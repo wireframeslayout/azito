@@ -50,6 +50,7 @@ import devtoolsRoutes, { handleDevtoolsRelay } from '../modules/browser/devtools
 import { handleBrowserConnection } from '../modules/browser/ws/browserHandler';
 import { proxyBrowserToAgent } from '../modules/servers/transport/AgentBrowserProxy';
 import { handleSupervisorConnection } from '../modules/supervisors/ws/supervisorSocketHandler';
+import { RepoDiscoveryService } from '../modules/git/RepoDiscoveryService';
 import { RenderSkillPromptUseCase } from '../modules/prompt/RenderSkillPromptUseCase';
 import { TaskPromptVarsResolver } from '../modules/prompt/TaskPromptVarsResolver';
 import { TmuxHookManager } from '../modules/tmux/TmuxHookManager';
@@ -210,7 +211,8 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   await app.register(sessionsRoutes, { serverRepo, tmux: tmuxClient, windowRepo, notificationBus, resourceGuard });
   await app.register(fileBrowseRoutes, { serverRepo, tmux: tmuxClient });
   await app.register(gitRoutes, { serverRepo, transportFactory });
-  await app.register(projectsRoutes, { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux: tmuxClient, serverRepo, projectSecretRepo });
+  const repoDiscovery = new RepoDiscoveryService(tmuxClient);
+  await app.register(projectsRoutes, { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux: tmuxClient, serverRepo, projectSecretRepo, repoDiscovery });
   await app.register(unitsRoutes, { unitRepo, taskRepo, logRepo, executeTaskUseCase, sidekickLoader: sidekickPackageLoader, unitTypeLoader });
   await app.register(operationsRoutes, { executeTaskUseCase, agentActivityMonitor });
   await app.register(tasksRoutes, { taskRepo, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux: tmuxClient, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService: windowRespawnService, taskRestoreService, supervisorRegistry, unitTypeLoader });
