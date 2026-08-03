@@ -1,0 +1,456 @@
+# セキュリティ設定・環境構築ガイド
+
+## この文書の位置づけ
+
+セキュリティ強化（Phase 0〜3）により、AZITO はセキュリティ関連の設定を自動的に行うようになりました。UI トークン（`AZITO_UI_TOKEN`）は未設定の場合に自動生成されます。MinIO を使う場合のみ、資格情報の手動設定が必要です。本ガイドは次の2つをカバーします。
+
+- **[既存環境の移行手順](#既存環境の移行手順)** -- すでに AZITO を動かしている環境をこの変更に追従させる
+- **[新規開発環境の構築手順](#新規開発環境の構築手順)** -- クリーンな状態から開発環境を立ち上げる
+
+リリースバンドルからのインストールについては [インストールとアップデート](install-and-update.md) を参照してください。
+
+## 変更サマリ
+
+| 変更点 | 影響 | 必要な対応 |
+|---|---|---|
+| API / WebSocket に認証が必須 | 未認証リクエストは 401、WS は `close(1008)` | `AZITO_UI_TOKEN` は自動生成される。`azito token show` で確認し、ブラウザ初回アクセス時に入力。固定したい場合は env に設定 |
+| bind アドレスが `127.0.0.1` 既定 | LAN / Tailscale からアクセスできない | 必要なら `AZITO_BIND` を設定 |
+| CORS が許可オリジン限定 | 未登録オリジンからのブラウザアクセスが失敗 | 必要なら `AZITO_ALLOWED_ORIGINS` を設定 |
+| MinIO の資格情報が必須 | `docker compose up` が失敗 | ルートの `.env` に資格情報を設定 |
+| harness のトークン配送方式変更 | `/azt-*` スキルの API 呼び出しが 401 | 各サーバーで `setup.sh` を再実行 |
+| DB の秘密カラムを暗号化 | `data/master.key` が自動生成される | 鍵ファイルをバックアップ |
+| SSH ホスト鍵の TOFU 検証 | ホスト鍵変更時に SSH 接続が拒否される | 意図した変更なら fingerprint をリセット |
+| agent の token 配送方式変更 | 既存 agent は旧形式のまま動作 | 再インストールで移行（任意） |
+| ブランチ名・パスの境界検証 | 記号を含む値が 400 で拒否される | 該当タスクの値を修正 |
+
+## 環境変数リファレンス
+
+環境変数ファイルは**2つ**あり、役割が異なります。混同しやすいので注意してください。
+
+| ファイル | 読み込む主体 | 用途 |
+|---|---|---|
+| `packages/server/.env` | AZITO サーバー（`tsx watch --env-file-if-exists=.env` / systemd の `EnvironmentFile`） | サーバーの動作設定 |
+| `<リポジトリルート>/.env` | `docker compose`（既定の env ファイル） | MinIO の資格情報 |
+
+いずれも git 管理外です。雛形は `.env.example` にあります。
+
+### `packages/server/.env`
+
+| 変数 | 必須 | 既定値 | 説明 |
+|---|---|---|---|
+| `AZITO_UI_TOKEN` | 任意 | `$AZITO_DATA_DIR/ui-token` を自動生成 | API / WebSocket 認証用トークン。env → ファイル → 自動生成の順で解決。`azito token show` で確認、`azito token rotate` でローテーション可能 |
+| `AZITO_DATA_DIR` | 任意 | リポジトリルート直下（`data.db`, `data/*`） | 永続データディレクトリ。設定すると `data.db`, `master.key`, `vapid-keys.json`, `ui-token`, `browser-profile/`, `sidekicks/` がこのディレクトリ配下に統合される（mode 700）。バージョンディレクトリ方式での運用時に必須 |
+| `AZITO_BIND` | 任意 | `127.0.0.1` | 待ち受けアドレス。`0.0.0.0` と `::` は明示的に拒否される。リモートアクセス時は Tailscale IP を指定 |
+| `AZITO_ALLOWED_ORIGINS` | 任意 | `http://localhost:5173,http://localhost:3001` | CORS と WebSocket の Origin 検証で許可するオリジン（カンマ区切り） |
+| `AZITO_WEBHOOK_TOKEN` | 任意 | 起動ごとにランダム生成 | hook / agent-signal / supervisor 用の共有トークン。固定したい場合に設定 |
+| `AZITO_MASTER_KEY` | 任意 | `$AZITO_DATA_DIR/master.key` を自動生成 | DB の秘密カラム暗号化キー（hex 64文字）。環境変数を優先 |
+| `AZITO_SIDEKICKS_DIR` | 任意 | `$AZITO_DATA_DIR/sidekicks` | ユーザー層 Sidekick パッケージの格納先。`AZITO_DATA_DIR` 設定時はその配下の `sidekicks/` がデフォルト |
+| `AZITO_VAPID_SUBJECT` | 任意 | なし | プッシュ通知の VAPID subject |
+| `PORT` | 任意 | `3001` | サーバーのポート |
+
+### ルートの `.env`
+
+| 変数 | 必須 | 説明 |
+|---|---|---|
+| `MINIO_ROOT_USER` | MinIO を使う場合は**必須** | 未設定だと `docker compose up` が失敗する |
+| `MINIO_ROOT_PASSWORD` | MinIO を使う場合は**必須** | 同上。十分に長い値を設定する |
+
+---
+
+## 既存環境の移行手順
+
+所要時間の目安は 15〜30 分です。順番に実行してください。
+
+### Step 0. バックアップ
+
+```bash
+cd <azito>
+cp data.db "data.db.bak-$(date +%Y%m%d-%H%M%S)"
+cp packages/server/.env packages/server/.env.bak 2>/dev/null || true
+```
+
+### Step 1. コードを取得する
+
+```bash
+git fetch origin
+git checkout master && git pull --ff-only origin master
+npm ci
+```
+
+`npm ci` を使うのは、更新された `package-lock.json`（`@fastify/static` の脆弱性修正を含む）に正確に揃えるためです。
+
+### Step 2. サーバーの環境変数を設定する
+
+> `AZITO_UI_TOKEN` を設定しなくても、初回起動時に自動生成されます（`azito token show` で確認可能）。固定トークンを使いたい場合のみ以下の手順で設定してください。
+
+```bash
+openssl rand -hex 32   # 出力をコピー
+```
+
+`packages/server/.env` に追記します。
+
+```bash
+AZITO_UI_TOKEN=<上で生成した64文字>
+
+# Tailscale 経由でアクセスする場合のみ（IP は `tailscale ip -4` で確認）
+AZITO_BIND=100.x.y.z
+AZITO_ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3001,http://<tailscale-host>:3001
+```
+
+権限を絞ります。
+
+```bash
+chmod 600 packages/server/.env
+```
+
+> `AZITO_BIND` を設定しない場合、`127.0.0.1` のみで待ち受けます。同じマシンのブラウザからしかアクセスできなくなるので、リモートから使っているなら必ず設定してください。
+
+### Step 3. MinIO の資格情報を設定して作り直す
+
+これまで既定値（`minioadmin` / `minioadmin`）で全ネットワークインターフェースに公開されていたため、**資格情報のローテーションを推奨します**。
+
+```bash
+# 十分に長い値を生成
+openssl rand -hex 24   # ユーザー名用
+openssl rand -hex 32   # パスワード用
+```
+
+リポジトリルートの `.env` に設定します。
+
+```bash
+MINIO_ROOT_USER=<生成した値>
+MINIO_ROOT_PASSWORD=<生成した値>
+```
+
+```bash
+chmod 600 .env
+docker compose down
+docker compose up -d
+```
+
+ポートは `127.0.0.1:9000` / `127.0.0.1:9001` に限定されました。リモートから MinIO コンソールを見る場合は SSH ポートフォワードか Tailscale の設定を使ってください。
+
+設定後、AZITO の Settings → Storage で新しい資格情報を登録し直します。
+
+### Step 4. 既存の秘密情報を暗号化する
+
+サーバー初回起動時に `data/master.key` が自動生成されます。既存の平文データは透過的に読めますが、一括で暗号化しておきます。
+
+```bash
+npm run dev   # 一度起動して data/master.key を生成させ、Ctrl+C で停止
+npx tsx scripts/seal-existing-secrets.ts
+```
+
+出力例:
+
+```
+Sealing existing secrets...
+  llm_providers.api_key: 2
+  servers.agent_token: 2
+  project_repositories.token: 0
+  project_secrets.value: 5
+  storage_settings.access_key/secret_key: 1
+Done.
+```
+
+**`data/master.key` を必ずバックアップしてください。** 紛失すると暗号化済みの秘密情報（LLM API キー・agent token・project secret・リポジトリ token・MinIO 資格情報）が復号不能になります。
+
+```bash
+cp data/master.key ~/secure-backup/azito-master.key   # 安全な場所へ
+```
+
+### Step 5. 永続ファイルの権限を確認する
+
+起動時に自動で `600` に設定されますが、確認しておきます。
+
+```bash
+stat -c '%a %n' data.db data.db-wal data/vapid-keys.json data/master.key 2>/dev/null
+# すべて 600 であること
+```
+
+### Step 6. 起動してトークンを入力する
+
+```bash
+npm run dev
+```
+
+`http://localhost:5173`（または `http://<tailscale-host>:3001`）を開くとトークン入力画面が表示されます。Step 2 で生成した `AZITO_UI_TOKEN` を入力してください。
+
+> トークンは `sessionStorage` に保存されるため、**ブラウザのセッションごと（タブを閉じるまで）** 有効です。新しいセッションでは再入力が必要です。
+
+### Step 7. harness を再セットアップする（全サーバー）
+
+harness のトークン配送方式が変わったため、これを実行しないと `/azt-*` スキルの API 呼び出しが 401 になります。
+
+```bash
+# ローカル
+./harness/setup.sh \
+  --azito-url http://localhost:3001 \
+  --webhook-token "$AZITO_WEBHOOK_TOKEN" \
+  --ui-token "$AZITO_UI_TOKEN" \
+  --server-name local
+```
+
+> **3つのオプションをすべて渡してください。** `~/.azito/azitoctl.env`（mode 600）は `--azito-url` と `--webhook-token` の両方が指定されたときにのみ書き出され、`--ui-token` はそこに追記されます。`--ui-token` だけでは書き出されません。
+
+リモートサーバーでは、そのサーバー上で同じコマンドを実行します（`--azito-url` はハブの URL、`--server-name` はそのサーバーの AZITO 上の名前）。
+
+```bash
+ssh <remote-host>
+cd <azito>   # harness が配置されているパス
+./harness/setup.sh --azito-url http://<hub>:3001 --webhook-token <token> --ui-token <token> --server-name "The Mirano"
+```
+
+### Step 8. agent サーバーを再インストールする（推奨・任意）
+
+agent の token が systemd unit への平文埋め込みから mode 600 の `EnvironmentFile` 方式に変わりました。既存 agent は旧形式のまま動作するので急ぎではありませんが、移行を推奨します。
+
+AZITO の Servers → 対象サーバー → Setup → Agent Server の「Reinstall」から実行できます。再インストールすると agent token も新しくなります。
+
+### Step 9. 検証
+
+```bash
+# 認証が効いていること
+curl -s -o /dev/null -w 'no-auth: %{http_code}\n' http://127.0.0.1:3001/api/servers
+# → 401
+
+curl -s -o /dev/null -w 'with-auth: %{http_code}\n' \
+  -H "Authorization: Bearer $AZITO_UI_TOKEN" http://127.0.0.1:3001/api/servers
+# → 200
+
+# CORS がワイルドカードでないこと
+curl -s -D - -o /dev/null -H 'Origin: https://evil.example' http://127.0.0.1:3001/api/servers | grep -i access-control-allow-origin
+# → 何も出ない（または許可オリジンのみ）
+```
+
+UI 側は次を確認します。
+
+- [ ] トークン入力後にワークスペースが表示される
+- [ ] ターミナルタブが接続できる（WebSocket 認証の確認）
+- [ ] タスクを1件実行して planning まで進む（harness トークン配送の確認）
+- [ ] ファイルエクスプローラーでファイルが開ける
+- [ ] エージェント完了通知が届く（webhook トークンの確認）
+
+---
+
+## 新規開発環境の構築手順
+
+### 前提条件
+
+| ソフトウェア | バージョン | 用途 |
+|---|---|---|
+| Node.js | v24 以上 | バックエンド・フロントエンド実行 |
+| tmux | 3.4 以上 | ターミナルセッション管理 |
+| Docker | 最新推奨 | MinIO（ファイルストレージ、任意） |
+| Tailscale | 最新推奨 | HTTPS / プッシュ通知 / SSH 接続（任意） |
+| OpenSSL | 任意のもの | トークン生成 |
+
+コーディングエージェントを使う場合は `claude` / `codex` コマンドも必要です。
+
+### 1. 取得とインストール
+
+```bash
+git clone <repository-url> azito
+cd azito
+npm ci
+```
+
+### 2. サーバーの環境変数を作成する
+
+> `AZITO_UI_TOKEN` を設定しなくても、初回起動時に自動生成されます（`azito token show` で確認可能）。固定トークンを使いたい場合のみ以下で設定してください。
+
+```bash
+cat > packages/server/.env <<EOF
+AZITO_UI_TOKEN=$(openssl rand -hex 32)
+AZITO_WEBHOOK_TOKEN=$(openssl rand -hex 32)
+EOF
+chmod 600 packages/server/.env
+cat packages/server/.env   # トークンを控える（ブラウザ入力と harness で使う）
+```
+
+`AZITO_WEBHOOK_TOKEN` は省略可（起動ごとにランダム生成）ですが、harness と共有する必要があるため固定しておくと運用が楽です。
+
+### 3. MinIO を使う場合（任意）
+
+```bash
+cat > .env <<EOF
+MINIO_ROOT_USER=$(openssl rand -hex 24)
+MINIO_ROOT_PASSWORD=$(openssl rand -hex 32)
+EOF
+chmod 600 .env
+docker compose up -d
+```
+
+ファイルストレージ機能を使わないならこの手順は不要です（AZITO 本体は MinIO なしで動作します）。
+
+### 4. 起動する
+
+```bash
+npm run dev
+```
+
+- バックエンド: `http://127.0.0.1:3001`
+- フロントエンド（Vite）: `http://localhost:5173`
+
+ブラウザで `http://localhost:5173` を開き、`AZITO_UI_TOKEN` を入力します。
+
+### 5. harness を導入する
+
+```bash
+source packages/server/.env   # トークンを読み込む
+./harness/setup.sh \
+  --azito-url http://localhost:3001 \
+  --webhook-token "$AZITO_WEBHOOK_TOKEN" \
+  --ui-token "$AZITO_UI_TOKEN" \
+  --server-name local
+```
+
+### 6. 初期セットアップ
+
+1. **サーバーの確認** -- 既定で `local` サーバーが登録されています
+2. **プロジェクトの作成** -- Projects からプロジェクトを作成し、ワーキングディレクトリを設定
+3. **Unit の設定** -- タスクの進め方と実行ランタイムを定義
+4. **依存の導入確認** -- Servers → 対象サーバー → Setup で tmux / Node.js / harness の状態を確認
+
+詳細は [ユーザーガイド](./README.md) と [azt-harness ガイド](./harness.md) を参照してください。
+
+---
+
+## Tailscale 経由でアクセスする場合
+
+**構成によって必要な設定が変わります。** まず自分がどちらかを確認してください。
+
+```bash
+tailscale serve status
+```
+
+### 構成A: `tailscale serve` で HTTPS 終端する（推奨・出力に proxy 行がある場合）
+
+```
+https://<host>.ts.net (tailnet only)
+|-- / proxy http://localhost:5173
+```
+
+この構成では通信が **すべて localhost で終端** します。ブラウザ → Tailscale(HTTPS) → `localhost:5173`(Vite) → `localhost:3001`(AZITO) という経路なので、**`AZITO_BIND` は既定の `127.0.0.1` のままで正しく、変更してはいけません**（変更すると Vite のプロキシ先 `localhost:3001` が届かなくなります）。
+
+必要なのは許可オリジンの追加だけです。`packages/server/.env`:
+
+```bash
+AZITO_ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3001,https://<host>.ts.net
+AZITO_PUBLIC_URL=https://<host>.ts.net
+```
+
+`AZITO_PUBLIC_URL` は supervisor やリモートエージェントがハブへ到達するための URL です。省略すると Tailscale IP（`http://100.x.x.x:3001`）が使われますが、`127.0.0.1` bind ではこのアドレスに到達できず、**supervised 監視が機能しません**。`tailscale serve` 構成では必ず MagicDNS の HTTPS URL を設定してください。
+
+ブラウザが送る `Origin` は Tailscale の HTTPS ドメインなので、これを追加しないと API が CORS で拒否され、WebSocket も `1008 Forbidden origin` で切断されます。
+
+Vite 側は `.ts.net` を既定で許可しているため設定不要です（`allowedHosts` に `.ts.net` が入っています）。別ドメインを使う場合のみ `AZITO_ALLOWED_HOSTS` に追加してください。
+
+```bash
+AZITO_ALLOWED_HOSTS=my-host.example.com npm run dev
+```
+
+### 構成B: Tailscale IP に直接アクセスする（`tailscale serve` を使わない場合）
+
+AZITO を Tailscale IP で待ち受けさせます。`packages/server/.env`:
+
+```bash
+AZITO_BIND=100.101.102.103          # tailscale ip -4 の出力
+AZITO_ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3001,http://<host>.ts.net:3001
+```
+
+この構成では `localhost:3001` で待ち受けなくなるため、**Vite 開発サーバーのプロキシ（`localhost:3001` 宛て）が動きません**。`npm run dev` ではなく本番デーモン（`:3001` がビルド済みフロントエンドを同一オリジンで配信）を使ってください。
+
+```bash
+npm run build && systemctl --user restart azito
+```
+
+### 設定後の確認
+
+```bash
+# CORS が Tailscale オリジンを許可しているか
+curl -s -D - -o /dev/null -H "Origin: https://<host>.ts.net" \
+  http://127.0.0.1:3001/api/health | grep -i access-control-allow-origin
+# → access-control-allow-origin: https://<host>.ts.net
+
+# 未許可オリジンが拒否されるか（何も出なければ正しい）
+curl -s -D - -o /dev/null -H "Origin: https://evil.example" \
+  http://127.0.0.1:3001/api/health | grep -i access-control-allow-origin
+```
+
+`.env` を変更したら、`tsx watch` はソース変更時に再読み込みするため `touch packages/server/src/main.ts` で反映できます（デーモン運用時は `systemctl --user restart azito`）。
+
+---
+
+## 本番（デーモン）運用
+
+```bash
+./deploy/daemon-install.sh          # ビルド + systemd user unit 登録 + 起動
+systemctl --user status azito
+journalctl --user -u azito -f
+```
+
+`deploy/azito.service` は `EnvironmentFile=-<root>/packages/server/.env` を読みます。したがって `AZITO_UI_TOKEN` と `AZITO_BIND` は `packages/server/.env` に置いておけばデーモンにも渡ります。
+
+コード更新後の反映:
+
+```bash
+npm run build && systemctl --user restart azito
+```
+
+開発サーバーとデーモンは同じ `:3001` を使うため、`npm run dev` を使う前にデーモンを停止してください。
+
+```bash
+systemctl --user stop azito
+# 開発終了後
+systemctl --user start azito
+```
+
+---
+
+## トラブルシューティング
+
+| 症状 | 原因 | 対処 |
+|---|---|---|
+| UI トークンが分からない | 自動生成されたトークンの確認方法 | `azito token show` で表示。TTY 起動時は初回生成時に端末に表示される |
+| `AZITO_BIND must not be 0.0.0.0 or ::` で落ちる | 全インターフェース bind は明示的に禁止 | `127.0.0.1` か Tailscale IP を指定 |
+| ブラウザからアクセスできない（接続拒否） | `127.0.0.1` のみで待ち受けている | `AZITO_BIND` に Tailscale IP を設定して再起動 |
+| UI が API 401 のままループする | 入力トークンがサーバーの値と不一致 | `packages/server/.env` の値を確認。ブラウザのセッションを閉じて再入力 |
+| ターミナルタブが即切断される（`1008 Unauthorized`） | WebSocket にトークンが載っていない | ブラウザをリロード。古いタブが残っている場合は閉じる |
+| ターミナルが `1008 Forbidden origin` で切断される | アクセス元オリジンが未許可 | `AZITO_ALLOWED_ORIGINS` にそのオリジンを追加して再起動 |
+| Vite が `Blocked request. This host is not allowed` を返す | `allowedHosts` に未登録 | `vite.config.ts` にホスト名を追加、または `:3001` を使う |
+| `/azt-*` スキルが 401 になる | harness のトークン未配布 | `setup.sh` を `--azito-url` `--webhook-token` `--ui-token` の3つ付きで再実行 |
+| `docker compose up` が `MINIO_ROOT_USER is required` で失敗 | ルートの `.env` 未設定 | ルート `.env` に資格情報を設定 |
+| MinIO コンソールにリモートから繋がらない | ポートが `127.0.0.1` 限定になった | SSH ポートフォワード（`ssh -L 9001:127.0.0.1:9001 <host>`）を使う |
+| タスク実行が `Unsafe branchName` / `Invalid base_branch` で失敗 | ブランチ名・パスに使用不可の文字が含まれる | 英数字と `_ . / -`（パスは `@ : ~` も可）のみを使う |
+| ファイルプレビューが `Not a regular file` になる | 通常ファイル以外（デバイス・FIFO 等）を開いた | 通常ファイルを選択する。プレビュー不可は仕様 |
+| カスタム LLM provider の保存が 400 になる | `base_url` が HTTPS でない、または private / loopback / Tailscale CGNAT（100.64.0.0/10）を指している | 公開 HTTPS エンドポイントを使う。tailnet 上のエンドポイントが必要な場合は `shared/validation/urlValidation.ts` の緩和が必要 |
+| provider 更新が `api_key must be re-entered when base_url changes` で 400 | エンドポイント変更時のキー流出防止 | API キーを再入力して保存する |
+| SSH 接続が `Host key mismatch` で失敗 | 保存済み fingerprint と不一致（サーバー再構築 or 中間者攻撃） | 意図した変更なら Servers → 対象サーバー → Danger Zone で「SSH fingerprint をリセット」 |
+| agent サーバーが全 API 401 | agent token 不一致 | Servers → Setup → Agent Server の「Reinstall」で再配備 |
+| supervised ペインを開くたびに 10 秒待ちになる | `AZITO_PUBLIC_URL` 未設定で Tailscale IP が使われているが `127.0.0.1` bind のため到達不能 | `.env` に `AZITO_PUBLIC_URL=https://<MagicDNS名>` を追記 → サービス再起動 → supervised ウィンドウを respawn（既存ペインのシェルは古い `AZITO_URL` を保持するため respawn 必須。`GET /api/supervisors` が `[]` なら本問題） |
+
+## 復旧（ロールバック）
+
+### `data/master.key` を紛失した場合
+
+暗号化済みの秘密情報は復号できません。次の値を手動で再設定してください。
+
+1. Settings → Providers で LLM API キーを再入力
+2. Settings → Storage で MinIO 資格情報を再入力
+3. 各プロジェクトの Secrets を再登録
+4. 各リポジトリの token を再登録
+5. agent サーバーを再インストール（token 再発行）
+
+再設定前に、旧 `master.key` が別の場所に残っていないか確認してください（バックアップ・`data.db.bak-*` と同じディレクトリなど）。
+
+### 変更前のバージョンに戻す場合
+
+```bash
+systemctl --user stop azito        # デーモン運用時
+git checkout <変更前のコミット>
+npm ci
+cp data.db.bak-<timestamp> data.db  # Step 0 で取ったバックアップ
+```
+
+DB スキーマの追加（`servers.ssh_host_fingerprint`）は旧コードでも無害なので、DB を戻さずに動かすこともできます。ただし暗号化済みの秘密カラムは旧コードでは復号されないため、`data.db` のバックアップから戻すのが確実です。

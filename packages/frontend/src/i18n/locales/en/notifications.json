@@ -1,0 +1,26 @@
+{
+  "center": {
+    "title": "Notifications",
+    "ariaLabel": "Notification center",
+    "closeAriaLabel": "Close notification center",
+    "markAllRead": "Mark all read",
+    "clear": "Clear",
+    "empty": "No notifications",
+    "emptyDescription": "Task status and agent activity will be shown here."
+  },
+  "bell": {
+    "ariaLabel": "Notifications",
+    "ariaLabelUnread": "Notifications ({{count}} unread)"
+  },
+  "kinds": {
+    "qa": "Task has questions: {{title}}",
+    "planApproval": "Plan approval needed: {{title}}",
+    "taskDone": "Task completed: {{title}}",
+    "taskFailed": "Task failed: {{title}}",
+    "agentFinished": "Agent finished: {{label}}"
+  },
+  "toast": {
+    "dismissAriaLabel": "Dismiss notification"
+  },
+  "fallbackTaskTitle": "Task #{{taskId}}"
+}

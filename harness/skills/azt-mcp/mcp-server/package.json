@@ -1,0 +1,13 @@
+{
+  "name": "mcp-azt",
+  "version": "1.0.0",
+  "description": "MCP server for azito API operations (projects, tasks, sidekicks)",
+  "type": "module",
+  "main": "index.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1"
+  }
+}

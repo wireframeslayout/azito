@@ -1,0 +1,26 @@
+{
+  "center": {
+    "title": "通知",
+    "ariaLabel": "通知センター",
+    "closeAriaLabel": "通知センターを閉じる",
+    "markAllRead": "すべて既読",
+    "clear": "クリア",
+    "empty": "通知はありません",
+    "emptyDescription": "タスクの状況やエージェントの稼働状況をここに表示します"
+  },
+  "bell": {
+    "ariaLabel": "通知",
+    "ariaLabelUnread": "通知（{{count}}件未読）"
+  },
+  "kinds": {
+    "qa": "タスクが質問しています: {{title}}",
+    "planApproval": "プラン承認待ち: {{title}}",
+    "taskDone": "タスク完了: {{title}}",
+    "taskFailed": "タスク失敗: {{title}}",
+    "agentFinished": "エージェント終了: {{label}}"
+  },
+  "toast": {
+    "dismissAriaLabel": "通知を閉じる"
+  },
+  "fallbackTaskTitle": "タスク #{{taskId}}"
+}

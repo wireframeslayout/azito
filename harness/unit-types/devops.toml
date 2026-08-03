@@ -1,0 +1,32 @@
+name = "devops"
+label = "DevOps"
+description = "Standard 5-phase development workflow"
+
+[[phases]]
+name = "planning"
+questions = true
+planApproval = true
+skillCommand = "azt-plan"
+
+[[phases]]
+name = "implementing"
+questions = true
+subagentRole = "implement"
+skillCommand = "azt-implement"
+
+[[phases]]
+name = "reviewing"
+selfReviewRetry = true
+subagentRole = "review"
+skillCommand = "azt-review"
+
+[[phases]]
+name = "testing"
+testFailed = true
+testFailedRollbackTo = "reviewing"
+skillCommand = "azt-test"
+
+[[phases]]
+name = "pushing"
+pushVerify = true
+skillCommand = "azt-push"

@@ -1,0 +1,207 @@
+#!/bin/bash
+# azitoctl — send structured agent-turn signals (phase completion, questions,
+# failure, progress) from a coding agent to the AZITO hub via HTTP.
+#
+#   azitoctl complete  --turn <token> [--summary <text>] [--output-file <path>] [--test-failed]
+#   azitoctl questions --turn <token> <questions_json>
+#   azitoctl fail      --turn <token> --reason <text>
+#   azitoctl progress  --turn <token>
+#
+# Unlike harness/hooks/azito-activity.sh (which no-ops when env is missing —
+# activity detection has a Tier 2 heuristic fallback), a turn signal is
+# required data with no fallback: missing config is a hard error (exit 3).
+set -euo pipefail
+
+MAX_OUTPUT_BYTES=262144
+
+usage_exit() {
+  cat >&2 <<'EOF'
+Usage:
+  azitoctl complete  --turn <token> [--summary <text>] [--output-file <path>] [--test-failed]
+  azitoctl questions --turn <token> <questions_json>
+  azitoctl fail      --turn <token> --reason <text>
+  azitoctl progress  --turn <token>
+EOF
+  exit 2
+}
+
+require_value() {
+  if [[ $# -lt 2 || "$2" == --* ]]; then
+    echo "azitoctl: option $1 requires a value" >&2
+    usage_exit
+  fi
+}
+
+# ── サブコマンド ──
+SUBCOMMAND="${1:-}"
+case "$SUBCOMMAND" in
+  complete|questions|fail|progress) shift ;;
+  *) usage_exit ;;
+esac
+
+# ── 引数パース ──
+TURN_TOKEN=""
+SUMMARY=""
+OUTPUT_FILE=""
+TEST_FAILED=0
+REASON=""
+POSITIONAL=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --turn)
+      require_value "$@"; TURN_TOKEN="$2"; shift 2 ;;
+    --summary)
+      require_value "$@"; SUMMARY="$2"; shift 2 ;;
+    --output-file)
+      require_value "$@"; OUTPUT_FILE="$2"; shift 2 ;;
+    --test-failed)
+      TEST_FAILED=1; shift ;;
+    --reason)
+      require_value "$@"; REASON="$2"; shift 2 ;;
+    --)
+      shift
+      while [[ $# -gt 0 ]]; do POSITIONAL+=("$1"); shift; done
+      ;;
+    -*)
+      echo "azitoctl: unknown option: $1" >&2
+      usage_exit
+      ;;
+    *)
+      POSITIONAL+=("$1"); shift ;;
+  esac
+done
+
+[[ -n "$TURN_TOKEN" ]] || usage_exit
+
+if [[ "$SUBCOMMAND" == "questions" ]]; then
+  [[ ${#POSITIONAL[@]} -eq 1 ]] || usage_exit
+  QUESTIONS_JSON="${POSITIONAL[0]}"
+fi
+
+if [[ "$SUBCOMMAND" == "fail" ]]; then
+  [[ -n "$REASON" ]] || usage_exit
+fi
+
+# ── env解決: 環境変数優先、欠けていれば ~/.azito/azitoctl.env を source ──
+if [[ -z "${AZITO_URL:-}" || -z "${AZITO_WEBHOOK_TOKEN:-}" ]]; then
+  ENV_FILE="$HOME/.azito/azitoctl.env"
+  if [[ -f "$ENV_FILE" ]]; then
+    # shellcheck disable=SC1090
+    source "$ENV_FILE"
+  fi
+fi
+
+if [[ -z "${AZITO_URL:-}" || -z "${AZITO_WEBHOOK_TOKEN:-}" ]]; then
+  echo "azitoctl: AZITO_URL/AZITO_WEBHOOK_TOKEN not set (env or ~/.azito/azitoctl.env)" >&2
+  exit 3
+fi
+
+# ── JSON文字列エスケープ ──
+# python3/node があればそれで JSON.stringify 相当を使う（改行・引用符・
+# 制御文字・非ASCIIすべて正しく処理できる）。どちらも無い環境向けに
+# sed ベースのフォールバックを用意する。標準入力から読むのは、
+# --output-file の内容（最大256KB）を argv に載せて ARG_MAX に触れる
+# のを避けるため。
+json_escape_stdin() {
+  if command -v python3 >/dev/null 2>&1; then
+    # head -c による切り詰めがマルチバイト文字の途中でバイト列を断ち切る
+    # ことがあるため、strict decode（sys.stdin.read()）ではなく
+    # errors='replace' で U+FFFD に置換して読む。
+    python3 -c 'import json,sys; sys.stdout.write(json.dumps(sys.stdin.buffer.read().decode("utf-8", errors="replace")))'
+  elif command -v node >/dev/null 2>&1; then
+    # node の utf8 デコードは不正バイト列を U+FFFD に置換するため、
+    # UTF-8 境界での切り詰めもそのまま安全に処理できる。
+    node -e 'let d="";process.stdin.setEncoding("utf8");process.stdin.on("data",c=>d+=c);process.stdin.on("end",()=>process.stdout.write(JSON.stringify(d)))'
+  else
+    local input escaped
+    input="$(cat)"
+    escaped="${input//\\/\\\\}"
+    escaped="${escaped//\"/\\\"}"
+    escaped="$(printf '%s' "$escaped" | sed ':a;N;$!ba;s/\n/\\n/g')"
+    escaped="${escaped//$'\t'/\\t}"
+    escaped="${escaped//$'\r'/\\r}"
+    printf '"%s"' "$escaped"
+  fi
+}
+
+json_escape() {
+  printf '%s' "$1" | json_escape_stdin
+}
+
+is_valid_json() {
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import json,sys; json.loads(sys.argv[1])' "$1" >/dev/null 2>&1
+  elif command -v node >/dev/null 2>&1; then
+    node -e 'JSON.parse(process.argv[1])' "$1" >/dev/null 2>&1
+  else
+    # 軽い構文チェック: 前後の空白を除いた先頭・末尾が対応する括弧であること
+    local trimmed
+    trimmed="$(printf '%s' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    [[ "$trimmed" == \{*\} || "$trimmed" == \[*\] ]]
+  fi
+}
+
+# ── ボディ組み立て ──
+BODY="{\"turnToken\":$(json_escape "$TURN_TOKEN"),\"type\":\"$SUBCOMMAND\""
+
+case "$SUBCOMMAND" in
+  complete)
+    if [[ -n "$SUMMARY" ]]; then
+      BODY="$BODY,\"summary\":$(json_escape "$SUMMARY")"
+    fi
+    if [[ -n "$OUTPUT_FILE" ]]; then
+      if [[ ! -f "$OUTPUT_FILE" ]]; then
+        echo "azitoctl: output file not found: $OUTPUT_FILE" >&2
+        exit 2
+      fi
+      OUTPUT_ESCAPED="$(head -c "$MAX_OUTPUT_BYTES" "$OUTPUT_FILE" | json_escape_stdin)"
+      BODY="$BODY,\"output\":$OUTPUT_ESCAPED"
+    fi
+    if [[ "$TEST_FAILED" -eq 1 ]]; then
+      BODY="$BODY,\"testFailed\":true"
+    fi
+    ;;
+  questions)
+    if ! is_valid_json "$QUESTIONS_JSON"; then
+      echo "azitoctl: invalid questions JSON" >&2
+      exit 2
+    fi
+    BODY="$BODY,\"questions\":$QUESTIONS_JSON"
+    ;;
+  fail)
+    BODY="$BODY,\"reason\":$(json_escape "$REASON")"
+    ;;
+  progress)
+    ;;
+esac
+
+BODY="$BODY}"
+
+# ── 送信 ──
+# BODY は --output-file 同梱時に 256KB 近くなりうるので argv（-d "$BODY"）に
+# 載せず、一時ファイル経由（-d @file）で渡す。argv に載せると Linux の
+# 単一引数上限 MAX_ARG_STRLEN（128KB）を超えて curl の exec が E2BIG で
+# 失敗する。
+# Authorization ヘッダは --config - 経由（stdin）で渡し、トークンが
+# argv に出ないようにする（ps 等でローカルユーザーから見えるのを防ぐ）。
+BODY_TMP="$(mktemp)"
+trap 'rm -f "$BODY_TMP"' EXIT
+chmod 600 "$BODY_TMP"
+printf '%s' "$BODY" > "$BODY_TMP"
+
+# --retry-connrefused: デフォルトの --retry は connection refused を
+# リトライしないため明示する（ハブ再起動直後の取りこぼし対策）。
+HTTP_CODE="$(curl --retry 3 --retry-connrefused --max-time 15 -sS -f -o /dev/null -w '%{http_code}' \
+  -X POST "${AZITO_URL}/api/agent-signals" \
+  -H "Content-Type: application/json" \
+  --config - \
+  --data-binary @"$BODY_TMP" <<CURLCFG
+header = "Authorization: Bearer ${AZITO_WEBHOOK_TOKEN}"
+CURLCFG
+)" || {
+  echo "azitoctl: failed to send $SUBCOMMAND signal" >&2
+  exit 1
+}
+
+echo "$HTTP_CODE"

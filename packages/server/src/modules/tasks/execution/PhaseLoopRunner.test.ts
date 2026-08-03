@@ -1,0 +1,686 @@
+import { describe, it, expect, vi } from 'vitest';
+import { PhaseLoopRunner } from './PhaseLoopRunner';
+import { TuiWorkerRuntime } from './runtime/TuiWorkerRuntime';
+import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
+import type { SidekickPackage } from '../../sidekicks/SidekickPackage';
+import { resolveTaskPromptVars } from '../../prompt/resolveTaskPromptVars';
+import { renderSidekickBody } from '../../sidekicks/renderSidekickBody';
+
+// ─── Minimal mock harness ───
+//
+// Exercises only the Issue #263 Phase 5 resolution swap (resolvePhaseSidekick /
+// resolveEnabledPhases replacing the old phasePromptRepo-backed lookups) — not
+// the full worker-interaction happy path (covered indirectly by
+// ExecuteTaskUseCase tests). Unused collaborators are stubbed with vi.fn() and
+// must not be called on the paths under test (asserted via toHaveBeenCalled
+// where relevant).
+
+function makeSidekick(overrides: Partial<SidekickPackage> = {}): SidekickPackage {
+  return {
+    name: 'planning-default',
+    description: 'default',
+    tags: ['planning'],
+    isDefault: true,
+    layer: 'builtin',
+    overridesBuiltin: false,
+    dir: '/harness/sidekicks/planning-default',
+    body: 'Plan {{task.title}}',
+    hasScripts: false,
+    hasReferences: false,
+    ...overrides,
+  };
+}
+
+function makeRunner(overrides: { sidekickLoader?: Record<string, unknown>; sidekickSyncService?: Record<string, unknown>; httpSignalCoordinator?: Record<string, unknown>; pullRequestCreator?: Record<string, unknown> } = {}) {
+  const taskRepo = {
+    findById: vi.fn(() => ({
+      id: 1,
+      projectId: 10,
+      unitId: 1,
+      serverName: 'local',
+      title: 'Test Task',
+      description: null,
+      status: 'open',
+      currentPhase: 'planning',
+      planMarkdown: 'THE PLAN',
+      targetBranch: null,
+      baseBranch: null,
+      skipPr: false,
+      selfReviewCount: 0,
+      worktreePath: null,
+      workingDirectory: '/work',
+      summaryJson: null,
+    })),
+    update: vi.fn(),
+    updateStatus: vi.fn(),
+    updateCurrentPhase: vi.fn(),
+  };
+  const projectRepo = {
+    findById: vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main' })),
+    findRepositoryById: vi.fn((() => null) as any),
+  };
+  const projectServerRepo = {
+    find: vi.fn(() => null),
+    findByProject: vi.fn(() => []),
+  };
+  const unitRepo = {
+    findById: vi.fn(() => ({
+      id: 1, unitType: 'devops', systemPrompt: null, selfReviewMaxAttempts: 2, reviewSubagent: null, implementSubagent: null, phaseConfig: null,
+      workerType: null, workerModel: null, workerExtraArgs: null,
+      workerExecutionMode: 'tmux-pipe',
+    })),
+  };
+  const sidekickLoader = {
+    findByName: vi.fn(() => null),
+    findDefaultForTag: vi.fn(() => makeSidekick()),
+    list: vi.fn(() => []),
+    invalidateCache: vi.fn(),
+    ...overrides.sidekickLoader,
+  };
+  const workerInput = {
+    sendPrompt: vi.fn(async (_server: unknown, _target: string, _text: string, _ctx?: unknown) => {}),
+    sendKeys: vi.fn(async (_server: unknown, _target: string, _keys: string[], _ctx?: unknown) => {}),
+  };
+  const workerWaiter = {
+    startPaneStream: vi.fn(() => ({ stop: vi.fn() })),
+    startSignalStream: vi.fn(() => ({ getFilePath: () => '/tmp/sig', stop: vi.fn() })),
+    waitForWorker: vi.fn(async () => ({ output: 'PHASE_COMPLETE', classification: { status: 'phase_complete' } })),
+    capturePaneText: vi.fn(async () => 'Thinking...'),
+    readPhaseOutputFile: vi.fn(async () => null),
+    extractPlanWithFallback: vi.fn(async () => null),
+  };
+  const pushVerifier = { verifyPushCompleted: vi.fn(async () => true) };
+  const gitInfoCollector = {
+    collectGitInfoSync: vi.fn(() => ({ branch: null, changedFiles: null })),
+    collectGitInfoRemote: vi.fn(async () => ({ branch: null, changedFiles: null })),
+    writeRemoteFile: vi.fn(async () => {}),
+  };
+  const gitProvider = { findPullRequestByBranch: vi.fn(async () => null) };
+  const pullRequestCreator = { ensureCreated: vi.fn(async () => {}), ...overrides.pullRequestCreator };
+  const getWorktreeService = vi.fn(() => ({ exists: vi.fn(async () => false) }));
+  const appendLog = vi.fn();
+  const transportFactory = { getTransport: vi.fn(() => ({ exec: vi.fn() })), invalidate: vi.fn() };
+  const sidekickSyncService = { sync: vi.fn(async () => {}), ...overrides.sidekickSyncService };
+  const httpSignalCoordinator = {
+    start: vi.fn(() => ({
+      turn: { id: 1, taskId: 1, unitId: 1, kind: 'phase', phase: 'planning', nonce: 'n', status: 'running', completionSource: null, confidence: null, serverName: 'local', tmuxTarget: 'sess:1.1', outputFilePath: '/tmp/out.md', startedAt: '2026-01-01T00:00:00Z', endedAt: null },
+      signalStream: { on: vi.fn(), stop: vi.fn(), getFilePath: () => '(in-process)' },
+      markerizedPrompt: 'http-signal prompt',
+    })),
+    finalize: vi.fn(async (_turnId: number, classification: unknown) => ({ classification, turn: null })),
+    readOutput: vi.fn(() => null),
+    rejectInferredCompletion: vi.fn(),
+    ...overrides.httpSignalCoordinator,
+  };
+
+  const runner = new PhaseLoopRunner(
+    taskRepo as any,
+    projectRepo as any,
+    projectServerRepo as any,
+    unitRepo as any,
+    sidekickLoader as any,
+    workerWaiter as any,
+    pushVerifier as any,
+    gitInfoCollector as any,
+    gitProvider as any,
+    pullRequestCreator as any,
+    getWorktreeService as any,
+    appendLog as any,
+    transportFactory as any,
+    sidekickSyncService as any,
+    httpSignalCoordinator as any,
+    workerInput as any,
+    { getOrThrow: vi.fn(() => ({ name: 'devops', label: 'DevOps', description: '', phases: [
+      { name: 'planning', label: 'Planning', tags: ['planning'], questions: true, testFailed: false, planApproval: true, selfReviewRetry: false, pushVerify: false, skillCommand: 'azt-plan' },
+      { name: 'implementing', label: 'Implementing', tags: ['implementing'], questions: true, testFailed: false, planApproval: false, selfReviewRetry: false, pushVerify: false, subagentRole: 'implement', skillCommand: 'azt-implement' },
+      { name: 'reviewing', label: 'Reviewing', tags: ['reviewing'], questions: false, testFailed: false, planApproval: false, selfReviewRetry: true, pushVerify: false, subagentRole: 'review', skillCommand: 'azt-review' },
+      { name: 'testing', label: 'Testing', tags: ['testing'], questions: false, testFailed: true, planApproval: false, selfReviewRetry: false, pushVerify: false, testFailedRollbackTo: 'reviewing', skillCommand: 'azt-test' },
+      { name: 'pushing', label: 'Pushing', tags: ['pushing'], questions: false, testFailed: false, planApproval: false, selfReviewRetry: false, pushVerify: true, skillCommand: 'azt-push' },
+    ] })) } as any,
+    (() => {
+      const tuiRuntime = new TuiWorkerRuntime({ sendKeys: vi.fn() } as any, workerInput as any, workerWaiter as any, httpSignalCoordinator as any);
+      const registry = new WorkerRuntimeRegistry();
+      registry.register('tui', tuiRuntime);
+      return registry;
+    })(),
+  );
+
+  return { runner, taskRepo, projectRepo, projectServerRepo, unitRepo, sidekickLoader, workerInput, workerWaiter, appendLog, getWorktreeService, transportFactory, sidekickSyncService, httpSignalCoordinator, pushVerifier, gitProvider, pullRequestCreator };
+}
+
+const server = { name: 'local', type: 'local' } as any;
+const task = { id: 1, projectId: 10, title: 'Test Task', description: null, status: 'open' as const, currentPhase: 'planning' as string | null };
+
+function makeUnitForRun(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 1, unitType: 'devops', systemPrompt: null, selfReviewMaxAttempts: 2, reviewSubagent: null, implementSubagent: null, phaseConfig: null,
+    workerType: null, workerModel: null, workerExtraArgs: null,
+    workerExecutionMode: 'tmux-pipe' as const,
+    workerRuntime: 'tui' as const,
+    ...overrides,
+  };
+}
+
+describe('PhaseLoopRunner phase-resolution (Issue #263 Phase 5)', () => {
+  it('resolves the phase prompt via resolvePhaseSidekick (loader.findDefaultForTag) when no override is configured', async () => {
+    const { runner, sidekickLoader } = makeRunner();
+    const unit = makeUnitForRun();
+
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    expect(sidekickLoader.findDefaultForTag).toHaveBeenCalledWith('planning');
+  });
+
+  it('resolves a phase override configured on unit.phaseConfig instead of the default', async () => {
+    const overridePkg = makeSidekick({ name: 'planning-custom', body: 'Custom {{task.title}}' });
+    const { runner, sidekickLoader, workerInput } = makeRunner({
+      sidekickLoader: { findByName: vi.fn((name: string) => (name === 'planning-custom' ? overridePkg : null)) },
+    });
+    const unit = makeUnitForRun({ phaseConfig: { planning: { sidekick: 'planning-custom' } } });
+
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    expect(sidekickLoader.findByName).toHaveBeenCalledWith('planning-custom');
+    expect(sidekickLoader.findDefaultForTag).not.toHaveBeenCalledWith('planning');
+    const sentPrompt = workerInput.sendPrompt.mock.calls[0][2] as string;
+    expect(sentPrompt).toContain('Custom Test Task');
+  });
+
+  it('fails fast (rejects) when the configured phase sidekick does not exist', async () => {
+    const { runner } = makeRunner({ sidekickLoader: { findByName: vi.fn(() => null) } });
+    const unit = makeUnitForRun({ phaseConfig: { planning: { sidekick: 'missing' } } });
+
+    await expect(
+      runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1'),
+    ).rejects.toThrow('Sidekick "missing" configured for phase "planning" was not found');
+  });
+
+  it('skips the whole loop (and never touches the worker) when every phase is disabled via phaseConfig', async () => {
+    const { runner, workerInput, sidekickLoader } = makeRunner();
+    const unit = makeUnitForRun({
+      phaseConfig: {
+        planning: { enabled: false }, implementing: { enabled: false }, reviewing: { enabled: false },
+        testing: { enabled: false }, pushing: { enabled: false },
+      },
+    });
+
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    expect(sidekickLoader.findDefaultForTag).not.toHaveBeenCalled();
+    expect(workerInput.sendPrompt).not.toHaveBeenCalled();
+  });
+
+  it('expands the exact same vars as resolveTaskPromptVars (parity with skill render / render API)', async () => {
+    // Body references vars from every group the shared resolver produces —
+    // including task.plan and module.* which the old inline vars paths dropped.
+    const pkg = makeSidekick({
+      body: 'PLAN:{{task.plan}}|BR:{{project.defaultBranch}}|WD:{{projectServer.workingDirectory}}|SR:{{selfReview.attempt}}/{{selfReview.maxAttempts}}|MOD:{{module.reviewPerspectives}}',
+    });
+    const { runner, taskRepo, projectRepo, projectServerRepo, unitRepo, workerInput } = makeRunner({
+      sidekickLoader: { findDefaultForTag: vi.fn(() => pkg) },
+    });
+    const unit = makeUnitForRun();
+
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    const expected = renderSidekickBody(pkg, {
+      ...resolveTaskPromptVars(taskRepo as any, projectRepo as any, unitRepo as any, projectServerRepo as any, 1),
+      // The only path-specific override the loop applies: its in-memory self-review state.
+      selfReview: { attempt: '1', maxAttempts: '2' },
+    });
+    const sentPrompt = workerInput.sendPrompt.mock.calls[0][2] as string;
+    expect(sentPrompt.startsWith(expected)).toBe(true);
+    expect(expected).toContain('PLAN:THE PLAN');
+    expect(expected).toContain('BR:main');
+  });
+});
+
+describe('PhaseLoopRunner remote sidekick sync + dir resolution (Issue #263 Phase 6)', () => {
+  const remoteServer = { name: 'staging', type: 'agent' } as any;
+
+  it('does not sync for a local server', async () => {
+    const { runner, sidekickSyncService } = makeRunner();
+    const unit = makeUnitForRun();
+
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    expect(sidekickSyncService.sync).not.toHaveBeenCalled();
+  });
+
+  it('syncs the full merged package list to a remote (ssh/agent) server before sending the first phase prompt', async () => {
+    const pkg = makeSidekick({ body: 'Dir:{{sidekick.dir}}' });
+    const otherPkg = makeSidekick({ name: 'other', body: 'other' });
+    const { runner, sidekickSyncService, transportFactory, workerInput } = makeRunner({
+      sidekickLoader: { findDefaultForTag: vi.fn(() => pkg), list: vi.fn(() => [pkg, otherPkg]) },
+    });
+    const unit = makeUnitForRun();
+
+    await runner.stateMachineLoop(unit, 'staging', task, remoteServer, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    expect(transportFactory.getTransport).toHaveBeenCalledWith(remoteServer);
+    expect(sidekickSyncService.sync).toHaveBeenCalledWith('staging', expect.anything(), [pkg, otherPkg]);
+    const sentPrompt = workerInput.sendPrompt.mock.calls[0][2] as string;
+    expect(sentPrompt).toContain(`Dir:~/.azito/sidekicks/${pkg.name}`);
+  });
+
+  it('fails fast (rejects, never sends a prompt) when the remote sync fails', async () => {
+    const { runner, workerInput } = makeRunner({
+      sidekickSyncService: { sync: vi.fn(async () => { throw new Error('sync failed: disk full'); }) },
+    });
+    const unit = makeUnitForRun();
+
+    await expect(
+      runner.stateMachineLoop(unit, 'staging', task, remoteServer, 'sess:1.1', new AbortController().signal, 'sess:1'),
+    ).rejects.toThrow('sync failed: disk full');
+    expect(workerInput.sendPrompt).not.toHaveBeenCalled();
+  });
+});
+
+describe('PhaseLoopRunner phase:completed lifecycle log (#263)', () => {
+  it('appends a phase_completed command log (summary: null) when the output has no AZITO_PHASE_SUMMARY', async () => {
+    const { runner, appendLog } = makeRunner();
+    const unit = makeUnitForRun();
+
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    const entries = appendLog.mock.calls.filter(
+      ([, , type, content]) => type === 'command' && (content as { type?: string }).type === 'phase_completed',
+    );
+    expect(entries.length).toBeGreaterThan(0);
+    expect(entries[0][3]).toMatchObject({ type: 'phase_completed', phase: 'planning', summary: null });
+  });
+
+  it('includes the extracted summary object in the phase_completed log when present', async () => {
+    const summaryLine = 'AZITO_PHASE_SUMMARY: {"phase":"planning","status":"completed","summary":"did the plan"}';
+    const { runner, appendLog } = makeRunner();
+    const unit = makeUnitForRun();
+    // readPhaseOutputFile はデフォルト null。summary 付き出力を返すよう差し替える
+    (runner as any).workerWaiter.readPhaseOutputFile = vi.fn(async () => `plan body\n\n${summaryLine}\n`);
+
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    const entry = appendLog.mock.calls.find(
+      ([, , type, content]) =>
+        type === 'command' &&
+        (content as { type?: string; phase?: string }).type === 'phase_completed' &&
+        (content as { phase?: string }).phase === 'planning',
+    );
+    expect(entry).toBeDefined();
+    expect(entry![3]).toMatchObject({
+      type: 'phase_completed',
+      phase: 'planning',
+      summary: { phase: 'planning', status: 'completed', summary: 'did the plan' },
+    });
+  });
+});
+
+describe('PhaseLoopRunner http-signal execution mode (Issue: AZITO監視強化 Phase 1)', () => {
+  function makeHttpTurn(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 1, taskId: 1, unitId: 1, kind: 'phase', phase: 'planning', nonce: 'n1', status: 'running',
+      completionSource: null, confidence: null, serverName: 'local', tmuxTarget: 'sess:1.1',
+      outputFilePath: '/tmp/azito-output-1-n1.md', startedAt: '2026-01-01T00:00:00Z', endedAt: null,
+      ...overrides,
+    };
+  }
+
+  it('creates a turn via httpSignalCoordinator.start (not the tmux signal-file path) and sends its markerizedPrompt for http-signal mode', async () => {
+    const { runner, workerInput, workerWaiter, httpSignalCoordinator } = makeRunner();
+    const unit = makeUnitForRun({ workerExecutionMode: 'http-signal' });
+
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    expect(httpSignalCoordinator.start).toHaveBeenCalledWith(expect.objectContaining({
+      taskId: 1, unitId: 1, kind: 'phase', phase: 'planning', server, target: 'sess:1.1',
+    }));
+    expect(workerWaiter.startSignalStream).not.toHaveBeenCalled();
+    expect(workerInput.sendPrompt.mock.calls[0][2]).toBe('http-signal prompt');
+  });
+
+  it('advances to the next phase on an explicit azitoctl completion even when the output payload/file is empty', async () => {
+    // Fail-fast guard exception: completionSource 'azitoctl' means the agent
+    // itself ran `azitoctl complete` — an explicit signal is trusted even when
+    // no output was attached or left on disk.
+    const { runner, sidekickLoader, httpSignalCoordinator } = makeRunner({
+      httpSignalCoordinator: {
+        start: vi.fn(() => ({
+          turn: makeHttpTurn(),
+          signalStream: { on: vi.fn(), stop: vi.fn(), getFilePath: () => '(in-process)' },
+          markerizedPrompt: 'http-signal prompt',
+        })),
+        finalize: vi.fn(async () => ({
+          classification: { status: 'phase_complete' },
+          turn: makeHttpTurn({ status: 'completed', completionSource: 'azitoctl', confidence: 'explicit' }),
+        })),
+        readOutput: vi.fn(() => null),
+      },
+    });
+    const unit = makeUnitForRun({ workerExecutionMode: 'http-signal' });
+
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    // All 5 phases run to completion (loop exits normally) — resolveEnabledPhases default.
+    expect(sidekickLoader.findDefaultForTag).toHaveBeenCalledWith('pushing');
+    expect(httpSignalCoordinator.rejectInferredCompletion).not.toHaveBeenCalled();
+  });
+
+  it('rejects an inferred phase_complete with no output: task failed, turn re-marked failed, rejection logged', async () => {
+    // Phase 3b E2E regression: prompt injection failed, claude sat on its idle
+    // screen, the idle classifier misread it as phase_complete, and the phase
+    // advanced with an empty deliverable. No explicit azitoctl signal + no
+    // output = do not trust the completion (Fail Fast).
+    const { runner, taskRepo, appendLog, sidekickLoader, httpSignalCoordinator } = makeRunner({
+      httpSignalCoordinator: {
+        start: vi.fn(() => ({
+          turn: makeHttpTurn(),
+          signalStream: { on: vi.fn(), stop: vi.fn(), getFilePath: () => '(in-process)' },
+          markerizedPrompt: 'http-signal prompt',
+        })),
+        finalize: vi.fn(async () => ({
+          classification: { status: 'phase_complete' },
+          turn: makeHttpTurn({ status: 'completed', completionSource: 'classifier', confidence: 'inferred' }),
+        })),
+        readOutput: vi.fn(() => null),
+      },
+    });
+    const unit = makeUnitForRun({ workerExecutionMode: 'http-signal' });
+
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    expect(httpSignalCoordinator.rejectInferredCompletion).toHaveBeenCalledWith(1);
+    expect(appendLog).toHaveBeenCalledWith(1, 1, 'command', expect.objectContaining({
+      type: 'phase_complete_without_output_rejected', phase: 'planning', turnId: 1,
+    }));
+    expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'failed');
+    expect(sidekickLoader.findDefaultForTag).not.toHaveBeenCalledWith('implementing');
+  });
+
+  it('trusts an inferred completion that left phase output behind (classifier + output present → advance)', async () => {
+    const { runner, sidekickLoader, httpSignalCoordinator } = makeRunner({
+      httpSignalCoordinator: {
+        start: vi.fn(() => ({
+          turn: makeHttpTurn(),
+          signalStream: { on: vi.fn(), stop: vi.fn(), getFilePath: () => '(in-process)' },
+          markerizedPrompt: 'http-signal prompt',
+        })),
+        finalize: vi.fn(async () => ({
+          classification: { status: 'phase_complete' },
+          turn: makeHttpTurn({ status: 'completed', completionSource: 'classifier', confidence: 'inferred' }),
+        })),
+        readOutput: vi.fn(() => 'a real deliverable body'),
+      },
+    });
+    const unit = makeUnitForRun({ workerExecutionMode: 'http-signal' });
+
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    expect(sidekickLoader.findDefaultForTag).toHaveBeenCalledWith('pushing');
+    expect(httpSignalCoordinator.rejectInferredCompletion).not.toHaveBeenCalled();
+  });
+
+  it('trusts a pushing completion backed by the completionProbe even without output (probe = real git-state evidence)', async () => {
+    const { runner, taskRepo, httpSignalCoordinator } = makeRunner({
+      httpSignalCoordinator: {
+        start: vi.fn(() => ({
+          turn: makeHttpTurn({ phase: 'pushing' }),
+          signalStream: { on: vi.fn(), stop: vi.fn(), getFilePath: () => '(in-process)' },
+          markerizedPrompt: 'http-signal prompt',
+        })),
+        finalize: vi.fn(async () => ({
+          classification: { status: 'phase_complete' },
+          turn: makeHttpTurn({ phase: 'pushing', status: 'completed', completionSource: 'classifier', confidence: 'inferred' }),
+        })),
+        readOutput: vi.fn(() => null),
+      },
+    });
+    // branch must resolve so the pushing completionProbe (PushVerifier) is armed.
+    taskRepo.findById.mockReturnValue({
+      id: 1, projectId: 10, unitId: 1, serverName: 'local', title: 'Test Task', description: null,
+      status: 'running', currentPhase: 'pushing', planMarkdown: 'THE PLAN', targetBranch: null, baseBranch: null, skipPr: false,
+      selfReviewCount: 0, worktreePath: null, workingDirectory: '/work', summaryJson: null,
+      branch: 'task/1-slug',
+    } as any);
+    // Only the pushing phase enabled, so the guard-exempt probe path is the one under test.
+    const unit = makeUnitForRun({
+      workerExecutionMode: 'http-signal',
+      phaseConfig: {
+        planning: { enabled: false }, implementing: { enabled: false },
+        reviewing: { enabled: false }, testing: { enabled: false },
+      },
+    });
+
+    await runner.stateMachineLoop(unit, 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    expect(httpSignalCoordinator.rejectInferredCompletion).not.toHaveBeenCalled();
+    expect(taskRepo.updateStatus).not.toHaveBeenCalledWith(1, 'failed');
+    expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'review');
+  });
+
+  it('routes a testing-phase turn ended as test_failed back to reviewing, without relying on the testFailedMarker text', async () => {
+    const unit = makeUnitForRun({ workerExecutionMode: 'http-signal' });
+    let calls = 0;
+    const { runner, sidekickLoader } = makeRunner({
+      httpSignalCoordinator: {
+        start: vi.fn(() => ({
+          turn: makeHttpTurn(),
+          signalStream: { on: vi.fn(), stop: vi.fn(), getFilePath: () => '(in-process)' },
+          markerizedPrompt: 'http-signal prompt',
+        })),
+        // Every phase completes; the testing-phase call additionally reports test_failed.
+        finalize: vi.fn(async () => {
+          calls++;
+          const isTestingCall = calls === 4; // planning, implementing, reviewing, testing
+          return {
+            classification: { status: 'phase_complete' },
+            turn: makeHttpTurn({ status: isTestingCall ? 'test_failed' : 'completed' }),
+          };
+        }),
+        readOutput: vi.fn(() => 'output body, no testFailedMarker text here'),
+      },
+    });
+
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    // Retried reviewing at least once after the testing turn reported test_failed
+    // (selfReviewMaxAttempts default 2 on the mock unit's task fixture).
+    const findDefaultForTagCalls = sidekickLoader.findDefaultForTag.mock.calls as unknown as [string][];
+    const reviewingCalls = findDefaultForTagCalls.filter(([p]) => p === 'reviewing');
+    expect(reviewingCalls.length).toBeGreaterThan(1);
+  });
+
+  it('puts the task into waiting_input when finalize reports a question turn', async () => {
+    const { runner, taskRepo } = makeRunner({
+      httpSignalCoordinator: {
+        start: vi.fn(() => ({
+          turn: makeHttpTurn(),
+          signalStream: { on: vi.fn(), stop: vi.fn(), getFilePath: () => '(in-process)' },
+          markerizedPrompt: 'http-signal prompt',
+        })),
+        finalize: vi.fn(async () => ({
+          classification: { status: 'question', questions: [{ text: 'Which branch?' }] },
+          turn: makeHttpTurn({ status: 'questions' }),
+        })),
+        readOutput: vi.fn(() => null),
+      },
+    });
+    const unit = makeUnitForRun({ workerExecutionMode: 'http-signal' });
+
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'waiting_input');
+  });
+
+  it('marks the task failed when finalize infers the turn ended via timeout/classifier as stopped', async () => {
+    const { runner, taskRepo } = makeRunner({
+      httpSignalCoordinator: {
+        start: vi.fn(() => ({
+          turn: makeHttpTurn(),
+          signalStream: { on: vi.fn(), stop: vi.fn(), getFilePath: () => '(in-process)' },
+          markerizedPrompt: 'http-signal prompt',
+        })),
+        finalize: vi.fn(async () => ({
+          classification: { status: 'stopped' },
+          turn: makeHttpTurn({ status: 'failed', completionSource: 'classifier', confidence: 'inferred' }),
+        })),
+        readOutput: vi.fn(() => null),
+      },
+    });
+    const unit = makeUnitForRun({ workerExecutionMode: 'http-signal' });
+
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'failed');
+  });
+
+  it('reads phase output from httpSignalCoordinator.readOutput before falling back to readPhaseOutputFile', async () => {
+    const { runner, workerWaiter } = makeRunner({
+      httpSignalCoordinator: {
+        start: vi.fn(() => ({
+          turn: makeHttpTurn(),
+          signalStream: { on: vi.fn(), stop: vi.fn(), getFilePath: () => '(in-process)' },
+          markerizedPrompt: 'http-signal prompt',
+        })),
+        finalize: vi.fn(async () => ({ classification: { status: 'phase_complete' }, turn: makeHttpTurn({ status: 'completed' }) })),
+        readOutput: vi.fn(() => 'output from the azitoctl complete event payload'),
+      },
+    });
+    const unit = makeUnitForRun({ workerExecutionMode: 'http-signal' });
+
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    expect(workerWaiter.readPhaseOutputFile).not.toHaveBeenCalled();
+  });
+});
+
+describe('PhaseLoopRunner prompt delivery verification (Issue #447)', () => {
+  it('retries sendPrompt once when first delivery check finds no delivery indicators', { timeout: 15_000 }, async () => {
+    const { runner, workerInput, workerWaiter, appendLog } = makeRunner();
+    let captureCalls = 0;
+    workerWaiter.capturePaneText = vi.fn(async () => {
+      captureCalls++;
+      if (captureCalls === 1) return 'Claude Code\n/help\nbypass permissions';
+      return 'Thinking...';
+    });
+    const unit = makeUnitForRun();
+
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    expect(workerInput.sendPrompt).toHaveBeenCalledTimes(6);
+    const retryLog = appendLog.mock.calls.find(
+      (args: unknown[]) => args[2] === 'command' && (args[3] as { type?: string }).type === 'prompt_retry',
+    );
+    expect(retryLog).toBeDefined();
+  });
+
+  it('does not retry when first delivery check finds delivery indicators', async () => {
+    const { runner, workerInput, appendLog } = makeRunner();
+    const unit = makeUnitForRun();
+
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    expect(workerInput.sendPrompt).toHaveBeenCalledTimes(5);
+    const retryLog = appendLog.mock.calls.find(
+      (args: unknown[]) => args[2] === 'command' && (args[3] as { type?: string }).type === 'prompt_retry',
+    );
+    expect(retryLog).toBeUndefined();
+  });
+});
+
+describe('PhaseLoopRunner pushing-phase PR auto-creation (git provider abstraction Phase 4-A)', () => {
+  const repo = { id: 1, name: 'repo', url: 'https://github.com/acme/widgets', provider: 'github' as const, owner: 'acme', repoName: 'widgets', token: null, hasToken: false };
+
+  function makePushingUnit(overrides: Record<string, unknown> = {}) {
+    return makeUnitForRun({
+      phaseConfig: {
+        planning: { enabled: false }, implementing: { enabled: false },
+        reviewing: { enabled: false }, testing: { enabled: false },
+      },
+      ...overrides,
+    });
+  }
+
+  it('invokes pullRequestCreator.ensureCreated (before verifyPushCompleted) when the task is not skipPr', async () => {
+    let capturedProbe: (() => Promise<boolean>) | undefined;
+    const { runner, taskRepo, projectRepo, workerWaiter, pushVerifier, pullRequestCreator } = makeRunner();
+    workerWaiter.waitForWorker = vi.fn(async (...args: unknown[]) => {
+      capturedProbe = args[8] as (() => Promise<boolean>) | undefined;
+      return { output: 'PHASE_COMPLETE', classification: { status: 'phase_complete' } };
+    });
+    projectRepo.findById = vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', repositories: [repo] }));
+    projectRepo.findRepositoryById = vi.fn(() => repo);
+    taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: false, worktreePath: null,
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+    } as any));
+    const unit = makePushingUnit();
+
+    await runner.stateMachineLoop(unit, 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    expect(capturedProbe).toBeDefined();
+    await capturedProbe!();
+
+    expect(pullRequestCreator.ensureCreated).toHaveBeenCalledWith(1, 1, repo, 'task/1-slug', expect.objectContaining({
+      title: 'Test Task', description: 'desc', targetBranch: null,
+    }));
+    // Order matters: creation runs before verification sees the (now-existing) PR.
+    const ensureOrder = (pullRequestCreator.ensureCreated as any).mock.invocationCallOrder[0];
+    const verifyOrder = (pushVerifier.verifyPushCompleted as any).mock.invocationCallOrder[0];
+    expect(ensureOrder).toBeLessThan(verifyOrder);
+  });
+
+  it('does not invoke pullRequestCreator.ensureCreated when the task has skipPr set', async () => {
+    let capturedProbe: (() => Promise<boolean>) | undefined;
+    const { runner, taskRepo, projectRepo, workerWaiter, pullRequestCreator } = makeRunner();
+    workerWaiter.waitForWorker = vi.fn(async (...args: unknown[]) => {
+      capturedProbe = args[8] as (() => Promise<boolean>) | undefined;
+      return { output: 'PHASE_COMPLETE', classification: { status: 'phase_complete' } };
+    });
+    projectRepo.findById = vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', repositories: [repo] }));
+    projectRepo.findRepositoryById = vi.fn(() => repo);
+    taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: true, worktreePath: null,
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+    } as any));
+    const unit = makePushingUnit();
+
+    await runner.stateMachineLoop(unit, 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    expect(capturedProbe).toBeDefined();
+    await capturedProbe!();
+
+    expect(pullRequestCreator.ensureCreated).not.toHaveBeenCalled();
+  });
+
+  it('does not fail the pushing phase when pullRequestCreator.ensureCreated rejects (best-effort creation)', async () => {
+    let capturedProbe: (() => Promise<boolean>) | undefined;
+    const { runner, taskRepo, projectRepo, workerWaiter, pushVerifier } = makeRunner({
+      pullRequestCreator: { ensureCreated: vi.fn(async () => { throw new Error('network error'); }) },
+    });
+    workerWaiter.waitForWorker = vi.fn(async (...args: unknown[]) => {
+      capturedProbe = args[8] as (() => Promise<boolean>) | undefined;
+      return { output: 'PHASE_COMPLETE', classification: { status: 'phase_complete' } };
+    });
+    projectRepo.findById = vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', repositories: [repo] }));
+    projectRepo.findRepositoryById = vi.fn(() => repo);
+    taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: false, worktreePath: null,
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+    } as any));
+    const unit = makePushingUnit();
+
+    await runner.stateMachineLoop(unit, 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    expect(capturedProbe).toBeDefined();
+    // The probe itself must not reject even though ensureCreated does — a
+    // completionProbe rejection would otherwise be swallowed by WorkerWaiter's
+    // .catch() as "not verified", but here we assert the PhaseLoopRunner-built
+    // probe stays resilient regardless, and the phase still completes normally.
+    await expect(capturedProbe!()).resolves.toBe(true);
+    expect(pushVerifier.verifyPushCompleted).toHaveBeenCalled();
+    expect(taskRepo.updateStatus).not.toHaveBeenCalledWith(1, 'failed');
+    expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'review');
+  });
+});

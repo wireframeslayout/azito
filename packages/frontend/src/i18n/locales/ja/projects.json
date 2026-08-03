@@ -1,0 +1,144 @@
+{
+  "title": "プロジェクト",
+  "newProject": "+ 新規プロジェクト",
+  "newProjectShort": "+ 新規",
+  "emptyState": {
+    "title": "プロジェクトがありません",
+    "description": "プロジェクトを作成して、サーバーとUnitをまとめましょう"
+  },
+  "chips": {
+    "windows": "{{count}} ウィンドウ",
+    "repos": "{{count}} リポジトリ"
+  },
+  "search": {
+    "placeholder": "プロジェクトを検索...",
+    "allProjects": "すべてのプロジェクト",
+    "newProject": "新規プロジェクト"
+  },
+  "contextMenu": {
+    "unpin": "ピン解除",
+    "pin": "ピン留め",
+    "moveUp": "上へ移動",
+    "moveDown": "下へ移動"
+  },
+  "sidebar": {
+    "servers": "サーバー",
+    "sidekicks": "Sidekick",
+    "units": "Unit",
+    "azitoMenu": "Azito メニュー",
+    "systemUpdate": "システム更新あり",
+    "moreProjects": "プロジェクト一覧",
+    "installApp": "アプリをインストール"
+  },
+  "form": {
+    "newProject": "新規プロジェクト",
+    "createProject": "プロジェクトを作成",
+    "nameRequired": "名前は必須です",
+    "slugRequired": "スラッグは必須です"
+  },
+  "general": {
+    "projectName": "プロジェクト名",
+    "projectNamePlaceholder": "プロジェクト名",
+    "slug": "スラッグ",
+    "slugHint": "tmuxセッション名として使用されます。小文字英字・数字・ハイフンのみ。",
+    "slugPlaceholder": "project-slug",
+    "description": "説明",
+    "descriptionPlaceholder": "プロジェクトの説明...",
+    "icon": "アイコン",
+    "iconHint": "プロジェクトサイドバーに表示される絵文字またはアップロード画像",
+    "iconPlaceholder": "例: ここに絵文字をペースト",
+    "uploadImage": "画像をアップロード",
+    "imageIconSet": "画像アイコン設定済み",
+    "color": "色",
+    "colorHint": "プロジェクトサイドバーアイコンのアクセントカラー",
+    "colorNone": "（なし）",
+    "scale": "スケール",
+    "repositoryUrl": "リポジトリURL",
+    "repositoryUrlPlaceholder": "https://github.com/org/repo",
+    "defaultBranch": "デフォルトブランチ",
+    "defaultBranchPlaceholder": "main",
+    "unitPrompt": "Unitプロンプト",
+    "unitPromptHint": "すべてのUnitに対するプロジェクトレベルの指示。各Unitのシステムプロンプトと組み合わされます。",
+    "unitPromptPlaceholder": "例: これはTypeScriptを使用したNext.jsアプリケーションです..."
+  },
+  "settings": {
+    "title": "設定",
+    "sections": {
+      "general": "一般",
+      "repositories": "リポジトリ",
+      "serverEnvironments": "サーバー環境",
+      "secrets": "シークレット",
+      "dangerZone": "危険な操作"
+    },
+    "general": {
+      "defaultUnit": "デフォルトUnit",
+      "defaultUnitHint": "自身のUnitが指定されていないタスクに使用されます。",
+      "defaultUnitNone": "（なし）"
+    },
+    "repositories": {
+      "tip": "ヒント: アクティビティバーのリポジトリタブからIssueを参照できます。",
+      "count": "{{count}} 件のリポジトリ",
+      "provider": "プロバイダー",
+      "github": "GitHub",
+      "gitlab": "GitLab",
+      "other": "その他",
+      "repositoryUrl": "リポジトリURL",
+      "repositoryUrlPlaceholder": "https://github.com/owner/repo",
+      "owner": "オーナー",
+      "ownerPlaceholder": "例: octocat",
+      "repoName": "リポジトリ名",
+      "repoNamePlaceholder": "例: my-repo",
+      "displayName": "表示名（任意）",
+      "displayNamePlaceholder": "例: frontend",
+      "token": "トークン（任意）",
+      "tokenHint": "空の場合はgh CLI認証を使用",
+      "tokenPlaceholder": "ghp_xxxx...",
+      "addRepository": "リポジトリを追加",
+      "noRepositories": "リポジトリが設定されていません"
+    },
+    "windows": {
+      "title": "ウィンドウ",
+      "noWindows": "ウィンドウなし"
+    },
+    "servers": {
+      "count": "{{count}} 件のサーバー環境",
+      "server": "サーバー",
+      "workingDirectory": "作業ディレクトリ",
+      "workingDirectoryPlaceholder": "/path/to/project",
+      "branch": "ブランチ（任意）",
+      "branchPlaceholder": "例: feat/my-feature",
+      "tmuxSession": "Tmuxセッション（任意）",
+      "tmuxSessionHint": "空の場合は 'azito' がデフォルト。",
+      "tmuxSessionPlaceholder": "azito",
+      "noServers": "サーバー環境が設定されていません",
+      "session": "セッション: {{name}}"
+    },
+    "secrets": {
+      "note": "ここに登録した値はタスク実行ペインに環境変数（AZITO_SECRET_<NAME>）として注入されます。エージェントと共有しても安全な認証情報のみ登録してください。保存後に値を取得することはできません。",
+      "noteLabel": "注意:",
+      "namePlaceholder": "MY_SECRET_KEY",
+      "valueLabel": "値",
+      "valuePlaceholder": "••••••••",
+      "noSecrets": "シークレットが登録されていません。",
+      "added": "追加日: {{date}}",
+      "deleteSecret": "削除",
+      "deleteSecretLabel": "シークレット「{{name}}」を削除",
+      "nameValidation": "名前は A-Z, 0-9, _ のみ（最大64文字）",
+      "valueValidation": "値は必須です（最大4096文字）",
+      "saveFailed": "シークレットの保存に失敗しました",
+      "deleteFailed": "シークレットの削除に失敗しました",
+      "deleteConfirm": "シークレットを削除",
+      "deleteConfirmMessage": "シークレット「{{name}}」を削除しますか？この操作は元に戻せません。"
+    },
+    "danger": {
+      "description": "プロジェクトを削除すると、関連するすべてのウィンドウとサーバー設定が削除されます。タスクは残りますが、このプロジェクトとのリンクは解除されます。",
+      "deleteProject": "プロジェクトを削除",
+      "deleteConfirm": "プロジェクトを削除",
+      "deleteConfirmMessage": "このプロジェクトを削除しますか？この操作は元に戻せません。"
+    },
+    "resourceWarning": {
+      "title": "サーバーのリソースがひっ迫しています",
+      "actionLabel": "それでも開く"
+    }
+  }
+}

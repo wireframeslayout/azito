@@ -1,0 +1,198 @@
+import type { Database as SqliteDatabase } from 'better-sqlite3';
+import type { Window, PaneLayout, IWindowRepository } from './Window';
+import { isSameWindowTarget } from './paneTarget';
+
+interface WindowRow {
+  id: number;
+  owner_type: string;
+  project_id: number | null;
+  task_id: number | null;
+  server_name: string;
+  tmux_target: string;
+  label: string | null;
+  is_primary: number;
+  window_type: string;
+  worker_type: string | null;
+  worker_model: string | null;
+  agent_session_id: string | null;
+  launch_command: string | null;
+  working_directory: string | null;
+  pane_layout: string | null;
+  created_at: string;
+}
+
+export class SqliteWindowRepository implements IWindowRepository {
+  private addStmt;
+  private findAllStmt;
+  private findByIdStmt;
+  private findByProjectStmt;
+  private findByTaskStmt;
+  private removeStmt;
+  private updatePaneLayoutStmt;
+  private findProjectWindowStmt;
+  private findByServerStmt;
+  private findAgentSessionIdsByServerStmt;
+
+  constructor(private db: SqliteDatabase) {
+    this.addStmt = db.prepare(`
+      INSERT INTO windows (owner_type, project_id, task_id, server_name, tmux_target, label, is_primary, window_type, worker_type, worker_model, agent_session_id, launch_command, working_directory, pane_layout)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    this.findAllStmt = db.prepare('SELECT * FROM windows');
+    this.findByIdStmt = db.prepare('SELECT * FROM windows WHERE id = ?');
+    this.findByProjectStmt = db.prepare("SELECT * FROM windows WHERE owner_type = 'project' AND project_id = ?");
+    this.findByTaskStmt = db.prepare("SELECT * FROM windows WHERE owner_type = 'task' AND task_id = ? ORDER BY is_primary DESC, created_at ASC");
+    this.removeStmt = db.prepare('DELETE FROM windows WHERE id = ?');
+    this.updatePaneLayoutStmt = db.prepare('UPDATE windows SET pane_layout = ? WHERE id = ?');
+    this.findProjectWindowStmt = db.prepare(
+      "SELECT id FROM windows WHERE owner_type = 'project' AND project_id = ? AND server_name = ? AND tmux_target = ?"
+    );
+    this.findByServerStmt = db.prepare('SELECT * FROM windows WHERE server_name = ?');
+    this.findAgentSessionIdsByServerStmt = db.prepare(
+      'SELECT DISTINCT agent_session_id FROM windows WHERE server_name = ? AND agent_session_id IS NOT NULL',
+    );
+  }
+
+  add(window: Omit<Window, 'id' | 'createdAt'>): number {
+    if (window.ownerType === 'project') {
+      const existing = this.findProjectWindowStmt.get(window.projectId, window.serverName, window.tmuxTarget) as { id: number } | undefined;
+      if (existing) {
+        if (window.label !== undefined) {
+          this.db.prepare('UPDATE windows SET label = ? WHERE id = ?').run(window.label, existing.id);
+        }
+        return existing.id;
+      }
+    }
+    const result = this.addStmt.run(
+      window.ownerType,
+      window.projectId,
+      window.taskId,
+      window.serverName,
+      window.tmuxTarget,
+      window.label,
+      window.isPrimary ? 1 : 0,
+      window.windowType,
+      window.workerType,
+      window.workerModel,
+      window.agentSessionId,
+      window.launchCommand,
+      window.workingDirectory,
+      window.paneLayout ? JSON.stringify(window.paneLayout) : null,
+    );
+    return Number(result.lastInsertRowid);
+  }
+
+  findAll(): Window[] {
+    const rows = this.findAllStmt.all() as WindowRow[];
+    return rows.map((r) => this.toWindow(r));
+  }
+
+  findById(id: number): Window | undefined {
+    const row = this.findByIdStmt.get(id) as WindowRow | undefined;
+    return row ? this.toWindow(row) : undefined;
+  }
+
+  findByProject(projectId: number): Window[] {
+    const rows = this.findByProjectStmt.all(projectId) as WindowRow[];
+    return rows.map((r) => this.toWindow(r));
+  }
+
+  findByTask(taskId: number): Window[] {
+    const rows = this.findByTaskStmt.all(taskId) as WindowRow[];
+    return rows.map((r) => this.toWindow(r));
+  }
+
+  findAgentSessionIdsByServer(serverName: string): Set<string> {
+    const rows = this.findAgentSessionIdsByServerStmt.all(serverName) as { agent_session_id: string }[];
+    return new Set(rows.map((r) => r.agent_session_id));
+  }
+
+  findByServerAndTarget(serverName: string, tmuxTarget: string): Window | undefined {
+    // sqlite has no built-in regex, so pane-suffix stripping happens in JS after narrowing to
+    // this server (there are never enough windows per server for this to matter perf-wise).
+    const rows = this.findByServerStmt.all(serverName) as WindowRow[];
+    const matches = rows.filter((r) => isSameWindowTarget(r.tmux_target, tmuxTarget));
+    if (matches.length === 0) return undefined;
+    // Multiple rows can share a physical target — a project-owned row and a task-owned row can
+    // legitimately point at the same tmuxTarget at once. Prefer a task-owning row: it carries
+    // runtime info (launchCommand, agentSessionId) that callers like pane-loading-state need.
+    // Supervised-or-not is now derived from windowType, so the choice doesn't affect that.
+    const row = matches.find((r) => r.task_id !== null) ?? matches[0];
+    return this.toWindow(row);
+  }
+
+  update(id: number, data: Partial<Pick<Window,
+    'tmuxTarget' | 'label' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType'
+  >>): void {
+    const fields: string[] = [];
+    const values: unknown[] = [];
+
+    if (data.tmuxTarget !== undefined) { fields.push('tmux_target = ?'); values.push(data.tmuxTarget); }
+    if (data.label !== undefined) { fields.push('label = ?'); values.push(data.label); }
+    if (data.agentSessionId !== undefined) { fields.push('agent_session_id = ?'); values.push(data.agentSessionId); }
+    if (data.launchCommand !== undefined) { fields.push('launch_command = ?'); values.push(data.launchCommand); }
+    if (data.paneLayout !== undefined) { fields.push('pane_layout = ?'); values.push(data.paneLayout ? JSON.stringify(data.paneLayout) : null); }
+    if (data.workerModel !== undefined) { fields.push('worker_model = ?'); values.push(data.workerModel); }
+    if (data.workingDirectory !== undefined) { fields.push('working_directory = ?'); values.push(data.workingDirectory); }
+    if (data.windowType !== undefined) { fields.push('window_type = ?'); values.push(data.windowType); }
+    if (data.workerType !== undefined) { fields.push('worker_type = ?'); values.push(data.workerType); }
+
+    if (fields.length === 0) return;
+    values.push(id);
+    this.db.prepare(`UPDATE windows SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+  }
+
+  updateAgentSessionIdByWindow(serverName: string, tmuxTarget: string, sessionId: string): void {
+    const rows = this.findByServerStmt.all(serverName) as WindowRow[];
+    const ids = rows.filter((r) => isSameWindowTarget(r.tmux_target, tmuxTarget)).map((r) => r.id);
+    if (ids.length === 0) return;
+    const placeholders = ids.map(() => '?').join(',');
+    this.db.prepare(`UPDATE windows SET agent_session_id = ? WHERE id IN (${placeholders})`).run(sessionId, ...ids);
+  }
+
+  remove(id: number): void {
+    this.removeStmt.run(id);
+  }
+
+  removeByServerAndTarget(serverName: string, tmuxTarget: string): number {
+    const targetPrefix = tmuxTarget.includes('.') ? tmuxTarget : `${tmuxTarget}.`;
+    const result = this.db.prepare(
+      'DELETE FROM windows WHERE server_name = ? AND (tmux_target = ? OR tmux_target LIKE ?)',
+    ).run(serverName, tmuxTarget, `${targetPrefix}%`);
+    return result.changes;
+  }
+
+  updatePaneLayout(id: number, layout: PaneLayout): void {
+    this.updatePaneLayoutStmt.run(JSON.stringify(layout), id);
+  }
+
+  private toWindow(row: WindowRow): Window {
+    let paneLayout: PaneLayout | null = null;
+    if (row.pane_layout) {
+      try {
+        paneLayout = JSON.parse(row.pane_layout) as PaneLayout;
+      } catch {
+        paneLayout = null;
+      }
+    }
+
+    return {
+      id: row.id,
+      ownerType: row.owner_type as Window['ownerType'],
+      projectId: row.project_id,
+      taskId: row.task_id,
+      serverName: row.server_name,
+      tmuxTarget: row.tmux_target,
+      label: row.label,
+      isPrimary: row.is_primary === 1,
+      windowType: row.window_type as Window['windowType'],
+      workerType: row.worker_type,
+      workerModel: row.worker_model,
+      agentSessionId: row.agent_session_id,
+      launchCommand: row.launch_command,
+      workingDirectory: row.working_directory,
+      paneLayout,
+      createdAt: row.created_at,
+    };
+  }
+}

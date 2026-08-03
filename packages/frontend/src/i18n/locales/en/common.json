@@ -1,0 +1,193 @@
+{
+  "actions": {
+    "confirm": "Confirm",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "processing": "Processing...",
+    "save": "Save",
+    "saving": "Saving...",
+    "new": "+ New",
+    "close": "Close",
+    "connect": "Connect",
+    "execute": "Execute",
+    "stop": "Stop",
+    "edit": "Edit",
+    "restore": "Restore",
+    "archive": "Archive",
+    "back": "Back",
+    "submit": "Submit",
+    "submitting": "Submitting...",
+    "reject": "Reject",
+    "approve": "Approve",
+    "add": "Add",
+    "create": "Create",
+    "rePlan": "Re-plan",
+    "adding": "Adding...",
+    "installApp": "Install App",
+    "remove": "Remove",
+    "clear": "Clear",
+    "apply": "Apply",
+    "search": "Search",
+    "refresh": "Refresh",
+    "retry": "Retry",
+    "retrying": "Retrying...",
+    "send": "Send",
+    "sending": "Sending...",
+    "creating": "Creating..."
+  },
+  "states": {
+    "loading": "Loading...",
+    "noDescription": "No description provided."
+  },
+  "navigation": {
+    "backTo": "Back to {{label}}",
+    "moreActions": "More actions",
+    "settings": "Settings",
+    "expandSidebar": "Expand sidebar",
+    "collapseSidebar": "Collapse sidebar"
+  },
+  "labels": {
+    "terminal": "Terminal",
+    "server": "Server",
+    "window": "Window",
+    "session": "Session",
+    "default": "Default",
+    "browser": "Browser",
+    "source": "Source",
+    "name": "Name",
+    "description": "Description",
+    "status": "Status",
+    "priority": "Priority",
+    "options": "Options"
+  },
+  "priority": {
+    "normal": "Normal",
+    "high": "High",
+    "urgent": "Urgent"
+  },
+  "status": {
+    "open": "Open",
+    "running": "Running",
+    "planning": "Planning",
+    "implementing": "Implementing",
+    "reviewing": "Reviewing",
+    "testing": "Testing",
+    "pushing": "Pushing",
+    "phaseReview": "Plan Review",
+    "waitingInput": "Waiting for Input",
+    "inProgress": "In Progress",
+    "done": "Done",
+    "failed": "Failed",
+    "review": "Review",
+    "archived": "Archived"
+  },
+  "validation": {
+    "nameRequired": "Name is required",
+    "titleRequired": "Title is required",
+    "slugRequired": "Slug is required",
+    "descriptionRequired": "Description is required",
+    "urlRequired": "URL required"
+  },
+  "confirm": {
+    "cannotBeUndone": "This cannot be undone."
+  },
+  "tokenGate": {
+    "title": "AZITO",
+    "instruction": "Enter the UI token to continue.",
+    "tokenRequired": "Token is required"
+  },
+  "windowPaneTree": {
+    "noWindows": "No windows attached",
+    "respawning": "respawning...",
+    "offline": "(offline)",
+    "respawningLabel": "Respawning",
+    "showAllPanes": "Show all panes (unzoom)",
+    "showAllPanesLabel": "Show all panes"
+  },
+  "phaseConfig": {
+    "sidekick": "Sidekick",
+    "hintWithDefault": "Leave unset to use the phase default: {{defaultName}}",
+    "hintNoDefault": "No default Sidekick package is configured for this phase yet",
+    "defaultOption": "Default ({{defaultName}})",
+    "selectSidekick": "Select a Sidekick...",
+    "defaultSuffix": " (default)"
+  },
+  "subagentConfig": {
+    "agent": "Agent",
+    "selectAgent": "Select an agent...",
+    "model": "Model",
+    "selectModel": "Select a model...",
+    "headlessWarning": "Headless execution (claude -p) uses credits. Switching worker type to claude enables native delegation with no additional cost."
+  },
+  "tagChip": {
+    "addTag": "Add tag",
+    "removeTag": "Remove tag {{tag}}"
+  },
+  "mobileKeyboard": {
+    "controls": "Keyboard controls",
+    "dragToMove": "Drag to move",
+    "close": "Close keyboard controls"
+  },
+  "usage": {
+    "title": "Global Token Usage",
+    "ariaLabel": "Usage statistics",
+    "input": "Input",
+    "output": "Output",
+    "cacheRead": "Cache Read",
+    "cacheWrite": "Cache Write",
+    "total": "Total",
+    "cachedInput": "Cached Input",
+    "reasoning": "Reasoning",
+    "rateLimit": "Rate Limit (5h)",
+    "models": "Models ({{count}})",
+    "inOut": "In / Out",
+    "notMeasured": "Not measured"
+  },
+  "terminal": {
+    "splitHorizontal": "Split horizontal",
+    "splitVertical": "Split vertical",
+    "reconnect": "Reconnect",
+    "closeTab": "Close tab",
+    "disconnected": "Disconnected",
+    "windowMissing": "Window not found",
+    "respawn": "Respawn",
+    "unregisteredWindow": "This window is not registered in AZITO and cannot be respawned",
+    "launchingClaude": "Launching Claude Code…",
+    "launchingCodex": "Launching Codex…",
+    "launchingAgent": "Launching agent…",
+    "clipboardFailed": "Copy failed: Clipboard API is unavailable without HTTPS",
+    "connecting": "Connecting…",
+    "launchTimeout": "Launch timed out",
+    "supervisedMonitoring": "Monitoring agent launch…",
+    "continueDisplay": "Continuing to display",
+    "respawning": "Respawning…"
+  },
+  "resourceWarning": {
+    "title": "Server resources are constrained",
+    "freeMemory": "Free memory",
+    "loadPerCore": "Load / Core",
+    "minimum": "Minimum",
+    "maximum": "Maximum",
+    "executeAnyway": "Execute anyway",
+    "respawnAnyway": "Respawn anyway",
+    "description": "You are trying to run on a server with constrained resources.",
+    "skipNote": "Press {{actionLabel}} to skip the resource check and proceed."
+  },
+  "statusbar": {
+    "healthy": "Healthy",
+    "warning": "Warning",
+    "critical": "Critical",
+    "updateAvailable": "Update available",
+    "updateAvailableWithCount": "Update available ({{count}})",
+    "disconnected": "Disconnected",
+    "criticalMemory": "Critical (Memory {{percent}}%)",
+    "warningMemory": "Warning (Memory {{percent}}%)",
+    "fetchingResources": "Fetching resource information…",
+    "deleteFailed": "Delete failed: {{error}}"
+  },
+  "globalPages": {
+    "backToWorkspace": "Back to workspace",
+    "workspace": "Workspace",
+    "serversList": "Servers list"
+  }
+}

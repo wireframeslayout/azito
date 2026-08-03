@@ -1,0 +1,88 @@
+{
+  "issues": {
+    "title": "Issues",
+    "pullRequests": "プルリクエスト",
+    "open": "オープン",
+    "closed": "クローズ",
+    "all": "すべて",
+    "refresh": "リストを更新",
+    "searchPlaceholder": "Issueを検索...",
+    "noMatching": "一致するIssueがありません",
+    "noIssues": "Issueが見つかりません",
+    "viewTask": "タスクを表示",
+    "createTask": "+ タスク",
+    "createTaskFull": "タスクを作成",
+    "noPullRequests": "プルリクエストが見つかりません",
+    "loadMore": "さらに読み込む",
+    "backToList": "リストに戻る",
+    "openOnGitHub": "GitHubで開く",
+    "loading": "Issue #{{number}} を読み込み中...",
+    "viewTaskLink": "リンクされたタスクを表示",
+    "createTaskFromIssue": "このIssueからタスクを作成",
+    "prStatus": {
+      "draft": "ドラフト",
+      "merged": "マージ済み",
+      "closed": "クローズ",
+      "open": "オープン"
+    },
+    "import": {
+      "title": "GitHubからインポート",
+      "repository": "リポジトリ",
+      "searchPlaceholder": "Issueを検索...",
+      "noIssues": "Issueが見つかりません",
+      "selectRepository": "リポジトリを選択",
+      "loadMore": "さらに読み込む"
+    }
+  },
+  "diff": {
+    "noChanges": "変更なし",
+    "noChangesDescription": "ブランチ間に差分はありません。",
+    "fileCount_one": "{{count}} ファイル",
+    "fileCount_other": "{{count}} ファイル",
+    "truncated": "（切り詰め）",
+    "hideFileList": "ファイル一覧を隠す",
+    "showFileList": "ファイル一覧を表示",
+    "changedFiles": "変更ファイル",
+    "binary": "バイナリ",
+    "largeFile": "大きなファイル",
+    "binaryNotShown": "バイナリファイルは表示されません",
+    "errors": {
+      "invalidResponse": "無効なdiffレスポンス",
+      "loadFailed": "diffの読み込みに失敗しました",
+      "loadTitle": "diff読み込みエラー",
+      "invalidCommitResponse": "無効なレスポンス",
+      "loadCommitsFailed": "コミットの読み込みに失敗しました",
+      "loadCommitsTitle": "コミット読み込みエラー"
+    }
+  },
+  "commits": {
+    "noCommits": "コミットなし",
+    "noCommitsDescription": "この範囲にコミットが見つかりません。",
+    "commitList": "コミット一覧"
+  },
+  "repo": {
+    "repositories": "リポジトリ",
+    "addRepository": "リポジトリを追加",
+    "provider": "プロバイダー",
+    "github": "GitHub",
+    "gitlab": "GitLab",
+    "other": "その他",
+    "repositoryUrl": "リポジトリURL",
+    "repositoryUrlPlaceholder": "https://github.com/owner/repo",
+    "owner": "オーナー",
+    "ownerPlaceholder": "owner",
+    "repoName": "リポジトリ名",
+    "repoNamePlaceholder": "repo",
+    "displayName": "名前（任意）",
+    "displayNamePlaceholder": "表示名",
+    "token": "トークン（任意）",
+    "tokenHint": "空 = gh CLI認証",
+    "tokenPlaceholder": "ghp_...",
+    "viewOnGitHub": "GitHubで表示",
+    "otherSection": "その他",
+    "noRepositories": "リポジトリがありません。+ をクリックして追加してください。",
+    "removeConfirmTitle": "リポジトリを削除",
+    "removeConfirmMessage": "このリポジトリを削除しますか？",
+    "urlRequired": "URLは必須です"
+  }
+}

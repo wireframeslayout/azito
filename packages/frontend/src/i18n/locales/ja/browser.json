@@ -1,0 +1,44 @@
+{
+  "newTab": "新しいタブ",
+  "closeTab": "タブを閉じる",
+  "closeTabLabel": "タブを閉じる: {{name}}",
+  "clipboardDenied": "ブラウザによりクリップボードへのアクセスが拒否されました",
+  "fileSizeExceeded": "ファイルサイズが上限（10MB）を超えています: {{names}}",
+  "fileReadFailed": "ファイルの読み取りに失敗しました",
+  "keyboardInputAriaLabel": "ブラウザキーボード入力",
+  "historyAriaLabel": "閲覧履歴",
+  "dialog": {
+    "inputAriaLabel": "ダイアログ入力",
+    "alert": "アラート",
+    "confirm": "確認",
+    "prompt": "入力",
+    "beforeunload": "このページを離れますか？",
+    "signIn": "サインイン",
+    "ok": "OK",
+    "default": "OK",
+    "username": "ユーザー名",
+    "password": "パスワード"
+  },
+  "startPage": {
+    "title": "AZITO 共有ブラウザ — {{serverName}}",
+    "description": "サーバー上で動作する共有 Chromium です。ここで開いた画面はチームの全員が同じ状態で閲覧できます。",
+    "tips": {
+      "localhost": {
+        "title": "localhost をそのままプレビュー",
+        "description": "このサーバー上の開発サーバー（:5173 など）に直接つながります"
+      },
+      "devtools": {
+        "title": "DevTools",
+        "description": "右上のリンクから、このタブ専用の DevTools を開けます"
+      },
+      "cursor": {
+        "title": "カーソル共有",
+        "description": "同じタブを見ている人のカーソルが色付きで表示されます"
+      },
+      "touch": {
+        "title": "タッチ操作対応",
+        "description": "モバイルではスワイプでスクロール、タップでクリックできます"
+      }
+    }
+  }
+}

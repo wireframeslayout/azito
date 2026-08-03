@@ -1,0 +1,70 @@
+{
+  "title": "Sidekicks",
+  "list": {
+    "newSidekick": "+ 新規Sidekick",
+    "newSidekickShort": "+ 新規",
+    "description": "Sidekickはタグ付きのスキルパッケージです。フェーズタグはSidekickが実行できるフェーズを決定します。それ以外のタグは自由形式です。ビルトインパッケージはカスタマイズ可能で、編集するとオリジナルを変更せずにユーザーレイヤーにコピーが作成されます。",
+    "filterByTag": "タグでSidekickを絞り込み",
+    "clearFilter": "フィルターをクリア",
+    "noSidekicks": "Sidekickがありません",
+    "noSidekicksDescription": "Sidekickパッケージを作成してフェーズの動作をカスタマイズ",
+    "noSidekicksMatch": "このタグに一致するSidekickがありません",
+    "noSidekicksMatchDescription": "フィルターをクリアしてすべてのSidekickを表示",
+    "builtIn": "ビルトイン",
+    "custom": "カスタム",
+    "default": "デフォルト",
+    "overridden": "オーバーライド済み",
+    "scripts": "スクリプト",
+    "loadFailed": "Sidekickの読み込みに失敗しました: {{error}}"
+  },
+  "form": {
+    "newSidekick": "新規Sidekick",
+    "builtInWarning": "これはビルトインSidekickです。変更を保存するとユーザーレイヤーにコピーが作成されます。ビルトインのオリジナルは変更されず、このパッケージにはビルトインの更新が反映されなくなります。",
+    "name": "名前",
+    "nameHint": "小文字英数字とハイフンのみ。カスタムSidekickには説明的な名前ではなく、独自のペルソナ名（例: \"robin\"、\"falcon\"）を推奨します。",
+    "namePlaceholder": "例: robin",
+    "description": "説明",
+    "descriptionPlaceholder": "このSidekickが行うこと",
+    "tags": "タグ",
+    "tagsHint": "planning/implementing/reviewing/testing/pushingはフェーズタグです（フェーズタグを持つSidekickのみそのフェーズに割り当て可能）。フェーズタグなし＝汎用Sidekick（例: Issue作成）。タグを入力してEnterを押すか、下の候補をクリックしてください。",
+    "tagsPlaceholder": "例: implementing",
+    "defaultForPhase": "フェーズタグのデフォルト",
+    "addPhaseTagHint": "フェーズタグ（planning/implementing/reviewing/testing/pushing）を追加してデフォルトとして設定可能にします。",
+    "skillBody": "SKILL.md 本文",
+    "skillBodyHint": "スキルパッケージのMarkdown本文（フロントマターは上記で管理）。{{task.*}} / {{project.*}} / {{module.*}} / {{sidekick.*}} テンプレート変数が使用可能。",
+    "packageContents": "パッケージ内容",
+    "hasScripts": "scripts/あり",
+    "noScripts": "scripts/なし",
+    "hasReferences": "references/あり",
+    "noReferences": "references/なし",
+    "scriptsTitle": "スクリプト（任意）",
+    "scriptsDescription": "scripts/配下に配置される実行可能ファイル。作成時のみ設定可能。",
+    "scriptFilenamePlaceholder": "例: check.sh",
+    "removeScript": "削除",
+    "removeScriptLabel": "スクリプト {{index}} を削除",
+    "scriptContentPlaceholder": "スクリプト内容",
+    "addScript": "+ スクリプトを追加",
+    "revertToBuiltIn": "ビルトインに戻す",
+    "deleteSidekick": "Sidekickを削除"
+  },
+  "validation": {
+    "descriptionRequired": "説明は必須です",
+    "nameRequired": "名前は必須です",
+    "nameFormat": "名前は小文字英字または数字で始まり、小文字英字・数字・ハイフンのみ使用できます",
+    "invalidTag": "無効なタグ「{{tag}}」: 小文字英字または数字で始まり、小文字英字・数字・ハイフンのみ使用できます",
+    "scriptFilenameRequired": "すべてのスクリプトにファイル名が必要です"
+  },
+  "confirm": {
+    "copyBuiltIn": "ビルトインSidekickをコピー",
+    "copyBuiltInMessage": "これはビルトインSidekickです。保存するとユーザーレイヤーにコピーが作成されます。今後「{{name}}」のビルトイン更新は反映されなくなります。続行しますか？",
+    "revert": "Sidekickを元に戻す",
+    "revertMessage": "「{{name}}」をビルトインバージョンに戻しますか？カスタマイズした内容は破棄されます。",
+    "delete": "Sidekickを削除",
+    "deleteMessage": "Sidekick「{{name}}」を削除しますか？この操作は元に戻せません。"
+  },
+  "errors": {
+    "unexpectedEmpty": "サーバーから空のレスポンスが返されました",
+    "unexpectedResponse": "サーバーから予期しないレスポンスが返されました",
+    "loadFailed": "Sidekickの読み込みに失敗しました: {{error}}"
+  }
+}

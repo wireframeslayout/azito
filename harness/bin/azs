@@ -1,0 +1,110 @@
+#!/bin/bash
+# azs (azito-supervisor 起動ラッパー) — tmux pane 内で `azs <command...>` と
+# 打つと、azito-supervisor (tui-supervisor) 経由でエージェントを起動し、
+# AZITO の稼働監視 Tier 0 (PTY バイト監視) に自動で乗る。
+#
+#   azs claude --model sonnet
+#   azs codex
+#   azs python3 -c 'print("hi there")'
+#
+# azitoctl（シグナル送信、必須データなので env 欠如は exit 3）と違い、
+# azs は「エージェントの起動そのもの」を代行するラッパーである。supervisor
+# が見つからない・tmux 外である等の理由で監視に乗せられなくても、
+# ユーザーの起動操作そのものは絶対に止めてはいけない — 常に「警告 (stderr)
+# + supervisor 無しで直接 exec」に degrade する。
+set -euo pipefail
+
+usage_exit() {
+  echo "Usage: azs <agent-command...>  (例: azs claude --model sonnet)" >&2
+  exit 2
+}
+
+[[ $# -ge 1 ]] || usage_exit
+
+AZITOCTL_ENV_FILE="$HOME/.azito/azitoctl.env"
+
+# ── tmux内チェック ──
+# supervisor 登録には pane の target (session:window.pane) が要る。tmux 外
+# (直接 ssh ログインしたシェル等) では監視自体が成立しないため、supervisor
+# を経由せずコマンドをそのまま起動する。
+if [[ -z "${TMUX:-}" || -z "${TMUX_PANE:-}" ]]; then
+  echo "azs: not running inside a tmux pane; launching without supervisor" >&2
+  exec "$@"
+fi
+
+# ── target解決 ──
+TARGET="$(tmux display-message -p -t "$TMUX_PANE" '#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null)" || TARGET=""
+if [[ -z "$TARGET" ]]; then
+  echo "azs: failed to resolve tmux target; launching without supervisor" >&2
+  exec "$@"
+fi
+
+# ── env解決 (serverName / supervisor path / runner) ──
+# AZITO_SERVER_NAME / AZITO_SUPERVISOR_PATH / AZITO_SUPERVISOR_RUNNER は
+# 環境変数優先。欠けていれば ~/.azito/azitoctl.env を source して補う
+# (azitoctl / azito-activity.sh と同じ探索順)。azitoctl.env は setup.sh が
+# printf %q でクォートして書き出す信頼済みファイル (chmod 600)。
+if [[ ( -z "${AZITO_SERVER_NAME:-}" || -z "${AZITO_SUPERVISOR_PATH:-}" || -z "${AZITO_SUPERVISOR_RUNNER:-}" ) && -f "$AZITOCTL_ENV_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "$AZITOCTL_ENV_FILE"
+fi
+
+# serverName: env/file → 無ければ local を既定値とする (ローカル開発で
+# --server-name 無しに setup.sh を実行したケースへの配慮)。
+SERVER_NAME="${AZITO_SERVER_NAME:-local}"
+# runner: 既定 node。dev で dist 未ビルドの src を走らせる等の特殊ケース向けに
+# 差し替え可能にしておく (例: AZITO_SUPERVISOR_RUNNER="npx tsx")。
+RUNNER="${AZITO_SUPERVISOR_RUNNER:-node}"
+
+# ── supervisor 実行ファイル解決 ──
+# 探索順 (いずれも実ファイル存在チェック `-f` を必須とする):
+#   a. $AZITO_SUPERVISOR_PATH (env / azitoctl.env。setup.sh が既定で agent
+#      サーバーのパスを書き出す)
+#   b. local repo dist: <this-script>/../../packages/tui-supervisor/dist/
+#      azito-supervisor.cjs (ローカルチェックアウト。SupervisorPath.ts の
+#      localSupervisorDistPath と同じ)
+#   c. ~/.azito/agent/current/azito-supervisor.cjs (agent サーバーの既定パス。
+#      SupervisorPath.ts の AGENT_SUPERVISOR_PATH と同じ)
+#   d. どれも存在しなければ supervisor 不在 → 警告 + 直接 exec (degrade)
+#
+# パスは常に固定的に 1 引数として扱う (eval を使わない)。AZITO_SUPERVISOR_PATH
+# に `$(...)` や `;` が混入しても任意実行されないようにするため。
+SUPERVISOR_PATH=""
+
+if [[ -n "${AZITO_SUPERVISOR_PATH:-}" && -f "$AZITO_SUPERVISOR_PATH" ]]; then
+  SUPERVISOR_PATH="$AZITO_SUPERVISOR_PATH"
+fi
+
+if [[ -z "$SUPERVISOR_PATH" ]]; then
+  # harness/bin/azs → repo root は 2 階層上。readlink -f で symlink 経由の
+  # 起動 (~/.claude 等からのリンク) でも実体位置を解決する。
+  SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+  REPO_DIST="$SCRIPT_DIR/../../packages/tui-supervisor/dist/azito-supervisor.cjs"
+  if [[ -f "$REPO_DIST" ]]; then
+    SUPERVISOR_PATH="$REPO_DIST"
+  fi
+fi
+
+if [[ -z "$SUPERVISOR_PATH" ]]; then
+  AGENT_SUPERVISOR_PATH="$HOME/.azito/agent/current/azito-supervisor.cjs"
+  if [[ -f "$AGENT_SUPERVISOR_PATH" ]]; then
+    SUPERVISOR_PATH="$AGENT_SUPERVISOR_PATH"
+  fi
+fi
+
+if [[ -z "$SUPERVISOR_PATH" ]]; then
+  echo "azs: azito-supervisor not found (AZITO_SUPERVISOR_PATH unset/missing, no repo dist, no agent bundle at ~/.azito/agent/current); launching without supervisor" >&2
+  exec "$@"
+fi
+
+# ── 起動 ──
+# supervisor の cli.ts は `--` 以降を join(' ') して単一シェルコマンド文字列に
+# し、PtyProxy が `shell -lc <文字列>` で実行する (hub 側 wrapWithSupervisor
+# の起動経路と同じ契約)。そのため引数の空白・メタ文字が実行構文として再解釈
+# されないよう、azs 側で printf %q により各引数をシェルクォートして単一文字列
+# にまとめ、それを 1 引数として `-- "$CHILD"` で渡す (wrapWithSupervisor が
+# shellQuote(cmd) を 1 引数として渡すのと同じ方式)。これで
+# `azs python3 -c 'print("hi there")'` の引数境界が保たれる。
+CHILD="$(printf '%q ' "$@")"
+exec "$RUNNER" "$SUPERVISOR_PATH" --server "$SERVER_NAME" --target "$TARGET" -- "$CHILD"

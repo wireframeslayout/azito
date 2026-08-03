@@ -1,0 +1,366 @@
+import type { FastifyPluginCallback } from 'fastify';
+import type { IServerRepository } from '../../servers/Server';
+import type { TmuxClient, TmuxSession } from '../TmuxClient';
+import type { SqliteWindowRepository } from '../../windows/SqliteWindowRepository';
+import type { NotificationBus } from '../../notifications/NotificationBus';
+import type { ResourceGuard } from '../../servers/resources/ResourceGuard';
+
+// ─── Types ───
+
+export interface SessionsRouteOptions {
+  serverRepo: IServerRepository;
+  tmux: TmuxClient;
+  windowRepo?: SqliteWindowRepository;
+  notificationBus?: NotificationBus;
+  resourceGuard?: ResourceGuard;
+}
+
+// ─── Session cache (30 s TTL) ───
+
+const sessionCache = new Map<string, { data: TmuxSession[]; ts: number }>();
+const SESSION_CACHE_TTL = 30000;
+
+export function invalidateSessionCache(serverName: string): void {
+  sessionCache.delete(serverName);
+}
+
+// ─── Linked-session GC throttle (60 s per server) ───
+
+const lastGcRun = new Map<string, number>();
+const GC_INTERVAL = 60000;
+
+// ─── Plugin ───
+
+const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, opts, done) => {
+  const { serverRepo, tmux } = opts;
+
+  // Invalidate the hub-side cache AND push a sessions:updated notification, so clients
+  // refresh immediately after a hub-initiated mutation. Remote (ssh/agent) servers have
+  // no reliable tmux-hook path back to the hub, so relying on hooks alone leaves the UI
+  // stale for up to SESSION_CACHE_TTL.
+  function notifySessionsChanged(serverName: string): void {
+    sessionCache.delete(serverName);
+    opts.notificationBus?.emit({ type: 'sessions:updated', payload: { serverName } });
+  }
+
+  // ── GET /api/servers/:name/sessions ──
+  fastify.get<{ Params: { name: string } }>(
+    '/api/servers/:name/sessions',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+
+      const cached = sessionCache.get(request.params.name);
+      if (cached && Date.now() - cached.ts < SESSION_CACHE_TTL) {
+        return cached.data;
+      }
+
+      try {
+        const sessions = await tmux.listSessions(srv);
+        sessionCache.set(request.params.name, { data: sessions, ts: Date.now() });
+
+        const now = Date.now();
+        const lastRun = lastGcRun.get(request.params.name) ?? 0;
+        if (now - lastRun > GC_INTERVAL) {
+          lastGcRun.set(request.params.name, now);
+          tmux.cleanupLinkedSessions(srv).then((n) => {
+            if (n > 0) fastify.log.info(`GC: cleaned ${n} linked session(s) on ${request.params.name}`);
+          }).catch(() => {});
+        }
+
+        return sessions;
+      } catch (err: unknown) {
+        return reply.status(500).send({ error: (err as Error).message });
+      }
+    },
+  );
+
+  // ── POST /api/servers/:name/sessions ──
+  fastify.post<{ Params: { name: string } }>(
+    '/api/servers/:name/sessions',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const { name, command, windowName: reqWindowName, force } = request.body as { name?: string; command?: string; windowName?: string; force?: boolean };
+      if (!name) return reply.status(400).send({ error: 'Session name required' });
+      if (opts.resourceGuard && force !== true) {
+        const status = await opts.resourceGuard.check(srv);
+        if (!status.ok)
+          return reply.status(409).send({ error: 'insufficient_resources', resources: status });
+      }
+      try {
+        const { result, windowName } = await tmux.createSession(srv, name, { command, windowName: reqWindowName });
+        // Agent/SSH transports resolve with a non-zero code instead of throwing — surface it.
+        if (result.code !== 0)
+          return reply.status(500).send({ error: `new-session failed: ${result.stderr || result.stdout}` });
+        notifySessionsChanged(request.params.name);
+        return { ok: true, windowName };
+      } catch (err: unknown) {
+        return reply.status(500).send({ error: (err as Error).message });
+      }
+    },
+  );
+
+  // ── POST /api/servers/:name/sessions/:session/windows ──
+  fastify.post<{ Params: { name: string; session: string } }>(
+    '/api/servers/:name/sessions/:session/windows',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const { name: reqName, force } = (request.body as { name?: string; force?: boolean } | null) || {};
+      if (opts.resourceGuard && force !== true) {
+        const status = await opts.resourceGuard.check(srv);
+        if (!status.ok)
+          return reply.status(409).send({ error: 'insufficient_resources', resources: status });
+      }
+      try {
+        const { result, windowName } = await tmux.createWindow(srv, request.params.session, reqName || undefined);
+        if (result.code !== 0)
+          return reply.status(500).send({ error: `new-window failed: ${result.stderr || result.stdout}` });
+        notifySessionsChanged(request.params.name);
+        return { ok: true, windowName };
+      } catch (err: unknown) {
+        return reply.status(500).send({ error: (err as Error).message });
+      }
+    },
+  );
+
+  // ── POST /api/servers/:name/sessions/:session/windows/:window/panes ──
+  fastify.post<{ Params: { name: string; session: string; window: string } }>(
+    '/api/servers/:name/sessions/:session/windows/:window/panes',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const direction = ((request.body as Record<string, unknown>)?.direction as string) || 'v';
+      const target = `${request.params.session}:${request.params.window}`;
+      try {
+        await tmux.splitPane(srv, target, direction as 'h' | 'v');
+        notifySessionsChanged(request.params.name);
+        return { ok: true };
+      } catch (err: unknown) {
+        return reply.status(500).send({ error: (err as Error).message });
+      }
+    },
+  );
+
+  // ── DELETE /api/servers/:name/sessions/:session ──
+  fastify.delete<{ Params: { name: string; session: string } }>(
+    '/api/servers/:name/sessions/:session',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      try {
+        await tmux.killSession(srv, request.params.session);
+        notifySessionsChanged(request.params.name);
+        return { ok: true };
+      } catch (err: unknown) {
+        return reply.status(500).send({ error: (err as Error).message });
+      }
+    },
+  );
+
+  // ── DELETE /api/servers/:name/windows/:target ──
+  fastify.delete<{ Params: { name: string; target: string } }>(
+    '/api/servers/:name/windows/:target',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      try {
+        const target = decodeURIComponent(request.params.target);
+        // Resolve identity before killing — once the window is gone, tmux can no longer tell us
+        // its canonical name/index, and the sidebar's index-form target ("session:2") won't match
+        // the name-form target ("session:win--xxxx") the DB row was stored under.
+        const identity = await tmux.getWindowIdentity(srv, target);
+        // The local transport throws on failure while agent/SSH resolve with a non-zero
+        // code — normalize both into an ExecResult so the already-gone check covers all.
+        const result = await tmux.killWindow(srv, target)
+          .catch((err: Error) => ({ stdout: '', stderr: err.message, code: 1 }));
+        if (result.code !== 0) {
+          const output = `${result.stderr || ''}${result.stdout || ''}`;
+          const alreadyGone = output.includes("can't find");
+          if (!alreadyGone)
+            return reply.status(500).send({ error: `kill-window failed: ${result.stderr || result.stdout}` });
+          // Already gone — fall through to DB cleanup below.
+        }
+        notifySessionsChanged(request.params.name);
+        opts.windowRepo?.removeByServerAndTarget(request.params.name, target);
+        if (identity) {
+          opts.windowRepo?.removeByServerAndTarget(request.params.name, `${identity.sessionName}:${identity.windowName}`);
+          opts.windowRepo?.removeByServerAndTarget(request.params.name, `${identity.sessionName}:${identity.windowIndex}`);
+        }
+        // Clients hold terminal tabs under both name-form and index-form targets;
+        // return the resolved identity so they can close every matching tab.
+        return { ok: true, identity };
+      } catch (err: unknown) {
+        return reply.status(500).send({ error: (err as Error).message });
+      }
+    },
+  );
+
+  // ── DELETE /api/servers/:name/panes/:target ──
+  fastify.delete<{ Params: { name: string; target: string } }>(
+    '/api/servers/:name/panes/:target',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      try {
+        const target = decodeURIComponent(request.params.target);
+        const result = await tmux.killPane(srv, target)
+          .catch((err: Error) => ({ stdout: '', stderr: err.message, code: 1 }));
+        if (result.code !== 0) {
+          const output = `${result.stderr || ''}${result.stdout || ''}`;
+          const alreadyGone = output.includes("can't find");
+          if (!alreadyGone)
+            return reply.status(500).send({ error: `kill-pane failed: ${result.stderr || result.stdout}` });
+          // Already gone — fall through to DB cleanup below. Note: the window itself may still be
+          // alive (only this pane was removed), so we do not resolve/clean up window identities here.
+        }
+        notifySessionsChanged(request.params.name);
+        opts.windowRepo?.removeByServerAndTarget(request.params.name, target);
+        return { ok: true };
+      } catch (err: unknown) {
+        return reply.status(500).send({ error: (err as Error).message });
+      }
+    },
+  );
+
+  // ── PUT /api/servers/:name/sessions/:session/rename ──
+  fastify.put<{ Params: { name: string; session: string } }>(
+    '/api/servers/:name/sessions/:session/rename',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const { name } = request.body as { name?: string };
+      if (!name) return reply.status(400).send({ error: 'New name required' });
+      try {
+        await tmux.renameSession(srv, request.params.session, name);
+        notifySessionsChanged(request.params.name);
+        return { ok: true };
+      } catch (err: unknown) {
+        return reply.status(500).send({ error: (err as Error).message });
+      }
+    },
+  );
+
+  // ── PUT /api/servers/:name/windows/:target/rename ──
+  fastify.put<{ Params: { name: string; target: string } }>(
+    '/api/servers/:name/windows/:target/rename',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const { name } = request.body as { name?: string };
+      if (!name) return reply.status(400).send({ error: 'New name required' });
+      try {
+        await tmux.renameWindow(srv, decodeURIComponent(request.params.target), name);
+        notifySessionsChanged(request.params.name);
+        return { ok: true };
+      } catch (err: unknown) {
+        return reply.status(500).send({ error: (err as Error).message });
+      }
+    },
+  );
+
+  // ── PUT /api/servers/:name/panes/:target/rename ──
+  fastify.put<{ Params: { name: string; target: string } }>(
+    '/api/servers/:name/panes/:target/rename',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const { title } = request.body as { title?: string };
+      if (!title) return reply.status(400).send({ error: 'New title required' });
+      try {
+        await tmux.renamePane(srv, decodeURIComponent(request.params.target), title);
+        notifySessionsChanged(request.params.name);
+        return { ok: true };
+      } catch (err: unknown) {
+        return reply.status(500).send({ error: (err as Error).message });
+      }
+    },
+  );
+
+  // ── GET /api/servers/:name/panes/:target/capture ──
+  fastify.get<{
+    Params: { name: string; target: string };
+    Querystring: { start?: string; end?: string; history?: string };
+  }>(
+    '/api/servers/:name/panes/:target/capture',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+
+      const startLine = request.query.start != null ? parseInt(request.query.start, 10) : undefined;
+      const endLine = request.query.end != null ? parseInt(request.query.end, 10) : undefined;
+      const decodedTarget = decodeURIComponent(request.params.target);
+
+      // Legacy: ?history=N
+      if (startLine == null && endLine == null && request.query.history) {
+        const h = parseInt(request.query.history, 10);
+        try {
+          const { stdout } = await tmux.capturePane(srv, decodedTarget, -h, undefined);
+          return { content: stdout };
+        } catch (err: unknown) {
+          return reply.status(500).send({ error: (err as Error).message });
+        }
+      }
+
+      try {
+        const { stdout } = await tmux.capturePane(srv, decodedTarget, startLine, endLine);
+        return { content: stdout };
+      } catch (err: unknown) {
+        return reply.status(500).send({ error: (err as Error).message });
+      }
+    },
+  );
+
+  // ── POST /api/servers/:name/panes/:target/send-keys ──
+  fastify.post<{ Params: { name: string; target: string } }>(
+    '/api/servers/:name/panes/:target/send-keys',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const { keys } = request.body as { keys?: string[] };
+      if (!keys || !Array.isArray(keys))
+        return reply.status(400).send({ error: 'keys array required' });
+      try {
+        await tmux.sendKeys(srv, decodeURIComponent(request.params.target), keys);
+        return { ok: true };
+      } catch (err: unknown) {
+        return reply.status(500).send({ error: (err as Error).message });
+      }
+    },
+  );
+
+  // ── POST /api/servers/:name/panes/:target/zoom ──
+  fastify.post<{ Params: { name: string; target: string } }>(
+    '/api/servers/:name/panes/:target/zoom',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      try {
+        await tmux.zoomPane(srv, decodeURIComponent(request.params.target));
+        return { ok: true };
+      } catch (err: unknown) {
+        return reply.status(500).send({ error: (err as Error).message });
+      }
+    },
+  );
+
+  // ── POST /api/servers/:name/panes/:target/unzoom ──
+  fastify.post<{ Params: { name: string; target: string } }>(
+    '/api/servers/:name/panes/:target/unzoom',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      try {
+        await tmux.unzoomPane(srv, decodeURIComponent(request.params.target));
+        return { ok: true };
+      } catch (err: unknown) {
+        return reply.status(500).send({ error: (err as Error).message });
+      }
+    },
+  );
+
+  done();
+};
+
+export default sessionsRoutes;

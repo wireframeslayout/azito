@@ -1,0 +1,35 @@
+{
+  "name": "azito-agent-base",
+  "version": "1.0.0",
+  "description": "Browser-based tmux session manager for Claude Code / Codex agents",
+  "private": true,
+  "workspaces": [
+    "packages/server",
+    "packages/frontend",
+    "packages/tui-supervisor"
+  ],
+  "scripts": {
+    "dev": "npm run dev:server & npm run dev:web & wait",
+    "dev:server": "PORT=3001 npm run dev --workspace=packages/server",
+    "dev:web": "npm run dev --workspace=packages/frontend -- --host",
+    "build": "npm run build:server && npm run build:web",
+    "build:server": "npm run build --workspace=packages/server",
+    "build:web": "npx -w packages/frontend vite build --outDir ../../public --emptyOutDir",
+    "start": "PORT=3001 node packages/server/dist/main.js",
+    "build:hub": "npx -w packages/server tsx scripts/build-hub.ts",
+    "depcruise": "depcruise packages/server/src --config .dependency-cruiser.cjs"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.10.0",
+    "dompurify": "^3.4.11",
+    "express": "^4.21.0",
+    "node-pty": "^1.0.0",
+    "ssh-config": "^5.0.0",
+    "ssh2": "^1.16.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/dompurify": "^3.0.5",
+    "dependency-cruiser": "^18.0.0"
+  }
+}

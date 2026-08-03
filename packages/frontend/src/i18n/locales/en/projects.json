@@ -1,0 +1,144 @@
+{
+  "title": "Projects",
+  "newProject": "+ New Project",
+  "newProjectShort": "+ New",
+  "emptyState": {
+    "title": "No projects yet",
+    "description": "Create a project to group your servers and Units"
+  },
+  "chips": {
+    "windows": "{{count}} windows",
+    "repos": "{{count}} repos"
+  },
+  "search": {
+    "placeholder": "Search projects...",
+    "allProjects": "All Projects",
+    "newProject": "New Project"
+  },
+  "contextMenu": {
+    "unpin": "Unpin",
+    "pin": "Pin",
+    "moveUp": "Move up",
+    "moveDown": "Move down"
+  },
+  "sidebar": {
+    "servers": "Servers",
+    "sidekicks": "Sidekicks",
+    "units": "Units",
+    "azitoMenu": "Azito Menu",
+    "systemUpdate": "System update available",
+    "moreProjects": "More Projects",
+    "installApp": "Install App"
+  },
+  "form": {
+    "newProject": "New Project",
+    "createProject": "Create Project",
+    "nameRequired": "Name is required",
+    "slugRequired": "Slug is required"
+  },
+  "general": {
+    "projectName": "Project Name",
+    "projectNamePlaceholder": "project name",
+    "slug": "Slug",
+    "slugHint": "Used as tmux session name. Lowercase letters, numbers, and hyphens only.",
+    "slugPlaceholder": "project-slug",
+    "description": "Description",
+    "descriptionPlaceholder": "Project description...",
+    "icon": "Icon",
+    "iconHint": "Emoji or uploaded image displayed on the project sidebar",
+    "iconPlaceholder": "e.g. paste an emoji here",
+    "uploadImage": "Upload Image",
+    "imageIconSet": "Image icon set",
+    "color": "Color",
+    "colorHint": "Accent color for the project sidebar icon",
+    "colorNone": "(none)",
+    "scale": "Scale",
+    "repositoryUrl": "Repository URL",
+    "repositoryUrlPlaceholder": "https://github.com/org/repo",
+    "defaultBranch": "Default Branch",
+    "defaultBranchPlaceholder": "main",
+    "unitPrompt": "Unit Prompt",
+    "unitPromptHint": "Project-level instructions for all Units. Combined with each Unit's own system prompt.",
+    "unitPromptPlaceholder": "e.g. This is a Next.js application using TypeScript..."
+  },
+  "settings": {
+    "title": "Settings",
+    "sections": {
+      "general": "General",
+      "repositories": "Repositories",
+      "serverEnvironments": "Server Environments",
+      "secrets": "Secrets",
+      "dangerZone": "Danger Zone"
+    },
+    "general": {
+      "defaultUnit": "Default Unit",
+      "defaultUnitHint": "Used for tasks in this project that don't specify their own Unit.",
+      "defaultUnitNone": "(None)"
+    },
+    "repositories": {
+      "tip": "Tip: Use the Repositories tab in the activity bar to browse issues.",
+      "count": "{{count}} repositories",
+      "provider": "Provider",
+      "github": "GitHub",
+      "gitlab": "GitLab",
+      "other": "Other",
+      "repositoryUrl": "Repository URL",
+      "repositoryUrlPlaceholder": "https://github.com/owner/repo",
+      "owner": "Owner",
+      "ownerPlaceholder": "e.g. octocat",
+      "repoName": "Repository Name",
+      "repoNamePlaceholder": "e.g. my-repo",
+      "displayName": "Display Name (optional)",
+      "displayNamePlaceholder": "e.g. frontend",
+      "token": "Token (optional)",
+      "tokenHint": "Leave empty to use gh CLI authentication",
+      "tokenPlaceholder": "ghp_xxxx...",
+      "addRepository": "Add Repository",
+      "noRepositories": "No repositories configured"
+    },
+    "windows": {
+      "title": "Windows",
+      "noWindows": "No windows"
+    },
+    "servers": {
+      "count": "{{count}} server environments",
+      "server": "Server",
+      "workingDirectory": "Working Directory",
+      "workingDirectoryPlaceholder": "/path/to/project",
+      "branch": "Branch (optional)",
+      "branchPlaceholder": "e.g. feat/my-feature",
+      "tmuxSession": "Tmux Session (optional)",
+      "tmuxSessionHint": "Defaults to 'azito' when left empty.",
+      "tmuxSessionPlaceholder": "azito",
+      "noServers": "No server environments configured",
+      "session": "session: {{name}}"
+    },
+    "secrets": {
+      "note": "Values registered here are injected as environment variables (AZITO_SECRET_<NAME>) into task execution panes. Only register credentials that are safe to share with agents. Values cannot be retrieved after saving.",
+      "noteLabel": "Note:",
+      "namePlaceholder": "MY_SECRET_KEY",
+      "valueLabel": "Value",
+      "valuePlaceholder": "••••••••",
+      "noSecrets": "No secrets registered.",
+      "added": "Added {{date}}",
+      "deleteSecret": "Delete",
+      "deleteSecretLabel": "Delete secret {{name}}",
+      "nameValidation": "Name must contain only A-Z, 0-9, _ (max 64 chars)",
+      "valueValidation": "Value is required (max 4096 chars)",
+      "saveFailed": "Failed to save secret",
+      "deleteFailed": "Failed to delete secret",
+      "deleteConfirm": "Delete Secret",
+      "deleteConfirmMessage": "Delete secret \"{{name}}\"? This cannot be undone."
+    },
+    "danger": {
+      "description": "Deleting a project will remove all associated windows and server configurations. Tasks will remain but will no longer be linked to this project.",
+      "deleteProject": "Delete Project",
+      "deleteConfirm": "Delete Project",
+      "deleteConfirmMessage": "Delete this project? This cannot be undone."
+    },
+    "resourceWarning": {
+      "title": "Server resources are running low",
+      "actionLabel": "Open anyway"
+    }
+  }
+}

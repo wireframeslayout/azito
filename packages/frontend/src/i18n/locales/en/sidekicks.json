@@ -1,0 +1,70 @@
+{
+  "title": "Sidekicks",
+  "list": {
+    "newSidekick": "+ New Sidekick",
+    "newSidekickShort": "+ New",
+    "description": "Sidekicks are tagged skill packages. Phase tags determine which phase a Sidekick can run; any other tag is free-form. Built-in packages can be customized — editing one creates a copy in your user layer without touching the original.",
+    "filterByTag": "Filter Sidekicks by tag",
+    "clearFilter": "Clear filter",
+    "noSidekicks": "No Sidekicks yet",
+    "noSidekicksDescription": "Create a Sidekick package to customize how a phase runs",
+    "noSidekicksMatch": "No Sidekicks match this tag",
+    "noSidekicksMatchDescription": "Clear the filter to see all Sidekicks",
+    "builtIn": "Built-in",
+    "custom": "Custom",
+    "default": "Default",
+    "overridden": "Overridden",
+    "scripts": "Scripts",
+    "loadFailed": "Failed to load Sidekicks: {{error}}"
+  },
+  "form": {
+    "newSidekick": "New Sidekick",
+    "builtInWarning": "This is a built-in Sidekick. Saving changes will copy it into your user layer — the built-in original stays untouched, and this package will no longer receive built-in updates.",
+    "name": "Name",
+    "nameHint": "Lowercase letters, digits, and hyphens only. Consider a distinct persona name for custom Sidekicks (e.g. \"robin\", \"falcon\") rather than a literal description.",
+    "namePlaceholder": "e.g. robin",
+    "description": "Description",
+    "descriptionPlaceholder": "What this Sidekick does",
+    "tags": "Tags",
+    "tagsHint": "planning/implementing/reviewing/testing/pushing are phase tags (only Sidekicks carrying a phase tag can be assigned to that phase). No phase tag = a general-purpose Sidekick (e.g. issue creation). Type a tag and press Enter, or click a suggestion below.",
+    "tagsPlaceholder": "e.g. implementing",
+    "defaultForPhase": "Default for its phase tag(s)",
+    "addPhaseTagHint": "Add a phase tag (planning/implementing/reviewing/testing/pushing) to make this Sidekick eligible as a default.",
+    "skillBody": "SKILL.md Body",
+    "skillBodyHint": "Markdown body of the skill package (frontmatter is managed above). Supports {{task.*}} / {{project.*}} / {{module.*}} / {{sidekick.*}} template variables.",
+    "packageContents": "Package Contents",
+    "hasScripts": "Has scripts/",
+    "noScripts": "No scripts/",
+    "hasReferences": "Has references/",
+    "noReferences": "No references/",
+    "scriptsTitle": "Scripts (optional)",
+    "scriptsDescription": "Executable files placed under scripts/. Can only be set at creation time.",
+    "scriptFilenamePlaceholder": "e.g. check.sh",
+    "removeScript": "Remove",
+    "removeScriptLabel": "Remove script {{index}}",
+    "scriptContentPlaceholder": "Script content",
+    "addScript": "+ Add Script",
+    "revertToBuiltIn": "Revert to built-in",
+    "deleteSidekick": "Delete Sidekick"
+  },
+  "validation": {
+    "descriptionRequired": "Description is required",
+    "nameRequired": "Name is required",
+    "nameFormat": "Name must start with a lowercase letter or digit and contain only lowercase letters, digits, and hyphens",
+    "invalidTag": "Invalid tag \"{{tag}}\": must start with a lowercase letter or digit and contain only lowercase letters, digits, and hyphens",
+    "scriptFilenameRequired": "Every script needs a filename"
+  },
+  "confirm": {
+    "copyBuiltIn": "Copy Built-in Sidekick",
+    "copyBuiltInMessage": "This Sidekick is built-in. Saving will create a copy in your user layer — future built-in updates to \"{{name}}\" will no longer affect it. Continue?",
+    "revert": "Revert Sidekick",
+    "revertMessage": "Revert \"{{name}}\" to the built-in version? Your customizations will be discarded.",
+    "delete": "Delete Sidekick",
+    "deleteMessage": "Delete Sidekick \"{{name}}\"? This cannot be undone."
+  },
+  "errors": {
+    "unexpectedEmpty": "Unexpected empty response from server",
+    "unexpectedResponse": "Unexpected response from server",
+    "loadFailed": "Failed to load Sidekick: {{error}}"
+  }
+}

@@ -1,0 +1,113 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux
+            arch: x64
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+          - os: macos-14
+            platform: darwin
+            arch: arm64
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - run: npm ci
+
+      - name: Build hub bundle
+        run: |
+          npx -w packages/server tsx scripts/build-hub.ts \
+            --version ${{ github.ref_name }} \
+            --platform ${{ matrix.platform }} \
+            --arch ${{ matrix.arch }} \
+            --repo ${{ github.repository }}
+
+      - name: Verify no data/ in tarball
+        run: |
+          TARBALL=$(ls packages/server/dist-hub/azito-hub-*.tar.gz)
+          if tar tzf "$TARBALL" | grep -q '^data/'; then
+            echo "ERROR: tarball contains data/ directory" >&2
+            exit 1
+          fi
+          echo "Verified: no data/ in tarball"
+
+      # Linux runners ship shellcheck; macOS runners do not. The script is
+      # platform-independent, so linting it once on Linux is enough.
+      - name: shellcheck install.sh
+        if: runner.os == 'Linux'
+        run: shellcheck install.sh packages/server/scripts/run-hub.sh packages/server/scripts/download-node.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hub-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            packages/server/dist-hub/azito-hub-*.tar.gz
+            packages/server/dist-hub/SHA256SUMS
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          find artifacts -name 'azito-hub-*.tar.gz' -exec cp {} release-assets/ \;
+          cp install.sh release-assets/
+
+          cd release-assets
+          sha256sum azito-hub-*.tar.gz install.sh > SHA256SUMS
+
+      - name: Test install.sh re-run detection
+        run: |
+          PREFIX=$(mktemp -d)
+          mkdir -p "${PREFIX}/hub/current"
+          output=$(bash install.sh --prefix "$PREFIX" --yes 2>&1 || true)
+          if echo "$output" | grep -q "already installed"; then
+            echo "Re-run detection works"
+          else
+            echo "ERROR: install.sh did not detect existing installation" >&2
+            exit 1
+          fi
+          rm -rf "$PREFIX"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A semver pre-release tag (v1.2.3-rc1) must not become "latest" —
+          # install.sh resolves "latest" when no --version is given.
+          PRERELEASE=""
+          case "${{ github.ref_name }}" in
+            *-*) PRERELEASE="--prerelease" ;;
+          esac
+          # shellcheck disable=SC2086
+          gh release create "${{ github.ref_name }}" \
+            --title "AZITO ${{ github.ref_name }}" \
+            --generate-notes \
+            $PRERELEASE \
+            release-assets/*

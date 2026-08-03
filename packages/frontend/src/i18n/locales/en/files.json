@@ -1,0 +1,28 @@
+{
+  "explorer": {
+    "refresh": "Refresh",
+    "emptyDirectory": "Empty directory",
+    "download": "Download",
+    "openInVsCode": "Open in VS Code",
+    "openInZed": "Open in Zed",
+    "sourceView": "Source",
+    "previewView": "Preview",
+    "splitView": "Split"
+  },
+  "preview": {
+    "downloadFile": "Download file",
+    "copyUrl": "Copy URL",
+    "copiedUrl": "URL copied",
+    "loading": "Loading preview…",
+    "loadError": "Failed to load file. It may require re-authentication."
+  },
+  "storage": {
+    "uploadFile": "Upload file",
+    "emptyMessage": "No files yet. Drag & drop or click + to upload.",
+    "download": "Download",
+    "copyUrl": "Copy URL",
+    "deleteFile": "Delete",
+    "copiedUrl": "URL copied",
+    "dropToUpload": "Drop to upload"
+  }
+}

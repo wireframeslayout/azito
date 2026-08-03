@@ -1,0 +1,44 @@
+{
+  "newTab": "New Tab",
+  "closeTab": "Close tab",
+  "closeTabLabel": "Close tab: {{name}}",
+  "clipboardDenied": "Clipboard access denied by the browser",
+  "fileSizeExceeded": "File size exceeds the limit (10MB): {{names}}",
+  "fileReadFailed": "Failed to read file",
+  "keyboardInputAriaLabel": "Browser keyboard input",
+  "historyAriaLabel": "Browsing history",
+  "dialog": {
+    "inputAriaLabel": "Dialog input",
+    "alert": "Alert",
+    "confirm": "Confirm",
+    "prompt": "Prompt",
+    "beforeunload": "Leave this page?",
+    "signIn": "Sign In",
+    "ok": "OK",
+    "default": "OK",
+    "username": "Username",
+    "password": "Password"
+  },
+  "startPage": {
+    "title": "AZITO Shared Browser — {{serverName}}",
+    "description": "A shared Chromium running on this server. Everyone on the team sees the same state.",
+    "tips": {
+      "localhost": {
+        "title": "Preview localhost directly",
+        "description": "Connects directly to dev servers (e.g. :5173) on this server"
+      },
+      "devtools": {
+        "title": "DevTools",
+        "description": "Open DevTools for this tab from the link in the top-right corner"
+      },
+      "cursor": {
+        "title": "Cursor sharing",
+        "description": "See color-coded cursors of everyone viewing the same tab"
+      },
+      "touch": {
+        "title": "Touch support",
+        "description": "Swipe to scroll and tap to click on mobile devices"
+      }
+    }
+  }
+}

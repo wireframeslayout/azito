@@ -1,0 +1,21 @@
+[Unit]
+Description=AZITO tmux session manager
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=__AZITO_ROOT__
+ExecStart=/bin/bash __AZITO_ROOT__/deploy/run-daemon.sh
+EnvironmentFile=-__AZITO_ROOT__/packages/server/.env
+Environment=PORT=3001
+Environment=NODE_ENV=production
+# Set to your Tailscale IP for remote access (e.g. 100.x.y.z)
+#Environment=AZITO_BIND=127.0.0.1
+# Required: generate with `openssl rand -hex 32` and set in packages/server/.env
+#Environment=AZITO_UI_TOKEN=
+Restart=on-failure
+RestartSec=10
+KillMode=process
+
+[Install]
+WantedBy=default.target

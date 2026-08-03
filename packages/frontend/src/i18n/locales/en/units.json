@@ -1,0 +1,114 @@
+{
+  "title": "Units",
+  "detail": {
+    "notFound": "Unit not found",
+    "editUnit": "Edit Unit"
+  },
+  "sections": {
+    "nowRunning": "Now Running ({{count}})",
+    "behavior": "Behavior",
+    "systemPrompt": "System Prompt",
+    "systemPromptEmpty": "System Prompt — Not set",
+    "tasks": "Tasks ({{count}})",
+    "phaseSidekicks": "Phase Sidekicks"
+  },
+  "stats": {
+    "worker": "Worker",
+    "execution": "Execution",
+    "selfReview": "Self-Review",
+    "selfReviewMax": "Max {{count}} attempts",
+    "subagents": "Subagents",
+    "implement": "Implement",
+    "review": "Review"
+  },
+  "subagent": {
+    "none": "{{label}} → none (worker handles it)"
+  },
+  "phaseSidekick": {
+    "defaultConfig": "Default configuration"
+  },
+  "statusFilter": {
+    "open": "Open",
+    "running": "Running",
+    "planReview": "Plan Review",
+    "review": "Review",
+    "waitingInput": "Waiting for Input",
+    "inProgress": "In Progress",
+    "done": "Done",
+    "failed": "Failed"
+  },
+  "taskList": {
+    "loading": "Loading tasks...",
+    "loadFailed": "Failed to load tasks: {{error}}",
+    "noTasks": "No tasks assigned",
+    "taskRef": "Task #{{id}}"
+  },
+  "backLabel": "Units",
+  "terminal": "Terminal",
+  "list": {
+    "newUnit": "+ New Unit",
+    "newUnitShort": "+ New",
+    "providers": "Providers",
+    "noUnits": "No Units yet",
+    "noUnitsDescription": "Create a Unit to start autonomous development",
+    "running": "{{count}} running",
+    "selfReview": "Self-review {{count}}",
+    "phaseOff": "{{phase}}: off",
+    "phaseCustom": "{{phase}}: custom"
+  },
+  "form": {
+    "newUnit": "New Unit",
+    "editUnit": "Edit Unit",
+    "description": "A Unit is the team that runs an operation: it pairs a worker runtime with the Sidekick packages assigned to each phase and the subagents delegated within them. Tasks are assigned to a Unit to run under these settings.",
+    "name": "Name",
+    "namePlaceholder": "e.g. backend-dev",
+    "unitType": "Unit Type",
+    "deleteUnit": "Delete Unit",
+    "deleteConfirm": "This cannot be undone."
+  },
+  "runtime": {
+    "title": "Runtime",
+    "workerType": "Worker Type",
+    "model": "Model",
+    "freeInput": "Free input below",
+    "additionalOptions": "Additional Options",
+    "command": "Command",
+    "agentDefsError": "Failed to load agent definitions. Command preview and generic/launchable detection may be unavailable. ",
+    "commandPlaceholder": "e.g. bash",
+    "extraArgsPlaceholder": "--verbose",
+    "loadingAgentDefs": "Loading agent definitions...",
+    "launchCommand": "Launch Command (generated)",
+    "loading": "Loading...",
+    "empty": "(empty)",
+    "workerRuntime": "Worker Runtime",
+    "workerRuntimeHint": "How the worker process is launched and managed.",
+    "runtimeTui": "TUI (tmux)",
+    "runtimeHeadless": "Headless (not implemented)",
+    "runtimeApi": "API (not implemented)",
+    "executionMode": "Worker Execution Mode",
+    "executionModeHint": "Determines how the worker's turn completion is detected.",
+    "modePipe": "tmux pipe (legacy)",
+    "modeHttpSignal": "HTTP signal (new)"
+  },
+  "phases": {
+    "title": "Phases",
+    "description": "Toggle a phase off to skip it, or pin it to a specific Sidekick package instead of the phase default. Only Sidekicks carrying that phase's tag are selectable."
+  },
+  "subagents": {
+    "title": "Subagents",
+    "reviewTitle": "Review Subagent",
+    "reviewDescription": "Delegate code review to a separate agent instead of self-review.",
+    "implementTitle": "Implementation Subagent",
+    "implementDescription": "Delegate implementation work to a separate agent instead of doing it directly."
+  },
+  "advanced": {
+    "title": "Advanced",
+    "selfReviewMax": "Self-Review Max Attempts",
+    "selfReviewHint": "Default value for new tasks. Can be overridden per task.",
+    "selfReviewSkip": "0 (skip review)",
+    "selfReviewDefault": "2 (default)",
+    "systemPrompt": "System Prompt",
+    "systemPromptHint": "The persona a task assumes while executing under this Unit.",
+    "systemPromptPlaceholder": "You are a senior developer..."
+  }
+}

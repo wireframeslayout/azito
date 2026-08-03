@@ -1,0 +1,87 @@
+import { useCallback, useEffect, useState } from 'react';
+import { api } from '../api/client';
+import { useNotificationChannel } from './useNotificationChannel';
+
+export interface BrowserGroupInfo {
+  groupId: string;
+  pageCount: number;
+  urls: (string | null)[];
+}
+
+interface BrowserStatusResponse {
+  running: boolean;
+  clientCount: number;
+  pages: { id: string; group: string; clientCount: number; url: string | null }[];
+}
+
+function aggregateGroups(pages: BrowserStatusResponse['pages']): BrowserGroupInfo[] {
+  const map = new Map<string, BrowserGroupInfo>();
+  for (const page of pages) {
+    const existing = map.get(page.group);
+    if (existing) {
+      existing.pageCount++;
+      existing.urls.push(page.url);
+    } else {
+      map.set(page.group, { groupId: page.group, pageCount: 1, urls: [page.url] });
+    }
+  }
+  return Array.from(map.values());
+}
+
+const POLL_INTERVAL = 30_000;
+
+export function useBrowserGroups(serverNames: string[]): Record<string, BrowserGroupInfo[]> {
+  const [groups, setGroups] = useState<Record<string, BrowserGroupInfo[]>>({});
+  const [revision, setRevision] = useState(0);
+  const refresh = useCallback(() => setRevision((r) => r + 1), []);
+
+  const serverNamesKey = serverNames.join(',');
+
+  useEffect(() => {
+    const names = serverNamesKey ? serverNamesKey.split(',') : [];
+    if (names.length === 0) {
+      setGroups({});
+      return;
+    }
+
+    let cancelled = false;
+
+    async function fetchAll() {
+      const result: Record<string, BrowserGroupInfo[]> = {};
+      await Promise.all(
+        names.map(async (name) => {
+          try {
+            const status = await api<BrowserStatusResponse>(`/browser/status?server=${encodeURIComponent(name)}`);
+            const grouped = aggregateGroups(status.pages);
+            if (grouped.length > 0) {
+              result[name] = grouped;
+            }
+          } catch (e) {
+            console.debug(`[useBrowserGroups] failed to fetch status for ${name}:`, e);
+          }
+        }),
+      );
+      if (!cancelled) setGroups(result);
+    }
+
+    void fetchAll();
+
+    const timer = setInterval(fetchAll, POLL_INTERVAL);
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [serverNamesKey, revision]);
+
+  useNotificationChannel({
+    onBrowserOpened: useCallback(() => {
+      refresh();
+    }, [refresh]),
+    onConnected: useCallback(() => {
+      refresh();
+    }, [refresh]),
+  });
+
+  return groups;
+}

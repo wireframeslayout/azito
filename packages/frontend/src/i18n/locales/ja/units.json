@@ -1,0 +1,114 @@
+{
+  "title": "Units",
+  "detail": {
+    "notFound": "Unitが見つかりません",
+    "editUnit": "Unitを編集"
+  },
+  "sections": {
+    "nowRunning": "実行中 ({{count}})",
+    "behavior": "動作設定",
+    "systemPrompt": "システムプロンプト",
+    "systemPromptEmpty": "システムプロンプト — 未設定",
+    "tasks": "タスク ({{count}})",
+    "phaseSidekicks": "フェーズ Sidekick"
+  },
+  "stats": {
+    "worker": "ワーカー",
+    "execution": "実行",
+    "selfReview": "セルフレビュー",
+    "selfReviewMax": "最大 {{count}} 回",
+    "subagents": "サブエージェント",
+    "implement": "実装",
+    "review": "レビュー"
+  },
+  "subagent": {
+    "none": "{{label}} → なし（worker本体が実施）"
+  },
+  "phaseSidekick": {
+    "defaultConfig": "デフォルト構成"
+  },
+  "statusFilter": {
+    "open": "オープン",
+    "running": "実行中",
+    "planReview": "計画レビュー",
+    "review": "レビュー",
+    "waitingInput": "入力待ち",
+    "inProgress": "進行中",
+    "done": "完了",
+    "failed": "失敗"
+  },
+  "taskList": {
+    "loading": "タスクを読み込み中...",
+    "loadFailed": "タスクの読み込みに失敗しました: {{error}}",
+    "noTasks": "タスクが割り当てられていません",
+    "taskRef": "Task #{{id}}"
+  },
+  "backLabel": "Units",
+  "terminal": "ターミナル",
+  "list": {
+    "newUnit": "+ 新規Unit",
+    "newUnitShort": "+ 新規",
+    "providers": "プロバイダー",
+    "noUnits": "Unitがありません",
+    "noUnitsDescription": "Unitを作成して自律開発を始めましょう",
+    "running": "{{count}} 件実行中",
+    "selfReview": "セルフレビュー {{count}}",
+    "phaseOff": "{{phase}}: オフ",
+    "phaseCustom": "{{phase}}: カスタム"
+  },
+  "form": {
+    "newUnit": "新規Unit",
+    "editUnit": "Unitを編集",
+    "description": "Unitは操作を実行するチームです。ワーカーランタイムと各フェーズに割り当てられたSidekickパッケージ、およびその中で委任されるサブエージェントを組み合わせます。タスクはこれらの設定の下で実行するためにUnitに割り当てられます。",
+    "name": "名前",
+    "namePlaceholder": "例: backend-dev",
+    "unitType": "Unit種別",
+    "deleteUnit": "Unitを削除",
+    "deleteConfirm": "この操作は元に戻せません。"
+  },
+  "runtime": {
+    "title": "ランタイム",
+    "workerType": "ワーカー種別",
+    "model": "モデル",
+    "freeInput": "以下に自由入力",
+    "additionalOptions": "追加オプション",
+    "command": "コマンド",
+    "agentDefsError": "エージェント定義の読み込みに失敗しました。コマンドプレビューとgeneric/launchable検出が利用できない可能性があります。",
+    "commandPlaceholder": "例: bash",
+    "extraArgsPlaceholder": "--verbose",
+    "loadingAgentDefs": "エージェント定義を読み込み中...",
+    "launchCommand": "起動コマンド（自動生成）",
+    "loading": "読み込み中...",
+    "empty": "（空）",
+    "workerRuntime": "ワーカーランタイム",
+    "workerRuntimeHint": "ワーカープロセスの起動・管理方法。",
+    "runtimeTui": "TUI（tmux）",
+    "runtimeHeadless": "Headless（未実装）",
+    "runtimeApi": "API（未実装）",
+    "executionMode": "ワーカー実行モード",
+    "executionModeHint": "ワーカーのターン完了をどのように検出するかを決定します。",
+    "modePipe": "tmux pipe（従来）",
+    "modeHttpSignal": "HTTPシグナル（新）"
+  },
+  "phases": {
+    "title": "フェーズ",
+    "description": "フェーズをオフにするとスキップされます。特定のSidekickパッケージに固定することもできます。そのフェーズのタグを持つSidekickのみ選択可能です。"
+  },
+  "subagents": {
+    "title": "サブエージェント",
+    "reviewTitle": "レビューサブエージェント",
+    "reviewDescription": "コードレビューをセルフレビューの代わりに別のエージェントに委託します。",
+    "implementTitle": "実装サブエージェント",
+    "implementDescription": "実装作業を直接行う代わりに別のエージェントに委託します。"
+  },
+  "advanced": {
+    "title": "詳細設定",
+    "selfReviewMax": "セルフレビュー最大回数",
+    "selfReviewHint": "新規タスクのデフォルト値。タスクごとにオーバーライド可能。",
+    "selfReviewSkip": "0（レビュー省略）",
+    "selfReviewDefault": "2（デフォルト）",
+    "systemPrompt": "システムプロンプト",
+    "systemPromptHint": "このUnitで実行されるタスクが使用するペルソナ。",
+    "systemPromptPlaceholder": "あなたはシニアデベロッパーです..."
+  }
+}

@@ -1,0 +1,1061 @@
+/* inline style からは padding: 'var(--space-2) var(--space-4)' のように文字列で参照する。calc が必要な箇所は無理にトークン化しない */
+/* ============================================================
+   Shade（旧称: Kasumi）— テーマドリブン面梯子 + エレベーション体系（canonical source）
+
+   設計方針（docs/ja/ui-surface-policy.md に詳細）:
+   [1] ソースは2変数のみ: --surface-base（井戸=テーマ背景）と --surface-fg。
+       terminal スコープでは既定値、workspace(app) スコープでは
+       useTerminalTheme がテーマの palette から注入する。
+   [2] 面の梯子は fg の混合率で相対導出する。テーマがどんな色でも
+       「井戸 < キャンバス < クローム < カード < 記入面 < hover < 浮遊UI」
+       の階層関係は崩れない。
+   [3] のっぺり対策: 面は色だけでなく「上端ハイライト(--edge-hi) +
+       落ち影(--shadow-N)」を対で持つ。深さは光で表現する。
+   [4] app スコープの透過は「透過してよい面」だけ半透明で再導出。
+       浮遊UI・入力欄・ハイライトは常に不透明（可読性の不変則）。
+   [5] 線は箱の輪郭には使わない。情報を運ぶ線（ログ種別レール）と
+       行間ヘアライン（fg 由来の透過色）だけを残す。
+   ============================================================ */
+:root {
+  /* [1] ソース */
+  --surface-base: #0d1117;
+  --surface-fg: #e6edf3;
+  --surface-accent: #58a6ff;
+
+  /* [2] 面の梯子（fg 混合率による相対導出） */
+  --bg:              color-mix(in srgb, var(--surface-fg) 3%,  var(--surface-base));
+  --bg-card:         color-mix(in srgb, var(--surface-fg) 9%,  var(--surface-base));
+  --input-bg:        color-mix(in srgb, var(--surface-fg) 12%, var(--surface-base));
+  --bg-hover:        color-mix(in srgb, var(--surface-fg) 14%, var(--surface-base));
+  --input-bg-active: color-mix(in srgb, var(--surface-fg) 16%, var(--surface-base));
+  /* 浮遊UI（メニュー/モーダル/ドロップダウン/トースト）専用の常時不透明サーフェス。
+     Workspaceスコープ時に --bg/--bg-card は半透明化されるため、浮遊UIはこちらを参照する */
+  --bg-solid:        color-mix(in srgb, var(--surface-fg) 14%, var(--surface-base));
+  --bg-elevated:     color-mix(in srgb, var(--surface-fg) 19%, var(--surface-base));
+
+  /* [5] 箱の輪郭線は全廃 */
+  --border: transparent;
+
+  --text: #e6edf3;
+  --text-dim: #8b949e;
+
+  /* [3] 深さの語彙: 上端ハイライト + 影スケール */
+  --edge-hi: color-mix(in srgb, var(--surface-fg) 9%, transparent);
+  --hairline: color-mix(in srgb, var(--surface-fg) 11%, transparent);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.30);
+  --shadow-2: 0 6px 18px rgba(0, 0, 0, 0.38);
+  --shadow-3: 0 18px 44px rgba(0, 0, 0, 0.50);
+
+  /* accent（テーマ導出。useTerminalTheme が --surface-accent を注入すると
+     スピナー・カレント表示・フォーカスリング・選択塗りが一括で追随する） */
+  --accent: var(--surface-accent);
+  --accent-a08: color-mix(in srgb, var(--surface-accent) 8%, transparent);
+  --accent-a15: color-mix(in srgb, var(--surface-accent) 15%, transparent);
+  --accent-a35: color-mix(in srgb, var(--surface-accent) 35%, transparent);
+
+  /* status hues: 固定色のまま（テーマ非導出） */
+  --green: #3fb950;
+  --red: #f85149;
+  --orange: #d29922;
+  --purple: #bc8cff;
+
+  /* red alpha variants */
+  --red-a08: color-mix(in srgb, var(--red) 8%, transparent);
+  --red-a15: color-mix(in srgb, var(--red) 15%, transparent);
+  --red-a35: color-mix(in srgb, var(--red) 35%, transparent);
+
+  /* green alpha variants */
+  --green-a08: color-mix(in srgb, var(--green) 8%, transparent);
+  --green-a15: color-mix(in srgb, var(--green) 15%, transparent);
+  --green-a35: color-mix(in srgb, var(--green) 35%, transparent);
+
+  /* orange alpha variants */
+  --orange-a08: color-mix(in srgb, var(--orange) 8%, transparent);
+  --orange-a15: color-mix(in srgb, var(--orange) 15%, transparent);
+  --orange-a35: color-mix(in srgb, var(--orange) 35%, transparent);
+
+  /* purple alpha variants */
+  --purple-a08: color-mix(in srgb, var(--purple) 8%, transparent);
+  --purple-a15: color-mix(in srgb, var(--purple) 15%, transparent);
+  --purple-a35: color-mix(in srgb, var(--purple) 35%, transparent);
+
+  /* semantic aliases */
+  --success: var(--green);
+  --warning: var(--orange);
+  --danger: var(--red);
+  --info: var(--accent);
+
+  --success-a08: var(--green-a08);  --success-a15: var(--green-a15);  --success-a35: var(--green-a35);
+  --warning-a08: var(--orange-a08); --warning-a15: var(--orange-a15); --warning-a35: var(--orange-a35);
+  --danger-a08: var(--red-a08);     --danger-a15: var(--red-a15);     --danger-a35: var(--red-a35);
+
+  --selected-bg: var(--accent-a08);
+  --selected-bg-strong: var(--accent-a15);
+  --overlay: rgba(0, 0, 0, 0.6);
+
+  /* モバイルのフローティングメニュー（MobileMenuBar）の高さ+余白分の下部インセット。
+     scroll-under方式の着地点として、メニューと重なりうる縦スクロール領域の内側下部に付与する */
+  --mobile-bottom-inset: calc(50px + 16px + env(safe-area-inset-bottom));
+
+  /* spacing (4px grid) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+
+  /* radius */
+  --radius-sm: 6px;
+  --radius-md: 9px;
+  --radius-lg: 12px;
+  --radius-full: 999px;
+
+  /* 意匠(data-design)切替: 単一の消費元を持つ構造トークン。
+     shade は現行の値、wired は Wired レイヤー（下記）でゼロ化する。
+     --panel-shadow は WorkspaceLayout のサイドバーパネルの落ち影（--edge-hi と
+     対になっていない生rgba項）を分離したもの — 変数化しないと wired 側で消せない */
+  --panel-radius: 12px;
+  --panel-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  --tray-inset: inset 0 2px 4px rgba(0, 0, 0, 0.35);
+
+  /* font size */
+  --font-2xs: 10px;
+  --font-xs: 11px;
+  --font-sm: 12px;
+  --font-md: 13px;
+  --font-base: 14px;
+  --font-lg: 16px;
+  --font-xl: 22px;
+}
+
+/* [4] workspace(app) スコープ: 透過してよい面だけ半透明で再導出。
+   --ws-surface / --ws-surface-card の既定値は下の
+   「Theme: workspace-scope backdrop」セクションで定義する。 */
+:root[data-bg-scope="app"] {
+  --bg:              color-mix(in srgb, color-mix(in srgb, var(--surface-fg) 3%, var(--surface-base)) 55%, transparent);
+  --ws-surface:      color-mix(in srgb, color-mix(in srgb, var(--surface-fg) 6%, var(--surface-base)) 58%, transparent);
+  --ws-surface-card: color-mix(in srgb, color-mix(in srgb, var(--surface-fg) 9%, var(--surface-base)) 66%, transparent);
+  --bg-card:         color-mix(in srgb, color-mix(in srgb, var(--surface-fg) 9%, var(--surface-base)) 66%, transparent);
+  --bg-hover:        color-mix(in srgb, var(--surface-fg) 13%, transparent);
+  --ws-content: transparent;
+  /* 不透明を保つ面: 浮遊UI・記入面（可読性の不変則） */
+}
+
+/* ============================================================
+   意匠切替（data-design） — Wired レイヤー
+   Shade（既定・線なし・面の梯子）に対し、旧意匠 Wired（線で階層を表す）を
+   同じトークン基盤の上に再現する。ソース・オブ・トゥルースは master の
+   packages/frontend/src/styles/global.css（`git show master:...`）。
+   [a] 線とスケールの復元: --border に可視色を与え、radius/edge-hi/shadow-1/2 を
+       master の値・ゼロへ倒す（shadow-3 はモーダル用に残す）。
+   [b] [a] の再導出で自動的に見た目が変わるもの（面梯子の各種 color-mix、
+       ListRowGroup / kanban-card の inline border 等）には個別ルールを足さない。
+   [c] コンポーネントクラスがトークンでなく生値（rgba 等）で深さを表現している
+       箇所だけ、このセクションで明示的に上書きする。
+   ============================================================ */
+:root[data-design="wired"] {
+  --border: color-mix(in srgb, var(--surface-fg) 18%, var(--surface-base));
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --edge-hi: transparent;
+  --shadow-1: 0 0 #0000;
+  --shadow-2: 0 0 #0000;
+  /* modal の --shadow-3 は深さ表現として残す（意図的に無効化しない） */
+  --panel-radius: 0;
+  --panel-shadow: 0 0 #0000;
+  --tray-inset: 0 0 #0000;
+}
+
+/* ---- Wired: ボタン（bordered, bg var(--bg), radius 6; master 準拠） ---- */
+[data-design="wired"] .btn {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: var(--radius-md);
+  box-shadow: none;
+}
+[data-design="wired"] .btn:hover {
+  background: var(--bg);
+  border-color: var(--text-dim);
+}
+[data-design="wired"] .btn:active {
+  box-shadow: none;
+}
+[data-design="wired"] .btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+[data-design="wired"] .btn-primary:hover {
+  background: var(--accent);
+  opacity: 0.9;
+}
+[data-design="wired"] .btn-danger {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+}
+[data-design="wired"] .btn-danger:hover {
+  background: var(--red);
+  opacity: 0.9;
+}
+[data-design="wired"] .btn-ghost {
+  border-color: transparent;
+}
+
+/* ---- Wired: テーブル（th 背景 var(--bg-card)、セル罫線は master 準拠、ヘアライン影は解除） ---- */
+[data-design="wired"] .data-table th {
+  background: var(--bg-card);
+  box-shadow: none;
+  border-bottom: 1px solid var(--border);
+}
+[data-design="wired"] .data-table td {
+  box-shadow: none;
+  border-bottom: 1px solid var(--border);
+}
+
+/* ---- Wired: トグルスイッチ（未チェック時は境界色で塗る） ---- */
+[data-design="wired"] .toggle-slider {
+  background: var(--border);
+}
+
+/* ---- Wired: Kanbanカード（境界線を持たせ、影は消す） ---- */
+[data-design="wired"] .kanban-card {
+  border: 1px solid var(--border);
+  box-shadow: none;
+}
+
+/* ---- Wired: モバイルキーボードの閉じるキー（master のボーダー+背景） ---- */
+[data-design="wired"] .kbd-key {
+  border: 1px solid rgba(139, 148, 158, 0.28); /* lint-allow: hex - master由来の固定rgba(既存の.kbd-keyインラインstyleと同値) */
+  background: rgba(230, 237, 243, 0.05); /* lint-allow: hex - master由来の固定rgba(既存の.kbd-keyインラインstyleと同値) */
+}
+
+/* ---- Wired: セグメントコントロール（master のボーダー付き外枠） ---- */
+[data-design="wired"] .azito-segmented {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+/* ---- Wired: リスト行群 — --border が可視化すると ListRowGroup の inline
+   border/borderBottom が自動的に復活するため、Shade側のヘアライン影は
+   二重線化を避けるためここで解除する ---- */
+[data-design="wired"] ul:has(> li > .list-row) {
+  box-shadow: none;
+}
+[data-design="wired"] li + li > .list-row {
+  box-shadow: none;
+}
+
+/* ---- Wired: ステータスバー（上端ハイライト・落ち影を解除） ---- */
+[data-design="wired"] .status-bar-desktop {
+  box-shadow: none;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+/* Prevent double-tap zoom while keeping pinch zoom */
+html {
+  touch-action: manipulation;
+}
+
+/* Prevent iOS auto-zoom on form focus (requires font-size >= 16px) */
+input, select, textarea {
+  font-size: 16px;
+}
+
+body {
+  font-family: 'JetBrainsMono Nerd Font', 'JetBrains Mono', -apple-system,
+    BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  /* 半透明化される --bg ではなく常時不透明の土台色（透過面の最終的な下地になる） */
+  background: var(--bg-solid);
+  color: var(--text);
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+html {
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+#root {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+/* タブとして表示され、モバイルのフローティングメニューと重なりうる縦スクロール領域に付与する。
+   ドロワー（オフキャンバス）内のスクロール領域には付与しない（メニューが退場するため対象外） */
+@media (max-width: 768px) {
+  .mobile-scroll-inset {
+    padding-bottom: var(--mobile-bottom-inset) !important;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--surface-fg) 22%, transparent);
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--surface-fg) 35%, transparent);
+}
+
+/* ---- Row hover / selected (generic, Issue #278 P7) ---- */
+/* button要素のUAデフォルト背景(buttonface)を打ち消すベース。.row-selected は後続ルールが優先する */
+.row-hover { background: transparent; transition: background 0.12s; }
+.row-hover:hover { background: var(--bg-hover); }
+.row-selected { background: var(--selected-bg-strong); }
+.row-selected.row-hover:hover { background: var(--selected-bg-strong); }
+
+/* ---- Kanban card ---- */
+.kanban-card {
+  background: var(--bg-card);
+  border: none;
+  box-shadow: inset 0 1px 0 var(--edge-hi), var(--shadow-1);
+}
+
+/* ---- Resize handle ---- */
+/* 視覚上の列は1pxまで細くし、パネル間の隙間に見えないようにする。
+   ヒット領域は .resize-handle-inner の負オフセットで左右に広げる（計9px）。
+   イベントハンドラは outer (.resize-handle) に付与: inner は outer の子なので、
+   絶対配置で外側にはみ出していてもバブリングで outer まで届く。outer に
+   overflow:hidden を付けないこと（付けると inner のはみ出し分がヒット判定から
+   欠落する）。 */
+.resize-handle {
+  width: 1px;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 51;
+  background: transparent;
+  cursor: col-resize;
+}
+.resize-handle-inner {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -4px;
+  right: -4px;
+  cursor: col-resize;
+}
+.resize-handle-inner::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  background: transparent;
+  transition: background 0.13s ease;
+}
+/* 現行の全塗りアクセントは Shade では強すぎるため淡色に。中央の縦線のみ表示する */
+.resize-handle-inner:hover::after { background: var(--accent-a35); }
+
+/* ---- Icon button ---- */
+.icon-btn {
+  border-radius: 7px;
+  background: transparent;
+  transition: background 0.13s ease, color 0.13s ease;
+}
+.icon-btn:hover { color: var(--text); background: var(--bg-hover); }
+.icon-btn:disabled { color: var(--text-dim); opacity: 0.4; cursor: not-allowed; }
+.icon-btn:disabled:hover { color: var(--text-dim); }
+
+/* ---- Dense Rows (ListRow / ListRowGroup, Issue #274) ---- */
+.list-row { background: transparent; }
+.list-row:hover {
+  background: var(--bg-hover);
+}
+.list-row.row-selected { background: var(--selected-bg-strong); }
+.list-row.row-selected:hover { background: var(--selected-bg-strong); }
+
+.list-row:hover .list-row-arrow {
+  opacity: 1;
+}
+
+.list-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* ---- Buttons ---- */
+/* 操作要素: 塗り + 触感（ハイライト/押し込み）。輪郭線は使わず、面の明度差と
+   上端ハイライト(--edge-hi)/落ち影で押せる面であることを示す */
+.btn {
+  padding: 8px 16px;
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  background: var(--bg-hover);
+  color: var(--text);
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  box-shadow: inset 0 1px 0 var(--edge-hi), 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: background 0.13s ease, box-shadow 0.13s ease;
+}
+
+.btn:hover {
+  background: var(--input-bg-active);
+  border-color: transparent;
+}
+.btn:active {
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+.btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.btn-primary {
+  background: var(--accent-a15);
+  border: none;
+  color: color-mix(in srgb, var(--accent) 55%, var(--surface-fg));
+}
+.btn-primary:hover {
+  background: color-mix(in srgb, var(--accent) 28%, var(--surface-base));
+}
+.btn-danger {
+  background: var(--danger-a15);
+  border: none;
+  color: color-mix(in srgb, var(--danger) 55%, var(--surface-fg));
+}
+.btn-danger:hover {
+  background: color-mix(in srgb, var(--danger) 26%, var(--surface-base));
+}
+.btn-sm {
+  padding: 4px 10px;
+  font-size: 12px;
+  min-height: 28px;
+}
+.btn-ghost {
+  background: transparent;
+  box-shadow: none;
+}
+.btn-ghost:hover {
+  background: var(--bg-hover);
+}
+
+/* ---- Tables ---- */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.data-table th {
+  text-align: left;
+  padding: 8px 12px;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background: transparent;
+  border: none;
+  box-shadow: 0 1px 0 var(--hairline);
+}
+
+.data-table td {
+  padding: 10px 12px;
+  vertical-align: middle;
+  border: none;
+  box-shadow: 0 1px 0 var(--hairline);
+}
+
+.data-table tr:hover td {
+  background: var(--bg-hover);
+}
+
+/* ---- Log timeline ---- */
+.log-entry {
+  padding: 8px 12px;
+  border-left: 2px solid color-mix(in srgb, var(--surface-fg) 30%, transparent);
+  margin-left: 8px;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+
+.log-entry.llm_request {
+  border-left-color: var(--accent);
+}
+.log-entry.llm_response {
+  border-left-color: var(--purple);
+}
+.log-entry.command {
+  border-left-color: var(--warning);
+}
+.log-entry.output {
+  border-left-color: var(--success);
+}
+.log-entry.status_change {
+  border-left-color: var(--text-dim);
+}
+
+.log-entry .log-time {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.log-entry .log-type {
+  font-size: 10px;
+  text-transform: uppercase;
+  font-weight: 600;
+  margin-left: 6px;
+}
+
+.log-entry pre {
+  margin-top: 4px;
+  font-family: 'JetBrainsMono Nerd Font', 'JetBrains Mono', monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text-dim);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+/* ---- Quick action bar (mobile virtual-keyboard toolbar) ---- */
+.qa-btn:hover {
+  filter: brightness(1.3);
+}
+.qa-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ---- Mobile floating menu (Issue #267) ---- */
+.mobile-menu-bar {
+  gap: 10px;
+  padding: 0 12px;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.mobile-menu-bar.mobile-menu-bar-hidden {
+  opacity: 0;
+  transform: translateY(24px);
+  pointer-events: none;
+}
+.mobile-menu-group {
+  pointer-events: auto;
+  display: flex;
+  gap: 6px;
+  padding: 7px;
+  border-radius: 12px;
+  background: rgba(22, 27, 34, 0.15);
+  border: 1px solid rgba(139, 148, 158, 0.22);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(230, 237, 243, 0.06);
+}
+@supports not (backdrop-filter: blur(3px)) {
+  .mobile-menu-group {
+    background: rgba(22, 27, 34, 0.96);
+  }
+}
+.mi-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  position: relative;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.mi-btn:hover {
+  background: rgba(230, 237, 243, 0.07);
+  color: var(--text);
+}
+.mi-btn.mi-btn-active {
+  background: rgba(88, 166, 255, 0.16);
+  color: var(--accent);
+}
+.mi-btn:focus-visible,
+.glass-popover-item:focus-visible,
+.notification-bell-btn:focus-visible,
+.notification-row:focus-visible,
+.notification-panel-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.mi-btn-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 16px;
+  height: 16px;
+  border-radius: var(--radius-full);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 3px;
+  box-shadow: 0 0 0 2px var(--bg-card);
+}
+.mi-btn-badge-alert {
+  background: var(--danger);
+}
+/* 狭幅端末(<=360px)向けコンパクト化: 320px幅でも両グループが収まる構成にする。
+   計算(320px時): 左グループ 2(border)+10(padding)+4×32(btn)+3×4(gap)=152px、
+   右グループ 2+10+3×32+2×4=116px、中央gap 8px、navのpadding 16px → 合計292px <= 320px */
+@media (max-width: 360px) {
+  .mobile-menu-bar {
+    gap: 8px;
+    padding: 0 8px;
+  }
+  .mobile-menu-group {
+    gap: 4px;
+    padding: 5px;
+  }
+  .mi-btn {
+    width: 32px;
+    height: 32px;
+  }
+}
+.notification-bell-btn:hover {
+  background: var(--selected-bg);
+  color: var(--text);
+}
+.notification-row {
+  transition: background 0.15s ease;
+}
+.notification-row:hover {
+  background: var(--selected-bg-strong);
+}
+.notification-panel-action:hover:not(:disabled) {
+  text-decoration: underline;
+}
+.glass-popover-item {
+  background: transparent;
+  border-radius: var(--radius-sm);
+  transition: background 0.15s ease;
+}
+.glass-popover-item:hover:not(.selected) {
+  background: rgba(230, 237, 243, 0.07);
+}
+.glass-popover-item.selected {
+  background: rgba(88, 166, 255, 0.14);
+}
+
+/* ---- Inline activity spinner ---- */
+@keyframes azito-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ---- Terminal loading overlay (XTermView) ---- */
+.terminal-loading-overlay {
+  transition: opacity 0.45s ease;
+}
+
+/* ---- Notification toast ---- */
+@keyframes azito-toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.notification-toast {
+  animation: azito-toast-in 0.18s ease;
+  transition: box-shadow 0.15s ease;
+}
+.notification-toast:hover {
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+}
+
+/* ---- Mobile keyboard control overlay ---- */
+.kbd-key {
+  border: none;
+  background: var(--bg-hover);
+  transition: filter 0.1s ease, transform 0.08s ease;
+}
+.kbd-key:hover {
+  filter: brightness(1.3);
+}
+.kbd-key:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.kbd-key:active {
+  transform: scale(0.95);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .qa-bar-transition,
+  .mobile-menu-bar,
+  .glass-popover,
+  .mi-btn,
+  .notification-toast,
+  .notification-bell-btn,
+  .notification-row,
+  .terminal-loading-overlay {
+    transition: none !important;
+    animation: none !important;
+  }
+  .kbd-key {
+    transition: none !important;
+  }
+  /* Static accent dot instead of a rotating ring */
+  .azito-spinner {
+    animation: none !important;
+    border-color: var(--accent) !important;
+  }
+  /* Slowed rather than disabled (still a loading affordance, just gentler) */
+  .browser-reload-ring,
+  .browser-tab-spinner {
+    animation-duration: 1.8s;
+  }
+  .browser-progress-track::before {
+    animation-duration: 3s;
+  }
+  .window-respawn-spinner {
+    animation: none !important;
+  }
+  .aw-row-working::before,
+  .aw-icon-working::before,
+  .aw-braille-spinner,
+  .aw-blocked-dot {
+    animation: none !important;
+  }
+  .tab-active-comet::after,
+  .tab-braille-spinner {
+    animation: none !important;
+  }
+}
+
+/* ---- Active Windows: working行のネオンシマー + brailleスピナー ---- */
+@keyframes aw-neon-sweep {
+  0% { background-position: -250% 0; }
+  100% { background-position: 250% 0; }
+}
+@keyframes aw-hue {
+  0%, 100% { filter: hue-rotate(0deg); }
+  50% { filter: hue-rotate(-70deg); }
+}
+.aw-row-working {
+  position: relative;
+  overflow: hidden;
+}
+.aw-row-working::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: linear-gradient(105deg,
+    transparent 26%, rgba(255, 79, 216, 0.16) 38%, rgba(154, 111, 255, 0.20) 50%,
+    rgba(88, 166, 255, 0.16) 62%, transparent 74%);
+  background-size: 250% 100%;
+  animation: aw-neon-sweep 9s linear infinite, aw-hue 9s linear infinite;
+}
+.aw-braille-spinner {
+  background: linear-gradient(135deg, #ff4fd8, #9a6fff, #58a6ff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-weight: 700;
+  animation: aw-hue 9s linear infinite;
+}
+
+/* ---- Active Windows: blocked行の背景 ---- */
+.aw-row-blocked {
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  border-radius: 8px;
+}
+
+/* ---- Active Windows: blocked行のオレンジ波紋スロブ ---- */
+@keyframes aw-throb {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(210, 153, 34, 0.5); }
+  70% { box-shadow: 0 0 0 7px rgba(210, 153, 34, 0); }
+}
+.aw-blocked-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--warning);
+  flex-shrink: 0;
+  animation: aw-throb 1.6s cubic-bezier(0.2, 0, 0.4, 1) infinite;
+}
+
+/* ---- Active Windows: 収納時アイコンのネオンシマー ---- */
+.aw-icon-working {
+  position: relative;
+  overflow: hidden;
+  border-radius: 8px;
+}
+.aw-icon-working::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: 8px;
+  background-image: linear-gradient(105deg,
+    transparent 26%, rgba(255, 79, 216, 0.16) 38%, rgba(154, 111, 255, 0.20) 50%,
+    rgba(88, 166, 255, 0.16) 62%, transparent 74%);
+  background-size: 250% 100%;
+  animation: aw-neon-sweep 9s linear infinite, aw-hue 9s linear infinite;
+}
+
+/* ---- Tab activity: neon comet bar (C2.B4) + braille spinner ---- */
+@keyframes tab-comet {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.tab-active-comet {
+  position: relative;
+}
+.tab-active-comet::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  pointer-events: none;
+  background-image: linear-gradient(90deg,
+    transparent 20%, #ff4fd8 35%, #9a6fff 50%, #58a6ff 65%, transparent 80%);
+  background-size: 200% 100%;
+  animation: tab-comet 3s linear infinite, aw-hue 9s linear infinite;
+}
+.tab-braille-spinner {
+  background: linear-gradient(135deg, #ff4fd8, #9a6fff, #58a6ff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-weight: 700;
+  animation: aw-hue 9s linear infinite;
+}
+
+/* ---- Toggle switch ---- */
+.toggle { position: relative; display: inline-block; width: 38px; height: 22px; }
+.toggle input { opacity: 0; width: 0; height: 0; }
+.toggle-slider { position: absolute; inset: 0; background: color-mix(in srgb, var(--surface-fg) 24%, var(--surface-base)); border: none; border-radius: 999px; transition: .2s; cursor: pointer; }
+.toggle-slider::before { content: ''; position: absolute; height: 16px; width: 16px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: .2s; }
+.toggle input:checked + .toggle-slider { background: var(--accent); }
+.toggle input:checked + .toggle-slider::before { transform: translateX(16px); }
+
+/* ---- Theme: workspace-scope backdrop ----
+   ワークスペースエリアのクローム面（サイドバー/タブバー）専用のサーフェス変数。
+   --bg/--bg-card はドロップダウン・モーダル等の浮遊UIも参照するため書き換えない。
+   app スコープでの再導出（透過）は先頭の :root[data-bg-scope="app"] ブロックを参照。 */
+:root {
+  --ws-surface:      color-mix(in srgb, var(--surface-fg) 6%,  var(--surface-base));
+  --ws-surface-card: color-mix(in srgb, var(--surface-fg) 9%,  var(--surface-base));
+  --ws-content: #000;
+}
+/* blur は面そのものではなく ::before に隔離する。
+   面自体に backdrop-filter を付けると stacking context / containing block が生成され、
+   内部の absolute/fixed 配置のドロップダウン・メニューが破綻する（疑似要素なら子孫が無いため安全） */
+:root[data-bg-scope="app"] .ws-surface {
+  position: relative;
+}
+:root[data-bg-scope="app"] .ws-surface::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  pointer-events: none;
+}
+
+/* ---- Slider (base component) ---- */
+.azito-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--accent) var(--fill, 50%), var(--border) var(--fill, 50%));
+  cursor: pointer;
+}
+.azito-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text);
+  border: 2px solid var(--accent);
+}
+.azito-slider::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--text);
+  border: 2px solid var(--accent);
+}
+.azito-slider:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
+/* ---- Segmented control ---- */
+.azito-segmented {
+  display: flex;
+  background: var(--bg-hover);
+  border: none;
+  border-radius: 9px;
+  padding: 2px;
+  gap: 2px;
+}
+.azito-segmented button {
+  flex: 1;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 5px 4px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.azito-segmented button:hover { color: var(--text); background: var(--bg-hover); }
+.azito-segmented button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.azito-segmented button[aria-pressed="true"] { background: var(--accent-a15); color: var(--accent); font-weight: 600; }
+
+/* ---- Shared browser: loading ring / tab favicon spinner / progress bar ---- */
+.browser-reload-ring {
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  border: 2px solid var(--accent-a35);
+  border-top-color: var(--accent);
+  animation: azito-spin 0.7s linear infinite;
+  pointer-events: none;
+}
+.browser-tab-spinner {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--accent-a35);
+  border-top-color: var(--accent);
+  animation: azito-spin 0.7s linear infinite;
+}
+.browser-progress-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  overflow: hidden;
+  opacity: 0;
+  transition: opacity 0.15s;
+  pointer-events: none;
+}
+.browser-progress-track.is-loading {
+  opacity: 1;
+}
+.browser-progress-track::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  background: var(--accent);
+  border-radius: 2px;
+  animation: browser-progress-slide 1.1s ease-in-out infinite;
+}
+@keyframes browser-progress-slide {
+  0% { transform: translateX(-110%); }
+  55% { transform: translateX(140%); }
+  100% { transform: translateX(260%); }
+}
+
+/* ---- Shade: 形の規約（線なしの構造表現） ----
+   既存のコンポーネントクラスに対応がない、構造そのものに対する規約。
+   ・ul:has / li+li: リスト行の外枠エレベーションと行間ヘアライン
+   ・.status-bar-desktop: 上端ハイライト+落ち影によるステータスバーの浮き
+   ・input/select/textarea の !important: コンポーネント側のインラインstyle
+     （FormInputなど）を確実に上書きするために必要（線ではなく沈み込みで
+     「書ける場所」を示すのが目的のため、通常の詳細度では負けてしまう） */
+ul:has(> li > .list-row) {
+  box-shadow: inset 0 1px 0 var(--edge-hi), var(--shadow-1);
+  border-radius: var(--radius-lg);
+}
+li + li > .list-row { box-shadow: 0 -1px 0 var(--hairline); }
+li + li > .list-row.row-selected { box-shadow: none; }
+.status-bar-desktop { box-shadow: inset 0 1px 0 var(--edge-hi), 0 -6px 16px -8px rgba(0, 0, 0, 0.5); }
+
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+select,
+textarea {
+  border-color: transparent !important;
+  background: var(--input-bg) !important;
+  border-radius: 9px !important;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.28);
+  transition: background 0.13s ease;
+}
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):hover,
+select:hover,
+textarea:hover { background: var(--input-bg-active) !important; }
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):focus,
+select:focus,
+textarea:focus {
+  background: var(--input-bg-active) !important;
+  outline: 2px solid var(--accent) !important;
+  outline-offset: 1px;
+}
+
+/* ---- Wired: input/select/textarea（master のボーダー付き記入面） ----
+   直上の Shade ブロックが !important + 同じ FormInput 系インラインstyle越えの
+   詳細度を持つため、対抗するにはこちらも !important が要る。[data-design="wired"]
+   祖先セレクタで詳細度は元から上回るが、カスケードの見通しのため意図的に
+   Shade ブロックの直後（このファイルの最後）に置く。フォーカスの outline は
+   アクセシビリティ（WCAG可視フォーカス）のため Shade と共有のまま変更しない。 */
+[data-design="wired"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+[data-design="wired"] select,
+[data-design="wired"] textarea {
+  border: 1px solid var(--border) !important;
+  background: var(--bg) !important;
+  border-radius: var(--radius-md) !important;
+  box-shadow: none !important;
+}
+[data-design="wired"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):hover,
+[data-design="wired"] select:hover,
+[data-design="wired"] textarea:hover {
+  background: var(--bg) !important;
+  border-color: var(--text-dim) !important;
+}
+[data-design="wired"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):focus,
+[data-design="wired"] select:focus,
+[data-design="wired"] textarea:focus {
+  background: var(--bg) !important;
+  border-color: var(--accent) !important;
+  box-shadow: none !important;
+}

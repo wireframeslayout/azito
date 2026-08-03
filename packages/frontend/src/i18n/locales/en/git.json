@@ -1,0 +1,88 @@
+{
+  "issues": {
+    "title": "Issues",
+    "pullRequests": "Pull Requests",
+    "open": "Open",
+    "closed": "Closed",
+    "all": "All",
+    "refresh": "Refresh list",
+    "searchPlaceholder": "Search issues...",
+    "noMatching": "No matching issues",
+    "noIssues": "No issues found",
+    "viewTask": "View Task",
+    "createTask": "+ Task",
+    "createTaskFull": "Create Task",
+    "noPullRequests": "No pull requests found",
+    "loadMore": "Load more",
+    "backToList": "Back to list",
+    "openOnGitHub": "Open on GitHub",
+    "loading": "Loading issue #{{number}}...",
+    "viewTaskLink": "View linked task",
+    "createTaskFromIssue": "Create task from this issue",
+    "prStatus": {
+      "draft": "Draft",
+      "merged": "Merged",
+      "closed": "Closed",
+      "open": "Open"
+    },
+    "import": {
+      "title": "Import from GitHub",
+      "repository": "Repository",
+      "searchPlaceholder": "Search issues...",
+      "noIssues": "No issues found",
+      "selectRepository": "Select a repository",
+      "loadMore": "Load more"
+    }
+  },
+  "diff": {
+    "noChanges": "No changes",
+    "noChangesDescription": "No differences found between the branches.",
+    "fileCount_one": "{{count}} file",
+    "fileCount_other": "{{count}} files",
+    "truncated": "(truncated)",
+    "hideFileList": "Hide file list",
+    "showFileList": "Show file list",
+    "changedFiles": "Changed files",
+    "binary": "Binary",
+    "largeFile": "Large file",
+    "binaryNotShown": "Binary file not shown",
+    "errors": {
+      "invalidResponse": "Invalid diff response",
+      "loadFailed": "Failed to load diff",
+      "loadTitle": "Error loading diff",
+      "invalidCommitResponse": "Invalid response",
+      "loadCommitsFailed": "Failed to load commits",
+      "loadCommitsTitle": "Error loading commits"
+    }
+  },
+  "commits": {
+    "noCommits": "No commits",
+    "noCommitsDescription": "No commits found in this range.",
+    "commitList": "Commit list"
+  },
+  "repo": {
+    "repositories": "Repositories",
+    "addRepository": "Add repository",
+    "provider": "Provider",
+    "github": "GitHub",
+    "gitlab": "GitLab",
+    "other": "Other",
+    "repositoryUrl": "Repository URL",
+    "repositoryUrlPlaceholder": "https://github.com/owner/repo",
+    "owner": "Owner",
+    "ownerPlaceholder": "owner",
+    "repoName": "Repo",
+    "repoNamePlaceholder": "repo",
+    "displayName": "Name (optional)",
+    "displayNamePlaceholder": "display name",
+    "token": "Token (optional)",
+    "tokenHint": "Empty = gh CLI auth",
+    "tokenPlaceholder": "ghp_...",
+    "viewOnGitHub": "View on GitHub",
+    "otherSection": "Other",
+    "noRepositories": "No repositories. Click + to add one.",
+    "removeConfirmTitle": "Remove Repository",
+    "removeConfirmMessage": "Remove this repository?",
+    "urlRequired": "URL required"
+  }
+}

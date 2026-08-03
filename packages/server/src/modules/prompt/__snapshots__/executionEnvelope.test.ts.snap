@@ -1,0 +1,155 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`stateMachineEnvelope > snapshots the full completion_signal block for every TaskPhase > implementing 1`] = `
+"body
+
+<completion_signal>
+When you finish this phase, do BOTH steps in order:
+
+STEP 1 — Write your complete final output for this phase (the deliverable described in the <output> section, e.g. the full implementation plan in markdown) to the file /tmp/azito-output-1-abc.md by running:
+  cat > /tmp/azito-output-1-abc.md <<'AZITO_EOF'
+  ...your complete output here...
+
+AZITO_PHASE_SUMMARY: {"phase":"implementing","status":"completed","summary":"<1-2 sentence summary of what was done in this phase>","tokensUsed":{"input":<estimated_input_tokens>,"output":<estimated_output_tokens>},"durationSeconds":<estimated_seconds>}
+AZITO_EOF
+
+Important: The AZITO_PHASE_SUMMARY line must be the LAST line in the file, after all your output. Replace the placeholder values with your best estimates.
+
+STEP 2 — Then, as the VERY LAST action, run:
+  echo "AZITO_DONE_1_abc" >> /tmp/azito-signal-1.txt
+
+If instead you need to ask the user questions, skip both steps above and run (single-quote the JSON; use "select" type with options when choices are enumerable, "text" otherwise):
+  echo 'AZITO_QUESTIONS_1_abc: [{"text":"...","type":"select","options":["A","B"]}]' >> /tmp/azito-signal-1.txt
+Output ALL questions at once in a single line. Do NOT use interactive prompts or selection UIs — write the line above and then stop.
+
+If tests fail, report the failures prefixed with "AZITO_TEST_FAILED_1_abc:" in your output for STEP 1 above, then continue with STEP 2 as usual.
+</completion_signal>"
+`;
+
+exports[`stateMachineEnvelope > snapshots the full completion_signal block for every TaskPhase > planning 1`] = `
+"body
+
+<completion_signal>
+When you finish this phase, do BOTH steps in order:
+
+STEP 1 — Write your complete final output for this phase (the deliverable described in the <output> section, e.g. the full implementation plan in markdown) to the file /tmp/azito-output-1-abc.md by running:
+  cat > /tmp/azito-output-1-abc.md <<'AZITO_EOF'
+  ...your complete output here...
+
+AZITO_PHASE_SUMMARY: {"phase":"planning","status":"completed","summary":"<1-2 sentence summary of what was done in this phase>","tokensUsed":{"input":<estimated_input_tokens>,"output":<estimated_output_tokens>},"durationSeconds":<estimated_seconds>}
+AZITO_EOF
+
+Important: The AZITO_PHASE_SUMMARY line must be the LAST line in the file, after all your output. Replace the placeholder values with your best estimates.
+
+STEP 2 — Then, as the VERY LAST action, run:
+  echo "AZITO_DONE_1_abc" >> /tmp/azito-signal-1.txt
+
+If instead you need to ask the user questions, skip both steps above and run (single-quote the JSON; use "select" type with options when choices are enumerable, "text" otherwise):
+  echo 'AZITO_QUESTIONS_1_abc: [{"text":"...","type":"select","options":["A","B"]}]' >> /tmp/azito-signal-1.txt
+Output ALL questions at once in a single line. Do NOT use interactive prompts or selection UIs — write the line above and then stop.
+
+If tests fail, report the failures prefixed with "AZITO_TEST_FAILED_1_abc:" in your output for STEP 1 above, then continue with STEP 2 as usual.
+</completion_signal>"
+`;
+
+exports[`stateMachineEnvelope > snapshots the full completion_signal block for every TaskPhase > pushing 1`] = `
+"body
+
+<completion_signal>
+When you finish this phase, do BOTH steps in order:
+
+STEP 1 — Write your complete final output for this phase (the deliverable described in the <output> section, e.g. the full implementation plan in markdown) to the file /tmp/azito-output-1-abc.md by running:
+  cat > /tmp/azito-output-1-abc.md <<'AZITO_EOF'
+  ...your complete output here...
+
+AZITO_PHASE_SUMMARY: {"phase":"pushing","status":"completed","summary":"<1-2 sentence summary of what was done in this phase>","tokensUsed":{"input":<estimated_input_tokens>,"output":<estimated_output_tokens>},"durationSeconds":<estimated_seconds>}
+AZITO_EOF
+
+Important: The AZITO_PHASE_SUMMARY line must be the LAST line in the file, after all your output. Replace the placeholder values with your best estimates.
+
+STEP 2 — Then, as the VERY LAST action, run:
+  echo "AZITO_DONE_1_abc" >> /tmp/azito-signal-1.txt
+
+If instead you need to ask the user questions, skip both steps above and run (single-quote the JSON; use "select" type with options when choices are enumerable, "text" otherwise):
+  echo 'AZITO_QUESTIONS_1_abc: [{"text":"...","type":"select","options":["A","B"]}]' >> /tmp/azito-signal-1.txt
+Output ALL questions at once in a single line. Do NOT use interactive prompts or selection UIs — write the line above and then stop.
+
+If tests fail, report the failures prefixed with "AZITO_TEST_FAILED_1_abc:" in your output for STEP 1 above, then continue with STEP 2 as usual.
+</completion_signal>"
+`;
+
+exports[`stateMachineEnvelope > snapshots the full completion_signal block for every TaskPhase > reviewing 1`] = `
+"body
+
+<completion_signal>
+When you finish this phase, do BOTH steps in order:
+
+STEP 1 — Write your complete final output for this phase (the deliverable described in the <output> section, e.g. the full implementation plan in markdown) to the file /tmp/azito-output-1-abc.md by running:
+  cat > /tmp/azito-output-1-abc.md <<'AZITO_EOF'
+  ...your complete output here...
+
+AZITO_PHASE_SUMMARY: {"phase":"reviewing","status":"completed","summary":"<1-2 sentence summary of what was done in this phase>","tokensUsed":{"input":<estimated_input_tokens>,"output":<estimated_output_tokens>},"durationSeconds":<estimated_seconds>}
+AZITO_EOF
+
+Important: The AZITO_PHASE_SUMMARY line must be the LAST line in the file, after all your output. Replace the placeholder values with your best estimates.
+
+STEP 2 — Then, as the VERY LAST action, run:
+  echo "AZITO_DONE_1_abc" >> /tmp/azito-signal-1.txt
+
+If instead you need to ask the user questions, skip both steps above and run (single-quote the JSON; use "select" type with options when choices are enumerable, "text" otherwise):
+  echo 'AZITO_QUESTIONS_1_abc: [{"text":"...","type":"select","options":["A","B"]}]' >> /tmp/azito-signal-1.txt
+Output ALL questions at once in a single line. Do NOT use interactive prompts or selection UIs — write the line above and then stop.
+
+If tests fail, report the failures prefixed with "AZITO_TEST_FAILED_1_abc:" in your output for STEP 1 above, then continue with STEP 2 as usual.
+</completion_signal>"
+`;
+
+exports[`stateMachineEnvelope > snapshots the full completion_signal block for every TaskPhase > testing 1`] = `
+"body
+
+<completion_signal>
+When you finish this phase, do BOTH steps in order:
+
+STEP 1 — Write your complete final output for this phase (the deliverable described in the <output> section, e.g. the full implementation plan in markdown) to the file /tmp/azito-output-1-abc.md by running:
+  cat > /tmp/azito-output-1-abc.md <<'AZITO_EOF'
+  ...your complete output here...
+
+AZITO_PHASE_SUMMARY: {"phase":"testing","status":"completed","summary":"<1-2 sentence summary of what was done in this phase>","tokensUsed":{"input":<estimated_input_tokens>,"output":<estimated_output_tokens>},"durationSeconds":<estimated_seconds>}
+AZITO_EOF
+
+Important: The AZITO_PHASE_SUMMARY line must be the LAST line in the file, after all your output. Replace the placeholder values with your best estimates.
+
+STEP 2 — Then, as the VERY LAST action, run:
+  echo "AZITO_DONE_1_abc" >> /tmp/azito-signal-1.txt
+
+If instead you need to ask the user questions, skip both steps above and run (single-quote the JSON; use "select" type with options when choices are enumerable, "text" otherwise):
+  echo 'AZITO_QUESTIONS_1_abc: [{"text":"...","type":"select","options":["A","B"]}]' >> /tmp/azito-signal-1.txt
+Output ALL questions at once in a single line. Do NOT use interactive prompts or selection UIs — write the line above and then stop.
+
+If tests fail, report the failures prefixed with "AZITO_TEST_FAILED_1_abc:" in your output for STEP 1 above, then continue with STEP 2 as usual.
+</completion_signal>"
+`;
+
+exports[`stateMachineEnvelope > snapshots the full completion_signal block for follow_up > follow_up 1`] = `
+"
+
+<completion_signal>
+When you finish this phase, do BOTH steps in order:
+
+STEP 1 — Write your complete final output for this phase (the deliverable described in the <output> section, e.g. the full implementation plan in markdown) to the file /tmp/azito-output-1-abc.md by running:
+  cat > /tmp/azito-output-1-abc.md <<'AZITO_EOF'
+  ...your complete output here...
+
+AZITO_PHASE_SUMMARY: {"phase":"follow_up","status":"completed","summary":"<1-2 sentence summary of what was done in this phase>","tokensUsed":{"input":<estimated_input_tokens>,"output":<estimated_output_tokens>},"durationSeconds":<estimated_seconds>}
+AZITO_EOF
+
+Important: The AZITO_PHASE_SUMMARY line must be the LAST line in the file, after all your output. Replace the placeholder values with your best estimates.
+
+STEP 2 — Then, as the VERY LAST action, run:
+  echo "AZITO_DONE_1_abc" >> /tmp/azito-signal-1.txt
+
+If instead you need to ask the user questions, skip both steps above and run (single-quote the JSON; use "select" type with options when choices are enumerable, "text" otherwise):
+  echo 'AZITO_QUESTIONS_1_abc: [{"text":"...","type":"select","options":["A","B"]}]' >> /tmp/azito-signal-1.txt
+Output ALL questions at once in a single line. Do NOT use interactive prompts or selection UIs — write the line above and then stop.
+</completion_signal>"
+`;
