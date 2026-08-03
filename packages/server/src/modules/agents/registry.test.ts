@@ -79,6 +79,8 @@ describe('catalog helpers (default registry)', () => {
     expect(getAgentModels('claude')).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: 'fable' }),
+        expect.objectContaining({ id: 'claude-opus-5' }),
+        expect.objectContaining({ id: 'claude-opus-5[1m]' }),
         expect.objectContaining({ id: 'claude-fable-5' }),
         expect.objectContaining({ id: 'claude-opus-4-8' }),
         expect.objectContaining({ id: 'claude-opus-4-6' }),
