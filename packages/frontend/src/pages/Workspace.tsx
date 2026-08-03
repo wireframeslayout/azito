@@ -84,7 +84,7 @@ function WorkspaceInner() {
     setThemeProjectId(activeProjectId || null);
   }, [activeProjectId, setThemeProjectId]);
 
-  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, closeTab, retargetTab, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, reorderTab, openProjectTasks, openSettings: openSettingsRaw, togglePin } = useTabPersistence();
+  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, closeTab, retargetTab, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, reorderTab, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence();
 
   const openServer = useCallback((serverName: string) => {
     navigate(paths.server(serverName, 'overview'));
@@ -677,6 +677,7 @@ function WorkspaceInner() {
         ? (allProjects.find(p => p.id === tab.projectId)?.color || getProjectColorFallback(tab.projectId))
         : undefined,
       extra: running ? <span className="tab-braille-spinner" style={{ fontSize: 'var(--font-xs)', lineHeight: 1 }}>{brailleFrame}</span> : undefined,
+      dirty: tab.dirty,
     };
   }, [getTerminalTabLabel, shouldShowActivity, shouldShowTaskActivity, allProjects, brailleFrame]);
 
@@ -1029,6 +1030,8 @@ function WorkspaceInner() {
           openIssue={openIssue}
           openProjectTasks={openProjectTasks}
           updateBrowserActiveTab={updateBrowserActiveTab}
+          openFile={openFile}
+          setTabDirty={setTabDirty}
         />
       </div>
     );

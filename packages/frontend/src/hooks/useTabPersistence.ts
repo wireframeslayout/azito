@@ -55,6 +55,8 @@ export interface PersistedTab {
   // Browser-specific
   browserData?: { serverName: string; pageId: string; lastActiveTabId?: string };
   reconnectKey?: number;
+  // Editor dirty state (not persisted to localStorage)
+  dirty?: boolean;
 }
 
 const STORAGE_KEY = 'workspace-tabs';
@@ -488,5 +490,13 @@ export function useTabPersistence(storageKey?: string) {
     });
   }, []);
 
-  return { tabs, activeTabId, setActiveTabId, openTab, connectPane, openFile, openUnit, openTask, openTaskForm, openUnitForm, openSidekickForm, openIssue, openIssueList, openServer, openSettings, openStorageFile, openDiff, openBrowser, updateBrowserActiveTab, closeTab, retargetTab, reorderTab, openProjectTasks, togglePin, activateOpener, getTabDisplayName };
+  const setTabDirty = useCallback((tabId: string, dirty: boolean) => {
+    setTabs((prev) => {
+      const target = prev.find((t) => t.id === tabId);
+      if (!target || target.dirty === dirty) return prev;
+      return prev.map((t) => t.id === tabId ? { ...t, dirty } : t);
+    });
+  }, []);
+
+  return { tabs, activeTabId, setActiveTabId, openTab, connectPane, openFile, openUnit, openTask, openTaskForm, openUnitForm, openSidekickForm, openIssue, openIssueList, openServer, openSettings, openStorageFile, openDiff, openBrowser, updateBrowserActiveTab, closeTab, retargetTab, reorderTab, openProjectTasks, togglePin, activateOpener, getTabDisplayName, setTabDirty };
 }
