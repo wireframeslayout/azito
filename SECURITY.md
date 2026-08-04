@@ -34,6 +34,19 @@ AZITO is intended for use by a **single trusted operator** on a **trusted privat
 - **Change the default MinIO credentials** in your `.env` before use.
 - **Set `AZITO_WEBHOOK_TOKEN`** (in `packages/server/.env`) so that webhook endpoints (`/api/webhooks/*`) require authentication. The same token must be configured on the Claude Code hook side.
 
+### Handling externally authored input
+
+AZITO can import GitHub / GitLab issues as tasks, and the imported text reaches agents that run
+with the permissive flags above. Hardening this path — trust gates, prompt-level trust boundaries,
+per-phase secret allowlists, and execution isolation — is tracked in
+[#22](https://github.com/wireframeslayout/azito/issues/22) and is **not complete yet**.
+
+Until it is, treat imported issue text as untrusted input:
+
+- Do not import issues that untrusted third parties can edit.
+- When importing an external issue, review its body first and create the task manually.
+- Register only the project secrets a project genuinely needs.
+
 ### Additional recommendations
 
 - Run AZITO under a dedicated user account with only the access the agents genuinely need.
