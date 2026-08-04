@@ -121,6 +121,7 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
       getTransport: vi.fn(() => ({})),
     } as unknown as TasksRouteOptions['transportFactory'],
     windowRepo: {
+      findByTaskIds: vi.fn(() => new Map()),
       add: vi.fn(() => 100),
       findAll: vi.fn(() => []),
       findById: vi.fn(() => undefined),

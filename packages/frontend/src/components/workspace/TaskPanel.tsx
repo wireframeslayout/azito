@@ -103,7 +103,14 @@ export default function TaskPanel({
   onSplitPane, onOpenTask, tabs, closeTab, projectServers,
 }: TaskPanelProps) {
   const { t } = useTranslation(['tasks', 'workspace', 'common']);
-  const task = tasks.find((t) => t.id === taskId) ?? allTasks.find((t) => t.id === taskId);
+  // The list response omits the detail-only documents (description, plan, summary,
+  // changed files) — they made the payload unusable on mobile networks. `fetchTaskData`
+  // below already pulls the full record from `/tasks/:id`; merge it over the list item
+  // so every tab reads one object regardless of where each field came from.
+  const taskListItem = tasks.find((t) => t.id === taskId) ?? allTasks.find((t) => t.id === taskId);
+  const [taskDetail, setTaskDetail] = useState<Task | null>(null);
+  const detailLoaded = taskDetail !== null && taskDetail.id === taskId;
+  const task = detailLoaded ? { ...taskListItem, ...taskDetail } as Task : taskListItem;
   const { unitTypes } = useUnitTypes();
   const [submittingAnswers, setSubmittingAnswers] = useState(false);
   const [windows, setWindows] = useState<Window[]>([]);
@@ -257,8 +264,9 @@ export default function TaskPanel({
   const fetchTaskData = useCallback(async () => {
     if (!taskId) return;
     try {
-      const res = await api<{ windows?: Window[] }>(`/tasks/${taskId}`);
+      const res = await api<Task & { windows?: Window[] }>(`/tasks/${taskId}`);
       if (currentTaskIdRef.current !== taskId) return; // stale response for a previous task
+      setTaskDetail(res);
       if (res.windows) setWindows(res.windows);
       setWindowsReady(true);
     } catch {
@@ -286,6 +294,7 @@ export default function TaskPanel({
   useEffect(() => {
     setWindows([]);
     setWindowsReady(false);
+    setTaskDetail(null);
     if (!taskId) return;
     fetchTaskData();
     const interval = setInterval(() => {
@@ -716,6 +725,16 @@ export default function TaskPanel({
     // that's the multi-pane split's whole point.
     if (!tabVisible || !isVisible) return null;
     const viewName = parseViewTabId(tabId);
+    // These tabs render fields that only `/tasks/:id` returns. Until it resolves they
+    // are absent, which is indistinguishable from "empty" — show the pending state
+    // instead of claiming the task has no description/plan/summary/diff.
+    if (!detailLoaded && (viewName === 'description' || viewName === 'unit' || viewName === 'git' || viewName === 'summary')) {
+      return (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+          <Spinner />
+        </div>
+      );
+    }
     if (viewName === 'description') {
       return (
         <div className="mobile-scroll-inset" style={{ height: '100%', overflowY: 'auto', padding: '16px 24px' }}>

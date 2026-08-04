@@ -8,6 +8,7 @@ import type { FastifyInstance } from 'fastify';
 import { getPushMessage } from '../modules/notifications/push/pushCatalog';
 import websocket from '@fastify/websocket';
 import multipart from '@fastify/multipart';
+import compress from '@fastify/compress';
 import fastifyStatic from '@fastify/static';
 import cors from '@fastify/cors';
 import crypto from 'crypto';
@@ -191,6 +192,10 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   await app.register(cors, { origin: allowedOrigins, credentials: false });
   await app.register(websocket);
   await app.register(multipart, { limits: { fileSize: 52_428_800 } });
+  // Responses are served over Tailscale, often from mobile networks where the
+  // task list's size dominates every other cost. `threshold` keeps the small,
+  // frequent responses (health, sessions) from paying compression overhead.
+  await app.register(compress, { global: true, threshold: 1024, encodings: ['gzip', 'deflate'] });
 
   app.addHook('onRequest', async (request, reply) => {
     if (!request.url.startsWith('/api')) return;

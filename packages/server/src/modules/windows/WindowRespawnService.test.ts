@@ -107,6 +107,7 @@ function buildService(opts: { window: Window; task?: Task | null; unit?: Unit | 
     findById: vi.fn(() => opts.window),
     findByProject: vi.fn(() => []),
     findByTask: vi.fn(() => []),
+    findByTaskIds: vi.fn(() => new Map()),
     findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
     findByServerAndTarget: vi.fn(() => undefined),
     update: vi.fn(),
