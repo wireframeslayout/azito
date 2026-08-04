@@ -102,6 +102,25 @@ export class SqliteWindowRepository implements IWindowRepository {
     return rows.map((r) => this.toWindow(r));
   }
 
+  findByTaskIds(taskIds: number[]): Map<number, Window[]> {
+    const byTask = new Map<number, Window[]>();
+    if (taskIds.length === 0) return byTask;
+    // Prepared per call: the placeholder count varies with the input length, so this
+    // cannot use a cached statement the way the single-id lookup above does.
+    const placeholders = taskIds.map(() => '?').join(',');
+    const rows = this.db
+      .prepare(`SELECT * FROM windows WHERE owner_type = 'task' AND task_id IN (${placeholders}) ORDER BY is_primary DESC, created_at ASC`)
+      .all(...taskIds) as WindowRow[];
+    for (const row of rows) {
+      const window = this.toWindow(row);
+      const taskId = row.task_id as number;
+      const existing = byTask.get(taskId);
+      if (existing) existing.push(window);
+      else byTask.set(taskId, [window]);
+    }
+    return byTask;
+  }
+
   findAgentSessionIdsByServer(serverName: string): Set<string> {
     const rows = this.findAgentSessionIdsByServerStmt.all(serverName) as { agent_session_id: string }[];
     return new Set(rows.map((r) => r.agent_session_id));

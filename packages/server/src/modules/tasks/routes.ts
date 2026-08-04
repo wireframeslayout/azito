@@ -67,6 +67,21 @@ export interface TasksRouteOptions {
 
 // ─── Plugin ───
 
+/**
+ * Fields kept out of the task *list* response. Each is a full document
+ * (plan, description, summary, changed-file list) that only the detail panel
+ * renders, and at a few hundred tasks they made up ~97% of the payload —
+ * enough to dominate first paint on mobile networks. `GET /api/tasks/:id`
+ * still returns the complete record; the panel fetches it when opened.
+ */
+const LIST_OMITTED_FIELDS = ['planMarkdown', 'description', 'summaryJson', 'changedFiles'] as const;
+
+function toListItem(task: Task, windows: unknown[]): Record<string, unknown> {
+  const item: Record<string, unknown> = { ...task, windows };
+  for (const field of LIST_OMITTED_FIELDS) delete item[field];
+  return item;
+}
+
 const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, done) => {
   const { taskRepo, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService, taskRestoreService, supervisorRegistry, unitTypeLoader } = opts;
   const taskCleanupService = new TaskCleanupService({ serverRepo, tmux, worktreeServiceFactory, transportFactory, projectServerRepo, projectRepo });
@@ -86,7 +101,8 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
     } else {
       tasks = taskRepo.findAll();
     }
-    return tasks.map((t) => ({ ...t, windows: windowRepo.findByTask(t.id) }));
+    const windowsByTask = windowRepo.findByTaskIds(tasks.map((t) => t.id));
+    return tasks.map((t) => toListItem(t, windowsByTask.get(t.id) ?? []));
   });
 
   // ── POST /api/tasks ──
