@@ -143,13 +143,13 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
 
 // ─── Per-module factories ───
 
-function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, dataPaths: DataPaths, uiToken: string, db?: SqliteDatabase, fingerprintStore?: FingerprintStore): SharedInfra {
+function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, db?: SqliteDatabase, fingerprintStore?: FingerprintStore): SharedInfra {
   const sshClient = new SshClient(fingerprintStore);
   const agentInstaller = new AgentInstaller(sshClient, agentBundler);
   const harnessInstaller = new HarnessInstaller(sshClient);
   const tmuxInstaller = new TmuxInstaller();
   const transportFactory = new TransportFactory(publicUrl);
-  const tmuxClient = new TmuxClient(transportFactory, publicUrl, uiToken);
+  const tmuxClient = new TmuxClient(transportFactory, publicUrl, uiToken, localUrl);
   const llmClient: ILlmClient = new CodexExecClient();
   const agentRegistry = createDefaultRegistry();
   const paneClassifier = new PaneClassifier(llmClient);
@@ -332,7 +332,7 @@ function buildAgentActivityMonitor(
 
 // ─── Composition root ───
 
-export async function buildWiring(db: SqliteDatabase, publicUrl: string, dataPaths: DataPaths, uiToken: string): Promise<Wiring> {
+export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string): Promise<Wiring> {
   // Build agent bundle (no-op if already up to date)
   const agentBundler = new AgentBundler();
   try {
@@ -370,7 +370,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, dataPat
       if (srv) repos.serverRepo.updateFingerprint(srv.name, fingerprint);
     },
   };
-  const infra = buildSharedInfra(agentBundler, publicUrl, dataPaths, uiToken, db, fingerprintStore);
+  const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, db, fingerprintStore);
   const pushNotification = buildPushNotificationModule(repos.pushSubRepo);
   const agentUpdater = buildAgentUpdater(agentBundler, infra, repos);
   const appServices = buildApplicationServices(infra, repos);

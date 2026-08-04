@@ -65,7 +65,27 @@ export function windowSpecMatches(windowSpec: string, windowIndex: number, windo
 // ─── TmuxClient ───
 
 export class TmuxClient {
-  constructor(private transportFactory: TransportFactory, private publicUrl: string, private uiToken: string) {}
+  constructor(
+    private transportFactory: TransportFactory,
+    private publicUrl: string,
+    private uiToken: string,
+    /** Loopback URL of this hub (`http://127.0.0.1:<port>`). */
+    private localUrl: string,
+  ) {}
+
+  /**
+   * URL that panes on `server` should use to reach the hub.
+   *
+   * Panes on the hub's own machine get the loopback URL: a host does not
+   * necessarily reach itself through its public address. With `tailscale serve`
+   * on WSL2, for instance, the MagicDNS name resolves but the connection to the
+   * host's own Tailscale IP never completes, so supervisors launched there could
+   * never register and every supervised window timed out. Remote servers keep
+   * the public URL, which is the only address that works for them.
+   */
+  private hubUrlFor(server: ServerConfig): string {
+    return server.type === 'local' ? this.localUrl : this.publicUrl;
+  }
 
   private async runTmuxCommand(server: ServerConfig, args: string[]): Promise<ExecResult> {
     return this.transportFactory.getTransport(server).execTmux(args);
@@ -153,7 +173,7 @@ export class TmuxClient {
     const windowName = options?.exactName && options?.windowName
       ? options.windowName
       : generateWindowName(options?.windowName || 'win');
-    const args = ['new-session', '-d', '-s', sessionName, '-n', windowName, '-e', `AZITO_URL=${this.publicUrl}`];
+    const args = ['new-session', '-d', '-s', sessionName, '-n', windowName, '-e', `AZITO_URL=${this.hubUrlFor(server)}`];
     if (this.uiToken) args.push('-e', `AZITO_UI_TOKEN=${this.uiToken}`);
     if (options?.extraEnv) {
       for (const [k, v] of Object.entries(options.extraEnv)) {
@@ -168,7 +188,7 @@ export class TmuxClient {
 
   async createWindow(server: ServerConfig, sessionName: string, baseName?: string, options?: { exactName?: boolean; extraEnv?: Record<string, string> }): Promise<{ result: ExecResult; windowName: string }> {
     const windowName = options?.exactName && baseName ? baseName : generateWindowName(baseName || 'win');
-    const args = ['new-window', '-t', sessionName, '-n', windowName, '-e', `AZITO_URL=${this.publicUrl}`];
+    const args = ['new-window', '-t', sessionName, '-n', windowName, '-e', `AZITO_URL=${this.hubUrlFor(server)}`];
     if (this.uiToken) args.push('-e', `AZITO_UI_TOKEN=${this.uiToken}`);
     if (options?.extraEnv) {
       for (const [k, v] of Object.entries(options.extraEnv)) {
