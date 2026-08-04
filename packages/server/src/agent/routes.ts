@@ -45,6 +45,12 @@ export interface AgentRoutesOptions {
   startedAt: number;
   agentEventBus: EventEmitter;
   browserSessionManager: BrowserSessionManager;
+  /**
+   * Address this agent listens on. tmux hooks are registered against it (see
+   * agent/main.ts), so requests the agent makes to itself arrive with this as
+   * their source address, not a loopback one.
+   */
+  bindAddress: string;
 }
 
 function execCommand(command: string, timeoutMs: number): Promise<{ stdout: string; stderr: string; code: number }> {
@@ -75,7 +81,7 @@ const VALID_HOOK_EVENTS = new Set([
 ]);
 
 const agentRoutes: FastifyPluginCallback<AgentRoutesOptions> = (fastify, opts, done) => {
-  const { agentVersion, startedAt, agentEventBus, browserSessionManager } = opts;
+  const { agentVersion, startedAt, agentEventBus, browserSessionManager, bindAddress } = opts;
 
   // ── GET /health (no auth required — registered before auth hook) ──
   fastify.get('/health', async () => {
@@ -288,8 +294,21 @@ const agentRoutes: FastifyPluginCallback<AgentRoutesOptions> = (fastify, opts, d
 
   // ── POST /api/hooks/tmux (no auth — called by local tmux set-hook via curl) ──
   fastify.post('/api/hooks/tmux', async (request, reply) => {
+    // Same-host only. The agent binds to a routable address (a Tailscale IP —
+    // 0.0.0.0 is rejected at startup) so the hub can reach it, and registers its
+    // tmux hooks against that same address. Traffic the host sends to its own
+    // address therefore arrives with that address as its source, never a
+    // loopback one, so accepting only loopback silently rejected every hook the
+    // agent had itself installed. Peers on the tailnet still carry their own
+    // source address and remain rejected.
     const remoteIp = request.ip;
-    if (remoteIp !== '127.0.0.1' && remoteIp !== '::1' && remoteIp !== '::ffff:127.0.0.1') {
+    const sameHost =
+      remoteIp === '127.0.0.1' ||
+      remoteIp === '::1' ||
+      remoteIp === '::ffff:127.0.0.1' ||
+      remoteIp === bindAddress ||
+      remoteIp === `::ffff:${bindAddress}`;
+    if (!sameHost) {
       return reply.status(403).send({ error: 'Forbidden' });
     }
     const { event, session } = request.query as { event?: string; session?: string };
