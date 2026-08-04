@@ -40,10 +40,15 @@ export class AgentBundler {
     return path.join(getDistDir(), 'azito-agent.tar.gz');
   }
 
+  /**
+   * Hash of the *agent* bundle, i.e. the value the deployed agent reports as its
+   * version. Both source and release mode read `dist-agent/bundle-hash.txt`,
+   * which build-agent.ts writes alongside the tarball and build-hub.ts stages
+   * into the release. Do not substitute the release's own `bundleHash` here —
+   * that identifies the hub bundle, never matches what an agent reports, and
+   * makes every agent install/update fail its health check.
+   */
   getBundleHash(): string {
-    const info = getReleaseInfo();
-    if (info) return info.bundleHash;
-
     const tarball = this.getTarballPath();
     const stat = fs.statSync(tarball);
     if (

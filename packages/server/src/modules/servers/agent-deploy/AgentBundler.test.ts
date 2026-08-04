@@ -125,6 +125,38 @@ describe('AgentBundler', () => {
       }
     });
 
+    it('reads bundle-hash.txt in release mode too, not the hub bundle hash', async () => {
+      // Release builds ship dist-agent/bundle-hash.txt alongside the tarball. Returning
+      // release.json's `bundleHash` here instead would identify the *hub* bundle, which
+      // never equals the version a deployed agent reports — every agent install/update
+      // would then fail its health check with "Version mismatch".
+      const tarballPath = bundler.getTarballPath();
+      const bundleHashFile = path.join(path.dirname(tarballPath), 'bundle-hash.txt');
+      if (!fs.existsSync(tarballPath) || !fs.existsSync(bundleHashFile)) {
+        return;
+      }
+      const agentHash = fs.readFileSync(bundleHashFile, 'utf-8').trim();
+
+      vi.resetModules();
+      vi.doMock('../../../shared/releaseInfo', () => ({
+        isReleaseMode: () => true,
+        getBundleRoot: () => null,
+        getReleaseInfo: () => ({
+          version: 'v0.0.0-test',
+          commit: 'deadbee',
+          bundleHash: 'hub-bundle-hash-must-not-be-used',
+          channel: { repo: 'example/repo' },
+        }),
+      }));
+      try {
+        const { AgentBundler: Fresh } = await import('./AgentBundler.js');
+        expect(new Fresh().getBundleHash()).toBe(agentHash);
+      } finally {
+        vi.doUnmock('../../../shared/releaseInfo');
+        vi.resetModules();
+      }
+    });
+
     it('memoizes by tarball mtime+size, avoiding a re-read once cached', () => {
       const tarballPath = bundler.getTarballPath();
       const bundleHashFile = path.join(path.dirname(tarballPath), 'bundle-hash.txt');
