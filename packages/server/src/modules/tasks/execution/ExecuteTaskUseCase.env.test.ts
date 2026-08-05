@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, mkdirSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import * as path from 'path';
 import { ExecuteTaskUseCase } from './ExecuteTaskUseCase';
 import { TurnSignalHub } from '../turns/TurnSignalHub';
 import type { AgentTurn, AgentTurnEvent } from '../turns/AgentTurn';
@@ -318,7 +321,7 @@ function buildUseCase(opts: {
     projectSecretRepo as any,
   );
 
-  return { useCase, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry };
+  return { useCase, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory };
 }
 
 describe('ExecuteTaskUseCase execution-env resolution', () => {
@@ -727,6 +730,127 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
     expect(turnRepo.turns[0].status).toBe('aborted');
     expect(turnRepo.turns[0].completionSource).toBe('abort');
     expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'review');
+  });
+});
+
+describe('ExecuteTaskUseCase working-directory containment (Issue #27)', () => {
+  let allowedRoot: string;
+  let outsideDir: string;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    allowedRoot = mkdtempSync(path.join(tmpdir(), 'azito-exec-root-'));
+    outsideDir = mkdtempSync(path.join(tmpdir(), 'azito-exec-outside-'));
+  });
+
+  afterEach(() => {
+    rmSync(allowedRoot, { recursive: true, force: true });
+    rmSync(outsideDir, { recursive: true, force: true });
+  });
+
+  it('rejects a task.workingDirectory that escapes the project working directory via ..', async () => {
+    const unit = makeUnit({ id: 10, workerType: 'claude', workerModel: 'opus' });
+    const escaped = path.join(allowedRoot, '..', path.basename(outsideDir));
+    const task = makeTask({ id: 1, serverName: 'local-server', unitId: 10, workingDirectory: escaped });
+    const { useCase, taskRepo, windowRepo, logRepo, worktreeServiceFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: { workingDirectory: allowedRoot, branch: null, tmuxSession: 'azito' },
+    });
+    const worktreeCreate = vi.fn();
+    worktreeServiceFactory.create.mockReturnValue({ create: worktreeCreate });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/Task working directory rejected/);
+
+    expect(worktreeCreate).not.toHaveBeenCalled();
+    expect(taskRepo.update).toHaveBeenCalledWith(1, expect.objectContaining({ status: 'failed' }));
+    expect(windowRepo.add).not.toHaveBeenCalled();
+    expect(logRepo.append).toHaveBeenCalledWith(1, 10, 'command', expect.objectContaining({ type: 'working_directory_rejected' }));
+  });
+
+  it('rejects a task.workingDirectory that is an unrelated absolute path outside the project working directory', async () => {
+    const unit = makeUnit({ id: 11, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 2, serverName: 'local-server', unitId: 11, workingDirectory: outsideDir });
+    const { useCase, taskRepo, windowRepo, worktreeServiceFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: { workingDirectory: allowedRoot, branch: null, tmuxSession: 'azito' },
+    });
+    const worktreeCreate = vi.fn();
+    worktreeServiceFactory.create.mockReturnValue({ create: worktreeCreate });
+
+    await expect(useCase.execute(11, 2)).rejects.toThrow(/Task working directory rejected/);
+    expect(worktreeCreate).not.toHaveBeenCalled();
+    expect(taskRepo.update).toHaveBeenCalledWith(2, expect.objectContaining({ status: 'failed' }));
+    expect(windowRepo.add).not.toHaveBeenCalled();
+  });
+
+  it('allows a task.workingDirectory nested inside the project working directory', async () => {
+    const unit = makeUnit({ id: 12, workerType: 'claude', workerModel: 'opus' });
+    const nested = path.join(allowedRoot, 'nested');
+    mkdirSync(nested);
+    const task = makeTask({ id: 3, serverName: 'local-server', unitId: 12, workingDirectory: nested });
+    const { useCase, windowRepo, worktreeServiceFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: { workingDirectory: allowedRoot, branch: null, tmuxSession: 'azito' },
+    });
+    const worktreePath = path.join(nested, '.worktrees', 'task-3');
+    mkdirSync(worktreePath, { recursive: true });
+    worktreeServiceFactory.create.mockReturnValue({
+      create: vi.fn(async () => ({ path: worktreePath, branch: 'task/3-slug' })),
+    });
+
+    await useCase.execute(12, 3);
+
+    expect(windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({ workerType: 'claude', workerModel: 'opus' }));
+  });
+
+  it('rejects when the created worktree path resolves outside the project working directory (symlink escape)', async () => {
+    const unit = makeUnit({ id: 13, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 4, serverName: 'local-server', unitId: 13 });
+    const { useCase, taskRepo, windowRepo, logRepo, worktreeServiceFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: { workingDirectory: allowedRoot, branch: null, tmuxSession: 'azito' },
+    });
+    // Simulate a worktree service that reports a path escaping allowedRoot —
+    // exercises the post-creation wt.path containment check independently of
+    // how the escape happened (symlink, bug in the worktree service, etc).
+    worktreeServiceFactory.create.mockReturnValue({
+      create: vi.fn(async () => ({ path: outsideDir, branch: 'task/4-slug' })),
+    });
+
+    await expect(useCase.execute(13, 4)).rejects.toThrow(/Worktree path rejected/);
+
+    expect(taskRepo.update).toHaveBeenCalledWith(4, expect.objectContaining({ status: 'failed' }));
+    expect(windowRepo.add).not.toHaveBeenCalled();
+    expect(logRepo.append).toHaveBeenCalledWith(4, 13, 'command', expect.objectContaining({ type: 'worktree_path_rejected' }));
+  });
+
+  it('skips containment checks when the project has no configured working directory (legacy behavior preserved)', async () => {
+    const unit = makeUnit({ id: 14, workerType: 'claude', workerModel: 'opus' });
+    const escaped = path.join(allowedRoot, '..', path.basename(outsideDir));
+    const task = makeTask({ id: 5, serverName: 'local-server', unitId: 14, workingDirectory: escaped });
+    const { useCase, windowRepo, worktreeServiceFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: null,
+    });
+    worktreeServiceFactory.create.mockReturnValue({
+      create: vi.fn(async () => ({ path: escaped, branch: 'task/5-slug' })),
+    });
+
+    await useCase.execute(14, 5);
+
+    // No allowedRoot (projectServer.workingDirectory unset) — containment is
+    // skipped, so execution proceeds as before this change.
+    expect(windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({ workerType: 'claude', workerModel: 'opus' }));
   });
 });
 

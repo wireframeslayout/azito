@@ -12,8 +12,10 @@ import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoade
 import type { SidekickSyncService } from '../../sidekicks/SidekickSyncService';
 import type { IExecutionLogRepository, LogType } from '../ExecutionLog';
 import type { TmuxClient } from '../../tmux/TmuxClient';
-import type { IWorktreeService } from '../../git/IWorktreeService';
+import type { IWorktreeService, WorktreeInfo } from '../../git/IWorktreeService';
 import type { WorktreeServiceFactory } from '../../git/WorktreeServiceFactory';
+import type { IPathResolver } from '../../git/PathContainment';
+import { PathResolverFactory, assertPathContained } from '../../git/PathContainment';
 import type { GitProviderService } from '../../git/providers/GitProviderService';
 import type { ProjectRepositoryWithToken as ProjectRepository } from '../../projects/Project';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
@@ -77,6 +79,7 @@ export class ExecuteTaskUseCase {
   private readonly phaseLoopRunner: PhaseLoopRunner;
   private readonly httpSignalCoordinator: HttpSignalTurnCoordinator;
   private readonly runtimeRegistry: WorkerRuntimeRegistry;
+  private readonly pathResolverFactory = new PathResolverFactory();
 
   constructor(
     private taskRepo: ITaskRepository,
@@ -166,6 +169,11 @@ export class ExecuteTaskUseCase {
   private getWorktreeService(server: ServerConfig): IWorktreeService {
     const transport = this.transportFactory.getTransport(server);
     return this.worktreeServiceFactory.create(server.type, transport);
+  }
+
+  private getPathResolver(server: ServerConfig): IPathResolver {
+    const transport = this.transportFactory.getTransport(server);
+    return this.pathResolverFactory.create(server.type, transport);
   }
 
   private appendLog(taskId: number, unitId: number, type: LogType, content: unknown): void {
@@ -307,16 +315,40 @@ export class ExecuteTaskUseCase {
     // Change to project working directory (use worktree if possible)
     const project = this.projectRepo.findById(task.projectId);
     const projectServer = project ? this.projectServerRepo.find(task.projectId, serverName) : null;
-    const workingDir = task.workingDirectory || projectServer?.workingDirectory;
+    // allowedRoot is the project's configured working directory — the boundary
+    // a caller-supplied task.workingDirectory must not escape (Issue #27:
+    // task.workingDirectory comes straight from the API with no path
+    // validation beyond shell-metachar rejection, so `..`/absolute-path
+    // escapes were previously possible). When the project has no configured
+    // working directory there is no boundary to enforce, so containment is
+    // skipped and the legacy behavior (run wherever task.workingDirectory
+    // points) is preserved rather than guessed at.
+    const allowedRoot = projectServer?.workingDirectory || null;
+    const workingDir = task.workingDirectory || allowedRoot;
     let effectiveDir = workingDir;
 
     if (workingDir) {
+      if (task.workingDirectory && allowedRoot) {
+        try {
+          await assertPathContained(this.getPathResolver(server), task.workingDirectory, allowedRoot, 'task working directory');
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          this.appendLog(taskId, unitId, 'command', {
+            type: 'working_directory_rejected',
+            message,
+          });
+          this.taskRepo.update(taskId, { status: 'failed' as TaskStatus, tmuxWindow: null } as Partial<Task>);
+          try { await this.tmux.killWindow(server, `${tmuxSession}:${windowName}`); } catch {}
+          throw new Error(`Task working directory rejected: ${message}`);
+        }
+      }
+
       // Create worktree for isolated branch/file tracking
+      let wt: WorktreeInfo;
       try {
         const baseBranch = task.baseBranch || projectServer?.branch || project?.defaultBranch || 'main';
         const slug = await this.contentExtractor.generateSlug(task.title);
-        const wt = await this.getWorktreeService(server).create(workingDir, taskId, slug, baseBranch, task.branch || undefined);
-        effectiveDir = wt.path;
+        wt = await this.getWorktreeService(server).create(workingDir, taskId, slug, baseBranch, task.branch || undefined);
 
         this.taskRepo.update(taskId, {
           worktreePath: wt.path,
@@ -341,6 +373,23 @@ export class ExecuteTaskUseCase {
         try { await this.tmux.killWindow(server, `${tmuxSession}:${windowName}`); } catch {}
         throw new Error(`Worktree creation failed: ${message}`);
       }
+
+      if (allowedRoot) {
+        try {
+          await assertPathContained(this.getPathResolver(server), wt.path, allowedRoot, 'worktree path');
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          this.appendLog(taskId, unitId, 'command', {
+            type: 'worktree_path_rejected',
+            message,
+          });
+          this.taskRepo.update(taskId, { status: 'failed' as TaskStatus, tmuxWindow: null } as Partial<Task>);
+          try { await this.tmux.killWindow(server, `${tmuxSession}:${windowName}`); } catch {}
+          throw new Error(`Worktree path rejected: ${message}`);
+        }
+      }
+
+      effectiveDir = wt.path;
 
       try {
         await this.tmux.sendKeys(server, target, [`cd ${effectiveDir}`, 'Enter']);
