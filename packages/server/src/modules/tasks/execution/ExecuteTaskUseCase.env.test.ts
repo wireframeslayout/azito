@@ -809,13 +809,15 @@ describe('ExecuteTaskUseCase working-directory containment (Issue #27)', () => {
     expect(windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({ workerType: 'claude', workerModel: 'opus' }));
   });
 
-  it('shell-quotes the resolved worktree path before sending the cd command (Issue #27 cd injection)', async () => {
-    // A directory name with shell metacharacters is legal on disk; the
-    // resolved (real) worktree path must reach the pane as one quoted
-    // shell word, not be interpolated raw into the `cd` string.
+  it('rejects (fail closed) a resolved worktree path containing shell metacharacters instead of quoting it through to the cd command (Issue #27: assertPathContained now runs assertSafePath on the resolved worktree path, since downstream shell interpolation elsewhere — e.g. PushVerifier — is not quoted and depends on this invariant)', async () => {
+    // A directory name with shell metacharacters is legal on disk. Rather
+    // than let the resolved (real) worktree path reach the pane as a quoted
+    // `cd` argument, it must be rejected up front — a persisted
+    // `task.worktreePath` in this format would later reach unquoted shell
+    // interpolation in `PushVerifier`.
     const unit = makeUnit({ id: 16, workerType: 'claude', workerModel: 'opus' });
     const task = makeTask({ id: 9, serverName: 'local-server', unitId: 16 });
-    const { useCase, tmux, worktreeServiceFactory } = buildUseCase({
+    const { useCase, tmux, taskRepo, windowRepo, worktreeServiceFactory } = buildUseCase({
       task,
       project: makeProject({ defaultUnitId: null }),
       units: [unit],
@@ -827,12 +829,12 @@ describe('ExecuteTaskUseCase working-directory containment (Issue #27)', () => {
       create: vi.fn(async () => ({ path: dangerousDir, branch: 'task/9-slug' })),
     });
 
-    await useCase.execute(16, 9);
+    await expect(useCase.execute(16, 9)).rejects.toThrow(/not in a safe path format/);
 
+    expect(taskRepo.update).toHaveBeenCalledWith(9, expect.objectContaining({ status: 'failed' }));
+    expect(windowRepo.add).not.toHaveBeenCalled();
     const cdCall = tmux.sendKeys.mock.calls.find((call: unknown[]) => ((call as unknown[])[2] as string[])[0]?.startsWith('cd '));
-    expect(cdCall).toBeDefined();
-    const expectedQuoted = `'${dangerousDir.replace(/'/g, "'\\''")}'`;
-    expect(((cdCall as unknown[])[2] as string[])[0]).toBe(`cd -- ${expectedQuoted}`);
+    expect(cdCall).toBeUndefined();
   });
 
   it('rejects when the created worktree path resolves outside the project working directory (symlink escape)', async () => {

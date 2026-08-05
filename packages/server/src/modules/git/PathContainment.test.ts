@@ -251,6 +251,52 @@ describe('assertPathContained', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it('rejects (fail closed) when the resolved target is contained but its resolved path is not in a safe path format, with an error distinguishable from a containment violation (Issue #27: a `\'`-containing directory name reached via a symlink under the allowed root used to defeat downstream unquoted shell interpolation in PushVerifier/RemoteWorktreeService)', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'azito-path-containment-root-'));
+    // The real (symlink-resolution-target) directory itself carries the
+    // unsafe character — this is what `assertSafePath` must catch, since a
+    // symlink alone (with a safe name) would already be handled by ordinary
+    // containment resolution.
+    const unsafeReal = path.join(root, "it's-a-dir; echo $HOME");
+    mkdirSync(unsafeReal);
+    const link = path.join(root, 'safe-looking-link');
+    symlinkSync(unsafeReal, link);
+    try {
+      const err = await assertPathContained(new LocalPathResolver(), { target: link, allowedRoot: root }, 'test path').catch(
+        (e) => e as Error,
+      );
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toMatch(/not in a safe path format/);
+      expect((err as Error).message).not.toMatch(/escapes the allowed directory/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a resolved path containing a space even without any other unsafe character', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'azito-path-containment-root-'));
+    const unsafeReal = path.join(root, 'has a space');
+    mkdirSync(unsafeReal);
+    try {
+      await expect(assertPathContained(new LocalPathResolver(), { target: unsafeReal, allowedRoot: root }, 'test path'))
+        .rejects.toThrow(/not in a safe path format/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('still accepts an ordinary safe resolved path (regression guard against over-rejecting the common case)', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'azito-path-containment-root-'));
+    const target = path.join(root, 'normal-sub.dir_1');
+    mkdirSync(target);
+    try {
+      const resolvedTarget = await new LocalPathResolver().resolveRealPath(target);
+      await expect(assertPathContained(new LocalPathResolver(), { target, allowedRoot: root }, 'test path')).resolves.toBe(resolvedTarget);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('assertDirectoryContained', () => {

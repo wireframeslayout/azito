@@ -446,10 +446,12 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
     expect(sentCommands).toContain(`cd -- '${rootDir}'`);
   });
 
-  it('quotes a resolved path containing shell metacharacters instead of interpolating it raw (Issue #27 cd injection)', async () => {
+  it('rejects (fail closed) a resolved path containing shell metacharacters instead of quoting it through to the cd command (Issue #27: assertPathContained now runs assertSafePath on the resolved path, since downstream shell interpolation elsewhere — e.g. PushVerifier — is not quoted and depends on this invariant)', async () => {
     // A directory name with `;`, whitespace, `$(...)`, and a single quote —
-    // all legal in a Linux filename — must reach the pane as one shell
-    // word, not be interpreted by the shell running there.
+    // all legal in a Linux filename — must never reach any downstream shell
+    // interpolation; it is now rejected at the containment-verification
+    // choke point instead of being passed through (quoted here, but
+    // unquoted elsewhere).
     const dangerousName = `evil; touch pwned; echo $(whoami)'quote`;
     const dangerousDir = path.join(rootDir, dangerousName);
     mkdirSync(dangerousDir);
@@ -460,14 +462,8 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
       transportFactory: makeTransportFactory(),
     });
 
-    await service.respawn(1, makeServer());
-
-    const cdCommand = sentCommands.find((c) => c.startsWith('cd '));
-    expect(cdCommand).toBeDefined();
-    // shellQuote wraps in single quotes and escapes embedded single quotes
-    // as '\''  — the whole path must be one quoted argument after `cd --`.
-    const expectedQuoted = `'${dangerousDir.replace(/'/g, "'\\''")}'`;
-    expect(cdCommand).toBe(`cd -- ${expectedQuoted}`);
+    await expect(service.respawn(1, makeServer())).rejects.toThrow(/not in a safe path format/);
+    expect(sentCommands.find((c) => c.startsWith('cd '))).toBeUndefined();
   });
 
   it('guards a resolved path starting with "-" from being read as a cd option', async () => {

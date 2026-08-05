@@ -2,6 +2,7 @@ import { promises as fs } from 'fs';
 import * as path from 'path';
 import type { IServerTransport } from '../servers/transport/ServerTransport';
 import { shellQuote } from '../agents/shellQuote';
+import { assertSafePath } from './assertSafeGitArgs';
 
 // Resolves a path to its real (symlink-free, absolute) form so containment
 // checks below cannot be defeated by `..` segments or a symlink that points
@@ -116,18 +117,19 @@ export interface PathContainmentPair {
  * '/a/b/..cache')` returns `'..cache'`), which would wrongly reject a real
  * child directory as an escape (Issue #27 review finding 3).
  */
-// NOTE: `PathContainment` only verifies structural containment (target is
-// `allowedRoot` itself or strictly beneath it, after symlink resolution) —
-// it does not restrict the character set of `target`/`allowedRoot` beyond
-// what `RemotePathResolver` needs to stay quoting-safe (see
-// `RemotePathResolver.resolveRealPath` above). `IWorktreeService`
+// NOTE: `PathContainment` verifies structural containment (target is
+// `allowedRoot` itself or strictly beneath it, after symlink resolution),
+// and — since the shell-injection fix below — `assertPathContained` also
+// runs the *resolved* target through `assertSafePath` (`SAFE_PATH_PATTERN`)
+// before returning it, so the character set of the value this module hands
+// back to callers is no longer unrestricted. The *raw, pre-resolution*
+// `target`/`allowedRoot` arguments passed in are still unrestricted here —
+// `RemotePathResolver.resolveRealPath` accepts them as-is because it stays
+// quoting-safe regardless (see the comment there). `IWorktreeService`
 // (`WorktreeService.ts` / `RemoteWorktreeService.ts`) and
-// `TaskRestoreService` still call `assertSafePath` (`SAFE_PATH_PATTERN`)
-// independently, which is stricter and rejects `+`/`,`/`=`/spaces. A path
-// that passes containment here can therefore still fail later at the
-// worktree step — that inconsistency is a known, accepted gap (Issue #27
-// review finding 3); narrowing `assertSafePath` or the worktree
-// implementations to match is out of scope for this change.
+// `TaskRestoreService` still call `assertSafePath` independently on the
+// paths they use; that is no longer the only enforcement point but remains
+// defense in depth alongside the check now performed here.
 export function isPathContained({ target, allowedRoot }: PathContainmentPair): boolean {
   const rel = path.relative(allowedRoot, target);
   if (rel === '') return true;
@@ -150,6 +152,27 @@ export function isPathContained({ target, allowedRoot }: PathContainmentPair): b
  * window where a symlink swapped in between the two could redirect the
  * later use outside `allowedRoot` even though the check passed
  * (Issue #27 review finding 2).
+ *
+ * Before returning, the resolved target is also run through `assertSafePath`
+ * (`SAFE_PATH_PATTERN`). This is a different concern from the `assertSafePath`
+ * call that used to sit inside `RemotePathResolver` and was removed from
+ * there: that removal was about the *input* to `realpath` — the raw
+ * `targetPath` is always single-quoted via `toRemotePathExpr`/`shellQuote`
+ * before it reaches the remote shell, so restricting its character set added
+ * no safety, only false rejections (see `RemotePathResolver.resolveRealPath`).
+ * The check added here is about the *output* of containment verification:
+ * once this resolved path is persisted (`task.worktreePath` /
+ * `task.workingDirectory`) and later read back, downstream call sites
+ * (`PushVerifier`, some `RemoteWorktreeService` call paths) interpolate it
+ * into a shell command string without quoting it themselves. Those call
+ * sites' safety depends entirely on the invariant that anything reaching them
+ * already matches `SAFE_PATH_PATTERN` — an invariant that used to be
+ * guaranteed by request-time input validation, but resolving symlinks here
+ * can turn an already-validated input into a resolved path that contains
+ * shell metacharacters (e.g. a `'`-containing directory name reached via a
+ * symlink under the allowed root). Enforcing `assertSafePath` on the
+ * resolved value restores that invariant at the one place all such paths
+ * pass through, fail-closed, before they are ever persisted or used again.
  */
 export async function assertPathContained(
   resolver: IPathResolver,
@@ -171,6 +194,18 @@ export async function assertPathContained(
   if (!isPathContained({ target: resolvedTarget, allowedRoot: resolvedRoot })) {
     throw new Error(`${label} escapes the allowed directory`);
   }
+
+  // Distinct from the containment error above: this path is contained
+  // within `allowedRoot`, but its resolved (symlink-free) form is not in the
+  // safe shell-interpolation format downstream code relies on. Fail closed
+  // rather than let an unsafe resolved path reach unquoted shell
+  // interpolation in `PushVerifier`/`RemoteWorktreeService`.
+  try {
+    assertSafePath(resolvedTarget, label);
+  } catch {
+    throw new Error(`${label} resolved to a path that is not in a safe path format: ${resolvedTarget}`);
+  }
+
   return resolvedTarget;
 }
 
