@@ -4,6 +4,9 @@ import type { TmuxClient } from '../tmux/TmuxClient';
 import type { ISessionStrategyFactory } from '../agents/SessionStrategy';
 import type { ITaskRepository } from '../tasks/Task';
 import type { IUnitRepository } from '../units/Unit';
+import type { IProjectServerRepository } from '../projects/ProjectServer';
+import type { TransportFactory } from '../servers/transport/TransportFactory';
+import { PathResolverFactory, assertDirectoryContained } from '../git/PathContainment';
 import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
 import type { SessionCaptureService } from './SessionCaptureService';
@@ -19,6 +22,8 @@ interface SupervisionContext {
 }
 
 export class WindowRespawnService {
+  private readonly pathResolverFactory = new PathResolverFactory();
+
   constructor(
     private windowRepo: IWindowRepository,
     private tmux: TmuxClient,
@@ -27,6 +32,16 @@ export class WindowRespawnService {
     private unitRepo: IUnitRepository,
     private supervisorRegistry: SupervisorRegistry,
     private sessionCaptureService?: SessionCaptureService,
+    // Optional (kept last, after the pre-existing optional sessionCaptureService)
+    // so existing call sites/tests that construct this service without them keep
+    // compiling. Both undefined means "no configured project boundary is
+    // reachable from here" — respawn() then skips containment verification
+    // entirely and cd's wherever it always did (legacy behavior preserved),
+    // same "no boundary to enforce" skip semantics as ExecuteTaskUseCase /
+    // TaskRestoreService use when a project has no projectServer.workingDirectory
+    // (Issue #27 review finding 1).
+    private projectServerRepo?: IProjectServerRepository,
+    private transportFactory?: TransportFactory,
   ) {}
 
   async respawn(windowId: number, server: ServerConfig): Promise<{ tmuxTarget: string }> {
@@ -73,15 +88,50 @@ export class WindowRespawnService {
       }
     }
     const supervision: SupervisionContext = { supervise, taskId: win.taskId, unitId };
+    const allowedRoot = this.resolveAllowedRoot(win, server.name);
 
     if (win.paneLayout) {
-      await this.restorePaneLayout(server, baseTarget, win.paneLayout, win, supervision);
+      await this.restorePaneLayout(server, baseTarget, win.paneLayout, win, supervision, allowedRoot);
     } else {
       const paneId = await this.tmux.resolvePaneId(server, baseTarget);
-      await this.setupSinglePane(server, paneId, baseTarget, win, supervision);
+      await this.setupSinglePane(server, paneId, baseTarget, win, supervision, allowedRoot);
     }
 
     return { tmuxTarget: dbTarget };
+  }
+
+  /**
+   * Resolves the project's configured working directory (the containment
+   * boundary — see PathContainment.ts) for the window being respawned, or
+   * `null` when it can't be determined. `null` means "no boundary to
+   * enforce" and the caller must skip verification, same as
+   * ExecuteTaskUseCase/TaskRestoreService do when a project has no
+   * projectServer.workingDirectory configured — this must never be treated
+   * as "verification failed" (Issue #27 review finding 1).
+   */
+  private resolveAllowedRoot(win: Window, serverName: string): string | null {
+    if (!this.projectServerRepo) return null;
+    let projectId = win.projectId;
+    if (projectId === null && win.taskId !== null) {
+      const task = this.taskRepo.findById(win.taskId);
+      projectId = task?.projectId ?? null;
+    }
+    if (projectId === null) return null;
+    return this.projectServerRepo.find(projectId, serverName)?.workingDirectory || null;
+  }
+
+  /**
+   * Verifies `cwd` stays within `allowedRoot` and returns the resolved
+   * (symlink-free) path to `cd` into — mirrors ExecuteTaskUseCase's TOCTOU
+   * fix (Issue #27 review finding 2): using `cwd` again after verification,
+   * instead of the resolved value this returns, would leave the same
+   * symlink-swap window open. Skips (returns `cwd` unchanged) when
+   * `allowedRoot` or `transportFactory` is unavailable.
+   */
+  private async resolveContainedCwd(server: ServerConfig, cwd: string, allowedRoot: string | null, label: string): Promise<string> {
+    if (!allowedRoot || !this.transportFactory) return cwd;
+    const transport = this.transportFactory.getTransport(server);
+    return assertDirectoryContained(this.pathResolverFactory, server.type, transport, cwd, allowedRoot, label);
   }
 
   private wrapIfSupervised(cmd: string, server: ServerConfig, supervisorTarget: string, supervision: SupervisionContext): string {
@@ -128,6 +178,7 @@ export class WindowRespawnService {
     paneLayout: PaneLayout,
     win: { workerType: string | null; agentSessionId: string | null; workerModel: string | null; workingDirectory: string | null },
     supervision: SupervisionContext,
+    allowedRoot: string | null,
   ): Promise<void> {
     const paneCount = paneLayout.panes.length;
     const firstPaneId = await this.tmux.resolvePaneId(server, baseTarget);
@@ -152,8 +203,14 @@ export class WindowRespawnService {
     for (const pane of paneLayout.panes) {
       const paneId = paneIdMap.get(pane.index);
       if (!paneId) continue;
-      const cwd = pane.workingDirectory || win.workingDirectory;
-      if (cwd) {
+      const rawCwd = pane.workingDirectory || win.workingDirectory;
+      if (rawCwd) {
+        // Fail fast (throw, abort the whole respawn) rather than silently cd
+        // somewhere else — a rejected pane cwd means either the window's
+        // persisted workingDirectory or the live tmux pane path (captured by
+        // capturePaneLayout) escapes the project boundary, and launching a
+        // worker there is exactly the Issue #27 containment gap this closes.
+        const cwd = await this.resolveContainedCwd(server, rawCwd, allowedRoot, 'pane working directory');
         await this.tmux.sendKeys(server, paneId, [`cd ${cwd}`, 'Enter']);
         await sleep(300);
       }
@@ -177,9 +234,11 @@ export class WindowRespawnService {
     supervisorTarget: string,
     win: { id?: number; workerType: string | null; agentSessionId: string | null; workerModel: string | null; workingDirectory: string | null },
     supervision: SupervisionContext,
+    allowedRoot: string | null,
   ): Promise<void> {
     if (win.workingDirectory) {
-      await this.tmux.sendKeys(server, paneId, [`cd ${win.workingDirectory}`, 'Enter']);
+      const cwd = await this.resolveContainedCwd(server, win.workingDirectory, allowedRoot, 'window working directory');
+      await this.tmux.sendKeys(server, paneId, [`cd ${cwd}`, 'Enter']);
       await sleep(300);
     }
 

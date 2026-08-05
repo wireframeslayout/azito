@@ -14,8 +14,7 @@ import type { IExecutionLogRepository, LogType } from '../ExecutionLog';
 import type { TmuxClient } from '../../tmux/TmuxClient';
 import type { IWorktreeService, WorktreeInfo } from '../../git/IWorktreeService';
 import type { WorktreeServiceFactory } from '../../git/WorktreeServiceFactory';
-import type { IPathResolver } from '../../git/PathContainment';
-import { PathResolverFactory, assertPathContained } from '../../git/PathContainment';
+import { PathResolverFactory, assertDirectoryContained } from '../../git/PathContainment';
 import type { GitProviderService } from '../../git/providers/GitProviderService';
 import type { ProjectRepositoryWithToken as ProjectRepository } from '../../projects/Project';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
@@ -171,28 +170,27 @@ export class ExecuteTaskUseCase {
     return this.worktreeServiceFactory.create(server.type, transport);
   }
 
-  private getPathResolver(server: ServerConfig): IPathResolver {
-    const transport = this.transportFactory.getTransport(server);
-    return this.pathResolverFactory.create(server.type, transport);
-  }
-
   /**
-   * Single choke point for the containment check every path that decides
-   * where to launch/resume a worker must go through (Issue #27). Skips (no
-   * throw) when either side is unset: `allowedRoot` unset means the project
-   * has no configured boundary to enforce (legacy behavior preserved),
-   * `candidateDir` unset means there is nothing to validate. Callers own
-   * their own failure handling (log/fail-task/cleanup) since that differs
-   * by call site — this only resolves+verifies.
+   * Thin wrapper over the shared `assertDirectoryContained` (modules/git/
+   * PathContainment.ts) that resolves this class's transport for `server`.
+   * The actual resolve+verify logic now lives in the shared function so
+   * `TaskRestoreService` and `WindowRespawnService` can run the same check
+   * without going through this use case (Issue #27 review finding 1) —
+   * this method only exists to avoid repeating `getPathResolver`-style
+   * transport wiring at each call site below. Returns the resolved
+   * (symlink-free) path; callers must use that return value, not
+   * `candidateDir`, for whatever follows (Issue #27 review finding 2).
+   * Callers guard `candidateDir` truthiness themselves since failure
+   * handling (log/fail-task/cleanup) differs by call site.
    */
   private async assertDirectoryContained(
     server: ServerConfig,
-    candidateDir: string | null | undefined,
+    candidateDir: string,
     allowedRoot: string | null | undefined,
     label: string,
-  ): Promise<void> {
-    if (!candidateDir || !allowedRoot) return;
-    await assertPathContained(this.getPathResolver(server), candidateDir, allowedRoot, label);
+  ): Promise<string> {
+    const transport = this.transportFactory.getTransport(server);
+    return assertDirectoryContained(this.pathResolverFactory, server.type, transport, candidateDir, allowedRoot, label);
   }
 
   private appendLog(taskId: number, unitId: number, type: LogType, content: unknown): void {
@@ -343,13 +341,18 @@ export class ExecuteTaskUseCase {
     // skipped and the legacy behavior (run wherever task.workingDirectory
     // points) is preserved rather than guessed at.
     const allowedRoot = projectServer?.workingDirectory || null;
-    const workingDir = task.workingDirectory || allowedRoot;
+    let workingDir = task.workingDirectory || allowedRoot;
     let effectiveDir = workingDir;
 
     if (workingDir) {
       if (task.workingDirectory && allowedRoot) {
         try {
-          await this.assertDirectoryContained(server, task.workingDirectory, allowedRoot, 'task working directory');
+          // Use the resolved (symlink-free) path returned by the check for
+          // worktree creation below, not the original task.workingDirectory —
+          // otherwise a symlink swapped in between verification and use could
+          // still redirect the worktree outside allowedRoot (Issue #27 review
+          // finding 2, TOCTOU).
+          workingDir = await this.assertDirectoryContained(server, task.workingDirectory, allowedRoot, 'task working directory');
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           this.appendLog(taskId, unitId, 'command', {
@@ -364,24 +367,10 @@ export class ExecuteTaskUseCase {
 
       // Create worktree for isolated branch/file tracking
       let wt: WorktreeInfo;
+      const baseBranch = task.baseBranch || projectServer?.branch || project?.defaultBranch || 'main';
       try {
-        const baseBranch = task.baseBranch || projectServer?.branch || project?.defaultBranch || 'main';
         const slug = await this.contentExtractor.generateSlug(task.title);
         wt = await this.getWorktreeService(server).create(workingDir, taskId, slug, baseBranch, task.branch || undefined);
-
-        this.taskRepo.update(taskId, {
-          worktreePath: wt.path,
-          worktreeBranch: wt.branch,
-          baseBranch,
-          branch: wt.branch,
-        } as Partial<Task>);
-
-        this.appendLog(taskId, unitId, 'command', {
-          type: 'worktree_created',
-          worktreePath: wt.path,
-          worktreeBranch: wt.branch,
-          baseBranch,
-        });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         this.appendLog(taskId, unitId, 'command', {
@@ -395,7 +384,11 @@ export class ExecuteTaskUseCase {
 
       if (allowedRoot) {
         try {
-          await this.assertDirectoryContained(server, wt.path, allowedRoot, 'worktree path');
+          // Same TOCTOU fix as above: the resolved path (not wt.path as
+          // returned by worktree creation) is what gets persisted and used
+          // from here on (Issue #27 review finding 2).
+          const resolvedWtPath = await this.assertDirectoryContained(server, wt.path, allowedRoot, 'worktree path');
+          wt = { ...wt, path: resolvedWtPath };
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           this.appendLog(taskId, unitId, 'command', {
@@ -425,6 +418,24 @@ export class ExecuteTaskUseCase {
           throw new Error(`Worktree path rejected: ${message}`);
         }
       }
+
+      // Persisted only after the containment check above passes (or is
+      // skipped when there's no allowedRoot to check against) — this closes
+      // the earlier TOCTOU window where wt.path was written to the DB before
+      // it had been verified (Issue #27 review finding 2).
+      this.taskRepo.update(taskId, {
+        worktreePath: wt.path,
+        worktreeBranch: wt.branch,
+        baseBranch,
+        branch: wt.branch,
+      } as Partial<Task>);
+
+      this.appendLog(taskId, unitId, 'command', {
+        type: 'worktree_created',
+        worktreePath: wt.path,
+        worktreeBranch: wt.branch,
+        baseBranch,
+      });
 
       effectiveDir = wt.path;
 
@@ -663,13 +674,15 @@ export class ExecuteTaskUseCase {
       const followUpProject = this.projectRepo.findById(task.projectId);
       const followUpProjectServerForDir = followUpProject ? this.projectServerRepo.find(task.projectId, serverName) : null;
       const followUpAllowedRoot = followUpProjectServerForDir?.workingDirectory || null;
-      const followUpDir = task.worktreePath && await this.getWorktreeService(server).exists(task.worktreePath)
+      let followUpDir = task.worktreePath && await this.getWorktreeService(server).exists(task.worktreePath)
         ? task.worktreePath
         : (task.workingDirectory || followUpProjectServerForDir?.workingDirectory);
 
       if (followUpDir && followUpAllowedRoot) {
         try {
-          await this.assertDirectoryContained(server, followUpDir, followUpAllowedRoot, 'follow-up working directory');
+          // Use the resolved path for the `cd` below, same TOCTOU fix as
+          // execute() (Issue #27 review finding 2).
+          followUpDir = await this.assertDirectoryContained(server, followUpDir, followUpAllowedRoot, 'follow-up working directory');
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           this.appendLog(taskId, unitId, 'command', { type: 'working_directory_rejected', message });

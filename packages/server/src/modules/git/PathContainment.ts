@@ -72,10 +72,18 @@ export class PathResolverFactory {
  * a prefix match would wrongly accept e.g. `/a/bc` as being under `/a/b`.
  * `resolvedRoot`/`resolvedTarget` must already be real (symlink-resolved,
  * absolute) paths; this function does no resolution of its own.
+ *
+ * The escape check is `rel === '..' || rel.startsWith('..' + path.sep)`, not
+ * a bare `rel.startsWith('..')` — the latter also matches legitimate child
+ * names that merely start with two dots (e.g. `path.relative('/a/b',
+ * '/a/b/..cache')` returns `'..cache'`), which would wrongly reject a real
+ * child directory as an escape (Issue #27 review finding 3).
  */
 export function isPathContained(resolvedRoot: string, resolvedTarget: string): boolean {
   const rel = path.relative(resolvedRoot, resolvedTarget);
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  if (rel === '') return true;
+  if (path.isAbsolute(rel)) return false;
+  return rel !== '..' && !rel.startsWith('..' + path.sep);
 }
 
 /**
@@ -85,13 +93,21 @@ export function isPathContained(resolvedRoot: string, resolvedTarget: string): b
  * treated as "not contained" — this must never silently let a task run
  * outside its configured directory just because containment couldn't be
  * verified.
+ *
+ * Returns the resolved (symlink-free, absolute) target path. Callers must
+ * use this returned value — not the original `targetPath` — for anything
+ * that follows (worktree creation, `cd`, persistence to the DB). Verifying
+ * `targetPath` and then separately using `targetPath` again would leave a
+ * TOCTOU window where a symlink swapped in between the two could redirect
+ * the later use outside `allowedRoot` even though the check passed
+ * (Issue #27 review finding 2).
  */
 export async function assertPathContained(
   resolver: IPathResolver,
   targetPath: string,
   allowedRoot: string,
   label: string,
-): Promise<void> {
+): Promise<string> {
   let resolvedTarget: string;
   let resolvedRoot: string;
   try {
@@ -107,4 +123,31 @@ export async function assertPathContained(
   if (!isPathContained(resolvedRoot, resolvedTarget)) {
     throw new Error(`${label} escapes the allowed directory`);
   }
+  return resolvedTarget;
+}
+
+/**
+ * Shared choke point for "resolve a transport-appropriate path resolver, then
+ * verify containment" — the piece every launch/resume/respawn path needs
+ * (Issue #27 review finding 1). Previously this wiring lived only as a
+ * private method on `ExecuteTaskUseCase`, so `TaskRestoreService` (startup
+ * task recovery) and `WindowRespawnService` (pane/window respawn) launched
+ * workers into `task.workingDirectory` / `pane.workingDirectory` without any
+ * containment check at all.
+ *
+ * Skips (returns `candidateDir` unchanged, no resolution/verification) when
+ * `allowedRoot` is unset — same "no configured boundary to enforce" behavior
+ * `ExecuteTaskUseCase` always had, preserved here for every caller.
+ */
+export async function assertDirectoryContained(
+  resolverFactory: PathResolverFactory,
+  serverType: string,
+  transport: IServerTransport | undefined,
+  candidateDir: string,
+  allowedRoot: string | null | undefined,
+  label: string,
+): Promise<string> {
+  if (!allowedRoot) return candidateDir;
+  const resolver = resolverFactory.create(serverType, transport);
+  return assertPathContained(resolver, candidateDir, allowedRoot, label);
 }

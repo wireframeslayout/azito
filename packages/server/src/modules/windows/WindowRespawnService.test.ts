@@ -1,9 +1,14 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import * as path from 'path';
 import { WindowRespawnService } from './WindowRespawnService';
 import type { Window, IWindowRepository } from './Window';
 import type { ServerConfig } from '../servers/Server';
 import type { ITaskRepository, Task } from '../tasks/Task';
 import type { IUnitRepository, Unit } from '../units/Unit';
+import type { IProjectServerRepository } from '../projects/ProjectServer';
+import type { TransportFactory } from '../servers/transport/TransportFactory';
 
 function makeWindow(overrides: Partial<Window> = {}): Window {
   return {
@@ -100,7 +105,13 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
   };
 }
 
-function buildService(opts: { window: Window; task?: Task | null; unit?: Unit | null }) {
+function buildService(opts: {
+  window: Window;
+  task?: Task | null;
+  unit?: Unit | null;
+  projectServerRepo?: Pick<IProjectServerRepository, 'find'>;
+  transportFactory?: Pick<TransportFactory, 'getTransport'>;
+}) {
   const windowRepo: IWindowRepository = {
     add: vi.fn(() => 1),
     findAll: vi.fn(() => []),
@@ -161,6 +172,9 @@ function buildService(opts: { window: Window; task?: Task | null; unit?: Unit | 
     taskRepo as any,
     unitRepo as any,
     supervisorRegistry,
+    undefined,
+    opts.projectServerRepo as any,
+    opts.transportFactory as any,
   );
 
   return { service, windowRepo, tmux, sentCommands, clearExitMarker };
@@ -289,5 +303,139 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
     );
     expect(tmux.createWindow).not.toHaveBeenCalled();
     expect(result.tmuxTarget).toBe('azito:task-1--ab12.1');
+  });
+});
+
+describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
+  // Containment resolves real paths via fs.realpath (LocalPathResolver), so
+  // these fixtures need to exist on disk — a literal string like '/work'
+  // would make every check fail closed with "Cannot verify ... (ENOENT)".
+  let rootDir: string;
+
+  function makeProjectServerRepo(workingDirectory: string | null): Pick<IProjectServerRepository, 'find'> {
+    return { find: vi.fn(() => ({ projectId: 1, serverName: 'local-server', workingDirectory, branch: 'main', tmuxSession: 'azito' })) };
+  }
+
+  function makeTransportFactory(): Pick<TransportFactory, 'getTransport'> {
+    // Only exercised for non-local server types; local respawns resolve via
+    // fs.realpath directly and never touch the transport.
+    return { getTransport: vi.fn(() => ({})) } as unknown as Pick<TransportFactory, 'getTransport'>;
+  }
+
+  beforeEach(() => {
+    rootDir = realpathSync(mkdtempSync(path.join(tmpdir(), 'azito-window-respawn-')));
+  });
+
+  afterEach(() => {
+    rmSync(rootDir, { recursive: true, force: true });
+  });
+
+  it('rejects a single-pane window.workingDirectory that escapes the project root', async () => {
+    const outsideDir = mkdtempSync(path.join(tmpdir(), 'azito-window-respawn-outside-'));
+    try {
+      const win = makeWindow({ projectId: 1, taskId: null, windowType: 'terminal', workerType: null, workingDirectory: outsideDir });
+      const { service } = buildService({
+        window: win,
+        projectServerRepo: makeProjectServerRepo(rootDir),
+        transportFactory: makeTransportFactory(),
+      });
+
+      await expect(service.respawn(1, makeServer())).rejects.toThrow(/escapes the allowed directory/);
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('cds into the resolved path for a single-pane window inside the project root', async () => {
+    const win = makeWindow({ projectId: 1, taskId: null, windowType: 'terminal', workerType: null, workingDirectory: rootDir });
+    const { service, sentCommands } = buildService({
+      window: win,
+      projectServerRepo: makeProjectServerRepo(rootDir),
+      transportFactory: makeTransportFactory(),
+    });
+
+    await service.respawn(1, makeServer());
+
+    expect(sentCommands).toContain(`cd ${rootDir}`);
+  });
+
+  it('accepts a child directory named "..cache" (regression: isPathContained must not over-reject)', async () => {
+    const dotDotCacheDir = path.join(rootDir, '..cache');
+    mkdirSync(dotDotCacheDir);
+    const win = makeWindow({ projectId: 1, taskId: null, windowType: 'terminal', workerType: null, workingDirectory: dotDotCacheDir });
+    const { service, sentCommands } = buildService({
+      window: win,
+      projectServerRepo: makeProjectServerRepo(rootDir),
+      transportFactory: makeTransportFactory(),
+    });
+
+    await service.respawn(1, makeServer());
+
+    expect(sentCommands).toContain(`cd ${dotDotCacheDir}`);
+  });
+
+  it('rejects a multi-pane layout pane.workingDirectory that escapes the project root', async () => {
+    const outsideDir = mkdtempSync(path.join(tmpdir(), 'azito-window-respawn-outside-'));
+    try {
+      const win = makeWindow({
+        projectId: 1,
+        taskId: null,
+        windowType: 'terminal',
+        workerType: null,
+        workingDirectory: rootDir,
+        paneLayout: {
+          layout: 'even-horizontal',
+          panes: [
+            { index: 0, command: null, workingDirectory: rootDir, title: null },
+            { index: 1, command: null, workingDirectory: outsideDir, title: null },
+          ],
+        },
+      });
+      const { service, tmux } = buildService({
+        window: win,
+        projectServerRepo: makeProjectServerRepo(rootDir),
+        transportFactory: makeTransportFactory(),
+      });
+      // Default mock only reports one pane id (index 0) regardless of the
+      // requested pane count — this test needs both panes mapped so pane
+      // index 1's (rejected) workingDirectory is actually reached.
+      tmux.listPaneIds.mockResolvedValue([{ index: 0, paneId: '%0' }, { index: 1, paneId: '%1' }]);
+
+      await expect(service.respawn(1, makeServer())).rejects.toThrow(/escapes the allowed directory/);
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('skips verification (legacy behavior) when the project has no configured working directory', async () => {
+    const outsideDir = mkdtempSync(path.join(tmpdir(), 'azito-window-respawn-outside-'));
+    try {
+      const win = makeWindow({ projectId: 1, taskId: null, windowType: 'terminal', workerType: null, workingDirectory: outsideDir });
+      const { service, sentCommands } = buildService({
+        window: win,
+        projectServerRepo: makeProjectServerRepo(null),
+        transportFactory: makeTransportFactory(),
+      });
+
+      await service.respawn(1, makeServer());
+
+      expect(sentCommands).toContain(`cd ${outsideDir}`);
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('skips verification (legacy behavior) when projectServerRepo/transportFactory are not wired at all', async () => {
+    const outsideDir = mkdtempSync(path.join(tmpdir(), 'azito-window-respawn-outside-'));
+    try {
+      const win = makeWindow({ projectId: 1, taskId: null, windowType: 'terminal', workerType: null, workingDirectory: outsideDir });
+      const { service, sentCommands } = buildService({ window: win });
+
+      await service.respawn(1, makeServer());
+
+      expect(sentCommands).toContain(`cd ${outsideDir}`);
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
   });
 });

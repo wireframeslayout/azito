@@ -5,6 +5,7 @@ import * as path from 'path';
 import {
   isPathContained,
   assertPathContained,
+  assertDirectoryContained,
   LocalPathResolver,
   RemotePathResolver,
   PathResolverFactory,
@@ -40,6 +41,11 @@ describe('isPathContained', () => {
 
   it('rejects an unrelated absolute path', () => {
     expect(isPathContained('/a/b', '/etc')).toBe(false);
+  });
+
+  it('accepts a legitimate child directory whose name happens to start with ".." (regression: bare rel.startsWith(\'..\') over-rejects)', () => {
+    expect(isPathContained('/a/b', '/a/b/..cache')).toBe(true);
+    expect(isPathContained('/a/b', '/a/b/..cache/nested')).toBe(true);
   });
 });
 
@@ -127,7 +133,11 @@ describe('assertPathContained', () => {
     const target = path.join(root, 'sub');
     mkdirSync(target);
     try {
-      await expect(assertPathContained(new LocalPathResolver(), target, root, 'test path')).resolves.toBeUndefined();
+      // Must return the resolved real path (not undefined) — callers rely on
+      // this to close the TOCTOU window between verifying and using a path
+      // (Issue #27 review finding 2).
+      const resolvedTarget = await new LocalPathResolver().resolveRealPath(target);
+      await expect(assertPathContained(new LocalPathResolver(), target, root, 'test path')).resolves.toBe(resolvedTarget);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -168,5 +178,55 @@ describe('assertPathContained', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('assertDirectoryContained', () => {
+  it('skips resolution/verification and returns candidateDir unchanged when allowedRoot is unset (no configured boundary)', async () => {
+    const factory = new PathResolverFactory();
+    await expect(
+      assertDirectoryContained(factory, 'local', undefined, '/does/not/exist/at/all', null, 'test path'),
+    ).resolves.toBe('/does/not/exist/at/all');
+  });
+
+  it('resolves via a local resolver and returns the resolved path when contained', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'azito-path-containment-root-'));
+    const target = path.join(root, 'sub');
+    mkdirSync(target);
+    try {
+      const factory = new PathResolverFactory();
+      const resolvedTarget = await new LocalPathResolver().resolveRealPath(target);
+      await expect(assertDirectoryContained(factory, 'local', undefined, target, root, 'test path'))
+        .resolves.toBe(resolvedTarget);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects when the target escapes allowedRoot', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'azito-path-containment-root-'));
+    const outside = mkdtempSync(path.join(tmpdir(), 'azito-path-containment-outside-'));
+    try {
+      const factory = new PathResolverFactory();
+      await expect(assertDirectoryContained(factory, 'local', undefined, outside, root, 'test path'))
+        .rejects.toThrow(/escapes the allowed directory/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('routes through a remote resolver when serverType is not local', async () => {
+    const factory = new PathResolverFactory();
+    const calls: string[] = [];
+    const transport = mockTransport((cmd) => {
+      calls.push(cmd);
+      if (cmd === `realpath -e '/work/proj/sub'`) return { stdout: '/work/proj/sub\n', stderr: '', code: 0 };
+      if (cmd === `realpath -e '/work/proj'`) return { stdout: '/work/proj\n', stderr: '', code: 0 };
+      throw new Error(`unexpected command: ${cmd}`);
+    });
+    await expect(assertDirectoryContained(factory, 'agent', transport, '/work/proj/sub', '/work/proj', 'test path'))
+      .resolves.toBe('/work/proj/sub');
+    expect(calls).toContain(`realpath -e '/work/proj/sub'`);
   });
 });
