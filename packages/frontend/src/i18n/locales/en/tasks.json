@@ -36,7 +36,15 @@
   "sidebar": {
     "title": "Tasks",
     "noRecentTasks": "No recent tasks",
-    "allTasks": "All Tasks"
+    "allTasks": "All Tasks",
+    "searchPlaceholder": "Search tasks…",
+    "newTask": "New task",
+    "groupRunning": "Running",
+    "groupFinished": "Finished",
+    "groupRecent": "Recent",
+    "noSearchResults": "No matching tasks",
+    "noTasks": "No tasks yet",
+    "browserTabs": "{{count}} tab(s)"
   },
   "contextMenu": {
     "showView": "Show {{view}}",
