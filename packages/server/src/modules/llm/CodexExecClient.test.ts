@@ -198,24 +198,95 @@ describe('CodexExecClient', () => {
     expect(message).not.toContain('untrusted prompt text');
   });
 
-  it('logs a warning when codex spawn emits an error event', async () => {
+  it('logs a warning when codex spawn emits an error event, followed by close (real Node behavior)', async () => {
     const fakeProc = createFakeProc();
+    const rmSpy = vi.mocked(fs.rmSync).mockImplementation(() => {});
+    rmSpy.mockClear();
     vi.mocked(spawn).mockImplementation((..._args: unknown[]) => {
       fakeProc.stdin.resume();
-      queueMicrotask(() => fakeProc.emit('error', new Error('spawn codex ENOENT')));
+      queueMicrotask(() => {
+        // Real Node behavior for an actual spawn failure (e.g. ENOENT): 'error' fires,
+        // and 'close' still fires afterwards.
+        fakeProc.emit('error', new Error('spawn codex ENOENT'));
+        fakeProc.emit('close', null);
+      });
       return fakeProc as unknown as ReturnType<typeof spawn>;
     });
-    vi.mocked(fs.rmSync).mockImplementation(() => {});
     vi.mocked(fs.mkdtempSync).mockReturnValue('/tmp/codex-exec-fail2');
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     const client = new CodexExecClient(5000);
     await expect(client.exec('untrusted prompt text')).rejects.toThrow('spawn codex ENOENT');
 
+    // Only the 'error' handler should settle the promise/log/cleanup; the subsequent
+    // 'close' event must be a no-op.
     expect(warnSpy).toHaveBeenCalledTimes(1);
     const message = warnSpy.mock.calls[0][0] as string;
     expect(message).toContain('codex exec failed');
     expect(message).toContain('spawn codex ENOENT');
+    expect(rmSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['Bearer token', 'Authorization: Bearer abc123.def456', 'Bearer abc123.def456'],
+    ['sk- prefixed key', 'invalid key sk-proj-ABCDEF1234567890', 'sk-proj-ABCDEF1234567890'],
+    ['ghp_ prefixed token', 'auth failed for ghp_1234567890abcdefghijklmnop', 'ghp_1234567890abcdefghijklmnop'],
+    ['gho_ prefixed token', 'auth failed for gho_1234567890abcdefghijklmnop', 'gho_1234567890abcdefghijklmnop'],
+    ['ghs_ prefixed token', 'auth failed for ghs_1234567890abcdefghijklmnop', 'ghs_1234567890abcdefghijklmnop'],
+    ['glpat- prefixed token', 'auth failed for glpat-AbCdEf12345_-xyz', 'glpat-AbCdEf12345_-xyz'],
+    ['token= query value', 'request failed: url?token=supersecretvalue', 'supersecretvalue'],
+    ['key= query value', 'request failed: url?key=supersecretvalue', 'supersecretvalue'],
+    ['secret= query value', 'request failed: url?secret=supersecretvalue', 'supersecretvalue'],
+    ['password= query value', 'request failed: url?password=supersecretvalue', 'supersecretvalue'],
+    ['URL userinfo', 'fetch failed: https://user:hunter2@example.com/api', 'user:hunter2@'],
+  ])('redacts %s from stderr before logging', async (_label, rawStderr, secret) => {
+    const fakeProc = createFakeProc();
+    vi.mocked(spawn).mockImplementation((..._args: unknown[]) => {
+      fakeProc.stdin.resume();
+      queueMicrotask(() => {
+        fakeProc.stderr.emit('data', Buffer.from(rawStderr));
+        fakeProc.emit('close', 1);
+      });
+      return fakeProc as unknown as ReturnType<typeof spawn>;
+    });
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+    vi.mocked(fs.rmSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdtempSync).mockReturnValue('/tmp/codex-exec-redact');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const client = new CodexExecClient(5000);
+    await expect(client.exec('untrusted prompt text')).rejects.toThrow();
+
+    const message = warnSpy.mock.calls[0][0] as string;
+    expect(message).not.toContain(secret);
+  });
+
+  it('collapses newlines and control characters in stderr into a single log line', async () => {
+    const fakeProc = createFakeProc();
+    const rawStderr = 'line one\nfake close event\x1b[1G\tinjected: warn\r\nline three';
+    vi.mocked(spawn).mockImplementation((..._args: unknown[]) => {
+      fakeProc.stdin.resume();
+      queueMicrotask(() => {
+        fakeProc.stderr.emit('data', Buffer.from(rawStderr));
+        fakeProc.emit('close', 1);
+      });
+      return fakeProc as unknown as ReturnType<typeof spawn>;
+    });
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+    vi.mocked(fs.rmSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdtempSync).mockReturnValue('/tmp/codex-exec-oneline');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const client = new CodexExecClient(5000);
+    await expect(client.exec('untrusted prompt text')).rejects.toThrow();
+
+    const message = warnSpy.mock.calls[0][0] as string;
+    expect(message.split('\n')).toHaveLength(1);
+    expect(message).not.toMatch(/[\x00-\x1f\x7f]/);
   });
 
   it('does not log a warning on success', async () => {

@@ -53,19 +53,56 @@ function buildAllowedEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-const STDERR_LOG_LIMIT = 500;
+const STDERR_LOG_LIMIT = 200;
+const REDACTED = '[REDACTED]';
+
+// codex は未信頼テキスト（エージェントのペイン出力、Issueタイトル等）を処理した直後の
+// プロセスであり、その stderr には秘密情報が紛れ込み得る。ログへ出す前に必ずこの関数を
+// 通し、既知の資格情報パターンを伏せる。切り詰めだけでは秘密情報の露出は防げないため、
+// 「マスキング」と「長さ制限」は別工程として両方必須。
+const CREDENTIAL_REPLACERS: Array<(text: string) => string> = [
+  // Authorization: Bearer <token>
+  (text) => text.replace(/\bBearer\s+\S+/gi, `Bearer ${REDACTED}`),
+  // OpenAI/Codex 系 API キー（sk-...）
+  (text) => text.replace(/\bsk-[A-Za-z0-9_-]+/g, REDACTED),
+  // GitHub 系トークン（personal access token / oauth / server-to-server）
+  (text) => text.replace(/\b(?:ghp|gho|ghs)_[A-Za-z0-9]+/g, REDACTED),
+  // GitLab personal access token
+  (text) => text.replace(/\bglpat-[A-Za-z0-9_-]+/g, REDACTED),
+  // token=xxx / key=xxx / secret=xxx / password=xxx 形式のクエリ文字列・KV
+  (text) => text.replace(/\b(token|key|secret|password)\s*=\s*[^\s&]+/gi, `$1=${REDACTED}`),
+  // URL の userinfo 部（scheme://user:pass@host）
+  (text) => text.replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@]+:[^\s/@]+@/gi, `$1${REDACTED}@`),
+];
+
+function maskCredentials(text: string): string {
+  return CREDENTIAL_REPLACERS.reduce((acc, replace) => replace(acc), text);
+}
+
+// ログ行偽造（log forging）対策: 改行・タブ等の制御文字を除去して必ず1行に収める。
+function collapseControlChars(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/[\x00-\x1f\x7f]+/g, ' ').trim();
+}
+
+function sanitizeStderrForLog(stderr: string): string {
+  const singleLine = collapseControlChars(stderr);
+  const masked = maskCredentials(singleLine);
+  return masked.length > STDERR_LOG_LIMIT
+    ? `${masked.slice(0, STDERR_LOG_LIMIT)}...(truncated)`
+    : masked;
+}
 
 // 呼び出し側（PaneClassifier / LlmContentExtractor）は codex exec の失敗を
 // すべて catch {} で握りつぶし null / 空配列 / 既定値にフォールバックするため、
 // ここでログを出さない限り「codex バイナリが無い」「認証切れ」「古い codex が
 // フラグを知らず拒否する」といった失敗が運用者から一切見えなくなる。
-// stderr には秘密情報が含まれ得るためプロンプト本文は出さず、stderr は先頭
-// STDERR_LOG_LIMIT 文字に切り詰めて出す（マスキングまでは行わない）。
+// プロンプト本文は出さず、stderr は sanitizeStderrForLog() で改行除去・資格情報
+// マスキング・長さ制限を通してから出す。
 function logExecFailure(reason: string, code: number | null, stderr: string): void {
-  const truncatedStderr =
-    stderr.length > STDERR_LOG_LIMIT ? `${stderr.slice(0, STDERR_LOG_LIMIT)}...(truncated)` : stderr;
+  const sanitizedStderr = sanitizeStderrForLog(stderr);
   console.warn(
-    `[CodexExecClient] codex exec failed (${reason}, code=${code ?? 'null'}): ${truncatedStderr}`,
+    `[CodexExecClient] codex exec failed (${reason}, code=${code ?? 'null'}): ${sanitizedStderr}`,
   );
 }
 
@@ -131,7 +168,17 @@ export class CodexExecClient implements ILlmClient {
         stderr += d.toString();
       });
 
+      // Node emits 'error' and then still emits 'close' for an actual spawn failure
+      // (e.g. ENOENT). Guard so cleanup/log/reject each run exactly once instead of
+      // once per event.
+      let settled = false;
+
       proc.on('close', (code: number | null) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+
         let output = '';
         try {
           output = fs.readFileSync(outFile, 'utf8');
@@ -147,6 +194,11 @@ export class CodexExecClient implements ILlmClient {
       });
 
       proc.on('error', (err: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+
         cleanupWorkDir();
         logExecFailure('spawn error', null, err.message);
         reject(err);
