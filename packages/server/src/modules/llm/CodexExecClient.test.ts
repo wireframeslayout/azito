@@ -34,6 +34,8 @@ describe('CodexExecClient', () => {
   const originalHubMarker = process.env.HUB_ONLY_MARKER;
   const originalWebhookToken = process.env.AZITO_WEBHOOK_TOKEN;
   const originalCodexHome = process.env.CODEX_HOME;
+  const originalOpenAiApiKey = process.env.OPENAI_API_KEY;
+  const originalCodexAccessToken = process.env.CODEX_ACCESS_TOKEN;
 
   beforeEach(() => {
     process.env.AZITO_UI_TOKEN = 'hub-secret-token';
@@ -51,6 +53,10 @@ describe('CodexExecClient', () => {
     else process.env.HUB_ONLY_MARKER = originalHubMarker;
     if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = originalCodexHome;
+    if (originalOpenAiApiKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = originalOpenAiApiKey;
+    if (originalCodexAccessToken === undefined) delete process.env.CODEX_ACCESS_TOKEN;
+    else process.env.CODEX_ACCESS_TOKEN = originalCodexAccessToken;
     vi.restoreAllMocks();
   });
 
@@ -118,6 +124,32 @@ describe('CodexExecClient', () => {
       { env?: NodeJS.ProcessEnv },
     ];
     expect(options.env?.CODEX_HOME).toBe('/home/user/.codex-alt');
+  });
+
+  it('passes OPENAI_API_KEY and CODEX_ACCESS_TOKEN through to the child process env (required for auth)', async () => {
+    process.env.OPENAI_API_KEY = 'sk-fake-openai-key';
+    process.env.CODEX_ACCESS_TOKEN = 'fake-codex-access-token';
+
+    const fakeProc = createFakeProc();
+    vi.mocked(spawn).mockImplementation((..._args: unknown[]) => {
+      fakeProc.stdin.resume();
+      queueMicrotask(() => fakeProc.emit('close', 0));
+      return fakeProc as unknown as ReturnType<typeof spawn>;
+    });
+    vi.mocked(fs.readFileSync).mockReturnValue('llm output');
+    vi.mocked(fs.rmSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdtempSync).mockReturnValue('/tmp/codex-exec-fake999');
+
+    const client = new CodexExecClient(5000);
+    await client.exec('untrusted prompt text');
+
+    const [, , options] = vi.mocked(spawn).mock.calls[0] as [
+      string,
+      string[],
+      { env?: NodeJS.ProcessEnv },
+    ];
+    expect(options.env?.OPENAI_API_KEY).toBe('sk-fake-openai-key');
+    expect(options.env?.CODEX_ACCESS_TOKEN).toBe('fake-codex-access-token');
   });
 
   it('writes the prompt directly to child stdin (no temp prompt file)', async () => {

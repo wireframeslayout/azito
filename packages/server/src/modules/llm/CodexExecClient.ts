@@ -24,8 +24,11 @@ const ALLOWED_ENV_KEYS = [
   // codex --help: --ignore-user-config を付けても auth 情報は CODEX_HOME を見に行く。
   // 落とすと CODEX_HOME を使う構成で認証が失敗する。
   'CODEX_HOME',
-  // 非対話実行（exec）での認証に使われる
+  // 環境変数ベースの認証で使われる（非対話実行時の CODEX_API_KEY、
+  // 標準的な OPENAI_API_KEY、`codex login --with-api-key` 系の CODEX_ACCESS_TOKEN）
   'CODEX_API_KEY',
+  'OPENAI_API_KEY',
+  'CODEX_ACCESS_TOKEN',
   // 独自 TLS ルートを使う環境向け
   'SSL_CERT_FILE',
   'SSL_CERT_DIR',
