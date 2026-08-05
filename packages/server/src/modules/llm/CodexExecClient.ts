@@ -7,6 +7,13 @@ import type { ILlmClient } from './ILlmClient';
 // codex exec には未信頼テキスト（エージェントのペイン出力、Issueタイトル等）がそのまま渡る。
 // ハブの全環境変数を継承すると AZITO_UI_TOKEN 等の秘密情報が子プロセスへ漏れるため、
 // codex の動作に必要な最小限のキーだけを明示的に許可する（AZITO_* は1つも通さない不変条件）。
+//
+// この対策で塞げるのは「環境変数経由の秘密漏洩」まで。--sandbox read-only は書き込みを
+// 禁じるだけで読み取りは許すため、プロンプトインジェクションで絶対パスを指定されれば
+// data.db や ~/.azito/azitoctl.env 等を読み取ることは依然として可能（実測で確認済み）。
+// 認証のため HOME / CODEX_HOME を渡さざるを得ず、この env allowlist と cwd 分離では
+// 読み取りの遮断は達成できない。読み取り遮断には OS レベルの隔離（専用ユーザー/コンテナ）
+// が別途必要（未対応）。
 const ALLOWED_ENV_KEYS = [
   'PATH',
   'HOME',
@@ -68,7 +75,20 @@ export class CodexExecClient implements ILlmClient {
 
       const proc = spawn(
         'codex',
-        ['exec', '--sandbox', 'read-only', '--ignore-user-config', '-o', outFile, '--ephemeral', '-'],
+        [
+          'exec',
+          '--sandbox',
+          'read-only',
+          '--ignore-user-config',
+          // workDir は意図的に git リポジトリ外の空一時ディレクトリ。codex-cli 0.146.0 では
+          // このフラグなしでも非 git ディレクトリで問題なく動作することを確認済み（不具合修正ではない）。
+          // 意図を明示し、非 git ディレクトリでの実行を拒否する構成や将来バージョンに対する保険として付与する。
+          '--skip-git-repo-check',
+          '-o',
+          outFile,
+          '--ephemeral',
+          '-',
+        ],
         {
           cwd: workDir,
           stdio: ['pipe', 'pipe', 'pipe'],

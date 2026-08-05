@@ -81,6 +81,7 @@ describe('CodexExecClient', () => {
     expect(args).toContain('--sandbox');
     expect(args).toContain('read-only');
     expect(args).toContain('--ignore-user-config');
+    expect(args).toContain('--skip-git-repo-check');
 
     // cwd must be an explicit, isolated directory distinct from the hub's own cwd
     expect(options.cwd).toBeDefined();
