@@ -83,11 +83,28 @@ describe('RemotePathResolver', () => {
     expect(await resolver.resolveRealPath('/work/proj')).toBe('/work/proj');
   });
 
-  it('rejects unsafe path input without calling the transport', async () => {
+  it('rejects an empty path without calling the transport', async () => {
     const transport = mockTransport(() => ({ stdout: '', stderr: '', code: 0 }));
     const resolver = new RemotePathResolver(transport);
-    await expect(resolver.resolveRealPath('/tmp; rm -rf /')).rejects.toThrow('Unsafe targetPath');
+    await expect(resolver.resolveRealPath('')).rejects.toThrow('must not be empty');
     expect(transport.exec).not.toHaveBeenCalled();
+  });
+
+  it('rejects a path containing a NUL byte without calling the transport', async () => {
+    const transport = mockTransport(() => ({ stdout: '', stderr: '', code: 0 }));
+    const resolver = new RemotePathResolver(transport);
+    await expect(resolver.resolveRealPath('/work/\0proj')).rejects.toThrow('NUL byte');
+    expect(transport.exec).not.toHaveBeenCalled();
+  });
+
+  it('does not reject a legitimate directory containing shell-sensitive characters (`+`, `,`, `=`, space) — the argument is single-quoted, not shell-parsed (Issue #27 review finding: over-broad SAFE_PATH_PATTERN rejected valid remote paths)', async () => {
+    const dir = "/work/my project (v2), rel=1.0+build";
+    const transport = mockTransport((cmd) => {
+      expect(cmd).toBe(`realpath -e '${dir}'`);
+      return { stdout: `${dir}\n`, stderr: '', code: 0 };
+    });
+    const resolver = new RemotePathResolver(transport);
+    expect(await resolver.resolveRealPath(dir)).toBe(dir);
   });
 
   it('rejects when realpath exits non-zero (target does not exist)', async () => {

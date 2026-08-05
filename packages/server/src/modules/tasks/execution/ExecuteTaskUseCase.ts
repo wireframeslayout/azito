@@ -292,6 +292,46 @@ export class ExecuteTaskUseCase {
       }
     }
 
+    // Change to project working directory (use worktree if possible)
+    const project = this.projectRepo.findById(task.projectId);
+    const projectServer = project ? this.projectServerRepo.find(task.projectId, serverName) : null;
+    // allowedRoot is the project's configured working directory — the boundary
+    // a caller-supplied task.workingDirectory must not escape (Issue #27:
+    // task.workingDirectory comes straight from the API with no path
+    // validation beyond shell-metachar rejection, so `..`/absolute-path
+    // escapes were previously possible). When the project has no configured
+    // working directory there is no boundary to enforce, so containment is
+    // skipped and the legacy behavior (run wherever task.workingDirectory
+    // points) is preserved rather than guessed at.
+    const allowedRoot = projectServer?.workingDirectory || null;
+    let workingDir = task.workingDirectory || allowedRoot;
+    let effectiveDir = workingDir;
+
+    // Verified before any tmux window is touched (Important review finding):
+    // a rejected path used to be discovered only after the pre-existing pane
+    // had already been killed and a replacement window created, forcing the
+    // catch block to kill that replacement too. Checking containment first
+    // means a rejection leaves tmux state untouched and the task simply never
+    // starts, instead of destroying and recreating a window for nothing.
+    if (task.workingDirectory && allowedRoot) {
+      try {
+        // Use the resolved (symlink-free) path returned by the check for
+        // worktree creation below, not the original task.workingDirectory —
+        // otherwise a symlink swapped in between verification and use could
+        // still redirect the worktree outside allowedRoot (Issue #27 review
+        // finding 2, TOCTOU).
+        workingDir = await this.assertDirectoryContained(server, { target: task.workingDirectory, allowedRoot }, 'task working directory');
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.appendLog(taskId, unitId, 'command', {
+          type: 'working_directory_rejected',
+          message,
+        });
+        this.taskRepo.update(taskId, { status: 'failed' as TaskStatus } as Partial<Task>);
+        throw new Error(`Task working directory rejected: ${message}`);
+      }
+    }
+
     // Ensure tmux session exists
     const existingSessions = await this.tmux.listSessions(server);
     const sessionExists = existingSessions.some((s) => s.name === tmuxSession);
@@ -329,42 +369,7 @@ export class ExecuteTaskUseCase {
     const windowTarget = `${tmuxSession}:${windowName}`;
     const target = await this.tmux.resolvePaneId(server, windowTarget);
 
-    // Change to project working directory (use worktree if possible)
-    const project = this.projectRepo.findById(task.projectId);
-    const projectServer = project ? this.projectServerRepo.find(task.projectId, serverName) : null;
-    // allowedRoot is the project's configured working directory — the boundary
-    // a caller-supplied task.workingDirectory must not escape (Issue #27:
-    // task.workingDirectory comes straight from the API with no path
-    // validation beyond shell-metachar rejection, so `..`/absolute-path
-    // escapes were previously possible). When the project has no configured
-    // working directory there is no boundary to enforce, so containment is
-    // skipped and the legacy behavior (run wherever task.workingDirectory
-    // points) is preserved rather than guessed at.
-    const allowedRoot = projectServer?.workingDirectory || null;
-    let workingDir = task.workingDirectory || allowedRoot;
-    let effectiveDir = workingDir;
-
     if (workingDir) {
-      if (task.workingDirectory && allowedRoot) {
-        try {
-          // Use the resolved (symlink-free) path returned by the check for
-          // worktree creation below, not the original task.workingDirectory —
-          // otherwise a symlink swapped in between verification and use could
-          // still redirect the worktree outside allowedRoot (Issue #27 review
-          // finding 2, TOCTOU).
-          workingDir = await this.assertDirectoryContained(server, { target: task.workingDirectory, allowedRoot }, 'task working directory');
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          this.appendLog(taskId, unitId, 'command', {
-            type: 'working_directory_rejected',
-            message,
-          });
-          this.taskRepo.update(taskId, { status: 'failed' as TaskStatus, tmuxWindow: null } as Partial<Task>);
-          try { await this.tmux.killWindow(server, `${tmuxSession}:${windowName}`); } catch {}
-          throw new Error(`Task working directory rejected: ${message}`);
-        }
-      }
-
       // Create worktree for isolated branch/file tracking
       let wt: WorktreeInfo;
       const baseBranch = task.baseBranch || projectServer?.branch || project?.defaultBranch || 'main';

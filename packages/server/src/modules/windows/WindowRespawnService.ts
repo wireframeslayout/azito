@@ -32,17 +32,18 @@ export class WindowRespawnService {
     private taskRepo: ITaskRepository,
     private unitRepo: IUnitRepository,
     private supervisorRegistry: SupervisorRegistry,
+    // projectServerRepo/transportFactory are required, not optional: making
+    // them optional previously let respawn() silently skip containment
+    // verification whenever a caller forgot to wire them in, even for a
+    // project that has an allowedRoot configured — a forgotten-wiring bug
+    // would look identical to the legitimate "no boundary configured" case
+    // (Issue #27 review Minor finding). They must always be supplied; the
+    // only remaining skip path is resolveAllowedRoot() returning null
+    // because the *project* has no projectServer.workingDirectory, which is
+    // a real "no boundary to enforce" case, not a missing dependency.
+    private projectServerRepo: IProjectServerRepository,
+    private transportFactory: TransportFactory,
     private sessionCaptureService?: SessionCaptureService,
-    // Optional (kept last, after the pre-existing optional sessionCaptureService)
-    // so existing call sites/tests that construct this service without them keep
-    // compiling. Both undefined means "no configured project boundary is
-    // reachable from here" — respawn() then skips containment verification
-    // entirely and cd's wherever it always did (legacy behavior preserved),
-    // same "no boundary to enforce" skip semantics as ExecuteTaskUseCase /
-    // TaskRestoreService use when a project has no projectServer.workingDirectory
-    // (Issue #27 review finding 1).
-    private projectServerRepo?: IProjectServerRepository,
-    private transportFactory?: TransportFactory,
   ) {}
 
   async respawn(windowId: number, server: ServerConfig): Promise<{ tmuxTarget: string }> {

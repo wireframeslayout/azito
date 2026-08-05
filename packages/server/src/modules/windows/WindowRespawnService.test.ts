@@ -105,6 +105,21 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
   };
 }
 
+// projectServerRepo/transportFactory are now required constructor
+// dependencies (Issue #27 review Minor finding: an optional dependency let
+// containment verification be silently skipped by a wiring omission, not
+// just by a genuine "no allowedRoot configured" case). Tests that don't
+// care about containment get a repo that reports no workingDirectory
+// (allowedRoot === null), which is the real "no boundary to enforce" skip
+// path — not an unwired dependency.
+function defaultProjectServerRepo(): Pick<IProjectServerRepository, 'find'> {
+  return { find: vi.fn(() => null) };
+}
+
+function defaultTransportFactory(): Pick<TransportFactory, 'getTransport'> {
+  return { getTransport: vi.fn(() => ({})) } as unknown as Pick<TransportFactory, 'getTransport'>;
+}
+
 function buildService(opts: {
   window: Window;
   task?: Task | null;
@@ -172,9 +187,9 @@ function buildService(opts: {
     taskRepo as any,
     unitRepo as any,
     supervisorRegistry,
+    (opts.projectServerRepo ?? defaultProjectServerRepo()) as any,
+    (opts.transportFactory ?? defaultTransportFactory()) as any,
     undefined,
-    opts.projectServerRepo as any,
-    opts.transportFactory as any,
   );
 
   return { service, windowRepo, tmux, sentCommands, clearExitMarker };
@@ -536,7 +551,11 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
     }
   });
 
-  it('skips verification (legacy behavior) when projectServerRepo/transportFactory are not wired at all', async () => {
+  it('skips verification (legacy behavior) when the caller omits projectServerRepo/transportFactory overrides (default fixture reports no workingDirectory)', async () => {
+    // projectServerRepo/transportFactory are now required constructor
+    // dependencies (Issue #27 review Minor finding) — this exercises the
+    // remaining legitimate skip path (allowedRoot === null because the
+    // project has no configured workingDirectory), not an unwired dependency.
     const outsideDir = mkdtempSync(path.join(tmpdir(), 'azito-window-respawn-outside-'));
     try {
       const win = makeWindow({ projectId: 1, taskId: null, windowType: 'terminal', workerType: null, workingDirectory: outsideDir });

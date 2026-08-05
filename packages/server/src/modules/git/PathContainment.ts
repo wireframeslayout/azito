@@ -1,7 +1,6 @@
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import type { IServerTransport } from '../servers/transport/ServerTransport';
-import { assertSafePath } from './assertSafeGitArgs';
 
 // Resolves a path to its real (symlink-free, absolute) form so containment
 // checks below cannot be defeated by `..` segments or a symlink that points
@@ -43,7 +42,17 @@ export class RemotePathResolver implements IPathResolver {
   constructor(private transport: IServerTransport) {}
 
   async resolveRealPath(targetPath: string): Promise<string> {
-    assertSafePath(targetPath, 'targetPath');
+    // Unlike git ref/arg values, this string is never interpolated
+    // unquoted — `toRemotePathExpr()` always wraps it in single quotes (or
+    // the `"$HOME"'...'` form for a leading `~`), so shell metacharacters
+    // cannot escape into the command. Applying git's `assertSafePath`
+    // (SAFE_PATH_PATTERN) here was therefore only extra restriction, not
+    // extra safety, and it rejected legitimate directory names containing
+    // `+`, `,`, `=`, or spaces. Only the structural requirements that would
+    // break quoting/parsing itself are checked: non-empty, no NUL byte (NUL
+    // cannot appear in a POSIX path and would truncate the shell command).
+    if (targetPath.length === 0) throw new Error('targetPath must not be empty');
+    if (targetPath.includes('\0')) throw new Error('targetPath must not contain a NUL byte');
     // `realpath -e` (GNU coreutils, matches the Linux-only remote/agent server
     // assumption already made elsewhere in this module) requires every path
     // component including the last to exist, so a missing target fails here
