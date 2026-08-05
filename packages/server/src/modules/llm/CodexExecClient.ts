@@ -6,8 +6,31 @@ import type { ILlmClient } from './ILlmClient';
 
 // codex exec には未信頼テキスト（エージェントのペイン出力、Issueタイトル等）がそのまま渡る。
 // ハブの全環境変数を継承すると AZITO_UI_TOKEN 等の秘密情報が子プロセスへ漏れるため、
-// codex の動作に必要な最小限のキーだけを明示的に許可する。
-const ALLOWED_ENV_KEYS = ['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'TERM'] as const;
+// codex の動作に必要な最小限のキーだけを明示的に許可する（AZITO_* は1つも通さない不変条件）。
+const ALLOWED_ENV_KEYS = [
+  'PATH',
+  'HOME',
+  'TMPDIR',
+  'LANG',
+  'LC_ALL',
+  'TERM',
+  // codex --help: --ignore-user-config を付けても auth 情報は CODEX_HOME を見に行く。
+  // 落とすと CODEX_HOME を使う構成で認証が失敗する。
+  'CODEX_HOME',
+  // 非対話実行（exec）での認証に使われる
+  'CODEX_API_KEY',
+  // 独自 TLS ルートを使う環境向け
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
+  'CODEX_CA_CERTIFICATE',
+  // プロキシ経由でしか外部到達できない環境向け（大文字/小文字の両方を尊重する慣習に合わせる）
+  'HTTPS_PROXY',
+  'https_proxy',
+  'HTTP_PROXY',
+  'http_proxy',
+  'NO_PROXY',
+  'no_proxy',
+] as const;
 
 function buildAllowedEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
@@ -35,10 +58,6 @@ export class CodexExecClient implements ILlmClient {
     return new Promise<string>((resolve, reject) => {
       const outFile = path.join(workDir, 'out.txt');
 
-      // Use stdin for prompt to avoid E2BIG when prompt is large
-      const promptFile = outFile + '.prompt';
-      fs.writeFileSync(promptFile, prompt);
-
       const cleanupWorkDir = () => {
         try {
           fs.rmSync(workDir, { recursive: true, force: true });
@@ -58,12 +77,15 @@ export class CodexExecClient implements ILlmClient {
         },
       );
 
-      // Feed prompt via stdin and close
-      const promptStream = fs.createReadStream(promptFile);
-      promptStream.pipe(proc.stdin);
-      promptStream.on('end', () => {
-        try { fs.unlinkSync(promptFile); } catch {}
-      });
+      // Feed prompt via stdin and close. prompt is already in memory and goes over
+      // stdin (not argv), so writing it directly avoids E2BIG without needing a temp
+      // file — sidestepping the async-open ENOENT-on-spawn-failure hazard a
+      // createReadStream(...).pipe(proc.stdin) would have.
+      // On spawn failure the stdin stream can itself emit 'error' independently of
+      // proc.on('error'); an unhandled listener there would crash the hub, so no-op it
+      // (proc.on('error') below still performs the actual cleanup/reject).
+      proc.stdin.on('error', () => {});
+      proc.stdin.end(prompt);
 
       let stderr = '';
       proc.stderr.on('data', (d: Buffer) => {

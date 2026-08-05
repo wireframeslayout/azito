@@ -14,11 +14,8 @@ vi.mock('fs', async (importOriginal) => {
   return {
     ...actual,
     readFileSync: vi.fn(),
-    writeFileSync: vi.fn(),
-    unlinkSync: vi.fn(),
     rmSync: vi.fn(),
     mkdtempSync: vi.fn(),
-    createReadStream: vi.fn(),
   };
 });
 
@@ -35,6 +32,8 @@ function createFakeProc() {
 describe('CodexExecClient', () => {
   const originalHubSecret = process.env.AZITO_UI_TOKEN;
   const originalHubMarker = process.env.HUB_ONLY_MARKER;
+  const originalWebhookToken = process.env.AZITO_WEBHOOK_TOKEN;
+  const originalCodexHome = process.env.CODEX_HOME;
 
   beforeEach(() => {
     process.env.AZITO_UI_TOKEN = 'hub-secret-token';
@@ -46,26 +45,26 @@ describe('CodexExecClient', () => {
   afterEach(() => {
     if (originalHubSecret === undefined) delete process.env.AZITO_UI_TOKEN;
     else process.env.AZITO_UI_TOKEN = originalHubSecret;
-    delete process.env.AZITO_WEBHOOK_TOKEN;
+    if (originalWebhookToken === undefined) delete process.env.AZITO_WEBHOOK_TOKEN;
+    else process.env.AZITO_WEBHOOK_TOKEN = originalWebhookToken;
     if (originalHubMarker === undefined) delete process.env.HUB_ONLY_MARKER;
     else process.env.HUB_ONLY_MARKER = originalHubMarker;
+    if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = originalCodexHome;
     vi.restoreAllMocks();
   });
 
   it('spawns codex with a minimal env allowlist, isolated cwd and sandbox flags', async () => {
     const fakeProc = createFakeProc();
     vi.mocked(spawn).mockImplementation((..._args: unknown[]) => {
-      // consume stdin so the prompt file stream can end without blocking
+      // consume stdin so the prompt write can end without blocking
       fakeProc.stdin.resume();
       queueMicrotask(() => fakeProc.emit('close', 0));
       return fakeProc as unknown as ReturnType<typeof spawn>;
     });
     vi.mocked(fs.readFileSync).mockReturnValue('llm output');
-    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
-    vi.mocked(fs.unlinkSync).mockImplementation(() => {});
     const rmSpy = vi.mocked(fs.rmSync).mockImplementation(() => {});
     const mkdtempSpy = vi.mocked(fs.mkdtempSync).mockReturnValue('/tmp/codex-exec-fake123');
-    vi.mocked(fs.createReadStream).mockReturnValue(new PassThrough() as unknown as fs.ReadStream);
 
     const client = new CodexExecClient(5000);
     const output = await client.exec('untrusted prompt text');
@@ -94,5 +93,47 @@ describe('CodexExecClient', () => {
     expect(env.HUB_ONLY_MARKER).toBeUndefined();
 
     expect(rmSpy).toHaveBeenCalledWith('/tmp/codex-exec-fake123', { recursive: true, force: true });
+  });
+
+  it('passes CODEX_HOME through to the child process env (required for auth)', async () => {
+    process.env.CODEX_HOME = '/home/user/.codex-alt';
+
+    const fakeProc = createFakeProc();
+    vi.mocked(spawn).mockImplementation((..._args: unknown[]) => {
+      fakeProc.stdin.resume();
+      queueMicrotask(() => fakeProc.emit('close', 0));
+      return fakeProc as unknown as ReturnType<typeof spawn>;
+    });
+    vi.mocked(fs.readFileSync).mockReturnValue('llm output');
+    vi.mocked(fs.rmSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdtempSync).mockReturnValue('/tmp/codex-exec-fake456');
+
+    const client = new CodexExecClient(5000);
+    await client.exec('untrusted prompt text');
+
+    const [, , options] = vi.mocked(spawn).mock.calls[0] as [
+      string,
+      string[],
+      { env?: NodeJS.ProcessEnv },
+    ];
+    expect(options.env?.CODEX_HOME).toBe('/home/user/.codex-alt');
+  });
+
+  it('writes the prompt directly to child stdin (no temp prompt file)', async () => {
+    const fakeProc = createFakeProc();
+    const stdinEndSpy = vi.spyOn(fakeProc.stdin, 'end');
+    vi.mocked(spawn).mockImplementation((..._args: unknown[]) => {
+      fakeProc.stdin.resume();
+      queueMicrotask(() => fakeProc.emit('close', 0));
+      return fakeProc as unknown as ReturnType<typeof spawn>;
+    });
+    vi.mocked(fs.readFileSync).mockReturnValue('llm output');
+    vi.mocked(fs.rmSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdtempSync).mockReturnValue('/tmp/codex-exec-fake789');
+
+    const client = new CodexExecClient(5000);
+    await client.exec('untrusted prompt text');
+
+    expect(stdinEndSpy).toHaveBeenCalledWith('untrusted prompt text');
   });
 });
