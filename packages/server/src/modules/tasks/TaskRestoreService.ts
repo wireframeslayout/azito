@@ -12,6 +12,7 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { IContentExtractor } from '../llm/ContentExtractor';
 import { resolveTaskServerName, resolveTmuxSession, resolveUnitId } from './execution/TaskExecutionEnv';
 import { buildWorkerLaunchCommand } from '../agents/LaunchCommand';
+import { shellQuote } from '../agents/shellQuote';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -123,7 +124,10 @@ export class TaskRestoreService {
         }
 
         try {
-          await tmux.sendKeys(server, paneId, [`cd ${effectiveDir}`, 'Enter']);
+          // effectiveDir is a resolved (symlink-free) real path — must be
+          // shell-quoted before being typed into the pane; see the matching
+          // fix/comment in ExecuteTaskUseCase (Issue #27 cd injection).
+          await tmux.sendKeys(server, paneId, [`cd -- ${shellQuote(effectiveDir)}`, 'Enter']);
           await sleep(500);
         } catch (e) {
           log.warn(`[task-restore] Failed to cd into ${effectiveDir}: ${(e as Error).message}`);

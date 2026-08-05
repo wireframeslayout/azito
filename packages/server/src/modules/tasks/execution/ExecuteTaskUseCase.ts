@@ -25,6 +25,7 @@ import type { IWindowRepository } from '../../windows/Window';
 import type { IPaneStreamFactory } from '../../tmux/PaneStream';
 import type { ISessionStrategyFactory } from '../../agents/SessionStrategy';
 import { buildWorkerLaunchCommand } from '../../agents/LaunchCommand';
+import { shellQuote } from '../../agents/shellQuote';
 import { expandTemplate } from './PromptExpander';
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import { WorkerWaiter } from './WorkerWaiter';
@@ -439,7 +440,13 @@ export class ExecuteTaskUseCase {
       effectiveDir = wt.path;
 
       try {
-        await this.tmux.sendKeys(server, target, [`cd ${effectiveDir}`, 'Enter']);
+        // effectiveDir is a resolved (symlink-free) real path (see
+        // PathContainment.ts) and must be shell-quoted before being typed
+        // into the pane — an unquoted realpath can contain shell
+        // metacharacters via a maliciously named directory/symlink inside
+        // the allowed root (Issue #27 review finding: cd command injection).
+        // `--` guards against a leading `-` being read as a cd option.
+        await this.tmux.sendKeys(server, target, [`cd -- ${shellQuote(effectiveDir)}`, 'Enter']);
         await sleep(500);
       } catch {}
     }

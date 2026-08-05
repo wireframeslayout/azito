@@ -7,6 +7,7 @@ import type { IUnitRepository } from '../units/Unit';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { PathResolverFactory, assertDirectoryContained } from '../git/PathContainment';
+import { shellQuote } from '../agents/shellQuote';
 import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
 import type { SessionCaptureService } from './SessionCaptureService';
@@ -53,6 +54,18 @@ export class WindowRespawnService {
     const windowPart = parts[1]?.split('.')[0];
     if (!windowPart) throw new Error(`Invalid tmuxTarget: ${win.tmuxTarget}`);
 
+    // Resolve and verify every working directory this respawn will `cd`
+    // into before touching tmux or the DB at all. Containment verification
+    // used to run per-pane inside restorePaneLayout/setupSinglePane, i.e.
+    // after the existing window had already been killed, its replacement
+    // created, and tmuxTarget persisted — a rejection at that point left a
+    // killed window, an empty replacement, and an updated DB row with
+    // nothing to show for it (Issue #27 review: destructive half-applied
+    // respawn). Resolving here means a rejection throws before any of that
+    // happens, leaving the original window and DB row untouched.
+    const allowedRoot = this.resolveAllowedRoot(win, server.name);
+    const resolvedCwds = await this.resolveAllCwds(server, win, allowedRoot);
+
     const sessions = await this.tmux.listSessions(server);
     const sessionExists = sessions.some((s) => s.name === sessionName);
 
@@ -88,13 +101,12 @@ export class WindowRespawnService {
       }
     }
     const supervision: SupervisionContext = { supervise, taskId: win.taskId, unitId };
-    const allowedRoot = this.resolveAllowedRoot(win, server.name);
 
     if (win.paneLayout) {
-      await this.restorePaneLayout(server, baseTarget, win.paneLayout, win, supervision, allowedRoot);
+      await this.restorePaneLayout(server, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds);
     } else {
       const paneId = await this.tmux.resolvePaneId(server, baseTarget);
-      await this.setupSinglePane(server, paneId, baseTarget, win, supervision, allowedRoot);
+      await this.setupSinglePane(server, paneId, baseTarget, win, supervision, resolvedCwds.singleCwd);
     }
 
     return { tmuxTarget: dbTarget };
@@ -132,6 +144,36 @@ export class WindowRespawnService {
     if (!allowedRoot || !this.transportFactory) return cwd;
     const transport = this.transportFactory.getTransport(server);
     return assertDirectoryContained(this.pathResolverFactory, server.type, transport, { target: cwd, allowedRoot }, label);
+  }
+
+  /**
+   * Resolves and verifies every working directory a respawn will `cd` into,
+   * up front — see the ordering comment in respawn(). Mirrors exactly what
+   * restorePaneLayout/setupSinglePane used to compute inline, just moved
+   * ahead of the kill/create/persist sequence; the per-pane "fail fast"
+   * rationale (a rejected cwd aborts the whole respawn) is unchanged.
+   */
+  private async resolveAllCwds(
+    server: ServerConfig,
+    win: { workingDirectory: string | null; paneLayout: PaneLayout | null },
+    allowedRoot: string | null,
+  ): Promise<{ paneCwds: Map<number, string>; singleCwd: string | null }> {
+    if (win.paneLayout) {
+      const paneCwds = new Map<number, string>();
+      for (const pane of win.paneLayout.panes) {
+        const rawCwd = pane.workingDirectory || win.workingDirectory;
+        if (rawCwd) {
+          const cwd = await this.resolveContainedCwd(server, rawCwd, allowedRoot, 'pane working directory');
+          paneCwds.set(pane.index, cwd);
+        }
+      }
+      return { paneCwds, singleCwd: null };
+    }
+    if (win.workingDirectory) {
+      const singleCwd = await this.resolveContainedCwd(server, win.workingDirectory, allowedRoot, 'window working directory');
+      return { paneCwds: new Map(), singleCwd };
+    }
+    return { paneCwds: new Map(), singleCwd: null };
   }
 
   private wrapIfSupervised(cmd: string, server: ServerConfig, supervisorTarget: string, supervision: SupervisionContext): string {
@@ -178,7 +220,7 @@ export class WindowRespawnService {
     paneLayout: PaneLayout,
     win: { workerType: string | null; agentSessionId: string | null; workerModel: string | null; workingDirectory: string | null },
     supervision: SupervisionContext,
-    allowedRoot: string | null,
+    paneCwds: Map<number, string>,
   ): Promise<void> {
     const paneCount = paneLayout.panes.length;
     const firstPaneId = await this.tmux.resolvePaneId(server, baseTarget);
@@ -203,15 +245,15 @@ export class WindowRespawnService {
     for (const pane of paneLayout.panes) {
       const paneId = paneIdMap.get(pane.index);
       if (!paneId) continue;
-      const rawCwd = pane.workingDirectory || win.workingDirectory;
-      if (rawCwd) {
-        // Fail fast (throw, abort the whole respawn) rather than silently cd
-        // somewhere else — a rejected pane cwd means either the window's
-        // persisted workingDirectory or the live tmux pane path (captured by
-        // capturePaneLayout) escapes the project boundary, and launching a
-        // worker there is exactly the Issue #27 containment gap this closes.
-        const cwd = await this.resolveContainedCwd(server, rawCwd, allowedRoot, 'pane working directory');
-        await this.tmux.sendKeys(server, paneId, [`cd ${cwd}`, 'Enter']);
+      // Already resolved and containment-checked by resolveAllCwds() before
+      // any destructive tmux operation ran — a missing entry here means the
+      // pane had no workingDirectory to begin with, not a rejected one (a
+      // rejection would have thrown out of respawn() earlier).
+      const cwd = paneCwds.get(pane.index);
+      if (cwd) {
+        // cwd is a resolved (symlink-free) real path — must be shell-quoted
+        // before being typed into the pane (Issue #27 cd injection).
+        await this.tmux.sendKeys(server, paneId, [`cd -- ${shellQuote(cwd)}`, 'Enter']);
         await sleep(300);
       }
 
@@ -234,11 +276,14 @@ export class WindowRespawnService {
     supervisorTarget: string,
     win: { id?: number; workerType: string | null; agentSessionId: string | null; workerModel: string | null; workingDirectory: string | null },
     supervision: SupervisionContext,
-    allowedRoot: string | null,
+    singleCwd: string | null,
   ): Promise<void> {
-    if (win.workingDirectory) {
-      const cwd = await this.resolveContainedCwd(server, win.workingDirectory, allowedRoot, 'window working directory');
-      await this.tmux.sendKeys(server, paneId, [`cd ${cwd}`, 'Enter']);
+    if (singleCwd) {
+      // singleCwd is a resolved (symlink-free) real path, already
+      // containment-checked by resolveAllCwds() before any destructive tmux
+      // operation ran — must be shell-quoted before being typed into the
+      // pane (Issue #27 cd injection).
+      await this.tmux.sendKeys(server, paneId, [`cd -- ${shellQuote(singleCwd)}`, 'Enter']);
       await sleep(300);
     }
 

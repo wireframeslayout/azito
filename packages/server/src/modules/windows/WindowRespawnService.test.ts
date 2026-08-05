@@ -346,6 +346,78 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
     }
   });
 
+  it('does not kill or recreate the existing window when the path is rejected (destructive ops must follow verification)', async () => {
+    // A rejection must abort before any destructive tmux operation or DB
+    // write — killing the live window first and only then discovering the
+    // resolved path escapes the project root would strand a dead window and
+    // a stale-but-persisted tmuxTarget with nothing to show for it.
+    const outsideDir = mkdtempSync(path.join(tmpdir(), 'azito-window-respawn-outside-'));
+    try {
+      const win = makeWindow({ projectId: 1, taskId: null, windowType: 'terminal', workerType: null, workingDirectory: outsideDir });
+      const { service, tmux, windowRepo } = buildService({
+        window: win,
+        projectServerRepo: makeProjectServerRepo(rootDir),
+        transportFactory: makeTransportFactory(),
+      });
+      tmux.listSessions.mockResolvedValue([{
+        name: 'azito',
+        windowCount: 1,
+        attached: false,
+        created: 0,
+        windows: [{ name: 'task-1', index: 0, active: true, panes: [], activity: 0 }],
+      }]);
+
+      await expect(service.respawn(1, makeServer())).rejects.toThrow(/escapes the allowed directory/);
+
+      expect(tmux.killWindow).not.toHaveBeenCalled();
+      expect(tmux.createWindow).not.toHaveBeenCalled();
+      expect(tmux.createSession).not.toHaveBeenCalled();
+      expect(windowRepo.update).not.toHaveBeenCalled();
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not kill the existing window when a multi-pane layout path is rejected', async () => {
+    const outsideDir = mkdtempSync(path.join(tmpdir(), 'azito-window-respawn-outside-'));
+    try {
+      const win = makeWindow({
+        projectId: 1,
+        taskId: null,
+        windowType: 'terminal',
+        workerType: null,
+        workingDirectory: rootDir,
+        paneLayout: {
+          layout: 'even-horizontal',
+          panes: [
+            { index: 0, command: null, workingDirectory: rootDir, title: null },
+            { index: 1, command: null, workingDirectory: outsideDir, title: null },
+          ],
+        },
+      });
+      const { service, tmux, windowRepo } = buildService({
+        window: win,
+        projectServerRepo: makeProjectServerRepo(rootDir),
+        transportFactory: makeTransportFactory(),
+      });
+      tmux.listSessions.mockResolvedValue([{
+        name: 'azito',
+        windowCount: 1,
+        attached: false,
+        created: 0,
+        windows: [{ name: 'task-1', index: 0, active: true, panes: [], activity: 0 }],
+      }]);
+
+      await expect(service.respawn(1, makeServer())).rejects.toThrow(/escapes the allowed directory/);
+
+      expect(tmux.killWindow).not.toHaveBeenCalled();
+      expect(tmux.createWindow).not.toHaveBeenCalled();
+      expect(windowRepo.update).not.toHaveBeenCalled();
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
   it('cds into the resolved path for a single-pane window inside the project root', async () => {
     const win = makeWindow({ projectId: 1, taskId: null, windowType: 'terminal', workerType: null, workingDirectory: rootDir });
     const { service, sentCommands } = buildService({
@@ -356,7 +428,46 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
 
     await service.respawn(1, makeServer());
 
-    expect(sentCommands).toContain(`cd ${rootDir}`);
+    expect(sentCommands).toContain(`cd -- '${rootDir}'`);
+  });
+
+  it('quotes a resolved path containing shell metacharacters instead of interpolating it raw (Issue #27 cd injection)', async () => {
+    // A directory name with `;`, whitespace, `$(...)`, and a single quote —
+    // all legal in a Linux filename — must reach the pane as one shell
+    // word, not be interpreted by the shell running there.
+    const dangerousName = `evil; touch pwned; echo $(whoami)'quote`;
+    const dangerousDir = path.join(rootDir, dangerousName);
+    mkdirSync(dangerousDir);
+    const win = makeWindow({ projectId: 1, taskId: null, windowType: 'terminal', workerType: null, workingDirectory: dangerousDir });
+    const { service, sentCommands } = buildService({
+      window: win,
+      projectServerRepo: makeProjectServerRepo(rootDir),
+      transportFactory: makeTransportFactory(),
+    });
+
+    await service.respawn(1, makeServer());
+
+    const cdCommand = sentCommands.find((c) => c.startsWith('cd '));
+    expect(cdCommand).toBeDefined();
+    // shellQuote wraps in single quotes and escapes embedded single quotes
+    // as '\''  — the whole path must be one quoted argument after `cd --`.
+    const expectedQuoted = `'${dangerousDir.replace(/'/g, "'\\''")}'`;
+    expect(cdCommand).toBe(`cd -- ${expectedQuoted}`);
+  });
+
+  it('guards a resolved path starting with "-" from being read as a cd option', async () => {
+    const dashDir = path.join(rootDir, '-rf');
+    mkdirSync(dashDir);
+    const win = makeWindow({ projectId: 1, taskId: null, windowType: 'terminal', workerType: null, workingDirectory: dashDir });
+    const { service, sentCommands } = buildService({
+      window: win,
+      projectServerRepo: makeProjectServerRepo(rootDir),
+      transportFactory: makeTransportFactory(),
+    });
+
+    await service.respawn(1, makeServer());
+
+    expect(sentCommands).toContain(`cd -- '${dashDir}'`);
   });
 
   it('accepts a child directory named "..cache" (regression: isPathContained must not over-reject)', async () => {
@@ -371,7 +482,7 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
 
     await service.respawn(1, makeServer());
 
-    expect(sentCommands).toContain(`cd ${dotDotCacheDir}`);
+    expect(sentCommands).toContain(`cd -- '${dotDotCacheDir}'`);
   });
 
   it('rejects a multi-pane layout pane.workingDirectory that escapes the project root', async () => {
@@ -419,7 +530,7 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
 
       await service.respawn(1, makeServer());
 
-      expect(sentCommands).toContain(`cd ${outsideDir}`);
+      expect(sentCommands).toContain(`cd -- '${outsideDir}'`);
     } finally {
       rmSync(outsideDir, { recursive: true, force: true });
     }
@@ -433,7 +544,7 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
 
       await service.respawn(1, makeServer());
 
-      expect(sentCommands).toContain(`cd ${outsideDir}`);
+      expect(sentCommands).toContain(`cd -- '${outsideDir}'`);
     } finally {
       rmSync(outsideDir, { recursive: true, force: true });
     }
