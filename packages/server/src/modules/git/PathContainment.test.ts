@@ -76,7 +76,7 @@ describe('LocalPathResolver', () => {
 describe('RemotePathResolver', () => {
   it('resolves via `realpath -e` and rejects unsafe input before touching the transport', async () => {
     const transport = mockTransport((cmd) => {
-      expect(cmd).toBe(`realpath -e '/work/proj'`);
+      expect(cmd).toBe(`realpath -e -- '/work/proj'`);
       return { stdout: '/work/proj\n', stderr: '', code: 0 };
     });
     const resolver = new RemotePathResolver(transport);
@@ -100,7 +100,7 @@ describe('RemotePathResolver', () => {
   it('does not reject a legitimate directory containing shell-sensitive characters (`+`, `,`, `=`, space) — the argument is single-quoted, not shell-parsed (Issue #27 review finding: over-broad SAFE_PATH_PATTERN rejected valid remote paths)', async () => {
     const dir = "/work/my project (v2), rel=1.0+build";
     const transport = mockTransport((cmd) => {
-      expect(cmd).toBe(`realpath -e '${dir}'`);
+      expect(cmd).toBe(`realpath -e -- '${dir}'`);
       return { stdout: `${dir}\n`, stderr: '', code: 0 };
     });
     const resolver = new RemotePathResolver(transport);
@@ -115,7 +115,7 @@ describe('RemotePathResolver', () => {
 
   it('expands a `~/...` path against $HOME instead of single-quoting it literally (regression: `realpath -e \'~/x\'` never expands under POSIX shells)', async () => {
     const transport = mockTransport((cmd) => {
-      expect(cmd).toBe(`realpath -e "$HOME"'/workspace/repo'`);
+      expect(cmd).toBe(`realpath -e -- "$HOME"'/workspace/repo'`);
       return { stdout: '/home/user/workspace/repo\n', stderr: '', code: 0 };
     });
     const resolver = new RemotePathResolver(transport);
@@ -124,11 +124,46 @@ describe('RemotePathResolver', () => {
 
   it('expands a bare `~` against $HOME', async () => {
     const transport = mockTransport((cmd) => {
-      expect(cmd).toBe(`realpath -e "$HOME"`);
+      expect(cmd).toBe(`realpath -e -- "$HOME"`);
       return { stdout: '/home/user\n', stderr: '', code: 0 };
     });
     const resolver = new RemotePathResolver(transport);
     expect(await resolver.resolveRealPath('~')).toBe('/home/user');
+  });
+
+  it('escapes a single quote in the path instead of letting it break out of the quoted shell word (Issue #27 critical: shell injection via a bare single-quote wrap in the old toRemotePathExpr — a path like `/work/x\'; touch /tmp/pwn; echo \'` used to execute arbitrary commands)', async () => {
+    const evil = "/work/x'; touch /tmp/azito-pwn; echo '";
+    const transport = mockTransport((cmd) => {
+      // shellQuote() turns `'` into `'\''`, so the whole value stays a
+      // single, inert shell word — no unquoted `;` reaches the shell.
+      expect(cmd).toBe(`realpath -e -- '/work/x'\\''; touch /tmp/azito-pwn; echo '\\'''`);
+      return { stdout: `${evil}\n`, stderr: '', code: 0 };
+    });
+    const resolver = new RemotePathResolver(transport);
+    expect(await resolver.resolveRealPath(evil)).toBe(evil);
+  });
+
+  it('escapes a single quote in the `~/...` branch the same way (regression: the $HOME branch bypassed quoting entirely before the fix)', async () => {
+    const evil = "~/proj'; touch /tmp/azito-pwn; echo '";
+    const transport = mockTransport((cmd) => {
+      expect(cmd).toBe(`realpath -e -- "$HOME"'/proj'\\''; touch /tmp/azito-pwn; echo '\\'''`);
+      return { stdout: '/home/user/proj\n', stderr: '', code: 0 };
+    });
+    const resolver = new RemotePathResolver(transport);
+    expect(await resolver.resolveRealPath(evil)).toBe('/home/user/proj');
+  });
+
+  it('passes a path starting with `-` after `--` so it cannot be parsed as a `realpath` option', async () => {
+    const dashPath = '-rf /work/proj';
+    const transport = mockTransport((cmd) => {
+      expect(cmd).toBe(`realpath -e -- '${dashPath}'`);
+      // `--` must precede the quoted argument for GNU coreutils to stop
+      // option parsing before it.
+      expect(cmd.indexOf('-- ')).toBeLessThan(cmd.indexOf(`'${dashPath}'`));
+      return { stdout: `${dashPath}\n`, stderr: '', code: 0 };
+    });
+    const resolver = new RemotePathResolver(transport);
+    expect(await resolver.resolveRealPath(dashPath)).toBe(dashPath);
   });
 });
 
@@ -258,13 +293,13 @@ describe('assertDirectoryContained', () => {
     const calls: string[] = [];
     const transport = mockTransport((cmd) => {
       calls.push(cmd);
-      if (cmd === `realpath -e '/work/proj/sub'`) return { stdout: '/work/proj/sub\n', stderr: '', code: 0 };
-      if (cmd === `realpath -e '/work/proj'`) return { stdout: '/work/proj\n', stderr: '', code: 0 };
+      if (cmd === `realpath -e -- '/work/proj/sub'`) return { stdout: '/work/proj/sub\n', stderr: '', code: 0 };
+      if (cmd === `realpath -e -- '/work/proj'`) return { stdout: '/work/proj\n', stderr: '', code: 0 };
       throw new Error(`unexpected command: ${cmd}`);
     });
     await expect(assertDirectoryContained(factory, 'agent', transport, { target: '/work/proj/sub', allowedRoot: '/work/proj' }, 'test path'))
       .resolves.toBe('/work/proj/sub');
-    expect(calls).toContain(`realpath -e '/work/proj/sub'`);
+    expect(calls).toContain(`realpath -e -- '/work/proj/sub'`);
   });
 
   it('swapping target/allowedRoot flips the verdict at the assertDirectoryContained entry point too (same regression guard as isPathContained/assertPathContained above) — confirms the fix holds through the full wrapper chain every real caller (ExecuteTaskUseCase, TaskRestoreService, WindowRespawnService) goes through.', async () => {

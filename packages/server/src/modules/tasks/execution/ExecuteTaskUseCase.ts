@@ -705,7 +705,7 @@ export class ExecuteTaskUseCase {
 
       if (followUpDir) {
         try {
-          await this.tmux.sendKeys(server, target, [`cd ${followUpDir}`, 'Enter']);
+          await this.tmux.sendKeys(server, target, [`cd -- ${shellQuote(followUpDir)}`, 'Enter']);
           await sleep(500);
         } catch {}
       }

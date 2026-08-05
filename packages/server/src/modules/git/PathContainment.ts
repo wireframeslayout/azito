@@ -1,6 +1,7 @@
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import type { IServerTransport } from '../servers/transport/ServerTransport';
+import { shellQuote } from '../agents/shellQuote';
 
 // Resolves a path to its real (symlink-free, absolute) form so containment
 // checks below cannot be defeated by `..` segments or a symlink that points
@@ -24,18 +25,23 @@ export class LocalPathResolver implements IPathResolver {
 /**
  * Builds the shell path expression for a remote `realpath -e` invocation.
  * `SAFE_PATH_PATTERN` allows a leading `~` (e.g. `~/workspace/repo` is a
- * supported `project_servers.working_directory` form), but single-quoting
- * the whole value never expands it — POSIX shells only expand `~` when it
+ * supported `project_servers.working_directory` form), but quoting the
+ * whole value never expands it — POSIX shells only expand `~` when it
  * appears unquoted. Splitting `$HOME` out into a double-quoted segment
- * (still expands, but is safe from word-splitting/globbing) and leaving the
- * rest single-quoted preserves the original quoting safety while letting
- * `~` resolve correctly; adjacent quoted segments concatenate into one
- * shell word, so `"$HOME"'/workspace/repo'` is exactly one argument.
+ * (still expands, but is safe from word-splitting/globbing) and running the
+ * remainder through `shellQuote()` (single-quote escaping, `'` -> `'\''`)
+ * preserves quoting safety while letting `~` resolve correctly; adjacent
+ * quoted segments concatenate into one shell word, so
+ * `"$HOME"'/workspace/repo'` is exactly one argument. Every fragment must go
+ * through `shellQuote()` — a bare `'...'` wrap does not escape a `'` inside
+ * `targetPath` and lets the value break out of the quotes (Issue #27,
+ * critical: shell injection via `project_servers.working_directory` /
+ * `windows.working_directory`).
  */
 function toRemotePathExpr(targetPath: string): string {
   if (targetPath === '~') return '"$HOME"';
-  if (targetPath.startsWith('~/')) return `"$HOME"'${targetPath.slice(1)}'`;
-  return `'${targetPath}'`;
+  if (targetPath.startsWith('~/')) return `"$HOME"${shellQuote(targetPath.slice(1))}`;
+  return shellQuote(targetPath);
 }
 
 export class RemotePathResolver implements IPathResolver {
@@ -56,8 +62,10 @@ export class RemotePathResolver implements IPathResolver {
     // `realpath -e` (GNU coreutils, matches the Linux-only remote/agent server
     // assumption already made elsewhere in this module) requires every path
     // component including the last to exist, so a missing target fails here
-    // instead of returning a plausible-looking but unverified path.
-    const result = await this.transport.exec(`realpath -e ${toRemotePathExpr(targetPath)}`);
+    // instead of returning a plausible-looking but unverified path. The `--`
+    // before the path stops a value starting with `-` (e.g. `-rf`) from being
+    // parsed as a `realpath` option.
+    const result = await this.transport.exec(`realpath -e -- ${toRemotePathExpr(targetPath)}`);
     const resolved = result.stdout.trim();
     if (result.code !== 0 || !resolved) {
       throw new Error(`realpath failed for '${targetPath}'`);
@@ -108,6 +116,18 @@ export interface PathContainmentPair {
  * '/a/b/..cache')` returns `'..cache'`), which would wrongly reject a real
  * child directory as an escape (Issue #27 review finding 3).
  */
+// NOTE: `PathContainment` only verifies structural containment (target is
+// `allowedRoot` itself or strictly beneath it, after symlink resolution) —
+// it does not restrict the character set of `target`/`allowedRoot` beyond
+// what `RemotePathResolver` needs to stay quoting-safe (see
+// `RemotePathResolver.resolveRealPath` above). `IWorktreeService`
+// (`WorktreeService.ts` / `RemoteWorktreeService.ts`) and
+// `TaskRestoreService` still call `assertSafePath` (`SAFE_PATH_PATTERN`)
+// independently, which is stricter and rejects `+`/`,`/`=`/spaces. A path
+// that passes containment here can therefore still fail later at the
+// worktree step — that inconsistency is a known, accepted gap (Issue #27
+// review finding 3); narrowing `assertSafePath` or the worktree
+// implementations to match is out of scope for this change.
 export function isPathContained({ target, allowedRoot }: PathContainmentPair): boolean {
   const rel = path.relative(allowedRoot, target);
   if (rel === '') return true;
