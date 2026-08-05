@@ -289,6 +289,69 @@ describe('CodexExecClient', () => {
     expect(message).not.toMatch(/[\x00-\x1f\x7f]/);
   });
 
+  it('redacts forwarded credential env var values by exact match even when the value does not match any known pattern', async () => {
+    process.env.CODEX_API_KEY = 'plainvalue12345';
+    process.env.OPENAI_API_KEY = 'anotherplainvalue';
+    process.env.CODEX_ACCESS_TOKEN = 'yetanotherplainvalue';
+
+    const fakeProc = createFakeProc();
+    const rawStderr =
+      'auth failed with key plainvalue12345 and anotherplainvalue and yetanotherplainvalue';
+    vi.mocked(spawn).mockImplementation((..._args: unknown[]) => {
+      fakeProc.stdin.resume();
+      queueMicrotask(() => {
+        fakeProc.stderr.emit('data', Buffer.from(rawStderr));
+        fakeProc.emit('close', 1);
+      });
+      return fakeProc as unknown as ReturnType<typeof spawn>;
+    });
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+    vi.mocked(fs.rmSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdtempSync).mockReturnValue('/tmp/codex-exec-exact-redact');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const client = new CodexExecClient(5000);
+    await expect(client.exec('untrusted prompt text')).rejects.toThrow();
+
+    const message = warnSpy.mock.calls[0][0] as string;
+    expect(message).not.toContain('plainvalue12345');
+    expect(message).not.toContain('anotherplainvalue');
+    expect(message).not.toContain('yetanotherplainvalue');
+
+    delete process.env.CODEX_API_KEY;
+  });
+
+  it('sanitizes stderr without error when secret env vars are unset or empty', async () => {
+    delete process.env.CODEX_API_KEY;
+    process.env.OPENAI_API_KEY = '';
+    delete process.env.CODEX_ACCESS_TOKEN;
+
+    const fakeProc = createFakeProc();
+    const rawStderr = 'plain failure message with no secrets';
+    vi.mocked(spawn).mockImplementation((..._args: unknown[]) => {
+      fakeProc.stdin.resume();
+      queueMicrotask(() => {
+        fakeProc.stderr.emit('data', Buffer.from(rawStderr));
+        fakeProc.emit('close', 1);
+      });
+      return fakeProc as unknown as ReturnType<typeof spawn>;
+    });
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+    vi.mocked(fs.rmSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdtempSync).mockReturnValue('/tmp/codex-exec-empty-secret');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const client = new CodexExecClient(5000);
+    await expect(client.exec('untrusted prompt text')).rejects.toThrow();
+
+    const message = warnSpy.mock.calls[0][0] as string;
+    expect(message).toContain('plain failure message with no secrets');
+  });
+
   it('does not log a warning on success', async () => {
     const fakeProc = createFakeProc();
     vi.mocked(spawn).mockImplementation((..._args: unknown[]) => {

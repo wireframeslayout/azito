@@ -56,10 +56,32 @@ function buildAllowedEnv(): NodeJS.ProcessEnv {
 const STDERR_LOG_LIMIT = 200;
 const REDACTED = '[REDACTED]';
 
+// ALLOWED_ENV_KEYS のうち、子プロセスへ転送する値そのものを秘密として扱うキー。
+// これらの値は buildAllowedEnv() で組み立てた実際の値と完全一致すれば必ず伏せられる
+// （パターンに合致しない形式でも漏れない）。PATH / HOME / LANG 等の非秘密は含めない。
+const SECRET_ENV_KEYS = ['CODEX_API_KEY', 'OPENAI_API_KEY', 'CODEX_ACCESS_TOKEN'] as const;
+
 // codex は未信頼テキスト（エージェントのペイン出力、Issueタイトル等）を処理した直後の
 // プロセスであり、その stderr には秘密情報が紛れ込み得る。ログへ出す前に必ずこの関数を
 // 通し、既知の資格情報パターンを伏せる。切り詰めだけでは秘密情報の露出は防げないため、
 // 「マスキング」と「長さ制限」は別工程として両方必須。
+//
+// なお stderr をログへ出すこと自体は意図的な判断（呼び出し側が失敗を catch {} で
+// 握りつぶすため、出さないと失敗が完全に不可視になる）。転送した認証情報は完全一致で、
+// 既知の形式はパターンで伏せるが、未知の形式の秘密が混じる可能性は残る。根本的な
+// 解決には OS レベルの隔離が必要で、それは別途対応する。
+function maskAllowedSecretValues(text: string): string {
+  let result = text;
+  for (const key of SECRET_ENV_KEYS) {
+    const value = process.env[key];
+    if (!value) {
+      continue;
+    }
+    result = result.split(value).join(REDACTED);
+  }
+  return result;
+}
+
 const CREDENTIAL_REPLACERS: Array<(text: string) => string> = [
   // Authorization: Bearer <token>
   (text) => text.replace(/\bBearer\s+\S+/gi, `Bearer ${REDACTED}`),
@@ -87,7 +109,8 @@ function collapseControlChars(text: string): string {
 
 function sanitizeStderrForLog(stderr: string): string {
   const singleLine = collapseControlChars(stderr);
-  const masked = maskCredentials(singleLine);
+  const exactMasked = maskAllowedSecretValues(singleLine);
+  const masked = maskCredentials(exactMasked);
   return masked.length > STDERR_LOG_LIMIT
     ? `${masked.slice(0, STDERR_LOG_LIMIT)}...(truncated)`
     : masked;
