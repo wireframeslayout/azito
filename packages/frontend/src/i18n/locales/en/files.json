@@ -3,6 +3,7 @@
     "refresh": "Refresh",
     "emptyDirectory": "Empty directory",
     "download": "Download",
+    "downloadFailed": "Failed to download file",
     "openInVsCode": "Open in VS Code",
     "openInZed": "Open in Zed",
     "sourceView": "Source",
@@ -11,8 +12,8 @@
   },
   "preview": {
     "downloadFile": "Download file",
-    "copyUrl": "Copy URL",
-    "copiedUrl": "URL copied",
+    "copyUrl": "Copy API URL",
+    "copiedUrl": "API URL copied (for agents — requires an auth token)",
     "loading": "Loading preview…",
     "loadError": "Failed to load file. It may require re-authentication."
   },
@@ -20,9 +21,9 @@
     "uploadFile": "Upload file",
     "emptyMessage": "No files yet. Drag & drop or click + to upload.",
     "download": "Download",
-    "copyUrl": "Copy URL",
+    "copyUrl": "Copy API URL",
     "deleteFile": "Delete",
-    "copiedUrl": "URL copied",
+    "copiedUrl": "API URL copied (for agents — requires an auth token)",
     "dropToUpload": "Drop to upload"
   }
 }

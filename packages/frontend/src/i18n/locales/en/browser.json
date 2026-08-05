@@ -5,6 +5,7 @@
   "clipboardDenied": "Clipboard access denied by the browser",
   "fileSizeExceeded": "File size exceeds the limit (10MB): {{names}}",
   "fileReadFailed": "Failed to read file",
+  "devtoolsOpenFailed": "Failed to open DevTools",
   "keyboardInputAriaLabel": "Browser keyboard input",
   "historyAriaLabel": "Browsing history",
   "dialog": {
