@@ -36,6 +36,7 @@ describe('CodexExecClient', () => {
   const originalCodexHome = process.env.CODEX_HOME;
   const originalOpenAiApiKey = process.env.OPENAI_API_KEY;
   const originalCodexAccessToken = process.env.CODEX_ACCESS_TOKEN;
+  const originalCodexApiKey = process.env.CODEX_API_KEY;
 
   beforeEach(() => {
     process.env.AZITO_UI_TOKEN = 'hub-secret-token';
@@ -57,6 +58,8 @@ describe('CodexExecClient', () => {
     else process.env.OPENAI_API_KEY = originalOpenAiApiKey;
     if (originalCodexAccessToken === undefined) delete process.env.CODEX_ACCESS_TOKEN;
     else process.env.CODEX_ACCESS_TOKEN = originalCodexAccessToken;
+    if (originalCodexApiKey === undefined) delete process.env.CODEX_API_KEY;
+    else process.env.CODEX_API_KEY = originalCodexApiKey;
     vi.restoreAllMocks();
   });
 
@@ -319,8 +322,6 @@ describe('CodexExecClient', () => {
     expect(message).not.toContain('plainvalue12345');
     expect(message).not.toContain('anotherplainvalue');
     expect(message).not.toContain('yetanotherplainvalue');
-
-    delete process.env.CODEX_API_KEY;
   });
 
   it('sanitizes stderr without error when secret env vars are unset or empty', async () => {

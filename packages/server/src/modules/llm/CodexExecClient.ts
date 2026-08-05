@@ -158,6 +158,11 @@ export class CodexExecClient implements ILlmClient {
           'exec',
           '--sandbox',
           'read-only',
+          // 未信頼テキストを扱う実行に config.toml のユーザー設定（MCPサーバー・フック・
+          // サンドボックス上書き）を効かせないための意図的な指定。維持する（外さない）。
+          // 代償として config.toml のカスタムプロバイダ設定等はこの実行に適用されず、
+          // 該当構成では認証・実行が失敗しうるが、その失敗は logExecFailure() の警告ログで
+          // 可視化される（呼び出し側が握りつぶして完全に不可視、ではない）。
           '--ignore-user-config',
           // workDir は意図的に git リポジトリ外の空一時ディレクトリ。codex-cli 0.146.0 では
           // このフラグなしでも非 git ディレクトリで問題なく動作することを確認済み（不具合修正ではない）。
