@@ -17,6 +17,9 @@ interface WorkspaceSidebarContentProps {
   tasks: Task[];
   openTask: (taskId: number, title: string) => void;
   openProjectTasks: (projectId: number, projectName: string) => void;
+  onCreateTask?: () => void;
+  onOpenTaskWindow?: (taskId: number, taskTitle: string, terminal: { serverName: string; target: string }) => void;
+  onOpenTaskBrowser?: (taskId: number, taskTitle: string, browser: { serverName: string; groupId: string }) => void;
   projectServers: { serverName: string; workingDirectory?: string }[];
   selectedFileServer: string;
   onSelectFileServer: (server: string) => void;
@@ -53,6 +56,9 @@ export default function WorkspaceSidebarContent({
   tasks,
   openTask,
   openProjectTasks,
+  onCreateTask,
+  onOpenTaskWindow,
+  onOpenTaskBrowser,
   projectServers,
   selectedFileServer,
   onSelectFileServer,
@@ -99,6 +105,18 @@ export default function WorkspaceSidebarContent({
           }}
           onOpenAllTasks={() => {
             openProjectTasks(project.id, project.name);
+            if (mobile) onCloseMobileSidebar();
+          }}
+          onCreateTask={() => {
+            onCreateTask?.();
+            if (mobile) onCloseMobileSidebar();
+          }}
+          onOpenTaskWindow={(taskId, title, terminal) => {
+            onOpenTaskWindow?.(taskId, title, terminal);
+            if (mobile) onCloseMobileSidebar();
+          }}
+          onOpenTaskBrowser={(taskId, title, browser) => {
+            onOpenTaskBrowser?.(taskId, title, browser);
             if (mobile) onCloseMobileSidebar();
           }}
         />

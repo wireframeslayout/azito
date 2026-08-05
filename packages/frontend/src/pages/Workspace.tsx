@@ -762,6 +762,15 @@ function WorkspaceInner() {
       tasks={tasks}
       openTask={openTask}
       openProjectTasks={openProjectTasks}
+      onCreateTask={() => openTaskForm({ mode: 'create', projectId: currentProjectId })}
+      onOpenTaskWindow={(taskId, title, terminal) => {
+        selectTaskTerminal(taskId, terminal);
+        openTask(taskId, title);
+      }}
+      onOpenTaskBrowser={(taskId, title, browser) => {
+        addBrowserToTaskLayout(taskId, browser.serverName, browser.groupId);
+        openTask(taskId, title);
+      }}
       projectServers={projectServers}
       selectedFileServer={selectedFileServer}
       onSelectFileServer={setSelectedFileServer}
