@@ -31,7 +31,7 @@ export interface UseProjectRailReturn {
    * wiped on the next call.
    */
   normalize: (projectIds: number[]) => void;
-  getVisibleProjects: (allProjects: ProjectInput[]) => { projects: RailProject[]; hasMore: boolean };
+  getVisibleProjects: (allProjects: ProjectInput[]) => RailProject[];
   getAllSortedProjects: (allProjects: ProjectInput[]) => RailProject[];
   isPinned: (projectId: number) => boolean;
 }
@@ -201,10 +201,7 @@ export function useProjectRail(): UseProjectRailReturn {
   }, [pinned, recent]);
 
   const getVisibleProjects = useCallback((allProjects: ProjectInput[]) => {
-    return {
-      projects: sortProjects(allProjects, pinned, recent).slice(0, VISIBLE_LIMIT),
-      hasMore: allProjects.length > VISIBLE_LIMIT,
-    };
+    return sortProjects(allProjects, pinned, recent).slice(0, VISIBLE_LIMIT);
   }, [pinned, recent]);
 
   const isPinned = useCallback((projectId: number) => pinned.includes(projectId), [pinned]);
