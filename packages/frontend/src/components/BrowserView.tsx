@@ -8,6 +8,7 @@ import { WheelVelocityTracker, BrowserWheelInertia } from './browserWheelGesture
 import BrowserDialog from './BrowserDialog';
 import type { BrowserDialogInfo } from './BrowserDialog';
 import { useToast } from '../hooks/useToast';
+import { api } from '../api/client';
 import { buildWsUrl } from '../api/wsUrl';
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
@@ -1120,7 +1121,23 @@ export default function BrowserView({ serverName, groupId, initialTabId, onActiv
     };
   }, [canvasEl, sendMessage, anchorImeInput]);
 
-  const devtoolsUrl = `/api/browser/devtools?server=${encodeURIComponent(serverName)}&group=${encodeURIComponent(groupId)}&page=${encodeURIComponent(activeTabId)}`;
+  const openDevtools = useCallback(async () => {
+    const win = window.open('about:blank', '_blank');
+    try {
+      const { inspectorUrl } = await api<{ inspectorUrl: string }>(
+        `/browser/devtools?server=${encodeURIComponent(serverName)}`
+        + `&group=${encodeURIComponent(groupId)}&page=${encodeURIComponent(activeTabId)}`,
+      );
+      if (!inspectorUrl) throw new Error('inspectorUrl missing');
+      if (win) {
+        win.opener = null;
+        win.location.href = inspectorUrl;
+      }
+    } catch {
+      win?.close();
+      showToast(t('devtoolsOpenFailed'));
+    }
+  }, [serverName, groupId, activeTabId, showToast, t]);
 
   // Only show the start page once we actually know the tab is blank — never
   // during the initial connecting gap before any {type:'url'} has arrived.
@@ -1276,18 +1293,17 @@ export default function BrowserView({ serverName, groupId, initialTabId, onActiv
             <circle cx={8} cy={8} r={6} fill="none" stroke="currentColor" strokeWidth={1.4} />
           </svg>
         </IconButton>
-        <a
-          href={devtoolsUrl}
-          target="_blank"
-          rel="noopener noreferrer"
+        <button
+          type="button"
+          onClick={openDevtools}
           style={{
-            color: 'var(--text-dim)', fontSize: 'var(--font-xs)',
-            textDecoration: 'none', flexShrink: 0,
+            background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+            color: 'var(--text-dim)', fontSize: 'var(--font-xs)', flexShrink: 0,
           }}
           title="Open DevTools"
         >
           DevTools
-        </a>
+        </button>
         <div
           className={`browser-progress-track${isLoading ? ' is-loading' : ''}`}
           aria-hidden="true"
