@@ -23,29 +23,35 @@ function mockTransport(handler: (cmd: string) => ExecResult): IServerTransport {
 
 describe('isPathContained', () => {
   it('accepts the root itself', () => {
-    expect(isPathContained('/a/b', '/a/b')).toBe(true);
+    expect(isPathContained({ target: '/a/b', allowedRoot: '/a/b' })).toBe(true);
   });
 
   it('accepts a path strictly beneath the root', () => {
-    expect(isPathContained('/a/b', '/a/b/c')).toBe(true);
+    expect(isPathContained({ target: '/a/b/c', allowedRoot: '/a/b' })).toBe(true);
   });
 
   it('rejects a sibling path that merely shares a string prefix (regression: no prefix matching)', () => {
-    expect(isPathContained('/a/b', '/a/bc')).toBe(false);
-    expect(isPathContained('/a/b', '/a/bc/d')).toBe(false);
+    expect(isPathContained({ target: '/a/bc', allowedRoot: '/a/b' })).toBe(false);
+    expect(isPathContained({ target: '/a/bc/d', allowedRoot: '/a/b' })).toBe(false);
   });
 
   it('rejects a path that escapes the root via ..', () => {
-    expect(isPathContained('/a/b', '/a/b/../../etc')).toBe(false);
+    expect(isPathContained({ target: '/a/b/../../etc', allowedRoot: '/a/b' })).toBe(false);
   });
 
   it('rejects an unrelated absolute path', () => {
-    expect(isPathContained('/a/b', '/etc')).toBe(false);
+    expect(isPathContained({ target: '/etc', allowedRoot: '/a/b' })).toBe(false);
   });
 
   it('accepts a legitimate child directory whose name happens to start with ".." (regression: bare rel.startsWith(\'..\') over-rejects)', () => {
-    expect(isPathContained('/a/b', '/a/b/..cache')).toBe(true);
-    expect(isPathContained('/a/b', '/a/b/..cache/nested')).toBe(true);
+    expect(isPathContained({ target: '/a/b/..cache', allowedRoot: '/a/b' })).toBe(true);
+    expect(isPathContained({ target: '/a/b/..cache/nested', allowedRoot: '/a/b' })).toBe(true);
+  });
+
+  it('swapping target/allowedRoot flips the verdict (regression guard for Issue #27 review finding 4: adjacent same-typed args were mixed up during review and silently inverted containment). This is exactly the mistake the {target, allowedRoot} object shape exists to make visible at every call site — do not revert to positional string params.', () => {
+    // A strict parent/child pair: contained one way, not contained the other.
+    expect(isPathContained({ target: '/a/b/c', allowedRoot: '/a/b' })).toBe(true);
+    expect(isPathContained({ target: '/a/b', allowedRoot: '/a/b/c' })).toBe(false);
   });
 });
 
@@ -137,7 +143,7 @@ describe('assertPathContained', () => {
       // this to close the TOCTOU window between verifying and using a path
       // (Issue #27 review finding 2).
       const resolvedTarget = await new LocalPathResolver().resolveRealPath(target);
-      await expect(assertPathContained(new LocalPathResolver(), target, root, 'test path')).resolves.toBe(resolvedTarget);
+      await expect(assertPathContained(new LocalPathResolver(), { target, allowedRoot: root }, 'test path')).resolves.toBe(resolvedTarget);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -148,7 +154,7 @@ describe('assertPathContained', () => {
     const outside = mkdtempSync(path.join(tmpdir(), 'azito-path-containment-outside-'));
     try {
       const escaped = path.join(root, '..', path.basename(outside));
-      await expect(assertPathContained(new LocalPathResolver(), escaped, root, 'test path'))
+      await expect(assertPathContained(new LocalPathResolver(), { target: escaped, allowedRoot: root }, 'test path'))
         .rejects.toThrow(/escapes the allowed directory/);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -162,7 +168,7 @@ describe('assertPathContained', () => {
     const linkPath = path.join(root, 'escape-link');
     symlinkSync(outside, linkPath);
     try {
-      await expect(assertPathContained(new LocalPathResolver(), linkPath, root, 'test path'))
+      await expect(assertPathContained(new LocalPathResolver(), { target: linkPath, allowedRoot: root }, 'test path'))
         .rejects.toThrow(/escapes the allowed directory/);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -173,8 +179,22 @@ describe('assertPathContained', () => {
   it('rejects (fails closed) when the target does not exist', async () => {
     const root = mkdtempSync(path.join(tmpdir(), 'azito-path-containment-root-'));
     try {
-      await expect(assertPathContained(new LocalPathResolver(), path.join(root, 'nope'), root, 'test path'))
+      await expect(assertPathContained(new LocalPathResolver(), { target: path.join(root, 'nope'), allowedRoot: root }, 'test path'))
         .rejects.toThrow(/Cannot verify/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('swapping target/allowedRoot flips the verdict (same regression guard as isPathContained, at the resolver-driven layer): a directory strictly beneath another is contained one way and rejected the other. Confirms the object-argument fix propagates through assertPathContained, not just the pure isPathContained check.', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'azito-path-containment-root-'));
+    const child = path.join(root, 'sub');
+    mkdirSync(child);
+    try {
+      await expect(assertPathContained(new LocalPathResolver(), { target: child, allowedRoot: root }, 'test path'))
+        .resolves.toBeTruthy();
+      await expect(assertPathContained(new LocalPathResolver(), { target: root, allowedRoot: child }, 'test path'))
+        .rejects.toThrow(/escapes the allowed directory/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -185,7 +205,7 @@ describe('assertDirectoryContained', () => {
   it('skips resolution/verification and returns candidateDir unchanged when allowedRoot is unset (no configured boundary)', async () => {
     const factory = new PathResolverFactory();
     await expect(
-      assertDirectoryContained(factory, 'local', undefined, '/does/not/exist/at/all', null, 'test path'),
+      assertDirectoryContained(factory, 'local', undefined, { target: '/does/not/exist/at/all', allowedRoot: null }, 'test path'),
     ).resolves.toBe('/does/not/exist/at/all');
   });
 
@@ -196,7 +216,7 @@ describe('assertDirectoryContained', () => {
     try {
       const factory = new PathResolverFactory();
       const resolvedTarget = await new LocalPathResolver().resolveRealPath(target);
-      await expect(assertDirectoryContained(factory, 'local', undefined, target, root, 'test path'))
+      await expect(assertDirectoryContained(factory, 'local', undefined, { target, allowedRoot: root }, 'test path'))
         .resolves.toBe(resolvedTarget);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -208,7 +228,7 @@ describe('assertDirectoryContained', () => {
     const outside = mkdtempSync(path.join(tmpdir(), 'azito-path-containment-outside-'));
     try {
       const factory = new PathResolverFactory();
-      await expect(assertDirectoryContained(factory, 'local', undefined, outside, root, 'test path'))
+      await expect(assertDirectoryContained(factory, 'local', undefined, { target: outside, allowedRoot: root }, 'test path'))
         .rejects.toThrow(/escapes the allowed directory/);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -225,8 +245,23 @@ describe('assertDirectoryContained', () => {
       if (cmd === `realpath -e '/work/proj'`) return { stdout: '/work/proj\n', stderr: '', code: 0 };
       throw new Error(`unexpected command: ${cmd}`);
     });
-    await expect(assertDirectoryContained(factory, 'agent', transport, '/work/proj/sub', '/work/proj', 'test path'))
+    await expect(assertDirectoryContained(factory, 'agent', transport, { target: '/work/proj/sub', allowedRoot: '/work/proj' }, 'test path'))
       .resolves.toBe('/work/proj/sub');
     expect(calls).toContain(`realpath -e '/work/proj/sub'`);
+  });
+
+  it('swapping target/allowedRoot flips the verdict at the assertDirectoryContained entry point too (same regression guard as isPathContained/assertPathContained above) — confirms the fix holds through the full wrapper chain every real caller (ExecuteTaskUseCase, TaskRestoreService, WindowRespawnService) goes through.', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'azito-path-containment-root-'));
+    const child = path.join(root, 'sub');
+    mkdirSync(child);
+    try {
+      const factory = new PathResolverFactory();
+      await expect(assertDirectoryContained(factory, 'local', undefined, { target: child, allowedRoot: root }, 'test path'))
+        .resolves.toBeTruthy();
+      await expect(assertDirectoryContained(factory, 'local', undefined, { target: root, allowedRoot: child }, 'test path'))
+        .rejects.toThrow(/escapes the allowed directory/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

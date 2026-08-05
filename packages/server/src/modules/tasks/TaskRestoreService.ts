@@ -94,7 +94,7 @@ export class TaskRestoreService {
           // original task.workingDirectory — closes the same TOCTOU window
           // ExecuteTaskUseCase closes (Issue #27 review finding 2).
           workingDir = await assertDirectoryContained(
-            this.pathResolverFactory, server.type, transportForCheck, task.workingDirectory, allowedRoot, 'task working directory',
+            this.pathResolverFactory, server.type, transportForCheck, { target: task.workingDirectory, allowedRoot }, 'task working directory',
           );
         }
 
@@ -116,7 +116,7 @@ export class TaskRestoreService {
           // back the worktree (worktreePath + repoDir are set) and tmux
           // window on any throw, so rejection here needs no separate cleanup.
           const resolvedWtPath = await assertDirectoryContained(
-            this.pathResolverFactory, server.type, transport, worktreePath, allowedRoot, 'worktree path',
+            this.pathResolverFactory, server.type, transport, { target: worktreePath, allowedRoot }, 'worktree path',
           );
           worktreePath = resolvedWtPath;
           effectiveDir = resolvedWtPath;

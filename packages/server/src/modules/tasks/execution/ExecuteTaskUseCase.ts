@@ -185,12 +185,11 @@ export class ExecuteTaskUseCase {
    */
   private async assertDirectoryContained(
     server: ServerConfig,
-    candidateDir: string,
-    allowedRoot: string | null | undefined,
+    { target, allowedRoot }: { target: string; allowedRoot: string | null | undefined },
     label: string,
   ): Promise<string> {
     const transport = this.transportFactory.getTransport(server);
-    return assertDirectoryContained(this.pathResolverFactory, server.type, transport, candidateDir, allowedRoot, label);
+    return assertDirectoryContained(this.pathResolverFactory, server.type, transport, { target, allowedRoot }, label);
   }
 
   private appendLog(taskId: number, unitId: number, type: LogType, content: unknown): void {
@@ -352,7 +351,7 @@ export class ExecuteTaskUseCase {
           // otherwise a symlink swapped in between verification and use could
           // still redirect the worktree outside allowedRoot (Issue #27 review
           // finding 2, TOCTOU).
-          workingDir = await this.assertDirectoryContained(server, task.workingDirectory, allowedRoot, 'task working directory');
+          workingDir = await this.assertDirectoryContained(server, { target: task.workingDirectory, allowedRoot }, 'task working directory');
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           this.appendLog(taskId, unitId, 'command', {
@@ -387,7 +386,7 @@ export class ExecuteTaskUseCase {
           // Same TOCTOU fix as above: the resolved path (not wt.path as
           // returned by worktree creation) is what gets persisted and used
           // from here on (Issue #27 review finding 2).
-          const resolvedWtPath = await this.assertDirectoryContained(server, wt.path, allowedRoot, 'worktree path');
+          const resolvedWtPath = await this.assertDirectoryContained(server, { target: wt.path, allowedRoot }, 'worktree path');
           wt = { ...wt, path: resolvedWtPath };
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -682,7 +681,7 @@ export class ExecuteTaskUseCase {
         try {
           // Use the resolved path for the `cd` below, same TOCTOU fix as
           // execute() (Issue #27 review finding 2).
-          followUpDir = await this.assertDirectoryContained(server, followUpDir, followUpAllowedRoot, 'follow-up working directory');
+          followUpDir = await this.assertDirectoryContained(server, { target: followUpDir, allowedRoot: followUpAllowedRoot }, 'follow-up working directory');
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           this.appendLog(taskId, unitId, 'command', { type: 'working_directory_rejected', message });

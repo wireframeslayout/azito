@@ -68,10 +68,30 @@ export class PathResolverFactory {
 }
 
 /**
+ * Path pair shared by all three containment functions below. Bundling
+ * `target`/`allowedRoot` into a named-field object — rather than two
+ * adjacent `string` parameters — is the fix for Issue #27 review finding 4:
+ * with two bare strings in a row, a caller that swaps their order still
+ * type-checks and still passes tests, but silently inverts the security
+ * judgment (a legitimate path gets rejected, or worse, a path that should be
+ * rejected gets allowed). An object argument makes the swap a visible,
+ * grep-able mistake at every call site instead of an invisible one.
+ *
+ * All three functions use this same `{ target, allowedRoot }` field order —
+ * previously `isPathContained(resolvedRoot, resolvedTarget)` took root
+ * first while `assertPathContained` took target first, which made the
+ * mismatch easier to introduce by copy-paste.
+ */
+export interface PathContainmentPair {
+  target: string;
+  allowedRoot: string;
+}
+
+/**
  * Judges containment via path.relative() rather than a string prefix match —
  * a prefix match would wrongly accept e.g. `/a/bc` as being under `/a/b`.
- * `resolvedRoot`/`resolvedTarget` must already be real (symlink-resolved,
- * absolute) paths; this function does no resolution of its own.
+ * `target`/`allowedRoot` must already be real (symlink-resolved, absolute)
+ * paths; this function does no resolution of its own.
  *
  * The escape check is `rel === '..' || rel.startsWith('..' + path.sep)`, not
  * a bare `rel.startsWith('..')` — the latter also matches legitimate child
@@ -79,15 +99,15 @@ export class PathResolverFactory {
  * '/a/b/..cache')` returns `'..cache'`), which would wrongly reject a real
  * child directory as an escape (Issue #27 review finding 3).
  */
-export function isPathContained(resolvedRoot: string, resolvedTarget: string): boolean {
-  const rel = path.relative(resolvedRoot, resolvedTarget);
+export function isPathContained({ target, allowedRoot }: PathContainmentPair): boolean {
+  const rel = path.relative(allowedRoot, target);
   if (rel === '') return true;
   if (path.isAbsolute(rel)) return false;
   return rel !== '..' && !rel.startsWith('..' + path.sep);
 }
 
 /**
- * Resolves both `targetPath` and `allowedRoot` to real paths and asserts the
+ * Resolves both `target` and `allowedRoot` to real paths and asserts the
  * target is `allowedRoot` itself or strictly beneath it. Fail-fast: any
  * resolution failure (target/root missing, remote lookup error, etc.) is
  * treated as "not contained" — this must never silently let a task run
@@ -95,24 +115,23 @@ export function isPathContained(resolvedRoot: string, resolvedTarget: string): b
  * verified.
  *
  * Returns the resolved (symlink-free, absolute) target path. Callers must
- * use this returned value — not the original `targetPath` — for anything
- * that follows (worktree creation, `cd`, persistence to the DB). Verifying
- * `targetPath` and then separately using `targetPath` again would leave a
- * TOCTOU window where a symlink swapped in between the two could redirect
- * the later use outside `allowedRoot` even though the check passed
+ * use this returned value — not the original `target` — for anything that
+ * follows (worktree creation, `cd`, persistence to the DB). Verifying
+ * `target` and then separately using `target` again would leave a TOCTOU
+ * window where a symlink swapped in between the two could redirect the
+ * later use outside `allowedRoot` even though the check passed
  * (Issue #27 review finding 2).
  */
 export async function assertPathContained(
   resolver: IPathResolver,
-  targetPath: string,
-  allowedRoot: string,
+  { target, allowedRoot }: PathContainmentPair,
   label: string,
 ): Promise<string> {
   let resolvedTarget: string;
   let resolvedRoot: string;
   try {
     [resolvedTarget, resolvedRoot] = await Promise.all([
-      resolver.resolveRealPath(targetPath),
+      resolver.resolveRealPath(target),
       resolver.resolveRealPath(allowedRoot),
     ]);
   } catch (err) {
@@ -120,7 +139,7 @@ export async function assertPathContained(
     throw new Error(`Cannot verify ${label} stays within the allowed directory (${message})`);
   }
 
-  if (!isPathContained(resolvedRoot, resolvedTarget)) {
+  if (!isPathContained({ target: resolvedTarget, allowedRoot: resolvedRoot })) {
     throw new Error(`${label} escapes the allowed directory`);
   }
   return resolvedTarget;
@@ -143,11 +162,10 @@ export async function assertDirectoryContained(
   resolverFactory: PathResolverFactory,
   serverType: string,
   transport: IServerTransport | undefined,
-  candidateDir: string,
-  allowedRoot: string | null | undefined,
+  { target, allowedRoot }: { target: string; allowedRoot: string | null | undefined },
   label: string,
 ): Promise<string> {
-  if (!allowedRoot) return candidateDir;
+  if (!allowedRoot) return target;
   const resolver = resolverFactory.create(serverType, transport);
-  return assertPathContained(resolver, candidateDir, allowedRoot, label);
+  return assertPathContained(resolver, { target, allowedRoot }, label);
 }

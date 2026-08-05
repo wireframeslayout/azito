@@ -131,7 +131,7 @@ export class WindowRespawnService {
   private async resolveContainedCwd(server: ServerConfig, cwd: string, allowedRoot: string | null, label: string): Promise<string> {
     if (!allowedRoot || !this.transportFactory) return cwd;
     const transport = this.transportFactory.getTransport(server);
-    return assertDirectoryContained(this.pathResolverFactory, server.type, transport, cwd, allowedRoot, label);
+    return assertDirectoryContained(this.pathResolverFactory, server.type, transport, { target: cwd, allowedRoot }, label);
   }
 
   private wrapIfSupervised(cmd: string, server: ServerConfig, supervisorTarget: string, supervision: SupervisionContext): string {
