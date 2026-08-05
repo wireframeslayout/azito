@@ -169,4 +169,70 @@ describe('CodexExecClient', () => {
 
     expect(stdinEndSpy).toHaveBeenCalledWith('untrusted prompt text');
   });
+
+  it('logs a warning when codex exec exits non-zero with empty output', async () => {
+    const fakeProc = createFakeProc();
+    vi.mocked(spawn).mockImplementation((..._args: unknown[]) => {
+      fakeProc.stdin.resume();
+      queueMicrotask(() => {
+        fakeProc.stderr.emit('data', Buffer.from('auth error: not logged in'));
+        fakeProc.emit('close', 1);
+      });
+      return fakeProc as unknown as ReturnType<typeof spawn>;
+    });
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+    vi.mocked(fs.rmSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdtempSync).mockReturnValue('/tmp/codex-exec-fail1');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const client = new CodexExecClient(5000);
+    await expect(client.exec('untrusted prompt text')).rejects.toThrow();
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const message = warnSpy.mock.calls[0][0] as string;
+    expect(message).toContain('codex exec failed');
+    expect(message).toContain('code=1');
+    expect(message).toContain('auth error: not logged in');
+    expect(message).not.toContain('untrusted prompt text');
+  });
+
+  it('logs a warning when codex spawn emits an error event', async () => {
+    const fakeProc = createFakeProc();
+    vi.mocked(spawn).mockImplementation((..._args: unknown[]) => {
+      fakeProc.stdin.resume();
+      queueMicrotask(() => fakeProc.emit('error', new Error('spawn codex ENOENT')));
+      return fakeProc as unknown as ReturnType<typeof spawn>;
+    });
+    vi.mocked(fs.rmSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdtempSync).mockReturnValue('/tmp/codex-exec-fail2');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const client = new CodexExecClient(5000);
+    await expect(client.exec('untrusted prompt text')).rejects.toThrow('spawn codex ENOENT');
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const message = warnSpy.mock.calls[0][0] as string;
+    expect(message).toContain('codex exec failed');
+    expect(message).toContain('spawn codex ENOENT');
+  });
+
+  it('does not log a warning on success', async () => {
+    const fakeProc = createFakeProc();
+    vi.mocked(spawn).mockImplementation((..._args: unknown[]) => {
+      fakeProc.stdin.resume();
+      queueMicrotask(() => fakeProc.emit('close', 0));
+      return fakeProc as unknown as ReturnType<typeof spawn>;
+    });
+    vi.mocked(fs.readFileSync).mockReturnValue('llm output');
+    vi.mocked(fs.rmSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdtempSync).mockReturnValue('/tmp/codex-exec-ok1');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const client = new CodexExecClient(5000);
+    await client.exec('untrusted prompt text');
+
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
 });

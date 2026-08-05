@@ -53,6 +53,22 @@ function buildAllowedEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
+const STDERR_LOG_LIMIT = 500;
+
+// 呼び出し側（PaneClassifier / LlmContentExtractor）は codex exec の失敗を
+// すべて catch {} で握りつぶし null / 空配列 / 既定値にフォールバックするため、
+// ここでログを出さない限り「codex バイナリが無い」「認証切れ」「古い codex が
+// フラグを知らず拒否する」といった失敗が運用者から一切見えなくなる。
+// stderr には秘密情報が含まれ得るためプロンプト本文は出さず、stderr は先頭
+// STDERR_LOG_LIMIT 文字に切り詰めて出す（マスキングまでは行わない）。
+function logExecFailure(reason: string, code: number | null, stderr: string): void {
+  const truncatedStderr =
+    stderr.length > STDERR_LOG_LIMIT ? `${stderr.slice(0, STDERR_LOG_LIMIT)}...(truncated)` : stderr;
+  console.warn(
+    `[CodexExecClient] codex exec failed (${reason}, code=${code ?? 'null'}): ${truncatedStderr}`,
+  );
+}
+
 export class CodexExecClient implements ILlmClient {
   private readonly timeoutMs: number;
 
@@ -124,6 +140,7 @@ export class CodexExecClient implements ILlmClient {
         }
         cleanupWorkDir();
         if (code !== 0 && !output) {
+          logExecFailure('non-zero exit with empty output', code, stderr);
           return reject(new Error(`codex exec failed (code ${code}): ${stderr}`));
         }
         resolve(output);
@@ -131,6 +148,7 @@ export class CodexExecClient implements ILlmClient {
 
       proc.on('error', (err: Error) => {
         cleanupWorkDir();
+        logExecFailure('spawn error', null, err.message);
         reject(err);
       });
     });
