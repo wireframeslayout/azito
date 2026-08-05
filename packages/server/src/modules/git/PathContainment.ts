@@ -1,8 +1,7 @@
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import type { IServerTransport } from '../servers/transport/ServerTransport';
-import { shellQuote } from '../agents/shellQuote';
-import { assertSafePath } from './assertSafeGitArgs';
+import { shellQuote } from '../../shared/shellQuote';
 
 // Resolves a path to its real (symlink-free, absolute) form so containment
 // checks below cannot be defeated by `..` segments or a symlink that points
@@ -24,20 +23,19 @@ export class LocalPathResolver implements IPathResolver {
 }
 
 /**
- * Builds the shell path expression for a remote `realpath -e` invocation.
- * `SAFE_PATH_PATTERN` allows a leading `~` (e.g. `~/workspace/repo` is a
- * supported `project_servers.working_directory` form), but quoting the
- * whole value never expands it — POSIX shells only expand `~` when it
- * appears unquoted. Splitting `$HOME` out into a double-quoted segment
- * (still expands, but is safe from word-splitting/globbing) and running the
- * remainder through `shellQuote()` (single-quote escaping, `'` -> `'\''`)
- * preserves quoting safety while letting `~` resolve correctly; adjacent
- * quoted segments concatenate into one shell word, so
- * `"$HOME"'/workspace/repo'` is exactly one argument. Every fragment must go
- * through `shellQuote()` — a bare `'...'` wrap does not escape a `'` inside
- * `targetPath` and lets the value break out of the quotes (Issue #27,
- * critical: shell injection via `project_servers.working_directory` /
- * `windows.working_directory`).
+ * Builds the shell path expression for a remote `cd -- <path> && pwd -P`
+ * invocation. Quoting the whole value never expands a leading `~` (e.g.
+ * `~/workspace/repo` is a supported `project_servers.working_directory`
+ * form) — POSIX shells only expand `~` when it appears unquoted. Splitting
+ * `$HOME` out into a double-quoted segment (still expands, but is safe from
+ * word-splitting/globbing) and running the remainder through `shellQuote()`
+ * (single-quote escaping, `'` -> `'\''`) preserves quoting safety while
+ * letting `~` resolve correctly; adjacent quoted segments concatenate into
+ * one shell word, so `"$HOME"'/workspace/repo'` is exactly one argument.
+ * Every fragment must go through `shellQuote()` — a bare `'...'` wrap does
+ * not escape a `'` inside `targetPath` and lets the value break out of the
+ * quotes (Issue #27, critical: shell injection via
+ * `project_servers.working_directory` / `windows.working_directory`).
  */
 function toRemotePathExpr(targetPath: string): string {
   if (targetPath === '~') return '"$HOME"';
@@ -52,21 +50,24 @@ export class RemotePathResolver implements IPathResolver {
     // Unlike git ref/arg values, this string is never interpolated
     // unquoted — `toRemotePathExpr()` always wraps it in single quotes (or
     // the `"$HOME"'...'` form for a leading `~`), so shell metacharacters
-    // cannot escape into the command. Applying git's `assertSafePath`
-    // (SAFE_PATH_PATTERN) here was therefore only extra restriction, not
-    // extra safety, and it rejected legitimate directory names containing
-    // `+`, `,`, `=`, or spaces. Only the structural requirements that would
-    // break quoting/parsing itself are checked: non-empty, no NUL byte (NUL
-    // cannot appear in a POSIX path and would truncate the shell command).
+    // cannot escape into the command. Only the structural requirements that
+    // would break quoting/parsing itself are checked: non-empty, no NUL
+    // byte (NUL cannot appear in a POSIX path and would truncate the shell
+    // command).
     if (targetPath.length === 0) throw new Error('targetPath must not be empty');
     if (targetPath.includes('\0')) throw new Error('targetPath must not contain a NUL byte');
-    // `realpath -e` (GNU coreutils, matches the Linux-only remote/agent server
-    // assumption already made elsewhere in this module) requires every path
-    // component including the last to exist, so a missing target fails here
-    // instead of returning a plausible-looking but unverified path. The `--`
-    // before the path stops a value starting with `-` (e.g. `-rf`) from being
-    // parsed as a `realpath` option.
-    const result = await this.transport.exec(`realpath -e -- ${toRemotePathExpr(targetPath)}`);
+    // `realpath -e` is GNU coreutils only — the BSD/macOS `realpath` shipped
+    // with the darwin-arm64 release bundle has no `-e` flag, so remote
+    // servers on macOS failed every working-directory-bound task run
+    // (execute/resume/follow-up/window respawn) that hit this resolver
+    // (Issue #27 review finding 1). `cd -- <path> && pwd -P` is POSIX and
+    // gives the same guarantees: `cd` fails (non-zero exit) when the target
+    // does not exist or is not a directory, matching `-e`'s "must exist"
+    // requirement, and `pwd -P` prints the physical (symlink-resolved)
+    // working directory, matching `realpath`'s symlink resolution. The `--`
+    // before the path stops a value starting with `-` (e.g. `-rf`) from
+    // being parsed as a `cd` option.
+    const result = await this.transport.exec(`cd -- ${toRemotePathExpr(targetPath)} && pwd -P`);
     const resolved = result.stdout.trim();
     if (result.code !== 0 || !resolved) {
       throw new Error(`realpath failed for '${targetPath}'`);
@@ -117,19 +118,21 @@ export interface PathContainmentPair {
  * '/a/b/..cache')` returns `'..cache'`), which would wrongly reject a real
  * child directory as an escape (Issue #27 review finding 3).
  */
-// NOTE: `PathContainment` verifies structural containment (target is
-// `allowedRoot` itself or strictly beneath it, after symlink resolution),
-// and — since the shell-injection fix below — `assertPathContained` also
-// runs the *resolved* target through `assertSafePath` (`SAFE_PATH_PATTERN`)
-// before returning it, so the character set of the value this module hands
-// back to callers is no longer unrestricted. The *raw, pre-resolution*
-// `target`/`allowedRoot` arguments passed in are still unrestricted here —
-// `RemotePathResolver.resolveRealPath` accepts them as-is because it stays
-// quoting-safe regardless (see the comment there). `IWorktreeService`
-// (`WorktreeService.ts` / `RemoteWorktreeService.ts`) and
-// `TaskRestoreService` still call `assertSafePath` independently on the
-// paths they use; that is no longer the only enforcement point but remains
-// defense in depth alongside the check now performed here.
+// NOTE: `PathContainment` verifies structural containment only (target is
+// `allowedRoot` itself or strictly beneath it, after symlink resolution). It
+// deliberately does not restrict the character set of `target`/`allowedRoot`
+// — a previous revision ran the resolved target through git's
+// `assertSafePath` (`SAFE_PATH_PATTERN`) here, on the theory that downstream
+// shell interpolation needed the input pre-restricted to a safe character
+// set. That was the wrong layer for the fix: it rejected legitimate
+// directory names (e.g. `/srv/repo+tools`) that a *quoted* shell command
+// handles just fine, breaking window respawn for real repos. The correct
+// invariant is "quote at every shell boundary", not "restrict characters
+// globally" (Issue #27 review finding 2). Containment verification and
+// character-set restriction are separate concerns; only the former belongs
+// here. `IWorktreeService` (`WorktreeService.ts` / `RemoteWorktreeService.ts`)
+// still calls `assertSafePath` independently — see the asymmetry note on
+// `assertPathContained` below.
 export function isPathContained({ target, allowedRoot }: PathContainmentPair): boolean {
   const rel = path.relative(allowedRoot, target);
   if (rel === '') return true;
@@ -153,26 +156,19 @@ export function isPathContained({ target, allowedRoot }: PathContainmentPair): b
  * later use outside `allowedRoot` even though the check passed
  * (Issue #27 review finding 2).
  *
- * Before returning, the resolved target is also run through `assertSafePath`
- * (`SAFE_PATH_PATTERN`). This is a different concern from the `assertSafePath`
- * call that used to sit inside `RemotePathResolver` and was removed from
- * there: that removal was about the *input* to `realpath` — the raw
- * `targetPath` is always single-quoted via `toRemotePathExpr`/`shellQuote`
- * before it reaches the remote shell, so restricting its character set added
- * no safety, only false rejections (see `RemotePathResolver.resolveRealPath`).
- * The check added here is about the *output* of containment verification:
- * once this resolved path is persisted (`task.worktreePath` /
- * `task.workingDirectory`) and later read back, downstream call sites
- * (`PushVerifier`, some `RemoteWorktreeService` call paths) interpolate it
- * into a shell command string without quoting it themselves. Those call
- * sites' safety depends entirely on the invariant that anything reaching them
- * already matches `SAFE_PATH_PATTERN` — an invariant that used to be
- * guaranteed by request-time input validation, but resolving symlinks here
- * can turn an already-validated input into a resolved path that contains
- * shell metacharacters (e.g. a `'`-containing directory name reached via a
- * symlink under the allowed root). Enforcing `assertSafePath` on the
- * resolved value restores that invariant at the one place all such paths
- * pass through, fail-closed, before they are ever persisted or used again.
+ * This function does **not** restrict the character set of the resolved
+ * path (see the NOTE above `isPathContained`) — downstream shell
+ * interpolation is responsible for quoting the value it receives, not for
+ * relying on an upstream character-set filter. `PushVerifier` quotes both
+ * `workingDir` and `branch` via `shellQuote()` for exactly this reason.
+ *
+ * Asymmetry with `RemoteWorktreeService`: that service still calls
+ * `assertSafePath` on its own paths independently of this module (see its
+ * own comments) — changing that call site was out of scope here because it
+ * has broader blast radius. That means a resolved path containing a
+ * shell-sensitive character (allowed through by this function) can still be
+ * rejected later if it reaches `RemoteWorktreeService`. The worktree path is
+ * the stricter one of the two; this function's contract is containment only.
  */
 export async function assertPathContained(
   resolver: IPathResolver,
@@ -193,17 +189,6 @@ export async function assertPathContained(
 
   if (!isPathContained({ target: resolvedTarget, allowedRoot: resolvedRoot })) {
     throw new Error(`${label} escapes the allowed directory`);
-  }
-
-  // Distinct from the containment error above: this path is contained
-  // within `allowedRoot`, but its resolved (symlink-free) form is not in the
-  // safe shell-interpolation format downstream code relies on. Fail closed
-  // rather than let an unsafe resolved path reach unquoted shell
-  // interpolation in `PushVerifier`/`RemoteWorktreeService`.
-  try {
-    assertSafePath(resolvedTarget, label);
-  } catch {
-    throw new Error(`${label} resolved to a path that is not in a safe path format: ${resolvedTarget}`);
   }
 
   return resolvedTarget;

@@ -7,7 +7,7 @@ import type { IUnitRepository } from '../units/Unit';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { PathResolverFactory, assertDirectoryContained } from '../git/PathContainment';
-import { shellQuote } from '../agents/shellQuote';
+import { shellQuote } from '../../shared/shellQuote';
 import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
 import type { SessionCaptureService } from './SessionCaptureService';

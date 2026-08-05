@@ -62,7 +62,7 @@ AZITO はエージェント種別(claude / codex / generic など)を
 ## 補足
 
 - 起動コマンド文字列を組み立てる際にモデル名・追加引数をシェルに渡す場合は、
-  `modules/agents/shellQuote.ts` の `shellQuote()` を使ってクォートすること
+  `shared/shellQuote.ts` の `shellQuote()` を使ってクォートすること
   (`claude/`、`codex/` の実装を参照)。
 - `modules/agents/LaunchCommand.ts` の `buildWorkerLaunchCommand` /
   `buildHeadlessLaunchCommand` は、DB に保存された任意の `workerType` 文字列を受け取る

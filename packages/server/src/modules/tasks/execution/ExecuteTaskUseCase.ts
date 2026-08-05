@@ -25,7 +25,7 @@ import type { IWindowRepository } from '../../windows/Window';
 import type { IPaneStreamFactory } from '../../tmux/PaneStream';
 import type { ISessionStrategyFactory } from '../../agents/SessionStrategy';
 import { buildWorkerLaunchCommand } from '../../agents/LaunchCommand';
-import { shellQuote } from '../../agents/shellQuote';
+import { shellQuote } from '../../../shared/shellQuote';
 import { expandTemplate } from './PromptExpander';
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import { WorkerWaiter } from './WorkerWaiter';

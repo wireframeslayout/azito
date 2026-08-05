@@ -446,12 +446,10 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
     expect(sentCommands).toContain(`cd -- '${rootDir}'`);
   });
 
-  it('rejects (fail closed) a resolved path containing shell metacharacters instead of quoting it through to the cd command (Issue #27: assertPathContained now runs assertSafePath on the resolved path, since downstream shell interpolation elsewhere — e.g. PushVerifier — is not quoted and depends on this invariant)', async () => {
+  it('accepts a resolved path containing shell metacharacters and quotes it through to the cd command (Issue #27 review finding 2: containment verification must not restrict the character set — that rejected legitimate directory names like `/srv/repo+tools`; window respawn already sends `cd -- ${shellQuote(cwd)}`, so quoting at that shell boundary is what keeps this safe)', async () => {
     // A directory name with `;`, whitespace, `$(...)`, and a single quote —
-    // all legal in a Linux filename — must never reach any downstream shell
-    // interpolation; it is now rejected at the containment-verification
-    // choke point instead of being passed through (quoted here, but
-    // unquoted elsewhere).
+    // all legal in a Linux filename — must reach the pane only inside the
+    // single-quoted `cd --` argument, never unquoted.
     const dangerousName = `evil; touch pwned; echo $(whoami)'quote`;
     const dangerousDir = path.join(rootDir, dangerousName);
     mkdirSync(dangerousDir);
@@ -462,8 +460,9 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
       transportFactory: makeTransportFactory(),
     });
 
-    await expect(service.respawn(1, makeServer())).rejects.toThrow(/not in a safe path format/);
-    expect(sentCommands.find((c) => c.startsWith('cd '))).toBeUndefined();
+    await service.respawn(1, makeServer());
+
+    expect(sentCommands).toContain(`cd -- '${dangerousDir.replace(/'/g, "'\\''")}'`);
   });
 
   it('guards a resolved path starting with "-" from being read as a cd option', async () => {

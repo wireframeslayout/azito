@@ -74,9 +74,9 @@ describe('LocalPathResolver', () => {
 });
 
 describe('RemotePathResolver', () => {
-  it('resolves via `realpath -e` and rejects unsafe input before touching the transport', async () => {
+  it('resolves via `cd -- <path> && pwd -P` (portable — `realpath -e` is GNU-only and has no `-e` flag on BSD/macOS `realpath`, which the darwin-arm64 release bundle ships)', async () => {
     const transport = mockTransport((cmd) => {
-      expect(cmd).toBe(`realpath -e -- '/work/proj'`);
+      expect(cmd).toBe(`cd -- '/work/proj' && pwd -P`);
       return { stdout: '/work/proj\n', stderr: '', code: 0 };
     });
     const resolver = new RemotePathResolver(transport);
@@ -100,22 +100,22 @@ describe('RemotePathResolver', () => {
   it('does not reject a legitimate directory containing shell-sensitive characters (`+`, `,`, `=`, space) — the argument is single-quoted, not shell-parsed (Issue #27 review finding: over-broad SAFE_PATH_PATTERN rejected valid remote paths)', async () => {
     const dir = "/work/my project (v2), rel=1.0+build";
     const transport = mockTransport((cmd) => {
-      expect(cmd).toBe(`realpath -e -- '${dir}'`);
+      expect(cmd).toBe(`cd -- '${dir}' && pwd -P`);
       return { stdout: `${dir}\n`, stderr: '', code: 0 };
     });
     const resolver = new RemotePathResolver(transport);
     expect(await resolver.resolveRealPath(dir)).toBe(dir);
   });
 
-  it('rejects when realpath exits non-zero (target does not exist)', async () => {
-    const transport = mockTransport(() => ({ stdout: '', stderr: 'realpath: /work/missing: No such file or directory', code: 1 }));
+  it('rejects when cd exits non-zero (target does not exist)', async () => {
+    const transport = mockTransport(() => ({ stdout: '', stderr: 'sh: cd: /work/missing: No such file or directory', code: 1 }));
     const resolver = new RemotePathResolver(transport);
     await expect(resolver.resolveRealPath('/work/missing')).rejects.toThrow('realpath failed');
   });
 
-  it('expands a `~/...` path against $HOME instead of single-quoting it literally (regression: `realpath -e \'~/x\'` never expands under POSIX shells)', async () => {
+  it('expands a `~/...` path against $HOME instead of single-quoting it literally (regression: `cd \'~/x\'` never expands under POSIX shells)', async () => {
     const transport = mockTransport((cmd) => {
-      expect(cmd).toBe(`realpath -e -- "$HOME"'/workspace/repo'`);
+      expect(cmd).toBe(`cd -- "$HOME"'/workspace/repo' && pwd -P`);
       return { stdout: '/home/user/workspace/repo\n', stderr: '', code: 0 };
     });
     const resolver = new RemotePathResolver(transport);
@@ -124,7 +124,7 @@ describe('RemotePathResolver', () => {
 
   it('expands a bare `~` against $HOME', async () => {
     const transport = mockTransport((cmd) => {
-      expect(cmd).toBe(`realpath -e -- "$HOME"`);
+      expect(cmd).toBe(`cd -- "$HOME" && pwd -P`);
       return { stdout: '/home/user\n', stderr: '', code: 0 };
     });
     const resolver = new RemotePathResolver(transport);
@@ -136,7 +136,7 @@ describe('RemotePathResolver', () => {
     const transport = mockTransport((cmd) => {
       // shellQuote() turns `'` into `'\''`, so the whole value stays a
       // single, inert shell word — no unquoted `;` reaches the shell.
-      expect(cmd).toBe(`realpath -e -- '/work/x'\\''; touch /tmp/azito-pwn; echo '\\'''`);
+      expect(cmd).toBe(`cd -- '/work/x'\\''; touch /tmp/azito-pwn; echo '\\''' && pwd -P`);
       return { stdout: `${evil}\n`, stderr: '', code: 0 };
     });
     const resolver = new RemotePathResolver(transport);
@@ -146,19 +146,18 @@ describe('RemotePathResolver', () => {
   it('escapes a single quote in the `~/...` branch the same way (regression: the $HOME branch bypassed quoting entirely before the fix)', async () => {
     const evil = "~/proj'; touch /tmp/azito-pwn; echo '";
     const transport = mockTransport((cmd) => {
-      expect(cmd).toBe(`realpath -e -- "$HOME"'/proj'\\''; touch /tmp/azito-pwn; echo '\\'''`);
+      expect(cmd).toBe(`cd -- "$HOME"'/proj'\\''; touch /tmp/azito-pwn; echo '\\''' && pwd -P`);
       return { stdout: '/home/user/proj\n', stderr: '', code: 0 };
     });
     const resolver = new RemotePathResolver(transport);
     expect(await resolver.resolveRealPath(evil)).toBe('/home/user/proj');
   });
 
-  it('passes a path starting with `-` after `--` so it cannot be parsed as a `realpath` option', async () => {
+  it('passes a path starting with `-` after `--` so it cannot be parsed as a `cd` option', async () => {
     const dashPath = '-rf /work/proj';
     const transport = mockTransport((cmd) => {
-      expect(cmd).toBe(`realpath -e -- '${dashPath}'`);
-      // `--` must precede the quoted argument for GNU coreutils to stop
-      // option parsing before it.
+      expect(cmd).toBe(`cd -- '${dashPath}' && pwd -P`);
+      // `--` must precede the quoted argument to stop option parsing before it.
       expect(cmd.indexOf('-- ')).toBeLessThan(cmd.indexOf(`'${dashPath}'`));
       return { stdout: `${dashPath}\n`, stderr: '', code: 0 };
     });
@@ -252,35 +251,29 @@ describe('assertPathContained', () => {
     }
   });
 
-  it('rejects (fail closed) when the resolved target is contained but its resolved path is not in a safe path format, with an error distinguishable from a containment violation (Issue #27: a `\'`-containing directory name reached via a symlink under the allowed root used to defeat downstream unquoted shell interpolation in PushVerifier/RemoteWorktreeService)', async () => {
+  it('accepts a resolved target reached via a symlink whose real directory name contains shell-sensitive characters (regression: a prior revision ran the resolved path through git\'s `assertSafePath` here and rejected it — that was the wrong layer; containment verification must not restrict the character set, quoting is the shell boundary\'s job, see `PushVerifier`)', async () => {
     const root = mkdtempSync(path.join(tmpdir(), 'azito-path-containment-root-'));
-    // The real (symlink-resolution-target) directory itself carries the
-    // unsafe character — this is what `assertSafePath` must catch, since a
-    // symlink alone (with a safe name) would already be handled by ordinary
-    // containment resolution.
     const unsafeReal = path.join(root, "it's-a-dir; echo $HOME");
     mkdirSync(unsafeReal);
     const link = path.join(root, 'safe-looking-link');
     symlinkSync(unsafeReal, link);
     try {
-      const err = await assertPathContained(new LocalPathResolver(), { target: link, allowedRoot: root }, 'test path').catch(
-        (e) => e as Error,
-      );
-      expect(err).toBeInstanceOf(Error);
-      expect((err as Error).message).toMatch(/not in a safe path format/);
-      expect((err as Error).message).not.toMatch(/escapes the allowed directory/);
+      const resolvedTarget = await new LocalPathResolver().resolveRealPath(link);
+      await expect(assertPathContained(new LocalPathResolver(), { target: link, allowedRoot: root }, 'test path'))
+        .resolves.toBe(resolvedTarget);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it('rejects a resolved path containing a space even without any other unsafe character', async () => {
+  it('accepts a resolved path containing a space (regression: same over-broad character-set rejection as above, without a symlink involved)', async () => {
     const root = mkdtempSync(path.join(tmpdir(), 'azito-path-containment-root-'));
     const unsafeReal = path.join(root, 'has a space');
     mkdirSync(unsafeReal);
     try {
+      const resolvedTarget = await new LocalPathResolver().resolveRealPath(unsafeReal);
       await expect(assertPathContained(new LocalPathResolver(), { target: unsafeReal, allowedRoot: root }, 'test path'))
-        .rejects.toThrow(/not in a safe path format/);
+        .resolves.toBe(resolvedTarget);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -339,13 +332,13 @@ describe('assertDirectoryContained', () => {
     const calls: string[] = [];
     const transport = mockTransport((cmd) => {
       calls.push(cmd);
-      if (cmd === `realpath -e -- '/work/proj/sub'`) return { stdout: '/work/proj/sub\n', stderr: '', code: 0 };
-      if (cmd === `realpath -e -- '/work/proj'`) return { stdout: '/work/proj\n', stderr: '', code: 0 };
+      if (cmd === `cd -- '/work/proj/sub' && pwd -P`) return { stdout: '/work/proj/sub\n', stderr: '', code: 0 };
+      if (cmd === `cd -- '/work/proj' && pwd -P`) return { stdout: '/work/proj\n', stderr: '', code: 0 };
       throw new Error(`unexpected command: ${cmd}`);
     });
     await expect(assertDirectoryContained(factory, 'agent', transport, { target: '/work/proj/sub', allowedRoot: '/work/proj' }, 'test path'))
       .resolves.toBe('/work/proj/sub');
-    expect(calls).toContain(`realpath -e -- '/work/proj/sub'`);
+    expect(calls).toContain(`cd -- '/work/proj/sub' && pwd -P`);
   });
 
   it('swapping target/allowedRoot flips the verdict at the assertDirectoryContained entry point too (same regression guard as isPathContained/assertPathContained above) — confirms the fix holds through the full wrapper chain every real caller (ExecuteTaskUseCase, TaskRestoreService, WindowRespawnService) goes through.', async () => {

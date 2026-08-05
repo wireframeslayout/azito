@@ -3,6 +3,7 @@ import type { TmuxClient } from '../../tmux/TmuxClient';
 import type { ServerConfig } from '../../servers/Server';
 import type { ProjectRepositoryWithToken as ProjectRepository } from '../../projects/Project';
 import type { GitProviderService } from '../../git/providers/GitProviderService';
+import { shellQuote } from '../../../shared/shellQuote';
 
 /**
  * Verifies that a push (and, unless skipped, a PR/MR) has actually landed by
@@ -58,9 +59,18 @@ export class PushVerifier {
 
   private async readShasRemote(server: ServerConfig, workingDir: string, branch: string): Promise<{ localSha: string; remoteSha: string } | null> {
     try {
-      const r1 = await this.tmux.execCommand(server, `cd ${workingDir} && git rev-parse HEAD`);
+      // `workingDir` comes from `assertPathContained`'s resolved output and
+      // `branch` from task/worktree metadata — neither is restricted to a
+      // safe character set anymore (Issue #27 review finding 2 removed the
+      // global `assertSafePath` gate from PathContainment), so this call
+      // site is now the one responsible for quoting its own shell
+      // interpolation, same as every other `cd -- <path>` call in this
+      // codebase.
+      const quotedDir = shellQuote(workingDir);
+      const quotedBranch = shellQuote(branch);
+      const r1 = await this.tmux.execCommand(server, `cd -- ${quotedDir} && git rev-parse HEAD`);
       const localSha = r1.stdout.trim();
-      const r2 = await this.tmux.execCommand(server, `cd ${workingDir} && git ls-remote --heads origin ${branch}`);
+      const r2 = await this.tmux.execCommand(server, `cd -- ${quotedDir} && git ls-remote --heads origin ${quotedBranch}`);
       const remoteShaLine = r2.stdout.trim();
       if (!localSha || !remoteShaLine) return null;
       return { localSha, remoteSha: remoteShaLine.slice(0, 40) };

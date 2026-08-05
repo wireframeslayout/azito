@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { ExecuteTaskUseCase } from './ExecuteTaskUseCase';
+import { shellQuote } from '../../../shared/shellQuote';
 import { TurnSignalHub } from '../turns/TurnSignalHub';
 import type { AgentTurn, AgentTurnEvent } from '../turns/AgentTurn';
 import type { Task, ITaskRepository } from '../Task';
@@ -809,15 +810,14 @@ describe('ExecuteTaskUseCase working-directory containment (Issue #27)', () => {
     expect(windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({ workerType: 'claude', workerModel: 'opus' }));
   });
 
-  it('rejects (fail closed) a resolved worktree path containing shell metacharacters instead of quoting it through to the cd command (Issue #27: assertPathContained now runs assertSafePath on the resolved worktree path, since downstream shell interpolation elsewhere — e.g. PushVerifier — is not quoted and depends on this invariant)', async () => {
-    // A directory name with shell metacharacters is legal on disk. Rather
-    // than let the resolved (real) worktree path reach the pane as a quoted
-    // `cd` argument, it must be rejected up front — a persisted
-    // `task.worktreePath` in this format would later reach unquoted shell
-    // interpolation in `PushVerifier`.
+  it('accepts a resolved worktree path containing shell metacharacters and reaches the pane only via the already-quoted `cd --` command (Issue #27 review finding 2: containment verification must not restrict the character set — that rejected legitimate directory names like `/srv/repo+tools`; the shell boundary at `cd -- ${shellQuote(...)}` is what stays safe, not an upstream filter)', async () => {
+    // A directory name with shell metacharacters is legal on disk and must
+    // be allowed through containment verification; only quoting at the
+    // shell boundary (already done here via `shellQuote`) protects the
+    // `cd` command.
     const unit = makeUnit({ id: 16, workerType: 'claude', workerModel: 'opus' });
     const task = makeTask({ id: 9, serverName: 'local-server', unitId: 16 });
-    const { useCase, tmux, taskRepo, windowRepo, worktreeServiceFactory } = buildUseCase({
+    const { useCase, tmux, windowRepo, worktreeServiceFactory } = buildUseCase({
       task,
       project: makeProject({ defaultUnitId: null }),
       units: [unit],
@@ -829,12 +829,13 @@ describe('ExecuteTaskUseCase working-directory containment (Issue #27)', () => {
       create: vi.fn(async () => ({ path: dangerousDir, branch: 'task/9-slug' })),
     });
 
-    await expect(useCase.execute(16, 9)).rejects.toThrow(/not in a safe path format/);
+    await useCase.execute(16, 9);
 
-    expect(taskRepo.update).toHaveBeenCalledWith(9, expect.objectContaining({ status: 'failed' }));
-    expect(windowRepo.add).not.toHaveBeenCalled();
+    expect(windowRepo.add).toHaveBeenCalled();
     const cdCall = tmux.sendKeys.mock.calls.find((call: unknown[]) => ((call as unknown[])[2] as string[])[0]?.startsWith('cd '));
-    expect(cdCall).toBeUndefined();
+    expect(cdCall).toBeDefined();
+    const cdCommand = ((cdCall as unknown[])[2] as string[])[0];
+    expect(cdCommand).toBe(`cd -- ${shellQuote(dangerousDir)}`);
   });
 
   it('rejects when the created worktree path resolves outside the project working directory (symlink escape)', async () => {

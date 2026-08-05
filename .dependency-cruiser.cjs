@@ -150,11 +150,10 @@ module.exports = {
       severity: 'error',
       comment:
         'modules/git は基盤層(tmux/servers)以外への依存を原則禁止。' +
-        '例外1: git/providers/GitProviderService.ts が projects/Project を参照している' +
+        '例外: git/providers/GitProviderService.ts が projects/Project を参照している' +
         '（プロジェクトの Git プロバイダ設定を読むため、mid→上位層の逆依存だが現状の実装として許可）。' +
-        '例外2: git/PathContainment.ts が agents/shellQuote（シェル引数の単一引用符エスケープ）を参照している' +
-        '（リモートの realpath 実行コマンドを組み立てる際、独自のクォート実装を持たず共通実装を再利用するため、' +
-        'Issue #27 セキュリティ修正、mid↔mid）。',
+        '（shellQuote は shared/shellQuote.ts に移動済みのため、以前ここにあった agents/shellQuote.ts への' +
+        '例外は不要になった — Issue #27 レビュー指摘3。）',
       from: { path: '^packages/server/src/modules/git' },
       to: {
         path: '^packages/server/src/modules',
@@ -163,7 +162,6 @@ module.exports = {
           '^packages/server/src/modules/tmux',
           '^packages/server/src/modules/servers',
           '^packages/server/src/modules/projects/Project\\.ts$',
-          '^packages/server/src/modules/agents/shellQuote\\.ts$',
         ],
       },
     },

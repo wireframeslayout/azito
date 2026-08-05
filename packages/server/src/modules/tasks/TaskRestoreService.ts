@@ -12,7 +12,7 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { IContentExtractor } from '../llm/ContentExtractor';
 import { resolveTaskServerName, resolveTmuxSession, resolveUnitId } from './execution/TaskExecutionEnv';
 import { buildWorkerLaunchCommand } from '../agents/LaunchCommand';
-import { shellQuote } from '../agents/shellQuote';
+import { shellQuote } from '../../shared/shellQuote';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
