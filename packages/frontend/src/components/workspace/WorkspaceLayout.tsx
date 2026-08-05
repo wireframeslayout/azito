@@ -22,8 +22,9 @@ function buildProjectMenuItems(
   allProjects: ProjectItem[],
   currentProject: { id: number; name: string } | null,
   onSelect: (id: number) => void,
+  extraItems: ContextMenuItem[] = [],
 ): ContextMenuItem[] {
-  return allProjects.map((p) => ({
+  const projectItems = allProjects.map((p) => ({
     label: p.name,
     selected: p.id === currentProject?.id,
     icon: p.icon && p.icon.startsWith('data:') ? (
@@ -39,6 +40,9 @@ function buildProjectMenuItems(
     ),
     onClick: () => onSelect(p.id),
   }));
+  return extraItems.length > 0
+    ? [...projectItems, { label: '', separator: true, onClick: () => {} }, ...extraItems]
+    : projectItems;
 }
 
 interface WorkspaceLayoutProps {
@@ -96,7 +100,7 @@ export default function WorkspaceLayout({
   openTask,
   taskWindows,
 }: WorkspaceLayoutProps) {
-  const { t } = useTranslation(['workspace', 'common']);
+  const { t } = useTranslation(['workspace', 'common', 'projects']);
   const navigate = useNavigate();
   const currentProjectItem = allProjects.find((p) => p.id === project?.id) ?? null;
   const projectMenu = useContextMenu();
@@ -118,12 +122,25 @@ export default function WorkspaceLayout({
   // Toggle behavior: while the menu is open, stop mousedown/touchstart from reaching
   // useClickOutside's document listeners (which would close it before click fires),
   // then close it in onClick instead of re-showing.
-  const projectMenuTriggerProps = (onSelect: (id: number) => void) => ({
+  const buildProjectActions = (closeSidebar: boolean): ContextMenuItem[] => [
+    {
+      label: t('projects:search.newProject'),
+      icon: <Icon name="plus" size={16} />,
+      onClick: () => { if (closeSidebar) setSidebarOpen(false); navigate(paths.projectNew()); },
+    },
+    {
+      label: t('projects:search.allProjects'),
+      icon: <Icon name="projects" size={16} />,
+      onClick: () => { if (closeSidebar) setSidebarOpen(false); navigate(paths.projects()); },
+    },
+  ];
+
+  const projectMenuTriggerProps = (onSelect: (id: number) => void, extraItems: ContextMenuItem[] = []) => ({
     onMouseDown: (e: React.MouseEvent) => { if (projectMenu.menu) e.stopPropagation(); },
     onTouchStart: (e: React.TouchEvent) => { if (projectMenu.menu) e.stopPropagation(); },
     onClick: (e: React.MouseEvent) => {
       if (projectMenu.menu) projectMenu.hide();
-      else projectMenu.show(e, buildProjectMenuItems(allProjects, project, onSelect));
+      else projectMenu.show(e, buildProjectMenuItems(allProjects, project, onSelect, extraItems));
     },
   });
 
@@ -176,7 +193,7 @@ export default function WorkspaceLayout({
                 taskWindows={taskWindows}
                 projectAvatar={
                   <button
-                    {...projectMenuTriggerProps(handleProjectSelect)}
+                    {...projectMenuTriggerProps(handleProjectSelect, buildProjectActions(false))}
                     title={project?.name || ''}
                     style={{
                       width: 28,
@@ -244,7 +261,7 @@ export default function WorkspaceLayout({
           <div className="ws-surface" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', zIndex: 51, background: 'var(--ws-surface)' }}>
             <div className="ws-surface" style={{ display: 'flex', alignItems: 'center', padding: '0 8px 0 12px', minHeight: 48, background: 'transparent', flexShrink: 0, position: 'relative' }}>
               <button
-                {...projectMenuTriggerProps(handleProjectSelect)}
+                {...projectMenuTriggerProps(handleProjectSelect, buildProjectActions(false))}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0,
                   background: 'none', border: 'none', cursor: 'pointer', padding: 0, margin: 0,
@@ -297,7 +314,7 @@ export default function WorkspaceLayout({
           </div>
           <div style={{ padding: '0 8px 0 12px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', minHeight: 48, flexShrink: 0, position: 'relative' }}>
             <button
-              {...projectMenuTriggerProps(handleMobileProjectSelect)}
+              {...projectMenuTriggerProps(handleMobileProjectSelect, buildProjectActions(true))}
               style={{
                 display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0,
                 background: 'none', border: 'none', cursor: 'pointer', padding: 0, margin: 0,
@@ -342,7 +359,7 @@ export default function WorkspaceLayout({
           project={currentProjectItem}
           allProjects={allProjects}
           onSelectProject={handleMobileProjectSelect}
-          onOpenAllProjects={() => navigate('/projects')}
+          onOpenAllProjects={() => navigate(paths.projects())}
           sidebarMode={sidebarMode}
           onSwitchMode={handleMobileMenuOpenMode}
           onSendKey={onSendKey}
