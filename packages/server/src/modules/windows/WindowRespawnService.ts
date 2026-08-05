@@ -123,7 +123,6 @@ export class WindowRespawnService {
    * as "verification failed" (Issue #27 review finding 1).
    */
   private resolveAllowedRoot(win: Window, serverName: string): string | null {
-    if (!this.projectServerRepo) return null;
     let projectId = win.projectId;
     if (projectId === null && win.taskId !== null) {
       const task = this.taskRepo.findById(win.taskId);
@@ -139,10 +138,12 @@ export class WindowRespawnService {
    * fix (Issue #27 review finding 2): using `cwd` again after verification,
    * instead of the resolved value this returns, would leave the same
    * symlink-swap window open. Skips (returns `cwd` unchanged) when
-   * `allowedRoot` or `transportFactory` is unavailable.
+   * `allowedRoot` is unset — i.e. the project has no containment boundary
+   * configured, not because a dependency is missing (both `transportFactory`
+   * and `projectServerRepo` are required constructor dependencies).
    */
   private async resolveContainedCwd(server: ServerConfig, cwd: string, allowedRoot: string | null, label: string): Promise<string> {
-    if (!allowedRoot || !this.transportFactory) return cwd;
+    if (!allowedRoot) return cwd;
     const transport = this.transportFactory.getTransport(server);
     return assertDirectoryContained(this.pathResolverFactory, server.type, transport, { target: cwd, allowedRoot }, label);
   }

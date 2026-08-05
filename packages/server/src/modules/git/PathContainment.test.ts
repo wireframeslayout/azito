@@ -163,10 +163,20 @@ describe('RemotePathResolver', () => {
     expect(await resolver.resolveRealPath(dir)).toBe(dir);
   });
 
-  it('strips a trailing CRLF line terminator from `pwd -P` output, not just LF', async () => {
-    const transport = mockTransport(() => ({ stdout: '/work/proj\r\n', stderr: '', code: 0 }));
+  it('strips only the trailing LF from `pwd -P` output, not a preceding CR (POSIX `pwd` terminates with LF only)', async () => {
+    const transport = mockTransport(() => ({ stdout: '/work/proj\n', stderr: '', code: 0 }));
     const resolver = new RemotePathResolver(transport);
     expect(await resolver.resolveRealPath('/work/proj')).toBe('/work/proj');
+  });
+
+  it('preserves a trailing CR in the resolved path instead of stripping it as a line terminator (regression: a `\\r?\\n` strip would collapse a real directory genuinely named with a trailing CR — e.g. reached via a symlink whose target has that name — into a different, less-restrictive directory, letting paths under the CR-less sibling pass containment)', async () => {
+    // The input path itself cannot contain CR/LF (rejected above), but the
+    // *resolved* real path can differ from it — e.g. a symlink pointing at a
+    // directory whose actual name ends in CR — so `pwd -P` can legitimately
+    // emit a trailing CR before its LF terminator.
+    const transport = mockTransport(() => ({ stdout: '/srv/project\r\n', stderr: '', code: 0 }));
+    const resolver = new RemotePathResolver(transport);
+    expect(await resolver.resolveRealPath('/srv/project-link')).toBe('/srv/project\r');
   });
 
   it('rejects a path containing a line terminator without calling the transport (CR/LF cannot be told apart from the pwd output terminator, so it cannot be recovered unambiguously)', async () => {

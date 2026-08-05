@@ -81,8 +81,12 @@ export class RemotePathResolver implements IPathResolver {
     // `String.trim()` — `.trim()` would also remove leading/trailing
     // whitespace that is part of a legitimate directory name, silently
     // resolving to a different (and possibly unintended) path than the one
-    // that was actually verified (Issue #27 review finding).
-    const resolved = result.stdout.replace(/\r?\n$/, '');
+    // that was actually verified (Issue #27 review finding). POSIX `pwd`
+    // terminates its output with LF only, so only `\n` is stripped here — a
+    // trailing CR is a legitimate path byte and must be preserved (stripping
+    // `\r?` as well would treat `/srv/project\r` as `/srv/project` and let
+    // its contents pass containment checks meant for a different directory).
+    const resolved = result.stdout.replace(/\n$/, '');
     if (result.code !== 0 || !resolved) {
       throw new Error(`realpath failed for '${targetPath}'`);
     }
