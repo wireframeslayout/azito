@@ -83,6 +83,24 @@ describe('RemotePathResolver', () => {
     const resolver = new RemotePathResolver(transport);
     await expect(resolver.resolveRealPath('/work/missing')).rejects.toThrow('realpath failed');
   });
+
+  it('expands a `~/...` path against $HOME instead of single-quoting it literally (regression: `realpath -e \'~/x\'` never expands under POSIX shells)', async () => {
+    const transport = mockTransport((cmd) => {
+      expect(cmd).toBe(`realpath -e "$HOME"'/workspace/repo'`);
+      return { stdout: '/home/user/workspace/repo\n', stderr: '', code: 0 };
+    });
+    const resolver = new RemotePathResolver(transport);
+    expect(await resolver.resolveRealPath('~/workspace/repo')).toBe('/home/user/workspace/repo');
+  });
+
+  it('expands a bare `~` against $HOME', async () => {
+    const transport = mockTransport((cmd) => {
+      expect(cmd).toBe(`realpath -e "$HOME"`);
+      return { stdout: '/home/user\n', stderr: '', code: 0 };
+    });
+    const resolver = new RemotePathResolver(transport);
+    expect(await resolver.resolveRealPath('~')).toBe('/home/user');
+  });
 });
 
 describe('PathResolverFactory', () => {

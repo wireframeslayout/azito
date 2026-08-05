@@ -22,6 +22,23 @@ export class LocalPathResolver implements IPathResolver {
   }
 }
 
+/**
+ * Builds the shell path expression for a remote `realpath -e` invocation.
+ * `SAFE_PATH_PATTERN` allows a leading `~` (e.g. `~/workspace/repo` is a
+ * supported `project_servers.working_directory` form), but single-quoting
+ * the whole value never expands it — POSIX shells only expand `~` when it
+ * appears unquoted. Splitting `$HOME` out into a double-quoted segment
+ * (still expands, but is safe from word-splitting/globbing) and leaving the
+ * rest single-quoted preserves the original quoting safety while letting
+ * `~` resolve correctly; adjacent quoted segments concatenate into one
+ * shell word, so `"$HOME"'/workspace/repo'` is exactly one argument.
+ */
+function toRemotePathExpr(targetPath: string): string {
+  if (targetPath === '~') return '"$HOME"';
+  if (targetPath.startsWith('~/')) return `"$HOME"'${targetPath.slice(1)}'`;
+  return `'${targetPath}'`;
+}
+
 export class RemotePathResolver implements IPathResolver {
   constructor(private transport: IServerTransport) {}
 
@@ -31,7 +48,7 @@ export class RemotePathResolver implements IPathResolver {
     // assumption already made elsewhere in this module) requires every path
     // component including the last to exist, so a missing target fails here
     // instead of returning a plausible-looking but unverified path.
-    const result = await this.transport.exec(`realpath -e '${targetPath}'`);
+    const result = await this.transport.exec(`realpath -e ${toRemotePathExpr(targetPath)}`);
     const resolved = result.stdout.trim();
     if (result.code !== 0 || !resolved) {
       throw new Error(`realpath failed for '${targetPath}'`);

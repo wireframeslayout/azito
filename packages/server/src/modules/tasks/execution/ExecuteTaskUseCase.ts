@@ -176,6 +176,25 @@ export class ExecuteTaskUseCase {
     return this.pathResolverFactory.create(server.type, transport);
   }
 
+  /**
+   * Single choke point for the containment check every path that decides
+   * where to launch/resume a worker must go through (Issue #27). Skips (no
+   * throw) when either side is unset: `allowedRoot` unset means the project
+   * has no configured boundary to enforce (legacy behavior preserved),
+   * `candidateDir` unset means there is nothing to validate. Callers own
+   * their own failure handling (log/fail-task/cleanup) since that differs
+   * by call site — this only resolves+verifies.
+   */
+  private async assertDirectoryContained(
+    server: ServerConfig,
+    candidateDir: string | null | undefined,
+    allowedRoot: string | null | undefined,
+    label: string,
+  ): Promise<void> {
+    if (!candidateDir || !allowedRoot) return;
+    await assertPathContained(this.getPathResolver(server), candidateDir, allowedRoot, label);
+  }
+
   private appendLog(taskId: number, unitId: number, type: LogType, content: unknown): void {
     this.logRepo.append(taskId, unitId, type, content);
     this.events.emit('log', { taskId, unitId, type, content, createdAt: new Date().toISOString() });
@@ -330,7 +349,7 @@ export class ExecuteTaskUseCase {
     if (workingDir) {
       if (task.workingDirectory && allowedRoot) {
         try {
-          await assertPathContained(this.getPathResolver(server), task.workingDirectory, allowedRoot, 'task working directory');
+          await this.assertDirectoryContained(server, task.workingDirectory, allowedRoot, 'task working directory');
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           this.appendLog(taskId, unitId, 'command', {
@@ -376,14 +395,32 @@ export class ExecuteTaskUseCase {
 
       if (allowedRoot) {
         try {
-          await assertPathContained(this.getPathResolver(server), wt.path, allowedRoot, 'worktree path');
+          await this.assertDirectoryContained(server, wt.path, allowedRoot, 'worktree path');
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           this.appendLog(taskId, unitId, 'command', {
             type: 'worktree_path_rejected',
             message,
           });
-          this.taskRepo.update(taskId, { status: 'failed' as TaskStatus, tmuxWindow: null } as Partial<Task>);
+          // The worktree was already created on disk (and its branch checked
+          // out) before this check ran — leaving it behind would leak a real
+          // worktree + branch for a task that never got permission to use it
+          // (Issue #27 review finding 3). Cleanup failure is logged, not
+          // swallowed, since it means the leaked worktree needs manual attention.
+          try {
+            await this.getWorktreeService(server).remove(workingDir, wt.path);
+          } catch (cleanupErr) {
+            this.appendLog(taskId, unitId, 'command', {
+              type: 'worktree_cleanup_failed',
+              message: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
+            });
+          }
+          this.taskRepo.update(taskId, {
+            status: 'failed' as TaskStatus,
+            tmuxWindow: null,
+            worktreePath: null,
+            worktreeBranch: null,
+          } as Partial<Task>);
           try { await this.tmux.killWindow(server, `${tmuxSession}:${windowName}`); } catch {}
           throw new Error(`Worktree path rejected: ${message}`);
         }
@@ -616,14 +653,32 @@ export class ExecuteTaskUseCase {
     const target = await this.tmux.resolvePaneId(server, windowTarget);
 
     if (!windowExists) {
-      // Use worktree path if available, otherwise fall back to working directory
+      // Use worktree path if available, otherwise fall back to working directory.
+      // Neither field is trusted just because it resolves/exists on disk: both
+      // task.worktreePath and task.workingDirectory are settable via
+      // PUT /api/tasks/:id, so without the containment check below a caller
+      // could simply walk around the boundary execute() enforces by editing
+      // the task and then triggering a follow-up instead of a fresh execute()
+      // (Issue #27 review finding 1).
+      const followUpProject = this.projectRepo.findById(task.projectId);
+      const followUpProjectServerForDir = followUpProject ? this.projectServerRepo.find(task.projectId, serverName) : null;
+      const followUpAllowedRoot = followUpProjectServerForDir?.workingDirectory || null;
       const followUpDir = task.worktreePath && await this.getWorktreeService(server).exists(task.worktreePath)
         ? task.worktreePath
-        : (() => {
-            const project = this.projectRepo.findById(task.projectId);
-            const projectServer = project ? this.projectServerRepo.find(task.projectId, serverName) : null;
-            return task.workingDirectory || projectServer?.workingDirectory;
-          })();
+        : (task.workingDirectory || followUpProjectServerForDir?.workingDirectory);
+
+      if (followUpDir && followUpAllowedRoot) {
+        try {
+          await this.assertDirectoryContained(server, followUpDir, followUpAllowedRoot, 'follow-up working directory');
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          this.appendLog(taskId, unitId, 'command', { type: 'working_directory_rejected', message });
+          this.taskRepo.update(taskId, { status: 'failed' as TaskStatus, tmuxWindow: null } as Partial<Task>);
+          try { await this.tmux.killWindow(server, `${tmuxSession}:${windowName}`); } catch {}
+          throw new Error(`Follow-up working directory rejected: ${message}`);
+        }
+      }
+
       if (followUpDir) {
         try {
           await this.tmux.sendKeys(server, target, [`cd ${followUpDir}`, 'Enter']);

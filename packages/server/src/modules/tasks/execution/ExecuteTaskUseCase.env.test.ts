@@ -852,6 +852,103 @@ describe('ExecuteTaskUseCase working-directory containment (Issue #27)', () => {
     // skipped, so execution proceeds as before this change.
     expect(windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({ workerType: 'claude', workerModel: 'opus' }));
   });
+
+  it('cleans up the worktree (removes it, clears worktreePath/worktreeBranch) when the post-creation containment check rejects it', async () => {
+    const unit = makeUnit({ id: 15, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 6, serverName: 'local-server', unitId: 15 });
+    const { useCase, taskRepo, windowRepo, worktreeServiceFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: { workingDirectory: allowedRoot, branch: null, tmuxSession: 'azito' },
+    });
+    const worktreeRemove = vi.fn(async () => {});
+    worktreeServiceFactory.create.mockReturnValue({
+      create: vi.fn(async () => ({ path: outsideDir, branch: 'task/6-slug' })),
+      remove: worktreeRemove,
+    });
+
+    await expect(useCase.execute(15, 6)).rejects.toThrow(/Worktree path rejected/);
+
+    expect(worktreeRemove).toHaveBeenCalledWith(allowedRoot, outsideDir);
+    expect(taskRepo.update).toHaveBeenCalledWith(6, expect.objectContaining({
+      status: 'failed',
+      worktreePath: null,
+      worktreeBranch: null,
+    }));
+    expect(windowRepo.add).not.toHaveBeenCalled();
+  });
+});
+
+describe('ExecuteTaskUseCase.followUp working-directory containment (Issue #27 review finding 1)', () => {
+  let allowedRoot: string;
+  let outsideDir: string;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    allowedRoot = mkdtempSync(path.join(tmpdir(), 'azito-followup-root-'));
+    outsideDir = mkdtempSync(path.join(tmpdir(), 'azito-followup-outside-'));
+  });
+
+  afterEach(() => {
+    rmSync(allowedRoot, { recursive: true, force: true });
+    rmSync(outsideDir, { recursive: true, force: true });
+  });
+
+  it('rejects a task.workingDirectory that escapes the project working directory (no tmux window exists yet)', async () => {
+    const unit = makeUnit({ id: 20, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 7, serverName: 'local-server', unitId: 20, tmuxWindow: null, workingDirectory: outsideDir });
+    const { useCase, taskRepo, worktreeServiceFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: { workingDirectory: allowedRoot, branch: null, tmuxSession: 'azito' },
+    });
+    worktreeServiceFactory.create.mockReturnValue({ exists: vi.fn(async () => false) });
+
+    await expect(useCase.followUp(20, 7, 'please continue')).rejects.toThrow(/Follow-up working directory rejected/);
+
+    expect(taskRepo.update).toHaveBeenCalledWith(7, expect.objectContaining({ status: 'failed' }));
+  });
+
+  it('rejects a persisted task.worktreePath that exists on disk but resolves outside the project working directory (regression: existence was previously treated as trust)', async () => {
+    const unit = makeUnit({ id: 21, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 8, serverName: 'local-server', unitId: 21, tmuxWindow: null, worktreePath: outsideDir });
+    const { useCase, taskRepo, worktreeServiceFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: { workingDirectory: allowedRoot, branch: null, tmuxSession: 'azito' },
+    });
+    // The worktree "exists" on disk (persisted path is real) — the point of
+    // this test is that existence alone must not be trusted as containment.
+    worktreeServiceFactory.create.mockReturnValue({ exists: vi.fn(async () => true) });
+
+    await expect(useCase.followUp(21, 8, 'please continue')).rejects.toThrow(/Follow-up working directory rejected/);
+
+    expect(taskRepo.update).toHaveBeenCalledWith(8, expect.objectContaining({ status: 'failed' }));
+  });
+
+  it('allows a task.workingDirectory nested inside the project working directory', async () => {
+    const unit = makeUnit({ id: 22, workerType: 'claude', workerModel: 'opus' });
+    const nested = path.join(allowedRoot, 'nested-followup');
+    mkdirSync(nested);
+    const task = makeTask({ id: 9, serverName: 'local-server', unitId: 22, tmuxWindow: null, workingDirectory: nested });
+    const { useCase, taskRepo, worktreeServiceFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: { workingDirectory: allowedRoot, branch: null, tmuxSession: 'azito' },
+    });
+    worktreeServiceFactory.create.mockReturnValue({ exists: vi.fn(async () => false) });
+
+    await useCase.followUp(22, 9, 'please continue');
+
+    // Containment passed — the run reaches the normal in_progress transition
+    // rather than being short-circuited into 'failed'.
+    expect(taskRepo.updateStatus).toHaveBeenCalledWith(9, 'in_progress');
+    expect(taskRepo.update).not.toHaveBeenCalledWith(9, expect.objectContaining({ status: 'failed' }));
+  });
 });
 
 describe('ExecuteTaskUseCase stale window cleanup', () => {
