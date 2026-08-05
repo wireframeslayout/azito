@@ -8,7 +8,7 @@
 >   既定候補であることを示す。phase タグを持たない Sidekick は汎用スキル（イシュー作成など）
 > - **Unit** -- **オペレーションを実行するチーム**。ワークフロー定義（フェーズごとの Sidekick 割当・
 >   有効/無効、システムプロンプト、self-review・サブエージェント設定）と、実行ランタイム（ワーカー種別・
->   モデル・追加引数・オーケストレーターモード）の両方を1つのエンティティとして持つ
+>   モデル・追加引数・UnitType）の両方を1つのエンティティとして持つ
 >   （Refine A/B で分離した Operation と WorkerProfile を Refine B で再統合したもの）
 > - **Operation** -- Unit が**タスクを遂行する1回の実行ラン**。DB に永続化される設定エンティティでは
 >   なく、`GET /api/operations` が返す「現在実行中の Unit×Task の組」がその実体
@@ -82,7 +82,7 @@ isDefault: false                     # 持っている phase タグそれぞれ�
 - ユーザー層のみ削除可能。ビルトインとの差分を取り消して「ビルトインに戻す」には、ユーザー層の
   コピーを削除する（`DELETE /api/sidekicks/:name`、または UI の「Revert to built-in」）
 
-### ビルトイン6種
+### ビルトイン7種
 
 | name | tags | 内容 |
 |---|---|---|
@@ -91,7 +91,8 @@ isDefault: false                     # 持っている phase タグそれぞれ�
 | `reviewing-default` | reviewing | 自身の実装をレビューし問題を修正する |
 | `testing-default` | testing | 実装したコードのテストを実行する |
 | `pushing-default` | pushing | commit/push/PR作成をスクリプト実行（`scripts/push.sh`）で行う |
-| `issue-default` | (なし) | イシューを作成する（`/azt-issue` が薄いラッパーとして利用） |
+| `issue-default` | issue | イシューを作成する（`/azt-issue` が薄いラッパーとして利用） |
+| `browser-ops` | browser | ブラウザ操作（CDP 接続ヘルパーとログイン・ログ衛生規約）を提供する |
 
 ### テンプレート変数
 
@@ -136,13 +137,15 @@ isDefault: false                     # 持っている phase タグそれぞれ�
 **実行プロトコル**は本文に書かず、実行文脈（`executionEnvelope.ts`）が本文の外側に「封筒」として
 付加する（Issue #263 Refine D）。
 
-- **state-machine**（`PhaseLoopRunner`）: `AZITO_DONE_*` / `AZITO_QUESTIONS_*` / `AZITO_TEST_FAILED_*`
-  マーカーと `AZITO_PHASE_SUMMARY` 行を含む `<completion_signal>` ブロックを本文の末尾に付加する。
-  質問セクション・テスト失敗セクションはフェーズごとの `signalCapabilitiesForPhase`（planning/
-  implementing は質問可、testing はテスト失敗報告可、reviewing/pushing はどちらも無し）に応じて
-  条件付きで含まれる
+- **state-machine**（`PhaseLoopRunner`、`workerExecutionMode: 'tmux-pipe'` の場合）:
+  `AZITO_DONE_*` / `AZITO_QUESTIONS_*` / `AZITO_TEST_FAILED_*` マーカーと `AZITO_PHASE_SUMMARY` 行を
+  含む `<completion_signal>` ブロックを本文の末尾に付加する。質問セクション・テスト失敗セクションは
+  UnitTypePhase 定義の `questions` / `testFailed` フラグに基づいて条件付きで含まれる
+- **http-signal**（`PhaseLoopRunner`、`workerExecutionMode: 'http-signal'` の場合）:
+  `azitoctl` CLI を通じて完了・質問・テスト失敗を報告する封筒を付加する。シグナルファイルへの
+  マーカー書き込みの代わりに `azitoctl complete` / `azitoctl questions` コマンドで通知する方式
 - **skill**（`/azt-plan` 等の harness スキル、`RenderSkillPromptUseCase` 経由）: 自然言語で
-  「完了したら報告」「不明点はユーザーに直接質問」等を付加する。同じ capability 判定を使う
+  「完了したら報告」「不明点はユーザーに直接質問」等を付加する。同じ UnitTypePhase フラグで判定する
 - **standalone**（`GET /api/sidekicks/:name?render=1`、`/azt-sidekick` の直接実行）: 封筒は一切
   適用されない。本文がそのまま返る
 
@@ -171,21 +174,22 @@ Unit は「タスクをどう進めるか」（振る舞い）と「何で進め
 | 項目 | 説明 |
 |---|---|
 | Name | Unit 名 |
+| UnitType | フェーズ構成を定義する UnitType 名（`devops` 等、`harness/unit-types/*.toml` で定義） |
 | Worker Type / Worker Model / Worker Extra Args | 実行ランタイム。`claude` / `codex` / `generic` とそのモデル・追加 CLI 引数 |
-| Orchestrator Mode | `state-machine`（フェーズベース、固定フロー）または `llm`（LLM ループ、柔軟だが API トークンを消費） |
-| System Prompt | オーケストレーターが各イテレーションで参照するベースプロンプト（省略可） |
+| Worker Execution Mode | ワーカー出力の監視方式（`tmux-pipe` / `http-signal`） |
+| Worker Runtime | ワーカーランタイム（`tui`） |
+| System Prompt | ワーカーが各フェーズで参照するベースプロンプト（省略可） |
 | Self-Review Max Attempts | self-review（reviewing フェーズでの差し戻し）の既定最大試行回数。タスク単位で上書き可 |
 | Review Subagent / Implement Subagent | レビュー・実装作業をサブエージェントへ委譲する設定（provider/model）。タスク単位で上書き可 |
 | Phase Config | フェーズごとの Sidekick 割当・有効/無効 |
 
-- **State Machine モード**: `planning → implementing → reviewing → testing → pushing` を
-  `phaseConfig` に従って順に遷移する
-- **LLM モード**: LLM API を直接使い、最大 30 イテレーションのループでオーケストレーター LLM が
-  次のアクション（`prompt` / `done` / `error`）を判断する
+フェーズ順序は Unit の `unitType` が参照する UnitType 定義（TOML）で決まる。デフォルトの `devops`
+タイプでは planning → implementing → reviewing → testing → pushing の順に `phaseConfig` に従って
+遷移する
 
 ### phase_config によるフェーズ設定
 
-`phaseConfig` は各フェーズ（`planning` / `implementing` / `reviewing` / `testing` / `pushing`）に対し、
+`phaseConfig` は UnitType で定義された各フェーズに対し、
 以下を指定できる:
 
 ```jsonc

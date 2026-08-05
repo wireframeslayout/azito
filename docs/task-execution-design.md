@@ -41,8 +41,7 @@ UnitType (TOML 定義: harness/unit-types/*.toml)
                     Worker (claude/codex/generic) に送信
 
 WorkerRuntime (IWorkerRuntime)
-  ├── TuiWorkerRuntime    ← tui-supervisor ベース（ローカルサーバー）
-  └── LegacyWorkerRuntime ← 旧 tmux 直接操作方式
+  └── TuiWorkerRuntime    ← tui-supervisor ベース（ローカルサーバー）
 ```
 
 ## 主要コンポーネント
