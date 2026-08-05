@@ -153,6 +153,30 @@ describe('RemotePathResolver', () => {
     expect(await resolver.resolveRealPath(evil)).toBe('/home/user/proj');
   });
 
+  it('preserves trailing whitespace in the resolved path instead of trimming it away (regression: `.trim()` on `pwd -P` output silently changed a root ending in a space into a different, less-restrictive directory, letting paths under the untrimmed sibling pass containment)', async () => {
+    const dir = '/srv/project ';
+    const transport = mockTransport((cmd) => {
+      expect(cmd).toBe(`cd -- '${dir}' && pwd -P`);
+      return { stdout: `${dir}\n`, stderr: '', code: 0 };
+    });
+    const resolver = new RemotePathResolver(transport);
+    expect(await resolver.resolveRealPath(dir)).toBe(dir);
+  });
+
+  it('strips a trailing CRLF line terminator from `pwd -P` output, not just LF', async () => {
+    const transport = mockTransport(() => ({ stdout: '/work/proj\r\n', stderr: '', code: 0 }));
+    const resolver = new RemotePathResolver(transport);
+    expect(await resolver.resolveRealPath('/work/proj')).toBe('/work/proj');
+  });
+
+  it('rejects a path containing a line terminator without calling the transport (CR/LF cannot be told apart from the pwd output terminator, so it cannot be recovered unambiguously)', async () => {
+    const transport = mockTransport(() => ({ stdout: '', stderr: '', code: 0 }));
+    const resolver = new RemotePathResolver(transport);
+    await expect(resolver.resolveRealPath('/work/pro\nject')).rejects.toThrow('line terminator');
+    await expect(resolver.resolveRealPath('/work/pro\rject')).rejects.toThrow('line terminator');
+    expect(transport.exec).not.toHaveBeenCalled();
+  });
+
   it('passes a path starting with `-` after `--` so it cannot be parsed as a `cd` option', async () => {
     const dashPath = '-rf /work/proj';
     const transport = mockTransport((cmd) => {
@@ -277,6 +301,20 @@ describe('assertPathContained', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it('rejects a path under a same-name sibling directory when allowedRoot resolves with trailing whitespace (regression: `.trim()`-ing `pwd -P` output used to collapse `/srv/project ` (trailing space) into `/srv/project`, letting `/srv/project/evil` — a different, unconfigured directory — pass containment)', async () => {
+    const rootTransport = mockTransport(() => ({ stdout: '/srv/project \n', stderr: '', code: 0 }));
+    const targetTransport = mockTransport(() => ({ stdout: '/srv/project/evil\n', stderr: '', code: 0 }));
+    const rootResolver = new RemotePathResolver(rootTransport);
+    // assertPathContained takes a single resolver; simulate the pair of
+    // real-path lookups directly to isolate the trim-vs-trailing-terminator
+    // behavior being tested (both would go through the same RemotePathResolver
+    // in production, one call per path).
+    const resolvedRoot = await rootResolver.resolveRealPath('/srv/project ');
+    expect(resolvedRoot).toBe('/srv/project ');
+    const resolvedTarget = await new RemotePathResolver(targetTransport).resolveRealPath('/srv/project/evil');
+    expect(isPathContained({ target: resolvedTarget, allowedRoot: resolvedRoot })).toBe(false);
   });
 
   it('still accepts an ordinary safe resolved path (regression guard against over-rejecting the common case)', async () => {

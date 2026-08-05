@@ -56,6 +56,15 @@ export class RemotePathResolver implements IPathResolver {
     // command).
     if (targetPath.length === 0) throw new Error('targetPath must not be empty');
     if (targetPath.includes('\0')) throw new Error('targetPath must not contain a NUL byte');
+    // `pwd -P`'s stdout is trimmed of only its trailing line terminator below
+    // (not `.trim()`, which would also eat legitimate leading/trailing
+    // whitespace from the resolved path itself). A path containing CR/LF
+    // cannot be told apart from the terminator that ends the command's
+    // output, so there is no way to recover it unambiguously from transport
+    // stdout — reject it here rather than risk stripping real path bytes.
+    if (/\r|\n/.test(targetPath)) {
+      throw new Error('targetPath must not contain a line terminator');
+    }
     // `realpath -e` is GNU coreutils only — the BSD/macOS `realpath` shipped
     // with the darwin-arm64 release bundle has no `-e` flag, so remote
     // servers on macOS failed every working-directory-bound task run
@@ -68,7 +77,12 @@ export class RemotePathResolver implements IPathResolver {
     // before the path stops a value starting with `-` (e.g. `-rf`) from
     // being parsed as a `cd` option.
     const result = await this.transport.exec(`cd -- ${toRemotePathExpr(targetPath)} && pwd -P`);
-    const resolved = result.stdout.trim();
+    // Strip only the trailing line terminator `pwd` appends, not
+    // `String.trim()` — `.trim()` would also remove leading/trailing
+    // whitespace that is part of a legitimate directory name, silently
+    // resolving to a different (and possibly unintended) path than the one
+    // that was actually verified (Issue #27 review finding).
+    const resolved = result.stdout.replace(/\r?\n$/, '');
     if (result.code !== 0 || !resolved) {
       throw new Error(`realpath failed for '${targetPath}'`);
     }
