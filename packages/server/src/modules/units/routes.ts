@@ -4,12 +4,14 @@ import type { ITaskRepository } from '../tasks/Task';
 import type { TaskStatus } from '../tasks/TaskStatus';
 import type { IExecutionLogRepository } from '../tasks/ExecutionLog';
 import type { ExecuteTaskUseCase } from '../tasks/execution/ExecuteTaskUseCase';
+import type { IProjectRepository } from '../projects/Project';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { PhaseConfig, PhaseEntryConfig } from '../sidekicks/PhaseConfig';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import { resolvePhaseSidekick } from '../sidekicks/resolvePhaseSidekick';
 import { ResourceExhaustedError } from '../servers/resources/ResourceGuard';
 import { ExecutionGateDeniedError, ExecutionGatePendingApprovalError, hashTaskDescription } from '../tasks/execution/ExecutionGate';
+import { resolveUnitId } from '../tasks/execution/TaskExecutionEnv';
 
 // ─── Types ───
 
@@ -18,6 +20,7 @@ export interface UnitsRouteOptions {
   taskRepo: ITaskRepository;
   logRepo: IExecutionLogRepository;
   executeTaskUseCase: ExecuteTaskUseCase;
+  projectRepo: IProjectRepository;
   sidekickLoader: SidekickPackageLoader;
   unitTypeLoader: UnitTypeLoader;
 }
@@ -100,7 +103,7 @@ function parseWorkerRuntimeInput(raw: unknown): WorkerRuntime | undefined {
 // ─── Plugin ───
 
 const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, done) => {
-  const { unitRepo, taskRepo, logRepo, executeTaskUseCase, sidekickLoader, unitTypeLoader } = opts;
+  const { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, sidekickLoader, unitTypeLoader } = opts;
 
   // ── GET /api/units ──
   fastify.get('/api/units', async () => {
@@ -386,13 +389,34 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
       const unit = unitRepo.findById(id);
       if (!unit) return reply.status(404).send({ error: 'Unit not found' });
 
-      const { taskId, approved } = request.body as { taskId?: number; approved?: boolean };
-      if (!taskId) return reply.status(400).send({ error: 'taskId required' });
-      if (approved === undefined) return reply.status(400).send({ error: 'approved required' });
+      // Runtime-validated, not just type-asserted: this endpoint flips a
+      // security gate, so a truthy-but-wrong body (e.g. `approved: "false"`,
+      // a string — truthy, and would have slipped past a bare `undefined`
+      // check) must not be able to approve execution (Issue #328 review).
+      const body = request.body as { taskId?: unknown; approved?: unknown };
+      const { taskId, approved } = body;
+      if (typeof taskId !== 'number' || !Number.isInteger(taskId) || taskId <= 0) {
+        return reply.status(400).send({ error: 'taskId must be a positive integer' });
+      }
+      if (typeof approved !== 'boolean') {
+        return reply.status(400).send({ error: 'approved must be a boolean' });
+      }
 
       const task = taskRepo.findById(taskId);
       if (!task || task.status !== ('pending_approval' as TaskStatus)) {
         return reply.status(400).send({ error: 'Task is not pending execution approval' });
+      }
+
+      // The route's :id and the task's actual Unit must agree — otherwise an
+      // approval submitted against the wrong Unit id would still be honored
+      // (and would resume the task via `id`, not the Unit it's really
+      // governed by/logged under). Same resolution ExecuteTaskUseCase uses
+      // (task.unitId ?? project.defaultUnitId), so this doesn't invent a new
+      // "which Unit owns this task" rule.
+      const project = projectRepo.findById(task.projectId);
+      const resolvedUnitId = resolveUnitId(task, project);
+      if (resolvedUnitId !== id) {
+        return reply.status(400).send({ error: `Task ${taskId} belongs to unit ${resolvedUnitId ?? 'none'}, not unit ${id}` });
       }
 
       if (!approved) {

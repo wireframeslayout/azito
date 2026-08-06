@@ -103,6 +103,12 @@ function makeOpts(task: Task, unit: Unit): UnitsRouteOptions {
       stop: vi.fn(),
       resumeStateMachine: vi.fn(async () => {}),
     } as unknown as UnitsRouteOptions['executeTaskUseCase'],
+    // defaultUnitId: null so the mismatch check falls back purely to
+    // task.unitId (set per-test via makeTask({ unitId })) — no test here
+    // relies on the project-default fallback path.
+    projectRepo: {
+      findById: vi.fn(() => ({ id: task.projectId, defaultUnitId: null })),
+    } as unknown as UnitsRouteOptions['projectRepo'],
     sidekickLoader: {} as unknown as UnitsRouteOptions['sidekickLoader'],
     unitTypeLoader: { get: vi.fn(() => null) } as unknown as UnitsRouteOptions['unitTypeLoader'],
   };
@@ -162,6 +168,50 @@ describe('POST /api/units/:id/approve-execution (Issue #328)', () => {
     expect(res.statusCode).toBe(200);
     expect(opts.taskRepo.updateStatus).toHaveBeenCalledWith(1, 'running');
     expect(opts.executeTaskUseCase.resumeStateMachine).toHaveBeenCalledWith(20, 1);
+    expect(opts.executeTaskUseCase.execute).not.toHaveBeenCalled();
+  });
+
+  it('rejects a string "false" for approved instead of treating it as truthy approval', async () => {
+    // `approved: "false"` used to pass the old `approved === undefined`
+    // check and then evaluate truthy in `if (!approved)`, silently approving
+    // execution (Issue #328 review).
+    const opts = makeOpts(makeTask({ status: 'pending_approval' }), makeUnit());
+    const app = Fastify();
+    await app.register(unitsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/units/20/approve-execution', payload: { taskId: 1, approved: 'false' } });
+
+    expect(res.statusCode).toBe(400);
+    expect(opts.taskRepo.updateStatus).not.toHaveBeenCalled();
+    expect(opts.executeTaskUseCase.execute).not.toHaveBeenCalled();
+  });
+
+  it('rejects a taskId that is not a positive integer', async () => {
+    const opts = makeOpts(makeTask({ status: 'pending_approval' }), makeUnit());
+    const app = Fastify();
+    await app.register(unitsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/units/20/approve-execution', payload: { taskId: -1, approved: true } });
+
+    expect(res.statusCode).toBe(400);
+    expect(opts.taskRepo.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('rejects when the task belongs to a different unit than the route id', async () => {
+    // Task belongs to unit 20 (makeTask default), but the request addresses
+    // unit 99 — must not approve/resume against the wrong unit.
+    const task = makeTask({ status: 'pending_approval', unitId: 20 });
+    const opts = makeOpts(task, makeUnit({ id: 99 }));
+    const app = Fastify();
+    await app.register(unitsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/units/99/approve-execution', payload: { taskId: 1, approved: true } });
+
+    expect(res.statusCode).toBe(400);
+    expect(opts.taskRepo.updateStatus).not.toHaveBeenCalled();
     expect(opts.executeTaskUseCase.execute).not.toHaveBeenCalled();
   });
 });
