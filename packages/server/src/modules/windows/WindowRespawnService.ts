@@ -14,13 +14,49 @@ import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
 import type { SessionCaptureService } from './SessionCaptureService';
 import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError } from '../tasks/execution/ExecutionGate';
-import { resolveExecutionManifest, hashExecutionManifest } from '../tasks/execution/ExecutionManifest';
+import { resolveExecutionManifest, hashExecutionManifest, type RespawnManifestInput } from '../tasks/execution/ExecutionManifest';
 import { resolveTmuxSession } from '../tasks/execution/TaskExecutionEnv';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Builds the `RespawnManifestInput` (ExecutionManifest.ts) for `win` — the
+ * subset of a Window row's fields that decide what a respawn actually
+ * launches. Exported (not a private method) because it must be computed
+ * TWICE from the exact same Window row for the fingerprint to line up: once
+ * here when respawn() itself runs the gate, and once by
+ * units/routes.ts's approve-execution handler when it records the approval
+ * fingerprint for a blocked 'respawn' operation (Issue #328 eighth-round
+ * review finding 2) — a second, slightly-different reimplementation at the
+ * approval site is exactly how this class of bug (module doc comment above)
+ * keeps recurring, so both call this one function.
+ *
+ * Mirrors the per-pane worker-type fallback restorePaneLayout()/
+ * setupSinglePane() below actually apply when respawning: the first pane
+ * inherits `win.workerType` when it has no pane-level override, every other
+ * pane has none unless explicitly set.
+ */
+export function buildRespawnManifestInput(win: Pick<Window, 'serverName' | 'workerModel' | 'workerType' | 'paneLayout'>): RespawnManifestInput {
+  if (win.paneLayout) {
+    const firstPaneIndex = win.paneLayout.panes[0]?.index;
+    return {
+      serverName: win.serverName,
+      workerModel: win.workerModel,
+      panes: win.paneLayout.panes.map((pane) => ({
+        index: pane.index,
+        workerType: pane.workerType || (pane.index === firstPaneIndex ? win.workerType : null),
+      })),
+    };
+  }
+  return {
+    serverName: win.serverName,
+    workerModel: win.workerModel,
+    panes: [{ index: 0, workerType: win.workerType }],
+  };
 }
 
 interface SupervisionContext {
@@ -103,7 +139,7 @@ export class WindowRespawnService {
       task = this.taskRepo.findById(win.taskId);
     }
     if (task) {
-      unitId = this.enforceExecutionGate(task, server, 'respawn', windowId);
+      unitId = this.enforceExecutionGate(task, server, 'respawn', windowId, buildRespawnManifestInput(win));
     }
 
     // Resolve and verify every working directory this respawn will `cd`
@@ -185,12 +221,25 @@ export class WindowRespawnService {
    * only meaningful for `'respawn'` — resumeLegacySession() has no Window
    * row to record, so it always passes `null` (see Task.pendingOperation's
    * write-site catalogue).
+   *
+   * `respawnInput` (built by buildRespawnManifestInput() above from the
+   * Window actually being respawned) is folded into the resolved manifest
+   * before hashing so the fingerprint covers what THIS respawn will really
+   * launch (target server, worker model, per-pane worker types) — not just
+   * what task/Unit resolution alone would produce, which can diverge when a
+   * stale Window still lives on a different server than the task now
+   * resolves to (Issue #328 eighth-round review finding 2). Omitted (kept
+   * `undefined`) for `'recover_session_legacy'`, which has no Window row and
+   * whose target server already comes from the same resolveTaskServerName()
+   * call the manifest itself uses (units/routes.ts's approve-execution
+   * dispatch), so there is nothing to diverge from.
    */
   private enforceExecutionGate(
     task: Task,
     server: ServerConfig,
     operation: 'respawn' | 'recover_session_legacy',
     windowId: number | null,
+    respawnInput?: RespawnManifestInput,
   ): number | null {
     const { manifest, unit, projectServer } = resolveExecutionManifest(task, {
       unitRepo: this.unitRepo,
@@ -198,7 +247,7 @@ export class WindowRespawnService {
       projectServerRepo: this.projectServerRepo,
       unitTypeLoader: this.unitTypeLoader,
       sidekickLoader: this.sidekickLoader,
-    });
+    }, respawnInput);
     const unitId = unit?.id ?? null;
     const gate = checkExecutionGate(task, projectServer, hashExecutionManifest(manifest));
     if (gate.allowed) return unitId;

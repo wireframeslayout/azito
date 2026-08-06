@@ -9,6 +9,7 @@ import type { IProjectServerRepository } from '../projects/ProjectServer';
 import type { IServerRepository } from '../servers/Server';
 import type { IWindowRepository } from '../windows/Window';
 import type { WindowRespawnService } from '../windows/WindowRespawnService';
+import { buildRespawnManifestInput } from '../windows/WindowRespawnService';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { PhaseConfig, PhaseEntryConfig } from '../sidekicks/PhaseConfig';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
@@ -482,6 +483,16 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
       // freshness the way the fingerprint hash does; see the 'restore'
       // branch below for the field that DOES need a refetch.
       const pendingWindowId = task.pendingOperationWindowId;
+      // Resolved once, up front, and reused both for the approval
+      // fingerprint below AND the dispatch further down — respawn() itself
+      // hashes `buildRespawnManifestInput(win)` into its gate check (Issue
+      // #328 eighth-round review finding 2), so the fingerprint this handler
+      // records must be built from the exact same Window row or the
+      // just-approved respawn would immediately re-hit 'pending_approval'
+      // the moment it actually runs (respawn's own self-invalidation
+      // failure mode, the same class of bug as the sidekicks-slice fix in
+      // ExecutionManifest.ts).
+      const respawnWindow = operation === 'respawn' && pendingWindowId !== null ? windowRepo.findById(pendingWindowId) : null;
       // The status the gate overwrote with 'pending_approval' — every
       // operation that doesn't manage its own status transition on success
       // (see the transition table) restores this instead of leaving the task
@@ -519,7 +530,11 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
       // project_servers row's config, see ExecutionManifest.ts — will
       // invalidate this and require approval again.
       logRepo.append(taskId, id, 'status_change', { status: 'execution_approved' });
-      const { manifest } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader });
+      const { manifest } = resolveExecutionManifest(
+        task,
+        { unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader },
+        respawnWindow ? buildRespawnManifestInput(respawnWindow) : undefined,
+      );
       taskRepo.update(taskId, {
         executionApprovedFingerprintHash: hashExecutionManifest(manifest),
         pendingOperation: null,

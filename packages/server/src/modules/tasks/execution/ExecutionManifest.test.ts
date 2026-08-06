@@ -452,6 +452,75 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     expect(hashExecutionManifest(before)).not.toBe(hashExecutionManifest(after));
   });
 
+  // Issue #328 eighth-round review (top-priority acceptance criterion): the
+  // `sidekicks` list used to be sliced from task.currentPhase's resume point
+  // onward — but currentPhase moves forward on its own as an APPROVED run
+  // progresses (PhaseLoopRunner advances it between phases), so the mere act
+  // of running an approved task changed this manifest and self-invalidated
+  // the approval mid-run. These assert the manifest — and therefore the
+  // fingerprint — is identical regardless of where task.currentPhase points,
+  // as long as nothing a human would recognize as "what will run" changed.
+
+  it('advancing task.currentPhase from planning to implementing after approval does NOT invalidate it', () => {
+    const planningPhase = makeUnitTypePhase({ name: 'planning', tags: ['planning'] });
+    const implementingPhase = makeUnitTypePhase({ name: 'implementing', tags: ['implementing'] });
+    const unitType: UnitType = { name: 'devops', label: 'DevOps', phases: [planningPhase, implementingPhase] };
+    const fixture: Fixture = {
+      units: { 20: makeUnit() },
+      project: makeProject(),
+      projectServers: { 'test-server': makeProjectServer() },
+      unitTypes: { devops: unitType },
+      sidekicks: [
+        makeSidekick({ name: 'planning-default', tags: ['planning'], body: 'Plan it.' }),
+        makeSidekick({ name: 'implementing-default', tags: ['implementing'], body: 'Implement it.' }),
+      ],
+    };
+
+    // Approved while resuming at 'planning'.
+    const atPlanning = makeTask({ currentPhase: 'planning' });
+    const approvedHash = hashFor(atPlanning, fixture);
+
+    // PhaseLoopRunner advances currentPhase to 'implementing' as the run
+    // progresses — checkExecutionGate() re-resolves and re-hashes on the
+    // very next gate check (e.g. approve-plan's resumeStateMachine() call).
+    const atImplementing = { ...atPlanning, currentPhase: 'implementing', executionApprovedFingerprintHash: approvedHash };
+    const { manifest: manifestAtImplementing, projectServer } = resolveExecutionManifest(atImplementing, makeDeps(fixture));
+    const gate = checkExecutionGate(atImplementing, projectServer, hashExecutionManifest(manifestAtImplementing));
+
+    expect(hashExecutionManifest(manifestAtImplementing)).toBe(approvedHash);
+    expect(gate).toEqual({ allowed: true });
+  });
+
+  it('advancing task.currentPhase across a phase boundary while waiting_input does NOT invalidate a prior approval either', () => {
+    const planningPhase = makeUnitTypePhase({ name: 'planning', tags: ['planning'] });
+    const implementingPhase = makeUnitTypePhase({ name: 'implementing', tags: ['implementing'] });
+    const testingPhase = makeUnitTypePhase({ name: 'testing', tags: ['testing'] });
+    const unitType: UnitType = { name: 'devops', label: 'DevOps', phases: [planningPhase, implementingPhase, testingPhase] };
+    const fixture: Fixture = {
+      units: { 20: makeUnit() },
+      project: makeProject(),
+      projectServers: { 'test-server': makeProjectServer() },
+      unitTypes: { devops: unitType },
+      sidekicks: [
+        makeSidekick({ name: 'planning-default', tags: ['planning'], body: 'Plan it.' }),
+        makeSidekick({ name: 'implementing-default', tags: ['implementing'], body: 'Implement it.' }),
+        makeSidekick({ name: 'testing-default', tags: ['testing'], body: 'Test it.' }),
+      ],
+    };
+
+    const atImplementing = makeTask({ currentPhase: 'implementing', status: 'waiting_input' as Task['status'] });
+    const approvedHash = hashFor(atImplementing, fixture);
+
+    // The task's questions were answered and it resumed all the way into
+    // 'testing' by the time the gate is re-checked.
+    const atTesting = { ...atImplementing, currentPhase: 'testing', executionApprovedFingerprintHash: approvedHash };
+    const { manifest: manifestAtTesting, projectServer } = resolveExecutionManifest(atTesting, makeDeps(fixture));
+    const gate = checkExecutionGate(atTesting, projectServer, hashExecutionManifest(manifestAtTesting));
+
+    expect(hashExecutionManifest(manifestAtTesting)).toBe(approvedHash);
+    expect(gate).toEqual({ allowed: true });
+  });
+
   it('resolving the manifest twice for the same inputs yields the same Sidekick body digest (approving and immediately re-checking must not self-invalidate)', () => {
     const phase = makeUnitTypePhase({ name: 'implementing', tags: ['implementing'] });
     const unitType: UnitType = { name: 'devops', label: 'DevOps', phases: [phase] };

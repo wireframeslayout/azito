@@ -6,7 +6,7 @@ import type { IProjectServerRepository, ProjectServer } from '../../projects/Pro
 import type { PhaseConfig } from '../../sidekicks/PhaseConfig';
 import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoader';
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
-import { resolvePhaseSidekick, resolveCurrentPhaseIndex } from '../../sidekicks/resolvePhaseSidekick';
+import { resolvePhaseSidekick, resolveEnabledPhases } from '../../sidekicks/resolvePhaseSidekick';
 import { resolveUnitId, resolveTaskServerName, resolveBaseBranch } from './TaskExecutionEnv';
 
 /**
@@ -77,28 +77,41 @@ import { resolveUnitId, resolveTaskServerName, resolveBaseBranch } from './TaskE
  *   (resolveEnabledPhases) — reassigning a phase to a different package or
  *   toggling one off/on changes what runs without changing anything else on
  *   this list.
- * - sidekicks: the resolved Sidekick package for EVERY enabled phase from the
- *   resume point onward (resolveCurrentPhaseIndex — same "resume point"
- *   resolution PhaseLoopRunner.stateMachineLoop uses — sliced from there to
- *   the end of the enabled-phase list), in phase order. Seventh-round review:
- *   hashing only the immediate next phase's package let an approved task's
- *   LATER phases be swapped out after approval — PhaseLoopRunner advances
- *   through subsequent phases without re-checking the gate, so a package
- *   rewrite targeting e.g. the pushing phase while an approved task was still
- *   in planning would never invalidate approval and would still run
- *   unattended once reached. Hashing the whole ordered remainder closes that
- *   gap and also detects phases being reordered/added/removed via phaseConfig
- *   (a change unit.phaseConfig above already covers by itself, but the
- *   ordered list here is what makes a reordering-without-content-change
- *   visible too). Only a content digest of each package body is hashed (see
- *   hashExecutionManifest), not the full text — this is the instruction text
- *   actually sent to the worker; without it, editing a user-layer Sidekick
- *   package (`data/sidekicks/`) after approval could swap in arbitrary
- *   instructions post-approval with no fingerprint change at all. Resolution
- *   failure for a given phase (missing/misconfigured package) is tolerated
- *   here the same way a null unit/server is elsewhere — the real run's own
- *   resolvePhaseSidekick() call still fails fast; this manifest only needs to
- *   detect drift, not duplicate that validation.
+ * - sidekicks: the resolved Sidekick package for EVERY enabled phase of the
+ *   UnitType (resolveEnabledPhases), in the UnitType's declared order, in
+ *   phase order. Eighth-round review: this used to be sliced from the
+ *   "resume point" onward (resolveCurrentPhaseIndex, keyed off
+ *   task.currentPhase) — but task.currentPhase moves forward on every
+ *   ordinary run (PhaseLoopRunner advances it as phases complete), so that
+ *   slice changed on its own mid-run and self-invalidated an approval the
+ *   moment execution progressed past the approved phase (approve at
+ *   planning -> currentPhase becomes 'implementing' -> the very next gate
+ *   check hashes a shorter remainder and throws). Hashing ALL enabled
+ *   phases, unconditionally, removes that dependency on a value execution
+ *   itself mutates, while still catching every case the resume-point slice
+ *   was added for (seventh-round review): a package rewrite targeting a
+ *   later phase, or phases being reordered/added/removed via phaseConfig (a
+ *   change unit.phaseConfig above already covers by itself, but the ordered
+ *   list here is what makes a reordering-without-content-change visible
+ *   too) still changes this list regardless of where task.currentPhase
+ *   happens to be. Only a content digest of each package body is hashed
+ *   (see hashExecutionManifest), not the full text — this is the
+ *   instruction text actually sent to the worker; without it, editing a
+ *   user-layer Sidekick package (`data/sidekicks/`) after approval could
+ *   swap in arbitrary instructions post-approval with no fingerprint change
+ *   at all. Resolution failure for a given phase (missing/misconfigured
+ *   package) is tolerated here the same way a null unit/server is elsewhere
+ *   — the real run's own resolvePhaseSidekick() call still fails fast; this
+ *   manifest only needs to detect drift, not duplicate that validation.
+ * - respawn: present only when resolveExecutionManifest is called from
+ *   WindowRespawnService (see its own doc comment below) — null for every
+ *   other call site (ExecuteTaskUseCase, TaskRestoreService, the
+ *   approve-execution handler for non-respawn operations). Carries the
+ *   values that actually decide what a respawn launches (target server,
+ *   worker model, per-pane worker types) which live on the persisted
+ *   Window row, NOT on anything resolveUnitId/resolveTaskServerName touch
+ *   — see WindowRespawnService's module doc comment (Issue #328
+ *   eighth-round review finding 2) for why the two can diverge.
  *
  * Deliberately excluded (values that change on every run of an
  * ALREADY-approved task, or that a human never reviews as "what will run"):
@@ -128,6 +141,12 @@ import { resolveUnitId, resolveTaskServerName, resolveBaseBranch } from './TaskE
  * - source, sourceRef: `source` is already the one field this whole gate
  *   distrusts on principle (see Task.inputTrust's doc comment); neither is
  *   read by any prompt-building/targeting code path.
+ * - task.currentPhase: mutated by PhaseLoopRunner as an ALREADY-approved run
+ *   advances from phase to phase — the textbook case the exclusion list
+ *   above warns about. It used to influence this manifest indirectly (as
+ *   the slice point into `sidekicks`, see that field's doc comment above);
+ *   that was the eighth-round review's self-invalidation bug. Not read
+ *   anywhere in this file anymore.
  */
 
 export interface ResolvedExecutionManifest {
@@ -181,6 +200,23 @@ export interface ResolvedExecutionManifest {
     name: string | null;
     bodyDigest: string | null;
   }>;
+  respawn: RespawnManifestInput | null;
+}
+
+/**
+ * The subset of a persisted Window row's fields that decide what a respawn
+ * actually launches (target server, worker model, per-pane worker types) —
+ * see the `respawn` field's doc comment on ResolvedExecutionManifest above
+ * and WindowRespawnService's module doc comment for why these can diverge
+ * from what task/Unit resolution alone would produce. Built by
+ * WindowRespawnService from the Window it is about to respawn (this module
+ * must not import the `windows` module itself — see AGENTS.md's dependency
+ * direction rule: `windows` depends on `tasks`, not the reverse).
+ */
+export interface RespawnManifestInput {
+  serverName: string;
+  workerModel: string | null;
+  panes: Array<{ index: number; workerType: string | null }>;
 }
 
 export interface ExecutionManifestResolution {
@@ -218,8 +254,16 @@ export interface ExecutionManifestDeps {
  * historically tolerates a null Unit (an archived task whose Unit was
  * deleted), so this resolver must too, to stay a faithful mirror of what
  * execution actually does.
+ *
+ * `respawnInput` is optional and only ever passed by WindowRespawnService —
+ * every other call site omits it and gets `respawn: null` in the returned
+ * manifest (see the `respawn` field's doc comment above).
  */
-export function resolveExecutionManifest(task: Task, deps: ExecutionManifestDeps): ExecutionManifestResolution {
+export function resolveExecutionManifest(
+  task: Task,
+  deps: ExecutionManifestDeps,
+  respawnInput?: RespawnManifestInput,
+): ExecutionManifestResolution {
   const project = deps.projectRepo.findById(task.projectId);
   const unitId = resolveUnitId(task, project);
   const unit = unitId !== null ? deps.unitRepo.findById(unitId) : null;
@@ -235,12 +279,14 @@ export function resolveExecutionManifest(task: Task, deps: ExecutionManifestDeps
   const unitType = unit ? deps.unitTypeLoader.get(unit.unitType) : undefined;
   const sidekicks: ResolvedExecutionManifest['sidekicks'] = [];
   if (unit && unitType) {
-    // Every enabled phase from the resume point onward — not just the
-    // immediate next one — so a rewrite targeting a LATER phase invalidates
-    // approval too (see the module doc comment's "sidekicks" bullet,
-    // seventh-round review).
-    const { enabledPhases, index } = resolveCurrentPhaseIndex(unit.phaseConfig, unitType.phases, task.currentPhase);
-    for (const phase of enabledPhases.slice(index)) {
+    // EVERY enabled phase, unconditionally — not sliced from
+    // task.currentPhase's resume point. task.currentPhase moves forward on
+    // its own as an approved run progresses, so slicing from it made this
+    // list (and therefore the fingerprint) change on every ordinary phase
+    // transition, self-invalidating approval mid-run (eighth-round review;
+    // see the module doc comment's "sidekicks" bullet).
+    const enabledPhases = resolveEnabledPhases(unit.phaseConfig, unitType.phases);
+    for (const phase of enabledPhases) {
       const phaseDef = unitType.phases.find((p) => p.name === phase);
       if (!phaseDef) {
         sidekicks.push({ phase, name: null, bodyDigest: null });
@@ -303,6 +349,7 @@ export function resolveExecutionManifest(task: Task, deps: ExecutionManifestDeps
       sidekickPrompt: project?.sidekickPrompt ?? null,
     },
     sidekicks,
+    respawn: respawnInput ?? null,
   };
 
   return { manifest, project, unit, serverName, projectServer };
@@ -373,6 +420,19 @@ export function hashExecutionManifest(manifest: ResolvedExecutionManifest): stri
       name: s.name ?? '',
       bodyDigest: s.bodyDigest ?? '',
     })),
+    // null for every call site except WindowRespawnService (see the
+    // `respawn` field's doc comment on ResolvedExecutionManifest) — a
+    // stable `null` here for non-respawn resolutions means this addition
+    // does not change what any other call site hashes relative to omitting
+    // the key entirely, aside from the one-time fingerprint rotation adding
+    // any new key to this object always causes.
+    respawn: manifest.respawn
+      ? {
+          serverName: manifest.respawn.serverName,
+          workerModel: manifest.respawn.workerModel ?? '',
+          panes: manifest.respawn.panes.map((p) => ({ index: p.index, workerType: p.workerType ?? '' })),
+        }
+      : null,
   });
   return createHash('sha256').update(normalized).digest('hex');
 }

@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
-import { WindowRespawnService } from './WindowRespawnService';
+import { WindowRespawnService, buildRespawnManifestInput } from './WindowRespawnService';
+import { resolveExecutionManifest, hashExecutionManifest } from '../tasks/execution/ExecutionManifest';
 import type { Window, IWindowRepository } from './Window';
 import type { ServerConfig } from '../servers/Server';
 import type { ITaskRepository, Task } from '../tasks/Task';
@@ -656,6 +657,79 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
     } finally {
       rmSync(outsideDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('WindowRespawnService.respawn — respawn config fingerprint (Issue #328 eighth-round review finding 2)', () => {
+  // Mirrors buildService()'s own default deps (unwired unitTypeLoader/
+  // sidekickLoader, no projectServer row) so a hash computed here lines up
+  // with the hash the service computes internally during respawn().
+  function manifestDeps(unit: Unit | null) {
+    return {
+      unitRepo: { findById: () => unit } as unknown as IUnitRepository,
+      projectRepo: { findById: () => null } as unknown as IProjectRepository,
+      projectServerRepo: { find: () => null, findByProject: () => [] } as unknown as IProjectServerRepository,
+      unitTypeLoader: { get: () => undefined, getOrThrow: () => { throw new Error('not used in tests'); } } as any,
+      sidekickLoader: { findByName: () => null, findDefaultForTag: () => null, list: () => [] } as any,
+    };
+  }
+
+  it('a respawn approved for the CURRENT window config does not self-invalidate (top-priority acceptance criterion)', async () => {
+    const task = makeTask({ id: 5, unitId: 10, inputTrust: 'untrusted' });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ id: 1, taskId: 5, windowType: 'agent', workerType: 'claude', workerModel: 'opus' });
+
+    const { manifest } = resolveExecutionManifest(task, manifestDeps(unit), buildRespawnManifestInput(win));
+    const approvedHash = hashExecutionManifest(manifest);
+    const approvedTask = { ...task, executionApprovedFingerprintHash: approvedHash };
+
+    const { service, tmux } = buildService({ window: win, task: approvedTask, unit });
+
+    await service.respawn(1, makeServer());
+
+    expect(tmux.sendKeys).toHaveBeenCalled();
+  });
+
+  it("a window whose persisted worker config drifted since approval is blocked, not silently respawned with the drifted config (the mismatch this fix closes: approving what task/Unit resolution says vs. what the Window row actually launches)", async () => {
+    const task = makeTask({ id: 6, unitId: 10, inputTrust: 'untrusted' });
+    const unit = makeUnit({ id: 10 });
+    const approvedWin = makeWindow({ id: 1, taskId: 6, windowType: 'agent', workerType: 'claude', workerModel: 'opus' });
+
+    const { manifest } = resolveExecutionManifest(task, manifestDeps(unit), buildRespawnManifestInput(approvedWin));
+    const approvedHash = hashExecutionManifest(manifest);
+    const approvedTask = { ...task, executionApprovedFingerprintHash: approvedHash };
+
+    // The Window row persisted since approval now points at a different
+    // worker — same task/Unit resolution as before, so the OLD (bugged)
+    // manifest would have hashed identically and let this through.
+    const driftedWin = { ...approvedWin, workerType: 'codex' };
+    const { service, tmux, taskRepo } = buildService({ window: driftedWin, task: approvedTask, unit });
+
+    await expect(service.respawn(1, makeServer())).rejects.toThrow(/requires approval/);
+
+    expect(tmux.sendKeys).not.toHaveBeenCalled();
+    expect(taskRepo.update).toHaveBeenCalledWith(6, {
+      status: 'pending_approval',
+      pendingOperation: 'respawn',
+      pendingOperationWindowId: 1,
+      pendingOperationPriorStatus: 'open',
+    });
+  });
+
+  it('a window respawning on a different server than approved is blocked', async () => {
+    const task = makeTask({ id: 7, unitId: 10, inputTrust: 'untrusted' });
+    const unit = makeUnit({ id: 10 });
+    const approvedWin = makeWindow({ id: 1, taskId: 7, windowType: 'agent', workerType: 'claude', workerModel: 'opus', serverName: 'local-server' });
+
+    const { manifest } = resolveExecutionManifest(task, manifestDeps(unit), buildRespawnManifestInput(approvedWin));
+    const approvedHash = hashExecutionManifest(manifest);
+    const approvedTask = { ...task, executionApprovedFingerprintHash: approvedHash };
+
+    const driftedWin = { ...approvedWin, serverName: 'other-server' };
+    const { service, taskRepo } = buildService({ window: driftedWin, task: approvedTask, unit });
+
+    await expect(service.respawn(1, makeServer({ name: 'other-server' }))).rejects.toThrow(/requires approval/);
+    expect(taskRepo.update).toHaveBeenCalledWith(7, expect.objectContaining({ status: 'pending_approval', pendingOperation: 'respawn' }));
   });
 });
 
