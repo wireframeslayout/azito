@@ -425,7 +425,7 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
           // this the same as a GitHub/GitLab-sourced task regardless of what
           // `source`/`source_ref` end up being edited to later (Issue #328).
           inputTrust: 'untrusted',
-          executionApprovedDescriptionHash: null,
+          executionApprovedFingerprintHash: null,
         });
         return { ok: true, taskId, issue: { number: issue.number, title: issue.title } };
       } catch (err: unknown) {

@@ -41,7 +41,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     prUrl: null,
     agentSessionId: null,
     inputTrust: 'trusted',
-    executionApprovedDescriptionHash: null,
+    executionApprovedFingerprintHash: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -158,7 +158,7 @@ describe('POST /api/tasks — input_trust immutability (Issue #328)', () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(createCalls[0]).toMatchObject({ inputTrust: 'trusted', executionApprovedDescriptionHash: null });
+    expect(createCalls[0]).toMatchObject({ inputTrust: 'trusted', executionApprovedFingerprintHash: null });
   });
 });
 

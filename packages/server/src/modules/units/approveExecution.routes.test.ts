@@ -4,7 +4,7 @@ import unitsRoutes from './routes';
 import type { UnitsRouteOptions } from './routes';
 import type { Task } from '../tasks/Task';
 import type { Unit } from './Unit';
-import { hashTaskDescription } from '../tasks/execution/ExecutionGate';
+import { hashApprovedTaskFingerprint } from '../tasks/execution/ExecutionGate';
 
 // POST /api/units/:id/approve-execution — the human decision point for the
 // untrusted-input execution gate (Issue #328), mirroring approve-plan's
@@ -41,7 +41,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     prUrl: null,
     agentSessionId: null,
     inputTrust: 'untrusted',
-    executionApprovedDescriptionHash: null,
+    executionApprovedFingerprintHash: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -150,7 +150,7 @@ describe('POST /api/units/:id/approve-execution (Issue #328)', () => {
     const res = await app.inject({ method: 'POST', url: '/api/units/20/approve-execution', payload: { taskId: 1, approved: true } });
 
     expect(res.statusCode).toBe(200);
-    expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { executionApprovedDescriptionHash: hashTaskDescription('do the thing') });
+    expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { executionApprovedFingerprintHash: hashApprovedTaskFingerprint(task) });
     expect(opts.taskRepo.updateStatus).toHaveBeenCalledWith(1, 'open');
     expect(opts.executeTaskUseCase.execute).toHaveBeenCalledWith(20, 1);
     expect(opts.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();

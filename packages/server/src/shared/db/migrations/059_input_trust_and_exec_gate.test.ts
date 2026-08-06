@@ -114,14 +114,14 @@ function insertTask(db: Database.Database, overrides: { source?: string } = {}):
 }
 
 describe('migration 059: input_trust_and_exec_gate', () => {
-  it('adds tasks.input_trust defaulting to trusted, and execution_approved_description_hash', () => {
+  it('adds tasks.input_trust defaulting to trusted, and execution_approved_fingerprint_hash', () => {
     const db = buildSeededDb();
     const id = insertTask(db, { source: 'local' });
     m059.up(db);
 
-    const row = db.prepare('SELECT input_trust, execution_approved_description_hash FROM tasks WHERE id = ?').get(id) as Record<string, unknown>;
+    const row = db.prepare('SELECT input_trust, execution_approved_fingerprint_hash FROM tasks WHERE id = ?').get(id) as Record<string, unknown>;
     expect(row.input_trust).toBe('trusted');
-    expect(row.execution_approved_description_hash).toBeNull();
+    expect(row.execution_approved_fingerprint_hash).toBeNull();
   });
 
   it('backfills github/gitlab-sourced tasks to untrusted', () => {

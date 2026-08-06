@@ -45,7 +45,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     prUrl: null,
     agentSessionId: null,
     inputTrust: 'trusted',
-    executionApprovedDescriptionHash: null,
+    executionApprovedFingerprintHash: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -579,7 +579,7 @@ describe('ExecuteTaskUseCase execution gate (Issue #328)', () => {
   const gateProjectServer = { workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const };
 
   it('execute(): blocks an untrusted, unapproved task before touching tmux — marks pending_approval', async () => {
-    const task = makeTask({ serverName: 'local-server', unitId: 10, inputTrust: 'untrusted', executionApprovedDescriptionHash: null });
+    const task = makeTask({ serverName: 'local-server', unitId: 10, inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
     const { useCase, taskRepo, tmux } = buildUseCase({
       task,
       project: makeProject({ defaultUnitId: null }),
@@ -593,15 +593,15 @@ describe('ExecuteTaskUseCase execution gate (Issue #328)', () => {
     expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'pending_approval');
   });
 
-  it('execute(): allows an untrusted task whose approval hash matches the current description', async () => {
-    const { hashTaskDescription } = await import('./ExecutionGate.js');
+  it('execute(): allows an untrusted task whose approval hash matches the current fingerprint', async () => {
+    const { hashApprovedTaskFingerprint } = await import('./ExecutionGate.js');
     const task = makeTask({
       serverName: 'local-server',
       unitId: 10,
       description: 'do the thing',
       inputTrust: 'untrusted',
-      executionApprovedDescriptionHash: hashTaskDescription('do the thing'),
     });
+    task.executionApprovedFingerprintHash = hashApprovedTaskFingerprint(task);
     const { useCase, tmux } = buildUseCase({
       task,
       project: makeProject({ defaultUnitId: null }),
@@ -644,7 +644,7 @@ describe('ExecuteTaskUseCase execution gate (Issue #328)', () => {
   });
 
   it('followUp(): blocks resuming an untrusted task with a stale approval, before any tmux call', async () => {
-    const task = makeTask({ serverName: 'local-server', unitId: 10, tmuxWindow: 'task-1', inputTrust: 'untrusted', executionApprovedDescriptionHash: null });
+    const task = makeTask({ serverName: 'local-server', unitId: 10, tmuxWindow: 'task-1', inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
     const { useCase, taskRepo, tmux } = buildUseCase({
       task,
       project: makeProject({ defaultUnitId: null }),
@@ -660,7 +660,7 @@ describe('ExecuteTaskUseCase execution gate (Issue #328)', () => {
   });
 
   it('resumeStateMachine(): blocks resuming an untrusted task with a stale approval', async () => {
-    const task = makeTask({ serverName: 'local-server', unitId: 10, tmuxWindow: 'task-1', currentPhase: null, inputTrust: 'untrusted', executionApprovedDescriptionHash: null });
+    const task = makeTask({ serverName: 'local-server', unitId: 10, tmuxWindow: 'task-1', currentPhase: null, inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
     const { useCase, taskRepo } = buildUseCase({
       task,
       project: makeProject({ defaultUnitId: null }),

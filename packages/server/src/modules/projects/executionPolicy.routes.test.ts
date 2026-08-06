@@ -194,7 +194,7 @@ describe('POST /api/projects/:id/import-issue — marks the created task untrust
     expect(res.statusCode).toBe(200);
     expect(opts.taskRepo.create).toHaveBeenCalledWith(expect.objectContaining({
       inputTrust: 'untrusted',
-      executionApprovedDescriptionHash: null,
+      executionApprovedFingerprintHash: null,
       source: 'github',
     }));
   });

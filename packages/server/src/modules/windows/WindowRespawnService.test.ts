@@ -79,7 +79,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     prUrl: null,
     agentSessionId: null,
     inputTrust: 'trusted',
-    executionApprovedDescriptionHash: null,
+    executionApprovedFingerprintHash: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -300,7 +300,7 @@ describe('WindowRespawnService.respawn — execution gate (Issue #328)', () => {
   });
 
   it('blocks respawn for an untrusted task pending approval and marks the task accordingly', async () => {
-    const task = makeTask({ id: 6, unitId: 10, inputTrust: 'untrusted', executionApprovedDescriptionHash: null });
+    const task = makeTask({ id: 6, unitId: 10, inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
     const unit = makeUnit({ id: 10 });
     const win = makeWindow({ taskId: 6, windowType: 'agent', workerType: 'claude' });
     const { service, tmux, taskRepo } = buildService({

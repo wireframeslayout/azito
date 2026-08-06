@@ -46,7 +46,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     prUrl: null,
     agentSessionId: null,
     inputTrust: 'trusted',
-    executionApprovedDescriptionHash: null,
+    executionApprovedFingerprintHash: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -362,7 +362,7 @@ describe('TaskRestoreService', () => {
 
   describe('execution gate (Issue #328)', () => {
     it('blocks an untrusted, unapproved task before touching tmux — status becomes pending_approval', async () => {
-      const task = makeTask({ serverName: 'test-server', inputTrust: 'untrusted', executionApprovedDescriptionHash: null });
+      const task = makeTask({ serverName: 'test-server', inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
 
       await expect(service.restore(task, log)).rejects.toThrow(/requires approval/);
 
@@ -371,14 +371,14 @@ describe('TaskRestoreService', () => {
       expect(deps.taskRepo.updateStatus).toHaveBeenCalledWith(1, 'pending_approval');
     });
 
-    it('allows an untrusted task whose approval hash matches the current description', async () => {
-      const { hashTaskDescription } = await import('./execution/ExecutionGate.js');
+    it('allows an untrusted task whose approval hash matches the current fingerprint', async () => {
+      const { hashApprovedTaskFingerprint } = await import('./execution/ExecutionGate.js');
       const task = makeTask({
         serverName: 'test-server',
         inputTrust: 'untrusted',
         description: 'do the thing',
-        executionApprovedDescriptionHash: hashTaskDescription('do the thing'),
       });
+      task.executionApprovedFingerprintHash = hashApprovedTaskFingerprint(task);
 
       const result = await service.restore(task, log);
 

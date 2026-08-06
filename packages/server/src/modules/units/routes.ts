@@ -10,7 +10,7 @@ import type { PhaseConfig, PhaseEntryConfig } from '../sidekicks/PhaseConfig';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import { resolvePhaseSidekick } from '../sidekicks/resolvePhaseSidekick';
 import { ResourceExhaustedError } from '../servers/resources/ResourceGuard';
-import { ExecutionGateDeniedError, ExecutionGatePendingApprovalError, hashTaskDescription } from '../tasks/execution/ExecutionGate';
+import { hashApprovedTaskFingerprint, replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
 import { resolveUnitId } from '../tasks/execution/TaskExecutionEnv';
 
 // ─── Types ───
@@ -73,24 +73,9 @@ function parseWorkerExecutionModeInput(raw: unknown): WorkerExecutionMode | unde
   return raw;
 }
 
-/**
- * Shared translation of the untrusted-input execution gate's errors (Issue
- * #328) into HTTP responses, used by both /execute and /follow-up — both
- * routes can trigger ExecuteTaskUseCase's enforceExecutionGate(). Returns
- * true when it handled the error (caller should stop), false otherwise so
- * the caller falls through to its generic 400 handling.
- */
-function replyToExecutionGateError(err: unknown, reply: { status: (code: number) => { send: (body: unknown) => unknown } }): boolean {
-  if (err instanceof ExecutionGatePendingApprovalError) {
-    reply.status(409).send({ error: 'execution_pending_approval', message: err.message });
-    return true;
-  }
-  if (err instanceof ExecutionGateDeniedError) {
-    reply.status(403).send({ error: 'execution_denied', message: err.message });
-    return true;
-  }
-  return false;
-}
+// replyToExecutionGateError is now shared from ExecutionGate.ts (see fix for
+// the same conversion missing on /api/windows/:id/respawn) — used by both
+// /execute and /follow-up below.
 
 function parseWorkerRuntimeInput(raw: unknown): WorkerRuntime | undefined {
   if (raw === undefined) return undefined;
@@ -425,12 +410,13 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
         return { ok: true };
       }
 
-      // Record approval against the CURRENT description (checkExecutionGate
+      // Record approval against the CURRENT fingerprint (checkExecutionGate
       // re-hashes on every check) so re-running this same task later does not
-      // re-prompt, but a subsequent description edit (task stays untrusted)
-      // will invalidate this and require approval again.
+      // re-prompt, but a subsequent edit to any prompt-reaching field (title,
+      // description, targetBranch, baseBranch, workingDirectory — task stays
+      // untrusted) will invalidate this and require approval again.
       logRepo.append(taskId, id, 'status_change', { status: 'execution_approved' });
-      taskRepo.update(taskId, { executionApprovedDescriptionHash: hashTaskDescription(task.description) } as Partial<import('../tasks/Task').Task>);
+      taskRepo.update(taskId, { executionApprovedFingerprintHash: hashApprovedTaskFingerprint(task) } as Partial<import('../tasks/Task').Task>);
 
       // Which entry point to resume depends on whether this task ever
       // actually started: tmuxWindow is only ever set once execute() (or

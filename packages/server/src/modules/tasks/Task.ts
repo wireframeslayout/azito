@@ -30,12 +30,17 @@ export interface Task {
    */
   inputTrust: 'trusted' | 'untrusted';
   /**
-   * Hash of the task.description that a human most recently approved for
-   * unattended execution while input_trust = 'untrusted'. Null means "never
-   * approved" or "approved description is stale" (description changed
-   * since). See ExecutionGate.checkExecutionGate for the comparison.
+   * Fingerprint (see ExecutionGate.hashApprovedTaskFingerprint) of the
+   * title/description/targetBranch/baseBranch/workingDirectory a human most
+   * recently approved for unattended execution while input_trust =
+   * 'untrusted'. Null means "never approved" or "approved fingerprint is
+   * stale" (one of those fields changed since). See
+   * ExecutionGate.checkExecutionGate for the comparison. Covers every task
+   * field that reaches the worker's prompt as free text (resolveTaskPromptVars.ts)
+   * — not just description — so editing any one of them post-approval
+   * requires re-approval.
    */
-  executionApprovedDescriptionHash: string | null;
+  executionApprovedFingerprintHash: string | null;
   worktreePath: string | null;
   worktreeBranch: string | null;
   baseBranch: string | null;

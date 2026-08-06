@@ -11,6 +11,7 @@ import type { NotificationBus } from '../notifications/NotificationBus';
 import type { ResourceGuard } from '../servers/resources/ResourceGuard';
 import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
+import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
 import { isSameWindowTarget, stripPaneSuffix } from './paneTarget';
 import type { SessionCaptureService } from './SessionCaptureService';
 
@@ -295,7 +296,17 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
           return reply.status(409).send({ error: 'insufficient_resources', resources: status });
       }
 
-      const result = await respawnService.respawn(id, srv);
+      // respawnService.respawn() runs the untrusted-input execution gate
+      // (Issue #328) itself before touching tmux — this route only needs to
+      // translate its errors into a response, same as
+      // /api/tasks/:id/recover-session and /api/units/:id/execute|follow-up.
+      let result: { tmuxTarget: string };
+      try {
+        result = await respawnService.respawn(id, srv);
+      } catch (err) {
+        if (replyToExecutionGateError(err, reply)) return;
+        throw err;
+      }
       notifyWindowsChanged(srv.name);
       return { ok: true, tmuxTarget: result.tmuxTarget };
     },

@@ -18,7 +18,7 @@ import { TaskCleanupService } from './TaskCleanupService';
 import { SAFE_PATH_PATTERN, SAFE_BRANCH_PATTERN } from '../git/assertSafeGitArgs';
 import { resolveTaskServerName, resolveTmuxSession, resolveUnitId } from './execution/TaskExecutionEnv';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
-import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError } from './execution/ExecutionGate';
+import { checkExecutionGate, replyToExecutionGateError } from './execution/ExecutionGate';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 
 function parseSubagentConfigInput(raw: unknown, fieldName: string): SubagentConfig | null {
@@ -187,7 +187,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         reviewSubagent,
         implementSubagent,
         inputTrust: 'trusted',
-        executionApprovedDescriptionHash: null,
+        executionApprovedFingerprintHash: null,
       });
       return { ok: true, id };
     } catch (err: unknown) {
@@ -446,17 +446,12 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         // respawnService.respawn() runs the untrusted-input execution gate
         // (Issue #328) itself before touching tmux — this route only needs
         // to translate its errors into a response, same as /api/units/:id/
-        // execute|follow-up (units/routes.ts replyToExecutionGateError).
+        // execute|follow-up and /api/windows/:id/respawn.
         let result: { tmuxTarget: string };
         try {
           result = await respawnService.respawn(primaryWindow.id, srv);
         } catch (err) {
-          if (err instanceof ExecutionGatePendingApprovalError) {
-            return reply.status(409).send({ error: 'execution_pending_approval', message: err.message });
-          }
-          if (err instanceof ExecutionGateDeniedError) {
-            return reply.status(403).send({ error: 'execution_denied', message: err.message });
-          }
+          if (replyToExecutionGateError(err, reply)) return;
           throw err;
         }
         const windowName = task.tmuxWindow || `task-${task.id}`;

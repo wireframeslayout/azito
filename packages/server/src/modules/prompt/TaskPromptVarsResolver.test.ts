@@ -39,7 +39,7 @@ const makeTask = (overrides = {}) => ({
   prUrl: null,
   agentSessionId: null,
   inputTrust: 'trusted' as const,
-  executionApprovedDescriptionHash: null,
+  executionApprovedFingerprintHash: null,
   createdAt: '2024-01-01',
   updatedAt: '2024-01-01',
   ...overrides,

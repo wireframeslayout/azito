@@ -28,13 +28,48 @@ export type ExecutionGateResult =
 const FALLBACK_INPUT_POLICY: ProjectServer['inputPolicy'] = 'manual-approval';
 
 /**
- * Deterministic fingerprint of the task description an approval was granted
- * for. Not a security hash (collision resistance beyond "don't false-match
- * on edit" isn't a requirement here) — sha256 is used simply because Node
- * ships it and it's already the project's convention for content fingerprints.
+ * Task fields that reach the worker's prompt as free-form text (see
+ * resolveTaskPromptVars.ts: task.title/description are interpolated
+ * directly; task.targetBranch is interpolated directly into the `- PR
+ * target branch: ...` line; task.baseBranch/task.workingDirectory feed
+ * project.defaultBranch/projectServer.workingDirectory, which are also
+ * interpolated directly). Every one of these is editable via PUT
+ * /api/tasks/:id with no inputTrust restriction, so every one of them must
+ * be covered by the approval fingerprint below — covering only
+ * `description` would let an attacker rewrite any of the others post-
+ * approval and have it reach the prompt unreviewed.
+ *
+ * Deliberately NOT included: task.skipPr and the push* template vars derived
+ * from it (fixed strings selected by a boolean, not attacker-authored text),
+ * task.planMarkdown (worker-authored, not task-input), selfReview counters
+ * (numeric), and project.sidekickPrompt/unit.systemPrompt (not task fields).
  */
-export function hashTaskDescription(description: string | null): string {
-  return createHash('sha256').update(description ?? '').digest('hex');
+type ApprovableTaskFields = Pick<Task, 'title' | 'description' | 'targetBranch' | 'baseBranch' | 'workingDirectory'>;
+
+/**
+ * Deterministic fingerprint of the task fields an approval was granted for.
+ * Not a security hash (collision resistance beyond "don't false-match on
+ * edit" isn't a requirement here) — sha256 is used simply because Node ships
+ * it and it's already the project's convention for content fingerprints.
+ *
+ * Fields are combined via JSON.stringify with an explicit, fixed key order
+ * (not string concatenation): JSON.stringify escapes embedded quotes,
+ * backslashes and control characters, and the object literal's key order is
+ * fixed in source rather than derived from user input, so there is no
+ * delimiter an attacker could inject to make content "move" from one field
+ * into another and still hash-collide with a previously-approved fingerprint
+ * (e.g. title="" + description="X" would serialize differently from
+ * title="X" + description="").
+ */
+export function hashApprovedTaskFingerprint(task: ApprovableTaskFields): string {
+  const normalized = JSON.stringify({
+    title: task.title,
+    description: task.description ?? '',
+    targetBranch: task.targetBranch ?? '',
+    baseBranch: task.baseBranch ?? '',
+    workingDirectory: task.workingDirectory ?? '',
+  });
+  return createHash('sha256').update(normalized).digest('hex');
 }
 
 /**
@@ -48,7 +83,7 @@ export function hashTaskDescription(description: string | null): string {
  * because a server was never configured would be a materially worse default
  * than asking a human once.
  */
-export function checkExecutionGate(task: Pick<Task, 'inputTrust' | 'description' | 'executionApprovedDescriptionHash'>, projectServer: ProjectServer | null): ExecutionGateResult {
+export function checkExecutionGate(task: ApprovableTaskFields & Pick<Task, 'inputTrust' | 'executionApprovedFingerprintHash'>, projectServer: ProjectServer | null): ExecutionGateResult {
   if (task.inputTrust !== 'untrusted') return { allowed: true };
 
   const policy = projectServer?.inputPolicy ?? FALLBACK_INPUT_POLICY;
@@ -60,9 +95,11 @@ export function checkExecutionGate(task: Pick<Task, 'inputTrust' | 'description'
   // day that profile ships and the API restriction is lifted.
   if (policy === 'allow') return { allowed: true };
 
-  // manual-approval: allowed only if a human approved the CURRENT description.
-  const currentHash = hashTaskDescription(task.description);
-  if (task.executionApprovedDescriptionHash === currentHash) return { allowed: true };
+  // manual-approval: allowed only if a human approved the CURRENT fingerprint
+  // (title/description/targetBranch/baseBranch/workingDirectory — see
+  // ApprovableTaskFields above).
+  const currentHash = hashApprovedTaskFingerprint(task);
+  if (task.executionApprovedFingerprintHash === currentHash) return { allowed: true };
   return { allowed: false, reason: 'pending_approval' };
 }
 
@@ -80,4 +117,31 @@ export class ExecutionGatePendingApprovalError extends Error {
     super(`Task ${taskId}: execution requires approval (untrusted-origin task) — see POST /api/units/:id/approve-execution`);
     this.name = 'ExecutionGatePendingApprovalError';
   }
+}
+
+/**
+ * Shared translation of the untrusted-input execution gate's thrown errors
+ * (Issue #328) into HTTP responses. Used by every route that can trigger
+ * ExecuteTaskUseCase/WindowRespawnService's enforceExecutionGate() or an
+ * inline checkExecutionGate() re-throw: /api/units/:id/execute,
+ * /api/units/:id/follow-up, /api/tasks/:id/recover-session, and
+ * /api/windows/:id/respawn. Kept in this module (not e.g. a routes-only
+ * helper file) so it lives next to the error classes it translates and
+ * stays reachable from both `tasks` and `windows` — `windows` already
+ * depends on `tasks` (WindowRespawnService imports ExecutionGate directly),
+ * so this doesn't introduce a new dependency-direction edge.
+ *
+ * Returns true when it handled the error (caller should stop/return),
+ * false otherwise so the caller falls through to its own error handling.
+ */
+export function replyToExecutionGateError(err: unknown, reply: { status: (code: number) => { send: (body: unknown) => unknown } }): boolean {
+  if (err instanceof ExecutionGatePendingApprovalError) {
+    reply.status(409).send({ error: 'execution_pending_approval', message: err.message });
+    return true;
+  }
+  if (err instanceof ExecutionGateDeniedError) {
+    reply.status(403).send({ error: 'execution_denied', message: err.message });
+    return true;
+  }
+  return false;
 }
