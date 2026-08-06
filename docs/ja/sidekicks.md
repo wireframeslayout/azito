@@ -183,6 +183,8 @@ Unit は「タスクをどう進めるか」（振る舞い）と「何で進め
 | Review Subagent / Implement Subagent | レビュー・実装作業をサブエージェントへ委譲する設定（provider/model）。タスク単位で上書き可 |
 | Phase Config | フェーズごとの Sidekick 割当・有効/無効 |
 
+> **注意:** UnitType の TOML 定義は現状 UI から作成・編集できません（ビルトインは `devops` のみ）。カスタム UnitType を追加するにはユーザー層ディレクトリ `data/unit-types/`（`AZITO_UNIT_TYPES_DIR` で変更可）にファイルを手動で配置してください。`harness/unit-types/` はビルトイン層のためリリース更新時に上書きされます。
+
 フェーズ順序は Unit の `unitType` が参照する UnitType 定義（TOML）で決まる。デフォルトの `devops`
 タイプでは planning → implementing → reviewing → testing → pushing の順に `phaseConfig` に従って
 遷移する

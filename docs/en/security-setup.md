@@ -13,7 +13,7 @@ For installation from release bundles, see [Installation and Updates](install-an
 
 | Change | Impact | Action required |
 |---|---|---|
-| API / WebSocket now require authentication | Unauthenticated requests get 401; WS gets `close(1008)` | `AZITO_UI_TOKEN` is auto-generated. Use `azito token show` to view it, enter on first browser access. Set it in env to use a fixed token |
+| API / WebSocket now require authentication | Unauthenticated requests get 401; WS gets `close(1008)` | `AZITO_UI_TOKEN` is auto-generated. Use `azito token show` (release installs only) to view it, enter on first browser access. Set it in env to use a fixed token |
 | Bind address defaults to `127.0.0.1` | Not reachable from LAN / Tailscale | Set `AZITO_BIND` if needed |
 | CORS restricted to an allowlist | Browser access from unlisted origins fails | Set `AZITO_ALLOWED_ORIGINS` if needed |
 | MinIO credentials are mandatory | `docker compose up` fails | Set credentials in the root `.env` |
@@ -38,14 +38,20 @@ Both are git-ignored. Templates live in `.env.example`.
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `AZITO_UI_TOKEN` | No | auto-generates `$AZITO_DATA_DIR/ui-token` | Token for API / WebSocket auth. Resolution order: env -> file -> auto-generate. Use `azito token show` to view, `azito token rotate` to rotate |
+| `AZITO_UI_TOKEN` | No | auto-generates `$AZITO_DATA_DIR/ui-token` | Token for API / WebSocket auth. Resolution order: env -> file -> auto-generate. Use `azito token show` to view, `azito token rotate` to rotate. For source checkouts, check `packages/server/.env` or `data/ui-token` directly. Running `azito token rotate` also updates `AZITO_UI_TOKEN` in all `~/.azito/azitoctl*.env` files automatically |
 | `AZITO_DATA_DIR` | No | repo root (`data.db`, `data/*`) | Persistent data directory. When set, `data.db`, `master.key`, `vapid-keys.json`, `ui-token`, `browser-profile/`, `sidekicks/` are consolidated under this directory (mode 700). Required for versioned directory deployments |
 | `AZITO_BIND` | No | `127.0.0.1` | Listen address. `0.0.0.0` and `::` are explicitly rejected. Use a Tailscale IP for remote access |
 | `AZITO_ALLOWED_ORIGINS` | No | `http://localhost:5173,http://localhost:3001` | Comma-separated origins allowed by CORS and the WebSocket Origin check |
 | `AZITO_WEBHOOK_TOKEN` | No | random per start | Shared token for hooks / agent-signal / supervisor. Set it to keep it stable |
 | `AZITO_MASTER_KEY` | No | auto-generates `$AZITO_DATA_DIR/master.key` | Encryption key for DB secret columns (64 hex chars). Takes precedence over the file |
 | `AZITO_SIDEKICKS_DIR` | No | `$AZITO_DATA_DIR/sidekicks` | User-layer Sidekick package directory. Defaults to `sidekicks/` under `AZITO_DATA_DIR` |
-| `AZITO_VAPID_SUBJECT` | No | none | VAPID subject for push notifications |
+| `AZITO_VAPID_SUBJECT` | No | `mailto:admin@example.com` | VAPID subject for push notifications |
+| `AZITO_PUBLIC_URL` | No | none | URL that supervisors and remote agents use to reach the hub. Set to `https://<MagicDNS>` when using `tailscale serve` |
+| `AZITO_MUX_RUNTIME` | No | `system` | Server's tmux runtime (`system` / `managed`) |
+| `AZITO_UNIT_TYPES_DIR` | No | `data/unit-types` | User-layer UnitType TOML definition directory (the built-in layer `harness/unit-types/` is always loaded) |
+| `AZITO_HARNESS_PREFIX` | No | none | Identifier appended to the remote harness path when installed via the UI (`~/.azito/harness-<prefix>`) |
+| `AZITO_RELEASE_REPO` | No | `wireframeslayout/azito` | GitHub repository used for update checks and downloads |
+| `AZITO_GITHUB_TOKEN` | No | none | GitHub PAT to avoid API rate limits during update checks |
 | `PORT` | No | `3001` | Server port |
 
 ### Root `.env`
@@ -81,7 +87,7 @@ Use `npm ci` so you land exactly on the updated `package-lock.json` (it contains
 
 ### Step 2. Configure the server
 
-> `AZITO_UI_TOKEN` is auto-generated on first start if not set (view with `azito token show`). Only follow the steps below if you want a fixed token.
+> `AZITO_UI_TOKEN` is auto-generated on first start if not set (release: `azito token show`; source: `packages/server/.env` or `data/ui-token`). Only follow the steps below if you want a fixed token.
 
 ```bash
 openssl rand -hex 32   # copy the output
@@ -256,7 +262,7 @@ npm ci
 
 ### 2. Create the server env file
 
-> `AZITO_UI_TOKEN` is auto-generated on first start if not set (view with `azito token show`). Only set it here if you want a fixed token.
+> `AZITO_UI_TOKEN` is auto-generated on first start if not set (release: `azito token show`; source: `packages/server/.env` or `data/ui-token`). Only set it here if you want a fixed token.
 
 ```bash
 cat > packages/server/.env <<EOF
@@ -411,7 +417,7 @@ systemctl --user start azito
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Don't know the UI token | Need to find the auto-generated token | Run `azito token show`. On TTY startup the token is printed once when generated |
+| Don't know the UI token | Need to find the auto-generated token | Release: `azito token show`. Source: `grep AZITO_UI_TOKEN packages/server/.env` or `cat data/ui-token` |
 | Exits with `AZITO_BIND must not be 0.0.0.0 or ::` | Binding to all interfaces is explicitly refused | Use `127.0.0.1` or a Tailscale IP |
 | Cannot reach the server (connection refused) | Listening on `127.0.0.1` only | Set `AZITO_BIND` to the Tailscale IP and restart |
 | UI loops on API 401 | Entered token does not match the server value | Check `packages/server/.env`, close the browser session and re-enter |

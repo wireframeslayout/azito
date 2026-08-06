@@ -71,9 +71,10 @@ File storage panel powered by MinIO. Upload files, view thumbnails for images, a
 
 Project configuration panel with sections for:
 
-- **General** -- Project name, description, repository URL, default branch, sidekick prompt (extra project-level instructions injected into phase prompts)
+- **General** -- Project name, description, repository URL, default branch, icon (emoji or image upload with cropping), theme color, default Unit, sidekick prompt
 - **Repositories** -- Add or remove linked repositories
-- **Servers** -- Configure per-server working directories and branches, and the project's default Unit
+- **Servers** -- Configure per-server working directories and branches
+- **Secrets** -- Manage project secrets (injected as `AZITO_SECRET_*` environment variables during task execution)
 - **Danger Zone** -- Delete the project
 
 ## Tab Management

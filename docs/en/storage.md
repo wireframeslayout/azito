@@ -1,5 +1,7 @@
 # File Storage Guide
 
+> **File storage is disabled by default.** Provision an S3-compatible storage backend (local MinIO, AWS S3, Cloudflare R2, etc.), then register it under Settings → Storage to enable this feature.
+
 AZITO provides per-project file storage backed by [MinIO](https://min.io/), an S3-compatible object storage server. You can upload files via the sidebar or drag-and-drop, and copy shareable URLs for use in chat or documentation.
 
 ## MinIO Setup
