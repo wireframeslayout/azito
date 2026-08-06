@@ -18,6 +18,7 @@ import { TaskCleanupService } from './TaskCleanupService';
 import { SAFE_PATH_PATTERN, SAFE_BRANCH_PATTERN } from '../git/assertSafeGitArgs';
 import { resolveTaskServerName, resolveTmuxSession, resolveUnitId } from './execution/TaskExecutionEnv';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
+import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError } from './execution/ExecutionGate';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 
 function parseSubagentConfigInput(raw: unknown, fieldName: string): SubagentConfig | null {
@@ -442,18 +443,53 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         const srv = serverRepo.findByName(primaryWindow.serverName);
         if (!srv) return reply.status(404).send({ error: 'Server not found' });
 
-        const result = await respawnService.respawn(primaryWindow.id, srv);
+        // respawnService.respawn() runs the untrusted-input execution gate
+        // (Issue #328) itself before touching tmux — this route only needs
+        // to translate its errors into a response, same as /api/units/:id/
+        // execute|follow-up (units/routes.ts replyToExecutionGateError).
+        let result: { tmuxTarget: string };
+        try {
+          result = await respawnService.respawn(primaryWindow.id, srv);
+        } catch (err) {
+          if (err instanceof ExecutionGatePendingApprovalError) {
+            return reply.status(409).send({ error: 'execution_pending_approval', message: err.message });
+          }
+          if (err instanceof ExecutionGateDeniedError) {
+            return reply.status(403).send({ error: 'execution_denied', message: err.message });
+          }
+          throw err;
+        }
         const windowName = task.tmuxWindow || `task-${task.id}`;
         taskRepo.update(id, { tmuxWindow: windowName } as Partial<Task>);
 
         return { tmuxWindow: windowName, tmuxTarget: result.tmuxTarget };
       }
 
-      // Fallback for tasks without window records (pre-migration 034)
+      // Fallback for tasks without window records (pre-migration 034). This
+      // path creates a tmux window and launches `claude --resume` directly
+      // (no WindowRespawnService involved), so it needs its own execution
+      // gate check (Issue #328) — otherwise a legacy task with no window
+      // record could resume regardless of inputTrust/input_policy.
       if (!task.agentSessionId) return reply.status(400).send({ error: 'No primary window or agent session ID' });
       const resolvedServerName = resolveTaskServerName(task, projectServerRepo);
       const server = resolvedServerName ? serverRepo.findByName(resolvedServerName) : null;
       if (!resolvedServerName || !server) return reply.status(404).send({ error: 'Server not found' });
+
+      const project = projectRepo.findById(task.projectId);
+      const projectServer = project ? projectServerRepo.find(task.projectId, resolvedServerName) : null;
+      const gate = checkExecutionGate(task, projectServer);
+      if (!gate.allowed) {
+        const gateUnitId = resolveUnitId(task, project);
+        if (gateUnitId !== null) {
+          logRepo.append(id, gateUnitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
+        }
+        if (gate.reason === 'pending_approval') {
+          taskRepo.updateStatus(id, 'pending_approval');
+          return reply.status(409).send({ error: 'execution_pending_approval', message: `Task ${id}: execution requires approval (untrusted-origin task)` });
+        }
+        return reply.status(403).send({ error: 'execution_denied', message: `Task ${id}: execution denied by project server input policy (untrusted-origin task)` });
+      }
+
       const tmuxSession = resolveTmuxSession(task.projectId, resolvedServerName, projectServerRepo);
 
       const { windowName: newWindowName } = await tmux.createWindow(server, tmuxSession, `task-${task.id}`);

@@ -245,7 +245,7 @@ function buildAgentUpdater(agentBundler: AgentBundler, infra: SharedInfra, repos
 function buildApplicationServices(infra: SharedInfra, repos: Repositories): ApplicationServices {
   const sessionStrategyFactory = new SessionStrategyFactory(infra.agentRegistry, infra.transportFactory);
   const sessionCaptureService = new SessionCaptureService(repos.windowRepo, repos.taskRepo, repos.serverRepo, sessionStrategyFactory);
-  const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.tmuxClient, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, infra.transportFactory, sessionCaptureService);
+  const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.tmuxClient, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, infra.transportFactory, repos.logRepo, sessionCaptureService);
   const taskRestoreService = new TaskRestoreService({
     taskRepo: repos.taskRepo,
     serverRepo: repos.serverRepo,

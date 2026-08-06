@@ -3,6 +3,7 @@ import Fastify from 'fastify';
 import tasksRoutes from './routes';
 import type { TasksRouteOptions } from './routes';
 import type { Task } from './Task';
+import { ExecutionGateDeniedError } from './execution/ExecutionGate';
 
 // Covers Issue #328's client-facing surface on the tasks routes: input_trust
 // must never be settable from a request body (only server-side code paths —
@@ -222,5 +223,65 @@ describe('PUT /api/tasks/:id — require_plan_approval guard for untrusted tasks
 
     const updateCall = (opts.taskRepo.update as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(updateCall[1]).not.toHaveProperty('inputTrust');
+  });
+});
+
+describe('POST /api/tasks/:id/recover-session — execution gate (Issue #328)', () => {
+  it('translates WindowRespawnService gate errors into the same HTTP shape as /execute (window-record path)', async () => {
+    const { opts } = makeOpts(makeTask({ inputTrust: 'untrusted', status: 'pending_approval' }));
+    opts.windowRepo.findByTask = vi.fn(() => [
+      { id: 1, ownerType: 'task' as const, projectId: null, taskId: 1, serverName: 'test-server', tmuxTarget: 'azito:task-1.1', label: 'task-1', isPrimary: true, windowType: 'agent' as const, workerType: 'claude', workerModel: 'opus', agentSessionId: null, launchCommand: null, workingDirectory: null, paneLayout: null, createdAt: '' },
+    ]);
+    opts.respawnService = {
+      respawn: vi.fn(async () => { throw new ExecutionGateDeniedError(1); }),
+    } as unknown as TasksRouteOptions['respawnService'];
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/recover-session' });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ error: 'execution_denied' });
+  });
+
+  it('gates the legacy pre-migration-034 fallback path (no window record) before creating a tmux window', async () => {
+    const { opts } = makeOpts(makeTask({
+      inputTrust: 'untrusted', status: 'open', agentSessionId: '11111111-1111-1111-1111-111111111111',
+    }));
+    opts.windowRepo.findByTask = vi.fn(() => []);
+    opts.projectServerRepo.find = vi.fn(() => ({
+      projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'deny' as const,
+    }));
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/recover-session' });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ error: 'execution_denied' });
+    expect(opts.tmux.createWindow).not.toHaveBeenCalled();
+    expect(opts.tmux.sendKeys).not.toHaveBeenCalled();
+  });
+
+  it('allows the legacy fallback path for a trusted task', async () => {
+    const { opts } = makeOpts(makeTask({
+      inputTrust: 'trusted', status: 'open', agentSessionId: '11111111-1111-1111-1111-111111111111',
+    }));
+    opts.windowRepo.findByTask = vi.fn(() => []);
+    opts.projectServerRepo.find = vi.fn(() => ({
+      projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'deny' as const,
+    }));
+    opts.supervisorRegistry = { clearExitMarker: vi.fn() } as unknown as TasksRouteOptions['supervisorRegistry'];
+    (opts.tmux as any).resolvePaneId = vi.fn(async () => '%0');
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/recover-session' });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.tmux.createWindow).toHaveBeenCalled();
   });
 });

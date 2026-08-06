@@ -2,15 +2,17 @@ import type { IWindowRepository, PaneLayout, Window } from './Window';
 import type { ServerConfig } from '../servers/Server';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { ISessionStrategyFactory } from '../agents/SessionStrategy';
-import type { ITaskRepository } from '../tasks/Task';
+import type { ITaskRepository, Task } from '../tasks/Task';
 import type { IUnitRepository } from '../units/Unit';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
+import type { IExecutionLogRepository } from '../tasks/ExecutionLog';
 import { PathResolverFactory, assertDirectoryContained } from '../git/PathContainment';
 import { shellQuote } from '../../shared/shellQuote';
 import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
 import type { SessionCaptureService } from './SessionCaptureService';
+import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError } from '../tasks/execution/ExecutionGate';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -43,6 +45,11 @@ export class WindowRespawnService {
     // a real "no boundary to enforce" case, not a missing dependency.
     private projectServerRepo: IProjectServerRepository,
     private transportFactory: TransportFactory,
+    // logRepo is required for the same reason projectServerRepo/transportFactory
+    // are (see comment above): the untrusted-input execution gate (Issue #328)
+    // must log its blocks the same way ExecuteTaskUseCase/TaskRestoreService
+    // do, and making it optional would let a caller silently skip that record.
+    private logRepo: IExecutionLogRepository,
     private sessionCaptureService?: SessionCaptureService,
   ) {}
 
@@ -54,6 +61,28 @@ export class WindowRespawnService {
     const sessionName = parts[0];
     const windowPart = parts[1]?.split('.')[0];
     if (!windowPart) throw new Error(`Invalid tmuxTarget: ${win.tmuxTarget}`);
+
+    // Resolve the owning task + Unit up front (also needed for the
+    // supervision context below) and run the untrusted-input execution gate
+    // (Issue #328) before touching tmux or the DB at all — respawn()
+    // relaunches a worker exactly like ExecuteTaskUseCase.execute()/
+    // TaskRestoreService.restore() do, so an untrusted task that was denied
+    // or is pending approval must not be able to resume via respawn (used by
+    // both POST /api/windows/:id/respawn and the recover-session fallback in
+    // tasks/routes.ts). Windows with no taskId (plain terminals, non-task
+    // windows) have no Task.inputTrust to check, so they respawn unchanged.
+    let task: Task | null = null;
+    let unitId: number | null = null;
+    if (win.taskId !== null) {
+      task = this.taskRepo.findById(win.taskId);
+      if (task && task.unitId !== null) {
+        const unit = this.unitRepo.findById(task.unitId);
+        if (unit) unitId = unit.id;
+      }
+    }
+    if (task) {
+      this.enforceExecutionGate(task, unitId, server);
+    }
 
     // Resolve and verify every working directory this respawn will `cd`
     // into before touching tmux or the DB at all. Containment verification
@@ -93,14 +122,8 @@ export class WindowRespawnService {
     this.windowRepo.update(windowId, { tmuxTarget: dbTarget });
 
     const supervise = shouldSupervise(server.type, win.windowType);
-    let unitId: number | null = null;
-    if (win.taskId !== null) {
-      const task = this.taskRepo.findById(win.taskId);
-      if (task && task.unitId !== null) {
-        const unit = this.unitRepo.findById(task.unitId);
-        if (unit) unitId = unit.id;
-      }
-    }
+    // task/unitId already resolved above for the execution gate — reused
+    // here instead of re-querying the repositories a second time.
     const supervision: SupervisionContext = { supervise, taskId: win.taskId, unitId };
 
     if (win.paneLayout) {
@@ -111,6 +134,33 @@ export class WindowRespawnService {
     }
 
     return { tmuxTarget: dbTarget };
+  }
+
+  /**
+   * Runs the untrusted-input execution gate (Issue #328) for the task that
+   * owns this window and, when it blocks, records the same log entry and
+   * task-status transition ExecuteTaskUseCase.enforceExecutionGate() /
+   * TaskRestoreService.restore() use, then throws before respawn() proceeds
+   * to any tmux mutation. `unitId` is `null` when the task has no resolvable
+   * Unit (e.g. task.unitId points at a deleted Unit) — the block still
+   * throws in that case, it just has no unit to attach a log entry to.
+   */
+  private enforceExecutionGate(task: Task, unitId: number | null, server: ServerConfig): void {
+    const projectServer = this.projectServerRepo.find(task.projectId, server.name);
+    const gate = checkExecutionGate(task, projectServer);
+    if (gate.allowed) return;
+
+    if (unitId !== null) {
+      this.logRepo.append(task.id, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
+    }
+    if (gate.reason === 'pending_approval') {
+      this.taskRepo.updateStatus(task.id, 'pending_approval');
+      throw new ExecutionGatePendingApprovalError(task.id);
+    }
+    // 'denied': leave task status untouched — same rationale as the other
+    // two enforcement sites (nothing to roll back, a human must change the
+    // project server's input_policy before a retry can succeed).
+    throw new ExecutionGateDeniedError(task.id);
   }
 
   /**

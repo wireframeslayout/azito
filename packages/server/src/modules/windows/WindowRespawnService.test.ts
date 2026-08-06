@@ -171,8 +171,9 @@ function buildService(opts: {
     })),
   };
 
-  const taskRepo: Pick<ITaskRepository, 'findById'> = {
+  const taskRepo: Pick<ITaskRepository, 'findById' | 'updateStatus'> = {
     findById: vi.fn(() => opts.task ?? null),
+    updateStatus: vi.fn(),
   };
 
   const unitRepo: Pick<IUnitRepository, 'findById'> = {
@@ -181,6 +182,8 @@ function buildService(opts: {
 
   const clearExitMarker = vi.fn();
   const supervisorRegistry = { clearExitMarker } as any;
+
+  const logRepo = { append: vi.fn() } as any;
 
   const service = new WindowRespawnService(
     windowRepo,
@@ -191,10 +194,11 @@ function buildService(opts: {
     supervisorRegistry,
     (opts.projectServerRepo ?? defaultProjectServerRepo()) as any,
     (opts.transportFactory ?? defaultTransportFactory()) as any,
+    logRepo,
     undefined,
   );
 
-  return { service, windowRepo, tmux, sentCommands, clearExitMarker };
+  return { service, windowRepo, tmux, sentCommands, clearExitMarker, taskRepo, logRepo };
 }
 
 describe('WindowRespawnService.respawn — supervisor wrap', () => {
@@ -265,6 +269,59 @@ describe('WindowRespawnService.respawn — supervisor wrap', () => {
     await service.respawn(1, makeServer());
 
     expect(tmux.sendKeys).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('WindowRespawnService.respawn — execution gate (Issue #328)', () => {
+  function untrustedProjectServerRepo(inputPolicy: 'deny' | 'manual-approval'): Pick<IProjectServerRepository, 'find'> {
+    return {
+      find: vi.fn(() => ({
+        projectId: 1, serverName: 'local-server', workingDirectory: null, branch: 'main', tmuxSession: 'azito', inputPolicy,
+      })),
+    };
+  }
+
+  it('blocks respawn for an untrusted task denied by policy, before any tmux mutation', async () => {
+    const task = makeTask({ id: 5, unitId: 10, inputTrust: 'untrusted' });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 5, windowType: 'agent', workerType: 'claude' });
+    const { service, tmux, windowRepo, logRepo } = buildService({
+      window: win, task, unit, projectServerRepo: untrustedProjectServerRepo('deny'),
+    });
+
+    await expect(service.respawn(1, makeServer())).rejects.toThrow(/execution denied/);
+
+    expect(tmux.killWindow).not.toHaveBeenCalled();
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(tmux.createSession).not.toHaveBeenCalled();
+    expect(tmux.sendKeys).not.toHaveBeenCalled();
+    expect(windowRepo.update).not.toHaveBeenCalled();
+    expect(logRepo.append).toHaveBeenCalledWith(5, 10, 'command', { type: 'execution_gate_blocked', reason: 'denied' });
+  });
+
+  it('blocks respawn for an untrusted task pending approval and marks the task accordingly', async () => {
+    const task = makeTask({ id: 6, unitId: 10, inputTrust: 'untrusted', executionApprovedDescriptionHash: null });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 6, windowType: 'agent', workerType: 'claude' });
+    const { service, tmux, taskRepo } = buildService({
+      window: win, task, unit, projectServerRepo: untrustedProjectServerRepo('manual-approval'),
+    });
+
+    await expect(service.respawn(1, makeServer())).rejects.toThrow(/requires approval/);
+
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(taskRepo.updateStatus).toHaveBeenCalledWith(6, 'pending_approval');
+  });
+
+  it('allows respawn for windows with no taskId regardless of policy', async () => {
+    const win = makeWindow({ taskId: null, windowType: 'terminal', workerType: null });
+    const { service, tmux } = buildService({
+      window: win, projectServerRepo: untrustedProjectServerRepo('deny'),
+    });
+
+    await service.respawn(1, makeServer());
+
+    expect(tmux.createWindow).toHaveBeenCalled();
   });
 });
 
