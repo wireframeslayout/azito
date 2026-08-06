@@ -122,7 +122,7 @@
     "displayNamePlaceholder": "例: dev-server"
   },
   "menu": {
-    "windows": "ウィンドウ",
+    "windows": "オブジェクト",
     "tasks": "タスク",
     "files": "ファイル",
     "repositories": "リポジトリ",
@@ -186,6 +186,22 @@
   },
   "tabContent": {
     "serverDetailMoved": "サーバーの詳細はサーバーグローバルページに移動しました。"
+  },
+  "objects": {
+    "title": "オブジェクト",
+    "sectionWindows": "ウィンドウ",
+    "sectionOperations": "オペレーションウィンドウ",
+    "sectionBrowsers": "ブラウザ",
+    "noObjects": "このプロジェクトにはまだオブジェクトがありません",
+    "noOperations": "実行中のオペレーションはありません",
+    "noBrowsers": "開いているブラウザはありません",
+    "openBrowser": "新しく開く",
+    "closeBrowserGroup": "このブラウザグループを閉じる",
+    "browserPages": "{{count}} ページ",
+    "browserBlankUrl": "空のタブ",
+    "browserError": "ブラウザの状態を取得できません",
+    "retry": "再試行",
+    "selectServer": "サーバーを選択"
   },
   "viewLabels": {
     "description": "説明",

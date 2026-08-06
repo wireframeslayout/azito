@@ -78,7 +78,7 @@ export default function TasksSidebar({
     return Array.from(names);
   }, [tasks]);
 
-  const browserGroups = useBrowserGroups(serverNames);
+  const { groups: browserGroups } = useBrowserGroups(serverNames);
 
   const toggleExpanded = useCallback((taskId: number) => {
     setExpandedIds((prev) => {

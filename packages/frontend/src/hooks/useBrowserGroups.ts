@@ -8,6 +8,12 @@ export interface BrowserGroupInfo {
   urls: (string | null)[];
 }
 
+export interface BrowserGroupsState {
+  groups: Record<string, BrowserGroupInfo[]>;
+  errors: Record<string, string>;
+  refresh: () => void;
+}
+
 interface BrowserStatusResponse {
   running: boolean;
   clientCount: number;
@@ -30,8 +36,9 @@ function aggregateGroups(pages: BrowserStatusResponse['pages']): BrowserGroupInf
 
 const POLL_INTERVAL = 30_000;
 
-export function useBrowserGroups(serverNames: string[]): Record<string, BrowserGroupInfo[]> {
+export function useBrowserGroups(serverNames: string[]): BrowserGroupsState {
   const [groups, setGroups] = useState<Record<string, BrowserGroupInfo[]>>({});
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const [revision, setRevision] = useState(0);
   const refresh = useCallback(() => setRevision((r) => r + 1), []);
 
@@ -41,6 +48,7 @@ export function useBrowserGroups(serverNames: string[]): Record<string, BrowserG
     const names = serverNamesKey ? serverNamesKey.split(',') : [];
     if (names.length === 0) {
       setGroups({});
+      setErrors({});
       return;
     }
 
@@ -48,6 +56,7 @@ export function useBrowserGroups(serverNames: string[]): Record<string, BrowserG
 
     async function fetchAll() {
       const result: Record<string, BrowserGroupInfo[]> = {};
+      const failed: Record<string, string> = {};
       await Promise.all(
         names.map(async (name) => {
           try {
@@ -58,10 +67,14 @@ export function useBrowserGroups(serverNames: string[]): Record<string, BrowserG
             }
           } catch (e) {
             console.debug(`[useBrowserGroups] failed to fetch status for ${name}:`, e);
+            failed[name] = e instanceof Error ? e.message : String(e);
           }
         }),
       );
-      if (!cancelled) setGroups(result);
+      if (!cancelled) {
+        setGroups(result);
+        setErrors(failed);
+      }
     }
 
     void fetchAll();
@@ -83,5 +96,5 @@ export function useBrowserGroups(serverNames: string[]): Record<string, BrowserG
     }, [refresh]),
   });
 
-  return groups;
+  return { groups, errors, refresh };
 }
