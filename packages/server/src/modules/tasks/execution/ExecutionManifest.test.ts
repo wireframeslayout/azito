@@ -9,6 +9,8 @@ import type { Task } from '../Task';
 import type { IUnitRepository, Unit } from '../../units/Unit';
 import type { IProjectRepository, ProjectDetail } from '../../projects/Project';
 import type { IProjectServerRepository, ProjectServer } from '../../projects/ProjectServer';
+import type { IServerRepository, ServerConfig } from '../../servers/Server';
+import type { SqliteProjectSecretRepository } from '../../projects/SqliteProjectSecretRepository';
 import type { UnitType, UnitTypePhase } from '../../sidekicks/UnitType';
 import type { SidekickPackage } from '../../sidekicks/SidekickPackage';
 import type { PhaseConfig } from '../../sidekicks/PhaseConfig';
@@ -117,6 +119,22 @@ function makeProjectServer(overrides: Partial<ProjectServer> = {}): ProjectServe
   };
 }
 
+function makeServerConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
+  return {
+    name: 'test-server',
+    type: 'local',
+    host: null,
+    agentPort: null,
+    agentToken: null,
+    agentVersion: null,
+    sshHost: null,
+    muxRuntime: 'system',
+    sshHostFingerprint: null,
+    createdAt: '2026-01-01T00:00:00Z',
+    ...overrides,
+  };
+}
+
 interface Fixture {
   units: Record<number, Unit>;
   project: ProjectDetail | null;
@@ -126,6 +144,15 @@ interface Fixture {
   // exercised deliberately by the "sidekick body digest" tests further down.
   unitTypes?: Record<string, UnitType>;
   sidekicks?: SidekickPackage[];
+  // Both optional (Issue #328 tenth-round review): most existing fixtures
+  // below don't register a `servers` row for 'test-server' or any project
+  // secrets, so `manifest.server.type/host/agentPort/sshHost` resolve to
+  // null and `manifest.secrets.namesDigest` resolves to the digest of an
+  // empty set — consistently across every call, so pre-existing hash
+  // (in)equality assertions are unaffected. Exercised deliberately by the
+  // "server retargeting" / "project secrets" tests further down.
+  servers?: Record<string, ServerConfig>;
+  secretNames?: string[];
 }
 
 function makeSidekick(overrides: Partial<SidekickPackage> = {}): SidekickPackage {
@@ -169,6 +196,14 @@ function makeDeps(fixture: Fixture) {
     find: vi.fn((_projectId: number, serverName: string) => fixture.projectServers[serverName] ?? null),
     findByProject: vi.fn(() => Object.values(fixture.projectServers)),
   };
+  const servers = fixture.servers ?? {};
+  const serverRepo: Pick<IServerRepository, 'findByName'> = {
+    findByName: vi.fn((name: string) => servers[name] ?? null),
+  };
+  const secretNames = fixture.secretNames ?? [];
+  const projectSecretRepo: Pick<SqliteProjectSecretRepository, 'findByProject'> = {
+    findByProject: vi.fn(() => secretNames.map((name, i) => ({ id: i, projectId: fixture.project?.id ?? 0, name, createdAt: '2026-01-01T00:00:00Z' }))),
+  };
   const unitTypes = fixture.unitTypes ?? {};
   const unitTypeLoader: { get: (name: string) => UnitType | undefined; getOrThrow: (name: string) => UnitType } = {
     get: vi.fn((name: string) => unitTypes[name]),
@@ -184,10 +219,12 @@ function makeDeps(fixture: Fixture) {
     findDefaultForTag: vi.fn((tag: string) => sidekicks.find((s) => s.isDefault && s.tags.includes(tag)) ?? null),
     list: vi.fn(() => sidekicks),
   };
-  return { unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader } as unknown as {
+  return { unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader } as unknown as {
     unitRepo: IUnitRepository;
     projectRepo: IProjectRepository;
     projectServerRepo: IProjectServerRepository;
+    serverRepo: IServerRepository;
+    projectSecretRepo: SqliteProjectSecretRepository;
     unitTypeLoader: import('../../sidekicks/UnitTypeLoader').UnitTypeLoader;
     sidekickLoader: import('../../sidekicks/SidekickPackageLoader').SidekickPackageLoader;
   };
@@ -251,6 +288,145 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     const editedHash = hashFor(edited, fixture);
 
     expect(editedHash).not.toBe(approvedHash);
+  });
+
+  // Issue #328 tenth-round review finding 1: re-registering the SAME server
+  // name against a different host/type used to leave the fingerprint
+  // unchanged (only `serverName` was hashed, never the resolved
+  // `ServerConfig`), so an already-approved task could silently execute
+  // against a different machine post-approval. These tests exercise the
+  // fix without touching the task row at all — same shape as the
+  // project.defaultUnitId/Unit.systemPrompt/project_servers.workingDirectory
+  // "WITHOUT touching the task row" tests above, since a server re-registration
+  // is exactly that class of attack (approval covers resolved content, not
+  // just what the task row names).
+  it.each(['type', 'host', 'agentPort', 'sshHost'] as const)(
+    "re-registering 'test-server' with a different %s alone invalidates approval, WITHOUT touching the task row",
+    (field) => {
+      const unitFixture = { 20: makeUnit() };
+      const project = makeProject();
+      const projectServers = { 'test-server': makeProjectServer() };
+      const task = makeTask();
+
+      const before: Record<string, ServerConfig> = {
+        'test-server': makeServerConfig({ type: 'local', host: 'host-a', agentPort: null, sshHost: null }),
+      };
+      const after: Record<string, ServerConfig> = {
+        'test-server': makeServerConfig({
+          ...before['test-server'],
+          ...(field === 'type' ? { type: 'agent' as const } : {}),
+          ...(field === 'host' ? { host: 'host-b' } : {}),
+          ...(field === 'agentPort' ? { agentPort: 2222 } : {}),
+          ...(field === 'sshHost' ? { sshHost: 'other@host-b' } : {}),
+        }),
+      };
+
+      const hashBefore = hashFor(task, { units: unitFixture, project, projectServers, servers: before });
+      const hashAfter = hashFor(task, { units: unitFixture, project, projectServers, servers: after });
+
+      expect(hashAfter).not.toBe(hashBefore);
+    },
+  );
+
+  it('re-registering the server with byte-identical content (a no-op edit) does NOT invalidate approval — a run against it must not self-invalidate', () => {
+    const fixture: Fixture = {
+      units: { 20: makeUnit() },
+      project: makeProject(),
+      projectServers: { 'test-server': makeProjectServer() },
+      servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021, sshHost: null }) },
+    };
+    const task = makeTask();
+    const approvedHash = hashFor(task, fixture);
+
+    // Re-resolve from scratch (fresh serverRepo.findByName() call), same as
+    // resolveExecutionManifest() would do on the actual run this approval is
+    // for — this is the acceptance criterion the module doc comment's
+    // "server" bullet exists to keep true.
+    const rerunHash = hashFor(task, fixture);
+
+    expect(rerunHash).toBe(approvedHash);
+  });
+
+  it('editing project_servers.workingDirectory but NOT re-registering the servers row does not accidentally exercise the server-targeting fields (control case)', () => {
+    // Sanity check that the two `server` sub-objects (project_servers-backed
+    // workingDirectory/branch vs. servers-backed type/host/agentPort/sshHost)
+    // are independent — a change to one must not be masked or duplicated by
+    // the other.
+    const servers = { 'test-server': makeServerConfig() };
+    const task = makeTask();
+
+    const hashA = hashFor(task, {
+      units: { 20: makeUnit() },
+      project: makeProject(),
+      projectServers: { 'test-server': makeProjectServer({ workingDirectory: '/work-a' }) },
+      servers,
+    });
+    const hashB = hashFor(task, {
+      units: { 20: makeUnit() },
+      project: makeProject(),
+      projectServers: { 'test-server': makeProjectServer({ workingDirectory: '/work-b' }) },
+      servers,
+    });
+
+    expect(hashA).not.toBe(hashB);
+  });
+
+  // Issue #328 tenth-round review finding 2: project secrets (injected as
+  // AZITO_SECRET_<name> env vars by ExecuteTaskUseCase.buildExtraEnv) were
+  // not covered by the manifest at all — adding a secret to the project
+  // after approval let an already-approved untrusted task use it without
+  // re-prompting. Only the NAME SET is covered (see secrets.namesDigest's
+  // doc comment on ResolvedExecutionManifest) — these tests assert both
+  // halves of that deliberate asymmetry.
+  it('adding a project secret alone invalidates a prior approval, WITHOUT touching the task row', () => {
+    const fixture = (secretNames: string[]): Fixture => ({
+      units: { 20: makeUnit() },
+      project: makeProject(),
+      projectServers: { 'test-server': makeProjectServer() },
+      secretNames,
+    });
+    const task = makeTask();
+
+    const hashBefore = hashFor(task, fixture(['DEPLOY_KEY']));
+    const hashAfter = hashFor(task, fixture(['DEPLOY_KEY', 'STRIPE_SECRET']));
+
+    expect(hashAfter).not.toBe(hashBefore);
+  });
+
+  it('the ORDER project secrets are returned in does not affect the hash (name SET, not a list)', () => {
+    const fixture = (secretNames: string[]): Fixture => ({
+      units: { 20: makeUnit() },
+      project: makeProject(),
+      projectServers: { 'test-server': makeProjectServer() },
+      secretNames,
+    });
+    const task = makeTask();
+
+    const hashInOrderA = hashFor(task, fixture(['ALPHA', 'BETA', 'GAMMA']));
+    const hashInOrderB = hashFor(task, fixture(['GAMMA', 'ALPHA', 'BETA']));
+
+    expect(hashInOrderA).toBe(hashInOrderB);
+  });
+
+  it("rotating an EXISTING secret's value (same name set) does NOT invalidate approval — this is the deliberate asymmetry documented on secrets.namesDigest", () => {
+    // The manifest only ever sees names (findByProject, never
+    // findByProjectWithValues) — this test asserts that by construction: two
+    // fixtures with the identical name set produce the identical hash,
+    // modeling "the secret's value was rotated but nothing renamed/added/
+    // removed" without needing to plumb a value through this test's mocks at
+    // all (the manifest has no path to read one).
+    const fixture: Fixture = {
+      units: { 20: makeUnit() },
+      project: makeProject(),
+      projectServers: { 'test-server': makeProjectServer() },
+      secretNames: ['DEPLOY_KEY'],
+    };
+    const task = makeTask();
+
+    const hashBeforeRotation = hashFor(task, fixture);
+    const hashAfterRotation = hashFor(task, fixture);
+
+    expect(hashAfterRotation).toBe(hashBeforeRotation);
   });
 
   it('editing task.unitId alone invalidates a prior approval (retargets the Unit)', () => {

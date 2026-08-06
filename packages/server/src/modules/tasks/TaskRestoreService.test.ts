@@ -168,6 +168,13 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
       findDefaultForTag: vi.fn(() => null),
       list: vi.fn(() => []),
     } as unknown as TaskRestoreDeps['sidekickLoader'],
+    // Needed by resolveExecutionManifest() to resolve `secrets.namesDigest`
+    // (Issue #328 tenth-round review) — empty by default, same rationale as
+    // unitTypeLoader/sidekickLoader above.
+    projectSecretRepo: {
+      findByProject: vi.fn(() => []),
+      findByProjectWithValues: vi.fn(() => []),
+    } as unknown as TaskRestoreDeps['projectSecretRepo'],
     ...overrides,
   };
 }

@@ -78,6 +78,8 @@ function expectedManifestHash(opts: UnitsRouteOptions, task: Task): string {
     unitRepo: opts.unitRepo,
     projectRepo: opts.projectRepo,
     projectServerRepo: opts.projectServerRepo,
+    serverRepo: opts.serverRepo,
+    projectSecretRepo: opts.projectSecretRepo,
     unitTypeLoader: opts.unitTypeLoader,
     sidekickLoader: opts.sidekickLoader,
   });
@@ -162,6 +164,9 @@ function makeOpts(task: Task, unit: Unit): UnitsRouteOptions {
     serverRepo: {
       findByName: vi.fn(() => null),
     } as unknown as UnitsRouteOptions['serverRepo'],
+    projectSecretRepo: {
+      findByProject: vi.fn(() => []),
+    } as unknown as UnitsRouteOptions['projectSecretRepo'],
     windowRepo: {
       findById: vi.fn(() => null),
     } as unknown as UnitsRouteOptions['windowRepo'],
@@ -348,6 +353,13 @@ describe('POST /api/units/:id/approve-execution (Issue #328)', () => {
     expect(opts.executeTaskUseCase.execute).not.toHaveBeenCalled();
     expect(opts.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();
     expect(opts.taskRestoreService.restore).not.toHaveBeenCalled();
+    // Issue #328 tenth-round review finding 3: the 'execution_approved'
+    // audit log entry used to be written BEFORE consumePendingApproval(),
+    // so the losing side of a race left a false "approved" record behind
+    // even though this request's approval never actually took effect (the
+    // 409 above proves it didn't). Logging must happen strictly AFTER the
+    // atomic consume succeeds.
+    expect(opts.logRepo.append).not.toHaveBeenCalledWith(1, 20, 'status_change', { status: 'execution_approved' });
   });
 
   it('rejects a DENIAL with 409 and applies no side effects when consumePendingApproval() reports it was already consumed', async () => {
@@ -362,6 +374,41 @@ describe('POST /api/units/:id/approve-execution (Issue #328)', () => {
 
     expect(res.statusCode).toBe(409);
     expect(opts.taskRepo.consumePendingApproval).toHaveBeenCalledWith(1, { status: 'failed' });
+    // Same rationale as the approval case above (Issue #328 tenth-round
+    // review finding 3) — a losing denial request must not leave an
+    // 'execution_denied' audit entry behind for a denial that never took
+    // effect.
+    expect(opts.logRepo.append).not.toHaveBeenCalledWith(1, 20, 'status_change', { status: 'execution_denied' });
+  });
+
+  it('logs execution_approved only AFTER consumePendingApproval() succeeds (Issue #328 tenth-round review finding 3)', async () => {
+    const task = makeTask({ status: 'pending_approval', pendingOperation: 'execute', tmuxWindow: null, description: 'do the thing' });
+    const opts = makeOpts(task, makeUnit());
+    const callOrder: string[] = [];
+    // Wrap (not replace) each mock's existing behavior with call-order
+    // tracking — `originalConsumeImpl`/`originalAppendImpl` are the real
+    // implementations makeOpts() already wired (state mutation / no-op
+    // respectively), captured before this test overrides them.
+    const originalConsumeImpl = (opts.taskRepo.consumePendingApproval as ReturnType<typeof vi.fn>).getMockImplementation() as
+      (id: number, fields: { status?: Task['status']; executionApprovedFingerprintHash?: string | null }) => boolean;
+    (opts.taskRepo.consumePendingApproval as ReturnType<typeof vi.fn>).mockImplementation((id: number, fields: { status?: Task['status']; executionApprovedFingerprintHash?: string | null }) => {
+      callOrder.push('consumePendingApproval');
+      return originalConsumeImpl(id, fields);
+    });
+    // logRepo.append's mock has no implementation of its own (a bare
+    // `vi.fn()` — makeOpts() only asserts it was called-with, never gives it
+    // behavior), so there is nothing to preserve here beyond tracking order.
+    (opts.logRepo.append as ReturnType<typeof vi.fn>).mockImplementation((_taskId: number, _unitId: number, _type: string, content: { status?: string }) => {
+      if (content?.status === 'execution_approved') callOrder.push('logRepo.append(execution_approved)');
+    });
+    const app = Fastify();
+    await app.register(unitsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/units/20/approve-execution', payload: { taskId: 1, approved: true } });
+
+    expect(res.statusCode).toBe(200);
+    expect(callOrder).toEqual(['consumePendingApproval', 'logRepo.append(execution_approved)']);
   });
 
   it('rejects a string "false" for approved instead of treating it as truthy approval', async () => {

@@ -245,7 +245,7 @@ function buildAgentUpdater(agentBundler: AgentBundler, infra: SharedInfra, repos
 function buildApplicationServices(infra: SharedInfra, repos: Repositories): ApplicationServices {
   const sessionStrategyFactory = new SessionStrategyFactory(infra.agentRegistry, infra.transportFactory);
   const sessionCaptureService = new SessionCaptureService(repos.windowRepo, repos.taskRepo, repos.serverRepo, sessionStrategyFactory);
-  const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.tmuxClient, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, sessionCaptureService);
+  const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.tmuxClient, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, repos.serverRepo, repos.projectSecretRepo, sessionCaptureService);
   const taskRestoreService = new TaskRestoreService({
     taskRepo: repos.taskRepo,
     serverRepo: repos.serverRepo,
@@ -260,6 +260,7 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories): Appl
     logRepo: repos.logRepo,
     unitTypeLoader: infra.unitTypeLoader,
     sidekickLoader: infra.sidekickPackageLoader,
+    projectSecretRepo: repos.projectSecretRepo,
   });
   const usageService = new UsageService(infra.agentRegistry);
   const agentSignalService = new AgentSignalService(repos.agentTurnRepo, infra.turnSignalHub, repos.logRepo);

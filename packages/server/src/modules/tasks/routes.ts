@@ -420,7 +420,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       // the human to resubmit this same /answer call. See the transition
       // table on Task.pendingOperation.
       try {
-        executeTaskUseCase.enforceExecutionGate(task, answerUnitId, server, 'resume_await_answer');
+        executeTaskUseCase.enforceExecutionGate(task, answerUnitId, 'resume_await_answer');
       } catch (err) {
         if (replyToExecutionGateError(err, reply)) return;
         throw err;

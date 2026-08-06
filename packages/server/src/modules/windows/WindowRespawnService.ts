@@ -6,6 +6,8 @@ import type { ITaskRepository, Task } from '../tasks/Task';
 import type { IUnitRepository } from '../units/Unit';
 import type { IProjectRepository } from '../projects/Project';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
+import type { IServerRepository } from '../servers/Server';
+import type { SqliteProjectSecretRepository } from '../projects/SqliteProjectSecretRepository';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { IExecutionLogRepository } from '../tasks/ExecutionLog';
 import { PathResolverFactory, assertDirectoryContained } from '../git/PathContainment';
@@ -107,6 +109,13 @@ export class WindowRespawnService {
     // instead of failing to compile.
     private unitTypeLoader: UnitTypeLoader,
     private sidekickLoader: SidekickPackageLoader,
+    // Required for the same reason unitTypeLoader/sidekickLoader are (see
+    // comments above): resolveExecutionManifest() needs these to resolve
+    // the `server.type`/`host`/`agentPort`/`sshHost` and
+    // `secrets.namesDigest` manifest fields the same way every other
+    // execution entry point does (Issue #328 tenth-round review).
+    private serverRepo: IServerRepository,
+    private projectSecretRepo: SqliteProjectSecretRepository,
     private sessionCaptureService?: SessionCaptureService,
   ) {}
 
@@ -253,6 +262,8 @@ export class WindowRespawnService {
       unitRepo: this.unitRepo,
       projectRepo: this.projectRepo,
       projectServerRepo: this.projectServerRepo,
+      serverRepo: this.serverRepo,
+      projectSecretRepo: this.projectSecretRepo,
       unitTypeLoader: this.unitTypeLoader,
       sidekickLoader: this.sidekickLoader,
     }, respawnInput, server.name);

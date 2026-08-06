@@ -7,6 +7,7 @@ import type { ExecuteTaskUseCase } from '../tasks/execution/ExecuteTaskUseCase';
 import type { IProjectRepository } from '../projects/Project';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
 import type { IServerRepository } from '../servers/Server';
+import type { SqliteProjectSecretRepository } from '../projects/SqliteProjectSecretRepository';
 import type { IWindowRepository } from '../windows/Window';
 import type { WindowRespawnService } from '../windows/WindowRespawnService';
 import { buildRespawnManifestInput } from '../windows/WindowRespawnService';
@@ -35,6 +36,10 @@ export interface UnitsRouteOptions {
   sidekickLoader: SidekickPackageLoader;
   unitTypeLoader: UnitTypeLoader;
   taskRestoreService: TaskRestoreService;
+  // Needed by the approve-execution handler's resolveExecutionManifest()
+  // call to resolve `secrets.namesDigest` (Issue #328 tenth-round review)
+  // the same way every other execution entry point does.
+  projectSecretRepo: SqliteProjectSecretRepository;
 }
 
 // ─── Helpers ───
@@ -96,7 +101,7 @@ function parseWorkerRuntimeInput(raw: unknown): WorkerRuntime | undefined {
 // ─── Plugin ───
 
 const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, done) => {
-  const { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, projectServerRepo, serverRepo, windowRepo, respawnService, sidekickLoader, unitTypeLoader, taskRestoreService } = opts;
+  const { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, projectServerRepo, serverRepo, windowRepo, respawnService, sidekickLoader, unitTypeLoader, taskRestoreService, projectSecretRepo } = opts;
 
   // ── GET /api/units ──
   fastify.get('/api/units', async () => {
@@ -376,7 +381,7 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
         if (feedback) {
           // Send feedback and restart planning via followUp
           try {
-            executeTaskUseCase.enforceExecutionGate(task, id, server, 'resume_await_plan_review');
+            executeTaskUseCase.enforceExecutionGate(task, id, 'resume_await_plan_review');
           } catch (err) {
             if (replyToExecutionGateError(err, reply)) return;
             throw err;
@@ -400,7 +405,7 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
       // here must not auto-resume either — see the comment above this
       // handler and the transition table on Task.pendingOperation.
       try {
-        executeTaskUseCase.enforceExecutionGate(task, id, server, 'resume_await_plan_review');
+        executeTaskUseCase.enforceExecutionGate(task, id, 'resume_await_plan_review');
       } catch (err) {
         if (replyToExecutionGateError(err, reply)) return;
         throw err;
@@ -510,7 +515,6 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
       const priorStatus = (task.pendingOperationPriorStatus ?? 'failed') as TaskStatus;
 
       if (!approved) {
-        logRepo.append(taskId, id, 'status_change', { status: 'execution_denied' });
         // A denied restore never started anything — put the task back to
         // 'archived' (its state before the blocked restore attempt) rather
         // than 'failed', which would misrepresent an archived task as a
@@ -533,6 +537,13 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
         if (!consumed) {
           return reply.status(409).send({ error: `Task ${taskId}'s pending approval was already resolved by a concurrent request` });
         }
+        // Logged only AFTER the atomic consume above succeeds (Issue #328
+        // tenth-round review finding 3): logging first meant a request that
+        // lost the compare-and-clear race (and got a 409 above) had already
+        // written an "execution_denied" audit entry for a denial that never
+        // actually took effect — a false record in the audit log, the exact
+        // thing an approval/denial audit trail exists to prevent.
+        logRepo.append(taskId, id, 'status_change', { status: 'execution_denied' });
         return { ok: true };
       }
 
@@ -543,7 +554,6 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
       // the resolved Unit's content, project.defaultUnitId, or the
       // project_servers row's config, see ExecutionManifest.ts — will
       // invalidate this and require approval again.
-      logRepo.append(taskId, id, 'status_change', { status: 'execution_approved' });
       // For a 'respawn' approval, the fingerprint recorded here must be
       // resolved against respawnWindow's OWN server (win.serverName), not
       // whatever server the task itself resolves to — respawn() computes its
@@ -556,7 +566,7 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
       // comment already covers for the `respawn` manifest field).
       const { manifest } = resolveExecutionManifest(
         task,
-        { unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader },
+        { unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader },
         respawnWindow ? buildRespawnManifestInput(respawnWindow) : undefined,
         respawnWindow?.serverName,
       );
@@ -576,6 +586,12 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
       if (!consumed) {
         return reply.status(409).send({ error: `Task ${taskId}'s pending approval was already resolved by a concurrent request` });
       }
+      // Logged only AFTER the atomic consume above succeeds — same rationale
+      // as the denial branch's log-ordering fix above (Issue #328
+      // tenth-round review finding 3): a request that loses the race gets a
+      // 409 and must not leave an "execution_approved" audit entry behind
+      // for an approval that never actually took effect.
+      logRepo.append(taskId, id, 'status_change', { status: 'execution_approved' });
 
       // Fire-and-forget below, matching the pre-existing convention for
       // every long-running resume path in this file (approve-plan above

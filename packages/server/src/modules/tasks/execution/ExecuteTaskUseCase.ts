@@ -152,6 +152,8 @@ export class ExecuteTaskUseCase {
       this.workerInput,
       this.unitTypeLoader,
       this.runtimeRegistry,
+      this.serverRepo,
+      this.projectSecretRepo,
     );
   }
 
@@ -244,11 +246,21 @@ export class ExecuteTaskUseCase {
    * restores task.status to pendingOperationPriorStatus and leaves it for the
    * human to resubmit the same request (Issue #328 seventh-round review
    * symptom A).
+   *
+   * No `server: ServerConfig` parameter (Issue #328 tenth-round review
+   * finding 1: this method used to take one and never read it — dead
+   * wiring that masked the actual gap, which was that the MANIFEST itself
+   * never resolved a ServerConfig at all, see ExecutionManifest.ts's
+   * `server` field doc comment). resolveExecutionManifest() below now
+   * resolves the target server itself, via the exact same `serverName`
+   * every caller here already resolved before calling in — passing a
+   * second, separately-captured copy through this parameter would be the
+   * same divergent-resolution-path risk this file's callers already avoid
+   * for Unit/projectServer.
    */
   enforceExecutionGate(
     task: Task,
     unitId: number,
-    server: ServerConfig,
     operation: 'execute' | 'resume' | 'resume_await_answer' | 'resume_await_plan_review',
   ) {
     // resolveExecutionManifest() re-resolves the same (task.unitId ??
@@ -261,6 +273,8 @@ export class ExecuteTaskUseCase {
       unitRepo: this.unitRepo,
       projectRepo: this.projectRepo,
       projectServerRepo: this.projectServerRepo,
+      serverRepo: this.serverRepo,
+      projectSecretRepo: this.projectSecretRepo,
       unitTypeLoader: this.unitTypeLoader,
       sidekickLoader: this.sidekickLoader,
     });
@@ -376,7 +390,7 @@ export class ExecuteTaskUseCase {
     // resource guard, before any tmux window, before any worktree, before
     // any secret is injected. Resolves project/projectServer once for reuse
     // below.
-    const { project, projectServer } = this.enforceExecutionGate(task, unitId, server, 'execute');
+    const { project, projectServer } = this.enforceExecutionGate(task, unitId, 'execute');
 
     // リソースひっ迫時はウィンドウ作成前に中断する（タスクは開始前なので status は変更しない）。
     // force 指定（フロントの「それでも実行」）でスキップできる。
@@ -740,7 +754,7 @@ export class ExecuteTaskUseCase {
     // endpoint issues) must not resume it unattended. The `comment` for this
     // particular call is not persisted anywhere and is lost when blocked;
     // the caller must resubmit it after approval (see approve-execution).
-    this.enforceExecutionGate(task, unitId, server, 'resume');
+    this.enforceExecutionGate(task, unitId, 'resume');
 
     this.appendLog(taskId, unitId, 'user_comment', { text: comment });
     this.taskRepo.updateStatus(taskId, 'in_progress');
@@ -1028,7 +1042,7 @@ export class ExecuteTaskUseCase {
     // recovery (RecoverStuckTasksUseCase) — both resume a worker that may
     // have gone stale for an untrusted task (description edited since the
     // approval this run started under).
-    this.enforceExecutionGate(task, unitId, server, 'resume');
+    this.enforceExecutionGate(task, unitId, 'resume');
 
     // Validate currentPhase against unitType phases
     if (task.currentPhase) {

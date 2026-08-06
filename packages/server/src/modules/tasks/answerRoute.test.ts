@@ -192,7 +192,7 @@ describe('POST /api/tasks/:id/answer — untrusted-input execution gate (Issue #
     // 'resume_await_answer', not plain 'resume' (Issue #328 seventh-round
     // review symptom A): approving this block must not auto-resume via
     // resumeStateMachine() — see Task.pendingOperation's transition table.
-    expect(opts.executeTaskUseCase.enforceExecutionGate).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.anything(), 'resume_await_answer');
+    expect(opts.executeTaskUseCase.enforceExecutionGate).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'resume_await_answer');
   });
 
   it('allowed by the gate: clears pendingQuestions, logs the answers, and calls followUp with the answer text', async () => {

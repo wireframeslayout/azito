@@ -300,7 +300,7 @@ function buildUseCase(opts: {
   };
   const turnSignalHub = { emitSignal: vi.fn(), subscribe: vi.fn(() => () => {}) };
   const supervisorRegistry = { isConnected: vi.fn(() => false), sendCommand: vi.fn(async () => {}), clearExitMarker: vi.fn() };
-  const projectSecretRepo = { findByProjectWithValues: vi.fn(() => []) };
+  const projectSecretRepo = { findByProjectWithValues: vi.fn(() => []), findByProject: vi.fn(() => []) };
   // Only `get` matters for resolveExecutionManifest()'s `sidekick` field
   // resolution (Issue #328 sixth-round review); returning a UnitType with no
   // phases means that resolution finds no enabled phase and the field stays
@@ -337,7 +337,7 @@ function buildUseCase(opts: {
     projectSecretRepo as any,
   );
 
-  return { useCase, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader };
+  return { useCase, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader };
 }
 
 describe('ExecuteTaskUseCase execution-env resolution', () => {
@@ -617,13 +617,13 @@ describe('ExecuteTaskUseCase execution gate (Issue #328)', () => {
       description: 'do the thing',
       inputTrust: 'untrusted',
     });
-    const { useCase, tmux, unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader } = buildUseCase({
+    const { useCase, tmux, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader } = buildUseCase({
       task,
       project: makeProject({ defaultUnitId: null }),
       units: [makeUnit({ id: 10 })],
       projectServer: gateProjectServer,
     });
-    const { manifest } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo, unitTypeLoader: unitTypeLoader as any, sidekickLoader: sidekickLoader as any });
+    const { manifest } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo: projectSecretRepo as any, unitTypeLoader: unitTypeLoader as any, sidekickLoader: sidekickLoader as any });
     task.executionApprovedFingerprintHash = hashExecutionManifest(manifest);
 
     await useCase.execute(10, 1);
@@ -799,7 +799,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITOç›
     const turnRepo = new FakeAgentTurnRepo();
     const turnSignalHub = new TurnSignalHub();
     const supervisorRegistry = { isConnected: vi.fn(() => false), sendCommand: vi.fn(async () => {}), clearExitMarker: vi.fn() };
-    const projectSecretRepo = { findByProjectWithValues: vi.fn(() => []) };
+    const projectSecretRepo = { findByProjectWithValues: vi.fn(() => []), findByProject: vi.fn(() => []) };
 
     const useCase = new ExecuteTaskUseCase(
       taskRepo,

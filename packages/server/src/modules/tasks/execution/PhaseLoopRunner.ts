@@ -7,6 +7,8 @@ import type { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
 import type { IWorkerRuntime, WorkerContext } from './runtime/IWorkerRuntime';
 import type { IProjectRepository } from '../../projects/Project';
 import type { IProjectServerRepository } from '../../projects/ProjectServer';
+import type { IServerRepository } from '../../servers/Server';
+import type { SqliteProjectSecretRepository } from '../../projects/SqliteProjectSecretRepository';
 import type { PhaseConfig } from '../../sidekicks/PhaseConfig';
 import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoader';
 import { resolvePhaseSidekick, resolveEnabledPhases, resolveCurrentPhaseIndex } from '../../sidekicks/resolvePhaseSidekick';
@@ -87,6 +89,14 @@ export class PhaseLoopRunner {
     private workerInput: WorkerInputService,
     private unitTypeLoader: UnitTypeLoader,
     private runtimeRegistry: WorkerRuntimeRegistry,
+    // Required for reverifyExecutionGateForPhase()'s resolveExecutionManifest()
+    // call below (Issue #328 tenth-round review) — same as
+    // ExecuteTaskUseCase/TaskRestoreService/WindowRespawnService, this class
+    // must resolve the manifest's `server`/`secrets` fields the same way a
+    // real run does, not skip them because this class doesn't otherwise
+    // depend on these repositories.
+    private serverRepo: IServerRepository,
+    private projectSecretRepo: SqliteProjectSecretRepository,
   ) {}
 
   private async findPrUrl(task: { projectId: number }, branch: string | null): Promise<string | null> {
@@ -141,6 +151,8 @@ export class PhaseLoopRunner {
       unitRepo: this.unitRepo,
       projectRepo: this.projectRepo,
       projectServerRepo: this.projectServerRepo,
+      serverRepo: this.serverRepo,
+      projectSecretRepo: this.projectSecretRepo,
       unitTypeLoader: this.unitTypeLoader,
       sidekickLoader: this.sidekickLoader,
     });

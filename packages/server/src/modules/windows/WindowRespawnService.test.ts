@@ -207,6 +207,11 @@ function buildService(opts: {
   // that don't exercise it.
   const unitTypeLoader = { get: vi.fn(() => undefined), getOrThrow: vi.fn(() => { throw new Error('not used in tests'); }) } as any;
   const sidekickLoader = { findByName: vi.fn(() => null), findDefaultForTag: vi.fn(() => null), list: vi.fn(() => []) } as any;
+  // Only needed by resolveExecutionManifest() to resolve the manifest's
+  // `server`/`secrets` fields (Issue #328 tenth-round review) — null/empty
+  // by default, fine for tests that don't exercise them.
+  const serverRepo = { findByName: vi.fn(() => null) } as any;
+  const projectSecretRepo = { findByProject: vi.fn(() => []) } as any;
 
   const service = new WindowRespawnService(
     windowRepo,
@@ -221,10 +226,12 @@ function buildService(opts: {
     logRepo,
     unitTypeLoader,
     sidekickLoader,
+    serverRepo,
+    projectSecretRepo,
     undefined,
   );
 
-  return { service, windowRepo, tmux, sentCommands, clearExitMarker, taskRepo, logRepo };
+  return { service, windowRepo, tmux, sentCommands, clearExitMarker, taskRepo, logRepo, serverRepo, projectSecretRepo };
 }
 
 describe('WindowRespawnService.respawn — supervisor wrap', () => {
@@ -669,6 +676,11 @@ describe('WindowRespawnService.respawn — respawn config fingerprint (Issue #32
       unitRepo: { findById: () => unit } as unknown as IUnitRepository,
       projectRepo: { findById: () => null } as unknown as IProjectRepository,
       projectServerRepo: { find: () => null, findByProject: () => [] } as unknown as IProjectServerRepository,
+      // Empty/null by default (Issue #328 tenth-round review) — matches
+      // buildService()'s own serverRepo/projectSecretRepo defaults, so a
+      // manifest approved here and one resolved via the real service agree.
+      serverRepo: { findByName: () => null } as any,
+      projectSecretRepo: { findByProject: () => [] } as any,
       unitTypeLoader: { get: () => undefined, getOrThrow: () => { throw new Error('not used in tests'); } } as any,
       sidekickLoader: { findByName: () => null, findDefaultForTag: () => null, list: () => [] } as any,
     };

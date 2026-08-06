@@ -5,6 +5,7 @@ import type { IProjectRepository } from '../projects/Project';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
 import type { IUnitRepository } from '../units/Unit';
 import type { IWindowRepository } from '../windows/Window';
+import type { SqliteProjectSecretRepository } from '../projects/SqliteProjectSecretRepository';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { WorktreeServiceFactory } from '../git/WorktreeServiceFactory';
 import { PathResolverFactory, assertDirectoryContained } from '../git/PathContainment';
@@ -30,6 +31,10 @@ export interface TaskRestoreDeps {
   projectServerRepo: IProjectServerRepository;
   unitRepo: IUnitRepository;
   windowRepo: IWindowRepository;
+  // Needed by resolveExecutionManifest() to resolve `secrets.namesDigest`
+  // (Issue #328 tenth-round review) the same way every other execution
+  // entry point does.
+  projectSecretRepo: SqliteProjectSecretRepository;
   tmux: TmuxClient;
   worktreeServiceFactory: WorktreeServiceFactory;
   transportFactory: TransportFactory;
@@ -49,7 +54,7 @@ export class TaskRestoreService {
   constructor(private deps: TaskRestoreDeps) {}
 
   async restore(task: Task, log: { warn: (msg: string) => void }): Promise<{ tmuxTarget: string; worktreePath: string | null }> {
-    const { taskRepo, serverRepo, projectRepo, projectServerRepo, unitRepo, windowRepo, tmux, worktreeServiceFactory, transportFactory, contentExtractor, logRepo, unitTypeLoader, sidekickLoader } = this.deps;
+    const { taskRepo, serverRepo, projectRepo, projectServerRepo, unitRepo, windowRepo, tmux, worktreeServiceFactory, transportFactory, contentExtractor, logRepo, unitTypeLoader, sidekickLoader, projectSecretRepo } = this.deps;
 
     const serverName = resolveTaskServerName(task, projectServerRepo);
     if (!serverName) {
@@ -71,7 +76,7 @@ export class TaskRestoreService {
     // project/unit/projectServer are resolved here and reused below
     // (unit may be null: restore() has always tolerated a task whose Unit
     // was deleted or was never set on either the task or its project).
-    const { manifest, project, unit, projectServer } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader });
+    const { manifest, project, unit, projectServer } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader });
     const unitId = unit?.id ?? null;
     const gate = checkExecutionGate(task, projectServer, hashExecutionManifest(manifest));
     if (!gate.allowed) {

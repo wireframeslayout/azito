@@ -5,6 +5,8 @@ import type { Task } from '../Task';
 import type { IUnitRepository, SubagentConfig, Unit } from '../../units/Unit';
 import type { IProjectRepository, ProjectDetail } from '../../projects/Project';
 import type { IProjectServerRepository, ProjectServer } from '../../projects/ProjectServer';
+import type { IServerRepository } from '../../servers/Server';
+import type { SqliteProjectSecretRepository } from '../../projects/SqliteProjectSecretRepository';
 import type { PhaseConfig } from '../../sidekicks/PhaseConfig';
 import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoader';
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
@@ -51,9 +53,21 @@ import { resolveUnitId, resolveTaskServerName, resolveBaseBranch } from './TaskE
  *   otherwise re-pointing a task at a different Unit with byte-identical
  *   config wouldn't invalidate approval, which is still a targeting change
  *   a human should re-confirm.
- * - server: the resolved server name plus its project_servers row's content
+ * - server: the resolved server name, its project_servers row's content
  *   (workingDirectory, branch) — NOT the per-run worktree path (see
- *   "deliberately excluded" below).
+ *   "deliberately excluded" below) — AND, since Issue #328 tenth-round
+ *   review, the fields of the resolved `servers` row (via IServerRepository)
+ *   that decide WHICH MACHINE a run actually executes on: `type` (local/
+ *   agent), `host`, `agentPort`, `sshHost`. Execution resolves a target
+ *   machine from `serverName` at run time via `serverRepo.findByName()` —
+ *   TransportFactory picks local/SSH/agent based on exactly these fields —
+ *   so hashing only the NAME left a hole: re-registering the same server
+ *   name against a different host/type changed nothing this fingerprint
+ *   covered, letting an already-approved task silently execute on a
+ *   different machine post-approval. `agentToken` is deliberately excluded
+ *   (see below) — everything else on `ServerConfig` is either an auth
+ *   secret or state that mutates independently of "what machine does this
+ *   task run on" (also see below).
  * - branches: base/target/work, each resolved the same way execution
  *   resolves them (resolveBaseBranch; task.targetBranch/branch directly,
  *   same as before).
@@ -74,6 +88,28 @@ import { resolveUnitId, resolveTaskServerName, resolveBaseBranch } from './TaskE
  *   resolveTaskPromptVars.ts (`[project.sidekickPrompt, unit.systemPrompt]`) —
  *   editing it changes what the worker is told exactly like editing
  *   unit.systemPrompt does, so it must invalidate approval the same way.
+ * - secrets.namesDigest: a sha256 digest of the SORTED set of project
+ *   secret NAMES (ExecuteTaskUseCase.buildExtraEnv injects every
+ *   `project_secrets` row for task.projectId as `AZITO_SECRET_<name>` env
+ *   vars into the task's tmux window — see the Issue #328 tenth-round
+ *   review finding this closes). Sorted so the digest is independent of
+ *   insertion order — the same "no delimiter for an attacker to move
+ *   content across a field boundary" property hashExecutionManifest's own
+ *   doc comment describes applies here too (see hashSecretNameSet()).
+ *   Values are deliberately NOT hashed or otherwise included, for two
+ *   reasons: (1) it would put plaintext secret material on a path that
+ *   feeds a hash computation, for no security benefit over hashing just the
+ *   names; (2) a value rotation (e.g. a leaked API key being replaced) would
+ *   then invalidate every already-approved task using that secret — the
+ *   same self-invalidation failure mode this file's "deliberately excluded"
+ *   section below warns about. The consequence of that choice is deliberate
+ *   and asymmetric: adding a NEW secret to the project changes the digest
+ *   (an untrusted task gaining access to something a human never reviewed
+ *   must re-prompt approval); replacing an EXISTING secret's value, with the
+ *   same name, does not (the human already approved that name being
+ *   injected — only the value changed, and Resolve at the Boundary already
+ *   treats "which secrets reach this task" as the thing being approved, not
+ *   "what are they set to today").
  * - unit.phaseConfig: decides which Sidekick package renders each phase
  *   (resolvePhaseSidekick.ts) and which phases are enabled/skipped
  *   (resolveEnabledPhases) — reassigning a phase to a different package or
@@ -129,6 +165,25 @@ import { resolveUnitId, resolveTaskServerName, resolveBaseBranch } from './TaskE
  *   and the system does not overwrite mid-run for this purpose.
  * - tmuxWindow, agentSessionId, pendingOperation(WindowId): run-scoped
  *   bookkeeping, not execution content or target.
+ * - server.agentToken: an authentication credential, not a targeting
+ *   decision — `TransportFactory` uses it to AUTHENTICATE to the host
+ *   `server.host`/`server.agentPort` already identify, it doesn't change
+ *   WHICH host that is. Including it would make a routine credential
+ *   rotation (`azito token rotate`-style agent re-provisioning) invalidate
+ *   every already-approved task on that server — the self-invalidation
+ *   failure mode this section exists to prevent.
+ * - server.agentVersion: bumped by AgentUpdater whenever the remote agent
+ *   process auto-updates, entirely independent of any human decision about
+ *   what/where a task runs.
+ * - server.sshHostFingerprint: TOFU host-key pinning state, mutated by
+ *   `fingerprintStore.saveFingerprint()` on legitimate key rotation (see
+ *   app/wiring.ts) — a host-identity integrity mechanism, not something a
+ *   human reviews as "which server will this task run on" (that's
+ *   `server.sshHost`, already covered above).
+ * - server.muxRuntime, server.createdAt: `muxRuntime` selects how tmux
+ *   itself is managed on an already-identified host (system vs. managed
+ *   process), not which host; `createdAt` is immutable registration
+ *   metadata. Neither is a targeting decision.
  * - status, priority, selfReviewCount, planMarkdown, changedFiles, prUrl,
  *   summaryJson: workflow state or worker-authored output, not input the
  *   approval needs to cover.
@@ -251,6 +306,27 @@ export function hashSidekickPackageTree(dir: string, body: string): string {
   return hash.digest('hex');
 }
 
+/**
+ * Deterministic digest of a SET of project secret names (Issue #328
+ * tenth-round review) — order-independent by construction: callers must
+ * pass names already sorted (resolveExecutionManifest below does this), and
+ * this function does not re-sort them itself so a caller mistake is visible
+ * rather than silently masked. NUL-delimited between entries for the same
+ * "no delimiter an attacker could use to make one name's suffix collide
+ * with the next name's prefix" reason hashSidekickPackageTree's own doc
+ * comment gives — secret names are project-admin-authored (not literally
+ * attacker-controlled the way a task title is), but the same cheap
+ * unambiguous encoding applies regardless.
+ */
+export function hashSecretNameSet(sortedNames: string[]): string {
+  const hash = createHash('sha256');
+  for (const name of sortedNames) {
+    hash.update(name);
+    hash.update('\0');
+  }
+  return hash.digest('hex');
+}
+
 export interface ResolvedExecutionManifest {
   unit: {
     id: number;
@@ -267,6 +343,17 @@ export interface ResolvedExecutionManifest {
     name: string | null;
     workingDirectory: string | null;
     branch: string | null;
+    // Fields from the resolved `servers` row (via IServerRepository) that
+    // decide WHICH MACHINE this task executes on — see the module doc
+    // comment's `server` bullet above for why these were added (Issue #328
+    // tenth-round review) and the "deliberately excluded" section for the
+    // ServerConfig fields intentionally left out (agentToken, agentVersion,
+    // sshHostFingerprint, muxRuntime, createdAt). `null` when `name` is null
+    // (no resolvable server) or the named server row no longer exists.
+    type: string | null;
+    host: string | null;
+    agentPort: number | null;
+    sshHost: string | null;
   };
   branches: {
     base: string;
@@ -284,6 +371,12 @@ export interface ResolvedExecutionManifest {
   };
   project: {
     sidekickPrompt: string | null;
+  };
+  // See the module doc comment's `secrets.namesDigest` bullet above for what
+  // this covers and why only names (sorted, digested), never values, are
+  // included.
+  secrets: {
+    namesDigest: string;
   };
   /**
    * The resolved Sidekick package for every enabled phase from the resume
@@ -338,6 +431,20 @@ export interface ExecutionManifestDeps {
   unitRepo: IUnitRepository;
   projectRepo: IProjectRepository;
   projectServerRepo: IProjectServerRepository;
+  // Needed to resolve the `server.type`/`host`/`agentPort`/`sshHost` fields
+  // (Issue #328 tenth-round review) — resolved via the SAME
+  // `serverRepo.findByName(serverName)` call TransportFactory's callers use
+  // at run time (ExecuteTaskUseCase.execute et al.), so this manifest can
+  // never drift from what execution actually resolves the target machine to
+  // be. A single resolution path here (not "pass in an already-resolved
+  // ServerConfig sometimes, look it up internally other times") avoids the
+  // exact class of drift the module doc comment above describes as how the
+  // earlier holes opened up.
+  serverRepo: IServerRepository;
+  // Needed to resolve `secrets.namesDigest` (Issue #328 tenth-round review)
+  // — `findByProject` (not `findByProjectWithValues`) so plaintext secret
+  // values never reach this module, only names.
+  projectSecretRepo: SqliteProjectSecretRepository;
   // Needed to resolve the `sidekick` field above — the same
   // UnitTypeLoader/SidekickPackageLoader singletons PhaseLoopRunner is
   // wired with (see app/wiring.ts), so the package this manifest hashes is
@@ -395,6 +502,18 @@ export function resolveExecutionManifest(
   const serverName = serverNameOverride ?? resolveTaskServerName(task, deps.projectServerRepo);
   const projectServer = serverName ? deps.projectServerRepo.find(task.projectId, serverName) : null;
   const baseBranch = resolveBaseBranch(task, projectServer, project);
+  // Resolved via the same `serverRepo.findByName()` TransportFactory's
+  // callers use at run time to pick local/SSH/agent — see the `server`
+  // manifest field's doc comment above (Issue #328 tenth-round review).
+  // `null` when there is no serverName to resolve, or the named row was
+  // deleted after being registered — tolerated the same way a null
+  // unit/projectServer is elsewhere in this function.
+  const serverConfig = serverName ? deps.serverRepo.findByName(serverName) : null;
+
+  // Sorted so the digest is independent of DB row insertion order — see
+  // `secrets.namesDigest`'s doc comment above. `findByProject` (not
+  // `findByProjectWithValues`): only names are read here, never values.
+  const secretNames = deps.projectSecretRepo.findByProject(task.projectId).map((s) => s.name).sort();
 
   // Same resolution PhaseLoopRunner.stateMachineLoop uses to pick the phase
   // a run resumes at (resolveCurrentPhaseIndex), then resolvePhaseSidekick
@@ -459,6 +578,10 @@ export function resolveExecutionManifest(
       name: serverName,
       workingDirectory: projectServer?.workingDirectory ?? null,
       branch: projectServer?.branch ?? null,
+      type: serverConfig?.type ?? null,
+      host: serverConfig?.host ?? null,
+      agentPort: serverConfig?.agentPort ?? null,
+      sshHost: serverConfig?.sshHost ?? null,
     },
     branches: {
       base: baseBranch,
@@ -479,6 +602,9 @@ export function resolveExecutionManifest(
     },
     project: {
       sidekickPrompt: project?.sidekickPrompt ?? null,
+    },
+    secrets: {
+      namesDigest: hashSecretNameSet(secretNames),
     },
     sidekicks,
     respawn: respawnInput ?? null,
@@ -526,6 +652,14 @@ export function hashExecutionManifest(manifest: ResolvedExecutionManifest): stri
       name: manifest.server.name ?? '',
       workingDirectory: manifest.server.workingDirectory ?? '',
       branch: manifest.server.branch ?? '',
+      type: manifest.server.type ?? '',
+      host: manifest.server.host ?? '',
+      // Left as `number | null` (not coerced to a sentinel number like 0,
+      // unlike the string fields above coerced to '') — 0 is a value
+      // `agentPort` could plausibly hold, so a real port and "unset" must
+      // stay distinguishable in the hashed JSON.
+      agentPort: manifest.server.agentPort ?? null,
+      sshHost: manifest.server.sshHost ?? '',
     },
     branches: {
       base: manifest.branches.base,
@@ -543,6 +677,9 @@ export function hashExecutionManifest(manifest: ResolvedExecutionManifest): stri
     },
     project: {
       sidekickPrompt: manifest.project.sidekickPrompt ?? '',
+    },
+    secrets: {
+      namesDigest: manifest.secrets.namesDigest,
     },
     // Array order is significant and preserved by JSON.stringify — a
     // reordering of phases (via phaseConfig) changes this even if the same

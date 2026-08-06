@@ -108,6 +108,15 @@ function makeRunner(overrides: {
     getOrThrow: vi.fn(() => DEVOPS_UNIT_TYPE),
     ...overrides.unitTypeLoader,
   };
+  // Needed by reverifyExecutionGateForPhase()'s resolveExecutionManifest()
+  // call (Issue #328 tenth-round review) — empty/null by default, same
+  // rationale as unitTypeLoader/sidekickLoader above.
+  const serverRepo = {
+    findByName: vi.fn(() => null),
+  };
+  const projectSecretRepo = {
+    findByProject: vi.fn(() => []),
+  };
   const sidekickLoader = {
     findByName: vi.fn(() => null),
     findDefaultForTag: vi.fn(() => makeSidekick()),
@@ -175,9 +184,11 @@ function makeRunner(overrides: {
       registry.register('tui', tuiRuntime);
       return registry;
     })(),
+    serverRepo as any,
+    projectSecretRepo as any,
   );
 
-  return { runner, taskRepo, projectRepo, projectServerRepo, unitRepo, unitTypeLoader, sidekickLoader, workerInput, workerWaiter, appendLog, getWorktreeService, transportFactory, sidekickSyncService, httpSignalCoordinator, pushVerifier, gitProvider, pullRequestCreator };
+  return { runner, taskRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitRepo, unitTypeLoader, sidekickLoader, workerInput, workerWaiter, appendLog, getWorktreeService, transportFactory, sidekickSyncService, httpSignalCoordinator, pushVerifier, gitProvider, pullRequestCreator };
 }
 
 const server = { name: 'local', type: 'local' } as any;
@@ -731,7 +742,18 @@ describe('PhaseLoopRunner pushing-phase PR auto-creation (git provider abstracti
 // untrusted task and letting it run must NOT self-invalidate mid-run.
 describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-round review finding 1)', () => {
   function makeManifestDeps(taskRepo: any, unitRepo: any, projectRepo: any, projectServerRepo: any, unitTypeLoader: any, sidekickLoader: any) {
-    return { unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader };
+    return {
+      unitRepo,
+      projectRepo,
+      projectServerRepo,
+      // Empty/null by default (Issue #328 tenth-round review) — matches
+      // makeRunner()'s own serverRepo/projectSecretRepo defaults, so a test
+      // approving against this manifest and one built via makeRunner() agree.
+      serverRepo: { findByName: () => null } as any,
+      projectSecretRepo: { findByProject: () => [] } as any,
+      unitTypeLoader,
+      sidekickLoader,
+    };
   }
 
   it('a TRUSTED task runs all 5 phases without ever blocking (the gate is a no-op cost-wise: checkExecutionGate short-circuits before this loop resolves a manifest)', async () => {

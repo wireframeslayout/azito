@@ -138,6 +138,9 @@ function makeOpts(task: Task, unit: Unit, opts: { gateAllows: boolean }): { opts
     serverRepo: {
       findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, createdAt: '' })),
     } as unknown as UnitsRouteOptions['serverRepo'],
+    projectSecretRepo: {
+      findByProject: vi.fn(() => []),
+    } as unknown as UnitsRouteOptions['projectSecretRepo'],
     windowRepo: {
       findById: vi.fn(() => null),
     } as unknown as UnitsRouteOptions['windowRepo'],
@@ -193,7 +196,7 @@ describe('POST /api/units/:id/approve-plan — untrusted-input execution gate (I
     expect(opts.executeTaskUseCase.followUp).toHaveBeenCalledWith(20, 1, 'please redo this part');
     // 'resume_await_plan_review', not plain 'resume' (Issue #328 seventh-round
     // review symptom A) — see Task.pendingOperation's transition table.
-    expect(opts.executeTaskUseCase.enforceExecutionGate).toHaveBeenCalledWith(expect.anything(), 20, expect.anything(), 'resume_await_plan_review');
+    expect(opts.executeTaskUseCase.enforceExecutionGate).toHaveBeenCalledWith(expect.anything(), 20, 'resume_await_plan_review');
   });
 
   it('approval, blocked by the gate: 409s and leaves task.status/currentPhase at phase_review/planning, planMarkdown untouched', async () => {
@@ -235,7 +238,7 @@ describe('POST /api/units/:id/approve-plan — untrusted-input execution gate (I
     expect(opts.executeTaskUseCase.resumeStateMachine).toHaveBeenCalledWith(20, 1);
     // 'resume_await_plan_review', not plain 'resume' (Issue #328 seventh-round
     // review symptom A) — see Task.pendingOperation's transition table.
-    expect(opts.executeTaskUseCase.enforceExecutionGate).toHaveBeenCalledWith(expect.anything(), 20, expect.anything(), 'resume_await_plan_review');
+    expect(opts.executeTaskUseCase.enforceExecutionGate).toHaveBeenCalledWith(expect.anything(), 20, 'resume_await_plan_review');
   });
 
   it('full rejection (no feedback) never checks the gate — no worker is resumed either way', async () => {
