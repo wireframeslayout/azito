@@ -7,19 +7,13 @@ import type { ExecuteTaskUseCase } from '../tasks/execution/ExecuteTaskUseCase';
 import type { IProjectRepository } from '../projects/Project';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
 import type { IServerRepository } from '../servers/Server';
-import type { SqliteProjectSecretRepository } from '../projects/SqliteProjectSecretRepository';
-import type { IWindowRepository } from '../windows/Window';
-import type { WindowRespawnService } from '../windows/WindowRespawnService';
-import { buildRespawnManifestInput } from '../windows/WindowRespawnService';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { PhaseConfig, PhaseEntryConfig } from '../sidekicks/PhaseConfig';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
-import type { TaskRestoreService } from '../tasks/TaskRestoreService';
 import { resolvePhaseSidekick } from '../sidekicks/resolvePhaseSidekick';
 import { ResourceExhaustedError } from '../servers/resources/ResourceGuard';
 import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
-import { resolveExecutionManifest, hashExecutionManifest } from '../tasks/execution/ExecutionManifest';
-import { resolveTaskServerName, resolveUnitId } from '../tasks/execution/TaskExecutionEnv';
+import { resolveTaskServerName } from '../tasks/execution/TaskExecutionEnv';
 
 // ─── Types ───
 
@@ -31,15 +25,8 @@ export interface UnitsRouteOptions {
   projectRepo: IProjectRepository;
   projectServerRepo: IProjectServerRepository;
   serverRepo: IServerRepository;
-  windowRepo: IWindowRepository;
-  respawnService: WindowRespawnService;
   sidekickLoader: SidekickPackageLoader;
   unitTypeLoader: UnitTypeLoader;
-  taskRestoreService: TaskRestoreService;
-  // Needed by the approve-execution handler's resolveExecutionManifest()
-  // call to resolve `secrets.namesDigest` (Issue #328 tenth-round review)
-  // the same way every other execution entry point does.
-  projectSecretRepo: SqliteProjectSecretRepository;
 }
 
 // ─── Helpers ───
@@ -101,7 +88,7 @@ function parseWorkerRuntimeInput(raw: unknown): WorkerRuntime | undefined {
 // ─── Plugin ───
 
 const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, done) => {
-  const { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, projectServerRepo, serverRepo, windowRepo, respawnService, sidekickLoader, unitTypeLoader, taskRestoreService, projectSecretRepo } = opts;
+  const { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, projectServerRepo, serverRepo, sidekickLoader, unitTypeLoader } = opts;
 
   // ── GET /api/units ──
   fastify.get('/api/units', async () => {
@@ -422,277 +409,14 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
     },
   );
 
-  // ── POST /api/units/:id/approve-execution ──
-  //
-  // Approves/rejects the untrusted-input execution gate (Issue #328) — a
-  // separate concern from approve-plan above: that endpoint approves a
-  // PLAN the worker already produced (secrets/worktree already used once);
-  // this one approves letting an untrusted task run a worker AT ALL, before
-  // any of that has happened yet (task.status === 'pending_approval').
-  fastify.post<{ Params: { id: string } }>(
-    '/api/units/:id/approve-execution',
-    async (request, reply) => {
-      const id = parseInt(request.params.id, 10);
-      const unit = unitRepo.findById(id);
-      if (!unit) return reply.status(404).send({ error: 'Unit not found' });
-
-      // Runtime-validated, not just type-asserted: this endpoint flips a
-      // security gate, so a truthy-but-wrong body (e.g. `approved: "false"`,
-      // a string — truthy, and would have slipped past a bare `undefined`
-      // check) must not be able to approve execution (Issue #328 review).
-      const body = request.body as { taskId?: unknown; approved?: unknown };
-      const { taskId, approved } = body;
-      if (typeof taskId !== 'number' || !Number.isInteger(taskId) || taskId <= 0) {
-        return reply.status(400).send({ error: 'taskId must be a positive integer' });
-      }
-      if (typeof approved !== 'boolean') {
-        return reply.status(400).send({ error: 'approved must be a boolean' });
-      }
-
-      const task = taskRepo.findById(taskId);
-      if (!task || task.status !== ('pending_approval' as TaskStatus)) {
-        return reply.status(400).send({ error: 'Task is not pending execution approval' });
-      }
-
-      // The route's :id and the task's actual Unit must agree — otherwise an
-      // approval submitted against the wrong Unit id would still be honored
-      // (and would resume the task via `id`, not the Unit it's really
-      // governed by/logged under). Same resolution ExecuteTaskUseCase uses
-      // (task.unitId ?? project.defaultUnitId), so this doesn't invent a new
-      // "which Unit owns this task" rule.
-      const project = projectRepo.findById(task.projectId);
-      const resolvedUnitId = resolveUnitId(task, project);
-      if (resolvedUnitId !== id) {
-        return reply.status(400).send({ error: `Task ${taskId} belongs to unit ${resolvedUnitId ?? 'none'}, not unit ${id}` });
-      }
-
-      // Which operation was blocked — see the per-operation transition table
-      // on Task.pendingOperation for the authoritative list ('execute' |
-      // 'resume' | 'resume_await_answer' | 'resume_await_plan_review' |
-      // 'restore' | 'respawn' | 'recover_session_legacy') and what
-      // approval/denial does for each (Issue #328 seventh-round review
-      // findings 1/2).
-      //
-      // NO tmuxWindow-based fallback anymore (Issue #328 ninth-round review
-      // finding 4): that heuristic used to stand in for a legacy NULL row
-      // (migration 059 predates this column), but it can't distinguish
-      // "never started" from "was being restored from archive" (third-round
-      // review finding 1) and, worse, widened the blast radius of a
-      // duplicate-submission race — a second request that lost the atomic
-      // consume below (pendingOperation already cleared by the first) would
-      // otherwise fall through to this guess and dispatch a DIFFERENT
-      // operation than the one actually approved. Migration 059 has never
-      // shipped in a release, so there is no real row with pendingOperation
-      // === NULL to guess for; failing fast here (409, see below) is strictly
-      // safer than guessing.
-      const operation = task.pendingOperation;
-      if (!operation) {
-        return reply.status(409).send({ error: `Task ${taskId} is pending_approval but has no pendingOperation recorded — nothing to approve or deny` });
-      }
-      // Captured before the approval below clears it — respawn is the only
-      // operation that needs an extra identifier to resume (see
-      // Task.pendingOperationWindowId's doc comment); it doesn't depend on
-      // freshness the way the fingerprint hash does; see the 'restore'
-      // branch below for the field that DOES need a refetch.
-      const pendingWindowId = task.pendingOperationWindowId;
-      // Resolved once, up front, and reused both for the approval
-      // fingerprint below AND the dispatch further down — respawn() itself
-      // hashes `buildRespawnManifestInput(win)` into its gate check (Issue
-      // #328 eighth-round review finding 2), so the fingerprint this handler
-      // records must be built from the exact same Window row or the
-      // just-approved respawn would immediately re-hit 'pending_approval'
-      // the moment it actually runs (respawn's own self-invalidation
-      // failure mode, the same class of bug as the sidekicks-slice fix in
-      // ExecutionManifest.ts).
-      const respawnWindow = operation === 'respawn' && pendingWindowId !== null ? windowRepo.findById(pendingWindowId) : null;
-      // The status the gate overwrote with 'pending_approval' — every
-      // operation that doesn't manage its own status transition on success
-      // (see the transition table) restores this instead of leaving the task
-      // stuck on 'pending_approval' (Issue #328 seventh-round review symptom
-      // B). Falls back to 'failed' only for a legacy NULL row (none in
-      // practice, same caveat as `operation` above) — every write site going
-      // forward always sets this alongside pendingOperation.
-      const priorStatus = (task.pendingOperationPriorStatus ?? 'failed') as TaskStatus;
-
-      if (!approved) {
-        // A denied restore never started anything — put the task back to
-        // 'archived' (its state before the blocked restore attempt) rather
-        // than 'failed', which would misrepresent an archived task as a
-        // failed run. Every other operation's denial (including
-        // 'resume_await_answer'/'resume_await_plan_review': the human's
-        // answers/feedback were never persisted and are simply discarded)
-        // keeps the existing 'failed' outcome — a denial always means "stop
-        // this run", not "go back to waiting for input" the way an
-        // *approval* of those two operations does below.
-        //
-        // consumePendingApproval() atomically guards this write on
-        // (status = 'pending_approval' AND pendingOperation IS NOT NULL)
-        // (Issue #328 ninth-round review finding 4): a duplicate/racing
-        // denial request that loses this compare-and-clear gets `false` and
-        // is rejected with 409 instead of re-running this branch's side
-        // effects a second time against state the first request already
-        // consumed.
-        const denyStatus = (operation === 'restore' ? 'archived' : 'failed') as TaskStatus;
-        const consumed = taskRepo.consumePendingApproval(taskId, { status: denyStatus });
-        if (!consumed) {
-          return reply.status(409).send({ error: `Task ${taskId}'s pending approval was already resolved by a concurrent request` });
-        }
-        // Logged only AFTER the atomic consume above succeeds (Issue #328
-        // tenth-round review finding 3): logging first meant a request that
-        // lost the compare-and-clear race (and got a 409 above) had already
-        // written an "execution_denied" audit entry for a denial that never
-        // actually took effect — a false record in the audit log, the exact
-        // thing an approval/denial audit trail exists to prevent.
-        logRepo.append(taskId, id, 'status_change', { status: 'execution_denied' });
-        return { ok: true };
-      }
-
-      // Record approval against the CURRENT resolved execution manifest
-      // (checkExecutionGate re-resolves and re-hashes on every check) so
-      // re-running this same task later does not re-prompt, but a
-      // subsequent change to anything the manifest covers — task fields,
-      // the resolved Unit's content, project.defaultUnitId, or the
-      // project_servers row's config, see ExecutionManifest.ts — will
-      // invalidate this and require approval again.
-      // For a 'respawn' approval, the fingerprint recorded here must be
-      // resolved against respawnWindow's OWN server (win.serverName), not
-      // whatever server the task itself resolves to — respawn() computes its
-      // gate check the same way (WindowRespawnService.enforceExecutionGate
-      // passes `server.name`, resolved from the Window, as this same
-      // override), and a mismatch here would make the just-recorded approval
-      // immediately re-hit 'pending_approval' the moment respawn() actually
-      // runs (Issue #328 ninth-round review finding 3 — the same
-      // self-invalidation failure mode buildRespawnManifestInput's own doc
-      // comment already covers for the `respawn` manifest field).
-      const { manifest } = resolveExecutionManifest(
-        task,
-        { unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader },
-        respawnWindow ? buildRespawnManifestInput(respawnWindow) : undefined,
-        respawnWindow?.serverName,
-      );
-      // consumePendingApproval() atomically guards this write on
-      // (status = 'pending_approval' AND pendingOperation IS NOT NULL)
-      // (Issue #328 ninth-round review finding 4) — the same compare-and-
-      // clear as the denial branch above. A duplicate/racing approval
-      // request that loses this gets `false` and is rejected with 409
-      // BEFORE any dispatch below runs, instead of both requests reading
-      // `operation`/`pendingWindowId` off the same pre-approval `task`
-      // object and each independently kicking off a (possibly different,
-      // since the second would have fallen through to a guess under the
-      // now-removed tmuxWindow fallback) operation.
-      const consumed = taskRepo.consumePendingApproval(taskId, {
-        executionApprovedFingerprintHash: hashExecutionManifest(manifest),
-      });
-      if (!consumed) {
-        return reply.status(409).send({ error: `Task ${taskId}'s pending approval was already resolved by a concurrent request` });
-      }
-      // Logged only AFTER the atomic consume above succeeds — same rationale
-      // as the denial branch's log-ordering fix above (Issue #328
-      // tenth-round review finding 3): a request that loses the race gets a
-      // 409 and must not leave an "execution_approved" audit entry behind
-      // for an approval that never actually took effect.
-      logRepo.append(taskId, id, 'status_change', { status: 'execution_approved' });
-
-      // Fire-and-forget below, matching the pre-existing convention for
-      // every long-running resume path in this file (approve-plan above
-      // does the same): the HTTP response returns as soon as the operation
-      // is *kicked off*, not once it finishes, because these can run an
-      // entire agent turn. What changed (Issue #328 fourth-round review
-      // finding 1) is the empty `.catch(() => {})` those calls used to end
-      // in — a rejection there vanished with no log entry and no status
-      // change, so an approval could silently do nothing. Every branch below
-      // now logs the failure and marks the task 'failed' on the same
-      // rejection path ExecuteTaskUseCase's own internal catches already use
-      // for in-flight failures.
-      const failApprovedOperation = (op: string, err: unknown): void => {
-        const message = err instanceof Error ? err.message : String(err);
-        request.log.error({ err, taskId, operation: op }, `approved ${op} failed`);
-        logRepo.append(taskId, id, 'command', { type: 'approved_operation_failed', operation: op, message });
-        taskRepo.update(taskId, { status: 'failed' as TaskStatus } as Partial<Task>);
-      };
-
-      if (operation === 'resume_await_answer' || operation === 'resume_await_plan_review') {
-        // Deliberately NOT auto-resumed (Issue #328 seventh-round review
-        // symptom A): the human's answers/feedback were never persisted
-        // before the gate blocked this the first time (see the pre-check
-        // comments in POST /api/tasks/:id/answer and this file's
-        // approve-plan handler above), so kicking off resumeStateMachine()
-        // here would restart the task WITHOUT them. Restore the exact
-        // waiting status the human was looking at and stop — the human
-        // resubmits the same request (POST /api/tasks/:id/answer or POST
-        // /api/units/:id/approve-plan), which now passes the gate (the
-        // approval just above recorded the current manifest hash) and
-        // delivers the answers/feedback through the normal path.
-        logRepo.append(taskId, id, 'status_change', {
-          status: 'execution_approved_awaiting_resubmit',
-          operation,
-          restoredStatus: priorStatus,
-        });
-        taskRepo.updateStatus(taskId, priorStatus);
-      } else if (operation === 'restore') {
-        // Must be the just-persisted row, NOT the `task` object fetched at
-        // the top of this handler: checkExecutionGate() inside restore()
-        // re-validates executionApprovedFingerprintHash, which the update
-        // above just set — restore(task) with the stale pre-update object
-        // would re-hit "pending_approval" and throw immediately, silently
-        // undoing the approval (Issue #328 fourth-round review finding 1).
-        const approvedTask = taskRepo.findById(taskId);
-        if (!approvedTask) {
-          failApprovedOperation('restore', new Error(`Task ${taskId} disappeared after approval`));
-        } else {
-          // restore() manages its own status transition on success (sets
-          // 'open', matching what an ungated restore() always does; see
-          // TaskRestoreService.restore) — no status is set here, same as the
-          // standalone POST /api/tasks/:id/restore route.
-          taskRestoreService.restore(approvedTask, request.log).catch((err: unknown) => failApprovedOperation('restore', err));
-        }
-      } else if (operation === 'resume') {
-        taskRepo.updateStatus(taskId, 'running');
-        executeTaskUseCase.resumeStateMachine(id, taskId).catch((err: unknown) => failApprovedOperation('resume', err));
-      } else if (operation === 'respawn') {
-        // respawn() re-resolves the task from the DB by windowId internally
-        // (see WindowRespawnService.respawn), so — like execute()/
-        // resumeStateMachine() above — it has no staleness risk from the
-        // handler's local `task` object; only pendingWindowId (captured
-        // before this handler cleared it) is needed to target it.
-        const win = pendingWindowId !== null ? windowRepo.findById(pendingWindowId) : null;
-        const srv = win ? serverRepo.findByName(win.serverName) : null;
-        if (!win || !srv) {
-          failApprovedOperation('respawn', new Error(`Window ${pendingWindowId ?? 'null'} or its server no longer exists`));
-        } else {
-          // respawn() itself never touches task.status (it only manages the
-          // Window row) — unlike 'restore'/'resume'/'execute', which manage
-          // their own status transition, a successful respawn must
-          // explicitly restore priorStatus here or the task is stuck showing
-          // 'pending_approval' forever after a successful recovery (Issue
-          // #328 seventh-round review symptom B).
-          respawnService.respawn(win.id, srv)
-            .then(() => { taskRepo.updateStatus(taskId, priorStatus); })
-            .catch((err: unknown) => failApprovedOperation('respawn', err));
-        }
-      } else if (operation === 'recover_session_legacy') {
-        // resumeLegacySession() also re-resolves the task from the DB by
-        // taskId internally (see WindowRespawnService.resumeLegacySession) —
-        // same no-staleness reasoning as 'resume'/'respawn' above.
-        const resolvedServerName = resolveTaskServerName(task, projectServerRepo);
-        const srv = resolvedServerName ? serverRepo.findByName(resolvedServerName) : null;
-        if (!srv) {
-          failApprovedOperation('recover_session_legacy', new Error(`Server '${resolvedServerName ?? 'unresolved'}' not found`));
-        } else {
-          // Same reasoning as 'respawn' above: resumeLegacySession() doesn't
-          // touch task.status either (Issue #328 seventh-round review
-          // symptom B).
-          respawnService.resumeLegacySession(taskId, srv)
-            .then(() => { taskRepo.updateStatus(taskId, priorStatus); })
-            .catch((err: unknown) => failApprovedOperation('recover_session_legacy', err));
-        }
-      } else {
-        taskRepo.updateStatus(taskId, 'open');
-        executeTaskUseCase.execute(id, taskId).catch((err: unknown) => failApprovedOperation('execute', err));
-      }
-      return { ok: true };
-    },
-  );
+  // POST /api/units/:id/approve-execution was removed (Issue #328 hardening
+  // follow-up): it approved the SAME untrusted-input execution gate as
+  // POST /api/tasks/:id/approve-execution (modules/tasks/routes.ts,
+  // decideExecutionApproval()) but never required the `fingerprint` the
+  // TOCTOU close (Issue #328 review fix 1) depends on — a second reachable
+  // path to the same approval that skipped the one check fix 1 exists for.
+  // Approval is task-scoped (matches the design: a human approves running
+  // a specific TASK, not a Unit) and now has exactly one entry point.
 
   // ── GET /api/units/:id/logs ──
   fastify.get<{ Params: { id: string } }>(

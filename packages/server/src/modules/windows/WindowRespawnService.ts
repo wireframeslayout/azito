@@ -31,7 +31,7 @@ function sleep(ms: number): Promise<void> {
  * launches. Exported (not a private method) because it must be computed
  * TWICE from the exact same Window row for the fingerprint to line up: once
  * here when respawn() itself runs the gate, and once by
- * units/routes.ts's approve-execution handler when it records the approval
+ * tasks/execution/ExecutionApprovalDecision.ts's approve-execution handler when it records the approval
  * fingerprint for a blocked 'respawn' operation (Issue #328 eighth-round
  * review finding 2) — a second, slightly-different reimplementation at the
  * approval site is exactly how this class of bug (module doc comment above)
@@ -220,7 +220,7 @@ export class WindowRespawnService {
    *
    * `operation`/`windowId` record WHICH blocked entry point this was, in
    * task.pendingOperation/pendingOperationWindowId, so the approval handler
-   * (modules/units/routes.ts's approve-execution) can resume the exact
+   * (modules/tasks/execution/ExecutionApprovalDecision.ts's approve-execution) can resume the exact
    * operation a human approved (Issue #328 fourth-round review finding 2:
    * this method used to only call `taskRepo.updateStatus(..., 'pending_
    * approval')`, recording no operation at all — approving a blocked
@@ -240,7 +240,7 @@ export class WindowRespawnService {
    * resolves to (Issue #328 eighth-round review finding 2). Omitted (kept
    * `undefined`) for `'recover_session_legacy'`, which has no Window row and
    * whose target server already comes from the same resolveTaskServerName()
-   * call the manifest itself uses (units/routes.ts's approve-execution
+   * call the manifest itself uses (tasks/execution/ExecutionApprovalDecision.ts's approve-execution
    * dispatch), so there is nothing to diverge from.
    */
   private enforceExecutionGate(

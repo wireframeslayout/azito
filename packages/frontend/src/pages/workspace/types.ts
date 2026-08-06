@@ -117,6 +117,13 @@ export interface ExecutionApprovalData {
   inputTrust: 'trusted' | 'untrusted';
   pendingOperation: string | null;
   inputPolicy: 'deny' | 'manual-approval' | 'allow' | null;
+  /** Fingerprint of the manifest this response describes (Issue #328 review
+   * fix 1) — must be echoed back unchanged in POST
+   * /api/tasks/:id/approve-execution's `approved: true` request. A 409 with
+   * `code: 'fingerprint_mismatch'` means the underlying content changed
+   * since this was fetched; re-fetch this endpoint and show the human the
+   * new content before letting them approve again. */
+  fingerprint: string;
   execution: {
     unitId: number | null;
     unitName: string | null;

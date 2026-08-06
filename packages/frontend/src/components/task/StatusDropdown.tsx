@@ -10,7 +10,7 @@ const RUNNING_STATUSES = new Set([
 // overwriting status away from pending_approval would leave the task's
 // pendingOperation/executionApprovedFingerprintHash bookkeeping stuck
 // mid-gate without ever consuming the approval decision (Issue #51) — the
-// only valid way out is POST /api/units/:id/approve-execution (the
+// only valid way out is POST /api/tasks/:id/approve-execution (the
 // dedicated approval panel), which atomically clears that state.
 const LOCKED_STATUSES = new Set(['archived', 'pending_approval']);
 

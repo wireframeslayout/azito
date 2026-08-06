@@ -59,7 +59,8 @@
     "approve": "Approve",
     "deny": "Deny",
     "approving": "Approving...",
-    "denying": "Denying..."
+    "denying": "Denying...",
+    "contentChanged": "This task's content changed since you loaded this screen. Please review the updated details below before approving again."
   },
   "sidebar": {
     "title": "Tasks",

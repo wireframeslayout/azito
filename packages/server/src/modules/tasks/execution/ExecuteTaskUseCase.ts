@@ -211,7 +211,7 @@ export class ExecuteTaskUseCase {
    *
    * `operation` records WHICH blocked entry point this was, in
    * task.pendingOperation, so the approval handler
-   * (modules/units/routes.ts's approve-execution) can resume the exact
+   * (modules/tasks/execution/ExecutionApprovalDecision.ts's approve-execution) can resume the exact
    * operation a human approved instead of re-inferring it from
    * task.tmuxWindow (Issue #328 third-round review finding 1: that
    * heuristic couldn't tell "never started" apart from "was being

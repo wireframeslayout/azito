@@ -346,7 +346,7 @@ describe('WindowRespawnService.respawn — execution gate (Issue #328)', () => {
     // Recording status alone (the old behavior) is not enough: without
     // pendingOperation/pendingOperationWindowId, the approval handler can't
     // tell a blocked respawn apart from a blocked execute()/resume() and
-    // resumes the wrong thing (see units/routes.ts's approve-execution).
+    // resumes the wrong thing (see tasks/execution/ExecutionApprovalDecision.ts's approve-execution).
     expect(taskRepo.update).toHaveBeenCalledWith(6, {
       status: 'pending_approval',
       pendingOperation: 'respawn',

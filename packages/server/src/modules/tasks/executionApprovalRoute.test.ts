@@ -3,6 +3,8 @@ import Fastify from 'fastify';
 import tasksRoutes from './routes';
 import type { TasksRouteOptions } from './routes';
 import type { Task } from './Task';
+import { resolveExecutionManifest, hashExecutionManifest } from './execution/ExecutionManifest';
+import { buildRespawnManifestInput } from '../windows/WindowRespawnService';
 
 // GET /api/tasks/:id/execution-approval (Issue #51) — the browser-facing
 // read API for what the untrusted-input execution gate blocked and what a
@@ -218,5 +220,434 @@ describe('GET /api/tasks/:id/execution-approval (Issue #51)', () => {
     expect(body.secretNames).toEqual(['API_KEY', 'GH_TOKEN']);
     const json = JSON.stringify(body);
     expect(json).not.toContain('namesDigest');
+
+    // Issue #328 review fix 1: the fingerprint returned here is what the
+    // client must echo back on approval — must be a real, non-empty hash.
+    expect(typeof body.fingerprint).toBe('string');
+    expect(body.fingerprint.length).toBeGreaterThan(0);
+  });
+});
+
+// POST /api/tasks/:id/approve-execution (Issue #328 review) — the task-scoped
+// approve/deny endpoint. Two things this endpoint exists to fix, covered
+// below: (1) an approval must be tied to the exact manifest fingerprint the
+// human saw on the approval screen (fix 1 — a TOCTOU close), and (2) a task
+// whose Unit cannot be resolved must still be at least deniable, and
+// approvable for operations ('restore') that don't actually need a Unit to
+// run (fix 2).
+describe('POST /api/tasks/:id/approve-execution (Issue #328 review)', () => {
+  /** Stateful task store so consumePendingApproval()/update() mutations are visible to a later findById() in the same test — mirrors modules/units/approveExecution.routes.test.ts's makeOpts pattern. */
+  function makeStatefulOpts(initialTask: Task): { opts: TasksRouteOptions; getTask: () => Task } {
+    let currentTask: Task = initialTask;
+    const opts = makeOpts(initialTask);
+    // The base makeOpts() fixture's execute()/followUp() mocks return
+    // undefined (no test using them previously awaited/chained on the
+    // result) — decideExecutionApproval's dispatch calls `.catch()` on
+    // whatever execute()/resumeStateMachine() return, so this describe
+    // block's tests need them to actually resolve.
+    opts.executeTaskUseCase = {
+      ...opts.executeTaskUseCase,
+      execute: vi.fn(async () => {}),
+      followUp: vi.fn(async () => {}),
+      resumeStateMachine: vi.fn(async () => {}),
+    } as unknown as TasksRouteOptions['executeTaskUseCase'];
+    opts.taskRepo.findById = vi.fn((id: number) => (id === initialTask.id ? currentTask : null));
+    opts.taskRepo.update = vi.fn((id: number, data: Partial<Task>) => {
+      if (id === initialTask.id) currentTask = { ...currentTask, ...data };
+    });
+    opts.taskRepo.updateStatus = vi.fn((id: number, status: Task['status']) => {
+      if (id === initialTask.id) currentTask = { ...currentTask, status };
+    });
+    opts.taskRepo.consumePendingApproval = vi.fn((id: number, fields: { status?: Task['status']; executionApprovedFingerprintHash?: string }) => {
+      if (id !== initialTask.id) return false;
+      if (currentTask.status !== 'pending_approval' || currentTask.pendingOperation === null) return false;
+      currentTask = {
+        ...currentTask,
+        ...(fields.status !== undefined ? { status: fields.status } : {}),
+        ...(fields.executionApprovedFingerprintHash !== undefined ? { executionApprovedFingerprintHash: fields.executionApprovedFingerprintHash } : {}),
+        pendingOperation: null,
+        pendingOperationWindowId: null,
+        pendingOperationPriorStatus: null,
+      };
+      return true;
+    });
+    return { opts, getTask: () => currentTask };
+  }
+
+  /**
+   * `respawnWindow` mirrors decideExecutionApproval's own resolution for a
+   * blocked 'respawn' operation (it re-resolves via the pending window, not
+   * the task's server) — pass the same window object a test's overridden
+   * windowRepo.findById() would return, so the fingerprint computed here
+   * matches what the handler recomputes at approval time.
+   */
+  function currentFingerprint(opts: TasksRouteOptions, task: Task, respawnWindow?: { serverName: string; workerModel: string | null; workerType: string | null; paneLayout: null }): string {
+    const { manifest } = resolveExecutionManifest(
+      task,
+      {
+        unitRepo: opts.unitRepo,
+        projectRepo: opts.projectRepo,
+        projectServerRepo: opts.projectServerRepo,
+        serverRepo: opts.serverRepo,
+        projectSecretRepo: opts.projectSecretRepo,
+        unitTypeLoader: opts.unitTypeLoader,
+        sidekickLoader: opts.sidekickLoader,
+      },
+      respawnWindow ? buildRespawnManifestInput(respawnWindow) : undefined,
+      respawnWindow?.serverName,
+    );
+    return hashExecutionManifest(manifest);
+  }
+
+  it('404s when the task does not exist', async () => {
+    const app = Fastify();
+    await app.register(tasksRoutes, makeOpts(null));
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/999/approve-execution', payload: { approved: true, fingerprint: 'whatever' } });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('400s an approval with no fingerprint — the whole point of fix 1 is that approval must be tied to a specific manifest', async () => {
+    const task = makeTask({ pendingOperation: 'execute' });
+    const app = Fastify();
+    await app.register(tasksRoutes, makeOpts(task));
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true } });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('approves with the CURRENT fingerprint and dispatches the pending operation', async () => {
+    const task = makeTask({ pendingOperation: 'execute' });
+    const { opts, getTask } = makeStatefulOpts(task);
+    const fingerprint = currentFingerprint(opts, task);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
+
+    expect(res.statusCode).toBe(200);
+    expect(getTask().executionApprovedFingerprintHash).toBe(fingerprint);
+    expect(getTask().pendingOperation).toBeNull();
+    expect(opts.executeTaskUseCase.execute).toHaveBeenCalledWith(20, 1);
+  });
+
+  it('a STALE fingerprint (task edited after the approval screen loaded) is rejected with 409 and consumes nothing', async () => {
+    const task = makeTask({ pendingOperation: 'execute', title: 'Original title' });
+    const { opts, getTask } = makeStatefulOpts(task);
+    const staleFingerprint = currentFingerprint(opts, task);
+    // Simulate the task's content changing after the human loaded the
+    // approval screen but before they clicked approve — same field this
+    // manifest fingerprints (title reaches the worker's prompt).
+    opts.taskRepo.findById = vi.fn((id: number) => (id === task.id ? { ...task, title: 'Rewritten by someone else' } : null));
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint: staleFingerprint } });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().code).toBe('fingerprint_mismatch');
+    expect(opts.taskRepo.consumePendingApproval).not.toHaveBeenCalled();
+    expect(opts.executeTaskUseCase.execute).not.toHaveBeenCalled();
+    // Task is still exactly as it was — approval was neither consumed nor
+    // silently re-sent against the new content.
+    expect(getTask().status).toBe('pending_approval');
+  });
+
+  it('a task whose Unit cannot be resolved can still be DENIED (Issue #328 review fix 2 — deny must never get stuck)', async () => {
+    const task = makeTask({ unitId: null, pendingOperation: 'restore', pendingOperationPriorStatus: 'archived' });
+    const { opts, getTask } = makeStatefulOpts(task);
+    // No unit_id on the task and no defaultUnitId on the project — the Unit
+    // is genuinely unresolvable.
+    opts.projectRepo.findById = vi.fn(() => ({ id: 10, name: 'P', slug: 'p', description: null, repositoryUrl: null, defaultBranch: 'main', sidekickPrompt: null, icon: null, color: null, defaultUnitId: null, servers: [], repositories: [], windows: [], createdAt: '', updatedAt: '' }));
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: false } });
+
+    expect(res.statusCode).toBe(200);
+    expect(getTask().status).toBe('archived');
+    expect(getTask().pendingOperation).toBeNull();
+  });
+
+  it("a task whose Unit cannot be resolved can still be APPROVED for a 'restore' (which does not need a Unit to run)", async () => {
+    const task = makeTask({ unitId: null, pendingOperation: 'restore', pendingOperationPriorStatus: 'archived' });
+    const { opts, getTask } = makeStatefulOpts(task);
+    opts.projectRepo.findById = vi.fn(() => ({ id: 10, name: 'P', slug: 'p', description: null, repositoryUrl: null, defaultBranch: 'main', sidekickPrompt: null, icon: null, color: null, defaultUnitId: null, servers: [], repositories: [], windows: [], createdAt: '', updatedAt: '' }));
+    const fingerprint = currentFingerprint(opts, task);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.taskRestoreService.restore).toHaveBeenCalled();
+    expect(getTask().pendingOperation).toBeNull();
+  });
+
+  it("a task whose Unit cannot be resolved is rejected with 409 (not silently consumed) when approving an 'execute' — that operation genuinely cannot dispatch without a Unit", async () => {
+    const task = makeTask({ unitId: null, pendingOperation: 'execute' });
+    const { opts, getTask } = makeStatefulOpts(task);
+    opts.projectRepo.findById = vi.fn(() => ({ id: 10, name: 'P', slug: 'p', description: null, repositoryUrl: null, defaultBranch: 'main', sidekickPrompt: null, icon: null, color: null, defaultUnitId: null, servers: [], repositories: [], windows: [], createdAt: '', updatedAt: '' }));
+    const fingerprint = currentFingerprint(opts, task);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
+
+    expect(res.statusCode).toBe(409);
+    expect(opts.executeTaskUseCase.execute).not.toHaveBeenCalled();
+    // Not consumed — the task remains pending_approval, so a human can fix
+    // the Unit assignment and retry, or still deny it.
+    expect(getTask().status).toBe('pending_approval');
+    expect(getTask().pendingOperation).toBe('execute');
+  });
+
+  // The tests below port modules/units/approveExecution.routes.test.ts's
+  // per-operation dispatch coverage (Issue #328 hardening follow-up): that
+  // file exercised POST /api/units/:id/approve-execution, which was removed
+  // because it reached decideExecutionApproval() without requiring
+  // `fingerprint`. Since this route dispatches through the exact same
+  // decideExecutionApproval(), the operation-dispatch behavior it proves
+  // (resume/restore/respawn/recover_session_legacy/resume_await_*, race
+  // handling, failure logging) still needs coverage — now against this,
+  // the only remaining entry point.
+
+  it('409s instead of guessing an operation when pendingOperation is NULL', async () => {
+    const task = makeTask({ pendingOperation: null });
+    const opts = makeOpts(task);
+    const fingerprint = currentFingerprint(opts, task);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
+
+    expect(res.statusCode).toBe(409);
+    expect(opts.taskRepo.consumePendingApproval).not.toHaveBeenCalled();
+  });
+
+  it('rejects with 409 and dispatches nothing when consumePendingApproval() reports the approval was already consumed (the losing side of a race)', async () => {
+    const task = makeTask({ pendingOperation: 'execute' });
+    const opts = makeOpts(task);
+    const fingerprint = currentFingerprint(opts, task);
+    // The base fixture's consumePendingApproval already returns false —
+    // simulating the losing side of a concurrent approval.
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
+
+    expect(res.statusCode).toBe(409);
+    expect(opts.executeTaskUseCase.execute).not.toHaveBeenCalled();
+    expect(opts.logRepo.append).not.toHaveBeenCalledWith(1, 20, 'status_change', { status: 'execution_approved' });
+  });
+
+  it('rejects a DENIAL with 409 and applies no side effects when consumePendingApproval() reports it was already consumed', async () => {
+    const task = makeTask({ pendingOperation: 'execute' });
+    const opts = makeOpts(task);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: false } });
+
+    expect(res.statusCode).toBe(409);
+    expect(opts.taskRepo.consumePendingApproval).toHaveBeenCalledWith(1, { status: 'failed' });
+    expect(opts.logRepo.append).not.toHaveBeenCalledWith(1, 20, 'status_change', { status: 'execution_denied' });
+  });
+
+  it('logs execution_approved only AFTER consumePendingApproval() succeeds', async () => {
+    const task = makeTask({ pendingOperation: 'execute' });
+    const { opts } = makeStatefulOpts(task);
+    const fingerprint = currentFingerprint(opts, task);
+    const callOrder: string[] = [];
+    const originalConsumeImpl = (opts.taskRepo.consumePendingApproval as ReturnType<typeof vi.fn>).getMockImplementation() as
+      (id: number, fields: { status?: Task['status']; executionApprovedFingerprintHash?: string }) => boolean;
+    (opts.taskRepo.consumePendingApproval as ReturnType<typeof vi.fn>).mockImplementation((id: number, fields: { status?: Task['status']; executionApprovedFingerprintHash?: string }) => {
+      callOrder.push('consumePendingApproval');
+      return originalConsumeImpl(id, fields);
+    });
+    (opts.logRepo.append as ReturnType<typeof vi.fn>).mockImplementation((_taskId: number, _unitId: number, _type: string, content: { status?: string }) => {
+      if (content?.status === 'execution_approved') callOrder.push('logRepo.append(execution_approved)');
+    });
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
+
+    expect(res.statusCode).toBe(200);
+    expect(callOrder).toEqual(['consumePendingApproval', 'logRepo.append(execution_approved)']);
+  });
+
+  it('approval on an already-started task (pendingOperation resume) resumes the state machine instead of re-executing', async () => {
+    const task = makeTask({ pendingOperation: 'resume', tmuxWindow: 'task-1' });
+    const { opts, getTask } = makeStatefulOpts(task);
+    const fingerprint = currentFingerprint(opts, task);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
+
+    expect(res.statusCode).toBe(200);
+    expect(getTask().status).toBe('running');
+    expect(opts.executeTaskUseCase.resumeStateMachine).toHaveBeenCalledWith(20, 1);
+    expect(opts.executeTaskUseCase.execute).not.toHaveBeenCalled();
+    expect(opts.taskRestoreService.restore).not.toHaveBeenCalled();
+  });
+
+  it('approving a gate-blocked restore passes a FRESH task object carrying the just-approved fingerprint, not the stale pre-approval one', async () => {
+    // Regression: the approval handler must call restore() with the task as
+    // it exists AFTER consumePendingApproval() persists the fingerprint —
+    // otherwise restore()'s own gate re-check sees the stale, still-null
+    // hash and immediately re-blocks, silently undoing the approval.
+    const task = makeTask({ pendingOperation: 'restore', pendingOperationPriorStatus: 'archived', executionApprovedFingerprintHash: null });
+    const { opts } = makeStatefulOpts(task);
+    const fingerprint = currentFingerprint(opts, task);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
+
+    expect(res.statusCode).toBe(200);
+    const restoreCall = (opts.taskRestoreService.restore as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(restoreCall[0].executionApprovedFingerprintHash).toBe(fingerprint);
+    expect(restoreCall[0].pendingOperation).toBeNull();
+  });
+
+  it('approval on a blocked respawn (pendingOperation respawn) resumes respawnService.respawn() against the recorded windowId, not resumeStateMachine', async () => {
+    const task = makeTask({ pendingOperation: 'respawn', pendingOperationWindowId: 5, pendingOperationPriorStatus: 'running' });
+    const { opts, getTask } = makeStatefulOpts(task);
+    const respawnWindow = { id: 5, serverName: 'test-server', workerModel: null, workerType: null, paneLayout: null };
+    opts.windowRepo.findById = vi.fn((id: number) => (id === 5 ? respawnWindow : undefined)) as unknown as TasksRouteOptions['windowRepo']['findById'];
+    const fingerprint = currentFingerprint(opts, task, respawnWindow);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
+    await new Promise((r) => setImmediate(r));
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.respawnService.respawn).toHaveBeenCalledWith(5, expect.objectContaining({ name: 'test-server' }));
+    expect(opts.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();
+    expect(opts.executeTaskUseCase.execute).not.toHaveBeenCalled();
+    expect(opts.taskRestoreService.restore).not.toHaveBeenCalled();
+    expect(getTask().status).toBe('running');
+  });
+
+  it('marks the task failed when an approved respawn cannot find its recorded window', async () => {
+    const task = makeTask({ pendingOperation: 'respawn', pendingOperationWindowId: 999 });
+    const { opts } = makeStatefulOpts(task);
+    // Default windowRepo.findById returns undefined — the recorded window
+    // no longer exists.
+    const fingerprint = currentFingerprint(opts, task);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
+    await new Promise((r) => setImmediate(r));
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.respawnService.respawn).not.toHaveBeenCalled();
+    expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { status: 'failed' });
+    expect(opts.logRepo.append).toHaveBeenCalledWith(1, 20, 'command', expect.objectContaining({ type: 'approved_operation_failed', operation: 'respawn' }));
+  });
+
+  it('approval on a blocked legacy recover-session (pendingOperation recover_session_legacy) resumes resumeLegacySession(), not execute()', async () => {
+    const task = makeTask({ pendingOperation: 'recover_session_legacy', pendingOperationPriorStatus: 'running', agentSessionId: 'sess-1' });
+    const { opts, getTask } = makeStatefulOpts(task);
+    const fingerprint = currentFingerprint(opts, task);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
+    await new Promise((r) => setImmediate(r));
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.respawnService.resumeLegacySession).toHaveBeenCalledWith(1, expect.objectContaining({ name: 'test-server' }));
+    expect(opts.executeTaskUseCase.execute).not.toHaveBeenCalled();
+    expect(opts.respawnService.respawn).not.toHaveBeenCalled();
+    expect(getTask().status).toBe('running');
+  });
+
+  it("approval of a blocked answer-resubmit (pendingOperation resume_await_answer) restores the task to its prior waiting status WITHOUT auto-resuming", async () => {
+    const task = makeTask({ pendingOperation: 'resume_await_answer', pendingOperationPriorStatus: 'waiting_input' });
+    const { opts, getTask } = makeStatefulOpts(task);
+    const fingerprint = currentFingerprint(opts, task);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
+
+    expect(res.statusCode).toBe(200);
+    expect(getTask().status).toBe('waiting_input');
+    expect(opts.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();
+    expect(opts.executeTaskUseCase.followUp).not.toHaveBeenCalled();
+    expect(opts.executeTaskUseCase.execute).not.toHaveBeenCalled();
+  });
+
+  it("approval of a blocked plan-review-resubmit (pendingOperation resume_await_plan_review) restores the task to 'phase_review' WITHOUT auto-resuming", async () => {
+    const task = makeTask({ pendingOperation: 'resume_await_plan_review', pendingOperationPriorStatus: 'phase_review' });
+    const { opts, getTask } = makeStatefulOpts(task);
+    const fingerprint = currentFingerprint(opts, task);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
+
+    expect(res.statusCode).toBe(200);
+    expect(getTask().status).toBe('phase_review');
+    expect(opts.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();
+    expect(opts.executeTaskUseCase.followUp).not.toHaveBeenCalled();
+    expect(opts.executeTaskUseCase.execute).not.toHaveBeenCalled();
+  });
+
+  it('logs the failure and marks the task failed when an approved execute() rejects, instead of silently swallowing it', async () => {
+    const task = makeTask({ pendingOperation: 'execute' });
+    const { opts } = makeStatefulOpts(task);
+    const fingerprint = currentFingerprint(opts, task);
+    (opts.executeTaskUseCase.execute as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('worktree boom'));
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
+    await new Promise((r) => setImmediate(r));
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { status: 'failed' });
+    expect(opts.logRepo.append).toHaveBeenCalledWith(1, 20, 'command', expect.objectContaining({ type: 'approved_operation_failed', operation: 'execute', message: 'worktree boom' }));
+  });
+
+  it('logs the failure and marks the task failed when an approved restore() rejects', async () => {
+    const task = makeTask({ pendingOperation: 'restore' });
+    const { opts } = makeStatefulOpts(task);
+    const fingerprint = currentFingerprint(opts, task);
+    (opts.taskRestoreService.restore as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('worktree gone'));
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
+    await new Promise((r) => setImmediate(r));
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { status: 'failed' });
+    expect(opts.logRepo.append).toHaveBeenCalledWith(1, 20, 'command', expect.objectContaining({ type: 'approved_operation_failed', operation: 'restore', message: 'worktree gone' }));
   });
 });

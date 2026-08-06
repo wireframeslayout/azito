@@ -413,44 +413,59 @@ export default function TaskPanel({
     fetchTaskData();
   }, [taskId, onRefresh, fetchTaskData]);
 
+  // Shared by the fetch-on-open effect below AND by handleExecutionApproval's
+  // 409 fingerprint-mismatch handling (Issue #328 review fix 1): a stale
+  // approval is refused, and this same fetch is what re-presents the human
+  // with what actually changed instead of silently resubmitting against it.
+  const fetchApprovalData = useCallback(async (id: number) => {
+    setApprovalLoading(true);
+    setApprovalError(null);
+    try {
+      const res = await api<ExecutionApprovalData & { error?: string }>(`/tasks/${id}/execution-approval`);
+      if (res.error) {
+        setApprovalError(res.error);
+        setApprovalData(null);
+      } else {
+        setApprovalData(res);
+      }
+    } catch {
+      setApprovalError(t('executionApproval.loadError'));
+    } finally {
+      setApprovalLoading(false);
+    }
+  }, [t]);
+
   useEffect(() => {
     if (!task || task.status !== 'pending_approval') {
       setApprovalData(null);
       setApprovalError(null);
       return;
     }
-    let cancelled = false;
-    setApprovalLoading(true);
-    setApprovalError(null);
-    api<ExecutionApprovalData & { error?: string }>(`/tasks/${task.id}/execution-approval`)
-      .then((res) => {
-        if (cancelled) return;
-        if (res.error) {
-          setApprovalError(res.error);
-          setApprovalData(null);
-        } else {
-          setApprovalData(res);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setApprovalError(t('executionApproval.loadError'));
-      })
-      .finally(() => {
-        if (!cancelled) setApprovalLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, [task?.id, task?.status, t]);
+    fetchApprovalData(task.id);
+    // fetchApprovalData is intentionally omitted: it's stable in practice
+    // (only depends on `t`), and including it would re-fetch on every
+    // locale-driven re-render instead of only when the task/status changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [task?.id, task?.status]);
 
   const handleExecutionApproval = useCallback(async (approved: boolean) => {
-    if (!approvalData?.execution.unitId || submittingApproval) return;
+    if (!approvalData || submittingApproval) return;
     setSubmittingApproval(approved ? 'approve' : 'deny');
     try {
-      const res = await api<{ error?: string }>(`/units/${approvalData.execution.unitId}/approve-execution`, {
+      const res = await api<{ error?: string; code?: string }>(`/tasks/${approvalData.taskId}/approve-execution`, {
         method: 'POST',
-        body: JSON.stringify({ taskId: approvalData.taskId, approved }),
+        body: JSON.stringify(approved ? { approved, fingerprint: approvalData.fingerprint } : { approved }),
       });
       if (res.error) {
-        showToast(res.error);
+        if (res.code === 'fingerprint_mismatch') {
+          // Do NOT resubmit — the content the human approved is not the
+          // content that would actually run. Refetch and show them the
+          // current state instead (Issue #328 review fix 1).
+          showToast(t('executionApproval.contentChanged'));
+          await fetchApprovalData(approvalData.taskId);
+        } else {
+          showToast(res.error);
+        }
         return;
       }
       onRefresh();
@@ -458,7 +473,7 @@ export default function TaskPanel({
     } finally {
       setSubmittingApproval(null);
     }
-  }, [approvalData, submittingApproval, showToast, onRefresh, fetchTaskData]);
+  }, [approvalData, submittingApproval, showToast, onRefresh, fetchTaskData, fetchApprovalData, t]);
 
   const handlePlanAction = useCallback(async (planTask: Task, approved: boolean) => {
     if (!planTask.unitId) return;

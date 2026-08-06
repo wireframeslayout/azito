@@ -47,7 +47,7 @@ export interface Task {
   /**
    * Which operation the execution gate blocked and must be resumed (not
    * re-inferred) once a human approves (Issue #328 third/fourth/seventh-round
-   * review): see modules/units/routes.ts's approve-execution handler. Set
+   * review): see modules/tasks/execution/ExecutionApprovalDecision.ts's approve-execution handler. Set
    * immediately before the gate throws and cleared once approval consumes
    * it. NULL means "no pending operation" — the normal state, and also the
    * fallback the approval handler uses for any row that predates this
@@ -172,7 +172,7 @@ export interface ITaskRepository {
    * approval (Issue #328 ninth-round review finding 4) — the write is
    * guarded on `status = 'pending_approval' AND pending_operation IS NOT
    * NULL` in a single statement, so a duplicate/racing call for the same
-   * task (POST /api/units/:id/approve-execution submitted twice) affects
+   * task (POST /api/tasks/:id/approve-execution submitted twice) affects
    * zero rows on the second call instead of both callers reading the same
    * pendingOperation/pendingOperationWindowId/pendingOperationPriorStatus
    * and each independently dispatching a resume/respawn/restore.
@@ -199,7 +199,7 @@ export interface ITaskRepository {
    * ALSO leave it unchanged (COALESCE only short-circuits on SQL NULL, and
    * this implementation maps both "omitted" and "explicit null" to the same
    * bound `null` parameter), never clearing it. The two call sites in
-   * units/routes.ts's approve-execution handler only ever pass a real hash
+   * ExecutionApprovalDecision.ts's approve-execution handler only ever pass a real hash
    * string from `hashExecutionManifest()` (the approve branch) or omit the
    * field entirely (the deny branch, which passes `status` instead) —
    * neither needs to clear an existing hash, so the type no longer offers a

@@ -88,7 +88,7 @@ export class ExecutionGateDeniedError extends Error {
 /** Thrown by execution entry points when checkExecutionGate() requires human approval. */
 export class ExecutionGatePendingApprovalError extends Error {
   constructor(taskId: number) {
-    super(`Task ${taskId}: execution requires approval (untrusted-origin task) — see POST /api/units/:id/approve-execution`);
+    super(`Task ${taskId}: execution requires approval (untrusted-origin task) — see POST /api/tasks/:id/approve-execution`);
     this.name = 'ExecutionGatePendingApprovalError';
   }
 }

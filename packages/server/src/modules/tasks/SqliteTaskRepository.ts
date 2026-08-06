@@ -89,7 +89,7 @@ export class SqliteTaskRepository implements ITaskRepository {
     // column unchanged, so one statement serves both the approve branch
     // (passes executionApprovedFingerprintHash, leaves status alone) and the
     // deny branch (passes status, leaves the fingerprint alone) of
-    // units/routes.ts's approve-execution handler.
+    // tasks/execution/ExecutionApprovalDecision.ts's approve-execution handler.
     this.consumePendingApprovalStmt = db.prepare(
       "UPDATE tasks SET status = COALESCE(?, status), execution_approved_fingerprint_hash = COALESCE(?, execution_approved_fingerprint_hash), pending_operation = NULL, pending_operation_window_id = NULL, pending_operation_prior_status = NULL, updated_at = datetime('now') WHERE id = ? AND status = 'pending_approval' AND pending_operation IS NOT NULL",
     );

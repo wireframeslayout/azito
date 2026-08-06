@@ -113,8 +113,8 @@ function makeOpts(task: Task, unit: Unit, opts: { gateAllows: boolean }): { opts
       touch: vi.fn(),
       delete: vi.fn(),
       // Not exercised by these approve-plan tests (approve-execution's
-      // pendingOperation-consuming path is a different route) — stubbed only
-      // to satisfy ITaskRepository's shape.
+      // pendingOperation-consuming path lives in modules/tasks/routes.ts) —
+      // stubbed only to satisfy ITaskRepository's shape.
       consumePendingApproval: vi.fn(() => false),
     },
     logRepo: {
@@ -138,21 +138,8 @@ function makeOpts(task: Task, unit: Unit, opts: { gateAllows: boolean }): { opts
     serverRepo: {
       findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, createdAt: '' })),
     } as unknown as UnitsRouteOptions['serverRepo'],
-    projectSecretRepo: {
-      findByProject: vi.fn(() => []),
-    } as unknown as UnitsRouteOptions['projectSecretRepo'],
-    windowRepo: {
-      findById: vi.fn(() => null),
-    } as unknown as UnitsRouteOptions['windowRepo'],
-    respawnService: {
-      respawn: vi.fn(async () => ({ tmuxTarget: 'session:window.1' })),
-      resumeLegacySession: vi.fn(async () => ({ windowName: 'task-1' })),
-    } as unknown as UnitsRouteOptions['respawnService'],
     sidekickLoader: {} as unknown as UnitsRouteOptions['sidekickLoader'],
     unitTypeLoader: { get: vi.fn(() => null) } as unknown as UnitsRouteOptions['unitTypeLoader'],
-    taskRestoreService: {
-      restore: vi.fn(async () => ({ tmuxTarget: 'session:window.1', worktreePath: null })),
-    } as unknown as UnitsRouteOptions['taskRestoreService'],
   };
   return { opts: routeOpts, currentTask: () => currentTask };
 }

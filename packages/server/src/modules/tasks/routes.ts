@@ -17,7 +17,8 @@ import { TaskCleanupService } from './TaskCleanupService';
 import { SAFE_PATH_PATTERN, SAFE_BRANCH_PATTERN } from '../git/assertSafeGitArgs';
 import { resolveTaskServerName, resolveTmuxSession, resolveUnitId } from './execution/TaskExecutionEnv';
 import { replyToExecutionGateError } from './execution/ExecutionGate';
-import { resolveExecutionManifest } from './execution/ExecutionManifest';
+import { resolveExecutionManifest, hashExecutionManifest } from './execution/ExecutionManifest';
+import { decideExecutionApproval } from './execution/ExecutionApprovalDecision';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { SqliteProjectSecretRepository } from '../projects/SqliteProjectSecretRepository';
@@ -249,7 +250,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
   // from the UI at all.
   //
   // Resolved through resolveExecutionManifest() — the SAME function the
-  // approve-execution handler (units/routes.ts) hashes and gates on — rather
+  // approve-execution handler below hashes and gates on — rather
   // than a second, hand-rolled resolution. Two resolution paths for "what
   // will this task do" is exactly how earlier ExecutionManifest.ts review
   // rounds found drift bugs (see that file's module doc comment); this
@@ -290,11 +291,21 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         inputTrust: task.inputTrust,
         pendingOperation: task.pendingOperation,
         inputPolicy: projectServer?.inputPolicy ?? null,
+        // Fingerprint of the manifest THIS RESPONSE displays (Issue #328
+        // review fix 1) — the client must send it back unchanged with
+        // POST /api/tasks/:id/approve-execution's `approved: true`. The
+        // approval handler re-resolves and re-hashes the manifest at the
+        // moment of approval and rejects with 409 if it no longer matches
+        // this value, closing the TOCTOU window between a human reading
+        // this screen and clicking approve (task/Unit/Sidekick/server/
+        // secrets could otherwise be edited out from under them in
+        // between, with the stale screen never refreshing on its own).
+        fingerprint: hashExecutionManifest(manifest),
         execution: {
-          // Included alongside unitName so the client can call
-          // POST /api/units/:id/approve-execution against the RESOLVED
-          // Unit id (that route validates :id matches resolveUnitId(task,
-          // project) exactly, the same resolution used here) rather than
+          // Included alongside unitName for display — POST
+          // /api/tasks/:id/approve-execution resolves the Unit itself (same
+          // resolution used here) from the taskId alone, so this field is
+          // shown, not addressed with. It is the RESOLVED Unit id — unlike
           // task.unitId, which is null whenever the task inherits the
           // project's defaultUnitId.
           unitId: unit?.id ?? null,
@@ -310,6 +321,57 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         },
         secretNames,
       };
+    },
+  );
+
+  // ── POST /api/tasks/:id/approve-execution ──
+  //
+  // Task-scoped approve/deny for the untrusted-input execution gate (Issue
+  // #328 review fix 2) — the SOLE entry point (hardening follow-up: a prior
+  // Unit-scoped POST /api/units/:id/approve-execution was removed because it
+  // reached the exact same gate without requiring `fingerprint`, silently
+  // defeating the TOCTOU close fix 1 below exists for). Addressed by taskId
+  // alone (matching GET .../execution-approval above) rather than requiring
+  // the task's resolved Unit id in the URL: a task whose Unit cannot be
+  // resolved (no unit_id on the task AND no defaultUnitId on its project;
+  // TaskRestoreService.restore's gate can block such a task, see its own doc
+  // comment) still has to be at least deniable. This route resolves the Unit
+  // itself — tolerating null, same as resolveExecutionManifest/
+  // TaskRestoreService already do.
+  //
+  // Dispatches via decideExecutionApproval() — see that function's doc
+  // comment for the full per-operation rationale. `fingerprint` (Issue #328
+  // review fix 1) is REQUIRED whenever `approved` is true: this is the route
+  // the browser approval screen submits to, and the whole point of fix 1 is
+  // that an approval must be tied to the exact manifest the human looking at
+  // that screen saw, not to whatever the CURRENT manifest happens to be.
+  fastify.post<{ Params: { id: string } }>(
+    '/api/tasks/:id/approve-execution',
+    async (request, reply) => {
+      const taskId = parseInt(request.params.id, 10);
+      const task = taskRepo.findById(taskId);
+      if (!task) return reply.status(404).send({ error: 'Task not found' });
+
+      // Runtime-validated, not just type-asserted: this endpoint flips a
+      // security gate, so a truthy-but-wrong `approved` (e.g. the string
+      // "false" — truthy) must not slip through as approval.
+      const body = request.body as { approved?: unknown; fingerprint?: unknown };
+      if (typeof body.approved !== 'boolean') {
+        return reply.status(400).send({ error: 'approved must be a boolean' });
+      }
+      if (body.approved && typeof body.fingerprint !== 'string') {
+        return reply.status(400).send({ error: 'fingerprint is required when approving (fetch it from GET /api/tasks/:id/execution-approval)' });
+      }
+
+      const project = projectRepo.findById(task.projectId);
+      const unitId = resolveUnitId(task, project);
+
+      const outcome = decideExecutionApproval(
+        { taskRepo, logRepo, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, windowRepo, respawnService, executeTaskUseCase, taskRestoreService },
+        { taskId, unitId, approved: body.approved, fingerprint: body.approved ? (body.fingerprint as string) : undefined },
+        request.log,
+      );
+      return reply.status(outcome.status).send(outcome.body);
     },
   );
 
@@ -498,7 +560,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       // here first, with nothing mutated yet, means a block leaves
       // pendingQuestions/task.status exactly as they were and returns 409 —
       // the human can resubmit the same answers from the same screen once a
-      // human approves via POST /api/units/:id/approve-execution.
+      // human approves via POST /api/tasks/:id/approve-execution.
       //
       // 'resume_await_answer', NOT plain 'resume' (Issue #328 seventh-round
       // review symptom A): plain 'resume' is auto-resumed via
@@ -545,7 +607,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       // any rejection from this point on is a genuine run failure (tmux/worker/env
       // resolution), not a gate block, and must not be swallowed silently: same
       // failure-handling convention as approve-execution's failApprovedOperation
-      // (modules/units/routes.ts) for every other fire-and-forget resume call.
+      // (ExecutionApprovalDecision.ts) for every other fire-and-forget resume call.
       executeTaskUseCase.followUp(answerUnitId, id, followUpComment).catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
         request.log.error({ err, taskId: id }, 'answer follow-up failed');
