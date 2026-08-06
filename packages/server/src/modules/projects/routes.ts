@@ -174,19 +174,34 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
         working_directory?: string;
         branch?: string;
         tmux_session?: string | null;
+        input_policy?: string;
       };
       // tmux_session semantics: key present with null/empty resets to the default
       // ('azito'); key present with a value sets it (trimmed); key absent preserves
       // the existing value (default for a brand-new row).
+      const existingRow = projectServerRepo.find(projectId, serverName);
       const tmuxSession = 'tmux_session' in body
         ? (body.tmux_session?.trim() || 'azito')
-        : (projectServerRepo.find(projectId, serverName)?.tmuxSession ?? 'azito');
+        : (existingRow?.tmuxSession ?? 'azito');
+      // 'allow' is rejected here, not just left undocumented: it would skip the
+      // execution-approval gate entirely for untrusted tasks, but the isolated
+      // execution profile that would make that safe (Issue #328 design doc)
+      // doesn't exist yet. Rejecting at the API boundary keeps a misconfigured
+      // client from silently granting unattended execution of external input.
+      if (body.input_policy === 'allow') {
+        return reply.status(400).send({ error: "input_policy 'allow' is not selectable yet (isolated execution profile not implemented)" });
+      }
+      if (body.input_policy !== undefined && body.input_policy !== 'deny' && body.input_policy !== 'manual-approval') {
+        return reply.status(400).send({ error: "input_policy must be 'deny' or 'manual-approval'" });
+      }
+      const inputPolicy = (body.input_policy as 'deny' | 'manual-approval' | undefined) ?? existingRow?.inputPolicy ?? 'manual-approval';
       projectServerRepo.upsert({
         projectId,
         serverName,
         workingDirectory: body.working_directory ?? null,
         branch: body.branch ?? null,
         tmuxSession,
+        inputPolicy,
       });
 
       let sessionCreated = false;
@@ -391,6 +406,12 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
           summaryJson: null,
           prUrl: null,
           agentSessionId: null,
+          // Issue body content comes straight from an external tracker with no
+          // human review yet — the execution gate (ExecutionGate.ts) treats
+          // this the same as a GitHub/GitLab-sourced task regardless of what
+          // `source`/`source_ref` end up being edited to later (Issue #328).
+          inputTrust: 'untrusted',
+          executionApprovedDescriptionHash: null,
         });
         return { ok: true, taskId, issue: { number: issue.number, title: issue.title } };
       } catch (err: unknown) {

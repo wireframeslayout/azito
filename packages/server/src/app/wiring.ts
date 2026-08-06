@@ -257,6 +257,7 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories): Appl
     worktreeServiceFactory: infra.worktreeServiceFactory,
     transportFactory: infra.transportFactory,
     contentExtractor: infra.contentExtractor,
+    logRepo: repos.logRepo,
   });
   const usageService = new UsageService(infra.agentRegistry);
   const agentSignalService = new AgentSignalService(repos.agentTurnRepo, infra.turnSignalHub, repos.logRepo);

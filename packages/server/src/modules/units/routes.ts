@@ -9,6 +9,7 @@ import type { PhaseConfig, PhaseEntryConfig } from '../sidekicks/PhaseConfig';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import { resolvePhaseSidekick } from '../sidekicks/resolvePhaseSidekick';
 import { ResourceExhaustedError } from '../servers/resources/ResourceGuard';
+import { ExecutionGateDeniedError, ExecutionGatePendingApprovalError, hashTaskDescription } from '../tasks/execution/ExecutionGate';
 
 // ─── Types ───
 
@@ -67,6 +68,25 @@ function parseWorkerExecutionModeInput(raw: unknown): WorkerExecutionMode | unde
     throw new Error('worker_execution_mode must be "tmux-pipe" or "http-signal"');
   }
   return raw;
+}
+
+/**
+ * Shared translation of the untrusted-input execution gate's errors (Issue
+ * #328) into HTTP responses, used by both /execute and /follow-up — both
+ * routes can trigger ExecuteTaskUseCase's enforceExecutionGate(). Returns
+ * true when it handled the error (caller should stop), false otherwise so
+ * the caller falls through to its generic 400 handling.
+ */
+function replyToExecutionGateError(err: unknown, reply: { status: (code: number) => { send: (body: unknown) => unknown } }): boolean {
+  if (err instanceof ExecutionGatePendingApprovalError) {
+    reply.status(409).send({ error: 'execution_pending_approval', message: err.message });
+    return true;
+  }
+  if (err instanceof ExecutionGateDeniedError) {
+    reply.status(403).send({ error: 'execution_denied', message: err.message });
+    return true;
+  }
+  return false;
 }
 
 function parseWorkerRuntimeInput(raw: unknown): WorkerRuntime | undefined {
@@ -237,6 +257,7 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
       } catch (err: unknown) {
         if (err instanceof ResourceExhaustedError)
           return reply.status(409).send({ error: 'insufficient_resources', resources: err.status });
+        if (replyToExecutionGateError(err, reply)) return;
         return reply.status(400).send({ error: (err as Error).message });
       }
     },
@@ -284,6 +305,7 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
         await executeTaskUseCase.followUp(id, taskId, finalComment);
         return { ok: true };
       } catch (err: unknown) {
+        if (replyToExecutionGateError(err, reply)) return;
         return reply.status(400).send({ error: (err as Error).message });
       }
     },
@@ -346,6 +368,62 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
       taskRepo.updateStatus(taskId, 'running');
       taskRepo.updateCurrentPhase(taskId, 'implementing');
       executeTaskUseCase.resumeStateMachine(id, taskId).catch(() => {});
+      return { ok: true };
+    },
+  );
+
+  // ── POST /api/units/:id/approve-execution ──
+  //
+  // Approves/rejects the untrusted-input execution gate (Issue #328) — a
+  // separate concern from approve-plan above: that endpoint approves a
+  // PLAN the worker already produced (secrets/worktree already used once);
+  // this one approves letting an untrusted task run a worker AT ALL, before
+  // any of that has happened yet (task.status === 'pending_approval').
+  fastify.post<{ Params: { id: string } }>(
+    '/api/units/:id/approve-execution',
+    async (request, reply) => {
+      const id = parseInt(request.params.id, 10);
+      const unit = unitRepo.findById(id);
+      if (!unit) return reply.status(404).send({ error: 'Unit not found' });
+
+      const { taskId, approved } = request.body as { taskId?: number; approved?: boolean };
+      if (!taskId) return reply.status(400).send({ error: 'taskId required' });
+      if (approved === undefined) return reply.status(400).send({ error: 'approved required' });
+
+      const task = taskRepo.findById(taskId);
+      if (!task || task.status !== ('pending_approval' as TaskStatus)) {
+        return reply.status(400).send({ error: 'Task is not pending execution approval' });
+      }
+
+      if (!approved) {
+        logRepo.append(taskId, id, 'status_change', { status: 'execution_denied' });
+        taskRepo.updateStatus(taskId, 'failed' as TaskStatus);
+        return { ok: true };
+      }
+
+      // Record approval against the CURRENT description (checkExecutionGate
+      // re-hashes on every check) so re-running this same task later does not
+      // re-prompt, but a subsequent description edit (task stays untrusted)
+      // will invalidate this and require approval again.
+      logRepo.append(taskId, id, 'status_change', { status: 'execution_approved' });
+      taskRepo.update(taskId, { executionApprovedDescriptionHash: hashTaskDescription(task.description) } as Partial<import('../tasks/Task').Task>);
+
+      // Which entry point to resume depends on whether this task ever
+      // actually started: tmuxWindow is only ever set once execute() (or
+      // TaskRestoreService.restore()) got past the gate far enough to create
+      // one. The gate runs BEFORE that in every caller, so "no window yet"
+      // reliably means the block happened in execute() itself — a fresh
+      // start. "Window already exists" means the block happened mid-run
+      // (followUp/resumeStateMachine, e.g. a description edit invalidated a
+      // previously-approved, already-running task) — resuming the state
+      // machine from task.currentPhase is the correct continuation there,
+      // not a second execute() (which would recreate the window/worktree).
+      taskRepo.updateStatus(taskId, task.tmuxWindow ? 'running' : 'open');
+      if (task.tmuxWindow) {
+        executeTaskUseCase.resumeStateMachine(id, taskId).catch(() => {});
+      } else {
+        executeTaskUseCase.execute(id, taskId).catch(() => {});
+      }
       return { ok: true };
     },
   );

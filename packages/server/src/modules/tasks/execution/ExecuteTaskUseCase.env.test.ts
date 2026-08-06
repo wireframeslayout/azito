@@ -44,6 +44,8 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     summaryJson: null,
     prUrl: null,
     agentSessionId: null,
+    inputTrust: 'trusted',
+    executionApprovedDescriptionHash: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -175,9 +177,9 @@ function buildUseCase(opts: {
   task: Task;
   project: ProjectDetail | null;
   units: Unit[];
-  projectServer?: { workingDirectory: string | null; branch: string | null; tmuxSession: string } | null;
+  projectServer?: { workingDirectory: string | null; branch: string | null; tmuxSession: string; inputPolicy?: 'deny' | 'manual-approval' | 'allow' } | null;
   /** When set, overrides findByProject entirely (e.g. to simulate multiple project servers). */
-  projectServersList?: Array<{ projectId: number; serverName: string; workingDirectory: string | null; branch: string | null; tmuxSession: string }>;
+  projectServersList?: Array<{ projectId: number; serverName: string; workingDirectory: string | null; branch: string | null; tmuxSession: string; inputPolicy?: 'deny' | 'manual-approval' | 'allow' }>;
   /** When set, overrides the server returned by serverRepo.findByName (default: makeServer(), type 'local'). */
   server?: ServerConfig;
 }) {
@@ -227,9 +229,9 @@ function buildUseCase(opts: {
   };
 
   const projectServerRepo: IProjectServerRepository = {
-    findByProject: vi.fn(() => opts.projectServersList ?? (opts.projectServer ? [{ projectId: 1, serverName: 'local-server', ...opts.projectServer }] : [])),
+    findByProject: vi.fn(() => (opts.projectServersList ?? (opts.projectServer ? [{ projectId: 1, serverName: 'local-server', ...opts.projectServer }] : [])).map((ps) => ({ inputPolicy: 'manual-approval' as const, ...ps }))),
     findByServer: vi.fn(() => []),
-    find: vi.fn(() => (opts.projectServer ? { projectId: 1, serverName: 'local-server', ...opts.projectServer } : null)),
+    find: vi.fn(() => (opts.projectServer ? { projectId: 1, serverName: 'local-server', inputPolicy: 'manual-approval' as const, ...opts.projectServer } : null)),
     upsert: vi.fn(),
     remove: vi.fn(),
   };
@@ -573,6 +575,105 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
   });
 });
 
+describe('ExecuteTaskUseCase execution gate (Issue #328)', () => {
+  const gateProjectServer = { workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const };
+
+  it('execute(): blocks an untrusted, unapproved task before touching tmux — marks pending_approval', async () => {
+    const task = makeTask({ serverName: 'local-server', unitId: 10, inputTrust: 'untrusted', executionApprovedDescriptionHash: null });
+    const { useCase, taskRepo, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [makeUnit({ id: 10 })],
+      projectServer: gateProjectServer,
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/requires approval/);
+
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'pending_approval');
+  });
+
+  it('execute(): allows an untrusted task whose approval hash matches the current description', async () => {
+    const { hashTaskDescription } = await import('./ExecutionGate.js');
+    const task = makeTask({
+      serverName: 'local-server',
+      unitId: 10,
+      description: 'do the thing',
+      inputTrust: 'untrusted',
+      executionApprovedDescriptionHash: hashTaskDescription('do the thing'),
+    });
+    const { useCase, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [makeUnit({ id: 10 })],
+      projectServer: gateProjectServer,
+    });
+
+    await useCase.execute(10, 1);
+
+    expect(tmux.createWindow).toHaveBeenCalled();
+  });
+
+  it('execute(): denies outright under a "deny" project server policy, without changing task status', async () => {
+    const task = makeTask({ serverName: 'local-server', unitId: 10, inputTrust: 'untrusted' });
+    const { useCase, taskRepo, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [makeUnit({ id: 10 })],
+      projectServer: { ...gateProjectServer, inputPolicy: 'deny' },
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/denied/);
+
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(taskRepo.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('execute(): does not gate a trusted task even with no project_servers row configured', async () => {
+    const task = makeTask({ serverName: 'local-server', unitId: 10, inputTrust: 'trusted' });
+    const { useCase, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [makeUnit({ id: 10 })],
+      // no projectServer -> projectServerRepo.find() returns null
+    });
+
+    await useCase.execute(10, 1);
+
+    expect(tmux.createWindow).toHaveBeenCalled();
+  });
+
+  it('followUp(): blocks resuming an untrusted task with a stale approval, before any tmux call', async () => {
+    const task = makeTask({ serverName: 'local-server', unitId: 10, tmuxWindow: 'task-1', inputTrust: 'untrusted', executionApprovedDescriptionHash: null });
+    const { useCase, taskRepo, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [makeUnit({ id: 10 })],
+      projectServer: gateProjectServer,
+    });
+
+    await expect(useCase.followUp(10, 1, 'please continue')).rejects.toThrow(/requires approval/);
+
+    expect(tmux.listSessions).not.toHaveBeenCalled();
+    expect(tmux.sendKeys).not.toHaveBeenCalled();
+    expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'pending_approval');
+  });
+
+  it('resumeStateMachine(): blocks resuming an untrusted task with a stale approval', async () => {
+    const task = makeTask({ serverName: 'local-server', unitId: 10, tmuxWindow: 'task-1', currentPhase: null, inputTrust: 'untrusted', executionApprovedDescriptionHash: null });
+    const { useCase, taskRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [makeUnit({ id: 10 })],
+      projectServer: gateProjectServer,
+    });
+
+    await expect(useCase.resumeStateMachine(10, 1)).rejects.toThrow(/requires approval/);
+
+    expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'pending_approval');
+  });
+});
+
 describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO監視強化 Phase 1)', () => {
   it('creates a follow_up turn (kind, phase:null) via the real HttpSignalTurnCoordinator, sends the http-signal envelope (not the tmux marker echo), and reconciles the turn as aborted when the run is stopped', async () => {
     const unit = makeUnit({ id: 42, workerExecutionMode: 'http-signal' });
@@ -621,9 +722,9 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
       removeRepository: vi.fn(),
     };
     const projectServerRepo: IProjectServerRepository = {
-      findByProject: vi.fn(() => [{ projectId: 1, serverName: 'local-server', workingDirectory: '/work', branch: null, tmuxSession: 'azito' }]),
+      findByProject: vi.fn(() => [{ projectId: 1, serverName: 'local-server', workingDirectory: '/work', branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const }]),
       findByServer: vi.fn(() => []),
-      find: vi.fn(() => ({ projectId: 1, serverName: 'local-server', workingDirectory: '/work', branch: null, tmuxSession: 'azito' })),
+      find: vi.fn(() => ({ projectId: 1, serverName: 'local-server', workingDirectory: '/work', branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const })),
       upsert: vi.fn(),
       remove: vi.fn(),
     };

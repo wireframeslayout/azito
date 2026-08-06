@@ -38,6 +38,8 @@ const makeTask = (overrides = {}) => ({
   summaryJson: null,
   prUrl: null,
   agentSessionId: null,
+  inputTrust: 'trusted' as const,
+  executionApprovedDescriptionHash: null,
   createdAt: '2024-01-01',
   updatedAt: '2024-01-01',
   ...overrides,

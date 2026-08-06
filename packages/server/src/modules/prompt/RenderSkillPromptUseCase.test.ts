@@ -43,6 +43,8 @@ const makeTask = (overrides = {}) => ({
   summaryJson: null,
   prUrl: null,
   agentSessionId: null,
+  inputTrust: 'trusted' as const,
+  executionApprovedDescriptionHash: null,
   createdAt: '2024-01-01',
   updatedAt: '2024-01-01',
   ...overrides,
@@ -173,7 +175,7 @@ function makeRepos(overrides: {
   const projectServerRepo: IProjectServerRepository = {
     findByProject: vi.fn(() => []),
     findByServer: vi.fn(() => []),
-    find: vi.fn(() => ({ projectId: 10, serverName: 'local', workingDirectory: '/work', branch: 'feat', tmuxSession: 'sess' })),
+    find: vi.fn(() => ({ projectId: 10, serverName: 'local', workingDirectory: '/work', branch: 'feat', tmuxSession: 'sess', inputPolicy: 'manual-approval' as const })),
     upsert: vi.fn(),
     remove: vi.fn(),
     ...overrides.projectServer,

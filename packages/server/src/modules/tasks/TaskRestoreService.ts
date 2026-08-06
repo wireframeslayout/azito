@@ -10,9 +10,11 @@ import type { WorktreeServiceFactory } from '../git/WorktreeServiceFactory';
 import { PathResolverFactory, assertDirectoryContained } from '../git/PathContainment';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { IContentExtractor } from '../llm/ContentExtractor';
+import type { IExecutionLogRepository } from './ExecutionLog';
 import { resolveTaskServerName, resolveTmuxSession, resolveUnitId } from './execution/TaskExecutionEnv';
 import { buildWorkerLaunchCommand } from '../agents/LaunchCommand';
 import { shellQuote } from '../../shared/shellQuote';
+import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError } from './execution/ExecutionGate';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -29,6 +31,7 @@ export interface TaskRestoreDeps {
   worktreeServiceFactory: WorktreeServiceFactory;
   transportFactory: TransportFactory;
   contentExtractor: IContentExtractor;
+  logRepo: IExecutionLogRepository;
 }
 
 export class TaskRestoreService {
@@ -37,7 +40,7 @@ export class TaskRestoreService {
   constructor(private deps: TaskRestoreDeps) {}
 
   async restore(task: Task, log: { warn: (msg: string) => void }): Promise<{ tmuxTarget: string; worktreePath: string | null }> {
-    const { taskRepo, serverRepo, projectRepo, projectServerRepo, unitRepo, windowRepo, tmux, worktreeServiceFactory, transportFactory, contentExtractor } = this.deps;
+    const { taskRepo, serverRepo, projectRepo, projectServerRepo, unitRepo, windowRepo, tmux, worktreeServiceFactory, transportFactory, contentExtractor, logRepo } = this.deps;
 
     const serverName = resolveTaskServerName(task, projectServerRepo);
     if (!serverName) {
@@ -53,6 +56,25 @@ export class TaskRestoreService {
     const project = projectRepo.findById(task.projectId);
     const unitId = resolveUnitId(task, project);
     const unit = unitId ? unitRepo.findById(unitId) : null;
+
+    // Untrusted-input execution gate (Issue #328), same check as
+    // ExecuteTaskUseCase's entry points — restoring an archived task
+    // recreates its tmux window and worktree from scratch, so it needs the
+    // identical pre-launch check, run before any of that happens.
+    const projectServer = project ? projectServerRepo.find(task.projectId, serverName) : null;
+    const gate = checkExecutionGate(task, projectServer);
+    if (!gate.allowed) {
+      if (unitId !== null) {
+        logRepo.append(task.id, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
+      }
+      if (gate.reason === 'pending_approval') {
+        taskRepo.updateStatus(task.id, 'pending_approval');
+        throw new ExecutionGatePendingApprovalError(task.id);
+      }
+      // 'denied': leave status untouched (still 'archived') — see the matching
+      // comment in ExecuteTaskUseCase.enforceExecutionGate for the rationale.
+      throw new ExecutionGateDeniedError(task.id);
+    }
 
     const existingSessions = await tmux.listSessions(server);
     const sessionExists = existingSessions.some((s) => s.name === tmuxSession);

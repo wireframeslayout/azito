@@ -78,6 +78,8 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     summaryJson: null,
     prUrl: null,
     agentSessionId: null,
+    inputTrust: 'trusted',
+    executionApprovedDescriptionHash: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -328,7 +330,7 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
   let rootDir: string;
 
   function makeProjectServerRepo(workingDirectory: string | null): Pick<IProjectServerRepository, 'find'> {
-    return { find: vi.fn(() => ({ projectId: 1, serverName: 'local-server', workingDirectory, branch: 'main', tmuxSession: 'azito' })) };
+    return { find: vi.fn(() => ({ projectId: 1, serverName: 'local-server', workingDirectory, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const })) };
   }
 
   function makeTransportFactory(): Pick<TransportFactory, 'getTransport'> {

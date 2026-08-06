@@ -38,6 +38,7 @@ import { HttpSignalTurnCoordinator } from './HttpSignalTurnCoordinator';
 import type { SupervisorRegistry } from '../../supervisors/SupervisorRegistry';
 import { shouldSupervise } from '../../supervisors/SupervisorLaunch';
 import { ResourceExhaustedError, type ResourceGuard } from '../../servers/resources/ResourceGuard';
+import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError } from './ExecutionGate';
 import { TuiWorkerRuntime } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
 import { resolveTaskServerName, resolveTmuxSession, resolveUnitId } from './TaskExecutionEnv';
@@ -193,6 +194,35 @@ export class ExecuteTaskUseCase {
     return assertDirectoryContained(this.pathResolverFactory, server.type, transport, { target, allowedRoot }, label);
   }
 
+  /**
+   * Runs the untrusted-input execution gate (Issue #328) and, when it
+   * blocks, marks the task accordingly and throws before any worker,
+   * worktree, or secret touches it. Called at the top of every entry point
+   * here that can launch or resume a worker (execute/followUp/
+   * resumeStateMachine); TaskRestoreService.restore runs the same
+   * checkExecutionGate() independently since it resolves its own
+   * task/server and has no dependency on this use case. Returns the
+   * project/projectServer it resolved so callers that need them anyway
+   * (execute()'s working-directory logic) don't re-fetch.
+   */
+  private enforceExecutionGate(task: Task, unitId: number, server: ServerConfig) {
+    const project = this.projectRepo.findById(task.projectId);
+    const projectServer = project ? this.projectServerRepo.find(task.projectId, server.name) : null;
+    const gate = checkExecutionGate(task, projectServer);
+    if (gate.allowed) return { project, projectServer };
+
+    this.appendLog(task.id, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
+    if (gate.reason === 'pending_approval') {
+      this.taskRepo.updateStatus(task.id, 'pending_approval');
+      throw new ExecutionGatePendingApprovalError(task.id);
+    }
+    // 'denied': leave task status untouched — same rationale as the resource
+    // guard's pre-launch block above (task hasn't started, nothing to roll
+    // back) but unlike that block this isn't transient; a human must change
+    // the project server's input_policy before a retry can succeed.
+    throw new ExecutionGateDeniedError(task.id);
+  }
+
   private appendLog(taskId: number, unitId: number, type: LogType, content: unknown): void {
     this.logRepo.append(taskId, unitId, type, content);
     this.events.emit('log', { taskId, unitId, type, content, createdAt: new Date().toISOString() });
@@ -282,6 +312,12 @@ export class ExecuteTaskUseCase {
     const server = this.serverRepo.findByName(serverName);
     if (!server) throw new Error('Server not found');
 
+    // Untrusted-input execution gate (Issue #328): must run before the
+    // resource guard, before any tmux window, before any worktree, before
+    // any secret is injected. Resolves project/projectServer once for reuse
+    // below.
+    const { project, projectServer } = this.enforceExecutionGate(task, unitId, server);
+
     // リソースひっ迫時はウィンドウ作成前に中断する（タスクは開始前なので status は変更しない）。
     // force 指定（フロントの「それでも実行」）でスキップできる。
     if (options?.force !== true) {
@@ -293,8 +329,6 @@ export class ExecuteTaskUseCase {
     }
 
     // Change to project working directory (use worktree if possible)
-    const project = this.projectRepo.findById(task.projectId);
-    const projectServer = project ? this.projectServerRepo.find(task.projectId, serverName) : null;
     // allowedRoot is the project's configured working directory — the boundary
     // a caller-supplied task.workingDirectory must not escape (Issue #27:
     // task.workingDirectory comes straight from the API with no path
@@ -639,6 +673,15 @@ export class ExecuteTaskUseCase {
     const server = this.serverRepo.findByName(serverName);
     if (!server) throw new Error('Server not found');
 
+    // Same gate as execute() (Issue #328). A follow-up can resume a worker
+    // just as much as a fresh execute() can — e.g. a description edit on an
+    // untrusted task invalidates its approval hash while the task is
+    // mid-run, and the next follow-up (including the one the answer-submit
+    // endpoint issues) must not resume it unattended. The `comment` for this
+    // particular call is not persisted anywhere and is lost when blocked;
+    // the caller must resubmit it after approval (see approve-execution).
+    this.enforceExecutionGate(task, unitId, server);
+
     this.appendLog(taskId, unitId, 'user_comment', { text: comment });
     this.taskRepo.updateStatus(taskId, 'in_progress');
 
@@ -919,6 +962,13 @@ export class ExecuteTaskUseCase {
 
     const server = this.serverRepo.findByName(serverName);
     if (!server) throw new Error('Server not found');
+
+    // Same gate as execute()/followUp() (Issue #328). Reached from
+    // approve-plan's "resume from implementing" flow and from startup
+    // recovery (RecoverStuckTasksUseCase) — both resume a worker that may
+    // have gone stale for an untrusted task (description edited since the
+    // approval this run started under).
+    this.enforceExecutionGate(task, unitId, server);
 
     // Validate currentPhase against unitType phases
     if (task.currentPhase) {

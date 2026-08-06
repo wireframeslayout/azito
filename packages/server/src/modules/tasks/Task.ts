@@ -19,6 +19,23 @@ export interface Task {
   requirePlanApproval: boolean;
   source: 'local' | 'github' | 'gitlab';
   sourceRef: string | null;
+  /**
+   * Immutable-by-client trust level (Issue #328). Unlike `source`, this is
+   * never accepted from POST/PUT /api/tasks request bodies — it is the only
+   * signal the execution gate (modules/tasks/execution/ExecutionGate.ts)
+   * relies on to tell external-origin tasks apart, precisely because
+   * `source` is freely rewritable by /azt-link and thus cannot be trusted
+   * for authorization. Only server-side code paths (import-issue) may set
+   * 'untrusted'; nothing may transition 'untrusted' back to 'trusted'.
+   */
+  inputTrust: 'trusted' | 'untrusted';
+  /**
+   * Hash of the task.description that a human most recently approved for
+   * unattended execution while input_trust = 'untrusted'. Null means "never
+   * approved" or "approved description is stale" (description changed
+   * since). See ExecutionGate.checkExecutionGate for the comparison.
+   */
+  executionApprovedDescriptionHash: string | null;
   worktreePath: string | null;
   worktreeBranch: string | null;
   baseBranch: string | null;

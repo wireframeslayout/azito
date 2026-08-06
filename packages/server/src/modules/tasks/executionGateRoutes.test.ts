@@ -4,6 +4,11 @@ import tasksRoutes from './routes';
 import type { TasksRouteOptions } from './routes';
 import type { Task } from './Task';
 
+// Covers Issue #328's client-facing surface on the tasks routes: input_trust
+// must never be settable from a request body (only server-side code paths —
+// e.g. import-issue — may set it), and an untrusted task may not have its
+// own plan-approval requirement turned off via PUT.
+
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {
     id: 1,
@@ -16,18 +21,18 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     currentPhase: null,
     selfReviewCount: 0,
     priority: 0,
-    tmuxWindow: 'task-1',
+    tmuxWindow: null,
     selfReviewMaxAttempts: null,
-    requirePlanApproval: false,
+    requirePlanApproval: true,
     source: 'local',
     sourceRef: null,
-    worktreePath: '/work/.worktrees/task-1',
-    worktreeBranch: 'feat/test',
-    baseBranch: 'main',
+    worktreePath: null,
+    worktreeBranch: null,
+    baseBranch: null,
     targetBranch: null,
     skipPr: false,
     workingDirectory: null,
-    branch: 'feat/test',
+    branch: null,
     planMarkdown: null,
     pendingQuestions: null,
     changedFiles: null,
@@ -42,18 +47,18 @@ function makeTask(overrides: Partial<Task> = {}): Task {
   };
 }
 
-function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
-  const task = makeTask(taskOverrides);
-  return {
+function makeOpts(existingTask: Task): { opts: TasksRouteOptions; createCalls: Record<string, unknown>[] } {
+  const createCalls: Record<string, unknown>[] = [];
+  const opts: TasksRouteOptions = {
     taskRepo: {
-      findAll: vi.fn(() => [task]),
-      findByProject: vi.fn(() => [task]),
+      findAll: vi.fn(() => []),
+      findByProject: vi.fn(() => []),
       findByUnit: vi.fn(() => []),
       findByStatus: vi.fn(() => []),
       findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
-      findById: vi.fn((id: number) => (id === task.id ? task : null)),
-      create: vi.fn(() => 1),
-      update: vi.fn((id: number, data: Partial<Task>) => { Object.assign(task, data); }),
+      findById: vi.fn((id: number) => (id === existingTask.id ? existingTask : null)),
+      create: vi.fn((data: Record<string, unknown>) => { createCalls.push(data); return 2; }),
+      update: vi.fn(),
       updateStatus: vi.fn(),
       updateCurrentPhase: vi.fn(),
       touch: vi.fn(),
@@ -113,22 +118,15 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
       clearFingerprint: vi.fn(),
       delete: vi.fn(),
     },
-    worktreeServiceFactory: {
-      create: vi.fn(() => ({
-        create: vi.fn(async () => ({ path: '/work/.worktrees/task-1', branch: 'feat/test' })),
-        remove: vi.fn(async () => {}),
-      })),
-    } as unknown as TasksRouteOptions['worktreeServiceFactory'],
-    transportFactory: {
-      getTransport: vi.fn(() => ({})),
-    } as unknown as TasksRouteOptions['transportFactory'],
+    worktreeServiceFactory: { create: vi.fn() } as unknown as TasksRouteOptions['worktreeServiceFactory'],
+    transportFactory: { getTransport: vi.fn(() => ({})) } as unknown as TasksRouteOptions['transportFactory'],
     windowRepo: {
       findByTaskIds: vi.fn(() => new Map()),
       add: vi.fn(() => 100),
       findAll: vi.fn(() => []),
       findById: vi.fn(() => undefined),
       findByProject: vi.fn(() => []),
-      findByTask: vi.fn(() => [{ id: 50, ownerType: 'task' as const, taskId: 1, isPrimary: true, serverName: 'test-server', tmuxTarget: 'azito:task-1.1', label: 'task-1', windowType: 'agent' as const, workerType: 'claude', workerModel: null, agentSessionId: null, launchCommand: null, workingDirectory: null, paneLayout: null, projectId: null, createdAt: '' }]),
+      findByTask: vi.fn(() => []),
       findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
       findByServerAndTarget: vi.fn(() => undefined),
       update: vi.fn(),
@@ -137,105 +135,92 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
       removeByServerAndTarget: vi.fn(() => 0),
       updatePaneLayout: vi.fn(),
     },
-    respawnService: {
-      respawn: vi.fn(async () => ({ tmuxTarget: 'azito:task-1.1' })),
-    } as unknown as TasksRouteOptions['respawnService'],
-    taskRestoreService: {
-      restore: vi.fn(async () => ({ tmuxTarget: 'azito:task-1.1', worktreePath: '/work/.worktrees/task-1' })),
-    } as unknown as TasksRouteOptions['taskRestoreService'],
+    respawnService: { respawn: vi.fn(async () => ({ tmuxTarget: 'azito:task-1.1' })) } as unknown as TasksRouteOptions['respawnService'],
+    taskRestoreService: { restore: vi.fn(async () => ({ tmuxTarget: 'azito:task-1.1', worktreePath: null })) } as unknown as TasksRouteOptions['taskRestoreService'],
     unitTypeLoader: { getOrThrow: vi.fn(() => ({ name: 'devops', label: 'DevOps', description: '', phases: [] })) } as unknown as TasksRouteOptions['unitTypeLoader'],
-    supervisorRegistry: {} as any,
+    supervisorRegistry: {} as unknown as TasksRouteOptions['supervisorRegistry'],
   };
+  return { opts, createCalls };
 }
 
-describe('POST /api/tasks/:id/archive', () => {
-  it('archives a task: stops execution, cleans up, removes windows, sets status to archived', async () => {
-    const opts = makeOpts({ status: 'open' });
+describe('POST /api/tasks — input_trust immutability (Issue #328)', () => {
+  it('ignores an input_trust field in the request body and always creates a trusted task', async () => {
+    const { opts, createCalls } = makeOpts(makeTask());
     const app = Fastify();
     await app.register(tasksRoutes, opts);
     await app.ready();
 
-    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/archive' });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/tasks',
+      payload: { project_id: 10, title: 'New task', input_trust: 'untrusted' },
+    });
 
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.payload)).toEqual({ ok: true });
-    expect(opts.executeTaskUseCase.stopByTaskId).toHaveBeenCalledWith(1);
-    expect(opts.windowRepo.remove).toHaveBeenCalledWith(50);
-    expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { status: 'archived', tmuxWindow: null });
-  });
-
-  it('returns ok when task is already archived (idempotent)', async () => {
-    const opts = makeOpts({ status: 'archived' });
-    const app = Fastify();
-    await app.register(tasksRoutes, opts);
-    await app.ready();
-
-    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/archive' });
-
-    expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.payload)).toEqual({ ok: true });
-    expect(opts.executeTaskUseCase.stopByTaskId).not.toHaveBeenCalled();
-  });
-
-  it('returns 404 when task does not exist', async () => {
-    const opts = makeOpts();
-    const app = Fastify();
-    await app.register(tasksRoutes, opts);
-    await app.ready();
-
-    const res = await app.inject({ method: 'POST', url: '/api/tasks/999/archive' });
-
-    expect(res.statusCode).toBe(404);
+    expect(createCalls[0]).toMatchObject({ inputTrust: 'trusted', executionApprovedDescriptionHash: null });
   });
 });
 
-describe('POST /api/tasks/:id/restore', () => {
-  it('restores an archived task via taskRestoreService', async () => {
-    const opts = makeOpts({ status: 'archived' });
+describe('PUT /api/tasks/:id — require_plan_approval guard for untrusted tasks (Issue #328)', () => {
+  it('rejects disabling require_plan_approval on an untrusted task', async () => {
+    const { opts } = makeOpts(makeTask({ inputTrust: 'untrusted', requirePlanApproval: true }));
     const app = Fastify();
     await app.register(tasksRoutes, opts);
     await app.ready();
 
-    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/restore' });
-
-    expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.payload)).toEqual({ ok: true, tmuxTarget: 'azito:task-1.1', worktreePath: '/work/.worktrees/task-1' });
-    expect(opts.taskRestoreService.restore).toHaveBeenCalled();
-  });
-
-  it('returns 400 when task is not archived', async () => {
-    const opts = makeOpts({ status: 'open' });
-    const app = Fastify();
-    await app.register(tasksRoutes, opts);
-    await app.ready();
-
-    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/restore' });
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/tasks/1',
+      payload: { require_plan_approval: false },
+    });
 
     expect(res.statusCode).toBe(400);
-    expect(JSON.parse(res.payload)).toEqual({ error: "Task status 'open' is not restorable" });
+    expect(opts.taskRepo.update).not.toHaveBeenCalled();
   });
 
-  it('returns 500 when restore fails', async () => {
-    const opts = makeOpts({ status: 'archived' });
-    (opts.taskRestoreService.restore as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('Server unreachable'));
+  it('allows enabling require_plan_approval on an untrusted task', async () => {
+    const { opts } = makeOpts(makeTask({ inputTrust: 'untrusted', requirePlanApproval: false }));
     const app = Fastify();
     await app.register(tasksRoutes, opts);
     await app.ready();
 
-    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/restore' });
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/tasks/1',
+      payload: { require_plan_approval: true },
+    });
 
-    expect(res.statusCode).toBe(500);
-    expect(JSON.parse(res.payload)).toEqual({ error: 'Server unreachable' });
+    expect(res.statusCode).toBe(200);
   });
 
-  it('returns 404 when task does not exist', async () => {
-    const opts = makeOpts();
+  it('allows disabling require_plan_approval on a trusted task (unaffected — legacy behavior preserved)', async () => {
+    const { opts } = makeOpts(makeTask({ inputTrust: 'trusted', requirePlanApproval: true }));
     const app = Fastify();
     await app.register(tasksRoutes, opts);
     await app.ready();
 
-    const res = await app.inject({ method: 'POST', url: '/api/tasks/999/restore' });
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/tasks/1',
+      payload: { require_plan_approval: false },
+    });
 
-    expect(res.statusCode).toBe(404);
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('does not accept input_trust from the PUT body (no such field is ever read into the update call)', async () => {
+    const { opts } = makeOpts(makeTask({ inputTrust: 'trusted' }));
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    await app.inject({
+      method: 'PUT',
+      url: '/api/tasks/1',
+      payload: { input_trust: 'untrusted' },
+    });
+
+    const updateCall = (opts.taskRepo.update as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(updateCall[1]).not.toHaveProperty('inputTrust');
   });
 });

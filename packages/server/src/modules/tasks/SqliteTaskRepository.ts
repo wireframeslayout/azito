@@ -19,6 +19,8 @@ interface TaskRow {
   require_plan_approval: number;
   source: string;
   source_ref: string | null;
+  input_trust: string;
+  execution_approved_description_hash: string | null;
   worktree_path: string | null;
   worktree_branch: string | null;
   base_branch: string | null;
@@ -72,10 +74,10 @@ export class SqliteTaskRepository implements ITaskRepository {
     this.listByStatusStmt = db.prepare('SELECT * FROM tasks WHERE status = ? ORDER BY priority DESC, created_at DESC');
     this.getStmt = db.prepare('SELECT * FROM tasks WHERE id = ?');
     this.createStmt = db.prepare(
-      'INSERT INTO tasks (project_id, unit_id, server_name, title, description, priority, tmux_window, self_review_max_attempts, require_plan_approval, source, source_ref, worktree_path, worktree_branch, base_branch, target_branch, skip_pr, working_directory, branch, plan_markdown, pending_questions, changed_files, summary_json, pr_url, agent_session_id, review_subagent, implement_subagent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO tasks (project_id, unit_id, server_name, title, description, priority, tmux_window, self_review_max_attempts, require_plan_approval, source, source_ref, worktree_path, worktree_branch, base_branch, target_branch, skip_pr, working_directory, branch, plan_markdown, pending_questions, changed_files, summary_json, pr_url, agent_session_id, review_subagent, implement_subagent, input_trust, execution_approved_description_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
     this.updateStmt = db.prepare(
-      "UPDATE tasks SET title = ?, description = ?, status = ?, unit_id = ?, server_name = ?, priority = ?, tmux_window = ?, self_review_max_attempts = ?, require_plan_approval = ?, source = ?, source_ref = ?, worktree_path = ?, worktree_branch = ?, base_branch = ?, target_branch = ?, skip_pr = ?, working_directory = ?, branch = ?, plan_markdown = ?, pending_questions = ?, changed_files = ?, summary_json = ?, pr_url = ?, agent_session_id = ?, review_subagent = ?, implement_subagent = ?, updated_at = datetime('now') WHERE id = ?",
+      "UPDATE tasks SET title = ?, description = ?, status = ?, unit_id = ?, server_name = ?, priority = ?, tmux_window = ?, self_review_max_attempts = ?, require_plan_approval = ?, source = ?, source_ref = ?, worktree_path = ?, worktree_branch = ?, base_branch = ?, target_branch = ?, skip_pr = ?, working_directory = ?, branch = ?, plan_markdown = ?, pending_questions = ?, changed_files = ?, summary_json = ?, pr_url = ?, agent_session_id = ?, review_subagent = ?, implement_subagent = ?, input_trust = ?, execution_approved_description_hash = ?, updated_at = datetime('now') WHERE id = ?",
     );
     this.updateStatusStmt = db.prepare("UPDATE tasks SET status = ?, updated_at = datetime('now') WHERE id = ?");
     this.updateCurrentPhaseStmt = db.prepare("UPDATE tasks SET current_phase = ?, updated_at = datetime('now') WHERE id = ?");
@@ -140,6 +142,8 @@ export class SqliteTaskRepository implements ITaskRepository {
       data.agentSessionId ?? null,
       data.reviewSubagent !== undefined ? (data.reviewSubagent !== null ? JSON.stringify(data.reviewSubagent) : null) : null,
       data.implementSubagent !== undefined ? (data.implementSubagent !== null ? JSON.stringify(data.implementSubagent) : null) : null,
+      data.inputTrust ?? 'trusted',
+      data.executionApprovedDescriptionHash ?? null,
     );
     return Number(result.lastInsertRowid);
   }
@@ -174,6 +178,8 @@ export class SqliteTaskRepository implements ITaskRepository {
       data.agentSessionId !== undefined ? data.agentSessionId : current.agent_session_id,
       data.reviewSubagent !== undefined ? (data.reviewSubagent !== null ? JSON.stringify(data.reviewSubagent) : null) : current.review_subagent,
       data.implementSubagent !== undefined ? (data.implementSubagent !== null ? JSON.stringify(data.implementSubagent) : null) : current.implement_subagent,
+      data.inputTrust !== undefined ? data.inputTrust : current.input_trust,
+      data.executionApprovedDescriptionHash !== undefined ? data.executionApprovedDescriptionHash : current.execution_approved_description_hash,
       id,
     );
   }
@@ -226,6 +232,8 @@ export class SqliteTaskRepository implements ITaskRepository {
       agentSessionId: row.agent_session_id ?? null,
       reviewSubagent: parseSubagentConfig(row.review_subagent),
       implementSubagent: parseSubagentConfig(row.implement_subagent),
+      inputTrust: row.input_trust as 'trusted' | 'untrusted',
+      executionApprovedDescriptionHash: row.execution_approved_description_hash ?? null,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };

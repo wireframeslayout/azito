@@ -138,6 +138,23 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
     try {
       const reviewSubagent = parseSubagentConfigInput(review_subagent, 'review_subagent');
       const implementSubagent = parseSubagentConfigInput(implement_subagent, 'implement_subagent');
+      // input_trust is deliberately NOT read from request.body — see Task.ts.
+      //
+      // Issue #328 asks this endpoint to inherit the parent task's trust level
+      // when an agent creates a sub-task and the parent is identifiable. There
+      // is currently no way to identify a calling agent's task from an HTTP
+      // request: every request (browser UI and any in-pane `curl`/MCP call
+      // alike) authenticates with the single shared AZITO_UI_TOKEN — there is
+      // no per-task credential or header carrying a "calling task id" (verified
+      // against app/buildServer.ts's createTokenVerifier and the harness
+      // worker launch env, which only injects AZITO_SECRET_*/AZITO_AGENT_*).
+      // Until such a signal exists, this endpoint cannot distinguish "human
+      // via the UI" from "agent via the API", so it defaults to 'trusted' —
+      // the same as it always has — rather than guess. This must never be
+      // 'untrusted' by construction here; only server-only paths (currently
+      // POST /api/projects/:id/import-issue) mark a task untrusted, since the
+      // trust-lowering direction is safe but trust-raising is not (Issue #328:
+      // "信頼度を上げる方向の遷移は実装しないこと").
       const id = taskRepo.create({
         projectId: project_id as number,
         unitId: (unit_id as number) ?? null,
@@ -168,6 +185,8 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         agentSessionId: null,
         reviewSubagent,
         implementSubagent,
+        inputTrust: 'trusted',
+        executionApprovedDescriptionHash: null,
       });
       return { ok: true, id };
     } catch (err: unknown) {
@@ -222,6 +241,16 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         request.body as Record<string, unknown>;
       const gitError = validateGitFields(request.body as Record<string, unknown>);
       if (gitError) return reply.status(400).send({ error: gitError });
+      // Only the untrusted-input-gate direction is enforced here: an
+      // untrusted task may not have its own plan-approval requirement turned
+      // off (that would let it skip straight to unattended execution).
+      // Turning it ON (true) is always allowed. `source`/`source_ref` remain
+      // freely editable below (for /azt-link) — inputTrust itself is not
+      // settable from this body at all, so this check is the only place
+      // trust level constrains what else can change (Issue #328).
+      if (existing.inputTrust === 'untrusted' && require_plan_approval === false) {
+        return reply.status(400).send({ error: 'require_plan_approval cannot be disabled for an untrusted-origin task' });
+      }
       try {
         const reviewSubagent = review_subagent !== undefined
           ? parseSubagentConfigInput(review_subagent, 'review_subagent')

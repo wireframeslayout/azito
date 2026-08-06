@@ -45,6 +45,8 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     summaryJson: null,
     prUrl: null,
     agentSessionId: null,
+    inputTrust: 'trusted',
+    executionApprovedDescriptionHash: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -88,9 +90,9 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
       removeRepository: vi.fn(),
     },
     projectServerRepo: {
-      findByProject: vi.fn(() => [{ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito' }]),
+      findByProject: vi.fn(() => [{ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const }]),
       findByServer: vi.fn(() => []),
-      find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito' })),
+      find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const })),
       upsert: vi.fn(),
       remove: vi.fn(),
     },
@@ -143,6 +145,11 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
       extractQuestions: vi.fn(async () => ({ questions: [] })),
       generateSlug: vi.fn(async () => 'test-task'),
     },
+    logRepo: {
+      append: vi.fn(),
+      findByTask: vi.fn(() => []),
+      findByUnit: vi.fn(() => []),
+    } as unknown as TaskRestoreDeps['logRepo'],
     ...overrides,
   };
 }
@@ -271,7 +278,7 @@ describe('TaskRestoreService', () => {
       ...deps,
       projectServerRepo: {
         ...deps.projectServerRepo,
-        find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: null, branch: null, tmuxSession: 'azito' })),
+        find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const })),
       },
     });
     service = new TaskRestoreService(deps);
@@ -351,5 +358,65 @@ describe('TaskRestoreService', () => {
       'azito',
       {},
     );
+  });
+
+  describe('execution gate (Issue #328)', () => {
+    it('blocks an untrusted, unapproved task before touching tmux — status becomes pending_approval', async () => {
+      const task = makeTask({ serverName: 'test-server', inputTrust: 'untrusted', executionApprovedDescriptionHash: null });
+
+      await expect(service.restore(task, log)).rejects.toThrow(/requires approval/);
+
+      expect(deps.tmux.createWindow).not.toHaveBeenCalled();
+      expect(deps.worktreeServiceFactory.create).not.toHaveBeenCalled();
+      expect(deps.taskRepo.updateStatus).toHaveBeenCalledWith(1, 'pending_approval');
+    });
+
+    it('allows an untrusted task whose approval hash matches the current description', async () => {
+      const { hashTaskDescription } = await import('./execution/ExecutionGate.js');
+      const task = makeTask({
+        serverName: 'test-server',
+        inputTrust: 'untrusted',
+        description: 'do the thing',
+        executionApprovedDescriptionHash: hashTaskDescription('do the thing'),
+      });
+
+      const result = await service.restore(task, log);
+
+      expect(result.tmuxTarget).toBe('azito:task-1.1');
+      expect(deps.tmux.createWindow).toHaveBeenCalled();
+    });
+
+    it('denies an untrusted task outright under a "deny" project server policy, without changing status', async () => {
+      const task = makeTask({ serverName: 'test-server', inputTrust: 'untrusted' });
+      deps = makeDeps({
+        ...deps,
+        projectServerRepo: {
+          ...deps.projectServerRepo,
+          find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'deny' as const })),
+        },
+      });
+      service = new TaskRestoreService(deps);
+
+      await expect(service.restore(task, log)).rejects.toThrow(/denied/);
+
+      expect(deps.tmux.createWindow).not.toHaveBeenCalled();
+      expect(deps.taskRepo.updateStatus).not.toHaveBeenCalled();
+    });
+
+    it('does not gate a trusted task even with no project_servers row', async () => {
+      const task = makeTask({ serverName: 'test-server', inputTrust: 'trusted' });
+      deps = makeDeps({
+        ...deps,
+        projectServerRepo: {
+          ...deps.projectServerRepo,
+          find: vi.fn(() => null),
+        },
+      });
+      service = new TaskRestoreService(deps);
+
+      const result = await service.restore(task, log);
+
+      expect(result.tmuxTarget).toBe('azito:task-1.1');
+    });
   });
 });
