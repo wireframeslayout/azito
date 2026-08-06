@@ -1,9 +1,14 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import * as path from 'path';
 import { WindowRespawnService } from './WindowRespawnService';
 import type { Window, IWindowRepository } from './Window';
 import type { ServerConfig } from '../servers/Server';
 import type { ITaskRepository, Task } from '../tasks/Task';
 import type { IUnitRepository, Unit } from '../units/Unit';
+import type { IProjectServerRepository } from '../projects/ProjectServer';
+import type { TransportFactory } from '../servers/transport/TransportFactory';
 
 function makeWindow(overrides: Partial<Window> = {}): Window {
   return {
@@ -100,7 +105,28 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
   };
 }
 
-function buildService(opts: { window: Window; task?: Task | null; unit?: Unit | null }) {
+// projectServerRepo/transportFactory are now required constructor
+// dependencies (Issue #27 review Minor finding: an optional dependency let
+// containment verification be silently skipped by a wiring omission, not
+// just by a genuine "no allowedRoot configured" case). Tests that don't
+// care about containment get a repo that reports no workingDirectory
+// (allowedRoot === null), which is the real "no boundary to enforce" skip
+// path — not an unwired dependency.
+function defaultProjectServerRepo(): Pick<IProjectServerRepository, 'find'> {
+  return { find: vi.fn(() => null) };
+}
+
+function defaultTransportFactory(): Pick<TransportFactory, 'getTransport'> {
+  return { getTransport: vi.fn(() => ({})) } as unknown as Pick<TransportFactory, 'getTransport'>;
+}
+
+function buildService(opts: {
+  window: Window;
+  task?: Task | null;
+  unit?: Unit | null;
+  projectServerRepo?: Pick<IProjectServerRepository, 'find'>;
+  transportFactory?: Pick<TransportFactory, 'getTransport'>;
+}) {
   const windowRepo: IWindowRepository = {
     add: vi.fn(() => 1),
     findAll: vi.fn(() => []),
@@ -161,6 +187,9 @@ function buildService(opts: { window: Window; task?: Task | null; unit?: Unit | 
     taskRepo as any,
     unitRepo as any,
     supervisorRegistry,
+    (opts.projectServerRepo ?? defaultProjectServerRepo()) as any,
+    (opts.transportFactory ?? defaultTransportFactory()) as any,
+    undefined,
   );
 
   return { service, windowRepo, tmux, sentCommands, clearExitMarker };
@@ -289,5 +318,249 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
     );
     expect(tmux.createWindow).not.toHaveBeenCalled();
     expect(result.tmuxTarget).toBe('azito:task-1--ab12.1');
+  });
+});
+
+describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
+  // Containment resolves real paths via fs.realpath (LocalPathResolver), so
+  // these fixtures need to exist on disk — a literal string like '/work'
+  // would make every check fail closed with "Cannot verify ... (ENOENT)".
+  let rootDir: string;
+
+  function makeProjectServerRepo(workingDirectory: string | null): Pick<IProjectServerRepository, 'find'> {
+    return { find: vi.fn(() => ({ projectId: 1, serverName: 'local-server', workingDirectory, branch: 'main', tmuxSession: 'azito' })) };
+  }
+
+  function makeTransportFactory(): Pick<TransportFactory, 'getTransport'> {
+    // Only exercised for non-local server types; local respawns resolve via
+    // fs.realpath directly and never touch the transport.
+    return { getTransport: vi.fn(() => ({})) } as unknown as Pick<TransportFactory, 'getTransport'>;
+  }
+
+  beforeEach(() => {
+    rootDir = realpathSync(mkdtempSync(path.join(tmpdir(), 'azito-window-respawn-')));
+  });
+
+  afterEach(() => {
+    rmSync(rootDir, { recursive: true, force: true });
+  });
+
+  it('rejects a single-pane window.workingDirectory that escapes the project root', async () => {
+    const outsideDir = mkdtempSync(path.join(tmpdir(), 'azito-window-respawn-outside-'));
+    try {
+      const win = makeWindow({ projectId: 1, taskId: null, windowType: 'terminal', workerType: null, workingDirectory: outsideDir });
+      const { service } = buildService({
+        window: win,
+        projectServerRepo: makeProjectServerRepo(rootDir),
+        transportFactory: makeTransportFactory(),
+      });
+
+      await expect(service.respawn(1, makeServer())).rejects.toThrow(/escapes the allowed directory/);
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not kill or recreate the existing window when the path is rejected (destructive ops must follow verification)', async () => {
+    // A rejection must abort before any destructive tmux operation or DB
+    // write — killing the live window first and only then discovering the
+    // resolved path escapes the project root would strand a dead window and
+    // a stale-but-persisted tmuxTarget with nothing to show for it.
+    const outsideDir = mkdtempSync(path.join(tmpdir(), 'azito-window-respawn-outside-'));
+    try {
+      const win = makeWindow({ projectId: 1, taskId: null, windowType: 'terminal', workerType: null, workingDirectory: outsideDir });
+      const { service, tmux, windowRepo } = buildService({
+        window: win,
+        projectServerRepo: makeProjectServerRepo(rootDir),
+        transportFactory: makeTransportFactory(),
+      });
+      tmux.listSessions.mockResolvedValue([{
+        name: 'azito',
+        windowCount: 1,
+        attached: false,
+        created: 0,
+        windows: [{ name: 'task-1', index: 0, active: true, panes: [], activity: 0 }],
+      }]);
+
+      await expect(service.respawn(1, makeServer())).rejects.toThrow(/escapes the allowed directory/);
+
+      expect(tmux.killWindow).not.toHaveBeenCalled();
+      expect(tmux.createWindow).not.toHaveBeenCalled();
+      expect(tmux.createSession).not.toHaveBeenCalled();
+      expect(windowRepo.update).not.toHaveBeenCalled();
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not kill the existing window when a multi-pane layout path is rejected', async () => {
+    const outsideDir = mkdtempSync(path.join(tmpdir(), 'azito-window-respawn-outside-'));
+    try {
+      const win = makeWindow({
+        projectId: 1,
+        taskId: null,
+        windowType: 'terminal',
+        workerType: null,
+        workingDirectory: rootDir,
+        paneLayout: {
+          layout: 'even-horizontal',
+          panes: [
+            { index: 0, command: null, workingDirectory: rootDir, title: null },
+            { index: 1, command: null, workingDirectory: outsideDir, title: null },
+          ],
+        },
+      });
+      const { service, tmux, windowRepo } = buildService({
+        window: win,
+        projectServerRepo: makeProjectServerRepo(rootDir),
+        transportFactory: makeTransportFactory(),
+      });
+      tmux.listSessions.mockResolvedValue([{
+        name: 'azito',
+        windowCount: 1,
+        attached: false,
+        created: 0,
+        windows: [{ name: 'task-1', index: 0, active: true, panes: [], activity: 0 }],
+      }]);
+
+      await expect(service.respawn(1, makeServer())).rejects.toThrow(/escapes the allowed directory/);
+
+      expect(tmux.killWindow).not.toHaveBeenCalled();
+      expect(tmux.createWindow).not.toHaveBeenCalled();
+      expect(windowRepo.update).not.toHaveBeenCalled();
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('cds into the resolved path for a single-pane window inside the project root', async () => {
+    const win = makeWindow({ projectId: 1, taskId: null, windowType: 'terminal', workerType: null, workingDirectory: rootDir });
+    const { service, sentCommands } = buildService({
+      window: win,
+      projectServerRepo: makeProjectServerRepo(rootDir),
+      transportFactory: makeTransportFactory(),
+    });
+
+    await service.respawn(1, makeServer());
+
+    expect(sentCommands).toContain(`cd -- '${rootDir}'`);
+  });
+
+  it('accepts a resolved path containing shell metacharacters and quotes it through to the cd command (Issue #27 review finding 2: containment verification must not restrict the character set — that rejected legitimate directory names like `/srv/repo+tools`; window respawn already sends `cd -- ${shellQuote(cwd)}`, so quoting at that shell boundary is what keeps this safe)', async () => {
+    // A directory name with `;`, whitespace, `$(...)`, and a single quote —
+    // all legal in a Linux filename — must reach the pane only inside the
+    // single-quoted `cd --` argument, never unquoted.
+    const dangerousName = `evil; touch pwned; echo $(whoami)'quote`;
+    const dangerousDir = path.join(rootDir, dangerousName);
+    mkdirSync(dangerousDir);
+    const win = makeWindow({ projectId: 1, taskId: null, windowType: 'terminal', workerType: null, workingDirectory: dangerousDir });
+    const { service, sentCommands } = buildService({
+      window: win,
+      projectServerRepo: makeProjectServerRepo(rootDir),
+      transportFactory: makeTransportFactory(),
+    });
+
+    await service.respawn(1, makeServer());
+
+    expect(sentCommands).toContain(`cd -- '${dangerousDir.replace(/'/g, "'\\''")}'`);
+  });
+
+  it('guards a resolved path starting with "-" from being read as a cd option', async () => {
+    const dashDir = path.join(rootDir, '-rf');
+    mkdirSync(dashDir);
+    const win = makeWindow({ projectId: 1, taskId: null, windowType: 'terminal', workerType: null, workingDirectory: dashDir });
+    const { service, sentCommands } = buildService({
+      window: win,
+      projectServerRepo: makeProjectServerRepo(rootDir),
+      transportFactory: makeTransportFactory(),
+    });
+
+    await service.respawn(1, makeServer());
+
+    expect(sentCommands).toContain(`cd -- '${dashDir}'`);
+  });
+
+  it('accepts a child directory named "..cache" (regression: isPathContained must not over-reject)', async () => {
+    const dotDotCacheDir = path.join(rootDir, '..cache');
+    mkdirSync(dotDotCacheDir);
+    const win = makeWindow({ projectId: 1, taskId: null, windowType: 'terminal', workerType: null, workingDirectory: dotDotCacheDir });
+    const { service, sentCommands } = buildService({
+      window: win,
+      projectServerRepo: makeProjectServerRepo(rootDir),
+      transportFactory: makeTransportFactory(),
+    });
+
+    await service.respawn(1, makeServer());
+
+    expect(sentCommands).toContain(`cd -- '${dotDotCacheDir}'`);
+  });
+
+  it('rejects a multi-pane layout pane.workingDirectory that escapes the project root', async () => {
+    const outsideDir = mkdtempSync(path.join(tmpdir(), 'azito-window-respawn-outside-'));
+    try {
+      const win = makeWindow({
+        projectId: 1,
+        taskId: null,
+        windowType: 'terminal',
+        workerType: null,
+        workingDirectory: rootDir,
+        paneLayout: {
+          layout: 'even-horizontal',
+          panes: [
+            { index: 0, command: null, workingDirectory: rootDir, title: null },
+            { index: 1, command: null, workingDirectory: outsideDir, title: null },
+          ],
+        },
+      });
+      const { service, tmux } = buildService({
+        window: win,
+        projectServerRepo: makeProjectServerRepo(rootDir),
+        transportFactory: makeTransportFactory(),
+      });
+      // Default mock only reports one pane id (index 0) regardless of the
+      // requested pane count — this test needs both panes mapped so pane
+      // index 1's (rejected) workingDirectory is actually reached.
+      tmux.listPaneIds.mockResolvedValue([{ index: 0, paneId: '%0' }, { index: 1, paneId: '%1' }]);
+
+      await expect(service.respawn(1, makeServer())).rejects.toThrow(/escapes the allowed directory/);
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('skips verification (legacy behavior) when the project has no configured working directory', async () => {
+    const outsideDir = mkdtempSync(path.join(tmpdir(), 'azito-window-respawn-outside-'));
+    try {
+      const win = makeWindow({ projectId: 1, taskId: null, windowType: 'terminal', workerType: null, workingDirectory: outsideDir });
+      const { service, sentCommands } = buildService({
+        window: win,
+        projectServerRepo: makeProjectServerRepo(null),
+        transportFactory: makeTransportFactory(),
+      });
+
+      await service.respawn(1, makeServer());
+
+      expect(sentCommands).toContain(`cd -- '${outsideDir}'`);
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('skips verification (legacy behavior) when the caller omits projectServerRepo/transportFactory overrides (default fixture reports no workingDirectory)', async () => {
+    // projectServerRepo/transportFactory are now required constructor
+    // dependencies (Issue #27 review Minor finding) — this exercises the
+    // remaining legitimate skip path (allowedRoot === null because the
+    // project has no configured workingDirectory), not an unwired dependency.
+    const outsideDir = mkdtempSync(path.join(tmpdir(), 'azito-window-respawn-outside-'));
+    try {
+      const win = makeWindow({ projectId: 1, taskId: null, windowType: 'terminal', workerType: null, workingDirectory: outsideDir });
+      const { service, sentCommands } = buildService({ window: win });
+
+      await service.respawn(1, makeServer());
+
+      expect(sentCommands).toContain(`cd -- '${outsideDir}'`);
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
   });
 });

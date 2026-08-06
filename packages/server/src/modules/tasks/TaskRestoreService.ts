@@ -7,10 +7,12 @@ import type { IUnitRepository } from '../units/Unit';
 import type { IWindowRepository } from '../windows/Window';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { WorktreeServiceFactory } from '../git/WorktreeServiceFactory';
+import { PathResolverFactory, assertDirectoryContained } from '../git/PathContainment';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { IContentExtractor } from '../llm/ContentExtractor';
 import { resolveTaskServerName, resolveTmuxSession, resolveUnitId } from './execution/TaskExecutionEnv';
 import { buildWorkerLaunchCommand } from '../agents/LaunchCommand';
+import { shellQuote } from '../../shared/shellQuote';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -30,6 +32,8 @@ export interface TaskRestoreDeps {
 }
 
 export class TaskRestoreService {
+  private readonly pathResolverFactory = new PathResolverFactory();
+
   constructor(private deps: TaskRestoreDeps) {}
 
   async restore(task: Task, log: { warn: (msg: string) => void }): Promise<{ tmuxTarget: string; worktreePath: string | null }> {
@@ -70,13 +74,31 @@ export class TaskRestoreService {
       const paneId = await tmux.resolvePaneId(server, windowTarget);
       const dbTarget = `${windowTarget}.1`;
       const projectServer = project ? projectServerRepo.find(task.projectId, serverName) : null;
-      const workingDir = task.workingDirectory || projectServer?.workingDirectory || null;
+      // allowedRoot mirrors ExecuteTaskUseCase.execute()'s containment boundary
+      // (Issue #27): this restore path also launches a worker into
+      // task.workingDirectory, which is settable via PUT /api/tasks/:id, so
+      // it needs the same verification a fresh execute() would apply — without
+      // it, startup task recovery was a way to bypass the boundary entirely
+      // (Issue #27 review finding 1). No configured working directory means
+      // no boundary to enforce, so containment is skipped (legacy behavior).
+      const allowedRoot = projectServer?.workingDirectory || null;
+      let workingDir = task.workingDirectory || allowedRoot;
       let effectiveDir = workingDir;
 
       let worktreeBranch: string | null = null;
       let baseBranch: string | null = null;
 
       if (workingDir) {
+        if (task.workingDirectory && allowedRoot) {
+          const transportForCheck = transportFactory.getTransport(server);
+          // Resolved (symlink-free) path is what gets used below, not the
+          // original task.workingDirectory — closes the same TOCTOU window
+          // ExecuteTaskUseCase closes (Issue #27 review finding 2).
+          workingDir = await assertDirectoryContained(
+            this.pathResolverFactory, server.type, transportForCheck, { target: task.workingDirectory, allowedRoot }, 'task working directory',
+          );
+        }
+
         repoDir = workingDir;
         baseBranch = task.baseBranch || projectServer?.branch || project?.defaultBranch || 'main';
         const branch = task.branch || task.worktreeBranch || undefined;
@@ -89,8 +111,23 @@ export class TaskRestoreService {
         worktreeBranch = wt.branch;
         effectiveDir = wt.path;
 
+        if (allowedRoot) {
+          // Same containment check ExecuteTaskUseCase applies to a freshly
+          // created worktree path; the outer try/catch below already rolls
+          // back the worktree (worktreePath + repoDir are set) and tmux
+          // window on any throw, so rejection here needs no separate cleanup.
+          const resolvedWtPath = await assertDirectoryContained(
+            this.pathResolverFactory, server.type, transport, { target: worktreePath, allowedRoot }, 'worktree path',
+          );
+          worktreePath = resolvedWtPath;
+          effectiveDir = resolvedWtPath;
+        }
+
         try {
-          await tmux.sendKeys(server, paneId, [`cd ${effectiveDir}`, 'Enter']);
+          // effectiveDir is a resolved (symlink-free) real path — must be
+          // shell-quoted before being typed into the pane; see the matching
+          // fix/comment in ExecuteTaskUseCase (Issue #27 cd injection).
+          await tmux.sendKeys(server, paneId, [`cd -- ${shellQuote(effectiveDir)}`, 'Enter']);
           await sleep(500);
         } catch (e) {
           log.warn(`[task-restore] Failed to cd into ${effectiveDir}: ${(e as Error).message}`);

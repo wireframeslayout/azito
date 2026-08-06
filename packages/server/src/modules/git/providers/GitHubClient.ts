@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import type {
   RemoteIssue, ListIssuesOptions, ListIssuesResult,
   RemotePullRequest, ListPullRequestsOptions, ListPullRequestsResult,
@@ -22,9 +22,10 @@ export class GitHubClient implements IGitProviderClient {
   /** Per-host `gh` CLI token fallback: GHE hosts need `--hostname` (mirrors GitLabClient.getGlabToken). */
   private getGhToken(host: string): string | null {
     if (this.ghTokens.has(host)) return this.ghTokens.get(host)!;
-    const command = host === 'github.com' ? 'gh auth token' : `gh auth token --hostname ${host}`;
+    // host comes from a repo URL and must never reach a shell; pass it as an argv element, not interpolated text.
+    const args = host === 'github.com' ? ['auth', 'token'] : ['auth', 'token', '--hostname', host];
     try {
-      const token = execSync(command, { encoding: 'utf-8', timeout: 5000 }).trim();
+      const token = execFileSync('gh', args, { encoding: 'utf-8', timeout: 5000 }).trim();
       this.ghTokens.set(host, token || null);
       return token || null;
     } catch {

@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import type {
   RemoteIssue, ListIssuesOptions, ListIssuesResult,
   RemotePullRequest, ListPullRequestsOptions, ListPullRequestsResult,
@@ -20,7 +20,8 @@ export class GitLabClient implements IGitProviderClient {
   private getGlabToken(host: string): string | null {
     if (this.glabTokens.has(host)) return this.glabTokens.get(host)!;
     try {
-      const token = execSync(`glab config get token -h ${host}`, { encoding: 'utf-8', timeout: 5000 }).trim();
+      // host comes from a repo URL and must never reach a shell; pass it as an argv element, not interpolated text.
+      const token = execFileSync('glab', ['config', 'get', 'token', '-h', host], { encoding: 'utf-8', timeout: 5000 }).trim();
       this.glabTokens.set(host, token || null);
       return token || null;
     } catch {

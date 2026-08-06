@@ -1,6 +1,6 @@
 import { defaultRegistry } from './registry';
 
-export { shellQuote } from './shellQuote';
+export { shellQuote } from '../../shared/shellQuote';
 
 /**
  * ヘッドレス(subagent)実行コマンドを組み立てる。

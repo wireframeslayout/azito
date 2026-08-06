@@ -12,8 +12,9 @@ import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoade
 import type { SidekickSyncService } from '../../sidekicks/SidekickSyncService';
 import type { IExecutionLogRepository, LogType } from '../ExecutionLog';
 import type { TmuxClient } from '../../tmux/TmuxClient';
-import type { IWorktreeService } from '../../git/IWorktreeService';
+import type { IWorktreeService, WorktreeInfo } from '../../git/IWorktreeService';
 import type { WorktreeServiceFactory } from '../../git/WorktreeServiceFactory';
+import { PathResolverFactory, assertDirectoryContained } from '../../git/PathContainment';
 import type { GitProviderService } from '../../git/providers/GitProviderService';
 import type { ProjectRepositoryWithToken as ProjectRepository } from '../../projects/Project';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
@@ -24,6 +25,7 @@ import type { IWindowRepository } from '../../windows/Window';
 import type { IPaneStreamFactory } from '../../tmux/PaneStream';
 import type { ISessionStrategyFactory } from '../../agents/SessionStrategy';
 import { buildWorkerLaunchCommand } from '../../agents/LaunchCommand';
+import { shellQuote } from '../../../shared/shellQuote';
 import { expandTemplate } from './PromptExpander';
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import { WorkerWaiter } from './WorkerWaiter';
@@ -77,6 +79,7 @@ export class ExecuteTaskUseCase {
   private readonly phaseLoopRunner: PhaseLoopRunner;
   private readonly httpSignalCoordinator: HttpSignalTurnCoordinator;
   private readonly runtimeRegistry: WorkerRuntimeRegistry;
+  private readonly pathResolverFactory = new PathResolverFactory();
 
   constructor(
     private taskRepo: ITaskRepository,
@@ -166,6 +169,28 @@ export class ExecuteTaskUseCase {
   private getWorktreeService(server: ServerConfig): IWorktreeService {
     const transport = this.transportFactory.getTransport(server);
     return this.worktreeServiceFactory.create(server.type, transport);
+  }
+
+  /**
+   * Thin wrapper over the shared `assertDirectoryContained` (modules/git/
+   * PathContainment.ts) that resolves this class's transport for `server`.
+   * The actual resolve+verify logic now lives in the shared function so
+   * `TaskRestoreService` and `WindowRespawnService` can run the same check
+   * without going through this use case (Issue #27 review finding 1) —
+   * this method only exists to avoid repeating `getPathResolver`-style
+   * transport wiring at each call site below. Returns the resolved
+   * (symlink-free) path; callers must use that return value, not
+   * `candidateDir`, for whatever follows (Issue #27 review finding 2).
+   * Callers guard `candidateDir` truthiness themselves since failure
+   * handling (log/fail-task/cleanup) differs by call site.
+   */
+  private async assertDirectoryContained(
+    server: ServerConfig,
+    { target, allowedRoot }: { target: string; allowedRoot: string | null | undefined },
+    label: string,
+  ): Promise<string> {
+    const transport = this.transportFactory.getTransport(server);
+    return assertDirectoryContained(this.pathResolverFactory, server.type, transport, { target, allowedRoot }, label);
   }
 
   private appendLog(taskId: number, unitId: number, type: LogType, content: unknown): void {
@@ -267,6 +292,46 @@ export class ExecuteTaskUseCase {
       }
     }
 
+    // Change to project working directory (use worktree if possible)
+    const project = this.projectRepo.findById(task.projectId);
+    const projectServer = project ? this.projectServerRepo.find(task.projectId, serverName) : null;
+    // allowedRoot is the project's configured working directory — the boundary
+    // a caller-supplied task.workingDirectory must not escape (Issue #27:
+    // task.workingDirectory comes straight from the API with no path
+    // validation beyond shell-metachar rejection, so `..`/absolute-path
+    // escapes were previously possible). When the project has no configured
+    // working directory there is no boundary to enforce, so containment is
+    // skipped and the legacy behavior (run wherever task.workingDirectory
+    // points) is preserved rather than guessed at.
+    const allowedRoot = projectServer?.workingDirectory || null;
+    let workingDir = task.workingDirectory || allowedRoot;
+    let effectiveDir = workingDir;
+
+    // Verified before any tmux window is touched (Important review finding):
+    // a rejected path used to be discovered only after the pre-existing pane
+    // had already been killed and a replacement window created, forcing the
+    // catch block to kill that replacement too. Checking containment first
+    // means a rejection leaves tmux state untouched and the task simply never
+    // starts, instead of destroying and recreating a window for nothing.
+    if (task.workingDirectory && allowedRoot) {
+      try {
+        // Use the resolved (symlink-free) path returned by the check for
+        // worktree creation below, not the original task.workingDirectory —
+        // otherwise a symlink swapped in between verification and use could
+        // still redirect the worktree outside allowedRoot (Issue #27 review
+        // finding 2, TOCTOU).
+        workingDir = await this.assertDirectoryContained(server, { target: task.workingDirectory, allowedRoot }, 'task working directory');
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.appendLog(taskId, unitId, 'command', {
+          type: 'working_directory_rejected',
+          message,
+        });
+        this.taskRepo.update(taskId, { status: 'failed' as TaskStatus } as Partial<Task>);
+        throw new Error(`Task working directory rejected: ${message}`);
+      }
+    }
+
     // Ensure tmux session exists
     const existingSessions = await this.tmux.listSessions(server);
     const sessionExists = existingSessions.some((s) => s.name === tmuxSession);
@@ -304,33 +369,13 @@ export class ExecuteTaskUseCase {
     const windowTarget = `${tmuxSession}:${windowName}`;
     const target = await this.tmux.resolvePaneId(server, windowTarget);
 
-    // Change to project working directory (use worktree if possible)
-    const project = this.projectRepo.findById(task.projectId);
-    const projectServer = project ? this.projectServerRepo.find(task.projectId, serverName) : null;
-    const workingDir = task.workingDirectory || projectServer?.workingDirectory;
-    let effectiveDir = workingDir;
-
     if (workingDir) {
       // Create worktree for isolated branch/file tracking
+      let wt: WorktreeInfo;
+      const baseBranch = task.baseBranch || projectServer?.branch || project?.defaultBranch || 'main';
       try {
-        const baseBranch = task.baseBranch || projectServer?.branch || project?.defaultBranch || 'main';
         const slug = await this.contentExtractor.generateSlug(task.title);
-        const wt = await this.getWorktreeService(server).create(workingDir, taskId, slug, baseBranch, task.branch || undefined);
-        effectiveDir = wt.path;
-
-        this.taskRepo.update(taskId, {
-          worktreePath: wt.path,
-          worktreeBranch: wt.branch,
-          baseBranch,
-          branch: wt.branch,
-        } as Partial<Task>);
-
-        this.appendLog(taskId, unitId, 'command', {
-          type: 'worktree_created',
-          worktreePath: wt.path,
-          worktreeBranch: wt.branch,
-          baseBranch,
-        });
+        wt = await this.getWorktreeService(server).create(workingDir, taskId, slug, baseBranch, task.branch || undefined);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         this.appendLog(taskId, unitId, 'command', {
@@ -342,8 +387,71 @@ export class ExecuteTaskUseCase {
         throw new Error(`Worktree creation failed: ${message}`);
       }
 
+      if (allowedRoot) {
+        try {
+          // Same TOCTOU fix as above: the resolved path (not wt.path as
+          // returned by worktree creation) is what gets persisted and used
+          // from here on (Issue #27 review finding 2).
+          const resolvedWtPath = await this.assertDirectoryContained(server, { target: wt.path, allowedRoot }, 'worktree path');
+          wt = { ...wt, path: resolvedWtPath };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          this.appendLog(taskId, unitId, 'command', {
+            type: 'worktree_path_rejected',
+            message,
+          });
+          // The worktree was already created on disk (and its branch checked
+          // out) before this check ran — leaving it behind would leak a real
+          // worktree + branch for a task that never got permission to use it
+          // (Issue #27 review finding 3). Cleanup failure is logged, not
+          // swallowed, since it means the leaked worktree needs manual attention.
+          try {
+            await this.getWorktreeService(server).remove(workingDir, wt.path);
+          } catch (cleanupErr) {
+            this.appendLog(taskId, unitId, 'command', {
+              type: 'worktree_cleanup_failed',
+              message: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
+            });
+          }
+          this.taskRepo.update(taskId, {
+            status: 'failed' as TaskStatus,
+            tmuxWindow: null,
+            worktreePath: null,
+            worktreeBranch: null,
+          } as Partial<Task>);
+          try { await this.tmux.killWindow(server, `${tmuxSession}:${windowName}`); } catch {}
+          throw new Error(`Worktree path rejected: ${message}`);
+        }
+      }
+
+      // Persisted only after the containment check above passes (or is
+      // skipped when there's no allowedRoot to check against) — this closes
+      // the earlier TOCTOU window where wt.path was written to the DB before
+      // it had been verified (Issue #27 review finding 2).
+      this.taskRepo.update(taskId, {
+        worktreePath: wt.path,
+        worktreeBranch: wt.branch,
+        baseBranch,
+        branch: wt.branch,
+      } as Partial<Task>);
+
+      this.appendLog(taskId, unitId, 'command', {
+        type: 'worktree_created',
+        worktreePath: wt.path,
+        worktreeBranch: wt.branch,
+        baseBranch,
+      });
+
+      effectiveDir = wt.path;
+
       try {
-        await this.tmux.sendKeys(server, target, [`cd ${effectiveDir}`, 'Enter']);
+        // effectiveDir is a resolved (symlink-free) real path (see
+        // PathContainment.ts) and must be shell-quoted before being typed
+        // into the pane — an unquoted realpath can contain shell
+        // metacharacters via a maliciously named directory/symlink inside
+        // the allowed root (Issue #27 review finding: cd command injection).
+        // `--` guards against a leading `-` being read as a cd option.
+        await this.tmux.sendKeys(server, target, [`cd -- ${shellQuote(effectiveDir)}`, 'Enter']);
         await sleep(500);
       } catch {}
     }
@@ -567,17 +675,37 @@ export class ExecuteTaskUseCase {
     const target = await this.tmux.resolvePaneId(server, windowTarget);
 
     if (!windowExists) {
-      // Use worktree path if available, otherwise fall back to working directory
-      const followUpDir = task.worktreePath && await this.getWorktreeService(server).exists(task.worktreePath)
+      // Use worktree path if available, otherwise fall back to working directory.
+      // Neither field is trusted just because it resolves/exists on disk: both
+      // task.worktreePath and task.workingDirectory are settable via
+      // PUT /api/tasks/:id, so without the containment check below a caller
+      // could simply walk around the boundary execute() enforces by editing
+      // the task and then triggering a follow-up instead of a fresh execute()
+      // (Issue #27 review finding 1).
+      const followUpProject = this.projectRepo.findById(task.projectId);
+      const followUpProjectServerForDir = followUpProject ? this.projectServerRepo.find(task.projectId, serverName) : null;
+      const followUpAllowedRoot = followUpProjectServerForDir?.workingDirectory || null;
+      let followUpDir = task.worktreePath && await this.getWorktreeService(server).exists(task.worktreePath)
         ? task.worktreePath
-        : (() => {
-            const project = this.projectRepo.findById(task.projectId);
-            const projectServer = project ? this.projectServerRepo.find(task.projectId, serverName) : null;
-            return task.workingDirectory || projectServer?.workingDirectory;
-          })();
+        : (task.workingDirectory || followUpProjectServerForDir?.workingDirectory);
+
+      if (followUpDir && followUpAllowedRoot) {
+        try {
+          // Use the resolved path for the `cd` below, same TOCTOU fix as
+          // execute() (Issue #27 review finding 2).
+          followUpDir = await this.assertDirectoryContained(server, { target: followUpDir, allowedRoot: followUpAllowedRoot }, 'follow-up working directory');
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          this.appendLog(taskId, unitId, 'command', { type: 'working_directory_rejected', message });
+          this.taskRepo.update(taskId, { status: 'failed' as TaskStatus, tmuxWindow: null } as Partial<Task>);
+          try { await this.tmux.killWindow(server, `${tmuxSession}:${windowName}`); } catch {}
+          throw new Error(`Follow-up working directory rejected: ${message}`);
+        }
+      }
+
       if (followUpDir) {
         try {
-          await this.tmux.sendKeys(server, target, [`cd ${followUpDir}`, 'Enter']);
+          await this.tmux.sendKeys(server, target, [`cd -- ${shellQuote(followUpDir)}`, 'Enter']);
           await sleep(500);
         } catch {}
       }

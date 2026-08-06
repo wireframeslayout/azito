@@ -1,4 +1,4 @@
-import { shellQuote } from '../shellQuote';
+import { shellQuote } from '../../../shared/shellQuote';
 import type { LaunchOptions } from '../AgentProvider';
 
 export function buildCodexLaunchCommand({ model, extraArgs }: LaunchOptions): string {

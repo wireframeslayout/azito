@@ -1,6 +1,19 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import * as path from 'path';
 import { TaskRestoreService, type TaskRestoreDeps } from './TaskRestoreService';
 import type { Task } from './Task';
+
+// Containment checks (Issue #27) resolve real paths via fs.realpath, so the
+// working directory / worktree path fixtures below must exist on disk —
+// literal strings like '/work' would make every containment check reject
+// with "Cannot verify ... (ENOENT)" now that TaskRestoreService actually
+// verifies them. rootDir is realpath'd immediately so assertions can compare
+// against it directly without worrying about tmpdir() itself being a symlink
+// (e.g. macOS /tmp -> /private/tmp).
+let rootDir: string;
+let worktreeDir: string;
 
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {
@@ -75,9 +88,9 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
       removeRepository: vi.fn(),
     },
     projectServerRepo: {
-      findByProject: vi.fn(() => [{ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito' }]),
+      findByProject: vi.fn(() => [{ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito' }]),
       findByServer: vi.fn(() => []),
-      find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito' })),
+      find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito' })),
       upsert: vi.fn(),
       remove: vi.fn(),
     },
@@ -114,7 +127,7 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
     } as unknown as TaskRestoreDeps['tmux'],
     worktreeServiceFactory: {
       create: vi.fn(() => ({
-        create: vi.fn(async () => ({ path: '/work/.worktrees/task-1', branch: 'feat/test-task' })),
+        create: vi.fn(async () => ({ path: worktreeDir, branch: 'feat/test-task' })),
         remove: vi.fn(async () => {}),
         exists: vi.fn(async () => false),
         getBranch: vi.fn(async () => null),
@@ -140,9 +153,16 @@ describe('TaskRestoreService', () => {
   const log = { warn: vi.fn() };
 
   beforeEach(() => {
+    rootDir = realpathSync(mkdtempSync(path.join(tmpdir(), 'azito-task-restore-')));
+    worktreeDir = path.join(rootDir, '.worktrees', 'task-1');
+    mkdirSync(worktreeDir, { recursive: true });
     deps = makeDeps();
     service = new TaskRestoreService(deps);
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    rmSync(rootDir, { recursive: true, force: true });
   });
 
   it('restores an archived task: creates session, window, worktree, window row, updates status', async () => {
@@ -151,7 +171,7 @@ describe('TaskRestoreService', () => {
     const result = await service.restore(task, log);
 
     expect(result.tmuxTarget).toBe('azito:task-1.1');
-    expect(result.worktreePath).toBe('/work/.worktrees/task-1');
+    expect(result.worktreePath).toBe(worktreeDir);
     expect(deps.tmux.createWindow).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'test-server' }),
       'azito',
@@ -173,7 +193,7 @@ describe('TaskRestoreService', () => {
 
     expect(deps.contentExtractor.generateSlug).not.toHaveBeenCalled();
     const worktreeService = (deps.worktreeServiceFactory.create as ReturnType<typeof vi.fn>).mock.results[0].value;
-    expect(worktreeService.create).toHaveBeenCalledWith('/work', 1, 'task-1', 'main', 'feat/existing-branch');
+    expect(worktreeService.create).toHaveBeenCalledWith(rootDir, 1, 'task-1', 'main', 'feat/existing-branch');
   });
 
   it('falls back to task.worktreeBranch when task.branch is null', async () => {
@@ -183,7 +203,7 @@ describe('TaskRestoreService', () => {
 
     expect(deps.contentExtractor.generateSlug).not.toHaveBeenCalled();
     const worktreeService = (deps.worktreeServiceFactory.create as ReturnType<typeof vi.fn>).mock.results[0].value;
-    expect(worktreeService.create).toHaveBeenCalledWith('/work', 1, 'task-1', 'main', 'feat/worktree-branch');
+    expect(worktreeService.create).toHaveBeenCalledWith(rootDir, 1, 'task-1', 'main', 'feat/worktree-branch');
   });
 
   it('passes a non-empty slug even when branch is specified (assertSafeBranch compatibility)', async () => {
@@ -195,6 +215,54 @@ describe('TaskRestoreService', () => {
     const slugArg = worktreeService.create.mock.calls[0][2];
     expect(slugArg).toBe('task-42');
     expect(slugArg.length).toBeGreaterThan(0);
+  });
+
+  it('rejects a task.workingDirectory that escapes the project working directory (Issue #27)', async () => {
+    const outsideDir = mkdtempSync(path.join(tmpdir(), 'azito-task-restore-outside-'));
+    try {
+      const task = makeTask({ serverName: 'test-server', workingDirectory: outsideDir });
+
+      await expect(service.restore(task, log)).rejects.toThrow(/escapes the allowed directory/);
+      expect(deps.worktreeServiceFactory.create).not.toHaveBeenCalled();
+      // No worktree was ever created, so rollback should only touch the tmux window.
+      expect(deps.tmux.killWindow).toHaveBeenCalled();
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts a child directory named "..cache" (regression: isPathContained must not over-reject)', async () => {
+    const dotDotCacheDir = path.join(rootDir, '..cache');
+    mkdirSync(dotDotCacheDir);
+    const task = makeTask({ serverName: 'test-server', workingDirectory: dotDotCacheDir });
+    deps = makeDeps({
+      ...deps,
+      worktreeServiceFactory: {
+        create: vi.fn(() => ({
+          create: vi.fn(async (workingDir: string) => ({ path: path.join(workingDir, '.worktrees', 'task-1'), branch: 'feat/test-task' })),
+          remove: vi.fn(async () => {}),
+        })),
+      } as unknown as TaskRestoreDeps['worktreeServiceFactory'],
+    });
+    mkdirSync(path.join(dotDotCacheDir, '.worktrees', 'task-1'), { recursive: true });
+    service = new TaskRestoreService(deps);
+
+    const result = await service.restore(task, log);
+
+    expect(result.worktreePath).toBe(path.join(dotDotCacheDir, '.worktrees', 'task-1'));
+  });
+
+  it('uses the resolved worktree path (not the pre-check value) for persistence — TOCTOU-safe (Issue #27)', async () => {
+    const task = makeTask({ serverName: 'test-server' });
+
+    const result = await service.restore(task, log);
+
+    // worktreeDir was already created via mkdtempSync -> realpathSync -> mkdirSync,
+    // so it carries no symlink indirection here; asserting equality with the
+    // resolved value (not a raw string literal) documents that the persisted
+    // path is the one assertDirectoryContained returned.
+    expect(result.worktreePath).toBe(realpathSync(worktreeDir));
+    expect(deps.taskRepo.update).toHaveBeenCalledWith(1, expect.objectContaining({ worktreePath: realpathSync(worktreeDir) }));
   });
 
   it('skips worktree creation when no workingDir is available', async () => {

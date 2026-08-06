@@ -2,7 +2,7 @@ import type { ISessionStrategy } from '../SessionStrategy';
 import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import { buildFindLatestByMtime } from '../sessionScanUtils';
-import { shellQuote } from '../shellQuote';
+import { shellQuote } from '../../../shared/shellQuote';
 import { buildClaudeLaunchCommand } from './launchCommand';
 
 export class ClaudeSessionStrategy implements ISessionStrategy {
