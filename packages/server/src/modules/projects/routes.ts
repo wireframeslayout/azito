@@ -171,8 +171,8 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       if (!project)
         return reply.status(404).send({ error: 'Project not found' });
       const body = (request.body ?? {}) as {
-        working_directory?: string;
-        branch?: string;
+        working_directory?: string | null;
+        branch?: string | null;
         tmux_session?: string | null;
         input_policy?: string;
       };
@@ -183,6 +183,20 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       const tmuxSession = 'tmux_session' in body
         ? (body.tmux_session?.trim() || 'azito')
         : (existingRow?.tmuxSession ?? 'azito');
+      // working_directory/branch use the same "key absent preserves, key
+      // present (incl. explicit null) sets" semantics as tmux_session/
+      // input_policy below — a client that PUTs only { input_policy } must
+      // not silently wipe the other fields. working_directory in particular
+      // is the containment boundary (PathContainment.ts): losing it isn't
+      // just a lost setting, it's a lost security boundary (Issue #328
+      // review). Previously this fell through to `body.xxx ?? null`, which
+      // treated "key omitted" the same as "key explicitly null".
+      const workingDirectory = 'working_directory' in body
+        ? (body.working_directory ?? null)
+        : (existingRow?.workingDirectory ?? null);
+      const branch = 'branch' in body
+        ? (body.branch ?? null)
+        : (existingRow?.branch ?? null);
       // 'allow' is rejected here, not just left undocumented: it would skip the
       // execution-approval gate entirely for untrusted tasks, but the isolated
       // execution profile that would make that safe (Issue #328 design doc)
@@ -198,8 +212,8 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       projectServerRepo.upsert({
         projectId,
         serverName,
-        workingDirectory: body.working_directory ?? null,
-        branch: body.branch ?? null,
+        workingDirectory,
+        branch,
         tmuxSession,
         inputPolicy,
       });

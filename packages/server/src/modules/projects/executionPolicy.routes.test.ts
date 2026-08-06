@@ -113,6 +113,69 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
     expect(res.statusCode).toBe(200);
     expect(opts.projectServerRepo.upsert).toHaveBeenCalledWith(expect.objectContaining({ inputPolicy: 'manual-approval' }));
   });
+
+  it('preserves working_directory and branch when a PUT sends only input_policy', async () => {
+    // Regression test: PUT used to overwrite workingDirectory/branch with
+    // `body.xxx ?? null` unconditionally, so a policy-only update silently
+    // wiped both fields — and workingDirectory is the containment boundary
+    // PathContainment.ts enforces, so losing it also lost that boundary.
+    const opts = makeOpts({
+      projectServerRepo: {
+        findByProject: vi.fn(() => []),
+        findByServer: vi.fn(() => []),
+        find: vi.fn(() => ({
+          projectId: 10, serverName: 'test-server', workingDirectory: '/srv/repo', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const,
+        })),
+        upsert: vi.fn(),
+        remove: vi.fn(),
+      },
+    });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10/servers/test-server',
+      payload: { input_policy: 'deny' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.projectServerRepo.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      workingDirectory: '/srv/repo',
+      branch: 'main',
+      inputPolicy: 'deny',
+    }));
+  });
+
+  it('clears working_directory and branch when explicitly sent as null', async () => {
+    const opts = makeOpts({
+      projectServerRepo: {
+        findByProject: vi.fn(() => []),
+        findByServer: vi.fn(() => []),
+        find: vi.fn(() => ({
+          projectId: 10, serverName: 'test-server', workingDirectory: '/srv/repo', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const,
+        })),
+        upsert: vi.fn(),
+        remove: vi.fn(),
+      },
+    });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10/servers/test-server',
+      payload: { working_directory: null, branch: null },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.projectServerRepo.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      workingDirectory: null,
+      branch: null,
+    }));
+  });
 });
 
 describe('POST /api/projects/:id/import-issue — marks the created task untrusted (Issue #328)', () => {
