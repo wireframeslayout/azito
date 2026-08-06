@@ -100,6 +100,17 @@ import { resolveUnitId, resolveTaskServerName, resolveBaseBranch } from './TaskE
  *   resolveTaskPromptVars.ts (`[project.sidekickPrompt, unit.systemPrompt]`) —
  *   editing it changes what the worker is told exactly like editing
  *   unit.systemPrompt does, so it must invalidate approval the same way.
+ * - repository: identity (id/provider/url/owner/repoName) of
+ *   `project.repositories[0]` — the PR DESTINATION the pushing phase's
+ *   PullRequestCreator/PushVerifier target (PhaseLoopRunner.ts ~367-384;
+ *   Issue #328 twelfth-round review, fix 2). Project repositories can be
+ *   added/removed independently of the task or Unit via
+ *   `POST`/`DELETE /api/projects/:id/repositories`, so without this field an
+ *   already-approved task's PR could be silently redirected to a different
+ *   repository post-approval — the same "changes WHERE output goes" class of
+ *   targeting decision `server` above already covers for WHERE a task runs.
+ *   `null` when the project has no registered repository (pushing then skips
+ *   PR creation the same way it always has for a repository-less project).
  * - secrets.namesDigest: a sha256 digest of the SORTED set of project
  *   secret NAMES (ExecuteTaskUseCase.buildExtraEnv injects every
  *   `project_secrets` row for task.projectId as `AZITO_SECRET_<name>` env
@@ -256,8 +267,34 @@ import { resolveUnitId, resolveTaskServerName, resolveBaseBranch } from './TaskE
  * - project_servers: workingDirectory, branch.
  * - ServerConfig (the `servers` row): type, host, agentPort, sshHost — which
  *   machine a run targets.
+ * - repository: id, provider, url, owner, repoName of `project.repositories[0]`
+ *   — which repository the pushing phase's PR targets (Issue #328
+ *   twelfth-round review, fix 2).
  * - secrets: the SORTED SET of project secret NAMES (not values — see
  *   "known limitations" below).
+ *
+ * Digest computation itself is part of this manifest's trusted computing
+ * base, not a best-effort convenience (Issue #328 twelfth-round review,
+ * fix 1): `hashSidekickPackageTree()` reads an untrusted task's ENTIRE
+ * resolved Sidekick package tree (SKILL.md + scripts/** + references/**)
+ * off disk to compute the digest this manifest hashes. A filesystem error
+ * while doing that — permission denied, an I/O error, a file that vanished
+ * mid-walk — is NOT treated as "empty"/"no content" and does not produce a
+ * digest for a partially-read tree. It is thrown, and propagates out of
+ * `resolveExecutionManifest()` through whichever `checkExecutionGate()` call
+ * site invoked it (ExecuteTaskUseCase.enforceExecutionGate,
+ * TaskRestoreService.restore, WindowRespawnService.enforceExecutionGate,
+ * PhaseLoopRunner.reverifyExecutionGateForPhase, the approve-execution
+ * handler in units/routes.ts). Every one of those either lets the exception
+ * propagate to its own caller (which marks the task `failed` on rejection —
+ * see ExecuteTaskUseCase.execute's `runLoop.catch()`) or returns an HTTP
+ * 500 (the approve-execution handler has no catch around its
+ * `resolveExecutionManifest()` call) — none of them convert this into an
+ * allowed run or a recorded approval. The only filesystem error this
+ * digest computation tolerates is `ENOENT` on an OPTIONAL `scripts/`/
+ * `references/` root itself (a package legitimately having neither); every
+ * other error, at any depth, is fail-closed: approval and execution both
+ * stop rather than proceed against an incompletely-read package.
  *
  * Deliberately NOT covered, and why — three recurring shapes, not a field-by-
  * field list (see the "Deliberately excluded" section above for the current
@@ -310,14 +347,22 @@ import { resolveUnitId, resolveTaskServerName, resolveBaseBranch } from './TaskE
  * `isDirectory()` and is silently skipped, matching the same symlink
  * exclusion SidekickPackageLoader's own directory listing already applies
  * (no following a package's scripts/references out of its own tree).
+ *
+ * `readdirSync` errors are NOT caught here (Issue #328 twelfth-round
+ * review — this function used to treat any `readdirSync` failure, including
+ * a permission error or other I/O error, as "empty directory", which let a
+ * package this manifest could not fully read get hashed as if the unreadable
+ * portion did not exist. `dir` here is always either the already-`statSync`-
+ * verified `scripts`/`references` root (see `hashSidekickPackageTree`, which
+ * tolerates only that root's own `ENOENT`) or a subdirectory this same
+ * function just discovered via a successful `readdirSync` one level up — so
+ * by the time this call is made, `dir` is known to exist; any failure to
+ * read it now is an unexpected error (permissions, I/O, or a race where it
+ * was removed mid-walk) and must propagate to the caller of
+ * `hashSidekickPackageTree`, not be silently treated as "no files here".
  */
 function listFilesRecursive(dir: string, baseDir: string, out: string[]): void {
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
   for (const entry of entries) {
     const abs = path.join(dir, entry.name);
     if (entry.isDirectory()) {
@@ -357,10 +402,26 @@ function listFilesRecursive(dir: string, baseDir: string, out: string[]): void {
  * digest (see ExecutionManifest.test.ts) — this function performs no
  * mutation and no randomness, only sorted reads.
  *
- * A missing target root (e.g. no `scripts/` directory) is not an error —
- * `listFilesRecursive` already tolerates a missing directory by returning no
- * entries for it, the same way a package with no scripts/references
- * legitimately has none.
+ * A missing target root (e.g. no `scripts/` directory) is not an error — a
+ * package with no scripts/references legitimately has none. That is the
+ * ONLY filesystem failure this function tolerates, and only as an `ENOENT`
+ * on the root itself (Issue #328 twelfth-round review): any other
+ * `statSync`/`readdirSync`/`readFileSync` failure — permission denied, an
+ * I/O error, or a file that vanished between being listed and being read —
+ * is a sign this function could NOT actually read the full package tree,
+ * and is thrown rather than silently treated as "empty"/"no content". This
+ * is security-critical: `hashSidekickPackageTree`'s result is what an
+ * untrusted task's approval is recorded against and what `checkExecutionGate`
+ * compares on every phase transition (see `resolveExecutionManifest` below,
+ * and its callers' fail-fast requirement documented in the module doc
+ * comment's "Scope of this manifest" section) — a digest computed from a
+ * PARTIAL read is worse than no digest at all, because it lets an attacker
+ * who can make part of the tree unreadable get a hash that has nothing to
+ * do with the tree's actual (unreadable) content approved or waved through
+ * an already-approved gate check. Every call site's failure mode when this
+ * throws is: the gate check itself throws, execution does not proceed, and
+ * the task ends up `failed` (verified for every `resolveExecutionManifest`
+ * caller — see the module doc comment).
  */
 export function hashSidekickPackageTree(dir: string, body: string): string {
   const relPaths: string[] = [];
@@ -369,8 +430,9 @@ export function hashSidekickPackageTree(dir: string, body: string): string {
     let stat: fs.Stats;
     try {
       stat = fs.statSync(targetPath);
-    } catch {
-      continue;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw err;
     }
     if (stat.isDirectory()) {
       listFilesRecursive(targetPath, dir, relPaths);
@@ -388,12 +450,11 @@ export function hashSidekickPackageTree(dir: string, body: string): string {
   hash.update(body);
   hash.update('\0');
   for (const relPath of relPaths) {
-    let content: Buffer;
-    try {
-      content = fs.readFileSync(path.join(dir, relPath));
-    } catch {
-      content = Buffer.alloc(0);
-    }
+    // No try/catch: a file listed a moment ago that now fails to read
+    // (permissions, I/O error, or removed mid-walk) must fail this digest
+    // computation, not silently contribute empty content — see this
+    // function's own doc comment above.
+    const content = fs.readFileSync(path.join(dir, relPath));
     hash.update(relPath);
     hash.update('\0');
     hash.update(content);
@@ -478,6 +539,30 @@ export interface ResolvedExecutionManifest {
   project: {
     sidekickPrompt: string | null;
   };
+  /**
+   * Identity of the repository the pushing phase will target — `id`,
+   * `provider`, `url`, `owner`, `repoName` of `project.repositories[0]`
+   * (Issue #328 twelfth-round review, fix 2). Resolved via the exact same
+   * selection PhaseLoopRunner's pushing-phase probe uses
+   * (`project?.repositories?.[0] ?? null`, PhaseLoopRunner.ts ~367) — not a
+   * second, separately-written selection rule; see this file's own
+   * `resolveExecutionManifest` for why a second resolution path is exactly
+   * how earlier review rounds' holes opened up. `null` when the project has
+   * no registered repository, or no resolvable project at all (mirrors the
+   * `unit: null` tolerance elsewhere in this manifest). `token` is
+   * deliberately never read here (`findRepositoryById` is not called) —
+   * same "credential rotation must not self-invalidate approval" reasoning
+   * as `server.agentToken` in the "deliberately excluded" section above; a
+   * repository's URL/owner/name is a targeting decision a human reviews,
+   * its access token is not.
+   */
+  repository: {
+    id: number;
+    provider: string;
+    url: string;
+    owner: string | null;
+    repoName: string | null;
+  } | null;
   // See the module doc comment's `secrets.namesDigest` bullet above for what
   // this covers and why only names (sorted, digested), never values, are
   // included.
@@ -691,8 +776,28 @@ export function resolveExecutionManifest(
         pushVerify: phaseDef.pushVerify,
         subagentRole: phaseDef.subagentRole ?? null,
       });
+      let sidekick;
       try {
-        const sidekick = resolvePhaseSidekick(deps.sidekickLoader, phase, unit.phaseConfig, phaseDef);
+        sidekick = resolvePhaseSidekick(deps.sidekickLoader, phase, unit.phaseConfig, phaseDef);
+      } catch {
+        // Misconfigured phaseConfig override / no default package for the
+        // tag — tolerated here (see ResolvedExecutionManifest.sidekicks' doc
+        // comment); the real run's own resolvePhaseSidekick() call still
+        // fails fast on this.
+        sidekicks.push({ phase, name: null, packageDigest: null });
+        continue;
+      }
+      // Deliberately OUTSIDE the try/catch above (Issue #328 twelfth-round
+      // review): that catch exists only to tolerate "no package resolves for
+      // this phase", not to swallow a filesystem failure while digesting a
+      // package that DID resolve. hashSidekickPackageTree() only tolerates a
+      // missing optional scripts/references directory internally — every
+      // other fs error (permission denied, I/O error, a file vanishing
+      // mid-walk) is thrown by it and must propagate all the way out of
+      // resolveExecutionManifest to whichever checkExecutionGate call site is
+      // resolving this manifest, so an unreadable package tree stops
+      // execution/approval instead of being hashed as if it were empty.
+      const packageDigest = task.inputTrust === 'untrusted'
         // Full package-tree walk (SKILL.md + scripts/** + references/**) is
         // only worth its I/O cost for an untrusted task — checkExecutionGate
         // allows every trusted task unconditionally, so a trusted resolution
@@ -701,17 +806,9 @@ export function resolveExecutionManifest(
         // compared against anything; the cheap body-only digest it already
         // used is enough for that discarded value (Issue #328 ninth-round
         // review: "trusted tasks pay nothing extra").
-        const packageDigest = task.inputTrust === 'untrusted'
-          ? hashSidekickPackageTree(sidekick.dir, sidekick.body)
-          : createHash('sha256').update(sidekick.body).digest('hex');
-        sidekicks.push({ phase, name: sidekick.name, packageDigest });
-      } catch {
-        // Misconfigured phaseConfig override / no default package for the
-        // tag — tolerated here (see ResolvedExecutionManifest.sidekicks' doc
-        // comment); the real run's own resolvePhaseSidekick() call still
-        // fails fast on this.
-        sidekicks.push({ phase, name: null, packageDigest: null });
-      }
+        ? hashSidekickPackageTree(sidekick.dir, sidekick.body)
+        : createHash('sha256').update(sidekick.body).digest('hex');
+      sidekicks.push({ phase, name: sidekick.name, packageDigest });
     }
   }
 
@@ -763,6 +860,16 @@ export function resolveExecutionManifest(
     project: {
       sidekickPrompt: project?.sidekickPrompt ?? null,
     },
+    // Same selection PhaseLoopRunner's pushing-phase probe uses
+    // (`project?.repositories?.[0] ?? null`) — see the field's doc comment
+    // on ResolvedExecutionManifest above (Issue #328 twelfth-round review,
+    // fix 2).
+    repository: (() => {
+      const repo = project?.repositories?.[0] ?? null;
+      return repo
+        ? { id: repo.id, provider: repo.provider, url: repo.url, owner: repo.owner, repoName: repo.repoName }
+        : null;
+    })(),
     secrets: {
       namesDigest: hashSecretNameSet(secretNames),
     },
@@ -844,6 +951,15 @@ export function hashExecutionManifest(manifest: ResolvedExecutionManifest): stri
     project: {
       sidekickPrompt: manifest.project.sidekickPrompt ?? '',
     },
+    repository: manifest.repository
+      ? {
+          id: manifest.repository.id,
+          provider: manifest.repository.provider,
+          url: manifest.repository.url,
+          owner: manifest.repository.owner ?? '',
+          repoName: manifest.repository.repoName ?? '',
+        }
+      : null,
     secrets: {
       namesDigest: manifest.secrets.namesDigest,
     },

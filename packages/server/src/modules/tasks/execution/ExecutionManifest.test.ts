@@ -7,7 +7,7 @@ import { resolveExecutionManifest, hashExecutionManifest, hashSidekickPackageTre
 import { checkExecutionGate } from './ExecutionGate';
 import type { Task } from '../Task';
 import type { IUnitRepository, Unit } from '../../units/Unit';
-import type { IProjectRepository, ProjectDetail } from '../../projects/Project';
+import type { IProjectRepository, ProjectDetail, ProjectRepository } from '../../projects/Project';
 import type { IProjectServerRepository, ProjectServer } from '../../projects/ProjectServer';
 import type { IServerRepository, ServerConfig } from '../../servers/Server';
 import type { SqliteProjectSecretRepository } from '../../projects/SqliteProjectSecretRepository';
@@ -163,7 +163,15 @@ function makeSidekick(overrides: Partial<SidekickPackage> = {}): SidekickPackage
     isDefault: true,
     layer: 'builtin',
     overridesBuiltin: false,
-    dir: '/dev/null',
+    // Deliberately a nonexistent path (Issue #328 twelfth-round review), NOT
+    // '/dev/null': hashSidekickPackageTree() now only tolerates a missing
+    // scripts/references directory as ENOENT — statSync('/dev/null/scripts')
+    // throws ENOTDIR, which is a real filesystem error the fail-open fix
+    // deliberately no longer swallows. Most fixtures below don't care about
+    // the package-tree digest at all, only that resolution succeeds, so this
+    // default must produce ENOENT (a genuinely absent directory), not
+    // ENOTDIR (a path built on top of a non-directory).
+    dir: '/nonexistent/azito-sidekick-fixture-default',
     body: 'Do the implementation.',
     hasScripts: false,
     hasReferences: false,
@@ -572,6 +580,69 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     expect(hashBefore).not.toBe(hashAfter);
   });
 
+  // Issue #328 twelfth-round review, fix 2: project.repositories can be
+  // added/removed independently of the task/Unit via
+  // POST/DELETE /api/projects/:id/repositories, which is exactly the
+  // "changed through an API, changes WHERE output goes" shape this
+  // manifest's own "Scope of this manifest" rule requires covering.
+  function makeProjectRepository(overrides: Partial<ProjectRepository> = {}): ProjectRepository {
+    return {
+      id: 1,
+      name: 'origin',
+      url: 'https://github.com/acme/widgets.git',
+      provider: 'github',
+      owner: 'acme',
+      repoName: 'widgets',
+      hasToken: false,
+      ...overrides,
+    };
+  }
+
+  it('re-registering the PR destination repository (same task/Unit) alone invalidates a prior approval', () => {
+    const fixture = (repositories: ProjectRepository[]): Fixture => ({
+      units: { 20: makeUnit() },
+      project: makeProject({ repositories }),
+      projectServers: { 'test-server': makeProjectServer() },
+    });
+    const task = makeTask();
+
+    const hashBefore = hashFor(task, fixture([makeProjectRepository()]));
+    const hashAfter = hashFor(task, fixture([makeProjectRepository({ id: 2, owner: 'attacker', repoName: 'widgets', url: 'https://github.com/attacker/widgets.git' })]));
+
+    expect(hashAfter).not.toBe(hashBefore);
+  });
+
+  it('removing the only registered repository alone invalidates a prior approval (pushing falls back to no-PR)', () => {
+    const fixture = (repositories: ProjectRepository[]): Fixture => ({
+      units: { 20: makeUnit() },
+      project: makeProject({ repositories }),
+      projectServers: { 'test-server': makeProjectServer() },
+    });
+    const task = makeTask();
+
+    const hashBefore = hashFor(task, fixture([makeProjectRepository()]));
+    const hashAfter = hashFor(task, fixture([]));
+
+    expect(hashAfter).not.toBe(hashBefore);
+  });
+
+  it('a project with no registered repository resolves a stable (non-throwing) repository: null, and does not self-invalidate on re-check', () => {
+    const fixture: Fixture = {
+      units: { 20: makeUnit() },
+      project: makeProject({ repositories: [] }),
+      projectServers: { 'test-server': makeProjectServer() },
+    };
+    const task = makeTask();
+    const deps = makeDeps(fixture);
+
+    const { manifest } = resolveExecutionManifest(task, deps);
+    expect(manifest.repository).toBeNull();
+
+    const approvedHash = hashExecutionManifest(manifest);
+    const { manifest: manifestAgain } = resolveExecutionManifest(task, deps);
+    expect(hashExecutionManifest(manifestAgain)).toBe(approvedHash);
+  });
+
   it("changing unit.phaseConfig alone invalidates approval (reassigns which Sidekick/phases run), WITHOUT touching the task row", () => {
     const fixture = (phaseConfig: PhaseConfig | null): Fixture => ({
       units: { 20: makeUnit({ phaseConfig }) },
@@ -791,6 +862,50 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
       expect(before).toBe(after);
       expect(before).not.toBe(changed);
     });
+
+    // Issue #328 twelfth-round review, fix 1: a filesystem error while
+    // digesting an untrusted task's package tree used to be swallowed and
+    // treated as "empty" at three separate points (readdirSync, statSync,
+    // readFileSync) — fail-open. It must now propagate instead, so a
+    // digest is never computed from a partially-read tree.
+    it('a scripts/ directory that cannot be listed (permission denied) makes digest computation throw, not silently digest as empty', () => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-sidekick-digest-'));
+      const scriptsDir = path.join(dir, 'scripts');
+      fs.mkdirSync(scriptsDir);
+      fs.writeFileSync(path.join(scriptsDir, 'push.sh'), 'echo hi\n');
+      fs.chmodSync(scriptsDir, 0o000);
+
+      try {
+        expect(() => hashSidekickPackageTree(dir, 'Do the push.')).toThrow();
+      } finally {
+        // Restore permissions so afterEach's rmSync can clean up.
+        fs.chmodSync(scriptsDir, 0o755);
+      }
+    });
+
+    it('a file under scripts/ that cannot be read (permission denied) makes digest computation throw, not silently digest as empty content', () => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-sidekick-digest-'));
+      const scriptsDir = path.join(dir, 'scripts');
+      fs.mkdirSync(scriptsDir);
+      const scriptPath = path.join(scriptsDir, 'push.sh');
+      fs.writeFileSync(scriptPath, 'echo hi\n');
+      fs.chmodSync(scriptPath, 0o000);
+
+      try {
+        expect(() => hashSidekickPackageTree(dir, 'Do the push.')).toThrow();
+      } finally {
+        fs.chmodSync(scriptPath, 0o644);
+      }
+    });
+
+    it('a missing scripts/ AND references/ directory (ENOENT on the optional root) still digests successfully — the one tolerated case', () => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-sidekick-digest-'));
+      // Neither scripts/ nor references/ created — package legitimately has
+      // neither. Distinct from the permission-denied cases above: ENOENT on
+      // the OPTIONAL root itself is the only filesystem failure this
+      // function still tolerates.
+      expect(() => hashSidekickPackageTree(dir, 'Plan the work.')).not.toThrow();
+    });
   });
 
   it("changing an untrusted task's Sidekick script alone invalidates approval (resolveExecutionManifest wiring for hashSidekickPackageTree)", () => {
@@ -817,6 +932,32 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
 
       expect(editedHash).not.toBe(approvedHash);
     } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("an unreadable Sidekick script for an untrusted task makes resolveExecutionManifest() throw (Issue #328 twelfth-round review, fix 1) instead of resolving a partial digest — the resolvePhaseSidekick tolerant catch must not swallow this", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-sidekick-digest-manifest-unreadable-'));
+    const scriptPath = path.join(dir, 'scripts', 'push.sh');
+    try {
+      fs.mkdirSync(path.join(dir, 'scripts'));
+      fs.writeFileSync(scriptPath, 'echo hi\n');
+      fs.chmodSync(scriptPath, 0o000);
+
+      const phase = makeUnitTypePhase({ name: 'pushing', tags: ['pushing'] });
+      const unitType: UnitType = { name: 'devops', label: 'DevOps', phases: [phase] };
+      const fixture: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer() },
+        unitTypes: { devops: unitType },
+        sidekicks: [makeSidekick({ name: 'pushing-default', tags: ['pushing'], dir, body: 'Push the branch.' })],
+      };
+      const task = makeTask({ inputTrust: 'untrusted', currentPhase: null });
+
+      expect(() => hashFor(task, fixture)).toThrow();
+    } finally {
+      fs.chmodSync(scriptPath, 0o644);
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
