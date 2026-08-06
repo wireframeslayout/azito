@@ -113,7 +113,7 @@ function WorkspaceInner() {
     () => servers.filter((s) => s.type === 'local' || s.type === 'agent').map((s) => s.name),
     [servers],
   );
-  const browserGroups = useBrowserGroups(browserCapableServers);
+  const { groups: browserGroups, errors: browserErrors, refresh: refreshBrowserGroups } = useBrowserGroups(browserCapableServers);
 
   const taskWindows = useMemo(() => {
     const entries: Array<{ tmuxTarget: string; taskId: number; serverName: string }> = [];
@@ -790,6 +790,8 @@ function WorkspaceInner() {
       openServer={openServer}
       openBrowser={openBrowser}
       browserGroups={browserGroups}
+      browserErrors={browserErrors}
+      refreshBrowserGroups={refreshBrowserGroups}
       openStorageFileRaw={openStorageFileRaw}
       projectSettings={sidebarProjectSettings}
       onOpenDiff={openDiff}

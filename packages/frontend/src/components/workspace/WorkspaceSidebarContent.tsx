@@ -2,11 +2,12 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import type { SidebarMode, Project, Session, Window, Task } from '../../pages/workspace/types';
 import type { PersistedTab } from '../../hooks/useTabPersistence';
+import type { BrowserGroupInfo } from '../../hooks/useBrowserGroups';
 import FileExplorer from '../FileExplorer';
 import RepoSidebar from '../RepoSidebar';
 import StoragePanel from '../StoragePanel';
 import { SettingsSidebar, type SettingsSection } from '../ProjectSettings';
-import WindowsSidebar from './WindowsSidebar';
+import ObjectsSidebar from './ObjectsSidebar';
 import TasksSidebar from './TasksSidebar';
 
 interface WorkspaceSidebarContentProps {
@@ -38,7 +39,9 @@ interface WorkspaceSidebarContentProps {
   connectPaneRaw: (serverName: string, target: string) => void;
   openServer: (name: string) => void;
   openBrowser: (serverName: string, groupId?: string) => void;
-  browserGroups?: Record<string, import('../../hooks/useBrowserGroups').BrowserGroupInfo[]>;
+  browserGroups?: Record<string, BrowserGroupInfo[]>;
+  browserErrors?: Record<string, string>;
+  refreshBrowserGroups?: () => void;
   openStorageFileRaw: (projectId: number, filename: string, originalName: string, size: number) => void;
   projectSettings: { section: SettingsSection; setSection: (s: SettingsSection) => void };
   onOpenDiff: (serverName: string, path: string) => void;
@@ -72,6 +75,10 @@ export default function WorkspaceSidebarContent({
   onRefresh,
   mobile,
   onCloseMobileSidebar,
+  openBrowser,
+  browserGroups,
+  browserErrors,
+  refreshBrowserGroups,
   openStorageFileRaw,
   projectSettings,
   onOpenDiff,
@@ -82,7 +89,7 @@ export default function WorkspaceSidebarContent({
   return (
     <>
       {sidebarMode === 'windows' && project && (
-        <WindowsSidebar
+        <ObjectsSidebar
           project={project}
           sessionData={sessionData}
           activeTabId={activeTabId}
@@ -94,6 +101,11 @@ export default function WorkspaceSidebarContent({
           onCloseMobileSidebar={onCloseMobileSidebar}
           respawningWindowIds={respawningWindowIds}
           taskWindows={taskWindows}
+          browserGroups={browserGroups ?? {}}
+          browserErrors={browserErrors ?? {}}
+          refreshBrowserGroups={refreshBrowserGroups ?? (() => {})}
+          openBrowser={openBrowser}
+          openTask={openTask}
         />
       )}
       {sidebarMode === 'tasks' && project && (
