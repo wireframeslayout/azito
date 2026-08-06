@@ -193,6 +193,8 @@ Unit itself (the Operation/WorkerProfile split introduced earlier in the redesig
 | Review Subagent / Implement Subagent | Config (provider/model) for delegating review/implementation work to a subagent. Can be overridden per task |
 | Phase Config | Per-phase Sidekick assignment and enablement |
 
+> **Note:** UnitType TOML definitions cannot currently be created or edited from the UI (the only built-in type is `devops`). To add a custom UnitType, place the file in the user-layer directory `data/unit-types/` (overridable via `AZITO_UNIT_TYPES_DIR`). `harness/unit-types/` is the built-in layer and is overwritten on release updates.
+
 The phase sequence is determined by the UnitType definition (TOML) referenced by the Unit's `unitType`.
 The default `devops` type transitions through planning → implementing → reviewing → testing → pushing
 according to `phaseConfig`

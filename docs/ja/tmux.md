@@ -5,9 +5,12 @@ AZITO は tmux の上で動作するため、tmux 側の設定がいくつかの
 
 tmux 実行系統が **managed**（AZITO 管理の tmux、`~/.azito/tmux/`）の場合は、必須＋推奨の
 全設定を含む `azito.conf` が自動配置されるため、このガイドの設定作業は不要です。
+managed は **Linux（x86_64 / aarch64）専用** です。tmux 3.6b のスタティックバイナリを
+GitHub から取得し、SHA256 固定検証付きでインストールします。macOS では managed は利用できず、
+system モードのみとなります。
 **system**（既存インストール済み tmux）の場合は、サーバー詳細パネルの
-「Apply recommended config」ボタンで同じ内容を `~/.tmux.conf` に `source-file` 行として
-冪等に追記できます（既存設定は変更されません）。
+「Apply recommended config」ボタンで `~/.azito/tmux/azito.conf` に AZITO 設定を配置し、
+`~/.tmux.conf` に `source-file` 行を1行追記します（既存の行は書き換えません）。
 
 ## 必須設定（これが無いと動作しない）
 

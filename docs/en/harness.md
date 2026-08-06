@@ -6,14 +6,18 @@ azt-harness (the AZITO Harness) lets you run AZITO's Sidekick Mode as **native C
 
 The traditional Sidekick Mode launches a worker into a tmux pane and detects markers such as `AZITO_DONE` / `QUESTIONS_JSON` in the pane output to advance phases. azt-harness replaces that mechanism: **Claude Code itself executes each phase as a skill**. Free of marker detection, it lets Claude Code drive a task forward through a natural conversation with the user — its defining advantage.
 
-azt-harness is made up of four parts.
+azt-harness is made up of the following parts.
 
 | Part | Location | Role |
 |---|---|---|
 | `/azt-*` skills | `harness/skills/azt-*` | Skills that run each task phase (plan/implement/review/test/push), run any Sidekick (azt-sidekick), create or edit one (azt-summon), create issues (azt-issue), or batch-run multiple tasks (azt-mission) |
 | azt-mcp | `harness/skills/azt-mcp` | Exposes AZITO's REST API as MCP tools (projects, tasks, Units, Operations, Sidekicks) |
 | prompt-modules | `harness/prompt-modules/` | Rule files for coding conventions, design principles, review perspectives, UI principles |
-| Stop hook | `harness/hooks/azito-notify.sh` | Sends a webhook notification to AZITO when the agent finishes |
+| sidekicks | `harness/sidekicks/` | Built-in Sidekick packages (`planning-default`, `implementing-default`, etc.) |
+| unit-types | `harness/unit-types/` | UnitType definitions (TOML; built-in: `devops`) |
+| bin | `harness/bin/` | CLI tools (`azs` — supervised window launcher, `azitoctl` — task control) |
+| tmux config | `harness/tmux/` | `azito.conf` template for managed tmux |
+| Hooks | `harness/hooks/` | `azito-notify.sh` (completion notification), `azito-activity.sh` (activity notification: Stop + UserPromptSubmit) |
 
 ## `/azt-*` Skills
 
@@ -73,9 +77,16 @@ azt-mcp is an MCP server that lets Claude Code operate AZITO's REST API directly
 
 `setup.sh` links these into `~/.claude/rules/` so they can be injected into Claude Code's subagent prompts.
 
-## Stop Hook (Completion Notification)
+## Hooks (Completion & Activity Notifications)
 
-`harness/hooks/azito-notify.sh` is registered as a Claude Code Stop hook and sends a webhook notification (`POST /api/webhooks/agent-done`) to AZITO when the agent's work finishes. The notification requires the shared secret `AZITO_WEBHOOK_TOKEN`; if the token is unset, the hook exits without doing anything.
+Two hooks are registered in Claude Code:
+
+| Hook | Event | Role |
+|---|---|---|
+| `azito-notify.sh` | Stop | Sends a webhook notification (`POST /api/webhooks/agent-done`) to AZITO when the agent finishes |
+| `azito-activity.sh` | Stop, UserPromptSubmit | Reports agent start/stop in real time to AZITO, reflected in the Active Windows status display |
+
+Both require the shared secret `AZITO_WEBHOOK_TOKEN`; if the token is unset, the hook exits silently.
 
 > **Note:** To enable webhook notifications, the AZITO server and the hook must share the same `AZITO_WEBHOOK_TOKEN`.
 
@@ -92,9 +103,11 @@ setup.sh performs the following:
 
 1. **Skills** -- Symlinks `harness/skills/azt-*` into `~/.claude/skills/`
 2. **Rules** -- Symlinks `harness/prompt-modules/*.md` into `~/.claude/rules/`
-3. **Settings** -- Merges azt-mcp (MCP server) and the Stop hook into `~/.claude/settings.json`
+3. **Settings** -- Merges azt-mcp (MCP server) and both hooks (`azito-notify.sh` + `azito-activity.sh`) into `~/.claude/settings.json`
+4. **CLI tools** -- Makes tools in `harness/bin/` executable (`azs`, `azitoctl`)
+5. **Env file** -- Only when both `--azito-url` and `--webhook-token` are given, writes `~/.azito/azitoctl.env` (mode 600). Always: `AZITO_URL`, `AZITO_WEBHOOK_TOKEN`, `AZITO_SUPERVISOR_PATH`. When provided: `AZITO_UI_TOKEN`, `AZITO_SERVER_NAME`
 
-`AZITO_URL` (default `http://localhost:3001`) and `AZITO_WEBHOOK_TOKEN` are also resolved from environment variables. Existing links and settings are skipped or updated, so re-running is safe. However, `--ui-token` (`AZITO_UI_TOKEN`) is required for azt-mcp authentication and cannot be omitted.
+`AZITO_URL` (default `http://localhost:3001`) and `AZITO_WEBHOOK_TOKEN` are also resolved from environment variables. Existing links and settings are skipped or updated, so re-running is safe. `--ui-token` (`AZITO_UI_TOKEN`) can be omitted, but a warning is shown that the MCP server config will not include a token.
 
 If the Codex CLI is installed (the `codex` command or `~/.codex` exists), the same skills and rules are also placed under `~/.codex/` and azt-mcp is registered via `codex mcp add`, so the same harness is available from both Claude Code and Codex.
 
@@ -112,3 +125,7 @@ npm install
 ## Install Status
 
 AZITO's server detail panel visualizes each server's dependency install status (tmux, Node.js, **harness**, Tailscale, etc.). When the harness is not installed, it shows "azt-harness not installed" along with guided setup actions.
+
+### Installing from the UI
+
+You can also install the harness without the CLI by clicking "Install Harness" in the server detail panel → Setup tab (`POST /api/servers/:name/harness/install`). For local servers the install runs directly; for Agent servers it runs over SSH.
