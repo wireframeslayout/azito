@@ -127,7 +127,7 @@ function makeOpts(task: Task, unit: Unit): UnitsRouteOptions {
       // call for the same task (double-submitted approval/denial) sees the
       // first call's clear and returns false, same as the real
       // compare-and-clear UPDATE.
-      consumePendingApproval: vi.fn((id: number, fields: { status?: Task['status']; executionApprovedFingerprintHash?: string | null }) => {
+      consumePendingApproval: vi.fn((id: number, fields: { status?: Task['status']; executionApprovedFingerprintHash?: string }) => {
         if (id !== task.id) return false;
         if (currentTask.status !== 'pending_approval' || currentTask.pendingOperation === null) return false;
         currentTask = {
@@ -390,8 +390,8 @@ describe('POST /api/units/:id/approve-execution (Issue #328)', () => {
     // implementations makeOpts() already wired (state mutation / no-op
     // respectively), captured before this test overrides them.
     const originalConsumeImpl = (opts.taskRepo.consumePendingApproval as ReturnType<typeof vi.fn>).getMockImplementation() as
-      (id: number, fields: { status?: Task['status']; executionApprovedFingerprintHash?: string | null }) => boolean;
-    (opts.taskRepo.consumePendingApproval as ReturnType<typeof vi.fn>).mockImplementation((id: number, fields: { status?: Task['status']; executionApprovedFingerprintHash?: string | null }) => {
+      (id: number, fields: { status?: Task['status']; executionApprovedFingerprintHash?: string }) => boolean;
+    (opts.taskRepo.consumePendingApproval as ReturnType<typeof vi.fn>).mockImplementation((id: number, fields: { status?: Task['status']; executionApprovedFingerprintHash?: string }) => {
       callOrder.push('consumePendingApproval');
       return originalConsumeImpl(id, fields);
     });

@@ -906,6 +906,35 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
       // function still tolerates.
       expect(() => hashSidekickPackageTree(dir, 'Plan the work.')).not.toThrow();
     });
+
+    // Issue #328 thirteenth-round review: a symlink under scripts/ used to be
+    // silently excluded from the digest (fs.Dirent from withFileTypes uses
+    // lstat, so a symlink is neither isFile() nor isDirectory()) while a
+    // worker can still follow it and execute whatever it points to — so
+    // swapping the symlink's target after approval changed what ran without
+    // changing the approved hash. Must now fail closed instead.
+    it('a symlink directly under scripts/ makes digest computation throw, not silently skip it', () => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-sidekick-digest-'));
+      const scriptsDir = path.join(dir, 'scripts');
+      fs.mkdirSync(scriptsDir);
+      const realTarget = path.join(dir, 'real-push.sh');
+      fs.writeFileSync(realTarget, 'echo hi\n');
+      fs.symlinkSync(realTarget, path.join(scriptsDir, 'push.sh'));
+
+      expect(() => hashSidekickPackageTree(dir, 'Do the push.')).toThrow();
+    });
+
+    it('a symlink nested inside a scripts/ subdirectory makes digest computation throw', () => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-sidekick-digest-'));
+      const scriptsDir = path.join(dir, 'scripts');
+      const nestedDir = path.join(scriptsDir, 'nested');
+      fs.mkdirSync(nestedDir, { recursive: true });
+      const realTarget = path.join(dir, 'real-lib.sh');
+      fs.writeFileSync(realTarget, 'echo lib\n');
+      fs.symlinkSync(realTarget, path.join(nestedDir, 'lib.sh'));
+
+      expect(() => hashSidekickPackageTree(dir, 'Do the push.')).toThrow();
+    });
   });
 
   it("changing an untrusted task's Sidekick script alone invalidates approval (resolveExecutionManifest wiring for hashSidekickPackageTree)", () => {

@@ -191,6 +191,19 @@ export interface ITaskRepository {
    * consumed it (or the row is no longer in a consumable state) — the
    * caller must reject (409), not fall back to any other signal to guess
    * what to do.
+   *
+   * `executionApprovedFingerprintHash` is `string`, not `string | null`
+   * (Issue #328 thirteenth-round review, fix 2): the underlying UPDATE uses
+   * `COALESCE(?, execution_approved_fingerprint_hash)` per field, so an
+   * omitted field leaves the column unchanged — but an explicit `null` would
+   * ALSO leave it unchanged (COALESCE only short-circuits on SQL NULL, and
+   * this implementation maps both "omitted" and "explicit null" to the same
+   * bound `null` parameter), never clearing it. The two call sites in
+   * units/routes.ts's approve-execution handler only ever pass a real hash
+   * string from `hashExecutionManifest()` (the approve branch) or omit the
+   * field entirely (the deny branch, which passes `status` instead) —
+   * neither needs to clear an existing hash, so the type no longer offers a
+   * capability ("pass null to clear") the implementation doesn't provide.
    */
-  consumePendingApproval(id: number, fields: { status?: TaskStatus; executionApprovedFingerprintHash?: string | null }): boolean;
+  consumePendingApproval(id: number, fields: { status?: TaskStatus; executionApprovedFingerprintHash?: string }): boolean;
 }

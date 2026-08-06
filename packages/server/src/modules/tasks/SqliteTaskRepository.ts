@@ -204,7 +204,7 @@ export class SqliteTaskRepository implements ITaskRepository {
     );
   }
 
-  consumePendingApproval(id: number, fields: { status?: TaskStatus; executionApprovedFingerprintHash?: string | null }): boolean {
+  consumePendingApproval(id: number, fields: { status?: TaskStatus; executionApprovedFingerprintHash?: string }): boolean {
     const result = this.consumePendingApprovalStmt.run(fields.status ?? null, fields.executionApprovedFingerprintHash ?? null, id);
     return result.changes > 0;
   }

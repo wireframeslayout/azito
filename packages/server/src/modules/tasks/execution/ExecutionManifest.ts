@@ -337,16 +337,65 @@ import { resolveUnitId, resolveTaskServerName, resolveBaseBranch } from './TaskE
  *   incorrectly, re-approval will still succeed against the (correctly)
  *   resolved manifest even though the human saw something else. That's a UI
  *   correctness concern, outside this file's scope.
+ * - On ssh/agent (remote) servers, this manifest's `sidekicks[i].packageDigest`
+ *   is a digest of the HUB's own local Sidekick package tree ONLY (Issue #328
+ *   thirteenth-round review, confirmed against the actual sync
+ *   implementation — see SidekickSyncService.ts). What a remote worker
+ *   actually reads and executes from `{{sidekick.dir}}` is a SEPARATE, synced
+ *   copy under `~/.azito/sidekicks/<name>` on that server, not the hub's
+ *   local tree this digest was computed from. `PhaseLoopRunner.
+ *   ensureSidekicksSynced()` pushes that copy exactly ONCE, before the
+ *   `while` loop over phases starts (`stateMachineLoop`, before
+ *   `currentPhaseIndex` begins iterating) — not re-verified at every phase
+ *   boundary the way the execution gate itself is
+ *   (`reverifyExecutionGateForPhase`, called inside the loop on every
+ *   iteration). And the sync is skip-if-unchanged: it trusts a hash MARKER
+ *   file it wrote on the remote (`~/.azito/sidekicks/.azito-sidekicks-hash`),
+ *   not a re-read of the remote tree's actual content — so if something with
+ *   write access to that path on the remote machine (which very plausibly
+ *   includes the task's own worker process, since it runs on that same
+ *   machine) rewrites a script under `~/.azito/sidekicks/<name>/scripts/`
+ *   directly, without touching the marker file, this manifest's digest does
+ *   not change (it never read the remote copy to begin with), the gate never
+ *   throws, and every remaining phase in that run executes the rewritten
+ *   script. In short: **this manifest guarantees the approved content matches
+ *   what's on the HUB's local disk; on a remote server it does NOT guarantee
+ *   that content is what actually executes.** Closing this would require
+ *   either re-verifying the remote tree's actual content against the digest
+ *   at every phase boundary (remote I/O added to the gate-check path itself,
+ *   a materially larger change than this round's scope) or placing packages
+ *   at a content-addressed remote path (e.g. keyed by this same digest, so a
+ *   stale/tampered copy can never satisfy a phase that requires a different
+ *   digest) — neither is implemented as of this round.
  */
 
 /**
  * Recursively collects every regular file under `dir`, returning paths
  * relative to `dir` with forward slashes (platform-independent, deterministic
- * comparison). Symlinks are excluded — `fs.Dirent` entries from
- * `withFileTypes: true` use `lstat`, so a symlink is neither `isFile()` nor
- * `isDirectory()` and is silently skipped, matching the same symlink
- * exclusion SidekickPackageLoader's own directory listing already applies
- * (no following a package's scripts/references out of its own tree).
+ * comparison).
+ *
+ * Symlinks are fail-closed, not silently skipped (Issue #328 thirteenth-round
+ * review). An earlier version of this function treated a symlink exactly
+ * like SidekickPackageLoader's own directory listing does — `fs.Dirent`
+ * entries from `withFileTypes: true` use `lstat`, so a symlink is neither
+ * `isFile()` nor `isDirectory()` and was silently excluded from the walk.
+ * That's the right call for SidekickPackageLoader (it's choosing what a
+ * builtin/user package LISTING shows), but wrong here: a worker executing a
+ * rendered Sidekick prompt can follow a symlink under `{{sidekick.dir}}/
+ * scripts` and run whatever it points to, so silently excluding it from the
+ * digest meant an attacker could swap the symlink's target (or the symlink
+ * itself) after approval and change what actually runs without changing the
+ * hash a human approved. Resolving the target and hashing ITS content would
+ * fix that, but only if the target is also verified to stay inside the
+ * package root — a symlink can point anywhere on disk (`../../etc/passwd`,
+ * an absolute path, another package's tree) — and that containment check is
+ * out of scope for a manifest that only needs to detect drift, not sandbox
+ * an arbitrary filesystem read. So a symlink anywhere under `scripts/` or
+ * `references/` throws instead: fail closed, matching every other
+ * unreadable-tree case this function's caller already fails closed on (see
+ * `hashSidekickPackageTree`'s doc comment). None of the six builtin Sidekick
+ * packages (`harness/sidekicks/`) contain a symlink, so this does not break
+ * existing usage — see ExecutionManifest.test.ts for the regression test.
  *
  * `readdirSync` errors are NOT caught here (Issue #328 twelfth-round
  * review — this function used to treat any `readdirSync` failure, including
@@ -365,7 +414,13 @@ function listFilesRecursive(dir: string, baseDir: string, out: string[]): void {
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   for (const entry of entries) {
     const abs = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
+    if (entry.isSymbolicLink()) {
+      const relPath = path.relative(baseDir, abs).split(path.sep).join('/');
+      throw new Error(
+        `Sidekick package tree contains a symlink at "${relPath}" — refusing to compute a digest ` +
+          `(symlink targets are not verified to stay inside the package root; approval must fail closed).`,
+      );
+    } else if (entry.isDirectory()) {
       listFilesRecursive(abs, baseDir, out);
     } else if (entry.isFile()) {
       out.push(path.relative(baseDir, abs).split(path.sep).join('/'));
