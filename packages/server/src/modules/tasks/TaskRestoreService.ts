@@ -68,7 +68,19 @@ export class TaskRestoreService {
         logRepo.append(task.id, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
       }
       if (gate.reason === 'pending_approval') {
-        taskRepo.updateStatus(task.id, 'pending_approval');
+        // pendingOperation records that the blocked operation was a restore
+        // (not a fresh execute()), so the approval handler
+        // (modules/units/routes.ts) resumes it by calling restore() again
+        // instead of guessing from task.tmuxWindow — an archived task never
+        // has a tmuxWindow either, so that heuristic couldn't tell "was being
+        // restored" apart from "never started" (Issue #328 third-round
+        // review finding 1). The task's prior 'archived' status is not lost
+        // by moving to 'pending_approval' here: restore() sets status to
+        // 'open' on success (see below) — the same transition a normal,
+        // ungated restore() always makes — so once approval re-invokes this
+        // method, the end state matches what restoring would have done in
+        // the first place.
+        taskRepo.update(task.id, { status: 'pending_approval', pendingOperation: 'restore' } as Partial<Task>);
         throw new ExecutionGatePendingApprovalError(task.id);
       }
       // 'denied': leave status untouched (still 'archived') — see the matching
@@ -186,6 +198,7 @@ export class TaskRestoreService {
         worktreeBranch,
         baseBranch,
         branch: worktreeBranch,
+        pendingOperation: null,
       } as Partial<Task>);
 
       return { tmuxTarget: dbTarget, worktreePath };

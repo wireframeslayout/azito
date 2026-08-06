@@ -38,4 +38,22 @@ export function up(db: Database.Database): void {
   // isolated auto-execution (allow), rather than silently auto-running
   // external input.
   db.exec(`ALTER TABLE project_servers ADD COLUMN input_policy TEXT NOT NULL DEFAULT 'manual-approval'`);
+
+  // Which operation was blocked by the gate and must be resumed (not
+  // re-guessed) once a human approves (Issue #328 third-round review): one of
+  // 'execute' | 'resume' | 'restore'. Before this column existed, the
+  // approval handler in modules/units/routes.ts inferred the operation from
+  // whether task.tmuxWindow was set — but TaskRestoreService.restore() also
+  // blocks before ever setting tmuxWindow, so that heuristic indistinguishably
+  // matched 'restore' and 'execute', and approving a blocked restore ran
+  // execute() instead (skipping worktree/window reconstruction and starting
+  // an unrequested worker run). NULL means "no pending operation" (the normal
+  // case) or, for any row written by this column's own migration before this
+  // comment existed, "predates operation tracking" — since 059 has never
+  // shipped in a release (no tagged/published version references it; verified
+  // against `git tag` and the GitHub releases list), there is no such legacy
+  // row to migrate, but the approval handler still falls back to the old
+  // tmuxWindow heuristic when this column is NULL, purely as defense in depth
+  // rather than a required backfill.
+  db.exec(`ALTER TABLE tasks ADD COLUMN pending_operation TEXT`);
 }

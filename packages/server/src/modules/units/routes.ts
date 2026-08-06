@@ -8,6 +8,7 @@ import type { IProjectRepository } from '../projects/Project';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { PhaseConfig, PhaseEntryConfig } from '../sidekicks/PhaseConfig';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
+import type { TaskRestoreService } from '../tasks/TaskRestoreService';
 import { resolvePhaseSidekick } from '../sidekicks/resolvePhaseSidekick';
 import { ResourceExhaustedError } from '../servers/resources/ResourceGuard';
 import { hashApprovedTaskFingerprint, replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
@@ -23,6 +24,7 @@ export interface UnitsRouteOptions {
   projectRepo: IProjectRepository;
   sidekickLoader: SidekickPackageLoader;
   unitTypeLoader: UnitTypeLoader;
+  taskRestoreService: TaskRestoreService;
 }
 
 // ─── Helpers ───
@@ -73,10 +75,6 @@ function parseWorkerExecutionModeInput(raw: unknown): WorkerExecutionMode | unde
   return raw;
 }
 
-// replyToExecutionGateError is now shared from ExecutionGate.ts (see fix for
-// the same conversion missing on /api/windows/:id/respawn) — used by both
-// /execute and /follow-up below.
-
 function parseWorkerRuntimeInput(raw: unknown): WorkerRuntime | undefined {
   if (raw === undefined) return undefined;
   if (raw !== 'tui' && raw !== 'headless' && raw !== 'api') {
@@ -88,7 +86,7 @@ function parseWorkerRuntimeInput(raw: unknown): WorkerRuntime | undefined {
 // ─── Plugin ───
 
 const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, done) => {
-  const { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, sidekickLoader, unitTypeLoader } = opts;
+  const { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, sidekickLoader, unitTypeLoader, taskRestoreService } = opts;
 
   // ── GET /api/units ──
   fastify.get('/api/units', async () => {
@@ -404,34 +402,54 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
         return reply.status(400).send({ error: `Task ${taskId} belongs to unit ${resolvedUnitId ?? 'none'}, not unit ${id}` });
       }
 
+      // Which operation was blocked (execute/resume/restore) — see
+      // Task.pendingOperation. Rows written before that column existed have
+      // it NULL (in practice there are none: migration 059 has never
+      // shipped in a release), so the tmuxWindow-based heuristic this
+      // replaced is kept as a fallback for that case only, not as the
+      // primary signal anymore (Issue #328 third-round review finding 1 —
+      // that heuristic couldn't distinguish "never started" from "was being
+      // restored from archive", so approving a blocked restore ran
+      // execute() instead of restore(), skipping worktree/window
+      // reconstruction and starting an unrequested worker run).
+      const operation = task.pendingOperation ?? (task.tmuxWindow ? 'resume' : 'execute');
+
       if (!approved) {
         logRepo.append(taskId, id, 'status_change', { status: 'execution_denied' });
-        taskRepo.updateStatus(taskId, 'failed' as TaskStatus);
+        // A denied restore never started anything — put the task back to
+        // 'archived' (its state before the blocked restore attempt) rather
+        // than 'failed', which would misrepresent an archived task as a
+        // failed run. execute()/resume() denials keep the existing 'failed'
+        // outcome.
+        taskRepo.update(taskId, {
+          status: (operation === 'restore' ? 'archived' : 'failed') as TaskStatus,
+          pendingOperation: null,
+        } as Partial<import('../tasks/Task').Task>);
         return { ok: true };
       }
 
       // Record approval against the CURRENT fingerprint (checkExecutionGate
       // re-hashes on every check) so re-running this same task later does not
-      // re-prompt, but a subsequent edit to any prompt-reaching field (title,
-      // description, targetBranch, baseBranch, workingDirectory — task stays
-      // untrusted) will invalidate this and require approval again.
+      // re-prompt, but a subsequent edit to any field covered by
+      // ApprovableTaskFields (see ExecutionGate.ts) will invalidate this and
+      // require approval again.
       logRepo.append(taskId, id, 'status_change', { status: 'execution_approved' });
-      taskRepo.update(taskId, { executionApprovedFingerprintHash: hashApprovedTaskFingerprint(task) } as Partial<import('../tasks/Task').Task>);
+      taskRepo.update(taskId, {
+        executionApprovedFingerprintHash: hashApprovedTaskFingerprint(task),
+        pendingOperation: null,
+      } as Partial<import('../tasks/Task').Task>);
 
-      // Which entry point to resume depends on whether this task ever
-      // actually started: tmuxWindow is only ever set once execute() (or
-      // TaskRestoreService.restore()) got past the gate far enough to create
-      // one. The gate runs BEFORE that in every caller, so "no window yet"
-      // reliably means the block happened in execute() itself — a fresh
-      // start. "Window already exists" means the block happened mid-run
-      // (followUp/resumeStateMachine, e.g. a description edit invalidated a
-      // previously-approved, already-running task) — resuming the state
-      // machine from task.currentPhase is the correct continuation there,
-      // not a second execute() (which would recreate the window/worktree).
-      taskRepo.updateStatus(taskId, task.tmuxWindow ? 'running' : 'open');
-      if (task.tmuxWindow) {
+      if (operation === 'restore') {
+        // restore() manages its own status transition (sets 'open' on
+        // success, matching what an ungated restore() always does; see
+        // TaskRestoreService.restore) — no status is set here, same as the
+        // standalone POST /api/tasks/:id/restore route.
+        taskRestoreService.restore(task, request.log).catch(() => {});
+      } else if (operation === 'resume') {
+        taskRepo.updateStatus(taskId, 'running');
         executeTaskUseCase.resumeStateMachine(id, taskId).catch(() => {});
       } else {
+        taskRepo.updateStatus(taskId, 'open');
         executeTaskUseCase.execute(id, taskId).catch(() => {});
       }
       return { ok: true };

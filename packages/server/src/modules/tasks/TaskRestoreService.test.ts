@@ -47,6 +47,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     agentSessionId: null,
     inputTrust: 'trusted',
     executionApprovedFingerprintHash: null,
+    pendingOperation: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -361,14 +362,19 @@ describe('TaskRestoreService', () => {
   });
 
   describe('execution gate (Issue #328)', () => {
-    it('blocks an untrusted, unapproved task before touching tmux — status becomes pending_approval', async () => {
+    it('blocks an untrusted, unapproved task before touching tmux — status becomes pending_approval, pendingOperation records "restore"', async () => {
+      // Third-round review finding 1 (Issue #328): before pendingOperation
+      // existed, the approval handler inferred "which operation to resume"
+      // from task.tmuxWindow — but an archived task never has a tmuxWindow
+      // either, so approving this exact block used to run execute() instead
+      // of restore(), skipping worktree/window reconstruction.
       const task = makeTask({ serverName: 'test-server', inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
 
       await expect(service.restore(task, log)).rejects.toThrow(/requires approval/);
 
       expect(deps.tmux.createWindow).not.toHaveBeenCalled();
       expect(deps.worktreeServiceFactory.create).not.toHaveBeenCalled();
-      expect(deps.taskRepo.updateStatus).toHaveBeenCalledWith(1, 'pending_approval');
+      expect(deps.taskRepo.update).toHaveBeenCalledWith(1, { status: 'pending_approval', pendingOperation: 'restore' });
     });
 
     it('allows an untrusted task whose approval hash matches the current fingerprint', async () => {

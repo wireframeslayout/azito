@@ -426,6 +426,7 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
           // `source`/`source_ref` end up being edited to later (Issue #328).
           inputTrust: 'untrusted',
           executionApprovedFingerprintHash: null,
+          pendingOperation: null,
         });
         return { ok: true, taskId, issue: { number: issue.number, title: issue.title } };
       } catch (err: unknown) {

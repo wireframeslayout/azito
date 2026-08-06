@@ -31,16 +31,31 @@ export interface Task {
   inputTrust: 'trusted' | 'untrusted';
   /**
    * Fingerprint (see ExecutionGate.hashApprovedTaskFingerprint) of the
-   * title/description/targetBranch/baseBranch/workingDirectory a human most
-   * recently approved for unattended execution while input_trust =
-   * 'untrusted'. Null means "never approved" or "approved fingerprint is
-   * stale" (one of those fields changed since). See
-   * ExecutionGate.checkExecutionGate for the comparison. Covers every task
-   * field that reaches the worker's prompt as free text (resolveTaskPromptVars.ts)
-   * — not just description — so editing any one of them post-approval
-   * requires re-approval.
+   * PUT-editable fields that determine WHAT runs and WHERE it runs (title,
+   * description, unitId, serverName, branch, targetBranch, baseBranch,
+   * workingDirectory — see ApprovableTaskFields in ExecutionGate.ts for the
+   * authoritative list and inclusion criteria) that a human most recently
+   * approved for unattended execution while input_trust = 'untrusted'. Null
+   * means "never approved" or "approved fingerprint is stale" (one of those
+   * fields changed since). See ExecutionGate.checkExecutionGate for the
+   * comparison. Editing ANY covered field post-approval requires
+   * re-approval — not just the ones that reach the worker's prompt as free
+   * text, but also the ones that select which Unit/server/branch the
+   * approval applies to.
    */
   executionApprovedFingerprintHash: string | null;
+  /**
+   * Which operation the execution gate blocked and must be resumed (not
+   * re-inferred) once a human approves (Issue #328 third-round review): see
+   * modules/units/routes.ts's approve-execution handler. Set immediately
+   * before the gate throws (ExecuteTaskUseCase.enforceExecutionGate /
+   * TaskRestoreService.restore) and cleared once approval consumes it. NULL
+   * means "no pending operation" — the normal state, and also the fallback
+   * the approval handler uses for any row that predates this column (see
+   * migration 059's comment; there is no such row in practice, 059 has never
+   * shipped).
+   */
+  pendingOperation: 'execute' | 'resume' | 'restore' | null;
   worktreePath: string | null;
   worktreeBranch: string | null;
   baseBranch: string | null;

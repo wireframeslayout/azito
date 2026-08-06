@@ -42,6 +42,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     agentSessionId: null,
     inputTrust: 'trusted',
     executionApprovedFingerprintHash: null,
+    pendingOperation: null,
     createdAt: '2026-06-16T00:00:00Z',
     updatedAt: '2026-06-16T00:00:00Z',
     ...overrides,

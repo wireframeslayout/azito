@@ -46,6 +46,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     agentSessionId: null,
     inputTrust: 'trusted',
     executionApprovedFingerprintHash: null,
+    pendingOperation: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -590,7 +591,10 @@ describe('ExecuteTaskUseCase execution gate (Issue #328)', () => {
     await expect(useCase.execute(10, 1)).rejects.toThrow(/requires approval/);
 
     expect(tmux.createWindow).not.toHaveBeenCalled();
-    expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'pending_approval');
+    // pendingOperation 'execute' lets the approval handler resume via
+    // execute() rather than re-inferring it from task.tmuxWindow (Issue #328
+    // third-round review finding 1).
+    expect(taskRepo.update).toHaveBeenCalledWith(1, { status: 'pending_approval', pendingOperation: 'execute' });
   });
 
   it('execute(): allows an untrusted task whose approval hash matches the current fingerprint', async () => {
@@ -656,7 +660,10 @@ describe('ExecuteTaskUseCase execution gate (Issue #328)', () => {
 
     expect(tmux.listSessions).not.toHaveBeenCalled();
     expect(tmux.sendKeys).not.toHaveBeenCalled();
-    expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'pending_approval');
+    // pendingOperation 'resume' lets the approval handler resume via
+    // resumeStateMachine() rather than re-inferring it from task.tmuxWindow
+    // (Issue #328 third-round review finding 1).
+    expect(taskRepo.update).toHaveBeenCalledWith(1, { status: 'pending_approval', pendingOperation: 'resume' });
   });
 
   it('resumeStateMachine(): blocks resuming an untrusted task with a stale approval', async () => {
@@ -670,7 +677,7 @@ describe('ExecuteTaskUseCase execution gate (Issue #328)', () => {
 
     await expect(useCase.resumeStateMachine(10, 1)).rejects.toThrow(/requires approval/);
 
-    expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'pending_approval');
+    expect(taskRepo.update).toHaveBeenCalledWith(1, { status: 'pending_approval', pendingOperation: 'resume' });
   });
 });
 

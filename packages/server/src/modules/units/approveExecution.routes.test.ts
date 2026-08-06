@@ -42,6 +42,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     agentSessionId: null,
     inputTrust: 'untrusted',
     executionApprovedFingerprintHash: null,
+    pendingOperation: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -111,6 +112,9 @@ function makeOpts(task: Task, unit: Unit): UnitsRouteOptions {
     } as unknown as UnitsRouteOptions['projectRepo'],
     sidekickLoader: {} as unknown as UnitsRouteOptions['sidekickLoader'],
     unitTypeLoader: { get: vi.fn(() => null) } as unknown as UnitsRouteOptions['unitTypeLoader'],
+    taskRestoreService: {
+      restore: vi.fn(async () => ({ tmuxTarget: 'session:window.1', worktreePath: null })),
+    } as unknown as UnitsRouteOptions['taskRestoreService'],
   };
 }
 
@@ -127,7 +131,7 @@ describe('POST /api/units/:id/approve-execution (Issue #328)', () => {
   });
 
   it('rejection: marks the task failed and does not resume execution', async () => {
-    const opts = makeOpts(makeTask({ status: 'pending_approval' }), makeUnit());
+    const opts = makeOpts(makeTask({ status: 'pending_approval', pendingOperation: 'execute' }), makeUnit());
     const app = Fastify();
     await app.register(unitsRoutes, opts);
     await app.ready();
@@ -135,13 +139,29 @@ describe('POST /api/units/:id/approve-execution (Issue #328)', () => {
     const res = await app.inject({ method: 'POST', url: '/api/units/20/approve-execution', payload: { taskId: 1, approved: false } });
 
     expect(res.statusCode).toBe(200);
-    expect(opts.taskRepo.updateStatus).toHaveBeenCalledWith(1, 'failed');
+    expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { status: 'failed', pendingOperation: null });
     expect(opts.executeTaskUseCase.execute).not.toHaveBeenCalled();
     expect(opts.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();
   });
 
-  it('approval on a never-started task (no tmuxWindow) records the approval hash and calls execute()', async () => {
-    const task = makeTask({ status: 'pending_approval', tmuxWindow: null, description: 'do the thing' });
+  it('rejection of a blocked restore reverts the task to archived, not failed', async () => {
+    // A restore that gets gate-blocked never started anything — denying it
+    // should put the task back where it was (archived), not mark it
+    // 'failed' (Issue #328 third-round review finding 2).
+    const opts = makeOpts(makeTask({ status: 'pending_approval', pendingOperation: 'restore' }), makeUnit());
+    const app = Fastify();
+    await app.register(unitsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/units/20/approve-execution', payload: { taskId: 1, approved: false } });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { status: 'archived', pendingOperation: null });
+    expect(opts.taskRestoreService.restore).not.toHaveBeenCalled();
+  });
+
+  it('approval on a never-started task (pendingOperation execute) records the approval hash and calls execute()', async () => {
+    const task = makeTask({ status: 'pending_approval', pendingOperation: 'execute', tmuxWindow: null, description: 'do the thing' });
     const opts = makeOpts(task, makeUnit());
     const app = Fastify();
     await app.register(unitsRoutes, opts);
@@ -150,14 +170,15 @@ describe('POST /api/units/:id/approve-execution (Issue #328)', () => {
     const res = await app.inject({ method: 'POST', url: '/api/units/20/approve-execution', payload: { taskId: 1, approved: true } });
 
     expect(res.statusCode).toBe(200);
-    expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { executionApprovedFingerprintHash: hashApprovedTaskFingerprint(task) });
+    expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { executionApprovedFingerprintHash: hashApprovedTaskFingerprint(task), pendingOperation: null });
     expect(opts.taskRepo.updateStatus).toHaveBeenCalledWith(1, 'open');
     expect(opts.executeTaskUseCase.execute).toHaveBeenCalledWith(20, 1);
     expect(opts.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();
+    expect(opts.taskRestoreService.restore).not.toHaveBeenCalled();
   });
 
-  it('approval on an already-started task (tmuxWindow set) resumes the state machine instead of re-executing', async () => {
-    const task = makeTask({ status: 'pending_approval', tmuxWindow: 'task-1', description: 'do the thing' });
+  it('approval on an already-started task (pendingOperation resume) resumes the state machine instead of re-executing', async () => {
+    const task = makeTask({ status: 'pending_approval', pendingOperation: 'resume', tmuxWindow: 'task-1', description: 'do the thing' });
     const opts = makeOpts(task, makeUnit());
     const app = Fastify();
     await app.register(unitsRoutes, opts);
@@ -169,6 +190,45 @@ describe('POST /api/units/:id/approve-execution (Issue #328)', () => {
     expect(opts.taskRepo.updateStatus).toHaveBeenCalledWith(1, 'running');
     expect(opts.executeTaskUseCase.resumeStateMachine).toHaveBeenCalledWith(20, 1);
     expect(opts.executeTaskUseCase.execute).not.toHaveBeenCalled();
+    expect(opts.taskRestoreService.restore).not.toHaveBeenCalled();
+  });
+
+  it('approval on a blocked restore (pendingOperation restore) resumes restore(), not execute()', async () => {
+    // Issue #328 third-round review finding 2: TaskRestoreService.restore()
+    // blocks before tmuxWindow is ever set, so the old tmuxWindow-based
+    // heuristic indistinguishably matched "never started" — approving used
+    // to call execute() instead of restore(), skipping worktree/window
+    // reconstruction and starting an unrequested worker run.
+    const task = makeTask({ status: 'pending_approval', pendingOperation: 'restore', tmuxWindow: null, description: 'do the thing' });
+    const opts = makeOpts(task, makeUnit());
+    const app = Fastify();
+    await app.register(unitsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/units/20/approve-execution', payload: { taskId: 1, approved: true } });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.taskRestoreService.restore).toHaveBeenCalledWith(task, expect.anything());
+    expect(opts.executeTaskUseCase.execute).not.toHaveBeenCalled();
+    expect(opts.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();
+    // restore() manages its own status transition; the approval handler
+    // must not preempt it with 'open'/'running'.
+    expect(opts.taskRepo.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the tmuxWindow heuristic when pendingOperation is NULL (pre-existing row)', async () => {
+    const task = makeTask({ status: 'pending_approval', pendingOperation: null, tmuxWindow: 'task-1', description: 'do the thing' });
+    const opts = makeOpts(task, makeUnit());
+    const app = Fastify();
+    await app.register(unitsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/units/20/approve-execution', payload: { taskId: 1, approved: true } });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.executeTaskUseCase.resumeStateMachine).toHaveBeenCalledWith(20, 1);
+    expect(opts.executeTaskUseCase.execute).not.toHaveBeenCalled();
+    expect(opts.taskRestoreService.restore).not.toHaveBeenCalled();
   });
 
   it('rejects a string "false" for approved instead of treating it as truthy approval', async () => {

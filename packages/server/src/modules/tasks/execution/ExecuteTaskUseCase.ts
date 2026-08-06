@@ -204,8 +204,22 @@ export class ExecuteTaskUseCase {
    * task/server and has no dependency on this use case. Returns the
    * project/projectServer it resolved so callers that need them anyway
    * (execute()'s working-directory logic) don't re-fetch.
+   *
+   * `operation` records WHICH blocked entry point this was, in
+   * task.pendingOperation, so the approval handler
+   * (modules/units/routes.ts's approve-execution) can resume the exact
+   * operation a human approved instead of re-inferring it from
+   * task.tmuxWindow (Issue #328 third-round review finding 1: that
+   * heuristic couldn't tell "never started" apart from "was being
+   * restored from archive", since TaskRestoreService.restore also blocks
+   * before tmuxWindow is ever set — see ExecutionGate.ts's
+   * ApprovableTaskFields doc for the related targeting-field discussion).
+   * `execute()` passes 'execute' (fresh start, no window yet); followUp()/
+   * resumeStateMachine() both pass 'resume' (continuing a run whose window
+   * already exists) — both resume via resumeStateMachine() on approval,
+   * matching the pre-existing behavior for those two entry points.
    */
-  private enforceExecutionGate(task: Task, unitId: number, server: ServerConfig) {
+  private enforceExecutionGate(task: Task, unitId: number, server: ServerConfig, operation: 'execute' | 'resume') {
     const project = this.projectRepo.findById(task.projectId);
     const projectServer = project ? this.projectServerRepo.find(task.projectId, server.name) : null;
     const gate = checkExecutionGate(task, projectServer);
@@ -213,7 +227,7 @@ export class ExecuteTaskUseCase {
 
     this.appendLog(task.id, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
     if (gate.reason === 'pending_approval') {
-      this.taskRepo.updateStatus(task.id, 'pending_approval');
+      this.taskRepo.update(task.id, { status: 'pending_approval', pendingOperation: operation } as Partial<Task>);
       throw new ExecutionGatePendingApprovalError(task.id);
     }
     // 'denied': leave task status untouched — same rationale as the resource
@@ -316,7 +330,7 @@ export class ExecuteTaskUseCase {
     // resource guard, before any tmux window, before any worktree, before
     // any secret is injected. Resolves project/projectServer once for reuse
     // below.
-    const { project, projectServer } = this.enforceExecutionGate(task, unitId, server);
+    const { project, projectServer } = this.enforceExecutionGate(task, unitId, server, 'execute');
 
     // リソースひっ迫時はウィンドウ作成前に中断する（タスクは開始前なので status は変更しない）。
     // force 指定（フロントの「それでも実行」）でスキップできる。
@@ -680,7 +694,7 @@ export class ExecuteTaskUseCase {
     // endpoint issues) must not resume it unattended. The `comment` for this
     // particular call is not persisted anywhere and is lost when blocked;
     // the caller must resubmit it after approval (see approve-execution).
-    this.enforceExecutionGate(task, unitId, server);
+    this.enforceExecutionGate(task, unitId, server, 'resume');
 
     this.appendLog(taskId, unitId, 'user_comment', { text: comment });
     this.taskRepo.updateStatus(taskId, 'in_progress');
@@ -968,7 +982,7 @@ export class ExecuteTaskUseCase {
     // recovery (RecoverStuckTasksUseCase) — both resume a worker that may
     // have gone stale for an untrusted task (description edited since the
     // approval this run started under).
-    this.enforceExecutionGate(task, unitId, server);
+    this.enforceExecutionGate(task, unitId, server, 'resume');
 
     // Validate currentPhase against unitType phases
     if (task.currentPhase) {

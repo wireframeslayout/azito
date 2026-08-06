@@ -188,6 +188,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         implementSubagent,
         inputTrust: 'trusted',
         executionApprovedFingerprintHash: null,
+        pendingOperation: null,
       });
       return { ok: true, id };
     } catch (err: unknown) {
@@ -538,6 +539,10 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         const result = await taskRestoreService.restore(task, request.log);
         return { ok: true, tmuxTarget: result.tmuxTarget, worktreePath: result.worktreePath };
       } catch (err) {
+        // Gate-blocked restores (Issue #328) become 409/403, not a generic
+        // 500 — same conversion every other execution entry point applies
+        // (see replyToExecutionGateError's doc comment for the full list).
+        if (replyToExecutionGateError(err, reply)) return;
         return reply.status(500).send({ error: (err as Error).message });
       }
     },

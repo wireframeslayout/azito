@@ -41,6 +41,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     agentSessionId: null,
     inputTrust: 'untrusted',
     executionApprovedFingerprintHash: null,
+    pendingOperation: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -123,6 +124,69 @@ describe('hashApprovedTaskFingerprint / checkExecutionGate (Issue #328 second-ro
     approved.executionApprovedFingerprintHash = hashApprovedTaskFingerprint(approved);
 
     const edited = { ...approved, priority: 5 };
+
+    expect(checkExecutionGate(edited, manualApprovalServer)).toEqual({ allowed: true });
+  });
+});
+
+// Third-round review finding 1 (Issue #328): PUT /api/tasks/:id also lets a
+// client freely edit unitId/serverName/branch/reviewSubagent/implementSubagent
+// with no inputTrust restriction. unitId/serverName/branch pick a different
+// Unit/host/branch than the one a human approved; reviewSubagent/
+// implementSubagent's provider/model are interpolated directly into a
+// delegated subagent's launch instructions. Each must independently
+// invalidate a prior approval.
+describe('hashApprovedTaskFingerprint / checkExecutionGate (Issue #328 third-round fix: targeting fields)', () => {
+  it('editing unitId after approval invalidates the approval (changes WHAT Unit runs it)', () => {
+    const approved = makeTask({ unitId: 20 });
+    approved.executionApprovedFingerprintHash = hashApprovedTaskFingerprint(approved);
+
+    const edited = { ...approved, unitId: 999 };
+
+    expect(checkExecutionGate(edited, manualApprovalServer)).toEqual({ allowed: false, reason: 'pending_approval' });
+  });
+
+  it('editing serverName after approval invalidates the approval (changes WHERE it runs, and which input_policy row applies)', () => {
+    const approved = makeTask({ serverName: 'test-server' });
+    approved.executionApprovedFingerprintHash = hashApprovedTaskFingerprint(approved);
+
+    const edited = { ...approved, serverName: 'other-server' };
+
+    expect(checkExecutionGate(edited, manualApprovalServer)).toEqual({ allowed: false, reason: 'pending_approval' });
+  });
+
+  it('editing branch after approval invalidates the approval (changes which existing branch is checked out)', () => {
+    const approved = makeTask({ branch: 'task/1-original' });
+    approved.executionApprovedFingerprintHash = hashApprovedTaskFingerprint(approved);
+
+    const edited = { ...approved, branch: 'task/1-attacker' };
+
+    expect(checkExecutionGate(edited, manualApprovalServer)).toEqual({ allowed: false, reason: 'pending_approval' });
+  });
+
+  it('editing reviewSubagent after approval invalidates the approval (provider/model reach a delegated subagent prompt)', () => {
+    const approved = makeTask({ reviewSubagent: { enabled: true, provider: 'claude', model: 'sonnet' } });
+    approved.executionApprovedFingerprintHash = hashApprovedTaskFingerprint(approved);
+
+    const edited = { ...approved, reviewSubagent: { enabled: true, provider: 'attacker-provider', model: 'attacker-model' } };
+
+    expect(checkExecutionGate(edited, manualApprovalServer)).toEqual({ allowed: false, reason: 'pending_approval' });
+  });
+
+  it('editing implementSubagent after approval invalidates the approval', () => {
+    const approved = makeTask({ implementSubagent: { enabled: true, provider: 'claude', model: 'sonnet' } });
+    approved.executionApprovedFingerprintHash = hashApprovedTaskFingerprint(approved);
+
+    const edited = { ...approved, implementSubagent: { enabled: true, provider: 'attacker-provider', model: 'attacker-model' } };
+
+    expect(checkExecutionGate(edited, manualApprovalServer)).toEqual({ allowed: false, reason: 'pending_approval' });
+  });
+
+  it('editing worktreePath after approval does NOT invalidate the approval (system-overwritten on every run; see ExecutionGate.ts ApprovableTaskFields doc)', () => {
+    const approved = makeTask({ worktreePath: null });
+    approved.executionApprovedFingerprintHash = hashApprovedTaskFingerprint(approved);
+
+    const edited = { ...approved, worktreePath: '/work/.worktrees/task-1' };
 
     expect(checkExecutionGate(edited, manualApprovalServer)).toEqual({ allowed: true });
   });
