@@ -199,6 +199,13 @@ function buildService(opts: {
 
   const logRepo = { append: vi.fn() } as any;
 
+  // Only needed by resolveExecutionManifest() to resolve the manifest's
+  // `sidekick` field (Issue #328 sixth-round review) — returning
+  // undefined/null here means that field resolves to nulls, fine for tests
+  // that don't exercise it.
+  const unitTypeLoader = { get: vi.fn(() => undefined), getOrThrow: vi.fn(() => { throw new Error('not used in tests'); }) } as any;
+  const sidekickLoader = { findByName: vi.fn(() => null), findDefaultForTag: vi.fn(() => null), list: vi.fn(() => []) } as any;
+
   const service = new WindowRespawnService(
     windowRepo,
     tmux as any,
@@ -210,6 +217,8 @@ function buildService(opts: {
     (opts.projectRepo ?? defaultProjectRepo()) as any,
     (opts.transportFactory ?? defaultTransportFactory()) as any,
     logRepo,
+    unitTypeLoader,
+    sidekickLoader,
     undefined,
   );
 

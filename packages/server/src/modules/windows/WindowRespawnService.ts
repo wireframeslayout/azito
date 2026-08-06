@@ -16,6 +16,8 @@ import type { SessionCaptureService } from './SessionCaptureService';
 import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError } from '../tasks/execution/ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest } from '../tasks/execution/ExecutionManifest';
 import { resolveTmuxSession } from '../tasks/execution/TaskExecutionEnv';
+import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
+import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -61,6 +63,14 @@ export class WindowRespawnService {
     // must log its blocks the same way ExecuteTaskUseCase/TaskRestoreService
     // do, and making it optional would let a caller silently skip that record.
     private logRepo: IExecutionLogRepository,
+    // Required for the same reason projectServerRepo/transportFactory/logRepo
+    // are (see comments above): resolveExecutionManifest() needs these to
+    // resolve the `sidekick` manifest field the same way PhaseLoopRunner
+    // resolves it for an actual run (Issue #328 sixth-round review) — without
+    // them the manifest this service hashes would silently omit that field
+    // instead of failing to compile.
+    private unitTypeLoader: UnitTypeLoader,
+    private sidekickLoader: SidekickPackageLoader,
     private sessionCaptureService?: SessionCaptureService,
   ) {}
 
@@ -186,6 +196,8 @@ export class WindowRespawnService {
       unitRepo: this.unitRepo,
       projectRepo: this.projectRepo,
       projectServerRepo: this.projectServerRepo,
+      unitTypeLoader: this.unitTypeLoader,
+      sidekickLoader: this.sidekickLoader,
     });
     const unitId = unit?.id ?? null;
     const gate = checkExecutionGate(task, projectServer, hashExecutionManifest(manifest));

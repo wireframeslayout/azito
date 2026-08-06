@@ -3,6 +3,10 @@ import type { Task } from '../Task';
 import type { IUnitRepository, SubagentConfig, Unit } from '../../units/Unit';
 import type { IProjectRepository, ProjectDetail } from '../../projects/Project';
 import type { IProjectServerRepository, ProjectServer } from '../../projects/ProjectServer';
+import type { PhaseConfig } from '../../sidekicks/PhaseConfig';
+import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoader';
+import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
+import { resolvePhaseSidekick, resolveCurrentPhaseIndex } from '../../sidekicks/resolvePhaseSidekick';
 import { resolveUnitId, resolveTaskServerName, resolveBaseBranch } from './TaskExecutionEnv';
 
 /**
@@ -51,13 +55,40 @@ import { resolveUnitId, resolveTaskServerName, resolveBaseBranch } from './TaskE
  * - branches: base/target/work, each resolved the same way execution
  *   resolves them (resolveBaseBranch; task.targetBranch/branch directly,
  *   same as before).
- * - task: title/description — interpolated directly into the worker's
- *   prompt (resolveTaskPromptVars.ts).
+ * - task: title/description/workingDirectory — title/description are
+ *   interpolated directly into the worker's prompt (resolveTaskPromptVars.ts);
+ *   workingDirectory is the task-level override (migration 032) that,
+ *   combined with server.workingDirectory above, decides where execute()
+ *   actually runs — a field the raw-column fingerprint carried but that was
+ *   dropped in the move to the resolved-manifest approach (Issue #328
+ *   sixth-round review regression: it was on the original hand-picked column
+ *   list this file's own history describes above).
  * - subagent: review/implement config, resolved the same way
  *   PhaseLoopRunner resolves it for an actual run (task override ??
  *   Unit default) — a task with no override still inherits the Unit's
  *   subagent config, so an edit to the UNIT's default must also be able to
  *   invalidate approval, not just a task-level override.
+ * - project.sidekickPrompt: injected into every phase prompt by
+ *   resolveTaskPromptVars.ts (`[project.sidekickPrompt, unit.systemPrompt]`) —
+ *   editing it changes what the worker is told exactly like editing
+ *   unit.systemPrompt does, so it must invalidate approval the same way.
+ * - unit.phaseConfig: decides which Sidekick package renders each phase
+ *   (resolvePhaseSidekick.ts) and which phases are enabled/skipped
+ *   (resolveEnabledPhases) — reassigning a phase to a different package or
+ *   toggling one off/on changes what runs without changing anything else on
+ *   this list.
+ * - sidekick: the resolved Sidekick package for the phase that will actually
+ *   run next (resolveCurrentPhaseIndex — same "resume point" resolution
+ *   PhaseLoopRunner.stateMachineLoop uses, so approval always reflects the
+ *   phase execution really resumes at, not just phase 0). Only a content
+ *   digest of the package body is hashed (see hashExecutionManifest), not the
+ *   full text — this is the instruction text actually sent to the worker;
+ *   without it, editing a user-layer Sidekick package (`data/sidekicks/`)
+ *   after approval could swap in arbitrary instructions post-approval with no
+ *   fingerprint change at all. Resolution failure (missing/misconfigured
+ *   package) is tolerated here the same way a null unit/server is elsewhere
+ *   — the real run's own resolvePhaseSidekick() call still fails fast; this
+ *   manifest only needs to detect drift, not duplicate that validation.
  *
  * Deliberately excluded (values that change on every run of an
  * ALREADY-approved task, or that a human never reviews as "what will run"):
@@ -99,6 +130,7 @@ export interface ResolvedExecutionManifest {
     workerExecutionMode: string;
     workerRuntime: string;
     unitType: string;
+    phaseConfig: PhaseConfig | null;
   } | null;
   server: {
     name: string | null;
@@ -113,10 +145,29 @@ export interface ResolvedExecutionManifest {
   task: {
     title: string;
     description: string;
+    workingDirectory: string | null;
   };
   subagent: {
     review: SubagentConfig | null;
     implement: SubagentConfig | null;
+  };
+  project: {
+    sidekickPrompt: string | null;
+  };
+  /**
+   * The Sidekick package that will render the phase this task resumes at
+   * next (see resolveCurrentPhaseIndex/resolvePhaseSidekick). `phase` is
+   * null when no Unit/UnitType/enabled phase can be resolved (mirrors the
+   * `unit: null` tolerance elsewhere in this manifest); `name`/`bodyDigest`
+   * are null when the phase resolves but the package itself does not
+   * (misconfigured phaseConfig override, no default package for the tag) —
+   * the real run's own resolvePhaseSidekick() call still fails fast on that,
+   * this manifest only needs to notice when it changes.
+   */
+  sidekick: {
+    phase: string | null;
+    name: string | null;
+    bodyDigest: string | null;
   };
 }
 
@@ -132,6 +183,13 @@ export interface ExecutionManifestDeps {
   unitRepo: IUnitRepository;
   projectRepo: IProjectRepository;
   projectServerRepo: IProjectServerRepository;
+  // Needed to resolve the `sidekick` field above — the same
+  // UnitTypeLoader/SidekickPackageLoader singletons PhaseLoopRunner is
+  // wired with (see app/wiring.ts), so the package this manifest hashes is
+  // read from the exact same in-memory/mtime-cached source a real run reads
+  // from, not a second load.
+  unitTypeLoader: UnitTypeLoader;
+  sidekickLoader: SidekickPackageLoader;
 }
 
 /**
@@ -157,6 +215,34 @@ export function resolveExecutionManifest(task: Task, deps: ExecutionManifestDeps
   const projectServer = serverName ? deps.projectServerRepo.find(task.projectId, serverName) : null;
   const baseBranch = resolveBaseBranch(task, projectServer, project);
 
+  // Same resolution PhaseLoopRunner.stateMachineLoop uses to pick the phase
+  // a run resumes at (resolveCurrentPhaseIndex), then resolvePhaseSidekick
+  // for the package that renders it — both shared functions, not
+  // reimplemented here, so this can never drift from what a real run
+  // actually resolves (Issue #328 sixth-round review).
+  const unitType = unit ? deps.unitTypeLoader.get(unit.unitType) : undefined;
+  let sidekickPhase: string | null = null;
+  let sidekickName: string | null = null;
+  let sidekickBodyDigest: string | null = null;
+  if (unit && unitType) {
+    const { enabledPhases, index } = resolveCurrentPhaseIndex(unit.phaseConfig, unitType.phases, task.currentPhase);
+    const phase = enabledPhases[index] ?? null;
+    sidekickPhase = phase;
+    const phaseDef = phase ? unitType.phases.find((p) => p.name === phase) : undefined;
+    if (phase && phaseDef) {
+      try {
+        const sidekick = resolvePhaseSidekick(deps.sidekickLoader, phase, unit.phaseConfig, phaseDef);
+        sidekickName = sidekick.name;
+        sidekickBodyDigest = createHash('sha256').update(sidekick.body).digest('hex');
+      } catch {
+        // Misconfigured phaseConfig override / no default package for the
+        // tag — tolerated here (see ResolvedExecutionManifest.sidekick's doc
+        // comment); the real run's own resolvePhaseSidekick() call still
+        // fails fast on this.
+      }
+    }
+  }
+
   const manifest: ResolvedExecutionManifest = {
     unit: unit
       ? {
@@ -168,6 +254,7 @@ export function resolveExecutionManifest(task: Task, deps: ExecutionManifestDeps
           workerExecutionMode: unit.workerExecutionMode,
           workerRuntime: unit.workerRuntime,
           unitType: unit.unitType,
+          phaseConfig: unit.phaseConfig,
         }
       : null,
     server: {
@@ -183,6 +270,7 @@ export function resolveExecutionManifest(task: Task, deps: ExecutionManifestDeps
     task: {
       title: task.title,
       description: task.description ?? '',
+      workingDirectory: task.workingDirectory ?? null,
     },
     subagent: {
       // Same precedence PhaseLoopRunner applies at run time (task override,
@@ -190,6 +278,14 @@ export function resolveExecutionManifest(task: Task, deps: ExecutionManifestDeps
       // whatever the Unit is currently configured with.
       review: task.reviewSubagent ?? unit?.reviewSubagent ?? null,
       implement: task.implementSubagent ?? unit?.implementSubagent ?? null,
+    },
+    project: {
+      sidekickPrompt: project?.sidekickPrompt ?? null,
+    },
+    sidekick: {
+      phase: sidekickPhase,
+      name: sidekickName,
+      bodyDigest: sidekickBodyDigest,
     },
   };
 
@@ -228,6 +324,7 @@ export function hashExecutionManifest(manifest: ResolvedExecutionManifest): stri
           workerExecutionMode: manifest.unit.workerExecutionMode,
           workerRuntime: manifest.unit.workerRuntime,
           unitType: manifest.unit.unitType,
+          phaseConfig: manifest.unit.phaseConfig ?? null,
         }
       : null,
     server: {
@@ -243,10 +340,19 @@ export function hashExecutionManifest(manifest: ResolvedExecutionManifest): stri
     task: {
       title: manifest.task.title,
       description: manifest.task.description,
+      workingDirectory: manifest.task.workingDirectory ?? '',
     },
     subagent: {
       review: normalizeSubagent(manifest.subagent.review),
       implement: normalizeSubagent(manifest.subagent.implement),
+    },
+    project: {
+      sidekickPrompt: manifest.project.sidekickPrompt ?? '',
+    },
+    sidekick: {
+      phase: manifest.sidekick.phase ?? '',
+      name: manifest.sidekick.name ?? '',
+      bodyDigest: manifest.sidekick.bodyDigest ?? '',
     },
   });
   return createHash('sha256').update(normalized).digest('hex');

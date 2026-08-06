@@ -9,7 +9,7 @@ import type { IProjectRepository } from '../../projects/Project';
 import type { IProjectServerRepository } from '../../projects/ProjectServer';
 import type { PhaseConfig } from '../../sidekicks/PhaseConfig';
 import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoader';
-import { resolvePhaseSidekick, resolveEnabledPhases } from '../../sidekicks/resolvePhaseSidekick';
+import { resolvePhaseSidekick, resolveEnabledPhases, resolveCurrentPhaseIndex } from '../../sidekicks/resolvePhaseSidekick';
 import { renderSidekickBody } from '../../sidekicks/renderSidekickBody';
 import type { SidekickSyncService } from '../../sidekicks/SidekickSyncService';
 import { resolveSidekickDir } from '../../sidekicks/SidekickSyncService';
@@ -154,22 +154,15 @@ export class PhaseLoopRunner {
 
     await this.ensureSidekicksSynced(server);
 
-    let currentPhaseIndex = 0;
     let selfReviewCount = 0;
     const maxSelfReview = unit.selfReviewMaxAttempts ?? 2;
     let isFirstPromptSent = false;
 
-    if (task.currentPhase) {
-      const idx = enabledPhases.indexOf(task.currentPhase);
-      if (idx >= 0) {
-        currentPhaseIndex = idx;
-      } else {
-        const allPhaseNames = unitType.phases.map((p) => p.name);
-        const phaseOrderIdx = allPhaseNames.indexOf(task.currentPhase);
-        const fallbackIdx = enabledPhases.findIndex((p) => allPhaseNames.indexOf(p) > phaseOrderIdx);
-        if (fallbackIdx >= 0) currentPhaseIndex = fallbackIdx;
-      }
-    }
+    // Shared with ExecutionManifest.ts's approval-manifest resolution
+    // (resolveCurrentPhaseIndex) so the phase a human approves is guaranteed
+    // to be the phase this loop actually resumes at (Issue #328 sixth-round
+    // review) — enabledPhases here is the same list already computed above.
+    let { index: currentPhaseIndex } = resolveCurrentPhaseIndex(unit.phaseConfig, unitType.phases, task.currentPhase);
 
     while (currentPhaseIndex < enabledPhases.length) {
       if (signal.aborted) {

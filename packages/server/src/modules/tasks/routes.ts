@@ -396,6 +396,26 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       const server = resolvedServerName ? serverRepo.findByName(resolvedServerName) : null;
       if (!server) return reply.status(404).send({ error: 'Server not found' });
 
+      // Untrusted-input execution gate (Issue #328), checked synchronously
+      // BEFORE anything below consumes task.pendingQuestions or the
+      // submitted answers. followUp() runs this same check internally, but
+      // by then it's too late: the answer route used to clear
+      // pendingQuestions and fire followUp() with `.catch(() => {})` before
+      // knowing whether the gate would block it, so a block silently lost
+      // both the question record (needed to resubmit) and the human's
+      // answer text (never persisted anywhere), while the client had already
+      // been told `{ ok: true }` (sixth-round review finding 1). Checking
+      // here first, with nothing mutated yet, means a block leaves
+      // pendingQuestions/task.status exactly as they were and returns 409 —
+      // the human can resubmit the same answers from the same screen once a
+      // human approves via POST /api/units/:id/approve-execution.
+      try {
+        executeTaskUseCase.enforceExecutionGate(task, answerUnitId, server, 'resume');
+      } catch (err) {
+        if (replyToExecutionGateError(err, reply)) return;
+        throw err;
+      }
+
       const questions = task.pendingQuestions ? JSON.parse(task.pendingQuestions) as Array<{ text: string; type: string; options?: string[] }> : [];
 
       // Build human-readable answer text for the agent
@@ -420,8 +440,19 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       logRepo.append(id, answerUnitId, 'status_change', { status: 'answers_submitted', answers });
 
       // Resume execution via followUp with actual answer content
-      // Keep current status (waiting_input) so followUp can resolve the correct phase
-      executeTaskUseCase.followUp(answerUnitId, id, followUpComment).catch(() => {});
+      // Keep current status (waiting_input) so followUp can resolve the correct phase.
+      // followUp() re-runs the same execution gate checked above synchronously,
+      // but nothing awaits between the two calls, so it cannot newly block here —
+      // any rejection from this point on is a genuine run failure (tmux/worker/env
+      // resolution), not a gate block, and must not be swallowed silently: same
+      // failure-handling convention as approve-execution's failApprovedOperation
+      // (modules/units/routes.ts) for every other fire-and-forget resume call.
+      executeTaskUseCase.followUp(answerUnitId, id, followUpComment).catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        request.log.error({ err, taskId: id }, 'answer follow-up failed');
+        logRepo.append(id, answerUnitId, 'command', { type: 'answer_followup_failed', message });
+        taskRepo.update(id, { status: 'failed' as TaskStatus } as Partial<import('./Task').Task>);
+      });
 
       return { ok: true };
     },

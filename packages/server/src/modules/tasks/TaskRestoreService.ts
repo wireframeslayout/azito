@@ -16,6 +16,8 @@ import { buildWorkerLaunchCommand } from '../agents/LaunchCommand';
 import { shellQuote } from '../../shared/shellQuote';
 import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError } from './execution/ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest } from './execution/ExecutionManifest';
+import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
+import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -33,6 +35,12 @@ export interface TaskRestoreDeps {
   transportFactory: TransportFactory;
   contentExtractor: IContentExtractor;
   logRepo: IExecutionLogRepository;
+  // Needed by resolveExecutionManifest() to resolve the `sidekick` manifest
+  // field the same way PhaseLoopRunner resolves it for an actual run (Issue
+  // #328 sixth-round review) — same singletons ExecuteTaskUseCase is wired
+  // with (see app/wiring.ts).
+  unitTypeLoader: UnitTypeLoader;
+  sidekickLoader: SidekickPackageLoader;
 }
 
 export class TaskRestoreService {
@@ -41,7 +49,7 @@ export class TaskRestoreService {
   constructor(private deps: TaskRestoreDeps) {}
 
   async restore(task: Task, log: { warn: (msg: string) => void }): Promise<{ tmuxTarget: string; worktreePath: string | null }> {
-    const { taskRepo, serverRepo, projectRepo, projectServerRepo, unitRepo, windowRepo, tmux, worktreeServiceFactory, transportFactory, contentExtractor, logRepo } = this.deps;
+    const { taskRepo, serverRepo, projectRepo, projectServerRepo, unitRepo, windowRepo, tmux, worktreeServiceFactory, transportFactory, contentExtractor, logRepo, unitTypeLoader, sidekickLoader } = this.deps;
 
     const serverName = resolveTaskServerName(task, projectServerRepo);
     if (!serverName) {
@@ -63,7 +71,7 @@ export class TaskRestoreService {
     // project/unit/projectServer are resolved here and reused below
     // (unit may be null: restore() has always tolerated a task whose Unit
     // was deleted or was never set on either the task or its project).
-    const { manifest, project, unit, projectServer } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo });
+    const { manifest, project, unit, projectServer } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader });
     const unitId = unit?.id ?? null;
     const gate = checkExecutionGate(task, projectServer, hashExecutionManifest(manifest));
     if (!gate.allowed) {

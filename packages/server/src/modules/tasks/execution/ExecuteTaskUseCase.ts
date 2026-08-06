@@ -221,7 +221,17 @@ export class ExecuteTaskUseCase {
    * already exists) — both resume via resumeStateMachine() on approval,
    * matching the pre-existing behavior for those two entry points.
    */
-  private enforceExecutionGate(task: Task, unitId: number, server: ServerConfig, operation: 'execute' | 'resume') {
+  /**
+   * Public (not private) because /api/tasks/:id/answer (modules/tasks/
+   * routes.ts) needs to run this exact check synchronously, BEFORE
+   * consuming task.pendingQuestions/the submitted answers, instead of
+   * discovering the block only after followUp() has already been kicked off
+   * fire-and-forget (Issue #328 sixth-round review finding 1: that ordering
+   * lost both the question record and the human's answer text on a block).
+   * Reusing this method rather than a second gate-check implementation keeps
+   * "what blocks execution" defined in exactly one place.
+   */
+  enforceExecutionGate(task: Task, unitId: number, server: ServerConfig, operation: 'execute' | 'resume') {
     // resolveExecutionManifest() re-resolves the same (task.unitId ??
     // project.defaultUnitId) / serverName the caller already resolved via
     // resolveExecutionEnv() — it's what turns the fingerprint into a
@@ -232,6 +242,8 @@ export class ExecuteTaskUseCase {
       unitRepo: this.unitRepo,
       projectRepo: this.projectRepo,
       projectServerRepo: this.projectServerRepo,
+      unitTypeLoader: this.unitTypeLoader,
+      sidekickLoader: this.sidekickLoader,
     });
     const gate = checkExecutionGate(task, projectServer, hashExecutionManifest(manifest));
     if (gate.allowed) return { project, projectServer };

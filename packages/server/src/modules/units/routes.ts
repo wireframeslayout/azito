@@ -338,16 +338,44 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
         return reply.status(400).send({ error: 'Task is not in phase_review state' });
       }
 
+      // Both branches below that actually resume a worker (feedback-driven
+      // followUp / approved resumeStateMachine) need the resolved server for
+      // the untrusted-input execution gate (Issue #328) — resolved once here
+      // and gate-checked synchronously in each branch, BEFORE either mutates
+      // task.status/currentPhase or persists `feedback`. Previously those
+      // mutations ran first and the resume call was fire-and-forget with
+      // `.catch(() => {})`: a gate block silently discarded `feedback` (never
+      // persisted anywhere else) while leaving the task stuck in a status
+      // ('running'/'planning' or 'running'/'implementing') that no longer
+      // matched what actually happened (sixth-round review finding 1, same
+      // failure mode as /api/tasks/:id/answer).
+      const resolvedServerName = resolveTaskServerName(task, projectServerRepo);
+      const server = resolvedServerName ? serverRepo.findByName(resolvedServerName) : null;
+      if (!server) return reply.status(404).send({ error: 'Server not found' });
+
+      const failResumedOperation = (op: string, err: unknown): void => {
+        const message = err instanceof Error ? err.message : String(err);
+        request.log.error({ err, taskId, operation: op }, `approve-plan ${op} failed`);
+        logRepo.append(taskId, id, 'command', { type: 'approved_operation_failed', operation: op, message });
+        taskRepo.update(taskId, { status: 'failed' as TaskStatus } as Partial<import('../tasks/Task').Task>);
+      };
+
       if (!approved) {
         // Rejected
         if (feedback) {
           // Send feedback and restart planning via followUp
+          try {
+            executeTaskUseCase.enforceExecutionGate(task, id, server, 'resume');
+          } catch (err) {
+            if (replyToExecutionGateError(err, reply)) return;
+            throw err;
+          }
           logRepo.append(taskId, id, 'status_change', { status: 'plan_changes_requested', feedback });
           taskRepo.updateStatus(taskId, 'running');
           taskRepo.updateCurrentPhase(taskId, 'planning');
-          executeTaskUseCase.followUp(id, taskId, feedback).catch(() => {});
+          executeTaskUseCase.followUp(id, taskId, feedback).catch((err: unknown) => failResumedOperation('follow-up', err));
         } else {
-          // No feedback = full rejection
+          // No feedback = full rejection — no worker is resumed, so no gate check needed.
           logRepo.append(taskId, id, 'status_change', { status: 'plan_rejected' });
           taskRepo.updateStatus(taskId, 'failed' as TaskStatus);
         }
@@ -355,6 +383,12 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
       }
 
       // Approved - resume execution from implementing phase
+      try {
+        executeTaskUseCase.enforceExecutionGate(task, id, server, 'resume');
+      } catch (err) {
+        if (replyToExecutionGateError(err, reply)) return;
+        throw err;
+      }
       logRepo.append(taskId, id, 'status_change', { status: 'plan_approved', feedback: feedback || undefined });
       if (feedback) {
         const plan = task.planMarkdown || '';
@@ -362,7 +396,7 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
       }
       taskRepo.updateStatus(taskId, 'running');
       taskRepo.updateCurrentPhase(taskId, 'implementing');
-      executeTaskUseCase.resumeStateMachine(id, taskId).catch(() => {});
+      executeTaskUseCase.resumeStateMachine(id, taskId).catch((err: unknown) => failResumedOperation('resume', err));
       return { ok: true };
     },
   );
@@ -456,7 +490,7 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
       // project_servers row's config, see ExecutionManifest.ts — will
       // invalidate this and require approval again.
       logRepo.append(taskId, id, 'status_change', { status: 'execution_approved' });
-      const { manifest } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo });
+      const { manifest } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader });
       taskRepo.update(taskId, {
         executionApprovedFingerprintHash: hashExecutionManifest(manifest),
         pendingOperation: null,

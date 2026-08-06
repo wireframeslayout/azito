@@ -152,6 +152,20 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
       findByTask: vi.fn(() => []),
       findByUnit: vi.fn(() => []),
     } as unknown as TaskRestoreDeps['logRepo'],
+    // Only needed by resolveExecutionManifest() to resolve the manifest's
+    // `sidekick` field (Issue #328 sixth-round review) — returning
+    // undefined/null here just means that field resolves to nulls, which is
+    // fine for tests that don't exercise it.
+    unitTypeLoader: {
+      get: vi.fn(() => undefined),
+      getOrThrow: vi.fn(() => { throw new Error('not used in tests'); }),
+      list: vi.fn(() => []),
+    } as unknown as TaskRestoreDeps['unitTypeLoader'],
+    sidekickLoader: {
+      findByName: vi.fn(() => null),
+      findDefaultForTag: vi.fn(() => null),
+      list: vi.fn(() => []),
+    } as unknown as TaskRestoreDeps['sidekickLoader'],
     ...overrides,
   };
 }

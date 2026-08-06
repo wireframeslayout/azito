@@ -299,6 +299,15 @@ function buildUseCase(opts: {
   const turnSignalHub = { emitSignal: vi.fn(), subscribe: vi.fn(() => () => {}) };
   const supervisorRegistry = { isConnected: vi.fn(() => false), sendCommand: vi.fn(async () => {}), clearExitMarker: vi.fn() };
   const projectSecretRepo = { findByProjectWithValues: vi.fn(() => []) };
+  // Only `get` matters for resolveExecutionManifest()'s `sidekick` field
+  // resolution (Issue #328 sixth-round review); returning a UnitType with no
+  // phases means that resolution finds no enabled phase and the field stays
+  // null, without needing a real phases/tags fixture for these env-resolution
+  // tests.
+  const unitTypeLoader = {
+    get: vi.fn(() => ({ name: 'devops', label: 'DevOps', description: '', phases: [] })),
+    getOrThrow: vi.fn(() => ({ name: 'devops', label: 'DevOps', description: '', phases: [] })),
+  };
 
   const useCase = new ExecuteTaskUseCase(
     taskRepo,
@@ -321,12 +330,12 @@ function buildUseCase(opts: {
     turnRepo as any,
     turnSignalHub as any,
     supervisorRegistry as any,
-    { getOrThrow: vi.fn(() => ({ name: 'devops', label: 'DevOps', description: '', phases: [] })) } as any,
+    unitTypeLoader as any,
     { check: vi.fn(async () => ({ ok: true, reasons: [], memAvailablePercent: null, loadPerCore: null, memAvailablePercentMin: 10, loadPerCoreMax: 2 })) } as any,
     projectSecretRepo as any,
   );
 
-  return { useCase, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, unitRepo, projectRepo, projectServerRepo };
+  return { useCase, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader };
 }
 
 describe('ExecuteTaskUseCase execution-env resolution', () => {
@@ -606,13 +615,13 @@ describe('ExecuteTaskUseCase execution gate (Issue #328)', () => {
       description: 'do the thing',
       inputTrust: 'untrusted',
     });
-    const { useCase, tmux, unitRepo, projectRepo, projectServerRepo } = buildUseCase({
+    const { useCase, tmux, unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader } = buildUseCase({
       task,
       project: makeProject({ defaultUnitId: null }),
       units: [makeUnit({ id: 10 })],
       projectServer: gateProjectServer,
     });
-    const { manifest } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo });
+    const { manifest } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo, unitTypeLoader: unitTypeLoader as any, sidekickLoader: sidekickLoader as any });
     task.executionApprovedFingerprintHash = hashExecutionManifest(manifest);
 
     await useCase.execute(10, 1);
@@ -810,7 +819,10 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITOç›
       turnRepo as any,
       turnSignalHub as any,
       supervisorRegistry as any,
-      { getOrThrow: vi.fn(() => ({ name: 'devops', label: 'DevOps', description: '', phases: [] })) } as any,
+      {
+        get: vi.fn(() => ({ name: 'devops', label: 'DevOps', description: '', phases: [] })),
+        getOrThrow: vi.fn(() => ({ name: 'devops', label: 'DevOps', description: '', phases: [] })),
+      } as any,
       { check: vi.fn(async () => ({ ok: true, reasons: [], memAvailablePercent: null, loadPerCore: null, memAvailablePercentMin: 10, loadPerCoreMax: 2 })) } as any,
       projectSecretRepo as any,
     );

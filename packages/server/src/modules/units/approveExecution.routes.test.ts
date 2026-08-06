@@ -77,6 +77,8 @@ function expectedManifestHash(opts: UnitsRouteOptions, task: Task): string {
     unitRepo: opts.unitRepo,
     projectRepo: opts.projectRepo,
     projectServerRepo: opts.projectServerRepo,
+    unitTypeLoader: opts.unitTypeLoader,
+    sidekickLoader: opts.sidekickLoader,
   });
   return hashExecutionManifest(manifest);
 }
