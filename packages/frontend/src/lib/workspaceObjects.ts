@@ -31,10 +31,8 @@ export function buildObjectSections(
   const projectWindows = resolved.filter((w) => !isOperation(w));
   const operationWindows = resolved.filter(isOperation);
 
-  const serverSet = new Set(projectServerNames);
   const browsers: BrowserObject[] = [];
   for (const serverName of projectServerNames) {
-    if (!serverSet.has(serverName)) continue;
     for (const g of browserGroups[serverName] ?? []) {
       browsers.push({
         serverName,
