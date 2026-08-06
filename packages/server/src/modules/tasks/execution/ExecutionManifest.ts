@@ -78,7 +78,19 @@ import { resolveUnitId, resolveTaskServerName, resolveBaseBranch } from './TaskE
  *   actually runs — a field the raw-column fingerprint carried but that was
  *   dropped in the move to the resolved-manifest approach (Issue #328
  *   sixth-round review regression: it was on the original hand-picked column
- *   list this file's own history describes above).
+ *   list this file's own history describes above). Also, since the
+ *   eleventh-round review: `skipPr` and `selfReviewMaxAttempts` (resolved,
+ *   task override ?? Unit default — same precedence
+ *   ExecuteTaskUseCase's `effectiveSelfReviewMax` uses). Both were previously
+ *   in the "deliberately excluded" list on the mistaken assumption that they
+ *   only select between fixed strings or control a loop count; in fact
+ *   `skipPr` also selects the RENDERED CONTENT of `pushTaskDescription`/
+ *   `pushRules`/`pushOutput` (resolveTaskPromptVars.ts) and whether
+ *   PushVerifier requires a PR to exist (PhaseLoopRunner.ts ~375-385), and
+ *   `selfReviewMaxAttempts` is interpolated into the prompt as
+ *   `selfReview.maxAttempts` (PhaseLoopRunner.ts ~278-282) in addition to
+ *   bounding the retry loop — both are prompt content, not just workflow
+ *   shape.
  * - subagent: review/implement config, resolved the same way
  *   PhaseLoopRunner resolves it for an actual run (task override ??
  *   Unit default) — a task with no override still inherits the Unit's
@@ -141,6 +153,19 @@ import { resolveUnitId, resolveTaskServerName, resolveBaseBranch } from './TaskE
  *   package) is tolerated here the same way a null unit/server is elsewhere
  *   — the real run's own resolvePhaseSidekick() call still fails fast; this
  *   manifest only needs to detect drift, not duplicate that validation.
+ * - phases: since the eleventh-round review, the state-machine behavior
+ *   flags PhaseLoopRunner reads off each enabled phase's UnitTypePhase
+ *   definition — planApproval, questions, testFailed,
+ *   testFailedRollbackTo, selfReviewRetry, pushVerify, subagentRole. Same
+ *   enabled-phase list/order as `sidekicks` above. Before this round, only
+ *   the phase NAME and its Sidekick package identity were covered — the
+ *   UnitType TOML's own behavior flags could be edited freely post-approval
+ *   with no fingerprint change, and `planApproval` in particular gates
+ *   whether a human ever reviews the plan before an untrusted task's
+ *   implementation runs: removing it from an already-approved task's
+ *   UnitType silently deleted that checkpoint. See the field's own doc
+ *   comment on ResolvedExecutionManifest for exactly which flags and why
+ *   each is/isn't included.
  * - respawn: present only when resolveExecutionManifest is called from
  *   WindowRespawnService (see its own doc comment below) — null for every
  *   other call site (ExecuteTaskUseCase, TaskRestoreService, the
@@ -187,11 +212,6 @@ import { resolveUnitId, resolveTaskServerName, resolveBaseBranch } from './TaskE
  * - status, priority, selfReviewCount, planMarkdown, changedFiles, prUrl,
  *   summaryJson: workflow state or worker-authored output, not input the
  *   approval needs to cover.
- * - selfReviewMaxAttempts (task or Unit): a loop-iteration count, not prompt
- *   content or a run target — worst case is more iterations of an
- *   already-approved phase.
- * - task.skipPr: selects between two fixed template strings, never
- *   attacker-authored text.
  * - requirePlanApproval: can only be strengthened for an untrusted task
  *   (enforced by the PUT handler itself), so there's no dangerous direction
  *   left to guard against.
@@ -204,6 +224,82 @@ import { resolveUnitId, resolveTaskServerName, resolveBaseBranch } from './TaskE
  *   the slice point into `sidekicks`, see that field's doc comment above);
  *   that was the eighth-round review's self-invalidation bug. Not read
  *   anywhere in this file anymore.
+ *
+ * ── Scope of this manifest (Issue #328 eleventh-round review) ──
+ *
+ * Eleven review rounds have each found one more field this manifest was
+ * missing. This section exists to stop that from being an open-ended
+ * search: it states the RULE the current field list already follows, so the
+ * next addition (or non-addition) can be justified against the rule instead
+ * of against "well, review round N found this one too".
+ *
+ * What belongs in this manifest: any value that (a) can be changed through
+ * an API or a user-layer file (not just by the system itself), AND (b)
+ * changing it changes WHAT gets executed, WHERE it executes, or HOW the
+ * state machine behaves — prompt content, worker target, subagent
+ * delegation, or control flow (approval gates, retry/rollback, phase
+ * enable/order). If a human approved a task under one set of these values,
+ * a later edit to any of them must force re-approval.
+ *
+ * Currently covered, by category:
+ * - task: title, description, workingDirectory, skipPr, selfReviewMaxAttempts
+ *   (resolved).
+ * - unit: id, systemPrompt, workerType/Model/ExtraArgs, workerExecutionMode,
+ *   workerRuntime, unitType, phaseConfig.
+ * - UnitType phases (per enabled phase, in order): planApproval, questions,
+ *   testFailed, testFailedRollbackTo, selfReviewRetry, pushVerify,
+ *   subagentRole (the `phases` field), plus the resolved Sidekick package
+ *   identity/content for that phase (the `sidekicks` field).
+ * - Sidekick packages: a full package-tree digest (SKILL.md body +
+ *   scripts/** + references/**) per enabled phase.
+ * - project: sidekickPrompt.
+ * - project_servers: workingDirectory, branch.
+ * - ServerConfig (the `servers` row): type, host, agentPort, sshHost — which
+ *   machine a run targets.
+ * - secrets: the SORTED SET of project secret NAMES (not values — see
+ *   "known limitations" below).
+ *
+ * Deliberately NOT covered, and why — three recurring shapes, not a field-by-
+ * field list (see the "Deliberately excluded" section above for the current
+ * field-by-field detail):
+ * 1. Values the SYSTEM overwrites as a side effect of running an
+ *    already-approved task (worktreePath/worktreeBranch, tmuxWindow,
+ *    agentSessionId, task.currentPhase, status, selfReviewCount,
+ *    planMarkdown, changedFiles, prUrl, summaryJson, server.agentVersion,
+ *    server.sshHostFingerprint). Including any of these makes "approve once"
+ *    into an infinite pending_approval loop, because the very act of running
+ *    the approved task changes the value and re-triggers the gate. This is
+ *    the single most common way a new field breaks this file (it happened
+ *    twice already — sixth-round and eighth-round reviews) — always ask
+ *    "does an ordinary, already-approved run change this on its own?"
+ *    before adding a field.
+ * 2. Credentials, where the correct operational response to a leak/rotation
+ *    is "replace the value, change nothing else" (server.agentToken, and by
+ *    the same logic, secret VALUES — see "known limitations" below).
+ *    Covering these would make routine credential rotation invalidate every
+ *    already-approved task that depends on them, discouraging rotation.
+ * 3. Operational/administrative state managed independently of the approval
+ *    decision (server.muxRuntime, server.createdAt, requirePlanApproval —
+ *    can only be strengthened for an untrusted task, source/sourceRef — not
+ *    read by any prompt-building/targeting path).
+ *
+ * Known limitations (things this manifest does NOT currently protect
+ * against, stated plainly rather than implied by omission):
+ * - Secret VALUE rotation is invisible to this manifest by design (see
+ *   `secrets.namesDigest`'s own doc comment) — replacing an already-approved
+ *   secret's value with different content does not require re-approval, only
+ *   adding/removing/renaming a secret does.
+ * - A Unit or UnitType field this manifest does not read (because
+ *   PhaseLoopRunner/ExecuteTaskUseCase does not read it either, as of this
+ *   round) is not covered — this file only tracks inputs to the CURRENT
+ *   execution path; a future code change that starts consuming a
+ *   previously-inert field must add it here in the same change, not rely on
+ *   a future review round to notice.
+ * - This manifest hashes the RESOLVED values, not "what a human read in the
+ *   approval UI" — if the approval UI itself renders a resolved value
+ *   incorrectly, re-approval will still succeed against the (correctly)
+ *   resolved manifest even though the human saw something else. That's a UI
+ *   correctness concern, outside this file's scope.
  */
 
 /**
@@ -364,6 +460,16 @@ export interface ResolvedExecutionManifest {
     title: string;
     description: string;
     workingDirectory: string | null;
+    // See the module doc comment's "task" bullet (eleventh-round review) for
+    // why these two were added — both were previously excluded on the
+    // mistaken assumption that they only select between fixed strings /
+    // control a loop count, when in fact both also change rendered prompt
+    // content.
+    skipPr: boolean;
+    // Resolved the same way PhaseLoopRunner computes `effectiveSelfReviewMax`
+    // (task.selfReviewMaxAttempts ?? unit.selfReviewMaxAttempts) — `null` only
+    // when neither a task override nor a resolvable Unit exists.
+    selfReviewMaxAttempts: number | null;
   };
   subagent: {
     review: SubagentConfig | null;
@@ -399,6 +505,40 @@ export interface ResolvedExecutionManifest {
     phase: string;
     name: string | null;
     packageDigest: string | null;
+  }>;
+  /**
+   * The state-machine behavior flags PhaseLoopRunner actually reads off each
+   * enabled phase's `UnitTypePhase` definition (Issue #328 eleventh-round
+   * review) — every field consumed by `stateMachineLoop` below:
+   * `planApproval` (PhaseLoopRunner.ts ~455, gates on human plan review —
+   * the single most important flag here, see the module doc comment),
+   * `questions`/`testFailed` (~327, the worker capability envelope),
+   * `testFailedRollbackTo` (~475-482, which phase a test failure rewinds
+   * to), `selfReviewRetry` (~488-494, whether a non-`phase_complete`
+   * classification retries the phase), `pushVerify` (~358-387, whether push
+   * completion is probed before the phase is considered done), and
+   * `subagentRole` (~284-313, whether/which subagent-delegation block is
+   * appended to the prompt). Same enabled-phase list and order as
+   * `sidekicks` above (resolveEnabledPhases), so a phase reorder/enable/
+   * disable is visible on both arrays consistently.
+   *
+   * Deliberately NOT included: `label` (display-only), `tags` (already
+   * reflected indirectly — a tag change can only affect which package an
+   * override resolves to, and that resolution's OUTCOME is already captured
+   * by `sidekicks[i].name`/`packageDigest` above), `skillCommand`/
+   * `defaultSidekick` (read by the `/api/sidekicks`-render / harness-skill
+   * compat path, not by PhaseLoopRunner), and `name` (redundant with
+   * `phase` on this same entry).
+   */
+  phases: Array<{
+    phase: string;
+    planApproval: boolean;
+    questions: boolean;
+    testFailed: boolean;
+    testFailedRollbackTo: string | null;
+    selfReviewRetry: boolean;
+    pushVerify: boolean;
+    subagentRole: string | null;
   }>;
   respawn: RespawnManifestInput | null;
 }
@@ -522,6 +662,7 @@ export function resolveExecutionManifest(
   // actually resolves (Issue #328 sixth-round review).
   const unitType = unit ? deps.unitTypeLoader.get(unit.unitType) : undefined;
   const sidekicks: ResolvedExecutionManifest['sidekicks'] = [];
+  const phases: ResolvedExecutionManifest['phases'] = [];
   if (unit && unitType) {
     // EVERY enabled phase, unconditionally — not sliced from
     // task.currentPhase's resume point. task.currentPhase moves forward on
@@ -536,6 +677,20 @@ export function resolveExecutionManifest(
         sidekicks.push({ phase, name: null, packageDigest: null });
         continue;
       }
+      // The state-machine behavior flags this phase carries — see the
+      // `phases` field's doc comment on ResolvedExecutionManifest above for
+      // exactly which PhaseLoopRunner reads and why (Issue #328
+      // eleventh-round review).
+      phases.push({
+        phase,
+        planApproval: phaseDef.planApproval,
+        questions: phaseDef.questions,
+        testFailed: phaseDef.testFailed,
+        testFailedRollbackTo: phaseDef.testFailedRollbackTo ?? null,
+        selfReviewRetry: phaseDef.selfReviewRetry,
+        pushVerify: phaseDef.pushVerify,
+        subagentRole: phaseDef.subagentRole ?? null,
+      });
       try {
         const sidekick = resolvePhaseSidekick(deps.sidekickLoader, phase, unit.phaseConfig, phaseDef);
         // Full package-tree walk (SKILL.md + scripts/** + references/**) is
@@ -592,6 +747,11 @@ export function resolveExecutionManifest(
       title: task.title,
       description: task.description ?? '',
       workingDirectory: task.workingDirectory ?? null,
+      skipPr: task.skipPr,
+      // Same precedence PhaseLoopRunner's callers resolve
+      // (ExecuteTaskUseCase's `effectiveSelfReviewMax`) — task override,
+      // falling back to the resolved Unit's default.
+      selfReviewMaxAttempts: task.selfReviewMaxAttempts ?? unit?.selfReviewMaxAttempts ?? null,
     },
     subagent: {
       // Same precedence PhaseLoopRunner applies at run time (task override,
@@ -607,6 +767,7 @@ export function resolveExecutionManifest(
       namesDigest: hashSecretNameSet(secretNames),
     },
     sidekicks,
+    phases,
     respawn: respawnInput ?? null,
   };
 
@@ -670,6 +831,11 @@ export function hashExecutionManifest(manifest: ResolvedExecutionManifest): stri
       title: manifest.task.title,
       description: manifest.task.description,
       workingDirectory: manifest.task.workingDirectory ?? '',
+      skipPr: manifest.task.skipPr,
+      // Left as `number | null` (not coerced to a sentinel), same reasoning
+      // as `server.agentPort` above — a real attempt count and "unresolved"
+      // must stay distinguishable.
+      selfReviewMaxAttempts: manifest.task.selfReviewMaxAttempts ?? null,
     },
     subagent: {
       review: normalizeSubagent(manifest.subagent.review),
@@ -688,6 +854,18 @@ export function hashExecutionManifest(manifest: ResolvedExecutionManifest): stri
       phase: s.phase,
       name: s.name ?? '',
       packageDigest: s.packageDigest ?? '',
+    })),
+    // Array order is significant and preserved by JSON.stringify — same
+    // reasoning as `sidekicks` above (a phase reorder must change this).
+    phases: manifest.phases.map((p) => ({
+      phase: p.phase,
+      planApproval: p.planApproval,
+      questions: p.questions,
+      testFailed: p.testFailed,
+      testFailedRollbackTo: p.testFailedRollbackTo ?? '',
+      selfReviewRetry: p.selfReviewRetry,
+      pushVerify: p.pushVerify,
+      subagentRole: p.subagentRole ?? '',
     })),
     // null for every call site except WindowRespawnService (see the
     // `respawn` field's doc comment on ResolvedExecutionManifest) — a

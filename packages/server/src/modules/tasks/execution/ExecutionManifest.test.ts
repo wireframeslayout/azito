@@ -856,4 +856,155 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     // path, this digest would differ.
     expect(manifest.sidekicks[0].packageDigest).not.toBe(hashSidekickPackageTree(dir, body));
   });
+
+  // Issue #328 eleventh-round review, fix 1: the `phases` field carries the
+  // state-machine behavior flags PhaseLoopRunner actually reads off each
+  // enabled phase's UnitTypePhase (see the field's doc comment on
+  // ResolvedExecutionManifest). `planApproval` is the top-priority case —
+  // removing it from an already-approved task's UnitType would silently
+  // delete the human plan-review checkpoint without invalidating approval.
+  describe('phases (UnitTypePhase state-machine behavior flags)', () => {
+    function fixtureWithPhase(phase: UnitTypePhase): Fixture {
+      const unitType: UnitType = { name: 'devops', label: 'DevOps', phases: [phase] };
+      return {
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer() },
+        unitTypes: { devops: unitType },
+        sidekicks: [makeSidekick({ tags: phase.tags })],
+      };
+    }
+
+    it.each([
+      ['planApproval', { planApproval: true }, { planApproval: false }],
+      ['questions', { questions: true }, { questions: false }],
+      ['testFailed', { testFailed: true }, { testFailed: false }],
+      ['testFailedRollbackTo', { testFailed: true, testFailedRollbackTo: 'planning' }, { testFailed: true, testFailedRollbackTo: 'implementing' }],
+      ['selfReviewRetry', { selfReviewRetry: true }, { selfReviewRetry: false }],
+      ['pushVerify', { pushVerify: true }, { pushVerify: false }],
+      ['subagentRole', { subagentRole: 'review' as const }, { subagentRole: 'implement' as const }],
+    ] as const)('editing phaseDef.%s alone invalidates a prior approval', (_name, before, after) => {
+      const task = makeTask({ currentPhase: null });
+
+      const hashBefore = hashFor(task, fixtureWithPhase(makeUnitTypePhase(before)));
+      const hashAfter = hashFor(task, fixtureWithPhase(makeUnitTypePhase(after)));
+
+      expect(hashAfter).not.toBe(hashBefore);
+    });
+
+    it('resolves the phases entries for every enabled phase, in UnitType order, mirroring the sidekicks list', () => {
+      const planningPhase = makeUnitTypePhase({ name: 'planning', tags: ['planning'], planApproval: true });
+      const implementingPhase = makeUnitTypePhase({ name: 'implementing', tags: ['implementing'], subagentRole: 'implement' });
+      const unitType: UnitType = { name: 'devops', label: 'DevOps', phases: [planningPhase, implementingPhase] };
+      const fixture: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer() },
+        unitTypes: { devops: unitType },
+        sidekicks: [
+          makeSidekick({ name: 'planning-default', tags: ['planning'], body: 'Plan it.' }),
+          makeSidekick({ name: 'implementing-default', tags: ['implementing'], body: 'Implement it.' }),
+        ],
+      };
+      const task = makeTask({ currentPhase: null });
+
+      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture));
+
+      expect(manifest.phases).toEqual([
+        { phase: 'planning', planApproval: true, questions: false, testFailed: false, testFailedRollbackTo: null, selfReviewRetry: false, pushVerify: false, subagentRole: null },
+        { phase: 'implementing', planApproval: false, questions: false, testFailed: false, testFailedRollbackTo: null, selfReviewRetry: false, pushVerify: false, subagentRole: 'implement' },
+      ]);
+    });
+
+    it('advancing task.currentPhase after approval does NOT invalidate it, even with planApproval/pushVerify/subagentRole set (no self-invalidation regression)', () => {
+      const planningPhase = makeUnitTypePhase({ name: 'planning', tags: ['planning'], planApproval: true });
+      const pushingPhase = makeUnitTypePhase({ name: 'pushing', tags: ['pushing'], pushVerify: true, subagentRole: 'review' });
+      const unitType: UnitType = { name: 'devops', label: 'DevOps', phases: [planningPhase, pushingPhase] };
+      const fixture: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer() },
+        unitTypes: { devops: unitType },
+        sidekicks: [
+          makeSidekick({ name: 'planning-default', tags: ['planning'], body: 'Plan it.' }),
+          makeSidekick({ name: 'pushing-default', tags: ['pushing'], body: 'Push it.' }),
+        ],
+      };
+
+      const atPlanning = makeTask({ currentPhase: 'planning' });
+      const approvedHash = hashFor(atPlanning, fixture);
+
+      const atPushing = { ...atPlanning, currentPhase: 'pushing', executionApprovedFingerprintHash: approvedHash };
+      const { manifest: manifestAtPushing, projectServer } = resolveExecutionManifest(atPushing, makeDeps(fixture));
+      const gate = checkExecutionGate(atPushing, projectServer, hashExecutionManifest(manifestAtPushing));
+
+      expect(hashExecutionManifest(manifestAtPushing)).toBe(approvedHash);
+      expect(gate).toEqual({ allowed: true });
+    });
+  });
+
+  // Issue #328 eleventh-round review, fix 2: task.skipPr and
+  // task.selfReviewMaxAttempts were previously excluded on the mistaken
+  // assumption that they only select between fixed template strings / a loop
+  // count — both also change rendered prompt content (resolveTaskPromptVars.ts
+  // pushTaskDescription/pushRules/pushOutput; PhaseLoopRunner's
+  // selfReview.maxAttempts template var).
+  describe('task.skipPr / task.selfReviewMaxAttempts', () => {
+    it('editing task.skipPr alone invalidates a prior approval', () => {
+      const fixture: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer() },
+      };
+      const approved = makeTask({ skipPr: false });
+      const approvedHash = hashFor(approved, fixture);
+
+      const edited = { ...approved, skipPr: true };
+      const editedHash = hashFor(edited, fixture);
+
+      expect(editedHash).not.toBe(approvedHash);
+    });
+
+    it('editing task.selfReviewMaxAttempts (task-level override) alone invalidates a prior approval', () => {
+      const fixture: Fixture = {
+        units: { 20: makeUnit({ selfReviewMaxAttempts: 2 }) },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer() },
+      };
+      const approved = makeTask({ selfReviewMaxAttempts: null });
+      const approvedHash = hashFor(approved, fixture);
+
+      const edited = { ...approved, selfReviewMaxAttempts: 5 };
+      const editedHash = hashFor(edited, fixture);
+
+      expect(editedHash).not.toBe(approvedHash);
+    });
+
+    it("changing the resolved Unit's selfReviewMaxAttempts DEFAULT alone invalidates approval when the task has no override, WITHOUT touching the task row", () => {
+      const fixture = (unitDefault: number): Fixture => ({
+        units: { 20: makeUnit({ selfReviewMaxAttempts: unitDefault }) },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer() },
+      });
+      const task = makeTask({ selfReviewMaxAttempts: null });
+
+      const hashBefore = hashFor(task, fixture(2));
+      const hashAfter = hashFor(task, fixture(10));
+
+      expect(hashBefore).not.toBe(hashAfter);
+    });
+
+    it('a task-level selfReviewMaxAttempts override takes precedence over the Unit default in the resolved manifest', () => {
+      const fixture: Fixture = {
+        units: { 20: makeUnit({ selfReviewMaxAttempts: 2 }) },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer() },
+      };
+      const task = makeTask({ selfReviewMaxAttempts: 7 });
+
+      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture));
+
+      expect(manifest.task.selfReviewMaxAttempts).toBe(7);
+    });
+  });
 });
