@@ -4,6 +4,7 @@ import type { TmuxClient } from '../tmux/TmuxClient';
 import type { ISessionStrategyFactory } from '../agents/SessionStrategy';
 import type { ITaskRepository, Task } from '../tasks/Task';
 import type { IUnitRepository } from '../units/Unit';
+import type { IProjectRepository } from '../projects/Project';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { IExecutionLogRepository } from '../tasks/ExecutionLog';
@@ -13,6 +14,7 @@ import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
 import type { SessionCaptureService } from './SessionCaptureService';
 import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError } from '../tasks/execution/ExecutionGate';
+import { resolveExecutionManifest, hashExecutionManifest } from '../tasks/execution/ExecutionManifest';
 import { resolveTmuxSession } from '../tasks/execution/TaskExecutionEnv';
 
 function sleep(ms: number): Promise<void> {
@@ -45,6 +47,14 @@ export class WindowRespawnService {
     // because the *project* has no projectServer.workingDirectory, which is
     // a real "no boundary to enforce" case, not a missing dependency.
     private projectServerRepo: IProjectServerRepository,
+    // Required for the same reason projectServerRepo is: resolveExecutionManifest()
+    // needs it to resolve project.defaultUnitId / project.defaultBranch the
+    // same way ExecuteTaskUseCase/TaskRestoreService do (Issue #328
+    // fifth-round review) — without it this service could not fix the gap
+    // where a task with no unitId override resolved its Unit differently
+    // here (task.unitId directly, ignoring the project default) than every
+    // other execution entry point.
+    private projectRepo: IProjectRepository,
     private transportFactory: TransportFactory,
     // logRepo is required for the same reason projectServerRepo/transportFactory
     // are (see comment above): the untrusted-input execution gate (Issue #328)
@@ -63,26 +73,27 @@ export class WindowRespawnService {
     const windowPart = parts[1]?.split('.')[0];
     if (!windowPart) throw new Error(`Invalid tmuxTarget: ${win.tmuxTarget}`);
 
-    // Resolve the owning task + Unit up front (also needed for the
-    // supervision context below) and run the untrusted-input execution gate
-    // (Issue #328) before touching tmux or the DB at all — respawn()
+    // Resolve the owning task up front and run the untrusted-input execution
+    // gate (Issue #328) before touching tmux or the DB at all — respawn()
     // relaunches a worker exactly like ExecuteTaskUseCase.execute()/
     // TaskRestoreService.restore() do, so an untrusted task that was denied
     // or is pending approval must not be able to resume via respawn (used by
     // both POST /api/windows/:id/respawn and the recover-session fallback in
     // tasks/routes.ts). Windows with no taskId (plain terminals, non-task
     // windows) have no Task.inputTrust to check, so they respawn unchanged.
+    // enforceExecutionGate() resolves the Unit itself (via
+    // resolveExecutionManifest, same as every other entry point) and returns
+    // the resolved id for reuse in the supervision context below — it used
+    // to be resolved separately here from task.unitId alone, which silently
+    // skipped the project.defaultUnitId fallback every other entry point
+    // applies (Issue #328 fifth-round review).
     let task: Task | null = null;
     let unitId: number | null = null;
     if (win.taskId !== null) {
       task = this.taskRepo.findById(win.taskId);
-      if (task && task.unitId !== null) {
-        const unit = this.unitRepo.findById(task.unitId);
-        if (unit) unitId = unit.id;
-      }
     }
     if (task) {
-      this.enforceExecutionGate(task, unitId, server, 'respawn', windowId);
+      unitId = this.enforceExecutionGate(task, server, 'respawn', windowId);
     }
 
     // Resolve and verify every working directory this respawn will `cd`
@@ -142,9 +153,15 @@ export class WindowRespawnService {
    * owns this window and, when it blocks, records the same log entry
    * ExecuteTaskUseCase.enforceExecutionGate()/TaskRestoreService.restore()
    * use, then throws before the caller proceeds to any tmux mutation.
-   * `unitId` is `null` when the task has no resolvable Unit (e.g.
-   * task.unitId points at a deleted Unit) — the block still throws in that
-   * case, it just has no unit to attach a log entry to.
+   * Resolves the manifest (and the Unit it covers) itself via
+   * resolveExecutionManifest() — same as those other two entry points —
+   * and returns the resolved Unit id so the caller can reuse it for the
+   * supervision context instead of re-resolving (or under-resolving:
+   * this used to read `task.unitId` directly here, which skips the
+   * project.defaultUnitId fallback every other entry point applies; Issue
+   * #328 fifth-round review). Returns `null` when the task has no
+   * resolvable Unit (e.g. task.unitId points at a deleted Unit) — the block
+   * still throws in that case, it just has no unit to attach a log entry to.
    *
    * `operation`/`windowId` record WHICH blocked entry point this was, in
    * task.pendingOperation/pendingOperationWindowId, so the approval handler
@@ -161,14 +178,18 @@ export class WindowRespawnService {
    */
   private enforceExecutionGate(
     task: Task,
-    unitId: number | null,
     server: ServerConfig,
     operation: 'respawn' | 'recover_session_legacy',
     windowId: number | null,
-  ): void {
-    const projectServer = this.projectServerRepo.find(task.projectId, server.name);
-    const gate = checkExecutionGate(task, projectServer);
-    if (gate.allowed) return;
+  ): number | null {
+    const { manifest, unit, projectServer } = resolveExecutionManifest(task, {
+      unitRepo: this.unitRepo,
+      projectRepo: this.projectRepo,
+      projectServerRepo: this.projectServerRepo,
+    });
+    const unitId = unit?.id ?? null;
+    const gate = checkExecutionGate(task, projectServer, hashExecutionManifest(manifest));
+    if (gate.allowed) return unitId;
 
     if (unitId !== null) {
       this.logRepo.append(task.id, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
@@ -208,12 +229,7 @@ export class WindowRespawnService {
     if (!task) throw new Error(`Task ${taskId} not found`);
     if (!task.agentSessionId) throw new Error(`Task ${taskId} has no agent session ID`);
 
-    let unitId: number | null = null;
-    if (task.unitId !== null) {
-      const unit = this.unitRepo.findById(task.unitId);
-      if (unit) unitId = unit.id;
-    }
-    this.enforceExecutionGate(task, unitId, server, 'recover_session_legacy', null);
+    this.enforceExecutionGate(task, server, 'recover_session_legacy', null);
 
     const tmuxSession = resolveTmuxSession(task.projectId, server.name, this.projectServerRepo);
     const { windowName } = await this.tmux.createWindow(server, tmuxSession, `task-${task.id}`);

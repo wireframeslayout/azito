@@ -39,9 +39,10 @@ import type { SupervisorRegistry } from '../../supervisors/SupervisorRegistry';
 import { shouldSupervise } from '../../supervisors/SupervisorLaunch';
 import { ResourceExhaustedError, type ResourceGuard } from '../../servers/resources/ResourceGuard';
 import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError } from './ExecutionGate';
+import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionManifest';
 import { TuiWorkerRuntime } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
-import { resolveTaskServerName, resolveTmuxSession, resolveUnitId } from './TaskExecutionEnv';
+import { resolveTaskServerName, resolveTmuxSession, resolveUnitId, resolveBaseBranch } from './TaskExecutionEnv';
 import type { SqliteAgentTurnRepository } from '../turns/SqliteAgentTurnRepository';
 import type { TurnSignalHub } from '../turns/TurnSignalHub';
 import type { AgentTurn } from '../turns/AgentTurn';
@@ -199,11 +200,12 @@ export class ExecuteTaskUseCase {
    * blocks, marks the task accordingly and throws before any worker,
    * worktree, or secret touches it. Called at the top of every entry point
    * here that can launch or resume a worker (execute/followUp/
-   * resumeStateMachine); TaskRestoreService.restore runs the same
-   * checkExecutionGate() independently since it resolves its own
-   * task/server and has no dependency on this use case. Returns the
-   * project/projectServer it resolved so callers that need them anyway
-   * (execute()'s working-directory logic) don't re-fetch.
+   * resumeStateMachine); TaskRestoreService.restore and
+   * WindowRespawnService.enforceExecutionGate run the same
+   * checkExecutionGate()+resolveExecutionManifest() pairing independently
+   * since they resolve their own task/server and have no dependency on this
+   * use case. Returns the project/projectServer it resolved so callers that
+   * need them anyway (execute()'s working-directory logic) don't re-fetch.
    *
    * `operation` records WHICH blocked entry point this was, in
    * task.pendingOperation, so the approval handler
@@ -212,17 +214,26 @@ export class ExecuteTaskUseCase {
    * task.tmuxWindow (Issue #328 third-round review finding 1: that
    * heuristic couldn't tell "never started" apart from "was being
    * restored from archive", since TaskRestoreService.restore also blocks
-   * before tmuxWindow is ever set — see ExecutionGate.ts's
-   * ApprovableTaskFields doc for the related targeting-field discussion).
+   * before tmuxWindow is ever set — see ExecutionManifest.ts's module doc
+   * comment for the related field-coverage discussion).
    * `execute()` passes 'execute' (fresh start, no window yet); followUp()/
    * resumeStateMachine() both pass 'resume' (continuing a run whose window
    * already exists) — both resume via resumeStateMachine() on approval,
    * matching the pre-existing behavior for those two entry points.
    */
   private enforceExecutionGate(task: Task, unitId: number, server: ServerConfig, operation: 'execute' | 'resume') {
-    const project = this.projectRepo.findById(task.projectId);
-    const projectServer = project ? this.projectServerRepo.find(task.projectId, server.name) : null;
-    const gate = checkExecutionGate(task, projectServer);
+    // resolveExecutionManifest() re-resolves the same (task.unitId ??
+    // project.defaultUnitId) / serverName the caller already resolved via
+    // resolveExecutionEnv() — it's what turns the fingerprint into a
+    // fingerprint of RESOLVED execution content instead of raw task columns
+    // (see ExecutionManifest.ts). `project`/`projectServer` returned here are
+    // reused by execute()'s working-directory logic below, same as before.
+    const { manifest, project, projectServer } = resolveExecutionManifest(task, {
+      unitRepo: this.unitRepo,
+      projectRepo: this.projectRepo,
+      projectServerRepo: this.projectServerRepo,
+    });
+    const gate = checkExecutionGate(task, projectServer, hashExecutionManifest(manifest));
     if (gate.allowed) return { project, projectServer };
 
     this.appendLog(task.id, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
@@ -420,7 +431,7 @@ export class ExecuteTaskUseCase {
     if (workingDir) {
       // Create worktree for isolated branch/file tracking
       let wt: WorktreeInfo;
-      const baseBranch = task.baseBranch || projectServer?.branch || project?.defaultBranch || 'main';
+      const baseBranch = resolveBaseBranch(task, projectServer, project);
       try {
         const slug = await this.contentExtractor.generateSlug(task.title);
         wt = await this.getWorktreeService(server).create(workingDir, taskId, slug, baseBranch, task.branch || undefined);

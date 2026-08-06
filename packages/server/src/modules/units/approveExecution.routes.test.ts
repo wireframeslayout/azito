@@ -4,7 +4,7 @@ import unitsRoutes from './routes';
 import type { UnitsRouteOptions } from './routes';
 import type { Task } from '../tasks/Task';
 import type { Unit } from './Unit';
-import { hashApprovedTaskFingerprint } from '../tasks/execution/ExecutionGate';
+import { resolveExecutionManifest, hashExecutionManifest } from '../tasks/execution/ExecutionManifest';
 
 // POST /api/units/:id/approve-execution — the human decision point for the
 // untrusted-input execution gate (Issue #328), mirroring approve-plan's
@@ -69,6 +69,16 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
+}
+
+/** Computes the same manifest hash the approve-execution route resolves, using this test's own opts mocks (Issue #328 fifth-round review). */
+function expectedManifestHash(opts: UnitsRouteOptions, task: Task): string {
+  const { manifest } = resolveExecutionManifest(task, {
+    unitRepo: opts.unitRepo,
+    projectRepo: opts.projectRepo,
+    projectServerRepo: opts.projectServerRepo,
+  });
+  return hashExecutionManifest(manifest);
 }
 
 function makeOpts(task: Task, unit: Unit): UnitsRouteOptions {
@@ -197,7 +207,7 @@ describe('POST /api/units/:id/approve-execution (Issue #328)', () => {
     const res = await app.inject({ method: 'POST', url: '/api/units/20/approve-execution', payload: { taskId: 1, approved: true } });
 
     expect(res.statusCode).toBe(200);
-    expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { executionApprovedFingerprintHash: hashApprovedTaskFingerprint(task), pendingOperation: null, pendingOperationWindowId: null });
+    expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { executionApprovedFingerprintHash: expectedManifestHash(opts, task), pendingOperation: null, pendingOperationWindowId: null });
     expect(opts.taskRepo.updateStatus).toHaveBeenCalledWith(1, 'open');
     expect(opts.executeTaskUseCase.execute).toHaveBeenCalledWith(20, 1);
     expect(opts.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();
@@ -263,7 +273,7 @@ describe('POST /api/units/:id/approve-execution (Issue #328)', () => {
     const res = await app.inject({ method: 'POST', url: '/api/units/20/approve-execution', payload: { taskId: 1, approved: true } });
 
     expect(res.statusCode).toBe(200);
-    const expectedHash = hashApprovedTaskFingerprint(task);
+    const expectedHash = expectedManifestHash(opts, task);
     expect(expectedHash).not.toBeNull();
     const restoreCall = (opts.taskRestoreService.restore as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(restoreCall[0].executionApprovedFingerprintHash).toBe(expectedHash);

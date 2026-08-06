@@ -18,18 +18,23 @@ export function up(db: Database.Database): void {
   // /azt-link), so this is a one-time historical backfill, not a live rule.
   db.exec(`UPDATE tasks SET input_trust = 'untrusted' WHERE source IN ('github', 'gitlab')`);
 
-  // Records that a human has approved this task's *current* prompt-reaching
-  // fields (title, description, targetBranch, baseBranch, workingDirectory —
-  // see ExecutionGate.hashApprovedTaskFingerprint) for autonomous execution
-  // while input_trust = 'untrusted'. Compared against a fresh fingerprint of
-  // those fields at gate-check time (see
-  // modules/tasks/execution/ExecutionGate.ts): NULL/mismatch => approval
-  // required again. This lets a task run unattended after one approval
-  // (Issue #328 "no re-approval on every re-run") while still re-prompting
-  // if any of those (still-untrusted) fields change underneath the approval.
-  // Named "fingerprint", not "description", because it covers more than the
-  // description field alone (second-round review finding: title changes
-  // alone previously bypassed re-approval).
+  // Records that a human has approved this task's *current resolved
+  // execution manifest* (see modules/tasks/execution/ExecutionManifest.ts —
+  // the resolved Unit's content, the resolved server's project_servers
+  // config, resolved base/target/work branches, task title/description, and
+  // resolved subagent config) for autonomous execution while input_trust =
+  // 'untrusted'. Compared against a freshly resolved manifest hash at
+  // gate-check time (see modules/tasks/execution/ExecutionGate.ts):
+  // NULL/mismatch => approval required again. This lets a task run
+  // unattended after one approval (Issue #328 "no re-approval on every
+  // re-run") while still re-prompting if anything the manifest covers
+  // changes underneath the approval — including things that aren't task
+  // columns at all, e.g. project.defaultUnitId or the resolved Unit's
+  // systemPrompt (Issue #328 fifth-round review: hashing raw task columns
+  // missed exactly this class of gap). Named "fingerprint", not
+  // "description", because it covers far more than the description field
+  // alone (second-round review finding: title changes alone previously
+  // bypassed re-approval).
   db.exec(`ALTER TABLE tasks ADD COLUMN execution_approved_fingerprint_hash TEXT`);
 
   // Per project+server execution policy for untrusted tasks. Default

@@ -326,7 +326,7 @@ function buildUseCase(opts: {
     projectSecretRepo as any,
   );
 
-  return { useCase, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory };
+  return { useCase, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, unitRepo, projectRepo, projectServerRepo };
 }
 
 describe('ExecuteTaskUseCase execution-env resolution', () => {
@@ -599,20 +599,21 @@ describe('ExecuteTaskUseCase execution gate (Issue #328)', () => {
   });
 
   it('execute(): allows an untrusted task whose approval hash matches the current fingerprint', async () => {
-    const { hashApprovedTaskFingerprint } = await import('./ExecutionGate.js');
+    const { resolveExecutionManifest, hashExecutionManifest } = await import('./ExecutionManifest.js');
     const task = makeTask({
       serverName: 'local-server',
       unitId: 10,
       description: 'do the thing',
       inputTrust: 'untrusted',
     });
-    task.executionApprovedFingerprintHash = hashApprovedTaskFingerprint(task);
-    const { useCase, tmux } = buildUseCase({
+    const { useCase, tmux, unitRepo, projectRepo, projectServerRepo } = buildUseCase({
       task,
       project: makeProject({ defaultUnitId: null }),
       units: [makeUnit({ id: 10 })],
       projectServer: gateProjectServer,
     });
+    const { manifest } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo });
+    task.executionApprovedFingerprintHash = hashExecutionManifest(manifest);
 
     await useCase.execute(10, 1);
 

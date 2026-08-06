@@ -11,10 +11,11 @@ import { PathResolverFactory, assertDirectoryContained } from '../git/PathContai
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { IContentExtractor } from '../llm/ContentExtractor';
 import type { IExecutionLogRepository } from './ExecutionLog';
-import { resolveTaskServerName, resolveTmuxSession, resolveUnitId } from './execution/TaskExecutionEnv';
+import { resolveTaskServerName, resolveTmuxSession, resolveBaseBranch } from './execution/TaskExecutionEnv';
 import { buildWorkerLaunchCommand } from '../agents/LaunchCommand';
 import { shellQuote } from '../../shared/shellQuote';
 import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError } from './execution/ExecutionGate';
+import { resolveExecutionManifest, hashExecutionManifest } from './execution/ExecutionManifest';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -53,16 +54,18 @@ export class TaskRestoreService {
     }
 
     const tmuxSession = resolveTmuxSession(task.projectId, serverName, projectServerRepo);
-    const project = projectRepo.findById(task.projectId);
-    const unitId = resolveUnitId(task, project);
-    const unit = unitId ? unitRepo.findById(unitId) : null;
 
-    // Untrusted-input execution gate (Issue #328), same check as
+    // Untrusted-input execution gate (Issue #328), same
+    // resolveExecutionManifest()+checkExecutionGate() pairing as
     // ExecuteTaskUseCase's entry points — restoring an archived task
     // recreates its tmux window and worktree from scratch, so it needs the
     // identical pre-launch check, run before any of that happens.
-    const projectServer = project ? projectServerRepo.find(task.projectId, serverName) : null;
-    const gate = checkExecutionGate(task, projectServer);
+    // project/unit/projectServer are resolved here and reused below
+    // (unit may be null: restore() has always tolerated a task whose Unit
+    // was deleted or was never set on either the task or its project).
+    const { manifest, project, unit, projectServer } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo });
+    const unitId = unit?.id ?? null;
+    const gate = checkExecutionGate(task, projectServer, hashExecutionManifest(manifest));
     if (!gate.allowed) {
       if (unitId !== null) {
         logRepo.append(task.id, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
@@ -107,7 +110,8 @@ export class TaskRestoreService {
       const windowTarget = `${tmuxSession}:${windowName}`;
       const paneId = await tmux.resolvePaneId(server, windowTarget);
       const dbTarget = `${windowTarget}.1`;
-      const projectServer = project ? projectServerRepo.find(task.projectId, serverName) : null;
+      // projectServer was already resolved above (by resolveExecutionManifest,
+      // for the gate check) — reused here rather than re-querying.
       // allowedRoot mirrors ExecuteTaskUseCase.execute()'s containment boundary
       // (Issue #27): this restore path also launches a worker into
       // task.workingDirectory, which is settable via PUT /api/tasks/:id, so
@@ -134,7 +138,7 @@ export class TaskRestoreService {
         }
 
         repoDir = workingDir;
-        baseBranch = task.baseBranch || projectServer?.branch || project?.defaultBranch || 'main';
+        baseBranch = resolveBaseBranch(task, projectServer, project);
         const branch = task.branch || task.worktreeBranch || undefined;
         const slug = branch ? `task-${task.id}` : await contentExtractor.generateSlug(task.title);
 

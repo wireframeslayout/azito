@@ -8,6 +8,7 @@ import type { ServerConfig } from '../servers/Server';
 import type { ITaskRepository, Task } from '../tasks/Task';
 import type { IUnitRepository, Unit } from '../units/Unit';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
+import type { IProjectRepository } from '../projects/Project';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 
 function makeWindow(overrides: Partial<Window> = {}): Window {
@@ -116,19 +117,29 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
 // care about containment get a repo that reports no workingDirectory
 // (allowedRoot === null), which is the real "no boundary to enforce" skip
 // path — not an unwired dependency.
-function defaultProjectServerRepo(): Pick<IProjectServerRepository, 'find'> {
-  return { find: vi.fn(() => null) };
+function defaultProjectServerRepo(): Pick<IProjectServerRepository, 'find' | 'findByProject'> {
+  return { find: vi.fn(() => null), findByProject: vi.fn(() => []) };
 }
 
 function defaultTransportFactory(): Pick<TransportFactory, 'getTransport'> {
   return { getTransport: vi.fn(() => ({})) } as unknown as Pick<TransportFactory, 'getTransport'>;
 }
 
+// resolveExecutionManifest() (Issue #328 fifth-round review) needs a
+// projectRepo to resolve project.defaultUnitId/defaultBranch — every test
+// below sets task.unitId explicitly, so resolveUnitId() never actually falls
+// through to this mock's return value, but the dependency itself is now
+// required (same reasoning as projectServerRepo/transportFactory above).
+function defaultProjectRepo(): Pick<IProjectRepository, 'findById'> {
+  return { findById: vi.fn(() => null) };
+}
+
 function buildService(opts: {
   window: Window;
   task?: Task | null;
   unit?: Unit | null;
-  projectServerRepo?: Pick<IProjectServerRepository, 'find'>;
+  projectServerRepo?: Pick<IProjectServerRepository, 'find' | 'findByProject'>;
+  projectRepo?: Pick<IProjectRepository, 'findById'>;
   transportFactory?: Pick<TransportFactory, 'getTransport'>;
 }) {
   const windowRepo: IWindowRepository = {
@@ -196,6 +207,7 @@ function buildService(opts: {
     unitRepo as any,
     supervisorRegistry,
     (opts.projectServerRepo ?? defaultProjectServerRepo()) as any,
+    (opts.projectRepo ?? defaultProjectRepo()) as any,
     (opts.transportFactory ?? defaultTransportFactory()) as any,
     logRepo,
     undefined,
@@ -276,11 +288,11 @@ describe('WindowRespawnService.respawn — supervisor wrap', () => {
 });
 
 describe('WindowRespawnService.respawn — execution gate (Issue #328)', () => {
-  function untrustedProjectServerRepo(inputPolicy: 'deny' | 'manual-approval'): Pick<IProjectServerRepository, 'find'> {
+  function untrustedProjectServerRepo(inputPolicy: 'deny' | 'manual-approval'): Pick<IProjectServerRepository, 'find' | 'findByProject'> {
+    const row = { projectId: 1, serverName: 'local-server', workingDirectory: null, branch: 'main', tmuxSession: 'azito', inputPolicy };
     return {
-      find: vi.fn(() => ({
-        projectId: 1, serverName: 'local-server', workingDirectory: null, branch: 'main', tmuxSession: 'azito', inputPolicy,
-      })),
+      find: vi.fn(() => row),
+      findByProject: vi.fn(() => [row]),
     };
   }
 
@@ -397,8 +409,9 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
   // would make every check fail closed with "Cannot verify ... (ENOENT)".
   let rootDir: string;
 
-  function makeProjectServerRepo(workingDirectory: string | null): Pick<IProjectServerRepository, 'find'> {
-    return { find: vi.fn(() => ({ projectId: 1, serverName: 'local-server', workingDirectory, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const })) };
+  function makeProjectServerRepo(workingDirectory: string | null): Pick<IProjectServerRepository, 'find' | 'findByProject'> {
+    const row = { projectId: 1, serverName: 'local-server', workingDirectory, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const };
+    return { find: vi.fn(() => row), findByProject: vi.fn(() => [row]) };
   }
 
   function makeTransportFactory(): Pick<TransportFactory, 'getTransport'> {
@@ -636,11 +649,11 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
 });
 
 describe('WindowRespawnService.resumeLegacySession (Issue #328 fourth-round review finding 2)', () => {
-  function untrustedProjectServerRepo(inputPolicy: 'deny' | 'manual-approval'): Pick<IProjectServerRepository, 'find'> {
+  function untrustedProjectServerRepo(inputPolicy: 'deny' | 'manual-approval'): Pick<IProjectServerRepository, 'find' | 'findByProject'> {
+    const row = { projectId: 1, serverName: 'local-server', workingDirectory: null, branch: 'main', tmuxSession: 'azito', inputPolicy };
     return {
-      find: vi.fn(() => ({
-        projectId: 1, serverName: 'local-server', workingDirectory: null, branch: 'main', tmuxSession: 'azito', inputPolicy,
-      })),
+      find: vi.fn(() => row),
+      findByProject: vi.fn(() => [row]),
     };
   }
 

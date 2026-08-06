@@ -15,7 +15,8 @@ import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { TaskRestoreService } from '../tasks/TaskRestoreService';
 import { resolvePhaseSidekick } from '../sidekicks/resolvePhaseSidekick';
 import { ResourceExhaustedError } from '../servers/resources/ResourceGuard';
-import { hashApprovedTaskFingerprint, replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
+import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
+import { resolveExecutionManifest, hashExecutionManifest } from '../tasks/execution/ExecutionManifest';
 import { resolveTaskServerName, resolveUnitId } from '../tasks/execution/TaskExecutionEnv';
 
 // ─── Types ───
@@ -447,14 +448,17 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
         return { ok: true };
       }
 
-      // Record approval against the CURRENT fingerprint (checkExecutionGate
-      // re-hashes on every check) so re-running this same task later does not
-      // re-prompt, but a subsequent edit to any field covered by
-      // ApprovableTaskFields (see ExecutionGate.ts) will invalidate this and
-      // require approval again.
+      // Record approval against the CURRENT resolved execution manifest
+      // (checkExecutionGate re-resolves and re-hashes on every check) so
+      // re-running this same task later does not re-prompt, but a
+      // subsequent change to anything the manifest covers — task fields,
+      // the resolved Unit's content, project.defaultUnitId, or the
+      // project_servers row's config, see ExecutionManifest.ts — will
+      // invalidate this and require approval again.
       logRepo.append(taskId, id, 'status_change', { status: 'execution_approved' });
+      const { manifest } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo });
       taskRepo.update(taskId, {
-        executionApprovedFingerprintHash: hashApprovedTaskFingerprint(task),
+        executionApprovedFingerprintHash: hashExecutionManifest(manifest),
         pendingOperation: null,
         pendingOperationWindowId: null,
       } as Partial<Task>);

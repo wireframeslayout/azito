@@ -30,18 +30,18 @@ export interface Task {
    */
   inputTrust: 'trusted' | 'untrusted';
   /**
-   * Fingerprint (see ExecutionGate.hashApprovedTaskFingerprint) of the
-   * PUT-editable fields that determine WHAT runs and WHERE it runs (title,
-   * description, unitId, serverName, branch, targetBranch, baseBranch,
-   * workingDirectory — see ApprovableTaskFields in ExecutionGate.ts for the
-   * authoritative list and inclusion criteria) that a human most recently
-   * approved for unattended execution while input_trust = 'untrusted'. Null
-   * means "never approved" or "approved fingerprint is stale" (one of those
-   * fields changed since). See ExecutionGate.checkExecutionGate for the
-   * comparison. Editing ANY covered field post-approval requires
-   * re-approval — not just the ones that reach the worker's prompt as free
-   * text, but also the ones that select which Unit/server/branch the
-   * approval applies to.
+   * Fingerprint (see ExecutionManifest.hashExecutionManifest) of the
+   * RESOLVED execution manifest — not raw task columns — that a human most
+   * recently approved for unattended execution while input_trust =
+   * 'untrusted': the resolved Unit's content, the resolved server's
+   * project_servers config, resolved base/target/work branches, task
+   * title/description, and resolved subagent config (see
+   * ExecutionManifest.ts's module doc comment for the authoritative list and
+   * inclusion criteria — it covers more than this row alone, e.g.
+   * project.defaultUnitId and the resolved Unit's systemPrompt). Null means
+   * "never approved" or "the resolved manifest is stale" (something it
+   * covers changed since, on the task OR elsewhere it resolves through). See
+   * ExecutionGate.checkExecutionGate for the comparison.
    */
   executionApprovedFingerprintHash: string | null;
   /**

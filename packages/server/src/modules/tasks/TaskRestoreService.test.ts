@@ -379,13 +379,14 @@ describe('TaskRestoreService', () => {
     });
 
     it('allows an untrusted task whose approval hash matches the current fingerprint', async () => {
-      const { hashApprovedTaskFingerprint } = await import('./execution/ExecutionGate.js');
+      const { resolveExecutionManifest, hashExecutionManifest } = await import('./execution/ExecutionManifest.js');
       const task = makeTask({
         serverName: 'test-server',
         inputTrust: 'untrusted',
         description: 'do the thing',
       });
-      task.executionApprovedFingerprintHash = hashApprovedTaskFingerprint(task);
+      const { manifest } = resolveExecutionManifest(task, deps);
+      task.executionApprovedFingerprintHash = hashExecutionManifest(manifest);
 
       const result = await service.restore(task, log);
 

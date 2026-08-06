@@ -1,4 +1,3 @@
-import { createHash } from 'crypto';
 import type { Task } from '../Task';
 import type { ProjectServer } from '../../projects/ProjectServer';
 
@@ -17,6 +16,18 @@ import type { ProjectServer } from '../../projects/ProjectServer';
  * `task.source` is deliberately never consulted — it is client-editable via
  * PUT /api/tasks/:id (used by /azt-link) and would let a task silently lift
  * its own gate. `task.inputTrust` is the only signal this module trusts.
+ *
+ * What this module hashes changed in the fifth review round (Issue #328):
+ * it used to hash a hand-picked list of raw `tasks` table columns, and every
+ * review round found one more field execution actually depends on that
+ * wasn't on the list (title -> targetBranch/baseBranch/workingDirectory ->
+ * unitId/serverName/branch/subagent config -> project.defaultUnitId /
+ * Unit.systemPrompt / project_servers.workingDirectory, none of which are
+ * even task columns). See ExecutionManifest.ts for the resolved-manifest
+ * approach that replaced it — this file now only compares an
+ * already-resolved manifest hash against the stored approval, it does not
+ * compute the hash itself and does not read any repository (Resolve at the
+ * Boundary: every call site resolves via ExecutionManifest.ts first).
  */
 
 export type ExecutionGateResult =
@@ -28,134 +39,6 @@ export type ExecutionGateResult =
 const FALLBACK_INPUT_POLICY: ProjectServer['inputPolicy'] = 'manual-approval';
 
 /**
- * Task fields covered by the approval fingerprint below.
- *
- * Inclusion criterion (apply this to any NEW field added to PUT
- * /api/tasks/:id — do not rely on the list below staying exhaustive by
- * inspection): a field belongs here if it is (a) settable via PUT
- * /api/tasks/:id, AND (b) it changes WHAT gets executed (content that
- * reaches a worker's prompt or a delegated subagent's launch instructions)
- * or WHERE/HOW it executes (which Unit, server, branch, or worktree/window
- * the run targets) — i.e. it changes the execution's content or its
- * conditions. A field that reaches the prompt but the human already
- * re-reviews at another mandatory gate does NOT need to be here either;
- * this module only covers what would otherwise reach an untrusted-origin
- * task's worker UNREVIEWED.
- *
- * Fields currently covered, and why each one qualifies:
- * - title, description: interpolated directly into the worker's prompt
- *   (resolveTaskPromptVars.ts).
- * - targetBranch: interpolated directly into the `- PR target branch: ...`
- *   prompt line.
- * - baseBranch, workingDirectory: feed project.defaultBranch /
- *   projectServer.workingDirectory, also interpolated directly into the
- *   prompt.
- * - unitId: selects the Unit (worker type/model, phase config, system
- *   prompt) the task runs under — changes WHAT executes entirely.
- * - serverName: selects WHERE the task executes, and — because the
- *   untrusted-input policy itself is a project_servers row keyed by
- *   (projectId, serverName) — which policy row applies to future gate
- *   checks. Re-pointing serverName after approval could move an approved
- *   task onto a host with a laxer (or no) input_policy.
- * - branch: the worktree branch to check out — determines which existing
- *   branch's contents the worker starts from.
- * - reviewSubagent, implementSubagent: `{enabled, provider, model}` — when
- *   `enabled`, `provider`/`model` are interpolated directly into the
- *   delegated subagent's launch instructions and intro text
- *   (PhasePromptRenderer.buildSubagentDelegationBlock: "このフェーズの${role}は、
- *   必ず ${config.provider}（${config.model}）のサブエージェントに委任してください"),
- *   and parseSubagentConfigInput only checks types, not that provider/model
- *   are from a known-safe set — this is attacker-controlled free text
- *   reaching a prompt exactly like description, just structured. Neither
- *   field is system-overwritten after the client sets it (unlike
- *   worktreePath below), so including it does not cause fingerprint drift.
- *
- * Deliberately NOT included, and why:
- * - task.skipPr: only selects between two fixed template strings
- *   (pushTaskDescription/pushRules/pushOutput), never attacker-authored
- *   text.
- * - task.planMarkdown: worker-authored output, not client-supplied input.
- * - selfReview counters/limits (selfReviewCount, selfReviewMaxAttempts):
- *   numeric loop-iteration controls, not prompt content or a run target;
- *   worst case is more iterations of an already-approved phase, not new
- *   content or a new destination.
- * - project.sidekickPrompt/unit.systemPrompt: not task fields at all.
- * - status, priority: workflow bookkeeping/ordering consumed by the state
- *   machine and UI, not read as an execution input by any prompt-building
- *   or targeting code path.
- * - tmux_window (Task.tmuxWindow): system-managed once a run starts
- *   (execute() always creates a fresh `task-<id>` window and ignores this
- *   field for naming); NOT covered by the fingerprint, but see
- *   Task.pendingOperation for how a stale/attacker-set value here is kept
- *   from redirecting a follow-up into an unrelated existing window
- *   (Issue #328 third-round review finding 2 — a targeting concern, but
- *   one addressed by tracking the pending *operation* rather than by
- *   fingerprinting the window name, since the window name churns on every
- *   run and isn't itself something a human reviews at approval time).
- * - source, sourceRef: grep-verified unused by every prompt-building/
- *   execution-targeting code path (modules/prompt, modules/tasks/execution)
- *   — used only for UI display and /azt-link. `source` is also already
- *   documented above as deliberately untrusted for gating purposes.
- * - changedFiles, prUrl: system-computed OUTPUTS written back to the task
- *   after a phase completes (git diff / PR lookup); never read as input
- *   before or during a run.
- * - requirePlanApproval: can only be strengthened (true), never weakened,
- *   for an untrusted task — enforced independently by the PUT handler
- *   itself (`PUT /api/tasks/:id` rejects `require_plan_approval: false` on
- *   an untrusted task), so there is no dangerous direction left for the
- *   fingerprint to guard against.
- * - worktreePath, worktreeBranch: settable via PUT, and worktreePath IS read
- *   as a follow-up target directory (ExecuteTaskUseCase.followUp) — but both
- *   are also unconditionally overwritten by the system itself every time a
- *   worktree is (re)created (ExecuteTaskUseCase.execute/TaskRestoreService.
- *   restore write the freshly-created worktree's actual path/branch back
- *   onto the task right after the gate check that approved the run). Adding
- *   them to the fingerprint would make every approval self-invalidate the
- *   moment the run it approved actually creates a worktree — the opposite of
- *   "approve once, resume across follow-ups" — while the actual attack
- *   surface (a client picking an arbitrary followUpDir before the system
- *   overwrites it) is already closed by the pre-existing containment check
- *   (assertDirectoryContained against projectServer.workingDirectory) that
- *   ExecuteTaskUseCase.followUp applies to worktreePath before using it,
- *   independent of this gate.
- */
-type ApprovableTaskFields = Pick<
-  Task,
-  'title' | 'description' | 'targetBranch' | 'baseBranch' | 'workingDirectory' | 'unitId' | 'serverName' | 'branch' | 'reviewSubagent' | 'implementSubagent'
->;
-
-/**
- * Deterministic fingerprint of the task fields an approval was granted for.
- * Not a security hash (collision resistance beyond "don't false-match on
- * edit" isn't a requirement here) — sha256 is used simply because Node ships
- * it and it's already the project's convention for content fingerprints.
- *
- * Fields are combined via JSON.stringify with an explicit, fixed key order
- * (not string concatenation): JSON.stringify escapes embedded quotes,
- * backslashes and control characters, and the object literal's key order is
- * fixed in source rather than derived from user input, so there is no
- * delimiter an attacker could inject to make content "move" from one field
- * into another and still hash-collide with a previously-approved fingerprint
- * (e.g. title="" + description="X" would serialize differently from
- * title="X" + description="").
- */
-export function hashApprovedTaskFingerprint(task: ApprovableTaskFields): string {
-  const normalized = JSON.stringify({
-    title: task.title,
-    description: task.description ?? '',
-    targetBranch: task.targetBranch ?? '',
-    baseBranch: task.baseBranch ?? '',
-    workingDirectory: task.workingDirectory ?? '',
-    unitId: task.unitId ?? null,
-    serverName: task.serverName ?? '',
-    branch: task.branch ?? '',
-    reviewSubagent: task.reviewSubagent ?? null,
-    implementSubagent: task.implementSubagent ?? null,
-  });
-  return createHash('sha256').update(normalized).digest('hex');
-}
-
-/**
  * `projectServer` is the project_servers row for the task's resolved server,
  * or null when none exists yet (e.g. server never explicitly configured for
  * this project). A missing row is treated the same as an explicit
@@ -165,8 +48,18 @@ export function hashApprovedTaskFingerprint(task: ApprovableTaskFields): string 
  * nothing to be strict *about* yet), silently auto-running untrusted input
  * because a server was never configured would be a materially worse default
  * than asking a human once.
+ *
+ * `manifestHash` is the caller's already-computed
+ * `hashExecutionManifest(resolveExecutionManifest(task, ...).manifest)`
+ * (ExecutionManifest.ts) — this function does not resolve or hash it itself,
+ * so it needs no repository access at all; every call site resolves the
+ * manifest at its own boundary (Resolve at the Boundary) before calling in.
  */
-export function checkExecutionGate(task: ApprovableTaskFields & Pick<Task, 'inputTrust' | 'executionApprovedFingerprintHash'>, projectServer: ProjectServer | null): ExecutionGateResult {
+export function checkExecutionGate(
+  task: Pick<Task, 'inputTrust' | 'executionApprovedFingerprintHash'>,
+  projectServer: ProjectServer | null,
+  manifestHash: string,
+): ExecutionGateResult {
   if (task.inputTrust !== 'untrusted') return { allowed: true };
 
   const policy = projectServer?.inputPolicy ?? FALLBACK_INPUT_POLICY;
@@ -178,11 +71,9 @@ export function checkExecutionGate(task: ApprovableTaskFields & Pick<Task, 'inpu
   // day that profile ships and the API restriction is lifted.
   if (policy === 'allow') return { allowed: true };
 
-  // manual-approval: allowed only if a human approved the CURRENT fingerprint
-  // (see ApprovableTaskFields above for the full field list and inclusion
-  // criteria).
-  const currentHash = hashApprovedTaskFingerprint(task);
-  if (task.executionApprovedFingerprintHash === currentHash) return { allowed: true };
+  // manual-approval: allowed only if a human approved the CURRENT resolved
+  // manifest (see ExecutionManifest.ts for what's covered and why).
+  if (task.executionApprovedFingerprintHash === manifestHash) return { allowed: true };
   return { allowed: false, reason: 'pending_approval' };
 }
 

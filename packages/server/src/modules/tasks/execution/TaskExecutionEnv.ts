@@ -1,6 +1,6 @@
 import type { Task } from '../Task';
 import type { ProjectDetail } from '../../projects/Project';
-import type { IProjectServerRepository } from '../../projects/ProjectServer';
+import type { IProjectServerRepository, ProjectServer } from '../../projects/ProjectServer';
 
 const DEFAULT_TMUX_SESSION = 'azito';
 
@@ -47,4 +47,22 @@ export function resolveUnitId(
   project: Pick<ProjectDetail, 'defaultUnitId'> | null,
 ): number | null {
   return task.unitId ?? project?.defaultUnitId ?? null;
+}
+
+/**
+ * Resolves the base branch a worktree is created from: the task's own
+ * override, falling back to the project_servers row's branch, falling back
+ * to the project's default branch, falling back to 'main'. Single source for
+ * this precedence — ExecuteTaskUseCase.execute() and TaskRestoreService.
+ * restore() both create a worktree from this same value, and
+ * ExecutionManifest.ts hashes it via the same call, so the value a human
+ * approves is guaranteed to be the value the run actually uses (Issue #328
+ * fifth-round review).
+ */
+export function resolveBaseBranch(
+  task: Pick<Task, 'baseBranch'>,
+  projectServer: Pick<ProjectServer, 'branch'> | null,
+  project: Pick<ProjectDetail, 'defaultBranch'> | null,
+): string {
+  return task.baseBranch || projectServer?.branch || project?.defaultBranch || 'main';
 }
