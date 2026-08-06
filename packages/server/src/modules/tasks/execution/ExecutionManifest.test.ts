@@ -935,6 +935,39 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
 
       expect(() => hashSidekickPackageTree(dir, 'Do the push.')).toThrow();
     });
+
+    // Issue #328 review: the nested-symlink checks above only prove
+    // listFilesRecursive() rejects a symlink found DURING a walk — they never
+    // exercised the case where `scripts` (or `references`) itself is a
+    // symlink, because the old statSync-based root check followed it and
+    // started walking the target before listFilesRecursive ever saw a
+    // symlink to reject. Must fail closed at the root too.
+    it('scripts/ itself being a symlink makes digest computation throw, not walk the link target', () => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-sidekick-digest-'));
+      const realScriptsDir = path.join(dir, 'real-scripts');
+      fs.mkdirSync(realScriptsDir);
+      fs.writeFileSync(path.join(realScriptsDir, 'push.sh'), 'echo hi\n');
+      fs.symlinkSync(realScriptsDir, path.join(dir, 'scripts'));
+
+      expect(() => hashSidekickPackageTree(dir, 'Do the push.')).toThrow();
+    });
+
+    it('references/ itself being a symlink makes digest computation throw', () => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-sidekick-digest-'));
+      const realReferencesDir = path.join(dir, 'real-references');
+      fs.mkdirSync(realReferencesDir);
+      fs.writeFileSync(path.join(realReferencesDir, 'notes.md'), 'notes\n');
+      fs.symlinkSync(realReferencesDir, path.join(dir, 'references'));
+
+      expect(() => hashSidekickPackageTree(dir, 'Do the push.')).toThrow();
+    });
+
+    it('scripts/ being a regular file (not a directory, not a symlink) makes digest computation throw', () => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-sidekick-digest-'));
+      fs.writeFileSync(path.join(dir, 'scripts'), 'not a directory\n');
+
+      expect(() => hashSidekickPackageTree(dir, 'Do the push.')).toThrow();
+    });
   });
 
   it("changing an untrusted task's Sidekick script alone invalidates approval (resolveExecutionManifest wiring for hashSidekickPackageTree)", () => {

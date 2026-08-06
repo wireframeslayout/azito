@@ -42,7 +42,7 @@ import { resolveUnitId, resolveTaskServerName, resolveBaseBranch } from './TaskE
  * an already-resolved manifest hash and project_servers policy, and never
  * reads a repository itself (Resolve at the Boundary) — every call site
  * (ExecuteTaskUseCase, TaskRestoreService, WindowRespawnService,
- * units/routes.ts's approve-execution handler) resolves via this module
+ * tasks/execution/ExecutionApprovalDecision.ts's approve-execution handler) resolves via this module
  * first, then hands the gate the resolved hash.
  *
  * What's included, and why:
@@ -484,14 +484,34 @@ export function hashSidekickPackageTree(dir: string, body: string): string {
     const targetPath = path.join(dir, target);
     let stat: fs.Stats;
     try {
-      stat = fs.statSync(targetPath);
+      // lstatSync, not statSync (Issue #328 review): statSync follows a
+      // symlink before returning, so if `scripts`/`references` ITSELF were a
+      // symlink, the isDirectory() check below would happily walk whatever
+      // the link points to — the same "fail closed on symlinks" contract
+      // listFilesRecursive already enforces for nested entries, just missing
+      // at the root. lstatSync reports the link itself, so the isSymbolicLink()
+      // check right below can reject it before any traversal begins.
+      stat = fs.lstatSync(targetPath);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
       throw err;
     }
-    if (stat.isDirectory()) {
-      listFilesRecursive(targetPath, dir, relPaths);
+    if (stat.isSymbolicLink()) {
+      throw new Error(
+        `Sidekick package tree root "${target}" is a symlink — refusing to compute a digest ` +
+          `(symlink targets are not verified to stay inside the package root; approval must fail closed).`,
+      );
     }
+    if (!stat.isDirectory()) {
+      // Neither ENOENT (tolerated above) nor a real directory nor a symlink
+      // (rejected above) — an unexpected entry type (e.g. a regular file
+      // named `scripts`). Fail closed rather than silently treat it as "no
+      // scripts" the way the old statSync-based check did.
+      throw new Error(
+        `Sidekick package tree root "${target}" is not a directory — refusing to compute a digest.`,
+      );
+    }
+    listFilesRecursive(targetPath, dir, relPaths);
   }
   relPaths.sort();
 
