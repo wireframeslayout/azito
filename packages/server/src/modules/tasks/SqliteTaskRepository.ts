@@ -66,6 +66,7 @@ export class SqliteTaskRepository implements ITaskRepository {
   private createStmt;
   private updateStmt;
   private consumePendingApprovalStmt;
+  private recordExecutionGateBlockStmt;
   private updateStatusStmt;
   private updateCurrentPhaseStmt;
   private touchStmt;
@@ -92,6 +93,15 @@ export class SqliteTaskRepository implements ITaskRepository {
     // tasks/execution/ExecutionApprovalDecision.ts's approve-execution handler.
     this.consumePendingApprovalStmt = db.prepare(
       "UPDATE tasks SET status = COALESCE(?, status), execution_approved_fingerprint_hash = COALESCE(?, execution_approved_fingerprint_hash), pending_operation = NULL, pending_operation_window_id = NULL, pending_operation_prior_status = NULL, updated_at = datetime('now') WHERE id = ? AND status = 'pending_approval' AND pending_operation IS NOT NULL",
+    );
+    // Guarded compare-and-swap for recordExecutionGateBlock() (Issue #328
+    // review round) — mirrors consumePendingApprovalStmt's guard style. Only
+    // succeeds while no block is already outstanding (pending_operation IS
+    // NULL), so a second blocked entry point arriving after the first cannot
+    // overwrite pendingOperation/pendingOperationPriorStatus — see that
+    // method's own doc comment on ITaskRepository.
+    this.recordExecutionGateBlockStmt = db.prepare(
+      "UPDATE tasks SET status = 'pending_approval', pending_operation = ?, pending_operation_prior_status = ?, updated_at = datetime('now') WHERE id = ? AND pending_operation IS NULL",
     );
     this.updateStatusStmt = db.prepare("UPDATE tasks SET status = ?, updated_at = datetime('now') WHERE id = ?");
     this.updateCurrentPhaseStmt = db.prepare("UPDATE tasks SET current_phase = ?, updated_at = datetime('now') WHERE id = ?");
@@ -206,6 +216,14 @@ export class SqliteTaskRepository implements ITaskRepository {
 
   consumePendingApproval(id: number, fields: { status?: TaskStatus; executionApprovedFingerprintHash?: string }): boolean {
     const result = this.consumePendingApprovalStmt.run(fields.status ?? null, fields.executionApprovedFingerprintHash ?? null, id);
+    return result.changes > 0;
+  }
+
+  recordExecutionGateBlock(
+    id: number,
+    fields: { pendingOperation: NonNullable<Task['pendingOperation']>; priorStatus: TaskStatus },
+  ): boolean {
+    const result = this.recordExecutionGateBlockStmt.run(fields.pendingOperation, fields.priorStatus, id);
     return result.changes > 0;
   }
 

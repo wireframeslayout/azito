@@ -116,6 +116,7 @@ function makeOpts(task: Task, unit: Unit, opts: { gateAllows: boolean }): { opts
       // pendingOperation-consuming path lives in modules/tasks/routes.ts) —
       // stubbed only to satisfy ITaskRepository's shape.
       consumePendingApproval: vi.fn(() => false),
+      recordExecutionGateBlock: vi.fn(() => true),
     },
     logRepo: {
       findByTask: vi.fn(() => []),

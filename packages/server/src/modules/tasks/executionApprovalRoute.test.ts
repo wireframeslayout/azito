@@ -70,6 +70,7 @@ function makeOpts(existingTask: Task | null): TasksRouteOptions {
       touch: vi.fn(),
       delete: vi.fn(),
       consumePendingApproval: vi.fn(() => false),
+      recordExecutionGateBlock: vi.fn(() => true),
     },
     projectRepo: {
       findAll: vi.fn(() => []),
@@ -636,6 +637,15 @@ describe('POST /api/tasks/:id/approve-execution (Issue #328 review)', () => {
     expect(res.statusCode).toBe(200);
     expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { status: 'failed' });
     expect(opts.logRepo.append).toHaveBeenCalledWith(1, 20, 'command', expect.objectContaining({ type: 'approved_operation_failed', operation: 'execute', message: 'worktree boom' }));
+    // Issue #328 review round: the 'failed' transition itself must be logged
+    // as a 'status_change' entry AND emitted on the shared task-events bus —
+    // not just the 'command' entry above — so other connected clients get a
+    // live `task:status` WS notification instead of seeing a stale status
+    // until their next manual refresh.
+    expect(opts.logRepo.append).toHaveBeenCalledWith(1, 20, 'status_change', expect.objectContaining({ status: 'failed', operation: 'execute' }));
+    expect(opts.executeTaskUseCase.events.emit).toHaveBeenCalledWith('log', expect.objectContaining({
+      taskId: 1, unitId: 20, type: 'status_change', content: expect.objectContaining({ status: 'failed', operation: 'execute' }),
+    }));
   });
 
   it('logs the failure and marks the task failed when an approved restore() rejects', async () => {
@@ -653,6 +663,10 @@ describe('POST /api/tasks/:id/approve-execution (Issue #328 review)', () => {
     expect(res.statusCode).toBe(200);
     expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { status: 'failed' });
     expect(opts.logRepo.append).toHaveBeenCalledWith(1, 20, 'command', expect.objectContaining({ type: 'approved_operation_failed', operation: 'restore', message: 'worktree gone' }));
+    expect(opts.logRepo.append).toHaveBeenCalledWith(1, 20, 'status_change', expect.objectContaining({ status: 'failed', operation: 'restore' }));
+    expect(opts.executeTaskUseCase.events.emit).toHaveBeenCalledWith('log', expect.objectContaining({
+      taskId: 1, unitId: 20, type: 'status_change', content: expect.objectContaining({ status: 'failed', operation: 'restore' }),
+    }));
   });
 });
 

@@ -206,4 +206,54 @@ export interface ITaskRepository {
    * capability ("pass null to clear") the implementation doesn't provide.
    */
   consumePendingApproval(id: number, fields: { status?: TaskStatus; executionApprovedFingerprintHash?: string }): boolean;
+  /**
+   * Atomically records that the untrusted-input execution gate has blocked
+   * `id` pending human approval (Issue #328 review round) — the compare-and-
+   * swap counterpart to {@link consumePendingApproval}, guarded the same way
+   * (a single UPDATE, not a read-then-write) so a SECOND blocked entry point
+   * arriving after the first can never overwrite it.
+   *
+   * Before this method existed, ExecuteTaskUseCase.enforceExecutionGate and
+   * PhaseLoopRunner.reverifyExecutionGateForPhase each called
+   * `taskRepo.update(id, { status: 'pending_approval', pendingOperation,
+   * pendingOperationPriorStatus: task.status })` unconditionally. Neither
+   * execute() nor follow-up() rejects a task that is ALREADY
+   * `pending_approval` before calling in — so a second blocked call (e.g. a
+   * follow-up request racing an execute() request for the same untrusted
+   * task) would overwrite the FIRST block's `pendingOperation` with its own,
+   * and — worse — read `task.status` as `'pending_approval'` (the status the
+   * FIRST call had already written) and persist THAT as
+   * `pendingOperationPriorStatus`, permanently losing the task's real prior
+   * status (e.g. `'review'` or `'in_progress'`). On approval, the task would
+   * then be restored to `'pending_approval'` instead of its actual prior
+   * status.
+   *
+   * This write only succeeds while the task ISN'T already blocked — guarded
+   * on `pending_operation IS NULL` (the same invariant
+   * {@link consumePendingApproval}'s guard restores on every exit: approval,
+   * denial, and this method's own success all leave pendingOperation
+   * non-NULL only while a block is genuinely outstanding). A second call
+   * while one is already pending is a no-op (returns false); the caller must
+   * NOT re-log a `status_change` event when it does (the first block's
+   * notification already reached the client) — see the call sites for how
+   * `false` is handled.
+   *
+   * `priorStatus` must be the CALLER'S OWN task snapshot's status, exactly
+   * as {@link consumePendingApproval}'s `fields.status` is caller-supplied —
+   * this method does not re-read the row itself before writing, so passing a
+   * stale/already-`pending_approval` status here defeats the guard's
+   * purpose. Every call site derives it from the same `task` object it just
+   * used to resolve the manifest (never a fresh `findById()`), matching this
+   * contract.
+   *
+   * Returns true iff this call was the one that recorded the block (the
+   * caller should log the entry-point-appropriate `status_change` event);
+   * false means another block was already outstanding for this task (the
+   * caller must not overwrite it, and must not log a duplicate
+   * `status_change`).
+   */
+  recordExecutionGateBlock(
+    id: number,
+    fields: { pendingOperation: NonNullable<Task['pendingOperation']>; priorStatus: TaskStatus },
+  ): boolean;
 }

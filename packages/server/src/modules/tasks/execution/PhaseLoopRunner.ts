@@ -168,19 +168,29 @@ export class PhaseLoopRunner {
       // re-enters this same loop at task.currentPhase — already set to this
       // phase by the updateCurrentPhase() call above the call site below, so
       // the resume lands exactly where this block happened.
-      this.taskRepo.update(taskId, {
-        status: 'pending_approval',
+      //
+      // Atomic compare-and-swap (Issue #328 review round), same as
+      // ExecuteTaskUseCase.enforceExecutionGate's own pending_approval
+      // branch — see recordExecutionGateBlock's doc comment on
+      // ITaskRepository for why an unconditional update here could
+      // overwrite an already-recorded block from a concurrently-blocked
+      // entry point.
+      const recorded = this.taskRepo.recordExecutionGateBlock(taskId, {
         pendingOperation: 'resume',
-        pendingOperationPriorStatus: currentTask.status,
-      } as Partial<Task>);
-      // Same shape as ExecuteTaskUseCase.enforceExecutionGate's own
-      // pending_approval log entry (Issue #328 review) — the notification
-      // bridge only forwards a 'task:status' WS event off a 'status_change'
-      // log entry (see that method's own comment), not off the 'command'
-      // entry logged above. Without this, a drift block that happens
-      // mid-run (as opposed to at execute()/resumeStateMachine() entry)
-      // silently sat at pending_approval with nobody notified.
-      this.appendLog(taskId, unitId, 'status_change', { status: 'pending_approval', operation: 'resume' });
+        priorStatus: currentTask.status,
+      });
+      if (recorded) {
+        // Same shape as ExecuteTaskUseCase.enforceExecutionGate's own
+        // pending_approval log entry (Issue #328 review) — the notification
+        // bridge only forwards a 'task:status' WS event off a 'status_change'
+        // log entry (see that method's own comment), not off the 'command'
+        // entry logged above. Without this, a drift block that happens
+        // mid-run (as opposed to at execute()/resumeStateMachine() entry)
+        // silently sat at pending_approval with nobody notified.
+        this.appendLog(taskId, unitId, 'status_change', { status: 'pending_approval', operation: 'resume' });
+      } else {
+        this.appendLog(taskId, unitId, 'command', { type: 'execution_gate_already_pending', operation: 'resume' });
+      }
     } else {
       // 'denied': the project server's input policy changed to 'deny' mid-run.
       // Unlike the entry-point gates (which haven't started anything yet and
@@ -521,7 +531,14 @@ export class PhaseLoopRunner {
     const updateFields: Record<string, unknown> = {};
     if (prUrl) updateFields.prUrl = prUrl;
     if (gitInfo.changedFiles) updateFields.changedFiles = gitInfo.changedFiles;
-    if (gitInfo.branch) updateFields.branch = gitInfo.branch;
+    // worktreeBranch, not branch (Issue #328 review round): `branch` is the
+    // value the execution-gate fingerprint hashes as `branches.work`
+    // (ExecutionManifest.ts) — writing this end-of-run git-resolved branch
+    // back into it made an already-approved task's OWN completed run
+    // invalidate the approval a subsequent operation (e.g. a follow-up)
+    // would need. worktreeBranch is the system-resolved field, already on
+    // the fingerprint's deliberately-excluded list for this exact reason.
+    if (gitInfo.branch) updateFields.worktreeBranch = gitInfo.branch;
     if (Object.keys(updateFields).length > 0) {
       this.taskRepo.update(task.id, updateFields as Partial<Task>);
     }

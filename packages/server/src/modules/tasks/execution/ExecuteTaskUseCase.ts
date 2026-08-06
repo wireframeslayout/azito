@@ -296,19 +296,34 @@ export class ExecuteTaskUseCase {
 
     this.appendLog(task.id, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
     if (gate.reason === 'pending_approval') {
-      this.taskRepo.update(task.id, {
-        status: 'pending_approval',
+      // Atomic compare-and-swap (Issue #328 review round): a second blocked
+      // entry point (e.g. a follow-up racing an execute() for the same
+      // untrusted task) must NOT overwrite an already-recorded
+      // pendingOperation/pendingOperationPriorStatus — see
+      // recordExecutionGateBlock's doc comment on ITaskRepository for why
+      // the old unconditional `taskRepo.update(...)` here could both lose
+      // the first block's operation identity AND corrupt
+      // pendingOperationPriorStatus with 'pending_approval' itself.
+      const recorded = this.taskRepo.recordExecutionGateBlock(task.id, {
         pendingOperation: operation,
-        pendingOperationPriorStatus: task.status,
-      } as Partial<Task>);
-      // Separate 'status_change' log entry (Issue #51), not just the
-      // 'command' entry above — buildServer.ts's NotificationBus bridge
-      // (`executeTaskUseCase.events.on('log', ...)`) only turns a
-      // 'status_change' entry into a `task:status` WS event, the same
-      // mechanism that already surfaces 'waiting_for_human'/'phase_review'
-      // as browser notifications. Without this, a task blocked here would
-      // sit at pending_approval with no notification ever reaching the UI.
-      this.appendLog(task.id, unitId, 'status_change', { status: 'pending_approval', operation });
+        priorStatus: task.status,
+      });
+      if (recorded) {
+        // Separate 'status_change' log entry (Issue #51), not just the
+        // 'command' entry above — buildServer.ts's NotificationBus bridge
+        // (`executeTaskUseCase.events.on('log', ...)`) only turns a
+        // 'status_change' entry into a `task:status` WS event, the same
+        // mechanism that already surfaces 'waiting_for_human'/'phase_review'
+        // as browser notifications. Without this, a task blocked here would
+        // sit at pending_approval with no notification ever reaching the UI.
+        this.appendLog(task.id, unitId, 'status_change', { status: 'pending_approval', operation });
+      } else {
+        // Another operation is already recorded as the pending block — the
+        // first block's own 'status_change' already notified the client;
+        // logging a second one here would misreport `operation` as the one
+        // that will actually resume on approval.
+        this.appendLog(task.id, unitId, 'command', { type: 'execution_gate_already_pending', operation });
+      }
       throw new ExecutionGatePendingApprovalError(task.id);
     }
     // 'denied': leave task status untouched — same rationale as the resource
@@ -556,11 +571,27 @@ export class ExecuteTaskUseCase {
       // skipped when there's no allowedRoot to check against) — this closes
       // the earlier TOCTOU window where wt.path was written to the DB before
       // it had been verified (Issue #27 review finding 2).
+      //
+      // task.branch is deliberately NOT written here (Issue #328 review
+      // round): it is the value the execution-gate fingerprint hashes as
+      // `branches.work` (ExecutionManifest.ts), and it is also read a few
+      // lines above as the user-specified branchName input to
+      // `getWorktreeService(server).create(...)`. Writing the freshly
+      // resolved worktree branch back into it here made an approved-but-
+      // unstarted run's OWN worktree creation change the very fingerprint
+      // its approval was granted under — the next phase-boundary
+      // reverification (PhaseLoopRunner.reverifyExecutionGateForPhase) then
+      // saw a manifest that no longer matched and threw the task straight
+      // back to pending_approval, mid-run, with the tmux window and worktree
+      // already created. `worktreeBranch` is the correct field for "the
+      // branch the system actually resolved/created" — it's already in the
+      // execution-gate fingerprint's deliberately-excluded list for exactly
+      // this self-invalidation reason (see ExecutionManifest.ts's module doc
+      // comment).
       this.taskRepo.update(taskId, {
         worktreePath: wt.path,
         worktreeBranch: wt.branch,
         baseBranch,
-        branch: wt.branch,
       } as Partial<Task>);
 
       this.appendLog(taskId, unitId, 'command', {
@@ -726,8 +757,15 @@ export class ExecuteTaskUseCase {
 
             if (wtPath && await ws.exists(wtPath)) {
               const updates: Partial<Task> = {};
+              // worktreeBranch, not branch — same self-invalidation reasoning
+              // as the worktree-creation write above: this async tail runs
+              // for every completed/failed run of an already-approved task,
+              // so writing the resolved branch back into the
+              // approval-fingerprinted `branch` field would invalidate the
+              // NEXT operation's (e.g. a follow-up's) approval on every
+              // ordinary run.
               const branch = await ws.getBranch(wtPath);
-              if (branch) updates.branch = branch;
+              if (branch) updates.worktreeBranch = branch;
               if (wtBaseBranch) {
                 const changedFiles = await ws.getDiff(wtPath, wtBaseBranch);
                 if (changedFiles) updates.changedFiles = changedFiles;
@@ -745,7 +783,9 @@ export class ExecuteTaskUseCase {
               if (gitInfo.changedFiles) updates.changedFiles = gitInfo.changedFiles;
               const prUrl = await this.findPrUrl(repo, gitInfo.branch);
               if (prUrl) updates.prUrl = prUrl;
-              if (gitInfo.branch) updates.branch = gitInfo.branch;
+              // worktreeBranch, not branch — same reasoning as the worktree
+              // branch above, applied to the no-worktree fallback path.
+              if (gitInfo.branch) updates.worktreeBranch = gitInfo.branch;
               if (Object.keys(updates).length > 0) {
                 this.taskRepo.update(taskId, updates);
               }

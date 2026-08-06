@@ -41,6 +41,7 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
       touch: vi.fn(),
       delete: vi.fn(),
       consumePendingApproval: vi.fn(() => false),
+      recordExecutionGateBlock: vi.fn(() => true),
     },
     gitProvider: {
       getIssue: vi.fn(async () => ({ number: 5, title: 'Fix the thing', body: 'External issue body', state: 'open', htmlUrl: 'https://github.com/acme/widgets/issues/5' })),

@@ -83,6 +83,7 @@ function makeRunner(overrides: {
     update: vi.fn(),
     updateStatus: vi.fn(),
     updateCurrentPhase: vi.fn(),
+    recordExecutionGateBlock: vi.fn(() => true),
     ...overrides.taskRepo,
   };
   const projectRepo = {
@@ -835,7 +836,10 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
     // (planning) and the DRIFTED config for every check after — simulating
     // an edit that landed while planning was already running.
     const unitRepo = { findById: vi.fn().mockReturnValueOnce(originalUnit).mockReturnValue(driftedUnit) };
-    const taskRepo = { findById: vi.fn(() => fixedTask), update: vi.fn(), updateStatus: vi.fn(), updateCurrentPhase: vi.fn() };
+    const taskRepo = {
+      findById: vi.fn(() => fixedTask), update: vi.fn(), updateStatus: vi.fn(), updateCurrentPhase: vi.fn(),
+      recordExecutionGateBlock: vi.fn(() => true),
+    };
     const { runner, workerInput, appendLog } = makeRunner({ taskRepo, unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader });
     const unit = makeUnitForRun();
 
@@ -844,10 +848,9 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
     // Only planning's prompt went out — implementing's must never have been
     // built or sent.
     expect(workerInput.sendPrompt).toHaveBeenCalledTimes(1);
-    expect(taskRepo.update).toHaveBeenCalledWith(1, {
-      status: 'pending_approval',
+    expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(1, {
       pendingOperation: 'resume',
-      pendingOperationPriorStatus: 'running',
+      priorStatus: 'running',
     });
     expect(taskRepo.updateStatus).not.toHaveBeenCalledWith(1, 'review');
     // Issue #328 review: a mid-run drift block must also emit a

@@ -198,7 +198,19 @@ import { resolveUnitId, resolveTaskServerName, resolveBaseBranch } from './TaskE
  *   execute/TaskRestoreService.restore write these right after the gate
  *   check that approved the run) — never a value a human approved in advance.
  *   `branches.work` above uses `task.branch` instead, which the client sets
- *   and the system does not overwrite mid-run for this purpose.
+ *   and the system does not overwrite mid-run for this purpose. This was
+ *   previously an aspiration rather than a fact (Issue #328 review round):
+ *   ExecuteTaskUseCase.execute's worktree-creation write, its post-run git-
+ *   info tail, and PhaseLoopRunner's end-of-run git-info write all wrote the
+ *   resolved worktree branch back into `task.branch` too — so approving an
+ *   untrusted task with no client-specified branch, then running it,
+ *   self-invalidated the very approval the run was operating under the
+ *   moment the worktree was created (the fingerprint hashed `branches.work`
+ *   before the run started, the run then changed the value that field
+ *   hashes, and the next phase-boundary reverification saw a mismatch and
+ *   threw the task back to `pending_approval` with a tmux window and
+ *   worktree already created). All three writes now target `worktreeBranch`
+ *   instead — see each call site's own comment.
  * - tmuxWindow, agentSessionId, pendingOperation(WindowId): run-scoped
  *   bookkeeping, not execution content or target.
  * - server.agentToken: an authentication credential, not a targeting

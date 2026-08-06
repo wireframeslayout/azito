@@ -15,6 +15,7 @@ import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import type { TaskRestoreService } from '../TaskRestoreService';
 import { resolveExecutionManifest, hashExecutionManifest, type ExecutionManifestResolution } from './ExecutionManifest';
 import { resolveTaskServerName } from './TaskExecutionEnv';
+import { appendLogAndEmit } from './AppendLog';
 
 /**
  * Dependencies needed to resolve the manifest for a `pending_approval` task
@@ -177,8 +178,21 @@ export function decideExecutionApproval(
   const pendingWindowId = task.pendingOperationWindowId;
   const priorStatus = (task.pendingOperationPriorStatus ?? 'failed') as TaskStatus;
 
+  // appendLogAndEmit (not a raw logRepo.append), same as ExecuteTaskUseCase/
+  // TaskRestoreService/WindowRespawnService (Issue #328 review round) — a
+  // raw logRepo.append() only persists a row; nothing reads that table to
+  // drive a live notification (see AppendLog.ts's own doc comment). Before
+  // this fix, every log entry decideExecutionApproval wrote (including
+  // 'execution_approved'/'execution_denied' and, most importantly, the
+  // 'failed' transition failApprovedOperation() applies when an approved
+  // dispatch throws asynchronously) went straight to logRepo, so no other
+  // connected client ever saw a `task:status` WS event for any of them.
+  // `executeTaskUseCase.events` is the SAME shared EventEmitter instance
+  // ExecuteTaskUseCase/PhaseLoopRunner/TaskRestoreService/WindowRespawnService
+  // already emit on (see ExecuteTaskUseCase's constructor doc comment) —
+  // reused here rather than adding a second dependency for the same emitter.
   const appendLogIfUnitKnown = (type: Parameters<IExecutionLogRepository['append']>[2], content: unknown): void => {
-    if (unitId !== null) logRepo.append(taskId, unitId, type, content);
+    if (unitId !== null) appendLogAndEmit(logRepo, executeTaskUseCase.events, taskId, unitId, type, content);
   };
 
   if (!approved) {
@@ -242,6 +256,14 @@ export function decideExecutionApproval(
     log.error({ err, taskId, operation: op }, `approved ${op} failed`);
     appendLogIfUnitKnown('command', { type: 'approved_operation_failed', operation: op, message });
     taskRepo.update(taskId, { status: 'failed' as TaskStatus } as Partial<Task>);
+    // 'status_change' entry for the actual transition applied above (Issue
+    // #328 review round) — without this, an approved dispatch that later
+    // fails asynchronously (e.g. resumeStateMachine()/execute() rejecting
+    // after this function has already returned 200 to the approval request)
+    // left the task at 'failed' with only a 'command' log entry: no
+    // `task:status` WS event, so every OTHER connected client kept showing
+    // the task as running/pending until its next manual refresh.
+    appendLogIfUnitKnown('status_change', { status: 'failed', operation: op, message });
   };
 
   if (operation === 'resume_await_answer' || operation === 'resume_await_plan_review') {

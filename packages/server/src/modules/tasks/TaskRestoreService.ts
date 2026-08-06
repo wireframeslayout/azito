@@ -180,7 +180,16 @@ export class TaskRestoreService {
 
         repoDir = workingDir;
         baseBranch = resolveBaseBranch(task, projectServer, project);
-        const branch = task.branch || task.worktreeBranch || undefined;
+        // worktreeBranch first (Issue #328 review round): ExecuteTaskUseCase/
+        // PhaseLoopRunner no longer echo the system-resolved branch back into
+        // task.branch after a run (that write was the execution-gate
+        // fingerprint self-invalidation bug — see ExecuteTaskUseCase.execute's
+        // worktree-creation comment), so worktreeBranch is now the only field
+        // that reliably reflects "which branch did this task's prior run
+        // actually use" — task.branch stays whatever branch name (if any) the
+        // client originally specified. Restoring into the SAME branch a prior
+        // run created means preferring worktreeBranch when both are set.
+        const branch = task.worktreeBranch || task.branch || undefined;
         const slug = branch ? `task-${task.id}` : await contentExtractor.generateSlug(task.title);
 
         const transport = transportFactory.getTransport(server);

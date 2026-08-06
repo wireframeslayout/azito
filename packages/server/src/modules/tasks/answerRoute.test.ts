@@ -83,6 +83,7 @@ function makeOpts(existingTask: Task, opts: { gateAllows: boolean }): { opts: Ta
       touch: vi.fn(),
       delete: vi.fn(),
       consumePendingApproval: vi.fn(() => false),
+      recordExecutionGateBlock: vi.fn(() => true),
     },
     projectRepo: {
       findAll: vi.fn(() => []),

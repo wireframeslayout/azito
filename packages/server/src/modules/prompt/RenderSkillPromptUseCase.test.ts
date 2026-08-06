@@ -152,6 +152,7 @@ function makeRepos(overrides: {
     touch: vi.fn(),
     delete: vi.fn(),
     consumePendingApproval: vi.fn(() => false),
+    recordExecutionGateBlock: vi.fn(() => true),
     ...overrides.task,
   };
 

@@ -73,6 +73,7 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
       touch: vi.fn(),
       delete: vi.fn(),
       consumePendingApproval: vi.fn(() => false),
+      recordExecutionGateBlock: vi.fn(() => true),
     },
     serverRepo: {
       findAll: vi.fn(() => []),
