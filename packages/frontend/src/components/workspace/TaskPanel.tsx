@@ -30,7 +30,7 @@ import { computeTabOverlayStyle } from './paneTabOverlay';
 import BrowserView from '../BrowserView';
 import { useBrowserKeepalive, type BrowserGroupRef } from '../../hooks/useBrowserKeepalive';
 import { closeBrowserGroup } from '../../lib/browserGroup';
-import type { Task, Unit, Window, Session, Project } from '../../pages/workspace/types';
+import type { Task, Unit, Window, Session, Project, ExecutionApprovalData } from '../../pages/workspace/types';
 import type { PersistedTab } from '../../hooks/useTabPersistence';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { isSameWindowTarget } from '../../utils/tmuxTarget';
@@ -113,6 +113,15 @@ export default function TaskPanel({
   const task = detailLoaded ? { ...taskListItem, ...taskDetail } as Task : taskListItem;
   const { unitTypes } = useUnitTypes();
   const [submittingAnswers, setSubmittingAnswers] = useState(false);
+  // Execution-approval gate (Issue #51): fetched on demand only while the
+  // task is actually pending_approval — see the fetch effect below, which
+  // keys off `task?.status` so re-approval after an edit (server clears the
+  // fingerprint, status goes back to pending_approval) triggers a fresh
+  // fetch rather than showing stale content from a previous approval round.
+  const [approvalData, setApprovalData] = useState<ExecutionApprovalData | null>(null);
+  const [approvalLoading, setApprovalLoading] = useState(false);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
+  const [submittingApproval, setSubmittingApproval] = useState<'approve' | 'deny' | null>(null);
   const [windows, setWindows] = useState<Window[]>([]);
   // Tracks whether this task's windows have been *successfully* fetched at least once
   // since the panel last switched to this taskId. `allTabIds` starts out windowless
@@ -403,6 +412,53 @@ export default function TaskPanel({
     onRefresh();
     fetchTaskData();
   }, [taskId, onRefresh, fetchTaskData]);
+
+  useEffect(() => {
+    if (!task || task.status !== 'pending_approval') {
+      setApprovalData(null);
+      setApprovalError(null);
+      return;
+    }
+    let cancelled = false;
+    setApprovalLoading(true);
+    setApprovalError(null);
+    api<ExecutionApprovalData & { error?: string }>(`/tasks/${task.id}/execution-approval`)
+      .then((res) => {
+        if (cancelled) return;
+        if (res.error) {
+          setApprovalError(res.error);
+          setApprovalData(null);
+        } else {
+          setApprovalData(res);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setApprovalError(t('executionApproval.loadError'));
+      })
+      .finally(() => {
+        if (!cancelled) setApprovalLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [task?.id, task?.status, t]);
+
+  const handleExecutionApproval = useCallback(async (approved: boolean) => {
+    if (!approvalData?.execution.unitId || submittingApproval) return;
+    setSubmittingApproval(approved ? 'approve' : 'deny');
+    try {
+      const res = await api<{ error?: string }>(`/units/${approvalData.execution.unitId}/approve-execution`, {
+        method: 'POST',
+        body: JSON.stringify({ taskId: approvalData.taskId, approved }),
+      });
+      if (res.error) {
+        showToast(res.error);
+        return;
+      }
+      onRefresh();
+      fetchTaskData();
+    } finally {
+      setSubmittingApproval(null);
+    }
+  }, [approvalData, submittingApproval, showToast, onRefresh, fetchTaskData]);
 
   const handlePlanAction = useCallback(async (planTask: Task, approved: boolean) => {
     if (!planTask.unitId) return;
@@ -1098,6 +1154,143 @@ export default function TaskPanel({
           </div>
         );
       })()}
+
+      {/* Execution approval gate (Issue #51) — untrusted-origin task blocked
+          before any worker/worktree/secret is touched. Deliberately renders
+          task.title/description as PLAIN TEXT (never MarkdownRenderer): this
+          content can be attacker-authored (imported from an external
+          GitHub/GitLab issue), and rendering it as markdown/HTML on an
+          approval screen would let it forge links, images, or layout that
+          impersonates AZITO's own UI. */}
+      {task.status === 'pending_approval' && (
+        <div
+          role="region"
+          aria-label={t('executionApproval.regionLabel')}
+          style={{ borderBottom: '1px solid var(--border)', background: 'var(--danger-a08)', flexShrink: 0, maxHeight: '60%', overflowY: 'auto' }}
+        >
+          <div style={{ padding: '12px 16px 4px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={{ fontSize: 'var(--font-md)', color: 'var(--danger)', fontWeight: 600 }}>
+              {t('executionApproval.title')}
+            </span>
+            <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
+              {t('executionApproval.whyRequired')}
+            </span>
+          </div>
+
+          <div aria-live="polite" style={{ padding: '0 16px' }}>
+            {approvalLoading && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0', color: 'var(--text-dim)', fontSize: 'var(--font-sm)' }}>
+                <Spinner size={14} />
+                {t('executionApproval.loading')}
+              </div>
+            )}
+            {!approvalLoading && approvalError && (
+              <div style={{ padding: '8px 0', color: 'var(--danger)', fontSize: 'var(--font-sm)' }}>
+                {approvalError}
+              </div>
+            )}
+          </div>
+
+          {!approvalLoading && approvalData && (
+            <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {/* Untrusted content — plain text, visually distinct from AZITO's own UI chrome. */}
+              <div>
+                <div style={{ fontSize: 'var(--font-xs)', color: 'var(--danger)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 }}>
+                  {t('executionApproval.untrustedContentLabel')}
+                </div>
+                <div style={{
+                  border: '1px dashed var(--danger-a35)', borderRadius: 'var(--radius-md)', background: 'var(--bg)',
+                  padding: '10px 12px', maxHeight: 260, overflowY: 'auto',
+                }}>
+                  <div style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', marginBottom: 6, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                    {approvalData.title}
+                  </div>
+                  <pre style={{
+                    margin: 0, fontFamily: 'inherit', fontSize: 'var(--font-sm)', color: 'var(--text)',
+                    whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                  }}>
+                    {approvalData.description || t('executionApproval.noDescription')}
+                  </pre>
+                </div>
+              </div>
+
+              {/* Resolved execution context — where/what/which secrets. */}
+              <div>
+                <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 }}>
+                  {t('executionApproval.contextLabel')}
+                </div>
+                <div style={{
+                  border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', background: 'var(--bg)',
+                  padding: '10px 12px', display: 'grid', gridTemplateColumns: 'max-content 1fr', rowGap: 6, columnGap: 12,
+                  fontSize: 'var(--font-sm)',
+                }}>
+                  <span style={{ color: 'var(--text-dim)' }}>{t('executionApproval.fields.unit')}</span>
+                  <span style={{ color: 'var(--text)', wordBreak: 'break-word' }}>{approvalData.execution.unitName ?? t('executionApproval.unresolved')}</span>
+
+                  <span style={{ color: 'var(--text-dim)' }}>{t('executionApproval.fields.server')}</span>
+                  <span style={{ color: 'var(--text)', wordBreak: 'break-word' }}>{approvalData.execution.serverName ?? t('executionApproval.unresolved')}</span>
+
+                  <span style={{ color: 'var(--text-dim)' }}>{t('executionApproval.fields.workingDirectory')}</span>
+                  <span style={{ color: 'var(--text)', wordBreak: 'break-word' }}>{approvalData.execution.workingDirectory ?? t('executionApproval.unresolved')}</span>
+
+                  <span style={{ color: 'var(--text-dim)' }}>{t('executionApproval.fields.branches')}</span>
+                  <span style={{ color: 'var(--text)', wordBreak: 'break-word' }}>
+                    {t('executionApproval.branchesValue', {
+                      base: approvalData.execution.branches.base || '—',
+                      target: approvalData.execution.branches.target || '—',
+                      work: approvalData.execution.branches.work || '—',
+                    })}
+                  </span>
+
+                  <span style={{ color: 'var(--text-dim)' }}>{t('executionApproval.fields.phases')}</span>
+                  <span style={{ color: 'var(--text)', wordBreak: 'break-word' }}>
+                    {approvalData.execution.phases.length > 0
+                      ? approvalData.execution.phases.map((p) => `${p.phase} (${p.sidekickName ?? t('executionApproval.unresolved')})`).join(', ')
+                      : t('executionApproval.unresolved')}
+                  </span>
+
+                  <span style={{ color: 'var(--text-dim)' }}>{t('executionApproval.fields.repository')}</span>
+                  <span style={{ color: 'var(--text)', wordBreak: 'break-word' }}>
+                    {approvalData.execution.repository
+                      ? (approvalData.execution.repository.owner && approvalData.execution.repository.repoName
+                        ? `${approvalData.execution.repository.owner}/${approvalData.execution.repository.repoName}`
+                        : approvalData.execution.repository.url)
+                      : t('executionApproval.noRepository')}
+                  </span>
+
+                  <span style={{ color: 'var(--text-dim)' }}>{t('executionApproval.fields.secrets')}</span>
+                  <span style={{ color: 'var(--text)', wordBreak: 'break-word' }}>
+                    {approvalData.secretNames.length > 0 ? approvalData.secretNames.join(', ') : t('executionApproval.noSecrets')}
+                  </span>
+                </div>
+              </div>
+
+              <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
+                {t('executionApproval.reapprovalNote')}
+              </div>
+
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  disabled={submittingApproval !== null}
+                  loading={submittingApproval === 'deny'}
+                  loadingLabel={t('executionApproval.denying')}
+                  onClick={() => handleExecutionApproval(false)}
+                >{t('executionApproval.deny')}</Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  disabled={submittingApproval !== null}
+                  loading={submittingApproval === 'approve'}
+                  loadingLabel={t('executionApproval.approving')}
+                  onClick={() => handleExecutionApproval(true)}
+                >{t('executionApproval.approve')}</Button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Main content area (full width, no sidebar) */}
       {isMobile ? (

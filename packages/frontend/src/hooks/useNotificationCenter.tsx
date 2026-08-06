@@ -26,7 +26,7 @@ const PENDING_OPEN_TASK_TTL_MS = 5000;
 const FAILED_STATUSES = new Set(['error', 'send_error', 'codex_error', 'stopped_by_user']);
 
 const NOTIFICATION_KINDS: readonly AppNotificationKind[] = [
-  'qa', 'plan_approval', 'task_done', 'task_failed', 'agent_finished',
+  'qa', 'plan_approval', 'execution_approval', 'task_done', 'task_failed', 'agent_finished',
 ];
 
 interface EphemeralToast {
@@ -249,6 +249,9 @@ export function NotificationCenterProvider({ children }: { children: React.React
         case 'phase_review':
           pushNotification(buildTaskNotification('plan_approval', 'notifications:kinds.planApproval', payload, taskTitle));
           break;
+        case 'pending_approval':
+          pushNotification(buildTaskNotification('execution_approval', 'notifications:kinds.executionApproval', payload, taskTitle));
+          break;
         case 'done':
           pushNotification(buildTaskNotification('task_done', 'notifications:kinds.taskDone', payload, taskTitle));
           break;
@@ -338,7 +341,7 @@ export function NotificationCenterProvider({ children }: { children: React.React
     markRead(notification.id);
     dismissToast(notification.id);
 
-    if (notification.taskId !== undefined && (notification.kind === 'qa' || notification.kind === 'plan_approval' || notification.kind === 'task_done' || notification.kind === 'task_failed')) {
+    if (notification.taskId !== undefined && (notification.kind === 'qa' || notification.kind === 'plan_approval' || notification.kind === 'execution_approval' || notification.kind === 'task_done' || notification.kind === 'task_failed')) {
       if (notification.projectId !== undefined) {
         openTaskInProject(notification.taskId, notification.projectId);
       } else {
@@ -402,6 +405,7 @@ export function useNotificationCenter(): NotificationCenterContextValue {
 const KIND_ICON: Record<AppNotificationKind, React.ReactNode> = {
   qa: <Icon name="question" size={16} />,
   plan_approval: <Icon name="tasks" size={16} />,
+  execution_approval: <Icon name="warning" size={16} />,
   task_done: <Icon name="check" size={16} />,
   task_failed: <Icon name="warning" size={16} />,
   agent_finished: <Icon name="stop" size={16} />,

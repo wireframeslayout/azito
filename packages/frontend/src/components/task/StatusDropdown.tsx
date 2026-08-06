@@ -5,12 +5,22 @@ const RUNNING_STATUSES = new Set([
   'running', 'in_progress', 'phase_review', 'waiting_input',
 ]);
 
+// 'pending_approval' is locked the same way — never a MANUAL_OPTIONS target
+// and never selectable while current (see isDisabled below). Manually
+// overwriting status away from pending_approval would leave the task's
+// pendingOperation/executionApprovedFingerprintHash bookkeeping stuck
+// mid-gate without ever consuming the approval decision (Issue #51) — the
+// only valid way out is POST /api/units/:id/approve-execution (the
+// dedicated approval panel), which atomically clears that state.
+const LOCKED_STATUSES = new Set(['archived', 'pending_approval']);
+
 const MANUAL_OPTIONS = ['open', 'done'] as const;
 
 const badgeColors: Record<string, { bg: string; color: string }> = {
   open: { bg: 'var(--accent-a15)', color: 'var(--accent)' },
   running: { bg: 'var(--warning-a15)', color: 'var(--warning)' },
   phase_review: { bg: 'var(--accent-a15)', color: 'var(--accent)' },
+  pending_approval: { bg: 'var(--danger-a15)', color: 'var(--danger)' },
   review: { bg: 'var(--accent-a15)', color: 'var(--accent)' },
   waiting_input: { bg: 'var(--accent-a15)', color: 'var(--accent)' },
   in_progress: { bg: 'var(--warning-a15)', color: 'var(--warning)' },
@@ -22,6 +32,7 @@ const badgeColors: Record<string, { bg: string; color: string }> = {
 const STATUS_KEY_MAP: Record<string, string> = {
   waiting_input: 'waitingInput',
   phase_review: 'phaseReview',
+  pending_approval: 'pendingApproval',
   in_progress: 'inProgress',
 };
 
@@ -41,7 +52,7 @@ export default function StatusDropdown({ status, onChange, disabled }: StatusDro
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const isRunning = RUNNING_STATUSES.has(status);
-  const isDisabled = disabled || isRunning || status === 'archived';
+  const isDisabled = disabled || isRunning || LOCKED_STATUSES.has(status);
 
   const handleToggle = useCallback(() => {
     if (!isDisabled) setOpen((v) => !v);

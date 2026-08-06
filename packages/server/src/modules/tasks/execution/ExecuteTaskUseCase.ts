@@ -288,6 +288,14 @@ export class ExecuteTaskUseCase {
         pendingOperation: operation,
         pendingOperationPriorStatus: task.status,
       } as Partial<Task>);
+      // Separate 'status_change' log entry (Issue #51), not just the
+      // 'command' entry above — buildServer.ts's NotificationBus bridge
+      // (`executeTaskUseCase.events.on('log', ...)`) only turns a
+      // 'status_change' entry into a `task:status` WS event, the same
+      // mechanism that already surfaces 'waiting_for_human'/'phase_review'
+      // as browser notifications. Without this, a task blocked here would
+      // sit at pending_approval with no notification ever reaching the UI.
+      this.appendLog(task.id, unitId, 'status_change', { status: 'pending_approval', operation });
       throw new ExecutionGatePendingApprovalError(task.id);
     }
     // 'denied': leave task status untouched — same rationale as the resource

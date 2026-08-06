@@ -20,7 +20,11 @@ import { useToast } from '../hooks/useToast';
 import { useConfirm } from '../hooks/useConfirm';
 
 interface Repository { id: number; url: string; name?: string; provider?: string; owner?: string; repoName?: string; }
-interface ProjectServer { projectId: number; serverName: string; workingDirectory?: string; branch?: string; tmuxSession: string; }
+interface ProjectServer {
+  projectId: number; serverName: string; workingDirectory?: string; branch?: string; tmuxSession: string;
+  /** Issue #51 — 'allow' deliberately not selectable in the UI (server rejects it; see routes.ts). */
+  inputPolicy?: 'deny' | 'manual-approval';
+}
 interface Project {
   id: number; name: string; slug: string; description?: string;
   repositoryUrl?: string; defaultBranch?: string; sidekickPrompt?: string;
@@ -59,6 +63,12 @@ export function useProjectSettings(
   const [psWorkDir, setPsWorkDir] = useState('');
   const [psBranch, setPsBranch] = useState('');
   const [psTmuxSession, setPsTmuxSession] = useState('');
+  // Default 'manual-approval' — matches the server's own fallback when no
+  // project_servers row exists yet (see routes.ts PUT handler and
+  // ProjectServer.inputPolicy's doc comment). 'allow' is intentionally not
+  // an option here (Issue #51/#328: no isolated execution profile exists
+  // yet to make it safe — the server rejects it with 400).
+  const [psInputPolicy, setPsInputPolicy] = useState<'deny' | 'manual-approval'>('manual-approval');
 
   const [addRepoOpen, setAddRepoOpen] = useState(false);
   const [repoUrl, setRepoUrl] = useState('');
@@ -157,11 +167,28 @@ export function useProjectSettings(
         working_directory: psWorkDir.trim() || null,
         branch: psBranch.trim() || null,
         tmux_session: psTmuxSession.trim() || null,
+        input_policy: psInputPolicy,
       }),
     });
-    setAddPsOpen(false); setPsWorkDir(''); setPsBranch(''); setPsTmuxSession('');
+    setAddPsOpen(false); setPsWorkDir(''); setPsBranch(''); setPsTmuxSession(''); setPsInputPolicy('manual-approval');
     api<ProjectServer[]>(`/projects/${projectId}/servers`).then((res) => setProjectServers(Array.isArray(res) ? res : [])).catch(() => {});
-  }, [projectId, psServer, psWorkDir, psBranch, psTmuxSession]);
+  }, [projectId, psServer, psWorkDir, psBranch, psTmuxSession, psInputPolicy]);
+
+  // Opens the add/edit form for `serverName`, pre-filled from its existing
+  // project_servers row when one exists (Issue #51 review note: this form's
+  // Save always sends every field, so opening it BLANK against an already-
+  // configured server would silently wipe workingDirectory/branch/
+  // inputPolicy on save — the same field this project's PUT handler
+  // otherwise carefully preserves when a key is omitted).
+  const handleOpenServerForm = useCallback((serverName: string) => {
+    const existing = projectServers.find((ps) => ps.serverName === serverName);
+    setPsServer(serverName);
+    setPsWorkDir(existing?.workingDirectory ?? '');
+    setPsBranch(existing?.branch ?? '');
+    setPsTmuxSession(existing?.tmuxSession ?? '');
+    setPsInputPolicy(existing?.inputPolicy === 'deny' ? 'deny' : 'manual-approval');
+    setAddPsOpen(true);
+  }, [projectServers]);
 
   const handleRemoveServer = useCallback(async (serverName: string) => {
     await api(`/projects/${projectId}/servers/${serverName}`, { method: 'DELETE' });
@@ -183,7 +210,8 @@ export function useProjectSettings(
     handleRemoveWindow,
     // Servers
     projectServers, addPsOpen, setAddPsOpen, psServer, setPsServer,
-    psWorkDir, setPsWorkDir, psBranch, setPsBranch, psTmuxSession, setPsTmuxSession, handleSaveServer, handleRemoveServer,
+    psWorkDir, setPsWorkDir, psBranch, setPsBranch, psTmuxSession, setPsTmuxSession,
+    psInputPolicy, setPsInputPolicy, handleSaveServer, handleRemoveServer, handleOpenServerForm,
     // Danger
     handleDelete,
   };
@@ -445,12 +473,18 @@ function ServersSection({ settings: s }: { settings: ReturnType<typeof useProjec
     <>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
         <span style={{ fontSize: 'var(--font-md)', color: 'var(--text-dim)' }}>{t('settings.servers.count', { count: s.projectServers.length })}</span>
-        <Button size="sm" onClick={() => { s.setAddPsOpen(!s.addPsOpen); if (s.servers?.length) s.setPsServer(s.servers[0].name); }}>+ {t('common:actions.add')}</Button>
+        <Button
+          size="sm"
+          onClick={() => {
+            if (s.addPsOpen) { s.setAddPsOpen(false); return; }
+            s.handleOpenServerForm(s.servers?.length ? s.servers[0].name : '');
+          }}
+        >+ {t('common:actions.add')}</Button>
       </div>
       {s.addPsOpen && (
         <div style={{ marginBottom: 16, padding: 16, background: 'var(--bg-card)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
           <FormField label={t('settings.servers.server')}>
-            <FormSelect value={s.psServer} onChange={(e) => s.setPsServer(e.target.value)}>
+            <FormSelect value={s.psServer} onChange={(e) => s.handleOpenServerForm(e.target.value)}>
               {(s.servers || []).map((sv) => <option key={sv.name} value={sv.name}>{sv.name}</option>)}
             </FormSelect>
           </FormField>
@@ -462,6 +496,16 @@ function ServersSection({ settings: s }: { settings: ReturnType<typeof useProjec
           </FormField>
           <FormField label={t('settings.servers.tmuxSession')} hint={t('settings.servers.tmuxSessionHint')}>
             <FormInput value={s.psTmuxSession} onChange={(e) => s.setPsTmuxSession(e.target.value)} placeholder={t('settings.servers.tmuxSessionPlaceholder')} />
+          </FormField>
+          <FormField label={t('settings.servers.inputPolicy')} hint={t('settings.servers.inputPolicyHint')}>
+            <FormSelect
+              value={s.psInputPolicy}
+              onChange={(e) => s.setPsInputPolicy(e.target.value === 'deny' ? 'deny' : 'manual-approval')}
+            >
+              {/* 'allow' is deliberately not an option — see psInputPolicy's doc comment. */}
+              <option value="manual-approval">{t('settings.servers.inputPolicyManualApproval')}</option>
+              <option value="deny">{t('settings.servers.inputPolicyDeny')}</option>
+            </FormSelect>
           </FormField>
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
             <Button size="sm" onClick={() => s.setAddPsOpen(false)}>{t('common:actions.cancel')}</Button>
@@ -479,8 +523,14 @@ function ServersSection({ settings: s }: { settings: ReturnType<typeof useProjec
               {ps.workingDirectory && <span style={{ color: 'var(--text-dim)', marginLeft: 8 }}>{ps.workingDirectory}</span>}
               {ps.branch && <span style={{ color: 'var(--accent)', marginLeft: 8 }}>{ps.branch}</span>}
               <span style={{ color: 'var(--text-dim)', marginLeft: 8 }}>{t('settings.servers.session', { name: ps.tmuxSession })}</span>
+              <span style={{ color: ps.inputPolicy === 'deny' ? 'var(--danger)' : 'var(--text-dim)', marginLeft: 8 }}>
+                {ps.inputPolicy === 'deny' ? t('settings.servers.inputPolicyDeny') : t('settings.servers.inputPolicyManualApproval')}
+              </span>
             </span>
-            <Button size="sm" onClick={() => s.handleRemoveServer(ps.serverName)}>{t('common:actions.remove')}</Button>
+            <span style={{ display: 'flex', gap: 8 }}>
+              <Button size="sm" onClick={() => s.handleOpenServerForm(ps.serverName)}>{t('common:actions.edit')}</Button>
+              <Button size="sm" onClick={() => s.handleRemoveServer(ps.serverName)}>{t('common:actions.remove')}</Button>
+            </span>
           </div>
         ))
       )}

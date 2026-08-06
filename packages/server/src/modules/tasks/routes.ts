@@ -17,7 +17,10 @@ import { TaskCleanupService } from './TaskCleanupService';
 import { SAFE_PATH_PATTERN, SAFE_BRANCH_PATTERN } from '../git/assertSafeGitArgs';
 import { resolveTaskServerName, resolveTmuxSession, resolveUnitId } from './execution/TaskExecutionEnv';
 import { replyToExecutionGateError } from './execution/ExecutionGate';
+import { resolveExecutionManifest } from './execution/ExecutionManifest';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
+import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
+import type { SqliteProjectSecretRepository } from '../projects/SqliteProjectSecretRepository';
 
 function parseSubagentConfigInput(raw: unknown, fieldName: string): SubagentConfig | null {
   if (raw === null || raw === undefined) return null;
@@ -61,6 +64,13 @@ export interface TasksRouteOptions {
   respawnService: WindowRespawnService;
   taskRestoreService: TaskRestoreService;
   unitTypeLoader: UnitTypeLoader;
+  // Needed by GET /api/tasks/:id/execution-approval to resolve the same
+  // execution manifest resolveExecutionManifest() produces for the gate
+  // check itself (Issue #328/#51) — see that endpoint's comment for why a
+  // second, hand-rolled resolution would risk showing the approver
+  // something other than what actually gets hashed/executed.
+  sidekickLoader: SidekickPackageLoader;
+  projectSecretRepo: SqliteProjectSecretRepository;
 }
 
 // ─── Plugin ───
@@ -81,7 +91,7 @@ function toListItem(task: Task, windows: unknown[]): Record<string, unknown> {
 }
 
 const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, done) => {
-  const { taskRepo, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService, taskRestoreService, unitTypeLoader } = opts;
+  const { taskRepo, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService, taskRestoreService, unitTypeLoader, sidekickLoader, projectSecretRepo } = opts;
   const taskCleanupService = new TaskCleanupService({ serverRepo, tmux, worktreeServiceFactory, transportFactory, projectServerRepo, projectRepo });
 
   // ── GET /api/tasks ──
@@ -228,6 +238,78 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       }
 
       return { ...t, paneAlive, windows, unitType: unitTypeInfo };
+    },
+  );
+
+  // ── GET /api/tasks/:id/execution-approval ──
+  //
+  // What a human needs to see to approve/deny the untrusted-input execution
+  // gate (Issue #51/#328) — the browser previously had no way to fetch this,
+  // so an untrusted task blocked on `pending_approval` had no path forward
+  // from the UI at all.
+  //
+  // Resolved through resolveExecutionManifest() — the SAME function the
+  // approve-execution handler (units/routes.ts) hashes and gates on — rather
+  // than a second, hand-rolled resolution. Two resolution paths for "what
+  // will this task do" is exactly how earlier ExecutionManifest.ts review
+  // rounds found drift bugs (see that file's module doc comment); this
+  // endpoint reuses the same resolution and only reshapes it for display.
+  //
+  // 404 for a task that is not currently `pending_approval`: this resource
+  // represents a live approval decision, not a historical record of one —
+  // there is nothing meaningful to approve/deny once the task has moved on
+  // (approved-and-running, denied-and-failed, or never gated at all), and a
+  // stale UI polling this after the human already acted elsewhere should see
+  // "gone", not a manifest for a decision that no longer applies.
+  fastify.get<{ Params: { id: string } }>(
+    '/api/tasks/:id/execution-approval',
+    async (request, reply) => {
+      const task = taskRepo.findById(parseInt(request.params.id, 10));
+      if (!task || task.status !== 'pending_approval') {
+        return reply.status(404).send({ error: 'Task is not pending execution approval' });
+      }
+
+      const { manifest, unit, serverName, projectServer } = resolveExecutionManifest(task, {
+        unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader,
+      });
+
+      // Secret NAMES for display only — resolveExecutionManifest()
+      // deliberately hashes only a digest of the sorted name set (see
+      // ExecutionManifest.ts's `secrets.namesDigest` doc comment: plaintext
+      // names, let alone values, are not something the approval hash itself
+      // needs to carry). The approval screen needs the actual names, not a
+      // digest a human can't read, so they're read here directly from the
+      // same repository/query resolveExecutionManifest() reads its digest
+      // input from — not a differently-scoped or differently-filtered read.
+      const secretNames = projectSecretRepo.findByProject(task.projectId).map((s) => s.name).sort();
+
+      return {
+        taskId: task.id,
+        title: task.title,
+        description: task.description,
+        inputTrust: task.inputTrust,
+        pendingOperation: task.pendingOperation,
+        inputPolicy: projectServer?.inputPolicy ?? null,
+        execution: {
+          // Included alongside unitName so the client can call
+          // POST /api/units/:id/approve-execution against the RESOLVED
+          // Unit id (that route validates :id matches resolveUnitId(task,
+          // project) exactly, the same resolution used here) rather than
+          // task.unitId, which is null whenever the task inherits the
+          // project's defaultUnitId.
+          unitId: unit?.id ?? null,
+          unitName: unit?.name ?? null,
+          serverName,
+          workingDirectory: task.workingDirectory || manifest.server.workingDirectory,
+          branches: manifest.branches,
+          phases: manifest.phases.map((p) => {
+            const sidekick = manifest.sidekicks.find((s) => s.phase === p.phase);
+            return { phase: p.phase, sidekickName: sidekick?.name ?? null };
+          }),
+          repository: manifest.repository,
+        },
+        secretNames,
+      };
     },
   );
 

@@ -74,6 +74,7 @@
     "testing": "Testing",
     "pushing": "Pushing",
     "phaseReview": "Plan Review",
+    "pendingApproval": "Pending Approval",
     "waitingInput": "Waiting for Input",
     "inProgress": "In Progress",
     "done": "Done",

@@ -106,6 +106,29 @@ export interface Task {
   source?: 'local' | 'github' | 'gitlab';
   sourceRef?: string | null;
 }
+/** GET /api/tasks/:id/execution-approval response (Issue #51) — what a human
+ * needs to see to approve/deny the untrusted-input execution gate. Mirrors
+ * the server's ResolvedExecutionManifest reshaped for display; secret VALUES
+ * are never included, only names. */
+export interface ExecutionApprovalData {
+  taskId: number;
+  title: string;
+  description: string | null;
+  inputTrust: 'trusted' | 'untrusted';
+  pendingOperation: string | null;
+  inputPolicy: 'deny' | 'manual-approval' | 'allow' | null;
+  execution: {
+    unitId: number | null;
+    unitName: string | null;
+    serverName: string | null;
+    workingDirectory: string | null;
+    branches: { base: string; target: string; work: string };
+    phases: Array<{ phase: string; sidekickName: string | null }>;
+    repository: { id: number; provider: string; url: string; owner: string | null; repoName: string | null } | null;
+  };
+  secretNames: string[];
+}
+
 export interface Server { name: string; type: string; host?: string; }
 export interface Pane { index: number; title: string; command: string; width: number; height: number; active: boolean; }
 export interface TmuxWindow { index: number; name: string; panes: Pane[]; activity?: number; }

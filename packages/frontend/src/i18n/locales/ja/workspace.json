@@ -182,7 +182,8 @@
     "taskProjectFailed": "タスクの所属プロジェクト情報の取得に失敗しました",
     "noUnit": "Unitが割り当てられていません",
     "startExecution": "実行を開始",
-    "startConfirm": "実行を開始しますか？"
+    "startConfirm": "実行を開始しますか？",
+    "executionPendingApproval": "このタスクは実行前に承認が必要です — タスクパネルで確認してください。"
   },
   "tabContent": {
     "serverDetailMoved": "サーバーの詳細はサーバーグローバルページに移動しました。"

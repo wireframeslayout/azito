@@ -101,6 +101,14 @@ export class TaskRestoreService {
           pendingOperation: 'restore',
           pendingOperationPriorStatus: task.status,
         } as Partial<Task>);
+        // See the matching comment in ExecuteTaskUseCase.enforceExecutionGate
+        // (Issue #51) — a 'status_change' entry, not just the 'command' entry
+        // above, is what the NotificationBus bridge turns into a browser
+        // notification. Guarded on unitId !== null the same as the 'command'
+        // log above it (an archived task can have no resolvable Unit).
+        if (unitId !== null) {
+          logRepo.append(task.id, unitId, 'status_change', { status: 'pending_approval', operation: 'restore' });
+        }
         throw new ExecutionGatePendingApprovalError(task.id);
       }
       // 'denied': leave status untouched (still 'archived') — see the matching

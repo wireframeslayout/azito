@@ -33,6 +33,34 @@
     "submitAnswers": "Submit Answers",
     "submitting": "Submitting..."
   },
+  "executionApproval": {
+    "regionLabel": "Execution approval required",
+    "title": "Execution approval required",
+    "whyRequired": "This task's content was imported from an external source (a GitHub/GitLab issue). Review it below before an agent runs unattended with access to this project's server and secrets.",
+    "loading": "Loading approval details...",
+    "loadError": "Failed to load approval details. Please try again.",
+    "untrustedContentLabel": "Untrusted external content (plain text, not rendered)",
+    "noDescription": "(no description)",
+    "contextLabel": "What will run",
+    "fields": {
+      "unit": "Unit",
+      "server": "Server",
+      "workingDirectory": "Working directory",
+      "branches": "Branches",
+      "phases": "Phases",
+      "repository": "PR destination",
+      "secrets": "Secrets injected"
+    },
+    "branchesValue": "base: {{base}} → work: {{work}} → target: {{target}}",
+    "unresolved": "(unresolved)",
+    "noRepository": "(no repository configured)",
+    "noSecrets": "(none)",
+    "reapprovalNote": "Editing this task's title or description after approval will require re-approval.",
+    "approve": "Approve",
+    "deny": "Deny",
+    "approving": "Approving...",
+    "denying": "Denying..."
+  },
   "sidebar": {
     "title": "Tasks",
     "noRecentTasks": "No recent tasks",
