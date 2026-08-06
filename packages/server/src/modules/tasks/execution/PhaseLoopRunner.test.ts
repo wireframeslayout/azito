@@ -836,7 +836,7 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
     // an edit that landed while planning was already running.
     const unitRepo = { findById: vi.fn().mockReturnValueOnce(originalUnit).mockReturnValue(driftedUnit) };
     const taskRepo = { findById: vi.fn(() => fixedTask), update: vi.fn(), updateStatus: vi.fn(), updateCurrentPhase: vi.fn() };
-    const { runner, workerInput } = makeRunner({ taskRepo, unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader });
+    const { runner, workerInput, appendLog } = makeRunner({ taskRepo, unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader });
     const unit = makeUnitForRun();
 
     await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
@@ -850,5 +850,12 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
       pendingOperationPriorStatus: 'running',
     });
     expect(taskRepo.updateStatus).not.toHaveBeenCalledWith(1, 'review');
+    // Issue #328 review: a mid-run drift block must also emit a
+    // 'status_change' log entry — same shape as the entry-point gate
+    // (ExecuteTaskUseCase.enforceExecutionGate) — because the notification
+    // bridge only turns a 'status_change' entry into a `task:status` WS
+    // event. Without this, the task silently sat at pending_approval with no
+    // notification ever reaching a human.
+    expect(appendLog).toHaveBeenCalledWith(1, 1, 'status_change', { status: 'pending_approval', operation: 'resume' });
   });
 });

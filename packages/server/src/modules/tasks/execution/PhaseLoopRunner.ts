@@ -173,6 +173,14 @@ export class PhaseLoopRunner {
         pendingOperation: 'resume',
         pendingOperationPriorStatus: currentTask.status,
       } as Partial<Task>);
+      // Same shape as ExecuteTaskUseCase.enforceExecutionGate's own
+      // pending_approval log entry (Issue #328 review) — the notification
+      // bridge only forwards a 'task:status' WS event off a 'status_change'
+      // log entry (see that method's own comment), not off the 'command'
+      // entry logged above. Without this, a drift block that happens
+      // mid-run (as opposed to at execute()/resumeStateMachine() entry)
+      // silently sat at pending_approval with nobody notified.
+      this.appendLog(taskId, unitId, 'status_change', { status: 'pending_approval', operation: 'resume' });
     } else {
       // 'denied': the project server's input policy changed to 'deny' mid-run.
       // Unlike the entry-point gates (which haven't started anything yet and
