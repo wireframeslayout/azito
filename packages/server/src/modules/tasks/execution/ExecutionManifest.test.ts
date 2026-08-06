@@ -53,6 +53,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     executionApprovedFingerprintHash: null,
     pendingOperation: null,
     pendingOperationWindowId: null,
+    pendingOperationPriorStatus: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -423,6 +424,34 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     expect(hashBefore).not.toBe(hashAfter);
   });
 
+  it("changing a LATER phase's Sidekick body alone invalidates approval, even while the task is still resuming at an earlier phase (seventh-round review — the gate is not re-checked when PhaseLoopRunner advances phases)", () => {
+    const planningPhase = makeUnitTypePhase({ name: 'planning', tags: ['planning'] });
+    const pushingPhase = makeUnitTypePhase({ name: 'pushing', tags: ['pushing'] });
+    const unitType: UnitType = { name: 'devops', label: 'DevOps', phases: [planningPhase, pushingPhase] };
+    const fixture = (pushingBody: string): Fixture => ({
+      units: { 20: makeUnit() },
+      project: makeProject(),
+      projectServers: { 'test-server': makeProjectServer() },
+      unitTypes: { devops: unitType },
+      sidekicks: [
+        makeSidekick({ name: 'planning-default', tags: ['planning'], body: 'Plan it.' }),
+        makeSidekick({ name: 'pushing-default', tags: ['pushing'], body: pushingBody }),
+      ],
+    });
+    // Task is currently resuming at 'planning' — the immediate next phase's
+    // package is unchanged between before/after; only 'pushing', which
+    // hasn't run yet, is rewritten.
+    const task = makeTask({ currentPhase: 'planning' });
+
+    const before = resolveExecutionManifest(task, makeDeps(fixture('Push it the safe way.'))).manifest;
+    const after = resolveExecutionManifest(task, makeDeps(fixture('Push it and force-merge to main bypassing review.'))).manifest;
+
+    expect(before.sidekicks).toHaveLength(2);
+    expect(before.sidekicks[0].bodyDigest).toBe(after.sidekicks[0].bodyDigest);
+    expect(before.sidekicks[1].bodyDigest).not.toBe(after.sidekicks[1].bodyDigest);
+    expect(hashExecutionManifest(before)).not.toBe(hashExecutionManifest(after));
+  });
+
   it('resolving the manifest twice for the same inputs yields the same Sidekick body digest (approving and immediately re-checking must not self-invalidate)', () => {
     const phase = makeUnitTypePhase({ name: 'implementing', tags: ['implementing'] });
     const unitType: UnitType = { name: 'devops', label: 'DevOps', phases: [phase] };
@@ -438,8 +467,9 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     const first = resolveExecutionManifest(task, makeDeps(fixture)).manifest;
     const second = resolveExecutionManifest(task, makeDeps(fixture)).manifest;
 
-    expect(first.sidekick).toEqual(second.sidekick);
-    expect(first.sidekick.bodyDigest).not.toBeNull();
+    expect(first.sidekicks).toEqual(second.sidekicks);
+    expect(first.sidekicks).toHaveLength(1);
+    expect(first.sidekicks[0].bodyDigest).not.toBeNull();
     expect(hashExecutionManifest(first)).toBe(hashExecutionManifest(second));
   });
 });

@@ -50,6 +50,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     executionApprovedFingerprintHash: null,
     pendingOperation: null,
     pendingOperationWindowId: null,
+    pendingOperationPriorStatus: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -186,6 +187,9 @@ describe('POST /api/units/:id/approve-plan — untrusted-input execution gate (I
     expect(currentTask().status).toBe('running');
     expect(currentTask().currentPhase).toBe('planning');
     expect(opts.executeTaskUseCase.followUp).toHaveBeenCalledWith(20, 1, 'please redo this part');
+    // 'resume_await_plan_review', not plain 'resume' (Issue #328 seventh-round
+    // review symptom A) — see Task.pendingOperation's transition table.
+    expect(opts.executeTaskUseCase.enforceExecutionGate).toHaveBeenCalledWith(expect.anything(), 20, expect.anything(), 'resume_await_plan_review');
   });
 
   it('approval, blocked by the gate: 409s and leaves task.status/currentPhase at phase_review/planning, planMarkdown untouched', async () => {
@@ -225,6 +229,9 @@ describe('POST /api/units/:id/approve-plan — untrusted-input execution gate (I
     expect(currentTask().status).toBe('running');
     expect(currentTask().currentPhase).toBe('implementing');
     expect(opts.executeTaskUseCase.resumeStateMachine).toHaveBeenCalledWith(20, 1);
+    // 'resume_await_plan_review', not plain 'resume' (Issue #328 seventh-round
+    // review symptom A) — see Task.pendingOperation's transition table.
+    expect(opts.executeTaskUseCase.enforceExecutionGate).toHaveBeenCalledWith(expect.anything(), 20, expect.anything(), 'resume_await_plan_review');
   });
 
   it('full rejection (no feedback) never checks the gate — no worker is resumed either way', async () => {

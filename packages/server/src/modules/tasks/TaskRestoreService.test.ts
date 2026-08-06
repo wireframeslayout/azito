@@ -49,6 +49,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     executionApprovedFingerprintHash: null,
     pendingOperation: null,
     pendingOperationWindowId: null,
+    pendingOperationPriorStatus: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -389,7 +390,7 @@ describe('TaskRestoreService', () => {
 
       expect(deps.tmux.createWindow).not.toHaveBeenCalled();
       expect(deps.worktreeServiceFactory.create).not.toHaveBeenCalled();
-      expect(deps.taskRepo.update).toHaveBeenCalledWith(1, { status: 'pending_approval', pendingOperation: 'restore' });
+      expect(deps.taskRepo.update).toHaveBeenCalledWith(1, { status: 'pending_approval', pendingOperation: 'restore', pendingOperationPriorStatus: 'archived' });
     });
 
     it('allows an untrusted task whose approval hash matches the current fingerprint', async () => {

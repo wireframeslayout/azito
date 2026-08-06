@@ -222,16 +222,35 @@ export class ExecuteTaskUseCase {
    * matching the pre-existing behavior for those two entry points.
    */
   /**
-   * Public (not private) because /api/tasks/:id/answer (modules/tasks/
-   * routes.ts) needs to run this exact check synchronously, BEFORE
-   * consuming task.pendingQuestions/the submitted answers, instead of
-   * discovering the block only after followUp() has already been kicked off
-   * fire-and-forget (Issue #328 sixth-round review finding 1: that ordering
-   * lost both the question record and the human's answer text on a block).
-   * Reusing this method rather than a second gate-check implementation keeps
-   * "what blocks execution" defined in exactly one place.
+   * Public (not private) because /api/tasks/:id/answer and
+   * /api/units/:id/approve-plan (modules/tasks/routes.ts,
+   * modules/units/routes.ts) need to run this exact check synchronously,
+   * BEFORE consuming task.pendingQuestions/the submitted answers or feedback,
+   * instead of discovering the block only after followUp() has already been
+   * kicked off fire-and-forget (Issue #328 sixth-round review finding 1: that
+   * ordering lost both the question record and the human's answer text on a
+   * block). Reusing this method rather than a second gate-check
+   * implementation keeps "what blocks execution" defined in exactly one
+   * place.
+   *
+   * `operation` records WHICH blocked entry point this was — see the
+   * per-operation transition table on Task.pendingOperation for the
+   * authoritative list and what the approval handler does for each.
+   * 'resume_await_answer'/'resume_await_plan_review' exist because those two
+   * callers check the gate BEFORE persisting the human's answers/feedback:
+   * unlike plain 'resume' (auto-resumed via resumeStateMachine() on
+   * approval), these must NOT be auto-resumed, since nothing was persisted
+   * for resumeStateMachine() to pick up — the approval handler instead
+   * restores task.status to pendingOperationPriorStatus and leaves it for the
+   * human to resubmit the same request (Issue #328 seventh-round review
+   * symptom A).
    */
-  enforceExecutionGate(task: Task, unitId: number, server: ServerConfig, operation: 'execute' | 'resume') {
+  enforceExecutionGate(
+    task: Task,
+    unitId: number,
+    server: ServerConfig,
+    operation: 'execute' | 'resume' | 'resume_await_answer' | 'resume_await_plan_review',
+  ) {
     // resolveExecutionManifest() re-resolves the same (task.unitId ??
     // project.defaultUnitId) / serverName the caller already resolved via
     // resolveExecutionEnv() — it's what turns the fingerprint into a
@@ -250,7 +269,11 @@ export class ExecuteTaskUseCase {
 
     this.appendLog(task.id, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
     if (gate.reason === 'pending_approval') {
-      this.taskRepo.update(task.id, { status: 'pending_approval', pendingOperation: operation } as Partial<Task>);
+      this.taskRepo.update(task.id, {
+        status: 'pending_approval',
+        pendingOperation: operation,
+        pendingOperationPriorStatus: task.status,
+      } as Partial<Task>);
       throw new ExecutionGatePendingApprovalError(task.id);
     }
     // 'denied': leave task status untouched — same rationale as the resource

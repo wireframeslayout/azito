@@ -48,6 +48,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     executionApprovedFingerprintHash: null,
     pendingOperation: null,
     pendingOperationWindowId: null,
+    pendingOperationPriorStatus: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -604,7 +605,7 @@ describe('ExecuteTaskUseCase execution gate (Issue #328)', () => {
     // pendingOperation 'execute' lets the approval handler resume via
     // execute() rather than re-inferring it from task.tmuxWindow (Issue #328
     // third-round review finding 1).
-    expect(taskRepo.update).toHaveBeenCalledWith(1, { status: 'pending_approval', pendingOperation: 'execute' });
+    expect(taskRepo.update).toHaveBeenCalledWith(1, { status: 'pending_approval', pendingOperation: 'execute', pendingOperationPriorStatus: 'open' });
   });
 
   it('execute(): allows an untrusted task whose approval hash matches the current fingerprint', async () => {
@@ -674,7 +675,7 @@ describe('ExecuteTaskUseCase execution gate (Issue #328)', () => {
     // pendingOperation 'resume' lets the approval handler resume via
     // resumeStateMachine() rather than re-inferring it from task.tmuxWindow
     // (Issue #328 third-round review finding 1).
-    expect(taskRepo.update).toHaveBeenCalledWith(1, { status: 'pending_approval', pendingOperation: 'resume' });
+    expect(taskRepo.update).toHaveBeenCalledWith(1, { status: 'pending_approval', pendingOperation: 'resume', pendingOperationPriorStatus: 'open' });
   });
 
   it('resumeStateMachine(): blocks resuming an untrusted task with a stale approval', async () => {
@@ -688,7 +689,7 @@ describe('ExecuteTaskUseCase execution gate (Issue #328)', () => {
 
     await expect(useCase.resumeStateMachine(10, 1)).rejects.toThrow(/requires approval/);
 
-    expect(taskRepo.update).toHaveBeenCalledWith(1, { status: 'pending_approval', pendingOperation: 'resume' });
+    expect(taskRepo.update).toHaveBeenCalledWith(1, { status: 'pending_approval', pendingOperation: 'resume', pendingOperationPriorStatus: 'open' });
   });
 });
 

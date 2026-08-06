@@ -156,6 +156,15 @@ describe('migration 059: input_trust_and_exec_gate', () => {
     expect(row.pending_operation_window_id).toBeNull();
   });
 
+  it('adds tasks.pending_operation_prior_status, nullable and unset by default', () => {
+    const db = buildSeededDb();
+    const id = insertTask(db, { source: 'local' });
+    m059.up(db);
+
+    const row = db.prepare('SELECT pending_operation_prior_status FROM tasks WHERE id = ?').get(id) as Record<string, unknown>;
+    expect(row.pending_operation_prior_status).toBeNull();
+  });
+
   it('adds project_servers.input_policy defaulting to manual-approval', () => {
     const db = buildSeededDb();
     db.prepare(`INSERT INTO project_servers (project_id, server_name, tmux_session) VALUES (1, 'srv-a', 'azito')`).run();

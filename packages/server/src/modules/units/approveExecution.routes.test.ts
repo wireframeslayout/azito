@@ -44,6 +44,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     executionApprovedFingerprintHash: null,
     pendingOperation: null,
     pendingOperationWindowId: null,
+    pendingOperationPriorStatus: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -178,7 +179,7 @@ describe('POST /api/units/:id/approve-execution (Issue #328)', () => {
     const res = await app.inject({ method: 'POST', url: '/api/units/20/approve-execution', payload: { taskId: 1, approved: false } });
 
     expect(res.statusCode).toBe(200);
-    expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { status: 'failed', pendingOperation: null, pendingOperationWindowId: null });
+    expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { status: 'failed', pendingOperation: null, pendingOperationWindowId: null, pendingOperationPriorStatus: null });
     expect(opts.executeTaskUseCase.execute).not.toHaveBeenCalled();
     expect(opts.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();
   });
@@ -195,7 +196,7 @@ describe('POST /api/units/:id/approve-execution (Issue #328)', () => {
     const res = await app.inject({ method: 'POST', url: '/api/units/20/approve-execution', payload: { taskId: 1, approved: false } });
 
     expect(res.statusCode).toBe(200);
-    expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { status: 'archived', pendingOperation: null, pendingOperationWindowId: null });
+    expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { status: 'archived', pendingOperation: null, pendingOperationWindowId: null, pendingOperationPriorStatus: null });
     expect(opts.taskRestoreService.restore).not.toHaveBeenCalled();
   });
 
@@ -209,7 +210,7 @@ describe('POST /api/units/:id/approve-execution (Issue #328)', () => {
     const res = await app.inject({ method: 'POST', url: '/api/units/20/approve-execution', payload: { taskId: 1, approved: true } });
 
     expect(res.statusCode).toBe(200);
-    expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { executionApprovedFingerprintHash: expectedManifestHash(opts, task), pendingOperation: null, pendingOperationWindowId: null });
+    expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { executionApprovedFingerprintHash: expectedManifestHash(opts, task), pendingOperation: null, pendingOperationWindowId: null, pendingOperationPriorStatus: null });
     expect(opts.taskRepo.updateStatus).toHaveBeenCalledWith(1, 'open');
     expect(opts.executeTaskUseCase.execute).toHaveBeenCalledWith(20, 1);
     expect(opts.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();
@@ -342,7 +343,7 @@ describe('POST /api/units/:id/approve-execution (Issue #328)', () => {
   });
 
   it('approval on a blocked respawn (pendingOperation respawn) resumes respawnService.respawn() against the recorded windowId, not resumeStateMachine (Issue #328 fourth-round review finding 2)', async () => {
-    const task = makeTask({ status: 'pending_approval', pendingOperation: 'respawn', pendingOperationWindowId: 5, description: 'do the thing' });
+    const task = makeTask({ status: 'pending_approval', pendingOperation: 'respawn', pendingOperationWindowId: 5, pendingOperationPriorStatus: 'running', description: 'do the thing' });
     const opts = makeOpts(task, makeUnit());
     (opts.windowRepo.findById as ReturnType<typeof vi.fn>) = vi.fn((id: number) => (id === 5 ? { id: 5, serverName: 'test-server' } : null));
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>) = vi.fn((name: string) => (name === 'test-server' ? { name: 'test-server', type: 'local' } : null));
@@ -351,12 +352,18 @@ describe('POST /api/units/:id/approve-execution (Issue #328)', () => {
     await app.ready();
 
     const res = await app.inject({ method: 'POST', url: '/api/units/20/approve-execution', payload: { taskId: 1, approved: true } });
+    await new Promise((r) => setImmediate(r));
 
     expect(res.statusCode).toBe(200);
     expect(opts.respawnService.respawn).toHaveBeenCalledWith(5, expect.objectContaining({ name: 'test-server' }));
     expect(opts.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();
     expect(opts.executeTaskUseCase.execute).not.toHaveBeenCalled();
     expect(opts.taskRestoreService.restore).not.toHaveBeenCalled();
+    // respawn() itself never touches task.status — the approval handler must
+    // restore it to pendingOperationPriorStatus on success, or the task is
+    // stuck showing 'pending_approval' forever despite a successful respawn
+    // (Issue #328 seventh-round review symptom B).
+    expect(opts.taskRepo.updateStatus).toHaveBeenCalledWith(1, 'running');
   });
 
   it('marks the task failed when an approved respawn cannot find its recorded window (Issue #328 fourth-round review finding 2)', async () => {
@@ -376,7 +383,7 @@ describe('POST /api/units/:id/approve-execution (Issue #328)', () => {
   });
 
   it('approval on a blocked legacy recover-session (pendingOperation recover_session_legacy) resumes resumeLegacySession(), not execute() (Issue #328 fourth-round review finding 2)', async () => {
-    const task = makeTask({ status: 'pending_approval', pendingOperation: 'recover_session_legacy', serverName: 'test-server', agentSessionId: 'sess-1' });
+    const task = makeTask({ status: 'pending_approval', pendingOperation: 'recover_session_legacy', pendingOperationPriorStatus: 'running', serverName: 'test-server', agentSessionId: 'sess-1' });
     const opts = makeOpts(task, makeUnit());
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>) = vi.fn((name: string) => (name === 'test-server' ? { name: 'test-server', type: 'local' } : null));
     const app = Fastify();
@@ -384,11 +391,53 @@ describe('POST /api/units/:id/approve-execution (Issue #328)', () => {
     await app.ready();
 
     const res = await app.inject({ method: 'POST', url: '/api/units/20/approve-execution', payload: { taskId: 1, approved: true } });
+    await new Promise((r) => setImmediate(r));
 
     expect(res.statusCode).toBe(200);
     expect(opts.respawnService.resumeLegacySession).toHaveBeenCalledWith(1, expect.objectContaining({ name: 'test-server' }));
     expect(opts.executeTaskUseCase.execute).not.toHaveBeenCalled();
     expect(opts.respawnService.respawn).not.toHaveBeenCalled();
+    // Same reasoning as respawn above: resumeLegacySession() never touches
+    // task.status either (Issue #328 seventh-round review symptom B).
+    expect(opts.taskRepo.updateStatus).toHaveBeenCalledWith(1, 'running');
+  });
+
+  it("approval of a blocked answer-resubmit (pendingOperation resume_await_answer) restores the task to its prior waiting status WITHOUT auto-resuming (Issue #328 seventh-round review symptom A)", async () => {
+    const task = makeTask({ status: 'pending_approval', pendingOperation: 'resume_await_answer', pendingOperationPriorStatus: 'waiting_input', description: 'do the thing' });
+    const opts = makeOpts(task, makeUnit());
+    const app = Fastify();
+    await app.register(unitsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/units/20/approve-execution', payload: { taskId: 1, approved: true } });
+
+    expect(res.statusCode).toBe(200);
+    // The human's answers were never persisted before the block — approving
+    // must NOT resume the worker on its own; it must go back to waiting so
+    // the human can resubmit POST /api/tasks/:id/answer.
+    expect(opts.taskRepo.updateStatus).toHaveBeenCalledWith(1, 'waiting_input');
+    expect(opts.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();
+    expect(opts.executeTaskUseCase.followUp).not.toHaveBeenCalled();
+    expect(opts.executeTaskUseCase.execute).not.toHaveBeenCalled();
+  });
+
+  it("approval of a blocked plan-review-resubmit (pendingOperation resume_await_plan_review) restores the task to 'phase_review' WITHOUT auto-resuming (Issue #328 seventh-round review symptom A)", async () => {
+    const task = makeTask({ status: 'pending_approval', pendingOperation: 'resume_await_plan_review', pendingOperationPriorStatus: 'phase_review', description: 'do the thing' });
+    const opts = makeOpts(task, makeUnit());
+    const app = Fastify();
+    await app.register(unitsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/units/20/approve-execution', payload: { taskId: 1, approved: true } });
+
+    expect(res.statusCode).toBe(200);
+    // The human's plan feedback/decision was never persisted before the
+    // block — approving must NOT auto-resume; it must go back to
+    // 'phase_review' so the human can resubmit POST /api/units/:id/approve-plan.
+    expect(opts.taskRepo.updateStatus).toHaveBeenCalledWith(1, 'phase_review');
+    expect(opts.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();
+    expect(opts.executeTaskUseCase.followUp).not.toHaveBeenCalled();
+    expect(opts.executeTaskUseCase.execute).not.toHaveBeenCalled();
   });
 
   it('logs the failure and marks the task failed when an approved execute() rejects, instead of silently swallowing it (Issue #328 fourth-round review finding 1)', async () => {

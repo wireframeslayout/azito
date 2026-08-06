@@ -349,6 +349,16 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
       // ('running'/'planning' or 'running'/'implementing') that no longer
       // matched what actually happened (sixth-round review finding 1, same
       // failure mode as /api/tasks/:id/answer).
+      //
+      // Gate checks below pass 'resume_await_plan_review', NOT plain
+      // 'resume' (seventh-round review symptom A): `feedback` is not
+      // persisted anywhere until AFTER the gate check passes, so a block here
+      // must not auto-resume via resumeStateMachine() on approval — that
+      // would restart the task without ever delivering the feedback the
+      // human just typed. The approval handler (approve-execution below)
+      // instead restores task.status to 'phase_review' and leaves it for the
+      // human to resubmit this same approve-plan call. See the transition
+      // table on Task.pendingOperation.
       const resolvedServerName = resolveTaskServerName(task, projectServerRepo);
       const server = resolvedServerName ? serverRepo.findByName(resolvedServerName) : null;
       if (!server) return reply.status(404).send({ error: 'Server not found' });
@@ -365,7 +375,7 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
         if (feedback) {
           // Send feedback and restart planning via followUp
           try {
-            executeTaskUseCase.enforceExecutionGate(task, id, server, 'resume');
+            executeTaskUseCase.enforceExecutionGate(task, id, server, 'resume_await_plan_review');
           } catch (err) {
             if (replyToExecutionGateError(err, reply)) return;
             throw err;
@@ -382,9 +392,14 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
         return { ok: true };
       }
 
-      // Approved - resume execution from implementing phase
+      // Approved - resume execution from implementing phase. Same
+      // 'resume_await_plan_review' operation as the rejected-with-feedback
+      // branch above: an approved-with-feedback plan appends `feedback` to
+      // planMarkdown only AFTER this gate check passes (below), so a block
+      // here must not auto-resume either — see the comment above this
+      // handler and the transition table on Task.pendingOperation.
       try {
-        executeTaskUseCase.enforceExecutionGate(task, id, server, 'resume');
+        executeTaskUseCase.enforceExecutionGate(task, id, server, 'resume_await_plan_review');
       } catch (err) {
         if (replyToExecutionGateError(err, reply)) return;
         throw err;
@@ -445,20 +460,21 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
         return reply.status(400).send({ error: `Task ${taskId} belongs to unit ${resolvedUnitId ?? 'none'}, not unit ${id}` });
       }
 
-      // Which operation was blocked — see Task.pendingOperation's write-site
-      // catalogue for the full list ('execute' | 'resume' | 'restore' |
-      // 'respawn' | 'recover_session_legacy') and which code path writes
-      // each one. Rows written before that column existed have it NULL (in
-      // practice there are none: migration 059 has never shipped in a
+      // Which operation was blocked — see the per-operation transition table
+      // on Task.pendingOperation for the authoritative list ('execute' |
+      // 'resume' | 'resume_await_answer' | 'resume_await_plan_review' |
+      // 'restore' | 'respawn' | 'recover_session_legacy') and what
+      // approval/denial does for each (Issue #328 seventh-round review
+      // findings 1/2). Rows written before that column existed have it NULL
+      // (in practice there are none: migration 059 has never shipped in a
       // release), so the tmuxWindow-based heuristic this replaced is kept as
       // a fallback for that case only, not as the primary signal anymore
       // (Issue #328 third-round review finding 1 — that heuristic couldn't
       // distinguish "never started" from "was being restored from
-      // archive"). Note this fallback predates 'respawn'/'recover_session_
-      // legacy' too: it can only ever produce 'resume' or 'execute', so it
-      // cannot correctly recover a pre-fix respawn/legacy block either — not
-      // a live concern while 059 stays unshipped, same as the third-round
-      // caveat above.
+      // archive"). Note this fallback predates every value but 'resume'/
+      // 'execute' too: it cannot correctly recover a pre-fix block of any of
+      // them — not a live concern while 059 stays unshipped, same as the
+      // third-round caveat above.
       const operation = task.pendingOperation ?? (task.tmuxWindow ? 'resume' : 'execute');
       // Captured before the approval below clears it — respawn is the only
       // operation that needs an extra identifier to resume (see
@@ -466,18 +482,31 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
       // freshness the way the fingerprint hash does; see the 'restore'
       // branch below for the field that DOES need a refetch.
       const pendingWindowId = task.pendingOperationWindowId;
+      // The status the gate overwrote with 'pending_approval' — every
+      // operation that doesn't manage its own status transition on success
+      // (see the transition table) restores this instead of leaving the task
+      // stuck on 'pending_approval' (Issue #328 seventh-round review symptom
+      // B). Falls back to 'failed' only for a legacy NULL row (none in
+      // practice, same caveat as `operation` above) — every write site going
+      // forward always sets this alongside pendingOperation.
+      const priorStatus = (task.pendingOperationPriorStatus ?? 'failed') as TaskStatus;
 
       if (!approved) {
         logRepo.append(taskId, id, 'status_change', { status: 'execution_denied' });
         // A denied restore never started anything — put the task back to
         // 'archived' (its state before the blocked restore attempt) rather
         // than 'failed', which would misrepresent an archived task as a
-        // failed run. Every other operation's denial keeps the existing
-        // 'failed' outcome.
+        // failed run. Every other operation's denial (including
+        // 'resume_await_answer'/'resume_await_plan_review': the human's
+        // answers/feedback were never persisted and are simply discarded)
+        // keeps the existing 'failed' outcome — a denial always means "stop
+        // this run", not "go back to waiting for input" the way an
+        // *approval* of those two operations does below.
         taskRepo.update(taskId, {
           status: (operation === 'restore' ? 'archived' : 'failed') as TaskStatus,
           pendingOperation: null,
           pendingOperationWindowId: null,
+          pendingOperationPriorStatus: null,
         } as Partial<Task>);
         return { ok: true };
       }
@@ -495,6 +524,7 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
         executionApprovedFingerprintHash: hashExecutionManifest(manifest),
         pendingOperation: null,
         pendingOperationWindowId: null,
+        pendingOperationPriorStatus: null,
       } as Partial<Task>);
 
       // Fire-and-forget below, matching the pre-existing convention for
@@ -515,7 +545,25 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
         taskRepo.update(taskId, { status: 'failed' as TaskStatus } as Partial<Task>);
       };
 
-      if (operation === 'restore') {
+      if (operation === 'resume_await_answer' || operation === 'resume_await_plan_review') {
+        // Deliberately NOT auto-resumed (Issue #328 seventh-round review
+        // symptom A): the human's answers/feedback were never persisted
+        // before the gate blocked this the first time (see the pre-check
+        // comments in POST /api/tasks/:id/answer and this file's
+        // approve-plan handler above), so kicking off resumeStateMachine()
+        // here would restart the task WITHOUT them. Restore the exact
+        // waiting status the human was looking at and stop — the human
+        // resubmits the same request (POST /api/tasks/:id/answer or POST
+        // /api/units/:id/approve-plan), which now passes the gate (the
+        // approval just above recorded the current manifest hash) and
+        // delivers the answers/feedback through the normal path.
+        logRepo.append(taskId, id, 'status_change', {
+          status: 'execution_approved_awaiting_resubmit',
+          operation,
+          restoredStatus: priorStatus,
+        });
+        taskRepo.updateStatus(taskId, priorStatus);
+      } else if (operation === 'restore') {
         // Must be the just-persisted row, NOT the `task` object fetched at
         // the top of this handler: checkExecutionGate() inside restore()
         // re-validates executionApprovedFingerprintHash, which the update
@@ -546,7 +594,15 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
         if (!win || !srv) {
           failApprovedOperation('respawn', new Error(`Window ${pendingWindowId ?? 'null'} or its server no longer exists`));
         } else {
-          respawnService.respawn(win.id, srv).catch((err: unknown) => failApprovedOperation('respawn', err));
+          // respawn() itself never touches task.status (it only manages the
+          // Window row) — unlike 'restore'/'resume'/'execute', which manage
+          // their own status transition, a successful respawn must
+          // explicitly restore priorStatus here or the task is stuck showing
+          // 'pending_approval' forever after a successful recovery (Issue
+          // #328 seventh-round review symptom B).
+          respawnService.respawn(win.id, srv)
+            .then(() => { taskRepo.updateStatus(taskId, priorStatus); })
+            .catch((err: unknown) => failApprovedOperation('respawn', err));
         }
       } else if (operation === 'recover_session_legacy') {
         // resumeLegacySession() also re-resolves the task from the DB by
@@ -557,7 +613,12 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
         if (!srv) {
           failApprovedOperation('recover_session_legacy', new Error(`Server '${resolvedServerName ?? 'unresolved'}' not found`));
         } else {
-          respawnService.resumeLegacySession(taskId, srv).catch((err: unknown) => failApprovedOperation('recover_session_legacy', err));
+          // Same reasoning as 'respawn' above: resumeLegacySession() doesn't
+          // touch task.status either (Issue #328 seventh-round review
+          // symptom B).
+          respawnService.resumeLegacySession(taskId, srv)
+            .then(() => { taskRepo.updateStatus(taskId, priorStatus); })
+            .catch((err: unknown) => failApprovedOperation('recover_session_legacy', err));
         }
       } else {
         taskRepo.updateStatus(taskId, 'open');

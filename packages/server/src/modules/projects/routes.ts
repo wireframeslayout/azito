@@ -428,6 +428,7 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
           executionApprovedFingerprintHash: null,
           pendingOperation: null,
           pendingOperationWindowId: null,
+          pendingOperationPriorStatus: null,
         });
         return { ok: true, taskId, issue: { number: issue.number, title: issue.title } };
       } catch (err: unknown) {

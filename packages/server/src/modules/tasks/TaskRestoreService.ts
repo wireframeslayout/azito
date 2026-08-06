@@ -91,7 +91,11 @@ export class TaskRestoreService {
         // ungated restore() always makes — so once approval re-invokes this
         // method, the end state matches what restoring would have done in
         // the first place.
-        taskRepo.update(task.id, { status: 'pending_approval', pendingOperation: 'restore' } as Partial<Task>);
+        taskRepo.update(task.id, {
+          status: 'pending_approval',
+          pendingOperation: 'restore',
+          pendingOperationPriorStatus: task.status,
+        } as Partial<Task>);
         throw new ExecutionGatePendingApprovalError(task.id);
       }
       // 'denied': leave status untouched (still 'archived') — see the matching

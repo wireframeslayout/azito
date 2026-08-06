@@ -83,6 +83,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     executionApprovedFingerprintHash: null,
     pendingOperation: null,
     pendingOperationWindowId: null,
+    pendingOperationPriorStatus: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -342,6 +343,7 @@ describe('WindowRespawnService.respawn — execution gate (Issue #328)', () => {
       status: 'pending_approval',
       pendingOperation: 'respawn',
       pendingOperationWindowId: 1,
+      pendingOperationPriorStatus: 'open',
     });
   });
 
@@ -715,6 +717,7 @@ describe('WindowRespawnService.resumeLegacySession (Issue #328 fourth-round revi
       status: 'pending_approval',
       pendingOperation: 'recover_session_legacy',
       pendingOperationWindowId: null,
+      pendingOperationPriorStatus: 'open',
     });
   });
 });

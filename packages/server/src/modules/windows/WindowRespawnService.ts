@@ -211,6 +211,7 @@ export class WindowRespawnService {
         status: 'pending_approval',
         pendingOperation: operation,
         pendingOperationWindowId: windowId,
+        pendingOperationPriorStatus: task.status,
       } as Partial<Task>);
       throw new ExecutionGatePendingApprovalError(task.id);
     }

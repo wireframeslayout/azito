@@ -72,4 +72,16 @@ export function up(db: Database.Database): void {
   // for every pending_operation value except 'respawn' — see the write-site
   // catalogue on Task.pendingOperation.
   db.exec(`ALTER TABLE tasks ADD COLUMN pending_operation_window_id INTEGER`);
+
+  // task.status immediately before the gate overwrote it with
+  // 'pending_approval' (Issue #328 seventh-round review symptom B/table on
+  // Task.pendingOperation): 'respawn'/'recover_session_legacy' approvals need
+  // it to leave 'pending_approval' on success (neither service touches task
+  // status itself), and 'resume_await_answer'/'resume_await_plan_review'
+  // approvals need it to go back to the exact waiting state the human was
+  // looking at (e.g. 'waiting_input', 'phase_review') instead of being
+  // auto-resumed by the approval handler before the human's answer/feedback
+  // has ever been resubmitted. NULL alongside pending_operation = NULL, same
+  // as pending_operation_window_id above.
+  db.exec(`ALTER TABLE tasks ADD COLUMN pending_operation_prior_status TEXT`);
 }

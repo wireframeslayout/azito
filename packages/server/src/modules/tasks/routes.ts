@@ -187,6 +187,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         executionApprovedFingerprintHash: null,
         pendingOperation: null,
         pendingOperationWindowId: null,
+        pendingOperationPriorStatus: null,
       });
       return { ok: true, id };
     } catch (err: unknown) {
@@ -409,8 +410,17 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       // pendingQuestions/task.status exactly as they were and returns 409 —
       // the human can resubmit the same answers from the same screen once a
       // human approves via POST /api/units/:id/approve-execution.
+      //
+      // 'resume_await_answer', NOT plain 'resume' (Issue #328 seventh-round
+      // review symptom A): plain 'resume' is auto-resumed via
+      // resumeStateMachine() by the approval handler, which would restart the
+      // task WITHOUT the answers ever reaching it (they are never persisted
+      // above this check). The approval handler instead restores task.status
+      // to pendingOperationPriorStatus ('waiting_input') and leaves it for
+      // the human to resubmit this same /answer call. See the transition
+      // table on Task.pendingOperation.
       try {
-        executeTaskUseCase.enforceExecutionGate(task, answerUnitId, server, 'resume');
+        executeTaskUseCase.enforceExecutionGate(task, answerUnitId, server, 'resume_await_answer');
       } catch (err) {
         if (replyToExecutionGateError(err, reply)) return;
         throw err;

@@ -47,6 +47,7 @@ const makeTask = (overrides = {}) => ({
   executionApprovedFingerprintHash: null,
   pendingOperation: null,
   pendingOperationWindowId: null,
+  pendingOperationPriorStatus: null,
   createdAt: '2024-01-01',
   updatedAt: '2024-01-01',
   ...overrides,

@@ -77,18 +77,28 @@ import { resolveUnitId, resolveTaskServerName, resolveBaseBranch } from './TaskE
  *   (resolveEnabledPhases) — reassigning a phase to a different package or
  *   toggling one off/on changes what runs without changing anything else on
  *   this list.
- * - sidekick: the resolved Sidekick package for the phase that will actually
- *   run next (resolveCurrentPhaseIndex — same "resume point" resolution
- *   PhaseLoopRunner.stateMachineLoop uses, so approval always reflects the
- *   phase execution really resumes at, not just phase 0). Only a content
- *   digest of the package body is hashed (see hashExecutionManifest), not the
- *   full text — this is the instruction text actually sent to the worker;
- *   without it, editing a user-layer Sidekick package (`data/sidekicks/`)
- *   after approval could swap in arbitrary instructions post-approval with no
- *   fingerprint change at all. Resolution failure (missing/misconfigured
- *   package) is tolerated here the same way a null unit/server is elsewhere
- *   — the real run's own resolvePhaseSidekick() call still fails fast; this
- *   manifest only needs to detect drift, not duplicate that validation.
+ * - sidekicks: the resolved Sidekick package for EVERY enabled phase from the
+ *   resume point onward (resolveCurrentPhaseIndex — same "resume point"
+ *   resolution PhaseLoopRunner.stateMachineLoop uses — sliced from there to
+ *   the end of the enabled-phase list), in phase order. Seventh-round review:
+ *   hashing only the immediate next phase's package let an approved task's
+ *   LATER phases be swapped out after approval — PhaseLoopRunner advances
+ *   through subsequent phases without re-checking the gate, so a package
+ *   rewrite targeting e.g. the pushing phase while an approved task was still
+ *   in planning would never invalidate approval and would still run
+ *   unattended once reached. Hashing the whole ordered remainder closes that
+ *   gap and also detects phases being reordered/added/removed via phaseConfig
+ *   (a change unit.phaseConfig above already covers by itself, but the
+ *   ordered list here is what makes a reordering-without-content-change
+ *   visible too). Only a content digest of each package body is hashed (see
+ *   hashExecutionManifest), not the full text — this is the instruction text
+ *   actually sent to the worker; without it, editing a user-layer Sidekick
+ *   package (`data/sidekicks/`) after approval could swap in arbitrary
+ *   instructions post-approval with no fingerprint change at all. Resolution
+ *   failure for a given phase (missing/misconfigured package) is tolerated
+ *   here the same way a null unit/server is elsewhere — the real run's own
+ *   resolvePhaseSidekick() call still fails fast; this manifest only needs to
+ *   detect drift, not duplicate that validation.
  *
  * Deliberately excluded (values that change on every run of an
  * ALREADY-approved task, or that a human never reviews as "what will run"):
@@ -155,20 +165,22 @@ export interface ResolvedExecutionManifest {
     sidekickPrompt: string | null;
   };
   /**
-   * The Sidekick package that will render the phase this task resumes at
-   * next (see resolveCurrentPhaseIndex/resolvePhaseSidekick). `phase` is
-   * null when no Unit/UnitType/enabled phase can be resolved (mirrors the
-   * `unit: null` tolerance elsewhere in this manifest); `name`/`bodyDigest`
-   * are null when the phase resolves but the package itself does not
-   * (misconfigured phaseConfig override, no default package for the tag) —
-   * the real run's own resolvePhaseSidekick() call still fails fast on that,
-   * this manifest only needs to notice when it changes.
+   * The resolved Sidekick package for every enabled phase from the resume
+   * point onward, in order (see resolveCurrentPhaseIndex/
+   * resolvePhaseSidekick and the module doc comment above — seventh-round
+   * review). Empty when no Unit/UnitType/enabled phase can be resolved
+   * (mirrors the `unit: null` tolerance elsewhere in this manifest);
+   * `name`/`bodyDigest` are null for a given entry when that phase resolves
+   * but its package does not (misconfigured phaseConfig override, no default
+   * package for the tag) — the real run's own resolvePhaseSidekick() call
+   * still fails fast on that, this manifest only needs to notice when it
+   * changes.
    */
-  sidekick: {
-    phase: string | null;
+  sidekicks: Array<{
+    phase: string;
     name: string | null;
     bodyDigest: string | null;
-  };
+  }>;
 }
 
 export interface ExecutionManifestResolution {
@@ -221,24 +233,32 @@ export function resolveExecutionManifest(task: Task, deps: ExecutionManifestDeps
   // reimplemented here, so this can never drift from what a real run
   // actually resolves (Issue #328 sixth-round review).
   const unitType = unit ? deps.unitTypeLoader.get(unit.unitType) : undefined;
-  let sidekickPhase: string | null = null;
-  let sidekickName: string | null = null;
-  let sidekickBodyDigest: string | null = null;
+  const sidekicks: ResolvedExecutionManifest['sidekicks'] = [];
   if (unit && unitType) {
+    // Every enabled phase from the resume point onward — not just the
+    // immediate next one — so a rewrite targeting a LATER phase invalidates
+    // approval too (see the module doc comment's "sidekicks" bullet,
+    // seventh-round review).
     const { enabledPhases, index } = resolveCurrentPhaseIndex(unit.phaseConfig, unitType.phases, task.currentPhase);
-    const phase = enabledPhases[index] ?? null;
-    sidekickPhase = phase;
-    const phaseDef = phase ? unitType.phases.find((p) => p.name === phase) : undefined;
-    if (phase && phaseDef) {
+    for (const phase of enabledPhases.slice(index)) {
+      const phaseDef = unitType.phases.find((p) => p.name === phase);
+      if (!phaseDef) {
+        sidekicks.push({ phase, name: null, bodyDigest: null });
+        continue;
+      }
       try {
         const sidekick = resolvePhaseSidekick(deps.sidekickLoader, phase, unit.phaseConfig, phaseDef);
-        sidekickName = sidekick.name;
-        sidekickBodyDigest = createHash('sha256').update(sidekick.body).digest('hex');
+        sidekicks.push({
+          phase,
+          name: sidekick.name,
+          bodyDigest: createHash('sha256').update(sidekick.body).digest('hex'),
+        });
       } catch {
         // Misconfigured phaseConfig override / no default package for the
-        // tag — tolerated here (see ResolvedExecutionManifest.sidekick's doc
+        // tag — tolerated here (see ResolvedExecutionManifest.sidekicks' doc
         // comment); the real run's own resolvePhaseSidekick() call still
         // fails fast on this.
+        sidekicks.push({ phase, name: null, bodyDigest: null });
       }
     }
   }
@@ -282,11 +302,7 @@ export function resolveExecutionManifest(task: Task, deps: ExecutionManifestDeps
     project: {
       sidekickPrompt: project?.sidekickPrompt ?? null,
     },
-    sidekick: {
-      phase: sidekickPhase,
-      name: sidekickName,
-      bodyDigest: sidekickBodyDigest,
-    },
+    sidekicks,
   };
 
   return { manifest, project, unit, serverName, projectServer };
@@ -349,11 +365,14 @@ export function hashExecutionManifest(manifest: ResolvedExecutionManifest): stri
     project: {
       sidekickPrompt: manifest.project.sidekickPrompt ?? '',
     },
-    sidekick: {
-      phase: manifest.sidekick.phase ?? '',
-      name: manifest.sidekick.name ?? '',
-      bodyDigest: manifest.sidekick.bodyDigest ?? '',
-    },
+    // Array order is significant and preserved by JSON.stringify — a
+    // reordering of phases (via phaseConfig) changes this even if the same
+    // set of packages is still assigned to the same set of phases.
+    sidekicks: manifest.sidekicks.map((s) => ({
+      phase: s.phase,
+      name: s.name ?? '',
+      bodyDigest: s.bodyDigest ?? '',
+    })),
   });
   return createHash('sha256').update(normalized).digest('hex');
 }

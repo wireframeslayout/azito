@@ -46,7 +46,7 @@ export interface Task {
   executionApprovedFingerprintHash: string | null;
   /**
    * Which operation the execution gate blocked and must be resumed (not
-   * re-inferred) once a human approves (Issue #328 third/fourth-round
+   * re-inferred) once a human approves (Issue #328 third/fourth/seventh-round
    * review): see modules/units/routes.ts's approve-execution handler. Set
    * immediately before the gate throws and cleared once approval consumes
    * it. NULL means "no pending operation" — the normal state, and also the
@@ -54,13 +54,47 @@ export interface Task {
    * column (see migration 059's comment; there is no such row in practice,
    * 059 has never shipped).
    *
+   * **Per-operation approval transition table** (seventh-round review finding
+   * 1/2 — a per-operation table, kept here so a new write site is forced to
+   * fill in all four columns instead of copy-pasting the nearest existing
+   * `if` branch and silently missing one):
+   *
+   * | pendingOperation           | status BEFORE the gate stopped it (-> pendingOperationPriorStatus) | on APPROVE                                                        | on DENY                          | on approved-run FAILURE |
+   * |-----------------------------|----------------------------------------------------------------------|--------------------------------------------------------------------|-----------------------------------|--------------------------|
+   * | 'execute'                  | whatever it was pre-run (e.g. 'open')                                 | run execute(); execute() manages status itself                    | 'failed'                          | 'failed'                 |
+   * | 'resume'                   | whatever it was mid-run (e.g. 'running')                              | run resumeStateMachine(); it manages status itself                | 'failed'                          | 'failed'                 |
+   * | 'resume_await_answer'      | 'waiting_input' / 'review'                                            | restore to pendingOperationPriorStatus — NO auto resume; the human must resubmit the SAME answers to POST /api/tasks/:id/answer (they were never persisted) | 'failed' | n/a (nothing is run) |
+   * | 'resume_await_plan_review' | 'phase_review'                                                        | restore to pendingOperationPriorStatus — NO auto resume; the human must resubmit the SAME decision to POST /api/units/:id/approve-plan (feedback was never persisted) | 'failed' | n/a (nothing is run) |
+   * | 'restore'                  | 'archived'                                                            | run restore(); restore() sets 'open' on success itself             | 'archived' (not 'failed' — nothing ran) | 'failed' |
+   * | 'respawn'                  | whatever the window's task had                                       | run respawn(); on success restore to pendingOperationPriorStatus  | 'failed'                          | 'failed'                 |
+   * | 'recover_session_legacy'   | whatever the task had                                                 | run resumeLegacySession(); on success restore to pendingOperationPriorStatus | 'failed'                | 'failed'                 |
+   *
+   * `'resume_await_answer'`/`'resume_await_plan_review'` exist specifically
+   * because /api/tasks/:id/answer and /api/units/:id/approve-plan check the
+   * gate BEFORE persisting the human's answers/feedback (so a block doesn't
+   * silently discard them) — the previous single 'resume' value made the
+   * approval handler auto-invoke resumeStateMachine() for these too, which
+   * resumed the task WITHOUT ever delivering the answers/feedback (seventh-
+   * round review symptom A). Every other 'resume' call site (resumeStateMachine()
+   * itself, PhaseLoopRunner continuation, RecoverStuckTasksUseCase) has no
+   * ephemeral human input at risk, so it keeps auto-resuming under the plain
+   * 'resume' value.
+   *
    * Write-site catalogue (every gate that can set this MUST be listed here
    * — a value added without a matching writer is exactly how the fourth-
    * round review's "forgotten wiring" bug happened, silently falling back
    * to the wrong resumed operation):
    * - 'execute'  — ExecuteTaskUseCase.enforceExecutionGate (execute() entry)
    * - 'resume'   — ExecuteTaskUseCase.enforceExecutionGate (followUp()/
-   *                resumeStateMachine() entries)
+   *                resumeStateMachine() entries reached WITHOUT a route-level
+   *                pre-check, e.g. RecoverStuckTasksUseCase)
+   * - 'resume_await_answer'      — ExecuteTaskUseCase.enforceExecutionGate,
+   *                passed explicitly by POST /api/tasks/:id/answer's
+   *                pre-check (modules/tasks/routes.ts)
+   * - 'resume_await_plan_review' — ExecuteTaskUseCase.enforceExecutionGate,
+   *                passed explicitly by POST /api/units/:id/approve-plan's
+   *                pre-check (modules/units/routes.ts), both its
+   *                approved-with-feedback and rejected-with-feedback branches
    * - 'restore'  — TaskRestoreService.restore
    * - 'respawn'  — WindowRespawnService.enforceExecutionGate (respawn()
    *                entry); pendingOperationWindowId is set alongside this
@@ -70,7 +104,15 @@ export interface Task {
    *                window-less fallback used by POST /api/tasks/:id/
    *                recover-session)
    */
-  pendingOperation: 'execute' | 'resume' | 'restore' | 'respawn' | 'recover_session_legacy' | null;
+  pendingOperation:
+    | 'execute'
+    | 'resume'
+    | 'resume_await_answer'
+    | 'resume_await_plan_review'
+    | 'restore'
+    | 'respawn'
+    | 'recover_session_legacy'
+    | null;
   /**
    * The Window row id to resume when pendingOperation === 'respawn' — a
    * respawn-blocked task has no other reliable way to recover which window
@@ -81,6 +123,18 @@ export interface Task {
    * cleared whenever pendingOperation is cleared.
    */
   pendingOperationWindowId: number | null;
+  /**
+   * task.status immediately before the execution gate overwrote it with
+   * 'pending_approval' (Issue #328 seventh-round review symptom B) — the
+   * status every pendingOperation's approval handling above restores to
+   * (directly for 'resume_await_answer'/'resume_await_plan_review', or after
+   * a successful 'respawn'/'recover_session_legacy' run; 'execute'/'resume'/
+   * 'restore' manage their own status on success and don't consult this).
+   * NULL alongside pendingOperation === null (the normal state) or for any
+   * row written before this column existed — none in practice, same as
+   * pendingOperation/pendingOperationWindowId (059 has never shipped).
+   */
+  pendingOperationPriorStatus: TaskStatus | null;
   worktreePath: string | null;
   worktreeBranch: string | null;
   baseBranch: string | null;
