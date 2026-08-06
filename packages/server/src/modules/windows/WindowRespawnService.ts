@@ -241,13 +241,21 @@ export class WindowRespawnService {
     windowId: number | null,
     respawnInput?: RespawnManifestInput,
   ): number | null {
+    // `server` here is the ACTUAL server this respawn/legacy-recover will
+    // run on (respawn()/resumeLegacySession() both resolve it from the
+    // Window/task before calling in — see their call sites above) — not
+    // necessarily the server the task itself resolves to (see
+    // resolveExecutionManifest's `serverNameOverride` doc comment for why
+    // the two can diverge and what happens if this override is dropped).
+    // Passing it through is what makes checkExecutionGate below read the
+    // input policy for the server respawn will really touch.
     const { manifest, unit, projectServer } = resolveExecutionManifest(task, {
       unitRepo: this.unitRepo,
       projectRepo: this.projectRepo,
       projectServerRepo: this.projectServerRepo,
       unitTypeLoader: this.unitTypeLoader,
       sidekickLoader: this.sidekickLoader,
-    }, respawnInput);
+    }, respawnInput, server.name);
     const unitId = unit?.id ?? null;
     const gate = checkExecutionGate(task, projectServer, hashExecutionManifest(manifest));
     if (gate.allowed) return unitId;

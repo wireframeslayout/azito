@@ -151,6 +151,7 @@ function makeRepos(overrides: {
     updateCurrentPhase: vi.fn(),
     touch: vi.fn(),
     delete: vi.fn(),
+    consumePendingApproval: vi.fn(() => false),
     ...overrides.task,
   };
 

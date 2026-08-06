@@ -199,6 +199,7 @@ function buildUseCase(opts: {
     updateCurrentPhase: vi.fn(),
     touch: vi.fn(),
     delete: vi.fn(),
+    consumePendingApproval: vi.fn(() => false),
   };
 
   const unitRepo: IUnitRepository = {
@@ -711,6 +712,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITOç›
       updateCurrentPhase: vi.fn(),
       touch: vi.fn(),
       delete: vi.fn(),
+      consumePendingApproval: vi.fn(() => false),
     };
     const unitRepo: IUnitRepository = {
       findAll: vi.fn(() => [unit]),

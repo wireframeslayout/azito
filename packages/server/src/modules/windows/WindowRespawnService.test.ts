@@ -679,7 +679,13 @@ describe('WindowRespawnService.respawn — respawn config fingerprint (Issue #32
     const unit = makeUnit({ id: 10 });
     const win = makeWindow({ id: 1, taskId: 5, windowType: 'agent', workerType: 'claude', workerModel: 'opus' });
 
-    const { manifest } = resolveExecutionManifest(task, manifestDeps(unit), buildRespawnManifestInput(win));
+    // 4th arg mirrors WindowRespawnService.enforceExecutionGate's own call
+    // (Issue #328 ninth-round review finding 3): the manifest a human
+    // approves must be resolved against the WINDOW's server
+    // (win.serverName), not whatever resolveTaskServerName alone would
+    // produce from the task — respawn() computes its live gate check the
+    // same way, via the `server.name` it's actually called with below.
+    const { manifest } = resolveExecutionManifest(task, manifestDeps(unit), buildRespawnManifestInput(win), win.serverName);
     const approvedHash = hashExecutionManifest(manifest);
     const approvedTask = { ...task, executionApprovedFingerprintHash: approvedHash };
 
@@ -695,7 +701,7 @@ describe('WindowRespawnService.respawn — respawn config fingerprint (Issue #32
     const unit = makeUnit({ id: 10 });
     const approvedWin = makeWindow({ id: 1, taskId: 6, windowType: 'agent', workerType: 'claude', workerModel: 'opus' });
 
-    const { manifest } = resolveExecutionManifest(task, manifestDeps(unit), buildRespawnManifestInput(approvedWin));
+    const { manifest } = resolveExecutionManifest(task, manifestDeps(unit), buildRespawnManifestInput(approvedWin), approvedWin.serverName);
     const approvedHash = hashExecutionManifest(manifest);
     const approvedTask = { ...task, executionApprovedFingerprintHash: approvedHash };
 
@@ -721,7 +727,7 @@ describe('WindowRespawnService.respawn — respawn config fingerprint (Issue #32
     const unit = makeUnit({ id: 10 });
     const approvedWin = makeWindow({ id: 1, taskId: 7, windowType: 'agent', workerType: 'claude', workerModel: 'opus', serverName: 'local-server' });
 
-    const { manifest } = resolveExecutionManifest(task, manifestDeps(unit), buildRespawnManifestInput(approvedWin));
+    const { manifest } = resolveExecutionManifest(task, manifestDeps(unit), buildRespawnManifestInput(approvedWin), approvedWin.serverName);
     const approvedHash = hashExecutionManifest(manifest);
     const approvedTask = { ...task, executionApprovedFingerprintHash: approvedHash };
 
@@ -730,6 +736,62 @@ describe('WindowRespawnService.respawn — respawn config fingerprint (Issue #32
 
     await expect(service.respawn(1, makeServer({ name: 'other-server' }))).rejects.toThrow(/requires approval/);
     expect(taskRepo.update).toHaveBeenCalledWith(7, expect.objectContaining({ status: 'pending_approval', pendingOperation: 'respawn' }));
+  });
+});
+
+describe('WindowRespawnService.respawn — policy resolved from the WINDOW server, not the task server (Issue #328 ninth-round review finding 3)', () => {
+  // The task resolves to server A ('manual-approval'), but the Window being
+  // respawned actually lives on server B ('deny'). Before this fix,
+  // enforceExecutionGate() resolved the project_servers row via the TASK's
+  // own server resolution (resolveTaskServerName), ignoring the `server`
+  // param respawn() itself was called with — so B's 'deny' was silently
+  // overridden by A's more permissive 'manual-approval', and an untrusted
+  // respawn onto B could eventually be approved and run despite B's policy.
+  function twoServerProjectServerRepo(): Pick<IProjectServerRepository, 'find' | 'findByProject'> {
+    const rows: Record<string, { projectId: number; serverName: string; workingDirectory: string | null; branch: string; tmuxSession: string; inputPolicy: 'deny' | 'manual-approval' }> = {
+      'server-a': { projectId: 1, serverName: 'server-a', workingDirectory: null, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' },
+      'server-b': { projectId: 1, serverName: 'server-b', workingDirectory: null, branch: 'main', tmuxSession: 'azito', inputPolicy: 'deny' },
+    };
+    return {
+      find: vi.fn((_projectId: number, serverName: string) => rows[serverName] ?? null),
+      findByProject: vi.fn(() => Object.values(rows)),
+    };
+  }
+
+  it("a respawn onto the window's own server (B, deny) is denied even though the task itself resolves to server A (manual-approval)", async () => {
+    const task = makeTask({ id: 20, unitId: 10, inputTrust: 'untrusted', serverName: 'server-a' });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ id: 1, taskId: 20, windowType: 'agent', workerType: 'claude', serverName: 'server-b' });
+    const { service, tmux, taskRepo, logRepo } = buildService({
+      window: win, task, unit, projectServerRepo: twoServerProjectServerRepo(),
+    });
+
+    await expect(service.respawn(1, makeServer({ name: 'server-b' }))).rejects.toThrow(/execution denied/);
+
+    expect(tmux.killWindow).not.toHaveBeenCalled();
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(tmux.createSession).not.toHaveBeenCalled();
+    expect(tmux.sendKeys).not.toHaveBeenCalled();
+    // Denial never touches task.status/pendingOperation (same as the
+    // single-server 'deny' case above) — a bug that instead resolved
+    // server A's 'manual-approval' would have called taskRepo.update with
+    // pending_approval here instead of throwing outright.
+    expect(taskRepo.update).not.toHaveBeenCalled();
+    expect(logRepo.append).toHaveBeenCalledWith(20, 10, 'command', { type: 'execution_gate_blocked', reason: 'denied' });
+  });
+
+  it("resumeLegacySession also resolves policy from the server it's actually given, not the task's own resolved server", async () => {
+    const task = makeTask({ id: 21, unitId: 10, agentSessionId: 'sess-xyz', inputTrust: 'untrusted', serverName: 'server-a' });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 21 });
+    const { service, tmux, taskRepo } = buildService({
+      window: win, task, unit, projectServerRepo: twoServerProjectServerRepo(),
+    });
+
+    await expect(service.resumeLegacySession(21, makeServer({ name: 'server-b' }))).rejects.toThrow(/execution denied/);
+
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(taskRepo.update).not.toHaveBeenCalled();
   });
 });
 

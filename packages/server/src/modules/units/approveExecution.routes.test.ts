@@ -119,6 +119,25 @@ function makeOpts(task: Task, unit: Unit): UnitsRouteOptions {
       updateCurrentPhase: vi.fn(),
       touch: vi.fn(),
       delete: vi.fn(),
+      // Mirrors SqliteTaskRepository's real guard (Issue #328 ninth-round
+      // review finding 4): only consumes when the CURRENT in-memory task is
+      // still 'pending_approval' with a non-null pendingOperation — a second
+      // call for the same task (double-submitted approval/denial) sees the
+      // first call's clear and returns false, same as the real
+      // compare-and-clear UPDATE.
+      consumePendingApproval: vi.fn((id: number, fields: { status?: Task['status']; executionApprovedFingerprintHash?: string | null }) => {
+        if (id !== task.id) return false;
+        if (currentTask.status !== 'pending_approval' || currentTask.pendingOperation === null) return false;
+        currentTask = {
+          ...currentTask,
+          ...(fields.status !== undefined ? { status: fields.status } : {}),
+          ...(fields.executionApprovedFingerprintHash !== undefined ? { executionApprovedFingerprintHash: fields.executionApprovedFingerprintHash } : {}),
+          pendingOperation: null,
+          pendingOperationWindowId: null,
+          pendingOperationPriorStatus: null,
+        };
+        return true;
+      }),
     },
     logRepo: {
       findByTask: vi.fn(() => []),
@@ -179,7 +198,7 @@ describe('POST /api/units/:id/approve-execution (Issue #328)', () => {
     const res = await app.inject({ method: 'POST', url: '/api/units/20/approve-execution', payload: { taskId: 1, approved: false } });
 
     expect(res.statusCode).toBe(200);
-    expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { status: 'failed', pendingOperation: null, pendingOperationWindowId: null, pendingOperationPriorStatus: null });
+    expect(opts.taskRepo.consumePendingApproval).toHaveBeenCalledWith(1, { status: 'failed' });
     expect(opts.executeTaskUseCase.execute).not.toHaveBeenCalled();
     expect(opts.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();
   });
@@ -196,7 +215,7 @@ describe('POST /api/units/:id/approve-execution (Issue #328)', () => {
     const res = await app.inject({ method: 'POST', url: '/api/units/20/approve-execution', payload: { taskId: 1, approved: false } });
 
     expect(res.statusCode).toBe(200);
-    expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { status: 'archived', pendingOperation: null, pendingOperationWindowId: null, pendingOperationPriorStatus: null });
+    expect(opts.taskRepo.consumePendingApproval).toHaveBeenCalledWith(1, { status: 'archived' });
     expect(opts.taskRestoreService.restore).not.toHaveBeenCalled();
   });
 
@@ -210,7 +229,7 @@ describe('POST /api/units/:id/approve-execution (Issue #328)', () => {
     const res = await app.inject({ method: 'POST', url: '/api/units/20/approve-execution', payload: { taskId: 1, approved: true } });
 
     expect(res.statusCode).toBe(200);
-    expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { executionApprovedFingerprintHash: expectedManifestHash(opts, task), pendingOperation: null, pendingOperationWindowId: null, pendingOperationPriorStatus: null });
+    expect(opts.taskRepo.consumePendingApproval).toHaveBeenCalledWith(1, { executionApprovedFingerprintHash: expectedManifestHash(opts, task) });
     expect(opts.taskRepo.updateStatus).toHaveBeenCalledWith(1, 'open');
     expect(opts.executeTaskUseCase.execute).toHaveBeenCalledWith(20, 1);
     expect(opts.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();
@@ -283,7 +302,7 @@ describe('POST /api/units/:id/approve-execution (Issue #328)', () => {
     expect(restoreCall[0].pendingOperation).toBeNull();
   });
 
-  it('falls back to the tmuxWindow heuristic when pendingOperation is NULL (pre-existing row)', async () => {
+  it('409s instead of guessing an operation when pendingOperation is NULL (Issue #328 ninth-round review finding 4: the tmuxWindow-based fallback this replaced could not tell operations apart and widened the blast radius of a double-submission race)', async () => {
     const task = makeTask({ status: 'pending_approval', pendingOperation: null, tmuxWindow: 'task-1', description: 'do the thing' });
     const opts = makeOpts(task, makeUnit());
     const app = Fastify();
@@ -292,10 +311,57 @@ describe('POST /api/units/:id/approve-execution (Issue #328)', () => {
 
     const res = await app.inject({ method: 'POST', url: '/api/units/20/approve-execution', payload: { taskId: 1, approved: true } });
 
-    expect(res.statusCode).toBe(200);
-    expect(opts.executeTaskUseCase.resumeStateMachine).toHaveBeenCalledWith(20, 1);
+    expect(res.statusCode).toBe(409);
+    expect(opts.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();
     expect(opts.executeTaskUseCase.execute).not.toHaveBeenCalled();
     expect(opts.taskRestoreService.restore).not.toHaveBeenCalled();
+    expect(opts.taskRepo.consumePendingApproval).not.toHaveBeenCalled();
+  });
+
+  // A genuine double-submission race can't be reproduced by two concurrent
+  // `app.inject()` calls in this test harness: the route handler itself is
+  // fully synchronous up to its fire-and-forget dispatch (no `await` before
+  // it), so under Node's single-threaded event loop the FIRST request always
+  // runs to completion — including changing task.status away from
+  // 'pending_approval' — before the SECOND request's handler ever starts.
+  // The second request would legitimately 400 on the pre-existing "not
+  // pending_approval" check, never reaching consumePendingApproval() at all
+  // — which demonstrates the same "no double dispatch" property, just via a
+  // different (also correct) status code than a true cross-process race
+  // would produce. SqliteTaskRepository.test.ts exercises the actual atomic
+  // SQL guard directly (real DB, no mock) — that is where the "only the
+  // first caller wins" property is actually proven. These two tests instead
+  // verify routes.ts's OWN wiring: when consumePendingApproval() reports it
+  // lost the race (the scenario a second/losing process would hit), the
+  // handler rejects with 409 and never dispatches anything.
+  it('rejects with 409 and dispatches nothing when consumePendingApproval() reports the approval was already consumed (the losing side of a race)', async () => {
+    const task = makeTask({ status: 'pending_approval', pendingOperation: 'execute', tmuxWindow: null, description: 'do the thing' });
+    const opts = makeOpts(task, makeUnit());
+    (opts.taskRepo.consumePendingApproval as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    const app = Fastify();
+    await app.register(unitsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/units/20/approve-execution', payload: { taskId: 1, approved: true } });
+
+    expect(res.statusCode).toBe(409);
+    expect(opts.executeTaskUseCase.execute).not.toHaveBeenCalled();
+    expect(opts.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();
+    expect(opts.taskRestoreService.restore).not.toHaveBeenCalled();
+  });
+
+  it('rejects a DENIAL with 409 and applies no side effects when consumePendingApproval() reports it was already consumed', async () => {
+    const task = makeTask({ status: 'pending_approval', pendingOperation: 'execute', tmuxWindow: null, description: 'do the thing' });
+    const opts = makeOpts(task, makeUnit());
+    (opts.taskRepo.consumePendingApproval as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    const app = Fastify();
+    await app.register(unitsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/units/20/approve-execution', payload: { taskId: 1, approved: false } });
+
+    expect(res.statusCode).toBe(409);
+    expect(opts.taskRepo.consumePendingApproval).toHaveBeenCalledWith(1, { status: 'failed' });
   });
 
   it('rejects a string "false" for approved instead of treating it as truthy approval', async () => {

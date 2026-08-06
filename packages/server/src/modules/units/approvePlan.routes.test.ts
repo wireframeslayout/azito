@@ -112,6 +112,10 @@ function makeOpts(task: Task, unit: Unit, opts: { gateAllows: boolean }): { opts
       }),
       touch: vi.fn(),
       delete: vi.fn(),
+      // Not exercised by these approve-plan tests (approve-execution's
+      // pendingOperation-consuming path is a different route) — stubbed only
+      // to satisfy ITaskRepository's shape.
+      consumePendingApproval: vi.fn(() => false),
     },
     logRepo: {
       findByTask: vi.fn(() => []),

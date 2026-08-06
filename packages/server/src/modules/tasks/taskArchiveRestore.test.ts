@@ -61,6 +61,7 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
       updateCurrentPhase: vi.fn(),
       touch: vi.fn(),
       delete: vi.fn(),
+      consumePendingApproval: vi.fn(() => false),
     },
     projectRepo: {
       findAll: vi.fn(() => []),

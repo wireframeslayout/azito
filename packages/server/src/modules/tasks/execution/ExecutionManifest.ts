@@ -1,4 +1,6 @@
 import { createHash } from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
 import type { Task } from '../Task';
 import type { IUnitRepository, SubagentConfig, Unit } from '../../units/Unit';
 import type { IProjectRepository, ProjectDetail } from '../../projects/Project';
@@ -149,6 +151,106 @@ import { resolveUnitId, resolveTaskServerName, resolveBaseBranch } from './TaskE
  *   anywhere in this file anymore.
  */
 
+/**
+ * Recursively collects every regular file under `dir`, returning paths
+ * relative to `dir` with forward slashes (platform-independent, deterministic
+ * comparison). Symlinks are excluded — `fs.Dirent` entries from
+ * `withFileTypes: true` use `lstat`, so a symlink is neither `isFile()` nor
+ * `isDirectory()` and is silently skipped, matching the same symlink
+ * exclusion SidekickPackageLoader's own directory listing already applies
+ * (no following a package's scripts/references out of its own tree).
+ */
+function listFilesRecursive(dir: string, baseDir: string, out: string[]): void {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const abs = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      listFilesRecursive(abs, baseDir, out);
+    } else if (entry.isFile()) {
+      out.push(path.relative(baseDir, abs).split(path.sep).join('/'));
+    }
+  }
+}
+
+/**
+ * Deterministic digest of a Sidekick package's ENTIRE tree (Issue #328
+ * ninth-round review, finding 2) — not just SKILL.md's parsed body. A
+ * package also ships `scripts/` (executable — e.g. pushing-default/scripts/
+ * push.sh, which the rendered prompt tells the worker to run via
+ * `{{sidekick.dir}}/scripts/*`) and `references/`; rewriting a script changes
+ * what a run actually does without changing a single byte of the prompt
+ * text, so hashing only `sidekick.body` (the old approach) left approval
+ * blind to exactly the files a worker is instructed to execute.
+ *
+ * `body` is passed in (SidekickPackageLoader's already-parsed, mtime-cached
+ * SKILL.md content) rather than re-read from `dir/SKILL.md` here — this is
+ * the exact string `renderSidekickBody()` expands into the prompt, so this
+ * digest tracks precisely what reaches the worker, and callers that already
+ * hold a resolved `SidekickPackage` (every call site) don't pay a second
+ * disk read for the one file guaranteed to already be in memory.
+ * `scripts/**` and `references/**` have no equivalent in-memory copy — a
+ * worker reads/executes those directly off disk via `{{sidekick.dir}}`, so
+ * they're walked and read here.
+ *
+ * The relative path of each scripts/references file is folded into the
+ * digest alongside its content, so a rename/add/remove changes the digest
+ * even when every individual file's bytes are otherwise unchanged; paths are
+ * read once via a single recursive listing and then sorted for a stable
+ * iteration order (directory read order is not guaranteed stable across
+ * platforms/calls). Reading twice for identical input must yield the same
+ * digest (see ExecutionManifest.test.ts) — this function performs no
+ * mutation and no randomness, only sorted reads.
+ *
+ * A missing target root (e.g. no `scripts/` directory) is not an error —
+ * `listFilesRecursive` already tolerates a missing directory by returning no
+ * entries for it, the same way a package with no scripts/references
+ * legitimately has none.
+ */
+export function hashSidekickPackageTree(dir: string, body: string): string {
+  const relPaths: string[] = [];
+  for (const target of ['scripts', 'references']) {
+    const targetPath = path.join(dir, target);
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(targetPath);
+    } catch {
+      continue;
+    }
+    if (stat.isDirectory()) {
+      listFilesRecursive(targetPath, dir, relPaths);
+    }
+  }
+  relPaths.sort();
+
+  const hash = createHash('sha256');
+  // NUL-delimited: not itself a security boundary (this hash isn't parsed
+  // back apart), just enough to keep "a/b" + "c" from colliding with "a" +
+  // "b/c" in the unlikely event two path/content pairs could otherwise
+  // concatenate identically.
+  hash.update('SKILL.md');
+  hash.update('\0');
+  hash.update(body);
+  hash.update('\0');
+  for (const relPath of relPaths) {
+    let content: Buffer;
+    try {
+      content = fs.readFileSync(path.join(dir, relPath));
+    } catch {
+      content = Buffer.alloc(0);
+    }
+    hash.update(relPath);
+    hash.update('\0');
+    hash.update(content);
+    hash.update('\0');
+  }
+  return hash.digest('hex');
+}
+
 export interface ResolvedExecutionManifest {
   unit: {
     id: number;
@@ -189,16 +291,21 @@ export interface ResolvedExecutionManifest {
    * resolvePhaseSidekick and the module doc comment above — seventh-round
    * review). Empty when no Unit/UnitType/enabled phase can be resolved
    * (mirrors the `unit: null` tolerance elsewhere in this manifest);
-   * `name`/`bodyDigest` are null for a given entry when that phase resolves
-   * but its package does not (misconfigured phaseConfig override, no default
-   * package for the tag) — the real run's own resolvePhaseSidekick() call
-   * still fails fast on that, this manifest only needs to notice when it
-   * changes.
+   * `name`/`packageDigest` are null for a given entry when that phase
+   * resolves but its package does not (misconfigured phaseConfig override,
+   * no default package for the tag) — the real run's own
+   * resolvePhaseSidekick() call still fails fast on that, this manifest only
+   * needs to notice when it changes. `packageDigest` is a digest of the
+   * package's ENTIRE tree (SKILL.md + scripts/** + references/**), not just
+   * the parsed SKILL.md body — see hashSidekickPackageTree()'s doc comment
+   * above for why (Issue #328 ninth-round review, finding 2: a worker can
+   * execute `{{sidekick.dir}}/scripts/*`, so a script rewrite must invalidate
+   * approval exactly like a SKILL.md rewrite does).
    */
   sidekicks: Array<{
     phase: string;
     name: string | null;
-    bodyDigest: string | null;
+    packageDigest: string | null;
   }>;
   respawn: RespawnManifestInput | null;
 }
@@ -258,16 +365,34 @@ export interface ExecutionManifestDeps {
  * `respawnInput` is optional and only ever passed by WindowRespawnService —
  * every other call site omits it and gets `respawn: null` in the returned
  * manifest (see the `respawn` field's doc comment above).
+ *
+ * `serverNameOverride` (Issue #328 ninth-round review finding 3) is also
+ * only ever passed by WindowRespawnService, and only when it differs from
+ * what `resolveTaskServerName` alone would produce: a respawn always runs
+ * against the Window's OWN server (`win.serverName`, which is also the
+ * `server: ServerConfig` respawn()/resumeLegacySession() already resolved
+ * before calling in — see WindowRespawnService.enforceExecutionGate's call
+ * site), not the task's independently-resolved server (`task.serverName ??
+ * the project's sole project_servers row`). The two can diverge — a task
+ * resolved onto server A while its Window still lives on server B (this
+ * class's own module doc comment explains how) — and without this override
+ * both the `project_servers` row `checkExecutionGate` reads its input policy
+ * from AND the `server` fields this manifest hashes would silently come
+ * from the wrong server, letting server B's `deny` policy be bypassed by
+ * server A's more permissive one. Every other call site (ExecuteTaskUseCase,
+ * TaskRestoreService, the approve-execution handler for non-respawn
+ * operations) omits it and keeps the task-resolved server, unchanged.
  */
 export function resolveExecutionManifest(
   task: Task,
   deps: ExecutionManifestDeps,
   respawnInput?: RespawnManifestInput,
+  serverNameOverride?: string,
 ): ExecutionManifestResolution {
   const project = deps.projectRepo.findById(task.projectId);
   const unitId = resolveUnitId(task, project);
   const unit = unitId !== null ? deps.unitRepo.findById(unitId) : null;
-  const serverName = resolveTaskServerName(task, deps.projectServerRepo);
+  const serverName = serverNameOverride ?? resolveTaskServerName(task, deps.projectServerRepo);
   const projectServer = serverName ? deps.projectServerRepo.find(task.projectId, serverName) : null;
   const baseBranch = resolveBaseBranch(task, projectServer, project);
 
@@ -289,22 +414,29 @@ export function resolveExecutionManifest(
     for (const phase of enabledPhases) {
       const phaseDef = unitType.phases.find((p) => p.name === phase);
       if (!phaseDef) {
-        sidekicks.push({ phase, name: null, bodyDigest: null });
+        sidekicks.push({ phase, name: null, packageDigest: null });
         continue;
       }
       try {
         const sidekick = resolvePhaseSidekick(deps.sidekickLoader, phase, unit.phaseConfig, phaseDef);
-        sidekicks.push({
-          phase,
-          name: sidekick.name,
-          bodyDigest: createHash('sha256').update(sidekick.body).digest('hex'),
-        });
+        // Full package-tree walk (SKILL.md + scripts/** + references/**) is
+        // only worth its I/O cost for an untrusted task — checkExecutionGate
+        // allows every trusted task unconditionally, so a trusted resolution
+        // (which every entry point still runs unconditionally today, e.g.
+        // ExecuteTaskUseCase.enforceExecutionGate) never has its hash
+        // compared against anything; the cheap body-only digest it already
+        // used is enough for that discarded value (Issue #328 ninth-round
+        // review: "trusted tasks pay nothing extra").
+        const packageDigest = task.inputTrust === 'untrusted'
+          ? hashSidekickPackageTree(sidekick.dir, sidekick.body)
+          : createHash('sha256').update(sidekick.body).digest('hex');
+        sidekicks.push({ phase, name: sidekick.name, packageDigest });
       } catch {
         // Misconfigured phaseConfig override / no default package for the
         // tag — tolerated here (see ResolvedExecutionManifest.sidekicks' doc
         // comment); the real run's own resolvePhaseSidekick() call still
         // fails fast on this.
-        sidekicks.push({ phase, name: null, bodyDigest: null });
+        sidekicks.push({ phase, name: null, packageDigest: null });
       }
     }
   }
@@ -418,7 +550,7 @@ export function hashExecutionManifest(manifest: ResolvedExecutionManifest): stri
     sidekicks: manifest.sidekicks.map((s) => ({
       phase: s.phase,
       name: s.name ?? '',
-      bodyDigest: s.bodyDigest ?? '',
+      packageDigest: s.packageDigest ?? '',
     })),
     // null for every call site except WindowRespawnService (see the
     // `respawn` field's doc comment on ResolvedExecutionManifest) — a

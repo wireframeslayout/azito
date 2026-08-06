@@ -67,6 +67,7 @@ function makeOpts(existingTask: Task): { opts: TasksRouteOptions; createCalls: R
       updateCurrentPhase: vi.fn(),
       touch: vi.fn(),
       delete: vi.fn(),
+      consumePendingApproval: vi.fn(() => false),
     },
     projectRepo: {
       findAll: vi.fn(() => []),

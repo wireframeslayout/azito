@@ -65,6 +65,7 @@ export class SqliteTaskRepository implements ITaskRepository {
   private getStmt;
   private createStmt;
   private updateStmt;
+  private consumePendingApprovalStmt;
   private updateStatusStmt;
   private updateCurrentPhaseStmt;
   private touchStmt;
@@ -81,6 +82,16 @@ export class SqliteTaskRepository implements ITaskRepository {
     );
     this.updateStmt = db.prepare(
       "UPDATE tasks SET title = ?, description = ?, status = ?, unit_id = ?, server_name = ?, priority = ?, tmux_window = ?, self_review_max_attempts = ?, require_plan_approval = ?, source = ?, source_ref = ?, worktree_path = ?, worktree_branch = ?, base_branch = ?, target_branch = ?, skip_pr = ?, working_directory = ?, branch = ?, plan_markdown = ?, pending_questions = ?, changed_files = ?, summary_json = ?, pr_url = ?, agent_session_id = ?, review_subagent = ?, implement_subagent = ?, input_trust = ?, execution_approved_fingerprint_hash = ?, pending_operation = ?, pending_operation_window_id = ?, pending_operation_prior_status = ?, updated_at = datetime('now') WHERE id = ?",
+    );
+    // Guarded compare-and-clear for consumePendingApproval() (Issue #328
+    // ninth-round review finding 4) — see that method's doc comment on
+    // ITaskRepository. COALESCE(?, column) means a NULL param leaves the
+    // column unchanged, so one statement serves both the approve branch
+    // (passes executionApprovedFingerprintHash, leaves status alone) and the
+    // deny branch (passes status, leaves the fingerprint alone) of
+    // units/routes.ts's approve-execution handler.
+    this.consumePendingApprovalStmt = db.prepare(
+      "UPDATE tasks SET status = COALESCE(?, status), execution_approved_fingerprint_hash = COALESCE(?, execution_approved_fingerprint_hash), pending_operation = NULL, pending_operation_window_id = NULL, pending_operation_prior_status = NULL, updated_at = datetime('now') WHERE id = ? AND status = 'pending_approval' AND pending_operation IS NOT NULL",
     );
     this.updateStatusStmt = db.prepare("UPDATE tasks SET status = ?, updated_at = datetime('now') WHERE id = ?");
     this.updateCurrentPhaseStmt = db.prepare("UPDATE tasks SET current_phase = ?, updated_at = datetime('now') WHERE id = ?");
@@ -191,6 +202,11 @@ export class SqliteTaskRepository implements ITaskRepository {
       data.pendingOperationPriorStatus !== undefined ? data.pendingOperationPriorStatus : current.pending_operation_prior_status,
       id,
     );
+  }
+
+  consumePendingApproval(id: number, fields: { status?: TaskStatus; executionApprovedFingerprintHash?: string | null }): boolean {
+    const result = this.consumePendingApprovalStmt.run(fields.status ?? null, fields.executionApprovedFingerprintHash ?? null, id);
+    return result.changes > 0;
   }
 
   updateStatus(id: number, status: TaskStatus): void {

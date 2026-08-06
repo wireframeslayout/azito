@@ -167,4 +167,30 @@ export interface ITaskRepository {
   updateCurrentPhase(id: number, phase: string | null): void;
   touch(id: number): void;
   delete(id: number): void;
+  /**
+   * Atomically consumes ("claims") this task's pending execution-gate
+   * approval (Issue #328 ninth-round review finding 4) — the write is
+   * guarded on `status = 'pending_approval' AND pending_operation IS NOT
+   * NULL` in a single statement, so a duplicate/racing call for the same
+   * task (POST /api/units/:id/approve-execution submitted twice) affects
+   * zero rows on the second call instead of both callers reading the same
+   * pendingOperation/pendingOperationWindowId/pendingOperationPriorStatus
+   * and each independently dispatching a resume/respawn/restore.
+   *
+   * Always clears pendingOperation/pendingOperationWindowId/
+   * pendingOperationPriorStatus on success; `fields.status` and
+   * `fields.executionApprovedFingerprintHash` are applied in the same
+   * statement when provided (the approve-execution handler's approve branch
+   * passes the fingerprint, its deny branch passes the status — never both,
+   * since approval's per-operation status transition is decided afterward
+   * by the caller, not by this method).
+   *
+   * Returns true iff THIS call was the one that consumed it (safe to
+   * proceed with the dispatch the caller already resolved `operation`/
+   * `pendingOperationWindowId` for); false means another call already
+   * consumed it (or the row is no longer in a consumable state) — the
+   * caller must reject (409), not fall back to any other signal to guess
+   * what to do.
+   */
+  consumePendingApproval(id: number, fields: { status?: TaskStatus; executionApprovedFingerprintHash?: string | null }): boolean;
 }

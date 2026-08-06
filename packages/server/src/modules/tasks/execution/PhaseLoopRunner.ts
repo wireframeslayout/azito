@@ -30,6 +30,8 @@ import type { GitProviderService } from '../../git/providers/GitProviderService'
 import type { HttpSignalTurnCoordinator } from './HttpSignalTurnCoordinator';
 import type { PullRequestCreator } from './PullRequestCreator';
 import type { AgentTurn } from '../turns/AgentTurn';
+import { checkExecutionGate } from './ExecutionGate';
+import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionManifest';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -102,6 +104,74 @@ export class PhaseLoopRunner {
     }
   }
 
+
+  /**
+   * Re-runs the untrusted-input execution gate (Issue #328 ninth-round
+   * review) immediately before each phase's prompt is built and sent. The
+   * gate at execute()/resumeStateMachine() entry (ExecuteTaskUseCase.
+   * enforceExecutionGate) only fires ONCE, when a run starts or resumes —
+   * but this loop resolves the Sidekick package, task vars, and Unit
+   * config fresh for EVERY phase as the run progresses (see the
+   * resolvePhaseSidekick/resolveTaskPromptVars calls right after this
+   * method's call site below). An edit to anything the approval manifest
+   * covers, made after entry but before a later phase runs, must not reach
+   * the worker unattended.
+   *
+   * Reuses the exact same resolveExecutionManifest()/hashExecutionManifest()/
+   * checkExecutionGate() triplet every other entry point uses (ExecuteTaskUseCase,
+   * TaskRestoreService, WindowRespawnService) — no new comparison logic here,
+   * only the orchestration (what to do on a block), mirroring
+   * ExecuteTaskUseCase.enforceExecutionGate's own pending_approval/denied
+   * handling since this class can't call that method directly (it belongs to
+   * a different class and closes over ExecuteTaskUseCase-only state).
+   *
+   * Trusted tasks pay nothing extra for this: checkExecutionGate()
+   * short-circuits on `inputTrust !== 'untrusted'` before this method ever
+   * calls resolveExecutionManifest(), so a trusted task never resolves a
+   * manifest (no per-phase file I/O) here.
+   *
+   * Returns true when the phase may proceed. Returns false when it blocked —
+   * the caller must stop the loop (send nothing, launch nothing) without
+   * throwing, since the block itself is the intended outcome, not a failure.
+   */
+  private reverifyExecutionGateForPhase(taskId: number, currentTask: Task): boolean {
+    if (currentTask.inputTrust !== 'untrusted') return true;
+
+    const { manifest, projectServer } = resolveExecutionManifest(currentTask, {
+      unitRepo: this.unitRepo,
+      projectRepo: this.projectRepo,
+      projectServerRepo: this.projectServerRepo,
+      unitTypeLoader: this.unitTypeLoader,
+      sidekickLoader: this.sidekickLoader,
+    });
+    const gate = checkExecutionGate(currentTask, projectServer, hashExecutionManifest(manifest));
+    if (gate.allowed) return true;
+
+    const unitId = manifest.unit?.id ?? currentTask.unitId ?? 0;
+    this.appendLog(taskId, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
+    if (gate.reason === 'pending_approval') {
+      // Same 'resume' semantics as ExecuteTaskUseCase.followUp()/
+      // resumeStateMachine()'s own gate call: on approval, units/routes.ts's
+      // approve-execution handler resumes via resumeStateMachine(), which
+      // re-enters this same loop at task.currentPhase — already set to this
+      // phase by the updateCurrentPhase() call above the call site below, so
+      // the resume lands exactly where this block happened.
+      this.taskRepo.update(taskId, {
+        status: 'pending_approval',
+        pendingOperation: 'resume',
+        pendingOperationPriorStatus: currentTask.status,
+      } as Partial<Task>);
+    } else {
+      // 'denied': the project server's input policy changed to 'deny' mid-run.
+      // Unlike the entry-point gates (which haven't started anything yet and
+      // so leave status untouched), a run already in progress has no "leave
+      // it alone" state to return to — fail it, the same outcome any other
+      // hard stop mid-loop produces (send_error, stopped classification, etc).
+      this.appendLog(taskId, unitId, 'status_change', { status: 'error', message: 'Execution denied by project server input policy (untrusted-origin task)' });
+      this.taskRepo.updateStatus(taskId, 'failed');
+    }
+    return false;
+  }
 
   private async ensureSidekicksSynced(server: ServerConfig): Promise<void> {
     if (server.type === 'local') return;
@@ -178,9 +248,17 @@ export class PhaseLoopRunner {
       this.taskRepo.updateCurrentPhase(task.id, phase);
       this.appendLog(task.id, unit.id, 'status_change', { status: 'phase_started', phase });
 
+      // Untrusted-input execution gate re-check (Issue #328 ninth-round
+      // review) — must run BEFORE the Sidekick is resolved and the prompt is
+      // built below, so a block never lets a stale/rewritten instruction
+      // reach the worker. See reverifyExecutionGateForPhase's doc comment.
+      const currentTask = this.taskRepo.findById(task.id);
+      if (currentTask && !this.reverifyExecutionGateForPhase(task.id, currentTask)) {
+        return;
+      }
+
       const sidekick = resolvePhaseSidekick(this.sidekickLoader, phase, unit.phaseConfig, phaseDef);
       const sidekickDir = resolveSidekickDir(sidekick, server);
-      const currentTask = this.taskRepo.findById(task.id);
       const promptModules = loadPromptModules();
       const vars = resolveTaskPromptVars(this.taskRepo, this.projectRepo, this.unitRepo, this.projectServerRepo, task.id);
       const expandedPrompt = renderSidekickBody(sidekick, {

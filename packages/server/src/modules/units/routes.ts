@@ -466,17 +466,24 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
       // 'resume' | 'resume_await_answer' | 'resume_await_plan_review' |
       // 'restore' | 'respawn' | 'recover_session_legacy') and what
       // approval/denial does for each (Issue #328 seventh-round review
-      // findings 1/2). Rows written before that column existed have it NULL
-      // (in practice there are none: migration 059 has never shipped in a
-      // release), so the tmuxWindow-based heuristic this replaced is kept as
-      // a fallback for that case only, not as the primary signal anymore
-      // (Issue #328 third-round review finding 1 — that heuristic couldn't
-      // distinguish "never started" from "was being restored from
-      // archive"). Note this fallback predates every value but 'resume'/
-      // 'execute' too: it cannot correctly recover a pre-fix block of any of
-      // them — not a live concern while 059 stays unshipped, same as the
-      // third-round caveat above.
-      const operation = task.pendingOperation ?? (task.tmuxWindow ? 'resume' : 'execute');
+      // findings 1/2).
+      //
+      // NO tmuxWindow-based fallback anymore (Issue #328 ninth-round review
+      // finding 4): that heuristic used to stand in for a legacy NULL row
+      // (migration 059 predates this column), but it can't distinguish
+      // "never started" from "was being restored from archive" (third-round
+      // review finding 1) and, worse, widened the blast radius of a
+      // duplicate-submission race — a second request that lost the atomic
+      // consume below (pendingOperation already cleared by the first) would
+      // otherwise fall through to this guess and dispatch a DIFFERENT
+      // operation than the one actually approved. Migration 059 has never
+      // shipped in a release, so there is no real row with pendingOperation
+      // === NULL to guess for; failing fast here (409, see below) is strictly
+      // safer than guessing.
+      const operation = task.pendingOperation;
+      if (!operation) {
+        return reply.status(409).send({ error: `Task ${taskId} is pending_approval but has no pendingOperation recorded — nothing to approve or deny` });
+      }
       // Captured before the approval below clears it — respawn is the only
       // operation that needs an extra identifier to resume (see
       // Task.pendingOperationWindowId's doc comment); it doesn't depend on
@@ -513,12 +520,19 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
         // keeps the existing 'failed' outcome — a denial always means "stop
         // this run", not "go back to waiting for input" the way an
         // *approval* of those two operations does below.
-        taskRepo.update(taskId, {
-          status: (operation === 'restore' ? 'archived' : 'failed') as TaskStatus,
-          pendingOperation: null,
-          pendingOperationWindowId: null,
-          pendingOperationPriorStatus: null,
-        } as Partial<Task>);
+        //
+        // consumePendingApproval() atomically guards this write on
+        // (status = 'pending_approval' AND pendingOperation IS NOT NULL)
+        // (Issue #328 ninth-round review finding 4): a duplicate/racing
+        // denial request that loses this compare-and-clear gets `false` and
+        // is rejected with 409 instead of re-running this branch's side
+        // effects a second time against state the first request already
+        // consumed.
+        const denyStatus = (operation === 'restore' ? 'archived' : 'failed') as TaskStatus;
+        const consumed = taskRepo.consumePendingApproval(taskId, { status: denyStatus });
+        if (!consumed) {
+          return reply.status(409).send({ error: `Task ${taskId}'s pending approval was already resolved by a concurrent request` });
+        }
         return { ok: true };
       }
 
@@ -530,17 +544,38 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
       // project_servers row's config, see ExecutionManifest.ts — will
       // invalidate this and require approval again.
       logRepo.append(taskId, id, 'status_change', { status: 'execution_approved' });
+      // For a 'respawn' approval, the fingerprint recorded here must be
+      // resolved against respawnWindow's OWN server (win.serverName), not
+      // whatever server the task itself resolves to — respawn() computes its
+      // gate check the same way (WindowRespawnService.enforceExecutionGate
+      // passes `server.name`, resolved from the Window, as this same
+      // override), and a mismatch here would make the just-recorded approval
+      // immediately re-hit 'pending_approval' the moment respawn() actually
+      // runs (Issue #328 ninth-round review finding 3 — the same
+      // self-invalidation failure mode buildRespawnManifestInput's own doc
+      // comment already covers for the `respawn` manifest field).
       const { manifest } = resolveExecutionManifest(
         task,
         { unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader },
         respawnWindow ? buildRespawnManifestInput(respawnWindow) : undefined,
+        respawnWindow?.serverName,
       );
-      taskRepo.update(taskId, {
+      // consumePendingApproval() atomically guards this write on
+      // (status = 'pending_approval' AND pendingOperation IS NOT NULL)
+      // (Issue #328 ninth-round review finding 4) — the same compare-and-
+      // clear as the denial branch above. A duplicate/racing approval
+      // request that loses this gets `false` and is rejected with 409
+      // BEFORE any dispatch below runs, instead of both requests reading
+      // `operation`/`pendingWindowId` off the same pre-approval `task`
+      // object and each independently kicking off a (possibly different,
+      // since the second would have fallen through to a guess under the
+      // now-removed tmuxWindow fallback) operation.
+      const consumed = taskRepo.consumePendingApproval(taskId, {
         executionApprovedFingerprintHash: hashExecutionManifest(manifest),
-        pendingOperation: null,
-        pendingOperationWindowId: null,
-        pendingOperationPriorStatus: null,
-      } as Partial<Task>);
+      });
+      if (!consumed) {
+        return reply.status(409).send({ error: `Task ${taskId}'s pending approval was already resolved by a concurrent request` });
+      }
 
       // Fire-and-forget below, matching the pre-existing convention for
       // every long-running resume path in this file (approve-plan above
