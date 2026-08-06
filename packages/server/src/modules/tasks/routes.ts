@@ -242,6 +242,13 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         request.body as Record<string, unknown>;
       const gitError = validateGitFields(request.body as Record<string, unknown>);
       if (gitError) return reply.status(400).send({ error: gitError });
+      // require_plan_approval must be validated as an actual boolean before
+      // it is used for anything — otherwise `!!` coercion downstream would
+      // let non-boolean falsy values (null/0/'') silently masquerade as
+      // `false` and bypass the untrusted-origin gate below.
+      if (require_plan_approval !== undefined && typeof require_plan_approval !== 'boolean') {
+        return reply.status(400).send({ error: 'require_plan_approval must be a boolean' });
+      }
       // Only the untrusted-input-gate direction is enforced here: an
       // untrusted task may not have its own plan-approval requirement turned
       // off (that would let it skip straight to unattended execution).
@@ -274,7 +281,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
           selfReviewMaxAttempts:
             self_review_max_attempts !== undefined ? (self_review_max_attempts as number) : undefined,
           requirePlanApproval:
-            require_plan_approval !== undefined ? !!(require_plan_approval as boolean) : undefined,
+            require_plan_approval !== undefined ? (require_plan_approval as boolean) : undefined,
           baseBranch: base_branch !== undefined ? (base_branch as string) : undefined,
           targetBranch: target_branch !== undefined ? (target_branch as string) : undefined,
           skipPr: skip_pr !== undefined ? !!(skip_pr as boolean) : undefined,

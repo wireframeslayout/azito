@@ -215,6 +215,51 @@ describe('PUT /api/tasks/:id — require_plan_approval guard for untrusted tasks
     expect(res.statusCode).toBe(200);
   });
 
+  // Regression coverage: require_plan_approval must be validated as an actual
+  // boolean before use. Previously `!!value` coerced any non-boolean falsy
+  // value (null, 0, '', 'false') to `false` for storage, but the untrusted
+  // gate above only ever compared against the *literal* `false` — so a
+  // non-boolean falsy value slipped past the `=== false` check and still got
+  // coerced to `false` on write, silently disabling plan approval for an
+  // untrusted task.
+  it.each([null, 0, '', 'false'])(
+    'rejects a non-boolean require_plan_approval (%j) on an untrusted task with 400, and does not update',
+    async (badValue) => {
+      const { opts } = makeOpts(makeTask({ inputTrust: 'untrusted', requirePlanApproval: true }));
+      const app = Fastify();
+      await app.register(tasksRoutes, opts);
+      await app.ready();
+
+      const res = await app.inject({
+        method: 'PUT',
+        url: '/api/tasks/1',
+        payload: { require_plan_approval: badValue },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(opts.taskRepo.update).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([null, 0, '', 'false'])(
+    'rejects a non-boolean require_plan_approval (%j) on a trusted task with 400 too (type validation applies regardless of trust)',
+    async (badValue) => {
+      const { opts } = makeOpts(makeTask({ inputTrust: 'trusted', requirePlanApproval: true }));
+      const app = Fastify();
+      await app.register(tasksRoutes, opts);
+      await app.ready();
+
+      const res = await app.inject({
+        method: 'PUT',
+        url: '/api/tasks/1',
+        payload: { require_plan_approval: badValue },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(opts.taskRepo.update).not.toHaveBeenCalled();
+    },
+  );
+
   it('does not accept input_trust from the PUT body (no such field is ever read into the update call)', async () => {
     const { opts } = makeOpts(makeTask({ inputTrust: 'trusted' }));
     const app = Fastify();
