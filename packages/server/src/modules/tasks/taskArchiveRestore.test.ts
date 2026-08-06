@@ -37,6 +37,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     inputTrust: 'trusted',
     executionApprovedFingerprintHash: null,
     pendingOperation: null,
+    pendingOperationWindowId: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -145,7 +146,6 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
       restore: vi.fn(async () => ({ tmuxTarget: 'azito:task-1.1', worktreePath: '/work/.worktrees/task-1' })),
     } as unknown as TasksRouteOptions['taskRestoreService'],
     unitTypeLoader: { getOrThrow: vi.fn(() => ({ name: 'devops', label: 'DevOps', description: '', phases: [] })) } as unknown as TasksRouteOptions['unitTypeLoader'],
-    supervisorRegistry: {} as any,
   };
 }
 

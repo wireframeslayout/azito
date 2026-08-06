@@ -46,6 +46,7 @@ const makeTask = (overrides = {}) => ({
   inputTrust: 'trusted' as const,
   executionApprovedFingerprintHash: null,
   pendingOperation: null,
+  pendingOperationWindowId: null,
   createdAt: '2024-01-01',
   updatedAt: '2024-01-01',
   ...overrides,

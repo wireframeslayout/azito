@@ -81,6 +81,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     inputTrust: 'trusted',
     executionApprovedFingerprintHash: null,
     pendingOperation: null,
+    pendingOperationWindowId: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -172,9 +173,10 @@ function buildService(opts: {
     })),
   };
 
-  const taskRepo: Pick<ITaskRepository, 'findById' | 'updateStatus'> = {
+  const taskRepo: Pick<ITaskRepository, 'findById' | 'updateStatus' | 'update'> = {
     findById: vi.fn(() => opts.task ?? null),
     updateStatus: vi.fn(),
+    update: vi.fn(),
   };
 
   const unitRepo: Pick<IUnitRepository, 'findById'> = {
@@ -300,7 +302,7 @@ describe('WindowRespawnService.respawn — execution gate (Issue #328)', () => {
     expect(logRepo.append).toHaveBeenCalledWith(5, 10, 'command', { type: 'execution_gate_blocked', reason: 'denied' });
   });
 
-  it('blocks respawn for an untrusted task pending approval and marks the task accordingly', async () => {
+  it('blocks respawn for an untrusted task pending approval and records pendingOperation + the blocked windowId (Issue #328 fourth-round review)', async () => {
     const task = makeTask({ id: 6, unitId: 10, inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
     const unit = makeUnit({ id: 10 });
     const win = makeWindow({ taskId: 6, windowType: 'agent', workerType: 'claude' });
@@ -311,7 +313,15 @@ describe('WindowRespawnService.respawn — execution gate (Issue #328)', () => {
     await expect(service.respawn(1, makeServer())).rejects.toThrow(/requires approval/);
 
     expect(tmux.createWindow).not.toHaveBeenCalled();
-    expect(taskRepo.updateStatus).toHaveBeenCalledWith(6, 'pending_approval');
+    // Recording status alone (the old behavior) is not enough: without
+    // pendingOperation/pendingOperationWindowId, the approval handler can't
+    // tell a blocked respawn apart from a blocked execute()/resume() and
+    // resumes the wrong thing (see units/routes.ts's approve-execution).
+    expect(taskRepo.update).toHaveBeenCalledWith(6, {
+      status: 'pending_approval',
+      pendingOperation: 'respawn',
+      pendingOperationWindowId: 1,
+    });
   });
 
   it('allows respawn for windows with no taskId regardless of policy', async () => {
@@ -622,5 +632,67 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
     } finally {
       rmSync(outsideDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('WindowRespawnService.resumeLegacySession (Issue #328 fourth-round review finding 2)', () => {
+  function untrustedProjectServerRepo(inputPolicy: 'deny' | 'manual-approval'): Pick<IProjectServerRepository, 'find'> {
+    return {
+      find: vi.fn(() => ({
+        projectId: 1, serverName: 'local-server', workingDirectory: null, branch: 'main', tmuxSession: 'azito', inputPolicy,
+      })),
+    };
+  }
+
+  // Legacy recovery for tasks that predate Window records (migration 034):
+  // no Window row exists, so respawn() doesn't apply — this method creates
+  // the tmux window and launches `claude --resume` directly. It used to live
+  // inline in tasks/routes.ts's recover-session fallback; moved here so the
+  // approve-execution handler can resume the exact same blocked operation
+  // instead of duplicating the tmux/supervisor wiring.
+
+  it('creates a window and launches a supervised claude --resume for a trusted task', async () => {
+    const task = makeTask({ id: 7, unitId: 10, agentSessionId: 'sess-abc', inputTrust: 'trusted' });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 7 }); // unused by this method, buildService just needs a window to construct the service
+    const { service, tmux, sentCommands, clearExitMarker } = buildService({ window: win, task, unit });
+
+    const result = await service.resumeLegacySession(7, makeServer());
+
+    expect(tmux.createWindow).toHaveBeenCalledWith(expect.anything(), 'azito', 'task-7');
+    expect(sentCommands).toHaveLength(1);
+    expect(sentCommands[0]).toMatch(/supervisor/);
+    expect(sentCommands[0]).toContain('claude --resume sess-abc --dangerously-skip-permissions');
+    expect(sentCommands[0]).toContain('--task-id 7');
+    expect(sentCommands[0]).toContain('--unit-id 10');
+    expect(clearExitMarker).toHaveBeenCalled();
+    expect(result.windowName).toBe('task-7-new');
+  });
+
+  it('throws when the task has no agent session ID', async () => {
+    const task = makeTask({ id: 8, agentSessionId: null });
+    const win = makeWindow({ taskId: 8 });
+    const { service, tmux } = buildService({ window: win, task });
+
+    await expect(service.resumeLegacySession(8, makeServer())).rejects.toThrow(/agent session ID/);
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+  });
+
+  it('blocks an untrusted, unapproved task and records pendingOperation=recover_session_legacy (no windowId, unlike respawn)', async () => {
+    const task = makeTask({ id: 9, unitId: 10, agentSessionId: 'sess-xyz', inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 9 });
+    const { service, tmux, taskRepo } = buildService({
+      window: win, task, unit, projectServerRepo: untrustedProjectServerRepo('manual-approval'),
+    });
+
+    await expect(service.resumeLegacySession(9, makeServer())).rejects.toThrow(/requires approval/);
+
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(taskRepo.update).toHaveBeenCalledWith(9, {
+      status: 'pending_approval',
+      pendingOperation: 'recover_session_legacy',
+      pendingOperationWindowId: null,
+    });
   });
 });

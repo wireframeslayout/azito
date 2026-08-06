@@ -22,6 +22,7 @@ interface TaskRow {
   input_trust: string;
   execution_approved_fingerprint_hash: string | null;
   pending_operation: string | null;
+  pending_operation_window_id: number | null;
   worktree_path: string | null;
   worktree_branch: string | null;
   base_branch: string | null;
@@ -75,10 +76,10 @@ export class SqliteTaskRepository implements ITaskRepository {
     this.listByStatusStmt = db.prepare('SELECT * FROM tasks WHERE status = ? ORDER BY priority DESC, created_at DESC');
     this.getStmt = db.prepare('SELECT * FROM tasks WHERE id = ?');
     this.createStmt = db.prepare(
-      'INSERT INTO tasks (project_id, unit_id, server_name, title, description, priority, tmux_window, self_review_max_attempts, require_plan_approval, source, source_ref, worktree_path, worktree_branch, base_branch, target_branch, skip_pr, working_directory, branch, plan_markdown, pending_questions, changed_files, summary_json, pr_url, agent_session_id, review_subagent, implement_subagent, input_trust, execution_approved_fingerprint_hash, pending_operation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO tasks (project_id, unit_id, server_name, title, description, priority, tmux_window, self_review_max_attempts, require_plan_approval, source, source_ref, worktree_path, worktree_branch, base_branch, target_branch, skip_pr, working_directory, branch, plan_markdown, pending_questions, changed_files, summary_json, pr_url, agent_session_id, review_subagent, implement_subagent, input_trust, execution_approved_fingerprint_hash, pending_operation, pending_operation_window_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
     this.updateStmt = db.prepare(
-      "UPDATE tasks SET title = ?, description = ?, status = ?, unit_id = ?, server_name = ?, priority = ?, tmux_window = ?, self_review_max_attempts = ?, require_plan_approval = ?, source = ?, source_ref = ?, worktree_path = ?, worktree_branch = ?, base_branch = ?, target_branch = ?, skip_pr = ?, working_directory = ?, branch = ?, plan_markdown = ?, pending_questions = ?, changed_files = ?, summary_json = ?, pr_url = ?, agent_session_id = ?, review_subagent = ?, implement_subagent = ?, input_trust = ?, execution_approved_fingerprint_hash = ?, pending_operation = ?, updated_at = datetime('now') WHERE id = ?",
+      "UPDATE tasks SET title = ?, description = ?, status = ?, unit_id = ?, server_name = ?, priority = ?, tmux_window = ?, self_review_max_attempts = ?, require_plan_approval = ?, source = ?, source_ref = ?, worktree_path = ?, worktree_branch = ?, base_branch = ?, target_branch = ?, skip_pr = ?, working_directory = ?, branch = ?, plan_markdown = ?, pending_questions = ?, changed_files = ?, summary_json = ?, pr_url = ?, agent_session_id = ?, review_subagent = ?, implement_subagent = ?, input_trust = ?, execution_approved_fingerprint_hash = ?, pending_operation = ?, pending_operation_window_id = ?, updated_at = datetime('now') WHERE id = ?",
     );
     this.updateStatusStmt = db.prepare("UPDATE tasks SET status = ?, updated_at = datetime('now') WHERE id = ?");
     this.updateCurrentPhaseStmt = db.prepare("UPDATE tasks SET current_phase = ?, updated_at = datetime('now') WHERE id = ?");
@@ -146,6 +147,7 @@ export class SqliteTaskRepository implements ITaskRepository {
       data.inputTrust ?? 'trusted',
       data.executionApprovedFingerprintHash ?? null,
       data.pendingOperation ?? null,
+      data.pendingOperationWindowId ?? null,
     );
     return Number(result.lastInsertRowid);
   }
@@ -183,6 +185,7 @@ export class SqliteTaskRepository implements ITaskRepository {
       data.inputTrust !== undefined ? data.inputTrust : current.input_trust,
       data.executionApprovedFingerprintHash !== undefined ? data.executionApprovedFingerprintHash : current.execution_approved_fingerprint_hash,
       data.pendingOperation !== undefined ? data.pendingOperation : current.pending_operation,
+      data.pendingOperationWindowId !== undefined ? data.pendingOperationWindowId : current.pending_operation_window_id,
       id,
     );
   }
@@ -237,7 +240,8 @@ export class SqliteTaskRepository implements ITaskRepository {
       implementSubagent: parseSubagentConfig(row.implement_subagent),
       inputTrust: row.input_trust as 'trusted' | 'untrusted',
       executionApprovedFingerprintHash: row.execution_approved_fingerprint_hash ?? null,
-      pendingOperation: (row.pending_operation ?? null) as 'execute' | 'resume' | 'restore' | null,
+      pendingOperation: (row.pending_operation ?? null) as 'execute' | 'resume' | 'restore' | 'respawn' | 'recover_session_legacy' | null,
+      pendingOperationWindowId: row.pending_operation_window_id ?? null,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };

@@ -42,6 +42,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     inputTrust: 'untrusted',
     executionApprovedFingerprintHash: null,
     pendingOperation: null,
+    pendingOperationWindowId: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,

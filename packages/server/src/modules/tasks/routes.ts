@@ -13,12 +13,10 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { IWindowRepository } from '../windows/Window';
 import type { WindowRespawnService } from '../windows/WindowRespawnService';
 import type { TaskRestoreService } from './TaskRestoreService';
-import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import { TaskCleanupService } from './TaskCleanupService';
 import { SAFE_PATH_PATTERN, SAFE_BRANCH_PATTERN } from '../git/assertSafeGitArgs';
 import { resolveTaskServerName, resolveTmuxSession, resolveUnitId } from './execution/TaskExecutionEnv';
-import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
-import { checkExecutionGate, replyToExecutionGateError } from './execution/ExecutionGate';
+import { replyToExecutionGateError } from './execution/ExecutionGate';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 
 function parseSubagentConfigInput(raw: unknown, fieldName: string): SubagentConfig | null {
@@ -62,7 +60,6 @@ export interface TasksRouteOptions {
   windowRepo: IWindowRepository;
   respawnService: WindowRespawnService;
   taskRestoreService: TaskRestoreService;
-  supervisorRegistry: SupervisorRegistry;
   unitTypeLoader: UnitTypeLoader;
 }
 
@@ -84,7 +81,7 @@ function toListItem(task: Task, windows: unknown[]): Record<string, unknown> {
 }
 
 const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, done) => {
-  const { taskRepo, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService, taskRestoreService, supervisorRegistry, unitTypeLoader } = opts;
+  const { taskRepo, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService, taskRestoreService, unitTypeLoader } = opts;
   const taskCleanupService = new TaskCleanupService({ serverRepo, tmux, worktreeServiceFactory, transportFactory, projectServerRepo, projectRepo });
 
   // ── GET /api/tasks ──
@@ -189,6 +186,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         inputTrust: 'trusted',
         executionApprovedFingerprintHash: null,
         pendingOperation: null,
+        pendingOperationWindowId: null,
       });
       return { ok: true, id };
     } catch (err: unknown) {
@@ -463,46 +461,27 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
 
       // Fallback for tasks without window records (pre-migration 034). This
       // path creates a tmux window and launches `claude --resume` directly
-      // (no WindowRespawnService involved), so it needs its own execution
-      // gate check (Issue #328) — otherwise a legacy task with no window
-      // record could resume regardless of inputTrust/input_policy.
+      // (no Window row involved) via WindowRespawnService.resumeLegacySession,
+      // which runs its own execution gate check (Issue #328) — otherwise a
+      // legacy task with no window record could resume regardless of
+      // inputTrust/input_policy. Lives on the service (not inline here) so
+      // the approve-execution handler can resume the exact same blocked
+      // operation instead of duplicating this tmux/supervisor wiring
+      // (Issue #328 fourth-round review finding 2).
       if (!task.agentSessionId) return reply.status(400).send({ error: 'No primary window or agent session ID' });
       const resolvedServerName = resolveTaskServerName(task, projectServerRepo);
       const server = resolvedServerName ? serverRepo.findByName(resolvedServerName) : null;
       if (!resolvedServerName || !server) return reply.status(404).send({ error: 'Server not found' });
 
-      const project = projectRepo.findById(task.projectId);
-      const projectServer = project ? projectServerRepo.find(task.projectId, resolvedServerName) : null;
-      const gate = checkExecutionGate(task, projectServer);
-      if (!gate.allowed) {
-        const gateUnitId = resolveUnitId(task, project);
-        if (gateUnitId !== null) {
-          logRepo.append(id, gateUnitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
-        }
-        if (gate.reason === 'pending_approval') {
-          taskRepo.updateStatus(id, 'pending_approval');
-          return reply.status(409).send({ error: 'execution_pending_approval', message: `Task ${id}: execution requires approval (untrusted-origin task)` });
-        }
-        return reply.status(403).send({ error: 'execution_denied', message: `Task ${id}: execution denied by project server input policy (untrusted-origin task)` });
+      let legacyResult: { windowName: string };
+      try {
+        legacyResult = await respawnService.resumeLegacySession(id, server);
+      } catch (err) {
+        if (replyToExecutionGateError(err, reply)) return;
+        throw err;
       }
 
-      const tmuxSession = resolveTmuxSession(task.projectId, resolvedServerName, projectServerRepo);
-
-      const { windowName: newWindowName } = await tmux.createWindow(server, tmuxSession, `task-${task.id}`);
-      const windowTarget = `${tmuxSession}:${newWindowName}`;
-      const paneId = await tmux.resolvePaneId(server, windowTarget);
-      const resumeCommand = `claude --resume ${task.agentSessionId} --dangerously-skip-permissions`;
-      const isSupervised = shouldSupervise(server.type, 'agent');
-      if (isSupervised) {
-        supervisorRegistry.clearExitMarker(server.name, windowTarget);
-      }
-      const sendCmd = isSupervised
-        ? wrapWithSupervisor(resumeCommand, { server, target: windowTarget, taskId: id, unitId: task.unitId ?? undefined })
-        : resumeCommand;
-      await tmux.sendKeys(server, paneId, [sendCmd, 'Enter']);
-      taskRepo.update(id, { tmuxWindow: newWindowName } as Partial<Task>);
-
-      return { tmuxWindow: newWindowName };
+      return { tmuxWindow: legacyResult.windowName };
     },
   );
 

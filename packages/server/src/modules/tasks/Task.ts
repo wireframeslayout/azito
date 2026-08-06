@@ -46,16 +46,41 @@ export interface Task {
   executionApprovedFingerprintHash: string | null;
   /**
    * Which operation the execution gate blocked and must be resumed (not
-   * re-inferred) once a human approves (Issue #328 third-round review): see
-   * modules/units/routes.ts's approve-execution handler. Set immediately
-   * before the gate throws (ExecuteTaskUseCase.enforceExecutionGate /
-   * TaskRestoreService.restore) and cleared once approval consumes it. NULL
-   * means "no pending operation" — the normal state, and also the fallback
-   * the approval handler uses for any row that predates this column (see
-   * migration 059's comment; there is no such row in practice, 059 has never
-   * shipped).
+   * re-inferred) once a human approves (Issue #328 third/fourth-round
+   * review): see modules/units/routes.ts's approve-execution handler. Set
+   * immediately before the gate throws and cleared once approval consumes
+   * it. NULL means "no pending operation" — the normal state, and also the
+   * fallback the approval handler uses for any row that predates this
+   * column (see migration 059's comment; there is no such row in practice,
+   * 059 has never shipped).
+   *
+   * Write-site catalogue (every gate that can set this MUST be listed here
+   * — a value added without a matching writer is exactly how the fourth-
+   * round review's "forgotten wiring" bug happened, silently falling back
+   * to the wrong resumed operation):
+   * - 'execute'  — ExecuteTaskUseCase.enforceExecutionGate (execute() entry)
+   * - 'resume'   — ExecuteTaskUseCase.enforceExecutionGate (followUp()/
+   *                resumeStateMachine() entries)
+   * - 'restore'  — TaskRestoreService.restore
+   * - 'respawn'  — WindowRespawnService.enforceExecutionGate (respawn()
+   *                entry); pendingOperationWindowId is set alongside this
+   *                value and MUST be used to resume it (see below)
+   * - 'recover_session_legacy' — WindowRespawnService.enforceExecutionGate
+   *                (resumeLegacySession() entry, the pre-migration-034
+   *                window-less fallback used by POST /api/tasks/:id/
+   *                recover-session)
    */
-  pendingOperation: 'execute' | 'resume' | 'restore' | null;
+  pendingOperation: 'execute' | 'resume' | 'restore' | 'respawn' | 'recover_session_legacy' | null;
+  /**
+   * The Window row id to resume when pendingOperation === 'respawn' — a
+   * respawn-blocked task has no other reliable way to recover which window
+   * was being respawned (unlike 'execute'/'resume'/'restore', which
+   * re-resolve their target entirely from task/project fields).
+   * NULL for every other pendingOperation value. Set by
+   * WindowRespawnService.enforceExecutionGate alongside pendingOperation and
+   * cleared whenever pendingOperation is cleared.
+   */
+  pendingOperationWindowId: number | null;
   worktreePath: string | null;
   worktreeBranch: string | null;
   baseBranch: string | null;

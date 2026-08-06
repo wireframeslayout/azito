@@ -13,6 +13,7 @@ import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
 import type { SessionCaptureService } from './SessionCaptureService';
 import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError } from '../tasks/execution/ExecutionGate';
+import { resolveTmuxSession } from '../tasks/execution/TaskExecutionEnv';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -81,7 +82,7 @@ export class WindowRespawnService {
       }
     }
     if (task) {
-      this.enforceExecutionGate(task, unitId, server);
+      this.enforceExecutionGate(task, unitId, server, 'respawn', windowId);
     }
 
     // Resolve and verify every working directory this respawn will `cd`
@@ -138,14 +139,33 @@ export class WindowRespawnService {
 
   /**
    * Runs the untrusted-input execution gate (Issue #328) for the task that
-   * owns this window and, when it blocks, records the same log entry and
-   * task-status transition ExecuteTaskUseCase.enforceExecutionGate() /
-   * TaskRestoreService.restore() use, then throws before respawn() proceeds
-   * to any tmux mutation. `unitId` is `null` when the task has no resolvable
-   * Unit (e.g. task.unitId points at a deleted Unit) — the block still
-   * throws in that case, it just has no unit to attach a log entry to.
+   * owns this window and, when it blocks, records the same log entry
+   * ExecuteTaskUseCase.enforceExecutionGate()/TaskRestoreService.restore()
+   * use, then throws before the caller proceeds to any tmux mutation.
+   * `unitId` is `null` when the task has no resolvable Unit (e.g.
+   * task.unitId points at a deleted Unit) — the block still throws in that
+   * case, it just has no unit to attach a log entry to.
+   *
+   * `operation`/`windowId` record WHICH blocked entry point this was, in
+   * task.pendingOperation/pendingOperationWindowId, so the approval handler
+   * (modules/units/routes.ts's approve-execution) can resume the exact
+   * operation a human approved (Issue #328 fourth-round review finding 2:
+   * this method used to only call `taskRepo.updateStatus(..., 'pending_
+   * approval')`, recording no operation at all — approving a blocked
+   * respawn/legacy-recover then fell into the *other* gates' NULL-fallback
+   * heuristic and silently resumed the wrong operation, e.g. resuming the
+   * state machine instead of actually respawning the window). `windowId` is
+   * only meaningful for `'respawn'` — resumeLegacySession() has no Window
+   * row to record, so it always passes `null` (see Task.pendingOperation's
+   * write-site catalogue).
    */
-  private enforceExecutionGate(task: Task, unitId: number | null, server: ServerConfig): void {
+  private enforceExecutionGate(
+    task: Task,
+    unitId: number | null,
+    server: ServerConfig,
+    operation: 'respawn' | 'recover_session_legacy',
+    windowId: number | null,
+  ): void {
     const projectServer = this.projectServerRepo.find(task.projectId, server.name);
     const gate = checkExecutionGate(task, projectServer);
     if (gate.allowed) return;
@@ -154,13 +174,62 @@ export class WindowRespawnService {
       this.logRepo.append(task.id, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
     }
     if (gate.reason === 'pending_approval') {
-      this.taskRepo.updateStatus(task.id, 'pending_approval');
+      this.taskRepo.update(task.id, {
+        status: 'pending_approval',
+        pendingOperation: operation,
+        pendingOperationWindowId: windowId,
+      } as Partial<Task>);
       throw new ExecutionGatePendingApprovalError(task.id);
     }
     // 'denied': leave task status untouched — same rationale as the other
     // two enforcement sites (nothing to roll back, a human must change the
     // project server's input_policy before a retry can succeed).
     throw new ExecutionGateDeniedError(task.id);
+  }
+
+  /**
+   * Legacy recovery path for tasks that predate Window records (migration
+   * 034): creates a fresh tmux window and launches `claude --resume
+   * <agentSessionId>` directly, with no Window row involved — respawn()
+   * doesn't apply here since there is no window to respawn. Lives on this
+   * service (not inline in tasks/routes.ts, where it originated) so both
+   * the recover-session route's fallback branch and the approve-execution
+   * handler resuming a blocked 'recover_session_legacy' pendingOperation
+   * share one implementation instead of two copies of the same tmux/
+   * supervisor wiring drifting apart (Issue #328 fourth-round review).
+   * Re-resolves the task from the DB itself (like respawn() does for its
+   * window) rather than taking one as a parameter, so a caller can never
+   * pass a stale object whose executionApprovedFingerprintHash predates a
+   * just-recorded approval — see the matching fix in TaskRestoreService's
+   * caller for the bug this pattern avoids.
+   */
+  async resumeLegacySession(taskId: number, server: ServerConfig): Promise<{ windowName: string }> {
+    const task = this.taskRepo.findById(taskId);
+    if (!task) throw new Error(`Task ${taskId} not found`);
+    if (!task.agentSessionId) throw new Error(`Task ${taskId} has no agent session ID`);
+
+    let unitId: number | null = null;
+    if (task.unitId !== null) {
+      const unit = this.unitRepo.findById(task.unitId);
+      if (unit) unitId = unit.id;
+    }
+    this.enforceExecutionGate(task, unitId, server, 'recover_session_legacy', null);
+
+    const tmuxSession = resolveTmuxSession(task.projectId, server.name, this.projectServerRepo);
+    const { windowName } = await this.tmux.createWindow(server, tmuxSession, `task-${task.id}`);
+    const windowTarget = `${tmuxSession}:${windowName}`;
+    const paneId = await this.tmux.resolvePaneId(server, windowTarget);
+    const resumeCommand = `claude --resume ${task.agentSessionId} --dangerously-skip-permissions`;
+    const isSupervised = shouldSupervise(server.type, 'agent');
+    if (isSupervised) {
+      this.supervisorRegistry.clearExitMarker(server.name, windowTarget);
+    }
+    const sendCmd = isSupervised
+      ? wrapWithSupervisor(resumeCommand, { server, target: windowTarget, taskId: task.id, unitId: task.unitId ?? undefined })
+      : resumeCommand;
+    await this.tmux.sendKeys(server, paneId, [sendCmd, 'Enter']);
+    this.taskRepo.update(taskId, { tmuxWindow: windowName } as Partial<Task>);
+    return { windowName };
   }
 
   /**

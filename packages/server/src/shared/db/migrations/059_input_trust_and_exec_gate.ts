@@ -56,4 +56,15 @@ export function up(db: Database.Database): void {
   // tmuxWindow heuristic when this column is NULL, purely as defense in depth
   // rather than a required backfill.
   db.exec(`ALTER TABLE tasks ADD COLUMN pending_operation TEXT`);
+
+  // Which Window row to resume when pending_operation = 'respawn' (Issue
+  // #328 fourth-round review finding 2: WindowRespawnService's respawn()/
+  // resumeLegacySession() entries used to fall to status='pending_approval'
+  // WITHOUT recording pending_operation at all, so approving one of those
+  // blocks fell into the tmuxWindow heuristic above and resumed the wrong
+  // operation — e.g. approving a blocked respawn silently ran
+  // resumeStateMachine() instead of actually respawning the window). NULL
+  // for every pending_operation value except 'respawn' — see the write-site
+  // catalogue on Task.pendingOperation.
+  db.exec(`ALTER TABLE tasks ADD COLUMN pending_operation_window_id INTEGER`);
 }

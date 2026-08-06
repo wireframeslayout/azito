@@ -1,10 +1,14 @@
 import type { FastifyPluginCallback } from 'fastify';
 import type { IUnitRepository, SubagentConfig, WorkerExecutionMode, WorkerRuntime } from './Unit';
-import type { ITaskRepository } from '../tasks/Task';
+import type { ITaskRepository, Task } from '../tasks/Task';
 import type { TaskStatus } from '../tasks/TaskStatus';
 import type { IExecutionLogRepository } from '../tasks/ExecutionLog';
 import type { ExecuteTaskUseCase } from '../tasks/execution/ExecuteTaskUseCase';
 import type { IProjectRepository } from '../projects/Project';
+import type { IProjectServerRepository } from '../projects/ProjectServer';
+import type { IServerRepository } from '../servers/Server';
+import type { IWindowRepository } from '../windows/Window';
+import type { WindowRespawnService } from '../windows/WindowRespawnService';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { PhaseConfig, PhaseEntryConfig } from '../sidekicks/PhaseConfig';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
@@ -12,7 +16,7 @@ import type { TaskRestoreService } from '../tasks/TaskRestoreService';
 import { resolvePhaseSidekick } from '../sidekicks/resolvePhaseSidekick';
 import { ResourceExhaustedError } from '../servers/resources/ResourceGuard';
 import { hashApprovedTaskFingerprint, replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
-import { resolveUnitId } from '../tasks/execution/TaskExecutionEnv';
+import { resolveTaskServerName, resolveUnitId } from '../tasks/execution/TaskExecutionEnv';
 
 // ─── Types ───
 
@@ -22,6 +26,10 @@ export interface UnitsRouteOptions {
   logRepo: IExecutionLogRepository;
   executeTaskUseCase: ExecuteTaskUseCase;
   projectRepo: IProjectRepository;
+  projectServerRepo: IProjectServerRepository;
+  serverRepo: IServerRepository;
+  windowRepo: IWindowRepository;
+  respawnService: WindowRespawnService;
   sidekickLoader: SidekickPackageLoader;
   unitTypeLoader: UnitTypeLoader;
   taskRestoreService: TaskRestoreService;
@@ -86,7 +94,7 @@ function parseWorkerRuntimeInput(raw: unknown): WorkerRuntime | undefined {
 // ─── Plugin ───
 
 const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, done) => {
-  const { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, sidekickLoader, unitTypeLoader, taskRestoreService } = opts;
+  const { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, projectServerRepo, serverRepo, windowRepo, respawnService, sidekickLoader, unitTypeLoader, taskRestoreService } = opts;
 
   // ── GET /api/units ──
   fastify.get('/api/units', async () => {
@@ -402,29 +410,40 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
         return reply.status(400).send({ error: `Task ${taskId} belongs to unit ${resolvedUnitId ?? 'none'}, not unit ${id}` });
       }
 
-      // Which operation was blocked (execute/resume/restore) — see
-      // Task.pendingOperation. Rows written before that column existed have
-      // it NULL (in practice there are none: migration 059 has never
-      // shipped in a release), so the tmuxWindow-based heuristic this
-      // replaced is kept as a fallback for that case only, not as the
-      // primary signal anymore (Issue #328 third-round review finding 1 —
-      // that heuristic couldn't distinguish "never started" from "was being
-      // restored from archive", so approving a blocked restore ran
-      // execute() instead of restore(), skipping worktree/window
-      // reconstruction and starting an unrequested worker run).
+      // Which operation was blocked — see Task.pendingOperation's write-site
+      // catalogue for the full list ('execute' | 'resume' | 'restore' |
+      // 'respawn' | 'recover_session_legacy') and which code path writes
+      // each one. Rows written before that column existed have it NULL (in
+      // practice there are none: migration 059 has never shipped in a
+      // release), so the tmuxWindow-based heuristic this replaced is kept as
+      // a fallback for that case only, not as the primary signal anymore
+      // (Issue #328 third-round review finding 1 — that heuristic couldn't
+      // distinguish "never started" from "was being restored from
+      // archive"). Note this fallback predates 'respawn'/'recover_session_
+      // legacy' too: it can only ever produce 'resume' or 'execute', so it
+      // cannot correctly recover a pre-fix respawn/legacy block either — not
+      // a live concern while 059 stays unshipped, same as the third-round
+      // caveat above.
       const operation = task.pendingOperation ?? (task.tmuxWindow ? 'resume' : 'execute');
+      // Captured before the approval below clears it — respawn is the only
+      // operation that needs an extra identifier to resume (see
+      // Task.pendingOperationWindowId's doc comment); it doesn't depend on
+      // freshness the way the fingerprint hash does; see the 'restore'
+      // branch below for the field that DOES need a refetch.
+      const pendingWindowId = task.pendingOperationWindowId;
 
       if (!approved) {
         logRepo.append(taskId, id, 'status_change', { status: 'execution_denied' });
         // A denied restore never started anything — put the task back to
         // 'archived' (its state before the blocked restore attempt) rather
         // than 'failed', which would misrepresent an archived task as a
-        // failed run. execute()/resume() denials keep the existing 'failed'
-        // outcome.
+        // failed run. Every other operation's denial keeps the existing
+        // 'failed' outcome.
         taskRepo.update(taskId, {
           status: (operation === 'restore' ? 'archived' : 'failed') as TaskStatus,
           pendingOperation: null,
-        } as Partial<import('../tasks/Task').Task>);
+          pendingOperationWindowId: null,
+        } as Partial<Task>);
         return { ok: true };
       }
 
@@ -437,20 +456,74 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
       taskRepo.update(taskId, {
         executionApprovedFingerprintHash: hashApprovedTaskFingerprint(task),
         pendingOperation: null,
-      } as Partial<import('../tasks/Task').Task>);
+        pendingOperationWindowId: null,
+      } as Partial<Task>);
+
+      // Fire-and-forget below, matching the pre-existing convention for
+      // every long-running resume path in this file (approve-plan above
+      // does the same): the HTTP response returns as soon as the operation
+      // is *kicked off*, not once it finishes, because these can run an
+      // entire agent turn. What changed (Issue #328 fourth-round review
+      // finding 1) is the empty `.catch(() => {})` those calls used to end
+      // in — a rejection there vanished with no log entry and no status
+      // change, so an approval could silently do nothing. Every branch below
+      // now logs the failure and marks the task 'failed' on the same
+      // rejection path ExecuteTaskUseCase's own internal catches already use
+      // for in-flight failures.
+      const failApprovedOperation = (op: string, err: unknown): void => {
+        const message = err instanceof Error ? err.message : String(err);
+        request.log.error({ err, taskId, operation: op }, `approved ${op} failed`);
+        logRepo.append(taskId, id, 'command', { type: 'approved_operation_failed', operation: op, message });
+        taskRepo.update(taskId, { status: 'failed' as TaskStatus } as Partial<Task>);
+      };
 
       if (operation === 'restore') {
-        // restore() manages its own status transition (sets 'open' on
-        // success, matching what an ungated restore() always does; see
-        // TaskRestoreService.restore) — no status is set here, same as the
-        // standalone POST /api/tasks/:id/restore route.
-        taskRestoreService.restore(task, request.log).catch(() => {});
+        // Must be the just-persisted row, NOT the `task` object fetched at
+        // the top of this handler: checkExecutionGate() inside restore()
+        // re-validates executionApprovedFingerprintHash, which the update
+        // above just set — restore(task) with the stale pre-update object
+        // would re-hit "pending_approval" and throw immediately, silently
+        // undoing the approval (Issue #328 fourth-round review finding 1).
+        const approvedTask = taskRepo.findById(taskId);
+        if (!approvedTask) {
+          failApprovedOperation('restore', new Error(`Task ${taskId} disappeared after approval`));
+        } else {
+          // restore() manages its own status transition on success (sets
+          // 'open', matching what an ungated restore() always does; see
+          // TaskRestoreService.restore) — no status is set here, same as the
+          // standalone POST /api/tasks/:id/restore route.
+          taskRestoreService.restore(approvedTask, request.log).catch((err: unknown) => failApprovedOperation('restore', err));
+        }
       } else if (operation === 'resume') {
         taskRepo.updateStatus(taskId, 'running');
-        executeTaskUseCase.resumeStateMachine(id, taskId).catch(() => {});
+        executeTaskUseCase.resumeStateMachine(id, taskId).catch((err: unknown) => failApprovedOperation('resume', err));
+      } else if (operation === 'respawn') {
+        // respawn() re-resolves the task from the DB by windowId internally
+        // (see WindowRespawnService.respawn), so — like execute()/
+        // resumeStateMachine() above — it has no staleness risk from the
+        // handler's local `task` object; only pendingWindowId (captured
+        // before this handler cleared it) is needed to target it.
+        const win = pendingWindowId !== null ? windowRepo.findById(pendingWindowId) : null;
+        const srv = win ? serverRepo.findByName(win.serverName) : null;
+        if (!win || !srv) {
+          failApprovedOperation('respawn', new Error(`Window ${pendingWindowId ?? 'null'} or its server no longer exists`));
+        } else {
+          respawnService.respawn(win.id, srv).catch((err: unknown) => failApprovedOperation('respawn', err));
+        }
+      } else if (operation === 'recover_session_legacy') {
+        // resumeLegacySession() also re-resolves the task from the DB by
+        // taskId internally (see WindowRespawnService.resumeLegacySession) —
+        // same no-staleness reasoning as 'resume'/'respawn' above.
+        const resolvedServerName = resolveTaskServerName(task, projectServerRepo);
+        const srv = resolvedServerName ? serverRepo.findByName(resolvedServerName) : null;
+        if (!srv) {
+          failApprovedOperation('recover_session_legacy', new Error(`Server '${resolvedServerName ?? 'unresolved'}' not found`));
+        } else {
+          respawnService.resumeLegacySession(taskId, srv).catch((err: unknown) => failApprovedOperation('recover_session_legacy', err));
+        }
       } else {
         taskRepo.updateStatus(taskId, 'open');
-        executeTaskUseCase.execute(id, taskId).catch(() => {});
+        executeTaskUseCase.execute(id, taskId).catch((err: unknown) => failApprovedOperation('execute', err));
       }
       return { ok: true };
     },
