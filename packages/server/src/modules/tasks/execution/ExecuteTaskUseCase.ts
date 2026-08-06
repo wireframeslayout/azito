@@ -34,6 +34,7 @@ import { PushVerifier } from './PushVerifier';
 import { GitInfoCollector } from './GitInfoCollector';
 import { PullRequestCreator } from './PullRequestCreator';
 import { PhaseLoopRunner } from './PhaseLoopRunner';
+import { appendLogAndEmit } from './AppendLog';
 import { HttpSignalTurnCoordinator } from './HttpSignalTurnCoordinator';
 import type { SupervisorRegistry } from '../../supervisors/SupervisorRegistry';
 import { shouldSupervise } from '../../supervisors/SupervisorLaunch';
@@ -70,7 +71,6 @@ interface RunningExecution {
 // registry, exposed read-only via getRunning() / GET /api/operations.
 
 export class ExecuteTaskUseCase {
-  public events = new EventEmitter();
   private runningExecutions = new Map<number, RunningExecution[]>();
 
   private readonly gitInfoCollector: GitInfoCollector;
@@ -107,6 +107,19 @@ export class ExecuteTaskUseCase {
     private unitTypeLoader: UnitTypeLoader,
     private resourceGuard: ResourceGuard,
     private projectSecretRepo: SqliteProjectSecretRepository,
+    // Shared task-events EventEmitter (Issue #328 fifteenth-round review) —
+    // injected, not self-created, so TaskRestoreService and
+    // WindowRespawnService can emit on the SAME instance buildServer.ts's
+    // NotificationBus/push bridges subscribe to via
+    // `executeTaskUseCase.events.on('log', ...)`. Before this, this class
+    // created its own private EventEmitter that only ITS OWN appendLog()
+    // calls (and PhaseLoopRunner's, injected from this class) ever emitted
+    // on — TaskRestoreService.restore() and WindowRespawnService's
+    // execution-gate enforcement wrote execution_log rows directly and had
+    // no way to reach it, so a pending_approval block from either path was
+    // silently unnotified. See AppendLog.ts's appendLogAndEmit() doc
+    // comment for the shared helper this and those two classes now all use.
+    public readonly events: EventEmitter,
   ) {
     this.gitInfoCollector = new GitInfoCollector(this.tmux);
     this.pushVerifier = new PushVerifier(this.tmux, this.gitProvider);
@@ -306,8 +319,7 @@ export class ExecuteTaskUseCase {
   }
 
   private appendLog(taskId: number, unitId: number, type: LogType, content: unknown): void {
-    this.logRepo.append(taskId, unitId, type, content);
-    this.events.emit('log', { taskId, unitId, type, content, createdAt: new Date().toISOString() });
+    appendLogAndEmit(this.logRepo, this.events, taskId, unitId, type, content);
   }
 
   /**

@@ -13,8 +13,70 @@ import { buildRespawnManifestInput } from '../../windows/WindowRespawnService';
 import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoader';
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import type { TaskRestoreService } from '../TaskRestoreService';
-import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionManifest';
+import { resolveExecutionManifest, hashExecutionManifest, type ExecutionManifestResolution } from './ExecutionManifest';
 import { resolveTaskServerName } from './TaskExecutionEnv';
+
+/**
+ * Dependencies needed to resolve the manifest for a `pending_approval` task
+ * — a subset of {@link ExecutionApprovalDeps} plus `windowRepo` (needed only
+ * to look up the respawn window; see {@link resolvePendingApprovalManifest}).
+ */
+export interface PendingApprovalManifestDeps {
+  unitRepo: IUnitRepository;
+  projectRepo: IProjectRepository;
+  projectServerRepo: IProjectServerRepository;
+  serverRepo: IServerRepository;
+  projectSecretRepo: SqliteProjectSecretRepository;
+  unitTypeLoader: UnitTypeLoader;
+  sidekickLoader: SidekickPackageLoader;
+  windowRepo: IWindowRepository;
+}
+
+/**
+ * Resolves the execution manifest for a `pending_approval` task — the ONE
+ * place both GET /api/tasks/:id/execution-approval (display + fingerprint
+ * the human sees) and decideExecutionApproval (fingerprint re-check at the
+ * moment of approval) must call, so the two can never resolve a different
+ * manifest for the same task (Issue #328 fourteenth-round review).
+ *
+ * Before this function existed, GET always called resolveExecutionManifest()
+ * with no overrides, while decideExecutionApproval separately looked up the
+ * respawn window and passed `buildRespawnManifestInput(window)` +
+ * `window.serverName` whenever `pendingOperation === 'respawn'`. Those two
+ * inputs produce different manifests (respawn's `respawn` field is null vs.
+ * populated, and the `server`/branches fields can resolve to a different
+ * server entirely — see resolveExecutionManifest's `serverNameOverride` doc
+ * comment) — so the fingerprint GET displayed could never match the one POST
+ * re-hashed for a respawn-blocked task, and approval was permanently stuck
+ * at `fingerprint_mismatch`.
+ *
+ * `pendingOperation` is read directly off `task` (not passed separately) —
+ * both call sites already have the up-to-date task row before calling this.
+ *
+ * Throws (does not fall back to the non-respawn manifest) when
+ * `pendingOperation === 'respawn'` but the recorded window
+ * (`task.pendingOperationWindowId`) no longer exists — silently falling
+ * back would resolve the SAME wrong manifest this function exists to avoid,
+ * just via a different code path. Callers must not swallow this into an
+ * approved/executed outcome; both call sites here surface it as an error
+ * response instead.
+ */
+export function resolvePendingApprovalManifest(
+  task: Task,
+  deps: PendingApprovalManifestDeps,
+): ExecutionManifestResolution {
+  if (task.pendingOperation === 'respawn') {
+    const windowId = task.pendingOperationWindowId;
+    const win = windowId !== null ? deps.windowRepo.findById(windowId) : null;
+    if (!win) {
+      throw new Error(
+        `Task ${task.id} is pending_approval for a "respawn" operation but its recorded window (id ${windowId ?? 'null'}) no longer exists — cannot resolve the manifest a respawn would actually use.`,
+      );
+    }
+    return resolveExecutionManifest(task, deps, buildRespawnManifestInput(win), win.serverName);
+  }
+  return resolveExecutionManifest(task, deps);
+}
 
 /**
  * The decision core of POST /api/tasks/:id/approve-execution (Issue #328),
@@ -113,7 +175,6 @@ export function decideExecutionApproval(
     return { status: 409, body: { error: `Task ${taskId} is pending_approval but has no pendingOperation recorded — nothing to approve or deny` } };
   }
   const pendingWindowId = task.pendingOperationWindowId;
-  const respawnWindow = operation === 'respawn' && pendingWindowId !== null ? windowRepo.findById(pendingWindowId) : null;
   const priorStatus = (task.pendingOperationPriorStatus ?? 'failed') as TaskStatus;
 
   const appendLogIfUnitKnown = (type: Parameters<IExecutionLogRepository['append']>[2], content: unknown): void => {
@@ -142,12 +203,19 @@ export function decideExecutionApproval(
     };
   }
 
-  const { manifest } = resolveExecutionManifest(
-    task,
-    { unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader },
-    respawnWindow ? buildRespawnManifestInput(respawnWindow) : undefined,
-    respawnWindow?.serverName,
-  );
+  let manifest: ExecutionManifestResolution['manifest'];
+  try {
+    ({ manifest } = resolvePendingApprovalManifest(task, {
+      unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, windowRepo,
+    }));
+  } catch (err) {
+    // Do NOT consume the approval — same reasoning as the fingerprint
+    // mismatch below: nothing here has mutated task state yet, so the task
+    // stays pending_approval for a human to investigate (e.g. re-trigger the
+    // respawn from scratch) rather than being silently marked failed.
+    const message = err instanceof Error ? err.message : String(err);
+    return { status: 409, body: { error: message, code: 'pending_operation_window_missing' } };
+  }
   const currentHash = hashExecutionManifest(manifest);
 
   if (fingerprint !== undefined && fingerprint !== currentHash) {

@@ -45,6 +45,7 @@ import {
   resolveDisplayedTaskTerminal, selectTaskTerminal,
   type FixedView, type TerminalRef,
 } from '../task/taskPaneLayout';
+import { ApprovalRequestTracker, isApprovalDataForTask } from '../task/executionApprovalRequest';
 
 // Re-exported so existing external imports (`from './TaskPanel'`) keep working —
 // the actual implementation lives in taskPaneLayout.ts, alongside the rest of the
@@ -413,15 +414,46 @@ export default function TaskPanel({
     fetchTaskData();
   }, [taskId, onRefresh, fetchTaskData]);
 
+  // Cancels a stale in-flight GET when a newer one supersedes it (task
+  // switched, or the same task's approval was re-fetched after a 409
+  // fingerprint-mismatch) — see fetchApprovalData below. `approvalTracker`'s
+  // generation guard is invalidated (with no new controller) whenever the
+  // task stops being pending_approval, so a response already in flight at
+  // that moment cannot land after the fact. See executionApprovalRequest.ts
+  // for why this is a plain (non-React) class — it lets the exact guard
+  // logic be unit tested without mounting TaskPanel's render tree.
+  const approvalAbortRef = useRef<AbortController | null>(null);
+  const approvalTrackerRef = useRef<ApprovalRequestTracker | null>(null);
+  if (approvalTrackerRef.current === null) approvalTrackerRef.current = new ApprovalRequestTracker();
+  const approvalTracker = approvalTrackerRef.current;
+
   // Shared by the fetch-on-open effect below AND by handleExecutionApproval's
   // 409 fingerprint-mismatch handling (Issue #328 review fix 1): a stale
   // approval is refused, and this same fetch is what re-presents the human
   // with what actually changed instead of silently resubmitting against it.
+  //
+  // Cancellation + generation guard (Issue #328 review — TaskPanel approval
+  // race): switching between two `pending_approval` tasks in quick
+  // succession used to let whichever GET happened to resolve LAST win,
+  // regardless of which task was actually being requested first — so
+  // `approvalData` (and therefore the taskId the Approve/Deny buttons submit
+  // against) could end up holding a DIFFERENT task than the one on screen.
+  // `approvalAbortRef` additionally cancels the previous request's
+  // underlying fetch so it doesn't do pointless work.
   const fetchApprovalData = useCallback(async (id: number) => {
+    approvalAbortRef.current?.abort();
+    const controller = new AbortController();
+    approvalAbortRef.current = controller;
+    const requestId = approvalTracker.begin();
+    // Clear immediately — never leave a PREVIOUS task's approval content (and
+    // its taskId/fingerprint) on screen, submittable, while a new task's
+    // fetch is in flight.
+    setApprovalData(null);
     setApprovalLoading(true);
     setApprovalError(null);
     try {
-      const res = await api<ExecutionApprovalData & { error?: string }>(`/tasks/${id}/execution-approval`);
+      const res = await api<ExecutionApprovalData & { error?: string }>(`/tasks/${id}/execution-approval`, { signal: controller.signal });
+      if (!approvalTracker.isCurrent(requestId)) return; // superseded
       if (res.error) {
         setApprovalError(res.error);
         setApprovalData(null);
@@ -429,14 +461,18 @@ export default function TaskPanel({
         setApprovalData(res);
       }
     } catch {
+      if (controller.signal.aborted) return; // superseded — a newer request already owns the UI
+      if (!approvalTracker.isCurrent(requestId)) return;
       setApprovalError(t('executionApproval.loadError'));
     } finally {
-      setApprovalLoading(false);
+      if (approvalTracker.isCurrent(requestId)) setApprovalLoading(false);
     }
   }, [t]);
 
   useEffect(() => {
     if (!task || task.status !== 'pending_approval') {
+      approvalAbortRef.current?.abort();
+      approvalTracker.invalidate(); // invalidate any request still in flight
       setApprovalData(null);
       setApprovalError(null);
       return;
@@ -450,6 +486,14 @@ export default function TaskPanel({
 
   const handleExecutionApproval = useCallback(async (approved: boolean) => {
     if (!approvalData || submittingApproval) return;
+    // Defense in depth alongside the generation guard in fetchApprovalData
+    // above: never submit an approval decision against a task other than
+    // the one currently displayed (Issue #328 review — approving the wrong
+    // task is a human-judgment integrity issue, not just a display glitch).
+    if (!isApprovalDataForTask(approvalData, taskId)) {
+      showToast(t('executionApproval.loadError'));
+      return;
+    }
     setSubmittingApproval(approved ? 'approve' : 'deny');
     try {
       const res = await api<{ error?: string; code?: string }>(`/tasks/${approvalData.taskId}/approve-execution`, {
@@ -473,7 +517,7 @@ export default function TaskPanel({
     } finally {
       setSubmittingApproval(null);
     }
-  }, [approvalData, submittingApproval, showToast, onRefresh, fetchTaskData, fetchApprovalData, t]);
+  }, [approvalData, submittingApproval, taskId, showToast, onRefresh, fetchTaskData, fetchApprovalData, t]);
 
   const handlePlanAction = useCallback(async (planTask: Task, approved: boolean) => {
     if (!planTask.unitId) return;

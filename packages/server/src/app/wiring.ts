@@ -4,6 +4,7 @@
 // manual `new` (no DI container). Mirrors the former inline construction in
 // main.ts; grouped into per-module factory functions for readability.
 
+import { EventEmitter } from 'events';
 import type { SqliteDatabase } from '../shared/db/Database';
 import type { DataPaths } from '../shared/dataDir';
 
@@ -124,6 +125,16 @@ export interface ApplicationServices {
   taskRestoreService: TaskRestoreService;
   usageService: UsageService;
   agentSignalService: AgentSignalService;
+  // Shared task-events EventEmitter (Issue #328 fifteenth-round review) —
+  // constructed once here (before ExecuteTaskUseCase, which WindowRespawnService/
+  // TaskRestoreService are themselves built ahead of) and injected into all
+  // three, so every execution-gate call site emits on the SAME instance
+  // buildServer.ts's NotificationBus/push bridges subscribe to via
+  // `executeTaskUseCase.events.on('log', ...)`. See AppendLog.ts's
+  // appendLogAndEmit() doc comment for why a per-class private EventEmitter
+  // (the previous shape) silently dropped notifications from every entry
+  // point except ExecuteTaskUseCase's own.
+  taskEvents: EventEmitter;
 }
 
 export interface SystemUpdateModule {
@@ -245,7 +256,11 @@ function buildAgentUpdater(agentBundler: AgentBundler, infra: SharedInfra, repos
 function buildApplicationServices(infra: SharedInfra, repos: Repositories): ApplicationServices {
   const sessionStrategyFactory = new SessionStrategyFactory(infra.agentRegistry, infra.transportFactory);
   const sessionCaptureService = new SessionCaptureService(repos.windowRepo, repos.taskRepo, repos.serverRepo, sessionStrategyFactory);
-  const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.tmuxClient, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, repos.serverRepo, repos.projectSecretRepo, sessionCaptureService);
+  // Constructed here (ahead of ExecuteTaskUseCase, built later in
+  // buildWiring) and shared with it below — see ApplicationServices.taskEvents'
+  // own doc comment for why this must be ONE instance, not one per class.
+  const taskEvents = new EventEmitter();
+  const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.tmuxClient, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, repos.serverRepo, repos.projectSecretRepo, taskEvents, sessionCaptureService);
   const taskRestoreService = new TaskRestoreService({
     taskRepo: repos.taskRepo,
     serverRepo: repos.serverRepo,
@@ -261,10 +276,11 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories): Appl
     unitTypeLoader: infra.unitTypeLoader,
     sidekickLoader: infra.sidekickPackageLoader,
     projectSecretRepo: repos.projectSecretRepo,
+    events: taskEvents,
   });
   const usageService = new UsageService(infra.agentRegistry);
   const agentSignalService = new AgentSignalService(repos.agentTurnRepo, infra.turnSignalHub, repos.logRepo);
-  return { sessionStrategyFactory, sessionCaptureService, windowRespawnService, taskRestoreService, usageService, agentSignalService };
+  return { sessionStrategyFactory, sessionCaptureService, windowRespawnService, taskRestoreService, usageService, agentSignalService, taskEvents };
 }
 
 function buildExecuteTaskUseCase(
@@ -297,6 +313,7 @@ function buildExecuteTaskUseCase(
     infra.unitTypeLoader,
     resourceGuard,
     repos.projectSecretRepo,
+    appServices.taskEvents,
   );
 }
 

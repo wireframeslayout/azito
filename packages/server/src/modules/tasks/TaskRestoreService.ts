@@ -17,8 +17,10 @@ import { buildWorkerLaunchCommand } from '../agents/LaunchCommand';
 import { shellQuote } from '../../shared/shellQuote';
 import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError } from './execution/ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest } from './execution/ExecutionManifest';
+import { appendLogAndEmit } from './execution/AppendLog';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
+import type { EventEmitter } from 'events';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -46,6 +48,13 @@ export interface TaskRestoreDeps {
   // with (see app/wiring.ts).
   unitTypeLoader: UnitTypeLoader;
   sidekickLoader: SidekickPackageLoader;
+  // Shared task-events EventEmitter (Issue #328 fifteenth-round review) —
+  // the SAME instance ExecuteTaskUseCase is constructed with, so
+  // appendLogAndEmit() calls here reach buildServer.ts's NotificationBus/
+  // push bridges exactly like ExecuteTaskUseCase's own do. See
+  // AppendLog.ts's doc comment for why a second, unwired notification path
+  // is exactly how the bug this fixes happened.
+  events: EventEmitter;
 }
 
 export class TaskRestoreService {
@@ -54,7 +63,7 @@ export class TaskRestoreService {
   constructor(private deps: TaskRestoreDeps) {}
 
   async restore(task: Task, log: { warn: (msg: string) => void }): Promise<{ tmuxTarget: string; worktreePath: string | null }> {
-    const { taskRepo, serverRepo, projectRepo, projectServerRepo, unitRepo, windowRepo, tmux, worktreeServiceFactory, transportFactory, contentExtractor, logRepo, unitTypeLoader, sidekickLoader, projectSecretRepo } = this.deps;
+    const { taskRepo, serverRepo, projectRepo, projectServerRepo, unitRepo, windowRepo, tmux, worktreeServiceFactory, transportFactory, contentExtractor, logRepo, unitTypeLoader, sidekickLoader, projectSecretRepo, events } = this.deps;
 
     const serverName = resolveTaskServerName(task, projectServerRepo);
     if (!serverName) {
@@ -81,7 +90,7 @@ export class TaskRestoreService {
     const gate = checkExecutionGate(task, projectServer, hashExecutionManifest(manifest));
     if (!gate.allowed) {
       if (unitId !== null) {
-        logRepo.append(task.id, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
+        appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
       }
       if (gate.reason === 'pending_approval') {
         // pendingOperation records that the blocked operation was a restore
@@ -101,13 +110,20 @@ export class TaskRestoreService {
           pendingOperation: 'restore',
           pendingOperationPriorStatus: task.status,
         } as Partial<Task>);
-        // See the matching comment in ExecuteTaskUseCase.enforceExecutionGate
-        // (Issue #51) — a 'status_change' entry, not just the 'command' entry
-        // above, is what the NotificationBus bridge turns into a browser
-        // notification. Guarded on unitId !== null the same as the 'command'
-        // log above it (an archived task can have no resolvable Unit).
+        // A 'status_change' entry, not just the 'command' entry above, is
+        // what the NotificationBus/push bridges (buildServer.ts) turn into a
+        // live browser notification — but ONLY when it's emitted on the
+        // shared events EventEmitter they subscribe to, not merely persisted
+        // via logRepo.append(). Before Issue #328 fifteenth-round review,
+        // this called logRepo.append() directly (this comment used to claim
+        // that alone was sufficient, mirroring
+        // ExecuteTaskUseCase.enforceExecutionGate's real behavior — it
+        // wasn't: TaskRestoreService had no way to reach that class's private
+        // EventEmitter). See AppendLog.ts's appendLogAndEmit() doc comment.
+        // Guarded on unitId !== null the same as the 'command' log above it
+        // (an archived task can have no resolvable Unit).
         if (unitId !== null) {
-          logRepo.append(task.id, unitId, 'status_change', { status: 'pending_approval', operation: 'restore' });
+          appendLogAndEmit(logRepo, events, task.id, unitId, 'status_change', { status: 'pending_approval', operation: 'restore' });
         }
         throw new ExecutionGatePendingApprovalError(task.id);
       }

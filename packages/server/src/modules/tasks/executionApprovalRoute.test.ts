@@ -171,6 +171,44 @@ function makeOpts(existingTask: Task | null): TasksRouteOptions {
   };
 }
 
+/** Stateful task store so consumePendingApproval()/update() mutations are visible to a later findById() in the same test — mirrors modules/units/approveExecution.routes.test.ts's makeOpts pattern. Module-scoped (not describe-local) so both the POST describe block and the GET/POST manifest-consistency describe block below can share it. */
+function makeStatefulOpts(initialTask: Task): { opts: TasksRouteOptions; getTask: () => Task } {
+  let currentTask: Task = initialTask;
+  const opts = makeOpts(initialTask);
+  // The base makeOpts() fixture's execute()/followUp() mocks return
+  // undefined (no test using them previously awaited/chained on the
+  // result) — decideExecutionApproval's dispatch calls `.catch()` on
+  // whatever execute()/resumeStateMachine() return, so callers needing
+  // that resolved need it to actually resolve.
+  opts.executeTaskUseCase = {
+    ...opts.executeTaskUseCase,
+    execute: vi.fn(async () => {}),
+    followUp: vi.fn(async () => {}),
+    resumeStateMachine: vi.fn(async () => {}),
+  } as unknown as TasksRouteOptions['executeTaskUseCase'];
+  opts.taskRepo.findById = vi.fn((id: number) => (id === initialTask.id ? currentTask : null));
+  opts.taskRepo.update = vi.fn((id: number, data: Partial<Task>) => {
+    if (id === initialTask.id) currentTask = { ...currentTask, ...data };
+  });
+  opts.taskRepo.updateStatus = vi.fn((id: number, status: Task['status']) => {
+    if (id === initialTask.id) currentTask = { ...currentTask, status };
+  });
+  opts.taskRepo.consumePendingApproval = vi.fn((id: number, fields: { status?: Task['status']; executionApprovedFingerprintHash?: string }) => {
+    if (id !== initialTask.id) return false;
+    if (currentTask.status !== 'pending_approval' || currentTask.pendingOperation === null) return false;
+    currentTask = {
+      ...currentTask,
+      ...(fields.status !== undefined ? { status: fields.status } : {}),
+      ...(fields.executionApprovedFingerprintHash !== undefined ? { executionApprovedFingerprintHash: fields.executionApprovedFingerprintHash } : {}),
+      pendingOperation: null,
+      pendingOperationWindowId: null,
+      pendingOperationPriorStatus: null,
+    };
+    return true;
+  });
+  return { opts, getTask: () => currentTask };
+}
+
 describe('GET /api/tasks/:id/execution-approval (Issue #51)', () => {
   it('404s when the task does not exist', async () => {
     const app = Fastify();
@@ -236,44 +274,6 @@ describe('GET /api/tasks/:id/execution-approval (Issue #51)', () => {
 // approvable for operations ('restore') that don't actually need a Unit to
 // run (fix 2).
 describe('POST /api/tasks/:id/approve-execution (Issue #328 review)', () => {
-  /** Stateful task store so consumePendingApproval()/update() mutations are visible to a later findById() in the same test — mirrors modules/units/approveExecution.routes.test.ts's makeOpts pattern. */
-  function makeStatefulOpts(initialTask: Task): { opts: TasksRouteOptions; getTask: () => Task } {
-    let currentTask: Task = initialTask;
-    const opts = makeOpts(initialTask);
-    // The base makeOpts() fixture's execute()/followUp() mocks return
-    // undefined (no test using them previously awaited/chained on the
-    // result) — decideExecutionApproval's dispatch calls `.catch()` on
-    // whatever execute()/resumeStateMachine() return, so this describe
-    // block's tests need them to actually resolve.
-    opts.executeTaskUseCase = {
-      ...opts.executeTaskUseCase,
-      execute: vi.fn(async () => {}),
-      followUp: vi.fn(async () => {}),
-      resumeStateMachine: vi.fn(async () => {}),
-    } as unknown as TasksRouteOptions['executeTaskUseCase'];
-    opts.taskRepo.findById = vi.fn((id: number) => (id === initialTask.id ? currentTask : null));
-    opts.taskRepo.update = vi.fn((id: number, data: Partial<Task>) => {
-      if (id === initialTask.id) currentTask = { ...currentTask, ...data };
-    });
-    opts.taskRepo.updateStatus = vi.fn((id: number, status: Task['status']) => {
-      if (id === initialTask.id) currentTask = { ...currentTask, status };
-    });
-    opts.taskRepo.consumePendingApproval = vi.fn((id: number, fields: { status?: Task['status']; executionApprovedFingerprintHash?: string }) => {
-      if (id !== initialTask.id) return false;
-      if (currentTask.status !== 'pending_approval' || currentTask.pendingOperation === null) return false;
-      currentTask = {
-        ...currentTask,
-        ...(fields.status !== undefined ? { status: fields.status } : {}),
-        ...(fields.executionApprovedFingerprintHash !== undefined ? { executionApprovedFingerprintHash: fields.executionApprovedFingerprintHash } : {}),
-        pendingOperation: null,
-        pendingOperationWindowId: null,
-        pendingOperationPriorStatus: null,
-      };
-      return true;
-    });
-    return { opts, getTask: () => currentTask };
-  }
-
   /**
    * `respawnWindow` mirrors decideExecutionApproval's own resolution for a
    * blocked 'respawn' operation (it re-resolves via the pending window, not
@@ -546,23 +546,27 @@ describe('POST /api/tasks/:id/approve-execution (Issue #328 review)', () => {
     expect(getTask().status).toBe('running');
   });
 
-  it('marks the task failed when an approved respawn cannot find its recorded window', async () => {
+  it("rejects with 409 (not a silent fallback to the non-respawn manifest) when a pending respawn's recorded window no longer exists — the manifest cannot be resolved at all, so nothing is consumed", async () => {
     const task = makeTask({ pendingOperation: 'respawn', pendingOperationWindowId: 999 });
-    const { opts } = makeStatefulOpts(task);
+    const { opts, getTask } = makeStatefulOpts(task);
     // Default windowRepo.findById returns undefined — the recorded window
-    // no longer exists.
-    const fingerprint = currentFingerprint(opts, task);
+    // no longer exists. Previously this silently fell back to resolving the
+    // NON-respawn manifest (same bug class as the GET/POST mismatch this
+    // round fixes) and only failed later, mid-dispatch, after approval was
+    // already consumed. Now resolvePendingApprovalManifest() throws before
+    // any state is mutated.
     const app = Fastify();
     await app.register(tasksRoutes, opts);
     await app.ready();
 
-    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
-    await new Promise((r) => setImmediate(r));
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint: 'irrelevant-manifest-cannot-be-resolved' } });
 
-    expect(res.statusCode).toBe(200);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().code).toBe('pending_operation_window_missing');
     expect(opts.respawnService.respawn).not.toHaveBeenCalled();
-    expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { status: 'failed' });
-    expect(opts.logRepo.append).toHaveBeenCalledWith(1, 20, 'command', expect.objectContaining({ type: 'approved_operation_failed', operation: 'respawn' }));
+    expect(opts.taskRepo.consumePendingApproval).not.toHaveBeenCalled();
+    expect(getTask().status).toBe('pending_approval');
+    expect(getTask().pendingOperation).toBe('respawn');
   });
 
   it('approval on a blocked legacy recover-session (pendingOperation recover_session_legacy) resumes resumeLegacySession(), not execute()', async () => {
@@ -649,5 +653,116 @@ describe('POST /api/tasks/:id/approve-execution (Issue #328 review)', () => {
     expect(res.statusCode).toBe(200);
     expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { status: 'failed' });
     expect(opts.logRepo.append).toHaveBeenCalledWith(1, 20, 'command', expect.objectContaining({ type: 'approved_operation_failed', operation: 'restore', message: 'worktree gone' }));
+  });
+});
+
+// Issue #328 fourteenth-round review: GET .../execution-approval and POST
+// .../approve-execution must resolve the SAME manifest for every
+// pendingOperation, so the fingerprint a human reads off the GET response is
+// always the one the POST handler re-hashes and accepts. Before this round,
+// GET always resolved the non-respawn manifest while POST additionally
+// folded in `buildRespawnManifestInput(window)` + the window's own
+// serverName whenever `pendingOperation === 'respawn'` — the two manifests
+// differed, so the fingerprint GET displayed could never satisfy POST's
+// check, and a respawn-blocked task could never be approved. These tests
+// exercise the real HTTP round trip (GET, then POST with exactly the
+// fingerprint GET returned) for every pendingOperation value, so a
+// reintroduced GET/POST resolution mismatch fails here instead of only
+// being caught in production.
+describe('GET fingerprint satisfies POST (Issue #328 fourteenth-round review — one operation at a time)', () => {
+  async function approveWithGetFingerprint(opts: TasksRouteOptions): Promise<{ getRes: { statusCode: number }; postRes: { statusCode: number; json: () => Record<string, unknown> } }> {
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const getRes = await app.inject({ method: 'GET', url: '/api/tasks/1/execution-approval' });
+    const fingerprint = getRes.json().fingerprint as string;
+    const postRes = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
+    await new Promise((r) => setImmediate(r));
+    return { getRes, postRes };
+  }
+
+  it("'execute'", async () => {
+    const task = makeTask({ pendingOperation: 'execute' });
+    const { opts } = makeStatefulOpts(task);
+    const { getRes, postRes } = await approveWithGetFingerprint(opts);
+    expect(getRes.statusCode).toBe(200);
+    expect(postRes.statusCode).toBe(200);
+    expect(opts.executeTaskUseCase.execute).toHaveBeenCalledWith(20, 1);
+  });
+
+  it("'resume'", async () => {
+    const task = makeTask({ pendingOperation: 'resume', tmuxWindow: 'task-1' });
+    const { opts, getTask } = makeStatefulOpts(task);
+    const { getRes, postRes } = await approveWithGetFingerprint(opts);
+    expect(getRes.statusCode).toBe(200);
+    expect(postRes.statusCode).toBe(200);
+    expect(opts.executeTaskUseCase.resumeStateMachine).toHaveBeenCalledWith(20, 1);
+    expect(getTask().status).toBe('running');
+  });
+
+  it("'restore'", async () => {
+    const task = makeTask({ pendingOperation: 'restore', pendingOperationPriorStatus: 'archived' });
+    const { opts } = makeStatefulOpts(task);
+    const { getRes, postRes } = await approveWithGetFingerprint(opts);
+    expect(getRes.statusCode).toBe(200);
+    expect(postRes.statusCode).toBe(200);
+    expect(opts.taskRestoreService.restore).toHaveBeenCalled();
+  });
+
+  it("'recover_session_legacy'", async () => {
+    const task = makeTask({ pendingOperation: 'recover_session_legacy', pendingOperationPriorStatus: 'running', agentSessionId: 'sess-1' });
+    const { opts, getTask } = makeStatefulOpts(task);
+    const { getRes, postRes } = await approveWithGetFingerprint(opts);
+    expect(getRes.statusCode).toBe(200);
+    expect(postRes.statusCode).toBe(200);
+    expect(opts.respawnService.resumeLegacySession).toHaveBeenCalledWith(1, expect.objectContaining({ name: 'test-server' }));
+    expect(getTask().status).toBe('running');
+  });
+
+  it("'resume_await_answer'", async () => {
+    const task = makeTask({ pendingOperation: 'resume_await_answer', pendingOperationPriorStatus: 'waiting_input' });
+    const { opts, getTask } = makeStatefulOpts(task);
+    const { getRes, postRes } = await approveWithGetFingerprint(opts);
+    expect(getRes.statusCode).toBe(200);
+    expect(postRes.statusCode).toBe(200);
+    expect(getTask().status).toBe('waiting_input');
+  });
+
+  it("'resume_await_plan_review'", async () => {
+    const task = makeTask({ pendingOperation: 'resume_await_plan_review', pendingOperationPriorStatus: 'phase_review' });
+    const { opts, getTask } = makeStatefulOpts(task);
+    const { getRes, postRes } = await approveWithGetFingerprint(opts);
+    expect(getRes.statusCode).toBe(200);
+    expect(postRes.statusCode).toBe(200);
+    expect(getTask().status).toBe('phase_review');
+  });
+
+  it("'respawn' — the operation the GET/POST manifest mismatch bug actually broke", async () => {
+    const task = makeTask({ pendingOperation: 'respawn', pendingOperationWindowId: 5, pendingOperationPriorStatus: 'running' });
+    const { opts, getTask } = makeStatefulOpts(task);
+    const respawnWindow = { id: 5, serverName: 'test-server', workerModel: null, workerType: null, paneLayout: null };
+    opts.windowRepo.findById = vi.fn((id: number) => (id === 5 ? respawnWindow : undefined)) as unknown as TasksRouteOptions['windowRepo']['findById'];
+    const { getRes, postRes } = await approveWithGetFingerprint(opts);
+    expect(getRes.statusCode).toBe(200);
+    // Before this round's fix, this was ALWAYS 409 fingerprint_mismatch —
+    // GET resolved a different manifest than POST re-hashed.
+    expect(postRes.statusCode).toBe(200);
+    expect(opts.respawnService.respawn).toHaveBeenCalledWith(5, expect.objectContaining({ name: 'test-server' }));
+    expect(getTask().status).toBe('running');
+  });
+
+  it("GET 409s (does not display a stale/wrong manifest) when a pending respawn's recorded window no longer exists", async () => {
+    const task = makeTask({ pendingOperation: 'respawn', pendingOperationWindowId: 999 });
+    const opts = makeOpts(task);
+    // Default windowRepo.findById returns undefined.
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'GET', url: '/api/tasks/1/execution-approval' });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().code).toBe('pending_operation_window_missing');
   });
 });

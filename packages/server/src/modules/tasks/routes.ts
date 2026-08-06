@@ -17,8 +17,8 @@ import { TaskCleanupService } from './TaskCleanupService';
 import { SAFE_PATH_PATTERN, SAFE_BRANCH_PATTERN } from '../git/assertSafeGitArgs';
 import { resolveTaskServerName, resolveTmuxSession, resolveUnitId } from './execution/TaskExecutionEnv';
 import { replyToExecutionGateError } from './execution/ExecutionGate';
-import { resolveExecutionManifest, hashExecutionManifest } from './execution/ExecutionManifest';
-import { decideExecutionApproval } from './execution/ExecutionApprovalDecision';
+import { hashExecutionManifest } from './execution/ExecutionManifest';
+import { decideExecutionApproval, resolvePendingApprovalManifest } from './execution/ExecutionApprovalDecision';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { SqliteProjectSecretRepository } from '../projects/SqliteProjectSecretRepository';
@@ -270,9 +270,29 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         return reply.status(404).send({ error: 'Task is not pending execution approval' });
       }
 
-      const { manifest, unit, serverName, projectServer } = resolveExecutionManifest(task, {
-        unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader,
-      });
+      // Resolved via resolvePendingApprovalManifest() — the SAME helper
+      // decideExecutionApproval() calls to re-resolve/re-hash at approval
+      // time (Issue #328 fourteenth-round review). Before this helper
+      // existed, this GET handler always resolved the non-respawn manifest,
+      // while the approval handler resolved a DIFFERENT manifest whenever
+      // `pendingOperation === 'respawn'` — so the fingerprint shown here
+      // could never match what POST re-hashed, and respawn approval was
+      // permanently stuck at `fingerprint_mismatch`. A missing respawn
+      // window throws rather than silently falling back to the wrong
+      // manifest; surfaced here as a 409, not a display of stale/incorrect
+      // data.
+      let manifest: ReturnType<typeof resolvePendingApprovalManifest>['manifest'];
+      let unit: ReturnType<typeof resolvePendingApprovalManifest>['unit'];
+      let serverName: ReturnType<typeof resolvePendingApprovalManifest>['serverName'];
+      let projectServer: ReturnType<typeof resolvePendingApprovalManifest>['projectServer'];
+      try {
+        ({ manifest, unit, serverName, projectServer } = resolvePendingApprovalManifest(task, {
+          unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, windowRepo,
+        }));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return reply.status(409).send({ error: message, code: 'pending_operation_window_missing' });
+      }
 
       // Secret NAMES for display only — resolveExecutionManifest()
       // deliberately hashes only a digest of the sorted name set (see

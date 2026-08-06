@@ -17,9 +17,11 @@ import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLa
 import type { SessionCaptureService } from './SessionCaptureService';
 import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError } from '../tasks/execution/ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest, type RespawnManifestInput } from '../tasks/execution/ExecutionManifest';
+import { appendLogAndEmit } from '../tasks/execution/AppendLog';
 import { resolveTmuxSession } from '../tasks/execution/TaskExecutionEnv';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
+import type { EventEmitter } from 'events';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -116,6 +118,14 @@ export class WindowRespawnService {
     // execution entry point does (Issue #328 tenth-round review).
     private serverRepo: IServerRepository,
     private projectSecretRepo: SqliteProjectSecretRepository,
+    // Shared task-events EventEmitter (Issue #328 fifteenth-round review) —
+    // the SAME instance ExecuteTaskUseCase is constructed with, required for
+    // the same reason logRepo is (see its own comment above): a
+    // pending_approval block enforceExecutionGate() records must reach
+    // buildServer.ts's NotificationBus/push bridges, which subscribe to
+    // THIS emitter's 'log' event, not to logRepo.append() rows directly. See
+    // AppendLog.ts's appendLogAndEmit() doc comment.
+    private events: EventEmitter,
     private sessionCaptureService?: SessionCaptureService,
   ) {}
 
@@ -272,7 +282,7 @@ export class WindowRespawnService {
     if (gate.allowed) return unitId;
 
     if (unitId !== null) {
-      this.logRepo.append(task.id, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
+      appendLogAndEmit(this.logRepo, this.events, task.id, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
     }
     if (gate.reason === 'pending_approval') {
       this.taskRepo.update(task.id, {
@@ -281,6 +291,19 @@ export class WindowRespawnService {
         pendingOperationWindowId: windowId,
         pendingOperationPriorStatus: task.status,
       } as Partial<Task>);
+      // A 'status_change' entry, not just the 'command' entry above, is what
+      // buildServer.ts's NotificationBus/push bridges turn into a live
+      // browser notification (same reasoning as
+      // ExecuteTaskUseCase.enforceExecutionGate / TaskRestoreService.restore
+      // — see AppendLog.ts's appendLogAndEmit() doc comment). Before Issue
+      // #328 fifteenth-round review this method recorded ONLY the 'command'
+      // entry above — a respawn or legacy-recover blocked here left the task
+      // at pending_approval with no notification ever reaching a human, the
+      // one entry point that had never even attempted the status_change log
+      // the other two entry points wrote (just to an unwired destination).
+      if (unitId !== null) {
+        appendLogAndEmit(this.logRepo, this.events, task.id, unitId, 'status_change', { status: 'pending_approval', operation });
+      }
       throw new ExecutionGatePendingApprovalError(task.id);
     }
     // 'denied': leave task status untouched — same rationale as the other

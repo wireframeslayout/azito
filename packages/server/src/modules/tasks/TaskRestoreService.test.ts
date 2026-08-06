@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { EventEmitter } from 'events';
 import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
@@ -175,6 +176,10 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
       findByProject: vi.fn(() => []),
       findByProjectWithValues: vi.fn(() => []),
     } as unknown as TaskRestoreDeps['projectSecretRepo'],
+    // Shared task-events EventEmitter (Issue #328 fifteenth-round review) —
+    // a real EventEmitter so appendLogAndEmit()'s emit() call is a no-op
+    // rather than a crash when no test subscribes to it.
+    events: new EventEmitter(),
     ...overrides,
   };
 }
@@ -399,6 +404,29 @@ describe('TaskRestoreService', () => {
       expect(deps.tmux.createWindow).not.toHaveBeenCalled();
       expect(deps.worktreeServiceFactory.create).not.toHaveBeenCalled();
       expect(deps.taskRepo.update).toHaveBeenCalledWith(1, { status: 'pending_approval', pendingOperation: 'restore', pendingOperationPriorStatus: 'archived' });
+    });
+
+    it("emits a 'log' event with the status_change entry on the shared events EventEmitter — this, not logRepo.append() alone, is what reaches buildServer.ts's NotificationBus/push bridges (Issue #328 fifteenth-round review)", async () => {
+      // Regression: TaskRestoreService used to call logRepo.append() directly
+      // with no corresponding events.emit(), so a human blocked here never
+      // got a live notification or WS task:status update — only a DB row no
+      // running code ever reads for that purpose.
+      const task = makeTask({ serverName: 'test-server', inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
+      const received: Array<{ taskId: number; unitId: number; type: string; content: unknown }> = [];
+      deps.events.on('log', (entry) => received.push(entry as typeof received[number]));
+
+      await expect(service.restore(task, log)).rejects.toThrow(/requires approval/);
+
+      const statusChangeEvents = received.filter((e) => e.type === 'status_change');
+      expect(statusChangeEvents).toHaveLength(1);
+      expect(statusChangeEvents[0]).toMatchObject({
+        taskId: 1,
+        unitId: 20,
+        content: { status: 'pending_approval', operation: 'restore' },
+      });
+      // The 'command' entry (execution_gate_blocked) must ALSO be emitted,
+      // not just persisted — same appendLogAndEmit() call site pairing.
+      expect(received.some((e) => e.type === 'command')).toBe(true);
     });
 
     it('allows an untrusted task whose approval hash matches the current fingerprint', async () => {

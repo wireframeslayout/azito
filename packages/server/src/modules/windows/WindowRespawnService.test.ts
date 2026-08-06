@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { EventEmitter } from 'events';
 import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
@@ -212,6 +213,10 @@ function buildService(opts: {
   // by default, fine for tests that don't exercise them.
   const serverRepo = { findByName: vi.fn(() => null) } as any;
   const projectSecretRepo = { findByProject: vi.fn(() => []) } as any;
+  // Shared task-events EventEmitter (Issue #328 fifteenth-round review) — a
+  // real EventEmitter so appendLogAndEmit()'s emit() call is a no-op rather
+  // than a crash when no test subscribes to it.
+  const events = new EventEmitter();
 
   const service = new WindowRespawnService(
     windowRepo,
@@ -228,10 +233,11 @@ function buildService(opts: {
     sidekickLoader,
     serverRepo,
     projectSecretRepo,
+    events,
     undefined,
   );
 
-  return { service, windowRepo, tmux, sentCommands, clearExitMarker, taskRepo, logRepo, serverRepo, projectSecretRepo };
+  return { service, windowRepo, tmux, sentCommands, clearExitMarker, taskRepo, logRepo, serverRepo, projectSecretRepo, events };
 }
 
 describe('WindowRespawnService.respawn — supervisor wrap', () => {
@@ -353,6 +359,28 @@ describe('WindowRespawnService.respawn — execution gate (Issue #328)', () => {
       pendingOperationWindowId: 1,
       pendingOperationPriorStatus: 'open',
     });
+  });
+
+  it("emits a 'log' event with a status_change entry on the shared events EventEmitter when a respawn blocks pending approval (Issue #328 fifteenth-round review) — before this, enforceExecutionGate recorded ONLY a 'command' entry, and neither entry ever reached buildServer.ts's NotificationBus/push bridges", async () => {
+    const task = makeTask({ id: 6, unitId: 10, inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 6, windowType: 'agent', workerType: 'claude' });
+    const { service, events } = buildService({
+      window: win, task, unit, projectServerRepo: untrustedProjectServerRepo('manual-approval'),
+    });
+    const received: Array<{ taskId: number; unitId: number; type: string; content: unknown }> = [];
+    events.on('log', (entry) => received.push(entry as typeof received[number]));
+
+    await expect(service.respawn(1, makeServer())).rejects.toThrow(/requires approval/);
+
+    const statusChangeEvents = received.filter((e) => e.type === 'status_change');
+    expect(statusChangeEvents).toHaveLength(1);
+    expect(statusChangeEvents[0]).toMatchObject({
+      taskId: 6,
+      unitId: 10,
+      content: { status: 'pending_approval', operation: 'respawn' },
+    });
+    expect(received.some((e) => e.type === 'command')).toBe(true);
   });
 
   it('allows respawn for windows with no taskId regardless of policy', async () => {
@@ -867,5 +895,22 @@ describe('WindowRespawnService.resumeLegacySession (Issue #328 fourth-round revi
       pendingOperationWindowId: null,
       pendingOperationPriorStatus: 'open',
     });
+  });
+
+  it("emits a 'log' status_change event for a blocked legacy recover too (Issue #328 fifteenth-round review) — shares enforceExecutionGate() with respawn, so this closes the same gap for the OTHER entry point that method serves", async () => {
+    const task = makeTask({ id: 9, unitId: 10, agentSessionId: 'sess-xyz', inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 9 });
+    const { service, events } = buildService({
+      window: win, task, unit, projectServerRepo: untrustedProjectServerRepo('manual-approval'),
+    });
+    const received: Array<{ taskId: number; unitId: number; type: string; content: unknown }> = [];
+    events.on('log', (entry) => received.push(entry as typeof received[number]));
+
+    await expect(service.resumeLegacySession(9, makeServer())).rejects.toThrow(/requires approval/);
+
+    expect(received.filter((e) => e.type === 'status_change')).toEqual([
+      expect.objectContaining({ taskId: 9, unitId: 10, content: { status: 'pending_approval', operation: 'recover_session_legacy' } }),
+    ]);
   });
 });
