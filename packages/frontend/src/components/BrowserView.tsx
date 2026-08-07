@@ -117,6 +117,19 @@ interface BrowserViewProps {
   initialTabId?: string;
   /** Called whenever the active Chromium tab changes, so the caller can persist it. */
   onActiveTabChange?: (tabId: string) => void;
+  /**
+   * Called whenever the server confirms this groupId's page is live — i.e. on
+   * every {type:'tabs'} message from browserHandler.ts. That message is sent
+   * unconditionally right after `session.getOrCreatePage()` resolves (unlike
+   * {type:'url'}/{type:'frame'}, which are only sent when a prior value already
+   * exists), so it's the first deterministic "the CDP page now exists on the
+   * server" signal on every (re)connect — the moment a sidebar list keyed off
+   * server-side page existence (e.g. GET /api/browser/status) can actually see
+   * this group. It also re-fires on later tab open/close/title changes (server
+   * emits 'group-tabs-changed' for those), which is an acceptable, low-frequency
+   * rate — not on every frame/message.
+   */
+  onPageReady?: () => void;
 }
 
 // {type:'tabs'} からのラベル生成。ページタイトルがあればそれを優先し、無ければ
@@ -139,7 +152,7 @@ function tabTooltip(url: string | null, newTabLabel: string): string {
   return url || newTabLabel;
 }
 
-export default function BrowserView({ serverName, groupId, initialTabId, onActiveTabChange }: BrowserViewProps) {
+export default function BrowserView({ serverName, groupId, initialTabId, onActiveTabChange, onPageReady }: BrowserViewProps) {
   const { t } = useTranslation('browser');
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const hiddenInputRef = useRef<HTMLInputElement>(null);
@@ -213,6 +226,12 @@ export default function BrowserView({ serverName, groupId, initialTabId, onActiv
   const urlEditingRef = useRef(false);
   const urlEditedRef = useRef(false);
   const latestUrlRef = useRef('');
+
+  // Read inside ws.onmessage via a ref rather than a WS-reset effect dependency,
+  // so an identity change on this optional callback (a caller that doesn't
+  // memoize it) doesn't tear down and reconnect the WS.
+  const onPageReadyRef = useRef(onPageReady);
+  onPageReadyRef.current = onPageReady;
 
   // Returns whether the message was actually sent (WS open), so callers that
   // optimistically update local UI state (e.g. navigateTo hiding the start
@@ -357,6 +376,13 @@ export default function BrowserView({ serverName, groupId, initialTabId, onActiv
           // instead of leaving the reload button stuck showing "stop".
           const activeTab = nextTabs.find((t) => t.tabId === activeTabId);
           if (activeTab) setIsLoading(activeTab.loading);
+          // {type:'tabs'} is sent unconditionally right after the server's
+          // session.getOrCreatePage() resolves (see browserHandler.ts), so this
+          // is the first reliable "the page now exists server-side" signal on
+          // every (re)connect — the moment a sidebar list keyed off server-side
+          // page existence should refetch. It also re-fires on later tab
+          // open/close/title changes, an acceptable low-frequency rate.
+          onPageReadyRef.current?.();
         } else if (msg.type === 'dialog') {
           setPendingDialog({ type: msg.dialogType, message: msg.message, defaultValue: msg.defaultValue });
         } else if (msg.type === 'dialog-dismissed') {
