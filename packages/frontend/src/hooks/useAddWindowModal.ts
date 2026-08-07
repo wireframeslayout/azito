@@ -109,6 +109,9 @@ export function useAddWindowModal(
     overrideProject?: { projectId: string; project: Project; projectServers: { serverName: string; workingDirectory?: string }[] },
     taskId?: number,
   ) => {
+    // クイック追加の走行中に汎用モーダルを開いた場合、先発のクイック追加取得が後から届いて
+    // 汎用モーダルの awSessionData/awWorkerModels を上書きしないよう、世代を進めて無効化する。
+    awQuickAddGenRef.current++;
     const effectiveProjectServers = overrideProject?.projectServers ?? projectServers;
     const effectiveProject = overrideProject?.project ?? project;
     setAwEffectiveProjectId(overrideProject?.projectId);
@@ -180,6 +183,15 @@ export function useAddWindowModal(
       setAwQuickAddLoading(false);
     })();
   }, [projectServers, project]);
+
+  /**
+   * クイック追加モーダルを閉じる。世代を進めて、走行中の取得（openQuickAddWindow 内の
+   * 非同期処理）が後から届いても awSessionData/awWorkerModels を上書きしないようにする。
+   */
+  const closeQuickAddWindow = useCallback(() => {
+    awQuickAddGenRef.current++;
+    setAwQuickAddOpen(false);
+  }, []);
 
   const getWindowTargets = useCallback((): { value: string; label: string }[] => {
     const sessions = awSessionData[awServer] || [];
@@ -313,13 +325,13 @@ export function useAddWindowModal(
         }
       }
       setAddWindowOpen(false);
-      setAwQuickAddOpen(false);
+      closeQuickAddWindow();
       refreshWorkspace();
       refreshSessions?.();
     } finally {
       setAddWindowLoading(false);
     }
-  }, [projectId, awEffectiveProjectId, awMode, awServer, awTarget, awLabel, awSelectedSession, awNewSession, awNewWindowName, awNewCommand, awWorkDir, awAgent, awAgentModel, awSessionData, agentPresets, project, refreshWorkspace, refreshSessions, addWindowLoading, awTaskId, onConnect, onTaskWindowAdded, launchAgent, showToast, t]);
+  }, [projectId, awEffectiveProjectId, awMode, awServer, awTarget, awLabel, awSelectedSession, awNewSession, awNewWindowName, awNewCommand, awWorkDir, awAgent, awAgentModel, awSessionData, agentPresets, project, refreshWorkspace, refreshSessions, addWindowLoading, awTaskId, onConnect, onTaskWindowAdded, launchAgent, showToast, t, closeQuickAddWindow]);
 
   return {
     // State
@@ -371,6 +383,7 @@ export function useAddWindowModal(
     handleAgentChange,
     openAddWindow,
     openQuickAddWindow,
+    closeQuickAddWindow,
     getWindowTargets,
     handleAddWindow,
   };

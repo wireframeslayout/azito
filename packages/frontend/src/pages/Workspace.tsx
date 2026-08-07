@@ -871,7 +871,7 @@ function WorkspaceInner() {
       />
       <QuickAddWindowModal
         open={addWindowModal.awQuickAddOpen}
-        onClose={() => addWindowModal.setAwQuickAddOpen(false)}
+        onClose={() => addWindowModal.closeQuickAddWindow()}
         loading={addWindowModal.addWindowLoading || addWindowModal.awQuickAddLoading}
         onSubmit={() => addWindowModal.handleAddWindow()}
         serverName={addWindowModal.awServer}
