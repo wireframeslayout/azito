@@ -286,6 +286,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
         const windowBaseTarget = `${sessionName}:${windowId}`;
         const windowHasFocus = !windowHasActive && isFocusedWindow(w.serverName, windowBaseTarget);
         const windowCtxExtra: ContextMenuExtra = { online: true, windowName: sw.name };
+        const parentSubtitle = renderSubtitle?.(w) ?? null;
 
         return (
           <div key={`${w.id}-${sw.index}`}>
@@ -323,6 +324,14 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
                   >{windowLabel}</span>
                   {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
                 </div>
+                {parentSubtitle != null && (
+                  <div style={{
+                    fontSize: 'var(--font-xs)', color: 'var(--text-dim)', overflow: 'hidden',
+                    textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1,
+                  }}>
+                    {parentSubtitle}
+                  </div>
+                )}
               </div>
               <button
                 onClick={(e) => { e.stopPropagation(); onUnzoom(w.serverName, sessionName, windowId); }}
