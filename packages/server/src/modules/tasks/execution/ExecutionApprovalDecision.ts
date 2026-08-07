@@ -115,8 +115,15 @@ export function resolvePendingApprovalManifest(
  * 'creation_form' to dodge scrutiny; the actual gate that decides whether an
  * approval is valid is the fingerprint comparison (`hashExecutionManifest`
  * match) below, independent of this field entirely.
+ *
+ * 'mission_prompt' (task/328 azt-mission integration): the `/azt-mission`
+ * orchestrator submits this after presenting a task's untrusted body and
+ * execution context (server/Unit/working directory/branch/phases/PR
+ * destination/secret names) to a human and getting an explicit approve
+ * response — same audit-only treatment as the other two values, never a
+ * decision input.
  */
-export type ApprovalOrigin = 'creation_form' | 'approval_panel';
+export type ApprovalOrigin = 'creation_form' | 'approval_panel' | 'mission_prompt';
 
 export interface ExecutionApprovalDeps {
   taskRepo: ITaskRepository;

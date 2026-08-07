@@ -518,6 +518,20 @@ describe('POST /api/tasks/:id/approve-execution (Issue #328 review)', () => {
     expect(callOrder).toEqual(['consumePendingApproval', 'logRepo.append(execution_approved)']);
   });
 
+  it("logs execution_approved with origin 'mission_prompt' when the /azt-mission orchestrator supplies it", async () => {
+    const task = makeTask({ pendingOperation: 'execute' });
+    const { opts } = makeStatefulOpts(task);
+    const fingerprint = currentFingerprint(opts, task);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint, origin: 'mission_prompt' } });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.logRepo.append).toHaveBeenCalledWith(1, 20, 'command', { type: 'execution_approved', origin: 'mission_prompt' });
+  });
+
   it('approval on an already-started task (pendingOperation resume) resumes the state machine instead of re-executing', async () => {
     const task = makeTask({ pendingOperation: 'resume', tmuxWindow: 'task-1' });
     const { opts, getTask } = makeStatefulOpts(task);
@@ -1084,6 +1098,20 @@ describe('Creation-time pre-approval (task/328 follow-up)', () => {
     await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
 
     expect(opts.logRepo.append).toHaveBeenCalledWith(1, 20, 'command', { type: 'execution_pre_approved', origin: 'creation_form' });
+  });
+
+  it("accepts origin 'mission_prompt' and logs it on 'execution_pre_approved'", async () => {
+    const task = makeOpenTask();
+    const { opts } = makeStatefulOpts(task);
+    const fingerprint = currentFingerprintFor(opts, task);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint, origin: 'mission_prompt' } });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.logRepo.append).toHaveBeenCalledWith(1, 20, 'command', { type: 'execution_pre_approved', origin: 'mission_prompt' });
   });
 
   it('rejects an unknown origin value with 400', async () => {

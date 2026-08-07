@@ -396,8 +396,8 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       // below, only logged.
       let origin: ApprovalOrigin | undefined;
       if (body.origin !== undefined) {
-        if (body.origin !== 'creation_form' && body.origin !== 'approval_panel') {
-          return reply.status(400).send({ error: "origin must be 'creation_form' or 'approval_panel'" });
+        if (body.origin !== 'creation_form' && body.origin !== 'approval_panel' && body.origin !== 'mission_prompt') {
+          return reply.status(400).send({ error: "origin must be 'creation_form', 'approval_panel', or 'mission_prompt'" });
         }
         origin = body.origin;
       }
