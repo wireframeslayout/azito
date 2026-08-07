@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Task } from '../../pages/workspace/types';
 import type { ActiveWindowRow } from '../../hooks/useActiveWindowRows';
-import { buildTaskSidebarGroups, matchesQuery, RECENT_LIMIT } from './taskSidebarModel';
+import { buildTaskSidebarGroups, findWindowActivity, matchesQuery, RECENT_LIMIT } from './taskSidebarModel';
 
 function makeTask(overrides: Partial<Task> & { id: number }): Task {
   return {
@@ -60,6 +60,26 @@ describe('matchesQuery', () => {
   it('returns true for empty query', () => {
     expect(matchesQuery(task, '')).toBe(true);
     expect(matchesQuery(task, '  ')).toBe(true);
+  });
+});
+
+describe('findWindowActivity', () => {
+  it('matches when the window target carries a pane suffix the activity target lacks', () => {
+    const rows: ActiveWindowRow[] = [makeActivity(1, 'running', { serverName: 'session', target: 'session:win' })];
+    const found = findWindowActivity(rows, 'session', 'session:win.1');
+    expect(found).toBe(rows[0]);
+  });
+
+  it('does not match when the server name differs', () => {
+    const rows: ActiveWindowRow[] = [makeActivity(1, 'running', { serverName: 'other', target: 'session:win' })];
+    const found = findWindowActivity(rows, 'session', 'session:win.1');
+    expect(found).toBeUndefined();
+  });
+
+  it('returns undefined when there is no matching row', () => {
+    const rows: ActiveWindowRow[] = [makeActivity(1, 'running', { serverName: 'session', target: 'session:other' })];
+    const found = findWindowActivity(rows, 'session', 'session:win.1');
+    expect(found).toBeUndefined();
   });
 });
 
@@ -141,5 +161,38 @@ describe('buildTaskSidebarGroups', () => {
     const groups = buildTaskSidebarGroups(tasks, [], '');
     expect(groups.length).toBe(1);
     expect(groups[0].key).toBe('recent');
+  });
+
+  it('sorts recent by openedAt when it is newer than taskTimestamp', () => {
+    const tasks = [
+      makeTask({ id: 1, title: 'Old but recently opened', updatedAt: '2026-01-01T00:00:00Z' }),
+      makeTask({ id: 2, title: 'Newer but never opened', updatedAt: '2026-01-05T00:00:00Z' }),
+    ];
+    const openedAt = { 1: new Date('2026-01-10T00:00:00Z').getTime() };
+    const groups = buildTaskSidebarGroups(tasks, [], '', openedAt);
+    const recentGroup = groups.find((g) => g.key === 'recent');
+    expect(recentGroup!.rows.map((r) => r.task.id)).toEqual([1, 2]);
+  });
+
+  it('falls back to taskTimestamp for tasks that were never opened', () => {
+    const tasks = [
+      makeTask({ id: 1, title: 'Opened long ago', updatedAt: '2026-01-01T00:00:00Z' }),
+      makeTask({ id: 2, title: 'Never opened, more recent update', updatedAt: '2026-01-05T00:00:00Z' }),
+    ];
+    const openedAt = { 1: new Date('2026-01-02T00:00:00Z').getTime() };
+    const groups = buildTaskSidebarGroups(tasks, [], '', openedAt);
+    const recentGroup = groups.find((g) => g.key === 'recent');
+    // task 2's own updatedAt (01-05) still beats task 1's max(openedAt, updatedAt) = 01-02.
+    expect(recentGroup!.rows.map((r) => r.task.id)).toEqual([2, 1]);
+  });
+
+  it('defaults to empty openedAt when omitted, preserving taskTimestamp order', () => {
+    const tasks = [
+      makeTask({ id: 1, updatedAt: '2026-01-01T00:00:00Z' }),
+      makeTask({ id: 2, updatedAt: '2026-01-05T00:00:00Z' }),
+    ];
+    const groups = buildTaskSidebarGroups(tasks, [], '');
+    const recentGroup = groups.find((g) => g.key === 'recent');
+    expect(recentGroup!.rows.map((r) => r.task.id)).toEqual([2, 1]);
   });
 });

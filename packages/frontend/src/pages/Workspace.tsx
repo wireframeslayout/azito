@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useLocation, matchPath } from 'react-router-dom';
 import { paths, matchWorkspacePath } from '../paths';
@@ -15,6 +15,7 @@ import { useBrailleSpinner } from '../hooks/useBrailleSpinner';
 import { useWorkspaceTargets } from '../hooks/useWorkspaceTargets';
 import { useAgentActivity } from '../hooks/useAgentActivity';
 import { useNotificationChannel } from '../hooks/useNotificationChannel';
+import { useRecentTasks } from '../hooks/useRecentTasks';
 import { useWorkspaceData } from '../hooks/useWorkspaceData';
 import { useSidebarState } from '../hooks/useSidebarState';
 import { useWindowActions } from '../hooks/useWindowActions';
@@ -148,6 +149,7 @@ function WorkspaceInner() {
 
   const { showToast } = useToast();
   const confirm = useConfirm();
+  const { recordOpened: recordTaskOpened } = useRecentTasks();
 
   useNotificationChannel({
     onBrowserOpened: useCallback((payload: BrowserOpenedPayload) => {
@@ -170,8 +172,8 @@ function WorkspaceInner() {
   });
 
   const handleSelectTab = useCallback((tabId: string) => {
-    setActiveTabId(tabId);
     const tab = tabs.find((t) => t.id === tabId);
+    setActiveTabId(tabId);
     if (tab?.projectId && tab.projectId !== currentProjectId) {
       navigate(`/workspace/${tab.projectId}`);
     }
@@ -217,6 +219,23 @@ function WorkspaceInner() {
     const pane = layout.state.focusedPaneId ? findPane(layout.state.root, layout.state.focusedPaneId) : null;
     return pane ? pane.activeTabId : activeTabId;
   }, [layout.state.root, layout.state.focusedPaneId, activeTabId]);
+
+  // Single recording point for the sidebar's "recent" order: every
+  // activation path (initial open, tab-bar reselect, pane focus, drag-drop,
+  // context-menu pane move, post-close successor selection, notification
+  // auto-open) funnels into focusedActiveTabId — the focused pane's active
+  // tab, falling back to the global activeTabId. Recording here instead of
+  // at each call site means no activation path can be missed. lastRecordedTaskIdRef
+  // guards against re-recording (localStorage write + subscriber notify) on
+  // every render while the same task tab stays focused.
+  const lastRecordedTaskIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    const tab = tabs.find((t) => t.id === focusedActiveTabId);
+    const taskId = tab?.type === 'task' && tab.entityId != null ? tab.entityId : null;
+    if (taskId === lastRecordedTaskIdRef.current) return;
+    lastRecordedTaskIdRef.current = taskId;
+    if (taskId != null) recordTaskOpened(taskId);
+  }, [focusedActiveTabId, tabs, recordTaskOpened]);
 
   // Pane-local tab selection: keeps the pane's own active tab and the
   // pane-focus in sync, mirrors the selection into useTabPersistence's
