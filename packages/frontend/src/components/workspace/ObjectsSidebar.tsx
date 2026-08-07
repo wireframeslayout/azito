@@ -10,6 +10,7 @@ import { WindowActivityIndicator } from '../ui';
 import { buildObjectSections } from '../../lib/workspaceObjects';
 import type { BrowserGroupInfo } from '../../hooks/useBrowserGroups';
 import type { Project, Session, Window } from '../../pages/workspace/types';
+import { stripPaneSuffix } from '../../utils/tmuxTarget';
 import ObjectSection from './objects/ObjectSection';
 import BrowserSection from './objects/BrowserSection';
 
@@ -58,6 +59,10 @@ interface ObjectsSidebarProps {
   connectPane: (serverName: string, target: string) => void;
   showWindowContextMenu: (e: React.MouseEvent, w: Window, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void;
   onOpenAddWindow: () => void;
+  onOpenQuickAdd: (serverName: string, agentType: QuickAddAgent) => void;
+  /** クイック追加ボタンの押下可否判定に使う。起動コマンドを実際に供給する useAddWindowModal 側の取得状態 */
+  agentDefsLoading: boolean;
+  agentDefsError: string | null;
   onCloseMobileSidebar: () => void;
   respawningWindowIds?: Set<number>;
   taskWindows?: Array<{ serverName: string; tmuxTarget: string; taskId: number }>;
@@ -66,6 +71,7 @@ interface ObjectsSidebarProps {
   refreshBrowserGroups: () => void;
   openBrowser: (serverName: string, groupId?: string) => void;
   openTask: (taskId: number, title: string) => void;
+  onOpenTaskWindow?: (taskId: number, taskTitle: string, terminal: { serverName: string; target: string }) => void;
 }
 
 type QuickAddAgent = 'claude' | 'codex' | 'terminal';
@@ -86,6 +92,9 @@ export default function ObjectsSidebar({
   connectPane,
   showWindowContextMenu,
   onOpenAddWindow,
+  onOpenQuickAdd,
+  agentDefsLoading,
+  agentDefsError,
   onCloseMobileSidebar,
   respawningWindowIds,
   taskWindows,
@@ -94,6 +103,7 @@ export default function ObjectsSidebar({
   refreshBrowserGroups,
   openBrowser,
   openTask,
+  onOpenTaskWindow,
 }: ObjectsSidebarProps) {
   const { t } = useTranslation(['workspace', 'tasks']);
   const { collapsed, toggle } = useObjectSectionCollapse();
@@ -112,7 +122,8 @@ export default function ObjectsSidebar({
     [project.windows, taskWindows, browserGroups, projectServerNames],
   );
 
-  const { agents: agentDefs, error: agentDefsError } = useAgentDefinitions('worker');
+  // agentByType（ラベル解決）専用。押下可否の判定は agentDefsLoading/agentDefsError props（useAddWindowModal 側の取得）を使う。
+  const { agents: agentDefs } = useAgentDefinitions('worker');
   const { windowIndicator, finishedEntries } = useAgentActivity();
 
   const renderActivityExtra = useCallback((w: WindowItem) => {
@@ -180,6 +191,25 @@ export default function ObjectsSidebar({
     openTask(taskId, t('tasks:detail.taskRef', { id: taskId }));
     if (mobile) onCloseMobileSidebar();
   }, [openTask, mobile, onCloseMobileSidebar, t]);
+
+  // serverName + pane-suffix-stripped target -> operation window (for routing clicks to the owning task panel)
+  const operationWindowByKey = useMemo(() => {
+    const map = new Map<string, Window>();
+    for (const w of sections.operationWindows) {
+      map.set(`${w.serverName}/${stripPaneSuffix(w.tmuxTarget)}`, w);
+    }
+    return map;
+  }, [sections.operationWindows]);
+
+  const handleOperationPaneClick = useCallback((serverName: string, target: string) => {
+    const w = operationWindowByKey.get(`${serverName}/${stripPaneSuffix(target)}`);
+    if (w?.taskId != null && onOpenTaskWindow) {
+      onOpenTaskWindow(w.taskId, t('tasks:detail.taskRef', { id: w.taskId }), { serverName: w.serverName, target: w.tmuxTarget });
+      if (mobile) onCloseMobileSidebar();
+      return;
+    }
+    handlePaneClick(serverName, target);
+  }, [operationWindowByKey, onOpenTaskWindow, t, mobile, onCloseMobileSidebar, handlePaneClick]);
 
   const renderOperationExtra = useCallback((w: WindowItem) => {
     const status = windowIndicator(w.serverName, w.tmuxTarget);
@@ -284,10 +314,11 @@ export default function ObjectsSidebar({
                     isActive={checkActive}
                     quickAddButtons={quickAddButtons}
                     quickAddIcons={quickAddIcons}
+                    agentDefsLoading={agentDefsLoading}
                     agentDefsError={agentDefsError}
                     onPaneClick={handlePaneClick}
                     onContextMenu={showWindowContextMenu}
-                    onOpenAddWindow={onOpenAddWindow}
+                    onOpenQuickAdd={onOpenQuickAdd}
                     extra={renderActivityExtra}
                     activityClassName={renderActivityClassName}
                     respawningWindowIds={respawningWindowIds}
@@ -308,7 +339,7 @@ export default function ObjectsSidebar({
                 windows={sections.operationWindows}
                 sessionData={sessionData}
                 isActive={checkActive}
-                onPaneClick={handlePaneClick}
+                onPaneClick={handleOperationPaneClick}
                 onContextMenu={showWindowContextMenu as (e: React.MouseEvent, w: WindowItem, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void}
                 extra={renderOperationExtra}
                 activityClassName={renderActivityClassName}
@@ -349,10 +380,11 @@ interface ServerGroupProps {
   isActive: (serverName: string, target: string, level: 'window' | 'pane') => boolean;
   quickAddButtons: QuickAddButton[];
   quickAddIcons: Record<QuickAddAgent, React.FC<{ size?: number }>>;
+  agentDefsLoading?: boolean;
   agentDefsError?: string | null;
   onPaneClick: (serverName: string, target: string) => void;
   onContextMenu: (e: React.MouseEvent, w: Window, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void;
-  onOpenAddWindow: () => void;
+  onOpenQuickAdd: (serverName: string, agentType: QuickAddAgent) => void;
   extra?: (w: WindowItem) => React.ReactNode;
   activityClassName?: (w: WindowItem) => string | undefined;
   respawningWindowIds?: Set<number>;
@@ -360,9 +392,9 @@ interface ServerGroupProps {
 
 function ServerGroup({
   serverName, windows, sessionData, isActive,
-  quickAddButtons, quickAddIcons, agentDefsError,
+  quickAddButtons, quickAddIcons, agentDefsLoading, agentDefsError,
   onPaneClick, onContextMenu,
-  onOpenAddWindow, extra, activityClassName,
+  onOpenQuickAdd, extra, activityClassName,
   respawningWindowIds,
 }: ServerGroupProps) {
   const { t } = useTranslation('workspace');
@@ -372,13 +404,17 @@ function ServerGroup({
         <span style={{ flex: 1, fontSize: 'var(--font-xs)', fontWeight: 600, color: 'var(--text-dim)', letterSpacing: 0.3 }}>{serverName}</span>
         {quickAddButtons.map((btn) => {
           const IconComp = quickAddIcons[btn.type];
-          const isDisabled = btn.type !== 'terminal' && !!agentDefsError;
+          const isAgentButton = btn.type !== 'terminal';
+          const isDisabled = isAgentButton && (!!agentDefsError || !!agentDefsLoading);
+          const disabledTitle = agentDefsError
+            ? t('windows.failedLoadAgents', { error: agentDefsError })
+            : t('windows.loadingAgents');
           return (
             <button
               key={btn.type}
-              onClick={() => onOpenAddWindow()}
+              onClick={() => onOpenQuickAdd(serverName, btn.type)}
               disabled={isDisabled}
-              title={isDisabled ? t('windows.failedLoadAgents', { error: agentDefsError }) : t('windows.addAgent', { label: btn.label })}
+              title={isDisabled ? disabledTitle : t('windows.addAgent', { label: btn.label })}
               aria-label={t('windows.addAgentToServer', { label: btn.label, serverName })}
               style={{
                 background: 'none',

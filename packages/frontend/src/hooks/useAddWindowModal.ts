@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../api/client';
 import type { Project, Server, Session } from '../pages/workspace/types';
@@ -34,6 +34,8 @@ export function buildAgentCommand(
 
 export type TaskWindowExtra = { windowType?: string; workerType?: string; workerModel?: string; workingDirectory?: string };
 
+export type QuickAddAgent = 'claude' | 'codex' | 'terminal';
+
 export function useAddWindowModal(
   projectId: string | undefined,
   project: Project | null,
@@ -64,6 +66,11 @@ export function useAddWindowModal(
   const [awEffectiveProjectServers, setAwEffectiveProjectServers] = useState<{ serverName: string; workingDirectory?: string }[] | undefined>(undefined);
   const [awEffectiveProject, setAwEffectiveProject] = useState<Project | undefined>(undefined);
   const [awResourceWarning, setAwResourceWarning] = useState<{ resources: ResourceStatus; retry: () => void } | null>(null);
+  const [awQuickAddOpen, setAwQuickAddOpen] = useState(false);
+  const [awQuickAddAgent, setAwQuickAddAgent] = useState<QuickAddAgent>('terminal');
+  const [awQuickAddLoading, setAwQuickAddLoading] = useState(false);
+  // クイック追加の呼び出し世代。連打時、後発の呼び出しだけが自分の取得結果を state に反映できるようにする。
+  const awQuickAddGenRef = useRef(0);
 
   const { t } = useTranslation('workspace');
   const { agents: agentDefs, loading: agentDefsLoading, error: agentDefsError } = useAgentDefinitions('worker');
@@ -102,6 +109,9 @@ export function useAddWindowModal(
     overrideProject?: { projectId: string; project: Project; projectServers: { serverName: string; workingDirectory?: string }[] },
     taskId?: number,
   ) => {
+    // クイック追加の走行中に汎用モーダルを開いた場合、先発のクイック追加取得が後から届いて
+    // 汎用モーダルの awSessionData/awWorkerModels を上書きしないよう、世代を進めて無効化する。
+    awQuickAddGenRef.current++;
     const effectiveProjectServers = overrideProject?.projectServers ?? projectServers;
     const effectiveProject = overrideProject?.project ?? project;
     setAwEffectiveProjectId(overrideProject?.projectId);
@@ -127,6 +137,61 @@ export function useAddWindowModal(
     setAwTaskId(taskId ?? null);
     setAddWindowOpen(true);
   }, [servers, projectServers, project]);
+
+  /**
+   * ServerGroup のクイック追加アイコン（claude/codex/terminal）用。サーバー・エージェント種別は
+   * 呼び出し時点で確定しているため、モデル選択と作業ディレクトリだけを入力させる最小限のモーダルを開く。
+   * 送信は handleAddWindow の 'new' モードをそのまま使う（同じ API・同じパラメータ組み立て）。
+   */
+  const openQuickAddWindow = useCallback((serverName: string, agentType: QuickAddAgent) => {
+    // 世代を確定させてからモーダルを同期的に開く。連打された場合、非同期取得が届いた時点で
+    // 自分がまだ最新世代かを確認し、そうでなければ結果を破棄する（先発の遅い応答が後発を上書きしない）。
+    const gen = ++awQuickAddGenRef.current;
+    setAwServer(serverName);
+    setAwTarget(''); setAwLabel(''); setAwMode('new');
+    setAwSelectedSession('');
+    const ps = projectServers.find((p) => p.serverName === serverName);
+    setAwNewSession(project?.slug || '');
+    setAwNewWindowName(''); setAwNewCommand('');
+    setAwWorkDir(ps?.workingDirectory || project?.workingDirectory || '');
+    setAwTaskId(null);
+    setAwEffectiveProjectId(undefined);
+    setAwEffectiveProjectServers(undefined);
+    setAwEffectiveProject(undefined);
+    setAwQuickAddAgent(agentType);
+    const agent = agentType === 'terminal' ? 'none' : agentType;
+    setAwAgent(agent);
+    setAwAgentModel('');
+    setAwWorkerModels([]);
+    setAwSessionData({});
+    setAwQuickAddOpen(true);
+    setAwQuickAddLoading(true);
+
+    void (async () => {
+      const data: Record<string, Session[]> = {};
+      try { const s = await api<Session[]>(`/servers/${serverName}/sessions`); if (Array.isArray(s)) data[serverName] = s; } catch {}
+      let models: { id: string; label: string }[] = [];
+      if (agent !== 'none') {
+        try {
+          const m = await api<{ id: string; label: string }[]>(`/workers/models/${agent}`);
+          if (Array.isArray(m)) models = m;
+        } catch {}
+      }
+      if (awQuickAddGenRef.current !== gen) return; // 自分より後の呼び出しがある場合は破棄
+      setAwSessionData(data);
+      setAwWorkerModels(models);
+      setAwQuickAddLoading(false);
+    })();
+  }, [projectServers, project]);
+
+  /**
+   * クイック追加モーダルを閉じる。世代を進めて、走行中の取得（openQuickAddWindow 内の
+   * 非同期処理）が後から届いても awSessionData/awWorkerModels を上書きしないようにする。
+   */
+  const closeQuickAddWindow = useCallback(() => {
+    awQuickAddGenRef.current++;
+    setAwQuickAddOpen(false);
+  }, []);
 
   const getWindowTargets = useCallback((): { value: string; label: string }[] => {
     const sessions = awSessionData[awServer] || [];
@@ -193,6 +258,13 @@ export function useAddWindowModal(
           onConnect?.(awServer, awTarget, numericProjectId);
         }
       } else {
+        if (awAgent !== 'none') {
+          const plannedAgentCmd = buildAgentCommand(awAgent, awAgentModel, agentPresets[awAgent]?.command || '', awNewCommand);
+          if (!plannedAgentCmd.trim()) {
+            showToast(t('addWindow.agentCommandUnavailable'));
+            return;
+          }
+        }
         const sessionName = awNewSession.trim();
         const beforeSessions = awSessionData[awServer] || [];
         const sessionExists = beforeSessions.some((s) => s.name === sessionName);
@@ -253,12 +325,13 @@ export function useAddWindowModal(
         }
       }
       setAddWindowOpen(false);
+      closeQuickAddWindow();
       refreshWorkspace();
       refreshSessions?.();
     } finally {
       setAddWindowLoading(false);
     }
-  }, [projectId, awEffectiveProjectId, awMode, awServer, awTarget, awLabel, awSelectedSession, awNewSession, awNewWindowName, awNewCommand, awWorkDir, awAgent, awAgentModel, awSessionData, agentPresets, project, refreshWorkspace, refreshSessions, addWindowLoading, awTaskId, onConnect, onTaskWindowAdded, launchAgent, showToast, t]);
+  }, [projectId, awEffectiveProjectId, awMode, awServer, awTarget, awLabel, awSelectedSession, awNewSession, awNewWindowName, awNewCommand, awWorkDir, awAgent, awAgentModel, awSessionData, agentPresets, project, refreshWorkspace, refreshSessions, addWindowLoading, awTaskId, onConnect, onTaskWindowAdded, launchAgent, showToast, t, closeQuickAddWindow]);
 
   return {
     // State
@@ -283,9 +356,13 @@ export function useAddWindowModal(
     awEffectiveProjectServers,
     awEffectiveProject,
     awResourceWarning,
+    awQuickAddOpen,
+    awQuickAddAgent,
+    awQuickAddLoading,
 
     // Setters
     setAddWindowOpen,
+    setAwQuickAddOpen,
     setAwMode,
     setAwServer,
     setAwTarget,
@@ -305,6 +382,8 @@ export function useAddWindowModal(
     // Callbacks
     handleAgentChange,
     openAddWindow,
+    openQuickAddWindow,
+    closeQuickAddWindow,
     getWindowTargets,
     handleAddWindow,
   };

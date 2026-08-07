@@ -28,6 +28,10 @@ interface WorkspaceSidebarContentProps {
   onSelectRepo: (id: number) => void;
   connectPane: (serverName: string, target: string) => void;
   onOpenAddWindow: () => void;
+  onOpenQuickAdd: (serverName: string, agentType: 'claude' | 'codex' | 'terminal') => void;
+  /** クイック追加ボタンの押下可否判定に使う。起動コマンドを実際に供給する useAddWindowModal 側の取得状態（Workspace.tsx 経由） */
+  agentDefsLoading: boolean;
+  agentDefsError: string | null;
   showWindowContextMenu: (e: React.MouseEvent, w: Window, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void;
   onSwitchSidebarMode: (mode: SidebarMode) => void;
   onFileSelect: (serverName: string, filePath: string) => void;
@@ -69,6 +73,9 @@ export default function WorkspaceSidebarContent({
   onSelectRepo,
   connectPane,
   onOpenAddWindow,
+  onOpenQuickAdd,
+  agentDefsLoading,
+  agentDefsError,
   showWindowContextMenu,
   onSwitchSidebarMode,
   onFileSelect,
@@ -98,6 +105,9 @@ export default function WorkspaceSidebarContent({
           connectPane={connectPane}
           showWindowContextMenu={showWindowContextMenu}
           onOpenAddWindow={onOpenAddWindow}
+          onOpenQuickAdd={onOpenQuickAdd}
+          agentDefsLoading={agentDefsLoading}
+          agentDefsError={agentDefsError}
           onCloseMobileSidebar={onCloseMobileSidebar}
           respawningWindowIds={respawningWindowIds}
           taskWindows={taskWindows}
@@ -106,6 +116,7 @@ export default function WorkspaceSidebarContent({
           refreshBrowserGroups={refreshBrowserGroups ?? (() => {})}
           openBrowser={openBrowser}
           openTask={openTask}
+          onOpenTaskWindow={onOpenTaskWindow}
         />
       )}
       {sidebarMode === 'tasks' && project && (
