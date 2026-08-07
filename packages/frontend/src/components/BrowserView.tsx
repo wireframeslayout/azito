@@ -118,16 +118,19 @@ interface BrowserViewProps {
   /** Called whenever the active Chromium tab changes, so the caller can persist it. */
   onActiveTabChange?: (tabId: string) => void;
   /**
-   * Called whenever the server confirms this groupId's page is live — i.e. on
-   * every {type:'tabs'} message from browserHandler.ts. That message is sent
-   * unconditionally right after `session.getOrCreatePage()` resolves (unlike
-   * {type:'url'}/{type:'frame'}, which are only sent when a prior value already
-   * exists), so it's the first deterministic "the CDP page now exists on the
-   * server" signal on every (re)connect — the moment a sidebar list keyed off
-   * server-side page existence (e.g. GET /api/browser/status) can actually see
-   * this group. It also re-fires on later tab open/close/title changes (server
-   * emits 'group-tabs-changed' for those), which is an acceptable, low-frequency
-   * rate — not on every frame/message.
+   * Called once per WS connection, the first time this groupId's page is
+   * confirmed live — i.e. on the first {type:'tabs'} message received after
+   * a (re)connect. That message is sent unconditionally right after
+   * `session.getOrCreatePage()` resolves (unlike {type:'url'}/{type:'frame'},
+   * which are only sent when a prior value already exists), so it's the
+   * first deterministic "the CDP page now exists on the server" signal on
+   * every (re)connect — the moment a sidebar list keyed off server-side page
+   * existence (e.g. GET /api/browser/status) can actually see this group.
+   * {type:'tabs'} also re-fires on later tab open/close/title changes (server
+   * emits 'group-tabs-changed' for those — potentially on every navigation,
+   * loading-state change, or title change within a single page load), but
+   * this callback is only invoked once per connection, not on those repeats.
+   * It fires again on the next (re)connect.
    */
   onPageReady?: () => void;
 }
@@ -232,6 +235,13 @@ export default function BrowserView({ serverName, groupId, initialTabId, onActiv
   // memoize it) doesn't tear down and reconnect the WS.
   const onPageReadyRef = useRef(onPageReady);
   onPageReadyRef.current = onPageReady;
+  // Fires onPageReady at most once per WS connection (reset to false at the
+  // top of the WS-reset effect below, right before a new WebSocket is
+  // created — that effect re-runs on every (re)connect, including tab
+  // switches). Set true the first time {type:'tabs'} arrives on that
+  // connection so later re-fires (tab open/close/title changes) don't
+  // re-trigger the callback.
+  const pageReadyFiredRef = useRef(false);
 
   // Returns whether the message was actually sent (WS open), so callers that
   // optimistically update local UI state (e.g. navigateTo hiding the start
@@ -271,6 +281,7 @@ export default function BrowserView({ serverName, groupId, initialTabId, onActiv
     setPendingDialog(null);
     setHistoryOpen(false);
     setReceivedUrl(null);
+    pageReadyFiredRef.current = false;
     const prevCanvas = canvasRef.current;
     if (prevCanvas) {
       const ctx = prevCanvas.getContext('2d');
@@ -381,8 +392,13 @@ export default function BrowserView({ serverName, groupId, initialTabId, onActiv
           // is the first reliable "the page now exists server-side" signal on
           // every (re)connect — the moment a sidebar list keyed off server-side
           // page existence should refetch. It also re-fires on later tab
-          // open/close/title changes, an acceptable low-frequency rate.
-          onPageReadyRef.current?.();
+          // open/close/title changes (potentially several times per page
+          // load), so only call onPageReady on the first {type:'tabs'} of
+          // this connection; pageReadyFiredRef is reset per-connection above.
+          if (!pageReadyFiredRef.current) {
+            pageReadyFiredRef.current = true;
+            onPageReadyRef.current?.();
+          }
         } else if (msg.type === 'dialog') {
           setPendingDialog({ type: msg.dialogType, message: msg.message, defaultValue: msg.defaultValue });
         } else if (msg.type === 'dialog-dismissed') {
