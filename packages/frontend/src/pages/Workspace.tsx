@@ -111,11 +111,15 @@ function WorkspaceInner() {
   const data = useWorkspaceData(id, tabs, sidebarMode);
   const { project, allUnits, tasks, servers, sessionData, allProjects, allTasks, projectsLoaded, projectServers, selectedFileServer, setSelectedFileServer, refreshWorkspace } = data;
 
-  const browserCapableServers = useMemo(
-    () => servers.filter((s) => s.type === 'local' || s.type === 'agent').map((s) => s.name),
-    [servers],
-  );
-  const { groups: browserGroups, errors: browserErrors, refresh: refreshBrowserGroups } = useBrowserGroups(browserCapableServers);
+  // プロジェクトに紐づくサーバー（projectServers）と、ブラウザ対応（local/agent型）サーバー（servers）の積集合。
+  // servers は全サーバーなのでそのまま使うと他プロジェクトのサーバーまで拾ってしまう。
+  const browserCapableServers = useMemo(() => {
+    const projectServerNames = new Set(projectServers.map((ps) => ps.serverName));
+    return servers
+      .filter((s) => (s.type === 'local' || s.type === 'agent') && projectServerNames.has(s.name))
+      .map((s) => s.name);
+  }, [servers, projectServers]);
+  const { groups: browserGroups, errors: browserErrors, refresh: refreshBrowserGroups, loaded: browserGroupsLoaded } = useBrowserGroups(browserCapableServers);
 
   const taskWindows = useMemo(() => {
     const entries: Array<{ tmuxTarget: string; taskId: number; serverName: string }> = [];
@@ -284,6 +288,22 @@ function WorkspaceInner() {
   // Mirrors usePaneLayout's own close() computation (same pure closeTab() +
   // focusedPaneId fallback) purely to read the resulting active tab
   // synchronously, since the hook's own state update is async.
+  // Wraps the flat closeTab() with a browser-groups sidebar refresh: closing a
+  // browser tab already tears down its server-side group (see closeTab's own
+  // closeBrowserGroup call), but the sidebar's browser list (useBrowserGroups)
+  // is a separately-polled hook that doesn't know a tab just closed. Every
+  // path that can close a tab (desktop pane-aware close, mobile TabBar close,
+  // mobile in-panel close) routes through this so the sidebar list drops the
+  // row immediately instead of waiting for the next 30s poll.
+  const closeTabAndRefreshBrowser = useCallback((tabId: string) => {
+    const wasBrowser = tabs.some((t) => t.id === tabId && t.type === 'browser');
+    const closed = closeTab(tabId);
+    // Wait for the server-side group teardown (closeTab's own closeBrowserGroup
+    // call) to settle before refetching, or the sidebar list can still see the
+    // group as present. The tab itself already closed synchronously above.
+    if (wasBrowser) void closed.then(refreshBrowserGroups);
+  }, [tabs, closeTab, refreshBrowserGroups]);
+
   const handlePaneCloseTab = useCallback((paneId: string, tabId: string) => {
     const newRoot = closeTabInLayoutTree(layout.state.root, paneId, tabId);
     const newFocusedPaneId = layout.state.focusedPaneId && findPane(newRoot, layout.state.focusedPaneId)
@@ -292,11 +312,11 @@ function WorkspaceInner() {
     const nextActiveTabId = findPane(newRoot, newFocusedPaneId)?.activeTabId ?? null;
 
     layout.close(paneId, tabId);
-    closeTab(tabId);
+    closeTabAndRefreshBrowser(tabId);
     if (nextActiveTabId && activeTabId !== nextActiveTabId) {
       setActiveTabId(nextActiveTabId);
     }
-  }, [layout, closeTab, activeTabId, setActiveTabId]);
+  }, [layout, closeTabAndRefreshBrowser, activeTabId, setActiveTabId]);
 
   // Single entry point for "close this tab by id" that every close affordance
   // (pane TabBar's ✕, the shared tab context menu's "Close tab" item, and
@@ -310,9 +330,9 @@ function WorkspaceInner() {
     if (pane) {
       handlePaneCloseTab(pane.id, tabId);
     } else {
-      closeTab(tabId);
+      closeTabAndRefreshBrowser(tabId);
     }
-  }, [layout, handlePaneCloseTab, closeTab]);
+  }, [layout, handlePaneCloseTab, closeTabAndRefreshBrowser]);
 
   const connectPane = useCallback((serverName: string, target: string, projectId?: number) => {
     connectPaneRaw(serverName, target, projectId ?? currentProjectId);
@@ -560,9 +580,9 @@ function WorkspaceInner() {
     refreshWorkspace();
   }, [refreshWorkspace, showToast, confirm]);
 
-  const stopTask = useCallback(async (unitId: number | null) => {
+  const stopTask = useCallback(async (unitId: number | null, taskId: number) => {
     if (!unitId) return;
-    await api(`/units/${unitId}/stop`, { method: 'POST' });
+    await api(`/units/${unitId}/stop`, { method: 'POST', body: JSON.stringify({ taskId }) });
     refreshWorkspace();
   }, [refreshWorkspace]);
 
@@ -808,13 +828,19 @@ function WorkspaceInner() {
       mobile={mobile}
       onCloseMobileSidebar={() => setSidebarOpen(false)}
       tabs={tabs}
-      closeTab={closeTab}
+      closeTab={closeTabPaneAware}
       connectPaneRaw={connectPaneRaw}
       openServer={openServer}
       openBrowser={openBrowser}
       browserGroups={browserGroups}
       browserErrors={browserErrors}
       refreshBrowserGroups={refreshBrowserGroups}
+      browserGroupsLoaded={browserGroupsLoaded}
+      browserCapableServerNames={browserCapableServers}
+      showContextMenu={showContextMenu}
+      showContextMenuAt={showContextMenuAt}
+      onCapturePanes={windowActions.handleCapturePanes}
+      onStopOperation={stopTask}
       openStorageFileRaw={openStorageFileRaw}
       projectSettings={sidebarProjectSettings}
       onOpenDiff={openDiff}
@@ -957,7 +983,7 @@ function WorkspaceInner() {
               tabs={tabs.map(buildTabItem)}
               activeId={activeTabId}
               onSelect={handleSelectTab}
-              onClose={closeTab}
+              onClose={closeTabAndRefreshBrowser}
               onReorder={reorderTab}
               draggable
               onTabContextMenu={windowActions.handleTabContextMenu}
@@ -971,7 +997,7 @@ function WorkspaceInner() {
                 </div>
               )}
 
-              {tabs.map((tab) => renderTabContent(tab, { position: 'absolute', inset: 0 }, tab.id === activeTabId, closeTab))}
+              {tabs.map((tab) => renderTabContent(tab, { position: 'absolute', inset: 0 }, tab.id === activeTabId, closeTabAndRefreshBrowser))}
             </div>
           </>
         ) : (

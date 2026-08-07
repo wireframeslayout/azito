@@ -519,11 +519,18 @@ export default function TaskPanel({
     // doesn't get re-included in `allTabIds` on the next render.
     const browser = parseBrowserTabId(tabId);
     if (browser) {
-      closeBrowserGroup(browser.serverName, browser.pageId);
       setBrowserTabIds((prev) => prev.filter((id) => id !== tabId));
+      // The sidebar's browser list (useBrowserGroups) polls independently of this
+      // task's tab layout, so it wouldn't otherwise notice this group is gone
+      // until its next 30s poll — nudge it the same way page-open already does
+      // (see onBrowserPageReady usage below). Wait for the close-group call to
+      // settle first, or the refetch can race ahead of the server-side teardown
+      // and still find the group present. The tab close itself stays synchronous
+      // above; only this notification is deferred.
+      void closeBrowserGroup(browser.serverName, browser.pageId).then(() => onBrowserPageReady?.());
     }
     layout.close(paneId, tabId);
-  }, [layout]);
+  }, [layout, onBrowserPageReady]);
 
   const handlePaneDrop = useCallback((paneId: string, zone: DropZone, index?: number) => {
     if (!paneDrag) return;

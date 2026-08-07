@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import type { SidebarMode, Project, Session, Window, Task } from '../../pages/workspace/types';
 import type { PersistedTab } from '../../hooks/useTabPersistence';
 import type { BrowserGroupInfo } from '../../hooks/useBrowserGroups';
+import type { ContextMenuItem } from '../ContextMenu';
 import FileExplorer from '../FileExplorer';
 import RepoSidebar from '../RepoSidebar';
 import StoragePanel from '../StoragePanel';
@@ -46,6 +47,13 @@ interface WorkspaceSidebarContentProps {
   browserGroups?: Record<string, BrowserGroupInfo[]>;
   browserErrors?: Record<string, string>;
   refreshBrowserGroups?: () => void;
+  /** true once the browser-capable server set has completed its first status fetch (see useBrowserGroups) */
+  browserGroupsLoaded?: boolean;
+  browserCapableServerNames: string[];
+  showContextMenu: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
+  showContextMenuAt: (x: number, y: number, items: ContextMenuItem[]) => void;
+  onCapturePanes: (windowId: number) => void;
+  onStopOperation: (unitId: number | null, taskId: number) => void;
   openStorageFileRaw: (projectId: number, filename: string, originalName: string, size: number) => void;
   projectSettings: { section: SettingsSection; setSection: (s: SettingsSection) => void };
   onOpenDiff: (serverName: string, path: string) => void;
@@ -82,10 +90,18 @@ export default function WorkspaceSidebarContent({
   onRefresh,
   mobile,
   onCloseMobileSidebar,
+  tabs,
+  closeTab,
   openBrowser,
   browserGroups,
   browserErrors,
   refreshBrowserGroups,
+  browserGroupsLoaded,
+  browserCapableServerNames,
+  showContextMenu,
+  showContextMenuAt,
+  onCapturePanes,
+  onStopOperation,
   openStorageFileRaw,
   projectSettings,
   onOpenDiff,
@@ -111,9 +127,18 @@ export default function WorkspaceSidebarContent({
           onCloseMobileSidebar={onCloseMobileSidebar}
           respawningWindowIds={respawningWindowIds}
           taskWindows={taskWindows}
+          tasks={tasks}
           browserGroups={browserGroups ?? {}}
           browserErrors={browserErrors ?? {}}
           refreshBrowserGroups={refreshBrowserGroups ?? (() => {})}
+          browserGroupsLoaded={browserGroupsLoaded ?? true}
+          browserCapableServerNames={browserCapableServerNames}
+          showContextMenu={showContextMenu}
+          showContextMenuAt={showContextMenuAt}
+          onCapturePanes={onCapturePanes}
+          onStopOperation={onStopOperation}
+          tabs={tabs}
+          closeTab={closeTab}
           openBrowser={openBrowser}
           openTask={openTask}
           onOpenTaskWindow={onOpenTaskWindow}
