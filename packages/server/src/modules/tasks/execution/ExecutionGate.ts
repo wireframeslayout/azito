@@ -54,9 +54,30 @@ const FALLBACK_INPUT_POLICY: ProjectServer['inputPolicy'] = 'manual-approval';
  * (ExecutionManifest.ts) — this function does not resolve or hash it itself,
  * so it needs no repository access at all; every call site resolves the
  * manifest at its own boundary (Resolve at the Boundary) before calling in.
+ *
+ * `task.pendingOperation` is checked BEFORE the hash comparison (third-party
+ * review round, "approved hash survives a block"): a non-null
+ * `pendingOperation` means a block is currently outstanding for this task
+ * (it is written exclusively by {@link recordExecutionGateBlock} call sites
+ * and cleared exclusively by {@link consumePendingApproval} — see Task.ts's
+ * own doc comment on the field), and that fact must win over a stale
+ * `executionApprovedFingerprintHash` that happens to match the CURRENT
+ * manifest again. Without this, the sequence (1) approve at hash H, (2) edit
+ * to hash H2 -> gate blocks, records pendingOperation, leaves the old
+ * approved hash H untouched, (3) edit back to H -> a naive hash-only
+ * comparison would read `executionApprovedFingerprintHash === manifestHash`
+ * as "approved" and allow execution while `pendingOperation` is still set —
+ * running a task a human has NOT actually approved in its current
+ * (reverted) form, and leaving `pending_operation IS NULL`'s invariant
+ * broken (a later, real drift could never record a fresh block, since one is
+ * already "outstanding"). Approval (`consumePendingApproval`) clears
+ * `pendingOperation` in the SAME atomic UPDATE that records the new approved
+ * hash, so by the time a human's approval is visible to this function,
+ * `pendingOperation` is already NULL again — this check never fires for a
+ * task that was genuinely just approved.
  */
 export function checkExecutionGate(
-  task: Pick<Task, 'inputTrust' | 'executionApprovedFingerprintHash'>,
+  task: Pick<Task, 'inputTrust' | 'executionApprovedFingerprintHash' | 'pendingOperation'>,
   projectServer: ProjectServer | null,
   manifestHash: string,
 ): ExecutionGateResult {
@@ -70,6 +91,11 @@ export function checkExecutionGate(
   // explicit rather than falling through, so this module stays correct the
   // day that profile ships and the API restriction is lifted.
   if (policy === 'allow') return { allowed: true };
+
+  // A block already outstanding always wins over a hash match — see this
+  // function's own doc comment above for the exact stale-approval sequence
+  // this guards against.
+  if (task.pendingOperation !== null) return { allowed: false, reason: 'pending_approval' };
 
   // manual-approval: allowed only if a human approved the CURRENT resolved
   // manifest (see ExecutionManifest.ts for what's covered and why).

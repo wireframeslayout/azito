@@ -100,4 +100,32 @@ describe('checkExecutionGate', () => {
     const task = makeTask({ inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
     expect(checkExecutionGate(task, null, 'any-hash')).toEqual({ allowed: false, reason: 'pending_approval' });
   });
+
+  // Third-party review round: an outstanding pendingOperation must win over a
+  // hash match that happens to equal a STALE approved fingerprint. Reproduces
+  // the exact sequence the review flagged: (1) approve at hash H, (2) edit to
+  // H2 -> gate blocks, records pendingOperation, leaves the approved hash at H
+  // untouched, (3) edit back to H. Removing the pendingOperation check from
+  // checkExecutionGate (i.e. comparing only the hash) makes this test fail,
+  // since executionApprovedFingerprintHash === manifestHash ('H') again.
+  it('an outstanding pendingOperation blocks execution even when the manifest hash reverted to the approved one', () => {
+    const task = makeTask({
+      inputTrust: 'untrusted',
+      executionApprovedFingerprintHash: 'H', // approved while the manifest was H
+      pendingOperation: 'resume', // then blocked partway through drift to H2 (H2 -> pending, hash left at H)
+      pendingOperationPriorStatus: 'running',
+    });
+    // Manifest has since been edited back to H — a naive hash-only compare
+    // would read this as "already approved".
+    expect(checkExecutionGate(task, manualApprovalServer, 'H')).toEqual({ allowed: false, reason: 'pending_approval' });
+  });
+
+  it('a cleared pendingOperation with a matching hash is allowed (the normal post-approval state)', () => {
+    const task = makeTask({
+      inputTrust: 'untrusted',
+      executionApprovedFingerprintHash: 'H',
+      pendingOperation: null,
+    });
+    expect(checkExecutionGate(task, manualApprovalServer, 'H')).toEqual({ allowed: true });
+  });
 });

@@ -100,6 +100,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     codex_error:       'task.codexError',
     waiting_for_human: 'task.waitingForHuman',
     phase_review:      'task.phaseReview',
+    pending_approval:  'task.pendingApproval',
   };
 
   executeTaskUseCase.events.on('log', (entry: { taskId: number; type: string; content: { status?: string } }) => {

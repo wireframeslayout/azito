@@ -6,7 +6,7 @@ describe('pushCatalog', () => {
   const ALL_KEYS: PushMessageKey[] = [
     'test', 'task.done', 'task.error', 'task.stoppedByUser',
     'task.sendError', 'task.codexError', 'task.waitingForHuman',
-    'task.phaseReview', 'agent.finished', 'agent.approvalRequired', 'agent.idle',
+    'task.phaseReview', 'task.pendingApproval', 'agent.finished', 'agent.approvalRequired', 'agent.idle',
   ];
 
   it('ja and en catalogs have the same keys', () => {
