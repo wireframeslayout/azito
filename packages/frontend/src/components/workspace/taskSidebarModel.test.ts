@@ -142,4 +142,37 @@ describe('buildTaskSidebarGroups', () => {
     expect(groups.length).toBe(1);
     expect(groups[0].key).toBe('recent');
   });
+
+  it('sorts recent by openedAt when it is newer than taskTimestamp', () => {
+    const tasks = [
+      makeTask({ id: 1, title: 'Old but recently opened', updatedAt: '2026-01-01T00:00:00Z' }),
+      makeTask({ id: 2, title: 'Newer but never opened', updatedAt: '2026-01-05T00:00:00Z' }),
+    ];
+    const openedAt = { 1: new Date('2026-01-10T00:00:00Z').getTime() };
+    const groups = buildTaskSidebarGroups(tasks, [], '', openedAt);
+    const recentGroup = groups.find((g) => g.key === 'recent');
+    expect(recentGroup!.rows.map((r) => r.task.id)).toEqual([1, 2]);
+  });
+
+  it('falls back to taskTimestamp for tasks that were never opened', () => {
+    const tasks = [
+      makeTask({ id: 1, title: 'Opened long ago', updatedAt: '2026-01-01T00:00:00Z' }),
+      makeTask({ id: 2, title: 'Never opened, more recent update', updatedAt: '2026-01-05T00:00:00Z' }),
+    ];
+    const openedAt = { 1: new Date('2026-01-02T00:00:00Z').getTime() };
+    const groups = buildTaskSidebarGroups(tasks, [], '', openedAt);
+    const recentGroup = groups.find((g) => g.key === 'recent');
+    // task 2's own updatedAt (01-05) still beats task 1's max(openedAt, updatedAt) = 01-02.
+    expect(recentGroup!.rows.map((r) => r.task.id)).toEqual([2, 1]);
+  });
+
+  it('defaults to empty openedAt when omitted, preserving taskTimestamp order', () => {
+    const tasks = [
+      makeTask({ id: 1, updatedAt: '2026-01-01T00:00:00Z' }),
+      makeTask({ id: 2, updatedAt: '2026-01-05T00:00:00Z' }),
+    ];
+    const groups = buildTaskSidebarGroups(tasks, [], '');
+    const recentGroup = groups.find((g) => g.key === 'recent');
+    expect(recentGroup!.rows.map((r) => r.task.id)).toEqual([2, 1]);
+  });
 });

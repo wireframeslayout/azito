@@ -21,6 +21,12 @@ export function taskTimestamp(task: Task): number {
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
+// 「最近」の並べ替え基準: タスクを開いた時刻があればそれと taskTimestamp の新しい方を使う。
+// 開いたことのないタスクは openedAt が無いので従来どおり taskTimestamp のみで並ぶ。
+function recentSortTimestamp(task: Task, openedAt: Record<number, number>): number {
+  return Math.max(openedAt[task.id] ?? 0, taskTimestamp(task));
+}
+
 export function matchesQuery(task: Task, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
@@ -36,6 +42,7 @@ export function buildTaskSidebarGroups(
   tasks: Task[],
   activityRows: ActiveWindowRow[],
   query: string,
+  openedAt: Record<number, number> = {},
 ): TaskSidebarGroup[] {
   const q = query.trim();
   const filtered = q ? tasks.filter((t) => matchesQuery(t, q)) : tasks;
@@ -90,7 +97,7 @@ export function buildTaskSidebarGroups(
   const remainingTasks = filtered
     .filter((t) => !assigned.has(t.id) && t.status !== 'archived')
     .slice()
-    .sort((a, b) => taskTimestamp(b) - taskTimestamp(a))
+    .sort((a, b) => recentSortTimestamp(b, openedAt) - recentSortTimestamp(a, openedAt))
     .slice(0, RECENT_LIMIT);
 
   for (const task of remainingTasks) {

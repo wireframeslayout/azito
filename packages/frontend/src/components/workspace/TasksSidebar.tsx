@@ -5,7 +5,9 @@ import { IconButton } from '../ui/IconButton';
 import { StatusDot } from '../StatusBadge';
 import { BrailleSpinner, BlockedDot, FinishedIndicator } from '../ui/WindowActivityIndicator';
 import { formatRelativeTime } from '../../utils/time';
-import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
+import { useActiveWindowRows, type ActiveWindowRow } from '../../hooks/useActiveWindowRows';
+import { activityKey } from '../../hooks/useAgentActivity';
+import { useRecentTasks } from '../../hooks/useRecentTasks';
 import { useBrowserGroups } from '../../hooks/useBrowserGroups';
 import { buildTaskSidebarGroups, type TaskGroupKey, type TaskSidebarGroup, type TaskSidebarRow } from './taskSidebarModel';
 import { listTaskChildren, type TaskChild } from './taskSidebarChildren';
@@ -61,11 +63,18 @@ export default function TasksSidebar({
   const treeRef = useRef<HTMLDivElement>(null);
 
   const { rows: activityRows } = useActiveWindowRows();
+  const { openedAt } = useRecentTasks();
 
   const groups = useMemo(
-    () => buildTaskSidebarGroups(tasks, activityRows, query),
-    [tasks, activityRows, query],
+    () => buildTaskSidebarGroups(tasks, activityRows, query, openedAt),
+    [tasks, activityRows, query, openedAt],
   );
+
+  const activityByKey = useMemo(() => {
+    const map = new Map<string, ActiveWindowRow>();
+    for (const row of activityRows) map.set(row.key, row);
+    return map;
+  }, [activityRows]);
 
   const totalVisible = groups.reduce((n, g) => n + g.rows.length, 0);
   const nonArchivedCount = tasks.filter((t) => t.status !== 'archived').length;
@@ -247,6 +256,7 @@ export default function TasksSidebar({
               onOpenTaskWindow={onOpenTaskWindow}
               onOpenTaskBrowser={onOpenTaskBrowser}
               browserGroups={browserGroups}
+              activityByKey={activityByKey}
               showGroupLabel={!isSearching}
               t={t}
             />
@@ -328,6 +338,7 @@ interface TaskGroupProps {
   onOpenTaskWindow: (taskId: number, title: string, terminal: { serverName: string; target: string }) => void;
   onOpenTaskBrowser: (taskId: number, title: string, browser: { serverName: string; groupId: string }) => void;
   browserGroups: Record<string, import('../../hooks/useBrowserGroups').BrowserGroupInfo[]>;
+  activityByKey: Map<string, ActiveWindowRow>;
   showGroupLabel: boolean;
   t: (key: string, opts?: Record<string, unknown>) => string;
 }
@@ -340,6 +351,7 @@ function TaskGroup({
   onOpenTaskWindow,
   onOpenTaskBrowser,
   browserGroups,
+  activityByKey,
   showGroupLabel,
   t,
 }: TaskGroupProps) {
@@ -369,6 +381,7 @@ function TaskGroup({
           onOpenTaskWindow={onOpenTaskWindow}
           onOpenTaskBrowser={onOpenTaskBrowser}
           browserGroups={browserGroups}
+          activityByKey={activityByKey}
           t={t}
         />
       ))}
@@ -384,10 +397,11 @@ interface TaskRowProps {
   onOpenTaskWindow: (taskId: number, title: string, terminal: { serverName: string; target: string }) => void;
   onOpenTaskBrowser: (taskId: number, title: string, browser: { serverName: string; groupId: string }) => void;
   browserGroups: Record<string, import('../../hooks/useBrowserGroups').BrowserGroupInfo[]>;
+  activityByKey: Map<string, ActiveWindowRow>;
   t: (key: string, opts?: Record<string, unknown>) => string;
 }
 
-function TaskRow({ row, expanded, toggleExpanded, onOpenTask, onOpenTaskWindow, onOpenTaskBrowser, browserGroups, t }: TaskRowProps) {
+function TaskRow({ row, expanded, toggleExpanded, onOpenTask, onOpenTaskWindow, onOpenTaskBrowser, browserGroups, activityByKey, t }: TaskRowProps) {
   const { task, activity } = row;
   const hasChildren = (task.windows && task.windows.length > 0) || false;
 
@@ -478,6 +492,7 @@ function TaskRow({ row, expanded, toggleExpanded, onOpenTask, onOpenTaskWindow, 
               taskTitle={task.title}
               onOpenTaskWindow={onOpenTaskWindow}
               onOpenTaskBrowser={onOpenTaskBrowser}
+              activity={child.kind === 'window' ? activityByKey.get(activityKey(child.window.serverName, child.window.tmuxTarget)) : undefined}
               t={t}
             />
           ))}
@@ -518,10 +533,11 @@ interface ChildRowProps {
   taskTitle: string;
   onOpenTaskWindow: (taskId: number, title: string, terminal: { serverName: string; target: string }) => void;
   onOpenTaskBrowser: (taskId: number, title: string, browser: { serverName: string; groupId: string }) => void;
+  activity?: ActiveWindowRow;
   t: (key: string, opts?: Record<string, unknown>) => string;
 }
 
-function ChildRow({ child, taskId, taskTitle, onOpenTaskWindow, onOpenTaskBrowser, t }: ChildRowProps) {
+function ChildRow({ child, taskId, taskTitle, onOpenTaskWindow, onOpenTaskBrowser, activity, t }: ChildRowProps) {
   if (child.kind === 'window') {
     const w = child.window;
     const label = w.label || w.tmuxTarget;
@@ -546,6 +562,7 @@ function ChildRow({ child, taskId, taskTitle, onOpenTaskWindow, onOpenTaskBrowse
         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {label}
         </span>
+        {activity && <ActivityIndicator activity={activity} />}
         {w.isPrimary && (
           <span style={{ fontSize: 'var(--font-2xs)', color: 'var(--text-dim)' }}>
             primary

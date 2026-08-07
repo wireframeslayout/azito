@@ -15,6 +15,7 @@ import { useBrailleSpinner } from '../hooks/useBrailleSpinner';
 import { useWorkspaceTargets } from '../hooks/useWorkspaceTargets';
 import { useAgentActivity } from '../hooks/useAgentActivity';
 import { useNotificationChannel } from '../hooks/useNotificationChannel';
+import { useRecentTasks } from '../hooks/useRecentTasks';
 import { useWorkspaceData } from '../hooks/useWorkspaceData';
 import { useSidebarState } from '../hooks/useSidebarState';
 import { useWindowActions } from '../hooks/useWindowActions';
@@ -148,6 +149,7 @@ function WorkspaceInner() {
 
   const { showToast } = useToast();
   const confirm = useConfirm();
+  const { recordOpened: recordTaskOpened } = useRecentTasks();
 
   useNotificationChannel({
     onBrowserOpened: useCallback((payload: BrowserOpenedPayload) => {
@@ -157,6 +159,7 @@ function WorkspaceInner() {
         const task = allTasks.find((t) => t.id === taskId);
         if (task) {
           openTaskRaw(taskId, task.title, task.projectId);
+          recordTaskOpened(taskId);
         }
       } else {
         const autoOpen = localStorage.getItem('browser-auto-open') === 'true';
@@ -166,7 +169,7 @@ function WorkspaceInner() {
           showToast(t('workspace:toast.browserTabOpened', { serverName }));
         }
       }
-    }, [allTasks, openTaskRaw, openBrowser, showToast]),
+    }, [allTasks, openTaskRaw, openBrowser, showToast, recordTaskOpened]),
   });
 
   const handleSelectTab = useCallback((tabId: string) => {
@@ -375,7 +378,8 @@ function WorkspaceInner() {
     } else {
       openTaskRaw(taskId, title, taskProjectId ?? currentProjectId, fromOrProjectId);
     }
-  }, [openTaskRaw, currentProjectId, allTasks]);
+    recordTaskOpened(taskId);
+  }, [openTaskRaw, currentProjectId, allTasks, recordTaskOpened]);
 
   useEffect(() => {
     setOnOpenTask((taskId) => openTask(taskId, t('tasks:detail.taskRef', { id: taskId })));
