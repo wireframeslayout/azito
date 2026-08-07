@@ -1077,6 +1077,7 @@ function WorkspaceInner() {
           openIssue={openIssue}
           openProjectTasks={openProjectTasks}
           updateBrowserActiveTab={updateBrowserActiveTab}
+          refreshBrowserGroups={refreshBrowserGroups}
         />
       </div>
     );
