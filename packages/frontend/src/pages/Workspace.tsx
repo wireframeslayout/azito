@@ -831,6 +831,7 @@ function WorkspaceInner() {
       browserGroups={browserGroups}
       browserErrors={browserErrors}
       refreshBrowserGroups={refreshBrowserGroups}
+      browserCapableServerNames={browserCapableServers}
       openStorageFileRaw={openStorageFileRaw}
       projectSettings={sidebarProjectSettings}
       onOpenDiff={openDiff}

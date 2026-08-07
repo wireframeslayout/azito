@@ -46,6 +46,7 @@ interface WorkspaceSidebarContentProps {
   browserGroups?: Record<string, BrowserGroupInfo[]>;
   browserErrors?: Record<string, string>;
   refreshBrowserGroups?: () => void;
+  browserCapableServerNames: string[];
   openStorageFileRaw: (projectId: number, filename: string, originalName: string, size: number) => void;
   projectSettings: { section: SettingsSection; setSection: (s: SettingsSection) => void };
   onOpenDiff: (serverName: string, path: string) => void;
@@ -88,6 +89,7 @@ export default function WorkspaceSidebarContent({
   browserGroups,
   browserErrors,
   refreshBrowserGroups,
+  browserCapableServerNames,
   openStorageFileRaw,
   projectSettings,
   onOpenDiff,
@@ -113,9 +115,11 @@ export default function WorkspaceSidebarContent({
           onCloseMobileSidebar={onCloseMobileSidebar}
           respawningWindowIds={respawningWindowIds}
           taskWindows={taskWindows}
+          tasks={tasks}
           browserGroups={browserGroups ?? {}}
           browserErrors={browserErrors ?? {}}
           refreshBrowserGroups={refreshBrowserGroups ?? (() => {})}
+          browserCapableServerNames={browserCapableServerNames}
           tabs={tabs}
           closeTab={closeTab}
           openBrowser={openBrowser}

@@ -101,15 +101,33 @@ export default function BrowserSection({
               <Icon name="browser" size={16} />
             </span>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div
-                style={{
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  color: 'var(--text)',
-                }}
-              >
-                {displayUrl}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    color: 'var(--text)',
+                  }}
+                >
+                  {displayUrl}
+                </span>
+                <span
+                  aria-label={t('objects.browserPages', { count: b.pageCount })}
+                  style={{
+                    fontSize: 'var(--font-2xs)',
+                    color: 'var(--text-dim)',
+                    background: 'var(--bg)',
+                    borderRadius: 'var(--radius-sm)',
+                    padding: '1px 5px',
+                    flexShrink: 0,
+                    fontVariantNumeric: 'tabular-nums',
+                  }}
+                >
+                  {b.pageCount}
+                </span>
               </div>
               <div
                 style={{
@@ -120,7 +138,7 @@ export default function BrowserSection({
                   whiteSpace: 'nowrap',
                 }}
               >
-                {t('objects.browserPages', { count: b.pageCount })} · {b.serverName}
+                {b.serverName} · {b.groupId}
               </div>
             </div>
             <button

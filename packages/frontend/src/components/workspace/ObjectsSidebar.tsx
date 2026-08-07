@@ -10,7 +10,7 @@ import { WindowActivityIndicator } from '../ui';
 import { buildObjectSections } from '../../lib/workspaceObjects';
 import type { BrowserGroupInfo } from '../../hooks/useBrowserGroups';
 import type { PersistedTab } from '../../hooks/useTabPersistence';
-import type { Project, Session, Window } from '../../pages/workspace/types';
+import type { Project, Session, Window, Task } from '../../pages/workspace/types';
 import { stripPaneSuffix } from '../../utils/tmuxTarget';
 import ObjectSection from './objects/ObjectSection';
 import BrowserSection from './objects/BrowserSection';
@@ -67,9 +67,13 @@ interface ObjectsSidebarProps {
   onCloseMobileSidebar: () => void;
   respawningWindowIds?: Set<number>;
   taskWindows?: Array<{ serverName: string; tmuxTarget: string; taskId: number }>;
+  /** オペレーションウィンドウ行の副題（サーバー · フェーズ · ブランチ）とタスクバッジのラベル解決に使う */
+  tasks: Task[];
   browserGroups: Record<string, BrowserGroupInfo[]>;
   browserErrors: Record<string, string>;
   refreshBrowserGroups: () => void;
+  /** ブラウザ対応（local/agent型）サーバー名の一覧。空ならブラウザセクション自体を出さない */
+  browserCapableServerNames: string[];
   tabs: PersistedTab[];
   closeTab: (tabId: string) => void;
   openBrowser: (serverName: string, groupId?: string) => void;
@@ -101,9 +105,11 @@ export default function ObjectsSidebar({
   onCloseMobileSidebar,
   respawningWindowIds,
   taskWindows,
+  tasks,
   browserGroups,
   browserErrors,
   refreshBrowserGroups,
+  browserCapableServerNames,
   tabs,
   closeTab,
   openBrowser,
@@ -123,8 +129,8 @@ export default function ObjectsSidebar({
   );
 
   const sections = useMemo(
-    () => buildObjectSections(project.windows, taskWindows ?? [], browserGroups, projectServerNames),
-    [project.windows, taskWindows, browserGroups, projectServerNames],
+    () => buildObjectSections(project.windows, taskWindows ?? [], browserGroups, browserCapableServerNames),
+    [project.windows, taskWindows, browserGroups, browserCapableServerNames],
   );
 
   // agentByType（ラベル解決）専用。押下可否の判定は agentDefsLoading/agentDefsError props（useAddWindowModal 側の取得）を使う。
@@ -197,6 +203,8 @@ export default function ObjectsSidebar({
     if (mobile) onCloseMobileSidebar();
   }, [openTask, mobile, onCloseMobileSidebar, t]);
 
+  const taskById = useMemo(() => new Map(tasks.map((task) => [task.id, task])), [tasks]);
+
   // serverName + pane-suffix-stripped target -> operation window (for routing clicks to the owning task panel)
   const operationWindowByKey = useMemo(() => {
     const map = new Map<string, Window>();
@@ -218,41 +226,55 @@ export default function ObjectsSidebar({
 
   const renderOperationExtra = useCallback((w: WindowItem) => {
     const status = windowIndicator(w.serverName, w.tmuxTarget);
+    if (!status) return null;
     const fe = status === 'finished' ? finishedEntries.find((e) => e.serverName === w.serverName && e.target === w.tmuxTarget) : undefined;
-    return (
-      <>
-        {status && <WindowActivityIndicator status={status} finishedAt={fe?.finishedAt} />}
-        {w.taskId != null && (
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); handleOpenTask(w.taskId!); }}
-            style={{
-              fontSize: 'var(--font-2xs)',
-              color: 'var(--text-dim)',
-              background: 'var(--bg)',
-              borderRadius: 'var(--radius-sm)',
-              padding: '1px 5px',
-              flexShrink: 0,
-              border: 'none',
-              cursor: 'pointer',
-            }}
-            className="icon-btn"
-          >
-            #{w.taskId}
-          </button>
-        )}
-      </>
-    );
-  }, [windowIndicator, finishedEntries, handleOpenTask]);
+    return <WindowActivityIndicator status={status} finishedAt={fe?.finishedAt} />;
+  }, [windowIndicator, finishedEntries]);
+
+  // タスク番号バッジ: 通常の #id バッジ（--text-dim/--bg）と区別するため --purple 系にし、クリックでタスクを開く
+  const renderOperationTaskBadge = useCallback((_w: WindowItem, taskId: number) => (
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); handleOpenTask(taskId); }}
+      style={{
+        fontSize: 'var(--font-2xs)',
+        color: 'var(--purple)',
+        background: 'var(--purple-a15)',
+        borderRadius: 'var(--radius-sm)',
+        padding: '1px 5px',
+        flexShrink: 0,
+        border: 'none',
+        cursor: 'pointer',
+        fontVariantNumeric: 'tabular-nums',
+      }}
+      className="icon-btn"
+    >
+      #{taskId}
+    </button>
+  ), [handleOpenTask]);
+
+  // 副題: 「サーバー · フェーズ · ブランチ」。取得できない項目は省く（ダミー値で埋めない）
+  const renderOperationSubtitle = useCallback((w: WindowItem) => {
+    const task = w.taskId != null ? taskById.get(w.taskId) : undefined;
+    const parts = [w.serverName];
+    const phaseKey = task?.currentPhase;
+    if (phaseKey) {
+      const label = t(`common:status.${phaseKey}`, { defaultValue: '' });
+      if (label) parts.push(label);
+    }
+    const branch = task?.branch || task?.worktreeBranch;
+    if (branch) parts.push(branch);
+    return parts.join(' · ');
+  }, [taskById, t]);
 
   const browserSectionAction = useMemo(() => {
-    if (projectServerNames.length === 0) return null;
+    if (browserCapableServerNames.length === 0) return null;
     const handleClick = () => {
-      if (projectServerNames.length === 1) {
-        handleOpenBrowser(projectServerNames[0]);
+      if (browserCapableServerNames.length === 1) {
+        handleOpenBrowser(browserCapableServerNames[0]);
       }
     };
-    if (projectServerNames.length === 1) {
+    if (browserCapableServerNames.length === 1) {
       return (
         <button
           onClick={handleClick}
@@ -267,7 +289,7 @@ export default function ObjectsSidebar({
     }
     return (
       <div style={{ position: 'relative' }}>
-        <ServerSelectMenu serverNames={projectServerNames} onSelect={(name) => handleOpenBrowser(name)}>
+        <ServerSelectMenu serverNames={browserCapableServerNames} onSelect={(name) => handleOpenBrowser(name)}>
           <button
             title={t('objects.openBrowser')}
             aria-label={t('objects.openBrowser')}
@@ -279,7 +301,7 @@ export default function ObjectsSidebar({
         </ServerSelectMenu>
       </div>
     );
-  }, [projectServerNames, handleOpenBrowser, t]);
+  }, [browserCapableServerNames, handleOpenBrowser, t]);
 
   const emptyMessage = (key: string) => (
     <div style={{ padding: '6px 20px', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{t(key)}</div>
@@ -349,28 +371,32 @@ export default function ObjectsSidebar({
                 extra={renderOperationExtra}
                 activityClassName={renderActivityClassName}
                 respawningWindowIds={respawningWindowIds}
+                renderTaskBadge={renderOperationTaskBadge}
+                renderSubtitle={renderOperationSubtitle}
               />
             </ObjectSection>
 
-            <ObjectSection
-              id="browsers"
-              label={t('objects.sectionBrowsers')}
-              count={sections.browsers.length + Object.keys(browserErrors).length}
-              collapsed={collapsed.browsers}
-              onToggleCollapse={() => toggle('browsers')}
-              action={browserSectionAction}
-              empty={emptyMessage('objects.noBrowsers')}
-            >
-              <BrowserSection
-                browsers={sections.browsers}
-                errors={browserErrors}
-                activeTabId={activeTabId}
-                tabs={tabs}
-                closeTab={closeTab}
-                openBrowser={handleOpenBrowser}
-                onRefresh={refreshBrowserGroups}
-              />
-            </ObjectSection>
+            {browserCapableServerNames.length > 0 && (
+              <ObjectSection
+                id="browsers"
+                label={t('objects.sectionBrowsers')}
+                count={sections.browsers.length + Object.keys(browserErrors).length}
+                collapsed={collapsed.browsers}
+                onToggleCollapse={() => toggle('browsers')}
+                action={browserSectionAction}
+                empty={emptyMessage('objects.noBrowsers')}
+              >
+                <BrowserSection
+                  browsers={sections.browsers}
+                  errors={browserErrors}
+                  activeTabId={activeTabId}
+                  tabs={tabs}
+                  closeTab={closeTab}
+                  openBrowser={handleOpenBrowser}
+                  onRefresh={refreshBrowserGroups}
+                />
+              </ObjectSection>
+            )}
           </>
         )}
       </div>
