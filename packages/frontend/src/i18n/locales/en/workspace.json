@@ -54,7 +54,8 @@
     "windowList": "Window list",
     "select": "Select",
     "detachFromProject": "Detach from project",
-    "deleteWindow": "Delete window"
+    "deleteWindow": "Delete window",
+    "quickAddTitle": "Add {{label}} — {{serverName}}"
   },
   "addWindow": {
     "title": "Add Window",

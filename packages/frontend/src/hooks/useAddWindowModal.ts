@@ -34,6 +34,8 @@ export function buildAgentCommand(
 
 export type TaskWindowExtra = { windowType?: string; workerType?: string; workerModel?: string; workingDirectory?: string };
 
+export type QuickAddAgent = 'claude' | 'codex' | 'terminal';
+
 export function useAddWindowModal(
   projectId: string | undefined,
   project: Project | null,
@@ -64,6 +66,8 @@ export function useAddWindowModal(
   const [awEffectiveProjectServers, setAwEffectiveProjectServers] = useState<{ serverName: string; workingDirectory?: string }[] | undefined>(undefined);
   const [awEffectiveProject, setAwEffectiveProject] = useState<Project | undefined>(undefined);
   const [awResourceWarning, setAwResourceWarning] = useState<{ resources: ResourceStatus; retry: () => void } | null>(null);
+  const [awQuickAddOpen, setAwQuickAddOpen] = useState(false);
+  const [awQuickAddAgent, setAwQuickAddAgent] = useState<QuickAddAgent>('terminal');
 
   const { t } = useTranslation('workspace');
   const { agents: agentDefs, loading: agentDefsLoading, error: agentDefsError } = useAgentDefinitions('worker');
@@ -127,6 +131,43 @@ export function useAddWindowModal(
     setAwTaskId(taskId ?? null);
     setAddWindowOpen(true);
   }, [servers, projectServers, project]);
+
+  /**
+   * ServerGroup のクイック追加アイコン（claude/codex/terminal）用。サーバー・エージェント種別は
+   * 呼び出し時点で確定しているため、モデル選択と作業ディレクトリだけを入力させる最小限のモーダルを開く。
+   * 送信は handleAddWindow の 'new' モードをそのまま使う（同じ API・同じパラメータ組み立て）。
+   */
+  const openQuickAddWindow = useCallback(async (serverName: string, agentType: QuickAddAgent) => {
+    const data: Record<string, Session[]> = {};
+    try { const s = await api<Session[]>(`/servers/${serverName}/sessions`); if (Array.isArray(s)) data[serverName] = s; } catch {}
+    setAwSessionData(data);
+    setAwServer(serverName);
+    setAwTarget(''); setAwLabel(''); setAwMode('new');
+    setAwSelectedSession('');
+    const ps = projectServers.find((p) => p.serverName === serverName);
+    setAwNewSession(project?.slug || '');
+    setAwNewWindowName(''); setAwNewCommand('');
+    setAwWorkDir(ps?.workingDirectory || project?.workingDirectory || '');
+    setAwTaskId(null);
+    setAwEffectiveProjectId(undefined);
+    setAwEffectiveProjectServers(undefined);
+    setAwEffectiveProject(undefined);
+    setAwQuickAddAgent(agentType);
+    const agent = agentType === 'terminal' ? 'none' : agentType;
+    setAwAgent(agent);
+    setAwAgentModel('');
+    if (agent === 'none') {
+      setAwWorkerModels([]);
+    } else {
+      try {
+        const models = await api<{ id: string; label: string }[]>(`/workers/models/${agent}`);
+        setAwWorkerModels(Array.isArray(models) ? models : []);
+      } catch {
+        setAwWorkerModels([]);
+      }
+    }
+    setAwQuickAddOpen(true);
+  }, [projectServers, project]);
 
   const getWindowTargets = useCallback((): { value: string; label: string }[] => {
     const sessions = awSessionData[awServer] || [];
@@ -253,6 +294,7 @@ export function useAddWindowModal(
         }
       }
       setAddWindowOpen(false);
+      setAwQuickAddOpen(false);
       refreshWorkspace();
       refreshSessions?.();
     } finally {
@@ -283,9 +325,12 @@ export function useAddWindowModal(
     awEffectiveProjectServers,
     awEffectiveProject,
     awResourceWarning,
+    awQuickAddOpen,
+    awQuickAddAgent,
 
     // Setters
     setAddWindowOpen,
+    setAwQuickAddOpen,
     setAwMode,
     setAwServer,
     setAwTarget,
@@ -305,6 +350,7 @@ export function useAddWindowModal(
     // Callbacks
     handleAgentChange,
     openAddWindow,
+    openQuickAddWindow,
     getWindowTargets,
     handleAddWindow,
   };

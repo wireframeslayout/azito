@@ -59,6 +59,7 @@ interface ObjectsSidebarProps {
   connectPane: (serverName: string, target: string) => void;
   showWindowContextMenu: (e: React.MouseEvent, w: Window, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void;
   onOpenAddWindow: () => void;
+  onOpenQuickAdd: (serverName: string, agentType: QuickAddAgent) => void;
   onCloseMobileSidebar: () => void;
   respawningWindowIds?: Set<number>;
   taskWindows?: Array<{ serverName: string; tmuxTarget: string; taskId: number }>;
@@ -88,6 +89,7 @@ export default function ObjectsSidebar({
   connectPane,
   showWindowContextMenu,
   onOpenAddWindow,
+  onOpenQuickAdd,
   onCloseMobileSidebar,
   respawningWindowIds,
   taskWindows,
@@ -309,7 +311,7 @@ export default function ObjectsSidebar({
                     agentDefsError={agentDefsError}
                     onPaneClick={handlePaneClick}
                     onContextMenu={showWindowContextMenu}
-                    onOpenAddWindow={onOpenAddWindow}
+                    onOpenQuickAdd={onOpenQuickAdd}
                     extra={renderActivityExtra}
                     activityClassName={renderActivityClassName}
                     respawningWindowIds={respawningWindowIds}
@@ -374,7 +376,7 @@ interface ServerGroupProps {
   agentDefsError?: string | null;
   onPaneClick: (serverName: string, target: string) => void;
   onContextMenu: (e: React.MouseEvent, w: Window, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void;
-  onOpenAddWindow: () => void;
+  onOpenQuickAdd: (serverName: string, agentType: QuickAddAgent) => void;
   extra?: (w: WindowItem) => React.ReactNode;
   activityClassName?: (w: WindowItem) => string | undefined;
   respawningWindowIds?: Set<number>;
@@ -384,7 +386,7 @@ function ServerGroup({
   serverName, windows, sessionData, isActive,
   quickAddButtons, quickAddIcons, agentDefsError,
   onPaneClick, onContextMenu,
-  onOpenAddWindow, extra, activityClassName,
+  onOpenQuickAdd, extra, activityClassName,
   respawningWindowIds,
 }: ServerGroupProps) {
   const { t } = useTranslation('workspace');
@@ -398,7 +400,7 @@ function ServerGroup({
           return (
             <button
               key={btn.type}
-              onClick={() => onOpenAddWindow()}
+              onClick={() => onOpenQuickAdd(serverName, btn.type)}
               disabled={isDisabled}
               title={isDisabled ? t('windows.failedLoadAgents', { error: agentDefsError }) : t('windows.addAgent', { label: btn.label })}
               aria-label={t('windows.addAgentToServer', { label: btn.label, serverName })}

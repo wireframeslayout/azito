@@ -28,6 +28,7 @@ interface WorkspaceSidebarContentProps {
   onSelectRepo: (id: number) => void;
   connectPane: (serverName: string, target: string) => void;
   onOpenAddWindow: () => void;
+  onOpenQuickAdd: (serverName: string, agentType: 'claude' | 'codex' | 'terminal') => void;
   showWindowContextMenu: (e: React.MouseEvent, w: Window, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void;
   onSwitchSidebarMode: (mode: SidebarMode) => void;
   onFileSelect: (serverName: string, filePath: string) => void;
@@ -69,6 +70,7 @@ export default function WorkspaceSidebarContent({
   onSelectRepo,
   connectPane,
   onOpenAddWindow,
+  onOpenQuickAdd,
   showWindowContextMenu,
   onSwitchSidebarMode,
   onFileSelect,
@@ -98,6 +100,7 @@ export default function WorkspaceSidebarContent({
           connectPane={connectPane}
           showWindowContextMenu={showWindowContextMenu}
           onOpenAddWindow={onOpenAddWindow}
+          onOpenQuickAdd={onOpenQuickAdd}
           onCloseMobileSidebar={onCloseMobileSidebar}
           respawningWindowIds={respawningWindowIds}
           taskWindows={taskWindows}

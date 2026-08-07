@@ -35,6 +35,7 @@ import WorkspaceSidebarContent from '../components/workspace/WorkspaceSidebarCon
 import ActiveWindowsSection from '../components/workspace/ActiveWindowsSection';
 import WorkspaceLayout from '../components/workspace/WorkspaceLayout';
 import AddWindowModal from '../components/workspace/AddWindowModal';
+import QuickAddWindowModal from '../components/workspace/QuickAddWindowModal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import ResourceWarningDialog, { type ResourceStatus } from '../components/ResourceWarningDialog';
 import TabContentRenderer from '../components/workspace/TabContentRenderer';
@@ -797,6 +798,7 @@ function WorkspaceInner() {
       onSelectRepo={handleSelectRepo}
       connectPane={connectPane}
       onOpenAddWindow={addWindowModal.openAddWindow}
+      onOpenQuickAdd={addWindowModal.openQuickAddWindow}
       showWindowContextMenu={windowActions.showWindowContextMenu}
       onSwitchSidebarMode={handleSwitchSidebarMode}
       onFileSelect={handleFileSelect}
@@ -866,6 +868,20 @@ function WorkspaceInner() {
         servers={servers}
         projectServers={addWindowModal.awEffectiveProjectServers ?? projectServers}
         project={addWindowModal.awEffectiveProject ?? project}
+      />
+      <QuickAddWindowModal
+        open={addWindowModal.awQuickAddOpen}
+        onClose={() => addWindowModal.setAwQuickAddOpen(false)}
+        loading={addWindowModal.addWindowLoading}
+        onSubmit={() => addWindowModal.handleAddWindow()}
+        serverName={addWindowModal.awServer}
+        agentLabel={addWindowModal.awQuickAddAgent === 'terminal' ? t('common:labels.terminal') : (addWindowModal.agentPresets[addWindowModal.awQuickAddAgent]?.label ?? addWindowModal.awQuickAddAgent)}
+        showModel={addWindowModal.awAgent !== 'none' && addWindowModal.awWorkerModels.length > 0}
+        workDir={addWindowModal.awWorkDir}
+        onWorkDirChange={addWindowModal.setAwWorkDir}
+        agentModel={addWindowModal.awAgentModel}
+        onAgentModelChange={addWindowModal.setAwAgentModel}
+        workerModels={addWindowModal.awWorkerModels}
       />
       <ResourceWarningDialog
         open={addWindowModal.awResourceWarning !== null}

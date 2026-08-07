@@ -54,7 +54,8 @@
     "windowList": "ウィンドウ一覧",
     "select": "選択",
     "detachFromProject": "プロジェクトから切り離す",
-    "deleteWindow": "ウィンドウを削除"
+    "deleteWindow": "ウィンドウを削除",
+    "quickAddTitle": "{{label}} を追加 — {{serverName}}"
   },
   "addWindow": {
     "title": "ウィンドウを追加",
