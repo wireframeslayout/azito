@@ -59,12 +59,16 @@ function buildSubagentPayload(v: TaskFormValue): Record<string, unknown> {
   };
 }
 
-export function buildTaskPayload(v: TaskFormValue, mode: 'create' | 'edit'): Record<string, unknown> {
+/**
+ * @param original 編集モードで、サーバーから読み込んだ元の値。指定した場合、
+ *   `status` は元の値から変更されているときのみ payload に含める
+ *   （変更していないのに常に送ると、承認待ちタスクの編集が 409 で拒否されてしまう）。
+ */
+export function buildTaskPayload(v: TaskFormValue, mode: 'create' | 'edit', original?: TaskFormValue): Record<string, unknown> {
   if (mode === 'edit') {
-    return {
+    const payload: Record<string, unknown> = {
       title: v.title.trim(),
       description: v.description.trim(),
-      status: v.status,
       unit_id: v.unitId ? parseInt(v.unitId, 10) : null,
       server_name: v.serverName.trim() || null,
       priority: parseInt(v.priority, 10),
@@ -76,6 +80,10 @@ export function buildTaskPayload(v: TaskFormValue, mode: 'create' | 'edit'): Rec
       branch: v.skipPr ? (v.workingBranch.trim() || null) : null,
       ...buildSubagentPayload(v),
     };
+    if (!original || v.status !== original.status) {
+      payload.status = v.status;
+    }
+    return payload;
   }
 
   // create

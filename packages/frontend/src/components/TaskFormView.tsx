@@ -48,6 +48,17 @@ export default function TaskFormView({ mode, taskId, initial, projects, units, r
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadingTask, setLoadingTask] = useState(false);
+  // 編集モードでサーバーから読み込んだ元の値。status など「変更していなければ
+  // payload に含めない」判定の基準として保持する（承認待ちタスクの status を
+  // 誤って送ってしまい、正当な編集保存が 409 になるのを防ぐため）。
+  // `initial` にすでにタイトルが入っている場合（呼び出し元がタスク一覧のキャッシュ
+  // から渡すケース）は、下の fetch 用 useEffect がスキップされて originalForm が
+  // 設定されないため、ここで `initial` 自体を元の値として使う。
+  const [originalForm, setOriginalForm] = useState<TaskFormValue | null>(() =>
+    mode === 'edit' && initial?.title
+      ? emptyTaskForm({ projectId: projectId ? String(projectId) : '', ...initial })
+      : null
+  );
 
   useEffect(() => {
     if (mode !== 'edit' || !taskId || initial?.title) return;
@@ -57,7 +68,7 @@ export default function TaskFormView({ mode, taskId, initial, projects, units, r
       .then((t) => {
         if (cancelled) return;
         const hasOverride = !!(t.reviewSubagent || t.implementSubagent);
-        setForm(emptyTaskForm({
+        const loaded = emptyTaskForm({
           projectId: projectId ? String(projectId) : '',
           title: t.title,
           description: t.description || '',
@@ -75,7 +86,9 @@ export default function TaskFormView({ mode, taskId, initial, projects, units, r
           reviewSubagent: t.reviewSubagent ?? null,
           implementSubagent: t.implementSubagent ?? null,
           source: t.source && t.sourceRef ? { source: t.source, sourceRef: t.sourceRef } : null,
-        }));
+        });
+        setForm(loaded);
+        setOriginalForm(loaded);
       })
       .catch((err: unknown) => {
         if (!cancelled) setError((err as Error).message);
@@ -130,7 +143,7 @@ export default function TaskFormView({ mode, taskId, initial, projects, units, r
         const res = await api<{ id: number }>('/tasks', { method: 'POST', body: JSON.stringify(payload) });
         onSaved(res.id, form.title.trim());
       } else {
-        const payload = buildTaskPayload(form, 'edit');
+        const payload = buildTaskPayload(form, 'edit', originalForm ?? undefined);
         await api(`/tasks/${taskId}`, { method: 'PUT', body: JSON.stringify(payload) });
         onSaved(taskId, form.title.trim());
       }
@@ -139,7 +152,7 @@ export default function TaskFormView({ mode, taskId, initial, projects, units, r
     } finally {
       setSaving(false);
     }
-  }, [form, mode, taskId, onSaved, projectServers]);
+  }, [form, mode, taskId, onSaved, projectServers, originalForm]);
 
   const githubRepos = repositories.filter((r) => isSupportedProvider(r.provider));
   const [issueModalOpen, setIssueModalOpen] = useState(false);
