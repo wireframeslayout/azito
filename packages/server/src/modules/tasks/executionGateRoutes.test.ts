@@ -171,6 +171,72 @@ describe('POST /api/tasks — input_trust immutability (Issue #328)', () => {
   });
 });
 
+describe('POST /api/tasks — input_trust derived from source (Issue #328)', () => {
+  it("derives inputTrust: 'untrusted' when source is 'github'", async () => {
+    const { opts, createCalls } = makeOpts(makeTask());
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/tasks',
+      payload: { project_id: 10, title: 'Imported issue', source: 'github', source_ref: 'org/repo#1' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(createCalls[0]).toMatchObject({ source: 'github', inputTrust: 'untrusted' });
+  });
+
+  it("derives inputTrust: 'untrusted' when source is 'gitlab'", async () => {
+    const { opts, createCalls } = makeOpts(makeTask());
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/tasks',
+      payload: { project_id: 10, title: 'Imported issue', source: 'gitlab', source_ref: 'org/repo#1' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(createCalls[0]).toMatchObject({ source: 'gitlab', inputTrust: 'untrusted' });
+  });
+
+  it("keeps inputTrust: 'trusted' when source is omitted (defaults to 'local')", async () => {
+    const { opts, createCalls } = makeOpts(makeTask());
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/tasks',
+      payload: { project_id: 10, title: 'New task' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(createCalls[0]).toMatchObject({ source: 'local', inputTrust: 'trusted' });
+  });
+
+  it("keeps inputTrust: 'trusted' when source is explicitly 'local'", async () => {
+    const { opts, createCalls } = makeOpts(makeTask());
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/tasks',
+      payload: { project_id: 10, title: 'New task', source: 'local' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(createCalls[0]).toMatchObject({ source: 'local', inputTrust: 'trusted' });
+  });
+});
+
 describe('PUT /api/tasks/:id — require_plan_approval guard for untrusted tasks (Issue #328)', () => {
   it('rejects disabling require_plan_approval on an untrusted task', async () => {
     const { opts } = makeOpts(makeTask({ inputTrust: 'untrusted', requirePlanApproval: true }));
@@ -276,7 +342,68 @@ describe('PUT /api/tasks/:id — require_plan_approval guard for untrusted tasks
     });
 
     const updateCall = (opts.taskRepo.update as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(updateCall[1]).not.toHaveProperty('inputTrust');
+    // Present-but-undefined (same convention as every other optional PUT
+    // field in this handler, e.g. baseBranch/skipPr) — SqliteTaskRepository.
+    // update() treats an undefined field as "leave the column unchanged", so
+    // an attacker-supplied `input_trust` in the body never reaches the DB.
+    expect(updateCall[1].inputTrust).toBeUndefined();
+  });
+});
+
+describe('PUT /api/tasks/:id — input_trust derivation is monotonic (Issue #328)', () => {
+  it("sets inputTrust to 'untrusted' when source is changed to 'github' on a trusted task", async () => {
+    const { opts } = makeOpts(makeTask({ inputTrust: 'trusted', source: 'local' }));
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/tasks/1',
+      payload: { source: 'github', source_ref: 'org/repo#1' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const updateCall = (opts.taskRepo.update as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(updateCall[1]).toMatchObject({ inputTrust: 'untrusted' });
+  });
+
+  it('never transitions inputTrust back to trusted, even when source is changed back to local', async () => {
+    const { opts } = makeOpts(makeTask({ inputTrust: 'untrusted', source: 'github', requirePlanApproval: true }));
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/tasks/1',
+      payload: { source: 'local' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const updateCall = (opts.taskRepo.update as ReturnType<typeof vi.fn>).mock.calls[0];
+    // Either undefined (leaving the column unchanged — it is already
+    // 'untrusted') or explicitly re-asserted as 'untrusted' — never
+    // 'trusted'.
+    const nextInputTrust = (updateCall[1] as { inputTrust?: string }).inputTrust;
+    expect(nextInputTrust === undefined || nextInputTrust === 'untrusted').toBe(true);
+  });
+
+  it('does not change inputTrust when source is left untouched on a trusted task', async () => {
+    const { opts } = makeOpts(makeTask({ inputTrust: 'trusted', source: 'local', title: 'Old title' }));
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/tasks/1',
+      payload: { title: 'New title' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const updateCall = (opts.taskRepo.update as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(updateCall[1].inputTrust).toBeUndefined();
   });
 });
 

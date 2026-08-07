@@ -1,5 +1,6 @@
 import type { FastifyPluginCallback } from 'fastify';
 import type { ITaskRepository, Task } from './Task';
+import { deriveInputTrust } from './Task';
 import type { TaskStatus } from './TaskStatus';
 import type { IProjectRepository } from '../projects/Project';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
@@ -148,22 +149,15 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       const reviewSubagent = parseSubagentConfigInput(review_subagent, 'review_subagent');
       const implementSubagent = parseSubagentConfigInput(implement_subagent, 'implement_subagent');
       // input_trust is deliberately NOT read from request.body — see Task.ts.
-      //
-      // Issue #328 asks this endpoint to inherit the parent task's trust level
-      // when an agent creates a sub-task and the parent is identifiable. There
-      // is currently no way to identify a calling agent's task from an HTTP
-      // request: every request (browser UI and any in-pane `curl`/MCP call
-      // alike) authenticates with the single shared AZITO_UI_TOKEN — there is
-      // no per-task credential or header carrying a "calling task id" (verified
-      // against app/buildServer.ts's createTokenVerifier and the harness
-      // worker launch env, which only injects AZITO_SECRET_*/AZITO_AGENT_*).
-      // Until such a signal exists, this endpoint cannot distinguish "human
-      // via the UI" from "agent via the API", so it defaults to 'trusted' —
-      // the same as it always has — rather than guess. This must never be
-      // 'untrusted' by construction here; only server-only paths (currently
-      // POST /api/projects/:id/import-issue) mark a task untrusted, since the
-      // trust-lowering direction is safe but trust-raising is not (Issue #328:
-      // "信頼度を上げる方向の遷移は実装しないこと").
+      // It is DERIVED from `source` via deriveInputTrust() (Issue #328
+      // hardening) — the same function POST /api/projects/:id/import-issue
+      // uses — rather than hardcoded 'trusted'. The browser's actual
+      // GitHub-issue-import flow (IssueDetailPanel -> TaskForm) posts here,
+      // to this endpoint, with `source: 'github'`; the previous hardcoded
+      // 'trusted' silently bypassed the execution gate for every task
+      // created that way. A caller-supplied `source` therefore now decides
+      // trust, not the endpoint used to reach this route.
+      const resolvedSource = (source as Task['source']) ?? 'local';
       const id = taskRepo.create({
         projectId: project_id as number,
         unitId: (unit_id as number) ?? null,
@@ -177,7 +171,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         tmuxWindow: (tmux_window as string) ?? null,
         selfReviewMaxAttempts: self_review_max_attempts != null ? (self_review_max_attempts as number) : null,
         requirePlanApproval: require_plan_approval !== false,
-        source: (source as 'local' | 'github' | 'gitlab') ?? 'local',
+        source: resolvedSource,
         sourceRef: (source_ref as string) ?? null,
         worktreePath: null,
         worktreeBranch: null,
@@ -194,7 +188,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         agentSessionId: null,
         reviewSubagent,
         implementSubagent,
-        inputTrust: 'trusted',
+        inputTrust: deriveInputTrust(resolvedSource),
         executionApprovedFingerprintHash: null,
         pendingOperation: null,
         pendingOperationWindowId: null,
@@ -453,6 +447,17 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         const implementSubagent = implement_subagent !== undefined
           ? parseSubagentConfigInput(implement_subagent, 'implement_subagent')
           : undefined;
+        // inputTrust is derived from the EFFECTIVE `source` (the incoming
+        // value if provided, else the task's existing source) via the same
+        // deriveInputTrust() used at creation — but floored at the task's
+        // CURRENT trust level so it can only move trusted -> untrusted, never
+        // back (Issue #328: "信頼度を上げる方向の遷移は実装しないこと"). A
+        // task already 'untrusted' stays 'untrusted' even if `source` is
+        // edited back to 'local' — otherwise that edit would be exactly the
+        // bypass this gate exists to prevent.
+        const effectiveSource = source !== undefined ? (source as Task['source']) : existing.source;
+        const nextInputTrust: Task['inputTrust'] =
+          existing.inputTrust === 'untrusted' ? 'untrusted' : deriveInputTrust(effectiveSource);
         taskRepo.update(id, {
           title: (title as string) || existing.title,
           description:
@@ -478,6 +483,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
           prUrl: pr_url !== undefined ? (pr_url as string) : undefined,
           source: source !== undefined ? (source as 'local' | 'github' | 'gitlab') : undefined,
           sourceRef: source_ref !== undefined ? (source_ref as string) : undefined,
+          inputTrust: nextInputTrust !== existing.inputTrust ? nextInputTrust : undefined,
           reviewSubagent,
           implementSubagent,
           worktreePath: worktree_path !== undefined ? (worktree_path as string) : undefined,

@@ -154,6 +154,34 @@ export interface Task {
   updatedAt: string;
 }
 
+/**
+ * The single source of truth for how `Task['source']` maps to
+ * `Task['inputTrust']` (Issue #328 hardening) — every task-creation and
+ * task-update code path MUST derive `inputTrust` through this function
+ * rather than deciding it inline. Before this function existed, `POST
+ * /api/tasks` hardcoded `inputTrust: 'trusted'` regardless of `source`
+ * while `POST /api/projects/:id/import-issue` independently hardcoded
+ * `'untrusted'` — the two decisions drifted, and the browser's actual
+ * GitHub-issue-import flow (which posts to `/api/tasks`, not
+ * `import-issue`) went through the always-`'trusted'` path, defeating the
+ * execution gate entirely for externally-sourced tasks.
+ *
+ * `github`/`gitlab` (untrusted external content, not yet reviewed by a
+ * human) map to `'untrusted'`; `local` maps to `'trusted'`.
+ *
+ * This function is intentionally one-directional in effect only when
+ * combined with the monotonicity rule enforced at each call site (never
+ * transition an already-`'untrusted'` task back to `'trusted'` — see
+ * `PUT /api/tasks/:id` in modules/tasks/routes.ts, which floors the
+ * derived value at the task's current trust level instead of applying
+ * this function's output unconditionally). This function alone is a pure
+ * mapping from `source` and does not know about a task's prior trust
+ * level.
+ */
+export function deriveInputTrust(source: Task['source']): Task['inputTrust'] {
+  return source === 'github' || source === 'gitlab' ? 'untrusted' : 'trusted';
+}
+
 export interface ITaskRepository {
   findAll(): Task[];
   findByProject(projectId: number): Task[];

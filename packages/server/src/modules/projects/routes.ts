@@ -2,6 +2,7 @@ import type { FastifyPluginCallback } from 'fastify';
 import type { IProjectRepository, RepositoryProvider } from './Project';
 import type { IProjectServerRepository } from './ProjectServer';
 import type { ITaskRepository } from '../tasks/Task';
+import { deriveInputTrust } from '../tasks/Task';
 import type { GitProviderService } from '../git/providers/GitProviderService';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { IServerRepository } from '../servers/Server';
@@ -421,10 +422,13 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
           prUrl: null,
           agentSessionId: null,
           // Issue body content comes straight from an external tracker with no
-          // human review yet — the execution gate (ExecutionGate.ts) treats
-          // this the same as a GitHub/GitLab-sourced task regardless of what
-          // `source`/`source_ref` end up being edited to later (Issue #328).
-          inputTrust: 'untrusted',
+          // human review yet — derived via deriveInputTrust() (the SAME
+          // function POST /api/tasks uses), which maps `source` ('github'/
+          // 'gitlab' here) to 'untrusted'. The execution gate (ExecutionGate.ts)
+          // treats this the same as any GitHub/GitLab-sourced task regardless
+          // of what `source`/`source_ref` end up being edited to later
+          // (Issue #328).
+          inputTrust: deriveInputTrust(source),
           executionApprovedFingerprintHash: null,
           pendingOperation: null,
           pendingOperationWindowId: null,
