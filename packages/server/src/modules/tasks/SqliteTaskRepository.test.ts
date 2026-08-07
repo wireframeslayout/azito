@@ -118,3 +118,152 @@ describe('SqliteTaskRepository.consumePendingApproval (Issue #328 ninth-round re
     expect(consumed).toBe(false);
   });
 });
+
+// recordExecutionGateBlock() (Issue #328 review round, fix 1 + fix 2): the
+// compare-and-swap counterpart to consumePendingApproval() above. These tests
+// exercise the REAL SQL (not a mock) for the SAME reason the suite above
+// does — the guard being tested lives entirely in the WHERE clause.
+
+describe('SqliteTaskRepository.recordExecutionGateBlock (Issue #328 review round)', () => {
+  let db: SqliteDatabase;
+  let repo: SqliteTaskRepository;
+  let taskId: number;
+
+  beforeEach(() => {
+    db = openDatabase(':memory:');
+    repo = new SqliteTaskRepository(db);
+    db.prepare(
+      "INSERT INTO projects (id, name, slug, default_branch) VALUES (1, 'P', 'p', 'main')",
+    ).run();
+    taskId = repo.create({
+      projectId: 1,
+      unitId: null,
+      serverName: null,
+      title: 'Test task',
+      description: null,
+      status: 'review',
+      currentPhase: null,
+      selfReviewCount: 0,
+      priority: 0,
+      tmuxWindow: null,
+      selfReviewMaxAttempts: null,
+      requirePlanApproval: true,
+      source: 'github',
+      sourceRef: null,
+      worktreePath: null,
+      worktreeBranch: null,
+      baseBranch: null,
+      targetBranch: null,
+      skipPr: false,
+      workingDirectory: null,
+      branch: null,
+      planMarkdown: null,
+      pendingQuestions: null,
+      changedFiles: null,
+      summaryJson: null,
+      prUrl: null,
+      agentSessionId: null,
+      reviewSubagent: null,
+      implementSubagent: null,
+      inputTrust: 'untrusted',
+      executionApprovedFingerprintHash: null,
+      pendingOperation: null,
+      pendingOperationWindowId: null,
+      pendingOperationPriorStatus: null,
+    });
+    // create() always inserts status = the schema default ('open') — set it
+    // directly to reach the 'review' state these tests need as the "real
+    // prior status" a block should record.
+    repo.updateStatus(taskId, 'review');
+  });
+
+  it('records the block: status -> pending_approval, pendingOperation/priorStatus persisted', () => {
+    const recorded = repo.recordExecutionGateBlock(taskId, {
+      pendingOperation: 'execute',
+      priorStatus: 'review',
+      manifestHash: 'hash-a',
+    });
+
+    expect(recorded).toBe(true);
+    const task = repo.findById(taskId);
+    expect(task?.status).toBe('pending_approval');
+    expect(task?.pendingOperation).toBe('execute');
+    expect(task?.pendingOperationPriorStatus).toBe('review');
+    expect(task?.pendingOperationWindowId).toBeNull();
+  });
+
+  it('folds pendingOperationWindowId into the SAME atomic write for a respawn block (Issue #328 review round fix 1)', () => {
+    const recorded = repo.recordExecutionGateBlock(taskId, {
+      pendingOperation: 'respawn',
+      priorStatus: 'review',
+      manifestHash: 'hash-a',
+      pendingOperationWindowId: 42,
+    });
+
+    expect(recorded).toBe(true);
+    expect(repo.findById(taskId)?.pendingOperationWindowId).toBe(42);
+  });
+
+  it('a SECOND block attempt (a concurrently-blocked entry point) is rejected while the first is still outstanding — the compare-and-swap affects zero rows', () => {
+    const first = repo.recordExecutionGateBlock(taskId, { pendingOperation: 'execute', priorStatus: 'review', manifestHash: 'hash-a' });
+    const second = repo.recordExecutionGateBlock(taskId, { pendingOperation: 'resume', priorStatus: 'pending_approval', manifestHash: 'hash-b' });
+
+    expect(first).toBe(true);
+    expect(second).toBe(false);
+    // The SECOND (losing) call's operation/windowId must not have overwritten
+    // the first's — this is the actual harm a non-atomic read-then-write
+    // would cause (Issue #328 review round finding this method exists to fix
+    // in TaskRestoreService/WindowRespawnService, which used to call the
+    // generic `update()` here instead).
+    const task = repo.findById(taskId);
+    expect(task?.pendingOperation).toBe('execute');
+    expect(task?.pendingOperationPriorStatus).toBe('review');
+  });
+
+  it('is rejected once a concurrent approval already matches the manifest hash the block was evaluated against (Issue #328 review round fix 2 — closes the approval-rewind race)', () => {
+    // Simulates: request A evaluated the gate against `hash-a` and decided it
+    // needed to block; meanwhile a human concurrently approved the SAME
+    // manifest (hash-a), so execution_approved_fingerprint_hash is now
+    // exactly the hash A's block would be stale against. A's late write must
+    // not rewind the just-approved task back to pending_approval.
+    repo.update(taskId, { executionApprovedFingerprintHash: 'hash-a' });
+
+    const recorded = repo.recordExecutionGateBlock(taskId, {
+      pendingOperation: 'execute',
+      priorStatus: 'review',
+      manifestHash: 'hash-a',
+    });
+
+    expect(recorded).toBe(false);
+    const task = repo.findById(taskId);
+    expect(task?.status).toBe('review');
+    expect(task?.pendingOperation).toBeNull();
+  });
+
+  it('still succeeds when the approved fingerprint differs from the manifest hash being blocked (a real, still-unapproved drift)', () => {
+    repo.update(taskId, { executionApprovedFingerprintHash: 'some-older-hash' });
+
+    const recorded = repo.recordExecutionGateBlock(taskId, {
+      pendingOperation: 'execute',
+      priorStatus: 'review',
+      manifestHash: 'hash-a',
+    });
+
+    expect(recorded).toBe(true);
+    expect(repo.findById(taskId)?.status).toBe('pending_approval');
+  });
+
+  it("refuses to write (and returns false) when the caller's priorStatus snapshot is already 'pending_approval' — a self-referential value that would make an eventual approval restore the task right back to pending_approval (Issue #328 review round fix 2, defensive guard)", () => {
+    const recorded = repo.recordExecutionGateBlock(taskId, {
+      pendingOperation: 'execute',
+      priorStatus: 'pending_approval',
+      manifestHash: 'hash-a',
+    });
+
+    expect(recorded).toBe(false);
+    // Nothing was written — status stays whatever it was before this call
+    // (not forced into pending_approval by a rejected write).
+    expect(repo.findById(taskId)?.status).toBe('review');
+    expect(repo.findById(taskId)?.pendingOperation).toBeNull();
+  });
+});

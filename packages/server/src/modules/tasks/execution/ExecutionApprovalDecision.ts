@@ -201,7 +201,15 @@ export function decideExecutionApproval(
     if (!consumed) {
       return { status: 409, body: { error: `Task ${taskId}'s pending approval was already resolved by a concurrent request` } };
     }
-    appendLogIfUnitKnown('status_change', { status: 'execution_denied' });
+    // `status` is denyStatus — the REAL value consumePendingApproval() just
+    // committed above — not a synthetic label (Issue #328 review round fix
+    // 3): buildServer.ts's NotificationBus/push bridges forward
+    // entry.content.status verbatim as the WS `task:status` payload's
+    // `status` field, so a synthetic value like 'execution_denied' would
+    // reach a client as if it were the task's actual status. The audit
+    // context (that this was a denial, not just any transition to
+    // denyStatus) lives in `reason`, a field those bridges don't read.
+    appendLogIfUnitKnown('status_change', { status: denyStatus, reason: 'execution_denied' });
     return { status: 200, body: { ok: true } };
   }
 
@@ -249,7 +257,34 @@ export function decideExecutionApproval(
   if (!consumed) {
     return { status: 409, body: { error: `Task ${taskId}'s pending approval was already resolved by a concurrent request` } };
   }
-  appendLogIfUnitKnown('status_change', { status: 'execution_approved' });
+  // Audit-only entry (Issue #328 review round fix 3): 'execution_approved' is
+  // not a real task.status value — consumePendingApproval() above only
+  // clears the pending-approval bookkeeping, it does not itself transition
+  // task.status (see its own doc comment: "status is untouched here"). Every
+  // operation branch below applies the REAL transition and emits ITS OWN
+  // 'status_change' once that transition actually lands (synchronously for
+  // resume_await_answer/resume_await_plan_review, or from the async
+  // operation's success callback otherwise) — emitting a 'status_change'
+  // here, before any of that has happened, raced a client that refetches on
+  // this event against a row that was still 'pending_approval', so the
+  // approval panel never closed. Logged as 'command' so the approval is
+  // still visible in the execution log without pretending to be a status
+  // transition (buildServer.ts's NotificationBus/push bridges only react to
+  // 'status_change' entries, forwarding entry.content.status verbatim as the
+  // WS `task:status` payload).
+  appendLogIfUnitKnown('command', { type: 'execution_approved' });
+
+  // Re-fetches the task and emits its CURRENT (real) status as a
+  // 'status_change' entry — used by every async operation's success
+  // callback below (Issue #328 review round fix 3) instead of each guessing
+  // the post-transition status by hand. restore()/respawn()/
+  // resumeLegacySession() each already commit the real status themselves
+  // before their promise resolves, so re-reading here is guaranteed to see
+  // the committed value, not a stale in-memory copy.
+  const emitCurrentStatus = (op: string): void => {
+    const current = taskRepo.findById(taskId);
+    if (current) appendLogIfUnitKnown('status_change', { status: current.status, operation: op });
+  };
 
   const failApprovedOperation = (op: string, err: unknown): void => {
     const message = err instanceof Error ? err.message : String(err);
@@ -267,18 +302,25 @@ export function decideExecutionApproval(
   };
 
   if (operation === 'resume_await_answer' || operation === 'resume_await_plan_review') {
-    appendLogIfUnitKnown('status_change', {
-      status: 'execution_approved_awaiting_resubmit',
-      operation,
-      restoredStatus: priorStatus,
-    });
+    // Real transition FIRST, then emit it (Issue #328 review round fix 3) —
+    // the previous ordering emitted the synthetic
+    // 'execution_approved_awaiting_resubmit' label BEFORE this updateStatus()
+    // call, so a client refetching on that event still saw 'pending_approval'
+    // in the DB.
     taskRepo.updateStatus(taskId, priorStatus);
+    appendLogIfUnitKnown('status_change', {
+      status: priorStatus,
+      operation,
+      awaitingResubmit: true,
+    });
   } else if (operation === 'restore') {
     const approvedTask = taskRepo.findById(taskId);
     if (!approvedTask) {
       failApprovedOperation('restore', new Error(`Task ${taskId} disappeared after approval`));
     } else {
-      taskRestoreService.restore(approvedTask, log).catch((err: unknown) => failApprovedOperation('restore', err));
+      taskRestoreService.restore(approvedTask, log)
+        .then(() => emitCurrentStatus('restore'))
+        .catch((err: unknown) => failApprovedOperation('restore', err));
     }
   } else if (operation === 'resume') {
     taskRepo.updateStatus(taskId, 'running');
@@ -290,7 +332,14 @@ export function decideExecutionApproval(
       failApprovedOperation('respawn', new Error(`Window ${pendingWindowId ?? 'null'} or its server no longer exists`));
     } else {
       respawnService.respawn(win.id, srv)
-        .then(() => { taskRepo.updateStatus(taskId, priorStatus); })
+        .then(() => {
+          taskRepo.updateStatus(taskId, priorStatus);
+          // Success-callback emit (Issue #328 review round fix 3): before
+          // this fix, respawn's real transition back to priorStatus was
+          // applied but NEVER emitted as a 'status_change' — a client had no
+          // way to learn the block had resolved short of a manual refresh.
+          emitCurrentStatus('respawn');
+        })
         .catch((err: unknown) => failApprovedOperation('respawn', err));
     }
   } else if (operation === 'recover_session_legacy') {
@@ -300,7 +349,11 @@ export function decideExecutionApproval(
       failApprovedOperation('recover_session_legacy', new Error(`Server '${resolvedServerName ?? 'unresolved'}' not found`));
     } else {
       respawnService.resumeLegacySession(taskId, srv)
-        .then(() => { taskRepo.updateStatus(taskId, priorStatus); })
+        .then(() => {
+          taskRepo.updateStatus(taskId, priorStatus);
+          // Same missing-emit fix as 'respawn' above.
+          emitCurrentStatus('recover_session_legacy');
+        })
         .catch((err: unknown) => failApprovedOperation('recover_session_legacy', err));
     }
   } else {

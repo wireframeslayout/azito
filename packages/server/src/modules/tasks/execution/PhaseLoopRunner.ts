@@ -144,7 +144,7 @@ export class PhaseLoopRunner {
    * the caller must stop the loop (send nothing, launch nothing) without
    * throwing, since the block itself is the intended outcome, not a failure.
    */
-  private reverifyExecutionGateForPhase(taskId: number, currentTask: Task): boolean {
+  private reverifyExecutionGateForPhase(taskId: number, currentTask: Task, loopUnitId: number): boolean {
     if (currentTask.inputTrust !== 'untrusted') return true;
 
     const { manifest, projectServer } = resolveExecutionManifest(currentTask, {
@@ -156,11 +156,27 @@ export class PhaseLoopRunner {
       unitTypeLoader: this.unitTypeLoader,
       sidekickLoader: this.sidekickLoader,
     });
-    const gate = checkExecutionGate(currentTask, projectServer, hashExecutionManifest(manifest));
+    const manifestHash = hashExecutionManifest(manifest);
+    const gate = checkExecutionGate(currentTask, projectServer, manifestHash);
     if (gate.allowed) return true;
 
-    const unitId = manifest.unit?.id ?? currentTask.unitId ?? 0;
-    this.appendLog(taskId, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
+    // Resolve a Unit id to attach log entries to WITHOUT ever falling back to
+    // a dummy value (Issue #328 review round fix 4): execution_log.unit_id is
+    // a real foreign key, so the old `manifest.unit?.id ?? currentTask.unitId
+    // ?? 0` fallback chain could append a log row with unit_id = 0 — no such
+    // Unit exists, so that write throws a foreign-key violation, turning a
+    // benign "the configured Unit was deleted mid-run" drift into an
+    // unrelated execution failure. Prefer the manifest's own fresh
+    // resolution; if that came back null (the Unit really is gone), fall
+    // back to `loopUnitId` — the Unit this very run started with, passed in
+    // by stateMachineLoop() — but ONLY if it still resolves; otherwise skip
+    // the unit-scoped log entirely (unitId stays null below) while still
+    // recording the task-level gate transition (recordExecutionGateBlock /
+    // updateStatus), which has no such foreign-key dependency.
+    const unitId = manifest.unit?.id ?? (this.unitRepo.findById(loopUnitId) ? loopUnitId : null);
+    if (unitId !== null) {
+      this.appendLog(taskId, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
+    }
     if (gate.reason === 'pending_approval') {
       // Same 'resume' semantics as ExecuteTaskUseCase.followUp()/
       // resumeStateMachine()'s own gate call: on approval, units/routes.ts's
@@ -174,22 +190,27 @@ export class PhaseLoopRunner {
       // branch — see recordExecutionGateBlock's doc comment on
       // ITaskRepository for why an unconditional update here could
       // overwrite an already-recorded block from a concurrently-blocked
-      // entry point.
+      // entry point. manifestHash is passed through so the guarded UPDATE
+      // can also detect a concurrent approval that already matches this
+      // exact manifest (Issue #328 review round fix 2).
       const recorded = this.taskRepo.recordExecutionGateBlock(taskId, {
         pendingOperation: 'resume',
         priorStatus: currentTask.status,
+        manifestHash,
       });
-      if (recorded) {
-        // Same shape as ExecuteTaskUseCase.enforceExecutionGate's own
-        // pending_approval log entry (Issue #328 review) — the notification
-        // bridge only forwards a 'task:status' WS event off a 'status_change'
-        // log entry (see that method's own comment), not off the 'command'
-        // entry logged above. Without this, a drift block that happens
-        // mid-run (as opposed to at execute()/resumeStateMachine() entry)
-        // silently sat at pending_approval with nobody notified.
-        this.appendLog(taskId, unitId, 'status_change', { status: 'pending_approval', operation: 'resume' });
-      } else {
-        this.appendLog(taskId, unitId, 'command', { type: 'execution_gate_already_pending', operation: 'resume' });
+      if (unitId !== null) {
+        if (recorded) {
+          // Same shape as ExecuteTaskUseCase.enforceExecutionGate's own
+          // pending_approval log entry (Issue #328 review) — the notification
+          // bridge only forwards a 'task:status' WS event off a 'status_change'
+          // log entry (see that method's own comment), not off the 'command'
+          // entry logged above. Without this, a drift block that happens
+          // mid-run (as opposed to at execute()/resumeStateMachine() entry)
+          // silently sat at pending_approval with nobody notified.
+          this.appendLog(taskId, unitId, 'status_change', { status: 'pending_approval', operation: 'resume' });
+        } else {
+          this.appendLog(taskId, unitId, 'command', { type: 'execution_gate_already_pending', operation: 'resume' });
+        }
       }
     } else {
       // 'denied': the project server's input policy changed to 'deny' mid-run.
@@ -197,7 +218,9 @@ export class PhaseLoopRunner {
       // so leave status untouched), a run already in progress has no "leave
       // it alone" state to return to — fail it, the same outcome any other
       // hard stop mid-loop produces (send_error, stopped classification, etc).
-      this.appendLog(taskId, unitId, 'status_change', { status: 'error', message: 'Execution denied by project server input policy (untrusted-origin task)' });
+      if (unitId !== null) {
+        this.appendLog(taskId, unitId, 'status_change', { status: 'error', message: 'Execution denied by project server input policy (untrusted-origin task)' });
+      }
       this.taskRepo.updateStatus(taskId, 'failed');
     }
     return false;
@@ -283,7 +306,7 @@ export class PhaseLoopRunner {
       // built below, so a block never lets a stale/rewritten instruction
       // reach the worker. See reverifyExecutionGateForPhase's doc comment.
       const currentTask = this.taskRepo.findById(task.id);
-      if (currentTask && !this.reverifyExecutionGateForPhase(task.id, currentTask)) {
+      if (currentTask && !this.reverifyExecutionGateForPhase(task.id, currentTask, unit.id)) {
         return;
       }
 

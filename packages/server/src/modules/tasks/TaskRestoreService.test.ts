@@ -404,7 +404,11 @@ describe('TaskRestoreService', () => {
 
       expect(deps.tmux.createWindow).not.toHaveBeenCalled();
       expect(deps.worktreeServiceFactory.create).not.toHaveBeenCalled();
-      expect(deps.taskRepo.update).toHaveBeenCalledWith(1, { status: 'pending_approval', pendingOperation: 'restore', pendingOperationPriorStatus: 'archived' });
+      expect(deps.taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(1, {
+        pendingOperation: 'restore',
+        priorStatus: 'archived',
+        manifestHash: expect.any(String),
+      });
     });
 
     it("emits a 'log' event with the status_change entry on the shared events EventEmitter — this, not logRepo.append() alone, is what reaches buildServer.ts's NotificationBus/push bridges (Issue #328 fifteenth-round review)", async () => {

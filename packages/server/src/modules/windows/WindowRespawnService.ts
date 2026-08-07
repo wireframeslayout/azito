@@ -278,19 +278,31 @@ export class WindowRespawnService {
       sidekickLoader: this.sidekickLoader,
     }, respawnInput, server.name);
     const unitId = unit?.id ?? null;
-    const gate = checkExecutionGate(task, projectServer, hashExecutionManifest(manifest));
+    const manifestHash = hashExecutionManifest(manifest);
+    const gate = checkExecutionGate(task, projectServer, manifestHash);
     if (gate.allowed) return unitId;
 
     if (unitId !== null) {
       appendLogAndEmit(this.logRepo, this.events, task.id, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
     }
     if (gate.reason === 'pending_approval') {
-      this.taskRepo.update(task.id, {
-        status: 'pending_approval',
+      // Atomic compare-and-swap (Issue #328 review round fix 1): this used to
+      // call the generic read-then-write `taskRepo.update(...)`
+      // unconditionally — the same non-atomic gap ExecuteTaskUseCase's own
+      // gate had before its fix, which could overwrite an already-recorded
+      // block from a concurrently-blocked entry point (e.g. an execute()
+      // racing this respawn for the same untrusted task) and corrupt
+      // pendingOperationPriorStatus with 'pending_approval' itself.
+      // `pendingOperationWindowId` is folded into the SAME atomic write
+      // (recordExecutionGateBlock's `fields.pendingOperationWindowId`) rather
+      // than a separate call, so the two never observably diverge. See
+      // recordExecutionGateBlock's doc comment on ITaskRepository.
+      const recorded = this.taskRepo.recordExecutionGateBlock(task.id, {
         pendingOperation: operation,
+        priorStatus: task.status,
+        manifestHash,
         pendingOperationWindowId: windowId,
-        pendingOperationPriorStatus: task.status,
-      } as Partial<Task>);
+      });
       // A 'status_change' entry, not just the 'command' entry above, is what
       // buildServer.ts's NotificationBus/push bridges turn into a live
       // browser notification (same reasoning as
@@ -301,8 +313,15 @@ export class WindowRespawnService {
       // at pending_approval with no notification ever reaching a human, the
       // one entry point that had never even attempted the status_change log
       // the other two entry points wrote (just to an unwired destination).
-      if (unitId !== null) {
-        appendLogAndEmit(this.logRepo, this.events, task.id, unitId, 'status_change', { status: 'pending_approval', operation });
+      // Only emitted when `recorded` is true — a no-op (already-blocked)
+      // attempt must not re-notify a client that already saw the first
+      // block's own 'status_change'.
+      if (recorded) {
+        if (unitId !== null) {
+          appendLogAndEmit(this.logRepo, this.events, task.id, unitId, 'status_change', { status: 'pending_approval', operation });
+        }
+      } else if (unitId !== null) {
+        appendLogAndEmit(this.logRepo, this.events, task.id, unitId, 'command', { type: 'execution_gate_already_pending', operation });
       }
       throw new ExecutionGatePendingApprovalError(task.id);
     }

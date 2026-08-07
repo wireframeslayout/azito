@@ -476,8 +476,15 @@ describe('POST /api/tasks/:id/approve-execution (Issue #328 review)', () => {
       callOrder.push('consumePendingApproval');
       return originalConsumeImpl(id, fields);
     });
-    (opts.logRepo.append as ReturnType<typeof vi.fn>).mockImplementation((_taskId: number, _unitId: number, _type: string, content: { status?: string }) => {
-      if (content?.status === 'execution_approved') callOrder.push('logRepo.append(execution_approved)');
+    // 'execution_approved' is now logged as a 'command' entry, not a
+    // 'status_change' one (Issue #328 review round fix 3) — it is audit-only,
+    // never a real task.status value (see decideExecutionApproval's own
+    // comment on why: buildServer.ts's NotificationBus/push bridges forward
+    // a 'status_change' entry's `content.status` verbatim as the WS
+    // `task:status` payload, and a synthetic label there would read as a
+    // phantom status to a connected client).
+    (opts.logRepo.append as ReturnType<typeof vi.fn>).mockImplementation((_taskId: number, _unitId: number, type: string, content: { type?: string }) => {
+      if (type === 'command' && content?.type === 'execution_approved') callOrder.push('logRepo.append(execution_approved)');
     });
     const app = Fastify();
     await app.register(tasksRoutes, opts);
@@ -547,6 +554,27 @@ describe('POST /api/tasks/:id/approve-execution (Issue #328 review)', () => {
     expect(getTask().status).toBe('running');
   });
 
+  it("respawn approval emits a 'status_change' log entry with the REAL restored status once respawnService.respawn() resolves — not just the audit-only 'execution_approved' entry (Issue #328 review round fix 3)", async () => {
+    // Before this fix, respawn's real transition back to priorStatus
+    // ('running') was applied via updateStatus() but never logged as a
+    // 'status_change' — a client that closed the approval panel on the
+    // FIRST (synthetic, pre-transition) event had no further signal that
+    // the respawn actually completed.
+    const task = makeTask({ pendingOperation: 'respawn', pendingOperationWindowId: 5, pendingOperationPriorStatus: 'running' });
+    const { opts } = makeStatefulOpts(task);
+    const respawnWindow = { id: 5, serverName: 'test-server', workerModel: null, workerType: null, paneLayout: null };
+    opts.windowRepo.findById = vi.fn((id: number) => (id === 5 ? respawnWindow : undefined)) as unknown as TasksRouteOptions['windowRepo']['findById'];
+    const fingerprint = currentFingerprint(opts, task, respawnWindow);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
+    await new Promise((r) => setImmediate(r));
+
+    expect(opts.logRepo.append).toHaveBeenCalledWith(1, 20, 'status_change', { status: 'running', operation: 'respawn' });
+  });
+
   it("rejects with 409 (not a silent fallback to the non-respawn manifest) when a pending respawn's recorded window no longer exists — the manifest cannot be resolved at all, so nothing is consumed", async () => {
     const task = makeTask({ pendingOperation: 'respawn', pendingOperationWindowId: 999 });
     const { opts, getTask } = makeStatefulOpts(task);
@@ -588,6 +616,44 @@ describe('POST /api/tasks/:id/approve-execution (Issue #328 review)', () => {
     expect(getTask().status).toBe('running');
   });
 
+  it("legacy-recover approval emits a 'status_change' log entry with the REAL restored status once resumeLegacySession() resolves (Issue #328 review round fix 3, same missing-emit gap as respawn)", async () => {
+    const task = makeTask({ pendingOperation: 'recover_session_legacy', pendingOperationPriorStatus: 'running', agentSessionId: 'sess-1' });
+    const { opts } = makeStatefulOpts(task);
+    const fingerprint = currentFingerprint(opts, task);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
+    await new Promise((r) => setImmediate(r));
+
+    expect(opts.logRepo.append).toHaveBeenCalledWith(1, 20, 'status_change', { status: 'running', operation: 'recover_session_legacy' });
+  });
+
+  it("restore approval emits a 'status_change' log entry with the REAL post-restore status once taskRestoreService.restore() resolves (Issue #328 review round fix 3) — a client refetching on the earlier 'execution_approved' audit entry alone would still see 'pending_approval'", async () => {
+    const task = makeTask({ pendingOperation: 'restore', pendingOperationPriorStatus: 'archived', executionApprovedFingerprintHash: null });
+    const { opts, getTask } = makeStatefulOpts(task);
+    // Mirrors what the REAL TaskRestoreService.restore() does on success —
+    // sets status to 'open' before its promise resolves (see
+    // TaskRestoreService.ts) — the base fixture's mock doesn't touch
+    // task state at all, which would leave currentTask stuck at
+    // 'pending_approval' and make this assertion vacuous.
+    opts.taskRestoreService.restore = vi.fn(async (t: Task) => {
+      opts.taskRepo.update(t.id, { status: 'open' as Task['status'], pendingOperation: null });
+      return { tmuxTarget: 'azito:task-1.1', worktreePath: null };
+    }) as unknown as TasksRouteOptions['taskRestoreService']['restore'];
+    const fingerprint = currentFingerprint(opts, task);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
+    await new Promise((r) => setImmediate(r));
+
+    expect(getTask().status).toBe('open');
+    expect(opts.logRepo.append).toHaveBeenCalledWith(1, 20, 'status_change', { status: 'open', operation: 'restore' });
+  });
+
   it("approval of a blocked answer-resubmit (pendingOperation resume_await_answer) restores the task to its prior waiting status WITHOUT auto-resuming", async () => {
     const task = makeTask({ pendingOperation: 'resume_await_answer', pendingOperationPriorStatus: 'waiting_input' });
     const { opts, getTask } = makeStatefulOpts(task);
@@ -603,6 +669,11 @@ describe('POST /api/tasks/:id/approve-execution (Issue #328 review)', () => {
     expect(opts.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();
     expect(opts.executeTaskUseCase.followUp).not.toHaveBeenCalled();
     expect(opts.executeTaskUseCase.execute).not.toHaveBeenCalled();
+    // The transition is applied BEFORE this emits (Issue #328 review round
+    // fix 3) — status is the REAL restored value ('waiting_input'), not the
+    // synthetic 'execution_approved_awaiting_resubmit' label the log used to
+    // carry as its `status` field.
+    expect(opts.logRepo.append).toHaveBeenCalledWith(1, 20, 'status_change', { status: 'waiting_input', operation: 'resume_await_answer', awaitingResubmit: true });
   });
 
   it("approval of a blocked plan-review-resubmit (pendingOperation resume_await_plan_review) restores the task to 'phase_review' WITHOUT auto-resuming", async () => {

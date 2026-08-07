@@ -87,7 +87,8 @@ export class TaskRestoreService {
     // was deleted or was never set on either the task or its project).
     const { manifest, project, unit, projectServer } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader });
     const unitId = unit?.id ?? null;
-    const gate = checkExecutionGate(task, projectServer, hashExecutionManifest(manifest));
+    const manifestHash = hashExecutionManifest(manifest);
+    const gate = checkExecutionGate(task, projectServer, manifestHash);
     if (!gate.allowed) {
       if (unitId !== null) {
         appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
@@ -105,11 +106,20 @@ export class TaskRestoreService {
         // ungated restore() always makes — so once approval re-invokes this
         // method, the end state matches what restoring would have done in
         // the first place.
-        taskRepo.update(task.id, {
-          status: 'pending_approval',
+        //
+        // Atomic compare-and-swap (Issue #328 review round fix 1): this used
+        // to call the generic read-then-write `taskRepo.update(...)`
+        // unconditionally, which — exactly like ExecuteTaskUseCase's own gate
+        // before its fix — could overwrite an already-recorded block from a
+        // concurrently-blocked entry point (e.g. a respawn racing this
+        // restore for the same untrusted task) and corrupt
+        // pendingOperationPriorStatus with 'pending_approval' itself. See
+        // recordExecutionGateBlock's doc comment on ITaskRepository.
+        const recorded = taskRepo.recordExecutionGateBlock(task.id, {
           pendingOperation: 'restore',
-          pendingOperationPriorStatus: task.status,
-        } as Partial<Task>);
+          priorStatus: task.status,
+          manifestHash,
+        });
         // A 'status_change' entry, not just the 'command' entry above, is
         // what the NotificationBus/push bridges (buildServer.ts) turn into a
         // live browser notification — but ONLY when it's emitted on the
@@ -121,9 +131,18 @@ export class TaskRestoreService {
         // wasn't: TaskRestoreService had no way to reach that class's private
         // EventEmitter). See AppendLog.ts's appendLogAndEmit() doc comment.
         // Guarded on unitId !== null the same as the 'command' log above it
-        // (an archived task can have no resolvable Unit).
-        if (unitId !== null) {
-          appendLogAndEmit(logRepo, events, task.id, unitId, 'status_change', { status: 'pending_approval', operation: 'restore' });
+        // (an archived task can have no resolvable Unit). Only emitted when
+        // `recorded` is true — a no-op (already-blocked) attempt must not
+        // re-notify a client that already saw the first block's own
+        // 'status_change' (same reasoning as
+        // ExecuteTaskUseCase.enforceExecutionGate's own pending_approval
+        // branch).
+        if (recorded) {
+          if (unitId !== null) {
+            appendLogAndEmit(logRepo, events, task.id, unitId, 'status_change', { status: 'pending_approval', operation: 'restore' });
+          }
+        } else if (unitId !== null) {
+          appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'execution_gate_already_pending', operation: 'restore' });
         }
         throw new ExecutionGatePendingApprovalError(task.id);
       }

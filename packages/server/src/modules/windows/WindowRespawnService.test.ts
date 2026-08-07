@@ -187,10 +187,23 @@ function buildService(opts: {
     })),
   };
 
-  const taskRepo: Pick<ITaskRepository, 'findById' | 'updateStatus' | 'update'> = {
+  const taskRepo: Pick<ITaskRepository, 'findById' | 'updateStatus' | 'update' | 'recordExecutionGateBlock'> = {
     findById: vi.fn(() => opts.task ?? null),
     updateStatus: vi.fn(),
     update: vi.fn(),
+    // Mirrors SqliteTaskRepository's real guard (Issue #328 review round):
+    // only succeeds while no block is already outstanding on `opts.task`
+    // (the same object reference `findById` above always returns, so
+    // mutating it here is visible to the next call) — same trick
+    // ExecuteTaskUseCase.env.test.ts's taskRepo mock already uses.
+    recordExecutionGateBlock: vi.fn((_id: number, fields: { pendingOperation: string; priorStatus: string; pendingOperationWindowId?: number | null }) => {
+      if (!opts.task || opts.task.pendingOperation !== null) return false;
+      opts.task.status = 'pending_approval' as Task['status'];
+      opts.task.pendingOperation = fields.pendingOperation as Task['pendingOperation'];
+      opts.task.pendingOperationWindowId = fields.pendingOperationWindowId ?? null;
+      opts.task.pendingOperationPriorStatus = fields.priorStatus as Task['pendingOperationPriorStatus'];
+      return true;
+    }),
   };
 
   const unitRepo: Pick<IUnitRepository, 'findById'> = {
@@ -353,11 +366,11 @@ describe('WindowRespawnService.respawn — execution gate (Issue #328)', () => {
     // pendingOperation/pendingOperationWindowId, the approval handler can't
     // tell a blocked respawn apart from a blocked execute()/resume() and
     // resumes the wrong thing (see tasks/execution/ExecutionApprovalDecision.ts's approve-execution).
-    expect(taskRepo.update).toHaveBeenCalledWith(6, {
-      status: 'pending_approval',
+    expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(6, {
       pendingOperation: 'respawn',
+      priorStatus: 'open',
+      manifestHash: expect.any(String),
       pendingOperationWindowId: 1,
-      pendingOperationPriorStatus: 'open',
     });
   });
 
@@ -754,11 +767,11 @@ describe('WindowRespawnService.respawn — respawn config fingerprint (Issue #32
     await expect(service.respawn(1, makeServer())).rejects.toThrow(/requires approval/);
 
     expect(tmux.sendKeys).not.toHaveBeenCalled();
-    expect(taskRepo.update).toHaveBeenCalledWith(6, {
-      status: 'pending_approval',
+    expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(6, {
       pendingOperation: 'respawn',
+      priorStatus: 'open',
+      manifestHash: expect.any(String),
       pendingOperationWindowId: 1,
-      pendingOperationPriorStatus: 'open',
     });
   });
 
@@ -775,7 +788,7 @@ describe('WindowRespawnService.respawn — respawn config fingerprint (Issue #32
     const { service, taskRepo } = buildService({ window: driftedWin, task: approvedTask, unit });
 
     await expect(service.respawn(1, makeServer({ name: 'other-server' }))).rejects.toThrow(/requires approval/);
-    expect(taskRepo.update).toHaveBeenCalledWith(7, expect.objectContaining({ status: 'pending_approval', pendingOperation: 'respawn' }));
+    expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(7, expect.objectContaining({ pendingOperation: 'respawn' }));
   });
 });
 
@@ -889,11 +902,11 @@ describe('WindowRespawnService.resumeLegacySession (Issue #328 fourth-round revi
     await expect(service.resumeLegacySession(9, makeServer())).rejects.toThrow(/requires approval/);
 
     expect(tmux.createWindow).not.toHaveBeenCalled();
-    expect(taskRepo.update).toHaveBeenCalledWith(9, {
-      status: 'pending_approval',
+    expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(9, {
       pendingOperation: 'recover_session_legacy',
+      priorStatus: 'open',
+      manifestHash: expect.any(String),
       pendingOperationWindowId: null,
-      pendingOperationPriorStatus: 'open',
     });
   });
 

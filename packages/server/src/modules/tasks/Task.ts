@@ -251,9 +251,47 @@ export interface ITaskRepository {
    * false means another block was already outstanding for this task (the
    * caller must not overwrite it, and must not log a duplicate
    * `status_change`).
+   *
+   * `fields.manifestHash` (Issue #328 review round, fix 2) is the SAME
+   * `hashExecutionManifest(...)` value the caller just passed to
+   * `checkExecutionGate()` to decide it needed to block. The guarded UPDATE
+   * folds it into its WHERE clause (`execution_approved_fingerprint_hash IS
+   * NULL OR execution_approved_fingerprint_hash != manifestHash`) so a block
+   * that is ALREADY stale by the time it reaches the database — because a
+   * concurrent approval matching this exact manifest landed first — is
+   * rejected instead of writing anyway. Without this, the following race
+   * rewinds an already-approved task back to `pending_approval`: (1) request
+   * A evaluates the gate and decides to block; (2) request B concurrently
+   * approves the SAME outstanding block, clearing `pending_operation` back to
+   * NULL; (3) A's now-unguarded (by the old `pending_operation IS NULL`-only
+   * condition) UPDATE succeeds, re-blocking a task a human just approved, and
+   * — worse — persists A's stale `priorStatus` snapshot (captured while the
+   * task was still `pending_approval` from the block B just resolved) as
+   * `pendingOperationPriorStatus`, corrupting it with `pending_approval`
+   * itself (a value approval could then "restore" to — a self-loop the UI
+   * can never escape from without manual intervention).
+   *
+   * `fields.priorStatus === 'pending_approval'` is refused outright (the
+   * implementation returns false without writing) as a second, independent
+   * guard against that same corruption: a caller-supplied snapshot is never
+   * allowed to already BE `pending_approval` — see the invariant described
+   * above and in `pendingOperationPriorStatus`'s own doc comment.
+   *
+   * `fields.pendingOperationWindowId` extends this atomic write to cover
+   * WindowRespawnService.enforceExecutionGate's `'respawn'` case (Issue #328
+   * review round fix 1), which must record `pendingOperationWindowId`
+   * alongside `pendingOperation` in the SAME statement — a separate follow-up
+   * write would reopen the exact non-atomic read-then-write gap this method
+   * exists to close. Omitted (or explicit `null`) for every other operation,
+   * matching `pendingOperationWindowId`'s own doc comment.
    */
   recordExecutionGateBlock(
     id: number,
-    fields: { pendingOperation: NonNullable<Task['pendingOperation']>; priorStatus: TaskStatus },
+    fields: {
+      pendingOperation: NonNullable<Task['pendingOperation']>;
+      priorStatus: TaskStatus;
+      manifestHash: string;
+      pendingOperationWindowId?: number | null;
+    },
   ): boolean;
 }

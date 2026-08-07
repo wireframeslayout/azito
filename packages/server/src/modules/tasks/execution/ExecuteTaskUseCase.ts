@@ -291,7 +291,8 @@ export class ExecuteTaskUseCase {
       unitTypeLoader: this.unitTypeLoader,
       sidekickLoader: this.sidekickLoader,
     });
-    const gate = checkExecutionGate(task, projectServer, hashExecutionManifest(manifest));
+    const manifestHash = hashExecutionManifest(manifest);
+    const gate = checkExecutionGate(task, projectServer, manifestHash);
     if (gate.allowed) return { project, projectServer };
 
     this.appendLog(task.id, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
@@ -304,9 +305,13 @@ export class ExecuteTaskUseCase {
       // the old unconditional `taskRepo.update(...)` here could both lose
       // the first block's operation identity AND corrupt
       // pendingOperationPriorStatus with 'pending_approval' itself.
+      // manifestHash is passed through so the guarded UPDATE can also detect
+      // a concurrent approval that already matches this exact manifest
+      // (Issue #328 review round fix 2).
       const recorded = this.taskRepo.recordExecutionGateBlock(task.id, {
         pendingOperation: operation,
         priorStatus: task.status,
+        manifestHash,
       });
       if (recorded) {
         // Separate 'status_change' log entry (Issue #51), not just the

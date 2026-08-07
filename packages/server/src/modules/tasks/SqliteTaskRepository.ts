@@ -97,11 +97,14 @@ export class SqliteTaskRepository implements ITaskRepository {
     // Guarded compare-and-swap for recordExecutionGateBlock() (Issue #328
     // review round) — mirrors consumePendingApprovalStmt's guard style. Only
     // succeeds while no block is already outstanding (pending_operation IS
-    // NULL), so a second blocked entry point arriving after the first cannot
-    // overwrite pendingOperation/pendingOperationPriorStatus — see that
-    // method's own doc comment on ITaskRepository.
+    // NULL) AND the approved fingerprint still differs from the manifest
+    // hash the caller used to decide it needed to block (the second half of
+    // the WHERE clause) — a concurrent approval that already matches this
+    // exact manifest must not be rewound back to pending_approval. See
+    // recordExecutionGateBlock's own doc comment on ITaskRepository for the
+    // race this closes.
     this.recordExecutionGateBlockStmt = db.prepare(
-      "UPDATE tasks SET status = 'pending_approval', pending_operation = ?, pending_operation_prior_status = ?, updated_at = datetime('now') WHERE id = ? AND pending_operation IS NULL",
+      "UPDATE tasks SET status = 'pending_approval', pending_operation = ?, pending_operation_window_id = ?, pending_operation_prior_status = ?, updated_at = datetime('now') WHERE id = ? AND pending_operation IS NULL AND (execution_approved_fingerprint_hash IS NULL OR execution_approved_fingerprint_hash != ?)",
     );
     this.updateStatusStmt = db.prepare("UPDATE tasks SET status = ?, updated_at = datetime('now') WHERE id = ?");
     this.updateCurrentPhaseStmt = db.prepare("UPDATE tasks SET current_phase = ?, updated_at = datetime('now') WHERE id = ?");
@@ -221,9 +224,28 @@ export class SqliteTaskRepository implements ITaskRepository {
 
   recordExecutionGateBlock(
     id: number,
-    fields: { pendingOperation: NonNullable<Task['pendingOperation']>; priorStatus: TaskStatus },
+    fields: {
+      pendingOperation: NonNullable<Task['pendingOperation']>;
+      priorStatus: TaskStatus;
+      manifestHash: string;
+      pendingOperationWindowId?: number | null;
+    },
   ): boolean {
-    const result = this.recordExecutionGateBlockStmt.run(fields.pendingOperation, fields.priorStatus, id);
+    // A caller-supplied snapshot must never already be 'pending_approval' —
+    // see the doc comment on ITaskRepository.recordExecutionGateBlock. This
+    // is a defensive guard independent of the fingerprint check above: it
+    // refuses to persist a self-referential prior status even in the (rarer)
+    // case where the manifest itself changed between the stale read and the
+    // concurrent approval, which the fingerprint condition alone would not
+    // catch.
+    if (fields.priorStatus === ('pending_approval' as TaskStatus)) return false;
+    const result = this.recordExecutionGateBlockStmt.run(
+      fields.pendingOperation,
+      fields.pendingOperationWindowId ?? null,
+      fields.priorStatus,
+      id,
+      fields.manifestHash,
+    );
     return result.changes > 0;
   }
 

@@ -851,6 +851,7 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
     expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(1, {
       pendingOperation: 'resume',
       priorStatus: 'running',
+      manifestHash: expect.any(String),
     });
     expect(taskRepo.updateStatus).not.toHaveBeenCalledWith(1, 'review');
     // Issue #328 review: a mid-run drift block must also emit a
@@ -860,5 +861,80 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
     // event. Without this, the task silently sat at pending_approval with no
     // notification ever reaching a human.
     expect(appendLog).toHaveBeenCalledWith(1, 1, 'status_change', { status: 'pending_approval', operation: 'resume' });
+  });
+
+  it('does not fall back to a dummy unit id (0) when the Unit is deleted mid-run — the task-level gate block is still recorded, but no gate-related log entry is attached to a nonexistent Unit (Issue #328 review round fix 4)', async () => {
+    const originalUnit = {
+      id: 1, unitType: 'devops', systemPrompt: 'Be careful.', selfReviewMaxAttempts: 2, reviewSubagent: null, implementSubagent: null, phaseConfig: null,
+      workerType: null, workerModel: null, workerExtraArgs: null, workerExecutionMode: 'tmux-pipe', workerRuntime: 'tui',
+    };
+    const projectRepo = { findById: vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', defaultUnitId: null })), findRepositoryById: vi.fn(() => null) };
+    const projectServerRepo = { find: vi.fn(() => null), findByProject: vi.fn(() => []) };
+    const unitTypeLoader = { get: vi.fn(() => DEVOPS_UNIT_TYPE), getOrThrow: vi.fn(() => DEVOPS_UNIT_TYPE) };
+    const sidekickLoader = { findByName: vi.fn(() => null), findDefaultForTag: vi.fn(() => makeSidekick()), list: vi.fn(() => []), invalidateCache: vi.fn() };
+
+    const fixedTask = {
+      id: 1, projectId: 10, unitId: 1, serverName: 'local', title: 'Test Task', description: null,
+      status: 'running', currentPhase: 'planning', planMarkdown: 'THE PLAN', targetBranch: null, baseBranch: null,
+      skipPr: false, selfReviewCount: 0, worktreePath: null, workingDirectory: '/work', summaryJson: null,
+      inputTrust: 'untrusted' as const, pendingOperation: null, pendingOperationWindowId: null, pendingOperationPriorStatus: null,
+      executionApprovedFingerprintHash: null as string | null,
+    };
+    // Approved against the ORIGINAL Unit config (what a human actually saw).
+    const approvedUnitRepo = { findById: vi.fn(() => originalUnit) };
+    const { manifest } = resolveExecutionManifest(
+      fixedTask as any,
+      makeManifestDeps(null, approvedUnitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader),
+    );
+    fixedTask.executionApprovedFingerprintHash = hashExecutionManifest(manifest);
+
+    // The Unit is gone by the time the loop re-checks the gate for this
+    // phase — EVERY unitRepo.findById() call (both
+    // resolveExecutionManifest()'s own resolution inside
+    // reverifyExecutionGateForPhase AND that method's own fallback check
+    // against the loop's already-resolved `unit.id`) returns null,
+    // simulating a deleted Unit. This necessarily invalidates the approved
+    // fingerprint too (the manifest's `unit` field flips from populated to
+    // null), so the gate blocks at the very first phase.
+    const unitRepo = { findById: vi.fn(() => null) };
+    const taskRepo = {
+      findById: vi.fn(() => fixedTask), update: vi.fn(), updateStatus: vi.fn(), updateCurrentPhase: vi.fn(),
+      recordExecutionGateBlock: vi.fn(() => true),
+    };
+    const { runner, workerInput, appendLog } = makeRunner({ taskRepo, unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader });
+    const unit = makeUnitForRun();
+
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    // Blocked before any prompt was built or sent.
+    expect(workerInput.sendPrompt).not.toHaveBeenCalled();
+    // The task-level gate transition is recorded regardless of whether a
+    // Unit could be resolved to log against (Issue #328 review round fix 4's
+    // second half: losing the Unit must not also lose the block itself).
+    expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(1, {
+      pendingOperation: 'resume',
+      priorStatus: 'running',
+      manifestHash: expect.any(String),
+    });
+    // No log entry — gate-related or otherwise — was ever appended with a
+    // dummy unitId of 0 (the old `manifest.unit?.id ?? currentTask.unitId ??
+    // 0` fallback chain). execution_log.unit_id is a real foreign key
+    // against the `units` table in production; appending with 0 there throws
+    // a foreign-key violation, turning this benign "Unit was deleted"
+    // drift into an unrelated crash instead of a clean gate block.
+    for (const call of appendLog.mock.calls) {
+      expect(call[1]).not.toBe(0);
+    }
+    // Specifically, neither of the two gate-related entries
+    // (reverifyExecutionGateForPhase's 'execution_gate_blocked'
+    // command/'pending_approval' status_change) was appended at all — there
+    // was no resolvable Unit to attach them to.
+    const gateRelatedCalls = appendLog.mock.calls.filter((c: unknown[]) => {
+      const type = c[2];
+      const content = c[3] as { type?: string; status?: string };
+      return (type === 'command' && content?.type === 'execution_gate_blocked')
+        || (type === 'status_change' && content?.status === 'pending_approval');
+    });
+    expect(gateRelatedCalls).toHaveLength(0);
   });
 });
