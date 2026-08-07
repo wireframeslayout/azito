@@ -872,7 +872,7 @@ function WorkspaceInner() {
       <QuickAddWindowModal
         open={addWindowModal.awQuickAddOpen}
         onClose={() => addWindowModal.setAwQuickAddOpen(false)}
-        loading={addWindowModal.addWindowLoading}
+        loading={addWindowModal.addWindowLoading || addWindowModal.awQuickAddLoading}
         onSubmit={() => addWindowModal.handleAddWindow()}
         serverName={addWindowModal.awServer}
         agentLabel={addWindowModal.awQuickAddAgent === 'terminal' ? t('common:labels.terminal') : (addWindowModal.agentPresets[addWindowModal.awQuickAddAgent]?.label ?? addWindowModal.awQuickAddAgent)}

@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../api/client';
 import type { Project, Server, Session } from '../pages/workspace/types';
@@ -68,6 +68,9 @@ export function useAddWindowModal(
   const [awResourceWarning, setAwResourceWarning] = useState<{ resources: ResourceStatus; retry: () => void } | null>(null);
   const [awQuickAddOpen, setAwQuickAddOpen] = useState(false);
   const [awQuickAddAgent, setAwQuickAddAgent] = useState<QuickAddAgent>('terminal');
+  const [awQuickAddLoading, setAwQuickAddLoading] = useState(false);
+  // クイック追加の呼び出し世代。連打時、後発の呼び出しだけが自分の取得結果を state に反映できるようにする。
+  const awQuickAddGenRef = useRef(0);
 
   const { t } = useTranslation('workspace');
   const { agents: agentDefs, loading: agentDefsLoading, error: agentDefsError } = useAgentDefinitions('worker');
@@ -137,10 +140,10 @@ export function useAddWindowModal(
    * 呼び出し時点で確定しているため、モデル選択と作業ディレクトリだけを入力させる最小限のモーダルを開く。
    * 送信は handleAddWindow の 'new' モードをそのまま使う（同じ API・同じパラメータ組み立て）。
    */
-  const openQuickAddWindow = useCallback(async (serverName: string, agentType: QuickAddAgent) => {
-    const data: Record<string, Session[]> = {};
-    try { const s = await api<Session[]>(`/servers/${serverName}/sessions`); if (Array.isArray(s)) data[serverName] = s; } catch {}
-    setAwSessionData(data);
+  const openQuickAddWindow = useCallback((serverName: string, agentType: QuickAddAgent) => {
+    // 世代を確定させてからモーダルを同期的に開く。連打された場合、非同期取得が届いた時点で
+    // 自分がまだ最新世代かを確認し、そうでなければ結果を破棄する（先発の遅い応答が後発を上書きしない）。
+    const gen = ++awQuickAddGenRef.current;
     setAwServer(serverName);
     setAwTarget(''); setAwLabel(''); setAwMode('new');
     setAwSelectedSession('');
@@ -156,17 +159,26 @@ export function useAddWindowModal(
     const agent = agentType === 'terminal' ? 'none' : agentType;
     setAwAgent(agent);
     setAwAgentModel('');
-    if (agent === 'none') {
-      setAwWorkerModels([]);
-    } else {
-      try {
-        const models = await api<{ id: string; label: string }[]>(`/workers/models/${agent}`);
-        setAwWorkerModels(Array.isArray(models) ? models : []);
-      } catch {
-        setAwWorkerModels([]);
-      }
-    }
+    setAwWorkerModels([]);
+    setAwSessionData({});
     setAwQuickAddOpen(true);
+    setAwQuickAddLoading(true);
+
+    void (async () => {
+      const data: Record<string, Session[]> = {};
+      try { const s = await api<Session[]>(`/servers/${serverName}/sessions`); if (Array.isArray(s)) data[serverName] = s; } catch {}
+      let models: { id: string; label: string }[] = [];
+      if (agent !== 'none') {
+        try {
+          const m = await api<{ id: string; label: string }[]>(`/workers/models/${agent}`);
+          if (Array.isArray(m)) models = m;
+        } catch {}
+      }
+      if (awQuickAddGenRef.current !== gen) return; // 自分より後の呼び出しがある場合は破棄
+      setAwSessionData(data);
+      setAwWorkerModels(models);
+      setAwQuickAddLoading(false);
+    })();
   }, [projectServers, project]);
 
   const getWindowTargets = useCallback((): { value: string; label: string }[] => {
@@ -234,6 +246,13 @@ export function useAddWindowModal(
           onConnect?.(awServer, awTarget, numericProjectId);
         }
       } else {
+        if (awAgent !== 'none') {
+          const plannedAgentCmd = buildAgentCommand(awAgent, awAgentModel, agentPresets[awAgent]?.command || '', awNewCommand);
+          if (!plannedAgentCmd.trim()) {
+            showToast(t('addWindow.agentCommandUnavailable'));
+            return;
+          }
+        }
         const sessionName = awNewSession.trim();
         const beforeSessions = awSessionData[awServer] || [];
         const sessionExists = beforeSessions.some((s) => s.name === sessionName);
@@ -327,6 +346,7 @@ export function useAddWindowModal(
     awResourceWarning,
     awQuickAddOpen,
     awQuickAddAgent,
+    awQuickAddLoading,
 
     // Setters
     setAddWindowOpen,
