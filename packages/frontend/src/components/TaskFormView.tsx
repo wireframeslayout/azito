@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../api/client';
-import { emptyTaskForm, buildTaskPayload } from '../lib/taskForm';
-import type { TaskFormValue } from '../lib/taskForm';
+import { emptyTaskForm, buildTaskPayload, compareExecutionApprovalContext } from '../lib/taskForm';
+import type { TaskFormValue, DisplayedExecutionContext } from '../lib/taskForm';
+import { resolveEnabledPhaseNames } from '../lib/taskPhases';
 import TaskFormFields from './TaskFormFields';
 import IssueImportModal from './IssueImportModal';
 import type { RemoteIssue } from './IssueImportModal';
 import { LoadingState, FormPage } from './ui';
 import { isSupportedProvider } from '../lib/gitProvider';
 import { useToast } from '../hooks/useToast';
+import { useUnitTypes, findUnitType } from '../hooks/useUnitTypes';
+import type { ExecutionApprovalData } from '../pages/workspace/types';
 
 interface Repository {
   id: number;
@@ -28,6 +31,10 @@ interface TaskFormViewProps {
     selfReviewMaxAttempts?: number;
     reviewSubagent?: { enabled: boolean; provider: string; model: string } | null;
     implementSubagent?: { enabled: boolean; provider: string; model: string } | null;
+    // Needed to resolve the Unit's enabled-phase list for the untrusted-import
+    // banner (task/328 follow-up, part A) — see resolveEnabledPhaseNames().
+    unitType: string;
+    phaseConfig?: Record<string, { enabled?: boolean; sidekick?: string }> | null;
   }[];
   repositories: Repository[];
   projectId?: number;
@@ -135,15 +142,78 @@ export default function TaskFormView({ mode, taskId, initial, projects, units, r
   // never values" shape (this endpoint's response never carries a `value`
   // field). Fetched only while the untrusted-import banner is actually
   // shown, not on every form render.
+  //
+  // FAIL CLOSED (third-party review, task/328 follow-up): a failed fetch
+  // used to fall back to an empty array, silently rendering "no secrets"
+  // in the banner as if that were confirmed fact — an approval decision
+  // made on missing information. `secretsState` now distinguishes
+  // 'loading'/'loaded'/'error' so the caller can refuse to pre-approve
+  // (see `canPreApprove` below) until secrets actually load, and the
+  // banner shows the error with a retry action instead of a false "none".
   const [secretNames, setSecretNames] = useState<string[]>([]);
+  const [secretsState, setSecretsState] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
+  const [secretsFetchNonce, setSecretsFetchNonce] = useState(0);
+  const retrySecretFetch = useCallback(() => setSecretsFetchNonce((n) => n + 1), []);
   useEffect(() => {
-    if (!isUntrustedImport || !effectiveProjectId) { setSecretNames([]); return; }
+    if (!isUntrustedImport || !effectiveProjectId) { setSecretNames([]); setSecretsState('idle'); return; }
     let cancelled = false;
+    setSecretsState('loading');
     api<{ name: string }[]>(`/projects/${effectiveProjectId}/secrets`)
-      .then((rows) => { if (!cancelled) setSecretNames(rows.map((r) => r.name).sort()); })
-      .catch(() => { if (!cancelled) setSecretNames([]); });
+      .then((rows) => {
+        if (cancelled) return;
+        setSecretNames(rows.map((r) => r.name).sort());
+        setSecretsState('loaded');
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSecretNames([]);
+        setSecretsState('error');
+      });
     return () => { cancelled = true; };
-  }, [isUntrustedImport, effectiveProjectId]);
+  }, [isUntrustedImport, effectiveProjectId, secretsFetchNonce]);
+
+  // Resolved execution context the banner actually displays (task/328
+  // follow-up, part A) — computed ONCE here and used both to render the
+  // banner and, after creation, as the "what the human saw" side of
+  // compareExecutionApprovalContext(). Best-effort client-side resolution:
+  // no task row exists yet, so project_servers/phaseConfig defaults are
+  // approximated the same way the rest of this form already approximates
+  // them (see the single-server auto-fill effect above) rather than
+  // re-implemented from scratch.
+  const resolvedServerName = form.serverName || (projectServers?.length === 1 ? projectServers[0].serverName : null);
+  const resolvedWorkingDirectory = form.workingDirectory
+    || projectServers?.find((s) => s.serverName === resolvedServerName)?.workingDirectory
+    || null;
+  const { unitTypes } = useUnitTypes();
+  const selectedUnit = units.find((u) => u.id === parseInt(form.unitId, 10))
+    ?? (defaultUnitId != null ? units.find((u) => u.id === defaultUnitId) : undefined);
+  const selectedUnitType = findUnitType(unitTypes, selectedUnit?.unitType);
+  const displayedPhases = selectedUnitType ? resolveEnabledPhaseNames(selectedUnit?.phaseConfig, selectedUnitType.phases) : [];
+  // Same selection the server's manifest resolver uses (`project?.repositories?.[0]`,
+  // see ExecutionManifest.ts) — `repositories` here is already scoped to this
+  // project and in the same order (TabContentRenderer passes `project.repositories`
+  // straight through), so its first entry is the same repository.
+  const displayedRepository = repositories.length > 0
+    ? { owner: repositories[0].owner ?? '', repoName: repositories[0].repoName ?? '' }
+    : null;
+  const buildDisplayedContext = useCallback((): DisplayedExecutionContext => ({
+    title: form.title.trim(),
+    description: form.description.trim(),
+    serverName: resolvedServerName,
+    workingDirectory: resolvedWorkingDirectory,
+    branches: {
+      base: form.baseBranch.trim(),
+      target: form.skipPr ? '' : form.targetBranch.trim(),
+      work: form.skipPr ? form.workingBranch.trim() : '',
+    },
+    phases: displayedPhases,
+    repository: displayedRepository,
+    secretNames,
+  }), [form.title, form.description, resolvedServerName, resolvedWorkingDirectory, form.baseBranch, form.targetBranch, form.skipPr, form.workingBranch, displayedPhases, displayedRepository, secretNames]);
+  // Pre-approval may only be attempted once secrets actually loaded — see
+  // `secretsState`'s doc comment above. While 'error', the create button
+  // falls back to an ordinary (non-approving) task creation.
+  const canPreApprove = isUntrustedImport && secretsState === 'loaded';
 
   const handleChange = useCallback((next: TaskFormValue) => {
     if (next.serverName !== form.serverName) {
@@ -175,26 +245,56 @@ export default function TaskFormView({ mode, taskId, initial, projects, units, r
     setSaving(true);
     try {
       if (mode === 'create') {
+        // Captured BEFORE the POST — the exact content the banner rendered
+        // for THIS submission, independent of any state change that might
+        // happen while the two requests below are in flight.
+        const displayedContext = canPreApprove ? buildDisplayedContext() : null;
         const payload = buildTaskPayload(form, 'create');
         const res = await api<{ id: number }>('/tasks', { method: 'POST', body: JSON.stringify(payload) });
-        // Creation-time pre-approval (task/328 follow-up, part A-2) — ONLY
-        // when the untrusted-import banner above was actually shown for
-        // this submission (isUntrustedImport, computed from the exact same
-        // condition the banner renders under). Task creation has already
-        // succeeded at this point; a failure here must not roll it back or
-        // block onSaved() below — the task still exists and is fully usable
-        // through the normal pending_approval panel on first execute, it
-        // just didn't get the create-form shortcut.
-        if (isUntrustedImport) {
+        // Creation-time pre-approval (task/328 follow-up, part A-2/A-3) —
+        // ONLY when the untrusted-import banner above was actually shown for
+        // this submission AND its secret names loaded successfully
+        // (canPreApprove — see `secretsState`'s doc comment: a failed
+        // secret fetch must fail CLOSED, never silently approve on missing
+        // information). Task creation has already succeeded at this point;
+        // a failure/mismatch here must not roll it back or block onSaved()
+        // below — the task still exists and is fully usable through the
+        // normal pending_approval panel on first execute, it just didn't
+        // get the create-form shortcut.
+        if (displayedContext) {
           try {
-            const approval = await api<{ fingerprint: string }>(`/tasks/${res.id}/execution-approval`);
-            await api(`/tasks/${res.id}/approve-execution`, {
-              method: 'POST',
-              body: JSON.stringify({ approved: true, fingerprint: approval.fingerprint, origin: 'creation_form' }),
-            });
-            showToast(t('form.untrustedImport.preApprovedToast'));
+            const approval = await api<ExecutionApprovalData>(`/tasks/${res.id}/execution-approval`);
+            // The TOCTOU close this whole flow exists for (third-party
+            // review, task/328 follow-up): only pre-approve when the
+            // server's ACTUALLY resolved manifest matches what the banner
+            // displayed, field for field (compareExecutionApprovalContext).
+            // A legitimate "form left blank -> server applied a default"
+            // difference is exactly what this catches too — the human never
+            // saw that resolved value, so it must not be silently approved.
+            const actualContext: DisplayedExecutionContext = {
+              title: approval.title,
+              description: approval.description ?? '',
+              serverName: approval.execution.serverName,
+              workingDirectory: approval.execution.workingDirectory,
+              branches: approval.execution.branches,
+              phases: approval.execution.phases.map((p) => p.phase),
+              repository: approval.execution.repository
+                ? { owner: approval.execution.repository.owner ?? '', repoName: approval.execution.repository.repoName ?? '' }
+                : null,
+              secretNames: approval.secretNames,
+            };
+            const comparison = compareExecutionApprovalContext(displayedContext, actualContext);
+            if (!comparison.matches) {
+              showToast(t('untrustedImport.contentMismatchToast', { fields: comparison.mismatches.join(', ') }));
+            } else {
+              await api(`/tasks/${res.id}/approve-execution`, {
+                method: 'POST',
+                body: JSON.stringify({ approved: true, fingerprint: approval.fingerprint, origin: 'creation_form' }),
+              });
+              showToast(t('untrustedImport.preApprovedToast'));
+            }
           } catch (approvalErr: unknown) {
-            showToast(t('form.untrustedImport.preApprovalFailedToast', { error: (approvalErr as Error).message }));
+            showToast(t('untrustedImport.preApprovalFailedToast', { error: (approvalErr as Error).message }));
           }
         }
         onSaved(res.id, form.title.trim());
@@ -208,7 +308,7 @@ export default function TaskFormView({ mode, taskId, initial, projects, units, r
     } finally {
       setSaving(false);
     }
-  }, [form, mode, taskId, onSaved, projectServers, originalForm, isUntrustedImport, showToast, t]);
+  }, [form, mode, taskId, onSaved, projectServers, originalForm, canPreApprove, buildDisplayedContext, showToast, t]);
 
   const githubRepos = repositories.filter((r) => isSupportedProvider(r.provider));
   const [issueModalOpen, setIssueModalOpen] = useState(false);
@@ -229,7 +329,7 @@ export default function TaskFormView({ mode, taskId, initial, projects, units, r
   return (
     <FormPage
       title={mode === 'create' ? t('form.newTask') : t('form.editTask')}
-      submitLabel={mode === 'create' ? (isUntrustedImport ? t('form.createTaskApproved') : t('form.createTask')) : t('form.saveChanges')}
+      submitLabel={mode === 'create' ? (canPreApprove ? t('form.createTaskApproved') : t('form.createTask')) : t('form.saveChanges')}
       onSubmit={handleSave}
       onCancel={onCancel}
       loading={saving}
@@ -257,15 +357,17 @@ export default function TaskFormView({ mode, taskId, initial, projects, units, r
             <UntrustedImportBanner
               title={form.title}
               description={form.description}
-              unitName={units.find((u) => u.id === parseInt(form.unitId, 10))?.name
-                ?? (defaultUnitId != null ? units.find((u) => u.id === defaultUnitId)?.name : undefined)
-                ?? null}
-              serverName={form.serverName || (projectServers?.length === 1 ? projectServers[0].serverName : null)}
-              workingDirectory={form.workingDirectory || null}
+              unitName={selectedUnit?.name ?? null}
+              serverName={resolvedServerName}
+              workingDirectory={resolvedWorkingDirectory}
               baseBranch={form.baseBranch}
               targetBranch={form.skipPr ? '' : form.targetBranch}
               workBranch={form.skipPr ? form.workingBranch : ''}
+              phases={displayedPhases}
+              repository={displayedRepository}
+              secretsState={secretsState}
               secretNames={secretNames}
+              onRetrySecrets={retrySecretFetch}
             />
           )}
 
@@ -306,7 +408,12 @@ interface UntrustedImportBannerProps {
   baseBranch: string;
   targetBranch: string;
   workBranch: string;
+  /** Ordered enabled-phase-name list — see resolveEnabledPhaseNames() (lib/taskPhases.ts). */
+  phases: string[];
+  repository: { owner: string; repoName: string } | null;
+  secretsState: 'idle' | 'loading' | 'loaded' | 'error';
   secretNames: string[];
+  onRetrySecrets: () => void;
 }
 
 /**
@@ -324,12 +431,12 @@ interface UntrustedImportBannerProps {
  * issue body), and rendering it as markdown/HTML here would let it forge
  * links or layout that impersonates AZITO's own UI.
  */
-function UntrustedImportBanner({ title, description, unitName, serverName, workingDirectory, baseBranch, targetBranch, workBranch, secretNames }: UntrustedImportBannerProps) {
+function UntrustedImportBanner({ title, description, unitName, serverName, workingDirectory, baseBranch, targetBranch, workBranch, phases, repository, secretsState, secretNames, onRetrySecrets }: UntrustedImportBannerProps) {
   const { t } = useTranslation(['tasks', 'common']);
   return (
     <div
       role="region"
-      aria-label={t('form.untrustedImport.bannerTitle')}
+      aria-label={t('untrustedImport.bannerTitle')}
       style={{
         border: '1px solid var(--danger-a35)', borderRadius: 'var(--radius-md)',
         background: 'var(--danger-a08)', padding: '12px 16px', marginBottom: 16,
@@ -338,10 +445,10 @@ function UntrustedImportBanner({ title, description, unitName, serverName, worki
     >
       <div>
         <div style={{ fontSize: 'var(--font-md)', color: 'var(--danger)', fontWeight: 600, marginBottom: 4 }}>
-          {t('form.untrustedImport.bannerTitle')}
+          {t('untrustedImport.bannerTitle')}
         </div>
         <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
-          {t('form.untrustedImport.bannerBody')}
+          {t('untrustedImport.bannerBody')}
         </div>
       </div>
 
@@ -364,7 +471,7 @@ function UntrustedImportBanner({ title, description, unitName, serverName, worki
 
       <div>
         <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 }}>
-          {t('form.untrustedImport.contextLabel')}
+          {t('untrustedImport.contextLabel')}
         </div>
         <div style={{
           border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', background: 'var(--bg)',
@@ -378,19 +485,53 @@ function UntrustedImportBanner({ title, description, unitName, serverName, worki
           <span style={{ color: 'var(--text)', wordBreak: 'break-word' }}>{serverName ?? t('executionApproval.unresolved')}</span>
 
           <span style={{ color: 'var(--text-dim)' }}>{t('executionApproval.fields.workingDirectory')}</span>
-          <span style={{ color: 'var(--text)', wordBreak: 'break-word' }}>{workingDirectory ?? t('executionApproval.unresolved')}</span>
+          <span style={{ color: 'var(--text)', wordBreak: 'break-word' }}>
+            {workingDirectory ?? t('untrustedImport.workingDirectoryDefault')}
+          </span>
 
           <span style={{ color: 'var(--text-dim)' }}>{t('executionApproval.fields.branches')}</span>
           <span style={{ color: 'var(--text)', wordBreak: 'break-word' }}>
             {t('executionApproval.branchesValue', { base: baseBranch || '—', target: targetBranch || '—', work: workBranch || '—' })}
           </span>
 
-          <span style={{ color: 'var(--text-dim)' }}>{t('executionApproval.fields.secrets')}</span>
+          <span style={{ color: 'var(--text-dim)' }}>{t('executionApproval.fields.phases')}</span>
           <span style={{ color: 'var(--text)', wordBreak: 'break-word' }}>
-            {secretNames.length > 0 ? secretNames.join(', ') : t('executionApproval.noSecrets')}
+            {phases.length > 0 ? phases.join(' → ') : t('executionApproval.unresolved')}
           </span>
+
+          <span style={{ color: 'var(--text-dim)' }}>{t('executionApproval.fields.repository')}</span>
+          <span style={{ color: 'var(--text)', wordBreak: 'break-word' }}>
+            {repository ? `${repository.owner}/${repository.repoName}` : t('executionApproval.noRepository')}
+          </span>
+
+          <span style={{ color: 'var(--text-dim)' }}>{t('executionApproval.fields.secrets')}</span>
+          {secretsState === 'error' ? (
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ color: 'var(--danger)', wordBreak: 'break-word' }}>{t('untrustedImport.secretsLoadError')}</span>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={onRetrySecrets}
+                style={{ padding: '2px 8px', fontSize: 'var(--font-xs)' }}
+              >
+                {t('untrustedImport.secretsRetry')}
+              </button>
+            </span>
+          ) : (
+            <span style={{ color: 'var(--text)', wordBreak: 'break-word' }}>
+              {secretsState === 'loading'
+                ? t('executionApproval.loading')
+                : (secretNames.length > 0 ? secretNames.join(', ') : t('executionApproval.noSecrets'))}
+            </span>
+          )}
         </div>
       </div>
+
+      {secretsState === 'error' && (
+        <div style={{ fontSize: 'var(--font-xs)', color: 'var(--danger)' }}>
+          {t('untrustedImport.secretsUnavailableNote')}
+        </div>
+      )}
     </div>
   );
 }

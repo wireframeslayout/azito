@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { emptyTaskForm, buildTaskPayload } from './taskForm';
+import { emptyTaskForm, buildTaskPayload, compareExecutionApprovalContext } from './taskForm';
+import type { DisplayedExecutionContext } from './taskForm';
 
 describe('buildTaskPayload (edit mode)', () => {
   it('omits status when unchanged from the loaded original', () => {
@@ -48,5 +49,94 @@ describe('buildTaskPayload (create mode)', () => {
     const payload = buildTaskPayload(form, 'create');
 
     expect(payload).not.toHaveProperty('status');
+  });
+});
+
+// Third-party review fix (task/328-input-trust-and-exec-gate follow-up):
+// the create-form's pre-approval banner must never approve content the
+// human didn't actually see. compareExecutionApprovalContext is the gate
+// between "banner displayed X" and "server will actually run Y" — only an
+// exact match on every compared field may pre-approve.
+describe('compareExecutionApprovalContext', () => {
+  function makeContext(overrides: Partial<DisplayedExecutionContext> = {}): DisplayedExecutionContext {
+    return {
+      title: 'Fix the bug',
+      description: 'Steps to reproduce...',
+      serverName: 'prod-1',
+      workingDirectory: '/srv/app',
+      branches: { base: 'main', target: 'main', work: 'task/1-fix' },
+      phases: ['planning', 'implementing', 'reviewing'],
+      repository: { owner: 'acme', repoName: 'widgets' },
+      secretNames: ['DEPLOY_KEY', 'NPM_TOKEN'],
+      ...overrides,
+    };
+  }
+
+  it('matches when every compared field is identical', () => {
+    const displayed = makeContext();
+    const actual = makeContext();
+    expect(compareExecutionApprovalContext(displayed, actual)).toEqual({ matches: true });
+  });
+
+  it('matches when secretNames differ only in order (compared as a set)', () => {
+    const displayed = makeContext({ secretNames: ['NPM_TOKEN', 'DEPLOY_KEY'] });
+    const actual = makeContext({ secretNames: ['DEPLOY_KEY', 'NPM_TOKEN'] });
+    expect(compareExecutionApprovalContext(displayed, actual)).toEqual({ matches: true });
+  });
+
+  it('reports a mismatch when the resolved server differs from the displayed one', () => {
+    const displayed = makeContext({ serverName: 'prod-1' });
+    const actual = makeContext({ serverName: 'prod-2' });
+    const result = compareExecutionApprovalContext(displayed, actual);
+    expect(result.matches).toBe(false);
+    expect((result as { mismatches: string[] }).mismatches).toContain('serverName');
+  });
+
+  it('reports a mismatch when the resolved working directory differs (server-side default applied)', () => {
+    const displayed = makeContext({ workingDirectory: null });
+    const actual = makeContext({ workingDirectory: '/srv/app-default' });
+    const result = compareExecutionApprovalContext(displayed, actual);
+    expect(result.matches).toBe(false);
+    expect((result as { mismatches: string[] }).mismatches).toContain('workingDirectory');
+  });
+
+  it('reports a mismatch when the enabled phase list differs', () => {
+    const displayed = makeContext({ phases: ['planning', 'implementing', 'reviewing'] });
+    const actual = makeContext({ phases: ['planning', 'implementing'] });
+    const result = compareExecutionApprovalContext(displayed, actual);
+    expect(result.matches).toBe(false);
+    expect((result as { mismatches: string[] }).mismatches).toContain('phases');
+  });
+
+  it('reports a mismatch when the PR destination repository differs', () => {
+    const displayed = makeContext({ repository: { owner: 'acme', repoName: 'widgets' } });
+    const actual = makeContext({ repository: { owner: 'acme', repoName: 'other-repo' } });
+    const result = compareExecutionApprovalContext(displayed, actual);
+    expect(result.matches).toBe(false);
+    expect((result as { mismatches: string[] }).mismatches).toContain('repository');
+  });
+
+  it('reports a mismatch when the secret name set differs', () => {
+    const displayed = makeContext({ secretNames: ['DEPLOY_KEY'] });
+    const actual = makeContext({ secretNames: ['DEPLOY_KEY', 'NPM_TOKEN'] });
+    const result = compareExecutionApprovalContext(displayed, actual);
+    expect(result.matches).toBe(false);
+    expect((result as { mismatches: string[] }).mismatches).toContain('secretNames');
+  });
+
+  it('reports a mismatch when branches differ', () => {
+    const displayed = makeContext({ branches: { base: 'main', target: 'main', work: 'task/1' } });
+    const actual = makeContext({ branches: { base: 'develop', target: 'main', work: 'task/1' } });
+    const result = compareExecutionApprovalContext(displayed, actual);
+    expect(result.matches).toBe(false);
+    expect((result as { mismatches: string[] }).mismatches).toContain('baseBranch');
+  });
+
+  it('reports all mismatches at once, not just the first', () => {
+    const displayed = makeContext();
+    const actual = makeContext({ serverName: 'other', workingDirectory: '/other' });
+    const result = compareExecutionApprovalContext(displayed, actual);
+    expect(result.matches).toBe(false);
+    expect((result as { mismatches: string[] }).mismatches).toEqual(expect.arrayContaining(['serverName', 'workingDirectory']));
   });
 });

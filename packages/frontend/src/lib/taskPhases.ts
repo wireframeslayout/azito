@@ -27,3 +27,21 @@ export function summarizePhaseConfig(
 export function getPhaseLabel(phases: Array<{ name: string; label: string }>, phaseName: string): string {
   return phases.find((p) => p.name === phaseName)?.label ?? phaseName;
 }
+
+/**
+ * Ordered list of phase names actually enabled for a Unit — a client-side
+ * port of the server's `resolveEnabledPhases()`
+ * (modules/sidekicks/resolvePhaseSidekick.ts): `phaseConfig[phase].enabled
+ * !== false` (undefined/omitted = enabled), in UnitType phase order. Used
+ * by the untrusted-import creation banner (TaskFormView) to show the SAME
+ * phase list the server will actually resolve into the execution manifest,
+ * so the post-creation comparison against GET
+ * /api/tasks/:id/execution-approval's `execution.phases` has something
+ * meaningful to compare against.
+ */
+export function resolveEnabledPhaseNames(
+  phaseConfig: Record<string, PhaseConfigEntryLike> | null | undefined,
+  phases: Array<{ name: string }>,
+): string[] {
+  return phases.map((p) => p.name).filter((name) => phaseConfig?.[name]?.enabled !== false);
+}
