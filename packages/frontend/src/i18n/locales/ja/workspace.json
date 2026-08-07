@@ -210,7 +210,8 @@
     "openInTab": "タブで開く",
     "copyUrl": "URL をコピー",
     "urlCopied": "URL をコピーしました",
-    "closeGroupAction": "グループを閉じる"
+    "closeGroupAction": "グループを閉じる",
+    "closeGroupFailed": "グループを閉じられませんでした"
   },
   "viewLabels": {
     "description": "説明",

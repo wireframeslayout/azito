@@ -16,6 +16,7 @@ import { useToast } from '../../hooks/useToast';
 import type { ContextMenuItem } from '../ContextMenu';
 import ObjectSection from './objects/ObjectSection';
 import BrowserSection from './objects/BrowserSection';
+import { RUNNING_STATUSES } from '../task/StatusDropdown';
 
 const COLLAPSE_STORAGE_KEY = 'workspace-objects-collapsed';
 
@@ -358,7 +359,7 @@ export default function ObjectsSidebar({
     if (extra?.online) {
       items.push({ label: t('windows.capturePanes'), icon: <Icon name="camera" size={16} />, onClick: () => onCapturePanes(w.id) });
     }
-    if (task?.status === 'in_progress' && task.unitId != null) {
+    if (task && RUNNING_STATUSES.has(task.status) && task.unitId != null) {
       items.push({ label: '', separator: true, onClick: () => {} });
       items.push({
         label: t('objects.stopOperation'), icon: <Icon name="stop" size={16} />, danger: true,
@@ -387,8 +388,10 @@ export default function ObjectsSidebar({
     try {
       await api('/browser/close-group', { method: 'POST', body: JSON.stringify({ server: b.serverName, group: b.groupId }) });
       refreshBrowserGroups();
-    } catch { /* best-effort */ }
-  }, [tabs, closeTab, refreshBrowserGroups]);
+    } catch {
+      showToast(t('objects.closeGroupFailed'));
+    }
+  }, [tabs, closeTab, refreshBrowserGroups, showToast, t]);
 
   const getBrowserMenuItems = useCallback((b: BrowserObject): ContextMenuItem[] => [
     { label: t('objects.openInTab'), icon: <Icon name="browser" size={16} />, onClick: () => handleOpenBrowser(b.serverName, b.groupId) },
@@ -597,7 +600,9 @@ function ObjectsLoadingSkeleton() {
   return (
     <div>
       {SKEL_WIDTHS.map((width, i) => (
-        <div key={i} className="objects-skel" style={{ height: 10, borderRadius: 5, background: 'var(--bg-hover)', margin: '12px 12px', width }} />
+        <div key={i} style={{ padding: '0 12px', margin: '12px 0' }}>
+          <div className="objects-skel" style={{ height: 10, borderRadius: 5, background: 'var(--bg-hover)', width }} />
+        </div>
       ))}
     </div>
   );

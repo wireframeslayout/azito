@@ -210,7 +210,8 @@
     "openInTab": "Open in tab",
     "copyUrl": "Copy URL",
     "urlCopied": "URL copied",
-    "closeGroupAction": "Close group"
+    "closeGroupAction": "Close group",
+    "closeGroupFailed": "Failed to close the group"
   },
   "viewLabels": {
     "description": "Description",

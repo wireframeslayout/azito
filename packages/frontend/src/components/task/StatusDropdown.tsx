@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-const RUNNING_STATUSES = new Set([
+// タスクが「実行中」（何らかの形で走っている/一時停止中で継続の見込みがある）とみなす status 集合。
+// フェーズ実行中の主状態は 'running'、follow-up 中断時は 'in_progress'、計画承認待ち/質問回答待ちは
+// 'phase_review'/'waiting_input'。他の実行中判定（例: オペレーション停止メニューの表示条件）でも
+// この集合を再利用する。
+export const RUNNING_STATUSES = new Set([
   'running', 'in_progress', 'phase_review', 'waiting_input',
 ]);
 

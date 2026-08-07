@@ -139,7 +139,7 @@ function TaskIdBadge({ taskId }: { taskId: number }) {
   );
 }
 
-function OfflineRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra, isRespawning, renderTaskBadge }: {
+function OfflineRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra, isRespawning, renderTaskBadge, renderSubtitle }: {
   w: WindowItem;
   active?: boolean;
   // Present so an offline/unmatched window is still selectable — see WindowRow's call
@@ -152,10 +152,12 @@ function OfflineRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra,
   extra?: React.ReactNode;
   isRespawning?: boolean;
   renderTaskBadge?: (w: WindowItem, taskId: number) => React.ReactNode;
+  renderSubtitle?: (w: WindowItem) => React.ReactNode | null | undefined;
 }) {
   const { t } = useTranslation('common');
   const bindLongPress = useLongPress();
   const clickable = !!onPaneClick;
+  const subtitle = renderSubtitle?.(w);
   return (
     <div
       onClick={onPaneClick ? () => onPaneClick(w.serverName, w.tmuxTarget) : undefined}
@@ -179,6 +181,14 @@ function OfflineRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra,
           </span>
           {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
         </div>
+        {subtitle != null && (
+          <div style={{
+            fontSize: 'var(--font-xs)', color: 'var(--text-dim)', overflow: 'hidden',
+            textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1,
+          }}>
+            {subtitle}
+          </div>
+        )}
         <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginTop: 1, display: 'flex', alignItems: 'center', gap: 5 }}>
           {isRespawning && <Spinner />}
           {isRespawning ? t('windowPaneTree.respawning') : t('windowPaneTree.offline')}
@@ -202,7 +212,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
   const offlineActive = isActive?.(w.serverName, w.tmuxTarget, 'window') ?? false;
 
   if (!session) {
-    return <OfflineRow w={w} active={offlineActive} onPaneClick={onPaneClick} onContextMenu={onContextMenu} onLongPress={onLongPress} extra={extra} isRespawning={isRespawning} renderTaskBadge={renderTaskBadge} />;
+    return <OfflineRow w={w} active={offlineActive} onPaneClick={onPaneClick} onContextMenu={onContextMenu} onLongPress={onLongPress} extra={extra} isRespawning={isRespawning} renderTaskBadge={renderTaskBadge} renderSubtitle={renderSubtitle} />;
   }
 
   let matchedWindows = winPart != null
@@ -221,7 +231,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
   }
 
   if (matchedWindows.length === 0) {
-    return <OfflineRow w={w} active={offlineActive} onPaneClick={onPaneClick} onContextMenu={onContextMenu} onLongPress={onLongPress} extra={extra} isRespawning={isRespawning} renderTaskBadge={renderTaskBadge} />;
+    return <OfflineRow w={w} active={offlineActive} onPaneClick={onPaneClick} onContextMenu={onContextMenu} onLongPress={onLongPress} extra={extra} isRespawning={isRespawning} renderTaskBadge={renderTaskBadge} renderSubtitle={renderSubtitle} />;
   }
 
   return (
