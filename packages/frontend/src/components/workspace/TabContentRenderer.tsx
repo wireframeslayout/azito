@@ -61,6 +61,8 @@ interface TabContentRendererProps {
   openIssue?: (repoId: number, owner: string, repo: string, issueNumber: number, title: string) => void;
   openProjectTasks?: (projectId: number, projectName: string) => void;
   updateBrowserActiveTab?: (tabId: string, chromiumTabId: string) => void;
+  openFile?: (serverName: string, filePath: string) => void;
+  setTabDirty?: (tabId: string, dirty: boolean) => void;
 }
 
 export default function TabContentRenderer({
@@ -96,6 +98,8 @@ export default function TabContentRenderer({
   openIssue,
   openProjectTasks,
   updateBrowserActiveTab,
+  openFile,
+  setTabDirty,
 }: TabContentRendererProps) {
   const { t } = useTranslation(['tasks', 'workspace', 'units']);
   const navigate = useNavigate();
@@ -153,7 +157,11 @@ export default function TabContentRenderer({
         />
       )}
       {tab.type === 'file' && tab.serverName && tab.filePath && (
-        <FilePreviewPanel serverName={tab.serverName} filePath={tab.filePath} />
+        <FilePreviewPanel
+          serverName={tab.serverName}
+          filePath={tab.filePath}
+          onDirtyChange={setTabDirty ? (dirty) => setTabDirty(tab.id, dirty) : undefined}
+        />
       )}
       {tab.type === 'storage-file' && tab.storageFileData && (
         <StorageFilePreview
@@ -187,6 +195,7 @@ export default function TabContentRenderer({
           stopTask={(unitId) => stopTask(unitId)}
           onRefresh={refreshWorkspace}
           projectServers={projectServers}
+          onOpenFile={openFile}
           onBack={() => {
             const proj = tab.projectId ? allProjects.find((p) => p.id === tab.projectId) : null;
             if (proj && openProjectTasks) {
@@ -318,6 +327,10 @@ export default function TabContentRenderer({
           serverName={tab.diffData.serverName}
           path={tab.diffData.path}
           baseBranch={tab.diffData.baseBranch}
+          onOpenFile={openFile ? (relPath) => {
+            const base = tab.diffData!.path.endsWith('/') ? tab.diffData!.path : tab.diffData!.path + '/';
+            openFile(tab.diffData!.serverName, base + relPath);
+          } : undefined}
         />
       )}
       {tab.type === 'browser' && tab.browserData && (

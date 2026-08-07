@@ -35,6 +35,9 @@ export const BINARY_EXTS = new Set([
 
 export const MAX_FILE_SIZE = 500 * 1024; // 500 KB
 export const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5 MB
+// リモート書き込みの base64 チャンク長。コマンド全体が Linux の
+// MAX_ARG_STRLEN(131072) を確実に下回るよう余裕を持たせる
+export const WRITE_CHUNK_SIZE = 48 * 1024;
 export const MAX_DOWNLOAD_SIZE = 50 * 1024 * 1024; // 50 MB
 
 export const MIME_TYPES: Record<string, string> = {
@@ -77,7 +80,7 @@ export type FileEntry = {
 export type FileContentResult =
   | { type: 'image'; mimeType: string; base64: string; path: string; size: number }
   | { type: 'pdf'; mimeType: 'application/pdf'; base64: string; path: string; size: number }
-  | { content: string; path: string; size: number; language: string };
+  | { content: string; path: string; size: number; language: string; mtime: number };
 
 export interface FileDownloadResult {
   buffer: Buffer;
@@ -280,7 +283,7 @@ export class FileBrowseService {
       if (content.includes('\0')) {
         throw new FileBrowseError('Binary file cannot be displayed', 400);
       }
-      return { content, path: filePath, size: stat.size, language };
+      return { content, path: filePath, size: stat.size, language, mtime: stat.mtimeMs };
     } else {
       // Remote: reject non-regular files, then check size, then cat
       const typeCheck = await this.tmux.execCommand(srv, `test -f ${sq(filePath)} && echo ok || echo ng`);
@@ -295,7 +298,77 @@ export class FileBrowseService {
       if (content.includes('\0')) {
         throw new FileBrowseError('Binary file cannot be displayed', 400);
       }
-      return { content, path: filePath, size, language };
+      const mtimeResult = await this.tmux.execCommand(
+        srv,
+        `stat -c%Y "${filePath}" 2>/dev/null || stat -f%m "${filePath}" 2>/dev/null`,
+      );
+      const mtime = parseInt(stripTerminalArtifacts(mtimeResult.stdout).trim(), 10) * 1000;
+      return { content, path: filePath, size, language, mtime: isNaN(mtime) ? 0 : mtime };
+    }
+  }
+
+  async writeFileContent(
+    srv: ServerConfig,
+    filePath: string,
+    content: string,
+    baseMtime?: number,
+  ): Promise<{ mtime: number }> {
+    if (Buffer.byteLength(content, 'utf-8') > MAX_FILE_SIZE) {
+      throw new FileBrowseError(`Content too large. Maximum is 500KB.`, 400);
+    }
+
+    if (srv.type === 'local') {
+      const fs = await import('fs');
+      if (baseMtime != null) {
+        const stat = fs.statSync(filePath);
+        if (Math.abs(stat.mtimeMs - baseMtime) > 1000) {
+          throw new FileBrowseError(
+            JSON.stringify({ conflict: true, currentMtime: stat.mtimeMs }),
+            409,
+          );
+        }
+      }
+      fs.writeFileSync(filePath, content, 'utf-8');
+      const newStat = fs.statSync(filePath);
+      return { mtime: newStat.mtimeMs };
+    } else {
+      const safePath = filePath.replace(/'/g, "'\\''");
+      if (baseMtime != null) {
+        const mtimeResult = await this.tmux.execCommand(
+          srv,
+          `stat -c%Y '${safePath}' 2>/dev/null || stat -f%m '${safePath}' 2>/dev/null`,
+        );
+        const currentMtime = parseInt(stripTerminalArtifacts(mtimeResult.stdout).trim(), 10) * 1000;
+        if (!isNaN(currentMtime) && Math.abs(currentMtime - baseMtime) > 1000) {
+          throw new FileBrowseError(
+            JSON.stringify({ conflict: true, currentMtime }),
+            409,
+          );
+        }
+      }
+      // agent/ssh の exec は base64 全文を1コマンド引数に載せると Linux の
+      // MAX_ARG_STRLEN(≒128KB) を超えて spawn E2BIG になるため、チャンク分割で
+      // 一時ファイルに追記してからデコードする
+      const b64 = Buffer.from(content, 'utf-8').toString('base64');
+      const tmpPath = `${safePath}.azito-write-tmp`;
+      await this.tmux.execCommand(srv, `: > '${tmpPath}'`);
+      for (let i = 0; i < b64.length; i += WRITE_CHUNK_SIZE) {
+        const chunk = b64.slice(i, i + WRITE_CHUNK_SIZE);
+        await this.tmux.execCommand(srv, `printf '%s' '${chunk}' >> '${tmpPath}'`);
+      }
+      await this.tmux.execCommand(
+        srv,
+        `base64 -d < '${tmpPath}' > '${safePath}'; S=$?; rm -f '${tmpPath}'; exit $S`,
+      );
+      const verifyResult = await this.tmux.execCommand(
+        srv,
+        `stat -c%Y '${safePath}' 2>/dev/null || stat -f%m '${safePath}' 2>/dev/null`,
+      );
+      const newMtime = parseInt(stripTerminalArtifacts(verifyResult.stdout).trim(), 10) * 1000;
+      if (isNaN(newMtime)) {
+        throw new FileBrowseError('Failed to verify file write', 500);
+      }
+      return { mtime: newMtime };
     }
   }
 

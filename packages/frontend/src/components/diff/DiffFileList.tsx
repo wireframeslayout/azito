@@ -7,9 +7,10 @@ interface DiffFileListProps {
   files: FileDiff[];
   activeFile: string | null;
   onFileClick: (file: string) => void;
+  onOpenFile?: (relPath: string) => void;
 }
 
-export default function DiffFileList({ files, activeFile, onFileClick }: DiffFileListProps) {
+export default function DiffFileList({ files, activeFile, onFileClick, onOpenFile }: DiffFileListProps) {
   const { t } = useTranslation('git');
   const totalAdditions = files.reduce((s, f) => s + f.additions, 0);
   const totalDeletions = files.reduce((s, f) => s + f.deletions, 0);
@@ -99,6 +100,36 @@ export default function DiffFileList({ files, activeFile, onFileClick }: DiffFil
                   <span style={{ color: 'var(--danger)' }}>-{f.deletions}</span>
                 )}
               </span>
+              {onOpenFile && (
+                <span
+                  role="button"
+                  tabIndex={f.status === 'D' ? -1 : 0}
+                  aria-label={f.status === 'D' ? 'Deleted file cannot be opened' : `Open ${name} in editor`}
+                  title={f.status === 'D' ? 'Deleted file cannot be opened' : 'Open in editor'}
+                  className="diff-open-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (f.status !== 'D') onOpenFile(f.file);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && f.status !== 'D') {
+                      e.stopPropagation();
+                      onOpenFile(f.file);
+                    }
+                  }}
+                  style={{
+                    fontSize: 12,
+                    flexShrink: 0,
+                    opacity: 0,
+                    transition: 'opacity 0.15s',
+                    cursor: f.status === 'D' ? 'not-allowed' : 'pointer',
+                    color: f.status === 'D' ? 'var(--text-dim)' : 'var(--accent)',
+                    padding: '0 2px',
+                  }}
+                >
+                  ✎
+                </span>
+              )}
             </button>
           );
         })}

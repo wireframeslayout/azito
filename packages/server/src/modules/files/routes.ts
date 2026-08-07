@@ -255,6 +255,45 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
     },
   );
 
+  // ── PUT /api/servers/:name/files/content ──
+  fastify.put<{ Params: { name: string } }>(
+    '/api/servers/:name/files/content',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const body = request.body as Record<string, unknown>;
+      const filePath = typeof body.path === 'string' ? body.path.trim() : '';
+      if (!filePath) return reply.status(400).send({ error: 'path is required' });
+      if (typeof body.content !== 'string') return reply.status(400).send({ error: 'content is required' });
+      const content = body.content;
+      const baseMtime = typeof body.baseMtime === 'number' ? body.baseMtime : undefined;
+      const force = body.force === true;
+
+      try {
+        const result = await fileBrowseService.writeFileContent(
+          srv,
+          filePath,
+          content,
+          force ? undefined : baseMtime,
+        );
+        return { ok: true, mtime: result.mtime };
+      } catch (err: unknown) {
+        if (err instanceof FileBrowseError) {
+          if (err.status === 409) {
+            try {
+              const parsed = JSON.parse(err.message);
+              return reply.status(409).send({ error: 'conflict', currentMtime: parsed.currentMtime });
+            } catch {
+              return reply.status(409).send({ error: 'conflict' });
+            }
+          }
+          return reply.status(err.status).send({ error: err.message });
+        }
+        return reply.status(500).send({ error: (err as Error).message });
+      }
+    },
+  );
+
   done();
 };
 

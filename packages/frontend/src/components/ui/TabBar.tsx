@@ -21,6 +21,7 @@ export interface TabItem {
   projectColor?: string;
   pinned?: boolean;
   className?: string;
+  dirty?: boolean;
 }
 
 export interface TabBarProps {
@@ -176,6 +177,7 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onReorder, draggable
       >
         <span onClick={() => onSelect(tab.id)} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {tab.pinned && <span style={{ display: 'inline-flex', opacity: 0.6, marginRight: 2, verticalAlign: '-1px' }}><Icon name="pin" size={14} /></span>}
+          {tab.dirty && <span style={{ color: 'var(--text-dim)', marginRight: 2 }}>●</span>}
           {tab.icon != null && <>{tab.icon} </>}{tab.label}
         </span>
         {tab.extra}
@@ -215,6 +217,7 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onReorder, draggable
                   style={{ padding: '8px 12px', fontSize: 'var(--font-sm)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, background: tab.id === activeId ? 'var(--accent-a15)' : tab.projectColor ? hexToRgba(tab.projectColor, 0.08) : 'transparent', color: tab.id === activeId ? 'var(--accent)' : 'var(--text)' }}>
                   <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {tab.pinned && <span style={{ display: 'inline-flex', opacity: 0.6, marginRight: 4, verticalAlign: '-1px' }}><Icon name="pin" size={14} /></span>}
+                    {tab.dirty && <span style={{ color: 'var(--text-dim)', marginRight: 2 }}>●</span>}
                     {tab.icon != null && <>{tab.icon} </>}{tab.label}
                   </span>
                   {tab.closable !== false && onClose && (
