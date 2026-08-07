@@ -14,6 +14,7 @@ import { resolvePhaseSidekick } from '../sidekicks/resolvePhaseSidekick';
 import { ResourceExhaustedError } from '../servers/resources/ResourceGuard';
 import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
 import { resolveTaskServerName } from '../tasks/execution/TaskExecutionEnv';
+import { failAsyncTaskOperation } from '../tasks/execution/AppendLog';
 
 // ─── Types ───
 
@@ -356,11 +357,15 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
       const server = resolvedServerName ? serverRepo.findByName(resolvedServerName) : null;
       if (!server) return reply.status(404).send({ error: 'Server not found' });
 
+      // Delegates to failAsyncTaskOperation() (tasks/execution/AppendLog.ts)
+      // — the same shared helper approve-execution's failApprovedOperation
+      // and POST /api/tasks/:id/answer's follow-up catch use, so this
+      // failure ALSO emits on the shared events EventEmitter (not just
+      // logRepo.append()), and therefore reaches other connected clients as
+      // a `task:status` WS event / push notification instead of leaving
+      // them stuck showing `phase_review` forever.
       const failResumedOperation = (op: string, err: unknown): void => {
-        const message = err instanceof Error ? err.message : String(err);
-        request.log.error({ err, taskId, operation: op }, `approve-plan ${op} failed`);
-        logRepo.append(taskId, id, 'command', { type: 'approved_operation_failed', operation: op, message });
-        taskRepo.update(taskId, { status: 'failed' as TaskStatus } as Partial<import('../tasks/Task').Task>);
+        failAsyncTaskOperation({ taskRepo, logRepo, events: executeTaskUseCase.events, log: request.log }, taskId, id, op, err, `approve-plan ${op} failed`);
       };
 
       if (!approved) {

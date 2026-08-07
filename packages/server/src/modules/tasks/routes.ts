@@ -1,6 +1,6 @@
 import type { FastifyPluginCallback } from 'fastify';
 import type { ITaskRepository, Task } from './Task';
-import { deriveInputTrust } from './Task';
+import { deriveInputTrust, validateTaskSourceFields } from './Task';
 import type { TaskStatus } from './TaskStatus';
 import type { IProjectRepository } from '../projects/Project';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
@@ -19,6 +19,7 @@ import { SAFE_PATH_PATTERN, SAFE_BRANCH_PATTERN } from '../git/assertSafeGitArgs
 import { resolveTaskServerName, resolveTmuxSession, resolveUnitId } from './execution/TaskExecutionEnv';
 import { replyToExecutionGateError } from './execution/ExecutionGate';
 import { hashExecutionManifest } from './execution/ExecutionManifest';
+import { failAsyncTaskOperation } from './execution/AppendLog';
 import { decideExecutionApproval, decideExecutionPreApproval, denyPendingApproval, resolvePendingApprovalManifest, type ApprovalOrigin } from './execution/ExecutionApprovalDecision';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
@@ -145,6 +146,12 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       return reply.status(400).send({ error: 'project_id, title required' });
     if (!projectRepo.findById(project_id as number))
       return reply.status(404).send({ error: 'Project not found' });
+    // Validates source/source_ref BEFORE deriveInputTrust() reads them below
+    // (third-party review, task/328 follow-up) — see validateTaskSourceFields'
+    // doc comment for why an unvalidated `source` can silently defeat the
+    // untrusted-origin execution gate.
+    const sourceFields = validateTaskSourceFields(source, source_ref);
+    if ('error' in sourceFields) return reply.status(400).send({ error: sourceFields.error });
     try {
       const reviewSubagent = parseSubagentConfigInput(review_subagent, 'review_subagent');
       const implementSubagent = parseSubagentConfigInput(implement_subagent, 'implement_subagent');
@@ -157,7 +164,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       // 'trusted' silently bypassed the execution gate for every task
       // created that way. A caller-supplied `source` therefore now decides
       // trust, not the endpoint used to reach this route.
-      const resolvedSource = (source as Task['source']) ?? 'local';
+      const resolvedSource = sourceFields.source ?? 'local';
       const id = taskRepo.create({
         projectId: project_id as number,
         unitId: (unit_id as number) ?? null,
@@ -172,7 +179,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         selfReviewMaxAttempts: self_review_max_attempts != null ? (self_review_max_attempts as number) : null,
         requirePlanApproval: require_plan_approval !== false,
         source: resolvedSource,
-        sourceRef: (source_ref as string) ?? null,
+        sourceRef: sourceFields.sourceRef ?? null,
         worktreePath: null,
         worktreeBranch: null,
         baseBranch: (base_branch as string) ?? null,
@@ -483,6 +490,10 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
           error: `Task ${id} is pending_approval; its status cannot be changed via PUT. Approve or deny via POST /api/tasks/${id}/approve-execution (denial clears the pending approval).`,
         });
       }
+      // Same validation as POST /api/tasks (third-party review, task/328
+      // follow-up) — see validateTaskSourceFields' doc comment.
+      const sourceFields = validateTaskSourceFields(source, source_ref);
+      if ('error' in sourceFields) return reply.status(400).send({ error: sourceFields.error });
       try {
         const reviewSubagent = review_subagent !== undefined
           ? parseSubagentConfigInput(review_subagent, 'review_subagent')
@@ -498,7 +509,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         // task already 'untrusted' stays 'untrusted' even if `source` is
         // edited back to 'local' — otherwise that edit would be exactly the
         // bypass this gate exists to prevent.
-        const effectiveSource = source !== undefined ? (source as Task['source']) : existing.source;
+        const effectiveSource = sourceFields.source !== undefined ? sourceFields.source : existing.source;
         const nextInputTrust: Task['inputTrust'] =
           existing.inputTrust === 'untrusted' ? 'untrusted' : deriveInputTrust(effectiveSource);
         taskRepo.update(id, {
@@ -524,8 +535,8 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
           branch: branch !== undefined ? (branch as string) : undefined,
           changedFiles: changed_files !== undefined ? (changed_files as string) : undefined,
           prUrl: pr_url !== undefined ? (pr_url as string) : undefined,
-          source: source !== undefined ? (source as 'local' | 'github' | 'gitlab') : undefined,
-          sourceRef: source_ref !== undefined ? (source_ref as string) : undefined,
+          source: sourceFields.source,
+          sourceRef: sourceFields.sourceRef,
           inputTrust: nextInputTrust !== existing.inputTrust ? nextInputTrust : undefined,
           reviewSubagent,
           implementSubagent,
@@ -700,11 +711,15 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       // resolution), not a gate block, and must not be swallowed silently: same
       // failure-handling convention as approve-execution's failApprovedOperation
       // (ExecutionApprovalDecision.ts) for every other fire-and-forget resume call.
+      // failAsyncTaskOperation() (AppendLog.ts) — same shared helper
+      // ExecutionApprovalDecision.ts's failApprovedOperation and
+      // approve-plan's failResumedOperation use, so this failure ALSO emits
+      // on the shared events EventEmitter (not just logRepo.append()), and
+      // therefore reaches other connected clients as a `task:status` WS
+      // event / push notification instead of leaving them stuck showing
+      // `waiting_input` forever.
       executeTaskUseCase.followUp(answerUnitId, id, followUpComment).catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
-        request.log.error({ err, taskId: id }, 'answer follow-up failed');
-        logRepo.append(id, answerUnitId, 'command', { type: 'answer_followup_failed', message });
-        taskRepo.update(id, { status: 'failed' as TaskStatus } as Partial<import('./Task').Task>);
+        failAsyncTaskOperation({ taskRepo, logRepo, events: executeTaskUseCase.events, log: request.log }, id, answerUnitId, 'answer_followup', err, 'answer follow-up failed');
       });
 
       return { ok: true };

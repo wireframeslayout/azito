@@ -1,5 +1,6 @@
 import type { EventEmitter } from 'events';
 import type { IExecutionLogRepository, LogType } from '../ExecutionLog';
+import type { ITaskRepository } from '../Task';
 
 /**
  * Writes an execution-log entry AND emits it on the shared task-events
@@ -38,4 +39,50 @@ export function appendLogAndEmit(
 ): void {
   logRepo.append(taskId, unitId, type, content);
   events.emit('log', { taskId, unitId, type, content, createdAt: new Date().toISOString() });
+}
+
+/**
+ * Minimal logger shape this module needs — just `error()`, matching both
+ * Fastify's `request.log` and the `ApprovalLogger` used elsewhere in this
+ * package, so callers don't have to depend on either type directly.
+ */
+export interface FailureLogger {
+  error(obj: unknown, msg?: string): void;
+}
+
+/**
+ * Shared failure handler for a fire-and-forget async resume/execute call
+ * (`.catch(...)` on `followUp()`/`resumeStateMachine()`/`execute()`) that
+ * has ALREADY returned `{ ok: true }` (or similar) to the HTTP caller by the
+ * time it rejects. Three call sites — `decideExecutionApproval`'s
+ * `failApprovedOperation`, `POST /api/tasks/:id/answer`'s follow-up catch,
+ * and `POST /api/units/:id/approve-plan`'s `failResumedOperation` — used to
+ * each hand-write this same "log the error, mark the task failed" sequence,
+ * and two of the three (answer / approve-plan) wrote the DB transition with
+ * a raw `logRepo.append()`/`taskRepo.update()` only, never emitting on the
+ * shared `events` EventEmitter — see `appendLogAndEmit`'s doc comment for
+ * why that matters: without the emit, no WS `task:status` event and no push
+ * notification reach the client, so it sits at `waiting_input`/`phase_review`
+ * forever with no visible sign the task actually failed.
+ *
+ * Always transitions to `'failed'` — every existing call site already did,
+ * and this is specifically the "an approved/resumed operation blew up after
+ * the fact" case, not a general-purpose failure path.
+ */
+export function failAsyncTaskOperation(
+  deps: { taskRepo: Pick<ITaskRepository, 'update'>; logRepo: IExecutionLogRepository; events: EventEmitter; log: FailureLogger },
+  taskId: number,
+  unitId: number | null,
+  operation: string,
+  err: unknown,
+  logMessage: string,
+): void {
+  const { taskRepo, logRepo, events, log } = deps;
+  const message = err instanceof Error ? err.message : String(err);
+  log.error({ err, taskId, operation }, logMessage);
+  taskRepo.update(taskId, { status: 'failed' });
+  if (unitId !== null) {
+    appendLogAndEmit(logRepo, events, taskId, unitId, 'command', { type: 'approved_operation_failed', operation, message });
+    appendLogAndEmit(logRepo, events, taskId, unitId, 'status_change', { status: 'failed', operation, message });
+  }
 }

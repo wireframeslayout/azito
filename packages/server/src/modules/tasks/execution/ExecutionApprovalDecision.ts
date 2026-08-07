@@ -15,7 +15,7 @@ import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import type { TaskRestoreService } from '../TaskRestoreService';
 import { resolveExecutionManifest, hashExecutionManifest, type ExecutionManifestResolution } from './ExecutionManifest';
 import { resolveTaskServerName } from './TaskExecutionEnv';
-import { appendLogAndEmit } from './AppendLog';
+import { appendLogAndEmit, failAsyncTaskOperation } from './AppendLog';
 
 /**
  * Dependencies needed to resolve the manifest for a `pending_approval` task
@@ -423,19 +423,13 @@ export function decideExecutionApproval(
     if (current) appendLogIfUnitKnown('status_change', { status: current.status, operation: op });
   };
 
+  // Delegates to the shared failAsyncTaskOperation() (AppendLog.ts) — the
+  // same "mark the task failed, log + emit both a 'command' and a
+  // 'status_change' entry" sequence POST /api/tasks/:id/answer's follow-up
+  // catch and POST /api/units/:id/approve-plan's failResumedOperation also
+  // need, now written once instead of three times (Issue #328 review round).
   const failApprovedOperation = (op: string, err: unknown): void => {
-    const message = err instanceof Error ? err.message : String(err);
-    log.error({ err, taskId, operation: op }, `approved ${op} failed`);
-    appendLogIfUnitKnown('command', { type: 'approved_operation_failed', operation: op, message });
-    taskRepo.update(taskId, { status: 'failed' as TaskStatus } as Partial<Task>);
-    // 'status_change' entry for the actual transition applied above (Issue
-    // #328 review round) — without this, an approved dispatch that later
-    // fails asynchronously (e.g. resumeStateMachine()/execute() rejecting
-    // after this function has already returned 200 to the approval request)
-    // left the task at 'failed' with only a 'command' log entry: no
-    // `task:status` WS event, so every OTHER connected client kept showing
-    // the task as running/pending until its next manual refresh.
-    appendLogIfUnitKnown('status_change', { status: 'failed', operation: op, message });
+    failAsyncTaskOperation({ taskRepo, logRepo, events: executeTaskUseCase.events, log }, taskId, unitId, op, err, `approved ${op} failed`);
   };
 
   if (operation === 'resume_await_answer' || operation === 'resume_await_plan_review') {

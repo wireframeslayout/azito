@@ -241,6 +241,15 @@ describe('POST /api/tasks/:id/answer — untrusted-input execution gate (Issue #
     for (let i = 0; i < 5; i++) await Promise.resolve();
 
     expect(task.status).toBe('failed');
-    expect(opts.logRepo.append).toHaveBeenCalledWith(1, 20, 'command', expect.objectContaining({ type: 'answer_followup_failed' }));
+    // failAsyncTaskOperation() (AppendLog.ts) — the shared helper this catch
+    // now delegates to, also used by approve-execution's failApprovedOperation
+    // and approve-plan's failResumedOperation — always logs 'command' type
+    // 'approved_operation_failed' and, critically, ALSO emits a 'status_change'
+    // entry on the shared events EventEmitter (not just logRepo.append()), so
+    // other connected clients see a `task:status` WS event instead of staying
+    // stuck showing 'waiting_input'.
+    expect(opts.logRepo.append).toHaveBeenCalledWith(1, 20, 'command', expect.objectContaining({ type: 'approved_operation_failed', operation: 'answer_followup' }));
+    expect(opts.logRepo.append).toHaveBeenCalledWith(1, 20, 'status_change', expect.objectContaining({ status: 'failed', operation: 'answer_followup' }));
+    expect(opts.executeTaskUseCase.events.emit).toHaveBeenCalledWith('log', expect.objectContaining({ taskId: 1, unitId: 20, type: 'status_change', content: expect.objectContaining({ status: 'failed' }) }));
   });
 });

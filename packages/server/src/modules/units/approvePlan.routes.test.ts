@@ -130,6 +130,7 @@ function makeOpts(task: Task, unit: Unit, opts: { gateAllows: boolean }): { opts
       stop: vi.fn(),
       resumeStateMachine: vi.fn(async () => {}),
       enforceExecutionGate,
+      events: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
     } as unknown as UnitsRouteOptions['executeTaskUseCase'],
     projectRepo: {
       findById: vi.fn(() => ({ id: task.projectId, defaultUnitId: null })),
@@ -246,5 +247,36 @@ describe('POST /api/units/:id/approve-plan — untrusted-input execution gate (I
     expect(res.statusCode).toBe(200);
     expect(currentTask().status).toBe('failed');
     expect(opts.executeTaskUseCase.enforceExecutionGate).not.toHaveBeenCalled();
+  });
+
+  // Third-party review fix (task/328-input-trust-and-exec-gate follow-up) —
+  // resumeStateMachine()/followUp() rejecting AFTER this route already
+  // returned 200 used to only logRepo.append() and taskRepo.update(), never
+  // emitting on the shared events EventEmitter: other connected clients saw
+  // no `task:status` WS event and stayed stuck showing 'phase_review'
+  // forever. failResumedOperation now delegates to the shared
+  // failAsyncTaskOperation() helper (AppendLog.ts), which emits too.
+  it('a resumeStateMachine rejection AFTER approval is not swallowed: marks the task failed and emits a status_change event', async () => {
+    const task = makeTask({ status: 'phase_review', currentPhase: 'planning' });
+    const { opts, currentTask } = makeOpts(task, makeUnit(), { gateAllows: true });
+    (opts.executeTaskUseCase.resumeStateMachine as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('tmux window creation failed'));
+    const app = Fastify();
+    await app.register(unitsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/units/20/approve-plan',
+      payload: { taskId: 1, approved: true },
+    });
+
+    expect(res.statusCode).toBe(200);
+    // Flush the fire-and-forget resumeStateMachine() rejection's microtask.
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    expect(currentTask().status).toBe('failed');
+    expect(opts.logRepo.append).toHaveBeenCalledWith(1, 20, 'command', expect.objectContaining({ type: 'approved_operation_failed', operation: 'resume' }));
+    expect(opts.logRepo.append).toHaveBeenCalledWith(1, 20, 'status_change', expect.objectContaining({ status: 'failed', operation: 'resume' }));
+    expect(opts.executeTaskUseCase.events.emit).toHaveBeenCalledWith('log', expect.objectContaining({ taskId: 1, unitId: 20, type: 'status_change', content: expect.objectContaining({ status: 'failed' }) }));
   });
 });
