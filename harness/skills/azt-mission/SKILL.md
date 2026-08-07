@@ -45,9 +45,11 @@ argument-hint: [--parallel] [--base <branch>] [--project <id|slug>] <taskId | #i
 1. Issue番号があれば、プロジェクトを解決して各 Issue をタスク化する:
    ```bash
    curl -sf -X POST -H "Authorization: Bearer ${AZITO_UI_TOKEN}" "${AZITO_URL:-http://localhost:3001}/api/projects/${PROJECT_ID}/import-issue" \
-     -H "Content-Type: application/json" -d "{\"issue_number\": ${ISSUE_NUM}}"
+     -H "Content-Type: application/json" -d "{\"repo_id\": ${REPO_ID}, \"issue_number\": ${ISSUE_NUM}, \"unit_id\": ${UNIT_ID}}"
    ```
-   返却されたタスクIDを実行リストに加える（指定順を維持）
+   `repo_id`/`issue_number`/`unit_id` は必須（欠けると 400 `repo_id, issue_number, unit_id required`）。
+   `repo_id` はプロジェクトのリポジトリ登録（`GET /api/projects/:id` の `repositories`）から取得し、
+   `unit_id` は Step 2-2 で解決済みの Unit を使う。返却されたタスクIDを実行リストに加える（指定順を維持）
 2. 全タスクを `GET /api/tasks/:id` で取得し、存在・status（open 以外なら注記）・project・unit を確認する。
    unit 未設定のタスクはプロジェクトの `defaultUnitId` を採用し、それも無ければ
    `GET /api/units` の一覧からユーザーに選択してもらう
@@ -211,7 +213,9 @@ done; echo "last:$S"
      -H "Content-Type: application/json" \
      -d "{\"approved\": true, \"fingerprint\": \"${FINGERPRINT}\", \"origin\": \"mission_prompt\"}"
    ```
-   成功したら実行が再キックされる。4-2 の監視ループへ戻る
+   承認が成功するとサーバーが保留中の操作（`pendingOperation`）を自動的に再開する。
+   **再キックは不要**（再キックすると実行中のタスクへ二重に execute を投げることになる）。
+   承認後は 4-2 の監視ポーリングへ戻る
 4. **中止する、と拒否された場合**:
    ```bash
    curl -s -X POST -H "Authorization: Bearer ${AZITO_UI_TOKEN}" "${AZITO_URL:-http://localhost:3001}/api/tasks/${TASK_ID}/approve-execution" \
