@@ -293,8 +293,11 @@ function WorkspaceInner() {
   // row immediately instead of waiting for the next 30s poll.
   const closeTabAndRefreshBrowser = useCallback((tabId: string) => {
     const wasBrowser = tabs.some((t) => t.id === tabId && t.type === 'browser');
-    closeTab(tabId);
-    if (wasBrowser) refreshBrowserGroups();
+    const closed = closeTab(tabId);
+    // Wait for the server-side group teardown (closeTab's own closeBrowserGroup
+    // call) to settle before refetching, or the sidebar list can still see the
+    // group as present. The tab itself already closed synchronously above.
+    if (wasBrowser) void closed.then(refreshBrowserGroups);
   }, [tabs, closeTab, refreshBrowserGroups]);
 
   const handlePaneCloseTab = useCallback((paneId: string, tabId: string) => {
