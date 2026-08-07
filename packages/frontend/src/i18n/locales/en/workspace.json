@@ -204,7 +204,13 @@
     "browserBlankUrl": "Blank tab",
     "browserError": "Failed to fetch browser status",
     "retry": "Retry",
-    "selectServer": "Select server"
+    "selectServer": "Select server",
+    "openTerminal": "Open terminal",
+    "stopOperation": "Stop operation",
+    "openInTab": "Open in tab",
+    "copyUrl": "Copy URL",
+    "urlCopied": "URL copied",
+    "closeGroupAction": "Close group"
   },
   "viewLabels": {
     "description": "Description",

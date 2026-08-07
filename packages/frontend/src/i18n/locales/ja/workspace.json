@@ -204,7 +204,13 @@
     "browserBlankUrl": "空のタブ",
     "browserError": "ブラウザの状態を取得できません",
     "retry": "再試行",
-    "selectServer": "サーバーを選択"
+    "selectServer": "サーバーを選択",
+    "openTerminal": "ターミナルを開く",
+    "stopOperation": "オペレーションを停止",
+    "openInTab": "タブで開く",
+    "copyUrl": "URL をコピー",
+    "urlCopied": "URL をコピーしました",
+    "closeGroupAction": "グループを閉じる"
   },
   "viewLabels": {
     "description": "説明",

@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Icon } from '../../ui/Icon';
 import { Spinner } from '../../ui';
 import { api } from '../../../api/client';
+import { useLongPress, longPressStyle } from '../../../hooks/useLongPress';
 import type { BrowserObject } from '../../../lib/workspaceObjects';
 import type { PersistedTab } from '../../../hooks/useTabPersistence';
 
@@ -14,6 +15,8 @@ interface BrowserSectionProps {
   closeTab: (tabId: string) => void;
   openBrowser: (serverName: string, groupId?: string) => void;
   onRefresh: () => void;
+  onContextMenu?: (e: React.MouseEvent, b: BrowserObject) => void;
+  onLongPress?: (x: number, y: number, b: BrowserObject) => void;
 }
 
 export default function BrowserSection({
@@ -24,9 +27,13 @@ export default function BrowserSection({
   closeTab,
   openBrowser,
   onRefresh,
+  onContextMenu,
+  onLongPress,
 }: BrowserSectionProps) {
   const { t } = useTranslation('workspace');
   const [closingIds, setClosingIds] = useState<Set<string>>(new Set());
+  const bindLongPress = useLongPress();
+  const hasLongPress = !!(onContextMenu || onLongPress);
 
   const handleClose = useCallback(
     async (b: BrowserObject, e: React.MouseEvent) => {
@@ -76,6 +83,8 @@ export default function BrowserSection({
             key={`${b.serverName}/${b.groupId}`}
             className={`row-hover${isActive ? ' row-selected' : ''}`}
             onClick={() => openBrowser(b.serverName, b.groupId)}
+            onContextMenu={onContextMenu ? (e) => onContextMenu(e, b) : undefined}
+            {...(onLongPress ? bindLongPress((x, y) => onLongPress(x, y, b)) : {})}
             role="button"
             tabIndex={0}
             onKeyDown={(e) => {
@@ -85,6 +94,7 @@ export default function BrowserSection({
               }
             }}
             style={{
+              ...(hasLongPress ? longPressStyle : {}),
               display: 'flex',
               alignItems: 'center',
               gap: 8,
@@ -172,33 +182,32 @@ export default function BrowserSection({
           key={`error-${serverName}`}
           role="status"
           style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: '6px 12px',
+            margin: '2px 4px 6px',
+            padding: '8px 10px',
             borderRadius: 'var(--radius-sm)',
-            margin: '1px 0',
-            fontSize: 'var(--font-sm)',
-            color: 'var(--text-dim)',
+            background: 'color-mix(in srgb, var(--danger) 10%, transparent)',
+            boxShadow: 'inset 2px 0 0 var(--danger)',
+            fontSize: 'var(--font-xs)',
+            color: 'var(--text)',
           }}
         >
-          <span style={{ flex: 1, minWidth: 0 }}>
-            {t('objects.browserError')}
-            <span style={{ fontSize: 'var(--font-xs)', marginLeft: 4 }}>({serverName})</span>
-          </span>
+          {t('objects.browserError')}
+          {/* 実際のエラー内容（サーバー名 + 生のメッセージ）をそのまま出す。友好的な言い換えで隠さない */}
+          <span style={{ display: 'block', color: 'var(--text-dim)', marginTop: 2 }}>{serverName}: {message}</span>
           <button
             type="button"
             onClick={onRefresh}
-            className="icon-btn"
-            title={message}
             style={{
-              background: 'none',
+              display: 'block',
+              marginTop: 7,
+              background: 'var(--bg-hover)',
               border: 'none',
-              color: 'var(--accent)',
-              cursor: 'pointer',
-              padding: '2px 6px',
+              color: 'var(--text)',
+              font: 'inherit',
               fontSize: 'var(--font-xs)',
+              padding: '3px 9px',
               borderRadius: 'var(--radius-sm)',
+              cursor: 'pointer',
             }}
           >
             {t('objects.retry')}

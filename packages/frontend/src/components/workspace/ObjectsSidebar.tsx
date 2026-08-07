@@ -1,4 +1,4 @@
-import React, { useMemo, useCallback, useState } from 'react';
+import React, { useMemo, useCallback, useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../ui/Icon';
 import { api } from '../../api/client';
@@ -7,11 +7,13 @@ import { WindowPaneTree, AGENT_ICON_MAP, TerminalIcon } from '../ui';
 import type { WindowItem } from '../ui';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
 import { WindowActivityIndicator } from '../ui';
-import { buildObjectSections } from '../../lib/workspaceObjects';
+import { buildObjectSections, type BrowserObject } from '../../lib/workspaceObjects';
 import type { BrowserGroupInfo } from '../../hooks/useBrowserGroups';
 import type { PersistedTab } from '../../hooks/useTabPersistence';
 import type { Project, Session, Window, Task } from '../../pages/workspace/types';
 import { stripPaneSuffix } from '../../utils/tmuxTarget';
+import { useToast } from '../../hooks/useToast';
+import type { ContextMenuItem } from '../ContextMenu';
 import ObjectSection from './objects/ObjectSection';
 import BrowserSection from './objects/BrowserSection';
 
@@ -72,6 +74,8 @@ interface ObjectsSidebarProps {
   browserGroups: Record<string, BrowserGroupInfo[]>;
   browserErrors: Record<string, string>;
   refreshBrowserGroups: () => void;
+  /** true になった時点で、現在のサーバー集合について最初の状態取得が完了している（useBrowserGroups 参照） */
+  browserGroupsLoaded: boolean;
   /** ブラウザ対応（local/agent型）サーバー名の一覧。空ならブラウザセクション自体を出さない */
   browserCapableServerNames: string[];
   tabs: PersistedTab[];
@@ -79,6 +83,13 @@ interface ObjectsSidebarProps {
   openBrowser: (serverName: string, groupId?: string) => void;
   openTask: (taskId: number, title: string) => void;
   onOpenTaskWindow?: (taskId: number, taskTitle: string, terminal: { serverName: string; target: string }) => void;
+  /** 既存のコンテキストメニュー機構（Workspace.tsx の useContextMenu）— オペレーション/ブラウザ用メニューの表示に使う */
+  showContextMenu: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
+  showContextMenuAt: (x: number, y: number, items: ContextMenuItem[]) => void;
+  /** オペレーションウィンドウ行の「ペインをキャプチャ」に接続する */
+  onCapturePanes: (windowId: number) => void;
+  /** オペレーションウィンドウ行の「オペレーションを停止」に接続する（Unit の POST /api/units/:id/stop） */
+  onStopOperation: (unitId: number | null) => void;
 }
 
 type QuickAddAgent = 'claude' | 'codex' | 'terminal';
@@ -109,24 +120,25 @@ export default function ObjectsSidebar({
   browserGroups,
   browserErrors,
   refreshBrowserGroups,
+  browserGroupsLoaded,
   browserCapableServerNames,
   tabs,
   closeTab,
   openBrowser,
   openTask,
   onOpenTaskWindow,
+  showContextMenu,
+  showContextMenuAt,
+  onCapturePanes,
+  onStopOperation,
 }: ObjectsSidebarProps) {
   const { t } = useTranslation(['workspace', 'tasks']);
+  const { showToast } = useToast();
   const { collapsed, toggle } = useObjectSectionCollapse();
 
   const checkActive = useCallback((serverName: string, target: string) =>
     activeTabId === `terminal:${serverName}/${target}`,
   [activeTabId]);
-
-  const projectServerNames = useMemo(
-    () => projectServers.map((ps) => ps.serverName),
-    [projectServers],
-  );
 
   const sections = useMemo(
     () => buildObjectSections(project.windows, taskWindows ?? [], browserGroups, browserCapableServerNames),
@@ -304,19 +316,134 @@ export default function ObjectsSidebar({
   }, [browserCapableServerNames, handleOpenBrowser, t]);
 
   const emptyMessage = (key: string) => (
-    <div style={{ padding: '6px 20px', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{t(key)}</div>
+    <div style={{ padding: '6px 12px 8px', fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>{t(key)}</div>
   );
+
+  const inlineTextButtonStyle: React.CSSProperties = {
+    background: 'none', border: 0, padding: 0, font: 'inherit', color: 'var(--accent)',
+    cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: 2,
+  };
+
+  // ブラウザセクションの空表示（.empty-inline + インラインの「新しく開く」ボタン）。
+  // サーバーが複数ある場合は既存の ServerSelectMenu で選択させる（見出しの + ボタンと同じ導線）。
+  const browserEmptyInline = (
+    <div style={{ padding: '6px 12px 8px', fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
+      {t('objects.noBrowsers')} —{' '}
+      {browserCapableServerNames.length === 1 ? (
+        <button type="button" onClick={() => handleOpenBrowser(browserCapableServerNames[0])} style={inlineTextButtonStyle}>
+          {t('objects.openBrowser')}
+        </button>
+      ) : (
+        <ServerSelectMenu serverNames={browserCapableServerNames} onSelect={(name) => handleOpenBrowser(name)}>
+          <button type="button" style={inlineTextButtonStyle}>{t('objects.openBrowser')}</button>
+        </ServerSelectMenu>
+      )}
+    </div>
+  );
+
+  // オペレーションウィンドウ用コンテキストメニュー: タスクを表示 / ターミナルを開く / ペインをキャプチャ / (区切り) / オペレーションを停止
+  const getOperationMenuItems = useCallback((w: WindowItem, extra?: { online: boolean; paneTarget?: string }): ContextMenuItem[] => {
+    const task = w.taskId != null ? taskById.get(w.taskId) : undefined;
+    const items: ContextMenuItem[] = [];
+    if (w.taskId != null) {
+      items.push({ label: t('windows.showTask'), icon: <Icon name="tasks" size={16} />, onClick: () => handleOpenTask(w.taskId!) });
+    }
+    items.push({
+      label: t('objects.openTerminal'),
+      icon: <Icon name="external-link" size={16} />,
+      onClick: () => handleOperationPaneClick(w.serverName, extra?.paneTarget ?? w.tmuxTarget),
+    });
+    if (extra?.online) {
+      items.push({ label: t('windows.capturePanes'), icon: <Icon name="camera" size={16} />, onClick: () => onCapturePanes(w.id) });
+    }
+    if (task?.status === 'in_progress' && task.unitId != null) {
+      items.push({ label: '', separator: true, onClick: () => {} });
+      items.push({
+        label: t('objects.stopOperation'), icon: <Icon name="stop" size={16} />, danger: true,
+        onClick: () => onStopOperation(task.unitId),
+      });
+    }
+    return items;
+  }, [taskById, t, handleOpenTask, handleOperationPaneClick, onCapturePanes, onStopOperation]);
+
+  const showOperationContextMenu = useCallback((e: React.MouseEvent, w: WindowItem, extra?: { online: boolean; paneTarget?: string }) => {
+    showContextMenu(e, getOperationMenuItems(w, extra));
+  }, [showContextMenu, getOperationMenuItems]);
+
+  const showOperationLongPress = useCallback((x: number, y: number, w: WindowItem, extra?: { online: boolean; paneTarget?: string }) => {
+    showContextMenuAt(x, y, getOperationMenuItems(w, extra));
+  }, [showContextMenuAt, getOperationMenuItems]);
+
+  // ブラウザ用コンテキストメニュー: タブで開く / URL をコピー / (区切り) / グループを閉じる
+  // 「新しいページを開く」は既存グループへページを追加する API が無いため未実装（メニューに出さない）
+  const handleCloseBrowserGroup = useCallback(async (b: BrowserObject) => {
+    const tabId = `browser:${b.serverName}/${b.groupId}`;
+    if (tabs.some((tb) => tb.id === tabId)) {
+      closeTab(tabId);
+      return;
+    }
+    try {
+      await api('/browser/close-group', { method: 'POST', body: JSON.stringify({ server: b.serverName, group: b.groupId }) });
+      refreshBrowserGroups();
+    } catch { /* best-effort */ }
+  }, [tabs, closeTab, refreshBrowserGroups]);
+
+  const getBrowserMenuItems = useCallback((b: BrowserObject): ContextMenuItem[] => [
+    { label: t('objects.openInTab'), icon: <Icon name="browser" size={16} />, onClick: () => handleOpenBrowser(b.serverName, b.groupId) },
+    {
+      label: t('objects.copyUrl'),
+      icon: <Icon name="copy" size={16} />,
+      disabled: !b.primaryUrl,
+      onClick: () => {
+        if (!b.primaryUrl) return;
+        navigator.clipboard.writeText(b.primaryUrl).then(() => showToast(t('objects.urlCopied')));
+      },
+    },
+    { label: '', separator: true, onClick: () => {} },
+    { label: t('objects.closeGroupAction'), icon: <Icon name="close" size={16} />, danger: true, onClick: () => handleCloseBrowserGroup(b) },
+  ], [t, handleOpenBrowser, showToast, handleCloseBrowserGroup]);
+
+  const showBrowserContextMenu = useCallback((e: React.MouseEvent, b: BrowserObject) => {
+    showContextMenu(e, getBrowserMenuItems(b));
+  }, [showContextMenu, getBrowserMenuItems]);
+
+  const showBrowserLongPress = useCallback((x: number, y: number, b: BrowserObject) => {
+    showContextMenuAt(x, y, getBrowserMenuItems(b));
+  }, [showContextMenuAt, getBrowserMenuItems]);
+
+  // 全セクションとも中身が空 かつ ブラウザ状態がまだ一度も取得できていない（＝何もわからない）間だけ、
+  // 見出し全体をスケルトンに差し替える。ポーリングのたびには戻らない（browserGroupsLoaded は
+  // useBrowserGroups 側でサーバー集合が変わらない限り true のまま保持される）
+  const objectsLoading = !browserGroupsLoaded && sections.windows.length === 0 && sections.operationWindows.length === 0;
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: 8 }}>
       <div style={{ marginBottom: 4 }}>
         <div style={{ fontSize: 'var(--font-xs)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text-dim)', padding: '12px 12px 4px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span>{t('objects.title')} <span style={{ fontWeight: 400, fontSize: 'var(--font-2xs)', background: 'var(--bg)', padding: '1px 6px', borderRadius: 'var(--radius-md)' }}>{sections.totalCount}</span></span>
+          <span>{t('objects.title')} <span style={{ fontWeight: 400, fontSize: 'var(--font-2xs)', background: 'var(--bg)', padding: '1px 6px', borderRadius: 'var(--radius-md)' }}>{objectsLoading ? '—' : sections.totalCount}</span></span>
           <button onClick={() => onOpenAddWindow()} title={t('windows.addWindow')} className="icon-btn" style={{ border: 'none', color: 'var(--text-dim)', cursor: 'pointer', padding: '3px 6px', display: 'flex', alignItems: 'center' }}><Icon name="plus" size={16} /></button>
         </div>
 
-        {sections.totalCount === 0 ? (
-          <div style={{ padding: '12px 20px', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{t('objects.noObjects')}</div>
+        {objectsLoading ? (
+          <ObjectsLoadingSkeleton />
+        ) : sections.totalCount === 0 ? (
+          <div style={{ padding: '12px 20px', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', textAlign: 'center' }}>
+            {t('objects.noObjects')}
+            <br />
+            <button
+              type="button"
+              onClick={() => onOpenAddWindow()}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 10,
+                background: 'var(--accent-a15)', color: 'var(--accent)', padding: '5px 12px',
+                borderRadius: 'var(--radius-md)', fontSize: 'var(--font-sm)', border: 'none',
+                cursor: 'pointer', fontFamily: 'inherit',
+              }}
+            >
+              <Icon name="plus" size={14} />
+              {t('windows.addWindow')}
+            </button>
+          </div>
         ) : (
           <>
             <ObjectSection
@@ -367,7 +494,8 @@ export default function ObjectsSidebar({
                 sessionData={sessionData}
                 isActive={checkActive}
                 onPaneClick={handleOperationPaneClick}
-                onContextMenu={showWindowContextMenu as (e: React.MouseEvent, w: WindowItem, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void}
+                onContextMenu={showOperationContextMenu}
+                onLongPress={showOperationLongPress}
                 extra={renderOperationExtra}
                 activityClassName={renderActivityClassName}
                 respawningWindowIds={respawningWindowIds}
@@ -384,7 +512,7 @@ export default function ObjectsSidebar({
                 collapsed={collapsed.browsers}
                 onToggleCollapse={() => toggle('browsers')}
                 action={browserSectionAction}
-                empty={emptyMessage('objects.noBrowsers')}
+                empty={browserEmptyInline}
               >
                 <BrowserSection
                   browsers={sections.browsers}
@@ -394,12 +522,43 @@ export default function ObjectsSidebar({
                   closeTab={closeTab}
                   openBrowser={handleOpenBrowser}
                   onRefresh={refreshBrowserGroups}
+                  onContextMenu={showBrowserContextMenu}
+                  onLongPress={showBrowserLongPress}
                 />
               </ObjectSection>
             )}
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+// --- ObjectsLoadingSkeleton (読み込み中: 行の骨組み4本。件数ピルは呼び出し側で "—" にする) ---
+
+const SKEL_KEYFRAMES_ID = 'objects-sidebar-skel-keyframes';
+const SKEL_WIDTHS = ['100%', '62%', '78%', '45%'];
+
+function ensureSkelKeyframes() {
+  if (typeof document === 'undefined' || document.getElementById(SKEL_KEYFRAMES_ID)) return;
+  const style = document.createElement('style');
+  style.id = SKEL_KEYFRAMES_ID;
+  style.textContent = `
+@keyframes objects-skel-pulse { 0%, 100% { opacity: .45; } 50% { opacity: .9; } }
+@media (prefers-reduced-motion: no-preference) {
+  .objects-skel { animation: objects-skel-pulse 1.6s ease-in-out infinite; }
+}
+`;
+  document.head.appendChild(style);
+}
+
+function ObjectsLoadingSkeleton() {
+  useEffect(() => { ensureSkelKeyframes(); }, []);
+  return (
+    <div>
+      {SKEL_WIDTHS.map((width, i) => (
+        <div key={i} className="objects-skel" style={{ height: 10, borderRadius: 5, background: 'var(--bg-hover)', margin: '12px 12px', width }} />
+      ))}
     </div>
   );
 }
