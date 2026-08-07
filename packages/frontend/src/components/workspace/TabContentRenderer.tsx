@@ -211,6 +211,7 @@ export default function TabContentRenderer({
           onOpenTask={openTask}
           tabs={tabs}
           closeTab={closeTab}
+          onBrowserPageReady={refreshBrowserGroups}
         />
       )}
       {tab.type === 'issue' && tab.issueData && tab.projectId && (

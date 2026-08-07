@@ -95,12 +95,19 @@ interface TaskPanelProps {
    * browser onto some other project's server.
    */
   projectServers?: { serverName: string }[];
+  /**
+   * Notifies the caller once a task-scoped browser tab's page has actually been created
+   * server-side, so the sidebar's "ブラウザ" section (server-wide, not task-scoped) can
+   * refetch immediately instead of waiting for its next poll. Mirrors the same prop on
+   * the workspace-level browser tab (TabContentRenderer's `BrowserView`).
+   */
+  onBrowserPageReady?: () => void;
 }
 
 export default function TaskPanel({
   taskId, isVisible = true, isPaneFocused = true, allUnits, tasks, allTasks, projects, currentProject, sessionData,
   executeTask, stopTask, onRefresh, onBack, onDelete, onEdit, onOpenAddWindow,
-  onSplitPane, onOpenTask, tabs, closeTab, projectServers,
+  onSplitPane, onOpenTask, tabs, closeTab, projectServers, onBrowserPageReady,
 }: TaskPanelProps) {
   const { t } = useTranslation(['tasks', 'workspace', 'common']);
   // The list response omits the detail-only documents (description, plan, summary,
@@ -865,6 +872,7 @@ export default function TaskPanel({
           // default tab. Left as a real (no-op) callback rather than omitted, so this stays
           // a deliberate choice (documented here) instead of looking like a forgotten wire-up.
           onActiveTabChange={() => {}}
+          onPageReady={onBrowserPageReady}
         />
       );
     }
