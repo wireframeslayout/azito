@@ -9,6 +9,7 @@ import { useAgentActivity } from '../../hooks/useAgentActivity';
 import { WindowActivityIndicator } from '../ui';
 import { buildObjectSections } from '../../lib/workspaceObjects';
 import type { BrowserGroupInfo } from '../../hooks/useBrowserGroups';
+import type { PersistedTab } from '../../hooks/useTabPersistence';
 import type { Project, Session, Window } from '../../pages/workspace/types';
 import { stripPaneSuffix } from '../../utils/tmuxTarget';
 import ObjectSection from './objects/ObjectSection';
@@ -69,6 +70,8 @@ interface ObjectsSidebarProps {
   browserGroups: Record<string, BrowserGroupInfo[]>;
   browserErrors: Record<string, string>;
   refreshBrowserGroups: () => void;
+  tabs: PersistedTab[];
+  closeTab: (tabId: string) => void;
   openBrowser: (serverName: string, groupId?: string) => void;
   openTask: (taskId: number, title: string) => void;
   onOpenTaskWindow?: (taskId: number, taskTitle: string, terminal: { serverName: string; target: string }) => void;
@@ -101,6 +104,8 @@ export default function ObjectsSidebar({
   browserGroups,
   browserErrors,
   refreshBrowserGroups,
+  tabs,
+  closeTab,
   openBrowser,
   openTask,
   onOpenTaskWindow,
@@ -360,6 +365,8 @@ export default function ObjectsSidebar({
                 browsers={sections.browsers}
                 errors={browserErrors}
                 activeTabId={activeTabId}
+                tabs={tabs}
+                closeTab={closeTab}
                 openBrowser={handleOpenBrowser}
                 onRefresh={refreshBrowserGroups}
               />

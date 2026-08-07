@@ -82,6 +82,8 @@ export default function WorkspaceSidebarContent({
   onRefresh,
   mobile,
   onCloseMobileSidebar,
+  tabs,
+  closeTab,
   openBrowser,
   browserGroups,
   browserErrors,
@@ -114,6 +116,8 @@ export default function WorkspaceSidebarContent({
           browserGroups={browserGroups ?? {}}
           browserErrors={browserErrors ?? {}}
           refreshBrowserGroups={refreshBrowserGroups ?? (() => {})}
+          tabs={tabs}
+          closeTab={closeTab}
           openBrowser={openBrowser}
           openTask={openTask}
           onOpenTaskWindow={onOpenTaskWindow}

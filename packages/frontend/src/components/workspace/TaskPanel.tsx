@@ -521,9 +521,14 @@ export default function TaskPanel({
     if (browser) {
       closeBrowserGroup(browser.serverName, browser.pageId);
       setBrowserTabIds((prev) => prev.filter((id) => id !== tabId));
+      // The sidebar's browser list (useBrowserGroups) polls independently of this
+      // task's tab layout, so it wouldn't otherwise notice this group is gone
+      // until its next 30s poll — nudge it the same way page-open already does
+      // (see onBrowserPageReady usage below).
+      onBrowserPageReady?.();
     }
     layout.close(paneId, tabId);
-  }, [layout]);
+  }, [layout, onBrowserPageReady]);
 
   const handlePaneDrop = useCallback((paneId: string, zone: DropZone, index?: number) => {
     if (!paneDrag) return;

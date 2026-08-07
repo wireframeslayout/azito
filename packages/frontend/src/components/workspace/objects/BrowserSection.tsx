@@ -4,11 +4,14 @@ import { Icon } from '../../ui/Icon';
 import { Spinner } from '../../ui';
 import { api } from '../../../api/client';
 import type { BrowserObject } from '../../../lib/workspaceObjects';
+import type { PersistedTab } from '../../../hooks/useTabPersistence';
 
 interface BrowserSectionProps {
   browsers: BrowserObject[];
   errors: Record<string, string>;
   activeTabId: string | null;
+  tabs: PersistedTab[];
+  closeTab: (tabId: string) => void;
   openBrowser: (serverName: string, groupId?: string) => void;
   onRefresh: () => void;
 }
@@ -17,6 +20,8 @@ export default function BrowserSection({
   browsers,
   errors,
   activeTabId,
+  tabs,
+  closeTab,
   openBrowser,
   onRefresh,
 }: BrowserSectionProps) {
@@ -26,6 +31,15 @@ export default function BrowserSection({
   const handleClose = useCallback(
     async (b: BrowserObject, e: React.MouseEvent) => {
       e.stopPropagation();
+      const tabId = `browser:${b.serverName}/${b.groupId}`;
+      if (tabs.some((t) => t.id === tabId)) {
+        // The workspace tab is open: route through its own close path, which
+        // already tears down the server-side group (useTabPersistence's
+        // closeTab -> closeBrowserGroup) and refreshes this list. Calling
+        // /browser/close-group here too would tear the group down twice.
+        closeTab(tabId);
+        return;
+      }
       setClosingIds((prev) => new Set(prev).add(b.groupId));
       try {
         await api('/browser/close-group', {
@@ -41,7 +55,7 @@ export default function BrowserSection({
         });
       }
     },
-    [onRefresh],
+    [tabs, closeTab, onRefresh],
   );
 
   const errorServers = Object.entries(errors).filter(

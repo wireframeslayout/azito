@@ -284,6 +284,19 @@ function WorkspaceInner() {
   // Mirrors usePaneLayout's own close() computation (same pure closeTab() +
   // focusedPaneId fallback) purely to read the resulting active tab
   // synchronously, since the hook's own state update is async.
+  // Wraps the flat closeTab() with a browser-groups sidebar refresh: closing a
+  // browser tab already tears down its server-side group (see closeTab's own
+  // closeBrowserGroup call), but the sidebar's browser list (useBrowserGroups)
+  // is a separately-polled hook that doesn't know a tab just closed. Every
+  // path that can close a tab (desktop pane-aware close, mobile TabBar close,
+  // mobile in-panel close) routes through this so the sidebar list drops the
+  // row immediately instead of waiting for the next 30s poll.
+  const closeTabAndRefreshBrowser = useCallback((tabId: string) => {
+    const wasBrowser = tabs.some((t) => t.id === tabId && t.type === 'browser');
+    closeTab(tabId);
+    if (wasBrowser) refreshBrowserGroups();
+  }, [tabs, closeTab, refreshBrowserGroups]);
+
   const handlePaneCloseTab = useCallback((paneId: string, tabId: string) => {
     const newRoot = closeTabInLayoutTree(layout.state.root, paneId, tabId);
     const newFocusedPaneId = layout.state.focusedPaneId && findPane(newRoot, layout.state.focusedPaneId)
@@ -292,11 +305,11 @@ function WorkspaceInner() {
     const nextActiveTabId = findPane(newRoot, newFocusedPaneId)?.activeTabId ?? null;
 
     layout.close(paneId, tabId);
-    closeTab(tabId);
+    closeTabAndRefreshBrowser(tabId);
     if (nextActiveTabId && activeTabId !== nextActiveTabId) {
       setActiveTabId(nextActiveTabId);
     }
-  }, [layout, closeTab, activeTabId, setActiveTabId]);
+  }, [layout, closeTabAndRefreshBrowser, activeTabId, setActiveTabId]);
 
   // Single entry point for "close this tab by id" that every close affordance
   // (pane TabBar's ✕, the shared tab context menu's "Close tab" item, and
@@ -310,9 +323,9 @@ function WorkspaceInner() {
     if (pane) {
       handlePaneCloseTab(pane.id, tabId);
     } else {
-      closeTab(tabId);
+      closeTabAndRefreshBrowser(tabId);
     }
-  }, [layout, handlePaneCloseTab, closeTab]);
+  }, [layout, handlePaneCloseTab, closeTabAndRefreshBrowser]);
 
   const connectPane = useCallback((serverName: string, target: string, projectId?: number) => {
     connectPaneRaw(serverName, target, projectId ?? currentProjectId);
@@ -808,7 +821,7 @@ function WorkspaceInner() {
       mobile={mobile}
       onCloseMobileSidebar={() => setSidebarOpen(false)}
       tabs={tabs}
-      closeTab={closeTab}
+      closeTab={closeTabPaneAware}
       connectPaneRaw={connectPaneRaw}
       openServer={openServer}
       openBrowser={openBrowser}
@@ -957,7 +970,7 @@ function WorkspaceInner() {
               tabs={tabs.map(buildTabItem)}
               activeId={activeTabId}
               onSelect={handleSelectTab}
-              onClose={closeTab}
+              onClose={closeTabAndRefreshBrowser}
               onReorder={reorderTab}
               draggable
               onTabContextMenu={windowActions.handleTabContextMenu}
@@ -971,7 +984,7 @@ function WorkspaceInner() {
                 </div>
               )}
 
-              {tabs.map((tab) => renderTabContent(tab, { position: 'absolute', inset: 0 }, tab.id === activeTabId, closeTab))}
+              {tabs.map((tab) => renderTabContent(tab, { position: 'absolute', inset: 0 }, tab.id === activeTabId, closeTabAndRefreshBrowser))}
             </div>
           </>
         ) : (
