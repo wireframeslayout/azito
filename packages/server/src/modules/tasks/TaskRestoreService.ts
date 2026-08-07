@@ -199,16 +199,24 @@ export class TaskRestoreService {
 
         repoDir = workingDir;
         baseBranch = resolveBaseBranch(task, projectServer, project);
-        // worktreeBranch first (Issue #328 review round): ExecuteTaskUseCase/
-        // PhaseLoopRunner no longer echo the system-resolved branch back into
-        // task.branch after a run (that write was the execution-gate
-        // fingerprint self-invalidation bug — see ExecuteTaskUseCase.execute's
-        // worktree-creation comment), so worktreeBranch is now the only field
-        // that reliably reflects "which branch did this task's prior run
-        // actually use" — task.branch stays whatever branch name (if any) the
-        // client originally specified. Restoring into the SAME branch a prior
-        // run created means preferring worktreeBranch when both are set.
-        const branch = task.worktreeBranch || task.branch || undefined;
+        // task.branch first (Issue #328 review round, fix 1): the approval
+        // manifest's `branches.work` field (ExecutionManifest.ts) hashes
+        // `task.branch` — the client-specified value — not `worktreeBranch`.
+        // Preferring worktreeBranch here (as an earlier round of this fix
+        // did) meant an edit to an archived task's branch, followed by
+        // approval of a manifest that displays and fingerprints the NEW
+        // task.branch, would still restore into the OLD worktreeBranch a
+        // prior run had created: the branch a human approved and the branch
+        // actually used would diverge. task.branch is preferred, with
+        // worktreeBranch only as a fallback for a task that has never had a
+        // client-specified branch (e.g. an auto-generated one from a prior
+        // run) — matching ExecuteTaskUseCase.execute's own worktree-creation
+        // call, which uses `task.branch || undefined` with no worktreeBranch
+        // fallback at all. The resolved result is still written ONLY to
+        // `worktreeBranch` below (never back to `task.branch`), so this
+        // change does not reintroduce the fingerprint self-invalidation bug
+        // the removed comment described.
+        const branch = task.branch || task.worktreeBranch || undefined;
         const slug = branch ? `task-${task.id}` : await contentExtractor.generateSlug(task.title);
 
         const transport = transportFactory.getTransport(server);

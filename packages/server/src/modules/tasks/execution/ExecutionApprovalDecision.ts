@@ -158,6 +158,53 @@ interface ApprovalLogger {
   warn: (msg: string) => void;
 }
 
+/**
+ * The status a task moves to the INSTANT an approval is consumed — folded
+ * into the same atomic `consumePendingApproval()` UPDATE that clears
+ * pendingOperation (Issue #328 review round, fix 2 — see the call site's own
+ * doc comment for the crash-window bug this closes). Mirrors, verbatim,
+ * where each operation ALREADY left the task once its (formerly separate,
+ * formerly sometimes-async) status transition landed — this function does
+ * not invent a new status for any operation, only moves WHEN the existing one
+ * is written:
+ * - 'execute' -> 'open': unchanged from the synchronous `taskRepo.
+ *   updateStatus(taskId, 'open')` this operation already ran immediately
+ *   before dispatching, before this fix.
+ * - 'resume' -> 'running': same reasoning; 'running' is also a
+ *   RECOVERABLE_STATUSES value (RecoverStuckTasksUseCase), so a crash right
+ *   after this lands is already covered by ordinary startup recovery.
+ * - 'resume_await_answer' / 'resume_await_plan_review' -> `priorStatus`:
+ *   unchanged from the synchronous `taskRepo.updateStatus(taskId,
+ *   priorStatus)` these operations already ran (no async dispatch follows
+ *   either one — the human must resubmit their answer/feedback).
+ * - 'restore' -> `priorStatus` (always 'archived' — see Task.ts's
+ *   pendingOperation doc comment's per-operation table): NOT a
+ *   RECOVERABLE_STATUSES value, so a crash mid-restore()-dispatch still needs
+ *   a human to re-trigger it — but "archived, with a plain Restore button
+ *   already in the UI, fingerprint already recorded so re-approval isn't
+ *   required" is a world apart from the pre-fix "pending_approval forever,
+ *   approval literally impossible because pendingOperation is already NULL"
+ *   dead end. Automatically re-triggering restore() at startup for any
+ *   archived task with a matching fingerprint was considered and rejected:
+ *   that signal is NOT unique to a crashed dispatch — an ordinary task that
+ *   was approved, ran to completion, and was later archived by a human
+ *   normally keeps the SAME matching fingerprint forever (nothing clears it
+ *   on ordinary archival), so that heuristic would silently resurrect
+ *   completed, intentionally-archived tasks on every hub restart.
+ * - 'respawn' / 'recover_session_legacy' -> `priorStatus`: usually 'running'
+ *   in practice (both exist only because a running task's tmux window died),
+ *   which — like 'resume' above — is a RECOVERABLE_STATUSES value: a crash
+ *   before the window is actually recreated is caught by ordinary startup
+ *   recovery's pane-liveness check (resolvePaneId fails -> the same
+ *   already-shipped "recover session" UX a dead pane gets outside this gate
+ *   entirely, not a new stuck state introduced by this fix).
+ */
+function resolveApprovedStatus(operation: NonNullable<Task['pendingOperation']>, priorStatus: TaskStatus): TaskStatus {
+  if (operation === 'execute') return 'open' as TaskStatus;
+  if (operation === 'resume') return 'running' as TaskStatus;
+  return priorStatus;
+}
+
 export function decideExecutionApproval(
   deps: ExecutionApprovalDeps,
   params: ExecutionApprovalParams,
@@ -253,25 +300,49 @@ export function decideExecutionApproval(
     };
   }
 
-  const consumed = taskRepo.consumePendingApproval(taskId, { executionApprovedFingerprintHash: currentHash });
+  // The status this task moves to the INSTANT approval is consumed (Issue
+  // #328 review round, fix 2) — folded into the SAME atomic
+  // consumePendingApproval() UPDATE below, alongside the fingerprint and the
+  // pendingOperation-clearing that update already does. Before this fix,
+  // that UPDATE cleared pendingOperation/pendingOperationWindowId/
+  // pendingOperationPriorStatus while leaving `status` at 'pending_approval'
+  // (COALESCE(null, status) is a no-op), and the REAL transition only landed
+  // later — synchronously for 'resume'/'execute' (a negligible gap), but only
+  // from an ASYNC success/failure callback for 'restore'/'respawn'/
+  // 'recover_session_legacy'. A crash (process kill, unhandled rejection
+  // elsewhere, log-write failure) inside that gap left the row stuck at
+  // status='pending_approval' with pendingOperation=null: the UI still shows
+  // "needs approval", but nothing is left to approve (decideExecutionApproval
+  // itself now 409s with "no pendingOperation recorded" — see the guard at
+  // the top of this function), and no record of which operation/window/prior
+  // status to resume with survives. Computing `nextStatus` here and passing
+  // it into the same UPDATE that clears pendingOperation makes that window
+  // zero-width: pendingOperation can never be NULL while status is still
+  // 'pending_approval'. See resolveApprovedStatus()'s own doc comment for
+  // where each operation lands and why every landing status is one an
+  // existing, ordinary code path already knows how to recover from (this
+  // repo's startup recovery for 'running'/'in_progress', or a plain manual
+  // re-trigger for 'open'/'archived' — no new recoverable state was invented
+  // for this fix, see that function's doc comment for the per-operation
+  // reasoning).
+  const nextStatus = resolveApprovedStatus(operation, priorStatus);
+  const consumed = taskRepo.consumePendingApproval(taskId, { executionApprovedFingerprintHash: currentHash, status: nextStatus });
   if (!consumed) {
     return { status: 409, body: { error: `Task ${taskId}'s pending approval was already resolved by a concurrent request` } };
   }
   // Audit-only entry (Issue #328 review round fix 3): 'execution_approved' is
-  // not a real task.status value — consumePendingApproval() above only
-  // clears the pending-approval bookkeeping, it does not itself transition
-  // task.status (see its own doc comment: "status is untouched here"). Every
-  // operation branch below applies the REAL transition and emits ITS OWN
-  // 'status_change' once that transition actually lands (synchronously for
-  // resume_await_answer/resume_await_plan_review, or from the async
-  // operation's success callback otherwise) — emitting a 'status_change'
-  // here, before any of that has happened, raced a client that refetches on
-  // this event against a row that was still 'pending_approval', so the
-  // approval panel never closed. Logged as 'command' so the approval is
-  // still visible in the execution log without pretending to be a status
-  // transition (buildServer.ts's NotificationBus/push bridges only react to
-  // 'status_change' entries, forwarding entry.content.status verbatim as the
-  // WS `task:status` payload).
+  // not a real task.status value — it's a marker that the REAL transition
+  // (`nextStatus` above, already committed by the atomic UPDATE this line
+  // follows) just landed. Every operation branch below still emits its OWN
+  // 'status_change' for that landed transition (synchronously for
+  // resume_await_answer/resume_await_plan_review — which also carries an
+  // `awaitingResubmit` flag the other operations don't — or from the async
+  // operation's success callback otherwise, once it reaches a FURTHER real
+  // status beyond `nextStatus`, e.g. restore()'s 'open'). Logged as 'command'
+  // so the approval is still visible in the execution log without pretending
+  // to be a status transition of its own (buildServer.ts's NotificationBus/
+  // push bridges only react to 'status_change' entries, forwarding
+  // entry.content.status verbatim as the WS `task:status` payload).
   appendLogIfUnitKnown('command', { type: 'execution_approved' });
 
   // Re-fetches the task and emits its CURRENT (real) status as a
@@ -302,18 +373,24 @@ export function decideExecutionApproval(
   };
 
   if (operation === 'resume_await_answer' || operation === 'resume_await_plan_review') {
-    // Real transition FIRST, then emit it (Issue #328 review round fix 3) —
-    // the previous ordering emitted the synthetic
-    // 'execution_approved_awaiting_resubmit' label BEFORE this updateStatus()
-    // call, so a client refetching on that event still saw 'pending_approval'
-    // in the DB.
-    taskRepo.updateStatus(taskId, priorStatus);
+    // The real transition to `priorStatus` already landed atomically inside
+    // consumePendingApproval() above (nextStatus === priorStatus for this
+    // operation — see resolveApprovedStatus()) — no separate updateStatus()
+    // call needed here anymore (Issue #328 review round fix 2). Only the
+    // notification remains to send, carrying the `awaitingResubmit` flag the
+    // other operations don't (the human must resubmit the same answer/
+    // feedback; nothing here auto-resumes).
     appendLogIfUnitKnown('status_change', {
       status: priorStatus,
       operation,
       awaitingResubmit: true,
     });
   } else if (operation === 'restore') {
+    // status is already `priorStatus` ('archived' — see
+    // resolveApprovedStatus()) by the time this reads the row back, same as
+    // it always was before an approval-gated restore (Issue #328 review round
+    // fix 2): TaskRestoreService.restore() only ever operates on an archived
+    // task, atomic-or-not, so this is not a new state for it to tolerate.
     const approvedTask = taskRepo.findById(taskId);
     if (!approvedTask) {
       failApprovedOperation('restore', new Error(`Task ${taskId} disappeared after approval`));
@@ -323,9 +400,20 @@ export function decideExecutionApproval(
         .catch((err: unknown) => failApprovedOperation('restore', err));
     }
   } else if (operation === 'resume') {
-    taskRepo.updateStatus(taskId, 'running');
+    // status is already 'running' (see resolveApprovedStatus()) — this is
+    // also the status RecoverStuckTasksUseCase's RECOVERABLE_STATUSES already
+    // watches for, so a crash between here and resumeStateMachine() actually
+    // starting is picked up by ordinary startup recovery, unchanged from
+    // before this fix (Issue #328 review round fix 2 only moved WHEN this
+    // status lands — earlier, into the same atomic UPDATE — not what it is).
     executeTaskUseCase.resumeStateMachine(unitId as number, taskId).catch((err: unknown) => failApprovedOperation('resume', err));
   } else if (operation === 'respawn') {
+    // status is already `priorStatus` (Issue #328 review round fix 2) — most
+    // often 'running' (a respawn exists because a running task's window
+    // died), which is also a RECOVERABLE_STATUSES value: a crash before
+    // respawn() finishes recreating the window is now caught by ordinary
+    // startup recovery (pane-dead detection -> the existing "recover session"
+    // UX), not left unrecoverable at 'pending_approval'.
     const win = pendingWindowId !== null ? windowRepo.findById(pendingWindowId) : null;
     const srv = win ? serverRepo.findByName(win.serverName) : null;
     if (!win || !srv) {
@@ -333,16 +421,17 @@ export function decideExecutionApproval(
     } else {
       respawnService.respawn(win.id, srv)
         .then(() => {
-          taskRepo.updateStatus(taskId, priorStatus);
           // Success-callback emit (Issue #328 review round fix 3): before
           // this fix, respawn's real transition back to priorStatus was
           // applied but NEVER emitted as a 'status_change' — a client had no
           // way to learn the block had resolved short of a manual refresh.
+          // No updateStatus() call needed here anymore — see above.
           emitCurrentStatus('respawn');
         })
         .catch((err: unknown) => failApprovedOperation('respawn', err));
     }
   } else if (operation === 'recover_session_legacy') {
+    // Same reasoning as 'respawn' above — status is already `priorStatus`.
     const resolvedServerName = resolveTaskServerName(task, projectServerRepo);
     const srv = resolvedServerName ? serverRepo.findByName(resolvedServerName) : null;
     if (!srv) {
@@ -350,14 +439,18 @@ export function decideExecutionApproval(
     } else {
       respawnService.resumeLegacySession(taskId, srv)
         .then(() => {
-          taskRepo.updateStatus(taskId, priorStatus);
-          // Same missing-emit fix as 'respawn' above.
+          // Same missing-emit fix as 'respawn' above; no updateStatus() call
+          // needed here anymore either.
           emitCurrentStatus('recover_session_legacy');
         })
         .catch((err: unknown) => failApprovedOperation('recover_session_legacy', err));
     }
   } else {
-    taskRepo.updateStatus(taskId, 'open');
+    // status is already 'open' (see resolveApprovedStatus()) — same
+    // "sits at a normal, human-actionable status" property this operation
+    // already had before this fix (Issue #328 review round fix 2 only closed
+    // the crash window BEFORE this point, which used to leave the row at
+    // 'pending_approval' with no pendingOperation instead).
     executeTaskUseCase.execute(unitId as number, taskId).catch((err: unknown) => failApprovedOperation('execute', err));
   }
 

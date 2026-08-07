@@ -244,6 +244,42 @@ describe('TaskRestoreService', () => {
     expect(worktreeService.create).toHaveBeenCalledWith(rootDir, 1, 'task-1', 'main', 'feat/worktree-branch');
   });
 
+  it('prefers task.branch over a stale task.worktreeBranch (Issue #328 review round, fix 1) — the branch a restore actually uses must match the branch the approval manifest displayed and fingerprinted', async () => {
+    // Regression: an earlier round of this fix preferred worktreeBranch
+    // (the SYSTEM-resolved branch from a PRIOR run) over task.branch (the
+    // CLIENT-specified value, editable via PUT /api/tasks/:id and the one
+    // resolveExecutionManifest()'s `branches.work` field hashes/displays —
+    // see ExecutionManifest.ts). Editing an archived task's branch and
+    // approving the resulting manifest would then restore into the OLD
+    // worktreeBranch, not the branch the human just approved.
+    const task = makeTask({
+      serverName: 'test-server',
+      branch: 'feat/newly-approved-branch',
+      worktreeBranch: 'feat/stale-prior-run-branch',
+    });
+
+    await service.restore(task, log);
+
+    const worktreeService = (deps.worktreeServiceFactory.create as ReturnType<typeof vi.fn>).mock.results[0].value;
+    expect(worktreeService.create).toHaveBeenCalledWith(rootDir, 1, 'task-1', 'main', 'feat/newly-approved-branch');
+  });
+
+  it('restores into the exact branch the approval manifest fingerprinted (Issue #328 review round) — manifest.branches.work must equal the branch actually passed to worktree creation', async () => {
+    const { resolveExecutionManifest } = await import('./execution/ExecutionManifest.js');
+    const task = makeTask({
+      serverName: 'test-server',
+      branch: 'feat/approved-branch',
+      worktreeBranch: 'feat/stale-prior-run-branch',
+    });
+
+    const { manifest } = resolveExecutionManifest(task, deps);
+    await service.restore(task, log);
+
+    const worktreeService = (deps.worktreeServiceFactory.create as ReturnType<typeof vi.fn>).mock.results[0].value;
+    const branchActuallyUsed = worktreeService.create.mock.calls[0][4];
+    expect(manifest.branches.work).toBe(branchActuallyUsed);
+  });
+
   it('passes a non-empty slug even when branch is specified (assertSafeBranch compatibility)', async () => {
     const task = makeTask({ id: 42, serverName: 'test-server', branch: 'feat/my-branch' });
 

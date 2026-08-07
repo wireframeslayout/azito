@@ -719,6 +719,87 @@ describe('POST /api/tasks/:id/approve-execution (Issue #328 review)', () => {
     }));
   });
 
+  // Issue #328 review round, fix 2: before this fix, consumePendingApproval()
+  // cleared pendingOperation/pendingOperationWindowId/pendingOperationPriorStatus
+  // while leaving `status` at 'pending_approval' — the REAL transition only
+  // landed later, from restore()/respawn()/resumeLegacySession()'s own async
+  // success callback. A crash (process kill, unhandled rejection, log-write
+  // failure) between those two points left the row stuck at
+  // status='pending_approval' with pendingOperation=null: re-approval is
+  // impossible (decideExecutionApproval's own guard 409s with "no
+  // pendingOperation recorded" — see the check right after `operation` is
+  // read), and the SAME check makes a second approve/deny attempt reject too.
+  // These tests model that crash by making the dispatched operation's promise
+  // never settle (simulating the process dying mid-dispatch, before
+  // taskRestoreService.restore()/respawnService.respawn() ever get a chance to
+  // resolve or reject) and assert the row is NEVER left with
+  // status='pending_approval' AND pendingOperation=null at the same time —
+  // removing this fix's `status: nextStatus` argument from the
+  // consumePendingApproval() call in ExecutionApprovalDecision.ts makes every
+  // test in this block fail.
+  describe('Issue #328 review round fix 2 — no crash window between approval consumption and dispatch completion', () => {
+    it('a restore approval whose dispatch never settles still leaves the row recoverable (archived, not pending_approval-with-no-pendingOperation)', async () => {
+      const task = makeTask({ pendingOperation: 'restore', pendingOperationPriorStatus: 'archived', executionApprovedFingerprintHash: null });
+      const { opts, getTask } = makeStatefulOpts(task);
+      // Simulates the process dying mid-restore(): the promise never
+      // resolves or rejects, so no success/failure callback ever runs.
+      opts.taskRestoreService.restore = vi.fn(() => new Promise(() => {})) as unknown as TasksRouteOptions['taskRestoreService']['restore'];
+      const fingerprint = currentFingerprint(opts, task);
+      const app = Fastify();
+      await app.register(tasksRoutes, opts);
+      await app.ready();
+
+      const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
+
+      expect(res.statusCode).toBe(200);
+      // The dangerous window this fix closes: status must NOT still be
+      // 'pending_approval' now that pendingOperation has already been
+      // cleared — that combination is exactly "looks like it needs approval,
+      // but nothing is left to approve".
+      expect(getTask().pendingOperation).toBeNull();
+      expect(getTask().status).not.toBe('pending_approval');
+      expect(getTask().status).toBe('archived');
+    });
+
+    it('a respawn approval whose dispatch never settles still leaves the row at its (recoverable) priorStatus, not pending_approval-with-no-pendingOperation', async () => {
+      const task = makeTask({ pendingOperation: 'respawn', pendingOperationWindowId: 5, pendingOperationPriorStatus: 'running' });
+      const { opts, getTask } = makeStatefulOpts(task);
+      const respawnWindow = { id: 5, serverName: 'test-server', workerModel: null, workerType: null, paneLayout: null };
+      opts.windowRepo.findById = vi.fn((id: number) => (id === 5 ? respawnWindow : undefined)) as unknown as TasksRouteOptions['windowRepo']['findById'];
+      // Simulates the process dying mid-respawn(): the promise never settles.
+      opts.respawnService.respawn = vi.fn(() => new Promise(() => {})) as unknown as TasksRouteOptions['respawnService']['respawn'];
+      const fingerprint = currentFingerprint(opts, task, respawnWindow);
+      const app = Fastify();
+      await app.register(tasksRoutes, opts);
+      await app.ready();
+
+      const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
+
+      expect(res.statusCode).toBe(200);
+      expect(getTask().pendingOperation).toBeNull();
+      expect(getTask().status).not.toBe('pending_approval');
+      // 'running' is a RECOVERABLE_STATUSES value (RecoverStuckTasksUseCase),
+      // so this crash is now caught by ordinary startup recovery instead of
+      // being unrecoverable.
+      expect(getTask().status).toBe('running');
+    });
+
+    it("a resume_await_answer approval (synchronous, no async dispatch) never has a pending_approval-with-no-pendingOperation window either", async () => {
+      const task = makeTask({ pendingOperation: 'resume_await_answer', pendingOperationPriorStatus: 'waiting_input' });
+      const { opts, getTask } = makeStatefulOpts(task);
+      const fingerprint = currentFingerprint(opts, task);
+      const app = Fastify();
+      await app.register(tasksRoutes, opts);
+      await app.ready();
+
+      const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
+
+      expect(res.statusCode).toBe(200);
+      expect(getTask().pendingOperation).toBeNull();
+      expect(getTask().status).toBe('waiting_input');
+    });
+  });
+
   it('logs the failure and marks the task failed when an approved restore() rejects', async () => {
     const task = makeTask({ pendingOperation: 'restore' });
     const { opts } = makeStatefulOpts(task);
