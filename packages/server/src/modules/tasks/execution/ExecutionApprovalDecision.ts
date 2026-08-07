@@ -205,6 +205,54 @@ function resolveApprovedStatus(operation: NonNullable<Task['pendingOperation']>,
   return priorStatus;
 }
 
+/**
+ * Consumes a task's outstanding `pending_approval` gate as a DENIAL — the
+ * same atomic `consumePendingApproval()` + audit log path
+ * `decideExecutionApproval({ approved: false })` below applies, factored out
+ * so a second caller (POST /api/tasks/:id/archive, Issue #328 fix 2) can
+ * reuse it verbatim instead of hand-rolling a second denial path.
+ *
+ * `targetStatus`, when given, overrides the status the task lands at
+ * (`decideExecutionApproval`'s own denial defaults to `'archived'` for a
+ * `restore` operation and `'failed'` for everything else — see that
+ * function's inline comment on `denyStatus`). The archive route always wants
+ * `'archived'` regardless of which operation was pending: archiving a task
+ * mid-approval is the human saying "I don't want this to run AND I don't
+ * want the task to sit anywhere but archived" — one atomic denial+archive,
+ * not a denial that leaves the task at 'failed' followed by a second
+ * archive of that 'failed' row.
+ *
+ * Returns `consumed: false` (no state mutated) when the approval was already
+ * resolved by a concurrent request — same race the direct call site below
+ * already handles, surfaced here so the archive route can 409 the same way.
+ */
+export function denyPendingApproval(
+  deps: Pick<ExecutionApprovalDeps, 'taskRepo' | 'logRepo' | 'executeTaskUseCase'>,
+  task: Task,
+  unitId: number | null,
+  targetStatus?: TaskStatus,
+): { consumed: boolean; status: TaskStatus } {
+  const { taskRepo, logRepo, executeTaskUseCase } = deps;
+  const operation = task.pendingOperation as NonNullable<Task['pendingOperation']>;
+  const denyStatus = targetStatus ?? ((operation === 'restore' ? 'archived' : 'failed') as TaskStatus);
+  const consumed = taskRepo.consumePendingApproval(task.id, { status: denyStatus });
+  if (!consumed) {
+    return { consumed: false, status: denyStatus };
+  }
+  // `status` is denyStatus — the REAL value consumePendingApproval() just
+  // committed above — not a synthetic label (Issue #328 review round fix
+  // 3): buildServer.ts's NotificationBus/push bridges forward
+  // entry.content.status verbatim as the WS `task:status` payload's
+  // `status` field, so a synthetic value like 'execution_denied' would
+  // reach a client as if it were the task's actual status. The audit
+  // context (that this was a denial, not just any transition to
+  // denyStatus) lives in `reason`, a field those bridges don't read.
+  if (unitId !== null) {
+    appendLogAndEmit(logRepo, executeTaskUseCase.events, task.id, unitId, 'status_change', { status: denyStatus, reason: 'execution_denied' });
+  }
+  return { consumed: true, status: denyStatus };
+}
+
 export function decideExecutionApproval(
   deps: ExecutionApprovalDeps,
   params: ExecutionApprovalParams,
@@ -243,20 +291,10 @@ export function decideExecutionApproval(
   };
 
   if (!approved) {
-    const denyStatus = (operation === 'restore' ? 'archived' : 'failed') as TaskStatus;
-    const consumed = taskRepo.consumePendingApproval(taskId, { status: denyStatus });
-    if (!consumed) {
+    const outcome = denyPendingApproval({ taskRepo, logRepo, executeTaskUseCase }, task, unitId);
+    if (!outcome.consumed) {
       return { status: 409, body: { error: `Task ${taskId}'s pending approval was already resolved by a concurrent request` } };
     }
-    // `status` is denyStatus — the REAL value consumePendingApproval() just
-    // committed above — not a synthetic label (Issue #328 review round fix
-    // 3): buildServer.ts's NotificationBus/push bridges forward
-    // entry.content.status verbatim as the WS `task:status` payload's
-    // `status` field, so a synthetic value like 'execution_denied' would
-    // reach a client as if it were the task's actual status. The audit
-    // context (that this was a denial, not just any transition to
-    // denyStatus) lives in `reason`, a field those bridges don't read.
-    appendLogIfUnitKnown('status_change', { status: denyStatus, reason: 'execution_denied' });
     return { status: 200, body: { ok: true } };
   }
 

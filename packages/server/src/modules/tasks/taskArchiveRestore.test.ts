@@ -193,6 +193,77 @@ describe('POST /api/tasks/:id/archive', () => {
 
     expect(res.statusCode).toBe(404);
   });
+
+  // Issue #328: archiving a `pending_approval` task used to overwrite
+  // `status` to 'archived' while leaving `pendingOperation` set — the same
+  // "changes status without consuming the pending approval" bug PUT
+  // /api/tasks/:id's pending_approval guard already closed for arbitrary
+  // status edits. That left the task un-approvable (GET
+  // .../execution-approval 404s once status isn't 'pending_approval') AND
+  // un-restorable (checkExecutionGate still blocks on the leftover
+  // pendingOperation) — permanently stuck. The fix consumes the pending
+  // approval as a denial (landing on 'archived', not denial's usual
+  // 'failed') atomically before archiving, via the SAME denyPendingApproval()
+  // path POST /api/tasks/:id/approve-execution's denial branch uses.
+  it('consumes a pending approval as a denial before archiving a task stuck in pending_approval (Issue #328)', async () => {
+    const opts = makeOpts({
+      status: 'pending_approval',
+      pendingOperation: 'execute',
+      pendingOperationWindowId: null,
+      pendingOperationPriorStatus: 'open',
+    });
+    // Stateful consumePendingApproval mock (mirrors executionApprovalRoute.
+    // test.ts's makeStatefulOpts pattern) — the base fixture's `vi.fn(() =>
+    // false)` would make this test indistinguishable from "the approval was
+    // never consumed", which is exactly the bug this test guards against.
+    const task = opts.taskRepo.findById(1) as Task;
+    opts.taskRepo.consumePendingApproval = vi.fn((id: number, fields: { status?: Task['status']; executionApprovedFingerprintHash?: string }) => {
+      if (id !== 1 || task.status !== 'pending_approval' || task.pendingOperation === null) return false;
+      Object.assign(task, {
+        ...(fields.status !== undefined ? { status: fields.status } : {}),
+        ...(fields.executionApprovedFingerprintHash !== undefined ? { executionApprovedFingerprintHash: fields.executionApprovedFingerprintHash } : {}),
+        pendingOperation: null,
+        pendingOperationWindowId: null,
+        pendingOperationPriorStatus: null,
+      });
+      return true;
+    });
+
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/archive' });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.payload)).toEqual({ ok: true });
+    expect(opts.taskRepo.consumePendingApproval).toHaveBeenCalledWith(1, { status: 'archived' });
+    expect(opts.logRepo.append).toHaveBeenCalledWith(1, 20, 'status_change', { status: 'archived', reason: 'execution_denied' });
+    // Not left stuck: pendingOperation is cleared and status actually landed
+    // on 'archived' — neither the un-approvable nor un-restorable dead end
+    // the pre-fix code left behind.
+    expect(task.pendingOperation).toBeNull();
+    expect(task.status).toBe('archived');
+  });
+
+  it('returns 409 without archiving when the pending approval was already resolved by a concurrent request', async () => {
+    const opts = makeOpts({
+      status: 'pending_approval',
+      pendingOperation: 'execute',
+      pendingOperationWindowId: null,
+      pendingOperationPriorStatus: 'open',
+    });
+    opts.taskRepo.consumePendingApproval = vi.fn(() => false);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/archive' });
+
+    expect(res.statusCode).toBe(409);
+    expect(opts.executeTaskUseCase.stopByTaskId).not.toHaveBeenCalled();
+    expect(opts.taskRepo.update).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /api/tasks/:id/restore', () => {

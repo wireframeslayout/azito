@@ -379,6 +379,31 @@ import { resolveUnitId, resolveTaskServerName, resolveBaseBranch } from './TaskE
  *   at a content-addressed remote path (e.g. keyed by this same digest, so a
  *   stale/tampered copy can never satisfy a phase that requires a different
  *   digest) — neither is implemented as of this round.
+ * - **The gate check is a single point-in-time inspection before dispatch,
+ *   not a lease held for the duration of dispatch.** `checkExecutionGate`
+ *   (and the fingerprint check in `decideExecutionApproval`) evaluate this
+ *   manifest ONCE, synchronously, immediately before an operation is
+ *   allowed to proceed. Everything after that point — tmux window creation
+ *   (including secret injection into the pane environment), worktree
+ *   creation, and the worker launch itself — runs across multiple `await`
+ *   boundaries (`resourceGuard.check`, containment/path verification, tmux
+ *   calls) that this single check does not span. If the task, its Unit, its
+ *   Sidekick packages, the target server, the applicable input policy, or
+ *   the project's secrets are modified while one of those awaits is in
+ *   flight, dispatch continues to completion under the approval that was
+ *   valid at the moment the gate was checked — not under whatever changed a
+ *   moment later. The per-phase re-verification
+ *   (`reverifyExecutionGateForPhase`, referenced above) only runs AFTER the
+ *   worker has already been launched for the current phase, so it cannot
+ *   close this window; it protects against drift between phases, not drift
+ *   between "gate passed" and "worker actually started". `followUp()` has
+ *   the same shape (gate check, then the same multi-await dispatch path).
+ *   Fully closing this would require either a lock that prevents the
+ *   approved inputs from being edited while dispatch for that task is in
+ *   progress, or an execution lease that re-verifies at every
+ *   side-effecting step rather than once up front — **neither is
+ *   implemented as of this round**; this file provides a single up-front
+ *   gate check only, which is Issue #27's scope.
  */
 
 /**

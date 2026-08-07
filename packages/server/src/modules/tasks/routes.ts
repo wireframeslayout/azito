@@ -18,7 +18,7 @@ import { SAFE_PATH_PATTERN, SAFE_BRANCH_PATTERN } from '../git/assertSafeGitArgs
 import { resolveTaskServerName, resolveTmuxSession, resolveUnitId } from './execution/TaskExecutionEnv';
 import { replyToExecutionGateError } from './execution/ExecutionGate';
 import { hashExecutionManifest } from './execution/ExecutionManifest';
-import { decideExecutionApproval, resolvePendingApprovalManifest } from './execution/ExecutionApprovalDecision';
+import { decideExecutionApproval, denyPendingApproval, resolvePendingApprovalManifest } from './execution/ExecutionApprovalDecision';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { SqliteProjectSecretRepository } from '../projects/SqliteProjectSecretRepository';
@@ -728,6 +728,40 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       const task = taskRepo.findById(id);
       if (!task) return reply.status(404).send({ error: 'Task not found' });
       if (task.status === 'archived') return { ok: true };
+
+      // A `pending_approval` task carries an outstanding untrusted-input
+      // execution gate (Issue #328) — this route used to overwrite `status`
+      // to 'archived' directly while leaving `pendingOperation` set, the same
+      // "changes status without touching the pending approval" bug the PUT
+      // /api/tasks/:id guard above already closed for arbitrary status edits
+      // (see that guard's own doc comment). Left as-is, the task became
+      // simultaneously un-approvable (GET .../execution-approval 404s once
+      // status is no longer 'pending_approval') and un-restorable
+      // (checkExecutionGate still sees the leftover pendingOperation and
+      // blocks the restore) — permanently stuck.
+      //
+      // Chosen fix: (b) consume the pending approval as a DENIAL, atomically,
+      // before archiving — not (a) reject the archive with 409. "Archive this,
+      // I don't need it anymore" already means "I don't want the pending
+      // operation to run either"; forcing the human to separately deny it
+      // first (via a UI screen that only shows for pending_approval tasks —
+      // ExecutionApprovalPanel, gone the moment they navigate away to hit
+      // archive) before they're allowed to archive would be a needless extra
+      // step for a decision they've already made. denyPendingApproval()
+      // reuses the SAME atomic consume + audit log path (`status_change` with
+      // `reason: 'execution_denied'`, forwarded over the same WS `task:status`
+      // bridge decideExecutionApproval's denial branch uses) so this leaves
+      // an identical audit trail to an explicit Deny — just with `'archived'`
+      // as the landing status instead of denial's usual 'failed' (this route
+      // is about to set 'archived' below anyway).
+      if (task.status === ('pending_approval' as TaskStatus)) {
+        const project = projectRepo.findById(task.projectId);
+        const unitId = resolveUnitId(task, project);
+        const outcome = denyPendingApproval({ taskRepo, logRepo, executeTaskUseCase }, task, unitId, 'archived' as TaskStatus);
+        if (!outcome.consumed) {
+          return reply.status(409).send({ error: `Task ${id}'s pending approval was already resolved by a concurrent request` });
+        }
+      }
 
       executeTaskUseCase.stopByTaskId(id);
       await taskCleanupService.cleanup(task, request.log);
