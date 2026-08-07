@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useLocation, matchPath } from 'react-router-dom';
 import { paths, matchWorkspacePath } from '../paths';
@@ -159,7 +159,6 @@ function WorkspaceInner() {
         const task = allTasks.find((t) => t.id === taskId);
         if (task) {
           openTaskRaw(taskId, task.title, task.projectId);
-          recordTaskOpened(taskId);
         }
       } else {
         const autoOpen = localStorage.getItem('browser-auto-open') === 'true';
@@ -169,30 +168,16 @@ function WorkspaceInner() {
           showToast(t('workspace:toast.browserTabOpened', { serverName }));
         }
       }
-    }, [allTasks, openTaskRaw, openBrowser, showToast, recordTaskOpened]),
+    }, [allTasks, openTaskRaw, openBrowser, showToast]),
   });
-
-  // Shared by every "a tab was selected" entry point (handleSelectTab,
-  // selectPaneTab) so a task tab becoming active — via tab-bar click, pane
-  // focus, drag-drop, etc. — always refreshes the sidebar's "recent" order,
-  // not just the initial open via openTask.
-  const recordIfTaskTab = useCallback((tab: PersistedTab | undefined) => {
-    if (tab?.type === 'task' && tab.entityId != null) {
-      recordTaskOpened(tab.entityId);
-    }
-  }, [recordTaskOpened]);
 
   const handleSelectTab = useCallback((tabId: string) => {
     const tab = tabs.find((t) => t.id === tabId);
-    // Only record on an actual selection change — recordIfTaskTab writes to
-    // localStorage and notifies every useRecentTasks subscriber, so it must
-    // not fire on a re-click of the already-active tab.
-    if (activeTabId !== tabId) recordIfTaskTab(tab);
     setActiveTabId(tabId);
     if (tab?.projectId && tab.projectId !== currentProjectId) {
       navigate(`/workspace/${tab.projectId}`);
     }
-  }, [tabs, currentProjectId, navigate, setActiveTabId, recordIfTaskTab, activeTabId]);
+  }, [tabs, currentProjectId, navigate, setActiveTabId]);
 
   // Multi-pane split layout (Issue #397). `allTabIds` must be a stable
   // reference across renders that don't actually add/remove tabs, or
@@ -235,6 +220,23 @@ function WorkspaceInner() {
     return pane ? pane.activeTabId : activeTabId;
   }, [layout.state.root, layout.state.focusedPaneId, activeTabId]);
 
+  // Single recording point for the sidebar's "recent" order: every
+  // activation path (initial open, tab-bar reselect, pane focus, drag-drop,
+  // context-menu pane move, post-close successor selection, notification
+  // auto-open) funnels into focusedActiveTabId — the focused pane's active
+  // tab, falling back to the global activeTabId. Recording here instead of
+  // at each call site means no activation path can be missed. lastRecordedTaskIdRef
+  // guards against re-recording (localStorage write + subscriber notify) on
+  // every render while the same task tab stays focused.
+  const lastRecordedTaskIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    const tab = tabs.find((t) => t.id === focusedActiveTabId);
+    const taskId = tab?.type === 'task' && tab.entityId != null ? tab.entityId : null;
+    if (taskId === lastRecordedTaskIdRef.current) return;
+    lastRecordedTaskIdRef.current = taskId;
+    if (taskId != null) recordTaskOpened(taskId);
+  }, [focusedActiveTabId, tabs, recordTaskOpened]);
+
   // Pane-local tab selection: keeps the pane's own active tab and the
   // pane-focus in sync, mirrors the selection into useTabPersistence's
   // activeTabId (guarded so an already-current selection is a no-op and
@@ -245,22 +247,14 @@ function WorkspaceInner() {
   // this so a cross-project tab's content is never shown against the wrong
   // project's `tasks`/`project`/`projectServers`.
   const selectPaneTab = useCallback((paneId: string, tabId: string) => {
-    const pane = findPane(layout.state.root, paneId);
-    // pointerdown-capture (see handlePointerDownCapture below) calls this on
-    // every click inside an already-focused, already-active tab, not just on
-    // an actual switch — only record when the pane's active tab is actually
-    // changing, so recordIfTaskTab's localStorage write + subscriber
-    // notification doesn't fire on every click inside a task panel.
-    const isPaneTabChange = pane?.activeTabId !== tabId;
     layout.setActive(paneId, tabId);
     layout.focusPane(paneId);
     if (activeTabId !== tabId) setActiveTabId(tabId);
     const tab = tabs.find((t) => t.id === tabId);
-    if (isPaneTabChange) recordIfTaskTab(tab);
     if (tab?.projectId && tab.projectId !== currentProjectId) {
       navigate(`/workspace/${tab.projectId}`);
     }
-  }, [layout, activeTabId, setActiveTabId, tabs, currentProjectId, navigate, recordIfTaskTab]);
+  }, [layout, activeTabId, setActiveTabId, tabs, currentProjectId, navigate]);
 
   const handlePaneSelectTab = selectPaneTab;
 
@@ -400,8 +394,7 @@ function WorkspaceInner() {
     } else {
       openTaskRaw(taskId, title, taskProjectId ?? currentProjectId, fromOrProjectId);
     }
-    recordTaskOpened(taskId);
-  }, [openTaskRaw, currentProjectId, allTasks, recordTaskOpened]);
+  }, [openTaskRaw, currentProjectId, allTasks]);
 
   useEffect(() => {
     setOnOpenTask((taskId) => openTask(taskId, t('tasks:detail.taskRef', { id: taskId })));
