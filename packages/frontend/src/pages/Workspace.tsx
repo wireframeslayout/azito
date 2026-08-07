@@ -172,13 +172,27 @@ function WorkspaceInner() {
     }, [allTasks, openTaskRaw, openBrowser, showToast, recordTaskOpened]),
   });
 
+  // Shared by every "a tab was selected" entry point (handleSelectTab,
+  // selectPaneTab) so a task tab becoming active — via tab-bar click, pane
+  // focus, drag-drop, etc. — always refreshes the sidebar's "recent" order,
+  // not just the initial open via openTask.
+  const recordIfTaskTab = useCallback((tab: PersistedTab | undefined) => {
+    if (tab?.type === 'task' && tab.entityId != null) {
+      recordTaskOpened(tab.entityId);
+    }
+  }, [recordTaskOpened]);
+
   const handleSelectTab = useCallback((tabId: string) => {
-    setActiveTabId(tabId);
     const tab = tabs.find((t) => t.id === tabId);
+    // Only record on an actual selection change — recordIfTaskTab writes to
+    // localStorage and notifies every useRecentTasks subscriber, so it must
+    // not fire on a re-click of the already-active tab.
+    if (activeTabId !== tabId) recordIfTaskTab(tab);
+    setActiveTabId(tabId);
     if (tab?.projectId && tab.projectId !== currentProjectId) {
       navigate(`/workspace/${tab.projectId}`);
     }
-  }, [tabs, currentProjectId, navigate, setActiveTabId]);
+  }, [tabs, currentProjectId, navigate, setActiveTabId, recordIfTaskTab, activeTabId]);
 
   // Multi-pane split layout (Issue #397). `allTabIds` must be a stable
   // reference across renders that don't actually add/remove tabs, or
@@ -231,14 +245,22 @@ function WorkspaceInner() {
   // this so a cross-project tab's content is never shown against the wrong
   // project's `tasks`/`project`/`projectServers`.
   const selectPaneTab = useCallback((paneId: string, tabId: string) => {
+    const pane = findPane(layout.state.root, paneId);
+    // pointerdown-capture (see handlePointerDownCapture below) calls this on
+    // every click inside an already-focused, already-active tab, not just on
+    // an actual switch — only record when the pane's active tab is actually
+    // changing, so recordIfTaskTab's localStorage write + subscriber
+    // notification doesn't fire on every click inside a task panel.
+    const isPaneTabChange = pane?.activeTabId !== tabId;
     layout.setActive(paneId, tabId);
     layout.focusPane(paneId);
     if (activeTabId !== tabId) setActiveTabId(tabId);
     const tab = tabs.find((t) => t.id === tabId);
+    if (isPaneTabChange) recordIfTaskTab(tab);
     if (tab?.projectId && tab.projectId !== currentProjectId) {
       navigate(`/workspace/${tab.projectId}`);
     }
-  }, [layout, activeTabId, setActiveTabId, tabs, currentProjectId, navigate]);
+  }, [layout, activeTabId, setActiveTabId, tabs, currentProjectId, navigate, recordIfTaskTab]);
 
   const handlePaneSelectTab = selectPaneTab;
 
