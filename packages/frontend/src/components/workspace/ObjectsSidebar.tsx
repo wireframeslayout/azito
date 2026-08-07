@@ -401,9 +401,26 @@ export default function ObjectsSidebar({
       disabled: !b.primaryUrl,
       onClick: () => {
         if (!b.primaryUrl) return;
-        navigator.clipboard.writeText(b.primaryUrl)
-          .then(() => showToast(t('objects.urlCopied')))
-          .catch(() => showToast(t('browser:clipboardDenied')));
+        const url = b.primaryUrl;
+        if (navigator.clipboard?.writeText) {
+          navigator.clipboard.writeText(url)
+            .then(() => showToast(t('objects.urlCopied')))
+            .catch(() => showToast(t('browser:clipboardDenied')));
+          return;
+        }
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = url;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+          showToast(t('objects.urlCopied'));
+        } catch {
+          showToast(t('browser:clipboardDenied'));
+        }
       },
     },
     { label: '', separator: true, onClick: () => {} },
