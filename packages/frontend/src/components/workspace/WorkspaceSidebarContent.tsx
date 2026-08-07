@@ -106,6 +106,7 @@ export default function WorkspaceSidebarContent({
           refreshBrowserGroups={refreshBrowserGroups ?? (() => {})}
           openBrowser={openBrowser}
           openTask={openTask}
+          onOpenTaskWindow={onOpenTaskWindow}
         />
       )}
       {sidebarMode === 'tasks' && project && (

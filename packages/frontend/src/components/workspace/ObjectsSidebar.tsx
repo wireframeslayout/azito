@@ -10,6 +10,7 @@ import { WindowActivityIndicator } from '../ui';
 import { buildObjectSections } from '../../lib/workspaceObjects';
 import type { BrowserGroupInfo } from '../../hooks/useBrowserGroups';
 import type { Project, Session, Window } from '../../pages/workspace/types';
+import { stripPaneSuffix } from '../../utils/tmuxTarget';
 import ObjectSection from './objects/ObjectSection';
 import BrowserSection from './objects/BrowserSection';
 
@@ -66,6 +67,7 @@ interface ObjectsSidebarProps {
   refreshBrowserGroups: () => void;
   openBrowser: (serverName: string, groupId?: string) => void;
   openTask: (taskId: number, title: string) => void;
+  onOpenTaskWindow?: (taskId: number, taskTitle: string, terminal: { serverName: string; target: string }) => void;
 }
 
 type QuickAddAgent = 'claude' | 'codex' | 'terminal';
@@ -94,6 +96,7 @@ export default function ObjectsSidebar({
   refreshBrowserGroups,
   openBrowser,
   openTask,
+  onOpenTaskWindow,
 }: ObjectsSidebarProps) {
   const { t } = useTranslation(['workspace', 'tasks']);
   const { collapsed, toggle } = useObjectSectionCollapse();
@@ -180,6 +183,25 @@ export default function ObjectsSidebar({
     openTask(taskId, t('tasks:detail.taskRef', { id: taskId }));
     if (mobile) onCloseMobileSidebar();
   }, [openTask, mobile, onCloseMobileSidebar, t]);
+
+  // serverName + pane-suffix-stripped target -> operation window (for routing clicks to the owning task panel)
+  const operationWindowByKey = useMemo(() => {
+    const map = new Map<string, Window>();
+    for (const w of sections.operationWindows) {
+      map.set(`${w.serverName}/${stripPaneSuffix(w.tmuxTarget)}`, w);
+    }
+    return map;
+  }, [sections.operationWindows]);
+
+  const handleOperationPaneClick = useCallback((serverName: string, target: string) => {
+    const w = operationWindowByKey.get(`${serverName}/${stripPaneSuffix(target)}`);
+    if (w?.taskId != null && onOpenTaskWindow) {
+      onOpenTaskWindow(w.taskId, t('tasks:detail.taskRef', { id: w.taskId }), { serverName: w.serverName, target: w.tmuxTarget });
+      if (mobile) onCloseMobileSidebar();
+      return;
+    }
+    handlePaneClick(serverName, target);
+  }, [operationWindowByKey, onOpenTaskWindow, t, mobile, onCloseMobileSidebar, handlePaneClick]);
 
   const renderOperationExtra = useCallback((w: WindowItem) => {
     const status = windowIndicator(w.serverName, w.tmuxTarget);
@@ -308,7 +330,7 @@ export default function ObjectsSidebar({
                 windows={sections.operationWindows}
                 sessionData={sessionData}
                 isActive={checkActive}
-                onPaneClick={handlePaneClick}
+                onPaneClick={handleOperationPaneClick}
                 onContextMenu={showWindowContextMenu as (e: React.MouseEvent, w: WindowItem, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void}
                 extra={renderOperationExtra}
                 activityClassName={renderActivityClassName}
