@@ -272,13 +272,26 @@ export class TaskRestoreService {
         paneLayout: null,
       });
 
+      // task.branch is deliberately NOT written here (Issue #328 review,
+      // fourth recurrence of this exact self-invalidation bug — see
+      // ExecuteTaskUseCase.execute's worktree-creation write and
+      // PhaseLoopRunner's end-of-run git-info write for the same reasoning
+      // applied at their own call sites): `branch` is the value the
+      // execution-gate fingerprint hashes as `branches.work`
+      // (ExecutionManifest.ts). Writing the freshly resolved worktree
+      // branch back into it here made restoring a branch-unspecified,
+      // already-approved task change the very fingerprint its approval was
+      // granted under, so the very next gate reverification saw a mismatch
+      // and threw the task back to `pending_approval`. `worktreeBranch` is
+      // the correct field for "the branch the system actually
+      // resolved/created" — it's in the execution-gate fingerprint's
+      // deliberately-excluded list for exactly this reason.
       taskRepo.update(task.id, {
         status: 'open' as TaskStatus,
         tmuxWindow: windowName,
         worktreePath,
         worktreeBranch,
         baseBranch,
-        branch: worktreeBranch,
         pendingOperation: null,
       } as Partial<Task>);
 

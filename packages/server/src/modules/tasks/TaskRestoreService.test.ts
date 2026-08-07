@@ -280,6 +280,43 @@ describe('TaskRestoreService', () => {
     expect(manifest.branches.work).toBe(branchActuallyUsed);
   });
 
+  it('does not write task.branch on restore — the resolved worktree branch goes only into worktreeBranch (Issue #328 review, fourth recurrence of the branch self-invalidation bug)', async () => {
+    // Regression: restore() used to also write `branch: worktreeBranch` into
+    // the same taskRepo.update() call this test already checks for status/
+    // worktreePath/worktreeBranch. Since the approval fingerprint hashes
+    // `task.branch` (ExecutionManifest.ts's `branches.work`), that write
+    // changed the very fingerprint an approved-but-branch-unspecified task's
+    // approval was granted under, the moment restore() ran — self-
+    // invalidating the approval it was operating under (see
+    // ExecutionManifest.ts's module doc comment for the three earlier
+    // recurrences of this exact failure mode).
+    const task = makeTask({ serverName: 'test-server', branch: null, worktreeBranch: null });
+
+    await service.restore(task, log);
+
+    const updateCall = (deps.taskRepo.update as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(updateCall[1]).not.toHaveProperty('branch');
+    expect(updateCall[1]).toMatchObject({ worktreeBranch: 'feat/test-task' });
+  });
+
+  it('restoring an approved, branch-unspecified task does not change the execution-manifest fingerprint (Issue #328 regression) — re-approval must not be required immediately after a successful restore', async () => {
+    const { resolveExecutionManifest, hashExecutionManifest } = await import('./execution/ExecutionManifest.js');
+    const task = makeTask({ serverName: 'test-server', branch: null, worktreeBranch: null });
+
+    const hashBefore = hashExecutionManifest(resolveExecutionManifest(task, deps).manifest);
+
+    await service.restore(task, log);
+
+    // Simulate the DB row after restore() by applying the exact same fields
+    // taskRepo.update() was called with — task.branch must be untouched, so
+    // re-resolving the manifest off the post-restore row hashes identically.
+    const updateCall = (deps.taskRepo.update as ReturnType<typeof vi.fn>).mock.calls[0];
+    const restoredTask: Task = { ...task, ...(updateCall[1] as Partial<Task>) };
+    const hashAfter = hashExecutionManifest(resolveExecutionManifest(restoredTask, deps).manifest);
+
+    expect(hashAfter).toBe(hashBefore);
+  });
+
   it('passes a non-empty slug even when branch is specified (assertSafeBranch compatibility)', async () => {
     const task = makeTask({ id: 42, serverName: 'test-server', branch: 'feat/my-branch' });
 

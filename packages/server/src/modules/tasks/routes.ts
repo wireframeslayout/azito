@@ -423,6 +423,29 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       if (existing.inputTrust === 'untrusted' && require_plan_approval === false) {
         return reply.status(400).send({ error: 'require_plan_approval cannot be disabled for an untrusted-origin task' });
       }
+      // A `pending_approval` task's status may only change through
+      // POST /api/tasks/:id/approve-execution (Issue #328 review round) —
+      // that endpoint atomically clears pendingOperation/
+      // pendingOperationWindowId/pendingOperationPriorStatus together with
+      // the status transition (consumePendingApproval). Accepting an
+      // arbitrary `status` here would let a client move the task to e.g.
+      // 'open' or 'done' while leaving pendingOperation set: the approval
+      // screen (GET .../execution-approval) rejects because status is no
+      // longer 'pending_approval', and checkExecutionGate blocks any new
+      // run because pendingOperation is still non-null — a permanently
+      // stuck task neither the approval UI nor the gate can recover.
+      // StatusDropdown already locks 'pending_approval' client-side
+      // (frontend/src/components/task/StatusDropdown.tsx); this is the
+      // server-side enforcement of the same rule. The escape hatch for "I
+      // don't want to approve this" is already POST .../approve-execution
+      // with `approved: false` (denial), which atomically clears the
+      // pending state via the same consumePendingApproval() call — so no
+      // new revoke endpoint is needed.
+      if (existing.status === ('pending_approval' as TaskStatus) && status !== undefined) {
+        return reply.status(409).send({
+          error: `Task ${id} is pending_approval; its status cannot be changed via PUT. Approve or deny via POST /api/tasks/${id}/approve-execution (denial clears the pending approval).`,
+        });
+      }
       try {
         const reviewSubagent = review_subagent !== undefined
           ? parseSubagentConfigInput(review_subagent, 'review_subagent')

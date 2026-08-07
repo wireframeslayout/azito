@@ -280,6 +280,93 @@ describe('PUT /api/tasks/:id — require_plan_approval guard for untrusted tasks
   });
 });
 
+describe('PUT /api/tasks/:id — status is locked while pending_approval (Issue #328)', () => {
+  // Regression: PUT used to accept an arbitrary `status` unconditionally
+  // (`status: (status as TaskStatus) || existing.status`), even for a task
+  // whose status is `pending_approval`. Moving it away from
+  // `pending_approval` this way leaves `pendingOperation` (and
+  // `pendingOperationWindowId`/`pendingOperationPriorStatus`) set: the
+  // approval screen (GET .../execution-approval) then 404/400s because
+  // status is no longer `pending_approval`, and checkExecutionGate refuses
+  // to record a new block because pendingOperation is already non-null — a
+  // task the approval UI and the execution gate can no longer touch.
+  it('rejects a status change on a pending_approval task with 409, and does not update', async () => {
+    const { opts } = makeOpts(makeTask({
+      status: 'pending_approval',
+      pendingOperation: 'execute',
+      pendingOperationPriorStatus: 'open',
+    }));
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/tasks/1',
+      payload: { status: 'open' },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(opts.taskRepo.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects even a same-value status round-trip on a pending_approval task (a stale edit-form save resubmits the old status verbatim)', async () => {
+    const { opts } = makeOpts(makeTask({
+      status: 'pending_approval',
+      pendingOperation: 'restore',
+      pendingOperationPriorStatus: 'archived',
+    }));
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/tasks/1',
+      payload: { status: 'pending_approval', title: 'Edited title' },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(opts.taskRepo.update).not.toHaveBeenCalled();
+  });
+
+  it('allows editing other fields on a pending_approval task as long as `status` itself is omitted from the body', async () => {
+    const { opts } = makeOpts(makeTask({
+      status: 'pending_approval',
+      pendingOperation: 'execute',
+      pendingOperationPriorStatus: 'open',
+    }));
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/tasks/1',
+      payload: { title: 'Edited title' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.taskRepo.update).toHaveBeenCalled();
+  });
+
+  it('allows a status change on a non-pending_approval task (unaffected — legacy behavior preserved)', async () => {
+    const { opts } = makeOpts(makeTask({ status: 'open' }));
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/tasks/1',
+      payload: { status: 'archived' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.taskRepo.update).toHaveBeenCalledWith(1, expect.objectContaining({ status: 'archived' }));
+  });
+});
+
 describe('POST /api/tasks/:id/recover-session — execution gate (Issue #328)', () => {
   it('translates WindowRespawnService gate errors into the same HTTP shape as /execute (window-record path)', async () => {
     const { opts } = makeOpts(makeTask({ inputTrust: 'untrusted', status: 'pending_approval' }));
