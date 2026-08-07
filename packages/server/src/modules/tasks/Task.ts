@@ -182,6 +182,51 @@ export function deriveInputTrust(source: Task['source']): Task['inputTrust'] {
   return source === 'github' || source === 'gitlab' ? 'untrusted' : 'trusted';
 }
 
+/** The only values {@link deriveInputTrust} (and thus the execution gate) understands. */
+const VALID_TASK_SOURCES: readonly Task['source'][] = ['local', 'github', 'gitlab'];
+
+/**
+ * Validates the raw `source`/`source_ref` request-body fields shared by
+ * POST /api/tasks and PUT /api/tasks/:id (third-party review, task/328
+ * follow-up) — before this, both endpoints only cast `source` to
+ * `Task['source']` without checking it against `VALID_TASK_SOURCES`, so a
+ * caller-supplied `"GitHub"` (wrong case) or `"github "` (stray whitespace)
+ * was stored verbatim and fell through `deriveInputTrust()`'s `===`
+ * comparison to `'trusted'` — silently defeating the untrusted-origin
+ * execution gate for content that looks exactly like a GitHub import.
+ *
+ * Also rejects `source_ref` supplied without `source` in the SAME request:
+ * a task that carries a `sourceRef` (so it visibly looks issue-linked in the
+ * UI) while `source` stays unset/`'local'` would derive `'trusted'` despite
+ * appearing to originate from an external issue.
+ *
+ * Pure function (no I/O) so callers translate its `{ error }` result into
+ * their own 400 response shape; returns `undefined` for a field the caller
+ * didn't touch (PUT's partial-update semantics), never coerces a value.
+ */
+export function validateTaskSourceFields(
+  source: unknown,
+  sourceRef: unknown,
+): { error: string } | { source: Task['source'] | undefined; sourceRef: string | null | undefined } {
+  if (source !== undefined) {
+    if (typeof source !== 'string' || !VALID_TASK_SOURCES.includes(source as Task['source'])) {
+      return { error: `source must be one of: ${VALID_TASK_SOURCES.join(', ')}` };
+    }
+  }
+  if (sourceRef !== undefined && sourceRef !== null) {
+    if (typeof sourceRef !== 'string') {
+      return { error: 'source_ref must be a string' };
+    }
+    if (source === undefined) {
+      return { error: 'source is required when source_ref is provided' };
+    }
+  }
+  return {
+    source: source as Task['source'] | undefined,
+    sourceRef: sourceRef as string | null | undefined,
+  };
+}
+
 export interface ITaskRepository {
   findAll(): Task[];
   findByProject(projectId: number): Task[];

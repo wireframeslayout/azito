@@ -236,6 +236,58 @@ describe('POST /api/tasks — input_trust derived from source (Issue #328)', () 
     expect(res.statusCode).toBe(200);
     expect(createCalls[0]).toMatchObject({ source: 'local', inputTrust: 'trusted' });
   });
+
+  // Third-party review fix (task/328-input-trust-and-exec-gate follow-up):
+  // `source` decides `inputTrust` via a `===` comparison in
+  // deriveInputTrust() — an unvalidated wrong-case/whitespace value fell
+  // through to 'trusted', silently bypassing the execution gate.
+  it('rejects a wrong-case source value ("GitHub") with 400 and does not create the task', async () => {
+    const { opts, createCalls } = makeOpts(makeTask());
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/tasks',
+      payload: { project_id: 10, title: 'Imported issue', source: 'GitHub', source_ref: 'org/repo#1' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(createCalls.length).toBe(0);
+  });
+
+  it('rejects a source value with stray whitespace ("github ") with 400', async () => {
+    const { opts, createCalls } = makeOpts(makeTask());
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/tasks',
+      payload: { project_id: 10, title: 'Imported issue', source: 'github ', source_ref: 'org/repo#1' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(createCalls.length).toBe(0);
+  });
+
+  it('rejects source_ref supplied without source (would look issue-linked while deriving trusted) with 400', async () => {
+    const { opts, createCalls } = makeOpts(makeTask());
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/tasks',
+      payload: { project_id: 10, title: 'Imported issue', source_ref: 'org/repo#1' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(createCalls.length).toBe(0);
+  });
 });
 
 describe('PUT /api/tasks/:id — require_plan_approval guard for untrusted tasks (Issue #328)', () => {
@@ -405,6 +457,40 @@ describe('PUT /api/tasks/:id — input_trust derivation is monotonic (Issue #328
     expect(res.statusCode).toBe(200);
     const updateCall = (opts.taskRepo.update as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(updateCall[1].inputTrust).toBeUndefined();
+  });
+
+  // Same validation as POST /api/tasks above, applied to PUT too (third-party
+  // review, task/328 follow-up).
+  it('rejects a wrong-case source value ("GitHub") with 400 and does not update the task', async () => {
+    const { opts } = makeOpts(makeTask({ inputTrust: 'trusted', source: 'local' }));
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/tasks/1',
+      payload: { source: 'GitHub', source_ref: 'org/repo#1' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(opts.taskRepo.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects source_ref supplied without source with 400', async () => {
+    const { opts } = makeOpts(makeTask({ inputTrust: 'trusted', source: 'local' }));
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/tasks/1',
+      payload: { source_ref: 'org/repo#1' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(opts.taskRepo.update).not.toHaveBeenCalled();
   });
 });
 
