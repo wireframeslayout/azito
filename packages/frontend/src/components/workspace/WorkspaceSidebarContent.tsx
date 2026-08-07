@@ -53,7 +53,7 @@ interface WorkspaceSidebarContentProps {
   showContextMenu: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
   showContextMenuAt: (x: number, y: number, items: ContextMenuItem[]) => void;
   onCapturePanes: (windowId: number) => void;
-  onStopOperation: (unitId: number | null) => void;
+  onStopOperation: (unitId: number | null, taskId: number) => void;
   openStorageFileRaw: (projectId: number, filename: string, originalName: string, size: number) => void;
   projectSettings: { section: SettingsSection; setSection: (s: SettingsSection) => void };
   onOpenDiff: (serverName: string, path: string) => void;

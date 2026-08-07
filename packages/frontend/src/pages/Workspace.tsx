@@ -111,10 +111,14 @@ function WorkspaceInner() {
   const data = useWorkspaceData(id, tabs, sidebarMode);
   const { project, allUnits, tasks, servers, sessionData, allProjects, allTasks, projectsLoaded, projectServers, selectedFileServer, setSelectedFileServer, refreshWorkspace } = data;
 
-  const browserCapableServers = useMemo(
-    () => servers.filter((s) => s.type === 'local' || s.type === 'agent').map((s) => s.name),
-    [servers],
-  );
+  // プロジェクトに紐づくサーバー（projectServers）と、ブラウザ対応（local/agent型）サーバー（servers）の積集合。
+  // servers は全サーバーなのでそのまま使うと他プロジェクトのサーバーまで拾ってしまう。
+  const browserCapableServers = useMemo(() => {
+    const projectServerNames = new Set(projectServers.map((ps) => ps.serverName));
+    return servers
+      .filter((s) => (s.type === 'local' || s.type === 'agent') && projectServerNames.has(s.name))
+      .map((s) => s.name);
+  }, [servers, projectServers]);
   const { groups: browserGroups, errors: browserErrors, refresh: refreshBrowserGroups, loaded: browserGroupsLoaded } = useBrowserGroups(browserCapableServers);
 
   const taskWindows = useMemo(() => {
@@ -576,9 +580,9 @@ function WorkspaceInner() {
     refreshWorkspace();
   }, [refreshWorkspace, showToast, confirm]);
 
-  const stopTask = useCallback(async (unitId: number | null) => {
+  const stopTask = useCallback(async (unitId: number | null, taskId: number) => {
     if (!unitId) return;
-    await api(`/units/${unitId}/stop`, { method: 'POST' });
+    await api(`/units/${unitId}/stop`, { method: 'POST', body: JSON.stringify({ taskId }) });
     refreshWorkspace();
   }, [refreshWorkspace]);
 

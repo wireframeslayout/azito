@@ -76,7 +76,8 @@ interface ObjectsSidebarProps {
   refreshBrowserGroups: () => void;
   /** true になった時点で、現在のサーバー集合について最初の状態取得が完了している（useBrowserGroups 参照） */
   browserGroupsLoaded: boolean;
-  /** ブラウザ対応（local/agent型）サーバー名の一覧。空ならブラウザセクション自体を出さない */
+  /** プロジェクトに紐づくサーバーのうち、ブラウザ対応（local/agent型）のものの名前一覧（呼び出し元で積集合済み）。
+   * 空ならブラウザセクション自体を出さない */
   browserCapableServerNames: string[];
   tabs: PersistedTab[];
   closeTab: (tabId: string) => void;
@@ -88,8 +89,9 @@ interface ObjectsSidebarProps {
   showContextMenuAt: (x: number, y: number, items: ContextMenuItem[]) => void;
   /** オペレーションウィンドウ行の「ペインをキャプチャ」に接続する */
   onCapturePanes: (windowId: number) => void;
-  /** オペレーションウィンドウ行の「オペレーションを停止」に接続する（Unit の POST /api/units/:id/stop） */
-  onStopOperation: (unitId: number | null) => void;
+  /** オペレーションウィンドウ行の「オペレーションを停止」に接続する（Unit の POST /api/units/:id/stop）。
+   * taskId を省略すると同じ Unit を使う他タスクの実行まで巻き添えで止まるため、対象タスクの id を必ず渡す。 */
+  onStopOperation: (unitId: number | null, taskId: number) => void;
 }
 
 type QuickAddAgent = 'claude' | 'codex' | 'terminal';
@@ -132,7 +134,7 @@ export default function ObjectsSidebar({
   onCapturePanes,
   onStopOperation,
 }: ObjectsSidebarProps) {
-  const { t } = useTranslation(['workspace', 'tasks']);
+  const { t } = useTranslation(['workspace', 'tasks', 'browser']);
   const { showToast } = useToast();
   const { collapsed, toggle } = useObjectSectionCollapse();
 
@@ -360,7 +362,7 @@ export default function ObjectsSidebar({
       items.push({ label: '', separator: true, onClick: () => {} });
       items.push({
         label: t('objects.stopOperation'), icon: <Icon name="stop" size={16} />, danger: true,
-        onClick: () => onStopOperation(task.unitId),
+        onClick: () => onStopOperation(task.unitId, task.id),
       });
     }
     return items;
@@ -396,7 +398,9 @@ export default function ObjectsSidebar({
       disabled: !b.primaryUrl,
       onClick: () => {
         if (!b.primaryUrl) return;
-        navigator.clipboard.writeText(b.primaryUrl).then(() => showToast(t('objects.urlCopied')));
+        navigator.clipboard.writeText(b.primaryUrl)
+          .then(() => showToast(t('objects.urlCopied')))
+          .catch(() => showToast(t('browser:clipboardDenied')));
       },
     },
     { label: '', separator: true, onClick: () => {} },
@@ -430,19 +434,55 @@ export default function ObjectsSidebar({
           <div style={{ padding: '12px 20px', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', textAlign: 'center' }}>
             {t('objects.noObjects')}
             <br />
-            <button
-              type="button"
-              onClick={() => onOpenAddWindow()}
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 10,
-                background: 'var(--accent-a15)', color: 'var(--accent)', padding: '5px 12px',
-                borderRadius: 'var(--radius-md)', fontSize: 'var(--font-sm)', border: 'none',
-                cursor: 'pointer', fontFamily: 'inherit',
-              }}
-            >
-              <Icon name="plus" size={14} />
-              {t('windows.addWindow')}
-            </button>
+            <div style={{ display: 'inline-flex', gap: 8, marginTop: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
+              <button
+                type="button"
+                onClick={() => onOpenAddWindow()}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                  background: 'var(--accent-a15)', color: 'var(--accent)', padding: '5px 12px',
+                  borderRadius: 'var(--radius-md)', fontSize: 'var(--font-sm)', border: 'none',
+                  cursor: 'pointer', fontFamily: 'inherit',
+                }}
+              >
+                <Icon name="plus" size={14} />
+                {t('windows.addWindow')}
+              </button>
+              {/* ブラウザ対応サーバーがあるプロジェクトでは、全体空表示からもブラウザを開く導線に到達できるようにする
+                  （ウィンドウ・オペレーション・ブラウザの3種別すべてが空のときの唯一のCTAが「ウィンドウを追加」だけにならないよう） */}
+              {browserCapableServerNames.length > 0 && (
+                browserCapableServerNames.length === 1 ? (
+                  <button
+                    type="button"
+                    onClick={() => handleOpenBrowser(browserCapableServerNames[0])}
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 6,
+                      background: 'var(--bg-hover)', color: 'var(--text)', padding: '5px 12px',
+                      borderRadius: 'var(--radius-md)', fontSize: 'var(--font-sm)', border: 'none',
+                      cursor: 'pointer', fontFamily: 'inherit',
+                    }}
+                  >
+                    <Icon name="browser" size={14} />
+                    {t('objects.openBrowser')}
+                  </button>
+                ) : (
+                  <ServerSelectMenu serverNames={browserCapableServerNames} onSelect={(name) => handleOpenBrowser(name)}>
+                    <button
+                      type="button"
+                      style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 6,
+                        background: 'var(--bg-hover)', color: 'var(--text)', padding: '5px 12px',
+                        borderRadius: 'var(--radius-md)', fontSize: 'var(--font-sm)', border: 'none',
+                        cursor: 'pointer', fontFamily: 'inherit',
+                      }}
+                    >
+                      <Icon name="browser" size={14} />
+                      {t('objects.openBrowser')}
+                    </button>
+                  </ServerSelectMenu>
+                )
+              )}
+            </div>
           </div>
         ) : (
           <>

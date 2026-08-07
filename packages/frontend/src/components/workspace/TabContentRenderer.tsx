@@ -45,7 +45,7 @@ interface TabContentRendererProps {
   closeTab: (tabId: string) => void;
   retargetTab?: (oldTabId: string, serverName: string, newTarget: string) => void;
   executeTask: (taskId: number, unitId: number | null) => void;
-  stopTask: (unitId: number | null) => void;
+  stopTask: (unitId: number | null, taskId: number) => void;
   refreshWorkspace: () => void;
   connectPane: (serverName: string, target: string) => void;
   openTask: (taskId: number, title: string, from?: 'global' | 'workspace') => void;
@@ -186,7 +186,7 @@ export default function TabContentRenderer({
           currentProject={project}
           sessionData={sessionData}
           executeTask={executeTask}
-          stopTask={(unitId) => stopTask(unitId)}
+          stopTask={(unitId) => stopTask(unitId, tab.entityId!)}
           onRefresh={refreshWorkspace}
           projectServers={projectServers}
           onBack={() => {
@@ -309,7 +309,7 @@ export default function TabContentRenderer({
           onExecute={executeTask}
           onStop={(taskId) => {
             const t = tasks.find((x) => x.id === taskId);
-            if (t) stopTask(t.unitId);
+            if (t) stopTask(t.unitId, t.id);
           }}
           headerRight={
             <Button variant="primary" size="sm" onClick={() => openTaskForm({ mode: 'create', projectId: currentProjectId })}>{t('tasks:actions.newTask')}</Button>
