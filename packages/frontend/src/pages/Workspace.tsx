@@ -799,6 +799,8 @@ function WorkspaceInner() {
       connectPane={connectPane}
       onOpenAddWindow={addWindowModal.openAddWindow}
       onOpenQuickAdd={addWindowModal.openQuickAddWindow}
+      agentDefsLoading={addWindowModal.agentPresetsLoading}
+      agentDefsError={addWindowModal.agentPresetsError}
       showWindowContextMenu={windowActions.showWindowContextMenu}
       onSwitchSidebarMode={handleSwitchSidebarMode}
       onFileSelect={handleFileSelect}

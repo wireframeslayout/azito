@@ -60,6 +60,9 @@ interface ObjectsSidebarProps {
   showWindowContextMenu: (e: React.MouseEvent, w: Window, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void;
   onOpenAddWindow: () => void;
   onOpenQuickAdd: (serverName: string, agentType: QuickAddAgent) => void;
+  /** クイック追加ボタンの押下可否判定に使う。起動コマンドを実際に供給する useAddWindowModal 側の取得状態 */
+  agentDefsLoading: boolean;
+  agentDefsError: string | null;
   onCloseMobileSidebar: () => void;
   respawningWindowIds?: Set<number>;
   taskWindows?: Array<{ serverName: string; tmuxTarget: string; taskId: number }>;
@@ -90,6 +93,8 @@ export default function ObjectsSidebar({
   showWindowContextMenu,
   onOpenAddWindow,
   onOpenQuickAdd,
+  agentDefsLoading,
+  agentDefsError,
   onCloseMobileSidebar,
   respawningWindowIds,
   taskWindows,
@@ -117,7 +122,8 @@ export default function ObjectsSidebar({
     [project.windows, taskWindows, browserGroups, projectServerNames],
   );
 
-  const { agents: agentDefs, loading: agentDefsLoading, error: agentDefsError } = useAgentDefinitions('worker');
+  // agentByType（ラベル解決）専用。押下可否の判定は agentDefsLoading/agentDefsError props（useAddWindowModal 側の取得）を使う。
+  const { agents: agentDefs } = useAgentDefinitions('worker');
   const { windowIndicator, finishedEntries } = useAgentActivity();
 
   const renderActivityExtra = useCallback((w: WindowItem) => {
