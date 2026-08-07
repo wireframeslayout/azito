@@ -62,7 +62,7 @@ The release bundle ships Node.js, but only to run **the hub process itself** (ju
 
 | Software | Required? | Used for |
 |---|---|---|
-| tmux 3.4+ | **Yes** | AZITO drives tmux sessions on the host. `install.sh` detects it and offers to install |
+| tmux | **Yes** | AZITO drives tmux sessions on the host. `install.sh` checks whether tmux is present and offers to install it (no version verification). 3.4+ recommended |
 | git | **Yes** | Per-task worktrees. Same as above |
 | Node.js v24+ | Feature-dependent | Browser runtime install (uses `npx`), supervised windows (`azs` starts the supervisor with `node`). **Not needed for the hub to boot** |
 | Tailscale | Optional | Access from other devices, push notifications over HTTPS |
@@ -246,6 +246,18 @@ Tags follow SemVer 2.0 pre-release identifiers with dot-separated numeric parts 
 | Promotion to stable | Tag the same commit as the last rc with the stable version |
 | GitHub treatment | Tags containing a hyphen are published as pre-releases |
 
+## Agent Server Auto-Update
+
+On hub startup, all registered Agent servers are automatically version-checked. Updates are determined by a content hash (SHA256 of the bundle file).
+
+| State | Behavior |
+|---|---|
+| Hash mismatch | Auto-redeploy (build → SSH transfer → restart) |
+| Running tasks present | Deferred — rechecked on next hub startup |
+| Hash match | No action (`up_to_date`) |
+
+To update manually, use Servers → target server → Setup → Agent Server → "Reinstall".
+
 ## Rollback
 
 ```bash
@@ -275,6 +287,8 @@ azito token rotate   # Regenerate UI token
 azito version        # Show version
 ```
 
+> **Note:** The `azito` CLI is only available in release installs (deployed via `install.sh`). Source checkouts (`git clone` + `npm run dev`) have no CLI wrapper — check the token directly in `packages/server/.env` or `data/ui-token`.
+
 ## Supported Platforms
 
 | OS | Architecture | Status |
@@ -296,9 +310,9 @@ npm run build:hub -- --repo wireframeslayout/azito
 AZITO_RELEASE_REPO=wireframeslayout/azito npm run build:hub
 ```
 
-## Manual Update on macOS
+## Manual Update on macOS (Fallback)
 
-In-app updates are not yet supported on macOS (launchd). Follow these steps to update manually.
+macOS (launchd) supports in-app updates from Settings → System (restarts via `launchctl kickstart`). The steps below serve as a fallback when the in-app updater is not available.
 
 ```bash
 # 1. Check the latest version

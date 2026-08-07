@@ -31,7 +31,7 @@ An autonomous execution loop that drives worker agents through the Planning → 
 A harness that runs each task phase as a Claude Code **`/azt-*` skill**. Instead of relying on markers such as `AZITO_DONE`, Claude Code progresses through plan → implement → review → test → push while conversing naturally with the user. It bundles **azt-mcp** (which exposes the AZITO API as MCP tools), implementation rules passed to subagents (prompt-modules), and completion / activity notification hooks — all installed into your Claude Code environment with a single run of `setup.sh`.
 
 ### Multi-server support
-Connect to multiple development servers over a private network via Tailscale. Three server types are supported — Local, SSH, and Agent — with the Agent type offering automatic installation and automatic updates on remote servers.
+Connect to multiple development servers over a private network via Tailscale. Two server types are supported — Local and Agent. The Agent type is deployed to remote servers via SSH and supports automatic installation and updates.
 
 ### Worktree-based task execution
 A Git worktree is created for each task, running on its own independent branch. This enables accurate diff display and isolated execution. The `IWorktreeService` interface allows worktree operations on both local and remote servers. User-specified branch names are supported, and an execution mode that skips PR creation (skipPr) is also available.
@@ -40,7 +40,7 @@ A Git worktree is created for each task, running on its own independent branch. 
 Fetch and search repository issues and PRs/MRs, and create tasks directly from issues. Self-hosted GitLab is also supported.
 
 ### PWA support
-Push notifications (on task completion or failure), add-to-home-screen, and offline support. Delivers a near-native app experience even on smartphones.
+Push notifications (task completion, failure, questions, plan review, agent idle, approval required, and more — 11 event types in total), add-to-home-screen, and offline support. Delivers a near-native app experience even on smartphones.
 
 ### File operations
 File explorer, syntax-highlighted previews, image previews, PDF previews, file downloads, and integration with VS Code / Zed.
@@ -55,7 +55,7 @@ Badges for task ID, issue number, and PR number; automatic summary generation on
 Aggregates Claude / Codex token usage from local session logs and shows it in a dropdown in the header.
 
 ### Selectable tmux runtime
-Each server can use either the system tmux or an AZITO-managed tmux (a static binary downloaded automatically with SHA256 verification). Recommended tmux settings can be applied from the server settings screen.
+Each server can use either the system tmux or an AZITO-managed tmux (a static binary downloaded automatically with SHA256 verification; Linux x86_64/aarch64 only). Recommended tmux settings can be applied from the server settings screen.
 
 ### File storage
 File upload and sharing via MinIO (S3-compatible), with drag & drop support.
@@ -69,7 +69,7 @@ Browser (React 19 + Vite)
   │
   └── Fastify Server
         ├── modules/         # 1 feature = 1 module (routes + service + repository together)
-        │     ├── tmux/, servers/          # Foundation: tmux client, server transports (Local / SSH / Agent)
+        │     ├── tmux/, servers/          # Foundation: tmux client, server transports (Local / Agent)
         │     ├── agents/, git/, llm/,     # Mid layer: workers, worktrees, LLM clients,
         │     │   prompt/, sidekicks/      #   phase prompts, Sidekick packages
         │     └── tasks/, windows/, units/, operations/,   # Upper layer: task execution (phase loop),
@@ -82,8 +82,7 @@ Browser (React 19 + Vite)
 | Type | Connection | Purpose |
 |---|---|---|
 | Local | Direct execution | The machine AZITO runs on |
-| SSH | Tailscale SSH (`none` auth) | Remote development servers |
-| Agent | AZITO Agent (HTTP) | Remote servers (with auto-install support) |
+| Agent | AZITO Agent (HTTP/WS) | Remote servers — deployed via SSH (Tailscale), with automatic installation and updates |
 
 ## Quick Start
 
@@ -136,7 +135,7 @@ Open `http://localhost:5173` in your browser.
 
 ### Initial setup
 
-1. **Check servers** -- A `local` server is registered by default. Add SSH / Agent servers from Settings
+1. **Check servers** -- A `local` server is registered by default. Add Agent servers from Settings
 2. **Create a project** -- Create a project from the Projects page and set its working directory
 3. **Open the workspace** -- In the project workspace, add windows and configure Units
 

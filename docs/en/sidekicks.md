@@ -11,7 +11,7 @@
 >   tag is a general-purpose skill (e.g. issue creation).
 > - **Unit** -- **the team that runs an operation**. A single entity holding both the workflow definition
 >   (per-phase Sidekick assignment/enablement, system prompt, self-review and subagent config) and the
->   execution runtime (worker type, model, extra args, orchestrator mode) — the Operation and
+>   execution runtime (worker type, model, extra args, UnitType) — the Operation and
 >   WorkerProfile split introduced earlier in the redesign was re-merged into one Unit.
 > - **Operation** -- **one execution run** of a Unit carrying out a task. It is not a persisted
 >   configuration entity; its only observable form is what `GET /api/operations` returns — the set of
@@ -92,7 +92,7 @@ running several custom Sidekicks.
 - Only the user layer can be deleted. To undo a user override and "revert to builtin", delete the user-layer
   copy (`DELETE /api/sidekicks/:name`, or "Revert to built-in" in the UI)
 
-### The 6 built-in packages
+### The 7 built-in packages
 
 | name | tags | Purpose |
 |---|---|---|
@@ -101,7 +101,8 @@ running several custom Sidekicks.
 | `reviewing-default` | reviewing | Review its own implementation and fix issues |
 | `testing-default` | testing | Run tests on the implemented code |
 | `pushing-default` | pushing | Commit/push/open a PR by running a script (`scripts/push.sh`) |
-| `issue-default` | (none) | Create an issue (`/azt-issue` is a thin wrapper around it) |
+| `issue-default` | issue | Create an issue (`/azt-issue` is a thin wrapper around it) |
+| `browser-ops` | browser | CDP browser connection helper and login / log hygiene conventions |
 
 ### Template variables
 
@@ -146,12 +147,15 @@ A `SKILL.md` body should describe only *capability* (what to do). It must not en
 protocol* — how completion/questions/test-failure get signaled back. That's added by the execution
 context, as an "envelope" wrapped around the body (`executionEnvelope.ts`, Issue #263 Refine D):
 
-- **state-machine** (`PhaseLoopRunner`): appends a `<completion_signal>` block with `AZITO_DONE_*` /
-  `AZITO_QUESTIONS_*` / `AZITO_TEST_FAILED_*` markers and an `AZITO_PHASE_SUMMARY` line. The
-  questions/test-failed sections are conditional on `signalCapabilitiesForPhase` (planning/implementing
-  can ask questions, testing can report a test failure, reviewing/pushing get neither)
+- **state-machine** (`PhaseLoopRunner`, when `workerExecutionMode: 'tmux-pipe'`): appends a
+  `<completion_signal>` block with `AZITO_DONE_*` / `AZITO_QUESTIONS_*` / `AZITO_TEST_FAILED_*` markers
+  and an `AZITO_PHASE_SUMMARY` line. The questions/test-failed sections are conditional on the
+  UnitTypePhase definition's `questions` / `testFailed` flags
+- **http-signal** (`PhaseLoopRunner`, when `workerExecutionMode: 'http-signal'`): appends an envelope
+  that instructs the worker to signal completion, questions, and test failures via the `azitoctl` CLI
+  (`azitoctl complete` / `azitoctl questions`) instead of writing markers to a signal file
 - **skill** (harness skills like `/azt-plan`, via `RenderSkillPromptUseCase`): appends natural-language
-  instructions ("report when done", "ask the user directly if unclear") using the same capability rule
+  instructions ("report when done", "ask the user directly if unclear") using the same UnitTypePhase flags
 - **standalone** (`GET /api/sidekicks/:name?render=1`, direct `/azt-sidekick` execution): no envelope is
   applied at all — the body is returned as authored
 
@@ -180,22 +184,24 @@ Unit itself (the Operation/WorkerProfile split introduced earlier in the redesig
 | Field | Description |
 |---|---|
 | Name | Unit name |
+| UnitType | The UnitType name defining the phase structure (`devops`, etc., defined in `harness/unit-types/*.toml`) |
 | Worker Type / Worker Model / Worker Extra Args | Execution runtime: `claude` / `codex` / `generic`, its model, and extra CLI args |
-| Orchestrator Mode | `state-machine` (phase-based, fixed flow) or `llm` (LLM loop, flexible but consumes API tokens) |
-| System Prompt | Base prompt the orchestrator references on each iteration (optional) |
+| Worker Execution Mode | How the worker's output is monitored (`tmux-pipe` / `http-signal`) |
+| Worker Runtime | Worker runtime (`tui`) |
+| System Prompt | Base prompt the worker references on each phase (optional) |
 | Self-Review Max Attempts | Default max retry count for self-review (send-back during the reviewing phase). Can be overridden per task |
 | Review Subagent / Implement Subagent | Config (provider/model) for delegating review/implementation work to a subagent. Can be overridden per task |
 | Phase Config | Per-phase Sidekick assignment and enablement |
 
-- **State Machine mode**: transitions through `planning → implementing → reviewing → testing → pushing`
-  according to `phaseConfig`
-- **LLM mode**: uses the LLM API directly; the orchestrator LLM decides the next action
-  (`prompt` / `done` / `error`) in a loop of up to 30 iterations
+> **Note:** UnitType TOML definitions cannot currently be created or edited from the UI (the only built-in type is `devops`). To add a custom UnitType, place the file in the user-layer directory `data/unit-types/` (overridable via `AZITO_UNIT_TYPES_DIR`). `harness/unit-types/` is the built-in layer and is overwritten on release updates.
+
+The phase sequence is determined by the UnitType definition (TOML) referenced by the Unit's `unitType`.
+The default `devops` type transitions through planning → implementing → reviewing → testing → pushing
+according to `phaseConfig`
 
 ### Per-phase configuration via phaseConfig
 
-`phaseConfig` lets you specify the following for each phase (`planning` / `implementing` / `reviewing` /
-`testing` / `pushing`):
+`phaseConfig` lets you specify the following for each phase defined by the UnitType:
 
 ```jsonc
 {

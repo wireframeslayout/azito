@@ -45,7 +45,7 @@ interface TabContentRendererProps {
   closeTab: (tabId: string) => void;
   retargetTab?: (oldTabId: string, serverName: string, newTarget: string) => void;
   executeTask: (taskId: number, unitId: number | null) => void;
-  stopTask: (unitId: number | null) => void;
+  stopTask: (unitId: number | null, taskId: number) => void;
   refreshWorkspace: () => void;
   connectPane: (serverName: string, target: string) => void;
   openTask: (taskId: number, title: string, from?: 'global' | 'workspace') => void;
@@ -61,6 +61,7 @@ interface TabContentRendererProps {
   openIssue?: (repoId: number, owner: string, repo: string, issueNumber: number, title: string) => void;
   openProjectTasks?: (projectId: number, projectName: string) => void;
   updateBrowserActiveTab?: (tabId: string, chromiumTabId: string) => void;
+  refreshBrowserGroups?: () => void;
 }
 
 export default function TabContentRenderer({
@@ -96,6 +97,7 @@ export default function TabContentRenderer({
   openIssue,
   openProjectTasks,
   updateBrowserActiveTab,
+  refreshBrowserGroups,
 }: TabContentRendererProps) {
   const { t } = useTranslation(['tasks', 'workspace', 'units']);
   const navigate = useNavigate();
@@ -184,7 +186,7 @@ export default function TabContentRenderer({
           currentProject={project}
           sessionData={sessionData}
           executeTask={executeTask}
-          stopTask={(unitId) => stopTask(unitId)}
+          stopTask={(unitId) => stopTask(unitId, tab.entityId!)}
           onRefresh={refreshWorkspace}
           projectServers={projectServers}
           onBack={() => {
@@ -209,6 +211,7 @@ export default function TabContentRenderer({
           onOpenTask={openTask}
           tabs={tabs}
           closeTab={closeTab}
+          onBrowserPageReady={refreshBrowserGroups}
         />
       )}
       {tab.type === 'issue' && tab.issueData && tab.projectId && (
@@ -306,7 +309,7 @@ export default function TabContentRenderer({
           onExecute={executeTask}
           onStop={(taskId) => {
             const t = tasks.find((x) => x.id === taskId);
-            if (t) stopTask(t.unitId);
+            if (t) stopTask(t.unitId, t.id);
           }}
           headerRight={
             <Button variant="primary" size="sm" onClick={() => openTaskForm({ mode: 'create', projectId: currentProjectId })}>{t('tasks:actions.newTask')}</Button>
@@ -326,6 +329,7 @@ export default function TabContentRenderer({
           groupId={tab.browserData.pageId ?? 'default'}
           initialTabId={tab.browserData.lastActiveTabId}
           onActiveTabChange={handleBrowserActiveTabChange}
+          onPageReady={refreshBrowserGroups}
         />
       )}
       {tab.type === 'server' && tab.serverName && (

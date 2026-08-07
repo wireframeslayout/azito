@@ -96,12 +96,19 @@ interface TaskPanelProps {
    * browser onto some other project's server.
    */
   projectServers?: { serverName: string }[];
+  /**
+   * Notifies the caller once a task-scoped browser tab's page has actually been created
+   * server-side, so the sidebar's "ブラウザ" section (server-wide, not task-scoped) can
+   * refetch immediately instead of waiting for its next poll. Mirrors the same prop on
+   * the workspace-level browser tab (TabContentRenderer's `BrowserView`).
+   */
+  onBrowserPageReady?: () => void;
 }
 
 export default function TaskPanel({
   taskId, isVisible = true, isPaneFocused = true, allUnits, tasks, allTasks, projects, currentProject, sessionData,
   executeTask, stopTask, onRefresh, onBack, onDelete, onEdit, onOpenAddWindow,
-  onSplitPane, onOpenTask, tabs, closeTab, projectServers,
+  onSplitPane, onOpenTask, tabs, closeTab, projectServers, onBrowserPageReady,
 }: TaskPanelProps) {
   const { t } = useTranslation(['tasks', 'workspace', 'common']);
   // The list response omits the detail-only documents (description, plan, summary,
@@ -631,11 +638,18 @@ export default function TaskPanel({
     // doesn't get re-included in `allTabIds` on the next render.
     const browser = parseBrowserTabId(tabId);
     if (browser) {
-      closeBrowserGroup(browser.serverName, browser.pageId);
       setBrowserTabIds((prev) => prev.filter((id) => id !== tabId));
+      // The sidebar's browser list (useBrowserGroups) polls independently of this
+      // task's tab layout, so it wouldn't otherwise notice this group is gone
+      // until its next 30s poll — nudge it the same way page-open already does
+      // (see onBrowserPageReady usage below). Wait for the close-group call to
+      // settle first, or the refetch can race ahead of the server-side teardown
+      // and still find the group present. The tab close itself stays synchronous
+      // above; only this notification is deferred.
+      void closeBrowserGroup(browser.serverName, browser.pageId).then(() => onBrowserPageReady?.());
     }
     layout.close(paneId, tabId);
-  }, [layout]);
+  }, [layout, onBrowserPageReady]);
 
   const handlePaneDrop = useCallback((paneId: string, zone: DropZone, index?: number) => {
     if (!paneDrag) return;
@@ -984,6 +998,7 @@ export default function TaskPanel({
           // default tab. Left as a real (no-op) callback rather than omitted, so this stays
           // a deliberate choice (documented here) instead of looking like a forgotten wire-up.
           onActiveTabChange={() => {}}
+          onPageReady={onBrowserPageReady}
         />
       );
     }

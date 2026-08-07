@@ -6,14 +6,18 @@ azt-harness（AZITO Harness）は、AZITO の Sidekick モードを **Claude Cod
 
 従来の Sidekick モードは、AZITO サーバーが tmux ペインへワーカーを起動し、`AZITO_DONE` / `QUESTIONS_JSON` などのマーカーをペイン出力から検知してフェーズを進めていました。azt-harness はこの仕組みを置き換え、**Claude Code 自身がスキルとしてフェーズを実行**します。マーカーに依存せず、Claude Code がユーザーと自然に対話しながらタスクを進められるのが最大の特長です。
 
-azt-harness は次の4つの要素で構成されます。
+azt-harness は次の要素で構成されます。
 
 | 要素 | 配置 | 役割 |
 |---|---|---|
 | `/azt-*` スキル | `harness/skills/azt-*` | タスクの各フェーズ（plan/implement/review/test/push）の実行、任意 Sidekick の実行（azt-sidekick）・作成/編集（azt-summon）、イシュー作成（azt-issue）、複数タスクのバッチ自動実行（azt-mission） |
 | azt-mcp | `harness/skills/azt-mcp` | AZITO の REST API を MCP ツールとして公開（プロジェクト・タスク・Unit・Operation・Sidekick 操作） |
 | prompt-modules | `harness/prompt-modules/` | コーディング規約・設計原則・レビュー観点・UI 原則のルールファイル |
-| Stop hook | `harness/hooks/azito-notify.sh` | エージェント完了時に AZITO へ Webhook 通知を送る |
+| sidekicks | `harness/sidekicks/` | ビルトイン Sidekick パッケージ（`planning-default`, `implementing-default` 等） |
+| unit-types | `harness/unit-types/` | UnitType 定義（TOML。ビルトインは `devops`） |
+| bin | `harness/bin/` | CLI ツール（`azs` — supervised ウィンドウ起動、`azitoctl` — タスク制御） |
+| tmux 設定 | `harness/tmux/` | managed tmux 用の `azito.conf` テンプレート |
+| Hooks | `harness/hooks/` | `azito-notify.sh`（完了通知）、`azito-activity.sh`（アクティビティ通知: Stop + UserPromptSubmit） |
 
 ## `/azt-*` スキル
 
@@ -73,9 +77,16 @@ azt-mcp は、Claude Code から AZITO の REST API を MCP ツールとして�
 
 `setup.sh` はこれらを `~/.claude/rules/` へリンクし、Claude Code のサブエージェントプロンプトへ注入できる状態にします。
 
-## Stop hook（完了通知）
+## Hooks（完了通知・アクティビティ通知）
 
-`harness/hooks/azito-notify.sh` は Claude Code の Stop hook として登録され、エージェントの作業が完了したタイミングで AZITO へ Webhook 通知（`POST /api/webhooks/agent-done`）を送ります。通知には共有シークレット `AZITO_WEBHOOK_TOKEN` が必要で、トークンが未設定の場合は何もせず終了します。
+2つの hook が Claude Code に登録されます。
+
+| Hook | イベント | 役割 |
+|---|---|---|
+| `azito-notify.sh` | Stop | エージェント完了時に AZITO へ Webhook 通知（`POST /api/webhooks/agent-done`）を送る |
+| `azito-activity.sh` | Stop, UserPromptSubmit | エージェントの開始・停止をリアルタイムで AZITO に通知し、Active Windows のステータス表示に反映する |
+
+いずれも共有シークレット `AZITO_WEBHOOK_TOKEN` が必要で、トークンが未設定の場合は何もせず終了します。
 
 > **注意:** Webhook 通知を有効にするには、AZITO サーバーと hook の双方で同じ `AZITO_WEBHOOK_TOKEN` を共有する必要があります。
 
@@ -92,9 +103,11 @@ setup.sh は次の処理を行います。
 
 1. **Skills** -- `harness/skills/azt-*` を `~/.claude/skills/` へシンボリックリンク
 2. **Rules** -- `harness/prompt-modules/*.md` を `~/.claude/rules/` へシンボリックリンク
-3. **Settings** -- `~/.claude/settings.json` に azt-mcp（MCP サーバー）と Stop hook をマージ登録
+3. **Settings** -- `~/.claude/settings.json` に azt-mcp（MCP サーバー）と hook（`azito-notify.sh` + `azito-activity.sh`）をマージ登録
+4. **CLI tools** -- `harness/bin/` 配下のツール（`azs`, `azitoctl`）に実行権を付与
+5. **Env file** -- `--azito-url` と `--webhook-token` の両方が指定された場合のみ、`~/.azito/azitoctl.env`（mode 600）を書き出し。必須: `AZITO_URL`, `AZITO_WEBHOOK_TOKEN`。任意（指定時のみ）: `AZITO_UI_TOKEN`, `AZITO_SERVER_NAME`。`AZITO_SUPERVISOR_PATH` は常に追加される
 
-`AZITO_URL`（既定値 `http://localhost:3001`）と `AZITO_WEBHOOK_TOKEN` は環境変数からも解決します。既存のリンク・設定がある場合はスキップまたは更新され、安全に再実行できます。ただし `--ui-token`（`AZITO_UI_TOKEN`）は azt-mcp の認証に必須で、省略はできません。
+`AZITO_URL`（既定値 `http://localhost:3001`）と `AZITO_WEBHOOK_TOKEN` は環境変数からも解決します。既存のリンク・設定がある場合はスキップまたは更新され、安全に再実行できます。`--ui-token`（`AZITO_UI_TOKEN`）は省略可能ですが、省略すると MCP サーバー設定にトークンが含まれない旨の警告が表示されます。
 
 Codex CLI がインストールされている環境（`codex` コマンドまたは `~/.codex` が存在）では、同じ skills / rules を `~/.codex/` 配下にも配置し、`codex mcp add` で azt-mcp を登録します。Claude Code と Codex の両方から同じハーネスを利用できます。
 
@@ -112,3 +125,7 @@ npm install
 ## インストール状況の確認
 
 AZITO のサーバー詳細パネルは、各サーバーの依存（tmux / Node.js / **harness** / Tailscale 等）のインストール状況を可視化します。harness が未インストールの場合は「azt-harness not installed」と表示され、導入導線が示されます。
+
+### UI からのインストール
+
+サーバー詳細パネル → Setup タブの「Install Harness」ボタン（`POST /api/servers/:name/harness/install`）から、CLI を使わずにハーネスをインストールすることもできます。ローカルサーバーの場合は直接インストール、Agent サーバーの場合は SSH 経由でリモートにインストールされます。

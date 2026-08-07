@@ -297,7 +297,7 @@ export function useTabPersistence(storageKey?: string) {
     openTab({ id: tabId, type: 'issue', label: `#${issueNumber} ${title}`, issueData: { repoId, owner, repo, number: issueNumber }, projectId });
   }, [openTab]);
 
-  const closeTab = useCallback((tabId: string) => {
+  const closeTab = useCallback((tabId: string): Promise<void> => {
     console.log('[useTabPersistence] closeTab called:', tabId);
     // Snapshot before setTabs mutates state, so the activeTabId fallback logic
     // below can inspect the closed tab's opener and its position among siblings.
@@ -305,10 +305,13 @@ export function useTabPersistence(storageKey?: string) {
     const closedIndex = prevTabs.findIndex((t) => t.id === tabId);
     const closedTab = closedIndex !== -1 ? prevTabs[closedIndex] : undefined;
 
-    if (closedTab?.type === 'browser' && closedTab.browserData) {
-      const { serverName, pageId } = closedTab.browserData;
-      closeBrowserGroup(serverName, pageId);
-    }
+    // The tab itself closes synchronously below regardless of this promise —
+    // only callers that need to know the server-side group teardown has
+    // settled (e.g. before refreshing the browser-groups sidebar) should
+    // await the returned promise.
+    const browserGroupClosed = closedTab?.type === 'browser' && closedTab.browserData
+      ? closeBrowserGroup(closedTab.browserData.serverName, closedTab.browserData.pageId)
+      : Promise.resolve();
 
     setTabs((prev) => {
       const next = prev.filter((t) => t.id !== tabId);
@@ -330,6 +333,8 @@ export function useTabPersistence(storageKey?: string) {
       const adjacentIndex = Math.min(closedIndex, remaining.length - 1);
       return remaining[adjacentIndex].id;
     });
+
+    return browserGroupClosed;
   }, []);
 
   /**
