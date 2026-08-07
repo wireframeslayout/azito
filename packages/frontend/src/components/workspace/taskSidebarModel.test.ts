@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Task } from '../../pages/workspace/types';
 import type { ActiveWindowRow } from '../../hooks/useActiveWindowRows';
-import { buildTaskSidebarGroups, matchesQuery, RECENT_LIMIT } from './taskSidebarModel';
+import { buildTaskSidebarGroups, findWindowActivity, matchesQuery, RECENT_LIMIT } from './taskSidebarModel';
 
 function makeTask(overrides: Partial<Task> & { id: number }): Task {
   return {
@@ -60,6 +60,26 @@ describe('matchesQuery', () => {
   it('returns true for empty query', () => {
     expect(matchesQuery(task, '')).toBe(true);
     expect(matchesQuery(task, '  ')).toBe(true);
+  });
+});
+
+describe('findWindowActivity', () => {
+  it('matches when the window target carries a pane suffix the activity target lacks', () => {
+    const rows: ActiveWindowRow[] = [makeActivity(1, 'running', { serverName: 'session', target: 'session:win' })];
+    const found = findWindowActivity(rows, 'session', 'session:win.1');
+    expect(found).toBe(rows[0]);
+  });
+
+  it('does not match when the server name differs', () => {
+    const rows: ActiveWindowRow[] = [makeActivity(1, 'running', { serverName: 'other', target: 'session:win' })];
+    const found = findWindowActivity(rows, 'session', 'session:win.1');
+    expect(found).toBeUndefined();
+  });
+
+  it('returns undefined when there is no matching row', () => {
+    const rows: ActiveWindowRow[] = [makeActivity(1, 'running', { serverName: 'session', target: 'session:other' })];
+    const found = findWindowActivity(rows, 'session', 'session:win.1');
+    expect(found).toBeUndefined();
   });
 });
 

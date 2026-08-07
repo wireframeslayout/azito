@@ -6,10 +6,9 @@ import { StatusDot } from '../StatusBadge';
 import { BrailleSpinner, BlockedDot, FinishedIndicator } from '../ui/WindowActivityIndicator';
 import { formatRelativeTime } from '../../utils/time';
 import { useActiveWindowRows, type ActiveWindowRow } from '../../hooks/useActiveWindowRows';
-import { activityKey } from '../../hooks/useAgentActivity';
 import { useRecentTasks } from '../../hooks/useRecentTasks';
 import { useBrowserGroups } from '../../hooks/useBrowserGroups';
-import { buildTaskSidebarGroups, type TaskGroupKey, type TaskSidebarGroup, type TaskSidebarRow } from './taskSidebarModel';
+import { buildTaskSidebarGroups, findWindowActivity, type TaskGroupKey, type TaskSidebarGroup, type TaskSidebarRow } from './taskSidebarModel';
 import { listTaskChildren, type TaskChild } from './taskSidebarChildren';
 import type { Task } from '../../pages/workspace/types';
 
@@ -69,12 +68,6 @@ export default function TasksSidebar({
     () => buildTaskSidebarGroups(tasks, activityRows, query, openedAt),
     [tasks, activityRows, query, openedAt],
   );
-
-  const activityByKey = useMemo(() => {
-    const map = new Map<string, ActiveWindowRow>();
-    for (const row of activityRows) map.set(row.key, row);
-    return map;
-  }, [activityRows]);
 
   const totalVisible = groups.reduce((n, g) => n + g.rows.length, 0);
   const nonArchivedCount = tasks.filter((t) => t.status !== 'archived').length;
@@ -256,7 +249,7 @@ export default function TasksSidebar({
               onOpenTaskWindow={onOpenTaskWindow}
               onOpenTaskBrowser={onOpenTaskBrowser}
               browserGroups={browserGroups}
-              activityByKey={activityByKey}
+              activityRows={activityRows}
               showGroupLabel={!isSearching}
               t={t}
             />
@@ -338,7 +331,7 @@ interface TaskGroupProps {
   onOpenTaskWindow: (taskId: number, title: string, terminal: { serverName: string; target: string }) => void;
   onOpenTaskBrowser: (taskId: number, title: string, browser: { serverName: string; groupId: string }) => void;
   browserGroups: Record<string, import('../../hooks/useBrowserGroups').BrowserGroupInfo[]>;
-  activityByKey: Map<string, ActiveWindowRow>;
+  activityRows: ActiveWindowRow[];
   showGroupLabel: boolean;
   t: (key: string, opts?: Record<string, unknown>) => string;
 }
@@ -351,7 +344,7 @@ function TaskGroup({
   onOpenTaskWindow,
   onOpenTaskBrowser,
   browserGroups,
-  activityByKey,
+  activityRows,
   showGroupLabel,
   t,
 }: TaskGroupProps) {
@@ -381,7 +374,7 @@ function TaskGroup({
           onOpenTaskWindow={onOpenTaskWindow}
           onOpenTaskBrowser={onOpenTaskBrowser}
           browserGroups={browserGroups}
-          activityByKey={activityByKey}
+          activityRows={activityRows}
           t={t}
         />
       ))}
@@ -397,11 +390,11 @@ interface TaskRowProps {
   onOpenTaskWindow: (taskId: number, title: string, terminal: { serverName: string; target: string }) => void;
   onOpenTaskBrowser: (taskId: number, title: string, browser: { serverName: string; groupId: string }) => void;
   browserGroups: Record<string, import('../../hooks/useBrowserGroups').BrowserGroupInfo[]>;
-  activityByKey: Map<string, ActiveWindowRow>;
+  activityRows: ActiveWindowRow[];
   t: (key: string, opts?: Record<string, unknown>) => string;
 }
 
-function TaskRow({ row, expanded, toggleExpanded, onOpenTask, onOpenTaskWindow, onOpenTaskBrowser, browserGroups, activityByKey, t }: TaskRowProps) {
+function TaskRow({ row, expanded, toggleExpanded, onOpenTask, onOpenTaskWindow, onOpenTaskBrowser, browserGroups, activityRows, t }: TaskRowProps) {
   const { task, activity } = row;
   const hasChildren = (task.windows && task.windows.length > 0) || false;
 
@@ -492,7 +485,7 @@ function TaskRow({ row, expanded, toggleExpanded, onOpenTask, onOpenTaskWindow, 
               taskTitle={task.title}
               onOpenTaskWindow={onOpenTaskWindow}
               onOpenTaskBrowser={onOpenTaskBrowser}
-              activity={child.kind === 'window' ? activityByKey.get(activityKey(child.window.serverName, child.window.tmuxTarget)) : undefined}
+              activity={child.kind === 'window' ? findWindowActivity(activityRows, child.window.serverName, child.window.tmuxTarget) : undefined}
               t={t}
             />
           ))}

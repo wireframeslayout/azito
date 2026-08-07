@@ -1,5 +1,6 @@
 import type { Task } from '../../pages/workspace/types';
 import type { ActiveWindowRow } from '../../hooks/useActiveWindowRows';
+import { stripPaneSuffix } from '../../utils/tmuxTarget';
 
 export type TaskGroupKey = 'running' | 'finished' | 'recent';
 
@@ -25,6 +26,20 @@ export function taskTimestamp(task: Task): number {
 // 開いたことのないタスクは openedAt が無いので従来どおり taskTimestamp のみで並ぶ。
 function recentSortTimestamp(task: Task, openedAt: Record<number, number>): number {
   return Math.max(openedAt[task.id] ?? 0, taskTimestamp(task));
+}
+
+// 子ウィンドウ行のtmuxTargetはペイン接尾辞を含む（例: "session:win.1"）が、エージェント
+// アクティビティのtargetは接尾辞を落とした形（"session:win"）で流れてくる。既存の
+// stripPaneSuffix で両者を同じ正規化に通してから照合する。
+export function findWindowActivity(
+  activityRows: ActiveWindowRow[],
+  serverName: string,
+  tmuxTarget: string,
+): ActiveWindowRow | undefined {
+  const targetBase = stripPaneSuffix(tmuxTarget);
+  return activityRows.find(
+    (row) => row.serverName === serverName && stripPaneSuffix(row.target) === targetBase,
+  );
 }
 
 export function matchesQuery(task: Task, query: string): boolean {
