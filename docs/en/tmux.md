@@ -6,9 +6,12 @@ NOT need to configure (AZITO sets them at runtime).
 
 If the server's tmux runtime is **managed** (AZITO-managed tmux under `~/.azito/tmux/`),
 an `azito.conf` containing all required and recommended settings is deployed automatically —
-no manual work is needed. For **system** tmux, the "Apply recommended config" button in the
-Server Detail Panel idempotently appends a `source-file` line to `~/.tmux.conf`
-(your existing configuration is never modified).
+no manual work is needed. Managed mode is **Linux-only (x86_64 / aarch64)**: it downloads
+a static tmux 3.6b binary from GitHub with SHA256 verification. On macOS, only system mode
+is available.
+For **system** tmux, the "Apply recommended config" button in the Server Detail Panel
+places AZITO settings in `~/.azito/tmux/azito.conf` and appends a single `source-file` line
+to `~/.tmux.conf` (existing lines are never modified).
 
 ## Required (AZITO does not work without these)
 

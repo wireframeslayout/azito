@@ -3,6 +3,7 @@
     "refresh": "更新",
     "emptyDirectory": "空のディレクトリ",
     "download": "ダウンロード",
+    "downloadFailed": "ダウンロードに失敗しました",
     "openInVsCode": "VS Code で開く",
     "openInZed": "Zed で開く",
     "sourceView": "ソース",
@@ -11,8 +12,8 @@
   },
   "preview": {
     "downloadFile": "ファイルをダウンロード",
-    "copyUrl": "URL をコピー",
-    "copiedUrl": "URL をコピーしました",
+    "copyUrl": "API URL をコピー",
+    "copiedUrl": "API URL をコピーしました（エージェント用。ブラウザでは開けません）",
     "loading": "プレビューを読み込み中…",
     "loadError": "ファイルの読み込みに失敗しました。再認証が必要な可能性があります。"
   },
@@ -20,9 +21,9 @@
     "uploadFile": "ファイルをアップロード",
     "emptyMessage": "ファイルはまだありません。ドラッグ＆ドロップまたは + をクリックしてアップロードしてください。",
     "download": "ダウンロード",
-    "copyUrl": "URL をコピー",
+    "copyUrl": "API URL をコピー",
     "deleteFile": "削除",
-    "copiedUrl": "URL をコピーしました",
+    "copiedUrl": "API URL をコピーしました（エージェント用。ブラウザでは開けません）",
     "dropToUpload": "ドロップしてアップロード"
   }
 }

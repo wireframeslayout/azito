@@ -2,11 +2,12 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import type { SidebarMode, Project, Session, Window, Task } from '../../pages/workspace/types';
 import type { PersistedTab } from '../../hooks/useTabPersistence';
+import type { BrowserGroupInfo } from '../../hooks/useBrowserGroups';
 import FileExplorer from '../FileExplorer';
 import RepoSidebar from '../RepoSidebar';
 import StoragePanel from '../StoragePanel';
 import { SettingsSidebar, type SettingsSection } from '../ProjectSettings';
-import WindowsSidebar from './WindowsSidebar';
+import ObjectsSidebar from './ObjectsSidebar';
 import TasksSidebar from './TasksSidebar';
 
 interface WorkspaceSidebarContentProps {
@@ -17,6 +18,9 @@ interface WorkspaceSidebarContentProps {
   tasks: Task[];
   openTask: (taskId: number, title: string) => void;
   openProjectTasks: (projectId: number, projectName: string) => void;
+  onCreateTask?: () => void;
+  onOpenTaskWindow?: (taskId: number, taskTitle: string, terminal: { serverName: string; target: string }) => void;
+  onOpenTaskBrowser?: (taskId: number, taskTitle: string, browser: { serverName: string; groupId: string }) => void;
   projectServers: { serverName: string; workingDirectory?: string }[];
   selectedFileServer: string;
   onSelectFileServer: (server: string) => void;
@@ -24,6 +28,10 @@ interface WorkspaceSidebarContentProps {
   onSelectRepo: (id: number) => void;
   connectPane: (serverName: string, target: string) => void;
   onOpenAddWindow: () => void;
+  onOpenQuickAdd: (serverName: string, agentType: 'claude' | 'codex' | 'terminal') => void;
+  /** クイック追加ボタンの押下可否判定に使う。起動コマンドを実際に供給する useAddWindowModal 側の取得状態（Workspace.tsx 経由） */
+  agentDefsLoading: boolean;
+  agentDefsError: string | null;
   showWindowContextMenu: (e: React.MouseEvent, w: Window, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void;
   onSwitchSidebarMode: (mode: SidebarMode) => void;
   onFileSelect: (serverName: string, filePath: string) => void;
@@ -35,7 +43,9 @@ interface WorkspaceSidebarContentProps {
   connectPaneRaw: (serverName: string, target: string) => void;
   openServer: (name: string) => void;
   openBrowser: (serverName: string, groupId?: string) => void;
-  browserGroups?: Record<string, import('../../hooks/useBrowserGroups').BrowserGroupInfo[]>;
+  browserGroups?: Record<string, BrowserGroupInfo[]>;
+  browserErrors?: Record<string, string>;
+  refreshBrowserGroups?: () => void;
   openStorageFileRaw: (projectId: number, filename: string, originalName: string, size: number) => void;
   projectSettings: { section: SettingsSection; setSection: (s: SettingsSection) => void };
   onOpenDiff: (serverName: string, path: string) => void;
@@ -53,6 +63,9 @@ export default function WorkspaceSidebarContent({
   tasks,
   openTask,
   openProjectTasks,
+  onCreateTask,
+  onOpenTaskWindow,
+  onOpenTaskBrowser,
   projectServers,
   selectedFileServer,
   onSelectFileServer,
@@ -60,12 +73,19 @@ export default function WorkspaceSidebarContent({
   onSelectRepo,
   connectPane,
   onOpenAddWindow,
+  onOpenQuickAdd,
+  agentDefsLoading,
+  agentDefsError,
   showWindowContextMenu,
   onSwitchSidebarMode,
   onFileSelect,
   onRefresh,
   mobile,
   onCloseMobileSidebar,
+  openBrowser,
+  browserGroups,
+  browserErrors,
+  refreshBrowserGroups,
   openStorageFileRaw,
   projectSettings,
   onOpenDiff,
@@ -76,7 +96,7 @@ export default function WorkspaceSidebarContent({
   return (
     <>
       {sidebarMode === 'windows' && project && (
-        <WindowsSidebar
+        <ObjectsSidebar
           project={project}
           sessionData={sessionData}
           activeTabId={activeTabId}
@@ -85,9 +105,18 @@ export default function WorkspaceSidebarContent({
           connectPane={connectPane}
           showWindowContextMenu={showWindowContextMenu}
           onOpenAddWindow={onOpenAddWindow}
+          onOpenQuickAdd={onOpenQuickAdd}
+          agentDefsLoading={agentDefsLoading}
+          agentDefsError={agentDefsError}
           onCloseMobileSidebar={onCloseMobileSidebar}
           respawningWindowIds={respawningWindowIds}
           taskWindows={taskWindows}
+          browserGroups={browserGroups ?? {}}
+          browserErrors={browserErrors ?? {}}
+          refreshBrowserGroups={refreshBrowserGroups ?? (() => {})}
+          openBrowser={openBrowser}
+          openTask={openTask}
+          onOpenTaskWindow={onOpenTaskWindow}
         />
       )}
       {sidebarMode === 'tasks' && project && (
@@ -99,6 +128,18 @@ export default function WorkspaceSidebarContent({
           }}
           onOpenAllTasks={() => {
             openProjectTasks(project.id, project.name);
+            if (mobile) onCloseMobileSidebar();
+          }}
+          onCreateTask={() => {
+            onCreateTask?.();
+            if (mobile) onCloseMobileSidebar();
+          }}
+          onOpenTaskWindow={(taskId, title, terminal) => {
+            onOpenTaskWindow?.(taskId, title, terminal);
+            if (mobile) onCloseMobileSidebar();
+          }}
+          onOpenTaskBrowser={(taskId, title, browser) => {
+            onOpenTaskBrowser?.(taskId, title, browser);
             if (mobile) onCloseMobileSidebar();
           }}
         />

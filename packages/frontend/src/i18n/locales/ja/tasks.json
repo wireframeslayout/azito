@@ -36,7 +36,15 @@
   "sidebar": {
     "title": "タスク",
     "noRecentTasks": "最近のタスクはありません",
-    "allTasks": "すべてのタスク"
+    "allTasks": "すべてのタスク",
+    "searchPlaceholder": "タスクを検索…",
+    "newTask": "新規タスク",
+    "groupRunning": "稼働中",
+    "groupFinished": "作業完了",
+    "groupRecent": "最近",
+    "noSearchResults": "一致するタスクがありません",
+    "noTasks": "タスクはまだありません",
+    "browserTabs": "{{count}}タブ"
   },
   "contextMenu": {
     "showView": "{{view}} を表示",

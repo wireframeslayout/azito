@@ -8,6 +8,7 @@ import { WheelVelocityTracker, BrowserWheelInertia } from './browserWheelGesture
 import BrowserDialog from './BrowserDialog';
 import type { BrowserDialogInfo } from './BrowserDialog';
 import { useToast } from '../hooks/useToast';
+import { api } from '../api/client';
 import { buildWsUrl } from '../api/wsUrl';
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
@@ -116,6 +117,22 @@ interface BrowserViewProps {
   initialTabId?: string;
   /** Called whenever the active Chromium tab changes, so the caller can persist it. */
   onActiveTabChange?: (tabId: string) => void;
+  /**
+   * Called once per WS connection, the first time this groupId's page is
+   * confirmed live — i.e. on the first {type:'tabs'} message received after
+   * a (re)connect. That message is sent unconditionally right after
+   * `session.getOrCreatePage()` resolves (unlike {type:'url'}/{type:'frame'},
+   * which are only sent when a prior value already exists), so it's the
+   * first deterministic "the CDP page now exists on the server" signal on
+   * every (re)connect — the moment a sidebar list keyed off server-side page
+   * existence (e.g. GET /api/browser/status) can actually see this group.
+   * {type:'tabs'} also re-fires on later tab open/close/title changes (server
+   * emits 'group-tabs-changed' for those — potentially on every navigation,
+   * loading-state change, or title change within a single page load), but
+   * this callback is only invoked once per connection, not on those repeats.
+   * It fires again on the next (re)connect.
+   */
+  onPageReady?: () => void;
 }
 
 // {type:'tabs'} からのラベル生成。ページタイトルがあればそれを優先し、無ければ
@@ -138,7 +155,7 @@ function tabTooltip(url: string | null, newTabLabel: string): string {
   return url || newTabLabel;
 }
 
-export default function BrowserView({ serverName, groupId, initialTabId, onActiveTabChange }: BrowserViewProps) {
+export default function BrowserView({ serverName, groupId, initialTabId, onActiveTabChange, onPageReady }: BrowserViewProps) {
   const { t } = useTranslation('browser');
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const hiddenInputRef = useRef<HTMLInputElement>(null);
@@ -213,6 +230,19 @@ export default function BrowserView({ serverName, groupId, initialTabId, onActiv
   const urlEditedRef = useRef(false);
   const latestUrlRef = useRef('');
 
+  // Read inside ws.onmessage via a ref rather than a WS-reset effect dependency,
+  // so an identity change on this optional callback (a caller that doesn't
+  // memoize it) doesn't tear down and reconnect the WS.
+  const onPageReadyRef = useRef(onPageReady);
+  onPageReadyRef.current = onPageReady;
+  // Fires onPageReady at most once per WS connection (reset to false at the
+  // top of the WS-reset effect below, right before a new WebSocket is
+  // created — that effect re-runs on every (re)connect, including tab
+  // switches). Set true the first time {type:'tabs'} arrives on that
+  // connection so later re-fires (tab open/close/title changes) don't
+  // re-trigger the callback.
+  const pageReadyFiredRef = useRef(false);
+
   // Returns whether the message was actually sent (WS open), so callers that
   // optimistically update local UI state (e.g. navigateTo hiding the start
   // page) can gate that update on the send having actually gone out.
@@ -251,6 +281,7 @@ export default function BrowserView({ serverName, groupId, initialTabId, onActiv
     setPendingDialog(null);
     setHistoryOpen(false);
     setReceivedUrl(null);
+    pageReadyFiredRef.current = false;
     const prevCanvas = canvasRef.current;
     if (prevCanvas) {
       const ctx = prevCanvas.getContext('2d');
@@ -356,6 +387,18 @@ export default function BrowserView({ serverName, groupId, initialTabId, onActiv
           // instead of leaving the reload button stuck showing "stop".
           const activeTab = nextTabs.find((t) => t.tabId === activeTabId);
           if (activeTab) setIsLoading(activeTab.loading);
+          // {type:'tabs'} is sent unconditionally right after the server's
+          // session.getOrCreatePage() resolves (see browserHandler.ts), so this
+          // is the first reliable "the page now exists server-side" signal on
+          // every (re)connect — the moment a sidebar list keyed off server-side
+          // page existence should refetch. It also re-fires on later tab
+          // open/close/title changes (potentially several times per page
+          // load), so only call onPageReady on the first {type:'tabs'} of
+          // this connection; pageReadyFiredRef is reset per-connection above.
+          if (!pageReadyFiredRef.current) {
+            pageReadyFiredRef.current = true;
+            onPageReadyRef.current?.();
+          }
         } else if (msg.type === 'dialog') {
           setPendingDialog({ type: msg.dialogType, message: msg.message, defaultValue: msg.defaultValue });
         } else if (msg.type === 'dialog-dismissed') {
@@ -1120,7 +1163,23 @@ export default function BrowserView({ serverName, groupId, initialTabId, onActiv
     };
   }, [canvasEl, sendMessage, anchorImeInput]);
 
-  const devtoolsUrl = `/api/browser/devtools?server=${encodeURIComponent(serverName)}&group=${encodeURIComponent(groupId)}&page=${encodeURIComponent(activeTabId)}`;
+  const openDevtools = useCallback(async () => {
+    const win = window.open('about:blank', '_blank');
+    try {
+      const { inspectorUrl } = await api<{ inspectorUrl: string }>(
+        `/browser/devtools?server=${encodeURIComponent(serverName)}`
+        + `&group=${encodeURIComponent(groupId)}&page=${encodeURIComponent(activeTabId)}`,
+      );
+      if (!inspectorUrl) throw new Error('inspectorUrl missing');
+      if (win) {
+        win.opener = null;
+        win.location.href = inspectorUrl;
+      }
+    } catch {
+      win?.close();
+      showToast(t('devtoolsOpenFailed'));
+    }
+  }, [serverName, groupId, activeTabId, showToast, t]);
 
   // Only show the start page once we actually know the tab is blank — never
   // during the initial connecting gap before any {type:'url'} has arrived.
@@ -1276,18 +1335,17 @@ export default function BrowserView({ serverName, groupId, initialTabId, onActiv
             <circle cx={8} cy={8} r={6} fill="none" stroke="currentColor" strokeWidth={1.4} />
           </svg>
         </IconButton>
-        <a
-          href={devtoolsUrl}
-          target="_blank"
-          rel="noopener noreferrer"
+        <button
+          type="button"
+          onClick={openDevtools}
           style={{
-            color: 'var(--text-dim)', fontSize: 'var(--font-xs)',
-            textDecoration: 'none', flexShrink: 0,
+            background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+            color: 'var(--text-dim)', fontSize: 'var(--font-xs)', flexShrink: 0,
           }}
           title="Open DevTools"
         >
           DevTools
-        </a>
+        </button>
         <div
           className={`browser-progress-track${isLoading ? ' is-loading' : ''}`}
           aria-hidden="true"

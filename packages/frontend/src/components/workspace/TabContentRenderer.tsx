@@ -61,6 +61,7 @@ interface TabContentRendererProps {
   openIssue?: (repoId: number, owner: string, repo: string, issueNumber: number, title: string) => void;
   openProjectTasks?: (projectId: number, projectName: string) => void;
   updateBrowserActiveTab?: (tabId: string, chromiumTabId: string) => void;
+  refreshBrowserGroups?: () => void;
 }
 
 export default function TabContentRenderer({
@@ -96,6 +97,7 @@ export default function TabContentRenderer({
   openIssue,
   openProjectTasks,
   updateBrowserActiveTab,
+  refreshBrowserGroups,
 }: TabContentRendererProps) {
   const { t } = useTranslation(['tasks', 'workspace', 'units']);
   const navigate = useNavigate();
@@ -209,6 +211,7 @@ export default function TabContentRenderer({
           onOpenTask={openTask}
           tabs={tabs}
           closeTab={closeTab}
+          onBrowserPageReady={refreshBrowserGroups}
         />
       )}
       {tab.type === 'issue' && tab.issueData && tab.projectId && (
@@ -326,6 +329,7 @@ export default function TabContentRenderer({
           groupId={tab.browserData.pageId ?? 'default'}
           initialTabId={tab.browserData.lastActiveTabId}
           onActiveTabChange={handleBrowserActiveTabChange}
+          onPageReady={refreshBrowserGroups}
         />
       )}
       {tab.type === 'server' && tab.serverName && (

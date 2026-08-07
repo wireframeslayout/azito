@@ -51,10 +51,12 @@
     "addAgentToServer": "Add {{label}} to {{serverName}}",
     "addAgent": "Add {{label}}",
     "failedLoadAgents": "Failed to load agents: {{error}}",
+    "loadingAgents": "Loading agent definitions…",
     "windowList": "Window list",
     "select": "Select",
     "detachFromProject": "Detach from project",
-    "deleteWindow": "Delete window"
+    "deleteWindow": "Delete window",
+    "quickAddTitle": "Add {{label}} — {{serverName}}"
   },
   "addWindow": {
     "title": "Add Window",
@@ -91,6 +93,7 @@
     "selectSessionError": "Select a session",
     "sessionNameRequired": "Session name is required",
     "failedLoadAgents": "Failed to load agents. {{error}}",
+    "agentCommandUnavailable": "Could not determine the launch command. Try again once agent definitions finish loading, or enter a command.",
     "window": "Window",
     "sessionWindowCount_one": "{{name}} ({{count}} window)",
     "sessionWindowCount_other": "{{name}} ({{count}} windows)"
@@ -122,7 +125,7 @@
     "displayNamePlaceholder": "e.g. dev-server"
   },
   "menu": {
-    "windows": "Windows",
+    "windows": "Objects",
     "tasks": "Tasks",
     "files": "Files",
     "repositories": "Repositories",
@@ -186,6 +189,22 @@
   },
   "tabContent": {
     "serverDetailMoved": "Server details have moved to the Servers global page."
+  },
+  "objects": {
+    "title": "Objects",
+    "sectionWindows": "Windows",
+    "sectionOperations": "Operation Windows",
+    "sectionBrowsers": "Browsers",
+    "noObjects": "No objects in this project yet",
+    "noOperations": "No running operations",
+    "noBrowsers": "No browsers open",
+    "openBrowser": "Open new",
+    "closeBrowserGroup": "Close this browser group",
+    "browserPages": "{{count}} pages",
+    "browserBlankUrl": "Blank tab",
+    "browserError": "Failed to fetch browser status",
+    "retry": "Retry",
+    "selectServer": "Select server"
   },
   "viewLabels": {
     "description": "Description",

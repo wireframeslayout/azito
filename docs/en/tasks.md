@@ -2,14 +2,14 @@
 
 ## What Is a Task?
 
-A task is a unit of work assigned to a Unit (the team that runs an operation). Each task holds information such as a title, description, and priority, and is executed autonomously by the orchestrator according to the Unit's phase configuration and execution runtime (worker type, model, orchestrator mode). Which Sidekick (tagged skill package) runs each phase is determined by the Unit's `phase_config`.
+A task is a unit of work assigned to a Unit (the team that runs an operation). Each task holds information such as a title, description, and priority, and is executed autonomously according to the Unit's UnitType (phase definition) and execution runtime (worker type, model). Which Sidekick (tagged skill package) runs each phase is determined by the Unit's `phase_config`.
 
 ## Creating a Task
 
 ### From the Workspace
 
 1. Select **Tasks** mode in the workspace activity bar.
-2. Click the "+" button to open a dedicated task creation form as a Workspace tab.
+2. Click the **+** button in the Tasks sidebar, or click the **+ New Task** button in the task list tab under All Tasks, to open a dedicated task creation form as a Workspace tab.
 3. Fill in the following fields:
 
 | Field | Description |
@@ -20,13 +20,16 @@ A task is a unit of work assigned to a Unit (the team that runs an operation). E
 | Assign to Unit | The Unit (workflow definition + execution runtime) that executes the task. Pre-selects the project's default Unit |
 | Server Environment | Override the execution server (shown when the project is bound to multiple servers) |
 | Priority | Priority (numeric, default: 0) |
-| Plan Approval | Whether plan approval is required |
+| Plan Approval | Require plan approval (checkbox) |
+| Self-Review Max | Maximum self-review attempts (0–3). Overrides the Unit's default |
 | Base Branch | The branch the work branch forks from (defaults to the repository default) |
 | Target Branch | The target branch for push / PR creation |
 | Issue Link | Link a GitHub / GitLab issue directly from the form (optional) |
 | Skip PR | Skip PR creation (commit + push only during pushing phase) |
 | Branch | Working branch name (available when Skip PR is enabled; checks out existing branch if found) |
 | Working Directory | Override the project's default working directory for this task |
+| tmux Window | Specify the tmux window name (optional) |
+| Subagent Override | Override the Unit's default review/implementation subagent settings (provider/model) |
 
 4. Click the **Create** button.
 
@@ -86,7 +89,7 @@ A Git worktree is created automatically when a task runs, so work happens on an 
 
 1. When task execution starts, `git worktree add` runs against the project's repository.
 2. Branch name: uses the user-specified branch name if given, otherwise `task/{id}-{slug}` (e.g. `task/42-add-login-page`).
-3. The worktree path is recorded in the task's `worktree_path` field.
+3. The worktree is created at `<workingDir>/.worktrees/task-<id>` and the path is recorded in the task's `worktree_path` field (protected by a regex guard in `TaskCleanupService`).
 4. The worker operates inside this worktree directory.
 
 ### Benefits
@@ -121,9 +124,10 @@ When a phase with `planApproval: true` completes (e.g. planning in the devops Un
 
 1. The worker drafts an execution plan and writes it to the log.
 2. The task transitions to `phase_review`.
-3. "Approve" and "Request Changes" buttons appear on the task detail view.
+3. Three buttons appear on the task detail view: "Reject", "Re-Plan", and "Approve".
 4. **Approve** -- Approves the plan and proceeds to the next phase.
-5. **Request Changes** -- Sends it back with a comment. Returns to the current phase.
+5. **Re-Plan** -- Sends it back with a comment and re-executes the same phase.
+6. **Reject** -- Rejects the plan and sends the task back.
 
 ## Structured Questions (QUESTIONS_JSON)
 
@@ -163,36 +167,43 @@ You can send additional instructions (follow-ups) to a running or paused task.
 2. Optionally select a **phase prompt chip** to attach a phase prompt.
 3. Click the "Send" button.
 
-Phase prompt chips let you attach a predefined phase prompt (e.g. "Run the tests", "Review it") with one click. Phase prompts can be customized under Settings > Phase Prompts.
+Phase prompt chips let you attach a predefined phase prompt (e.g. "Run the tests", "Review it") with one click. Phase prompts are managed as Sidekick packages (`/api/sidekicks`).
 
-## LLM Session Resume
+## Session Resume and Automatic Recovery
 
-If the server restarts or an error occurs while a task is running, the task can be resumed.
+If the server restarts or an error occurs while a task is running, the task can be resumed using the following methods.
 
-### How It Works
+### Worker `--resume`
 
-1. On resume, the past conversation is reconstructed from the existing execution log (`execution_log`).
-2. It is sent to the orchestrator LLM as conversation history to restore the session.
-3. Execution continues from where it was interrupted.
+The worker (Claude Code) session is resumed using the saved session ID (`agent_session_id`) via `claude --resume <session-id>`. This preserves the LLM's conversation context and continues from where execution was interrupted.
 
-This lets long-running tasks continue without losing context even if interrupted.
+### Automatic Recovery at Startup (RecoverStuckTasksUseCase)
+
+On server startup, `RecoverStuckTasksUseCase` automatically detects non-terminal tasks (`running` / `in_progress`) and attempts recovery:
+
+1. Pane liveness check — confirms whether the tmux pane still exists
+2. Done-marker check — examines signal files (`/tmp/azito-pipe-<taskId>-sig-*.log`) to determine if the phase completed
+3. If completed, advances to the next phase; if not, re-executes the current phase (resume)
+
+Concurrent resumes are capped at 3 and do not block server startup (fire-and-forget).
 
 ## Stall Detection and Retry
 
-If a worker's output does not change for a certain period during execution, it is detected as stalled.
+If a worker's output does not change during execution, stalling is detected in three stages.
 
-### Detection Condition
+### Detection Conditions (3 stages)
 
-- A task is judged stalled when the worker's output does not change for **5 minutes**.
+1. **30-second activity monitoring** — Worker output changes are monitored at 30-second intervals (`ACTIVITY_THRESHOLD_SEC = 30`)
+2. **2-minute idle → LLM classification** — If output hasn't changed for 2 minutes, an LLM (PaneClassifier) performs fallback classification (`IDLE_TIMEOUT = 120_000`)
+3. **5-minute max (extendable)** — If completely unresponsive for 5 minutes, judged as stalled (`MAX_IDLE = 300_000`). The overall max phase duration is 30 minutes (60 minutes with extension)
 
 ### UI Display
 
-- A **warning banner** appears on the task detail view.
-- A **Retry** button appears alongside the "This task appears to be stalled" message.
+In the task log view (TaskLogView), a warning bar appears when the task log connection becomes stale (no updates for an extended period). It displays the elapsed time along with a **Retry** button that re-establishes the connection.
 
 ### Retry
 
-Clicking the Retry button re-sends the prompt to the worker and resumes execution.
+Clicking the Retry button re-establishes the task log WebSocket connection and fetches the latest execution state.
 
 ## Archiving and Restoring Tasks
 
@@ -209,9 +220,22 @@ Select **Restore** on an archived task to recreate the worktree and tmux window 
 - The global task list has a filter for archived tasks.
 - The status dropdown is disabled for archived tasks.
 
-## Commit History
+## Task Detail Tabs
 
-The task detail view has a **Commits** tab showing the worktree's commit history.
+The task detail view has the following tabs:
+
+| Tab | Content |
+|---|---|
+| Description | Task description and details |
+| Unit | Configuration of the assigned Unit |
+| Git | Git information (branch, worktree status) |
+| Summary | Execution summary on task completion |
+| Commits | Worktree commit history (diff from base branch) |
+| Diff | Diff against the base branch |
+
+### Commit History
+
+The **Commits** tab shows the worktree's commit history.
 
 - Lists commits diverging from the base branch (`base..HEAD`)
 - Select a commit to view its individual diff
@@ -222,7 +246,7 @@ Deleting a task automatically cleans up associated resources:
 
 - **tmux window** -- The tmux window tied to the task is killed.
 - **Git worktree** -- The task's worktree is removed.
-- **Temporary files** -- pipe-pane output files and signal files are deleted.
+- **Temporary files** -- pipe-pane output files and signal files are deleted (**local server only**).
 
 ## Session Recovery
 

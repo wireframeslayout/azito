@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useLocation, matchPath } from 'react-router-dom';
 import { paths, matchWorkspacePath } from '../paths';
@@ -15,6 +15,7 @@ import { useBrailleSpinner } from '../hooks/useBrailleSpinner';
 import { useWorkspaceTargets } from '../hooks/useWorkspaceTargets';
 import { useAgentActivity } from '../hooks/useAgentActivity';
 import { useNotificationChannel } from '../hooks/useNotificationChannel';
+import { useRecentTasks } from '../hooks/useRecentTasks';
 import { useWorkspaceData } from '../hooks/useWorkspaceData';
 import { useSidebarState } from '../hooks/useSidebarState';
 import { useWindowActions } from '../hooks/useWindowActions';
@@ -34,6 +35,7 @@ import WorkspaceSidebarContent from '../components/workspace/WorkspaceSidebarCon
 import ActiveWindowsSection from '../components/workspace/ActiveWindowsSection';
 import WorkspaceLayout from '../components/workspace/WorkspaceLayout';
 import AddWindowModal from '../components/workspace/AddWindowModal';
+import QuickAddWindowModal from '../components/workspace/QuickAddWindowModal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import ResourceWarningDialog, { type ResourceStatus } from '../components/ResourceWarningDialog';
 import TabContentRenderer from '../components/workspace/TabContentRenderer';
@@ -113,7 +115,7 @@ function WorkspaceInner() {
     () => servers.filter((s) => s.type === 'local' || s.type === 'agent').map((s) => s.name),
     [servers],
   );
-  const browserGroups = useBrowserGroups(browserCapableServers);
+  const { groups: browserGroups, errors: browserErrors, refresh: refreshBrowserGroups } = useBrowserGroups(browserCapableServers);
 
   const taskWindows = useMemo(() => {
     const entries: Array<{ tmuxTarget: string; taskId: number; serverName: string }> = [];
@@ -148,6 +150,7 @@ function WorkspaceInner() {
 
   const { showToast } = useToast();
   const confirm = useConfirm();
+  const { recordOpened: recordTaskOpened } = useRecentTasks();
 
   useNotificationChannel({
     onBrowserOpened: useCallback((payload: BrowserOpenedPayload) => {
@@ -170,8 +173,8 @@ function WorkspaceInner() {
   });
 
   const handleSelectTab = useCallback((tabId: string) => {
-    setActiveTabId(tabId);
     const tab = tabs.find((t) => t.id === tabId);
+    setActiveTabId(tabId);
     if (tab?.projectId && tab.projectId !== currentProjectId) {
       navigate(`/workspace/${tab.projectId}`);
     }
@@ -217,6 +220,23 @@ function WorkspaceInner() {
     const pane = layout.state.focusedPaneId ? findPane(layout.state.root, layout.state.focusedPaneId) : null;
     return pane ? pane.activeTabId : activeTabId;
   }, [layout.state.root, layout.state.focusedPaneId, activeTabId]);
+
+  // Single recording point for the sidebar's "recent" order: every
+  // activation path (initial open, tab-bar reselect, pane focus, drag-drop,
+  // context-menu pane move, post-close successor selection, notification
+  // auto-open) funnels into focusedActiveTabId — the focused pane's active
+  // tab, falling back to the global activeTabId. Recording here instead of
+  // at each call site means no activation path can be missed. lastRecordedTaskIdRef
+  // guards against re-recording (localStorage write + subscriber notify) on
+  // every render while the same task tab stays focused.
+  const lastRecordedTaskIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    const tab = tabs.find((t) => t.id === focusedActiveTabId);
+    const taskId = tab?.type === 'task' && tab.entityId != null ? tab.entityId : null;
+    if (taskId === lastRecordedTaskIdRef.current) return;
+    lastRecordedTaskIdRef.current = taskId;
+    if (taskId != null) recordTaskOpened(taskId);
+  }, [focusedActiveTabId, tabs, recordTaskOpened]);
 
   // Pane-local tab selection: keeps the pane's own active tab and the
   // pane-focus in sync, mirrors the selection into useTabPersistence's
@@ -762,6 +782,15 @@ function WorkspaceInner() {
       tasks={tasks}
       openTask={openTask}
       openProjectTasks={openProjectTasks}
+      onCreateTask={() => openTaskForm({ mode: 'create', projectId: currentProjectId })}
+      onOpenTaskWindow={(taskId, title, terminal) => {
+        selectTaskTerminal(taskId, terminal);
+        openTask(taskId, title);
+      }}
+      onOpenTaskBrowser={(taskId, title, browser) => {
+        addBrowserToTaskLayout(taskId, browser.serverName, browser.groupId);
+        openTask(taskId, title);
+      }}
       projectServers={projectServers}
       selectedFileServer={selectedFileServer}
       onSelectFileServer={setSelectedFileServer}
@@ -769,6 +798,9 @@ function WorkspaceInner() {
       onSelectRepo={handleSelectRepo}
       connectPane={connectPane}
       onOpenAddWindow={addWindowModal.openAddWindow}
+      onOpenQuickAdd={addWindowModal.openQuickAddWindow}
+      agentDefsLoading={addWindowModal.agentPresetsLoading}
+      agentDefsError={addWindowModal.agentPresetsError}
       showWindowContextMenu={windowActions.showWindowContextMenu}
       onSwitchSidebarMode={handleSwitchSidebarMode}
       onFileSelect={handleFileSelect}
@@ -781,6 +813,8 @@ function WorkspaceInner() {
       openServer={openServer}
       openBrowser={openBrowser}
       browserGroups={browserGroups}
+      browserErrors={browserErrors}
+      refreshBrowserGroups={refreshBrowserGroups}
       openStorageFileRaw={openStorageFileRaw}
       projectSettings={sidebarProjectSettings}
       onOpenDiff={openDiff}
@@ -836,6 +870,20 @@ function WorkspaceInner() {
         servers={servers}
         projectServers={addWindowModal.awEffectiveProjectServers ?? projectServers}
         project={addWindowModal.awEffectiveProject ?? project}
+      />
+      <QuickAddWindowModal
+        open={addWindowModal.awQuickAddOpen}
+        onClose={() => addWindowModal.closeQuickAddWindow()}
+        loading={addWindowModal.addWindowLoading || addWindowModal.awQuickAddLoading}
+        onSubmit={() => addWindowModal.handleAddWindow()}
+        serverName={addWindowModal.awServer}
+        agentLabel={addWindowModal.awQuickAddAgent === 'terminal' ? t('common:labels.terminal') : (addWindowModal.agentPresets[addWindowModal.awQuickAddAgent]?.label ?? addWindowModal.awQuickAddAgent)}
+        showModel={addWindowModal.awAgent !== 'none' && addWindowModal.awWorkerModels.length > 0}
+        workDir={addWindowModal.awWorkDir}
+        onWorkDirChange={addWindowModal.setAwWorkDir}
+        agentModel={addWindowModal.awAgentModel}
+        onAgentModelChange={addWindowModal.setAwAgentModel}
+        workerModels={addWindowModal.awWorkerModels}
       />
       <ResourceWarningDialog
         open={addWindowModal.awResourceWarning !== null}
@@ -1029,6 +1077,7 @@ function WorkspaceInner() {
           openIssue={openIssue}
           openProjectTasks={openProjectTasks}
           updateBrowserActiveTab={updateBrowserActiveTab}
+          refreshBrowserGroups={refreshBrowserGroups}
         />
       </div>
     );

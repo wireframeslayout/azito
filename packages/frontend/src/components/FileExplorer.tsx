@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api } from '../api/client';
+import { api, fetchBlob } from '../api/client';
+import { useToast } from '../hooks/useToast';
 import MarkdownRenderer, { mdStyles } from './MarkdownRenderer';
 import { Icon } from './ui/Icon';
 import hljs from 'highlight.js/lib/core';
@@ -318,6 +319,7 @@ function MarkdownFileView({ content, language, mode }: { content: string; langua
 
 export function FilePreviewPanel({ serverName, filePath }: { serverName: string; filePath: string }) {
   const { t } = useTranslation('files');
+  const { showToast } = useToast();
   const [file, setFile] = useState<FileContent | null>(null);
   const [image, setImage] = useState<ImageContent | null>(null);
   const [pdf, setPdf] = useState<PdfContent | null>(null);
@@ -441,13 +443,22 @@ export function FilePreviewPanel({ serverName, filePath }: { serverName: string;
           </div>
         )}
         <button
-          onClick={() => {
-            const a = document.createElement('a');
-            a.href = `/api/servers/${encodeURIComponent(serverName)}/files/download?path=${encodeURIComponent(filePath)}`;
-            a.download = fileName;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
+          onClick={async () => {
+            try {
+              const blob = await fetchBlob(
+                `/servers/${encodeURIComponent(serverName)}/files/download?path=${encodeURIComponent(filePath)}`,
+              );
+              const objectUrl = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = objectUrl;
+              a.download = fileName;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(objectUrl);
+            } catch {
+              showToast(t('explorer.downloadFailed'));
+            }
           }}
           title={t('explorer.download')}
           style={{
