@@ -199,6 +199,8 @@ export default function TaskFormView({ mode, taskId, initial, projects, units, r
   const buildDisplayedContext = useCallback((): DisplayedExecutionContext => ({
     title: form.title.trim(),
     description: form.description.trim(),
+    unitId: selectedUnit?.id ?? null,
+    unitName: selectedUnit?.name ?? null,
     serverName: resolvedServerName,
     workingDirectory: resolvedWorkingDirectory,
     branches: {
@@ -209,7 +211,7 @@ export default function TaskFormView({ mode, taskId, initial, projects, units, r
     phases: displayedPhases,
     repository: displayedRepository,
     secretNames,
-  }), [form.title, form.description, resolvedServerName, resolvedWorkingDirectory, form.baseBranch, form.targetBranch, form.skipPr, form.workingBranch, displayedPhases, displayedRepository, secretNames]);
+  }), [form.title, form.description, selectedUnit, resolvedServerName, resolvedWorkingDirectory, form.baseBranch, form.targetBranch, form.skipPr, form.workingBranch, displayedPhases, displayedRepository, secretNames]);
   // Pre-approval may only be attempted once secrets actually loaded — see
   // `secretsState`'s doc comment above. While 'error', the create button
   // falls back to an ordinary (non-approving) task creation.
@@ -274,6 +276,8 @@ export default function TaskFormView({ mode, taskId, initial, projects, units, r
             const actualContext: DisplayedExecutionContext = {
               title: approval.title,
               description: approval.description ?? '',
+              unitId: approval.execution.unitId,
+              unitName: approval.execution.unitName,
               serverName: approval.execution.serverName,
               workingDirectory: approval.execution.workingDirectory,
               branches: approval.execution.branches,

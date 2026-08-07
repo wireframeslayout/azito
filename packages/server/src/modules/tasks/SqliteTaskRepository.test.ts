@@ -266,6 +266,29 @@ describe('SqliteTaskRepository.recordExecutionGateBlock (Issue #328 review round
     expect(repo.findById(taskId)?.status).toBe('review');
     expect(repo.findById(taskId)?.pendingOperation).toBeNull();
   });
+
+  it("is rejected when the task's status has already moved on from the caller's stale priorStatus snapshot (e.g. archived concurrently) — the guarded UPDATE must compare current status, not just overwrite it (Issue #328 review round, status-CAS fix)", () => {
+    // request A read the task while it was 'review' and is about to block it.
+    // Before A's write lands, a concurrent request archives the task —
+    // status is no longer what A observed.
+    repo.updateStatus(taskId, 'archived');
+
+    const recorded = repo.recordExecutionGateBlock(taskId, {
+      pendingOperation: 'execute',
+      priorStatus: 'review', // A's stale snapshot — no longer the real status
+      manifestHash: 'hash-a',
+    });
+
+    expect(recorded).toBe(false);
+    // Without the status = ? guard in the WHERE clause, this write would
+    // succeed and overwrite 'archived' with 'pending_approval', resurrecting
+    // an archived task — and a later approval would restore it to 'review'
+    // (A's stale priorStatus), letting it execute again.
+    const task = repo.findById(taskId);
+    expect(task?.status).toBe('archived');
+    expect(task?.pendingOperation).toBeNull();
+    expect(task?.pendingOperationPriorStatus).toBeNull();
+  });
 });
 
 // preApproveExecution() (task/328 follow-up — creation-time pre-approval):

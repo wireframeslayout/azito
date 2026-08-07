@@ -311,13 +311,23 @@ export interface ITaskRepository {
    * notification already reached the client) — see the call sites for how
    * `false` is handled.
    *
+   * The guarded UPDATE additionally requires `status = fields.priorStatus`
+   * (Issue #328 review round, status-CAS fix): without this, a status change
+   * that lands between the caller's stale read and this write (e.g. the task
+   * gets archived) would be silently clobbered back to `pending_approval` by
+   * this UPDATE, letting a later approval revive/execute an already-archived
+   * task. Failing this comparison returns false the same way the
+   * fingerprint/pending_operation guards do — the caller must treat it as
+   * "another writer changed this task" and not retry with a stale snapshot.
+   *
    * `priorStatus` must be the CALLER'S OWN task snapshot's status, exactly
    * as {@link consumePendingApproval}'s `fields.status` is caller-supplied —
    * this method does not re-read the row itself before writing, so passing a
    * stale/already-`pending_approval` status here defeats the guard's
    * purpose. Every call site derives it from the same `task` object it just
    * used to resolve the manifest (never a fresh `findById()`), matching this
-   * contract.
+   * contract. It now doubles as the CAS comparison value above, so it must
+   * be accurate — not just any valid TaskStatus.
    *
    * Returns true iff this call was the one that recorded the block (the
    * caller should log the entry-point-appropriate `status_change` event);

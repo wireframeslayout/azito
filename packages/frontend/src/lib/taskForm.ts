@@ -129,6 +129,11 @@ export function buildTaskPayload(v: TaskFormValue, mode: 'create' | 'edit', orig
 export interface DisplayedExecutionContext {
   title: string;
   description: string;
+  /** Resolved Unit id — the banner shows `unitName` but the id is what
+   * actually determines workerType/systemPrompt/phaseConfig, so it (not just
+   * the display name) is what must be compared; see compareExecutionApprovalContext. */
+  unitId: number | null;
+  unitName: string | null;
   serverName: string | null;
   workingDirectory: string | null;
   branches: { base: string; target: string; work: string };
@@ -151,6 +156,7 @@ export interface DisplayedExecutionContext {
  * Compares EXACTLY the fields {@link DisplayedExecutionContext} carries —
  * the same set the banner renders — and no others:
  *   - title, description          (the untrusted content itself)
+ *   - unitId / unitName           (which Unit's workerType/systemPrompt/phaseConfig applies)
  *   - serverName
  *   - workingDirectory
  *   - branches.base / .target / .work
@@ -172,6 +178,8 @@ export function compareExecutionApprovalContext(
   const mismatches: string[] = [];
   if (displayed.title !== actual.title) mismatches.push('title');
   if (displayed.description !== actual.description) mismatches.push('description');
+  if ((displayed.unitId ?? null) !== (actual.unitId ?? null)) mismatches.push('unit');
+  else if ((displayed.unitName || null) !== (actual.unitName || null)) mismatches.push('unit');
   if ((displayed.serverName || null) !== (actual.serverName || null)) mismatches.push('serverName');
   if ((displayed.workingDirectory || null) !== (actual.workingDirectory || null)) mismatches.push('workingDirectory');
   if (displayed.branches.base !== actual.branches.base) mismatches.push('baseBranch');

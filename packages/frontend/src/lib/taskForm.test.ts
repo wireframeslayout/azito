@@ -62,6 +62,8 @@ describe('compareExecutionApprovalContext', () => {
     return {
       title: 'Fix the bug',
       description: 'Steps to reproduce...',
+      unitId: 1,
+      unitName: 'Default Unit',
       serverName: 'prod-1',
       workingDirectory: '/srv/app',
       branches: { base: 'main', target: 'main', work: 'task/1-fix' },
@@ -122,6 +124,27 @@ describe('compareExecutionApprovalContext', () => {
     const result = compareExecutionApprovalContext(displayed, actual);
     expect(result.matches).toBe(false);
     expect((result as { mismatches: string[] }).mismatches).toContain('secretNames');
+  });
+
+  it('reports a mismatch when the resolved Unit differs (project default Unit swapped between banner display and creation)', () => {
+    // Same phase name (e.g. both Units enable 'implementing') would pass a
+    // phase-only comparison even though workerType/systemPrompt differ
+    // between the two Units — this is exactly the gap the third-party review
+    // flagged: the banner shows unitName (TaskFormView.tsx) but the old
+    // comparison never checked it.
+    const displayed = makeContext({ unitId: 1, unitName: 'Safe Unit' });
+    const actual = makeContext({ unitId: 2, unitName: 'Other Unit' });
+    const result = compareExecutionApprovalContext(displayed, actual);
+    expect(result.matches).toBe(false);
+    expect((result as { mismatches: string[] }).mismatches).toContain('unit');
+  });
+
+  it('reports a mismatch when the Unit id is the same but the display name differs (defensive: name drift without id drift should still surface)', () => {
+    const displayed = makeContext({ unitId: 1, unitName: 'Old Name' });
+    const actual = makeContext({ unitId: 1, unitName: 'Renamed Unit' });
+    const result = compareExecutionApprovalContext(displayed, actual);
+    expect(result.matches).toBe(false);
+    expect((result as { mismatches: string[] }).mismatches).toContain('unit');
   });
 
   it('reports a mismatch when branches differ', () => {

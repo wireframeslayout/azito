@@ -101,11 +101,15 @@ export class SqliteTaskRepository implements ITaskRepository {
     // NULL) AND the approved fingerprint still differs from the manifest
     // hash the caller used to decide it needed to block (the second half of
     // the WHERE clause) — a concurrent approval that already matches this
-    // exact manifest must not be rewound back to pending_approval. See
-    // recordExecutionGateBlock's own doc comment on ITaskRepository for the
-    // race this closes.
+    // exact manifest must not be rewound back to pending_approval. AND the
+    // current status still matches the caller's stale-read snapshot
+    // (fields.priorStatus) — without this, a concurrent status change (e.g.
+    // archive) between the caller's read and this write would be silently
+    // overwritten back to 'pending_approval', letting an already-archived
+    // task be revived via later approval. See recordExecutionGateBlock's own
+    // doc comment on ITaskRepository for the race this closes.
     this.recordExecutionGateBlockStmt = db.prepare(
-      "UPDATE tasks SET status = 'pending_approval', pending_operation = ?, pending_operation_window_id = ?, pending_operation_prior_status = ?, updated_at = datetime('now') WHERE id = ? AND pending_operation IS NULL AND (execution_approved_fingerprint_hash IS NULL OR execution_approved_fingerprint_hash != ?)",
+      "UPDATE tasks SET status = 'pending_approval', pending_operation = ?, pending_operation_window_id = ?, pending_operation_prior_status = ?, updated_at = datetime('now') WHERE id = ? AND status = ? AND pending_operation IS NULL AND (execution_approved_fingerprint_hash IS NULL OR execution_approved_fingerprint_hash != ?)",
     );
     // Guarded compare-and-swap for preApproveExecution() (creation-time
     // pre-approval) — see that method's doc comment on ITaskRepository.
@@ -254,6 +258,7 @@ export class SqliteTaskRepository implements ITaskRepository {
       fields.pendingOperationWindowId ?? null,
       fields.priorStatus,
       id,
+      fields.priorStatus,
       fields.manifestHash,
     );
     return result.changes > 0;
