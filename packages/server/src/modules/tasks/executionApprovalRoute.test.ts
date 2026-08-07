@@ -4,6 +4,7 @@ import tasksRoutes from './routes';
 import type { TasksRouteOptions } from './routes';
 import type { Task } from './Task';
 import { resolveExecutionManifest, hashExecutionManifest } from './execution/ExecutionManifest';
+import { checkExecutionGate } from './execution/ExecutionGate';
 import { buildRespawnManifestInput } from '../windows/WindowRespawnService';
 
 // GET /api/tasks/:id/execution-approval (Issue #51) — the browser-facing
@@ -71,6 +72,7 @@ function makeOpts(existingTask: Task | null): TasksRouteOptions {
       delete: vi.fn(),
       consumePendingApproval: vi.fn(() => false),
       recordExecutionGateBlock: vi.fn(() => true),
+      preApproveExecution: vi.fn(() => true),
     },
     projectRepo: {
       findAll: vi.fn(() => []),
@@ -207,7 +209,27 @@ function makeStatefulOpts(initialTask: Task): { opts: TasksRouteOptions; getTask
     };
     return true;
   });
+  opts.taskRepo.preApproveExecution = vi.fn((id: number, fingerprintHash: string) => {
+    if (id !== initialTask.id) return false;
+    if (currentTask.status !== 'open' || currentTask.pendingOperation !== null || currentTask.inputTrust !== 'untrusted') return false;
+    currentTask = { ...currentTask, executionApprovedFingerprintHash: fingerprintHash };
+    return true;
+  });
   return { opts, getTask: () => currentTask };
+}
+
+/** Module-scoped fingerprint helper (mirrors the POST describe block's own `currentFingerprint`, which is scoped to that block) — resolves via the SAME resolveExecutionManifest/hashExecutionManifest pair every route handler uses, for tests outside that block (the pre-approval describe below). No respawn support — pre-approval never applies to a respawn-blocked task. */
+function currentFingerprintFor(opts: TasksRouteOptions, task: Task): string {
+  const { manifest } = resolveExecutionManifest(task, {
+    unitRepo: opts.unitRepo,
+    projectRepo: opts.projectRepo,
+    projectServerRepo: opts.projectServerRepo,
+    serverRepo: opts.serverRepo,
+    projectSecretRepo: opts.projectSecretRepo,
+    unitTypeLoader: opts.unitTypeLoader,
+    sidekickLoader: opts.sidekickLoader,
+  });
+  return hashExecutionManifest(manifest);
 }
 
 describe('GET /api/tasks/:id/execution-approval (Issue #51)', () => {
@@ -930,5 +952,150 @@ describe('GET fingerprint satisfies POST (Issue #328 fourteenth-round review —
 
     expect(res.statusCode).toBe(409);
     expect(res.json().code).toBe('pending_operation_window_missing');
+  });
+});
+
+// Creation-time pre-approval (task/328-input-trust-and-exec-gate follow-up,
+// part A): a freshly created untrusted task — still status='open',
+// pendingOperation NULL, i.e. it has NEVER been gate-blocked — can be
+// pre-approved directly by the interactive create-form flow, without ever
+// entering pending_approval or dispatching a worker. Both GET
+// .../execution-approval (now additionally serving this state) and POST
+// .../approve-execution (branching to decideExecutionPreApproval instead of
+// decideExecutionApproval) are covered together, since the create-form flow
+// always calls them as a pair (fetch fingerprint, then approve with it).
+describe('Creation-time pre-approval (task/328 follow-up)', () => {
+  function makeOpenTask(overrides: Partial<Task> = {}): Task {
+    return makeTask({
+      status: 'open',
+      pendingOperation: null,
+      pendingOperationWindowId: null,
+      pendingOperationPriorStatus: null,
+      executionApprovedFingerprintHash: null,
+      ...overrides,
+    });
+  }
+
+  it('GET returns a live manifest/fingerprint for a fresh open untrusted task (not just pending_approval ones)', async () => {
+    const app = Fastify();
+    await app.register(tasksRoutes, makeOpts(makeOpenTask()));
+    await app.ready();
+
+    const res = await app.inject({ method: 'GET', url: '/api/tasks/1/execution-approval' });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.pendingOperation).toBeNull();
+    expect(typeof body.fingerprint).toBe('string');
+    expect(body.fingerprint.length).toBeGreaterThan(0);
+  });
+
+  it('GET still 404s for a fresh open TRUSTED task — nothing to pre-approve', async () => {
+    const app = Fastify();
+    await app.register(tasksRoutes, makeOpts(makeOpenTask({ inputTrust: 'trusted', source: 'local', sourceRef: null })));
+    await app.ready();
+
+    const res = await app.inject({ method: 'GET', url: '/api/tasks/1/execution-approval' });
+
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('POST approves with the current fingerprint, records it, and dispatches NOTHING — status/pendingOperation stay untouched', async () => {
+    const task = makeOpenTask();
+    const { opts, getTask } = makeStatefulOpts(task);
+    const fingerprint = currentFingerprintFor(opts, task);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
+
+    expect(res.statusCode).toBe(200);
+    expect(getTask().executionApprovedFingerprintHash).toBe(fingerprint);
+    expect(getTask().status).toBe('open');
+    expect(getTask().pendingOperation).toBeNull();
+    expect(opts.executeTaskUseCase.execute).not.toHaveBeenCalled();
+  });
+
+  it('POST 400s an approval with no fingerprint, same as the pending_approval path', async () => {
+    const app = Fastify();
+    await app.register(tasksRoutes, makeOpts(makeOpenTask()));
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true } });
+
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('POST rejects a STALE fingerprint with 409 fingerprint_mismatch and writes nothing', async () => {
+    const task = makeOpenTask({ title: 'Original title' });
+    const { opts, getTask } = makeStatefulOpts(task);
+    const staleFingerprint = currentFingerprintFor(opts, task);
+    opts.taskRepo.findById = vi.fn((id: number) => (id === task.id ? { ...task, title: 'Rewritten by someone else' } : null));
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint: staleFingerprint } });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().code).toBe('fingerprint_mismatch');
+    expect(getTask().executionApprovedFingerprintHash).toBeNull();
+  });
+
+  it('POST 400s a denial for a fresh open task — there is no pending block to deny', async () => {
+    const app = Fastify();
+    await app.register(tasksRoutes, makeOpts(makeOpenTask()));
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: false } });
+
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('a later execute() attempt against the pre-approved manifest passes the gate immediately (no pending_approval detour)', async () => {
+    // This is the actual point of the feature: once pre-approved, the
+    // task's first real execute() call must see
+    // executionApprovedFingerprintHash === the manifest hash and proceed —
+    // not re-block. Exercised via checkExecutionGate directly (the same
+    // function ExecuteTaskUseCase.enforceExecutionGate calls), since this
+    // route file doesn't wire a real ExecuteTaskUseCase.
+    const task = makeOpenTask();
+    const { opts, getTask } = makeStatefulOpts(task);
+    const fingerprint = currentFingerprintFor(opts, task);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+    await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
+
+    const approvedTask = getTask();
+    const gate = checkExecutionGate(approvedTask, { projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' }, fingerprint);
+    expect(gate).toEqual({ allowed: true });
+  });
+
+  it("logs 'execution_pre_approved' with origin 'creation_form' by default", async () => {
+    const task = makeOpenTask();
+    const { opts } = makeStatefulOpts(task);
+    const fingerprint = currentFingerprintFor(opts, task);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
+
+    expect(opts.logRepo.append).toHaveBeenCalledWith(1, 20, 'command', { type: 'execution_pre_approved', origin: 'creation_form' });
+  });
+
+  it('rejects an unknown origin value with 400', async () => {
+    const task = makeOpenTask();
+    const { opts } = makeStatefulOpts(task);
+    const fingerprint = currentFingerprintFor(opts, task);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint, origin: 'not-a-real-origin' } });
+
+    expect(res.statusCode).toBe(400);
   });
 });

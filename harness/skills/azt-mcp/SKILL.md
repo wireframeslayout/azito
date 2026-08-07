@@ -18,7 +18,7 @@ azito API に対して読み書き操作を行う MCP ツール群を提供し�
 | `azt_list_projects` | プロジェクト一覧を取得 |
 | `azt_create_project` | プロジェクトを新規作成（name 必須） |
 | `azt_list_tasks` | タスク一覧を取得（project_id/status/unit_id でフィルタ可） |
-| `azt_create_task` | タスクを新規作成（project_id, title 必須。unit_id はワークフロー自動実行時に推奨） |
+| `azt_create_task` | タスクを新規作成（project_id, title 必須。unit_id はワークフロー自動実行時に推奨。既存イシューから作る場合は source/source_ref を指定 — 未信頼入力として扱われ、実行前に人間の承認が必要になる） |
 | `azt_list_units` | Unit（フェーズ→Sidekick マッピング＋実行ランタイムを持つワークフロー定義）一覧を取得 |
 | `azt_list_operations` | 現在実行中の Operation（Unit の実行ラン）一覧を取得 |
 | `azt_list_sidekicks` | Sidekick（SKILL.md + scripts/ のスキルパッケージ）一覧を取得 |

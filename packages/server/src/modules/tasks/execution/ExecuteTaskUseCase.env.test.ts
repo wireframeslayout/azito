@@ -213,6 +213,7 @@ function buildUseCase(opts: {
       opts.task.pendingOperationPriorStatus = fields.priorStatus as Task['pendingOperationPriorStatus'];
       return true;
     }),
+    preApproveExecution: vi.fn(() => true),
   };
 
   const unitRepo: IUnitRepository = {
@@ -778,6 +779,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITOç›
       delete: vi.fn(),
       consumePendingApproval: vi.fn(() => false),
       recordExecutionGateBlock: vi.fn(() => true),
+      preApproveExecution: vi.fn(() => true),
     };
     const unitRepo: IUnitRepository = {
       findAll: vi.fn(() => [unit]),

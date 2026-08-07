@@ -82,7 +82,15 @@
     "importFromGitHub": "GitHubからインポート",
     "source": "ソース: {{ref}}",
     "titleRequired": "タイトルは必須です",
-    "serverRequired": "サーバーは必須です: このプロジェクトには複数のサーバーがあるため、実行サーバーを指定してください"
+    "serverRequired": "サーバーは必須です: このプロジェクトには複数のサーバーがあるため、実行サーバーを指定してください",
+    "createTaskApproved": "タスクを作成（実行承認を伴う）"
+  },
+  "untrustedImport": {
+    "bannerTitle": "未信頼の外部コンテンツ",
+    "bannerBody": "以下のタイトル・説明は外部の GitHub/GitLab イシューから取り込まれたものです。上のボタンで作成すると、この確認が実行承認として記録され、初回実行時に承認画面を経由せず実行されます。作成前に、内容と下記の実行条件を確認してください。",
+    "contextLabel": "実行される条件",
+    "preApprovedToast": "タスクを作成し、実行を承認済みにしました。初回実行時に承認画面は表示されません。",
+    "preApprovalFailedToast": "タスクは作成されましたが、自動承認に失敗しました: {{error}}。実行前に、タスクの承認パネルから承認してください。"
   },
   "fields": {
     "project": "プロジェクト",

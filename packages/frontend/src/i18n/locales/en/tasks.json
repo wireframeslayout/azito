@@ -82,7 +82,15 @@
     "importFromGitHub": "Import from GitHub",
     "source": "Source: {{ref}}",
     "titleRequired": "Title is required",
-    "serverRequired": "Server is required: this project has multiple servers, so the execution server cannot be inferred"
+    "serverRequired": "Server is required: this project has multiple servers, so the execution server cannot be inferred",
+    "createTaskApproved": "Create Task (approves execution)"
+  },
+  "untrustedImport": {
+    "bannerTitle": "Untrusted external content",
+    "bannerBody": "This task's title and description below come from an external GitHub/GitLab issue. Creating it with the button above records your review as execution approval — the task will run its first phase without a separate approval screen. Review the content and the execution context below before creating.",
+    "contextLabel": "Will run with",
+    "preApprovedToast": "Task created and execution pre-approved — no approval screen needed on first run.",
+    "preApprovalFailedToast": "Task created, but automatic approval failed: {{error}}. Approve it from the task's approval panel before running."
   },
   "fields": {
     "project": "Project",

@@ -99,6 +99,25 @@ export function resolvePendingApprovalManifest(
  *   and always passes `fingerprint` (Issue #328 review fix 1).
  */
 
+/**
+ * Client-reported origin of an approval decision (task/328-input-trust-and-
+ * exec-gate follow-up, part B) — audit-only, carried on the
+ * 'execution_approved'/'execution_pre_approved' log entries so a human
+ * reviewing the audit trail can tell "approved via the interactive
+ * create-form's own review" apart from "approved via the pending_approval
+ * panel". An enum, not a free string (never pass an arbitrary
+ * client-supplied string into the log — see the route handler's own
+ * validation): a caller cannot invent a new, unaudited-for origin value.
+ *
+ * Deliberately NEVER read by any approve/deny DECISION in this file — only
+ * by the log line that records what already happened. Trusting a
+ * client-supplied field for authorization would let any caller claim
+ * 'creation_form' to dodge scrutiny; the actual gate that decides whether an
+ * approval is valid is the fingerprint comparison (`hashExecutionManifest`
+ * match) below, independent of this field entirely.
+ */
+export type ApprovalOrigin = 'creation_form' | 'approval_panel';
+
 export interface ExecutionApprovalDeps {
   taskRepo: ITaskRepository;
   logRepo: IExecutionLogRepository;
@@ -146,6 +165,8 @@ export interface ExecutionApprovalParams {
    * validation).
    */
   fingerprint?: string;
+  /** See {@link ApprovalOrigin} — audit-only, defaults to 'approval_panel' when omitted (every caller before this field existed WAS the approval panel). */
+  origin?: ApprovalOrigin;
 }
 
 export interface ExecutionApprovalOutcome {
@@ -259,7 +280,7 @@ export function decideExecutionApproval(
   log: ApprovalLogger,
 ): ExecutionApprovalOutcome {
   const { taskRepo, logRepo, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, windowRepo, respawnService, executeTaskUseCase, taskRestoreService } = deps;
-  const { taskId, unitId, approved, fingerprint } = params;
+  const { taskId, unitId, approved, fingerprint, origin } = params;
 
   const task = taskRepo.findById(taskId);
   if (!task || task.status !== ('pending_approval' as TaskStatus)) {
@@ -381,7 +402,7 @@ export function decideExecutionApproval(
   // to be a status transition of its own (buildServer.ts's NotificationBus/
   // push bridges only react to 'status_change' entries, forwarding
   // entry.content.status verbatim as the WS `task:status` payload).
-  appendLogIfUnitKnown('command', { type: 'execution_approved' });
+  appendLogIfUnitKnown('command', { type: 'execution_approved', origin: origin ?? 'approval_panel' });
 
   // Re-fetches the task and emits its CURRENT (real) status as a
   // 'status_change' entry — used by every async operation's success
@@ -492,5 +513,150 @@ export function decideExecutionApproval(
     executeTaskUseCase.execute(unitId as number, taskId).catch((err: unknown) => failApprovedOperation('execute', err));
   }
 
+  return { status: 200, body: { ok: true } };
+}
+
+/**
+ * Dependencies for {@link decideExecutionPreApproval} — a subset of
+ * {@link ExecutionApprovalDeps}: no `windowRepo`/`respawnService`/
+ * `executeTaskUseCase.execute`/`taskRestoreService` because pre-approval
+ * never dispatches an operation (see that function's own doc comment), only
+ * `executeTaskUseCase.events` (to emit the audit log entry the same way
+ * every other write in this file does).
+ */
+export interface ExecutionPreApprovalDeps {
+  taskRepo: ITaskRepository;
+  logRepo: IExecutionLogRepository;
+  unitRepo: IUnitRepository;
+  projectRepo: IProjectRepository;
+  projectServerRepo: IProjectServerRepository;
+  serverRepo: IServerRepository;
+  projectSecretRepo: SqliteProjectSecretRepository;
+  unitTypeLoader: UnitTypeLoader;
+  sidekickLoader: SidekickPackageLoader;
+  events: ExecuteTaskUseCase['events'];
+}
+
+export interface ExecutionPreApprovalParams {
+  taskId: number;
+  /** Same nullable-Unit tolerance as {@link ExecutionApprovalParams.unitId} — used only to address the audit log entry, never to gate the decision. */
+  unitId: number | null;
+  fingerprint: string;
+  origin: ApprovalOrigin;
+}
+
+/**
+ * Creation-time pre-approval (task/328-input-trust-and-exec-gate follow-up,
+ * part A-2) — lets the interactive task-creation form, which already showed
+ * a human the untrusted content and the execution context BEFORE the task
+ * was created, record that review as an execution-gate approval immediately,
+ * instead of making the same human approve a second time on the
+ * pending_approval panel the moment they later click "execute".
+ *
+ * Deliberately NOT a variant of {@link decideExecutionApproval}: that
+ * function's whole shape is "consume an outstanding `pendingOperation` block
+ * and dispatch whatever it was blocking" — every one of its operation
+ * branches ends by either dispatching a real action (execute/resume/restore/
+ * respawn/recover_session_legacy) or restoring a prior waiting status.
+ * Pre-approval has no blocked operation to resume (the task was NEVER
+ * gate-blocked — it is still sitting at plain 'open', exactly as
+ * `POST /api/tasks` left it) and must NOT dispatch anything: the whole point
+ * is that the human still triggers execution themselves, later, whenever
+ * they choose — this call only pre-populates
+ * `executionApprovedFingerprintHash` so THAT later `execute` call satisfies
+ * `checkExecutionGate` on the first try instead of blocking. Reusing
+ * `decideExecutionApproval` for this would mean inventing an eighth
+ * `pendingOperation` value whose "approve" branch dispatches nothing — a
+ * bigger, riskier change to the existing (heavily-reviewed) function than a
+ * small, separate one reusing the same manifest-resolution/hashing/audit
+ * primitives it already reuses everywhere else in this file.
+ *
+ * Still reuses everything that must not be duplicated: `resolveExecutionManifest`/
+ * `hashExecutionManifest` (the exact same hash `checkExecutionGate` will
+ * later compare against — no second hashing scheme), the same
+ * fingerprint-mismatch TOCTOU close `decideExecutionApproval` applies
+ * (re-resolves and re-hashes at the moment of approval, 409s if the caller's
+ * fingerprint is stale), and `appendLogAndEmit` for the audit trail.
+ *
+ * Eligibility (enforced by `taskRepo.preApproveExecution`'s guarded
+ * compare-and-swap, not re-checked here — see that method's own doc comment):
+ * `status = 'open'`, `pending_operation IS NULL`, `input_trust = 'untrusted'`.
+ * A task outside that window (already gate-blocked, already running, or
+ * trusted) cannot be pre-approved — the caller falls through to the normal
+ * pending_approval panel instead.
+ *
+ * **Reachability note**: like every other route in this module, this is
+ * reachable by any caller holding the UI/API token, not only the browser's
+ * create-task form — the server has no way to distinguish "a human just
+ * reviewed this in a form" from "a script called the same two HTTP
+ * endpoints". The actual enforcement of "only the interactive create-form
+ * triggers this" (task/328 part A-3) lives in the CALLER: only
+ * TaskFormView's own create-and-approve flow calls this immediately after
+ * `POST /api/tasks` for a github/gitlab-sourced task; MCP's `azt_create_task`
+ * and the harness `/azt-issue`/`/azt-mission` skills deliberately do not
+ * (task/328 part C) — a human has not reviewed the content in either of
+ * those paths. This is the same trust boundary `decideExecutionApproval`
+ * itself already relies on (an authenticated caller could equally script a
+ * GET+POST against the real pending_approval panel's fingerprint without a
+ * human ever looking at the screen); this function does not weaken it
+ * further, only extends the same boundary to a second, narrower window
+ * (a task that was never blocked at all).
+ */
+export function decideExecutionPreApproval(
+  deps: ExecutionPreApprovalDeps,
+  params: ExecutionPreApprovalParams,
+  _log: ApprovalLogger,
+): ExecutionApprovalOutcome {
+  const { taskRepo, logRepo, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, events } = deps;
+  const { taskId, unitId, fingerprint, origin } = params;
+
+  const task = taskRepo.findById(taskId);
+  if (!task) return { status: 404, body: { error: 'Task not found' } };
+  if (task.inputTrust !== 'untrusted') {
+    return { status: 400, body: { error: `Task ${taskId} is not untrusted-origin — there is nothing to pre-approve.` } };
+  }
+  if (task.status !== 'open' || task.pendingOperation !== null) {
+    return {
+      status: 409,
+      body: {
+        error: `Task ${taskId} is not eligible for creation-time pre-approval (status=${task.status}, pendingOperation=${task.pendingOperation ?? 'null'}) — it has already been gate-blocked or has moved past 'open'. Approve via the normal pending_approval panel instead.`,
+        code: 'not_preapprovable',
+      },
+    };
+  }
+
+  const { manifest } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader });
+  const currentHash = hashExecutionManifest(manifest);
+  if (fingerprint !== currentHash) {
+    // Same TOCTOU close as decideExecutionApproval's fingerprint check above
+    // — nothing has mutated task state yet, so the task is left exactly as
+    // it was (still plain 'open') for the caller to re-fetch and retry, or
+    // to just leave alone and let the normal pending_approval panel handle
+    // approval on first execute.
+    return {
+      status: 409,
+      body: {
+        error: 'The execution manifest changed since you loaded this approval — re-check the current content before approving.',
+        code: 'fingerprint_mismatch',
+      },
+    };
+  }
+
+  const written = taskRepo.preApproveExecution(taskId, currentHash);
+  if (!written) {
+    // Lost a race against something else that changed the task's state
+    // between the read above and this write (e.g. a concurrent execute()
+    // attempt that already gate-blocked it, or another pre-approval call).
+    // Nothing was mutated by THIS call — same "leave it alone, let the
+    // normal panel handle it" fallback as the fingerprint mismatch above.
+    return {
+      status: 409,
+      body: { error: `Task ${taskId}'s pre-approval window has already closed (its state changed concurrently) — approve via the normal pending_approval panel instead.` },
+    };
+  }
+
+  if (unitId !== null) {
+    appendLogAndEmit(logRepo, events, taskId, unitId, 'command', { type: 'execution_pre_approved', origin });
+  }
   return { status: 200, body: { ok: true } };
 }

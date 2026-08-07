@@ -322,4 +322,28 @@ export interface ITaskRepository {
       pendingOperationWindowId?: number | null;
     },
   ): boolean;
+  /**
+   * Atomically records creation-time pre-approval for an untrusted-origin
+   * task that has NEVER been gate-blocked (interactive create-form approval
+   * — see modules/tasks/execution/ExecutionApprovalDecision.ts's
+   * decideExecutionPreApproval). Writes ONLY
+   * `execution_approved_fingerprint_hash`; unlike {@link consumePendingApproval}
+   * this never touches `status`/`pending_operation*` — there is no blocked
+   * operation to resume here, only a fingerprint to pre-record so the task's
+   * FIRST later `execute` call satisfies `checkExecutionGate` immediately
+   * instead of blocking.
+   *
+   * Guarded compare-and-swap, matching this file's existing
+   * consumePendingApproval/recordExecutionGateBlock style (a single UPDATE,
+   * not read-then-write): only succeeds while `status = 'open'`,
+   * `pending_operation IS NULL`, and `input_trust = 'untrusted'` — a task
+   * that has already been gate-blocked (pendingOperation set), has moved
+   * past 'open', or isn't untrusted at all must not take this shortcut; it
+   * goes through the normal pending_approval panel
+   * (`decideExecutionApproval`) instead. Returns true iff this call was the
+   * one that recorded it; false means the task's state changed out from
+   * under the caller between resolving the manifest and writing this (the
+   * caller must reject, not silently retry with a different manifest).
+   */
+  preApproveExecution(id: number, fingerprintHash: string): boolean;
 }

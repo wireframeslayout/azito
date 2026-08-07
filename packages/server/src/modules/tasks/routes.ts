@@ -19,7 +19,7 @@ import { SAFE_PATH_PATTERN, SAFE_BRANCH_PATTERN } from '../git/assertSafeGitArgs
 import { resolveTaskServerName, resolveTmuxSession, resolveUnitId } from './execution/TaskExecutionEnv';
 import { replyToExecutionGateError } from './execution/ExecutionGate';
 import { hashExecutionManifest } from './execution/ExecutionManifest';
-import { decideExecutionApproval, denyPendingApproval, resolvePendingApprovalManifest } from './execution/ExecutionApprovalDecision';
+import { decideExecutionApproval, decideExecutionPreApproval, denyPendingApproval, resolvePendingApprovalManifest, type ApprovalOrigin } from './execution/ExecutionApprovalDecision';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { SqliteProjectSecretRepository } from '../projects/SqliteProjectSecretRepository';
@@ -260,7 +260,20 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
     '/api/tasks/:id/execution-approval',
     async (request, reply) => {
       const task = taskRepo.findById(parseInt(request.params.id, 10));
-      if (!task || task.status !== 'pending_approval') {
+      if (!task) {
+        return reply.status(404).send({ error: 'Task is not pending execution approval' });
+      }
+      // Creation-time pre-approval window (task/328 follow-up, part A):
+      // a freshly created untrusted task that has NEVER been gate-blocked
+      // (still status='open', pending_operation NULL) also has a live
+      // manifest to display/approve — the create-form's own
+      // create-then-pre-approve flow (TaskFormView) fetches this exact
+      // response right after POST /api/tasks, the same way the
+      // pending_approval panel does. Every other status still 404s
+      // unchanged — this is additive, not a relaxation of the existing
+      // pending_approval-only guard.
+      const isPreApprovable = task.inputTrust === 'untrusted' && task.status === 'open' && task.pendingOperation === null;
+      if (task.status !== 'pending_approval' && !isPreApprovable) {
         return reply.status(404).send({ error: 'Task is not pending execution approval' });
       }
 
@@ -369,20 +382,50 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       // Runtime-validated, not just type-asserted: this endpoint flips a
       // security gate, so a truthy-but-wrong `approved` (e.g. the string
       // "false" — truthy) must not slip through as approval.
-      const body = request.body as { approved?: unknown; fingerprint?: unknown };
+      const body = request.body as { approved?: unknown; fingerprint?: unknown; origin?: unknown };
       if (typeof body.approved !== 'boolean') {
         return reply.status(400).send({ error: 'approved must be a boolean' });
       }
       if (body.approved && typeof body.fingerprint !== 'string') {
         return reply.status(400).send({ error: 'fingerprint is required when approving (fetch it from GET /api/tasks/:id/execution-approval)' });
       }
+      // `origin` (task/328 follow-up, part B) — audit-only, see
+      // ApprovalOrigin's doc comment. Validated as an enum, not passed
+      // through as a free string: a caller cannot invent an unaudited-for
+      // label, and this value is NEVER read by the approve/deny decision
+      // below, only logged.
+      let origin: ApprovalOrigin | undefined;
+      if (body.origin !== undefined) {
+        if (body.origin !== 'creation_form' && body.origin !== 'approval_panel') {
+          return reply.status(400).send({ error: "origin must be 'creation_form' or 'approval_panel'" });
+        }
+        origin = body.origin;
+      }
 
       const project = projectRepo.findById(task.projectId);
       const unitId = resolveUnitId(task, project);
 
+      // Creation-time pre-approval window (task/328 follow-up, part A-2): a
+      // freshly created untrusted task that has NEVER been gate-blocked
+      // (still status='open', pending_operation NULL) takes a separate,
+      // narrower path — decideExecutionPreApproval() — that records approval
+      // WITHOUT dispatching anything (see that function's own doc comment
+      // for why decideExecutionApproval() itself, which always dispatches
+      // the pendingOperation it consumes, cannot be reused for this).
+      // Denial is not meaningful here (nothing is blocked to deny) — the
+      // caller falls through to the ordinary 400 below.
+      if (task.status === 'open' && task.inputTrust === 'untrusted' && task.pendingOperation === null && body.approved) {
+        const outcome = decideExecutionPreApproval(
+          { taskRepo, logRepo, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, events: executeTaskUseCase.events },
+          { taskId, unitId, fingerprint: body.fingerprint as string, origin: origin ?? 'creation_form' },
+          request.log,
+        );
+        return reply.status(outcome.status).send(outcome.body);
+      }
+
       const outcome = decideExecutionApproval(
         { taskRepo, logRepo, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, windowRepo, respawnService, executeTaskUseCase, taskRestoreService },
-        { taskId, unitId, approved: body.approved, fingerprint: body.approved ? (body.fingerprint as string) : undefined },
+        { taskId, unitId, approved: body.approved, fingerprint: body.approved ? (body.fingerprint as string) : undefined, origin },
         request.log,
       );
       return reply.status(outcome.status).send(outcome.body);

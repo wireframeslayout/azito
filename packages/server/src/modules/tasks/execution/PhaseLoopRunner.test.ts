@@ -84,6 +84,7 @@ function makeRunner(overrides: {
     updateStatus: vi.fn(),
     updateCurrentPhase: vi.fn(),
     recordExecutionGateBlock: vi.fn(() => true),
+    preApproveExecution: vi.fn(() => true),
     ...overrides.taskRepo,
   };
   const projectRepo = {
@@ -839,6 +840,7 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
     const taskRepo = {
       findById: vi.fn(() => fixedTask), update: vi.fn(), updateStatus: vi.fn(), updateCurrentPhase: vi.fn(),
       recordExecutionGateBlock: vi.fn(() => true),
+      preApproveExecution: vi.fn(() => true),
     };
     const { runner, workerInput, appendLog } = makeRunner({ taskRepo, unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader });
     const unit = makeUnitForRun();
@@ -900,6 +902,7 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
     const taskRepo = {
       findById: vi.fn(() => fixedTask), update: vi.fn(), updateStatus: vi.fn(), updateCurrentPhase: vi.fn(),
       recordExecutionGateBlock: vi.fn(() => true),
+      preApproveExecution: vi.fn(() => true),
     };
     const { runner, workerInput, appendLog } = makeRunner({ taskRepo, unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader });
     const unit = makeUnitForRun();

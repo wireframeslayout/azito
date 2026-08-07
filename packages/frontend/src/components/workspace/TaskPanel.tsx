@@ -498,7 +498,11 @@ export default function TaskPanel({
     try {
       const res = await api<{ error?: string; code?: string }>(`/tasks/${approvalData.taskId}/approve-execution`, {
         method: 'POST',
-        body: JSON.stringify(approved ? { approved, fingerprint: approvalData.fingerprint } : { approved }),
+        // origin: 'approval_panel' (task/328 follow-up, part B) — audit-only,
+        // marks this decision as made through the pending_approval panel
+        // (as opposed to the create-form's own auto pre-approval flow), so
+        // the two are distinguishable in the execution log later.
+        body: JSON.stringify(approved ? { approved, fingerprint: approvalData.fingerprint, origin: 'approval_panel' } : { approved, origin: 'approval_panel' }),
       });
       if (res.error) {
         if (res.code === 'fingerprint_mismatch') {

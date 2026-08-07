@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../api/client';
 import { emptyTaskForm, buildTaskPayload } from '../lib/taskForm';
@@ -8,6 +8,7 @@ import IssueImportModal from './IssueImportModal';
 import type { RemoteIssue } from './IssueImportModal';
 import { LoadingState, FormPage } from './ui';
 import { isSupportedProvider } from '../lib/gitProvider';
+import { useToast } from '../hooks/useToast';
 
 interface Repository {
   id: number;
@@ -40,6 +41,7 @@ interface TaskFormViewProps {
 
 export default function TaskFormView({ mode, taskId, initial, projects, units, repositories, projectId, projectServers, defaultUnitId, onSaved, onCancel, backLabel, onBack }: TaskFormViewProps) {
   const { t } = useTranslation(['tasks', 'common']);
+  const { showToast } = useToast();
   const [form, setForm] = useState<TaskFormValue>(() => emptyTaskForm({
     projectId: projectId ? String(projectId) : '',
     unitId: mode === 'create' && defaultUnitId ? String(defaultUnitId) : '',
@@ -48,6 +50,18 @@ export default function TaskFormView({ mode, taskId, initial, projects, units, r
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadingTask, setLoadingTask] = useState(false);
+
+  // Untrusted-origin import (task/328-input-trust-and-exec-gate follow-up,
+  // part A) — the SAME condition the server derives inputTrust from
+  // (deriveInputTrust in modules/tasks/Task.ts: source is 'github' or
+  // 'gitlab'), kept in exact lockstep here rather than re-guessed, so this
+  // banner/auto-approval only ever fires for content the server will
+  // actually gate. `form.source` is populated by all three github/gitlab
+  // import paths that reach this form (IssueDetailPanel/IssueListPanel's
+  // presetSource, and this component's own "Import from GitHub" button via
+  // handleSelectIssue below) — there is no other way to reach this form with
+  // a github/gitlab `source` set.
+  const isUntrustedImport = mode === 'create' && (form.source?.source === 'github' || form.source?.source === 'gitlab');
   // 編集モードでサーバーから読み込んだ元の値。status など「変更していなければ
   // payload に含めない」判定の基準として保持する（承認待ちタスクの status を
   // 誤って送ってしまい、正当な編集保存が 409 になるのを防ぐため）。
@@ -109,6 +123,28 @@ export default function TaskFormView({ mode, taskId, initial, projects, units, r
     }
   }, [mode, projectServers, form.serverName]);
 
+  const effectiveProjectId = useMemo(() => parseInt(form.projectId, 10) || projectId, [form.projectId, projectId]);
+
+  // Secret NAMES for the untrusted-import banner below (task/328 follow-up,
+  // part A-1) — the same read the approval PANEL uses
+  // (GET /api/tasks/:id/execution-approval's `secretNames`, itself
+  // `projectSecretRepo.findByProject(...).map(s => s.name).sort()`): this
+  // form has no task yet, so it reads the identical underlying project
+  // secrets list directly via the existing GET /api/projects/:id/secrets
+  // endpoint instead — no new server endpoint, and the same "names only,
+  // never values" shape (this endpoint's response never carries a `value`
+  // field). Fetched only while the untrusted-import banner is actually
+  // shown, not on every form render.
+  const [secretNames, setSecretNames] = useState<string[]>([]);
+  useEffect(() => {
+    if (!isUntrustedImport || !effectiveProjectId) { setSecretNames([]); return; }
+    let cancelled = false;
+    api<{ name: string }[]>(`/projects/${effectiveProjectId}/secrets`)
+      .then((rows) => { if (!cancelled) setSecretNames(rows.map((r) => r.name).sort()); })
+      .catch(() => { if (!cancelled) setSecretNames([]); });
+    return () => { cancelled = true; };
+  }, [isUntrustedImport, effectiveProjectId]);
+
   const handleChange = useCallback((next: TaskFormValue) => {
     if (next.serverName !== form.serverName) {
       const ps = projectServers?.find((s) => s.serverName === next.serverName);
@@ -141,6 +177,26 @@ export default function TaskFormView({ mode, taskId, initial, projects, units, r
       if (mode === 'create') {
         const payload = buildTaskPayload(form, 'create');
         const res = await api<{ id: number }>('/tasks', { method: 'POST', body: JSON.stringify(payload) });
+        // Creation-time pre-approval (task/328 follow-up, part A-2) — ONLY
+        // when the untrusted-import banner above was actually shown for
+        // this submission (isUntrustedImport, computed from the exact same
+        // condition the banner renders under). Task creation has already
+        // succeeded at this point; a failure here must not roll it back or
+        // block onSaved() below — the task still exists and is fully usable
+        // through the normal pending_approval panel on first execute, it
+        // just didn't get the create-form shortcut.
+        if (isUntrustedImport) {
+          try {
+            const approval = await api<{ fingerprint: string }>(`/tasks/${res.id}/execution-approval`);
+            await api(`/tasks/${res.id}/approve-execution`, {
+              method: 'POST',
+              body: JSON.stringify({ approved: true, fingerprint: approval.fingerprint, origin: 'creation_form' }),
+            });
+            showToast(t('form.untrustedImport.preApprovedToast'));
+          } catch (approvalErr: unknown) {
+            showToast(t('form.untrustedImport.preApprovalFailedToast', { error: (approvalErr as Error).message }));
+          }
+        }
         onSaved(res.id, form.title.trim());
       } else {
         const payload = buildTaskPayload(form, 'edit', originalForm ?? undefined);
@@ -152,11 +208,10 @@ export default function TaskFormView({ mode, taskId, initial, projects, units, r
     } finally {
       setSaving(false);
     }
-  }, [form, mode, taskId, onSaved, projectServers, originalForm]);
+  }, [form, mode, taskId, onSaved, projectServers, originalForm, isUntrustedImport, showToast, t]);
 
   const githubRepos = repositories.filter((r) => isSupportedProvider(r.provider));
   const [issueModalOpen, setIssueModalOpen] = useState(false);
-  const effectiveProjectId = parseInt(form.projectId, 10) || projectId;
 
   const handleSelectIssue = useCallback((issue: RemoteIssue, repo: { provider?: string; owner?: string; repoName?: string }) => {
     setForm((prev) => ({
@@ -174,7 +229,7 @@ export default function TaskFormView({ mode, taskId, initial, projects, units, r
   return (
     <FormPage
       title={mode === 'create' ? t('form.newTask') : t('form.editTask')}
-      submitLabel={mode === 'create' ? t('form.createTask') : t('form.saveChanges')}
+      submitLabel={mode === 'create' ? (isUntrustedImport ? t('form.createTaskApproved') : t('form.createTask')) : t('form.saveChanges')}
       onSubmit={handleSave}
       onCancel={onCancel}
       loading={saving}
@@ -196,6 +251,22 @@ export default function TaskFormView({ mode, taskId, initial, projects, units, r
                 </div>
               )}
             </div>
+          )}
+
+          {isUntrustedImport && (
+            <UntrustedImportBanner
+              title={form.title}
+              description={form.description}
+              unitName={units.find((u) => u.id === parseInt(form.unitId, 10))?.name
+                ?? (defaultUnitId != null ? units.find((u) => u.id === defaultUnitId)?.name : undefined)
+                ?? null}
+              serverName={form.serverName || (projectServers?.length === 1 ? projectServers[0].serverName : null)}
+              workingDirectory={form.workingDirectory || null}
+              baseBranch={form.baseBranch}
+              targetBranch={form.skipPr ? '' : form.targetBranch}
+              workBranch={form.skipPr ? form.workingBranch : ''}
+              secretNames={secretNames}
+            />
           )}
 
           <TaskFormFields
@@ -223,5 +294,103 @@ export default function TaskFormView({ mode, taskId, initial, projects, units, r
         />
       )}
     </FormPage>
+  );
+}
+
+interface UntrustedImportBannerProps {
+  title: string;
+  description: string;
+  unitName: string | null;
+  serverName: string | null;
+  workingDirectory: string | null;
+  baseBranch: string;
+  targetBranch: string;
+  workBranch: string;
+  secretNames: string[];
+}
+
+/**
+ * The create-form's own "you are about to approve untrusted content"
+ * framing (task/328-input-trust-and-exec-gate follow-up, part A-1) —
+ * deliberately styled the SAME way TaskPanel's pending_approval panel
+ * renders the identical information (dashed border for the untrusted
+ * content box, a plain grid for the resolved execution context), so a human
+ * who has seen one recognizes the other as the same kind of decision. See
+ * TaskPanel.tsx's own "Execution approval gate" block for the panel this
+ * mirrors.
+ *
+ * Renders `title`/`description` as PLAIN TEXT ONLY — same reasoning as the
+ * panel: this content can be attacker-authored (an imported GitHub/GitLab
+ * issue body), and rendering it as markdown/HTML here would let it forge
+ * links or layout that impersonates AZITO's own UI.
+ */
+function UntrustedImportBanner({ title, description, unitName, serverName, workingDirectory, baseBranch, targetBranch, workBranch, secretNames }: UntrustedImportBannerProps) {
+  const { t } = useTranslation(['tasks', 'common']);
+  return (
+    <div
+      role="region"
+      aria-label={t('form.untrustedImport.bannerTitle')}
+      style={{
+        border: '1px solid var(--danger-a35)', borderRadius: 'var(--radius-md)',
+        background: 'var(--danger-a08)', padding: '12px 16px', marginBottom: 16,
+        display: 'flex', flexDirection: 'column', gap: 10,
+      }}
+    >
+      <div>
+        <div style={{ fontSize: 'var(--font-md)', color: 'var(--danger)', fontWeight: 600, marginBottom: 4 }}>
+          {t('form.untrustedImport.bannerTitle')}
+        </div>
+        <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
+          {t('form.untrustedImport.bannerBody')}
+        </div>
+      </div>
+
+      <div>
+        <div style={{ fontSize: 'var(--font-xs)', color: 'var(--danger)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 }}>
+          {t('executionApproval.untrustedContentLabel')}
+        </div>
+        <div style={{
+          border: '1px dashed var(--danger-a35)', borderRadius: 'var(--radius-md)', background: 'var(--bg)',
+          padding: '10px 12px', maxHeight: 200, overflowY: 'auto',
+        }}>
+          <div style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', marginBottom: 6, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+            {title || t('fields.titlePlaceholder')}
+          </div>
+          <pre style={{ margin: 0, fontFamily: 'inherit', fontSize: 'var(--font-sm)', color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+            {description || t('executionApproval.noDescription')}
+          </pre>
+        </div>
+      </div>
+
+      <div>
+        <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 }}>
+          {t('form.untrustedImport.contextLabel')}
+        </div>
+        <div style={{
+          border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', background: 'var(--bg)',
+          padding: '10px 12px', display: 'grid', gridTemplateColumns: 'max-content 1fr', rowGap: 6, columnGap: 12,
+          fontSize: 'var(--font-sm)',
+        }}>
+          <span style={{ color: 'var(--text-dim)' }}>{t('executionApproval.fields.unit')}</span>
+          <span style={{ color: 'var(--text)', wordBreak: 'break-word' }}>{unitName ?? t('executionApproval.unresolved')}</span>
+
+          <span style={{ color: 'var(--text-dim)' }}>{t('executionApproval.fields.server')}</span>
+          <span style={{ color: 'var(--text)', wordBreak: 'break-word' }}>{serverName ?? t('executionApproval.unresolved')}</span>
+
+          <span style={{ color: 'var(--text-dim)' }}>{t('executionApproval.fields.workingDirectory')}</span>
+          <span style={{ color: 'var(--text)', wordBreak: 'break-word' }}>{workingDirectory ?? t('executionApproval.unresolved')}</span>
+
+          <span style={{ color: 'var(--text-dim)' }}>{t('executionApproval.fields.branches')}</span>
+          <span style={{ color: 'var(--text)', wordBreak: 'break-word' }}>
+            {t('executionApproval.branchesValue', { base: baseBranch || '—', target: targetBranch || '—', work: workBranch || '—' })}
+          </span>
+
+          <span style={{ color: 'var(--text-dim)' }}>{t('executionApproval.fields.secrets')}</span>
+          <span style={{ color: 'var(--text)', wordBreak: 'break-word' }}>
+            {secretNames.length > 0 ? secretNames.join(', ') : t('executionApproval.noSecrets')}
+          </span>
+        </div>
+      </div>
+    </div>
   );
 }

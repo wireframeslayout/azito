@@ -67,6 +67,7 @@ export class SqliteTaskRepository implements ITaskRepository {
   private updateStmt;
   private consumePendingApprovalStmt;
   private recordExecutionGateBlockStmt;
+  private preApproveExecutionStmt;
   private updateStatusStmt;
   private updateCurrentPhaseStmt;
   private touchStmt;
@@ -105,6 +106,15 @@ export class SqliteTaskRepository implements ITaskRepository {
     // race this closes.
     this.recordExecutionGateBlockStmt = db.prepare(
       "UPDATE tasks SET status = 'pending_approval', pending_operation = ?, pending_operation_window_id = ?, pending_operation_prior_status = ?, updated_at = datetime('now') WHERE id = ? AND pending_operation IS NULL AND (execution_approved_fingerprint_hash IS NULL OR execution_approved_fingerprint_hash != ?)",
+    );
+    // Guarded compare-and-swap for preApproveExecution() (creation-time
+    // pre-approval) — see that method's doc comment on ITaskRepository.
+    // Deliberately narrower than consumePendingApprovalStmt above: it only
+    // ever writes execution_approved_fingerprint_hash, never status/
+    // pending_operation*, and only while the task is still in the untouched
+    // 'open, never gate-blocked, untrusted' state this shortcut is for.
+    this.preApproveExecutionStmt = db.prepare(
+      "UPDATE tasks SET execution_approved_fingerprint_hash = ?, updated_at = datetime('now') WHERE id = ? AND status = 'open' AND pending_operation IS NULL AND input_trust = 'untrusted'",
     );
     this.updateStatusStmt = db.prepare("UPDATE tasks SET status = ?, updated_at = datetime('now') WHERE id = ?");
     this.updateCurrentPhaseStmt = db.prepare("UPDATE tasks SET current_phase = ?, updated_at = datetime('now') WHERE id = ?");
@@ -246,6 +256,11 @@ export class SqliteTaskRepository implements ITaskRepository {
       id,
       fields.manifestHash,
     );
+    return result.changes > 0;
+  }
+
+  preApproveExecution(id: number, fingerprintHash: string): boolean {
+    const result = this.preApproveExecutionStmt.run(fingerprintHash, id);
     return result.changes > 0;
   }
 

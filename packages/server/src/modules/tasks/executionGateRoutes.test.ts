@@ -69,6 +69,7 @@ function makeOpts(existingTask: Task): { opts: TasksRouteOptions; createCalls: R
       delete: vi.fn(),
       consumePendingApproval: vi.fn(() => false),
       recordExecutionGateBlock: vi.fn(() => true),
+      preApproveExecution: vi.fn(() => true),
     },
     projectRepo: {
       findAll: vi.fn(() => []),

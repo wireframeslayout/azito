@@ -267,3 +267,104 @@ describe('SqliteTaskRepository.recordExecutionGateBlock (Issue #328 review round
     expect(repo.findById(taskId)?.pendingOperation).toBeNull();
   });
 });
+
+// preApproveExecution() (task/328 follow-up — creation-time pre-approval):
+// the compare-and-swap counterpart used by decideExecutionPreApproval(),
+// guarded on status='open' AND pending_operation IS NULL AND
+// input_trust='untrusted' — a task outside that narrow window (already
+// gate-blocked, already progressed, or trusted) must not be writable through
+// this shortcut.
+describe('SqliteTaskRepository.preApproveExecution (task/328 follow-up)', () => {
+  let db: SqliteDatabase;
+  let repo: SqliteTaskRepository;
+
+  beforeEach(() => {
+    db = openDatabase(':memory:');
+    repo = new SqliteTaskRepository(db);
+    db.prepare(
+      "INSERT INTO projects (id, name, slug, default_branch) VALUES (1, 'P', 'p', 'main')",
+    ).run();
+  });
+
+  function createTask(overrides: { inputTrust?: 'trusted' | 'untrusted'; pendingOperation?: 'execute' | null } = {}): number {
+    return repo.create({
+      projectId: 1,
+      unitId: null,
+      serverName: null,
+      title: 'Test task',
+      description: null,
+      status: 'open',
+      currentPhase: null,
+      selfReviewCount: 0,
+      priority: 0,
+      tmuxWindow: null,
+      selfReviewMaxAttempts: null,
+      requirePlanApproval: true,
+      source: 'github',
+      sourceRef: null,
+      worktreePath: null,
+      worktreeBranch: null,
+      baseBranch: null,
+      targetBranch: null,
+      skipPr: false,
+      workingDirectory: null,
+      branch: null,
+      planMarkdown: null,
+      pendingQuestions: null,
+      changedFiles: null,
+      summaryJson: null,
+      prUrl: null,
+      agentSessionId: null,
+      reviewSubagent: null,
+      implementSubagent: null,
+      inputTrust: overrides.inputTrust ?? 'untrusted',
+      executionApprovedFingerprintHash: null,
+      pendingOperation: overrides.pendingOperation ?? null,
+      pendingOperationWindowId: null,
+      pendingOperationPriorStatus: null,
+    });
+  }
+
+  it('writes the fingerprint and leaves status/pendingOperation untouched for a fresh open untrusted task', () => {
+    const taskId = createTask();
+
+    const written = repo.preApproveExecution(taskId, 'hash-abc');
+
+    expect(written).toBe(true);
+    const task = repo.findById(taskId);
+    expect(task?.executionApprovedFingerprintHash).toBe('hash-abc');
+    expect(task?.status).toBe('open');
+    expect(task?.pendingOperation).toBeNull();
+  });
+
+  it('refuses to write for a trusted task — nothing to pre-approve', () => {
+    const taskId = createTask({ inputTrust: 'trusted' });
+
+    const written = repo.preApproveExecution(taskId, 'hash-abc');
+
+    expect(written).toBe(false);
+    expect(repo.findById(taskId)?.executionApprovedFingerprintHash).toBeNull();
+  });
+
+  it('refuses to write once the task has already been gate-blocked (pendingOperation set) — the normal pending_approval panel owns it now', () => {
+    const taskId = createTask({ pendingOperation: 'execute' });
+    repo.updateStatus(taskId, 'pending_approval');
+
+    const written = repo.preApproveExecution(taskId, 'hash-abc');
+
+    expect(written).toBe(false);
+    expect(repo.findById(taskId)?.executionApprovedFingerprintHash).toBeNull();
+  });
+
+  it('refuses a second call once the fingerprint has already been recorded once and the task has moved past open', () => {
+    const taskId = createTask();
+    expect(repo.preApproveExecution(taskId, 'hash-abc')).toBe(true);
+    repo.updateStatus(taskId, 'running');
+
+    const secondWrite = repo.preApproveExecution(taskId, 'hash-def');
+
+    expect(secondWrite).toBe(false);
+    // First write's value survives untouched.
+    expect(repo.findById(taskId)?.executionApprovedFingerprintHash).toBe('hash-abc');
+  });
+});
