@@ -51,6 +51,7 @@
     "addAgentToServer": "{{serverName}} に {{label}} を追加",
     "addAgent": "{{label}} を追加",
     "failedLoadAgents": "エージェントの読み込みに失敗しました: {{error}}",
+    "loadingAgents": "エージェント定義を読み込み中です",
     "windowList": "ウィンドウ一覧",
     "select": "選択",
     "detachFromProject": "プロジェクトから切り離す",
@@ -92,6 +93,7 @@
     "selectSessionError": "セッションを選択してください",
     "sessionNameRequired": "セッション名は必須です",
     "failedLoadAgents": "エージェントの読み込みに失敗しました。{{error}}",
+    "agentCommandUnavailable": "起動コマンドを取得できませんでした。エージェント定義の読み込み完了後に再度お試しいただくか、コマンドを入力してください。",
     "window": "ウィンドウ",
     "sessionWindowCount_one": "{{name}} ({{count}} ウィンドウ)",
     "sessionWindowCount_other": "{{name}} ({{count}} ウィンドウ)"

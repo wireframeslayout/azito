@@ -51,6 +51,7 @@
     "addAgentToServer": "Add {{label}} to {{serverName}}",
     "addAgent": "Add {{label}}",
     "failedLoadAgents": "Failed to load agents: {{error}}",
+    "loadingAgents": "Loading agent definitions…",
     "windowList": "Window list",
     "select": "Select",
     "detachFromProject": "Detach from project",
@@ -92,6 +93,7 @@
     "selectSessionError": "Select a session",
     "sessionNameRequired": "Session name is required",
     "failedLoadAgents": "Failed to load agents. {{error}}",
+    "agentCommandUnavailable": "Could not determine the launch command. Try again once agent definitions finish loading, or enter a command.",
     "window": "Window",
     "sessionWindowCount_one": "{{name}} ({{count}} window)",
     "sessionWindowCount_other": "{{name}} ({{count}} windows)"

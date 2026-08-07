@@ -117,7 +117,7 @@ export default function ObjectsSidebar({
     [project.windows, taskWindows, browserGroups, projectServerNames],
   );
 
-  const { agents: agentDefs, error: agentDefsError } = useAgentDefinitions('worker');
+  const { agents: agentDefs, loading: agentDefsLoading, error: agentDefsError } = useAgentDefinitions('worker');
   const { windowIndicator, finishedEntries } = useAgentActivity();
 
   const renderActivityExtra = useCallback((w: WindowItem) => {
@@ -308,6 +308,7 @@ export default function ObjectsSidebar({
                     isActive={checkActive}
                     quickAddButtons={quickAddButtons}
                     quickAddIcons={quickAddIcons}
+                    agentDefsLoading={agentDefsLoading}
                     agentDefsError={agentDefsError}
                     onPaneClick={handlePaneClick}
                     onContextMenu={showWindowContextMenu}
@@ -373,6 +374,7 @@ interface ServerGroupProps {
   isActive: (serverName: string, target: string, level: 'window' | 'pane') => boolean;
   quickAddButtons: QuickAddButton[];
   quickAddIcons: Record<QuickAddAgent, React.FC<{ size?: number }>>;
+  agentDefsLoading?: boolean;
   agentDefsError?: string | null;
   onPaneClick: (serverName: string, target: string) => void;
   onContextMenu: (e: React.MouseEvent, w: Window, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void;
@@ -384,7 +386,7 @@ interface ServerGroupProps {
 
 function ServerGroup({
   serverName, windows, sessionData, isActive,
-  quickAddButtons, quickAddIcons, agentDefsError,
+  quickAddButtons, quickAddIcons, agentDefsLoading, agentDefsError,
   onPaneClick, onContextMenu,
   onOpenQuickAdd, extra, activityClassName,
   respawningWindowIds,
@@ -396,13 +398,17 @@ function ServerGroup({
         <span style={{ flex: 1, fontSize: 'var(--font-xs)', fontWeight: 600, color: 'var(--text-dim)', letterSpacing: 0.3 }}>{serverName}</span>
         {quickAddButtons.map((btn) => {
           const IconComp = quickAddIcons[btn.type];
-          const isDisabled = btn.type !== 'terminal' && !!agentDefsError;
+          const isAgentButton = btn.type !== 'terminal';
+          const isDisabled = isAgentButton && (!!agentDefsError || !!agentDefsLoading);
+          const disabledTitle = agentDefsError
+            ? t('windows.failedLoadAgents', { error: agentDefsError })
+            : t('windows.loadingAgents');
           return (
             <button
               key={btn.type}
               onClick={() => onOpenQuickAdd(serverName, btn.type)}
               disabled={isDisabled}
-              title={isDisabled ? t('windows.failedLoadAgents', { error: agentDefsError }) : t('windows.addAgent', { label: btn.label })}
+              title={isDisabled ? disabledTitle : t('windows.addAgent', { label: btn.label })}
               aria-label={t('windows.addAgentToServer', { label: btn.label, serverName })}
               style={{
                 background: 'none',
