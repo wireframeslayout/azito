@@ -21,5 +21,17 @@
     "toolResultError": "ツールエラー",
     "system": "システム",
     "other": "その他"
+  },
+  "promptBar": {
+    "placeholder": "プロンプトを入力…（Ctrl/Cmd+Enterで送信）",
+    "send": "送信",
+    "choosePane": "ペインを選択",
+    "selectPane": "送信先ペインを選択",
+    "selectPaneHint": "送信先ペインを選択してください",
+    "matchingCwd": "このセッションの作業ディレクトリと一致",
+    "otherPanes": "その他のペイン",
+    "noPanes": "tmuxペインが見つかりません",
+    "noCommand": "(アイドル)",
+    "sendError": "送信に失敗しました"
   }
 }

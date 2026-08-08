@@ -4,6 +4,8 @@ import { apiWithStatus } from '../../api/client';
 import { EmptyState, IconButton, LoadingState, PanelHeader } from '../ui';
 import { Icon } from '../ui/Icon';
 import MessageBubble from './MessageBubble';
+import PromptInputBar from './PromptInputBar';
+import { isErrorResponse } from './transcriptFormat';
 import type { ReadSessionResult, TranscriptEntry, TranscriptErrorResponse } from './transcriptTypes';
 
 const POLL_INTERVAL_MS = 2000;
@@ -12,10 +14,6 @@ const NEAR_BOTTOM_THRESHOLD_PX = 80;
 interface ConversationViewProps {
   sessionId: string;
   onBack: () => void;
-}
-
-function isErrorResponse(result: ReadSessionResult | TranscriptErrorResponse): result is TranscriptErrorResponse {
-  return 'error' in result;
 }
 
 export default function ConversationView({ sessionId, onBack }: ConversationViewProps) {
@@ -210,6 +208,10 @@ export default function ConversationView({ sessionId, onBack }: ConversationView
           </button>
         )}
       </div>
+
+      {!loading && !notFound && !error && (
+        <PromptInputBar sessionId={sessionId} onSent={() => scrollToBottom('smooth')} />
+      )}
     </div>
   );
 }

@@ -16,7 +16,7 @@ export type TranscriptBlock =
   | { kind: 'tool_use'; name: string; input: string; truncated: boolean }
   | { kind: 'tool_result'; text: string; truncated: boolean; isError?: boolean };
 
-export type TranscriptEntryType = 'user' | 'assistant' | 'system' | 'other';
+export type TranscriptEntryType = 'user' | 'assistant' | 'system' | 'tool' | 'other';
 
 export interface TranscriptEntry {
   uuid: string;
@@ -33,4 +33,21 @@ export interface ReadSessionResult {
 
 export interface TranscriptErrorResponse {
   error: string;
+}
+
+// GET /api/transcripts/:sessionId/panes のレスポンス型。
+// サーバー側の型（packages/server/src/modules/transcripts/TranscriptPaneService.ts）とフィールドを一致させる。
+
+export interface PaneCandidate {
+  paneId: string;
+  sessionName: string;
+  windowName: string;
+  currentPath: string;
+  currentCommand: string;
+  cwdMatch: boolean;
+}
+
+export interface PaneCandidatesResult {
+  cwd: string | null;
+  panes: PaneCandidate[];
 }

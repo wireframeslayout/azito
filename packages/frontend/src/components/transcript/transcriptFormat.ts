@@ -1,3 +1,10 @@
+import type { TranscriptErrorResponse } from './transcriptTypes';
+
+/** API レスポンスがエラー形状（{ error: string }）かどうかを判定する。 */
+export function isErrorResponse<T>(result: T | TranscriptErrorResponse): result is TranscriptErrorResponse {
+  return typeof result === 'object' && result !== null && 'error' in result;
+}
+
 /** サイズをKB/MB表記に変換する（1000区切りではなく1024区切り）。 */
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;

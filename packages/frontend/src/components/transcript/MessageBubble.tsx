@@ -71,6 +71,16 @@ export default function MessageBubble({ entry }: MessageBubbleProps) {
   const { t, i18n } = useTranslation('transcript');
   const timeLabel = formatEntryTimestamp(entry.timestamp, i18n.language);
 
+  if (entry.type === 'tool') {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'flex-start', margin: '4px 0' }}>
+        <div style={{ maxWidth: BUBBLE_MAX_WIDTH, minWidth: 0 }}>
+          <BlockList blocks={entry.blocks} markdownText={false} />
+        </div>
+      </div>
+    );
+  }
+
   if (entry.type === 'system' || entry.type === 'other') {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', margin: '10px 0' }}>

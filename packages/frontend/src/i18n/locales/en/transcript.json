@@ -21,5 +21,17 @@
     "toolResultError": "Tool error",
     "system": "System",
     "other": "Other"
+  },
+  "promptBar": {
+    "placeholder": "Type a prompt… (Ctrl/Cmd+Enter to send)",
+    "send": "Send",
+    "choosePane": "Choose pane",
+    "selectPane": "Select destination pane",
+    "selectPaneHint": "Select a destination pane",
+    "matchingCwd": "Matching this session's directory",
+    "otherPanes": "Other panes",
+    "noPanes": "No tmux panes found",
+    "noCommand": "(idle)",
+    "sendError": "Failed to send"
   }
 }
