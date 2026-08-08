@@ -60,6 +60,15 @@ export interface IWindowRepository {
   findAgentSessionIdsByServer(serverName: string): Set<string>;
   /** Window-granularity lookup (pane suffix stripped on both sides — see paneTarget.ts). */
   findByServerAndTarget(serverName: string, tmuxTarget: string): Window | undefined;
+  /**
+   * Every window row (any ownerType) whose tmuxTarget belongs to
+   * `sessionName` on `serverName` — used by the session-delete route
+   * (Issue #28 third-party review finding 4) to resolve which windows a
+   * whole-session kill is about to take down BEFORE the kill runs (once the
+   * session is gone, tmux itself can no longer answer "which windows did it
+   * hold").
+   */
+  findByServerAndSession(serverName: string, sessionName: string): Window[];
   update(id: number, data: Partial<Pick<Window,
     'tmuxTarget' | 'label' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType'
   >>): void;

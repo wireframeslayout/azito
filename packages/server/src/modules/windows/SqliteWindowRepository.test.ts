@@ -177,6 +177,49 @@ describe('SqliteWindowRepository.findByServerAndTarget', () => {
   });
 });
 
+// Issue #28 third-party review finding 4: the session-delete route needs to
+// resolve every window a session holds (any ownerType) BEFORE killing it —
+// this is the query that powers that lookup.
+describe('SqliteWindowRepository.findByServerAndSession', () => {
+  let db: Database.Database;
+  let repo: SqliteWindowRepository;
+  let projectId: number;
+
+  beforeEach(() => {
+    db = buildSeededDb();
+    repo = new SqliteWindowRepository(db);
+    projectId = insertProject(db, 'Test Project');
+  });
+
+  it('returns every window (task-owned and project-owned) whose target belongs to the session', () => {
+    const taskA = insertTask(db, projectId, 'Task A');
+    repo.add(baseWindow({ ownerType: 'task', projectId: null, taskId: taskA, tmuxTarget: 'azito:task-1' }));
+    repo.add(baseWindow({ projectId, tmuxTarget: 'azito:extra' }));
+
+    const found = repo.findByServerAndSession('local-server', 'azito');
+    expect(found).toHaveLength(2);
+    expect(found.map((w) => w.tmuxTarget).sort()).toEqual(['azito:extra', 'azito:task-1']);
+  });
+
+  it('does not match a different session sharing a name prefix', () => {
+    repo.add(baseWindow({ projectId, tmuxTarget: 'azito-other:win1' }));
+
+    const found = repo.findByServerAndSession('local-server', 'azito');
+    expect(found).toHaveLength(0);
+  });
+
+  it('does not match windows on a different server', () => {
+    repo.add(baseWindow({ projectId, serverName: 'other-server', tmuxTarget: 'azito:win1' }));
+
+    const found = repo.findByServerAndSession('local-server', 'azito');
+    expect(found).toHaveLength(0);
+  });
+
+  it('returns an empty array when the session has no windows', () => {
+    expect(repo.findByServerAndSession('local-server', 'azito')).toEqual([]);
+  });
+});
+
 describe('SqliteWindowRepository.updateAgentSessionIdByWindow', () => {
   let db: Database.Database;
   let repo: SqliteWindowRepository;

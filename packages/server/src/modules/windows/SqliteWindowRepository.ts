@@ -140,6 +140,12 @@ export class SqliteWindowRepository implements IWindowRepository {
     return this.toWindow(row);
   }
 
+  findByServerAndSession(serverName: string, sessionName: string): Window[] {
+    const rows = this.findByServerStmt.all(serverName) as WindowRow[];
+    const prefix = `${sessionName}:`;
+    return rows.filter((r) => r.tmux_target.startsWith(prefix)).map((r) => this.toWindow(r));
+  }
+
   update(id: number, data: Partial<Pick<Window,
     'tmuxTarget' | 'label' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType'
   >>): void {

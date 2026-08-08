@@ -51,7 +51,7 @@ describe('sidekicksRoutes', () => {
     const loader = new SidekickPackageLoader(builtinDir, userDir);
     const sidekickService = new SidekickPackageService(loader, userDir);
     app = Fastify();
-    await app.register(sidekicksRoutes, { sidekickService, taskPromptVarsResolver: makeTaskPromptVarsResolver(), unitTypeLoader: new UnitTypeLoader(builtinDir, userDir), detailAuth: { classes: [] } });
+    await app.register(sidekicksRoutes, { sidekickService, taskPromptVarsResolver: makeTaskPromptVarsResolver(), unitTypeLoader: new UnitTypeLoader(builtinDir, userDir), detailAuth: { classes: [] }, listAuth: { classes: [] }, resolveAssignedSidekickNames: () => new Set<string>() });
     await app.ready();
   });
 
@@ -348,6 +348,8 @@ describe('sidekicksRoutes', () => {
         }),
         unitTypeLoader: new UnitTypeLoader(builtinDir, userDir),
         detailAuth: { classes: [] },
+        listAuth: { classes: [] },
+        resolveAssignedSidekickNames: () => new Set<string>(),
       });
       await app.ready();
 
@@ -372,7 +374,7 @@ describe('sidekicksRoutes', () => {
       app = Fastify();
       const loader = new SidekickPackageLoader(DEFAULT_BUILTIN_SIDEKICKS_DIR, userDir);
       const sidekickService = new SidekickPackageService(loader, userDir);
-      await app.register(sidekicksRoutes, { sidekickService, taskPromptVarsResolver: makeTaskPromptVarsResolver(), unitTypeLoader: new UnitTypeLoader(builtinDir, userDir), detailAuth: { classes: [] } });
+      await app.register(sidekicksRoutes, { sidekickService, taskPromptVarsResolver: makeTaskPromptVarsResolver(), unitTypeLoader: new UnitTypeLoader(builtinDir, userDir), detailAuth: { classes: [] }, listAuth: { classes: [] }, resolveAssignedSidekickNames: () => new Set<string>() });
       await app.ready();
 
       const res = await app.inject({ method: 'GET', url: '/api/sidekicks/pushing-default?render=1' });

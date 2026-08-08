@@ -149,6 +149,7 @@ function makeOpts(existingTask: Task): { opts: TasksRouteOptions; createCalls: R
       findByTask: vi.fn(() => []),
       findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
       findByServerAndTarget: vi.fn(() => undefined),
+      findByServerAndSession: vi.fn(() => []),
       update: vi.fn(),
       updateAgentSessionIdByWindow: vi.fn(),
       remove: vi.fn(),

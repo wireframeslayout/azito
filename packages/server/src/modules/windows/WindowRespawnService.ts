@@ -184,6 +184,28 @@ export class WindowRespawnService {
     const sessions = await this.tmux.listSessions(server);
     const sessionExists = sessions.some((s) => s.name === sessionName);
 
+    // Confirm the old window is actually gone BEFORE rotating the task
+    // token (Issue #28 third-party review finding 3): buildEnvForNewWindow()
+    // revokes the current token generation and issues a new one, so calling
+    // it while the old window might still be alive (a killWindow() failure
+    // was previously swallowed via `.catch(() => {})`) could leave that
+    // still-live pane holding a now-dead credential — and if the
+    // create-window call below then also failed, nothing would be left
+    // holding the freshly-issued replacement either, silently orphaning it.
+    let oldWindowGone = true;
+    if (sessionExists) {
+      const session = sessions.find((s) => s.name === sessionName);
+      const windowAlive = session?.windows.some((w) => w.name === windowPart);
+      if (windowAlive) {
+        oldWindowGone = await this.tmux.killWindow(server, `${sessionName}:${windowPart}`).then(() => true, () => false);
+      }
+    }
+    if (task && !oldWindowGone) {
+      throw new Error(
+        `Failed to kill window ${sessionName}:${windowPart} before respawn; the task token was not rotated so the still-live pane stays authenticated`,
+      );
+    }
+
     // Window-generation point for this window: EITHER branch below actually
     // (re)creates the window that becomes the respawned pane (unlike
     // ExecuteTaskUseCase's throwaway-session-then-real-window split, respawn
@@ -191,24 +213,33 @@ export class WindowRespawnService {
     // respawn target). A task-owned window rotates its task token via
     // TaskPaneEnvironmentService; a plain (non-task) window keeps getting
     // the legacy default UI-token env instead (Issue #28 design v3 §3/§5
-    // only scope task panes — a manual terminal respawn is unaffected).
+    // only scope task panes — a manual terminal respawn is unaffected). The
+    // rotation itself only happens once the old window's demise is confirmed
+    // above, so a task pane is never left holding a revoked token for a
+    // window that, in fact, survived the kill attempt.
     const respawnEnv = task ? this.paneEnvService.buildEnvForNewWindow(task, server) : this.tmux.uiTokenEnv();
 
     let newName: string;
-    if (!sessionExists) {
-      // The session's mandatory first window IS the respawn target — creating the
-      // session with a generated name and then adding the real window separately
-      // would strand that first window as an unmanaged bare shell.
-      newName = (await this.tmux.createSession(server, sessionName, { windowName: windowPart, exactName: true, extraEnv: respawnEnv })).windowName;
-      await sleep(500);
-    } else {
-      const session = sessions.find((s) => s.name === sessionName);
-      const windowAlive = session?.windows.some((w) => w.name === windowPart);
-      if (windowAlive) {
-        await this.tmux.killWindow(server, `${sessionName}:${windowPart}`).catch(() => {});
+    try {
+      if (!sessionExists) {
+        // The session's mandatory first window IS the respawn target — creating the
+        // session with a generated name and then adding the real window separately
+        // would strand that first window as an unmanaged bare shell.
+        newName = (await this.tmux.createSession(server, sessionName, { windowName: windowPart, exactName: true, extraEnv: respawnEnv })).windowName;
+        await sleep(500);
+      } else {
+        newName = (await this.tmux.createWindow(server, sessionName, windowPart, { exactName: true, extraEnv: respawnEnv })).windowName;
+        await sleep(300);
       }
-      newName = (await this.tmux.createWindow(server, sessionName, windowPart, { exactName: true, extraEnv: respawnEnv })).windowName;
-      await sleep(300);
+    } catch (err) {
+      // Rollback: the old window is already confirmed gone (or never
+      // existed) and the new one never came up, so the generation issued
+      // into `respawnEnv` above has no window left to back it — revoke it
+      // rather than leave a live, unused credential outstanding.
+      if (task) {
+        this.paneEnvService.revokeForDestroyedWindow(task.id, 'respawn_create_failed');
+      }
+      throw err;
     }
 
     const baseTarget = `${sessionName}:${newName}`;

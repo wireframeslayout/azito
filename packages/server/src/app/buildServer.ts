@@ -221,30 +221,39 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // TaskPaneEnvironmentService (constructed earlier, in wiring.ts) can never
   // disagree about which mode the hub is running in.
 
-  // ── GET /api/sidekicks/:name?render=1&task_id= task-principal condition ──
+  // ── GET /api/sidekicks(/:name) task-principal auth ──
   // Cross-module (task -> project -> unit -> phaseConfig -> Sidekick tags)
   // lookup, so it lives here rather than in modules/sidekicks/routes.ts —
   // sidekicks is a mid-layer module and must not depend on tasks/units
   // (see .dependency-cruiser.cjs's mid-sidekicks-limited rule).
-  function taskOwnsSidekickForItsUnit(taskId: number, sidekickName: string): boolean {
+  //
+  // Single source of truth for "which Sidekicks is this task's Unit allowed
+  // to see" — both the detail route's condition (single-name check) and the
+  // list route's response filter (Issue #28 third-party review fix 1+2:
+  // GET /api/sidekicks previously had no task-principal auth at all, and
+  // GET /api/sidekicks/:name required an explicit task_id even though the
+  // task pane's own AZITO_TASK_ID env var already identifies it) derive from
+  // this one resolver, never reimplementing the phase-walk themselves.
+  function resolveAssignedSidekickNamesForTask(taskId: number): Set<string> {
     const task = taskRepo.findById(taskId);
-    if (!task) return false;
+    if (!task) return new Set();
     const project = projectRepo.findById(task.projectId);
     const resolvedUnitId = resolveUnitId(task, project);
-    if (resolvedUnitId === null) return false;
+    if (resolvedUnitId === null) return new Set();
     const unit = unitRepo.findById(resolvedUnitId);
-    if (!unit) return false;
+    if (!unit) return new Set();
     const unitType = unitTypeLoader.getOrThrow(unit.unitType);
+    const names = new Set<string>();
     for (const phaseDef of unitType.phases) {
       try {
         const pkg = resolvePhaseSidekick(sidekickPackageLoader, phaseDef.name, unit.phaseConfig, phaseDef);
-        if (pkg.name === sidekickName) return true;
+        names.add(pkg.name);
       } catch {
         // Phase misconfigured (e.g. assigned package no longer exists) — not
         // a grant for this task, fall through to the next phase.
       }
     }
-    return false;
+    return names;
   }
 
   const sidekickDetailAuth: RouteAuthRequirement = {
@@ -256,8 +265,19 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       const taskId = Number(query.task_id);
       if (!Number.isInteger(taskId) || principal.id !== taskId) return false;
       const name = (request.params as { name: string }).name;
-      return taskOwnsSidekickForItsUnit(taskId, name);
+      return resolveAssignedSidekickNamesForTask(taskId).has(name);
     },
+  };
+
+  // GET /api/sidekicks (list): a task principal is always allowed to reach
+  // the route — the response itself is narrowed to that task's Unit's
+  // assigned Sidekicks in modules/sidekicks/routes.ts via
+  // `resolveAssignedSidekickNames`, so there's no per-name relationship to
+  // check at the auth-gate level (unlike the detail route, which grants or
+  // denies a single named Sidekick).
+  const sidekickListAuth: RouteAuthRequirement = {
+    classes: ['task'],
+    operation: 'sidekicks.list',
   };
 
   app.addHook('onRequest', async (request, reply) => {
@@ -359,7 +379,14 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     sidekickPackageLoader,
     sidekickSyncService,
   );
-  await app.register(sidekicksRoutes, { sidekickService: sidekickPackageService, taskPromptVarsResolver, unitTypeLoader, detailAuth: sidekickDetailAuth });
+  await app.register(sidekicksRoutes, {
+    sidekickService: sidekickPackageService,
+    taskPromptVarsResolver,
+    unitTypeLoader,
+    detailAuth: sidekickDetailAuth,
+    listAuth: sidekickListAuth,
+    resolveAssignedSidekickNames: resolveAssignedSidekickNamesForTask,
+  });
   await app.register(supervisorsRoutes, { supervisorRegistry });
   await app.register(healthRoutes, { deployModeDetector });
   await app.register(systemRoutes, { systemUpdateService, channelResolver });

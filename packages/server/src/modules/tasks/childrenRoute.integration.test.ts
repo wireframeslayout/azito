@@ -109,7 +109,7 @@ function buildApp(scopedAuthEnabled: boolean, db: SqliteDatabase, createCalls: R
     serverRepo: { findAll: vi.fn(() => []), findByName: vi.fn(() => null), create: vi.fn(), update: vi.fn(), updateAgentVersion: vi.fn(), updateFingerprint: vi.fn(), clearFingerprint: vi.fn(), delete: vi.fn() },
     worktreeServiceFactory: {} as unknown as TasksRouteOptions['worktreeServiceFactory'],
     transportFactory: {} as unknown as TasksRouteOptions['transportFactory'],
-    windowRepo: { findByTaskIds: vi.fn(() => new Map()), add: vi.fn(), findAll: vi.fn(() => []), findById: vi.fn(), findByProject: vi.fn(() => []), findByTask: vi.fn(() => []), findAgentSessionIdsByServer: vi.fn(() => new Set<string>()), findByServerAndTarget: vi.fn(), update: vi.fn(), updateAgentSessionIdByWindow: vi.fn(), remove: vi.fn(), removeByServerAndTarget: vi.fn(() => 0), updatePaneLayout: vi.fn() },
+    windowRepo: { findByTaskIds: vi.fn(() => new Map()), add: vi.fn(), findAll: vi.fn(() => []), findById: vi.fn(), findByProject: vi.fn(() => []), findByTask: vi.fn(() => []), findAgentSessionIdsByServer: vi.fn(() => new Set<string>()), findByServerAndTarget: vi.fn(), findByServerAndSession: vi.fn(() => []), update: vi.fn(), updateAgentSessionIdByWindow: vi.fn(), remove: vi.fn(), removeByServerAndTarget: vi.fn(() => 0), updatePaneLayout: vi.fn() },
     respawnService: {} as unknown as TasksRouteOptions['respawnService'],
     taskRestoreService: {} as unknown as TasksRouteOptions['taskRestoreService'],
     unitTypeLoader: {} as unknown as TasksRouteOptions['unitTypeLoader'],

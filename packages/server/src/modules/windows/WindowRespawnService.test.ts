@@ -157,6 +157,7 @@ function buildService(opts: {
     findByTaskIds: vi.fn(() => new Map()),
     findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
     findByServerAndTarget: vi.fn(() => undefined),
+    findByServerAndSession: vi.fn(() => []),
     update: vi.fn(),
     updateAgentSessionIdByWindow: vi.fn(),
     remove: vi.fn(),
@@ -241,6 +242,7 @@ function buildService(opts: {
   // pass through.
   const paneEnvService = {
     buildEnvForNewWindow: vi.fn(() => ({ AZITO_TASK_TOKEN: 'azt.task.1.' + 'a'.repeat(64), AZITO_TASK_ID: '1' })),
+    revokeForDestroyedWindow: vi.fn(),
   } as any;
 
   const service = new WindowRespawnService(
@@ -449,6 +451,54 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
     expect(tmux.createWindow).toHaveBeenCalledWith(
       expect.anything(), 'azito', 'task-1--ab12', { exactName: true, extraEnv: { AZITO_UI_TOKEN: 'ui-token-fixture' } },
     );
+  });
+
+  it('does not rotate the task token when killing the old window fails, and aborts the respawn (Issue #28 third-party review fix 3)', async () => {
+    const task = makeTask({ id: 5, unitId: 10 });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 5, tmuxTarget: 'azito:task-1--ab12.1' });
+    const { service, tmux, paneEnvService } = buildService({ window: win, task, unit });
+    tmux.listSessions.mockResolvedValue([{
+      name: 'azito',
+      windowCount: 1,
+      attached: false,
+      created: 0,
+      windows: [{ name: 'task-1--ab12', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+    tmux.killWindow.mockRejectedValueOnce(new Error('kill failed'));
+
+    await expect(service.respawn(1, makeServer())).rejects.toThrow(/task token was not rotated/);
+
+    // The old window's kill attempt failed, so the token must never have
+    // been rotated (the old, still-live pane would otherwise be left
+    // holding a dead credential) and no replacement window is created.
+    expect(paneEnvService.buildEnvForNewWindow).not.toHaveBeenCalled();
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(tmux.createSession).not.toHaveBeenCalled();
+  });
+
+  it('revokes the freshly-issued generation when window creation fails after a confirmed kill (Issue #28 third-party review fix 3)', async () => {
+    const task = makeTask({ id: 5, unitId: 10 });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 5, tmuxTarget: 'azito:task-1--ab12.1' });
+    const { service, tmux, paneEnvService } = buildService({ window: win, task, unit });
+    tmux.listSessions.mockResolvedValue([{
+      name: 'azito',
+      windowCount: 1,
+      attached: false,
+      created: 0,
+      windows: [{ name: 'task-1--ab12', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+    tmux.createWindow.mockRejectedValueOnce(new Error('create failed'));
+
+    await expect(service.respawn(1, makeServer())).rejects.toThrow('create failed');
+
+    // The old window was confirmed killed, so rotation did happen (the new
+    // generation is what buildEnvForNewWindow issued) — but since the
+    // replacement window never came up, that generation must be revoked
+    // rather than left as a live, unused credential.
+    expect(paneEnvService.buildEnvForNewWindow).toHaveBeenCalledTimes(1);
+    expect(paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(5, 'respawn_create_failed');
   });
 
   it('throws on invalid tmuxTarget without window part', async () => {

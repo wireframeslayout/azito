@@ -39,7 +39,12 @@ Sidekick には Robin / Falcon のような固有のペルソナ名を付ける�
 引数が空なら Step 2 へ進み、一覧提示のみ行って終了する（ユーザーの選択を待つ）。
 引数がある場合、**最後の引数が数値かどうか**を判定する:
 - 数値である場合: それを `TASK_ID` とし、残りの引数を実行対象の Sidekick 名リスト（順序維持）とする
-- 数値でない場合: `TASK_ID` は空、全引数を Sidekick 名リストとする
+- 数値でない場合: `TASK_ID` は環境変数 `AZITO_TASK_ID`（task ペインに既に注入されている自タスクのID。
+  `TASK_ID="${LAST_ARG:-$AZITO_TASK_ID}"` の形で、明示引数を優先しつつ既定値として使う）、
+  全引数を Sidekick 名リストとする
+
+`AZITO_TASK_ID` も未設定（operator のペイン等）の場合は `TASK_ID` は空のままでよい
+（task/project 系テンプレート変数は未展開のまま残る、従来どおりの standalone 実行）。
 
 Sidekick 名リストが得られたら Step 3 へ進む。
 

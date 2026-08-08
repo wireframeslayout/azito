@@ -165,8 +165,38 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       try {
-        await tmux.killSession(srv, request.params.session);
+        // Resolve every window this session holds BEFORE killing it — once
+        // the session is gone, tmux can no longer tell us which windows it
+        // held, and this is the only chance to learn which of them were
+        // task-owned (Issue #28 third-party review finding 4: deleting a
+        // whole session previously revoked no task tokens at all — only the
+        // single-window DELETE route below did, via onTaskWindowDestroyed).
+        const sessionWindows = opts.windowRepo?.findByServerAndSession(request.params.name, request.params.session) ?? [];
+
+        // The local transport throws on failure while agent/SSH resolve with a non-zero
+        // code — normalize both into an ExecResult, same as the single-window route below.
+        const result = await tmux.killSession(srv, request.params.session)
+          .catch((err: Error) => ({ stdout: '', stderr: err.message, code: 1 }));
+        if (result.code !== 0) {
+          const output = `${result.stderr || ''}${result.stdout || ''}`;
+          const alreadyGone = output.includes("can't find session") || output.includes('no such session');
+          if (!alreadyGone)
+            return reply.status(500).send({ error: `kill-session failed: ${result.stderr || result.stdout}` });
+          // Already gone — fall through to DB cleanup + revocation below.
+        }
         notifySessionsChanged(request.params.name);
+
+        // Reaching here means the session is confirmed gone (killed, or
+        // tmux already reported it missing) — safe to clean up every window
+        // row it held and revoke each task-owned window's token, reusing
+        // the exact same callback the single-window route uses below
+        // (never a second revocation implementation).
+        for (const win of sessionWindows) {
+          opts.windowRepo?.removeByServerAndTarget(request.params.name, win.tmuxTarget);
+          if (win.ownerType === 'task' && win.taskId !== null) {
+            opts.onTaskWindowDestroyed?.(win.taskId, 'window_killed_via_session_delete');
+          }
+        }
         return { ok: true };
       } catch (err: unknown) {
         return reply.status(500).send({ error: (err as Error).message });

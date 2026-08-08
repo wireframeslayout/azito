@@ -20,6 +20,19 @@ export interface SidekicksRouteOptions {
    * must not depend on directly (see .dependency-cruiser.cjs).
    */
   detailAuth: RouteAuthRequirement;
+  /**
+   * Auth requirement for GET /api/sidekicks (list). A task principal is
+   * always let through the gate; the response is then narrowed to that
+   * task's Unit's assigned Sidekicks via `resolveAssignedSidekickNames`
+   * (Issue #28 third-party review fix 1+2).
+   */
+  listAuth: RouteAuthRequirement;
+  /**
+   * Resolves the set of Sidekick names assigned to a task's Unit's phases
+   * (built in buildServer.ts — see `sidekickDetailAuth`'s comment for why
+   * this cross-module lookup can't live in this mid-layer module).
+   */
+  resolveAssignedSidekickNames: (taskId: number) => Set<string>;
 }
 
 // ─── Helpers ───
@@ -72,11 +85,18 @@ function parseTagsInput(raw: unknown): string[] | undefined {
 // ─── Plugin ───
 
 const sidekicksRoutes: FastifyPluginCallback<SidekicksRouteOptions> = (fastify, opts, done) => {
-  const { sidekickService, taskPromptVarsResolver, detailAuth } = opts;
+  const { sidekickService, taskPromptVarsResolver, detailAuth, listAuth, resolveAssignedSidekickNames } = opts;
 
   // ── GET /api/sidekicks ── マージ済み一覧（メタ情報のみ、body は含まない）
-  fastify.get('/api/sidekicks', async () => {
-    return sidekickService.list();
+  // task principal は自タスクの Unit のフェーズに割当済みの Sidekick のみを見る
+  // （Issue #28 third-party review fix 1+2）。operator は従来どおり全件。
+  fastify.get('/api/sidekicks', { config: { auth: listAuth } }, async (request) => {
+    const all = sidekickService.list();
+    if (request.principal?.class === 'task' && request.principal.id !== undefined) {
+      const assigned = resolveAssignedSidekickNames(request.principal.id);
+      return all.filter((pkg) => assigned.has(pkg.name));
+    }
+    return all;
   });
 
   // ── GET /api/sidekicks/:name ── 詳細（body 含む）、?render=1 でテンプレート変数展開（Issue #263 Phase 5、azt-sidekick 用）
