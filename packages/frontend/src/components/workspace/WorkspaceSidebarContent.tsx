@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { SidebarMode, Project, Session, Window, Task } from '../../pages/workspace/types';
 import type { PersistedTab } from '../../hooks/useTabPersistence';
@@ -7,6 +7,7 @@ import type { ContextMenuItem } from '../ContextMenu';
 import FileExplorer from '../FileExplorer';
 import RepoSidebar from '../RepoSidebar';
 import StoragePanel from '../StoragePanel';
+import { WorktreeSection } from '../files/WorktreeSection';
 import { SettingsSidebar, type SettingsSection } from '../ProjectSettings';
 import ObjectsSidebar from './ObjectsSidebar';
 import TasksSidebar from './TasksSidebar';
@@ -109,6 +110,12 @@ export default function WorkspaceSidebarContent({
   taskWindows,
 }: WorkspaceSidebarContentProps) {
   const { t } = useTranslation('workspace');
+  const [selectedWorktreePath, setSelectedWorktreePath] = useState<string | null>(null);
+
+  useEffect(() => {
+    setSelectedWorktreePath(null);
+  }, [project?.id, selectedFileServer]);
+
   return (
     <>
       {sidebarMode === 'windows' && project && (
@@ -196,11 +203,20 @@ export default function WorkspaceSidebarContent({
                 </div>
               );
             }
+            const effectiveRoot = selectedWorktreePath ?? rootPath;
             return (
               <>
+                {project && (
+                  <WorktreeSection
+                    serverName={selectedFileServer}
+                    projectId={project.id}
+                    selectedPath={selectedWorktreePath}
+                    onSelect={setSelectedWorktreePath}
+                  />
+                )}
                 <div style={{ padding: '6px 12px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
                   <button
-                    onClick={() => { onOpenDiff(selectedFileServer, rootPath); if (mobile) onCloseMobileSidebar(); }}
+                    onClick={() => { onOpenDiff(selectedFileServer, effectiveRoot); if (mobile) onCloseMobileSidebar(); }}
                     style={{
                       width: '100%',
                       padding: '5px 10px',
@@ -216,7 +232,7 @@ export default function WorkspaceSidebarContent({
                     {t('sidebar.gitDiff')}
                   </button>
                 </div>
-                <FileExplorer serverName={selectedFileServer} rootPath={rootPath} projectId={project?.id} onFileSelect={onFileSelect} />
+                <FileExplorer serverName={selectedFileServer} rootPath={effectiveRoot} projectId={project?.id} onFileSelect={onFileSelect} />
               </>
             );
           })()}

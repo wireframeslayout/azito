@@ -43,5 +43,16 @@
     "deleteFile": "削除",
     "copiedUrl": "API URL をコピーしました（エージェント用。ブラウザでは開けません）",
     "dropToUpload": "ドロップしてアップロード"
+  },
+  "worktrees": {
+    "title": "ワークツリー",
+    "mainLabel": "本流",
+    "orphaned": "孤立",
+    "running": "実行中",
+    "empty": "ワークツリーはまだありません",
+    "loadError": "ワークツリーの読み込みに失敗しました",
+    "retry": "再試行",
+    "openTask": "タスクを開く",
+    "changedFiles": "{{count}} ファイル変更"
   }
 }
