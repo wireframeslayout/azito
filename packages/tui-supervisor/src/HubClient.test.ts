@@ -348,6 +348,52 @@ describe('HubClient', () => {
       expect(connections[1].messages[0]).toMatchObject({ launchId: 'launch-1', sessionToken: 'session-secret' });
       expect((connections[1].messages[0] as any).bootstrapToken).toBeUndefined();
     });
+
+    it('sends register_ack with the just-received sessionToken, on the same connection, right after registering', async () => {
+      // Issue #28 third-party review, Important finding: HubClient keeps using the same
+      // socket after a bootstrapToken register succeeds — it never reconnects on its own —
+      // so the hub can't rely on a later sessionToken-authenticated register to retire the
+      // bootstrap. HubClient must instead ack the sessionToken immediately, in-band.
+      server.removeAllListeners('connection');
+      server.on('connection', (socket, request) => {
+        const conn: Conn = { socket, request, messages: [] };
+        connections.push(conn);
+        socket.on('message', (raw) => {
+          const msg = JSON.parse(raw.toString()) as SupervisorToHubMessage;
+          conn.messages.push(msg);
+          if (msg.type === 'register') {
+            socket.send(JSON.stringify({ type: 'registered', sessionToken: 'session-secret' }));
+          }
+        });
+      });
+
+      makeClient({
+        register: {
+          serverName: 'local',
+          target: 'sess:1.0',
+          taskId: 42,
+          unitId: null,
+          pid: process.pid,
+          childCommand: 'claude',
+          launchId: 'launch-1',
+          bootstrapToken: 'bootstrap-secret',
+        } as any,
+      }).connect();
+
+      await waitFor(() => connections.length === 1 && connections[0].messages.some((m) => m.type === 'register_ack'));
+      const ack = connections[0].messages.find((m) => m.type === 'register_ack');
+      expect(ack).toEqual({ type: 'register_ack', sessionToken: 'session-secret' });
+      // No reconnect happened — the ack arrived on the very same connection as the register.
+      expect(connections).toHaveLength(1);
+    });
+
+    it('never sends register_ack when the hub does not return a sessionToken (unbound register)', async () => {
+      makeClient().connect();
+      await waitFor(() => connections.length === 1 && connections[0].messages.length >= 1);
+      // Give any (incorrect) ack a chance to arrive before asserting its absence.
+      await new Promise((r) => setTimeout(r, 50));
+      expect(connections[0].messages.some((m) => m.type === 'register_ack')).toBe(false);
+    });
   });
 
   it('reconnects with backoff after a disconnect', async () => {

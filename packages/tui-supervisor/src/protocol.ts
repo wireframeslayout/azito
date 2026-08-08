@@ -94,13 +94,27 @@ export interface AckMessage {
   error?: string;
 }
 
+/**
+ * Confirms receipt of a freshly-issued `sessionToken` (Issue #28 third-party
+ * review, Important finding). Sent immediately after a `RegisteredMessage`
+ * carrying `sessionToken` arrives, on the same connection that just
+ * registered with the one-shot `bootstrapToken` — see the hub-side copy of
+ * this doc comment (packages/server/.../protocol.ts) for the full rationale.
+ * A hub predating this message type simply ignores it (forward-compatible).
+ */
+export interface RegisterAckMessage {
+  type: 'register_ack';
+  sessionToken: string;
+}
+
 export type SupervisorToHubMessage =
   | RegisterMessage
   | HeartbeatMessage
   | ActivityMessage
   | ChildExitMessage
   | ReadyMessage
-  | AckMessage;
+  | AckMessage
+  | RegisterAckMessage;
 
 // ---- Hub -> Supervisor ----
 

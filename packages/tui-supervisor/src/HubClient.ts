@@ -188,6 +188,13 @@ export class HubClient {
         this.reconnectAttempts = 0;
         if (msg.sessionToken !== undefined) {
           this.sessionToken = msg.sessionToken;
+          // Issue #28 third-party review, Important finding: confirm receipt of the
+          // freshly-minted session token right away, on this same connection, so the
+          // hub can retire the one-shot bootstrapToken now rather than waiting for a
+          // reconnect that (with this HubClient's own "keep using the live socket"
+          // design) may never come. Additive — a hub predating this message type just
+          // ignores it.
+          this.safeSend({ type: 'register_ack', sessionToken: msg.sessionToken });
         }
         this.startHeartbeat();
         if (this.pendingChildExit) {

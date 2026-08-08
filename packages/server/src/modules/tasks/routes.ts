@@ -833,28 +833,21 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         return reply.status(400).send({ error: `Task status '${task.status}' is not retryable` });
       }
 
-      // Try to stop any running execution for this task
-      executeTaskUseCase.stopByTaskId(id);
-
-      // Kill the abandoned tmux window (if any) and revoke its task-token
-      // generation BEFORE clearing tmuxWindow (Issue #28 review Important
-      // finding): clearing the reference first left an abandoned pane
-      // running with a still-valid token and no `tmuxWindow` for the next
-      // execution's kill-and-rotate (createRotatedWindow, via
-      // confirmOldWindowGone) to find and kill — the token then never
-      // expired and the next run's fresh generation existed alongside it,
-      // not in place of it.
+      // Verify (non-mutating) that any abandoned tmux window can actually be
+      // killed BEFORE stopping the running execution or touching task state
+      // (Issue #28 third-party review, Minor finding: retry を副作用の後に
+      // 未変更の 409 を返す問題). `stopByTaskId` used to run first, so a 409
+      // returned below claimed "task unchanged" while the execution had, in
+      // fact, already been torn down (PhaseLoopRunner can transition it to
+      // `failed` once stopped). Resolving the server and confirming the kill
+      // first keeps every 409 response in this handler accurate — nothing
+      // about the task or its execution changes unless the kill (or
+      // "already gone") is confirmed.
       //
       // Fail-closed on an unconfirmed kill (third-party review, Phase B):
-      // a kill failure or an unresolvable server used to still clear
-      // `tmuxWindow` and reset the task to `open`, so a still-live pane
-      // kept running — with its still-valid token — completely untracked
-      // (no `tmuxWindow` left to find it by, and no generation revoked).
-      // Both the status reset AND the `tmuxWindow`/generation clearing now
-      // happen only once the kill is confirmed (success or already-gone);
-      // otherwise the task is left exactly as it was and the request fails,
-      // so the caller can check the server / kill the pane by hand and
-      // retry.
+      // a kill failure or an unresolvable server must leave the task
+      // untouched and the request errors, so the caller can check the
+      // server / kill the pane by hand and retry.
       if (task.tmuxWindow) {
         const resolvedServerName = resolveTaskServerName(task, projectServerRepo);
         const srv = resolvedServerName ? serverRepo.findByName(resolvedServerName) : null;
@@ -872,6 +865,20 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
               'it may still be running with a valid token. Check the server / kill the window manually, then retry.',
           });
         }
+      }
+
+      // Only reached once the kill is confirmed (or there was no abandoned
+      // window to begin with) — now safe to mutate: stop any running
+      // execution for this task, then revoke its task-token generation
+      // BEFORE clearing `tmuxWindow` below (Issue #28 review Important
+      // finding): clearing the reference first left an abandoned pane
+      // running with a still-valid token and no `tmuxWindow` for the next
+      // execution's kill-and-rotate (createRotatedWindow, via
+      // confirmOldWindowGone) to find and kill — the token then never
+      // expired and the next run's fresh generation existed alongside it,
+      // not in place of it.
+      executeTaskUseCase.stopByTaskId(id);
+      if (task.tmuxWindow) {
         revokeTaskWindowGeneration(id, 'retry_abandoned_window');
       }
 

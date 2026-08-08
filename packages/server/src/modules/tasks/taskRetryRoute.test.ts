@@ -181,6 +181,14 @@ function makeOpts(taskOverrides?: Partial<Task>, killWindowImpl?: () => Promise<
 // `tmuxWindow` anyway (fail-open). It must now fail-closed: the task is left
 // untouched and the request errors, so the abandoned pane and its token stay
 // tracked until a human confirms it is actually dead.
+//
+// Third-party review, Minor finding: the non-mutating kill verification
+// (resolve server, confirm kill) must run BEFORE `stopByTaskId` — otherwise a
+// 409 returned here is inaccurate, since the running execution was already
+// stopped as a side effect (PhaseLoopRunner can transition it to `failed`).
+// These tests also confirm `stopByTaskId` is never called on either
+// fail-closed (409) path, only once the kill (or "already gone") is
+// confirmed.
 describe('POST /api/tasks/:id/retry', () => {
   it('kills the abandoned tmux window and revokes its token generation before clearing tmuxWindow', async () => {
     const opts = makeOpts({ status: 'failed', tmuxWindow: 'task-1' });
@@ -196,11 +204,12 @@ describe('POST /api/tasks/:id/retry', () => {
       expect.objectContaining({ name: 'test-server' }),
       'azito:task-1',
     );
+    expect(opts.executeTaskUseCase.stopByTaskId).toHaveBeenCalledWith(1);
     expect(opts.revokeTaskWindowGeneration).toHaveBeenCalledWith(1, 'retry_abandoned_window');
     expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { status: 'open', tmuxWindow: null });
   });
 
-  it('fails closed and leaves tmuxWindow/status untouched when the kill fails (still-live pane)', async () => {
+  it('fails closed and leaves the task/execution untouched when the kill fails (still-live pane)', async () => {
     const opts = makeOpts(
       { status: 'failed', tmuxWindow: 'task-1' },
       async () => ({ stdout: '', stderr: 'some other tmux error', code: 1 }),
@@ -214,6 +223,9 @@ describe('POST /api/tasks/:id/retry', () => {
     expect(res.statusCode).toBe(409);
     expect(JSON.parse(res.payload).error).toMatch(/Failed to kill/);
     expect(opts.tmux.killWindow).toHaveBeenCalled();
+    // Fail-closed: nothing mutates on a 409 — not the execution, not the
+    // token generation, not the task row. The 409 response must be true.
+    expect(opts.executeTaskUseCase.stopByTaskId).not.toHaveBeenCalled();
     expect(opts.revokeTaskWindowGeneration).not.toHaveBeenCalled();
     // Fail-closed: the task must NOT be reset — the abandoned pane may still
     // be running with a still-valid token, so `tmuxWindow` and `status` stay
@@ -233,11 +245,12 @@ describe('POST /api/tasks/:id/retry', () => {
     expect(res.statusCode).toBe(409);
     expect(JSON.parse(res.payload).error).toMatch(/Could not resolve the server/);
     expect(opts.tmux.killWindow).not.toHaveBeenCalled();
+    expect(opts.executeTaskUseCase.stopByTaskId).not.toHaveBeenCalled();
     expect(opts.revokeTaskWindowGeneration).not.toHaveBeenCalled();
     expect(opts.taskRepo.update).not.toHaveBeenCalled();
   });
 
-  it('skips the kill/revoke step entirely when the task has no tmuxWindow', async () => {
+  it('skips the kill/revoke step entirely when the task has no tmuxWindow, but still stops the execution', async () => {
     const opts = makeOpts({ status: 'failed', tmuxWindow: null });
     const app = Fastify();
     await app.register(tasksRoutes, opts);
@@ -247,6 +260,7 @@ describe('POST /api/tasks/:id/retry', () => {
 
     expect(res.statusCode).toBe(200);
     expect(opts.tmux.killWindow).not.toHaveBeenCalled();
+    expect(opts.executeTaskUseCase.stopByTaskId).toHaveBeenCalledWith(1);
     expect(opts.revokeTaskWindowGeneration).not.toHaveBeenCalled();
   });
 

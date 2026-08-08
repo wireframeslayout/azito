@@ -519,6 +519,26 @@ export class SupervisorRegistry extends EventEmitter {
         break;
       }
 
+      case 'register_ack': {
+        // Issue #28 third-party review, Important finding — see RegisterAckMessage's
+        // doc comment in protocol.ts. Promotes the launch pending -> active THE
+        // MOMENT the supervisor confirms it received sessionToken, instead of
+        // waiting for a reconnect that may never happen while this socket stays
+        // live. Verified against the launch's persisted session hash (not merely
+        // "arrived on the already-registered socket") so a party that never saw
+        // the real session token cannot force early promotion.
+        if (typeof msg.sessionToken !== 'string' || !conn.launchId || !this.launchRepo) break;
+        const row = this.launchRepo.findByLaunchId(conn.launchId);
+        if (!row || !this.launchRepo.verifySession(row, msg.sessionToken)) break;
+        this.launchRepo.touchRegistered(conn.launchId);
+        this.audit('supervisor_launch.ack_activated', {
+          launchId: conn.launchId,
+          serverName: conn.serverName,
+          target: conn.target,
+        });
+        break;
+      }
+
       case 'ack': {
         const pending = conn.pendingAcks.get(msg.id);
         if (!pending) break;
