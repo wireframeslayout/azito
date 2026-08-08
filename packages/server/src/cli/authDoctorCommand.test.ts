@@ -274,12 +274,13 @@ describe('authDoctorCommand', () => {
       }
     }
 
-    it('passes quietly when the DB has not been created on this machine yet', async () => {
+    it('reports a notice (not a failure) when the DB has not been created on this machine yet — this host is not the hub', async () => {
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
       await authDoctorCommand();
 
       expect(process.exitCode).toBeUndefined();
-      expect(allLogLines()).toContain('が見つかりません（未セットアップ、またはこのマシンでハブを実行していません）');
+      expect(allLogLines()).toContain('このホストはハブではありません');
+      expect(allLogLines()).toContain('ハブが動いているサーバー上で');
     });
 
     it('passes with no warning when no task-owned windows exist on the local server', async () => {
@@ -316,7 +317,59 @@ describe('authDoctorCommand', () => {
       expect(allLogLines()).toContain('生存中のタスク所有ウィンドウが 1 件見つかりました');
       expect(allLogLines()).toContain('scoped 有効化前に、これらのタスクを終端させるか再生成してください');
       expect(allLogLines()).toContain('azito token rotate');
-      expect(allLogLines()).toContain('リモートサーバー');
+    });
+
+    // Issue #28 third-party review finding (Important): the drain check
+    // previously only ever looked at `type = 'local'` rows, so a live pane
+    // on an `agent` server went entirely unchecked while still being folded
+    // into a clean/green result. It must now cover every server the hub's
+    // DB knows about — and a server it cannot currently reach (down, wrong
+    // token, network partition) must be reported as unverifiable, never
+    // silently treated as "no live pane found" (clean).
+    it('reports a server it cannot reach as unverifiable, never as a clean pass', async () => {
+      const { openDatabase } = await import('../shared/db/Database.js');
+      const db = openDatabase(path.join(tmpDir, 'data.db'));
+      db.prepare(
+        "INSERT INTO servers (name, type, host, agent_port, agent_token) VALUES ('remote1', 'agent', '127.0.0.1', 1, 'tok')",
+      ).run();
+      db.prepare("INSERT INTO projects (name) VALUES ('p')").run();
+      db.prepare("INSERT INTO tasks (project_id, title) VALUES (1, 't')").run();
+      db.prepare(
+        "INSERT INTO windows (owner_type, task_id, server_name, tmux_target) VALUES ('task', 1, 'remote1', 'sess:1.0')",
+      ).run();
+      db.close();
+
+      const { authDoctorCommand } = await import('./authDoctorCommand.js');
+      await authDoctorCommand();
+
+      expect(process.exitCode).toBeUndefined();
+      expect(allLogLines()).toContain('[-- ] scoped 認可 有効化前の生存タスクウィンドウ');
+      expect(allLogLines()).toContain('検査できないサーバー上にタスク所有ウィンドウが');
+      expect(allLogLines()).toContain('到達不能');
+      expect(allLogLines()).not.toContain('生存中の tmux ペインはありません');
+    });
+
+    it('surfaces both a confirmed-live local pane and an unreachable remote server in the same warning', async () => {
+      await seedTaskWindow('sess:1.0');
+      execFileMock.mockImplementation((_cmd, _args, _opts, callback) => callback(null, '', ''));
+
+      const { openDatabase } = await import('../shared/db/Database.js');
+      const db = openDatabase(path.join(tmpDir, 'data.db'));
+      db.prepare(
+        "INSERT INTO servers (name, type, host, agent_port, agent_token) VALUES ('remote1', 'agent', '127.0.0.1', 1, 'tok')",
+      ).run();
+      db.prepare(
+        "INSERT INTO windows (owner_type, task_id, server_name, tmux_target) VALUES ('task', 1, 'remote1', 'sess:2.0')",
+      ).run();
+      db.close();
+
+      const { authDoctorCommand } = await import('./authDoctorCommand.js');
+      await authDoctorCommand();
+
+      expect(process.exitCode).toBeUndefined();
+      expect(allLogLines()).toContain('[!! ] scoped 認可 有効化前の生存タスクウィンドウ');
+      expect(allLogLines()).toContain('生存中のタスク所有ウィンドウが 1 件見つかりました');
+      expect(allLogLines()).toContain('検査できなかったタスク所有ウィンドウも');
     });
 
     it('is skipped once AZITO_SCOPED_AUTH is already enabled, even with a live task-owned pane', async () => {

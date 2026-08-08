@@ -217,9 +217,51 @@ export class SupervisorRegistry extends EventEmitter {
    * available at this hub instance); callers fall back to wrapping without
    * `--launch-id`/`--bootstrap-token`, which registers as `unbound` under
    * scoped auth (or `bound` under the compat flag, same as always).
+   *
+   * Issue #28 third-party review finding (Important): `launchRepo.create()`
+   * below invalidates any prior `supervisor_launches` row for this
+   * `(serverName, target)` (its own doc comment's "supersede step") — but
+   * that only affects the PERSISTED row, not whatever in-memory `connections`
+   * entry is still live for the key. If the OLD supervisor process's
+   * WebSocket is still connected when this is called (the hub hasn't yet
+   * observed its disconnect) and the NEW supervisor process then fails to
+   * start/register at all, the OLD connection would otherwise stay `bound`
+   * — still driving AgentActivityMonitor's Tier 0 override and the task
+   * turn's idle-timer refresh — forever, as the authority for a launch that
+   * was just superseded and no longer has a valid token. Downgrading it to
+   * `unbound` HERE (immediately, at issuance) rather than waiting for the
+   * new registration to evict it (`register()`'s own eviction path) or for
+   * the new supervisor's activity to arrive is the cheap option: it's a
+   * single in-memory map lookup on the rare (re-launch) path, with no new
+   * I/O, no new persisted state, and no behavior change for the common case
+   * (no existing connection for the key). The connection itself is left
+   * alone — still displayed, still able to reconnect — only its authority to
+   * drive Tier 0/turn-idle-refresh is revoked; `register()`'s later replace
+   * either evicts it for real (successful new registration) or never comes
+   * (new supervisor never starts), in which case it now correctly shows as
+   * unbound/display-only instead of silently remaining authoritative.
    */
   issueLaunch(expectation: SupervisorLaunchExpectation): IssuedSupervisorLaunch | undefined {
-    return this.launchRepo?.create(expectation);
+    const issued = this.launchRepo?.create(expectation);
+    if (issued) this.downgradeToUnbound(keyFor(expectation.serverName, expectation.target));
+    return issued;
+  }
+
+  /**
+   * Demotes an existing bound connection for `key` to unbound in place —
+   * does NOT close/replace the socket. See {@link issueLaunch}'s doc comment
+   * for why this exists. No-op if there is no connection for the key, or it
+   * is already unbound.
+   */
+  private downgradeToUnbound(key: string): void {
+    const existing = this.connections.get(key);
+    if (!existing || !existing.bound) return;
+    existing.bound = false;
+    existing.launchId = null;
+    this.audit('supervisor_launch.superseded_downgrade', {
+      serverName: existing.serverName,
+      target: existing.target,
+    });
   }
 
   private audit(event: string, detail: Record<string, unknown>): void {

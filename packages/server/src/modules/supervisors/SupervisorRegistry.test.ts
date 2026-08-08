@@ -615,7 +615,18 @@ describe('SupervisorRegistry — launch binding (Issue #28 Phase C, design v3 §
     expect(auditRecord).not.toHaveBeenCalledWith(expect.objectContaining({ event: 'supervisor_launch.replace_rejected' }));
   });
 
-  it('an UNAUTHENTICATED replacement attempt (bad token) is still rejected, leaving the bound connection untouched', () => {
+  // Issue #28 third-party review finding (Important): `issueLaunch()` now
+  // downgrades a still-connected bound connection for the same key to
+  // unbound the moment the new launch is issued (see its own doc comment) —
+  // so by the time `issuedB` exists, `oldSocket`'s connection is already
+  // unbound and the pre-existing "protect a bound connection from a
+  // different-launchId register" guard no longer applies to it (there is
+  // nothing bound left to protect via THAT guard). An intruder presenting
+  // `issuedB`'s launchId with the WRONG bootstrap token is still rejected —
+  // just via the ordinary credential check (4001, `bootstrap_rejected`)
+  // instead of the eviction guard (4009, `replace_rejected`) — and the old
+  // connection is still left completely untouched either way.
+  it('an UNAUTHENTICATED replacement attempt (bad token) is still rejected, leaving the (now-downgraded) old connection untouched', () => {
     const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
     const issuedA = registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })!;
 
@@ -623,14 +634,81 @@ describe('SupervisorRegistry — launch binding (Issue #28 Phase C, design v3 §
     registry.register(asSocket(oldSocket), registerWith({ launchId: issuedA.launchId, bootstrapToken: issuedA.bootstrapToken }));
 
     const issuedB = registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })!;
+    expect(registry.snapshot()[0].bound).toBe(false); // downgraded by the issueLaunch() call above
 
     const intruder = new MockSocket();
     registry.register(asSocket(intruder), registerWith({ launchId: issuedB.launchId, bootstrapToken: 'wrong-token' }));
 
-    expect(intruder.closed?.code).toBe(4009);
+    expect(intruder.closed?.code).toBe(4001);
     expect(oldSocket.closed).toBeNull();
     expect(registry.snapshot()).toHaveLength(1);
-    expect(auditRecord).toHaveBeenCalledWith(expect.objectContaining({ event: 'supervisor_launch.replace_rejected' }));
+    expect(auditRecord).toHaveBeenCalledWith(expect.objectContaining({ event: 'supervisor_launch.bootstrap_rejected' }));
+  });
+
+  // The actual fix under test: a still-connected bound connection must stop
+  // being authoritative (Tier 0 / turn-idle-refresh) the instant a NEW
+  // launch supersedes it for the same key — not only once a new supervisor
+  // successfully registers (which may never happen if the new process fails
+  // to start), and not only once the hub happens to observe the old socket
+  // disconnect.
+  describe('SupervisorRegistry — downgrade on supersede (Issue #28 third-party review, Important)', () => {
+    it('downgrades a still-connected bound connection to unbound the moment a new launch is issued for its key', () => {
+      const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
+      const issuedA = registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })!;
+
+      const oldSocket = new MockSocket();
+      registry.register(asSocket(oldSocket), registerWith({ launchId: issuedA.launchId, bootstrapToken: issuedA.bootstrapToken }));
+      expect(registry.snapshot()[0].bound).toBe(true);
+
+      // A fresh execute()/respawn() issues a new launch for the SAME key
+      // while the old supervisor is still connected — e.g. because the new
+      // supervisor process then crashes before it ever registers. The old
+      // connection must stop being authoritative right away, not linger
+      // bound forever with no future event that would ever downgrade it.
+      registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 });
+
+      expect(oldSocket.closed).toBeNull(); // still connected/displayed — only its authority is revoked
+      expect(registry.snapshot()).toHaveLength(1);
+      expect(registry.snapshot()[0].bound).toBe(false);
+      expect(auditRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ event: 'supervisor_launch.superseded_downgrade', detail: expect.objectContaining({ serverName: 'local', target: 'test:0.1' }) }),
+      );
+    });
+
+    it('a downgraded connection emits bound:false on subsequent activity (stops driving Tier 0 / turn-idle-refresh)', () => {
+      const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
+      const issuedA = registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })!;
+      const oldSocket = new MockSocket();
+      registry.register(asSocket(oldSocket), registerWith({ launchId: issuedA.launchId, bootstrapToken: issuedA.bootstrapToken }));
+
+      registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 });
+
+      const onActivity = vi.fn();
+      registry.on('activity', onActivity);
+      registry.handleMessage(asSocket(oldSocket), { type: 'activity', state: 'working' } as never);
+
+      expect(onActivity).toHaveBeenCalledWith(expect.objectContaining({ bound: false }));
+    });
+
+    it('is a no-op when no connection is registered yet for the key (nothing to downgrade)', () => {
+      const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
+      expect(() => registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })).not.toThrow();
+      expect(registry.snapshot()).toHaveLength(0);
+      expect(auditRecord).not.toHaveBeenCalledWith(expect.objectContaining({ event: 'supervisor_launch.superseded_downgrade' }));
+    });
+
+    it('does not re-audit a downgrade for a connection that is already unbound', () => {
+      const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
+      // A launchId-less register under scoped auth starts out unbound already.
+      const socket = new MockSocket();
+      registry.register(asSocket(socket), registerWith({}));
+      expect(registry.snapshot()[0].bound).toBe(false);
+      auditRecord.mockClear();
+
+      registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 });
+
+      expect(auditRecord).not.toHaveBeenCalledWith(expect.objectContaining({ event: 'supervisor_launch.superseded_downgrade' }));
+    });
   });
 
   it('a same-launchId reconnection still replaces the previous connection (normal reconnect)', () => {

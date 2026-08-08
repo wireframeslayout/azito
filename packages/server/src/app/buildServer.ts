@@ -343,6 +343,16 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   await app.register(sessionsRoutes, {
     serverRepo, tmux: tmuxClient, windowRepo, notificationBus, resourceGuard,
     onTaskWindowDestroyed: (taskId, reason) => taskPaneEnvironmentService.revokeForDestroyedWindow(taskId, reason),
+    buildSecondaryWindowEnv: (taskId, server) => {
+      const task = taskRepo.findById(taskId);
+      // Should be unreachable in practice (the caller only reaches here for
+      // a `windowRow.taskId` pulled from the same `windows` table row that
+      // references this task), but a task that no longer exists must not
+      // fall back to a legacy/empty env — mask both credentials exactly as
+      // buildEnvForSecondaryWindow's else-branch does.
+      if (!task) return { AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' };
+      return taskPaneEnvironmentService.buildEnvForSecondaryWindow(task, server);
+    },
   });
   await app.register(fileBrowseRoutes, { serverRepo, tmux: tmuxClient });
   await app.register(gitRoutes, { serverRepo, transportFactory });

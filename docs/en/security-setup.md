@@ -112,13 +112,17 @@ rewrites the whole file), or run `azito auth doctor` to confirm it's gone.
 
 ### `azito auth doctor`
 
-Run locally on any server to check for drift between the intended state and reality:
+Run **on the hub** to check for drift between the intended state and reality:
 
 ```bash
 azito auth doctor
 ```
 
-It checks, **on the machine it runs on only** (it does not reach out to remote servers):
+Checks (a)-(d) and (f) only look at local files/env on the machine this process runs on. Check (e)
+is the exception: it inspects **every server registered in the hub's DB** (local and agent alike)
+through that server's own transport, so it only produces a meaningful result when run on the
+machine holding the hub's DB (normally the hub itself). Run it on a non-hub host and (e) reports
+that it can't check anything there, rather than a false "nothing to check" green.
 
 - (a) no `AZITO_UI_TOKEN` line remains in any `~/.azito/azitoctl*.env`
 - (b) `~/.azito/operator.env` (if present) is mode 600
@@ -127,17 +131,17 @@ It checks, **on the machine it runs on only** (it does not reach out to remote s
 - (d) the Codex-side `azt-mcp` token matches the hub's current token (only when the `codex` CLI is
   present)
 - (e) **only while `AZITO_SCOPED_AUTH` is still off**: whether any task-owned tmux pane is still
-  alive on the local server (this is the drain check for Step 4 of the migration below — it's
-  reported as a warning, `!!`, not `NG`, since a live pane is completely normal while the flag is
-  off; it only matters as guidance ahead of flipping the flag). If it finds one, finish or
-  re-create that task before enabling the flag — a pane created in compatibility mode keeps
-  `AZITO_UI_TOKEN` in its env for its whole life, so it can still act as an operator-equivalent
-  principal even after the flag flips. **This check can only see the local server** — a remote
-  server's live panes are invisible to it; run `azito auth doctor` on that server too
+  alive on ANY server registered in the hub's DB (this is the drain check for Step 4 of the
+  migration below — it's reported as a warning, `!!`, not `NG`, since a live pane is completely
+  normal while the flag is off; it only matters as guidance ahead of flipping the flag). If it
+  finds one, finish or re-create that task before enabling the flag — a pane created in
+  compatibility mode keeps `AZITO_UI_TOKEN` in its env for its whole life, so it can still act as
+  an operator-equivalent principal even after the flag flips. **A server this process cannot
+  currently reach (down, stale token, network partition) is reported as unverifiable (`--`), never
+  folded into a green result** — "couldn't check" stays visibly distinct from "checked and clean".
 - (f) the current value of `AZITO_SCOPED_AUTH`
 
-Each failing (`NG`) check prints a fix instruction. Run it again on every remote server after
-migrating — a single run only covers the machine it executed on.
+Each failing (`NG`) check prints a fix instruction.
 
 ### The same-Unix-user limitation
 
@@ -167,16 +171,17 @@ also accepts the legacy UI-token-only flow, so nothing breaks mid-rollout. Roll 
 3. **Update the hub itself** (still in compatibility mode). Tasks that were already running when
    you restart the hub will either finish naturally or need to be re-created — they don't need to
    be killed, but their pane env was captured before the restart.
-4. **Flip `AZITO_SCOPED_AUTH` on** once `azito auth doctor` reports all green on every server. This
-   is the point where task principals actually become restricted to the allowlisted APIs (design
-   §4) instead of just being *issued* scoped tokens.
+4. **Flip `AZITO_SCOPED_AUTH` on** once `azito auth doctor`, run on the hub, reports every server
+   green (or not applicable). This is the point where task principals actually become restricted to
+   the allowlisted APIs (design §4) instead of just being *issued* scoped tokens.
 
    **Drain first.** A task pane created in compatibility mode keeps `AZITO_UI_TOKEN` in its process
    environment for its whole life, so flipping the flag doesn't retroactively restrict a pane that
    was already running — it can still act as an operator-equivalent principal until it exits. If
    `azito auth doctor`'s task-owned-window check (item (e) above) warns that a pane is still alive,
-   finish or re-create that task before enabling the flag. That check only covers the local
-   server, so check each remote server independently by running `azito auth doctor` on it.
+   finish or re-create that task before enabling the flag. Running it **on the hub** covers every
+   server in one pass; if any server is reported unreachable, check that server's own state (is it
+   up, is its agent token current) and re-run.
 
    This also changes how supervisor registrations are treated (design §8). A `tui-supervisor`
    started by task execution registers with a hub-issued `--launch-id`/`--bootstrap-token`, and is

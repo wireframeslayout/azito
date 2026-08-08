@@ -1,5 +1,5 @@
 import type { FastifyPluginCallback } from 'fastify';
-import type { IServerRepository } from '../../servers/Server';
+import type { IServerRepository, ServerConfig } from '../../servers/Server';
 import type { TmuxClient, TmuxSession } from '../TmuxClient';
 import type { SqliteWindowRepository } from '../../windows/SqliteWindowRepository';
 import { isPrimaryTaskWindow } from '../../windows/SqliteWindowRepository';
@@ -38,6 +38,20 @@ export interface SessionsRouteOptions {
    * (windows/Window.ts) for the shared judgment.
    */
   onTaskWindowDestroyed?: (taskId: number, reason: string) => void;
+
+  /**
+   * Issue #28 third-party review finding (manual "add pane" route leaking
+   * session env into a secondary task-owned window): mirrors
+   * `onTaskWindowDestroyed`'s reasoning for why this is a plain callback and
+   * not a `TaskPaneEnvironmentService` import — `tmux` is a base-layer
+   * module and must not depend on `tasks` (upper layer). Returns the SAME
+   * masked-only env `TaskPaneEnvironmentService.buildEnvForSecondaryWindow`
+   * produces for a secondary task window's own (re)creation; never issues
+   * or touches a task token. Only called for a window whose `taskId` is
+   * non-null and `isPrimaryTaskWindow(win)` is false — buildServer.ts wires
+   * this to look up the task and call `buildEnvForSecondaryWindow` on it.
+   */
+  buildSecondaryWindowEnv?: (taskId: number, server: ServerConfig) => Record<string, string>;
 }
 
 // ─── Session cache (30 s TTL) ───
@@ -159,7 +173,54 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       const direction = ((request.body as Record<string, unknown>)?.direction as string) || 'v';
       const target = `${request.params.session}:${request.params.window}`;
       try {
-        await tmux.splitPane(srv, target, direction as 'h' | 'v');
+        // Resolve whether the target window belongs to a task BEFORE
+        // splitting (Issue #28 third-party review finding: this generic
+        // "add pane" route previously always split with no extraEnv at all,
+        // so the new pane silently inherited whatever the tmux SESSION's own
+        // environment happened to carry — a lingering AZITO_UI_TOKEN on an
+        // older session grants the new pane operator-level credentials it
+        // was never issued, and a task-owned window's new pane never got
+        // AZITO_TASK_TOKEN). Mirrors the identity-fallback lookup the
+        // kill-window route above uses, since this route's `target` is
+        // likewise constructed from URL params rather than resolved via
+        // tmux first.
+        const identity = await tmux.getWindowIdentity(srv, target);
+        const windowRow = opts.windowRepo?.findByServerAndTarget(request.params.name, target)
+          ?? (identity ? opts.windowRepo?.findByServerAndTarget(request.params.name, `${identity.sessionName}:${identity.windowName}`) : undefined)
+          ?? (identity ? opts.windowRepo?.findByServerAndTarget(request.params.name, `${identity.sessionName}:${identity.windowIndex}`) : undefined);
+
+        let extraEnv: Record<string, string>;
+        if (windowRow && windowRow.taskId !== null && isPrimaryTaskWindow(windowRow)) {
+          // The task's PRIMARY worker window. Its already-running first pane
+          // holds the currently-active AZITO_TASK_TOKEN generation in its
+          // process env, and that plaintext is never persisted anywhere
+          // (design v3 §2 — TaskPaneEnvironmentService issues but never
+          // stores a token's plaintext). There is therefore no value this
+          // route could hand the new pane that is simultaneously (a) the
+          // SAME generation the first pane already holds — required, since
+          // every pane in one tmux window must carry an identical env per
+          // TmuxClient.splitPane's doc comment — and (b) obtained without
+          // rotating, which would revoke that still-in-use generation out
+          // from under the running worker pane. Reject rather than either
+          // silently omitting the token (this finding's original bug) or
+          // minting a fresh, unrelated generation only the new pane would
+          // hold. Respawning the window (which rotates once and applies the
+          // new generation to every pane it recreates) is the supported way
+          // to add a pane here.
+          return reply.status(409).send({
+            error: 'primary_task_window_pane_add_unsupported',
+            message: "Cannot add a pane to a task's primary window directly — respawn the window first, then add panes.",
+          });
+        } else if (windowRow && windowRow.taskId !== null) {
+          // Secondary task-owned window: masked-only env (no task token),
+          // same as its own (re)creation env.
+          extraEnv = opts.buildSecondaryWindowEnv?.(windowRow.taskId, srv) ?? {};
+        } else {
+          // Non-task window (manual/project/etc.) — legacy default.
+          extraEnv = tmux.uiTokenEnv();
+        }
+
+        await tmux.splitPane(srv, target, direction as 'h' | 'v', extraEnv);
         notifySessionsChanged(request.params.name);
         return { ok: true };
       } catch (err: unknown) {

@@ -3,6 +3,7 @@ import { parseTurnToken } from './AgentTurn';
 import type { SqliteAgentTurnRepository } from './SqliteAgentTurnRepository';
 import type { TurnSignalHub, TurnSignal } from './TurnSignalHub';
 import type { AuditLogService } from '../../../shared/audit/AuditLogService';
+import { recordAuditBestEffort } from '../../../shared/audit/recordAuditBestEffort';
 
 const MAX_OUTPUT_BYTES = 256 * 1024;
 
@@ -144,22 +145,33 @@ export class AgentSignalService {
     // many DISTINCT turnIds still gets one small metadata row per attempt,
     // never a 256KiB body).
     if (!turn) {
-      this.auditLogService.record({
-        actorClass: 'runtime',
-        actorId: null,
-        event: 'agent_signal.rejected',
-        detail: { reason: 'turn_not_found' },
-      });
+      // Best-effort (Issue #28 third-party review finding): an audit write
+      // failure here (disk full, locked DB, ...) must never turn this 404
+      // into a 500 — see recordAuditBestEffort's doc comment.
+      recordAuditBestEffort(
+        this.auditLogService,
+        {
+          actorClass: 'runtime',
+          actorId: null,
+          event: 'agent_signal.rejected',
+          detail: { reason: 'turn_not_found' },
+        },
+        (err) => console.error('[AgentSignalService] audit log write failed (turn_not_found); continuing with 404', err),
+      );
       return { status: 404, body: { error: 'Turn not found' } };
     }
 
     if (turn.taskId !== parsed.taskId || turn.nonce !== parsed.nonce) {
-      this.auditLogService.record({
-        actorClass: 'runtime',
-        actorId: null,
-        event: 'agent_signal.rejected',
-        detail: { reason: 'turn_mismatch', turnId: turn.id },
-      });
+      recordAuditBestEffort(
+        this.auditLogService,
+        {
+          actorClass: 'runtime',
+          actorId: null,
+          event: 'agent_signal.rejected',
+          detail: { reason: 'turn_mismatch', turnId: turn.id },
+        },
+        (err) => console.error('[AgentSignalService] audit log write failed (turn_mismatch); continuing with 403', err),
+      );
       return { status: 403, body: { error: 'Turn token does not match the resolved turn' } };
     }
 

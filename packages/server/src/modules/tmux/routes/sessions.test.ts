@@ -37,6 +37,7 @@ async function buildApp(opts: {
   tmux: Partial<TmuxClient>;
   windowRepo: SqliteWindowRepository;
   onTaskWindowDestroyed?: ReturnType<typeof vi.fn>;
+  buildSecondaryWindowEnv?: ReturnType<typeof vi.fn>;
 }): Promise<FastifyInstance> {
   const srv: ServerConfig = { name: 'srv1', type: 'local' } as ServerConfig;
   const app = Fastify();
@@ -45,6 +46,7 @@ async function buildApp(opts: {
     tmux: opts.tmux as TmuxClient,
     windowRepo: opts.windowRepo,
     onTaskWindowDestroyed: opts.onTaskWindowDestroyed as ((taskId: number, reason: string) => void) | undefined,
+    buildSecondaryWindowEnv: opts.buildSecondaryWindowEnv as ((taskId: number, server: ServerConfig) => Record<string, string>) | undefined,
   });
   await app.ready();
   return app;
@@ -308,5 +310,75 @@ describe('DELETE /api/servers/:name/sessions/:session', () => {
     expect(res.statusCode).toBe(200);
     expect(onTaskWindowDestroyed).not.toHaveBeenCalled();
     expect(windowRepo.removeByServerAndTarget).not.toHaveBeenCalled();
+  });
+});
+
+// Issue #28 third-party review finding 1: the generic "add pane" route
+// previously always split with no extraEnv at all — a task's primary window
+// leaked its running pane's env via tmux SESSION inheritance instead of ever
+// getting a properly-scoped extraEnv, and a leftover AZITO_UI_TOKEN on an
+// older session would flow straight into the new pane.
+describe('POST /api/servers/:name/sessions/:session/windows/:window/panes', () => {
+  let app: FastifyInstance;
+
+  afterEach(async () => {
+    await app.close();
+  });
+
+  it('rejects with 409 when the target is a task\'s PRIMARY window (no way to hand the new pane the live, unrotated token)', async () => {
+    const windowRepo = makeWindowRepo();
+    (windowRepo.findByServerAndTarget as ReturnType<typeof vi.fn>).mockReturnValue({
+      id: 5, ownerType: 'task', taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:2', isPrimary: true,
+    });
+    const splitPane = vi.fn(async () => ({ stdout: '', stderr: '', code: 0 }));
+    const tmux: Partial<TmuxClient> = {
+      getWindowIdentity: vi.fn(async () => null),
+      splitPane,
+    };
+    app = await buildApp({ tmux, windowRepo });
+
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv1/sessions/session/windows/2/panes' });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('primary_task_window_pane_add_unsupported');
+    expect(splitPane).not.toHaveBeenCalled();
+  });
+
+  it('splits with the masked secondary-window env when the target is a SECONDARY task window', async () => {
+    const windowRepo = makeWindowRepo();
+    (windowRepo.findByServerAndTarget as ReturnType<typeof vi.fn>).mockReturnValue({
+      id: 5, ownerType: 'task', taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:2', isPrimary: false,
+    });
+    const splitPane = vi.fn(async () => ({ stdout: '', stderr: '', code: 0 }));
+    const tmux: Partial<TmuxClient> = {
+      getWindowIdentity: vi.fn(async () => null),
+      splitPane,
+    };
+    const maskedEnv = { AZITO_TASK_ID: '42', AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' };
+    const buildSecondaryWindowEnv = vi.fn(() => maskedEnv);
+    app = await buildApp({ tmux, windowRepo, buildSecondaryWindowEnv });
+
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv1/sessions/session/windows/2/panes' });
+
+    expect(res.statusCode).toBe(200);
+    expect(buildSecondaryWindowEnv).toHaveBeenCalledWith(42, expect.objectContaining({ name: 'srv1' }));
+    expect(splitPane).toHaveBeenCalledWith(expect.objectContaining({ name: 'srv1' }), 'session:2', 'v', maskedEnv);
+  });
+
+  it('splits with the legacy uiTokenEnv() for a non-task window', async () => {
+    const windowRepo = makeWindowRepo();
+    const splitPane = vi.fn(async () => ({ stdout: '', stderr: '', code: 0 }));
+    const uiTokenEnv = vi.fn(() => ({ AZITO_UI_TOKEN: 'legacy-ui-token' }));
+    const tmux: Partial<TmuxClient> = {
+      getWindowIdentity: vi.fn(async () => null),
+      splitPane,
+      uiTokenEnv,
+    };
+    app = await buildApp({ tmux, windowRepo });
+
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv1/sessions/session/windows/2/panes' });
+
+    expect(res.statusCode).toBe(200);
+    expect(splitPane).toHaveBeenCalledWith(expect.objectContaining({ name: 'srv1' }), 'session:2', 'v', { AZITO_UI_TOKEN: 'legacy-ui-token' });
   });
 });

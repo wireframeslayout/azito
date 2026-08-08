@@ -343,6 +343,40 @@ export class TmuxClient {
   }
 
   /**
+   * Like {@link checkPaneExists}, but distinguishes "confirmed gone" from
+   * "couldn't verify" instead of collapsing both into `false` (Issue #28
+   * third-party review finding — `azito auth doctor`'s drain check: a caller
+   * that treats every failure as "pane gone" reports a clean/green result
+   * for a server it in fact could never reach, e.g. an `agent` server that's
+   * down, or a token mismatch). Mirrors `resolveKillOutcome`'s local-throws
+   * vs agent-resolves-with-nonzero-code normalization (see its doc comment):
+   * `LocalTransport.execTmux` rejects on ANY non-zero tmux exit, so a local
+   * "pane not found" and a local "tmux binary missing" are both caught here
+   * and must be told apart by message content, while `AgentTransport.execTmux`
+   * only rejects on an HTTP-level failure (network unreachable, auth
+   * rejected) and otherwise resolves with whatever `ExecResult` (including a
+   * non-zero `code`) the remote agent's own tmux run produced.
+   */
+  async checkPaneLiveness(server: ServerConfig, target: string): Promise<{ alive: boolean; verified: boolean }> {
+    let result: ExecResult;
+    try {
+      result = await this.runTmuxCommand(server, ['list-panes', '-t', target]);
+    } catch (err) {
+      result = { stdout: '', stderr: err instanceof Error ? err.message : String(err), code: 1 };
+    }
+    if (result.code === 0) return { alive: true, verified: true };
+    const output = `${result.stderr || ''}${result.stdout || ''}`;
+    // Same "confirmed absent" phrasing `resolveKillOutcome` matches — see its
+    // doc comment for why each of these three strings means "definitely not
+    // there" rather than "we couldn't tell."
+    const confirmedAbsent =
+      output.includes("can't find") ||
+      output.includes('no such session') ||
+      output.includes('no server running');
+    return { alive: false, verified: confirmedAbsent };
+  }
+
+  /**
    * `extraEnv` (Issue #28 review Critical finding): `tmux new-window -e` only
    * affects the FIRST pane of a newly-created window — every pane a
    * subsequent `split-window` adds to that window inherits the tmux

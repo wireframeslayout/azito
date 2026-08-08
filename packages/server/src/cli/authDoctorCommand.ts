@@ -6,18 +6,26 @@ import { resolveCurrentUiToken } from '../shared/currentUiToken';
 import { resolveScopedAuthEnabled } from '../shared/auth/scopedAuthFlag';
 import { resolveDataDir } from '../shared/dataDir';
 import { openDatabase } from '../shared/db/Database';
+import { open } from '../shared/crypto/SecretBox';
 import { TmuxClient } from '../modules/tmux/TmuxClient';
 import { TransportFactory } from '../modules/servers/transport/TransportFactory';
 import type { ServerConfig, MuxRuntime } from '../modules/servers/Server';
 
 // ─── azito auth doctor (Issue #28 Phase B, design §12 step 1) ───
 //
-// Local-only sanity check for the operator/task credential separation
-// introduced by the harness distribution split (setup.sh no longer writes
-// AZITO_UI_TOKEN into azitoctl*.env; --ui-token instead goes to a new
-// operator.env that nothing auto-sources). This command has no notion of
-// "the remote servers" — it only reads files on the machine it runs on, and
-// says so in its own output, so it isn't mistaken for a fleet-wide audit.
+// Sanity check for the operator/task credential separation introduced by the
+// harness distribution split (setup.sh no longer writes AZITO_UI_TOKEN into
+// azitoctl*.env; --ui-token instead goes to a new operator.env that nothing
+// auto-sources). Checks (a)-(d) and (f) below only read files/env on the
+// machine this process runs on and have no notion of "the remote servers".
+//
+// Check (e) — the drain check — is the one exception (Issue #28 third-party
+// review finding): it runs FROM the hub and inspects every server the hub's
+// DB knows about (local AND agent) through that server's own transport, not
+// just files on this machine. It therefore only produces a meaningful result
+// when run on the machine holding the hub's DB; run anywhere else it reports
+// itself as unable to check (see that function's own doc comment) rather
+// than a false "the remote servers must be checked separately" green.
 
 interface CheckResult {
   ok: boolean;
@@ -337,18 +345,32 @@ function checkCodexMcpTokenMatchesHub(): CheckResult {
 // There was no way to actually VERIFY the drain step happened, though — a
 // human just had to trust they remembered to finish every task first. This
 // check makes that concrete: while AZITO_SCOPED_AUTH is still off, look for
-// task-owned windows whose tmux pane is still alive on the LOCAL server
-// (the only server this process can inspect — see the file's own header
-// notice about being local-only).
+// task-owned windows whose tmux pane is still alive.
 //
-// Deliberately a `warning`, not an NG: while the flag is off, a live task
+// Issue #28 third-party review finding (Important): this used to run its
+// query scoped to `type = 'local'` only, and its own guidance then told a
+// human to re-run the SAME command "on each server" to cover the rest — but
+// only the hub process has this SQLite DB at all (a remote `agent` server's
+// process has no `servers`/`windows` tables to query), so that instruction
+// was unsatisfiable and every non-local task window went unchecked forever
+// while still being reported as a clean/green drain. This now runs FROM the
+// hub, over every server the hub's DB knows about (any `type`), driving each
+// one through its own transport (`TmuxClient.checkPaneLiveness` — local via
+// `execFile`, `agent` via HTTP to that server's agent process). A server
+// this process cannot currently reach — down, wrong token, network partition
+// — is reported as `notice` (unverifiable), NEVER folded into a green
+// result: "we couldn't check" must stay visibly different from "we checked
+// and it's clean," or a human reading this report would trust a clean run
+// that in fact never looked at that server at all.
+//
+// A live pane is a `warning`, not an NG: while the flag is off, a live task
 // window is completely normal/expected, not evidence of anything already
 // broken. It only matters as pre-flight guidance for someone about to flip
 // the flag on. Once AZITO_SCOPED_AUTH is actually enabled, this check is a
 // no-op (skipped) — draining is a one-time migration step, not an ongoing
 // invariant this command should keep flagging.
 async function checkTaskOwnedWindowsBeforeScopedAuth(): Promise<CheckResult> {
-  const label = 'scoped 認可 有効化前の生存タスクウィンドウ（ローカルのみ検査可能）';
+  const label = 'scoped 認可 有効化前の生存タスクウィンドウ（ハブから全サーバーを検査）';
 
   if (resolveScopedAuthEnabled()) {
     return {
@@ -360,10 +382,18 @@ async function checkTaskOwnedWindowsBeforeScopedAuth(): Promise<CheckResult> {
 
   const paths = resolveDataDir();
   if (!fs.existsSync(paths.db)) {
+    // Third-party review finding: this check can only ever run meaningfully
+    // on the machine holding the hub's DB — there is nothing to do "per
+    // server" here, unlike the old guidance implied. A human running this on
+    // a remote server (which has no hub DB at all) must be redirected to the
+    // hub, not told a false "nothing to check" green.
     return {
       ok: true,
+      notice: true,
       label,
-      detail: `${paths.db} が見つかりません（未セットアップ、またはこのマシンでハブを実行していません）`,
+      detail:
+        `${paths.db} が見つかりません。このホストはハブではありません（ハブの DB を持つホストでのみ検査できます）。\n` +
+        '  案内: ハブが動いているサーバー上で `azito auth doctor` を実行してください。',
     };
   }
 
@@ -371,62 +401,93 @@ async function checkTaskOwnedWindowsBeforeScopedAuth(): Promise<CheckResult> {
   try {
     db = openDatabase(paths.db);
 
-    const localServer = db
-      .prepare("SELECT name, mux_runtime FROM servers WHERE type = 'local' LIMIT 1")
-      .get() as { name: string; mux_runtime: MuxRuntime } | undefined;
-    if (!localServer) {
-      return { ok: true, label, detail: 'ローカルサーバーの登録が見つかりません（検査対象なし）' };
-    }
-
     const taskWindows = db
-      .prepare("SELECT task_id AS taskId, tmux_target AS tmuxTarget FROM windows WHERE owner_type = 'task' AND server_name = ?")
-      .all(localServer.name) as { taskId: number; tmuxTarget: string }[];
+      .prepare("SELECT task_id AS taskId, server_name AS serverName, tmux_target AS tmuxTarget FROM windows WHERE owner_type = 'task'")
+      .all() as { taskId: number; serverName: string; tmuxTarget: string }[];
     if (taskWindows.length === 0) {
-      return { ok: true, label, detail: 'タスク所有ウィンドウの登録がありません（ローカル範囲）' };
+      return { ok: true, label, detail: 'タスク所有ウィンドウの登録がありません（ハブ管理下の全サーバー）' };
     }
 
-    const serverConfig: ServerConfig = {
-      name: localServer.name,
-      type: 'local',
-      host: null,
-      agentPort: null,
-      agentToken: null,
-      agentVersion: null,
-      sshHost: null,
-      muxRuntime: localServer.mux_runtime ?? 'system',
-      sshHostFingerprint: null,
-      createdAt: '',
-    };
+    const serverRowStmt = db.prepare(
+      'SELECT name, type, host, agent_port, agent_token, agent_version, ssh_host, mux_runtime, ssh_host_fingerprint, created_at FROM servers WHERE name = ?',
+    );
+    const serverConfigCache = new Map<string, ServerConfig | null>();
+    function resolveServerConfig(serverName: string): ServerConfig | null {
+      if (serverConfigCache.has(serverName)) return serverConfigCache.get(serverName)!;
+      const row = serverRowStmt.get(serverName) as Record<string, unknown> | undefined;
+      const config: ServerConfig | null = row
+        ? {
+            name: row.name as string,
+            type: row.type as ServerConfig['type'],
+            host: (row.host as string) ?? null,
+            agentPort: (row.agent_port as number) ?? null,
+            agentToken: open(row.agent_token as string | null),
+            agentVersion: (row.agent_version as string) ?? null,
+            sshHost: (row.ssh_host as string) ?? null,
+            muxRuntime: (row.mux_runtime as MuxRuntime) ?? 'system',
+            sshHostFingerprint: (row.ssh_host_fingerprint as string) ?? null,
+            createdAt: row.created_at as string,
+          }
+        : null;
+      serverConfigCache.set(serverName, config);
+      return config;
+    }
+
     const tmux = new TmuxClient(new TransportFactory(''), '', '', '');
 
     const alive: string[] = [];
+    const unverifiable: string[] = [];
     for (const w of taskWindows) {
-      const exists = await tmux.checkPaneExists(serverConfig, w.tmuxTarget);
-      if (exists) alive.push(`task #${w.taskId}（${w.tmuxTarget}）`);
+      const descriptor = `task #${w.taskId}（${w.serverName}:${w.tmuxTarget}）`;
+      const config = resolveServerConfig(w.serverName);
+      if (!config) {
+        // The window row references a server that's no longer registered —
+        // stale data, not something we can drive a transport through.
+        unverifiable.push(`${descriptor}（サーバー未登録）`);
+        continue;
+      }
+      const { alive: isAlive, verified } = await tmux.checkPaneLiveness(config, w.tmuxTarget);
+      if (!verified) {
+        unverifiable.push(`${descriptor}（到達不能）`);
+      } else if (isAlive) {
+        alive.push(descriptor);
+      }
+    }
+
+    if (alive.length === 0 && unverifiable.length === 0) {
+      return {
+        ok: true,
+        label,
+        detail: 'タスク所有ウィンドウの登録はありますが、生存中の tmux ペインはありません（全サーバーで確認済み）',
+      };
     }
 
     if (alive.length === 0) {
       return {
         ok: true,
+        notice: true,
         label,
-        detail: 'タスク所有ウィンドウの登録はありますが、生存中の tmux ペインはありません（ローカル範囲で確認）',
+        detail:
+          `検査できないサーバー上にタスク所有ウィンドウが ${unverifiable.length} 件あります（未登録サーバー参照、または到達不能）: ${unverifiable.join(', ')}\n` +
+          '  案内: 対象サーバーが起動している／agent に到達可能であることを確認してから再実行してください。' +
+          'この件数は clean（green）としてではなく「未確認」として扱ってください。',
       };
     }
 
-    return {
-      ok: true,
-      warning: true,
-      label,
-      detail:
-        `生存中のタスク所有ウィンドウが ${alive.length} 件見つかりました（ローカル範囲のみ検査可能）: ${alive.join(', ')}\n` +
-        '  案内: scoped 有効化前に、これらのタスクを終端させるか再生成してください。' +
+    const lines = [
+      `生存中のタスク所有ウィンドウが ${alive.length} 件見つかりました: ${alive.join(', ')}`,
+      '  案内: scoped 有効化前に、これらのタスクを終端させるか再生成してください。' +
         '互換モードで作られたペインは env に AZITO_UI_TOKEN を保持したまま残るため、' +
-        '有効化後も残存ペインが operator 相当として振る舞える可能性があります。\n' +
-        '  有効化後に `azito token rotate` を実行すると、残存 env のトークンも最終的に無効化されます' +
-        '（最後の rotate が実質的なドレインの仕上げを兼ねます）。\n' +
-        '  リモートサーバー（ssh/agent）上のタスクウィンドウはここでは検査できません。' +
-        'そのサーバー上で `azito auth doctor` を実行してください。',
-    };
+        '有効化後も残存ペインが operator 相当として振る舞える可能性があります。',
+      '  有効化後に `azito token rotate` を実行すると、残存 env のトークンも最終的に無効化されます' +
+        '（最後の rotate が実質的なドレインの仕上げを兼ねます）。',
+    ];
+    if (unverifiable.length > 0) {
+      lines.push(
+        `  検査できなかったタスク所有ウィンドウも ${unverifiable.length} 件あります（未確認 — clean とはみなさないでください）: ${unverifiable.join(', ')}`,
+      );
+    }
+    return { ok: true, warning: true, label, detail: lines.join('\n') };
   } finally {
     db?.close();
   }
@@ -452,7 +513,7 @@ function colorize(ok: boolean, text: string): string {
 
 export async function authDoctorCommand(): Promise<void> {
   console.log('azito auth doctor');
-  console.log('ローカル検査のみです。リモートサーバーはそのサーバー上で `azito auth doctor` を実行してください。\n');
+  console.log('多くの検査はこのマシンのローカルファイルのみが対象です。タスクウィンドウの生存検査（e）だけはハブから全サーバーを横断検査します — ハブ以外のホストで実行した場合はその旨を案内します。\n');
 
   const checks: CheckResult[] = [
     checkAzitoctlEnvNoUiToken(),

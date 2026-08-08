@@ -124,6 +124,27 @@ describe('AgentSignalService', () => {
     }));
   });
 
+  // Issue #28 third-party review, Minor finding: `auditLogService.record()`
+  // in the rejection paths used to be called unguarded — a write failure
+  // there (disk full, locked DB, ...) propagated out of handleSignal and
+  // turned the intended 404 into an uncaught exception (a 500 at the route
+  // layer), silently upgrading the caller's visible failure mode. It must
+  // stay best-effort: the 404 is returned regardless of whether the audit
+  // write itself succeeded.
+  it('still returns 404 when the audit log write fails for a not-found turn (best-effort)', () => {
+    const turnRepo = makeTurnRepo(null);
+    const auditLogService = makeAuditLogService();
+    (auditLogService.record as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      throw new Error('disk full');
+    });
+    const service = new AgentSignalService(turnRepo, hub, makeLogRepo(), auditLogService);
+
+    const result = service.handleSignal({ turnToken: '10.1.nonce-1', type: 'progress' });
+
+    expect(result.status).toBe(404);
+    expect(auditLogService.record).toHaveBeenCalled();
+  });
+
   // Issue #28 third-party review, Important finding: an unauthenticated
   // caller could previously brute-force turnIds and grow agent_turn_events
   // without bound (each row carrying the full, up-to-256KiB request body)
@@ -160,6 +181,21 @@ describe('AgentSignalService', () => {
     // The raw request body must never appear in the audit detail either.
     const call = (auditLogService.record as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(JSON.stringify(call)).not.toContain('sensitive-body-content');
+  });
+
+  it('still returns 403 when the audit log write fails for a turn_mismatch rejection (best-effort)', () => {
+    const turn = makeTurn({ taskId: 999 });
+    const turnRepo = makeTurnRepo(turn);
+    const auditLogService = makeAuditLogService();
+    (auditLogService.record as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      throw new Error('disk full');
+    });
+    const service = new AgentSignalService(turnRepo, hub, makeLogRepo(), auditLogService);
+
+    const result = service.handleSignal({ turnToken: '10.1.nonce-1', type: 'progress' });
+
+    expect(result.status).toBe(403);
+    expect(auditLogService.record).toHaveBeenCalled();
   });
 
   it('returns 403 and writes nothing to agent_turn_events when nonce does not match the resolved turn', () => {
