@@ -338,6 +338,25 @@ export class FileBrowseService {
   }
 
   /**
+   * Fetches a remote file's permission mode as an octal string (e.g. `755`),
+   * for preserving it across the decode-to-tempfile + `mv` replace in
+   * `writeFileContent`. GNU `stat -c%a` first, BSD/macOS `stat -f%Lp`
+   * fallback. Returns `null` when the file does not exist yet (new file —
+   * the tempfile's default mode is fine) or the mode cannot be parsed as
+   * octal digits (defensive: never feed unvalidated stdout into `chmod`).
+   */
+  private async getRemoteFileMode(srv: ServerConfig, filePath: string): Promise<string | null> {
+    const q = sq(filePath);
+    const result = await this.tmux.execCommand(
+      srv,
+      `stat -c%a ${q} 2>/dev/null || stat -f%Lp ${q} 2>/dev/null`,
+    );
+    const raw = stripTerminalArtifacts(result.stdout).trim();
+    if (!/^[0-7]{3,4}$/.test(raw)) return null;
+    return raw;
+  }
+
+  /**
    * Tolerance for comparing a caller-supplied `baseMtime` (ms) against a
    * freshly-fetched remote mtime. `precise` (sub-second `stat -c%.Y` output)
    * gets a 1ms epsilon that only absorbs float rounding from the
@@ -407,7 +426,16 @@ export class FileBrowseService {
       const q = sq(filePath);
       if (baseMtime != null) {
         const current = await this.getRemoteMtimeMs(srv, filePath);
-        if (current != null && Math.abs(current.mtimeMs - baseMtime) > this.remoteMtimeTolerance(current.precise)) {
+        // current が取れない場合（stat の一時失敗やファイル消失）は「衝突なし」
+        // とみなさず fail closed する。バイパスは呼び出し元が force 指定時に
+        // baseMtime 自体を渡さない経路（routes.ts）でのみ行う。
+        if (current == null) {
+          throw new FileBrowseError(
+            JSON.stringify({ conflict: true, currentMtime: null }),
+            409,
+          );
+        }
+        if (Math.abs(current.mtimeMs - baseMtime) > this.remoteMtimeTolerance(current.precise)) {
           throw new FileBrowseError(
             JSON.stringify({ conflict: true, currentMtime: current.mtimeMs }),
             409,
@@ -419,6 +447,11 @@ export class FileBrowseService {
       // 一時ファイルに追記してからデコードする。一時ファイル名にリクエストごとの
       // 乱数サフィックスを入れるのは、固定名だと同一ファイルへの並行保存が
       // 互いの一時ファイルを踏みつけて破損し得るため（Issue #27 review Important 2）。
+      // 既存ファイルのパーミッション（例: 0755）を保全する。デコード先の一時
+      // ファイルは touch/リダイレクトで作られるため既定 umask 適用の 0644 になり、
+      // 何もせず mv すると実行ビット等が消える。新規ファイルの場合は mode が
+      // 取れない（null）ので一時ファイルの既定モードのままで良い。
+      const existingMode = await this.getRemoteFileMode(srv, filePath);
       const { randomBytes } = await import('crypto');
       const nonce = randomBytes(8).toString('hex');
       const uploadTmp = `${filePath}.azito-upload-${nonce}`;
@@ -433,15 +466,18 @@ export class FileBrowseService {
       }
       // デコードを別の一時ファイルへ行ってから `mv` で原子的に置き換える
       // （デコード先を直接 filePath にすると、書き込み途中で読まれたり途中で
-      // 失敗した場合に壊れた内容が残る）。成功時のみ明示的なマーカー
-      // `AZITO_WRITE_OK` を出力させ、それを見て初めて成功と判定する — SSH
-      // transport は常に exit code 0 を返すため（RemoteWorktreeService の
-      // hasGitError と同じ既知事情）、code ではなく stdout のマーカーで
-      // 判定する（Issue #27 review Important 1: デコード失敗が握りつぶされ、
-      // 直後の stat が旧ファイルで成功して見かけ上成功応答になっていた）。
+      // 失敗した場合に壊れた内容が残る）。既存ファイルのモードが分かっていれば
+      // mv 前に一時ファイルへ chmod してからモードごと置き換える。成功時のみ
+      // 明示的なマーカー `AZITO_WRITE_OK` を出力させ、それを見て初めて成功と
+      // 判定する — SSH transport は常に exit code 0 を返すため
+      // （RemoteWorktreeService の hasGitError と同じ既知事情）、code ではなく
+      // stdout のマーカーで判定する（Issue #27 review Important 1: デコード
+      // 失敗が握りつぶされ、直後の stat が旧ファイルで成功して見かけ上成功応答
+      // になっていた）。
+      const chmodStep = existingMode != null ? ` && chmod ${sq(existingMode)} ${qDecoded}` : '';
       const writeResult = await this.tmux.execCommand(
         srv,
-        `(base64 -d < ${qUpload} > ${qDecoded} && mv -f ${qDecoded} ${q} && echo AZITO_WRITE_OK); rm -f ${qUpload} ${qDecoded}`,
+        `(base64 -d < ${qUpload} > ${qDecoded}${chmodStep} && mv -f ${qDecoded} ${q} && echo AZITO_WRITE_OK); rm -f ${qUpload} ${qDecoded}`,
       );
       if (!stripTerminalArtifacts(writeResult.stdout).includes('AZITO_WRITE_OK')) {
         throw new FileBrowseError('Failed to write file', 500);

@@ -1,5 +1,21 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { LoadingState } from '../ui';
+import type { Vim as VimApi } from '@replit/codemirror-vim';
+
+// `Vim.defineEx` writes into a module-global command registry shared by every
+// CodeMirror-vim instance on the page. Register the `:write`/`:w` handler exactly
+// once and resolve the correct editor's onSave via a WeakMap keyed by the `cm`
+// adapter object the vim engine passes into the callback (one per EditorView).
+const vimWriteSaveHandlers = new WeakMap<object, () => void>();
+let vimWriteExRegistered = false;
+
+function ensureVimWriteExRegistered(Vim: VimApi): void {
+  if (vimWriteExRegistered) return;
+  vimWriteExRegistered = true;
+  Vim.defineEx('write', 'w', (cm: object) => {
+    vimWriteSaveHandlers.get(cm)?.();
+  });
+}
 
 interface CodeEditorViewProps {
   value: string;
@@ -29,6 +45,7 @@ export default function CodeEditorView({
   const viewRef = useRef<unknown>(null);
   const vimCompRef = useRef<unknown>(null);
   const readOnlyCompRef = useRef<unknown>(null);
+  const vimCmRef = useRef<object | null>(null);
   const [loaded, setLoaded] = useState(false);
 
   const onSaveRef = useRef(onSave);
@@ -83,9 +100,7 @@ export default function CodeEditorView({
       );
       const langSupport = langDesc ? await langDesc.load() : null;
 
-      vimMod.Vim.defineEx('write', 'w', () => {
-        onSaveRef.current?.();
-      });
+      ensureVimWriteExRegistered(vimMod.Vim);
 
       const saveKeymap = Prec.high(keymap.of([{
         key: 'Mod-s',
@@ -209,6 +224,14 @@ export default function CodeEditorView({
 
       viewRef.current = view;
 
+      if (vimMode) {
+        const cm = vimMod.getCM(view);
+        if (cm) {
+          vimWriteSaveHandlers.set(cm, () => onSaveRef.current?.());
+          vimCmRef.current = cm;
+        }
+      }
+
       if (initialLine && initialLine >= 1 && initialLine <= state.doc.lines) {
         const line = state.doc.line(initialLine);
         view.dispatch({
@@ -240,6 +263,10 @@ export default function CodeEditorView({
     return () => {
       destroyed = true;
       cleanup?.();
+      if (vimCmRef.current) {
+        vimWriteSaveHandlers.delete(vimCmRef.current);
+        vimCmRef.current = null;
+      }
       if (viewRef.current) {
         (viewRef.current as { destroy(): void }).destroy();
         viewRef.current = null;
@@ -258,14 +285,23 @@ export default function CodeEditorView({
 
     const reconfigure = async () => {
       if (vimMode) {
-        const { vim: vimExt, Vim } = await import('@replit/codemirror-vim');
-        Vim.defineEx('write', 'w', () => { onSaveRef.current?.(); });
+        const { vim: vimExt, Vim, getCM } = await import('@replit/codemirror-vim');
+        ensureVimWriteExRegistered(Vim);
         view.dispatch({ effects: comp.reconfigure(vimExt()) });
+        const cm = getCM(view as unknown as Parameters<typeof getCM>[0]);
+        if (cm) {
+          vimWriteSaveHandlers.set(cm, () => onSaveRef.current?.());
+          vimCmRef.current = cm;
+        }
         timer = setTimeout(() => {
           observer = observeVimPanel(containerRef.current, onVimModeDisplayRef);
         }, 100);
       } else {
         view.dispatch({ effects: comp.reconfigure([]) });
+        if (vimCmRef.current) {
+          vimWriteSaveHandlers.delete(vimCmRef.current);
+          vimCmRef.current = null;
+        }
         onVimModeDisplayRef.current?.('');
       }
     };

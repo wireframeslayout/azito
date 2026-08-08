@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate, useLocation, matchPath } from 'react-router-dom';
+import { useNavigate, useLocation, matchPath, useBlocker } from 'react-router-dom';
+import type { BlockerFunction } from 'react-router-dom';
 import { paths, matchWorkspacePath } from '../paths';
 import { api } from '../api/client';
 import ContextMenu, { useContextMenu, type ContextMenuItem } from '../components/ContextMenu';
@@ -363,6 +364,40 @@ function WorkspaceInner() {
     window.addEventListener('beforeunload', handler);
     return () => window.removeEventListener('beforeunload', handler);
   }, [hasDirtyTabs]);
+
+  // In-app router-transition guard: `beforeunload` above only fires on a
+  // full browser navigation/reload/close, not on a React Router client-side
+  // transition (e.g. the sidebar navigating to /projects or /units while an
+  // editor tab is dirty) — that discarded edits with no confirmation at all
+  // (Issue #27 review Important 4). `useBlocker` requires a data router
+  // (this app uses `createBrowserRouter`, see router.tsx) and only guards
+  // transitions the router itself performs — `<Link>`/`navigate()` calls and
+  // browser back/forward (POP) are covered; a full page load (typed URL,
+  // external link, `window.location` assignment) is not a router transition
+  // and falls through to the `beforeunload` handler above instead. Workspace
+  // stays mounted for the app's lifetime (Layout.tsx keeps it in the DOM,
+  // just `display: none`, even on global pages), so this blocker is always
+  // registered regardless of which page is currently showing.
+  const blocker = useBlocker(
+    useCallback<BlockerFunction>(
+      ({ currentLocation, nextLocation }) =>
+        hasDirtyTabs && currentLocation.pathname !== nextLocation.pathname,
+      [hasDirtyTabs],
+    ),
+  );
+  useEffect(() => {
+    if (blocker.state !== 'blocked') return;
+    const dirtyCount = tabs.filter((tb) => tb.dirty).length;
+    void confirm({
+      title: t('workspace:tab.leaveDirtyTitle'),
+      message: t('workspace:tab.leaveDirtyMessage', { count: dirtyCount }),
+      confirmLabel: t('workspace:tab.leaveDirtyConfirm'),
+      danger: true,
+    }).then((ok) => {
+      if (ok) blocker.proceed();
+      else blocker.reset();
+    });
+  }, [blocker, tabs, confirm, t]);
 
   // Single entry point for "close this tab by id" that every close affordance
   // (pane TabBar's ✕, the shared tab context menu's "Close tab" item, and

@@ -2,7 +2,11 @@
   "tab": {
     "closeDirtyTitle": "未保存の変更があるタブを閉じますか？",
     "closeDirtyMessage": "「{{name}}」には未保存の変更があります。このタブを閉じると変更は破棄されます。",
-    "closeDirtyConfirm": "破棄して閉じる"
+    "closeDirtyConfirm": "破棄して閉じる",
+    "leaveDirtyTitle": "未保存の変更があります。ページを離れますか？",
+    "leaveDirtyMessage_one": "未保存の変更があるタブが{{count}}件あります。このページを離れると変更は破棄されます。",
+    "leaveDirtyMessage_other": "未保存の変更があるタブが{{count}}件あります。このページを離れると変更は破棄されます。",
+    "leaveDirtyConfirm": "破棄して離れる"
   },
   "pane": {
     "splitRight": "右に分割",

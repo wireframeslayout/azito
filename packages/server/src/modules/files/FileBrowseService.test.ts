@@ -326,6 +326,75 @@ describe('FileBrowseService.writeFileContent (remote)', () => {
       service.writeFileContent(srv, '/tmp/quiet-failure.txt', 'content'),
     ).rejects.toMatchObject({ status: 500 });
   });
+
+  // Review Important 2 (remote half): a transient `stat` failure or the file
+  // disappearing must not be read as "no conflict" — the old code only
+  // compared mtimes `if (current != null && ...)`, so a null `current` (stat
+  // returned nothing) skipped the check entirely and wrote unconditionally.
+  it('fails closed with 409 when the remote mtime cannot be fetched but baseMtime was supplied', async () => {
+    const tmuxMock = {
+      execCommand: async (_srv: unknown, cmd: string) => {
+        // Every stat variant (mtime chain and mode chain) returns nothing,
+        // simulating a transient stat failure / vanished file.
+        if (cmd.startsWith('stat')) return { stdout: '', stderr: '', code: 0 };
+        return { stdout: '', stderr: '', code: 0 };
+      },
+    };
+    const service = new FileBrowseService(tmuxMock as any);
+    const srv = { name: 'remote', type: 'ssh' } as any;
+
+    await expect(
+      service.writeFileContent(srv, '/tmp/vanished.txt', 'content', Date.now()),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+
+  // Review Important 3: replacing an existing remote file via decode-to-tempfile
+  // + `mv -f` used to drop the original file's permission bits (e.g. 0755 ->
+  // the tempfile's default 0644 from the shell redirection). The write command
+  // must chmod the tempfile to the existing target's mode before the mv.
+  it('preserves the existing remote file mode across the mv replace', async () => {
+    const commands: string[] = [];
+    const tmuxMock = {
+      execCommand: async (_srv: unknown, cmd: string) => {
+        commands.push(cmd);
+        if (cmd.includes('base64 -d <')) return { stdout: 'AZITO_WRITE_OK\n', stderr: '', code: 0 };
+        if (cmd.startsWith('stat -c%a')) return { stdout: '755\n', stderr: '', code: 0 };
+        if (cmd.startsWith('stat ')) return { stdout: '1750000000\n', stderr: '', code: 0 };
+        return { stdout: '', stderr: '', code: 0 };
+      },
+    };
+    const service = new FileBrowseService(tmuxMock as any);
+    const srv = { name: 'remote', type: 'ssh' } as any;
+
+    await service.writeFileContent(srv, '/tmp/executable.sh', '#!/bin/sh\necho hi\n');
+
+    const writeCmd = commands.find((c) => c.includes('base64 -d <') && c.includes('mv -f'));
+    expect(writeCmd).toBeDefined();
+    expect(writeCmd).toContain("chmod '755'");
+    // chmod must run on the decoded tempfile before the mv, not after
+    expect(writeCmd!.indexOf('chmod')).toBeLessThan(writeCmd!.indexOf('mv -f'));
+  });
+
+  it('does not attempt chmod when the file is newly created (no existing mode)', async () => {
+    const commands: string[] = [];
+    const tmuxMock = {
+      execCommand: async (_srv: unknown, cmd: string) => {
+        commands.push(cmd);
+        if (cmd.includes('base64 -d <')) return { stdout: 'AZITO_WRITE_OK\n', stderr: '', code: 0 };
+        if (cmd.startsWith('stat -c%a')) return { stdout: '', stderr: '', code: 0 };
+        if (cmd.startsWith('stat ')) return { stdout: '1750000000\n', stderr: '', code: 0 };
+        return { stdout: '', stderr: '', code: 0 };
+      },
+    };
+    const service = new FileBrowseService(tmuxMock as any);
+    const srv = { name: 'remote', type: 'ssh' } as any;
+
+    await service.writeFileContent(srv, '/tmp/new-file.txt', 'content');
+
+    const writeCmd = commands.find((c) => c.includes('base64 -d <') && c.includes('mv -f'));
+    expect(writeCmd).toBeDefined();
+    expect(writeCmd).not.toContain('chmod');
+  });
 });
 
 describe('FileBrowseService.createEntry (local)', () => {
