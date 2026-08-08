@@ -173,6 +173,51 @@ describe('POST /api/tasks/:id/children + POST /api/tasks — task-principal surf
       });
     });
 
+    // Issue #28 third-party review finding 4: `description` was cast to
+    // `string` with no runtime check, so an object body value reached the
+    // SQLite bind unvalidated and 500'd instead of 400ing.
+    it('rejects a non-string, non-null description with 400 (never reaches taskRepo.create)', async () => {
+      const { app, taskTokenRepo } = buildApp(true, db, createCalls);
+      await app.ready();
+      const { token } = taskTokenRepo.issue(1, 1);
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/tasks/1/children',
+        headers: { authorization: `Bearer ${token}` },
+        payload: { title: 'Child task', description: { nested: 'object' } },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: 'description must be a string or null' });
+      expect(createCalls).toHaveLength(0);
+    });
+
+    it('accepts a null description and a string description', async () => {
+      const { app, taskTokenRepo } = buildApp(true, db, createCalls);
+      await app.ready();
+      const { token } = taskTokenRepo.issue(1, 1);
+
+      const resNull = await app.inject({
+        method: 'POST',
+        url: '/api/tasks/1/children',
+        headers: { authorization: `Bearer ${token}` },
+        payload: { title: 'Child task', description: null },
+      });
+      const resString = await app.inject({
+        method: 'POST',
+        url: '/api/tasks/1/children',
+        headers: { authorization: `Bearer ${token}` },
+        payload: { title: 'Child task 2', description: 'a plain description' },
+      });
+
+      expect(resNull.statusCode).toBe(201);
+      expect(resString.statusCode).toBe(201);
+      expect(createCalls).toHaveLength(2);
+      expect(createCalls[0]).toMatchObject({ description: null });
+      expect(createCalls[1]).toMatchObject({ description: 'a plain description' });
+    });
+
     it("a task's token is rejected (403) when addressing a DIFFERENT task's children endpoint", async () => {
       const { app, taskTokenRepo } = buildApp(true, db, createCalls);
       await app.ready();

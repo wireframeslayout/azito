@@ -49,12 +49,28 @@ export class TaskOriginationService {
       createdByKind: origin.kind,
       createdById: origin.id,
     });
-    this.auditLogService.record({
-      actorClass: actor.class,
-      actorId: actor.id ?? null,
-      event: 'task.created',
-      detail: { taskId: id, createdByKind: origin.kind, createdById: origin.id, source: fields.source, inputTrust },
-    });
+    // Best-effort, not part of the creation transaction (Issue #28
+    // third-party review finding 3): the task row above is the thing the
+    // caller actually asked for and it already committed successfully by
+    // this point. Letting an audit-write failure propagate up and turn into
+    // an error response would leave the caller believing creation failed
+    // when it didn't — the task now exists, so a client that retries on
+    // that error produces a duplicate task (the exact symptom this fix
+    // closes). AuditLogService/its repository may be a different DB
+    // connection than taskRepo (or, in principle, a different backend
+    // entirely) — creation success must never depend on the audit
+    // subsystem's health. A failed audit write is logged for operator
+    // visibility instead of being allowed to fail the request.
+    try {
+      this.auditLogService.record({
+        actorClass: actor.class,
+        actorId: actor.id ?? null,
+        event: 'task.created',
+        detail: { taskId: id, createdByKind: origin.kind, createdById: origin.id, source: fields.source, inputTrust },
+      });
+    } catch (err) {
+      console.error(`[TaskOriginationService] audit log write failed for task ${id} (task creation still succeeded):`, err);
+    }
     return id;
   }
 }

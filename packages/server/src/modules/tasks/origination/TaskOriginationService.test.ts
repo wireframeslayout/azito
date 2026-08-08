@@ -101,4 +101,24 @@ describe('TaskOriginationService.create', () => {
     const id = service.create(baseFields(), { kind: 'operator', id: null }, { class: 'operator' });
     expect(id).toBe(99);
   });
+
+  // Issue #28 third-party review finding 3: audit-log failure must not fail
+  // task creation (a caller retrying on an error response after the task
+  // ALREADY committed would create a duplicate task).
+  it('returns the created id (as a success) even when the audit log write throws', () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const taskRepo = { create: vi.fn(() => 99) } as unknown as ITaskRepository;
+      const auditLogService = { record: vi.fn(() => { throw new Error('audit db unavailable'); }) } as unknown as AuditLogService;
+      const service = new TaskOriginationService(taskRepo, auditLogService);
+
+      const id = service.create(baseFields(), { kind: 'operator', id: null }, { class: 'operator' });
+
+      expect(id).toBe(99);
+      expect(taskRepo.create).toHaveBeenCalledTimes(1);
+      expect(consoleErrorSpy).toHaveBeenCalled();
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
 });

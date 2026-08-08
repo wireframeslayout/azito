@@ -5,20 +5,55 @@ import type { SubagentConfig } from '../units/Unit';
 import type { ITaskTokenRepository } from './tokens/TaskToken';
 
 /**
- * Terminal statuses that must revoke every outstanding task_tokens row for
- * the task (Issue #28 design v3 §2: "失効はリポジトリの状態遷移 API 1箇所に
- * 集約"). Enforced by {@link SqliteTaskRepository.revokeIfTerminal}, the
- * single internal helper every status-writing method (updateStatus(),
- * update(), consumePendingApproval()) routes through in the same
- * transaction as its status write — every one of the ~25 scattered
+ * Statuses that must revoke every outstanding task_tokens row for the task
+ * (Issue #28 design v3 §2: "失効はリポジトリの状態遷移 API 1箇所に集約").
+ * Enforced by {@link SqliteTaskRepository.revokeIfTokenRevokingStatus}, the single
+ * internal helper every status-writing method (updateStatus(), update(),
+ * consumePendingApproval()) routes through in the same transaction as its
+ * status write — every one of the ~25 scattered
  * `taskRepo.updateStatus(...)`/`taskRepo.update(..., { status })` call sites
  * across PhaseLoopRunner/ExecuteTaskUseCase/RecoverStuckTasksUseCase/units
  * routes benefits automatically, and none of them needs to know task_tokens
  * exists. (recordExecutionGateBlock()/preApproveExecution() never write a
  * terminal status — see their own doc comments on ITaskRepository — so they
  * do not need this helper.)
+ *
+ * NOT the same set as "terminal status" (renamed from
+ * TERMINAL_TASK_STATUSES — Issue #28 third-party review finding 1): `review`
+ * and `failed` are both statuses a human can resume from via
+ * `ExecuteTaskUseCase.followUp()` (units routes' `/api/units/:id/follow-up`,
+ * also reachable through the answer-submit and plan-feedback flows), which
+ * — when the task's tmux window is still alive, the common case for both —
+ * resumes onto that SAME window without minting a new token (design v3 §2:
+ * "resume onto an existing window never rotates"). Revoking on a status the
+ * task can still be resumed from would hand that resumed pane a dead token
+ * and 401 every authorized call it makes.
+ *   - `review`: the success terminal of a normal run. Follow-up on a
+ *     `review` task is the PRIMARY way a human continues it (feedback,
+ *     more work) — this is not an edge case.
+ *   - `failed`: also follow-up-resumable in practice. The purpose-built
+ *     `POST /api/tasks/:id/retry` path explicitly clears `tmuxWindow` before
+ *     resetting to `open`, so it always gets a fresh window + token and
+ *     never depends on this set either way — but most `failed` transitions
+ *     in ExecuteTaskUseCase/PhaseLoopRunner do NOT clear `tmuxWindow`, and
+ *     the frontend's follow-up comment box is enabled for `failed` exactly
+ *     like it is for `review` (`TaskLogView.tsx`'s `canComment` excludes
+ *     only `in_progress`/`open`). So a `failed` task with a live window hits
+ *     the identical resume-onto-existing-window path as `review` and must
+ *     be excluded for the same reason.
+ *   - `done`/`archived`: neither is resumed onto a live window. `done` is
+ *     not reachable through the normal completion flow at all (that always
+ *     lands on `review` — see PhaseLoopRunner.finalize()); `archived` always
+ *     clears `tmuxWindow` in the same write that sets the status (tasks
+ *     routes' archive handler). Revoking here can never break a resume.
+ *
+ * A revoked token's authority is narrow (a handful of read-only,
+ * own-task-scoped routes — see routeAuth.ts), so keeping it alive through
+ * `review`/`failed` is not a meaningful risk increase; it is fully retired
+ * the moment the task reaches a true terminal state (`done`/`archived`) or
+ * is deleted.
  */
-const TERMINAL_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set(['review', 'done', 'failed', 'archived']);
+const TOKEN_REVOKING_STATUSES: ReadonlySet<TaskStatus> = new Set(['done', 'archived']);
 
 interface TaskRow {
   id: number;
@@ -226,7 +261,7 @@ export class SqliteTaskRepository implements ITaskRepository {
       // status here — a write that leaves status untouched can't newly
       // terminate it, and revoking on every unrelated field write (e.g. a
       // plain agentSessionId update) would just be dead work.
-      if (data.status !== undefined) this.revokeIfTerminal(id, data.status);
+      if (data.status !== undefined) this.revokeIfTokenRevokingStatus(id, data.status);
     });
     run();
   }
@@ -271,12 +306,14 @@ export class SqliteTaskRepository implements ITaskRepository {
   consumePendingApproval(id: number, fields: { status?: TaskStatus; executionApprovedFingerprintHash?: string }): boolean {
     const run = this.db.transaction(() => {
       const result = this.consumePendingApprovalStmt.run(fields.status ?? null, fields.executionApprovedFingerprintHash ?? null, id);
-      // A deny decision can land the task on a terminal status (e.g.
-      // 'failed'/'archived' — see ExecutionApprovalDecision.ts's denyStatus)
-      // in this same guarded UPDATE, never through updateStatus(). Route it
-      // through the same revocation helper so that path isn't a token-leak
-      // gap — see the doc comment on TERMINAL_TASK_STATUSES above.
-      if (result.changes > 0 && fields.status !== undefined) this.revokeIfTerminal(id, fields.status);
+      // A deny decision can land the task on 'failed'/'archived' (see
+      // ExecutionApprovalDecision.ts's denyStatus) in this same guarded
+      // UPDATE, never through updateStatus(). Route it through the same
+      // revocation helper regardless — only 'archived' actually revokes
+      // (see the doc comment on TOKEN_REVOKING_STATUSES above), but every
+      // status-writing path must go through this chokepoint so none of them
+      // has to know which statuses revoke.
+      if (result.changes > 0 && fields.status !== undefined) this.revokeIfTokenRevokingStatus(id, fields.status);
       return result.changes > 0;
     });
     return run();
@@ -318,20 +355,20 @@ export class SqliteTaskRepository implements ITaskRepository {
   updateStatus(id: number, status: TaskStatus): void {
     const run = this.db.transaction(() => {
       this.updateStatusStmt.run(status, id);
-      this.revokeIfTerminal(id, status);
+      this.revokeIfTokenRevokingStatus(id, status);
     });
     run();
   }
 
   /**
-   * Single internal chokepoint for terminal-status token revocation — see
-   * the doc comment on TERMINAL_TASK_STATUSES above. Callers MUST invoke
+   * Single internal chokepoint for token revocation on a status write — see
+   * the doc comment on TOKEN_REVOKING_STATUSES above. Callers MUST invoke
    * this inside the same `this.db.transaction(...)` as the status-writing
    * UPDATE it follows, so a crash between the two can never leave a
-   * terminal status with live tokens.
+   * revoking status with live tokens.
    */
-  private revokeIfTerminal(id: number, status: TaskStatus): void {
-    if (TERMINAL_TASK_STATUSES.has(status)) {
+  private revokeIfTokenRevokingStatus(id: number, status: TaskStatus): void {
+    if (TOKEN_REVOKING_STATUSES.has(status)) {
       this.taskTokenRepo.revokeAllForTask(id, `task_status:${status}`);
     }
   }

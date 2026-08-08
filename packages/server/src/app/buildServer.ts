@@ -43,7 +43,7 @@ import systemRoutes from '../modules/system/routes';
 
 import { createTokenVerifier } from '../modules/servers/auth/tokenAuth';
 import { resolvePrincipal } from '../shared/auth/resolvePrincipal';
-import { evaluateRouteAuth } from '../shared/auth/routeAuth';
+import { evaluateRouteAuth, UNMATCHED_ROUTE } from '../shared/auth/routeAuth';
 import { resolveUnitId } from '../modules/tasks/execution/TaskExecutionEnv';
 import { resolvePhaseSidekick } from '../modules/sidekicks/resolvePhaseSidekick';
 import type { Principal } from '../shared/auth/Principal';
@@ -283,10 +283,15 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
         // request.url — that includes the raw query string, which can carry
         // arbitrary caller-supplied values (search terms, tokens pasted into
         // a query param by mistake, etc.) into audit_log (Issue #28
-        // third-party review finding 3). Fall back to request.url only if
-        // routing somehow didn't populate routeOptions (defensive; should
-        // not happen for a matched request reaching this hook).
-        detail: { operation, method: request.method, url: request.routeOptions.url ?? request.url },
+        // third-party review finding 3). An UNMATCHED route (no route at all
+        // — routeOptions.url is undefined) falls back to the fixed
+        // UNMATCHED_ROUTE placeholder, never request.url: the raw URL here
+        // is fully caller-controlled (an unmatched path always 403s before
+        // this point) and varying its query string on every probe would
+        // otherwise defeat AuditLogService's flood dedup, which keys on the
+        // full JSON-serialized `detail` (Issue #28 third-party review
+        // finding 2 — a later round on the same file).
+        detail: { operation, method: request.method, url: request.routeOptions.url ?? UNMATCHED_ROUTE },
       });
       if (scopedAuthEnabled) {
         return reply.status(403).send({ error: 'operator_required', operation });

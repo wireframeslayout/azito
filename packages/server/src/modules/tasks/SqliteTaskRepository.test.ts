@@ -399,15 +399,19 @@ describe('SqliteTaskRepository.preApproveExecution (task/328 follow-up)', () => 
   });
 });
 
-// Terminal-status token revocation (Issue #28 third-party review finding 1):
-// updateStatus() was the ONLY status-writing method that revoked outstanding
-// task_tokens on a terminal status. update() (used by, e.g., archive routes
-// and async-failure handlers) and consumePendingApproval() (used by deny
-// decisions, which can land on 'failed'/'archived') could each write a
-// terminal status while leaving tokens live. These tests exercise the real
-// SqliteTaskTokenRepository (not a mock) to prove every status-writing path
-// now revokes in the same transaction as its status write.
-describe('SqliteTaskRepository terminal-status token revocation (Issue #28 review finding 1)', () => {
+// Token-revoking-status revocation (Issue #28 third-party review finding 1,
+// design v3 §2, then corrected by a later third-party review round — see
+// TOKEN_REVOKING_STATUSES' doc comment on SqliteTaskRepository.ts):
+// updateStatus() was originally the ONLY status-writing method that revoked
+// outstanding task_tokens on a terminal status. update() (used by, e.g.,
+// archive routes and async-failure handlers) and consumePendingApproval()
+// (used by deny decisions, which can land on 'failed'/'archived') could each
+// write such a status while leaving tokens live. These tests exercise the
+// real SqliteTaskTokenRepository (not a mock) to prove every status-writing
+// path revokes in the same transaction as its status write — AND that
+// 'review'/'failed' (both follow-up-resumable onto a still-live tmux window)
+// are deliberately excluded, so a resumed pane never inherits a dead token.
+describe('SqliteTaskRepository token-revoking-status revocation (Issue #28 review finding 1)', () => {
   let db: SqliteDatabase;
   let repo: SqliteTaskRepository;
   let tokenRepo: SqliteTaskTokenRepository;
@@ -461,32 +465,32 @@ describe('SqliteTaskRepository terminal-status token revocation (Issue #28 revie
     repo.updateStatus(taskId, 'running');
   });
 
-  it('updateStatus() to a terminal status revokes every active token (baseline)', () => {
+  it('updateStatus() to a token-revoking status revokes every active token (baseline)', () => {
     const { token } = tokenRepo.issue(taskId, 1);
     const secret = token.split('.')[3];
     expect(tokenRepo.verify(taskId, secret)).toBe(true);
 
-    repo.updateStatus(taskId, 'failed');
+    repo.updateStatus(taskId, 'done');
 
     expect(tokenRepo.verify(taskId, secret)).toBe(false);
   });
 
-  it('update({ status: "failed" }) revokes every active token — the read-then-write path archive/async-failure handlers use', () => {
+  it('update({ status: "archived" }) revokes every active token — the read-then-write path archive handlers use', () => {
     const { token } = tokenRepo.issue(taskId, 1);
     const secret = token.split('.')[3];
     expect(tokenRepo.verify(taskId, secret)).toBe(true);
-
-    repo.update(taskId, { status: 'failed' });
-
-    expect(tokenRepo.verify(taskId, secret)).toBe(false);
-    expect(repo.findById(taskId)?.status).toBe('failed');
-  });
-
-  it('update({ status: "archived" }) revokes every active token', () => {
-    const { token } = tokenRepo.issue(taskId, 1);
-    const secret = token.split('.')[3];
 
     repo.update(taskId, { status: 'archived' });
+
+    expect(tokenRepo.verify(taskId, secret)).toBe(false);
+    expect(repo.findById(taskId)?.status).toBe('archived');
+  });
+
+  it('update({ status: "done" }) revokes every active token', () => {
+    const { token } = tokenRepo.issue(taskId, 1);
+    const secret = token.split('.')[3];
+
+    repo.update(taskId, { status: 'done' });
 
     expect(tokenRepo.verify(taskId, secret)).toBe(false);
   });
@@ -500,7 +504,26 @@ describe('SqliteTaskRepository terminal-status token revocation (Issue #28 revie
     expect(tokenRepo.verify(taskId, secret)).toBe(true);
   });
 
-  it('consumePendingApproval() landing on a terminal deny status revokes every active token', () => {
+  it("updateStatus() to 'review' leaves active tokens alone — review is the success terminal a human resumes from via follow-up, onto the same (still-token-bearing) tmux window", () => {
+    const { token } = tokenRepo.issue(taskId, 1);
+    const secret = token.split('.')[3];
+
+    repo.updateStatus(taskId, 'review');
+
+    expect(tokenRepo.verify(taskId, secret)).toBe(true);
+  });
+
+  it("update({ status: 'failed' }) leaves active tokens alone — most failure paths keep tmuxWindow alive and the follow-up comment box is enabled for 'failed' exactly like it is for 'review'", () => {
+    const { token } = tokenRepo.issue(taskId, 1);
+    const secret = token.split('.')[3];
+
+    repo.update(taskId, { status: 'failed' });
+
+    expect(tokenRepo.verify(taskId, secret)).toBe(true);
+    expect(repo.findById(taskId)?.status).toBe('failed');
+  });
+
+  it("consumePendingApproval() landing on 'failed' via a deny decision leaves active tokens alone (same reasoning as the update() case above)", () => {
     repo.updateStatus(taskId, 'pending_approval');
     const { token } = tokenRepo.issue(taskId, 1);
     const secret = token.split('.')[3];
@@ -509,11 +532,24 @@ describe('SqliteTaskRepository terminal-status token revocation (Issue #28 revie
     const consumed = repo.consumePendingApproval(taskId, { status: 'failed' });
 
     expect(consumed).toBe(true);
-    expect(tokenRepo.verify(taskId, secret)).toBe(false);
+    expect(tokenRepo.verify(taskId, secret)).toBe(true);
     expect(repo.findById(taskId)?.status).toBe('failed');
   });
 
-  it('consumePendingApproval() approving into a non-terminal status leaves active tokens alone', () => {
+  it("consumePendingApproval() landing on 'archived' via a deny decision (e.g. a restore denial) revokes every active token", () => {
+    repo.updateStatus(taskId, 'pending_approval');
+    const { token } = tokenRepo.issue(taskId, 1);
+    const secret = token.split('.')[3];
+    expect(tokenRepo.verify(taskId, secret)).toBe(true);
+
+    const consumed = repo.consumePendingApproval(taskId, { status: 'archived' });
+
+    expect(consumed).toBe(true);
+    expect(tokenRepo.verify(taskId, secret)).toBe(false);
+    expect(repo.findById(taskId)?.status).toBe('archived');
+  });
+
+  it('consumePendingApproval() approving into a non-revoking status leaves active tokens alone', () => {
     repo.updateStatus(taskId, 'pending_approval');
     const { token } = tokenRepo.issue(taskId, 1);
     const secret = token.split('.')[3];

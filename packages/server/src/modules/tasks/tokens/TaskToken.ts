@@ -33,7 +33,7 @@ export interface ITaskTokenRepository {
    * updateStatus()/delete() in the same DB transaction as the task write —
    * never call this directly from a route/use-case to represent a task
    * status transition; add the transition to the task repository's
-   * TERMINAL_TASK_STATUSES/delete() instead so every call site benefits
+   * TOKEN_REVOKING_STATUSES/delete() instead so every call site benefits
    * automatically. Returns the number of rows revoked.
    */
   revokeAllForTask(taskId: number, reason: string): number;

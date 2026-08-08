@@ -8,6 +8,10 @@ import { UnitTypeLoader } from '../modules/sidekicks/UnitTypeLoader';
 import phasePromptsRoutes from '../modules/prompt/routes';
 import type { RenderSkillPromptUseCase } from '../modules/prompt/RenderSkillPromptUseCase';
 import type { SidekickPackageLoader } from '../modules/sidekicks/SidekickPackageLoader';
+import { openDatabase, type SqliteDatabase } from '../shared/db/Database';
+import { SqliteTaskRepository } from '../modules/tasks/SqliteTaskRepository';
+import { SqliteTaskTokenRepository } from '../modules/tasks/tokens/SqliteTaskTokenRepository';
+import type { Task } from '../modules/tasks/Task';
 
 /**
  * Issue #28 修正1: harness/skills/azt-<phase> 配下の SKILL.md の curl は
@@ -115,6 +119,112 @@ describe('task pane env with AZITO_TASK_TOKEN only (Issue #28 fix 1: harness ski
     });
 
     expect(res.statusCode).toBe(403);
+
+    await app.close();
+  });
+});
+
+/**
+ * Issue #28 third-party review finding 1 (fix): a task's token must survive
+ * the transition to 'review' — the success terminal a human resumes from via
+ * `POST /api/units/:id/follow-up`, onto the SAME tmux window that already
+ * holds this token (design v3 §2: "resume onto an existing window never
+ * rotates"). Revoking on 'review' would hand that resumed pane a dead token
+ * and 401 on the very next authorized call it makes — e.g. the
+ * `azt-plan`/`azt-implement`/etc. skill's `GET /api/phase-prompts/:phase`
+ * curl this suite exercises.
+ *
+ * Unlike the mocked-verify suite above, this one runs the REAL
+ * SqliteTaskRepository + SqliteTaskTokenRepository so the status transition
+ * itself (not a stand-in) is what proves the token is still valid.
+ */
+describe("task token survives a 'review' transition (Issue #28 review finding 1 fix)", () => {
+  function buildRealApp(): { app: FastifyInstance; db: SqliteDatabase; taskRepo: SqliteTaskRepository; taskTokenRepo: SqliteTaskTokenRepository; taskId: number } {
+    const db = openDatabase(':memory:');
+    const taskTokenRepo = new SqliteTaskTokenRepository(db);
+    const taskRepo = new SqliteTaskRepository(db, taskTokenRepo);
+
+    db.prepare("INSERT INTO projects (id, name, slug, default_branch) VALUES (1, 'P', 'p', 'main')").run();
+    const taskId = taskRepo.create({
+      projectId: 1,
+      unitId: null,
+      serverName: null,
+      title: 'Test task',
+      description: null,
+      status: 'running',
+      currentPhase: null,
+      selfReviewCount: 0,
+      priority: 0,
+      tmuxWindow: 'task-1',
+      selfReviewMaxAttempts: null,
+      requirePlanApproval: true,
+      source: 'local',
+      sourceRef: null,
+      worktreePath: null,
+      worktreeBranch: null,
+      baseBranch: null,
+      targetBranch: null,
+      skipPr: false,
+      workingDirectory: null,
+      branch: null,
+      planMarkdown: null,
+      pendingQuestions: null,
+      changedFiles: null,
+      summaryJson: null,
+      prUrl: null,
+      agentSessionId: null,
+      reviewSubagent: null,
+      implementSubagent: null,
+      inputTrust: 'trusted',
+      executionApprovedFingerprintHash: null,
+      pendingOperation: null,
+      pendingOperationWindowId: null,
+      pendingOperationPriorStatus: null,
+      createdByKind: 'operator',
+      createdById: null,
+    } as Omit<Task, 'id' | 'createdAt' | 'updatedAt'>);
+
+    const app = Fastify();
+    app.addHook('onRequest', async (request, reply) => {
+      if (!request.url.startsWith('/api')) return;
+      const principal = resolvePrincipal(request.headers.authorization, { verifyUiToken: () => false, taskTokenRepo });
+      if (!principal) return reply.status(401).send({ error: 'Unauthorized' });
+      request.principal = principal;
+      const { allowed, operation } = evaluateRouteAuth(principal, request);
+      if (!allowed) return reply.status(403).send({ error: 'operator_required', operation });
+    });
+
+    const unitTypeLoader = new UnitTypeLoader();
+    const sidekickLoader = {} as SidekickPackageLoader;
+    const renderSkillPromptUseCase = { render: vi.fn(async () => 'rendered planning prompt') };
+    app.register(phasePromptsRoutes, {
+      sidekickLoader,
+      renderSkillPromptUseCase: renderSkillPromptUseCase as unknown as RenderSkillPromptUseCase,
+      unitTypeLoader,
+    });
+
+    return { app, db, taskRepo, taskTokenRepo, taskId };
+  }
+
+  it('a token issued before the task reaches review still authenticates GET /api/phase-prompts/:phase after followUp-style resume', async () => {
+    const { app, taskRepo, taskTokenRepo, taskId } = buildRealApp();
+    const { token } = taskTokenRepo.issue(taskId, 1);
+
+    // Task completes a run and lands on 'review' — the same call
+    // PhaseLoopRunner.finalize() makes.
+    taskRepo.updateStatus(taskId, 'review');
+
+    // The task pane is resumed via follow-up onto the SAME window (never
+    // rotated), so this is still the only token that pane has. It must
+    // still authenticate a phase-prompts fetch — the exact request the
+    // azt-plan/azt-implement/etc. skill curl issues on resume.
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/phase-prompts/planning?render=skill&task_id=${taskId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.statusCode).toBe(200);
 
     await app.close();
   });

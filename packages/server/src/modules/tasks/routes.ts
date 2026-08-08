@@ -654,6 +654,15 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       if (!title || typeof title !== 'string') {
         return reply.status(400).send({ error: 'title required' });
       }
+      // description was cast straight to `string` with no runtime check
+      // (Issue #28 third-party review finding 4): an object/array/number
+      // body value passed the cast, then reached the SQLite bind as an
+      // unbindable type and 500'd. title/unit_id (below)/base_branch/branch
+      // (validateGitFields) are all already runtime-checked; this closes
+      // the one field that wasn't.
+      if (description !== undefined && description !== null && typeof description !== 'string') {
+        return reply.status(400).send({ error: 'description must be a string or null' });
+      }
       const gitError = validateGitFields(request.body as Record<string, unknown>);
       if (gitError) return reply.status(400).send({ error: gitError });
 
@@ -682,7 +691,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         unitId,
         serverName: null,
         title,
-        description: (description as string) ?? null,
+        description: (description as string | null | undefined) ?? null,
         status: 'open',
         currentPhase: null,
         selfReviewCount: 0,

@@ -38,6 +38,18 @@ export interface RouteAuthDecision {
 }
 
 /**
+ * Placeholder used in place of the raw request URL whenever no route
+ * actually matched (`request.routeOptions.url` is undefined). Falling back
+ * to `request.url` here would put a caller-controlled, query-string-bearing
+ * value into the 403 body's `operation` field AND the audit log's dedup key
+ * (Issue #28 third-party review finding: an unmatched-route probe could vary
+ * its query string on every request to defeat AuditLogService's flood
+ * dedup, which keys on the full JSON-serialized `detail`). A fixed literal
+ * has no such variability.
+ */
+export const UNMATCHED_ROUTE = '<unmatched>';
+
+/**
  * Single evaluation point for "may this principal reach this route" (design
  * v3 §1: "認可の判断構造は claim 評価と同型"). Called from buildServer.ts's
  * onRequest hook after the principal has already been resolved from the
@@ -46,7 +58,7 @@ export interface RouteAuthDecision {
  */
 export function evaluateRouteAuth(principal: Principal, request: FastifyRequest): RouteAuthDecision {
   const requirement = request.routeOptions.config?.auth;
-  const operation = requirement?.operation ?? `${request.routeOptions.method as string} ${request.routeOptions.url ?? request.url}`;
+  const operation = requirement?.operation ?? `${request.routeOptions.method as string} ${request.routeOptions.url ?? UNMATCHED_ROUTE}`;
 
   if (principal.class === 'operator') return { allowed: true, operation };
   if (!requirement) return { allowed: false, operation };
