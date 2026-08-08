@@ -116,4 +116,18 @@ describe('PUT file content route guards', () => {
       allowedRoot: '/workspace/project',
     })).toBe(true);
   });
+
+  // Issue #27 review Critical 2: parent-directory containment alone misses a
+  // save target that is itself a symlink to outside workingDirectory. The
+  // route resolves the target's real path (FileBrowseService
+  // .resolveExistingTargetRealPath — see its own primitive-level tests for
+  // the resolution itself) and re-checks containment on *that*; this is the
+  // containment judgment the route applies to the resolved value.
+  it('rejects a save target whose resolved real path escapes the working directory', () => {
+    const resolvedTargetOfSymlink = '/etc/passwd';
+    expect(isPathContained({
+      target: resolvedTargetOfSymlink,
+      allowedRoot: '/workspace/project',
+    })).toBe(false);
+  });
 });

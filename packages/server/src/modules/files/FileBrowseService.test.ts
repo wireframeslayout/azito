@@ -81,6 +81,41 @@ describe('FileBrowseService shell quoting', () => {
       expect(catCmd).toContain('cat --');
     }
   });
+
+  // Issue #27 review Critical 1: the mtime lookup at the end of the remote
+  // getFileContent() path used to interpolate filePath inside bare double
+  // quotes (`stat -c%Y "${filePath}"`), which lets a path containing
+  // `$(...)` execute as a subshell. Drives a full success path (typeCheck ->
+  // sizeResult -> cat -> mtime) so the mtime command itself is inspected,
+  // not just the first (already-quoted) typeCheck command the two tests
+  // above cover.
+  it('quotes filePath in the mtime lookup command, not raw double-quote interpolation', async () => {
+    const commands: string[] = [];
+    const injectionPath = '/tmp/test$(touch /tmp/pwned).txt';
+    const mock = {
+      commands,
+      execCommand: async (_srv: unknown, cmd: string) => {
+        commands.push(cmd);
+        if (cmd.startsWith('test -f')) return { stdout: 'ok\n', stderr: '', code: 0 };
+        if (cmd.startsWith('stat -c%s') || cmd.includes('stat -f%z')) return { stdout: '5\n', stderr: '', code: 0 };
+        if (cmd.startsWith('cat')) return { stdout: 'hello', stderr: '', code: 0 };
+        // mtime lookup (stat -c%.Y / -c%Y / -f%m chain)
+        return { stdout: '1750000000\n', stderr: '', code: 0 };
+      },
+    };
+    const svc = new FileBrowseService(mock as any);
+    const srv = { type: 'agent', name: 'test', host: 'user@host' };
+
+    const result = await svc.getFileContent(srv as any, injectionPath);
+    expect('mtime' in result && result.mtime).toBe(1750000000 * 1000);
+
+    const mtimeCmd = commands[commands.length - 1];
+    expect(mtimeCmd).toContain("'" + injectionPath.replace(/'/g, "'\\''") + "'");
+    // The raw path must never appear inside a bare double-quoted segment —
+    // that is exactly the shape ("${filePath}") that let $(...) expand.
+    expect(mtimeCmd).not.toContain(`"${injectionPath}"`);
+    expect(mtimeCmd).not.toContain('"');
+  });
 });
 
 describe('FileBrowseService.writeFileContent', () => {
@@ -137,6 +172,90 @@ describe('FileBrowseService.writeFileContent', () => {
     expect(fs.readFileSync(filePath, 'utf-8')).toBe('new content');
     expect(result.mtime).toBeGreaterThanOrEqual(stat.mtimeMs);
   });
+
+  // Issue #27 review Important 3: `Math.abs(stat.mtimeMs - baseMtime) > 1000`
+  // let an external edit that landed within the same second slip through
+  // silently. baseMtime round-trips the exact mtimeMs this service returned
+  // earlier, so the comparison can (and now does) be an exact equality.
+  it('rejects a conflicting edit that landed within the same second (millisecond precision)', async () => {
+    const filePath = path.join(tmpDir, 'same-second.txt');
+    fs.writeFileSync(filePath, 'original');
+    // Pin both mtimes to the same wall-clock second, 800ms apart, so the old
+    // `Math.abs(...) > 1000` tolerance would have let this race through as
+    // "no conflict" — deterministic via utimesSync rather than relying on
+    // two real writeFileSync calls happening to land in different ticks.
+    const baseDate = new Date(2026, 0, 1, 12, 0, 0, 100);
+    fs.utimesSync(filePath, baseDate, baseDate);
+    const staleBaseMtime = fs.statSync(filePath).mtimeMs;
+
+    fs.writeFileSync(filePath, 'raced edit');
+    const racedDate = new Date(2026, 0, 1, 12, 0, 0, 900);
+    fs.utimesSync(filePath, racedDate, racedDate);
+
+    const srv = createLocalServer(tmpDir);
+    await expect(
+      service.writeFileContent(srv, filePath, 'my edit', staleBaseMtime),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+
+  // Issue #27 review Critical 2 (local half): writeFileContent opens with
+  // O_NOFOLLOW so a symlink swapped in at the save target between the
+  // route's containment check and this write cannot redirect the write to
+  // wherever the symlink points.
+  it('refuses to write through a symlink (O_NOFOLLOW)', async () => {
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-outside-'));
+    const outsideFile = path.join(outsideDir, 'secret.txt');
+    fs.writeFileSync(outsideFile, 'original outside content');
+    const linkPath = path.join(tmpDir, 'escape-link.txt');
+    fs.symlinkSync(outsideFile, linkPath);
+    const srv = createLocalServer(tmpDir);
+
+    await expect(
+      service.writeFileContent(srv, linkPath, 'attacker-controlled content'),
+    ).rejects.toMatchObject({ status: 400 });
+    // The symlink target must be untouched.
+    expect(fs.readFileSync(outsideFile, 'utf-8')).toBe('original outside content');
+
+    fs.rmSync(outsideDir, { recursive: true, force: true });
+  });
+});
+
+describe('FileBrowseService.resolveExistingTargetRealPath', () => {
+  let tmpDir: string;
+  const svc = new FileBrowseService({} as any);
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-test-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  // Issue #27 review Critical 2: the containment check the PUT route runs on
+  // the parent directory alone can't see that the save target itself is a
+  // symlink pointing outside workingDirectory. This resolves the target's
+  // real path so the route can re-verify containment on it (see
+  // PathContainment.isPathContained usage in routes.ts).
+  it('resolves a symlinked target to its real (outside) path', async () => {
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-outside-'));
+    const outsideFile = path.join(outsideDir, 'secret.txt');
+    fs.writeFileSync(outsideFile, 'secret');
+    const linkPath = path.join(tmpDir, 'link.txt');
+    fs.symlinkSync(outsideFile, linkPath);
+    const srv = { type: 'local', name: 'local' } as any;
+
+    const resolved = await svc.resolveExistingTargetRealPath(srv, linkPath);
+    expect(resolved).toBe(fs.realpathSync(outsideFile));
+
+    fs.rmSync(outsideDir, { recursive: true, force: true });
+  });
+
+  it('returns null when the target does not exist yet', async () => {
+    const srv = { type: 'local', name: 'local' } as any;
+    const resolved = await svc.resolveExistingTargetRealPath(srv, path.join(tmpDir, 'nope.txt'));
+    expect(resolved).toBeNull();
+  });
 });
 
 describe('FileBrowseService.writeFileContent (remote)', () => {
@@ -146,7 +265,11 @@ describe('FileBrowseService.writeFileContent (remote)', () => {
     const tmuxMock = {
       execCommand: async (_srv: unknown, cmd: string) => {
         commands.push(cmd);
-        // 書き込み後の stat 検証には epoch 秒を返す
+        // デコード+置換コマンドは成功マーカーを返す（Issue #27 review Important 1）
+        if (cmd.includes('base64 -d <') && cmd.includes('AZITO_WRITE_OK')) {
+          return { stdout: 'AZITO_WRITE_OK\n', stderr: '', code: 0 };
+        }
+        // 書き込み後の stat 検証には epoch 秒を返す（%.Y が最初に試される）
         if (cmd.startsWith('stat ')) return { stdout: '1750000000\n', stderr: '', code: 0 };
         return { stdout: '', stderr: '', code: 0 };
       },
@@ -168,8 +291,40 @@ describe('FileBrowseService.writeFileContent (remote)', () => {
       .map((c) => c.slice("printf '%s' '".length, c.indexOf("' >> ")))
       .join('');
     expect(joined).toBe(Buffer.from(content, 'utf-8').toString('base64'));
-    // 最後にデコード + 一時ファイル削除コマンドが実行される
-    expect(commands.some((c) => c.includes('base64 -d <') && c.includes('rm -f'))).toBe(true);
+    // 最後にデコード + mv + 成功マーカー + 一時ファイル削除コマンドが実行される
+    expect(commands.some((c) => c.includes('base64 -d <') && c.includes('mv -f') && c.includes('AZITO_WRITE_OK') && c.includes('rm -f'))).toBe(true);
+    // 一時ファイル名にはリクエストごとの乱数サフィックスが入り、固定名を使わない
+    // （並行保存で互いの一時ファイルを踏みつけないため。Issue #27 review Important 2）
+    expect(commands.some((c) => /\.azito-upload-[0-9a-f]{16}/.test(c))).toBe(true);
+  });
+
+  // Issue #27 review Important 1: the decode command's result used to be
+  // ignored entirely — a failed `base64 -d` could leave the destination
+  // untouched, and the immediately-following stat would still report the
+  // *old* file's mtime as a success. SSH transports always return exit code
+  // 0 (RemoteWorktreeService.hasGitError's documented reason for using a
+  // stdout marker instead), so this asserts the write is judged by the
+  // explicit `AZITO_WRITE_OK` marker in stdout, not by exit code or by the
+  // later stat call succeeding.
+  it('throws when the remote write command reports no success marker', async () => {
+    const tmuxMock = {
+      execCommand: async (_srv: unknown, cmd: string) => {
+        // The decode/mv step "fails" silently (as a real base64/mv error
+        // would under `code: 0` from an SSH transport) — no marker in stdout.
+        if (cmd.includes('base64 -d <')) return { stdout: '', stderr: 'base64: invalid input\n', code: 0 };
+        // The post-write stat would still report the pre-existing file's
+        // mtime as if nothing had gone wrong — this must not be reached as
+        // a source of truth for success.
+        if (cmd.startsWith('stat ')) return { stdout: '1750000000\n', stderr: '', code: 0 };
+        return { stdout: '', stderr: '', code: 0 };
+      },
+    };
+    const service = new FileBrowseService(tmuxMock as any);
+    const srv = { name: 'remote', type: 'ssh' } as any;
+
+    await expect(
+      service.writeFileContent(srv, '/tmp/quiet-failure.txt', 'content'),
+    ).rejects.toMatchObject({ status: 500 });
   });
 });
 

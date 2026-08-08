@@ -9,7 +9,7 @@ import type { IProjectServerRepository } from '../projects/ProjectServer';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { FileBrowseService, FileBrowseError } from './FileBrowseService';
 import type { FileSearchService } from './FileSearchService';
-import { assertDirectoryContained, assertPathContained, PathResolverFactory } from '../git/PathContainment';
+import { assertDirectoryContained, isPathContained, PathResolverFactory } from '../git/PathContainment';
 
 export function sanitizeFileName(raw: string): string {
   const nfc = raw.normalize('NFC');
@@ -284,10 +284,31 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
       const ps = projectServerRepo.find(projectId, srv.name);
       if (!ps?.workingDirectory) return reply.status(400).send({ error: 'Project server has no working directory' });
 
+      let writeTargetPath = filePath;
       try {
         const transport = srv.type !== 'local' ? transportFactory.getTransport(srv) : undefined;
         const parentDir = path.dirname(filePath);
         await assertDirectoryContained(resolverFactory, srv.type, transport, { target: parentDir, allowedRoot: ps.workingDirectory }, 'target path');
+
+        // Parent-directory containment alone doesn't catch a save target
+        // that is itself a symlink pointing outside workingDirectory — the
+        // write would land at the symlink's target. When the target already
+        // exists, resolve its real path and re-verify containment on that
+        // (Issue #27 review Critical 2); a target that doesn't exist yet has
+        // no symlink to escape through, so it's created directly under the
+        // already-contained parent.
+        const existingRealPath = await fileBrowseService.resolveExistingTargetRealPath(srv, filePath);
+        if (existingRealPath != null) {
+          const resolver = resolverFactory.create(srv.type, transport);
+          const resolvedRoot = await resolver.resolveRealPath(ps.workingDirectory);
+          if (!isPathContained({ target: existingRealPath, allowedRoot: resolvedRoot })) {
+            return reply.status(400).send({ error: 'target path escapes the allowed directory' });
+          }
+          // Use the resolved real path — not the original request path — for
+          // the actual write, so the verified path is what's acted on rather
+          // than the pre-verification value (TOCTOU-adjacent discard).
+          writeTargetPath = existingRealPath;
+        }
       } catch (err: unknown) {
         const message = (err as Error).message;
         if (message.includes('escapes the allowed directory') || message.includes('Cannot verify')) {
@@ -299,7 +320,7 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
       try {
         const result = await fileBrowseService.writeFileContent(
           srv,
-          filePath,
+          writeTargetPath,
           content,
           force ? undefined : baseMtime,
         );
