@@ -14,6 +14,7 @@ interface FileContent {
   size: number;
   language: string;
   mtime: number;
+  hash: string;
 }
 
 interface ImageContent {
@@ -162,6 +163,7 @@ function MarkdownFileView({
 interface SaveResponse {
   ok?: boolean;
   mtime?: number;
+  hash?: string;
   error?: string;
   currentMtime?: number;
 }
@@ -201,6 +203,7 @@ export function FilePreviewPanel({
   // closed-over `editedContent` from when handleSave was created.
   const editedContentRef = useRef<string | null>(null);
   const [baseMtime, setBaseMtime] = useState<number | null>(null);
+  const [baseHash, setBaseHash] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('clean');
   const [vimMode, setVimMode] = useState(() => {
     if (window.matchMedia('(max-width: 768px)').matches) return false;
@@ -257,6 +260,7 @@ export function FilePreviewPanel({
         const fc = res as FileContent;
         setFile(fc);
         setBaseMtime(fc.mtime ?? null);
+        setBaseHash(fc.hash ?? null);
       }
     } catch {
       if (seq !== fetchFileRef.current) return;
@@ -293,6 +297,7 @@ export function FilePreviewPanel({
           content,
           projectId,
           baseMtime: force ? undefined : baseMtime,
+          baseHash: force ? undefined : baseHash,
           force,
         }),
       });
@@ -302,7 +307,8 @@ export function FilePreviewPanel({
       }
       if (res.ok && res.mtime != null) {
         setBaseMtime(res.mtime);
-        setFile(prev => prev ? { ...prev, content, mtime: res.mtime! } : prev);
+        if (res.hash != null) setBaseHash(res.hash);
+        setFile(prev => prev ? { ...prev, content, mtime: res.mtime!, hash: res.hash ?? prev.hash } : prev);
         const hasNewerEdits = editedContentRef.current !== editedContentAtSend;
         if (hasNewerEdits) {
           // The user edited again after this save was dispatched — keep the panel dirty so the newer
@@ -322,7 +328,7 @@ export function FilePreviewPanel({
     } catch {
       setSaveStatus('dirty');
     }
-  }, [file, editedContent, serverName, filePath, projectId, baseMtime, saveStatus]);
+  }, [file, editedContent, serverName, filePath, projectId, baseMtime, baseHash, saveStatus]);
 
   const handleReload = useCallback(() => {
     fetchFile();

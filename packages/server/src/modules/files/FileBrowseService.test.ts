@@ -1,9 +1,11 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { createHash } from 'crypto';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FileBrowseService, FileBrowseError } from './FileBrowseService';
 import type { ServerConfig } from '../servers/Server';
+import { shellQuote as sq } from '../../shared/shellQuote';
 
 function createLocalServer(dir: string): ServerConfig {
   return {
@@ -196,6 +198,43 @@ describe('FileBrowseService.writeFileContent', () => {
     await expect(
       service.writeFileContent(srv, filePath, 'my edit', staleBaseMtime),
     ).rejects.toMatchObject({ status: 409 });
+  });
+
+  // Issue #27 review Important 3: content-hash optimistic lock. On environments with only
+  // second-precision mtime the mtime check alone cannot detect an external edit that landed within
+  // the same second; a sha256 comparison of the actual bytes catches it regardless of timing.
+  it('returns 409 on hash conflict even when mtime matches', async () => {
+    const filePath = path.join(tmpDir, 'hash-conflict.txt');
+    fs.writeFileSync(filePath, 'original');
+    const stat = fs.statSync(filePath);
+    const srv = createLocalServer(tmpDir);
+    const staleHash = createHash('sha256').update('stale content the reader actually saw', 'utf-8').digest('hex');
+    await expect(
+      service.writeFileContent(srv, filePath, 'my edit', stat.mtimeMs, staleHash),
+    ).rejects.toMatchObject({ status: 409 });
+    // Must not have been overwritten.
+    expect(fs.readFileSync(filePath, 'utf-8')).toBe('original');
+  });
+
+  it('writes successfully when the content hash matches', async () => {
+    const filePath = path.join(tmpDir, 'hash-match.txt');
+    fs.writeFileSync(filePath, 'original');
+    const srv = createLocalServer(tmpDir);
+    const currentHash = createHash('sha256').update('original', 'utf-8').digest('hex');
+    const result = await service.writeFileContent(srv, filePath, 'new content', undefined, currentHash);
+    expect(fs.readFileSync(filePath, 'utf-8')).toBe('new content');
+    expect(result.hash).toBe(createHash('sha256').update('new content', 'utf-8').digest('hex'));
+  });
+
+  it('force bypasses both the mtime and hash conflict checks', async () => {
+    const filePath = path.join(tmpDir, 'force.txt');
+    fs.writeFileSync(filePath, 'original');
+    const srv = createLocalServer(tmpDir);
+    // Stale on both counts, but writeFileContent is called the way routes.ts calls it under
+    // `force: true` — baseMtime/baseHash simply omitted rather than passed-and-ignored.
+    const result = await service.writeFileContent(srv, filePath, 'forced edit');
+    expect(fs.readFileSync(filePath, 'utf-8')).toBe('forced edit');
+    expect(result.hash).toBe(createHash('sha256').update('forced edit', 'utf-8').digest('hex'));
   });
 
   // Issue #27 review Critical 2 (local half): writeFileContent opens with
@@ -394,6 +433,125 @@ describe('FileBrowseService.writeFileContent (remote)', () => {
     const writeCmd = commands.find((c) => c.includes('base64 -d <') && c.includes('mv -f'));
     expect(writeCmd).toBeDefined();
     expect(writeCmd).not.toContain('chmod');
+  });
+
+  // Issue #27 review Important 3 (remote content-hash lock): on hosts whose `stat` only reports
+  // whole-second mtime, a baseHash mismatch must still be caught via sha256sum/shasum even when the
+  // mtime check would pass (same-second race).
+  it('returns 409 on remote hash conflict, without performing the write', async () => {
+    const commands: string[] = [];
+    const tmuxMock = {
+      execCommand: async (_srv: unknown, cmd: string) => {
+        commands.push(cmd);
+        if (cmd.startsWith('sha256sum') || cmd.includes('shasum -a 256')) {
+          return { stdout: `${'a'.repeat(64)}  /tmp/hash-conflict.txt\n`, stderr: '', code: 0 };
+        }
+        if (cmd.startsWith('stat ')) return { stdout: '1750000000\n', stderr: '', code: 0 };
+        // A real base64 -d / mv should never be reached — fail loudly if it is.
+        if (cmd.includes('base64 -d <')) return { stdout: 'AZITO_WRITE_OK\n', stderr: '', code: 0 };
+        return { stdout: '', stderr: '', code: 0 };
+      },
+    };
+    const service = new FileBrowseService(tmuxMock as any);
+    const srv = { name: 'remote', type: 'ssh' } as any;
+    const staleHash = 'b'.repeat(64); // does not match the 'a'.repeat(64) the mock reports as current
+
+    await expect(
+      service.writeFileContent(srv, '/tmp/hash-conflict.txt', 'new content', undefined, staleHash),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(commands.some((c) => c.includes('base64 -d <') && c.includes('mv -f'))).toBe(false);
+  });
+
+  it('writes successfully when the remote content hash matches', async () => {
+    const currentHash = createHash('sha256').update('original', 'utf-8').digest('hex');
+    const tmuxMock = {
+      execCommand: async (_srv: unknown, cmd: string) => {
+        if (cmd.startsWith('sha256sum') || cmd.includes('shasum -a 256')) {
+          return { stdout: `${currentHash}  /tmp/hash-match.txt\n`, stderr: '', code: 0 };
+        }
+        if (cmd.includes('base64 -d <')) return { stdout: 'AZITO_WRITE_OK\n', stderr: '', code: 0 };
+        if (cmd.startsWith('stat ')) return { stdout: '1750000000\n', stderr: '', code: 0 };
+        return { stdout: '', stderr: '', code: 0 };
+      },
+    };
+    const service = new FileBrowseService(tmuxMock as any);
+    const srv = { name: 'remote', type: 'ssh' } as any;
+
+    const result = await service.writeFileContent(srv, '/tmp/hash-match.txt', 'new content', undefined, currentHash);
+    expect(result.hash).toBe(createHash('sha256').update('new content', 'utf-8').digest('hex'));
+  });
+
+  // Issue #27 review Important 3: when neither sha256sum nor shasum is available on the remote host,
+  // hash verification must be treated as "unavailable", not "matches" — the save proceeds on the
+  // (already-run) mtime check alone rather than either blocking every save on that host or silently
+  // skipping conflict detection with a false "verified" signal.
+  it('falls back to mtime-only conflict detection when no remote hash tool is available', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const tmuxMock = {
+      execCommand: async (_srv: unknown, cmd: string) => {
+        // Both sha256sum and shasum fail/are absent — empty stdout, as `2>/dev/null || ...` yields
+        // when neither tool exists.
+        if (cmd.startsWith('sha256sum') || cmd.includes('shasum -a 256')) {
+          return { stdout: '', stderr: '', code: 0 };
+        }
+        if (cmd.includes('base64 -d <')) return { stdout: 'AZITO_WRITE_OK\n', stderr: '', code: 0 };
+        if (cmd.startsWith('stat ')) return { stdout: '1750000000\n', stderr: '', code: 0 };
+        return { stdout: '', stderr: '', code: 0 };
+      },
+    };
+    const service = new FileBrowseService(tmuxMock as any);
+    const srv = { name: 'remote', type: 'ssh' } as any;
+
+    const result = await service.writeFileContent(srv, '/tmp/no-hash-tool.txt', 'new content', undefined, 'c'.repeat(64));
+    expect(result.mtime).toBe(1750000000 * 1000);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('sha256sum/shasum unavailable'));
+    warnSpy.mockRestore();
+  });
+
+  // Critical fix (nested single-quote breakage in the trap): the trap command must be built by
+  // shellQuote()-ing the fully-assembled `rm -f <upload> <decoded>` string as one unit, not by
+  // interpolating already-quoted (single-quoted) upload/decoded tokens inside a hand-written outer
+  // single-quoted literal — POSIX single quotes do not nest, so the outer quote would close at the
+  // first `'` inside a path, letting trailing bytes of a containment-passing path (e.g. containing
+  // `;`, `'`, or `#`) execute as shell syntax when the trap fires.
+  it('quotes the trap cleanup command as a single unit even when the path contains shell metacharacters', async () => {
+    const commands: string[] = [];
+    const tmuxMock = {
+      execCommand: async (_srv: unknown, cmd: string) => {
+        commands.push(cmd);
+        if (cmd.includes('base64 -d <')) return { stdout: 'AZITO_WRITE_OK\n', stderr: '', code: 0 };
+        if (cmd.startsWith('stat ')) return { stdout: '1750000000\n', stderr: '', code: 0 };
+        return { stdout: '', stderr: '', code: 0 };
+      },
+    };
+    const service = new FileBrowseService(tmuxMock as any);
+    const srv = { name: 'remote', type: 'ssh' } as any;
+    // A path with a single quote, a semicolon, a space and a `#` — all legal path bytes on POSIX,
+    // and none of them rejected by containment validation (which only cares about `..`/symlink escape,
+    // not shell metacharacters — the shell-safety burden falls entirely on shellQuote()).
+    const trickyPath = "/tmp/it's a; dangerous #path/file.txt";
+
+    await service.writeFileContent(srv, trickyPath, 'content');
+
+    const writeCmd = commands.find((c) => c.includes('base64 -d <') && c.includes('mv -f'));
+    expect(writeCmd).toBeDefined();
+
+    // Recover the exact (already shellQuote()-wrapped) upload/decoded tokens the command used for the
+    // `wc -c` / `base64 -d` steps, then assert the trap argument is exactly `sq(cleanup)` built from
+    // those same tokens — i.e. the cleanup string is quoted as one unit, not assembled by nesting two
+    // pre-quoted tokens inside a hand-written outer pair of single quotes.
+    const uploadToken = writeCmd!.match(/wc -c < (.+?) \| tr -d/)?.[1];
+    const decodedToken = writeCmd!.match(/base64 -d < .+? > (.+?)(?: &&| >)/)?.[1];
+    expect(uploadToken).toBeDefined();
+    expect(decodedToken).toBeDefined();
+    const expectedCleanup = `rm -f ${uploadToken} ${decodedToken}`;
+    expect(writeCmd).toContain(`trap ${sq(expectedCleanup)} EXIT`);
+
+    // Guard against the specific regression: the buggy version produced
+    // `trap 'rm -f '\''...it'\''s a...'\'' '\''...'\''' EXIT` where an *unescaped* `'` from the tricky
+    // path terminates the trap's quoting early, right after `it`. That unescaped-quote-followed-by-plain-text
+    // pattern must not appear.
+    expect(writeCmd).not.toMatch(/trap 'rm -f '\\''\/tmp\/it' /);
   });
 
   // Review follow-up (chunk verification): a chunk append that silently drops or truncates bytes must

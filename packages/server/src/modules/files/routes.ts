@@ -277,6 +277,7 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
       if (typeof body.content !== 'string') return reply.status(400).send({ error: 'content is required' });
       const content = body.content;
       const baseMtime = typeof body.baseMtime === 'number' ? body.baseMtime : undefined;
+      const baseHash = typeof body.baseHash === 'string' ? body.baseHash : undefined;
       const force = body.force === true;
       const projectId = typeof body.projectId === 'number' ? body.projectId : NaN;
       if (isNaN(projectId)) return reply.status(400).send({ error: 'projectId is required' });
@@ -336,8 +337,9 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
           writeTargetPath,
           content,
           force ? undefined : baseMtime,
+          force ? undefined : baseHash,
         );
-        return { ok: true, mtime: result.mtime };
+        return { ok: true, mtime: result.mtime, hash: result.hash };
       } catch (err: unknown) {
         if (err instanceof FileBrowseError) {
           if (err.status === 409) {

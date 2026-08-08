@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate, useLocation, matchPath, useBlocker } from 'react-router-dom';
-import type { BlockerFunction } from 'react-router-dom';
+import { useNavigate, useLocation, matchPath } from 'react-router-dom';
 import { paths, matchWorkspacePath } from '../paths';
 import { api } from '../api/client';
 import ContextMenu, { useContextMenu, type ContextMenuItem } from '../components/ContextMenu';
@@ -365,39 +364,14 @@ function WorkspaceInner() {
     return () => window.removeEventListener('beforeunload', handler);
   }, [hasDirtyTabs]);
 
-  // In-app router-transition guard: `beforeunload` above only fires on a
-  // full browser navigation/reload/close, not on a React Router client-side
-  // transition (e.g. the sidebar navigating to /projects or /units while an
-  // editor tab is dirty) — that discarded edits with no confirmation at all
-  // (Issue #27 review Important 4). `useBlocker` requires a data router
-  // (this app uses `createBrowserRouter`, see router.tsx) and only guards
-  // transitions the router itself performs — `<Link>`/`navigate()` calls and
-  // browser back/forward (POP) are covered; a full page load (typed URL,
-  // external link, `window.location` assignment) is not a router transition
-  // and falls through to the `beforeunload` handler above instead. Workspace
-  // stays mounted for the app's lifetime (Layout.tsx keeps it in the DOM,
-  // just `display: none`, even on global pages), so this blocker is always
-  // registered regardless of which page is currently showing.
-  const blocker = useBlocker(
-    useCallback<BlockerFunction>(
-      ({ currentLocation, nextLocation }) =>
-        hasDirtyTabs && currentLocation.pathname !== nextLocation.pathname,
-      [hasDirtyTabs],
-    ),
-  );
-  useEffect(() => {
-    if (blocker.state !== 'blocked') return;
-    const dirtyCount = tabs.filter((tb) => tb.dirty).length;
-    void confirm({
-      title: t('workspace:tab.leaveDirtyTitle'),
-      message: t('workspace:tab.leaveDirtyMessage', { count: dirtyCount }),
-      confirmLabel: t('workspace:tab.leaveDirtyConfirm'),
-      danger: true,
-    }).then((ok) => {
-      if (ok) blocker.proceed();
-      else blocker.reset();
-    });
-  }, [blocker, tabs, confirm, t]);
+  // No in-app router-transition guard here: Workspace stays mounted for the app's entire lifetime
+  // (Layout.tsx keeps it in the DOM, just `display: none`, even while a global page is showing —
+  // every route in router.tsx renders the same Layout element), so an in-app navigation never
+  // actually discards tab state; only leaving the page for real (reload/close/external navigation)
+  // does, and the `beforeunload` guard above already covers that. A `useBlocker` on pathname change
+  // was added previously but warned on transitions that lose nothing, and its confirm/cancel timing
+  // raced with `activeTabId`/pane-focus updates that already happen before the blocker had a chance
+  // to intervene — removed rather than reconciled, since there is nothing here for it to guard.
 
   // Single entry point for "close this tab by id" that every close affordance
   // (pane TabBar's ✕, the shared tab context menu's "Close tab" item, and
@@ -480,8 +454,14 @@ function WorkspaceInner() {
     }
   }, [resolveOverlayTarget, showToast]);
 
-  const openFile = useCallback((serverName: string, filePath: string, line?: number) => {
-    openFileRaw(serverName, filePath, currentProjectId, line);
+  // `projectId` is the caller's own tab.projectId (or, for callers with no owning tab yet — e.g. the
+  // sidebar FileExplorer, which is always scoped to the routed project — currentProjectId), never
+  // inferred from "whichever project is currently routed" here. A split-pane tab opening a file from
+  // a different project's diff/task view must attribute the new file tab to *its own* project, or the
+  // save-path containment check runs against the wrong project's workingDirectory (Issue #27 review
+  // Important 2).
+  const openFile = useCallback((serverName: string, filePath: string, projectId?: number, line?: number) => {
+    openFileRaw(serverName, filePath, projectId ?? currentProjectId, line);
   }, [openFileRaw, currentProjectId]);
 
   const openDiff = useCallback((serverName: string, path: string, baseBranch?: string) => {
@@ -637,9 +617,9 @@ function WorkspaceInner() {
   }, [location.search]);
 
   const handleFileSelect = useCallback((serverName: string, filePath: string, line?: number) => {
-    openFile(serverName, filePath, line);
+    openFile(serverName, filePath, currentProjectId, line);
     if (mobile) setSidebarOpen(false);
-  }, [openFile, mobile, setSidebarOpen]);
+  }, [openFile, currentProjectId, mobile, setSidebarOpen]);
 
   const [executeResourceWarning, setExecuteResourceWarning] = useState<{ resources: ResourceStatus; retry: () => void } | null>(null);
 

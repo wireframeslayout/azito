@@ -2,11 +2,7 @@
   "tab": {
     "closeDirtyTitle": "Close tab with unsaved changes?",
     "closeDirtyMessage": "\"{{name}}\" has unsaved changes. Closing this tab will discard them.",
-    "closeDirtyConfirm": "Discard and close",
-    "leaveDirtyTitle": "Leave with unsaved changes?",
-    "leaveDirtyMessage_one": "{{count}} tab has unsaved changes. Leaving this page will discard them.",
-    "leaveDirtyMessage_other": "{{count}} tabs have unsaved changes. Leaving this page will discard them.",
-    "leaveDirtyConfirm": "Discard and leave"
+    "closeDirtyConfirm": "Discard and close"
   },
   "pane": {
     "splitRight": "Split right",

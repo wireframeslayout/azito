@@ -61,7 +61,7 @@ interface TabContentRendererProps {
   openIssue?: (repoId: number, owner: string, repo: string, issueNumber: number, title: string) => void;
   openProjectTasks?: (projectId: number, projectName: string) => void;
   updateBrowserActiveTab?: (tabId: string, chromiumTabId: string) => void;
-  openFile?: (serverName: string, filePath: string) => void;
+  openFile?: (serverName: string, filePath: string, projectId?: number) => void;
   setTabDirty?: (tabId: string, dirty: boolean) => void;
   refreshBrowserGroups?: () => void;
 }
@@ -199,7 +199,7 @@ export default function TabContentRenderer({
           stopTask={(unitId) => stopTask(unitId, tab.entityId!)}
           onRefresh={refreshWorkspace}
           projectServers={projectServers}
-          onOpenFile={openFile}
+          onOpenFile={openFile ? (serverName, filePath) => openFile(serverName, filePath, tab.projectId) : undefined}
           onBack={() => {
             const proj = tab.projectId ? allProjects.find((p) => p.id === tab.projectId) : null;
             if (proj && openProjectTasks) {
@@ -334,7 +334,7 @@ export default function TabContentRenderer({
           baseBranch={tab.diffData.baseBranch}
           onOpenFile={openFile ? (relPath) => {
             const base = tab.diffData!.path.endsWith('/') ? tab.diffData!.path : tab.diffData!.path + '/';
-            openFile(tab.diffData!.serverName, base + relPath);
+            openFile(tab.diffData!.serverName, base + relPath, tab.projectId);
           } : undefined}
         />
       )}

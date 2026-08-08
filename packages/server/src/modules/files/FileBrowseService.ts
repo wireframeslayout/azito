@@ -1,10 +1,19 @@
 import * as path from 'path';
+import { createHash } from 'crypto';
 import type { ServerConfig } from '../servers/Server';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import { stripTerminalArtifacts } from '../../shared/utils/stripTerminalArtifacts';
 import { shellQuote } from '../../shared/shellQuote';
 
 const sq = shellQuote;
+
+/** Content-hash optimistic lock: sha256 of file text, hex-encoded. Shared by the read side
+ * (getFileContent, hashing the fetched content) and the write side (writeFileContentLocked,
+ * hashing the current on-disk/remote content before replacing it) so both sides compare the same
+ * bytes the same way. */
+function sha256Hex(content: string): string {
+  return createHash('sha256').update(content, 'utf-8').digest('hex');
+}
 
 // ─── File type lookup tables ───
 
@@ -82,7 +91,7 @@ export type FileEntry = {
 export type FileContentResult =
   | { type: 'image'; mimeType: string; base64: string; path: string; size: number }
   | { type: 'pdf'; mimeType: 'application/pdf'; base64: string; path: string; size: number }
-  | { content: string; path: string; size: number; language: string; mtime: number };
+  | { content: string; path: string; size: number; language: string; mtime: number; hash: string };
 
 export interface FileDownloadResult {
   buffer: Buffer;
@@ -308,7 +317,8 @@ export class FileBrowseService {
       if (content.includes('\0')) {
         throw new FileBrowseError('Binary file cannot be displayed', 400);
       }
-      return { content, path: filePath, size: stat.size, language, mtime: stat.mtimeMs };
+      const hash = sha256Hex(content);
+      return { content, path: filePath, size: stat.size, language, mtime: stat.mtimeMs, hash };
     } else {
       // Remote: reject non-regular files, then check size, then cat
       const typeCheck = await this.tmux.execCommand(srv, `test -f ${sq(filePath)} && echo ok || echo ng`);
@@ -324,7 +334,12 @@ export class FileBrowseService {
         throw new FileBrowseError('Binary file cannot be displayed', 400);
       }
       const mtimeResult = await this.getRemoteMtimeMs(srv, filePath);
-      return { content, path: filePath, size, language, mtime: mtimeResult?.mtimeMs ?? 0 };
+      // Computed from the already-fetched `content` on the Node side — no extra remote round-trip.
+      // This is the read-side counterpart to writeFileContentLocked's `sha256sum`/`shasum` verification
+      // below; both hash the same bytes, so an unrelated external edit landing in the same second as
+      // this save (past the mtime check's whole-second precision on non-GNU `stat`) is still caught.
+      const hash = sha256Hex(content);
+      return { content, path: filePath, size, language, mtime: mtimeResult?.mtimeMs ?? 0, hash };
     }
   }
 
@@ -397,18 +412,42 @@ export class FileBrowseService {
     return precise ? 1 : 999;
   }
 
+  /**
+   * Fetches a remote file's content sha256 (hex), preferring GNU/coreutils `sha256sum` and falling
+   * back to BSD/macOS `shasum -a 256` (both print `<hash>  <path>`, so only the first
+   * whitespace-delimited field is kept). Returns `null` when neither tool is present or the file
+   * disappeared — the caller treats that as "hash verification unavailable" and falls back to the
+   * mtime check alone (never as "hash matches"), logging once so the gap is visible rather than
+   * silently accepted.
+   */
+  private async getRemoteSha256(srv: ServerConfig, filePath: string): Promise<string | null> {
+    const q = sq(filePath);
+    const result = await this.tmux.execCommand(
+      srv,
+      `sha256sum ${q} 2>/dev/null || shasum -a 256 ${q} 2>/dev/null`,
+    );
+    const raw = stripTerminalArtifacts(result.stdout).trim();
+    const hash = raw.split(/\s+/, 1)[0];
+    if (!/^[0-9a-f]{64}$/.test(hash)) return null;
+    return hash;
+  }
+
   async writeFileContent(
     srv: ServerConfig,
     filePath: string,
     content: string,
     baseMtime?: number,
-  ): Promise<{ mtime: number }> {
+    baseHash?: string,
+  ): Promise<{ mtime: number; hash: string }> {
     if (Buffer.byteLength(content, 'utf-8') > MAX_FILE_SIZE) {
       throw new FileBrowseError(`Content too large. Maximum is 500KB.`, 400);
     }
     // Serialize the mtime-check-then-replace sequence per (server, path) so two concurrent saves
     // against the same baseMtime can't both pass the conflict check — see withWriteLock above.
-    return this.withWriteLock(`${srv.name}:${filePath}`, () => this.writeFileContentLocked(srv, filePath, content, baseMtime));
+    return this.withWriteLock(
+      `${srv.name}:${filePath}`,
+      () => this.writeFileContentLocked(srv, filePath, content, baseMtime, baseHash),
+    );
   }
 
   private async writeFileContentLocked(
@@ -416,7 +455,8 @@ export class FileBrowseService {
     filePath: string,
     content: string,
     baseMtime?: number,
-  ): Promise<{ mtime: number }> {
+    baseHash?: string,
+  ): Promise<{ mtime: number; hash: string }> {
     if (srv.type === 'local') {
       const fs = await import('fs');
       if (baseMtime != null) {
@@ -428,6 +468,20 @@ export class FileBrowseService {
         if (stat.mtimeMs !== baseMtime) {
           throw new FileBrowseError(
             JSON.stringify({ conflict: true, currentMtime: stat.mtimeMs }),
+            409,
+          );
+        }
+      }
+      // Content-hash optimistic lock (Issue #27 review Important 3): the mtime check above is
+      // exact locally (Node's `mtimeMs` has sub-millisecond-comparable precision), so this is mostly
+      // a defense-in-depth pairing with the remote branch below where mtime precision can be
+      // second-only. Verified right before the replace (mutex is already held via withWriteLock, so
+      // no other save from this process can land between this read and the write below).
+      if (baseHash != null) {
+        const currentContent = fs.readFileSync(filePath, 'utf-8');
+        if (sha256Hex(currentContent) !== baseHash) {
+          throw new FileBrowseError(
+            JSON.stringify({ conflict: true, currentMtime: fs.statSync(filePath).mtimeMs }),
             409,
           );
         }
@@ -456,7 +510,7 @@ export class FileBrowseService {
         fs.closeSync(fd);
       }
       const newStat = fs.statSync(filePath);
-      return { mtime: newStat.mtimeMs };
+      return { mtime: newStat.mtimeMs, hash: sha256Hex(content) };
     } else {
       const q = sq(filePath);
       if (baseMtime != null) {
@@ -473,6 +527,27 @@ export class FileBrowseService {
         if (Math.abs(current.mtimeMs - baseMtime) > this.remoteMtimeTolerance(current.precise)) {
           throw new FileBrowseError(
             JSON.stringify({ conflict: true, currentMtime: current.mtimeMs }),
+            409,
+          );
+        }
+      }
+      // Content-hash optimistic lock (Issue #27 review Important 3): on hosts whose `stat` has only
+      // whole-second precision (the BSD/macOS `-f%m` fallback in getRemoteMtimeMs), the mtime check
+      // above cannot distinguish an external edit that landed within the same second as the read this
+      // save is based on — the write would silently clobber it. sha256sum/shasum catches that because
+      // it compares actual bytes rather than a coarse timestamp. When neither tool is available,
+      // getRemoteSha256 returns null; that is "verification unavailable", not "hashes match" — the
+      // save proceeds on the mtime check alone (already run above) and this gap is logged so it's
+      // visible in server logs rather than silently accepted.
+      if (baseHash != null) {
+        const currentHash = await this.getRemoteSha256(srv, filePath);
+        if (currentHash == null) {
+          // eslint-disable-next-line no-console
+          console.warn(`[FileBrowseService] sha256sum/shasum unavailable on ${srv.name}; falling back to mtime-only conflict detection for ${filePath}`);
+        } else if (currentHash !== baseHash) {
+          const current = await this.getRemoteMtimeMs(srv, filePath);
+          throw new FileBrowseError(
+            JSON.stringify({ conflict: true, currentMtime: current?.mtimeMs ?? null }),
             409,
           );
         }
@@ -529,8 +604,16 @@ export class FileBrowseService {
         // `trap ... EXIT` (rather than a trailing `; rm -f ...`) cleans up the staging files on every
         // exit path of this script — including inside the `if`/`else` branches below — instead of only
         // the happy path a bare trailing command would cover.
+        //
+        // The cleanup command is built first and then quoted as a single unit via sq() (rather than
+        // interpolating the already-quoted qUpload/qDecoded inside a hand-written outer single-quoted
+        // string) — nesting single-quoted tokens inside another single-quoted literal does not nest in
+        // POSIX shell; it closes the outer quote early. A containment-passing path containing `;`, `'`,
+        // or `#` would then have its trailing bytes evaluated as shell syntax at trap-eval time, letting
+        // an attacker with write access to a permitted path run arbitrary remote commands.
+        const cleanup = `rm -f ${qUpload} ${qDecoded}`;
         const writeCmd =
-          `umask 077; trap 'rm -f ${qUpload} ${qDecoded}' EXIT; ` +
+          `umask 077; trap ${sq(cleanup)} EXIT; ` +
           `u=$(wc -c < ${qUpload} | tr -d ' '); ` +
           `if [ "$u" = ${expectedB64Len} ]; then ` +
           `base64 -d < ${qUpload} > ${qDecoded}${chmodStep} && mv -f ${qDecoded} ${q} && echo AZITO_WRITE_OK; ` +
@@ -554,7 +637,7 @@ export class FileBrowseService {
       if (verifyResult == null) {
         throw new FileBrowseError('Failed to verify file write', 500);
       }
-      return { mtime: verifyResult.mtimeMs };
+      return { mtime: verifyResult.mtimeMs, hash: sha256Hex(content) };
     }
   }
 
