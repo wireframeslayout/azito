@@ -17,6 +17,7 @@ import { resolveExecutionManifest, hashExecutionManifest, type ExecutionManifest
 import { resolveTaskServerName } from './TaskExecutionEnv';
 import { appendLogAndEmit, failAsyncTaskOperation } from './AppendLog';
 import type { AuditLogService } from '../../../shared/audit/AuditLogService';
+import { recordAuditBestEffort } from '../../../shared/audit/recordAuditBestEffort';
 import type { Principal } from '../../../shared/auth/Principal';
 import { OPERATOR_PRINCIPAL } from '../../../shared/auth/Principal';
 
@@ -309,20 +310,19 @@ export function denyPendingApproval(
   if (unitId !== null) {
     appendLogAndEmit(logRepo, executeTaskUseCase.events, task.id, unitId, 'status_change', { status: denyStatus, reason: 'execution_denied' });
   }
-  // Best-effort, same as every other audit write site in this codebase
-  // (see ExecutionApprovalDeps.auditLog's doc comment) — a write failure
+  // Best-effort (see recordAuditBestEffort's doc comment) — a write failure
   // here must never turn an already-committed denial into an error
   // response; the denial itself (consumed=true above) already landed.
-  try {
-    auditLog.record({
+  recordAuditBestEffort(
+    auditLog,
+    {
       actorClass: actor.class,
       actorId: actor.id ?? null,
       event: 'execution.denied',
       detail: { taskId: task.id, operation, targetStatus: denyStatus },
-    });
-  } catch (err) {
-    console.error(`[ExecutionApprovalDecision] audit log write failed for task ${task.id} denial (denial still applied):`, err);
-  }
+    },
+    (err) => console.error(`[ExecutionApprovalDecision] audit log write failed for task ${task.id} denial (denial still applied):`, err),
+  );
   return { consumed: true, status: denyStatus };
 }
 
@@ -460,16 +460,16 @@ export function decideExecutionApproval(
   // which drives the task's own timeline/WS notifications, not the
   // cross-task audit view. A write failure here must never turn an
   // already-committed approval into an error response.
-  try {
-    auditLog.record({
+  recordAuditBestEffort(
+    auditLog,
+    {
       actorClass: actor.class,
       actorId: actor.id ?? null,
       event: 'execution.approved',
       detail: { taskId, operation, unitId, origin: origin ?? 'approval_panel' },
-    });
-  } catch (err) {
-    log.error({ err, taskId }, 'audit log write failed for execution approval (approval still applied)');
-  }
+    },
+    (err) => log.error({ err, taskId }, 'audit log write failed for execution approval (approval still applied)'),
+  );
 
   // Re-fetches the task and emits its CURRENT (real) status as a
   // 'status_change' entry — used by every async operation's success
