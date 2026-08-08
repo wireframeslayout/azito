@@ -59,12 +59,16 @@ function buildSubagentPayload(v: TaskFormValue): Record<string, unknown> {
   };
 }
 
-export function buildTaskPayload(v: TaskFormValue, mode: 'create' | 'edit'): Record<string, unknown> {
+/**
+ * @param original 編集モードで、サーバーから読み込んだ元の値。指定した場合、
+ *   `status` は元の値から変更されているときのみ payload に含める
+ *   （変更していないのに常に送ると、承認待ちタスクの編集が 409 で拒否されてしまう）。
+ */
+export function buildTaskPayload(v: TaskFormValue, mode: 'create' | 'edit', original?: TaskFormValue): Record<string, unknown> {
   if (mode === 'edit') {
-    return {
+    const payload: Record<string, unknown> = {
       title: v.title.trim(),
       description: v.description.trim(),
-      status: v.status,
       unit_id: v.unitId ? parseInt(v.unitId, 10) : null,
       server_name: v.serverName.trim() || null,
       priority: parseInt(v.priority, 10),
@@ -76,6 +80,10 @@ export function buildTaskPayload(v: TaskFormValue, mode: 'create' | 'edit'): Rec
       branch: v.skipPr ? (v.workingBranch.trim() || null) : null,
       ...buildSubagentPayload(v),
     };
+    if (!original || v.status !== original.status) {
+      payload.status = v.status;
+    }
+    return payload;
   }
 
   // create
@@ -109,4 +117,80 @@ export function buildTaskPayload(v: TaskFormValue, mode: 'create' | 'edit'): Rec
   }
 
   return base;
+}
+
+/**
+ * Everything the untrusted-import creation banner (TaskFormView's
+ * `UntrustedImportBanner`) actually renders to the human before they
+ * approve — used both to build the banner's props and, after creation, as
+ * one side of {@link compareExecutionApprovalContext}'s comparison against
+ * the server's actually-resolved manifest.
+ */
+export interface DisplayedExecutionContext {
+  title: string;
+  description: string;
+  /** Resolved Unit id — the banner shows `unitName` but the id is what
+   * actually determines workerType/systemPrompt/phaseConfig, so it (not just
+   * the display name) is what must be compared; see compareExecutionApprovalContext. */
+  unitId: number | null;
+  unitName: string | null;
+  serverName: string | null;
+  workingDirectory: string | null;
+  branches: { base: string; target: string; work: string };
+  /** Ordered list of enabled phase names — see resolveEnabledPhaseNames() (lib/taskPhases.ts). */
+  phases: string[];
+  repository: { owner: string; repoName: string } | null;
+  secretNames: string[];
+}
+
+/**
+ * Create-form pre-approval fix (task/328-input-trust-and-exec-gate
+ * follow-up, third-party review) — the banner shown BEFORE task creation is
+ * necessarily a client-side approximation (no task row exists yet to
+ * resolve project_servers defaults, phaseConfig, or the target repository
+ * against). This compares that approximation against the response of GET
+ * /api/tasks/:id/execution-approval fetched immediately AFTER creation —
+ * the server's actual resolved manifest — and the caller must ONLY
+ * pre-approve when this reports `matches: true`.
+ *
+ * Compares EXACTLY the fields {@link DisplayedExecutionContext} carries —
+ * the same set the banner renders — and no others:
+ *   - title, description          (the untrusted content itself)
+ *   - unitId / unitName           (which Unit's workerType/systemPrompt/phaseConfig applies)
+ *   - serverName
+ *   - workingDirectory
+ *   - branches.base / .target / .work
+ *   - phases                      (ordered enabled-phase-name list)
+ *   - repository (owner/repoName)
+ *   - secretNames                 (as a set — order-independent)
+ *
+ * This list must never grow silently: a field compared here but not shown
+ * in the banner would reject on drift the human had no way to notice, and a
+ * field shown in the banner but not compared here would let the human
+ * approve content the fingerprint covers but they never actually saw. Keep
+ * DisplayedExecutionContext, UntrustedImportBanner's props, and this
+ * function's field list in lockstep.
+ */
+export function compareExecutionApprovalContext(
+  displayed: DisplayedExecutionContext,
+  actual: DisplayedExecutionContext,
+): { matches: true } | { matches: false; mismatches: string[] } {
+  const mismatches: string[] = [];
+  if (displayed.title !== actual.title) mismatches.push('title');
+  if (displayed.description !== actual.description) mismatches.push('description');
+  if ((displayed.unitId ?? null) !== (actual.unitId ?? null)) mismatches.push('unit');
+  else if ((displayed.unitName || null) !== (actual.unitName || null)) mismatches.push('unit');
+  if ((displayed.serverName || null) !== (actual.serverName || null)) mismatches.push('serverName');
+  if ((displayed.workingDirectory || null) !== (actual.workingDirectory || null)) mismatches.push('workingDirectory');
+  if (displayed.branches.base !== actual.branches.base) mismatches.push('baseBranch');
+  if (displayed.branches.target !== actual.branches.target) mismatches.push('targetBranch');
+  if (displayed.branches.work !== actual.branches.work) mismatches.push('workBranch');
+  if (displayed.phases.join(' ') !== actual.phases.join(' ')) mismatches.push('phases');
+  const displayedRepo = displayed.repository ? `${displayed.repository.owner}/${displayed.repository.repoName}` : '';
+  const actualRepo = actual.repository ? `${actual.repository.owner}/${actual.repository.repoName}` : '';
+  if (displayedRepo !== actualRepo) mismatches.push('repository');
+  const displayedSecrets = [...displayed.secretNames].sort().join(' ');
+  const actualSecrets = [...actual.secretNames].sort().join(' ');
+  if (displayedSecrets !== actualSecrets) mismatches.push('secretNames');
+  return mismatches.length === 0 ? { matches: true } : { matches: false, mismatches };
 }

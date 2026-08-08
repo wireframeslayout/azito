@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { EventEmitter } from 'events';
 import { mkdtempSync, mkdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
@@ -44,6 +45,11 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     summaryJson: null,
     prUrl: null,
     agentSessionId: null,
+    inputTrust: 'trusted',
+    executionApprovedFingerprintHash: null,
+    pendingOperation: null,
+    pendingOperationWindowId: null,
+    pendingOperationPriorStatus: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -175,9 +181,9 @@ function buildUseCase(opts: {
   task: Task;
   project: ProjectDetail | null;
   units: Unit[];
-  projectServer?: { workingDirectory: string | null; branch: string | null; tmuxSession: string } | null;
+  projectServer?: { workingDirectory: string | null; branch: string | null; tmuxSession: string; inputPolicy?: 'deny' | 'manual-approval' | 'allow' } | null;
   /** When set, overrides findByProject entirely (e.g. to simulate multiple project servers). */
-  projectServersList?: Array<{ projectId: number; serverName: string; workingDirectory: string | null; branch: string | null; tmuxSession: string }>;
+  projectServersList?: Array<{ projectId: number; serverName: string; workingDirectory: string | null; branch: string | null; tmuxSession: string; inputPolicy?: 'deny' | 'manual-approval' | 'allow' }>;
   /** When set, overrides the server returned by serverRepo.findByName (default: makeServer(), type 'local'). */
   server?: ServerConfig;
 }) {
@@ -194,6 +200,20 @@ function buildUseCase(opts: {
     updateCurrentPhase: vi.fn(),
     touch: vi.fn(),
     delete: vi.fn(),
+    consumePendingApproval: vi.fn(() => false),
+    // Mirrors SqliteTaskRepository's guard: only succeeds while no block is
+    // already outstanding (opts.task is the same object reference `findById`
+    // above always returns, so mutating it here is visible to the next call —
+    // same trick this file's other tests already use, e.g. setting
+    // `task.executionApprovedFingerprintHash` directly before calling execute()).
+    recordExecutionGateBlock: vi.fn((_id: number, fields: { pendingOperation: string; priorStatus: string }) => {
+      if (opts.task.pendingOperation !== null) return false;
+      opts.task.status = 'pending_approval' as Task['status'];
+      opts.task.pendingOperation = fields.pendingOperation as Task['pendingOperation'];
+      opts.task.pendingOperationPriorStatus = fields.priorStatus as Task['pendingOperationPriorStatus'];
+      return true;
+    }),
+    preApproveExecution: vi.fn(() => true),
   };
 
   const unitRepo: IUnitRepository = {
@@ -227,9 +247,9 @@ function buildUseCase(opts: {
   };
 
   const projectServerRepo: IProjectServerRepository = {
-    findByProject: vi.fn(() => opts.projectServersList ?? (opts.projectServer ? [{ projectId: 1, serverName: 'local-server', ...opts.projectServer }] : [])),
+    findByProject: vi.fn(() => (opts.projectServersList ?? (opts.projectServer ? [{ projectId: 1, serverName: 'local-server', ...opts.projectServer }] : [])).map((ps) => ({ inputPolicy: 'manual-approval' as const, ...ps }))),
     findByServer: vi.fn(() => []),
-    find: vi.fn(() => (opts.projectServer ? { projectId: 1, serverName: 'local-server', ...opts.projectServer } : null)),
+    find: vi.fn(() => (opts.projectServer ? { projectId: 1, serverName: 'local-server', inputPolicy: 'manual-approval' as const, ...opts.projectServer } : null)),
     upsert: vi.fn(),
     remove: vi.fn(),
   };
@@ -294,7 +314,16 @@ function buildUseCase(opts: {
   };
   const turnSignalHub = { emitSignal: vi.fn(), subscribe: vi.fn(() => () => {}) };
   const supervisorRegistry = { isConnected: vi.fn(() => false), sendCommand: vi.fn(async () => {}), clearExitMarker: vi.fn() };
-  const projectSecretRepo = { findByProjectWithValues: vi.fn(() => []) };
+  const projectSecretRepo = { findByProjectWithValues: vi.fn(() => []), findByProject: vi.fn(() => []) };
+  // Only `get` matters for resolveExecutionManifest()'s `sidekick` field
+  // resolution (Issue #328 sixth-round review); returning a UnitType with no
+  // phases means that resolution finds no enabled phase and the field stays
+  // null, without needing a real phases/tags fixture for these env-resolution
+  // tests.
+  const unitTypeLoader = {
+    get: vi.fn(() => ({ name: 'devops', label: 'DevOps', description: '', phases: [] })),
+    getOrThrow: vi.fn(() => ({ name: 'devops', label: 'DevOps', description: '', phases: [] })),
+  };
 
   const useCase = new ExecuteTaskUseCase(
     taskRepo,
@@ -317,12 +346,13 @@ function buildUseCase(opts: {
     turnRepo as any,
     turnSignalHub as any,
     supervisorRegistry as any,
-    { getOrThrow: vi.fn(() => ({ name: 'devops', label: 'DevOps', description: '', phases: [] })) } as any,
+    unitTypeLoader as any,
     { check: vi.fn(async () => ({ ok: true, reasons: [], memAvailablePercent: null, loadPerCore: null, memAvailablePercentMin: 10, loadPerCoreMax: 2 })) } as any,
     projectSecretRepo as any,
+    new EventEmitter(),
   );
 
-  return { useCase, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory };
+  return { useCase, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader };
 }
 
 describe('ExecuteTaskUseCase execution-env resolution', () => {
@@ -573,6 +603,162 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
   });
 });
 
+describe('ExecuteTaskUseCase execution gate (Issue #328)', () => {
+  const gateProjectServer = { workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const };
+
+  it('execute(): blocks an untrusted, unapproved task before touching tmux — marks pending_approval', async () => {
+    const task = makeTask({ serverName: 'local-server', unitId: 10, inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
+    const { useCase, taskRepo, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [makeUnit({ id: 10 })],
+      projectServer: gateProjectServer,
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/requires approval/);
+
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    // pendingOperation 'execute' lets the approval handler resume via
+    // execute() rather than re-inferring it from task.tmuxWindow (Issue #328
+    // third-round review finding 1).
+    expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(1, { pendingOperation: 'execute', priorStatus: 'open', manifestHash: expect.any(String) });
+  });
+
+  it('execute(): allows an untrusted task whose approval hash matches the current fingerprint', async () => {
+    const { resolveExecutionManifest, hashExecutionManifest } = await import('./ExecutionManifest.js');
+    const task = makeTask({
+      serverName: 'local-server',
+      unitId: 10,
+      description: 'do the thing',
+      inputTrust: 'untrusted',
+    });
+    const { useCase, tmux, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [makeUnit({ id: 10 })],
+      projectServer: gateProjectServer,
+    });
+    const { manifest } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo: projectSecretRepo as any, unitTypeLoader: unitTypeLoader as any, sidekickLoader: sidekickLoader as any });
+    task.executionApprovedFingerprintHash = hashExecutionManifest(manifest);
+
+    await useCase.execute(10, 1);
+
+    expect(tmux.createWindow).toHaveBeenCalled();
+  });
+
+  it('execute(): denies outright under a "deny" project server policy, without changing task status', async () => {
+    const task = makeTask({ serverName: 'local-server', unitId: 10, inputTrust: 'untrusted' });
+    const { useCase, taskRepo, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [makeUnit({ id: 10 })],
+      projectServer: { ...gateProjectServer, inputPolicy: 'deny' },
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/denied/);
+
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(taskRepo.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('execute(): does not gate a trusted task even with no project_servers row configured', async () => {
+    const task = makeTask({ serverName: 'local-server', unitId: 10, inputTrust: 'trusted' });
+    const { useCase, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [makeUnit({ id: 10 })],
+      // no projectServer -> projectServerRepo.find() returns null
+    });
+
+    await useCase.execute(10, 1);
+
+    expect(tmux.createWindow).toHaveBeenCalled();
+  });
+
+  it('followUp(): blocks resuming an untrusted task with a stale approval, before any tmux call', async () => {
+    const task = makeTask({ serverName: 'local-server', unitId: 10, tmuxWindow: 'task-1', inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
+    const { useCase, taskRepo, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [makeUnit({ id: 10 })],
+      projectServer: gateProjectServer,
+    });
+
+    await expect(useCase.followUp(10, 1, 'please continue')).rejects.toThrow(/requires approval/);
+
+    expect(tmux.listSessions).not.toHaveBeenCalled();
+    expect(tmux.sendKeys).not.toHaveBeenCalled();
+    // pendingOperation 'resume' lets the approval handler resume via
+    // resumeStateMachine() rather than re-inferring it from task.tmuxWindow
+    // (Issue #328 third-round review finding 1).
+    expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(1, { pendingOperation: 'resume', priorStatus: 'open', manifestHash: expect.any(String) });
+  });
+
+  it('resumeStateMachine(): blocks resuming an untrusted task with a stale approval', async () => {
+    const task = makeTask({ serverName: 'local-server', unitId: 10, tmuxWindow: 'task-1', currentPhase: null, inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
+    const { useCase, taskRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [makeUnit({ id: 10 })],
+      projectServer: gateProjectServer,
+    });
+
+    await expect(useCase.resumeStateMachine(10, 1)).rejects.toThrow(/requires approval/);
+
+    expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(1, { pendingOperation: 'resume', priorStatus: 'open', manifestHash: expect.any(String) });
+  });
+
+  it('a SECOND blocked operation (followUp, after execute already recorded a block) does not overwrite the FIRST pendingOperation/pendingOperationPriorStatus (Issue #328 review round)', async () => {
+    const task = makeTask({
+      serverName: 'local-server', unitId: 10, inputTrust: 'untrusted', executionApprovedFingerprintHash: null,
+      status: 'review',
+    });
+    const { useCase, taskRepo, logRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [makeUnit({ id: 10 })],
+      projectServer: gateProjectServer,
+    });
+
+    // First block: execute() records pendingOperation='execute',
+    // pendingOperationPriorStatus='review' (the task's real status at the
+    // time).
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/requires approval/);
+    expect(task.pendingOperation).toBe('execute');
+    expect(task.pendingOperationPriorStatus).toBe('review');
+    expect(task.status).toBe('pending_approval');
+
+    // Second, later-arriving block for the SAME still-unapproved task: a
+    // follow-up request must not overwrite the first block's operation, and
+    // — the sharper regression — must not read task.status as
+    // 'pending_approval' (what the first block just set) and persist THAT as
+    // pendingOperationPriorStatus, permanently losing the real prior status
+    // ('review').
+    await expect(useCase.followUp(10, 1, 'please continue')).rejects.toThrow(/requires approval/);
+    expect(task.pendingOperation).toBe('execute');
+    expect(task.pendingOperationPriorStatus).toBe('review');
+    expect(task.status).toBe('pending_approval');
+
+    // recordExecutionGateBlock was attempted twice (once per blocked call)
+    // but only the first actually recorded — the mock harness's
+    // recordExecutionGateBlock returns false once task.pendingOperation is
+    // already non-null (mirrors SqliteTaskRepository's real guard).
+    expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledTimes(2);
+    expect(taskRepo.recordExecutionGateBlock).toHaveBeenNthCalledWith(1, 1, { pendingOperation: 'execute', priorStatus: 'review', manifestHash: expect.any(String) });
+    expect(taskRepo.recordExecutionGateBlock).toHaveBeenNthCalledWith(2, 1, { pendingOperation: 'resume', priorStatus: 'pending_approval', manifestHash: expect.any(String) });
+
+    // Exactly one 'status_change' notification went out (from the FIRST
+    // block) — the second, no-op block must not emit a duplicate/misleading
+    // one reporting 'resume' as the operation that will run on approval.
+    const statusChangeCalls = (logRepo.append as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c: unknown[]) => c[2] === 'status_change' && (c[3] as { status?: string })?.status === 'pending_approval',
+    );
+    expect(statusChangeCalls).toHaveLength(1);
+    expect(statusChangeCalls[0][3]).toEqual({ status: 'pending_approval', operation: 'execute' });
+    expect(logRepo.append).toHaveBeenCalledWith(1, 10, 'command', { type: 'execution_gate_already_pending', operation: 'resume' });
+  });
+});
+
 describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO監視強化 Phase 1)', () => {
   it('creates a follow_up turn (kind, phase:null) via the real HttpSignalTurnCoordinator, sends the http-signal envelope (not the tmux marker echo), and reconciles the turn as aborted when the run is stopped', async () => {
     const unit = makeUnit({ id: 42, workerExecutionMode: 'http-signal' });
@@ -591,6 +777,9 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
       updateCurrentPhase: vi.fn(),
       touch: vi.fn(),
       delete: vi.fn(),
+      consumePendingApproval: vi.fn(() => false),
+      recordExecutionGateBlock: vi.fn(() => true),
+      preApproveExecution: vi.fn(() => true),
     };
     const unitRepo: IUnitRepository = {
       findAll: vi.fn(() => [unit]),
@@ -621,9 +810,9 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
       removeRepository: vi.fn(),
     };
     const projectServerRepo: IProjectServerRepository = {
-      findByProject: vi.fn(() => [{ projectId: 1, serverName: 'local-server', workingDirectory: '/work', branch: null, tmuxSession: 'azito' }]),
+      findByProject: vi.fn(() => [{ projectId: 1, serverName: 'local-server', workingDirectory: '/work', branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const }]),
       findByServer: vi.fn(() => []),
-      find: vi.fn(() => ({ projectId: 1, serverName: 'local-server', workingDirectory: '/work', branch: null, tmuxSession: 'azito' })),
+      find: vi.fn(() => ({ projectId: 1, serverName: 'local-server', workingDirectory: '/work', branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const })),
       upsert: vi.fn(),
       remove: vi.fn(),
     };
@@ -677,7 +866,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
     const turnRepo = new FakeAgentTurnRepo();
     const turnSignalHub = new TurnSignalHub();
     const supervisorRegistry = { isConnected: vi.fn(() => false), sendCommand: vi.fn(async () => {}), clearExitMarker: vi.fn() };
-    const projectSecretRepo = { findByProjectWithValues: vi.fn(() => []) };
+    const projectSecretRepo = { findByProjectWithValues: vi.fn(() => []), findByProject: vi.fn(() => []) };
 
     const useCase = new ExecuteTaskUseCase(
       taskRepo,
@@ -700,9 +889,13 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
       turnRepo as any,
       turnSignalHub as any,
       supervisorRegistry as any,
-      { getOrThrow: vi.fn(() => ({ name: 'devops', label: 'DevOps', description: '', phases: [] })) } as any,
+      {
+        get: vi.fn(() => ({ name: 'devops', label: 'DevOps', description: '', phases: [] })),
+        getOrThrow: vi.fn(() => ({ name: 'devops', label: 'DevOps', description: '', phases: [] })),
+      } as any,
       { check: vi.fn(async () => ({ ok: true, reasons: [], memAvailablePercent: null, loadPerCore: null, memAvailablePercentMin: 10, loadPerCoreMax: 2 })) } as any,
       projectSecretRepo as any,
+      new EventEmitter(),
     );
 
     await useCase.followUp(42, 1, 'please continue');
@@ -978,6 +1171,274 @@ describe('ExecuteTaskUseCase.followUp working-directory containment (Issue #27 r
     expect(taskRepo.updateStatus).toHaveBeenCalledWith(9, 'in_progress');
     expect(taskRepo.update).not.toHaveBeenCalledWith(9, expect.objectContaining({ status: 'failed' }));
   });
+});
+
+// ─── Issue #328 review round: execute()-entry regression for the
+// approval-self-invalidation bug ───
+//
+// Every other execution-gate test in this file (and in PhaseLoopRunner.test.ts)
+// calls `stateMachineLoop` directly — that never exercises the worktree
+// creation `this.taskRepo.update(taskId, { ... branch: wt.branch })` write
+// ExecuteTaskUseCase.execute() used to make BEFORE handing off to the phase
+// loop. A task approved with no client-specified branch (task.branch === null)
+// got a freshly auto-generated worktree branch written back into that same
+// `task.branch` field — the exact field the approval fingerprint hashes as
+// `branches.work` — so the very first phase-boundary reverification inside
+// the loop (which re-resolves the manifest from the NOW-mutated task) saw a
+// hash mismatch and threw the task straight back to `pending_approval`, with
+// the tmux window and worktree already created. This test drives the real
+// `execute()` entry point through two phases with a mutable fake task
+// repository (so the self-overwrite, if reintroduced, actually manifests) and
+// asserts the run completes without ever bouncing back to pending_approval.
+describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regression (Issue #328 review round)', () => {
+  function waitFor(cond: () => boolean, timeoutMs: number): Promise<void> {
+    const start = Date.now();
+    return new Promise((resolve, reject) => {
+      const tick = () => {
+        if (cond()) { resolve(); return; }
+        if (Date.now() - start > timeoutMs) { reject(new Error('waitFor: timed out')); return; }
+        setTimeout(tick, 20);
+      };
+      tick();
+    });
+  }
+
+  class FakeTaskRepo {
+    private task: Task;
+    constructor(initial: Task) { this.task = initial; }
+    findAll = () => [this.task];
+    findByProject = () => [this.task];
+    findByUnit = () => [this.task];
+    findByStatus = () => [this.task];
+    findAgentSessionIdsByServer = () => new Set<string>();
+    findById = (id: number) => (id === this.task.id ? { ...this.task } : null);
+    create = (): number => { throw new Error('FakeTaskRepo.create not implemented'); };
+    update = (id: number, data: Partial<Task>) => {
+      if (id !== this.task.id) return;
+      this.task = { ...this.task, ...data };
+    };
+    updateStatus = (id: number, status: Task['status']) => {
+      if (id !== this.task.id) return;
+      this.task = { ...this.task, status };
+    };
+    updateCurrentPhase = (id: number, phase: string | null) => {
+      if (id !== this.task.id) return;
+      this.task = { ...this.task, currentPhase: phase };
+    };
+    touch = () => {};
+    delete = () => {};
+    consumePendingApproval = () => false;
+    snapshot = () => this.task;
+  }
+
+  it('approves an untrusted task with no client-specified branch, runs execute() through two phases, and never bounces back to pending_approval', async () => {
+    const CUSTOM_UNIT_TYPE = {
+      name: 'two-phase', label: 'Two Phase', description: '', phases: [
+        { name: 'phase1', label: 'Phase 1', tags: ['phase1'], questions: false, testFailed: false, planApproval: false, selfReviewRetry: false, pushVerify: false },
+        { name: 'phase2', label: 'Phase 2', tags: ['phase2'], questions: false, testFailed: false, planApproval: false, selfReviewRetry: false, pushVerify: false },
+      ],
+    };
+    const fixedUnit = makeUnit({
+      id: 30, unitType: 'two-phase', workerType: null, workerModel: null,
+      workerExecutionMode: 'tmux-pipe', workerRuntime: 'tui',
+    });
+    const fixedProject = makeProject({ defaultUnitId: null, repositories: [] });
+    const fixedSidekick = {
+      name: 'test-sidekick', description: '', tags: ['phase1', 'phase2'], isDefault: true,
+      layer: 'builtin' as const, overridesBuiltin: false, dir: '/fake/sidekick',
+      body: 'Do the {{task.title}} phase.', hasScripts: false, hasReferences: false,
+    };
+
+    const unitRepo: IUnitRepository = {
+      findAll: vi.fn(() => [fixedUnit]),
+      findById: vi.fn((id: number) => (id === fixedUnit.id ? fixedUnit : null)),
+      create: vi.fn(() => 1),
+      update: vi.fn(),
+      delete: vi.fn(),
+    };
+    const projectRepo: IProjectRepository = {
+      findAll: vi.fn(() => []),
+      findById: vi.fn(() => fixedProject),
+      create: vi.fn(() => 1),
+      update: vi.fn(),
+      delete: vi.fn(),
+      addRepository: vi.fn(() => 1),
+      findRepositoryById: vi.fn(() => null),
+      removeRepository: vi.fn(),
+    };
+    const projectServerRepo: IProjectServerRepository = {
+      findByProject: vi.fn(() => []),
+      findByServer: vi.fn(() => []),
+      find: vi.fn(() => null),
+      upsert: vi.fn(),
+      remove: vi.fn(),
+    };
+    const server = makeServer({ name: 'local-server', type: 'local' });
+    const serverRepo: IServerRepository = {
+      findAll: vi.fn(() => [server]),
+      findByName: vi.fn(() => server),
+      create: vi.fn(),
+      update: vi.fn(),
+      updateAgentVersion: vi.fn(),
+      updateFingerprint: vi.fn(),
+      clearFingerprint: vi.fn(),
+      delete: vi.fn(),
+    };
+    const projectSecretRepo = { findByProjectWithValues: vi.fn(() => []), findByProject: vi.fn(() => []) };
+    const unitTypeLoader = {
+      get: vi.fn(() => CUSTOM_UNIT_TYPE),
+      getOrThrow: vi.fn(() => CUSTOM_UNIT_TYPE),
+    };
+    const sidekickLoader = {
+      list: vi.fn(() => []),
+      findByName: vi.fn(() => null),
+      findDefaultForTag: vi.fn(() => fixedSidekick),
+      findDefaultForPhase: vi.fn(() => fixedSidekick),
+      invalidateCache: vi.fn(),
+    };
+
+    // The task as approved: untrusted, no client-specified branch. The
+    // approval fingerprint is computed off this exact snapshot, BEFORE
+    // execute() ever touches the worktree.
+    const approvedTask = makeTask({
+      id: 501, projectId: fixedProject.id, unitId: fixedUnit.id, serverName: server.name,
+      inputTrust: 'untrusted', branch: null, worktreeBranch: null, worktreePath: null,
+      workingDirectory: '/fake/work', status: 'open',
+    });
+    const { resolveExecutionManifest, hashExecutionManifest } = await import('./ExecutionManifest.js');
+    const { manifest } = resolveExecutionManifest(approvedTask, {
+      unitRepo, projectRepo, projectServerRepo, serverRepo,
+      projectSecretRepo: projectSecretRepo as any, unitTypeLoader: unitTypeLoader as any, sidekickLoader: sidekickLoader as any,
+    });
+    approvedTask.executionApprovedFingerprintHash = hashExecutionManifest(manifest);
+
+    const taskRepo = new FakeTaskRepo(approvedTask);
+
+    const logRepo = { append: vi.fn(), findByTask: vi.fn(() => []), findByUnit: vi.fn(() => []) };
+
+    // paneStreamFactory: captures every 'marker' listener registered by
+    // WorkerWaiter.waitForWorker (the signal-stream path, tmux-pipe mode) so
+    // the test can fire a "phase_complete" marker on demand instead of
+    // waiting on real tmux output.
+    const markerListeners: Array<(type: string, raw: string) => void> = [];
+    const paneStreamFactory = {
+      create: vi.fn((id: string) => ({
+        start: vi.fn(),
+        stop: vi.fn(),
+        on: vi.fn((event: string, cb: (type: string, raw: string) => void) => {
+          if (event === 'marker') markerListeners.push(cb);
+        }),
+        getBuffer: () => 'PHASE_COMPLETE',
+        getFilePath: () => `/tmp/${id}`,
+        setMarkers: vi.fn(),
+        enableMarkerDetection: vi.fn(),
+      })),
+    };
+
+    const tmux = {
+      listSessions: vi.fn(async () => []),
+      createSession: vi.fn(async () => {}),
+      createWindow: vi.fn(async () => ({ windowName: 'w1' })),
+      resolvePaneId: vi.fn(async () => '%0'),
+      killPane: vi.fn(async () => {}),
+      killWindow: vi.fn(async () => {}),
+      sendKeys: vi.fn(async () => {}),
+      checkPaneExists: vi.fn(async () => true),
+      startPipePane: vi.fn(async () => {}),
+      stopPipePane: vi.fn(async () => {}),
+      execCommand: vi.fn(async () => ({ stdout: '' })),
+      // 'Thinking...' satisfies verifyPromptDelivery's isPromptDelivered()
+      // check on the first attempt — avoids an extra 3s retry sleep.
+      capturePane: vi.fn(async () => ({ stdout: 'Thinking... (esc to interrupt)' })),
+    };
+
+    const worktreeServiceFactory = {
+      create: vi.fn(() => ({
+        // The auto-generated worktree branch — deliberately DIFFERENT from
+        // approvedTask.branch (null) to reproduce the bug: if execute() ever
+        // writes this back into task.branch, the next reverification's
+        // fingerprint changes.
+        create: vi.fn(async () => ({ path: '/fake/work/.worktrees/task-501', branch: 'task/501-generated' })),
+        exists: vi.fn(async () => false),
+      })),
+    };
+    const gitProvider = { findPullRequestByBranch: vi.fn(async () => null) };
+    const transportFactory = { getTransport: vi.fn(() => ({})) };
+    const paneClassifier = {};
+    const contentExtractor = { generateSlug: vi.fn(async () => 'slug'), extractPlan: vi.fn(async () => ({ planMarkdown: null })) };
+    const windowRepo = {
+      add: vi.fn(() => 1),
+      findById: vi.fn(),
+      findByProject: vi.fn(() => []),
+      findByTask: vi.fn(() => []),
+      update: vi.fn(),
+      updateAgentSessionIdByWindow: vi.fn(),
+      remove: vi.fn(),
+      removeByServerAndTarget: vi.fn(() => 0),
+      updatePaneLayout: vi.fn(),
+    };
+    const sessionStrategyFactory = { create: vi.fn(() => ({ supportsSession: false })) };
+    const sidekickSyncService = { sync: vi.fn(async () => {}) };
+    const turnRepo = { supersedeRunning: vi.fn(), create: vi.fn(), findById: vi.fn(() => null), findLatestEventByType: vi.fn(() => null), markEnded: vi.fn(), appendEvent: vi.fn() };
+    const turnSignalHub = { emitSignal: vi.fn(), subscribe: vi.fn(() => () => {}) };
+    const supervisorRegistry = { isConnected: vi.fn(() => false), sendCommand: vi.fn(async () => {}), clearExitMarker: vi.fn() };
+
+    const useCase = new ExecuteTaskUseCase(
+      taskRepo as any,
+      unitRepo,
+      serverRepo,
+      projectRepo,
+      projectServerRepo,
+      sidekickLoader as any,
+      logRepo as any,
+      tmux as any,
+      worktreeServiceFactory as any,
+      gitProvider as any,
+      transportFactory as any,
+      paneClassifier as any,
+      contentExtractor as any,
+      paneStreamFactory as any,
+      windowRepo as any,
+      sessionStrategyFactory as any,
+      sidekickSyncService as any,
+      turnRepo as any,
+      turnSignalHub as any,
+      supervisorRegistry as any,
+      unitTypeLoader as any,
+      { check: vi.fn(async () => ({ ok: true, reasons: [], memAvailablePercent: null, loadPerCore: null, memAvailablePercentMin: 10, loadPerCoreMax: 2 })) } as any,
+      projectSecretRepo as any,
+      new EventEmitter(),
+    );
+
+    // execute() itself resolves once setup (session/window/worktree
+    // creation, launch) is done — it does NOT await the phase loop, which
+    // keeps running in the background (see execute()'s `runLoop` handling).
+    await useCase.execute(fixedUnit.id, approvedTask.id);
+
+    // The worktree-creation write must never have echoed the auto-generated
+    // branch back into task.branch (the field the approval fingerprint
+    // hashes) — this is the core assertion for fix 1.
+    expect(taskRepo.snapshot().branch).toBeNull();
+    expect(taskRepo.snapshot().worktreeBranch).toBe('task/501-generated');
+
+    // Phase 1: let the loop reach waitForWorker (past verifyPromptDelivery's
+    // delivery check), then fire its phase_complete marker.
+    await waitFor(() => markerListeners.length >= 1, 15_000);
+    markerListeners.shift()!('phase_complete', '');
+
+    // Phase 2: the SECOND phase-boundary reverification is exactly "crossing
+    // the first phase boundary" the regression this test guards against —
+    // it must not have blocked here either.
+    await waitFor(() => markerListeners.length >= 1, 15_000);
+    markerListeners.shift()!('phase_complete', '');
+
+    // The run must reach its normal terminal state ('review'), never
+    // 'pending_approval' — the acceptance criterion from the review.
+    await waitFor(() => taskRepo.snapshot().status === 'review', 15_000);
+
+    expect(taskRepo.snapshot().status).toBe('review');
+    expect(taskRepo.snapshot().pendingOperation).toBeNull();
+  }, 60_000);
 });
 
 describe('ExecuteTaskUseCase stale window cleanup', () => {

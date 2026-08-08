@@ -7,9 +7,11 @@ import type { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
 import type { IWorkerRuntime, WorkerContext } from './runtime/IWorkerRuntime';
 import type { IProjectRepository } from '../../projects/Project';
 import type { IProjectServerRepository } from '../../projects/ProjectServer';
+import type { IServerRepository } from '../../servers/Server';
+import type { SqliteProjectSecretRepository } from '../../projects/SqliteProjectSecretRepository';
 import type { PhaseConfig } from '../../sidekicks/PhaseConfig';
 import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoader';
-import { resolvePhaseSidekick, resolveEnabledPhases } from '../../sidekicks/resolvePhaseSidekick';
+import { resolvePhaseSidekick, resolveEnabledPhases, resolveCurrentPhaseIndex } from '../../sidekicks/resolvePhaseSidekick';
 import { renderSidekickBody } from '../../sidekicks/renderSidekickBody';
 import type { SidekickSyncService } from '../../sidekicks/SidekickSyncService';
 import { resolveSidekickDir } from '../../sidekicks/SidekickSyncService';
@@ -30,6 +32,8 @@ import type { GitProviderService } from '../../git/providers/GitProviderService'
 import type { HttpSignalTurnCoordinator } from './HttpSignalTurnCoordinator';
 import type { PullRequestCreator } from './PullRequestCreator';
 import type { AgentTurn } from '../turns/AgentTurn';
+import { checkExecutionGate } from './ExecutionGate';
+import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionManifest';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -85,6 +89,14 @@ export class PhaseLoopRunner {
     private workerInput: WorkerInputService,
     private unitTypeLoader: UnitTypeLoader,
     private runtimeRegistry: WorkerRuntimeRegistry,
+    // Required for reverifyExecutionGateForPhase()'s resolveExecutionManifest()
+    // call below (Issue #328 tenth-round review) — same as
+    // ExecuteTaskUseCase/TaskRestoreService/WindowRespawnService, this class
+    // must resolve the manifest's `server`/`secrets` fields the same way a
+    // real run does, not skip them because this class doesn't otherwise
+    // depend on these repositories.
+    private serverRepo: IServerRepository,
+    private projectSecretRepo: SqliteProjectSecretRepository,
   ) {}
 
   private async findPrUrl(task: { projectId: number }, branch: string | null): Promise<string | null> {
@@ -102,6 +114,117 @@ export class PhaseLoopRunner {
     }
   }
 
+
+  /**
+   * Re-runs the untrusted-input execution gate (Issue #328 ninth-round
+   * review) immediately before each phase's prompt is built and sent. The
+   * gate at execute()/resumeStateMachine() entry (ExecuteTaskUseCase.
+   * enforceExecutionGate) only fires ONCE, when a run starts or resumes —
+   * but this loop resolves the Sidekick package, task vars, and Unit
+   * config fresh for EVERY phase as the run progresses (see the
+   * resolvePhaseSidekick/resolveTaskPromptVars calls right after this
+   * method's call site below). An edit to anything the approval manifest
+   * covers, made after entry but before a later phase runs, must not reach
+   * the worker unattended.
+   *
+   * Reuses the exact same resolveExecutionManifest()/hashExecutionManifest()/
+   * checkExecutionGate() triplet every other entry point uses (ExecuteTaskUseCase,
+   * TaskRestoreService, WindowRespawnService) — no new comparison logic here,
+   * only the orchestration (what to do on a block), mirroring
+   * ExecuteTaskUseCase.enforceExecutionGate's own pending_approval/denied
+   * handling since this class can't call that method directly (it belongs to
+   * a different class and closes over ExecuteTaskUseCase-only state).
+   *
+   * Trusted tasks pay nothing extra for this: checkExecutionGate()
+   * short-circuits on `inputTrust !== 'untrusted'` before this method ever
+   * calls resolveExecutionManifest(), so a trusted task never resolves a
+   * manifest (no per-phase file I/O) here.
+   *
+   * Returns true when the phase may proceed. Returns false when it blocked —
+   * the caller must stop the loop (send nothing, launch nothing) without
+   * throwing, since the block itself is the intended outcome, not a failure.
+   */
+  private reverifyExecutionGateForPhase(taskId: number, currentTask: Task, loopUnitId: number): boolean {
+    if (currentTask.inputTrust !== 'untrusted') return true;
+
+    const { manifest, projectServer } = resolveExecutionManifest(currentTask, {
+      unitRepo: this.unitRepo,
+      projectRepo: this.projectRepo,
+      projectServerRepo: this.projectServerRepo,
+      serverRepo: this.serverRepo,
+      projectSecretRepo: this.projectSecretRepo,
+      unitTypeLoader: this.unitTypeLoader,
+      sidekickLoader: this.sidekickLoader,
+    });
+    const manifestHash = hashExecutionManifest(manifest);
+    const gate = checkExecutionGate(currentTask, projectServer, manifestHash);
+    if (gate.allowed) return true;
+
+    // Resolve a Unit id to attach log entries to WITHOUT ever falling back to
+    // a dummy value (Issue #328 review round fix 4): execution_log.unit_id is
+    // a real foreign key, so the old `manifest.unit?.id ?? currentTask.unitId
+    // ?? 0` fallback chain could append a log row with unit_id = 0 — no such
+    // Unit exists, so that write throws a foreign-key violation, turning a
+    // benign "the configured Unit was deleted mid-run" drift into an
+    // unrelated execution failure. Prefer the manifest's own fresh
+    // resolution; if that came back null (the Unit really is gone), fall
+    // back to `loopUnitId` — the Unit this very run started with, passed in
+    // by stateMachineLoop() — but ONLY if it still resolves; otherwise skip
+    // the unit-scoped log entirely (unitId stays null below) while still
+    // recording the task-level gate transition (recordExecutionGateBlock /
+    // updateStatus), which has no such foreign-key dependency.
+    const unitId = manifest.unit?.id ?? (this.unitRepo.findById(loopUnitId) ? loopUnitId : null);
+    if (unitId !== null) {
+      this.appendLog(taskId, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
+    }
+    if (gate.reason === 'pending_approval') {
+      // Same 'resume' semantics as ExecuteTaskUseCase.followUp()/
+      // resumeStateMachine()'s own gate call: on approval, units/routes.ts's
+      // approve-execution handler resumes via resumeStateMachine(), which
+      // re-enters this same loop at task.currentPhase — already set to this
+      // phase by the updateCurrentPhase() call above the call site below, so
+      // the resume lands exactly where this block happened.
+      //
+      // Atomic compare-and-swap (Issue #328 review round), same as
+      // ExecuteTaskUseCase.enforceExecutionGate's own pending_approval
+      // branch — see recordExecutionGateBlock's doc comment on
+      // ITaskRepository for why an unconditional update here could
+      // overwrite an already-recorded block from a concurrently-blocked
+      // entry point. manifestHash is passed through so the guarded UPDATE
+      // can also detect a concurrent approval that already matches this
+      // exact manifest (Issue #328 review round fix 2).
+      const recorded = this.taskRepo.recordExecutionGateBlock(taskId, {
+        pendingOperation: 'resume',
+        priorStatus: currentTask.status,
+        manifestHash,
+      });
+      if (unitId !== null) {
+        if (recorded) {
+          // Same shape as ExecuteTaskUseCase.enforceExecutionGate's own
+          // pending_approval log entry (Issue #328 review) — the notification
+          // bridge only forwards a 'task:status' WS event off a 'status_change'
+          // log entry (see that method's own comment), not off the 'command'
+          // entry logged above. Without this, a drift block that happens
+          // mid-run (as opposed to at execute()/resumeStateMachine() entry)
+          // silently sat at pending_approval with nobody notified.
+          this.appendLog(taskId, unitId, 'status_change', { status: 'pending_approval', operation: 'resume' });
+        } else {
+          this.appendLog(taskId, unitId, 'command', { type: 'execution_gate_already_pending', operation: 'resume' });
+        }
+      }
+    } else {
+      // 'denied': the project server's input policy changed to 'deny' mid-run.
+      // Unlike the entry-point gates (which haven't started anything yet and
+      // so leave status untouched), a run already in progress has no "leave
+      // it alone" state to return to — fail it, the same outcome any other
+      // hard stop mid-loop produces (send_error, stopped classification, etc).
+      if (unitId !== null) {
+        this.appendLog(taskId, unitId, 'status_change', { status: 'error', message: 'Execution denied by project server input policy (untrusted-origin task)' });
+      }
+      this.taskRepo.updateStatus(taskId, 'failed');
+    }
+    return false;
+  }
 
   private async ensureSidekicksSynced(server: ServerConfig): Promise<void> {
     if (server.type === 'local') return;
@@ -154,22 +277,15 @@ export class PhaseLoopRunner {
 
     await this.ensureSidekicksSynced(server);
 
-    let currentPhaseIndex = 0;
     let selfReviewCount = 0;
     const maxSelfReview = unit.selfReviewMaxAttempts ?? 2;
     let isFirstPromptSent = false;
 
-    if (task.currentPhase) {
-      const idx = enabledPhases.indexOf(task.currentPhase);
-      if (idx >= 0) {
-        currentPhaseIndex = idx;
-      } else {
-        const allPhaseNames = unitType.phases.map((p) => p.name);
-        const phaseOrderIdx = allPhaseNames.indexOf(task.currentPhase);
-        const fallbackIdx = enabledPhases.findIndex((p) => allPhaseNames.indexOf(p) > phaseOrderIdx);
-        if (fallbackIdx >= 0) currentPhaseIndex = fallbackIdx;
-      }
-    }
+    // Shared with ExecutionManifest.ts's approval-manifest resolution
+    // (resolveCurrentPhaseIndex) so the phase a human approves is guaranteed
+    // to be the phase this loop actually resumes at (Issue #328 sixth-round
+    // review) — enabledPhases here is the same list already computed above.
+    let { index: currentPhaseIndex } = resolveCurrentPhaseIndex(unit.phaseConfig, unitType.phases, task.currentPhase);
 
     while (currentPhaseIndex < enabledPhases.length) {
       if (signal.aborted) {
@@ -185,9 +301,17 @@ export class PhaseLoopRunner {
       this.taskRepo.updateCurrentPhase(task.id, phase);
       this.appendLog(task.id, unit.id, 'status_change', { status: 'phase_started', phase });
 
+      // Untrusted-input execution gate re-check (Issue #328 ninth-round
+      // review) — must run BEFORE the Sidekick is resolved and the prompt is
+      // built below, so a block never lets a stale/rewritten instruction
+      // reach the worker. See reverifyExecutionGateForPhase's doc comment.
+      const currentTask = this.taskRepo.findById(task.id);
+      if (currentTask && !this.reverifyExecutionGateForPhase(task.id, currentTask, unit.id)) {
+        return;
+      }
+
       const sidekick = resolvePhaseSidekick(this.sidekickLoader, phase, unit.phaseConfig, phaseDef);
       const sidekickDir = resolveSidekickDir(sidekick, server);
-      const currentTask = this.taskRepo.findById(task.id);
       const promptModules = loadPromptModules();
       const vars = resolveTaskPromptVars(this.taskRepo, this.projectRepo, this.unitRepo, this.projectServerRepo, task.id);
       const expandedPrompt = renderSidekickBody(sidekick, {
@@ -430,7 +554,14 @@ export class PhaseLoopRunner {
     const updateFields: Record<string, unknown> = {};
     if (prUrl) updateFields.prUrl = prUrl;
     if (gitInfo.changedFiles) updateFields.changedFiles = gitInfo.changedFiles;
-    if (gitInfo.branch) updateFields.branch = gitInfo.branch;
+    // worktreeBranch, not branch (Issue #328 review round): `branch` is the
+    // value the execution-gate fingerprint hashes as `branches.work`
+    // (ExecutionManifest.ts) — writing this end-of-run git-resolved branch
+    // back into it made an already-approved task's OWN completed run
+    // invalidate the approval a subsequent operation (e.g. a follow-up)
+    // would need. worktreeBranch is the system-resolved field, already on
+    // the fingerprint's deliberately-excluded list for this exact reason.
+    if (gitInfo.branch) updateFields.worktreeBranch = gitInfo.branch;
     if (Object.keys(updateFields).length > 0) {
       this.taskRepo.update(task.id, updateFields as Partial<Task>);
     }

@@ -185,7 +185,8 @@
     "taskProjectFailed": "Failed to get task project info",
     "noUnit": "No Unit assigned",
     "startExecution": "Start Execution",
-    "startConfirm": "Start execution?"
+    "startConfirm": "Start execution?",
+    "executionPendingApproval": "This task needs execution approval before it can run — review it in the task panel."
   },
   "tabContent": {
     "serverDetailMoved": "Server details have moved to the Servers global page."

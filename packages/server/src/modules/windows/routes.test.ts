@@ -364,3 +364,79 @@ describe('GET /api/windows/pane-loading-state', () => {
     expect(res.statusCode).toBe(400);
   });
 });
+
+describe('POST /api/windows/:id/respawn — execution gate (Issue #328 second-round fix)', () => {
+  // Previously this route called respawnService.respawn() unwrapped, so a
+  // thrown ExecutionGatePendingApprovalError/ExecutionGateDeniedError fell
+  // through to Fastify's default error handler as a generic 500 instead of
+  // the 409/403 that /api/tasks/:id/recover-session and
+  // /api/units/:id/execute|follow-up already return for the same errors.
+  let app: FastifyInstance;
+  let window: Window;
+  let server: ServerConfig;
+
+  async function setup(respawn: WindowRespawnService['respawn']): Promise<FastifyInstance> {
+    const windowRepo: Partial<IWindowRepository> = {
+      findById: (id: number) => (id === window.id ? window : undefined),
+    };
+    const serverRepo: Partial<IServerRepository> = {
+      findByName: (name: string) => (name === server.name ? server : null),
+    };
+    const instance = Fastify();
+    await instance.register(windowsRoutes, {
+      windowRepo: windowRepo as IWindowRepository,
+      projectRepo: {} as IProjectRepository,
+      taskRepo: {} as ITaskRepository,
+      tmux: {} as TmuxClient,
+      serverRepo: serverRepo as IServerRepository,
+      respawnService: { respawn } as unknown as WindowRespawnService,
+      sessionStrategyFactory: {} as ISessionStrategyFactory,
+      sessionCaptureService: { scheduleInitialScan: vi.fn() } as unknown as SessionCaptureService,
+      supervisorRegistry: makeSupervisorRegistry(),
+    });
+    await instance.ready();
+    return instance;
+  }
+
+  beforeEach(() => {
+    window = makeWindow();
+    server = makeServer();
+  });
+
+  it('translates ExecutionGatePendingApprovalError into 409 execution_pending_approval (not a generic 500)', async () => {
+    const { ExecutionGatePendingApprovalError } = await import('../tasks/execution/ExecutionGate.js');
+    app = await setup(vi.fn(async () => { throw new ExecutionGatePendingApprovalError(window.taskId ?? 1); }));
+
+    const res = await app.inject({ method: 'POST', url: `/api/windows/${window.id}/respawn` });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'execution_pending_approval' });
+  });
+
+  it('translates ExecutionGateDeniedError into 403 execution_denied (not a generic 500)', async () => {
+    const { ExecutionGateDeniedError } = await import('../tasks/execution/ExecutionGate.js');
+    app = await setup(vi.fn(async () => { throw new ExecutionGateDeniedError(window.taskId ?? 1); }));
+
+    const res = await app.inject({ method: 'POST', url: `/api/windows/${window.id}/respawn` });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ error: 'execution_denied' });
+  });
+
+  it('re-throws (and does not swallow) errors unrelated to the execution gate', async () => {
+    app = await setup(vi.fn(async () => { throw new Error('tmux exploded'); }));
+
+    const res = await app.inject({ method: 'POST', url: `/api/windows/${window.id}/respawn` });
+
+    expect(res.statusCode).toBe(500);
+  });
+
+  it('still succeeds and returns tmuxTarget when the gate allows execution', async () => {
+    app = await setup(vi.fn(async () => ({ tmuxTarget: 'proj:win1' })));
+
+    const res = await app.inject({ method: 'POST', url: `/api/windows/${window.id}/respawn` });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, tmuxTarget: 'proj:win1' });
+  });
+});

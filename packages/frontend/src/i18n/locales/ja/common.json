@@ -74,6 +74,7 @@
     "testing": "テスト中",
     "pushing": "プッシュ中",
     "phaseReview": "計画レビュー",
+    "pendingApproval": "承認待ち",
     "waitingInput": "入力待ち",
     "inProgress": "進行中",
     "done": "完了",

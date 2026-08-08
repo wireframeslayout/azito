@@ -2,6 +2,7 @@ import type { FastifyPluginCallback } from 'fastify';
 import type { IProjectRepository, RepositoryProvider } from './Project';
 import type { IProjectServerRepository } from './ProjectServer';
 import type { ITaskRepository } from '../tasks/Task';
+import { deriveInputTrust } from '../tasks/Task';
 import type { GitProviderService } from '../git/providers/GitProviderService';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { IServerRepository } from '../servers/Server';
@@ -171,22 +172,51 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       if (!project)
         return reply.status(404).send({ error: 'Project not found' });
       const body = (request.body ?? {}) as {
-        working_directory?: string;
-        branch?: string;
+        working_directory?: string | null;
+        branch?: string | null;
         tmux_session?: string | null;
+        input_policy?: string;
       };
       // tmux_session semantics: key present with null/empty resets to the default
       // ('azito'); key present with a value sets it (trimmed); key absent preserves
       // the existing value (default for a brand-new row).
+      const existingRow = projectServerRepo.find(projectId, serverName);
       const tmuxSession = 'tmux_session' in body
         ? (body.tmux_session?.trim() || 'azito')
-        : (projectServerRepo.find(projectId, serverName)?.tmuxSession ?? 'azito');
+        : (existingRow?.tmuxSession ?? 'azito');
+      // working_directory/branch use the same "key absent preserves, key
+      // present (incl. explicit null) sets" semantics as tmux_session/
+      // input_policy below — a client that PUTs only { input_policy } must
+      // not silently wipe the other fields. working_directory in particular
+      // is the containment boundary (PathContainment.ts): losing it isn't
+      // just a lost setting, it's a lost security boundary (Issue #328
+      // review). Previously this fell through to `body.xxx ?? null`, which
+      // treated "key omitted" the same as "key explicitly null".
+      const workingDirectory = 'working_directory' in body
+        ? (body.working_directory ?? null)
+        : (existingRow?.workingDirectory ?? null);
+      const branch = 'branch' in body
+        ? (body.branch ?? null)
+        : (existingRow?.branch ?? null);
+      // 'allow' is rejected here, not just left undocumented: it would skip the
+      // execution-approval gate entirely for untrusted tasks, but the isolated
+      // execution profile that would make that safe (Issue #328 design doc)
+      // doesn't exist yet. Rejecting at the API boundary keeps a misconfigured
+      // client from silently granting unattended execution of external input.
+      if (body.input_policy === 'allow') {
+        return reply.status(400).send({ error: "input_policy 'allow' is not selectable yet (isolated execution profile not implemented)" });
+      }
+      if (body.input_policy !== undefined && body.input_policy !== 'deny' && body.input_policy !== 'manual-approval') {
+        return reply.status(400).send({ error: "input_policy must be 'deny' or 'manual-approval'" });
+      }
+      const inputPolicy = (body.input_policy as 'deny' | 'manual-approval' | undefined) ?? existingRow?.inputPolicy ?? 'manual-approval';
       projectServerRepo.upsert({
         projectId,
         serverName,
-        workingDirectory: body.working_directory ?? null,
-        branch: body.branch ?? null,
+        workingDirectory,
+        branch,
         tmuxSession,
+        inputPolicy,
       });
 
       let sessionCreated = false;
@@ -391,6 +421,18 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
           summaryJson: null,
           prUrl: null,
           agentSessionId: null,
+          // Issue body content comes straight from an external tracker with no
+          // human review yet — derived via deriveInputTrust() (the SAME
+          // function POST /api/tasks uses), which maps `source` ('github'/
+          // 'gitlab' here) to 'untrusted'. The execution gate (ExecutionGate.ts)
+          // treats this the same as any GitHub/GitLab-sourced task regardless
+          // of what `source`/`source_ref` end up being edited to later
+          // (Issue #328).
+          inputTrust: deriveInputTrust(source),
+          executionApprovedFingerprintHash: null,
+          pendingOperation: null,
+          pendingOperationWindowId: null,
+          pendingOperationPriorStatus: null,
         });
         return { ok: true, taskId, issue: { number: issue.number, title: issue.title } };
       } catch (err: unknown) {

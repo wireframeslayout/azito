@@ -34,13 +34,16 @@ import { PushVerifier } from './PushVerifier';
 import { GitInfoCollector } from './GitInfoCollector';
 import { PullRequestCreator } from './PullRequestCreator';
 import { PhaseLoopRunner } from './PhaseLoopRunner';
+import { appendLogAndEmit } from './AppendLog';
 import { HttpSignalTurnCoordinator } from './HttpSignalTurnCoordinator';
 import type { SupervisorRegistry } from '../../supervisors/SupervisorRegistry';
 import { shouldSupervise } from '../../supervisors/SupervisorLaunch';
 import { ResourceExhaustedError, type ResourceGuard } from '../../servers/resources/ResourceGuard';
+import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError } from './ExecutionGate';
+import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionManifest';
 import { TuiWorkerRuntime } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
-import { resolveTaskServerName, resolveTmuxSession, resolveUnitId } from './TaskExecutionEnv';
+import { resolveTaskServerName, resolveTmuxSession, resolveUnitId, resolveBaseBranch } from './TaskExecutionEnv';
 import type { SqliteAgentTurnRepository } from '../turns/SqliteAgentTurnRepository';
 import type { TurnSignalHub } from '../turns/TurnSignalHub';
 import type { AgentTurn } from '../turns/AgentTurn';
@@ -68,7 +71,6 @@ interface RunningExecution {
 // registry, exposed read-only via getRunning() / GET /api/operations.
 
 export class ExecuteTaskUseCase {
-  public events = new EventEmitter();
   private runningExecutions = new Map<number, RunningExecution[]>();
 
   private readonly gitInfoCollector: GitInfoCollector;
@@ -105,6 +107,19 @@ export class ExecuteTaskUseCase {
     private unitTypeLoader: UnitTypeLoader,
     private resourceGuard: ResourceGuard,
     private projectSecretRepo: SqliteProjectSecretRepository,
+    // Shared task-events EventEmitter (Issue #328 fifteenth-round review) —
+    // injected, not self-created, so TaskRestoreService and
+    // WindowRespawnService can emit on the SAME instance buildServer.ts's
+    // NotificationBus/push bridges subscribe to via
+    // `executeTaskUseCase.events.on('log', ...)`. Before this, this class
+    // created its own private EventEmitter that only ITS OWN appendLog()
+    // calls (and PhaseLoopRunner's, injected from this class) ever emitted
+    // on — TaskRestoreService.restore() and WindowRespawnService's
+    // execution-gate enforcement wrote execution_log rows directly and had
+    // no way to reach it, so a pending_approval block from either path was
+    // silently unnotified. See AppendLog.ts's appendLogAndEmit() doc
+    // comment for the shared helper this and those two classes now all use.
+    public readonly events: EventEmitter,
   ) {
     this.gitInfoCollector = new GitInfoCollector(this.tmux);
     this.pushVerifier = new PushVerifier(this.tmux, this.gitProvider);
@@ -150,6 +165,8 @@ export class ExecuteTaskUseCase {
       this.workerInput,
       this.unitTypeLoader,
       this.runtimeRegistry,
+      this.serverRepo,
+      this.projectSecretRepo,
     );
   }
 
@@ -193,9 +210,136 @@ export class ExecuteTaskUseCase {
     return assertDirectoryContained(this.pathResolverFactory, server.type, transport, { target, allowedRoot }, label);
   }
 
+  /**
+   * Runs the untrusted-input execution gate (Issue #328) and, when it
+   * blocks, marks the task accordingly and throws before any worker,
+   * worktree, or secret touches it. Called at the top of every entry point
+   * here that can launch or resume a worker (execute/followUp/
+   * resumeStateMachine); TaskRestoreService.restore and
+   * WindowRespawnService.enforceExecutionGate run the same
+   * checkExecutionGate()+resolveExecutionManifest() pairing independently
+   * since they resolve their own task/server and have no dependency on this
+   * use case. Returns the project/projectServer it resolved so callers that
+   * need them anyway (execute()'s working-directory logic) don't re-fetch.
+   *
+   * `operation` records WHICH blocked entry point this was, in
+   * task.pendingOperation, so the approval handler
+   * (modules/tasks/execution/ExecutionApprovalDecision.ts's approve-execution) can resume the exact
+   * operation a human approved instead of re-inferring it from
+   * task.tmuxWindow (Issue #328 third-round review finding 1: that
+   * heuristic couldn't tell "never started" apart from "was being
+   * restored from archive", since TaskRestoreService.restore also blocks
+   * before tmuxWindow is ever set — see ExecutionManifest.ts's module doc
+   * comment for the related field-coverage discussion).
+   * `execute()` passes 'execute' (fresh start, no window yet); followUp()/
+   * resumeStateMachine() both pass 'resume' (continuing a run whose window
+   * already exists) — both resume via resumeStateMachine() on approval,
+   * matching the pre-existing behavior for those two entry points.
+   */
+  /**
+   * Public (not private) because /api/tasks/:id/answer and
+   * /api/units/:id/approve-plan (modules/tasks/routes.ts,
+   * modules/units/routes.ts) need to run this exact check synchronously,
+   * BEFORE consuming task.pendingQuestions/the submitted answers or feedback,
+   * instead of discovering the block only after followUp() has already been
+   * kicked off fire-and-forget (Issue #328 sixth-round review finding 1: that
+   * ordering lost both the question record and the human's answer text on a
+   * block). Reusing this method rather than a second gate-check
+   * implementation keeps "what blocks execution" defined in exactly one
+   * place.
+   *
+   * `operation` records WHICH blocked entry point this was — see the
+   * per-operation transition table on Task.pendingOperation for the
+   * authoritative list and what the approval handler does for each.
+   * 'resume_await_answer'/'resume_await_plan_review' exist because those two
+   * callers check the gate BEFORE persisting the human's answers/feedback:
+   * unlike plain 'resume' (auto-resumed via resumeStateMachine() on
+   * approval), these must NOT be auto-resumed, since nothing was persisted
+   * for resumeStateMachine() to pick up — the approval handler instead
+   * restores task.status to pendingOperationPriorStatus and leaves it for the
+   * human to resubmit the same request (Issue #328 seventh-round review
+   * symptom A).
+   *
+   * No `server: ServerConfig` parameter (Issue #328 tenth-round review
+   * finding 1: this method used to take one and never read it — dead
+   * wiring that masked the actual gap, which was that the MANIFEST itself
+   * never resolved a ServerConfig at all, see ExecutionManifest.ts's
+   * `server` field doc comment). resolveExecutionManifest() below now
+   * resolves the target server itself, via the exact same `serverName`
+   * every caller here already resolved before calling in — passing a
+   * second, separately-captured copy through this parameter would be the
+   * same divergent-resolution-path risk this file's callers already avoid
+   * for Unit/projectServer.
+   */
+  enforceExecutionGate(
+    task: Task,
+    unitId: number,
+    operation: 'execute' | 'resume' | 'resume_await_answer' | 'resume_await_plan_review',
+  ) {
+    // resolveExecutionManifest() re-resolves the same (task.unitId ??
+    // project.defaultUnitId) / serverName the caller already resolved via
+    // resolveExecutionEnv() — it's what turns the fingerprint into a
+    // fingerprint of RESOLVED execution content instead of raw task columns
+    // (see ExecutionManifest.ts). `project`/`projectServer` returned here are
+    // reused by execute()'s working-directory logic below, same as before.
+    const { manifest, project, projectServer } = resolveExecutionManifest(task, {
+      unitRepo: this.unitRepo,
+      projectRepo: this.projectRepo,
+      projectServerRepo: this.projectServerRepo,
+      serverRepo: this.serverRepo,
+      projectSecretRepo: this.projectSecretRepo,
+      unitTypeLoader: this.unitTypeLoader,
+      sidekickLoader: this.sidekickLoader,
+    });
+    const manifestHash = hashExecutionManifest(manifest);
+    const gate = checkExecutionGate(task, projectServer, manifestHash);
+    if (gate.allowed) return { project, projectServer };
+
+    this.appendLog(task.id, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
+    if (gate.reason === 'pending_approval') {
+      // Atomic compare-and-swap (Issue #328 review round): a second blocked
+      // entry point (e.g. a follow-up racing an execute() for the same
+      // untrusted task) must NOT overwrite an already-recorded
+      // pendingOperation/pendingOperationPriorStatus — see
+      // recordExecutionGateBlock's doc comment on ITaskRepository for why
+      // the old unconditional `taskRepo.update(...)` here could both lose
+      // the first block's operation identity AND corrupt
+      // pendingOperationPriorStatus with 'pending_approval' itself.
+      // manifestHash is passed through so the guarded UPDATE can also detect
+      // a concurrent approval that already matches this exact manifest
+      // (Issue #328 review round fix 2).
+      const recorded = this.taskRepo.recordExecutionGateBlock(task.id, {
+        pendingOperation: operation,
+        priorStatus: task.status,
+        manifestHash,
+      });
+      if (recorded) {
+        // Separate 'status_change' log entry (Issue #51), not just the
+        // 'command' entry above — buildServer.ts's NotificationBus bridge
+        // (`executeTaskUseCase.events.on('log', ...)`) only turns a
+        // 'status_change' entry into a `task:status` WS event, the same
+        // mechanism that already surfaces 'waiting_for_human'/'phase_review'
+        // as browser notifications. Without this, a task blocked here would
+        // sit at pending_approval with no notification ever reaching the UI.
+        this.appendLog(task.id, unitId, 'status_change', { status: 'pending_approval', operation });
+      } else {
+        // Another operation is already recorded as the pending block — the
+        // first block's own 'status_change' already notified the client;
+        // logging a second one here would misreport `operation` as the one
+        // that will actually resume on approval.
+        this.appendLog(task.id, unitId, 'command', { type: 'execution_gate_already_pending', operation });
+      }
+      throw new ExecutionGatePendingApprovalError(task.id);
+    }
+    // 'denied': leave task status untouched — same rationale as the resource
+    // guard's pre-launch block above (task hasn't started, nothing to roll
+    // back) but unlike that block this isn't transient; a human must change
+    // the project server's input_policy before a retry can succeed.
+    throw new ExecutionGateDeniedError(task.id);
+  }
+
   private appendLog(taskId: number, unitId: number, type: LogType, content: unknown): void {
-    this.logRepo.append(taskId, unitId, type, content);
-    this.events.emit('log', { taskId, unitId, type, content, createdAt: new Date().toISOString() });
+    appendLogAndEmit(this.logRepo, this.events, taskId, unitId, type, content);
   }
 
   /**
@@ -282,6 +426,12 @@ export class ExecuteTaskUseCase {
     const server = this.serverRepo.findByName(serverName);
     if (!server) throw new Error('Server not found');
 
+    // Untrusted-input execution gate (Issue #328): must run before the
+    // resource guard, before any tmux window, before any worktree, before
+    // any secret is injected. Resolves project/projectServer once for reuse
+    // below.
+    const { project, projectServer } = this.enforceExecutionGate(task, unitId, 'execute');
+
     // リソースひっ迫時はウィンドウ作成前に中断する（タスクは開始前なので status は変更しない）。
     // force 指定（フロントの「それでも実行」）でスキップできる。
     if (options?.force !== true) {
@@ -293,8 +443,6 @@ export class ExecuteTaskUseCase {
     }
 
     // Change to project working directory (use worktree if possible)
-    const project = this.projectRepo.findById(task.projectId);
-    const projectServer = project ? this.projectServerRepo.find(task.projectId, serverName) : null;
     // allowedRoot is the project's configured working directory — the boundary
     // a caller-supplied task.workingDirectory must not escape (Issue #27:
     // task.workingDirectory comes straight from the API with no path
@@ -372,7 +520,7 @@ export class ExecuteTaskUseCase {
     if (workingDir) {
       // Create worktree for isolated branch/file tracking
       let wt: WorktreeInfo;
-      const baseBranch = task.baseBranch || projectServer?.branch || project?.defaultBranch || 'main';
+      const baseBranch = resolveBaseBranch(task, projectServer, project);
       try {
         const slug = await this.contentExtractor.generateSlug(task.title);
         wt = await this.getWorktreeService(server).create(workingDir, taskId, slug, baseBranch, task.branch || undefined);
@@ -428,11 +576,27 @@ export class ExecuteTaskUseCase {
       // skipped when there's no allowedRoot to check against) — this closes
       // the earlier TOCTOU window where wt.path was written to the DB before
       // it had been verified (Issue #27 review finding 2).
+      //
+      // task.branch is deliberately NOT written here (Issue #328 review
+      // round): it is the value the execution-gate fingerprint hashes as
+      // `branches.work` (ExecutionManifest.ts), and it is also read a few
+      // lines above as the user-specified branchName input to
+      // `getWorktreeService(server).create(...)`. Writing the freshly
+      // resolved worktree branch back into it here made an approved-but-
+      // unstarted run's OWN worktree creation change the very fingerprint
+      // its approval was granted under — the next phase-boundary
+      // reverification (PhaseLoopRunner.reverifyExecutionGateForPhase) then
+      // saw a manifest that no longer matched and threw the task straight
+      // back to pending_approval, mid-run, with the tmux window and worktree
+      // already created. `worktreeBranch` is the correct field for "the
+      // branch the system actually resolved/created" — it's already in the
+      // execution-gate fingerprint's deliberately-excluded list for exactly
+      // this self-invalidation reason (see ExecutionManifest.ts's module doc
+      // comment).
       this.taskRepo.update(taskId, {
         worktreePath: wt.path,
         worktreeBranch: wt.branch,
         baseBranch,
-        branch: wt.branch,
       } as Partial<Task>);
 
       this.appendLog(taskId, unitId, 'command', {
@@ -598,8 +762,15 @@ export class ExecuteTaskUseCase {
 
             if (wtPath && await ws.exists(wtPath)) {
               const updates: Partial<Task> = {};
+              // worktreeBranch, not branch — same self-invalidation reasoning
+              // as the worktree-creation write above: this async tail runs
+              // for every completed/failed run of an already-approved task,
+              // so writing the resolved branch back into the
+              // approval-fingerprinted `branch` field would invalidate the
+              // NEXT operation's (e.g. a follow-up's) approval on every
+              // ordinary run.
               const branch = await ws.getBranch(wtPath);
-              if (branch) updates.branch = branch;
+              if (branch) updates.worktreeBranch = branch;
               if (wtBaseBranch) {
                 const changedFiles = await ws.getDiff(wtPath, wtBaseBranch);
                 if (changedFiles) updates.changedFiles = changedFiles;
@@ -617,7 +788,9 @@ export class ExecuteTaskUseCase {
               if (gitInfo.changedFiles) updates.changedFiles = gitInfo.changedFiles;
               const prUrl = await this.findPrUrl(repo, gitInfo.branch);
               if (prUrl) updates.prUrl = prUrl;
-              if (gitInfo.branch) updates.branch = gitInfo.branch;
+              // worktreeBranch, not branch — same reasoning as the worktree
+              // branch above, applied to the no-worktree fallback path.
+              if (gitInfo.branch) updates.worktreeBranch = gitInfo.branch;
               if (Object.keys(updates).length > 0) {
                 this.taskRepo.update(taskId, updates);
               }
@@ -638,6 +811,15 @@ export class ExecuteTaskUseCase {
 
     const server = this.serverRepo.findByName(serverName);
     if (!server) throw new Error('Server not found');
+
+    // Same gate as execute() (Issue #328). A follow-up can resume a worker
+    // just as much as a fresh execute() can — e.g. a description edit on an
+    // untrusted task invalidates its approval hash while the task is
+    // mid-run, and the next follow-up (including the one the answer-submit
+    // endpoint issues) must not resume it unattended. The `comment` for this
+    // particular call is not persisted anywhere and is lost when blocked;
+    // the caller must resubmit it after approval (see approve-execution).
+    this.enforceExecutionGate(task, unitId, 'resume');
 
     this.appendLog(taskId, unitId, 'user_comment', { text: comment });
     this.taskRepo.updateStatus(taskId, 'in_progress');
@@ -919,6 +1101,13 @@ export class ExecuteTaskUseCase {
 
     const server = this.serverRepo.findByName(serverName);
     if (!server) throw new Error('Server not found');
+
+    // Same gate as execute()/followUp() (Issue #328). Reached from
+    // approve-plan's "resume from implementing" flow and from startup
+    // recovery (RecoverStuckTasksUseCase) — both resume a worker that may
+    // have gone stale for an untrusted task (description edited since the
+    // approval this run started under).
+    this.enforceExecutionGate(task, unitId, 'resume');
 
     // Validate currentPhase against unitType phases
     if (task.currentPhase) {

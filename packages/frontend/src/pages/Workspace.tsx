@@ -576,9 +576,19 @@ function WorkspaceInner() {
       });
       return;
     }
+    if (res.error === 'execution_pending_approval') {
+      // The execution gate (Issue #51/#328) blocked this task BEFORE any
+      // worker/worktree/secret was touched and flipped its status to
+      // 'pending_approval' server-side. Not a hard failure to toast and drop
+      // — refetch so the task's new status reaches TaskPanel, which renders
+      // the approval panel for 'pending_approval' on its own.
+      showToast(t('workspace:toast.executionPendingApproval'));
+      refreshWorkspace();
+      return;
+    }
     if (res.error) return showToast(res.error);
     refreshWorkspace();
-  }, [refreshWorkspace, showToast, confirm]);
+  }, [refreshWorkspace, showToast, confirm, t]);
 
   const stopTask = useCallback(async (unitId: number | null, taskId: number) => {
     if (!unitId) return;

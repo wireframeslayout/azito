@@ -88,6 +88,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "number",
             description: "優先度（任意、数値が小さいほど高優先）",
           },
+          source: {
+            type: "string",
+            enum: ["github", "gitlab"],
+            description:
+              "既存の GitHub/GitLab イシューを読んでタスク化する場合に指定します（任意）。指定すると azito 側でこのタスクは未信頼入力として扱われ、初回実行前に人間の承認が必要になります（source_ref と併せて指定してください）。人間が本文を確認していない自動作成には設定しないでください",
+          },
+          source_ref: {
+            type: "string",
+            description: "イシューの参照（例: 'owner/repo#123'）。source 指定時は必須",
+          },
         },
       },
     },
@@ -189,6 +199,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
         if (args.description !== undefined) body.description = args.description;
         if (args.priority !== undefined) body.priority = args.priority;
+        // source/source_ref (task/328-input-trust-and-exec-gate follow-up,
+        // part C): passed through verbatim, never defaulted or inferred —
+        // an agent creating a task from an issue it read must say so
+        // explicitly via `source`. Deliberately NOT auto-approved here (no
+        // GET/POST to /api/tasks/:id/execution-approval): unlike the
+        // browser's interactive create-form, no human has reviewed this
+        // content, so an untrusted task created through this tool must still
+        // go through the normal pending_approval panel on first execute.
+        if (args.source !== undefined) body.source = args.source;
+        if (args.source_ref !== undefined) body.source_ref = args.source_ref;
         const result = await azitoPost("/api/tasks", body);
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }

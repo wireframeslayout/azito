@@ -1,13 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { EventEmitter } from 'events';
 import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
-import { WindowRespawnService } from './WindowRespawnService';
+import { WindowRespawnService, buildRespawnManifestInput } from './WindowRespawnService';
+import { resolveExecutionManifest, hashExecutionManifest } from '../tasks/execution/ExecutionManifest';
 import type { Window, IWindowRepository } from './Window';
 import type { ServerConfig } from '../servers/Server';
 import type { ITaskRepository, Task } from '../tasks/Task';
 import type { IUnitRepository, Unit } from '../units/Unit';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
+import type { IProjectRepository } from '../projects/Project';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 
 function makeWindow(overrides: Partial<Window> = {}): Window {
@@ -78,6 +81,11 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     summaryJson: null,
     prUrl: null,
     agentSessionId: null,
+    inputTrust: 'trusted',
+    executionApprovedFingerprintHash: null,
+    pendingOperation: null,
+    pendingOperationWindowId: null,
+    pendingOperationPriorStatus: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -112,19 +120,29 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
 // care about containment get a repo that reports no workingDirectory
 // (allowedRoot === null), which is the real "no boundary to enforce" skip
 // path — not an unwired dependency.
-function defaultProjectServerRepo(): Pick<IProjectServerRepository, 'find'> {
-  return { find: vi.fn(() => null) };
+function defaultProjectServerRepo(): Pick<IProjectServerRepository, 'find' | 'findByProject'> {
+  return { find: vi.fn(() => null), findByProject: vi.fn(() => []) };
 }
 
 function defaultTransportFactory(): Pick<TransportFactory, 'getTransport'> {
   return { getTransport: vi.fn(() => ({})) } as unknown as Pick<TransportFactory, 'getTransport'>;
 }
 
+// resolveExecutionManifest() (Issue #328 fifth-round review) needs a
+// projectRepo to resolve project.defaultUnitId/defaultBranch — every test
+// below sets task.unitId explicitly, so resolveUnitId() never actually falls
+// through to this mock's return value, but the dependency itself is now
+// required (same reasoning as projectServerRepo/transportFactory above).
+function defaultProjectRepo(): Pick<IProjectRepository, 'findById'> {
+  return { findById: vi.fn(() => null) };
+}
+
 function buildService(opts: {
   window: Window;
   task?: Task | null;
   unit?: Unit | null;
-  projectServerRepo?: Pick<IProjectServerRepository, 'find'>;
+  projectServerRepo?: Pick<IProjectServerRepository, 'find' | 'findByProject'>;
+  projectRepo?: Pick<IProjectRepository, 'findById'>;
   transportFactory?: Pick<TransportFactory, 'getTransport'>;
 }) {
   const windowRepo: IWindowRepository = {
@@ -169,8 +187,23 @@ function buildService(opts: {
     })),
   };
 
-  const taskRepo: Pick<ITaskRepository, 'findById'> = {
+  const taskRepo: Pick<ITaskRepository, 'findById' | 'updateStatus' | 'update' | 'recordExecutionGateBlock'> = {
     findById: vi.fn(() => opts.task ?? null),
+    updateStatus: vi.fn(),
+    update: vi.fn(),
+    // Mirrors SqliteTaskRepository's real guard (Issue #328 review round):
+    // only succeeds while no block is already outstanding on `opts.task`
+    // (the same object reference `findById` above always returns, so
+    // mutating it here is visible to the next call) — same trick
+    // ExecuteTaskUseCase.env.test.ts's taskRepo mock already uses.
+    recordExecutionGateBlock: vi.fn((_id: number, fields: { pendingOperation: string; priorStatus: string; pendingOperationWindowId?: number | null }) => {
+      if (!opts.task || opts.task.pendingOperation !== null) return false;
+      opts.task.status = 'pending_approval' as Task['status'];
+      opts.task.pendingOperation = fields.pendingOperation as Task['pendingOperation'];
+      opts.task.pendingOperationWindowId = fields.pendingOperationWindowId ?? null;
+      opts.task.pendingOperationPriorStatus = fields.priorStatus as Task['pendingOperationPriorStatus'];
+      return true;
+    }),
   };
 
   const unitRepo: Pick<IUnitRepository, 'findById'> = {
@@ -180,6 +213,24 @@ function buildService(opts: {
   const clearExitMarker = vi.fn();
   const supervisorRegistry = { clearExitMarker } as any;
 
+  const logRepo = { append: vi.fn() } as any;
+
+  // Only needed by resolveExecutionManifest() to resolve the manifest's
+  // `sidekick` field (Issue #328 sixth-round review) — returning
+  // undefined/null here means that field resolves to nulls, fine for tests
+  // that don't exercise it.
+  const unitTypeLoader = { get: vi.fn(() => undefined), getOrThrow: vi.fn(() => { throw new Error('not used in tests'); }) } as any;
+  const sidekickLoader = { findByName: vi.fn(() => null), findDefaultForTag: vi.fn(() => null), list: vi.fn(() => []) } as any;
+  // Only needed by resolveExecutionManifest() to resolve the manifest's
+  // `server`/`secrets` fields (Issue #328 tenth-round review) — null/empty
+  // by default, fine for tests that don't exercise them.
+  const serverRepo = { findByName: vi.fn(() => null) } as any;
+  const projectSecretRepo = { findByProject: vi.fn(() => []) } as any;
+  // Shared task-events EventEmitter (Issue #328 fifteenth-round review) — a
+  // real EventEmitter so appendLogAndEmit()'s emit() call is a no-op rather
+  // than a crash when no test subscribes to it.
+  const events = new EventEmitter();
+
   const service = new WindowRespawnService(
     windowRepo,
     tmux as any,
@@ -188,11 +239,18 @@ function buildService(opts: {
     unitRepo as any,
     supervisorRegistry,
     (opts.projectServerRepo ?? defaultProjectServerRepo()) as any,
+    (opts.projectRepo ?? defaultProjectRepo()) as any,
     (opts.transportFactory ?? defaultTransportFactory()) as any,
+    logRepo,
+    unitTypeLoader,
+    sidekickLoader,
+    serverRepo,
+    projectSecretRepo,
+    events,
     undefined,
   );
 
-  return { service, windowRepo, tmux, sentCommands, clearExitMarker };
+  return { service, windowRepo, tmux, sentCommands, clearExitMarker, taskRepo, logRepo, serverRepo, projectSecretRepo, events };
 }
 
 describe('WindowRespawnService.respawn — supervisor wrap', () => {
@@ -266,6 +324,90 @@ describe('WindowRespawnService.respawn — supervisor wrap', () => {
   });
 });
 
+describe('WindowRespawnService.respawn — execution gate (Issue #328)', () => {
+  function untrustedProjectServerRepo(inputPolicy: 'deny' | 'manual-approval'): Pick<IProjectServerRepository, 'find' | 'findByProject'> {
+    const row = { projectId: 1, serverName: 'local-server', workingDirectory: null, branch: 'main', tmuxSession: 'azito', inputPolicy };
+    return {
+      find: vi.fn(() => row),
+      findByProject: vi.fn(() => [row]),
+    };
+  }
+
+  it('blocks respawn for an untrusted task denied by policy, before any tmux mutation', async () => {
+    const task = makeTask({ id: 5, unitId: 10, inputTrust: 'untrusted' });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 5, windowType: 'agent', workerType: 'claude' });
+    const { service, tmux, windowRepo, logRepo } = buildService({
+      window: win, task, unit, projectServerRepo: untrustedProjectServerRepo('deny'),
+    });
+
+    await expect(service.respawn(1, makeServer())).rejects.toThrow(/execution denied/);
+
+    expect(tmux.killWindow).not.toHaveBeenCalled();
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(tmux.createSession).not.toHaveBeenCalled();
+    expect(tmux.sendKeys).not.toHaveBeenCalled();
+    expect(windowRepo.update).not.toHaveBeenCalled();
+    expect(logRepo.append).toHaveBeenCalledWith(5, 10, 'command', { type: 'execution_gate_blocked', reason: 'denied' });
+  });
+
+  it('blocks respawn for an untrusted task pending approval and records pendingOperation + the blocked windowId (Issue #328 fourth-round review)', async () => {
+    const task = makeTask({ id: 6, unitId: 10, inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 6, windowType: 'agent', workerType: 'claude' });
+    const { service, tmux, taskRepo } = buildService({
+      window: win, task, unit, projectServerRepo: untrustedProjectServerRepo('manual-approval'),
+    });
+
+    await expect(service.respawn(1, makeServer())).rejects.toThrow(/requires approval/);
+
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    // Recording status alone (the old behavior) is not enough: without
+    // pendingOperation/pendingOperationWindowId, the approval handler can't
+    // tell a blocked respawn apart from a blocked execute()/resume() and
+    // resumes the wrong thing (see tasks/execution/ExecutionApprovalDecision.ts's approve-execution).
+    expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(6, {
+      pendingOperation: 'respawn',
+      priorStatus: 'open',
+      manifestHash: expect.any(String),
+      pendingOperationWindowId: 1,
+    });
+  });
+
+  it("emits a 'log' event with a status_change entry on the shared events EventEmitter when a respawn blocks pending approval (Issue #328 fifteenth-round review) — before this, enforceExecutionGate recorded ONLY a 'command' entry, and neither entry ever reached buildServer.ts's NotificationBus/push bridges", async () => {
+    const task = makeTask({ id: 6, unitId: 10, inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 6, windowType: 'agent', workerType: 'claude' });
+    const { service, events } = buildService({
+      window: win, task, unit, projectServerRepo: untrustedProjectServerRepo('manual-approval'),
+    });
+    const received: Array<{ taskId: number; unitId: number; type: string; content: unknown }> = [];
+    events.on('log', (entry) => received.push(entry as typeof received[number]));
+
+    await expect(service.respawn(1, makeServer())).rejects.toThrow(/requires approval/);
+
+    const statusChangeEvents = received.filter((e) => e.type === 'status_change');
+    expect(statusChangeEvents).toHaveLength(1);
+    expect(statusChangeEvents[0]).toMatchObject({
+      taskId: 6,
+      unitId: 10,
+      content: { status: 'pending_approval', operation: 'respawn' },
+    });
+    expect(received.some((e) => e.type === 'command')).toBe(true);
+  });
+
+  it('allows respawn for windows with no taskId regardless of policy', async () => {
+    const win = makeWindow({ taskId: null, windowType: 'terminal', workerType: null });
+    const { service, tmux } = buildService({
+      window: win, projectServerRepo: untrustedProjectServerRepo('deny'),
+    });
+
+    await service.respawn(1, makeServer());
+
+    expect(tmux.createWindow).toHaveBeenCalled();
+  });
+});
+
 describe('WindowRespawnService.respawn — window name preservation', () => {
   it('preserves the original tmux window name on respawn', async () => {
     const win = makeWindow({ tmuxTarget: 'azito:task-1--ab12.1' });
@@ -327,8 +469,9 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
   // would make every check fail closed with "Cannot verify ... (ENOENT)".
   let rootDir: string;
 
-  function makeProjectServerRepo(workingDirectory: string | null): Pick<IProjectServerRepository, 'find'> {
-    return { find: vi.fn(() => ({ projectId: 1, serverName: 'local-server', workingDirectory, branch: 'main', tmuxSession: 'azito' })) };
+  function makeProjectServerRepo(workingDirectory: string | null): Pick<IProjectServerRepository, 'find' | 'findByProject'> {
+    const row = { projectId: 1, serverName: 'local-server', workingDirectory, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const };
+    return { find: vi.fn(() => row), findByProject: vi.fn(() => [row]) };
   }
 
   function makeTransportFactory(): Pick<TransportFactory, 'getTransport'> {
@@ -562,5 +705,225 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
     } finally {
       rmSync(outsideDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('WindowRespawnService.respawn — respawn config fingerprint (Issue #328 eighth-round review finding 2)', () => {
+  // Mirrors buildService()'s own default deps (unwired unitTypeLoader/
+  // sidekickLoader, no projectServer row) so a hash computed here lines up
+  // with the hash the service computes internally during respawn().
+  function manifestDeps(unit: Unit | null) {
+    return {
+      unitRepo: { findById: () => unit } as unknown as IUnitRepository,
+      projectRepo: { findById: () => null } as unknown as IProjectRepository,
+      projectServerRepo: { find: () => null, findByProject: () => [] } as unknown as IProjectServerRepository,
+      // Empty/null by default (Issue #328 tenth-round review) — matches
+      // buildService()'s own serverRepo/projectSecretRepo defaults, so a
+      // manifest approved here and one resolved via the real service agree.
+      serverRepo: { findByName: () => null } as any,
+      projectSecretRepo: { findByProject: () => [] } as any,
+      unitTypeLoader: { get: () => undefined, getOrThrow: () => { throw new Error('not used in tests'); } } as any,
+      sidekickLoader: { findByName: () => null, findDefaultForTag: () => null, list: () => [] } as any,
+    };
+  }
+
+  it('a respawn approved for the CURRENT window config does not self-invalidate (top-priority acceptance criterion)', async () => {
+    const task = makeTask({ id: 5, unitId: 10, inputTrust: 'untrusted' });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ id: 1, taskId: 5, windowType: 'agent', workerType: 'claude', workerModel: 'opus' });
+
+    // 4th arg mirrors WindowRespawnService.enforceExecutionGate's own call
+    // (Issue #328 ninth-round review finding 3): the manifest a human
+    // approves must be resolved against the WINDOW's server
+    // (win.serverName), not whatever resolveTaskServerName alone would
+    // produce from the task — respawn() computes its live gate check the
+    // same way, via the `server.name` it's actually called with below.
+    const { manifest } = resolveExecutionManifest(task, manifestDeps(unit), buildRespawnManifestInput(win), win.serverName);
+    const approvedHash = hashExecutionManifest(manifest);
+    const approvedTask = { ...task, executionApprovedFingerprintHash: approvedHash };
+
+    const { service, tmux } = buildService({ window: win, task: approvedTask, unit });
+
+    await service.respawn(1, makeServer());
+
+    expect(tmux.sendKeys).toHaveBeenCalled();
+  });
+
+  it("a window whose persisted worker config drifted since approval is blocked, not silently respawned with the drifted config (the mismatch this fix closes: approving what task/Unit resolution says vs. what the Window row actually launches)", async () => {
+    const task = makeTask({ id: 6, unitId: 10, inputTrust: 'untrusted' });
+    const unit = makeUnit({ id: 10 });
+    const approvedWin = makeWindow({ id: 1, taskId: 6, windowType: 'agent', workerType: 'claude', workerModel: 'opus' });
+
+    const { manifest } = resolveExecutionManifest(task, manifestDeps(unit), buildRespawnManifestInput(approvedWin), approvedWin.serverName);
+    const approvedHash = hashExecutionManifest(manifest);
+    const approvedTask = { ...task, executionApprovedFingerprintHash: approvedHash };
+
+    // The Window row persisted since approval now points at a different
+    // worker — same task/Unit resolution as before, so the OLD (bugged)
+    // manifest would have hashed identically and let this through.
+    const driftedWin = { ...approvedWin, workerType: 'codex' };
+    const { service, tmux, taskRepo } = buildService({ window: driftedWin, task: approvedTask, unit });
+
+    await expect(service.respawn(1, makeServer())).rejects.toThrow(/requires approval/);
+
+    expect(tmux.sendKeys).not.toHaveBeenCalled();
+    expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(6, {
+      pendingOperation: 'respawn',
+      priorStatus: 'open',
+      manifestHash: expect.any(String),
+      pendingOperationWindowId: 1,
+    });
+  });
+
+  it('a window respawning on a different server than approved is blocked', async () => {
+    const task = makeTask({ id: 7, unitId: 10, inputTrust: 'untrusted' });
+    const unit = makeUnit({ id: 10 });
+    const approvedWin = makeWindow({ id: 1, taskId: 7, windowType: 'agent', workerType: 'claude', workerModel: 'opus', serverName: 'local-server' });
+
+    const { manifest } = resolveExecutionManifest(task, manifestDeps(unit), buildRespawnManifestInput(approvedWin), approvedWin.serverName);
+    const approvedHash = hashExecutionManifest(manifest);
+    const approvedTask = { ...task, executionApprovedFingerprintHash: approvedHash };
+
+    const driftedWin = { ...approvedWin, serverName: 'other-server' };
+    const { service, taskRepo } = buildService({ window: driftedWin, task: approvedTask, unit });
+
+    await expect(service.respawn(1, makeServer({ name: 'other-server' }))).rejects.toThrow(/requires approval/);
+    expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(7, expect.objectContaining({ pendingOperation: 'respawn' }));
+  });
+});
+
+describe('WindowRespawnService.respawn — policy resolved from the WINDOW server, not the task server (Issue #328 ninth-round review finding 3)', () => {
+  // The task resolves to server A ('manual-approval'), but the Window being
+  // respawned actually lives on server B ('deny'). Before this fix,
+  // enforceExecutionGate() resolved the project_servers row via the TASK's
+  // own server resolution (resolveTaskServerName), ignoring the `server`
+  // param respawn() itself was called with — so B's 'deny' was silently
+  // overridden by A's more permissive 'manual-approval', and an untrusted
+  // respawn onto B could eventually be approved and run despite B's policy.
+  function twoServerProjectServerRepo(): Pick<IProjectServerRepository, 'find' | 'findByProject'> {
+    const rows: Record<string, { projectId: number; serverName: string; workingDirectory: string | null; branch: string; tmuxSession: string; inputPolicy: 'deny' | 'manual-approval' }> = {
+      'server-a': { projectId: 1, serverName: 'server-a', workingDirectory: null, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' },
+      'server-b': { projectId: 1, serverName: 'server-b', workingDirectory: null, branch: 'main', tmuxSession: 'azito', inputPolicy: 'deny' },
+    };
+    return {
+      find: vi.fn((_projectId: number, serverName: string) => rows[serverName] ?? null),
+      findByProject: vi.fn(() => Object.values(rows)),
+    };
+  }
+
+  it("a respawn onto the window's own server (B, deny) is denied even though the task itself resolves to server A (manual-approval)", async () => {
+    const task = makeTask({ id: 20, unitId: 10, inputTrust: 'untrusted', serverName: 'server-a' });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ id: 1, taskId: 20, windowType: 'agent', workerType: 'claude', serverName: 'server-b' });
+    const { service, tmux, taskRepo, logRepo } = buildService({
+      window: win, task, unit, projectServerRepo: twoServerProjectServerRepo(),
+    });
+
+    await expect(service.respawn(1, makeServer({ name: 'server-b' }))).rejects.toThrow(/execution denied/);
+
+    expect(tmux.killWindow).not.toHaveBeenCalled();
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(tmux.createSession).not.toHaveBeenCalled();
+    expect(tmux.sendKeys).not.toHaveBeenCalled();
+    // Denial never touches task.status/pendingOperation (same as the
+    // single-server 'deny' case above) — a bug that instead resolved
+    // server A's 'manual-approval' would have called taskRepo.update with
+    // pending_approval here instead of throwing outright.
+    expect(taskRepo.update).not.toHaveBeenCalled();
+    expect(logRepo.append).toHaveBeenCalledWith(20, 10, 'command', { type: 'execution_gate_blocked', reason: 'denied' });
+  });
+
+  it("resumeLegacySession also resolves policy from the server it's actually given, not the task's own resolved server", async () => {
+    const task = makeTask({ id: 21, unitId: 10, agentSessionId: 'sess-xyz', inputTrust: 'untrusted', serverName: 'server-a' });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 21 });
+    const { service, tmux, taskRepo } = buildService({
+      window: win, task, unit, projectServerRepo: twoServerProjectServerRepo(),
+    });
+
+    await expect(service.resumeLegacySession(21, makeServer({ name: 'server-b' }))).rejects.toThrow(/execution denied/);
+
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(taskRepo.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('WindowRespawnService.resumeLegacySession (Issue #328 fourth-round review finding 2)', () => {
+  function untrustedProjectServerRepo(inputPolicy: 'deny' | 'manual-approval'): Pick<IProjectServerRepository, 'find' | 'findByProject'> {
+    const row = { projectId: 1, serverName: 'local-server', workingDirectory: null, branch: 'main', tmuxSession: 'azito', inputPolicy };
+    return {
+      find: vi.fn(() => row),
+      findByProject: vi.fn(() => [row]),
+    };
+  }
+
+  // Legacy recovery for tasks that predate Window records (migration 034):
+  // no Window row exists, so respawn() doesn't apply — this method creates
+  // the tmux window and launches `claude --resume` directly. It used to live
+  // inline in tasks/routes.ts's recover-session fallback; moved here so the
+  // approve-execution handler can resume the exact same blocked operation
+  // instead of duplicating the tmux/supervisor wiring.
+
+  it('creates a window and launches a supervised claude --resume for a trusted task', async () => {
+    const task = makeTask({ id: 7, unitId: 10, agentSessionId: 'sess-abc', inputTrust: 'trusted' });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 7 }); // unused by this method, buildService just needs a window to construct the service
+    const { service, tmux, sentCommands, clearExitMarker } = buildService({ window: win, task, unit });
+
+    const result = await service.resumeLegacySession(7, makeServer());
+
+    expect(tmux.createWindow).toHaveBeenCalledWith(expect.anything(), 'azito', 'task-7');
+    expect(sentCommands).toHaveLength(1);
+    expect(sentCommands[0]).toMatch(/supervisor/);
+    expect(sentCommands[0]).toContain('claude --resume sess-abc --dangerously-skip-permissions');
+    expect(sentCommands[0]).toContain('--task-id 7');
+    expect(sentCommands[0]).toContain('--unit-id 10');
+    expect(clearExitMarker).toHaveBeenCalled();
+    expect(result.windowName).toBe('task-7-new');
+  });
+
+  it('throws when the task has no agent session ID', async () => {
+    const task = makeTask({ id: 8, agentSessionId: null });
+    const win = makeWindow({ taskId: 8 });
+    const { service, tmux } = buildService({ window: win, task });
+
+    await expect(service.resumeLegacySession(8, makeServer())).rejects.toThrow(/agent session ID/);
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+  });
+
+  it('blocks an untrusted, unapproved task and records pendingOperation=recover_session_legacy (no windowId, unlike respawn)', async () => {
+    const task = makeTask({ id: 9, unitId: 10, agentSessionId: 'sess-xyz', inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 9 });
+    const { service, tmux, taskRepo } = buildService({
+      window: win, task, unit, projectServerRepo: untrustedProjectServerRepo('manual-approval'),
+    });
+
+    await expect(service.resumeLegacySession(9, makeServer())).rejects.toThrow(/requires approval/);
+
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(9, {
+      pendingOperation: 'recover_session_legacy',
+      priorStatus: 'open',
+      manifestHash: expect.any(String),
+      pendingOperationWindowId: null,
+    });
+  });
+
+  it("emits a 'log' status_change event for a blocked legacy recover too (Issue #328 fifteenth-round review) — shares enforceExecutionGate() with respawn, so this closes the same gap for the OTHER entry point that method serves", async () => {
+    const task = makeTask({ id: 9, unitId: 10, agentSessionId: 'sess-xyz', inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 9 });
+    const { service, events } = buildService({
+      window: win, task, unit, projectServerRepo: untrustedProjectServerRepo('manual-approval'),
+    });
+    const received: Array<{ taskId: number; unitId: number; type: string; content: unknown }> = [];
+    events.on('log', (entry) => received.push(entry as typeof received[number]));
+
+    await expect(service.resumeLegacySession(9, makeServer())).rejects.toThrow(/requires approval/);
+
+    expect(received.filter((e) => e.type === 'status_change')).toEqual([
+      expect.objectContaining({ taskId: 9, unitId: 10, content: { status: 'pending_approval', operation: 'recover_session_legacy' } }),
+    ]);
   });
 });

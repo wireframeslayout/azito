@@ -43,6 +43,11 @@ const makeTask = (overrides = {}) => ({
   summaryJson: null,
   prUrl: null,
   agentSessionId: null,
+  inputTrust: 'trusted' as const,
+  executionApprovedFingerprintHash: null,
+  pendingOperation: null,
+  pendingOperationWindowId: null,
+  pendingOperationPriorStatus: null,
   createdAt: '2024-01-01',
   updatedAt: '2024-01-01',
   ...overrides,
@@ -146,6 +151,9 @@ function makeRepos(overrides: {
     updateCurrentPhase: vi.fn(),
     touch: vi.fn(),
     delete: vi.fn(),
+    consumePendingApproval: vi.fn(() => false),
+    recordExecutionGateBlock: vi.fn(() => true),
+    preApproveExecution: vi.fn(() => true),
     ...overrides.task,
   };
 
@@ -173,7 +181,7 @@ function makeRepos(overrides: {
   const projectServerRepo: IProjectServerRepository = {
     findByProject: vi.fn(() => []),
     findByServer: vi.fn(() => []),
-    find: vi.fn(() => ({ projectId: 10, serverName: 'local', workingDirectory: '/work', branch: 'feat', tmuxSession: 'sess' })),
+    find: vi.fn(() => ({ projectId: 10, serverName: 'local', workingDirectory: '/work', branch: 'feat', tmuxSession: 'sess', inputPolicy: 'manual-approval' as const })),
     upsert: vi.fn(),
     remove: vi.fn(),
     ...overrides.projectServer,

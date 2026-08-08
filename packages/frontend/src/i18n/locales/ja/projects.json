@@ -111,7 +111,11 @@
       "tmuxSessionHint": "空の場合は 'azito' がデフォルト。",
       "tmuxSessionPlaceholder": "azito",
       "noServers": "サーバー環境が設定されていません",
-      "session": "セッション: {{name}}"
+      "session": "セッション: {{name}}",
+      "inputPolicy": "未信頼入力のポリシー",
+      "inputPolicyHint": "外部（GitHub/GitLab のイシューなど）から取り込まれたタスクをこのサーバーで実行してよいかを制御します。既定では手動承認が必要です。",
+      "inputPolicyManualApproval": "手動承認を必須にする",
+      "inputPolicyDeny": "実行を拒否する"
     },
     "secrets": {
       "note": "ここに登録した値はタスク実行ペインに環境変数（AZITO_SECRET_<NAME>）として注入されます。エージェントと共有しても安全な認証情報のみ登録してください。保存後に値を取得することはできません。",

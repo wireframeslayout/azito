@@ -19,6 +19,11 @@ interface TaskRow {
   require_plan_approval: number;
   source: string;
   source_ref: string | null;
+  input_trust: string;
+  execution_approved_fingerprint_hash: string | null;
+  pending_operation: string | null;
+  pending_operation_window_id: number | null;
+  pending_operation_prior_status: string | null;
   worktree_path: string | null;
   worktree_branch: string | null;
   base_branch: string | null;
@@ -60,6 +65,9 @@ export class SqliteTaskRepository implements ITaskRepository {
   private getStmt;
   private createStmt;
   private updateStmt;
+  private consumePendingApprovalStmt;
+  private recordExecutionGateBlockStmt;
+  private preApproveExecutionStmt;
   private updateStatusStmt;
   private updateCurrentPhaseStmt;
   private touchStmt;
@@ -72,10 +80,45 @@ export class SqliteTaskRepository implements ITaskRepository {
     this.listByStatusStmt = db.prepare('SELECT * FROM tasks WHERE status = ? ORDER BY priority DESC, created_at DESC');
     this.getStmt = db.prepare('SELECT * FROM tasks WHERE id = ?');
     this.createStmt = db.prepare(
-      'INSERT INTO tasks (project_id, unit_id, server_name, title, description, priority, tmux_window, self_review_max_attempts, require_plan_approval, source, source_ref, worktree_path, worktree_branch, base_branch, target_branch, skip_pr, working_directory, branch, plan_markdown, pending_questions, changed_files, summary_json, pr_url, agent_session_id, review_subagent, implement_subagent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO tasks (project_id, unit_id, server_name, title, description, priority, tmux_window, self_review_max_attempts, require_plan_approval, source, source_ref, worktree_path, worktree_branch, base_branch, target_branch, skip_pr, working_directory, branch, plan_markdown, pending_questions, changed_files, summary_json, pr_url, agent_session_id, review_subagent, implement_subagent, input_trust, execution_approved_fingerprint_hash, pending_operation, pending_operation_window_id, pending_operation_prior_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
     this.updateStmt = db.prepare(
-      "UPDATE tasks SET title = ?, description = ?, status = ?, unit_id = ?, server_name = ?, priority = ?, tmux_window = ?, self_review_max_attempts = ?, require_plan_approval = ?, source = ?, source_ref = ?, worktree_path = ?, worktree_branch = ?, base_branch = ?, target_branch = ?, skip_pr = ?, working_directory = ?, branch = ?, plan_markdown = ?, pending_questions = ?, changed_files = ?, summary_json = ?, pr_url = ?, agent_session_id = ?, review_subagent = ?, implement_subagent = ?, updated_at = datetime('now') WHERE id = ?",
+      "UPDATE tasks SET title = ?, description = ?, status = ?, unit_id = ?, server_name = ?, priority = ?, tmux_window = ?, self_review_max_attempts = ?, require_plan_approval = ?, source = ?, source_ref = ?, worktree_path = ?, worktree_branch = ?, base_branch = ?, target_branch = ?, skip_pr = ?, working_directory = ?, branch = ?, plan_markdown = ?, pending_questions = ?, changed_files = ?, summary_json = ?, pr_url = ?, agent_session_id = ?, review_subagent = ?, implement_subagent = ?, input_trust = ?, execution_approved_fingerprint_hash = ?, pending_operation = ?, pending_operation_window_id = ?, pending_operation_prior_status = ?, updated_at = datetime('now') WHERE id = ?",
+    );
+    // Guarded compare-and-clear for consumePendingApproval() (Issue #328
+    // ninth-round review finding 4) — see that method's doc comment on
+    // ITaskRepository. COALESCE(?, column) means a NULL param leaves the
+    // column unchanged, so one statement serves both the approve branch
+    // (passes executionApprovedFingerprintHash, leaves status alone) and the
+    // deny branch (passes status, leaves the fingerprint alone) of
+    // tasks/execution/ExecutionApprovalDecision.ts's approve-execution handler.
+    this.consumePendingApprovalStmt = db.prepare(
+      "UPDATE tasks SET status = COALESCE(?, status), execution_approved_fingerprint_hash = COALESCE(?, execution_approved_fingerprint_hash), pending_operation = NULL, pending_operation_window_id = NULL, pending_operation_prior_status = NULL, updated_at = datetime('now') WHERE id = ? AND status = 'pending_approval' AND pending_operation IS NOT NULL",
+    );
+    // Guarded compare-and-swap for recordExecutionGateBlock() (Issue #328
+    // review round) — mirrors consumePendingApprovalStmt's guard style. Only
+    // succeeds while no block is already outstanding (pending_operation IS
+    // NULL) AND the approved fingerprint still differs from the manifest
+    // hash the caller used to decide it needed to block (the second half of
+    // the WHERE clause) — a concurrent approval that already matches this
+    // exact manifest must not be rewound back to pending_approval. AND the
+    // current status still matches the caller's stale-read snapshot
+    // (fields.priorStatus) — without this, a concurrent status change (e.g.
+    // archive) between the caller's read and this write would be silently
+    // overwritten back to 'pending_approval', letting an already-archived
+    // task be revived via later approval. See recordExecutionGateBlock's own
+    // doc comment on ITaskRepository for the race this closes.
+    this.recordExecutionGateBlockStmt = db.prepare(
+      "UPDATE tasks SET status = 'pending_approval', pending_operation = ?, pending_operation_window_id = ?, pending_operation_prior_status = ?, updated_at = datetime('now') WHERE id = ? AND status = ? AND pending_operation IS NULL AND (execution_approved_fingerprint_hash IS NULL OR execution_approved_fingerprint_hash != ?)",
+    );
+    // Guarded compare-and-swap for preApproveExecution() (creation-time
+    // pre-approval) — see that method's doc comment on ITaskRepository.
+    // Deliberately narrower than consumePendingApprovalStmt above: it only
+    // ever writes execution_approved_fingerprint_hash, never status/
+    // pending_operation*, and only while the task is still in the untouched
+    // 'open, never gate-blocked, untrusted' state this shortcut is for.
+    this.preApproveExecutionStmt = db.prepare(
+      "UPDATE tasks SET execution_approved_fingerprint_hash = ?, updated_at = datetime('now') WHERE id = ? AND status = 'open' AND pending_operation IS NULL AND input_trust = 'untrusted'",
     );
     this.updateStatusStmt = db.prepare("UPDATE tasks SET status = ?, updated_at = datetime('now') WHERE id = ?");
     this.updateCurrentPhaseStmt = db.prepare("UPDATE tasks SET current_phase = ?, updated_at = datetime('now') WHERE id = ?");
@@ -140,6 +183,11 @@ export class SqliteTaskRepository implements ITaskRepository {
       data.agentSessionId ?? null,
       data.reviewSubagent !== undefined ? (data.reviewSubagent !== null ? JSON.stringify(data.reviewSubagent) : null) : null,
       data.implementSubagent !== undefined ? (data.implementSubagent !== null ? JSON.stringify(data.implementSubagent) : null) : null,
+      data.inputTrust ?? 'trusted',
+      data.executionApprovedFingerprintHash ?? null,
+      data.pendingOperation ?? null,
+      data.pendingOperationWindowId ?? null,
+      data.pendingOperationPriorStatus ?? null,
     );
     return Number(result.lastInsertRowid);
   }
@@ -174,8 +222,51 @@ export class SqliteTaskRepository implements ITaskRepository {
       data.agentSessionId !== undefined ? data.agentSessionId : current.agent_session_id,
       data.reviewSubagent !== undefined ? (data.reviewSubagent !== null ? JSON.stringify(data.reviewSubagent) : null) : current.review_subagent,
       data.implementSubagent !== undefined ? (data.implementSubagent !== null ? JSON.stringify(data.implementSubagent) : null) : current.implement_subagent,
+      data.inputTrust !== undefined ? data.inputTrust : current.input_trust,
+      data.executionApprovedFingerprintHash !== undefined ? data.executionApprovedFingerprintHash : current.execution_approved_fingerprint_hash,
+      data.pendingOperation !== undefined ? data.pendingOperation : current.pending_operation,
+      data.pendingOperationWindowId !== undefined ? data.pendingOperationWindowId : current.pending_operation_window_id,
+      data.pendingOperationPriorStatus !== undefined ? data.pendingOperationPriorStatus : current.pending_operation_prior_status,
       id,
     );
+  }
+
+  consumePendingApproval(id: number, fields: { status?: TaskStatus; executionApprovedFingerprintHash?: string }): boolean {
+    const result = this.consumePendingApprovalStmt.run(fields.status ?? null, fields.executionApprovedFingerprintHash ?? null, id);
+    return result.changes > 0;
+  }
+
+  recordExecutionGateBlock(
+    id: number,
+    fields: {
+      pendingOperation: NonNullable<Task['pendingOperation']>;
+      priorStatus: TaskStatus;
+      manifestHash: string;
+      pendingOperationWindowId?: number | null;
+    },
+  ): boolean {
+    // A caller-supplied snapshot must never already be 'pending_approval' —
+    // see the doc comment on ITaskRepository.recordExecutionGateBlock. This
+    // is a defensive guard independent of the fingerprint check above: it
+    // refuses to persist a self-referential prior status even in the (rarer)
+    // case where the manifest itself changed between the stale read and the
+    // concurrent approval, which the fingerprint condition alone would not
+    // catch.
+    if (fields.priorStatus === ('pending_approval' as TaskStatus)) return false;
+    const result = this.recordExecutionGateBlockStmt.run(
+      fields.pendingOperation,
+      fields.pendingOperationWindowId ?? null,
+      fields.priorStatus,
+      id,
+      fields.priorStatus,
+      fields.manifestHash,
+    );
+    return result.changes > 0;
+  }
+
+  preApproveExecution(id: number, fingerprintHash: string): boolean {
+    const result = this.preApproveExecutionStmt.run(fingerprintHash, id);
+    return result.changes > 0;
   }
 
   updateStatus(id: number, status: TaskStatus): void {
@@ -226,6 +317,19 @@ export class SqliteTaskRepository implements ITaskRepository {
       agentSessionId: row.agent_session_id ?? null,
       reviewSubagent: parseSubagentConfig(row.review_subagent),
       implementSubagent: parseSubagentConfig(row.implement_subagent),
+      inputTrust: row.input_trust as 'trusted' | 'untrusted',
+      executionApprovedFingerprintHash: row.execution_approved_fingerprint_hash ?? null,
+      pendingOperation: (row.pending_operation ?? null) as
+        | 'execute'
+        | 'resume'
+        | 'resume_await_answer'
+        | 'resume_await_plan_review'
+        | 'restore'
+        | 'respawn'
+        | 'recover_session_legacy'
+        | null,
+      pendingOperationWindowId: row.pending_operation_window_id ?? null,
+      pendingOperationPriorStatus: (row.pending_operation_prior_status ?? null) as TaskStatus | null,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };

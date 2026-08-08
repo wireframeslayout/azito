@@ -65,3 +65,36 @@ export function resolveNextPhase(phaseConfig: PhaseConfig | null | undefined, cu
   if (idx === -1 || idx >= enabled.length - 1) return null;
   return enabled[idx + 1];
 }
+
+/**
+ * Resolves which enabled phase a task's `currentPhase` maps to — the "resume
+ * point" logic PhaseLoopRunner.stateMachineLoop uses to pick up a run in
+ * progress (or, when `currentPhase` is null/unset, the first enabled phase a
+ * fresh run starts at). Extracted as a shared function (Issue #328 sixth-round
+ * review) so ExecutionManifest.ts's approval-manifest resolution and the loop
+ * itself always agree on "which phase actually runs next" — two independent
+ * reimplementations of this are exactly how the manifest's earlier field gaps
+ * opened up.
+ *
+ * Returns the enabled-phase list alongside the resolved index so callers that
+ * only need "which phase" (index into the returned list) and the loop, which
+ * also needs the index to keep iterating, share one resolution.
+ */
+export function resolveCurrentPhaseIndex(
+  phaseConfig: PhaseConfig | null | undefined,
+  unitTypePhases: UnitTypePhase[],
+  currentPhase: string | null,
+): { enabledPhases: string[]; index: number } {
+  const enabledPhases = resolveEnabledPhases(phaseConfig, unitTypePhases);
+  if (!currentPhase) return { enabledPhases, index: 0 };
+
+  const idx = enabledPhases.indexOf(currentPhase);
+  if (idx >= 0) return { enabledPhases, index: idx };
+
+  // currentPhase was disabled since the run started: fall back to the next
+  // enabled phase that comes after it in unitType's declared order.
+  const allPhaseNames = unitTypePhases.map((p) => p.name);
+  const phaseOrderIdx = allPhaseNames.indexOf(currentPhase);
+  const fallbackIdx = enabledPhases.findIndex((p) => allPhaseNames.indexOf(p) > phaseOrderIdx);
+  return { enabledPhases, index: fallbackIdx >= 0 ? fallbackIdx : 0 };
+}

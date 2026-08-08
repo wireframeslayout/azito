@@ -15,6 +15,7 @@
   "kinds": {
     "qa": "Task has questions: {{title}}",
     "planApproval": "Plan approval needed: {{title}}",
+    "executionApproval": "Execution approval needed: {{title}}",
     "taskDone": "Task completed: {{title}}",
     "taskFailed": "Task failed: {{title}}",
     "agentFinished": "Agent finished: {{label}}"

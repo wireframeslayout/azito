@@ -100,6 +100,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     codex_error:       'task.codexError',
     waiting_for_human: 'task.waitingForHuman',
     phase_review:      'task.phaseReview',
+    pending_approval:  'task.pendingApproval',
   };
 
   executeTaskUseCase.events.on('log', (entry: { taskId: number; type: string; content: { status?: string } }) => {
@@ -216,9 +217,9 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   await app.register(fileBrowseRoutes, { serverRepo, tmux: tmuxClient });
   await app.register(gitRoutes, { serverRepo, transportFactory });
   await app.register(projectsRoutes, { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux: tmuxClient, serverRepo, projectSecretRepo });
-  await app.register(unitsRoutes, { unitRepo, taskRepo, logRepo, executeTaskUseCase, sidekickLoader: sidekickPackageLoader, unitTypeLoader });
+  await app.register(unitsRoutes, { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, projectServerRepo, serverRepo, sidekickLoader: sidekickPackageLoader, unitTypeLoader });
   await app.register(operationsRoutes, { executeTaskUseCase, agentActivityMonitor });
-  await app.register(tasksRoutes, { taskRepo, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux: tmuxClient, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService: windowRespawnService, taskRestoreService, supervisorRegistry, unitTypeLoader });
+  await app.register(tasksRoutes, { taskRepo, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux: tmuxClient, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService: windowRespawnService, taskRestoreService, unitTypeLoader, sidekickLoader: sidekickPackageLoader, projectSecretRepo });
   await app.register(windowsRoutes, { windowRepo, projectRepo, taskRepo, tmux: tmuxClient, serverRepo, respawnService: windowRespawnService, sessionStrategyFactory, sessionCaptureService, supervisorRegistry, notificationBus, resourceGuard });
   await app.register(providersRoutes, { providerRepo: wiring.providerRepo });
   const renderSkillPromptUseCase = new RenderSkillPromptUseCase(
