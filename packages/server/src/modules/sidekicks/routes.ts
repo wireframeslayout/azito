@@ -4,6 +4,7 @@ import type { ITaskPromptVarsResolver } from './ITaskPromptVarsResolver';
 import type { UnitTypeLoader } from './UnitTypeLoader';
 import { renderSidekickBody } from './renderSidekickBody';
 import { loadPromptModules } from '../prompt/PromptModuleLoader';
+import type { RouteAuthRequirement } from '../../shared/auth/routeAuth';
 
 // ─── Types ───
 
@@ -11,6 +12,14 @@ export interface SidekicksRouteOptions {
   sidekickService: SidekickPackageService;
   taskPromptVarsResolver: ITaskPromptVarsResolver;
   unitTypeLoader: UnitTypeLoader;
+  /**
+   * Auth requirement for GET /api/sidekicks/:name (Issue #28 design v3 §4:
+   * task principal allowed only for render=1 + task_id=self + a Sidekick
+   * assigned to that task's Unit). Built in buildServer.ts because the
+   * condition needs cross-module task/unit lookups this mid-layer module
+   * must not depend on directly (see .dependency-cruiser.cjs).
+   */
+  detailAuth: RouteAuthRequirement;
 }
 
 // ─── Helpers ───
@@ -63,7 +72,7 @@ function parseTagsInput(raw: unknown): string[] | undefined {
 // ─── Plugin ───
 
 const sidekicksRoutes: FastifyPluginCallback<SidekicksRouteOptions> = (fastify, opts, done) => {
-  const { sidekickService, taskPromptVarsResolver } = opts;
+  const { sidekickService, taskPromptVarsResolver, detailAuth } = opts;
 
   // ── GET /api/sidekicks ── マージ済み一覧（メタ情報のみ、body は含まない）
   fastify.get('/api/sidekicks', async () => {
@@ -73,6 +82,7 @@ const sidekicksRoutes: FastifyPluginCallback<SidekicksRouteOptions> = (fastify, 
   // ── GET /api/sidekicks/:name ── 詳細（body 含む）、?render=1 でテンプレート変数展開（Issue #263 Phase 5、azt-sidekick 用）
   fastify.get<{ Params: { name: string }; Querystring: { render?: string; task_id?: string } }>(
     '/api/sidekicks/:name',
+    { config: { auth: detailAuth } },
     async (request, reply) => {
       const pkg = sidekickService.getDetail(request.params.name);
       if (!pkg) return reply.status(404).send({ error: 'Sidekick not found' });

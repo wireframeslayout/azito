@@ -171,6 +171,8 @@ function makeOpts(existingTask: Task | null): TasksRouteOptions {
         { id: 1, projectId: 10, name: 'API_KEY', createdAt: '' },
       ]),
     } as unknown as TasksRouteOptions['projectSecretRepo'],
+    taskTokenRepo: { issue: vi.fn(), verify: vi.fn(() => false), revokeAllForTask: vi.fn(() => 0) } as unknown as TasksRouteOptions['taskTokenRepo'],
+    auditLogService: { record: vi.fn() } as unknown as TasksRouteOptions['auditLogService'],
   };
 }
 

@@ -51,7 +51,7 @@ describe('sidekicksRoutes', () => {
     const loader = new SidekickPackageLoader(builtinDir, userDir);
     const sidekickService = new SidekickPackageService(loader, userDir);
     app = Fastify();
-    await app.register(sidekicksRoutes, { sidekickService, taskPromptVarsResolver: makeTaskPromptVarsResolver(), unitTypeLoader: new UnitTypeLoader(builtinDir, userDir) });
+    await app.register(sidekicksRoutes, { sidekickService, taskPromptVarsResolver: makeTaskPromptVarsResolver(), unitTypeLoader: new UnitTypeLoader(builtinDir, userDir), detailAuth: { classes: [] } });
     await app.ready();
   });
 
@@ -347,6 +347,7 @@ describe('sidekicksRoutes', () => {
           resolveDir: async () => '~/.azito/sidekicks/pushing-default',
         }),
         unitTypeLoader: new UnitTypeLoader(builtinDir, userDir),
+        detailAuth: { classes: [] },
       });
       await app.ready();
 
@@ -371,7 +372,7 @@ describe('sidekicksRoutes', () => {
       app = Fastify();
       const loader = new SidekickPackageLoader(DEFAULT_BUILTIN_SIDEKICKS_DIR, userDir);
       const sidekickService = new SidekickPackageService(loader, userDir);
-      await app.register(sidekicksRoutes, { sidekickService, taskPromptVarsResolver: makeTaskPromptVarsResolver(), unitTypeLoader: new UnitTypeLoader(builtinDir, userDir) });
+      await app.register(sidekicksRoutes, { sidekickService, taskPromptVarsResolver: makeTaskPromptVarsResolver(), unitTypeLoader: new UnitTypeLoader(builtinDir, userDir), detailAuth: { classes: [] } });
       await app.ready();
 
       const res = await app.inject({ method: 'GET', url: '/api/sidekicks/pushing-default?render=1' });

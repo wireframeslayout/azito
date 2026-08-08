@@ -5,6 +5,24 @@ import { resolvePhaseSidekick } from '../sidekicks/resolvePhaseSidekick';
 import { isPhaseTag, type TaskPhase } from '../sidekicks/TaskPhase';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { UnitTypePhase } from '../sidekicks/UnitType';
+import type { RouteAuthRequirement } from '../../shared/auth/routeAuth';
+
+/**
+ * GET /api/phase-prompts/:phase: a task principal must supply task_id=self
+ * (Issue #28 design v3 §4: "無指定は拒否" — a missing task_id is a deny, not
+ * an operator-scope fallback). Self-contained (no cross-module lookup), so
+ * it's declared locally rather than in buildServer.ts.
+ */
+const phasePromptSelfAuth: RouteAuthRequirement = {
+  classes: ['task'],
+  operation: 'phase-prompts.render',
+  condition: (principal, request) => {
+    const taskIdParam = (request.query as { task_id?: string }).task_id;
+    if (!taskIdParam) return false;
+    const taskId = Number(taskIdParam);
+    return Number.isInteger(taskId) && principal.id === taskId;
+  },
+};
 
 // ─── Types ───
 
@@ -69,6 +87,7 @@ const phasePromptsRoutes: FastifyPluginCallback<PhasePromptsRouteOptions> = (fas
   // ── GET /api/phase-prompts/:phase ──
   fastify.get<{ Params: { phase: string }; Querystring: { render?: string; task_id?: string } }>(
     '/api/phase-prompts/:phase',
+    { config: { auth: phasePromptSelfAuth } },
     async (request, reply) => {
       const phaseParam = request.params.phase;
       const { render, task_id } = request.query;

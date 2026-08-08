@@ -34,6 +34,7 @@ import { SqliteProjectRepository } from '../modules/projects/SqliteProjectReposi
 import { SqliteProviderRepository } from '../modules/llm/SqliteProviderRepository';
 import { SqliteUnitRepository } from '../modules/units/SqliteUnitRepository';
 import { SqliteTaskRepository } from '../modules/tasks/SqliteTaskRepository';
+import { SqliteTaskTokenRepository } from '../modules/tasks/tokens/SqliteTaskTokenRepository';
 import { SqliteExecutionLogRepository } from '../modules/tasks/SqliteExecutionLogRepository';
 import { SqliteProjectServerRepository } from '../modules/projects/SqliteProjectServerRepository';
 import { SqliteProjectSecretRepository } from '../modules/projects/SqliteProjectSecretRepository';
@@ -43,6 +44,8 @@ import { SqliteAgentWatchRepository } from '../modules/notifications/SqliteAgent
 import { SqliteWindowRepository } from '../modules/windows/SqliteWindowRepository';
 import { SqliteAgentTurnRepository } from '../modules/tasks/turns/SqliteAgentTurnRepository';
 import { SqliteResourceGuardSettingsRepository } from '../modules/servers/resources/SqliteResourceGuardSettingsRepository';
+import { SqliteAuditLogRepository } from '../shared/audit/AuditLogRepository';
+import { AuditLogService } from '../shared/audit/AuditLogService';
 import { ResourceGuard } from '../modules/servers/resources/ResourceGuard';
 import { TurnSignalHub } from '../modules/tasks/turns/TurnSignalHub';
 import { AgentSignalService } from '../modules/tasks/turns/AgentSignalService';
@@ -103,6 +106,7 @@ export interface Repositories {
   providerRepo: SqliteProviderRepository;
   unitRepo: SqliteUnitRepository;
   taskRepo: SqliteTaskRepository;
+  taskTokenRepo: SqliteTaskTokenRepository;
   logRepo: SqliteExecutionLogRepository;
   projectServerRepo: SqliteProjectServerRepository;
   projectSecretRepo: SqliteProjectSecretRepository;
@@ -111,6 +115,8 @@ export interface Repositories {
   agentTurnRepo: SqliteAgentTurnRepository;
   agentWatchRepo: SqliteAgentWatchRepository;
   resourceGuardSettingsRepo: SqliteResourceGuardSettingsRepository;
+  auditLogRepo: SqliteAuditLogRepository;
+  auditLogService: AuditLogService;
 }
 
 export interface PushNotificationModule {
@@ -214,7 +220,8 @@ function buildRepositories(db: SqliteDatabase): Repositories {
   const projectRepo = new SqliteProjectRepository(db, windowRepo);
   const providerRepo = new SqliteProviderRepository(db);
   const unitRepo = new SqliteUnitRepository(db);
-  const taskRepo = new SqliteTaskRepository(db);
+  const taskTokenRepo = new SqliteTaskTokenRepository(db);
+  const taskRepo = new SqliteTaskRepository(db, taskTokenRepo);
   const logRepo = new SqliteExecutionLogRepository(db);
   const projectServerRepo = new SqliteProjectServerRepository(db);
   const projectSecretRepo = new SqliteProjectSecretRepository(db);
@@ -223,6 +230,8 @@ function buildRepositories(db: SqliteDatabase): Repositories {
   const agentTurnRepo = new SqliteAgentTurnRepository(db);
   const agentWatchRepo = new SqliteAgentWatchRepository(db);
   const resourceGuardSettingsRepo = new SqliteResourceGuardSettingsRepository(db);
+  const auditLogRepo = new SqliteAuditLogRepository(db);
+  const auditLogService = new AuditLogService(auditLogRepo);
 
   return {
     serverRepo,
@@ -231,6 +240,7 @@ function buildRepositories(db: SqliteDatabase): Repositories {
     providerRepo,
     unitRepo,
     taskRepo,
+    taskTokenRepo,
     logRepo,
     projectServerRepo,
     projectSecretRepo,
@@ -239,6 +249,8 @@ function buildRepositories(db: SqliteDatabase): Repositories {
     agentTurnRepo,
     agentWatchRepo,
     resourceGuardSettingsRepo,
+    auditLogRepo,
+    auditLogService,
   };
 }
 

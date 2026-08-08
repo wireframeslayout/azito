@@ -1,0 +1,40 @@
+/** A capability row backing an AZITO_TASK_TOKEN (design v3 §2). */
+export interface TaskToken {
+  id: number;
+  taskId: number;
+  windowGeneration: number;
+  issuedAt: string;
+  revokedAt: string | null;
+  revokeReason: string | null;
+}
+
+/** Returned only at issuance time — the plaintext token is never persisted or re-derivable. */
+export interface IssuedTaskToken {
+  id: number;
+  token: string;
+}
+
+export interface ITaskTokenRepository {
+  /**
+   * Mints a new token for `taskId` bound to `windowGeneration` (design v3
+   * §2: issued only when a window is actually (re)created — wiring that
+   * call site is out of scope for this phase, see AGENTS.md/Issue #28
+   * Phase A note). Does not revoke any existing token for the task; the
+   * caller decides whether an old generation should be revoked.
+   */
+  issue(taskId: number, windowGeneration: number): IssuedTaskToken;
+
+  /** True iff `secret` hashes to an active (non-revoked) token for `taskId`. Constant-time compare. */
+  verify(taskId: number, secret: string): boolean;
+
+  /**
+   * Revokes every active token for `taskId` (design v3 §2: "失効はリポジトリ
+   * の状態遷移 API 1箇所に集約"). Called from SqliteTaskRepository's
+   * updateStatus()/delete() in the same DB transaction as the task write —
+   * never call this directly from a route/use-case to represent a task
+   * status transition; add the transition to the task repository's
+   * TERMINAL_TASK_STATUSES/delete() instead so every call site benefits
+   * automatically. Returns the number of rows revoked.
+   */
+  revokeAllForTask(taskId: number, reason: string): number;
+}

@@ -166,6 +166,8 @@ function makeOpts(existingTask: Task, opts: { gateAllows: boolean }): { opts: Ta
     unitTypeLoader: { getOrThrow: vi.fn(() => ({ name: 'devops', label: 'DevOps', description: '', phases: [] })) } as unknown as TasksRouteOptions['unitTypeLoader'],
     sidekickLoader: { get: vi.fn(() => undefined) } as unknown as TasksRouteOptions['sidekickLoader'],
     projectSecretRepo: { findByProject: vi.fn(() => []) } as unknown as TasksRouteOptions['projectSecretRepo'],
+    taskTokenRepo: { issue: vi.fn(), verify: vi.fn(() => false), revokeAllForTask: vi.fn(() => 0) } as unknown as TasksRouteOptions['taskTokenRepo'],
+    auditLogService: { record: vi.fn() } as unknown as TasksRouteOptions['auditLogService'],
   };
   return { opts: routeOpts, task };
 }

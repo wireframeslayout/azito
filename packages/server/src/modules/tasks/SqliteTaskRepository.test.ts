@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { openDatabase, type SqliteDatabase } from '../../shared/db/Database';
 import { SqliteTaskRepository } from './SqliteTaskRepository';
+import { SqliteTaskTokenRepository } from './tokens/SqliteTaskTokenRepository';
 
 // consumePendingApproval() (Issue #328 ninth-round review finding 4): the
 // approve-execution route used to clear pendingOperation via the generic
@@ -19,7 +20,7 @@ describe('SqliteTaskRepository.consumePendingApproval (Issue #328 ninth-round re
 
   beforeEach(() => {
     db = openDatabase(':memory:');
-    repo = new SqliteTaskRepository(db);
+    repo = new SqliteTaskRepository(db, new SqliteTaskTokenRepository(db));
     db.prepare(
       "INSERT INTO projects (id, name, slug, default_branch) VALUES (1, 'P', 'p', 'main')",
     ).run();
@@ -131,7 +132,7 @@ describe('SqliteTaskRepository.recordExecutionGateBlock (Issue #328 review round
 
   beforeEach(() => {
     db = openDatabase(':memory:');
-    repo = new SqliteTaskRepository(db);
+    repo = new SqliteTaskRepository(db, new SqliteTaskTokenRepository(db));
     db.prepare(
       "INSERT INTO projects (id, name, slug, default_branch) VALUES (1, 'P', 'p', 'main')",
     ).run();
@@ -303,7 +304,7 @@ describe('SqliteTaskRepository.preApproveExecution (task/328 follow-up)', () => 
 
   beforeEach(() => {
     db = openDatabase(':memory:');
-    repo = new SqliteTaskRepository(db);
+    repo = new SqliteTaskRepository(db, new SqliteTaskTokenRepository(db));
     db.prepare(
       "INSERT INTO projects (id, name, slug, default_branch) VALUES (1, 'P', 'p', 'main')",
     ).run();

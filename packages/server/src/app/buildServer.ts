@@ -42,6 +42,12 @@ import healthRoutes from '../modules/health/routes';
 import systemRoutes from '../modules/system/routes';
 
 import { createTokenVerifier } from '../modules/servers/auth/tokenAuth';
+import { resolvePrincipal } from '../shared/auth/resolvePrincipal';
+import { evaluateRouteAuth } from '../shared/auth/routeAuth';
+import { resolveUnitId } from '../modules/tasks/execution/TaskExecutionEnv';
+import { resolvePhaseSidekick } from '../modules/sidekicks/resolvePhaseSidekick';
+import type { Principal } from '../shared/auth/Principal';
+import type { RouteAuthRequirement } from '../shared/auth/routeAuth';
 
 import { handleTerminalConnection } from '../modules/tmux/ws/terminalHandler';
 import { handleTaskLogStream } from '../modules/tasks/ws/taskLogHandler';
@@ -65,14 +71,14 @@ export interface ServerHandles {
 
 export async function buildServer(app: FastifyInstance, wiring: Wiring, port: number): Promise<ServerHandles> {
   const {
-    serverRepo, windowRepo, projectRepo, projectServerRepo, unitRepo, taskRepo, logRepo,
+    serverRepo, windowRepo, projectRepo, projectServerRepo, unitRepo, taskRepo, taskTokenRepo, logRepo,
     projectSecretRepo, storageSettingsRepo, pushSubRepo, agentWatchRepo, resourceGuardSettingsRepo, resourceGuard,
     tmuxClient, transportFactory, worktreeServiceFactory, gitProvider, storageClient,
     agentInstaller, agentBundler, harnessInstaller, tmuxInstaller,
     executeTaskUseCase, agentActivityMonitor, windowRespawnService, taskRestoreService, sessionStrategyFactory, sessionCaptureService, usageService,
     pushService, vapidKeys, notificationBus, sidekickPackageService, sidekickPackageLoader,
     sidekickSyncService, unitTypeLoader, agentSignalService, supervisorRegistry, agentTurnRepo, turnSignalHub,
-    browserSessionManager, deployModeDetector, systemUpdateService, channelResolver,
+    browserSessionManager, deployModeDetector, systemUpdateService, channelResolver, auditLogService,
   } = wiring;
 
   // ─── Webhook token ───
@@ -198,6 +204,57 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // frequent responses (health, sessions) from paying compression overhead.
   await app.register(compress, { global: true, threshold: 1024, encodings: ['gzip', 'deflate'] });
 
+  // ─── Authorization (Issue #28 Phase A) ───
+  //
+  // AZITO_SCOPED_AUTH gates whether a route auth declaration's rejection is
+  // actually enforced (403) or only audit-logged as "would have been
+  // denied" (design v3 §12 staged migration: A~E all merge behind this
+  // flag, then it flips on once every stage is deployed). Default off keeps
+  // every existing behavior byte-for-byte identical — a task token is a new
+  // credential shape that simply doesn't exist anywhere in the system yet
+  // outside this file and the (unwired) issuance endpoint, so recognizing
+  // it here changes nothing observable until AZITO_SCOPED_AUTH=1.
+  const scopedAuthEnabled = process.env.AZITO_SCOPED_AUTH === '1' || process.env.AZITO_SCOPED_AUTH === 'true';
+
+  // ── GET /api/sidekicks/:name?render=1&task_id= task-principal condition ──
+  // Cross-module (task -> project -> unit -> phaseConfig -> Sidekick tags)
+  // lookup, so it lives here rather than in modules/sidekicks/routes.ts —
+  // sidekicks is a mid-layer module and must not depend on tasks/units
+  // (see .dependency-cruiser.cjs's mid-sidekicks-limited rule).
+  function taskOwnsSidekickForItsUnit(taskId: number, sidekickName: string): boolean {
+    const task = taskRepo.findById(taskId);
+    if (!task) return false;
+    const project = projectRepo.findById(task.projectId);
+    const resolvedUnitId = resolveUnitId(task, project);
+    if (resolvedUnitId === null) return false;
+    const unit = unitRepo.findById(resolvedUnitId);
+    if (!unit) return false;
+    const unitType = unitTypeLoader.getOrThrow(unit.unitType);
+    for (const phaseDef of unitType.phases) {
+      try {
+        const pkg = resolvePhaseSidekick(sidekickPackageLoader, phaseDef.name, unit.phaseConfig, phaseDef);
+        if (pkg.name === sidekickName) return true;
+      } catch {
+        // Phase misconfigured (e.g. assigned package no longer exists) — not
+        // a grant for this task, fall through to the next phase.
+      }
+    }
+    return false;
+  }
+
+  const sidekickDetailAuth: RouteAuthRequirement = {
+    classes: ['task'],
+    operation: 'sidekicks.render',
+    condition: (principal, request) => {
+      const query = request.query as { render?: string; task_id?: string };
+      if (query.render !== '1' || !query.task_id) return false;
+      const taskId = Number(query.task_id);
+      if (!Number.isInteger(taskId) || principal.id !== taskId) return false;
+      const name = (request.params as { name: string }).name;
+      return taskOwnsSidekickForItsUnit(taskId, name);
+    },
+  };
+
   app.addHook('onRequest', async (request, reply) => {
     if (!request.url.startsWith('/api')) return;
     if (request.url.startsWith('/api/health')) return;
@@ -205,8 +262,23 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     if (request.url.startsWith('/api/hooks/')) return;
     if (request.url.startsWith('/api/agent-signal')) return;
 
-    if (!verifyUiToken(request.headers.authorization)) {
+    const principal = resolvePrincipal(request.headers.authorization, { verifyUiToken, taskTokenRepo });
+    if (!principal) {
       return reply.status(401).send({ error: 'Unauthorized' });
+    }
+    request.principal = principal;
+
+    const { allowed, operation } = evaluateRouteAuth(principal, request);
+    if (!allowed) {
+      auditLogService.record({
+        actorClass: principal.class,
+        actorId: principal.id ?? null,
+        event: scopedAuthEnabled ? 'route_auth.denied' : 'route_auth.would_deny',
+        detail: { operation, method: request.method, url: request.url },
+      });
+      if (scopedAuthEnabled) {
+        return reply.status(403).send({ error: 'operator_required', operation });
+      }
     }
   });
 
@@ -219,7 +291,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   await app.register(projectsRoutes, { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux: tmuxClient, serverRepo, projectSecretRepo });
   await app.register(unitsRoutes, { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, projectServerRepo, serverRepo, sidekickLoader: sidekickPackageLoader, unitTypeLoader });
   await app.register(operationsRoutes, { executeTaskUseCase, agentActivityMonitor });
-  await app.register(tasksRoutes, { taskRepo, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux: tmuxClient, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService: windowRespawnService, taskRestoreService, unitTypeLoader, sidekickLoader: sidekickPackageLoader, projectSecretRepo });
+  await app.register(tasksRoutes, { taskRepo, taskTokenRepo, auditLogService, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux: tmuxClient, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService: windowRespawnService, taskRestoreService, unitTypeLoader, sidekickLoader: sidekickPackageLoader, projectSecretRepo });
   await app.register(windowsRoutes, { windowRepo, projectRepo, taskRepo, tmux: tmuxClient, serverRepo, respawnService: windowRespawnService, sessionStrategyFactory, sessionCaptureService, supervisorRegistry, notificationBus, resourceGuard });
   await app.register(providersRoutes, { providerRepo: wiring.providerRepo });
   const renderSkillPromptUseCase = new RenderSkillPromptUseCase(
@@ -256,7 +328,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     sidekickPackageLoader,
     sidekickSyncService,
   );
-  await app.register(sidekicksRoutes, { sidekickService: sidekickPackageService, taskPromptVarsResolver, unitTypeLoader });
+  await app.register(sidekicksRoutes, { sidekickService: sidekickPackageService, taskPromptVarsResolver, unitTypeLoader, detailAuth: sidekickDetailAuth });
   await app.register(supervisorsRoutes, { supervisorRegistry });
   await app.register(healthRoutes, { deployModeDetector });
   await app.register(systemRoutes, { systemUpdateService, channelResolver });

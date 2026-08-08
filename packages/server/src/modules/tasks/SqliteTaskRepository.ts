@@ -2,6 +2,18 @@ import type { SqliteDatabase } from '../../shared/db/Database';
 import type { Task, ITaskRepository } from './Task';
 import type { TaskStatus } from './TaskStatus';
 import type { SubagentConfig } from '../units/Unit';
+import type { ITaskTokenRepository } from './tokens/TaskToken';
+
+/**
+ * Terminal statuses that must revoke every outstanding task_tokens row for
+ * the task (Issue #28 design v3 §2: "失効はリポジトリの状態遷移 API 1箇所に
+ * 集約"). Enforced inside updateStatus() below rather than at each of the
+ * ~25 scattered `taskRepo.updateStatus(...)` call sites across
+ * PhaseLoopRunner/ExecuteTaskUseCase/RecoverStuckTasksUseCase/units routes —
+ * every one of those call sites benefits automatically, and none of them
+ * needs to know task_tokens exists.
+ */
+const TERMINAL_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set(['review', 'done', 'failed', 'archived']);
 
 interface TaskRow {
   id: number;
@@ -73,7 +85,7 @@ export class SqliteTaskRepository implements ITaskRepository {
   private touchStmt;
   private deleteStmt;
   private findAgentSessionIdsByServerStmt;
-  constructor(private db: SqliteDatabase) {
+  constructor(private db: SqliteDatabase, private taskTokenRepo: ITaskTokenRepository) {
     this.listStmt = db.prepare('SELECT * FROM tasks ORDER BY priority DESC, created_at DESC');
     this.listByProjectStmt = db.prepare('SELECT * FROM tasks WHERE project_id = ? ORDER BY priority DESC, created_at DESC');
     this.listByUnitStmt = db.prepare('SELECT * FROM tasks WHERE unit_id = ? ORDER BY priority DESC, created_at DESC');
@@ -270,6 +282,16 @@ export class SqliteTaskRepository implements ITaskRepository {
   }
 
   updateStatus(id: number, status: TaskStatus): void {
+    // Terminal statuses revoke every outstanding task token in the same
+    // transaction as the status write — see TERMINAL_TASK_STATUSES above.
+    if (TERMINAL_TASK_STATUSES.has(status)) {
+      const run = this.db.transaction(() => {
+        this.updateStatusStmt.run(status, id);
+        this.taskTokenRepo.revokeAllForTask(id, `task_status:${status}`);
+      });
+      run();
+      return;
+    }
     this.updateStatusStmt.run(status, id);
   }
 
@@ -282,7 +304,13 @@ export class SqliteTaskRepository implements ITaskRepository {
   }
 
   delete(id: number): void {
-    this.deleteStmt.run(id);
+    // Deletion revokes (not cascades) outstanding task tokens in the same
+    // transaction — see the doc comment on ITaskTokenRepository.revokeAllForTask.
+    const run = this.db.transaction(() => {
+      this.taskTokenRepo.revokeAllForTask(id, 'task_deleted');
+      this.deleteStmt.run(id);
+    });
+    run();
   }
 
   private toEntity(row: TaskRow): Task {
