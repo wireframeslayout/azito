@@ -98,7 +98,27 @@ export default function CodeEditorView({
         l.name.toLowerCase() === language.toLowerCase() ||
         l.alias.some(a => a.toLowerCase() === language.toLowerCase())
       );
-      const langSupport = langDesc ? await langDesc.load() : null;
+      let langSupport = null;
+      if (langDesc) {
+        try {
+          langSupport = await langDesc.load();
+        } catch (err) {
+          // Non-fatal: the editor still works without this language's syntax highlighting/folding
+          // support. Swallowing it entirely would hide a real problem (e.g. a broken lazy-loaded
+          // chunk), so it's surfaced via console.error instead.
+          console.error(`Failed to load language support for "${language}"`, err);
+        }
+      }
+
+      // `langDesc.load()` can take a while (dynamic import), during which the component may have been
+      // unmounted (tab closed, file switched) — the outer effect's cleanup already ran in that case
+      // (with nothing to destroy yet, since viewRef.current is still unset at that point) and will not
+      // run again. Continuing past this point would create an EditorView attached to a `containerRef`
+      // that's since been detached from the DOM tree, and register a `cleanup` callback (the returned
+      // `init()` result) that the already-finished unmount handler will never invoke — leaking both the
+      // CodeMirror instance and, when `vimMode` is on, its MutationObserver. Abort here instead, mirroring
+      // the same guard already used right after the static `import()`s above.
+      if (destroyed || !containerRef.current) return;
 
       ensureVimWriteExRegistered(vimMod.Vim);
 

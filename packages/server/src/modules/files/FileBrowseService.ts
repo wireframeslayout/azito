@@ -95,6 +95,31 @@ export interface FileDownloadResult {
 export class FileBrowseService {
   constructor(private readonly tmux: TmuxClient) {}
 
+  // Per (serverName, path) in-process write serialization (simple mutex via Promise chaining). The hub
+  // is a single process, so this is sufficient to close the race where two concurrent saves against the
+  // same file both read the same baseMtime, both pass the conflict check, and the second silently
+  // clobbers the first ("last write wins" — mtime check and replace are separate operations with an
+  // await gap between them, especially on the remote path). Keyed by server name + path so unrelated
+  // files/servers never block each other. Entries are removed once their chain settles so the map does
+  // not grow unbounded.
+  private readonly writeLocks = new Map<string, Promise<unknown>>();
+
+  private async withWriteLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const prior = this.writeLocks.get(key) ?? Promise.resolve();
+    // Swallow the prior run's rejection here (not propagated) so one failed save doesn't poison the
+    // chain for the next caller waiting on the same key — each caller still observes its own fn()'s
+    // outcome via the returned/awaited `run` below.
+    const run = prior.catch(() => {}).then(fn);
+    this.writeLocks.set(key, run);
+    try {
+      return await run;
+    } finally {
+      if (this.writeLocks.get(key) === run) {
+        this.writeLocks.delete(key);
+      }
+    }
+  }
+
   /** GET /api/servers/:name/directories 用: 部分パスに対する候補ディレクトリ一覧 */
   async listDirectories(srv: ServerConfig, inputPath: string): Promise<string[]> {
     try {
@@ -381,7 +406,17 @@ export class FileBrowseService {
     if (Buffer.byteLength(content, 'utf-8') > MAX_FILE_SIZE) {
       throw new FileBrowseError(`Content too large. Maximum is 500KB.`, 400);
     }
+    // Serialize the mtime-check-then-replace sequence per (server, path) so two concurrent saves
+    // against the same baseMtime can't both pass the conflict check — see withWriteLock above.
+    return this.withWriteLock(`${srv.name}:${filePath}`, () => this.writeFileContentLocked(srv, filePath, content, baseMtime));
+  }
 
+  private async writeFileContentLocked(
+    srv: ServerConfig,
+    filePath: string,
+    content: string,
+    baseMtime?: number,
+  ): Promise<{ mtime: number }> {
     if (srv.type === 'local') {
       const fs = await import('fs');
       if (baseMtime != null) {
@@ -459,28 +494,61 @@ export class FileBrowseService {
       const qUpload = sq(uploadTmp);
       const qDecoded = sq(decodedTmp);
       const b64 = Buffer.from(content, 'utf-8').toString('base64');
-      await this.tmux.execCommand(srv, `: > ${qUpload}`);
-      for (let i = 0; i < b64.length; i += WRITE_CHUNK_SIZE) {
-        const chunk = b64.slice(i, i + WRITE_CHUNK_SIZE);
-        await this.tmux.execCommand(srv, `printf '%s' ${sq(chunk)} >> ${qUpload}`);
-      }
-      // デコードを別の一時ファイルへ行ってから `mv` で原子的に置き換える
-      // （デコード先を直接 filePath にすると、書き込み途中で読まれたり途中で
-      // 失敗した場合に壊れた内容が残る）。既存ファイルのモードが分かっていれば
-      // mv 前に一時ファイルへ chmod してからモードごと置き換える。成功時のみ
-      // 明示的なマーカー `AZITO_WRITE_OK` を出力させ、それを見て初めて成功と
-      // 判定する — SSH transport は常に exit code 0 を返すため
-      // （RemoteWorktreeService の hasGitError と同じ既知事情）、code ではなく
-      // stdout のマーカーで判定する（Issue #27 review Important 1: デコード
-      // 失敗が握りつぶされ、直後の stat が旧ファイルで成功して見かけ上成功応答
-      // になっていた）。
-      const chmodStep = existingMode != null ? ` && chmod ${sq(existingMode)} ${qDecoded}` : '';
-      const writeResult = await this.tmux.execCommand(
-        srv,
-        `(base64 -d < ${qUpload} > ${qDecoded}${chmodStep} && mv -f ${qDecoded} ${q} && echo AZITO_WRITE_OK); rm -f ${qUpload} ${qDecoded}`,
-      );
-      if (!stripTerminalArtifacts(writeResult.stdout).includes('AZITO_WRITE_OK')) {
-        throw new FileBrowseError('Failed to write file', 500);
+      // `umask 077` on the creation command means the staging file is created 0600 (owner-only) from
+      // the instant it exists, instead of the default-umask 0644 window an attacker on a shared host
+      // could read the (base64-encoded, but still plaintext-recoverable) content through before the
+      // final decode step ever runs (Issue #27 review follow-up: umask/cleanup on remote temp files).
+      // Each exec runs `/bin/sh -c <command>` as its own process (AgentTransport -> agent routes.ts
+      // execFile), so this umask never leaks into unrelated commands.
+      await this.tmux.execCommand(srv, `umask 077; : > ${qUpload}`);
+      try {
+        for (let i = 0; i < b64.length; i += WRITE_CHUNK_SIZE) {
+          const chunk = b64.slice(i, i + WRITE_CHUNK_SIZE);
+          await this.tmux.execCommand(srv, `printf '%s' ${sq(chunk)} >> ${qUpload}`);
+        }
+        // デコードを別の一時ファイルへ行ってから `mv` で原子的に置き換える
+        // （デコード先を直接 filePath にすると、書き込み途中で読まれたり途中で
+        // 失敗した場合に壊れた内容が残る）。既存ファイルのモードが分かっていれば
+        // mv 前に一時ファイルへ chmod してからモードごと置き換える。成功時のみ
+        // 明示的なマーカー `AZITO_WRITE_OK` を出力させ、それを見て初めて成功と
+        // 判定する — SSH transport は常に exit code 0 を返すため
+        // （RemoteWorktreeService の hasGitError と同じ既知事情）、code ではなく
+        // stdout のマーカーで判定する（Issue #27 review Important 1: デコード
+        // 失敗が握りつぶされ、直後の stat が旧ファイルで成功して見かけ上成功応答
+        // になっていた）。
+        //
+        // Before trusting the staged file, verify its byte count against the base64 length we intended
+        // to write. Each chunk append is its own exec/process; if one of them silently drops or
+        // truncates bytes (e.g. a transient transport hiccup that still returns as "succeeded"), the
+        // previous version of this command would decode+mv whatever partial content landed, as long as
+        // it happened to still be valid base64 — truncating the file while reporting success (Issue #27
+        // review follow-up: chunk append result was never checked against expected size). `wc -c`
+        // against the known-correct `b64.length` catches that before any decode/replace happens.
+        const chmodStep = existingMode != null ? ` && chmod ${sq(existingMode)} ${qDecoded}` : '';
+        const expectedB64Len = b64.length;
+        // `trap ... EXIT` (rather than a trailing `; rm -f ...`) cleans up the staging files on every
+        // exit path of this script — including inside the `if`/`else` branches below — instead of only
+        // the happy path a bare trailing command would cover.
+        const writeCmd =
+          `umask 077; trap 'rm -f ${qUpload} ${qDecoded}' EXIT; ` +
+          `u=$(wc -c < ${qUpload} | tr -d ' '); ` +
+          `if [ "$u" = ${expectedB64Len} ]; then ` +
+          `base64 -d < ${qUpload} > ${qDecoded}${chmodStep} && mv -f ${qDecoded} ${q} && echo AZITO_WRITE_OK; ` +
+          `else echo AZITO_WRITE_SIZE_MISMATCH; fi`;
+        const writeResult = await this.tmux.execCommand(srv, writeCmd);
+        const writeStdout = stripTerminalArtifacts(writeResult.stdout);
+        if (writeStdout.includes('AZITO_WRITE_SIZE_MISMATCH')) {
+          throw new FileBrowseError('Failed to write file: staged content size mismatch', 500);
+        }
+        if (!writeStdout.includes('AZITO_WRITE_OK')) {
+          throw new FileBrowseError('Failed to write file', 500);
+        }
+      } catch (err) {
+        // Best-effort cleanup for failures before the final command ran at all (e.g. a chunk append
+        // exec throwing partway through the loop) — the final command's own `trap ... EXIT` only covers
+        // failures within that single command, not an earlier one in this sequence.
+        await this.tmux.execCommand(srv, `rm -f ${qUpload} ${qDecoded}`).catch(() => {});
+        throw err;
       }
       const verifyResult = await this.getRemoteMtimeMs(srv, filePath);
       if (verifyResult == null) {

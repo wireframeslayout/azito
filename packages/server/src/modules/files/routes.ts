@@ -288,6 +288,19 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
       try {
         const transport = srv.type !== 'local' ? transportFactory.getTransport(srv) : undefined;
         const parentDir = path.dirname(filePath);
+        // Containment is verified here (ancestor directories resolved to their real path via
+        // assertDirectoryContained, then the target itself below) and the resolved real path is what
+        // actually gets written (see writeTargetPath below) — not the raw request path. What this does
+        // NOT close: an ancestor directory could be swapped for a symlink pointing outside
+        // ps.workingDirectory *after* this check runs but *before* writeFileContent() opens the file
+        // (TOCTOU). Closing that gap requires atomic "resolve + open" primitives the Node fs API doesn't
+        // expose today — namely openat2(RESOLVE_BENEATH)/O_BENEATH-style syscalls that refuse to resolve
+        // through a symlink race at the kernel level, not just re-check after the fact. Node's fs.open
+        // has no such flag, and the local write already uses O_NOFOLLOW to close the narrower case of the
+        // save target *itself* becoming a symlink after resolveExistingTargetRealPath() below runs.
+        // Per this repo's established policy (see the execution-gate TOCTOU notes), this residual race on
+        // ancestor directories is accepted and documented rather than worked around with a partial
+        // mitigation that would give false confidence.
         await assertDirectoryContained(resolverFactory, srv.type, transport, { target: parentDir, allowedRoot: ps.workingDirectory }, 'target path');
 
         // Parent-directory containment alone doesn't catch a save target

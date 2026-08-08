@@ -395,6 +395,168 @@ describe('FileBrowseService.writeFileContent (remote)', () => {
     expect(writeCmd).toBeDefined();
     expect(writeCmd).not.toContain('chmod');
   });
+
+  // Review follow-up (chunk verification): a chunk append that silently drops or truncates bytes must
+  // not be decoded/moved into place just because what landed still happens to be valid base64. The
+  // write command verifies the staged file's byte count against the expected base64 length via `wc -c`
+  // before decoding.
+  it('rejects the write when the staged base64 byte count does not match what was sent', async () => {
+    const commands: string[] = [];
+    const tmuxMock = {
+      execCommand: async (_srv: unknown, cmd: string) => {
+        commands.push(cmd);
+        if (cmd.includes('wc -c')) {
+          // Simulate a truncated staging file (e.g. a dropped chunk) reported as size mismatch.
+          return { stdout: 'AZITO_WRITE_SIZE_MISMATCH\n', stderr: '', code: 0 };
+        }
+        return { stdout: '', stderr: '', code: 0 };
+      },
+    };
+    const service = new FileBrowseService(tmuxMock as any);
+    const srv = { name: 'remote', type: 'ssh' } as any;
+
+    await expect(
+      service.writeFileContent(srv, '/tmp/truncated.txt', 'hello world'),
+    ).rejects.toMatchObject({ status: 500 });
+
+    const writeCmd = commands.find((c) => c.includes('wc -c'));
+    expect(writeCmd).toBeDefined();
+    expect(writeCmd).toContain('AZITO_WRITE_SIZE_MISMATCH');
+    // The verification command still ends with a cleanup for the staging files.
+    expect(writeCmd).toContain('rm -f');
+  });
+
+  it('creates the upload staging file under umask 077', async () => {
+    const commands: string[] = [];
+    const tmuxMock = {
+      execCommand: async (_srv: unknown, cmd: string) => {
+        commands.push(cmd);
+        if (cmd.includes('base64 -d <')) return { stdout: 'AZITO_WRITE_OK\n', stderr: '', code: 0 };
+        if (cmd.startsWith('stat ')) return { stdout: '1750000000\n', stderr: '', code: 0 };
+        return { stdout: '', stderr: '', code: 0 };
+      },
+    };
+    const service = new FileBrowseService(tmuxMock as any);
+    const srv = { name: 'remote', type: 'ssh' } as any;
+
+    await service.writeFileContent(srv, '/tmp/private.txt', 'secret content');
+
+    const createCmd = commands.find((c) => c.includes(': >') && c.includes('.azito-upload-'));
+    expect(createCmd).toBeDefined();
+    expect(createCmd).toContain('umask 077');
+    const writeCmd = commands.find((c) => c.includes('base64 -d <'));
+    expect(writeCmd).toContain('umask 077');
+    expect(writeCmd).toContain("trap 'rm -f");
+  });
+
+  // Review follow-up (cleanup): if a chunk append fails partway through the upload loop, the staging
+  // file created just before it must still be cleaned up rather than left behind on the remote host.
+  it('cleans up the staging files when a chunk append fails mid-upload', async () => {
+    const commands: string[] = [];
+    let chunkCalls = 0;
+    const tmuxMock = {
+      execCommand: async (_srv: unknown, cmd: string) => {
+        commands.push(cmd);
+        if (cmd.startsWith("printf '%s'")) {
+          chunkCalls++;
+          if (chunkCalls === 2) throw new Error('transport dropped mid-upload');
+        }
+        return { stdout: '', stderr: '', code: 0 };
+      },
+    };
+    const service = new FileBrowseService(tmuxMock as any);
+    const srv = { name: 'remote', type: 'ssh' } as any;
+
+    const bigContent = 'x'.repeat(200 * 1024); // forces multiple chunks
+
+    await expect(
+      service.writeFileContent(srv, '/tmp/interrupted.txt', bigContent),
+    ).rejects.toThrow('transport dropped mid-upload');
+
+    const cleanupCmd = commands[commands.length - 1];
+    expect(cleanupCmd).toContain('rm -f');
+    expect(cleanupCmd).toContain('.azito-upload-');
+    expect(cleanupCmd).toContain('.azito-decoded-');
+  });
+});
+
+describe('FileBrowseService.writeFileContent concurrency', () => {
+  // Review follow-up (per-path serialization): the mtime check and the actual replace are separate
+  // operations with an await gap between them. Without in-process serialization, two concurrent saves
+  // against the same file with the same (now-stale-by-the-time-either-finishes) baseMtime could both
+  // pass the conflict check and the second write would silently clobber the first. This drives two
+  // concurrent local writes against the same path and asserts the second sees a 409, not a silent
+  // overwrite — proving the writes were serialized rather than interleaved.
+  it('serializes concurrent saves to the same path so the second sees a conflict, not a silent overwrite', async () => {
+    // Uses the remote path with a mock clock instead of real local `fs` timestamps: local mtimeMs
+    // granularity on some filesystems (notably under WSL2, which this repo targets — see the existing
+    // "rejects a conflicting edit that landed within the same second" test's own comment on the same
+    // issue) is coarse enough that two real writes issued microseconds apart can land on the identical
+    // mtimeMs, which would make this test flaky for a reason unrelated to what it's actually verifying.
+    // `remoteMtimeSeconds` here is an explicit, fully-controlled stand-in for "the file's mtime on disk"
+    // that only advances when a write's decode/mv step actually runs, so the assertion is about call
+    // ordering (serialized vs. interleaved), not about real clock resolution.
+    let remoteMtimeSeconds = 100;
+    const baseMtime = remoteMtimeSeconds * 1000;
+    const commands: string[] = [];
+    const tmuxMock = {
+      execCommand: async (_srv: unknown, cmd: string) => {
+        commands.push(cmd);
+        if (cmd.includes('%.Y')) return { stdout: `${remoteMtimeSeconds}.000000\n`, stderr: '', code: 0 };
+        if (cmd.includes('%a')) return { stdout: '', stderr: '', code: 0 };
+        if (cmd.includes('base64 -d <')) {
+          // Simulates the remote write actually landing: mtime only advances here, once the decode/mv
+          // step for that particular request runs — never on the initial conflict-check read.
+          remoteMtimeSeconds += 1;
+          return { stdout: 'AZITO_WRITE_OK\n', stderr: '', code: 0 };
+        }
+        return { stdout: '', stderr: '', code: 0 };
+      },
+    };
+    const service = new FileBrowseService(tmuxMock as any);
+    const srv = { name: 'remote-shared', type: 'ssh' } as any;
+
+    // Both requests read the same baseMtime (as two browser tabs saving the same stale snapshot would).
+    const [first, second] = await Promise.allSettled([
+      service.writeFileContent(srv, '/tmp/shared.txt', 'edit A', baseMtime),
+      service.writeFileContent(srv, '/tmp/shared.txt', 'edit B', baseMtime),
+    ]);
+
+    const results = [first, second];
+    const fulfilled = results.filter((r) => r.status === 'fulfilled');
+    const rejected = results.filter((r) => r.status === 'rejected');
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0] as PromiseRejectedResult).reason).toMatchObject({ status: 409 });
+    // Exactly one decode/mv actually ran — the second request was rejected at the conflict check, before
+    // ever staging or writing, not raced through to a second (corrupting) write.
+    expect(commands.filter((c) => c.includes('base64 -d <')).length).toBe(1);
+  });
+
+  it('does not let one save request block unrelated files from saving concurrently', async () => {
+    const fs = await import('fs');
+    const os = await import('os');
+    const path = await import('path');
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-concurrency-'));
+    const fileA = path.join(tmpDir, 'a.txt');
+    const fileB = path.join(tmpDir, 'b.txt');
+    fs.writeFileSync(fileA, 'a');
+    fs.writeFileSync(fileB, 'b');
+    const srv = { name: 'test-local', type: 'local', directory: tmpDir } as any;
+    const service = new FileBrowseService({} as any);
+
+    const [resA, resB] = await Promise.all([
+      service.writeFileContent(srv, fileA, 'new a'),
+      service.writeFileContent(srv, fileB, 'new b'),
+    ]);
+
+    expect(resA.mtime).toBeGreaterThan(0);
+    expect(resB.mtime).toBeGreaterThan(0);
+    expect(fs.readFileSync(fileA, 'utf-8')).toBe('new a');
+    expect(fs.readFileSync(fileB, 'utf-8')).toBe('new b');
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
 });
 
 describe('FileBrowseService.createEntry (local)', () => {

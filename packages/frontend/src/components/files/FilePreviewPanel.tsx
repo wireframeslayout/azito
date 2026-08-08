@@ -195,6 +195,11 @@ export function FilePreviewPanel({
   });
 
   const [editedContent, setEditedContent] = useState<string | null>(null);
+  // Mirrors editedContent synchronously (setEditedContent is only reflected in the `editedContent`
+  // binding after the next render). handleSave needs the *current* value at response-arrival time to
+  // detect whether the user typed more since the request was sent, so it reads this ref instead of the
+  // closed-over `editedContent` from when handleSave was created.
+  const editedContentRef = useRef<string | null>(null);
   const [baseMtime, setBaseMtime] = useState<number | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('clean');
   const [vimMode, setVimMode] = useState(() => {
@@ -239,6 +244,7 @@ export function FilePreviewPanel({
     setFile(null);
     setImage(null);
     setPdf(null);
+    editedContentRef.current = null;
     setEditedContent(null);
     setSaveStatus('clean');
     try {
@@ -262,6 +268,7 @@ export function FilePreviewPanel({
   useEffect(() => { fetchFile(); }, [fetchFile]);
 
   const handleContentChange = useCallback((val: string) => {
+    editedContentRef.current = val;
     setEditedContent(val);
     setSaveStatus('dirty');
   }, []);
@@ -272,7 +279,11 @@ export function FilePreviewPanel({
       setError('Save failed: projectId is required');
       return;
     }
-    const content = editedContent ?? file.content;
+    // Snapshot both the raw edited-content state (possibly null, meaning "unedited") and the resolved
+    // content sent to the server. The user can keep typing while the request is in flight; compare
+    // against editedContentRef.current on response to decide whether their newer edits must survive.
+    const editedContentAtSend = editedContent;
+    const content = editedContentAtSend ?? file.content;
     setSaveStatus('saving');
     try {
       const res = await api<SaveResponse>(`/servers/${serverName}/files/content`, {
@@ -292,10 +303,18 @@ export function FilePreviewPanel({
       if (res.ok && res.mtime != null) {
         setBaseMtime(res.mtime);
         setFile(prev => prev ? { ...prev, content, mtime: res.mtime! } : prev);
-        setEditedContent(null);
-        setSaveStatus('saved');
-        if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
-        savedTimerRef.current = setTimeout(() => setSaveStatus('clean'), 2000);
+        const hasNewerEdits = editedContentRef.current !== editedContentAtSend;
+        if (hasNewerEdits) {
+          // The user edited again after this save was dispatched — keep the panel dirty so the newer
+          // text is not silently discarded or mislabeled as saved.
+          setSaveStatus('dirty');
+        } else {
+          editedContentRef.current = null;
+          setEditedContent(null);
+          setSaveStatus('saved');
+          if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+          savedTimerRef.current = setTimeout(() => setSaveStatus('clean'), 2000);
+        }
       } else if (res.error && res.error !== 'conflict') {
         setSaveStatus('dirty');
         setError(`Save failed: ${res.error}`);
