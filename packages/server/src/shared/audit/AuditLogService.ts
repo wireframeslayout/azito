@@ -41,15 +41,24 @@ export class AuditLogService {
     private now: () => number = Date.now,
   ) {}
 
+  /**
+   * Marks the dedup key AFTER `repo.record()` succeeds, not before (Issue #28
+   * third-party review finding 4): if the write throws (DB busy, disk full,
+   * etc.), the key must NOT be marked as "just logged" — otherwise a retried
+   * call for the very same event within FLOOD_WINDOW_MS would be silently
+   * suppressed by the dedup check above, and the audit event would simply
+   * never reach the DB. Marking on success only means a burst of write
+   * failures can each be retried and (once the write succeeds) recorded.
+   */
   record(entry: AuditLogEntry): void {
     const key = `${entry.actorClass}:${entry.actorId ?? ''}:${entry.event}:${JSON.stringify(entry.detail ?? {})}`;
     const nowMs = this.now();
     this.sweepExpired(nowMs);
     const last = this.lastLoggedAt.get(key);
     if (last !== undefined && nowMs - last < FLOOD_WINDOW_MS) return;
+    this.repo.record(entry);
     this.lastLoggedAt.set(key, nowMs);
     this.evictOldestIfOverCap();
-    this.repo.record(entry);
   }
 
   private sweepExpired(nowMs: number): void {

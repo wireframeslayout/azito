@@ -74,8 +74,15 @@ describe('TmuxClient AZITO_URL injection', () => {
   });
 });
 
-describe('TmuxClient AZITO_UI_TOKEN injection', () => {
-  it('createSession includes -e AZITO_UI_TOKEN=<uiToken> alongside AZITO_URL', async () => {
+// Issue #28 Phase A後半: TmuxClient no longer injects AZITO_UI_TOKEN
+// unconditionally into every window/session it creates — a task pane must
+// NOT automatically carry the all-powerful UI token (design v3 §2/§9). Every
+// caller now decides its own extraEnv explicitly; `uiTokenEnv()` below is
+// the opt-in helper for callers that want the pre-Phase-A default (a plain
+// terminal/manual/project window, not a task's — see the doc comment on
+// `uiTokenEnv()` itself).
+describe('TmuxClient AZITO_UI_TOKEN injection (Issue #28 Phase A後半: no longer unconditional)', () => {
+  it('createSession does NOT include -e AZITO_UI_TOKEN unless the caller passes it via extraEnv', async () => {
     const calls: string[][] = [];
     const client = makeClient(async (args) => {
       calls.push(args);
@@ -83,10 +90,10 @@ describe('TmuxClient AZITO_UI_TOKEN injection', () => {
     });
     await client.createSession(srv, 'test-session', { windowName: 'win' });
     expect(envValue(calls[0], 'AZITO_URL')).toBe(LOCAL_URL);
-    expect(envValue(calls[0], 'AZITO_UI_TOKEN')).toBe(UI_TOKEN);
+    expect(envValue(calls[0], 'AZITO_UI_TOKEN')).toBeUndefined();
   });
 
-  it('createWindow includes -e AZITO_UI_TOKEN=<uiToken> alongside AZITO_URL', async () => {
+  it('createWindow does NOT include -e AZITO_UI_TOKEN unless the caller passes it via extraEnv', async () => {
     const calls: string[][] = [];
     const client = makeClient(async (args) => {
       calls.push(args);
@@ -94,16 +101,28 @@ describe('TmuxClient AZITO_UI_TOKEN injection', () => {
     });
     await client.createWindow(srv, 'test-session', 'win');
     expect(envValue(calls[0], 'AZITO_URL')).toBe(LOCAL_URL);
-    expect(envValue(calls[0], 'AZITO_UI_TOKEN')).toBe(UI_TOKEN);
+    expect(envValue(calls[0], 'AZITO_UI_TOKEN')).toBeUndefined();
   });
 
-  it('does not inject -e AZITO_UI_TOKEN when uiToken is empty', async () => {
+  it('createSession/createWindow include -e AZITO_UI_TOKEN when the caller passes uiTokenEnv() as extraEnv', async () => {
     const calls: string[][] = [];
     const client = makeClient(async (args) => {
       calls.push(args);
       return { stdout: '', stderr: '', code: 0 };
-    }, '');
-    await client.createSession(srv, 'test-session', { windowName: 'win' });
-    expect(envValue(calls[0], 'AZITO_UI_TOKEN')).toBeUndefined();
+    });
+    await client.createSession(srv, 'test-session', { windowName: 'win', extraEnv: client.uiTokenEnv() });
+    await client.createWindow(srv, 'test-session', 'win', { extraEnv: client.uiTokenEnv() });
+    // Each call also emits a second `set-window-option` tmux invocation
+    // (setWindowStatusFormat) — filter to just the new-session/new-window
+    // calls that actually carry the env flags.
+    const newSessionCall = calls.find((c) => c[0] === 'new-session')!;
+    const newWindowCall = calls.find((c) => c[0] === 'new-window')!;
+    expect(envValue(newSessionCall, 'AZITO_UI_TOKEN')).toBe(UI_TOKEN);
+    expect(envValue(newWindowCall, 'AZITO_UI_TOKEN')).toBe(UI_TOKEN);
+  });
+
+  it('uiTokenEnv() returns an empty object when uiToken is empty', async () => {
+    const client = makeClient(async () => ({ stdout: '', stderr: '', code: 0 }), '');
+    expect(client.uiTokenEnv()).toEqual({});
   });
 });

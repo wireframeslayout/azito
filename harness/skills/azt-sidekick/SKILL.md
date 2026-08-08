@@ -46,7 +46,7 @@ Sidekick 名リストが得られたら Step 3 へ進む。
 ## Step 2 (name 未指定時): 一覧を表示して選択を促す
 
 ```bash
-curl -sf -H "Authorization: Bearer ${AZITO_UI_TOKEN}" "${AZITO_URL:-http://localhost:3001}/api/sidekicks"
+curl -sf -H "Authorization: Bearer ${AZITO_TASK_TOKEN:-$AZITO_UI_TOKEN}" "${AZITO_URL:-http://localhost:3001}/api/sidekicks"
 ```
 
 取得した配列の各要素から `name` / `description` / `tags` / `isDefault` を抽出して表で提示し
@@ -63,9 +63,9 @@ Sidekick 名リストの各 `NAME` について、以下の Step 3a〜3d を順�
 
 ```bash
 if [ -n "$TASK_ID" ]; then
-  curl -sf -H "Authorization: Bearer ${AZITO_UI_TOKEN}" "${AZITO_URL:-http://localhost:3001}/api/sidekicks/${NAME}?render=1&task_id=${TASK_ID}"
+  curl -sf -H "Authorization: Bearer ${AZITO_TASK_TOKEN:-$AZITO_UI_TOKEN}" "${AZITO_URL:-http://localhost:3001}/api/sidekicks/${NAME}?render=1&task_id=${TASK_ID}"
 else
-  curl -sf -H "Authorization: Bearer ${AZITO_UI_TOKEN}" "${AZITO_URL:-http://localhost:3001}/api/sidekicks/${NAME}?render=1"
+  curl -sf -H "Authorization: Bearer ${AZITO_TASK_TOKEN:-$AZITO_UI_TOKEN}" "${AZITO_URL:-http://localhost:3001}/api/sidekicks/${NAME}?render=1"
 fi
 ```
 

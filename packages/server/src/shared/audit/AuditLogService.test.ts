@@ -56,6 +56,40 @@ describe('AuditLogService dedup (Issue #28 review finding 2)', () => {
   });
 });
 
+describe('AuditLogService dedup marks AFTER a successful write (Issue #28 review finding 4)', () => {
+  it('does not suppress a retry of the same event after repo.record() throws — a failed write must not be treated as "already logged"', () => {
+    const repo = makeRepo();
+    repo.record.mockImplementationOnce(() => {
+      throw new Error('DB busy');
+    });
+    let now = 1_000;
+    const svc = new AuditLogService(repo, () => now);
+
+    expect(() => svc.record({ actorClass: 'task', actorId: 5, event: 'task_token.issued', detail: { taskId: 5 } })).toThrow('DB busy');
+
+    now += 1_000; // still well within FLOOD_WINDOW_MS
+    svc.record({ actorClass: 'task', actorId: 5, event: 'task_token.issued', detail: { taskId: 5 } });
+
+    // First call threw (write never landed), second call is the retry that
+    // must actually reach the repo — if the dedup key were marked before the
+    // write (the pre-fix behavior), this second call would be silently
+    // suppressed and the event would never make it to audit_log at all.
+    expect(repo.record).toHaveBeenCalledTimes(2);
+  });
+
+  it('still suppresses a repeat once a write has actually succeeded', () => {
+    const repo = makeRepo();
+    let now = 1_000;
+    const svc = new AuditLogService(repo, () => now);
+
+    svc.record({ actorClass: 'task', actorId: 5, event: 'task_token.issued', detail: { taskId: 5 } });
+    now += 1_000;
+    svc.record({ actorClass: 'task', actorId: 5, event: 'task_token.issued', detail: { taskId: 5 } });
+
+    expect(repo.record).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('AuditLogService bounded dedup cache (Issue #28 review finding 5)', () => {
   it('does not grow lastLoggedAt without bound as distinct keys accumulate — expired entries are swept', () => {
     const repo = makeRepo();

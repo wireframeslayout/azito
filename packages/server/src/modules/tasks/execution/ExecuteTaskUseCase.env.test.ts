@@ -50,6 +50,8 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     pendingOperation: null,
     pendingOperationWindowId: null,
     pendingOperationPriorStatus: null,
+    createdByKind: 'operator',
+    createdById: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -214,6 +216,7 @@ function buildUseCase(opts: {
       return true;
     }),
     preApproveExecution: vi.fn(() => true),
+    countChildren: vi.fn(() => 0),
   };
 
   const unitRepo: IUnitRepository = {
@@ -324,6 +327,10 @@ function buildUseCase(opts: {
     get: vi.fn(() => ({ name: 'devops', label: 'DevOps', description: '', phases: [] })),
     getOrThrow: vi.fn(() => ({ name: 'devops', label: 'DevOps', description: '', phases: [] })),
   };
+  // Stands in for TaskPaneEnvironmentService â€” this file's tests assert on
+  // tmux.createWindow call sequencing/branching, not on the exact env
+  // contents (see TaskPaneEnvironmentService.test.ts for those).
+  const paneEnvService = { buildEnvForNewWindow: vi.fn(() => ({ AZITO_TASK_TOKEN: 'azt.task.1.' + 'a'.repeat(64), AZITO_TASK_ID: '1' })) };
 
   const useCase = new ExecuteTaskUseCase(
     taskRepo,
@@ -350,9 +357,10 @@ function buildUseCase(opts: {
     { check: vi.fn(async () => ({ ok: true, reasons: [], memAvailablePercent: null, loadPerCore: null, memAvailablePercentMin: 10, loadPerCoreMax: 2 })) } as any,
     projectSecretRepo as any,
     new EventEmitter(),
+    paneEnvService as any,
   );
 
-  return { useCase, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader };
+  return { useCase, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, paneEnvService };
 }
 
 describe('ExecuteTaskUseCase execution-env resolution', () => {
@@ -780,6 +788,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITOç›
       consumePendingApproval: vi.fn(() => false),
       recordExecutionGateBlock: vi.fn(() => true),
       preApproveExecution: vi.fn(() => true),
+      countChildren: vi.fn(() => 0),
     };
     const unitRepo: IUnitRepository = {
       findAll: vi.fn(() => [unit]),
@@ -896,6 +905,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITOç›
       { check: vi.fn(async () => ({ ok: true, reasons: [], memAvailablePercent: null, loadPerCore: null, memAvailablePercentMin: 10, loadPerCoreMax: 2 })) } as any,
       projectSecretRepo as any,
       new EventEmitter(),
+      { buildEnvForNewWindow: vi.fn(() => ({})) } as any,
     );
 
     await useCase.followUp(42, 1, 'please continue');
@@ -1408,6 +1418,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       { check: vi.fn(async () => ({ ok: true, reasons: [], memAvailablePercent: null, loadPerCore: null, memAvailablePercentMin: 10, loadPerCoreMax: 2 })) } as any,
       projectSecretRepo as any,
       new EventEmitter(),
+      { buildEnvForNewWindow: vi.fn(() => ({})) } as any,
     );
 
     // execute() itself resolves once setup (session/window/worktree

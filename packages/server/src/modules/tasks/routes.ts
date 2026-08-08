@@ -24,7 +24,6 @@ import { decideExecutionApproval, decideExecutionPreApproval, denyPendingApprova
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { SqliteProjectSecretRepository } from '../projects/SqliteProjectSecretRepository';
-import type { ITaskTokenRepository } from './tokens/TaskToken';
 import type { AuditLogService } from '../../shared/audit/AuditLogService';
 import type { Principal } from '../../shared/auth/Principal';
 import { OPERATOR_PRINCIPAL } from '../../shared/auth/Principal';
@@ -42,9 +41,7 @@ import { TaskOriginationService } from './origination/TaskOriginationService';
  * `request.principal` is always set by buildServer.ts's onRequest hook
  * before any handler here runs in production — the `?? OPERATOR_PRINCIPAL`
  * fallback exists only for route-level unit tests that register this plugin
- * directly against a bare Fastify instance (bypassing that hook), matching
- * the same defensive convention the pre-existing POST /api/tasks/:id/tokens
- * handler already uses (`request.principal?.class ?? 'operator'`).
+ * directly against a bare Fastify instance (bypassing that hook).
  */
 function originFromPrincipal(principal: Principal | undefined): { kind: Task['createdByKind']; id: number | null } {
   const p = principal ?? OPERATOR_PRINCIPAL;
@@ -103,8 +100,6 @@ export interface TasksRouteOptions {
   // something other than what actually gets hashed/executed.
   sidekickLoader: SidekickPackageLoader;
   projectSecretRepo: SqliteProjectSecretRepository;
-  /** Issue #28 Phase A: backs GET /api/tasks/:id (task-self read) and POST /api/tasks/:id/tokens (operator-only issuance). */
-  taskTokenRepo: ITaskTokenRepository;
   auditLogService: AuditLogService;
   /** Issue #28 Phase A後半: the sole task-creation funnel — see TaskOriginationService's own doc comment. */
   originationService: TaskOriginationService;
@@ -151,7 +146,7 @@ function toListItem(task: Task, windows: unknown[]): Record<string, unknown> {
 }
 
 const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, done) => {
-  const { taskRepo, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService, taskRestoreService, unitTypeLoader, sidekickLoader, projectSecretRepo, taskTokenRepo, auditLogService, originationService } = opts;
+  const { taskRepo, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService, taskRestoreService, unitTypeLoader, sidekickLoader, projectSecretRepo, auditLogService, originationService } = opts;
   const taskCleanupService = new TaskCleanupService({ serverRepo, tmux, worktreeServiceFactory, transportFactory, projectServerRepo, projectRepo });
 
   // ── GET /api/tasks ──
@@ -629,33 +624,6 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       await taskCleanupService.cleanup(task, request.log);
       taskRepo.delete(id);
       return { ok: true };
-    },
-  );
-
-  // ── POST /api/tasks/:id/tokens ── operator-only (default-deny; no auth config declared).
-  // Issues an AZITO_TASK_TOKEN capability row. Not yet called from any window-creation
-  // path (Issue #28 Phase A scope: repository + this endpoint only — wiring the token
-  // into execute/restore/respawn is TaskPaneEnvironmentService, a later phase). Exists so
-  // the capability can be exercised/tested ahead of that wiring.
-  fastify.post<{ Params: { id: string }; Body: { window_generation?: number } }>(
-    '/api/tasks/:id/tokens',
-    async (request, reply) => {
-      const id = parseInt(request.params.id, 10);
-      if (!taskRepo.findById(id)) return reply.status(404).send({ error: 'Task not found' });
-
-      const windowGeneration = request.body?.window_generation;
-      if (typeof windowGeneration !== 'number' || !Number.isInteger(windowGeneration)) {
-        return reply.status(400).send({ error: 'window_generation must be an integer' });
-      }
-
-      const issued = taskTokenRepo.issue(id, windowGeneration);
-      auditLogService.record({
-        actorClass: request.principal?.class ?? 'operator',
-        actorId: request.principal?.id ?? null,
-        event: 'task_token.issued',
-        detail: { taskId: id, tokenId: issued.id, windowGeneration },
-      });
-      return reply.status(201).send({ id: issued.id, token: issued.token });
     },
   );
 

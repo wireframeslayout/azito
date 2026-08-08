@@ -113,7 +113,6 @@ function buildApp(scopedAuthEnabled: boolean, db: SqliteDatabase, createCalls: R
     unitTypeLoader: {} as unknown as TasksRouteOptions['unitTypeLoader'],
     sidekickLoader: {} as unknown as TasksRouteOptions['sidekickLoader'],
     projectSecretRepo: { findByProject: vi.fn(() => []) } as unknown as TasksRouteOptions['projectSecretRepo'],
-    taskTokenRepo,
     auditLogService,
     originationService,
   };

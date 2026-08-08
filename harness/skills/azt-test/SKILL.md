@@ -24,7 +24,7 @@ argument-hint: [task_id]
 
 ```bash
 TASK_ID="$1"
-curl -sf -H "Authorization: Bearer ${AZITO_UI_TOKEN}" "${AZITO_URL}/api/phase-prompts/testing?render=skill&task_id=${TASK_ID}"
+curl -sf -H "Authorization: Bearer ${AZITO_TASK_TOKEN:-$AZITO_UI_TOKEN}" "${AZITO_URL}/api/phase-prompts/testing?render=skill&task_id=${TASK_ID}"
 ```
 
 取得した JSON の `prompt` フィールドがこのフェーズの指示内容です。`nextPhase` フィールドが次フェーズのスキル名です。

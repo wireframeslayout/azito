@@ -21,7 +21,7 @@ argument-hint: [issue description (optional)]
 ## Step 1: issue-default の内容を取得する
 
 ```bash
-curl -sf -H "Authorization: Bearer ${AZITO_UI_TOKEN}" "${AZITO_URL:-http://localhost:3001}/api/sidekicks/issue-default?render=1"
+curl -sf -H "Authorization: Bearer ${AZITO_TASK_TOKEN:-$AZITO_UI_TOKEN}" "${AZITO_URL:-http://localhost:3001}/api/sidekicks/issue-default?render=1"
 ```
 
 - HTTP 404/500 等のエラー: レスポンスの `error` フィールドの内容をそのままユーザーに提示して終了する

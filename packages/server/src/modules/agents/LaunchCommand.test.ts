@@ -35,13 +35,13 @@ describe('buildWorkerLaunchCommand', () => {
 
   it('builds codex command with model', () => {
     expect(buildWorkerLaunchCommand('codex', 'gpt-5.6-sol', null)).toBe(
-      "codex --dangerously-bypass-approvals-and-sandbox --model 'gpt-5.6-sol'",
+      "codex --dangerously-bypass-approvals-and-sandbox -c mcp_servers.azt-mcp.enabled=false --model 'gpt-5.6-sol'",
     );
   });
 
   it('builds codex command with no model', () => {
     expect(buildWorkerLaunchCommand('codex', null, null)).toBe(
-      'codex --dangerously-bypass-approvals-and-sandbox',
+      'codex --dangerously-bypass-approvals-and-sandbox -c mcp_servers.azt-mcp.enabled=false',
     );
   });
 
@@ -77,7 +77,7 @@ describe('buildHeadlessLaunchCommand', () => {
 
   it('builds codex exec command with model', () => {
     expect(buildHeadlessLaunchCommand('codex', 'gpt-5.6-sol')).toBe(
-      "codex exec --model 'gpt-5.6-sol'",
+      "codex exec --ignore-user-config --model 'gpt-5.6-sol'",
     );
   });
 
