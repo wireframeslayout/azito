@@ -46,6 +46,7 @@ import { createTokenVerifier } from '../modules/servers/auth/tokenAuth';
 import { resolvePrincipal } from '../shared/auth/resolvePrincipal';
 import { evaluateRouteAuth, UNMATCHED_ROUTE } from '../shared/auth/routeAuth';
 import { resolveUnitId } from '../modules/tasks/execution/TaskExecutionEnv';
+import { destroyPrimaryTaskWindow } from '../modules/tasks/execution/TaskWindowDestruction';
 import { resolvePhaseSidekick } from '../modules/sidekicks/resolvePhaseSidekick';
 import type { Principal } from '../shared/auth/Principal';
 import type { RouteAuthRequirement } from '../shared/auth/routeAuth';
@@ -343,7 +344,13 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   await app.register(serversRoutes, { serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix });
   await app.register(sessionsRoutes, {
     serverRepo, tmux: tmuxClient, windowRepo, notificationBus, resourceGuard,
-    onTaskWindowDestroyed: (taskId, reason) => taskPaneEnvironmentService.revokeForDestroyedWindow(taskId, reason),
+    destroyPrimaryTaskWindow: (taskId, windowName, serverName, target, reason, kill, onDestroyed) =>
+      destroyPrimaryTaskWindow(taskId, windowName, taskRepo, taskPaneEnvironmentService, reason, kill, () => {
+        onDestroyed();
+        // Issue #28 third-party review, second round: the second launch-expiry
+        // entry point — see SupervisorRegistry.markLaunchExpired's doc comment.
+        supervisorRegistry.markLaunchExpired(serverName, target);
+      }),
     buildSecondaryWindowEnv: (taskId, server) => {
       const task = taskRepo.findById(taskId);
       // Should be unreachable in practice (the caller only reaches here for
@@ -363,7 +370,11 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   await app.register(auditLogRoutes, { auditLogService });
   await app.register(tasksRoutes, {
     taskRepo, auditLogService, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux: tmuxClient, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService: windowRespawnService, taskRestoreService, unitTypeLoader, sidekickLoader: sidekickPackageLoader, projectSecretRepo, originationService, taskTokenRepo,
-    revokeTaskWindowGeneration: (taskId, reason) => taskPaneEnvironmentService.revokeForDestroyedWindow(taskId, reason),
+    destroyPrimaryTaskWindow: (taskId, windowName, serverName, target, reason, kill, onDestroyed) =>
+      destroyPrimaryTaskWindow(taskId, windowName, taskRepo, taskPaneEnvironmentService, reason, kill, () => {
+        onDestroyed();
+        supervisorRegistry.markLaunchExpired(serverName, target);
+      }),
   });
   await app.register(windowsRoutes, { windowRepo, projectRepo, taskRepo, tmux: tmuxClient, serverRepo, respawnService: windowRespawnService, sessionStrategyFactory, sessionCaptureService, supervisorRegistry, notificationBus, resourceGuard });
   await app.register(providersRoutes, { providerRepo: wiring.providerRepo });

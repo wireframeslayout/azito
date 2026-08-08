@@ -4,6 +4,7 @@ import sessionsRoutes from './sessions';
 import type { IServerRepository, ServerConfig } from '../../servers/Server';
 import type { TmuxClient } from '../TmuxClient';
 import type { SqliteWindowRepository } from '../../windows/SqliteWindowRepository';
+import { resolveKillOutcome } from '../killOutcome';
 
 function makeServerRepo(srv: ServerConfig): IServerRepository {
   return {
@@ -33,10 +34,36 @@ function makeWindowRepo(): FakeWindowRepo {
   } as unknown as FakeWindowRepo;
 }
 
+/**
+ * Fake `destroyPrimaryTaskWindow` that mirrors the real function's contract
+ * (kill → on success: run `onDestroyed` → resolve a `KillOutcome`) without
+ * the per-task lock or token-repo plumbing — these route-level tests only
+ * need to confirm the ROUTE calls it with the right (taskId, windowName,
+ * reason) and reacts correctly to its resolved outcome; the lock/reread
+ * behavior itself is covered by TaskWindowDestruction.test.ts.
+ */
+function makeDestroyPrimaryTaskWindow() {
+  return vi.fn(async (
+    _taskId: number,
+    _windowName: string,
+    _serverName: string,
+    _target: string,
+    _reason: string,
+    kill: () => Promise<{ stdout: string; stderr: string; code: number }>,
+    onDestroyed: () => void,
+  ) => {
+    // Reuses the real `resolveKillOutcome` (not a bare `code === 0` check) so
+    // this fake's "already gone" handling matches production exactly.
+    const outcome = await resolveKillOutcome(kill());
+    if (outcome.success) onDestroyed();
+    return outcome;
+  });
+}
+
 async function buildApp(opts: {
   tmux: Partial<TmuxClient>;
   windowRepo: SqliteWindowRepository;
-  onTaskWindowDestroyed?: ReturnType<typeof vi.fn>;
+  destroyPrimaryTaskWindow?: ReturnType<typeof makeDestroyPrimaryTaskWindow>;
   buildSecondaryWindowEnv?: ReturnType<typeof vi.fn>;
 }): Promise<FastifyInstance> {
   const srv: ServerConfig = { name: 'srv1', type: 'local' } as ServerConfig;
@@ -45,7 +72,7 @@ async function buildApp(opts: {
     serverRepo: makeServerRepo(srv),
     tmux: opts.tmux as TmuxClient,
     windowRepo: opts.windowRepo,
-    onTaskWindowDestroyed: opts.onTaskWindowDestroyed as ((taskId: number, reason: string) => void) | undefined,
+    destroyPrimaryTaskWindow: opts.destroyPrimaryTaskWindow,
     buildSecondaryWindowEnv: opts.buildSecondaryWindowEnv as ((taskId: number, server: ServerConfig) => Record<string, string>) | undefined,
   });
   await app.ready();
@@ -133,13 +160,13 @@ describe('DELETE /api/servers/:name/windows/:target', () => {
         getWindowIdentity: vi.fn(async () => null),
         killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       };
-      const onTaskWindowDestroyed = vi.fn();
-      app = await buildApp({ tmux, windowRepo, onTaskWindowDestroyed });
+      const destroyPrimaryTaskWindow = makeDestroyPrimaryTaskWindow();
+      app = await buildApp({ tmux, windowRepo, destroyPrimaryTaskWindow });
 
       const res = await app.inject({ method: 'DELETE', url: '/api/servers/srv1/windows/session:2' });
 
       expect(res.statusCode).toBe(200);
-      expect(onTaskWindowDestroyed).toHaveBeenCalledWith(42, 'window_killed_via_sessions_route');
+      expect(destroyPrimaryTaskWindow).toHaveBeenCalledWith(42, '2', 'srv1', 'session:2', 'window_killed_via_sessions_route', expect.any(Function), expect.any(Function));
     });
 
     it('does NOT revoke when the killed window is project-owned (not a task window)', async () => {
@@ -151,13 +178,13 @@ describe('DELETE /api/servers/:name/windows/:target', () => {
         getWindowIdentity: vi.fn(async () => null),
         killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       };
-      const onTaskWindowDestroyed = vi.fn();
-      app = await buildApp({ tmux, windowRepo, onTaskWindowDestroyed });
+      const destroyPrimaryTaskWindow = makeDestroyPrimaryTaskWindow();
+      app = await buildApp({ tmux, windowRepo, destroyPrimaryTaskWindow });
 
       const res = await app.inject({ method: 'DELETE', url: '/api/servers/srv1/windows/session:2' });
 
       expect(res.statusCode).toBe(200);
-      expect(onTaskWindowDestroyed).not.toHaveBeenCalled();
+      expect(destroyPrimaryTaskWindow).not.toHaveBeenCalled();
     });
 
     // Issue #28 multi-window token collision fix: a SECONDARY task-owned
@@ -174,13 +201,13 @@ describe('DELETE /api/servers/:name/windows/:target', () => {
         getWindowIdentity: vi.fn(async () => null),
         killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       };
-      const onTaskWindowDestroyed = vi.fn();
-      app = await buildApp({ tmux, windowRepo, onTaskWindowDestroyed });
+      const destroyPrimaryTaskWindow = makeDestroyPrimaryTaskWindow();
+      app = await buildApp({ tmux, windowRepo, destroyPrimaryTaskWindow });
 
       const res = await app.inject({ method: 'DELETE', url: '/api/servers/srv1/windows/session:2' });
 
       expect(res.statusCode).toBe(200);
-      expect(onTaskWindowDestroyed).not.toHaveBeenCalled();
+      expect(destroyPrimaryTaskWindow).not.toHaveBeenCalled();
     });
 
     it('does NOT revoke when kill-window fails for a reason other than "already gone" (window may still be alive)', async () => {
@@ -192,13 +219,18 @@ describe('DELETE /api/servers/:name/windows/:target', () => {
         getWindowIdentity: vi.fn(async () => null),
         killWindow: vi.fn(async () => ({ stdout: '', stderr: 'some other tmux error', code: 1 })),
       };
-      const onTaskWindowDestroyed = vi.fn();
-      app = await buildApp({ tmux, windowRepo, onTaskWindowDestroyed });
+      const destroyPrimaryTaskWindow = makeDestroyPrimaryTaskWindow();
+      app = await buildApp({ tmux, windowRepo, destroyPrimaryTaskWindow });
 
       const res = await app.inject({ method: 'DELETE', url: '/api/servers/srv1/windows/session:2' });
 
+      // The kill itself now runs INSIDE destroyPrimaryTaskWindow (Issue #28
+      // third-party review, second round — kill+revoke share one per-task
+      // lock), so the route DOES call it here; it's the fake's own
+      // `resolveKillOutcome`-backed outcome (success: false) that keeps
+      // `onDestroyed` (and, in production, the revoke) from firing.
       expect(res.statusCode).toBe(500);
-      expect(onTaskWindowDestroyed).not.toHaveBeenCalled();
+      expect(destroyPrimaryTaskWindow).toHaveBeenCalledWith(42, '2', 'srv1', 'session:2', 'window_killed_via_sessions_route', expect.any(Function), expect.any(Function));
     });
 
     it('still revokes when kill-window reports the window already gone ("can\'t find")', async () => {
@@ -210,13 +242,13 @@ describe('DELETE /api/servers/:name/windows/:target', () => {
         getWindowIdentity: vi.fn(async () => null),
         killWindow: vi.fn(async () => ({ stdout: '', stderr: "can't find window: 2", code: 1 })),
       };
-      const onTaskWindowDestroyed = vi.fn();
-      app = await buildApp({ tmux, windowRepo, onTaskWindowDestroyed });
+      const destroyPrimaryTaskWindow = makeDestroyPrimaryTaskWindow();
+      app = await buildApp({ tmux, windowRepo, destroyPrimaryTaskWindow });
 
       const res = await app.inject({ method: 'DELETE', url: '/api/servers/srv1/windows/session:2' });
 
       expect(res.statusCode).toBe(200);
-      expect(onTaskWindowDestroyed).toHaveBeenCalledWith(42, 'window_killed_via_sessions_route');
+      expect(destroyPrimaryTaskWindow).toHaveBeenCalledWith(42, '2', 'srv1', 'session:2', 'window_killed_via_sessions_route', expect.any(Function), expect.any(Function));
     });
   });
 });
@@ -246,15 +278,15 @@ describe('DELETE /api/servers/:name/sessions/:session', () => {
     const tmux: Partial<TmuxClient> = {
       killSession: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
     };
-    const onTaskWindowDestroyed = vi.fn();
-    app = await buildApp({ tmux, windowRepo, onTaskWindowDestroyed });
+    const destroyPrimaryTaskWindow = makeDestroyPrimaryTaskWindow();
+    app = await buildApp({ tmux, windowRepo, destroyPrimaryTaskWindow });
 
     const res = await app.inject({ method: 'DELETE', url: '/api/servers/srv1/sessions/session' });
 
     expect(res.statusCode).toBe(200);
-    expect(onTaskWindowDestroyed).toHaveBeenCalledWith(42, 'window_killed_via_session_delete');
-    expect(onTaskWindowDestroyed).toHaveBeenCalledWith(43, 'window_killed_via_session_delete');
-    expect(onTaskWindowDestroyed).toHaveBeenCalledTimes(2);
+    expect(destroyPrimaryTaskWindow).toHaveBeenCalledWith(42, 'task-42', 'srv1', 'session:task-42', 'window_killed_via_session_delete', expect.any(Function), expect.any(Function));
+    expect(destroyPrimaryTaskWindow).toHaveBeenCalledWith(43, 'task-43', 'srv1', 'session:task-43', 'window_killed_via_session_delete', expect.any(Function), expect.any(Function));
+    expect(destroyPrimaryTaskWindow).toHaveBeenCalledTimes(2);
     expect(windowRepo.removeByServerAndTarget).toHaveBeenCalledWith('srv1', 'session:task-42');
     expect(windowRepo.removeByServerAndTarget).toHaveBeenCalledWith('srv1', 'session:task-43');
     expect(windowRepo.removeByServerAndTarget).toHaveBeenCalledWith('srv1', 'session:extra');
@@ -269,13 +301,13 @@ describe('DELETE /api/servers/:name/sessions/:session', () => {
     const tmux: Partial<TmuxClient> = {
       killSession: vi.fn(async () => ({ stdout: '', stderr: 'some other tmux error', code: 1 })),
     };
-    const onTaskWindowDestroyed = vi.fn();
-    app = await buildApp({ tmux, windowRepo, onTaskWindowDestroyed });
+    const destroyPrimaryTaskWindow = makeDestroyPrimaryTaskWindow();
+    app = await buildApp({ tmux, windowRepo, destroyPrimaryTaskWindow });
 
     const res = await app.inject({ method: 'DELETE', url: '/api/servers/srv1/sessions/session' });
 
     expect(res.statusCode).toBe(500);
-    expect(onTaskWindowDestroyed).not.toHaveBeenCalled();
+    expect(destroyPrimaryTaskWindow).not.toHaveBeenCalled();
     expect(windowRepo.removeByServerAndTarget).not.toHaveBeenCalled();
   });
 
@@ -287,13 +319,13 @@ describe('DELETE /api/servers/:name/sessions/:session', () => {
     const tmux: Partial<TmuxClient> = {
       killSession: vi.fn(async () => ({ stdout: '', stderr: "can't find session: session", code: 1 })),
     };
-    const onTaskWindowDestroyed = vi.fn();
-    app = await buildApp({ tmux, windowRepo, onTaskWindowDestroyed });
+    const destroyPrimaryTaskWindow = makeDestroyPrimaryTaskWindow();
+    app = await buildApp({ tmux, windowRepo, destroyPrimaryTaskWindow });
 
     const res = await app.inject({ method: 'DELETE', url: '/api/servers/srv1/sessions/session' });
 
     expect(res.statusCode).toBe(200);
-    expect(onTaskWindowDestroyed).toHaveBeenCalledWith(42, 'window_killed_via_session_delete');
+    expect(destroyPrimaryTaskWindow).toHaveBeenCalledWith(42, 'task-42', 'srv1', 'session:task-42', 'window_killed_via_session_delete', expect.any(Function), expect.any(Function));
     expect(windowRepo.removeByServerAndTarget).toHaveBeenCalledWith('srv1', 'session:task-42');
   });
 
@@ -302,13 +334,13 @@ describe('DELETE /api/servers/:name/sessions/:session', () => {
     const tmux: Partial<TmuxClient> = {
       killSession: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
     };
-    const onTaskWindowDestroyed = vi.fn();
-    app = await buildApp({ tmux, windowRepo, onTaskWindowDestroyed });
+    const destroyPrimaryTaskWindow = makeDestroyPrimaryTaskWindow();
+    app = await buildApp({ tmux, windowRepo, destroyPrimaryTaskWindow });
 
     const res = await app.inject({ method: 'DELETE', url: '/api/servers/srv1/sessions/session' });
 
     expect(res.statusCode).toBe(200);
-    expect(onTaskWindowDestroyed).not.toHaveBeenCalled();
+    expect(destroyPrimaryTaskWindow).not.toHaveBeenCalled();
     expect(windowRepo.removeByServerAndTarget).not.toHaveBeenCalled();
   });
 });

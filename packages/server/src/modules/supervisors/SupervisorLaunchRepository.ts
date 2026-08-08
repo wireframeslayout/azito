@@ -11,6 +11,19 @@ export interface SupervisorLaunchExpectation {
 
 export type SupervisorLaunchStatus = 'pending' | 'active' | 'replaced' | 'expired';
 
+/**
+ * Upper bound on how long an issued-but-never-registered bootstrap token
+ * stays valid (Issue #28 third-party review, second round: `markStatus` was
+ * never called from production, so a launch that never registered at all —
+ * a supervisor process that failed to start, e.g. — stayed `pending` and its
+ * bootstrap token kept verifying FOREVER; nothing ever expired it). 15
+ * minutes is comfortably longer than any real launch-retry loop (tmux
+ * send-keys + process start is on the order of seconds), while still
+ * bounding how long a captured/leaked bootstrap token from a launch that
+ * never came up stays usable.
+ */
+export const PENDING_BOOTSTRAP_TTL_MS = 15 * 60 * 1000;
+
 export interface SupervisorLaunchRow extends SupervisorLaunchExpectation {
   id: number;
   launchId: string;
@@ -66,8 +79,15 @@ export interface ISupervisorLaunchRepository {
    * reuse this bootstrap — is preserved by `create()`'s supersede step, which
    * marks any outstanding `pending`/`active` row for the same key `replaced`
    * the moment a new launch is issued for it.
+   *
+   * Bounded by {@link PENDING_BOOTSTRAP_TTL_MS} (Issue #28 third-party
+   * review, second round): a launch that never registers at all (the
+   * supervisor process failed to start, e.g.) would otherwise stay
+   * `pending` -- and its bootstrap token keep verifying -- indefinitely,
+   * since nothing else ever transitions it out of `pending`. A row older
+   * than the TTL is rejected here even though `status` is still `pending`.
    */
-  verifyBootstrap(row: Pick<SupervisorLaunchRow, 'bootstrapHash' | 'status'>, token: string): boolean;
+  verifyBootstrap(row: Pick<SupervisorLaunchRow, 'bootstrapHash' | 'status' | 'createdAt'>, token: string): boolean;
 
   /**
    * True iff `token` hashes to `row.sessionHash` AND the row is `pending` or
@@ -119,6 +139,18 @@ function timingSafeHashEquals(hash: string, token: string): boolean {
   const provided = Buffer.from(hashToken(token), 'hex');
   const stored = Buffer.from(hash, 'hex');
   return stored.length === provided.length && crypto.timingSafeEqual(stored, provided);
+}
+
+/**
+ * `created_at` is stored via SQLite's `datetime('now')` — `YYYY-MM-DD
+ * HH:MM:SS` UTC with no timezone suffix, which `Date` parses as LOCAL time
+ * if handed as-is. Appending `Z` (same fix used elsewhere in this codebase
+ * for the same SQLite default, e.g. tasks/routes.ts's staleness check)
+ * forces UTC interpretation.
+ */
+function isPendingBootstrapExpired(createdAt: string): boolean {
+  const createdAtMs = new Date(createdAt.endsWith('Z') ? createdAt : `${createdAt}Z`).getTime();
+  return Date.now() - createdAtMs >= PENDING_BOOTSTRAP_TTL_MS;
 }
 
 interface LaunchRawRow {
@@ -209,8 +241,9 @@ export class SqliteSupervisorLaunchRepository implements ISupervisorLaunchReposi
     return row ? toRow(row) : null;
   }
 
-  verifyBootstrap(row: Pick<SupervisorLaunchRow, 'bootstrapHash' | 'status'>, token: string): boolean {
+  verifyBootstrap(row: Pick<SupervisorLaunchRow, 'bootstrapHash' | 'status' | 'createdAt'>, token: string): boolean {
     if (row.status !== 'pending') return false; // one-shot — already consumed
+    if (isPendingBootstrapExpired(row.createdAt)) return false;
     return timingSafeHashEquals(row.bootstrapHash, token);
   }
 

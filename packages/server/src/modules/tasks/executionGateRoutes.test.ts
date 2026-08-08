@@ -168,7 +168,11 @@ function makeOpts(existingTask: Task): { opts: TasksRouteOptions; createCalls: R
     auditLogService: { record: vi.fn() } as unknown as TasksRouteOptions['auditLogService'],
     originationService,
     taskTokenRepo: { issue: vi.fn(), verify: vi.fn(() => false), revokeAllForTask: vi.fn(() => 0), issueNextGeneration: vi.fn(), getActiveGeneration: vi.fn(() => null) } as unknown as TasksRouteOptions['taskTokenRepo'],
-    revokeTaskWindowGeneration: vi.fn(),
+    destroyPrimaryTaskWindow: vi.fn(async (_taskId, _windowName, _serverName, _target, _reason, kill, onDestroyed) => {
+      const result = await kill();
+      onDestroyed();
+      return { success: result.code === 0, alreadyGone: false, result };
+    }),
   };
   return { opts, createCalls };
 }

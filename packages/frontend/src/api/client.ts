@@ -1,5 +1,5 @@
 import { getUiToken, clearUiToken } from './token';
-import { reportIfOperatorRequired } from './operatorRequired';
+import { isOperatorRequiredError, reportIfOperatorRequired } from './operatorRequired';
 
 export async function api<T = unknown>(
   path: string,
@@ -20,7 +20,15 @@ export async function api<T = unknown>(
     throw new Error('Unauthorized');
   }
   const body = await res.json();
-  reportIfOperatorRequired(res.status, body);
+  if (isOperatorRequiredError(res.status, body)) {
+    reportIfOperatorRequired(res.status, body);
+    // The stored token is task-shaped, not the operator's `AZITO_UI_TOKEN`
+    // (see operatorRequired.ts) — clear it and drop back to TokenGate, same
+    // as the 401 branch above, so the caller never treats this 403 body as
+    // a success value.
+    clearUiToken();
+    throw new Error('OperatorRequired');
+  }
   return body;
 }
 
@@ -67,6 +75,10 @@ export async function uploadFile<T = unknown>(
     throw new Error('Unauthorized');
   }
   const body = await res.json();
-  reportIfOperatorRequired(res.status, body);
+  if (isOperatorRequiredError(res.status, body)) {
+    reportIfOperatorRequired(res.status, body);
+    clearUiToken();
+    throw new Error('OperatorRequired');
+  }
   return body;
 }

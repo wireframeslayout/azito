@@ -319,3 +319,51 @@ describe('createRotatedWindow + rollbackWindowReference under runExclusiveForTas
     expect(tokenRepo.isActive(b.tokenId)).toBe(false);
   });
 });
+
+// Issue #28 third-party review, second round: `onGone` throwing (e.g. a DB
+// write failing) previously skipped the revoke that follows it — the
+// just-killed window's generation was left valid forever with nothing in
+// the DB pointing at it. `rollbackWindowReference` must always attempt the
+// revoke, and must still propagate `onGone`'s error to the caller (not
+// swallow it).
+describe('rollbackWindowReference: onGone throwing must not skip the revoke', () => {
+  function makeServices() {
+    const tokenRepo = new FakeTaskTokenRepo();
+    const projectSecretRepo = { findByProjectWithValues: vi.fn(() => []) } as any;
+    const paneEnvService = new TaskPaneEnvironmentService(tokenRepo, projectSecretRepo, 'ui-token', true);
+    return { tokenRepo, paneEnvService };
+  }
+
+  it('still revokes the generation, and propagates the error, when onGone throws', async () => {
+    const { tokenRepo, paneEnvService } = makeServices();
+    const server = makeServer();
+    const task = makeTask({ id: 50 });
+
+    const created = await createRotatedWindow(paneEnvService, server, task, 'unused', async () => ({
+      result: { stdout: '', stderr: '', code: 0 },
+      windowName: 'w',
+    }));
+    expect(tokenRepo.isActive(created.tokenId)).toBe(true);
+
+    const onGone = vi.fn(() => {
+      throw new Error('reference bookkeeping failed');
+    });
+    const onStillAlive = vi.fn();
+
+    await expect(
+      rollbackWindowReference(
+        Promise.resolve({ stdout: '', stderr: '', code: 0 }),
+        paneEnvService,
+        created.tokenId,
+        'kill_confirmed',
+        onGone,
+        onStillAlive,
+      ),
+    ).rejects.toThrow('reference bookkeeping failed');
+
+    expect(onGone).toHaveBeenCalledTimes(1);
+    expect(onStillAlive).not.toHaveBeenCalled();
+    // The critical assertion: despite onGone throwing, the revoke still ran.
+    expect(tokenRepo.isActive(created.tokenId)).toBe(false);
+  });
+});

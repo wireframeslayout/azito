@@ -119,7 +119,11 @@ function buildApp(scopedAuthEnabled: boolean, db: SqliteDatabase, createCalls: R
     auditLogService,
     originationService,
     taskTokenRepo,
-    revokeTaskWindowGeneration: vi.fn(),
+    destroyPrimaryTaskWindow: vi.fn(async (_taskId, _windowName, _serverName, _target, _reason, kill, onDestroyed) => {
+      const result = await kill();
+      onDestroyed();
+      return { success: result.code === 0, alreadyGone: false, result };
+    }),
   };
 
   const app = Fastify();

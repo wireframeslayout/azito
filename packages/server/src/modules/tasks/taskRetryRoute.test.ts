@@ -3,6 +3,21 @@ import Fastify from 'fastify';
 import tasksRoutes from './routes';
 import type { TasksRouteOptions } from './routes';
 import type { Task } from './Task';
+import { destroyPrimaryTaskWindow } from './execution/TaskWindowDestruction';
+import type { TaskPaneEnvironmentService } from './execution/TaskPaneEnvironmentService';
+
+/**
+ * Wires `destroyPrimaryTaskWindow` (kill → reread-gated revoke → cleanup,
+ * inside `runExclusiveForTask`) the same way buildServer.ts does — using the
+ * REAL function under test, not a bare `vi.fn()`, so these tests exercise the
+ * actual per-task-lock/reread-gated revoke ordering rather than merely
+ * recording that a callback was invoked. `revokeForDestroyedWindow` is
+ * exposed as a spy for assertions in place of the old `revokeTaskWindowGeneration`
+ * mock.
+ */
+function makePaneEnvServiceSpy(): Pick<TaskPaneEnvironmentService, 'revokeForDestroyedWindow'> {
+  return { revokeForDestroyedWindow: vi.fn() };
+}
 
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {
@@ -51,29 +66,42 @@ function makeTask(overrides: Partial<Task> = {}): Task {
 // Reuses the same fixture shape as taskArchiveRestore.test.ts's makeOpts —
 // this file only tweaks the pieces POST /api/tasks/:id/retry actually
 // touches (killWindow's outcome, revokeTaskWindowGeneration).
-function makeOpts(taskOverrides?: Partial<Task>, killWindowImpl?: () => Promise<{ stdout: string; stderr: string; code: number }>): TasksRouteOptions {
+function makeOpts(
+  taskOverrides?: Partial<Task>,
+  killWindowImpl?: () => Promise<{ stdout: string; stderr: string; code: number }>,
+  paneEnvService: Pick<TaskPaneEnvironmentService, 'revokeForDestroyedWindow'> = makePaneEnvServiceSpy(),
+): TasksRouteOptions & { paneEnvService: Pick<TaskPaneEnvironmentService, 'revokeForDestroyedWindow'> } {
   const task = makeTask(taskOverrides);
+  const taskRepo: TasksRouteOptions['taskRepo'] = {
+    findAll: vi.fn(() => [task]),
+    findByProject: vi.fn(() => [task]),
+    findByUnit: vi.fn(() => []),
+    findByStatus: vi.fn(() => []),
+    findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
+    findById: vi.fn((id: number) => (id === task.id ? task : null)),
+    create: vi.fn(() => 1),
+    update: vi.fn((id: number, data: Partial<Task>) => { Object.assign(task, data); }),
+    updateStatus: vi.fn(),
+    updateCurrentPhase: vi.fn(),
+    touch: vi.fn(),
+    delete: vi.fn(),
+    consumePendingApproval: vi.fn(() => false),
+    recordExecutionGateBlock: vi.fn(() => true),
+    preApproveExecution: vi.fn(() => true),
+    countChildren: vi.fn(() => 0),
+    countChildrenInGeneration: vi.fn(() => 0),
+    // Real CAS semantics (not a bare `true` stub): only clears/reports true
+    // when `expectedWindowName` still matches `task.tmuxWindow` — this is
+    // `destroyPrimaryTaskWindow`'s reread gate, so the revoke-vs-clear
+    // ordering assertions below actually exercise it.
+    clearTmuxWindowIfMatches: vi.fn((id: number, expectedWindowName: string) => {
+      if (id !== task.id || task.tmuxWindow !== expectedWindowName) return false;
+      task.tmuxWindow = null;
+      return true;
+    }),
+  };
   return {
-    taskRepo: {
-      findAll: vi.fn(() => [task]),
-      findByProject: vi.fn(() => [task]),
-      findByUnit: vi.fn(() => []),
-      findByStatus: vi.fn(() => []),
-      findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
-      findById: vi.fn((id: number) => (id === task.id ? task : null)),
-      create: vi.fn(() => 1),
-      update: vi.fn((id: number, data: Partial<Task>) => { Object.assign(task, data); }),
-      updateStatus: vi.fn(),
-      updateCurrentPhase: vi.fn(),
-      touch: vi.fn(),
-      delete: vi.fn(),
-      consumePendingApproval: vi.fn(() => false),
-      recordExecutionGateBlock: vi.fn(() => true),
-      preApproveExecution: vi.fn(() => true),
-      countChildren: vi.fn(() => 0),
-      countChildrenInGeneration: vi.fn(() => 0),
-      clearTmuxWindowIfMatches: vi.fn(() => true),
-    },
+    taskRepo,
     projectRepo: {
       findAll: vi.fn(() => []),
       findById: vi.fn(() => ({ id: 10, name: 'P', slug: 'p', description: null, repositoryUrl: null, defaultBranch: 'main', sidekickPrompt: null, icon: null, color: null, defaultUnitId: 20, servers: [], repositories: [], windows: [], createdAt: '', updatedAt: '' })),
@@ -165,7 +193,9 @@ function makeOpts(taskOverrides?: Partial<Task>, killWindowImpl?: () => Promise<
     auditLogService: { record: vi.fn() } as unknown as TasksRouteOptions['auditLogService'],
     originationService: { create: vi.fn(() => 1) } as unknown as TasksRouteOptions['originationService'],
     taskTokenRepo: { issue: vi.fn(), verify: vi.fn(() => false), revokeAllForTask: vi.fn(() => 0), issueNextGeneration: vi.fn(), getActiveGeneration: vi.fn(() => null) } as unknown as TasksRouteOptions['taskTokenRepo'],
-    revokeTaskWindowGeneration: vi.fn(),
+    destroyPrimaryTaskWindow: (taskId, windowName, _serverName, _target, reason, kill, onDestroyed) =>
+      destroyPrimaryTaskWindow(taskId, windowName, taskRepo, paneEnvService as TaskPaneEnvironmentService, reason, kill, onDestroyed),
+    paneEnvService,
   };
 }
 
@@ -205,7 +235,7 @@ describe('POST /api/tasks/:id/retry', () => {
       'azito:task-1',
     );
     expect(opts.executeTaskUseCase.stopByTaskId).toHaveBeenCalledWith(1);
-    expect(opts.revokeTaskWindowGeneration).toHaveBeenCalledWith(1, 'retry_abandoned_window');
+    expect(opts.paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(1, 'retry_abandoned_window');
     expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { status: 'open', tmuxWindow: null });
   });
 
@@ -226,7 +256,7 @@ describe('POST /api/tasks/:id/retry', () => {
     // Fail-closed: nothing mutates on a 409 — not the execution, not the
     // token generation, not the task row. The 409 response must be true.
     expect(opts.executeTaskUseCase.stopByTaskId).not.toHaveBeenCalled();
-    expect(opts.revokeTaskWindowGeneration).not.toHaveBeenCalled();
+    expect(opts.paneEnvService.revokeForDestroyedWindow).not.toHaveBeenCalled();
     // Fail-closed: the task must NOT be reset — the abandoned pane may still
     // be running with a still-valid token, so `tmuxWindow` and `status` stay
     // exactly as they were for the next attempt to find.
@@ -246,7 +276,7 @@ describe('POST /api/tasks/:id/retry', () => {
     expect(JSON.parse(res.payload).error).toMatch(/Could not resolve the server/);
     expect(opts.tmux.killWindow).not.toHaveBeenCalled();
     expect(opts.executeTaskUseCase.stopByTaskId).not.toHaveBeenCalled();
-    expect(opts.revokeTaskWindowGeneration).not.toHaveBeenCalled();
+    expect(opts.paneEnvService.revokeForDestroyedWindow).not.toHaveBeenCalled();
     expect(opts.taskRepo.update).not.toHaveBeenCalled();
   });
 
@@ -261,7 +291,7 @@ describe('POST /api/tasks/:id/retry', () => {
     expect(res.statusCode).toBe(200);
     expect(opts.tmux.killWindow).not.toHaveBeenCalled();
     expect(opts.executeTaskUseCase.stopByTaskId).toHaveBeenCalledWith(1);
-    expect(opts.revokeTaskWindowGeneration).not.toHaveBeenCalled();
+    expect(opts.paneEnvService.revokeForDestroyedWindow).not.toHaveBeenCalled();
   });
 
   it('returns 400 for a non-retryable status', async () => {

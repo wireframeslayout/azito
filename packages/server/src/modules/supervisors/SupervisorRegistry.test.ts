@@ -897,4 +897,111 @@ describe('SupervisorRegistry — launch binding (Issue #28 Phase C, design v3 §
 
     expect(onActivity).toHaveBeenCalledWith(expect.objectContaining({ bound: false }));
   });
+
+  // Issue #28 third-party review, second round: `markStatus` was never
+  // called from production — a launch's session token stayed
+  // authenticatable indefinitely, even once its child process had actually
+  // exited. `child_exit` must expire the connection's launch immediately.
+  describe('launch expiry (Issue #28 third-party review, second round)', () => {
+    it('expires the launch when its supervisor connection reports child_exit', () => {
+      const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
+      const issued = registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })!;
+      const socket = new MockSocket();
+      registry.register(asSocket(socket), registerWith({ launchId: issued.launchId, bootstrapToken: issued.bootstrapToken }));
+      expect(launchRepo.findByLaunchId(issued.launchId)!.status).toBe('pending');
+
+      registry.handleMessage(asSocket(socket), { type: 'child_exit', exitCode: 0, signal: null, ts: Date.now() });
+
+      expect(launchRepo.findByLaunchId(issued.launchId)!.status).toBe('expired');
+      // Once expired, neither the old bootstrap nor a freshly-minted session
+      // token can authenticate a reconnect for this launch.
+      const row = launchRepo.findByLaunchId(issued.launchId)!;
+      expect(launchRepo.verifyBootstrap(row, issued.bootstrapToken)).toBe(false);
+    });
+
+    it('does not throw when child_exit fires for a launchId-less (unbound) connection', () => {
+      const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
+      const socket = new MockSocket();
+      registry.register(asSocket(socket), registerWith({}));
+
+      expect(() =>
+        registry.handleMessage(asSocket(socket), { type: 'child_exit', exitCode: 0, signal: null, ts: Date.now() }),
+      ).not.toThrow();
+    });
+
+    it('markLaunchExpired expires the launch for a live connection at (serverName, target)', () => {
+      const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
+      const issued = registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })!;
+      const socket = new MockSocket();
+      registry.register(asSocket(socket), registerWith({ launchId: issued.launchId, bootstrapToken: issued.bootstrapToken }));
+
+      registry.markLaunchExpired('local', 'test:0.1');
+
+      expect(launchRepo.findByLaunchId(issued.launchId)!.status).toBe('expired');
+    });
+
+    it('markLaunchExpired is a no-op when there is no live connection for the key (window already gone)', () => {
+      const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
+      expect(() => registry.markLaunchExpired('local', 'no-such-target')).not.toThrow();
+    });
+  });
+});
+
+// Issue #28 third-party review, second round: a launch that never registers
+// at all (supervisor process failed to start) previously stayed `pending`
+// forever — nothing ever expired it — so its bootstrap token kept verifying
+// indefinitely. `verifyBootstrap` must bound that by the row's age.
+describe('SqliteSupervisorLaunchRepository.verifyBootstrap — pending bootstrap TTL', () => {
+  let db: Database.Database;
+  let launchRepo: SqliteSupervisorLaunchRepository;
+
+  beforeEach(() => {
+    db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE supervisor_launches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        launch_id TEXT NOT NULL,
+        server_name TEXT NOT NULL,
+        target TEXT NOT NULL,
+        task_id INTEGER,
+        unit_id INTEGER,
+        bootstrap_hash TEXT NOT NULL,
+        session_hash TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        last_registered_at TEXT
+      )
+    `);
+    db.exec('CREATE UNIQUE INDEX idx_supervisor_launches_launch_id ON supervisor_launches(launch_id)');
+    db.exec('CREATE UNIQUE INDEX idx_supervisor_launches_session_hash ON supervisor_launches(session_hash)');
+    launchRepo = new SqliteSupervisorLaunchRepository(db as any);
+  });
+
+  afterEach(() => {
+    db.close();
+    vi.useRealTimers();
+  });
+
+  it('still verifies a fresh pending bootstrap', () => {
+    const issued = launchRepo.create({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 });
+    const row = launchRepo.findByLaunchId(issued.launchId)!;
+
+    expect(launchRepo.verifyBootstrap(row, issued.bootstrapToken)).toBe(true);
+  });
+
+  it('rejects a pending bootstrap once it has aged past the TTL, even though status is still pending', () => {
+    const issued = launchRepo.create({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 });
+    const row = launchRepo.findByLaunchId(issued.launchId)!;
+    expect(row.status).toBe('pending');
+
+    // Simulate the row having aged past PENDING_BOOTSTRAP_TTL_MS (15
+    // minutes) without ever registering, by backdating created_at directly
+    // — the launch never transitioned out of 'pending' (nothing else does
+    // that for a launch that never registered), so status alone cannot
+    // distinguish "fresh" from "abandoned".
+    db.prepare("UPDATE supervisor_launches SET created_at = datetime('now', '-16 minutes') WHERE launch_id = ?").run(issued.launchId);
+    const agedRow = launchRepo.findByLaunchId(issued.launchId)!;
+
+    expect(launchRepo.verifyBootstrap(agedRow, issued.bootstrapToken)).toBe(false);
+  });
 });

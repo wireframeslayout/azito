@@ -175,7 +175,13 @@ export async function createRotatedWindow(
  *      counts as success — see its own doc comment)
  *   2. success (or already-gone): clear the caller's reference via
  *      `onGone` (e.g. `tmuxWindow: null`, removing the Window row) AND
- *      revoke the just-issued token generation
+ *      revoke the just-issued token generation — BOTH are always attempted
+ *      (Issue #28 third-party review, second round): `onGone` throwing (a
+ *      DB write failing, say) must not skip the revoke, or the just-killed
+ *      window's generation is left valid forever with nothing in the DB
+ *      pointing at it to ever clean it up — worse than either failure
+ *      alone. `onGone`'s error still propagates (via `finally`, not a
+ *      swallowed `catch {}`) once the revoke has also been attempted.
  *   3. failure: call `onStillAlive` — the caller MUST use this to keep (or
  *      create, if not yet persisted) a reference to the window, never to
  *      clear one — and do NOT revoke the generation, so a still-live pane
@@ -196,12 +202,17 @@ export async function rollbackWindowReference(
 ): Promise<KillOutcome> {
   const outcome = await resolveKillOutcome(killExec);
   if (outcome.success) {
-    onGone();
-    // Scoped to the specific generation `createRotatedWindow` issued for
-    // this window (see revokeGeneration's doc comment) — not a blanket
-    // revokeAllForTask, which could otherwise revoke a newer, still-valid
-    // generation a concurrent rotation for the same task already persisted.
-    paneEnvService.revokeGeneration(tokenId, revokeReason);
+    try {
+      onGone();
+    } finally {
+      // Always attempted, even if `onGone` threw above — see the doc
+      // comment's point 2. Scoped to the specific generation
+      // `createRotatedWindow` issued for this window (see
+      // revokeGeneration's doc comment) — not a blanket revokeAllForTask,
+      // which could otherwise revoke a newer, still-valid generation a
+      // concurrent rotation for the same task already persisted.
+      paneEnvService.revokeGeneration(tokenId, revokeReason);
+    }
   } else {
     onStillAlive();
   }

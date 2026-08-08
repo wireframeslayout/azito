@@ -1,11 +1,12 @@
 import type { FastifyPluginCallback } from 'fastify';
 import type { IServerRepository, ServerConfig } from '../../servers/Server';
+import type { ExecResult } from '../../servers/transport/ServerTransport';
 import type { TmuxClient, TmuxSession } from '../TmuxClient';
 import type { SqliteWindowRepository } from '../../windows/SqliteWindowRepository';
 import { isPrimaryTaskWindow } from '../../windows/SqliteWindowRepository';
 import type { NotificationBus } from '../../notifications/NotificationBus';
 import type { ResourceGuard } from '../../servers/resources/ResourceGuard';
-import { resolveKillOutcome } from '../killOutcome';
+import { resolveKillOutcome, type KillOutcome } from '../killOutcome';
 
 // ─── Types ───
 
@@ -23,11 +24,23 @@ export interface SessionsRouteOptions {
    * this is the generic tmux-kill route (terminal UI "close window",
    * ProjectSettings, etc.), so it has no other reason to know a window
    * belongs to a task without this. A plain callback, not a
-   * `TaskPaneEnvironmentService` import, because `tmux` is a base-layer
-   * module (.dependency-cruiser.cjs's `base-tmux-limited-upward` rule) and
-   * must not depend on `tasks` (an upper-layer module) — buildServer.ts (the
-   * composition root) closes over the real service and passes just this
-   * function.
+   * `TaskPaneEnvironmentService`/`TaskWindowDestruction` import, because
+   * `tmux` is a base-layer module (.dependency-cruiser.cjs's
+   * `base-tmux-limited-upward` rule) and must not depend on `tasks` (an
+   * upper-layer module) — buildServer.ts (the composition root) closes over
+   * `destroyPrimaryTaskWindow` (modules/tasks/execution/
+   * TaskWindowDestruction.ts) and passes just this function.
+   *
+   * Second-round finding: the kill itself must run INSIDE the same per-task
+   * lock the revoke does (`runExclusiveForTask`, via
+   * `destroyPrimaryTaskWindow`) — a plain "kill here, then fire a
+   * synchronous revoke callback" left a gap between kill success and revoke
+   * where a concurrent respawn could issue and persist a newer generation,
+   * which the revoke (a blanket revoke-all-for-task) would then wrongly take
+   * out. `kill` and `onDestroyed` are supplied per call site (the actual
+   * tmux kill call and `windows` table row cleanup differ per route); the
+   * callback resolves once the whole locked sequence has settled, so the
+   * caller waits for it before building its HTTP reply.
    *
    * Call sites below gate this with `isPrimaryTaskWindow(win)` (Issue #28
    * third-party review finding — multi-window token rotation collision): a
@@ -37,7 +50,26 @@ export interface SessionsRouteOptions {
    * still-live primary pane. See isPrimaryTaskWindow's doc comment
    * (windows/Window.ts) for the shared judgment.
    */
-  onTaskWindowDestroyed?: (taskId: number, reason: string) => void;
+  destroyPrimaryTaskWindow?: (
+    taskId: number,
+    windowName: string,
+    /**
+     * Issue #28 third-party review, second round: `serverName`/`target`
+     * (the same tmux target the killed window registered its supervisor
+     * connection under, if any) are passed through so buildServer.ts's
+     * wiring — the only place with a `SupervisorRegistry` in scope — can
+     * also expire that launch (`SupervisorRegistry.markLaunchExpired`) as
+     * part of the same destroy, alongside the task-token revoke. Neither
+     * `TaskWindowDestruction.destroyPrimaryTaskWindow` (the underlying
+     * function) nor this route needs to know about supervisors at all —
+     * this is pure pass-through.
+     */
+    serverName: string,
+    target: string,
+    reason: string,
+    kill: () => Promise<ExecResult>,
+    onDestroyed: () => void,
+  ) => Promise<KillOutcome>;
 
   /**
    * Issue #28 third-party review finding (manual "add pane" route leaking
@@ -52,6 +84,26 @@ export interface SessionsRouteOptions {
    * this to look up the task and call `buildEnvForSecondaryWindow` on it.
    */
   buildSecondaryWindowEnv?: (taskId: number, server: ServerConfig) => Record<string, string>;
+}
+
+// ─── Helpers ───
+
+/**
+ * Extracts the plain window name from a `windows` table row's `tmuxTarget`
+ * (always stored `<sessionName>:<windowName>` — see Window.ts/callers that
+ * `add()` a row). This is the same shape `task.tmuxWindow` is compared
+ * against (`ExecuteTaskUseCase`/`WindowRespawnService` persist
+ * `created.windowName`, a plain name, never a `session:window` pair), so
+ * this is what `destroyPrimaryTaskWindow`'s reread (`clearTmuxWindowIfMatches`)
+ * needs. Returns `undefined` if `tmuxTarget` has no `:` separator (should be
+ * unreachable given how rows are always written, but this is a boundary
+ * between a DB row and the reread call, so fail closed rather than pass a
+ * garbage window name into a revoke decision).
+ */
+function windowNameFromTarget(tmuxTarget: string): string | undefined {
+  const idx = tmuxTarget.indexOf(':');
+  if (idx < 0) return undefined;
+  return tmuxTarget.slice(idx + 1);
 }
 
 // ─── Session cache (30 s TTL) ───
@@ -241,7 +293,8 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         // held, and this is the only chance to learn which of them were
         // task-owned (Issue #28 third-party review finding 4: deleting a
         // whole session previously revoked no task tokens at all — only the
-        // single-window DELETE route below did, via onTaskWindowDestroyed).
+        // single-window DELETE route below did, via
+        // destroyPrimaryTaskWindow).
         const sessionWindows = opts.windowRepo?.findByServerAndSession(request.params.name, request.params.session) ?? [];
 
         // resolveKillOutcome normalizes local (throws on failure) vs agent
@@ -258,12 +311,26 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         // Reaching here means the session is confirmed gone (killed, or
         // tmux already reported it missing) — safe to clean up every window
         // row it held and revoke each task-owned window's token, reusing
-        // the exact same callback the single-window route uses below
-        // (never a second revocation implementation).
+        // the exact same callback the single-window route uses below (never
+        // a second revocation implementation). Each task-owned window still
+        // routes through `destroyPrimaryTaskWindow` (per-task lock +
+        // reread-gated revoke) — the session's own kill is already
+        // confirmed above, so the per-window `kill` this passes is a no-op
+        // resolving "already gone".
         for (const win of sessionWindows) {
-          opts.windowRepo?.removeByServerAndTarget(request.params.name, win.tmuxTarget);
-          if (win.taskId !== null && isPrimaryTaskWindow(win)) {
-            opts.onTaskWindowDestroyed?.(win.taskId, 'window_killed_via_session_delete');
+          const windowName = windowNameFromTarget(win.tmuxTarget);
+          if (win.taskId !== null && isPrimaryTaskWindow(win) && windowName) {
+            await opts.destroyPrimaryTaskWindow?.(
+              win.taskId,
+              windowName,
+              request.params.name,
+              win.tmuxTarget,
+              'window_killed_via_session_delete',
+              () => Promise.resolve({ code: 0, stdout: '', stderr: '' }),
+              () => opts.windowRepo?.removeByServerAndTarget(request.params.name, win.tmuxTarget),
+            );
+          } else {
+            opts.windowRepo?.removeByServerAndTarget(request.params.name, win.tmuxTarget);
           }
         }
         return { ok: true };
@@ -294,26 +361,43 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         const windowRow = opts.windowRepo?.findByServerAndTarget(request.params.name, target)
           ?? (identity ? opts.windowRepo?.findByServerAndTarget(request.params.name, `${identity.sessionName}:${identity.windowName}`) : undefined)
           ?? (identity ? opts.windowRepo?.findByServerAndTarget(request.params.name, `${identity.sessionName}:${identity.windowIndex}`) : undefined);
-        // resolveKillOutcome normalizes local (throws on failure) vs agent
-        // (resolves with a non-zero code) transports into one verdict — see
-        // its doc comment.
-        const outcome = await resolveKillOutcome(tmux.killWindow(srv, target));
+
+        const cleanupWindowRows = () => {
+          opts.windowRepo?.removeByServerAndTarget(request.params.name, target);
+          if (identity) {
+            opts.windowRepo?.removeByServerAndTarget(request.params.name, `${identity.sessionName}:${identity.windowName}`);
+            opts.windowRepo?.removeByServerAndTarget(request.params.name, `${identity.sessionName}:${identity.windowIndex}`);
+          }
+        };
+
+        const windowName = identity ? identity.windowName : windowNameFromTarget(target);
+        let outcome: KillOutcome;
+        if (windowRow && windowRow.taskId !== null && isPrimaryTaskWindow(windowRow) && windowName && opts.destroyPrimaryTaskWindow) {
+          // Task-owned primary window: the kill itself, the reread-gated
+          // revoke, and the row cleanup all run inside ONE per-task lock
+          // (Issue #28 third-party review, second round) — see
+          // `destroyPrimaryTaskWindow`'s doc comment for the race this
+          // closes vs. a concurrent respawn.
+          outcome = await opts.destroyPrimaryTaskWindow(
+            windowRow.taskId,
+            windowName,
+            request.params.name,
+            target,
+            'window_killed_via_sessions_route',
+            () => tmux.killWindow(srv, target),
+            cleanupWindowRows,
+          );
+        } else {
+          // resolveKillOutcome normalizes local (throws on failure) vs agent
+          // (resolves with a non-zero code) transports into one verdict —
+          // see its doc comment.
+          outcome = await resolveKillOutcome(tmux.killWindow(srv, target));
+          if (outcome.success) cleanupWindowRows();
+        }
         if (!outcome.success) {
           return reply.status(500).send({ error: `kill-window failed: ${outcome.result.stderr || outcome.result.stdout}` });
         }
-        // Success (killed, or tmux already reported it missing) — fall
-        // through to DB cleanup below.
         notifySessionsChanged(request.params.name);
-        opts.windowRepo?.removeByServerAndTarget(request.params.name, target);
-        if (identity) {
-          opts.windowRepo?.removeByServerAndTarget(request.params.name, `${identity.sessionName}:${identity.windowName}`);
-          opts.windowRepo?.removeByServerAndTarget(request.params.name, `${identity.sessionName}:${identity.windowIndex}`);
-        }
-        // Reaching here means the window is confirmed gone (kill-window
-        // succeeded, or tmux already reported it missing) — safe to revoke.
-        if (windowRow && windowRow.taskId !== null && isPrimaryTaskWindow(windowRow)) {
-          opts.onTaskWindowDestroyed?.(windowRow.taskId, 'window_killed_via_sessions_route');
-        }
         // Clients hold terminal tabs under both name-form and index-form targets;
         // return the resolved identity so they can close every matching tab.
         return { ok: true, identity };

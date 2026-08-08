@@ -264,6 +264,41 @@ export class SupervisorRegistry extends EventEmitter {
     });
   }
 
+  /**
+   * Marks a launch `expired` in the persisted `supervisor_launches` row
+   * (best-effort — never throws). Only place this and `child_exit`'s own
+   * call route through — see `markLaunchExpired`'s doc comment for the
+   * second entry point (task/window destruction, Issue #28 third-party
+   * review, second round).
+   */
+  private expireLaunchId(launchId: string): void {
+    try {
+      this.launchRepo?.markStatus(launchId, 'expired');
+    } catch (err) {
+      console.warn(`[supervisors] failed to mark launch ${launchId} expired`, err);
+    }
+  }
+
+  /**
+   * Second entry point for launch expiry (Issue #28 third-party review,
+   * second round — the first is `child_exit`, above). A task/window
+   * destroyed through `destroyPrimaryTaskWindow`
+   * (modules/tasks/execution/TaskWindowDestruction.ts) kills the WHOLE tmux
+   * window/pane — the supervisor process wrapping the child dies right
+   * along with it, with no chance to send its own `child_exit` message
+   * first, so that path alone never expires the launch. Best-effort and
+   * in-memory-lookup-only: if there's no live connection for this key (the
+   * common case — the window is usually already gone by the time a caller
+   * gets here), this is a no-op; the launch's bootstrap TTL
+   * (`PENDING_BOOTSTRAP_TTL_MS`) and `create()`'s own supersede-on-relaunch
+   * step are what actually bound its usable lifetime either way, so a missed
+   * expiry here is a narrowing, not the only guard.
+   */
+  markLaunchExpired(serverName: string, target: string): void {
+    const conn = this.connections.get(keyFor(serverName, target));
+    if (conn?.launchId) this.expireLaunchId(conn.launchId);
+  }
+
   private audit(event: string, detail: Record<string, unknown>): void {
     try {
       this.auditLogService?.record({ actorClass: 'runtime', actorId: null, event, detail });
@@ -514,6 +549,14 @@ export class SupervisorRegistry extends EventEmitter {
           signal: msg.signal,
           bound: conn.bound,
         } satisfies SupervisorChildExitEvent);
+        // Issue #28 third-party review, second round: `markStatus` was never
+        // called from production — a launch's session token stayed
+        // authenticatable (`verifySession` accepts `active`/`pending`)
+        // indefinitely even after its child process (and the supervisor
+        // wrapping it) had actually exited. The child exiting is definitive
+        // proof this launch is done; expire it here rather than waiting for
+        // some later relaunch's supersede step to notice.
+        if (conn.launchId) this.expireLaunchId(conn.launchId);
         this.socketKeys.delete(conn.socket);
         this.teardown(key, conn, new Error('supervisor child exited'));
         break;

@@ -17,7 +17,8 @@ import type { TaskRestoreService } from './TaskRestoreService';
 import { TaskCleanupService } from './TaskCleanupService';
 import { SAFE_PATH_PATTERN, SAFE_BRANCH_PATTERN } from '../git/assertSafeGitArgs';
 import { resolveTaskServerName, resolveTmuxSession, resolveUnitId } from './execution/TaskExecutionEnv';
-import { resolveKillOutcome } from '../tmux/killOutcome';
+import type { KillOutcome } from '../tmux/killOutcome';
+import type { ExecResult } from '../servers/transport/ServerTransport';
 import { replyToExecutionGateError } from './execution/ExecutionGate';
 import { hashExecutionManifest } from './execution/ExecutionManifest';
 import { failAsyncTaskOperation } from './execution/AppendLog';
@@ -93,12 +94,28 @@ export interface TasksRouteOptions {
    * still-valid token, and losing the `tmuxWindow` reference meant the next
    * execution's kill-and-rotate (createRotatedWindow, via
    * confirmOldWindowGone) had nothing left to find and kill either. Mirrors
-   * `onTaskWindowDestroyed` (registered the same way for sessionsRoutes in
+   * `destroyPrimaryTaskWindow` (registered the same way for sessionsRoutes in
    * buildServer.ts) instead of taking a `TaskPaneEnvironmentService`
-   * directly, so this module only depends on the one method it actually
+   * directly, so this module only depends on the one function it actually
    * calls.
+   *
+   * Second-round finding: the kill and the revoke must run inside the SAME
+   * per-task lock (`runExclusiveForTask`, via `destroyPrimaryTaskWindow`) —
+   * retry previously killed the window and revoked its token as two
+   * separate, unlocked steps, leaving a gap a concurrent respawn could land
+   * a fresh generation into before the blanket revoke ran, which would then
+   * wrongly take that new generation out too.
    */
-  revokeTaskWindowGeneration: (taskId: number, reason: string) => void;
+  destroyPrimaryTaskWindow: (
+    taskId: number,
+    windowName: string,
+    /** See sessionsRoutes' `destroyPrimaryTaskWindow` option — same pass-through purpose (supervisor launch expiry). */
+    serverName: string,
+    target: string,
+    reason: string,
+    kill: () => Promise<ExecResult>,
+    onDestroyed: () => void,
+  ) => Promise<KillOutcome>;
 }
 
 /** POST /api/tasks/:id/children: a task principal may only create children under its own (parent) task; operator always passes (Issue #28 design v3 §4). */
@@ -164,7 +181,7 @@ function toListItem(task: Task, windows: unknown[]): Record<string, unknown> {
 }
 
 const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, done) => {
-  const { taskRepo, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService, taskRestoreService, unitTypeLoader, sidekickLoader, projectSecretRepo, auditLogService, originationService, taskTokenRepo, revokeTaskWindowGeneration } = opts;
+  const { taskRepo, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService, taskRestoreService, unitTypeLoader, sidekickLoader, projectSecretRepo, auditLogService, originationService, taskTokenRepo, destroyPrimaryTaskWindow } = opts;
   const taskCleanupService = new TaskCleanupService({ serverRepo, tmux, worktreeServiceFactory, transportFactory, projectServerRepo, projectRepo });
 
   // ── GET /api/tasks ──
@@ -812,21 +829,32 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         return reply.status(400).send({ error: `Task status '${task.status}' is not retryable` });
       }
 
-      // Verify (non-mutating) that any abandoned tmux window can actually be
-      // killed BEFORE stopping the running execution or touching task state
-      // (Issue #28 third-party review, Minor finding: retry を副作用の後に
-      // 未変更の 409 を返す問題). `stopByTaskId` used to run first, so a 409
-      // returned below claimed "task unchanged" while the execution had, in
-      // fact, already been torn down (PhaseLoopRunner can transition it to
-      // `failed` once stopped). Resolving the server and confirming the kill
-      // first keeps every 409 response in this handler accurate — nothing
-      // about the task or its execution changes unless the kill (or
-      // "already gone") is confirmed.
+      // Verify (non-mutating, from this handler's own state-machine point of
+      // view) that any abandoned tmux window can actually be killed BEFORE
+      // stopping the running execution or touching task state (Issue #28
+      // third-party review, Minor finding: retry を副作用の後に未変更の 409
+      // を返す問題). `stopByTaskId` used to run first, so a 409 returned
+      // below claimed "task unchanged" while the execution had, in fact,
+      // already been torn down (PhaseLoopRunner can transition it to
+      // `failed` once stopped). Resolving the server first keeps every 409
+      // response in this handler accurate — nothing about the task or its
+      // execution changes unless the kill (or "already gone") is confirmed.
       //
       // Fail-closed on an unconfirmed kill (third-party review, Phase B):
       // a kill failure or an unresolvable server must leave the task
       // untouched and the request errors, so the caller can check the
       // server / kill the pane by hand and retry.
+      //
+      // Second-round finding: the kill and the token revoke must run inside
+      // ONE per-task lock (`runExclusiveForTask`, via
+      // `destroyPrimaryTaskWindow`) — running them as two separate,
+      // unlocked steps (as this handler used to) left a gap between kill
+      // success and revoke where a concurrent respawn could land a fresh
+      // generation that the revoke would then wrongly take out too.
+      // `destroyPrimaryTaskWindow`'s own reread (`clearTmuxWindowIfMatches`)
+      // guards against exactly that: it only revokes if the task's tmuxWindow
+      // is STILL the one this call is killing. No `windows` table row exists
+      // for a task's primary window, so `onDestroyed` is a no-op here.
       if (task.tmuxWindow) {
         const resolvedServerName = resolveTaskServerName(task, projectServerRepo);
         const srv = resolvedServerName ? serverRepo.findByName(resolvedServerName) : null;
@@ -837,32 +865,28 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
           });
         }
         const tmuxSession = resolveTmuxSession(task.projectId, resolvedServerName, projectServerRepo);
-        const outcome = await resolveKillOutcome(tmux.killWindow(srv, `${tmuxSession}:${task.tmuxWindow}`));
+        const windowName = task.tmuxWindow;
+        const target = `${tmuxSession}:${windowName}`;
+        const outcome = await destroyPrimaryTaskWindow(id, windowName, resolvedServerName, target, 'retry_abandoned_window', () => tmux.killWindow(srv, target), () => {});
         if (!outcome.success) {
           return reply.status(409).send({
-            error: `Failed to kill task ${id}'s abandoned tmux window '${tmuxSession}:${task.tmuxWindow}'; ` +
+            error: `Failed to kill task ${id}'s abandoned tmux window '${target}'; ` +
               'it may still be running with a valid token. Check the server / kill the window manually, then retry.',
           });
         }
       }
 
-      // Only reached once the kill is confirmed (or there was no abandoned
-      // window to begin with) — now safe to mutate: stop any running
-      // execution for this task, then revoke its task-token generation
-      // BEFORE clearing `tmuxWindow` below (Issue #28 review Important
-      // finding): clearing the reference first left an abandoned pane
-      // running with a still-valid token and no `tmuxWindow` for the next
-      // execution's kill-and-rotate (createRotatedWindow, via
-      // confirmOldWindowGone) to find and kill — the token then never
-      // expired and the next run's fresh generation existed alongside it,
-      // not in place of it.
+      // Only reached once the kill (and, when it was still the task's
+      // current window, the token revoke) is confirmed — now safe to stop
+      // any running execution for this task and reset its status.
       executeTaskUseCase.stopByTaskId(id);
-      if (task.tmuxWindow) {
-        revokeTaskWindowGeneration(id, 'retry_abandoned_window');
-      }
 
       // Reset task status and clear tmux window — only reached once any
-      // abandoned window has been confirmed dead (or there was none).
+      // abandoned window has been confirmed dead (or there was none). The
+      // revoke above (when it fired) already happened before this clears
+      // `tmuxWindow` (Issue #28 review Important finding's invariant): a
+      // reader must never observe `tmuxWindow: null` with the prior
+      // generation's token still active.
       taskRepo.update(id, { status: 'open' as TaskStatus, tmuxWindow: null });
 
       return { ok: true };
