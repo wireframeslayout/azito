@@ -91,7 +91,18 @@ harness 配布分離（Phase B）を説明します。
 
 ```bash
 source ~/.azito/operator.env
-azito token rotate     # これで operator 権限で実行される
+azito units list       # operator 権限が必要な他のコマンド
+```
+
+**このファイルを `source` した直後に `azito token rotate` を実行してはいけません。**
+`rotate` は環境に `AZITO_UI_TOKEN` が既に設定されていると必ず中止します。`operator.env` を
+`source` するとまさにその状態になるため、「同じシェルで source してから rotate」は毎回確実に
+中止します（`resolveCurrentUiToken()` は書き換え対象のトークンファイルより env を権威として
+優先するため。中止時に表示されるメッセージも参照）。`rotate` はこの変数が **未設定の状態**
+（`operator.env` を source していない新しいシェル）で実行するか、明示的に unset してください。
+
+```bash
+env -u AZITO_UI_TOKEN azito token rotate
 ```
 
 `~/.azito/azitoctl*.env`（`azitoctl` / `azs` が source する、タスク実行プロセスや hook スクリプト

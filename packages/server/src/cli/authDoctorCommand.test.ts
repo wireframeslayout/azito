@@ -8,6 +8,20 @@ let uiTokenPath: string;
 let dotEnvPath: string;
 let fakeHome: string;
 
+// Codex CLI availability varies by machine (dev box vs CI) — mock
+// `execFileSync` so `checkCodexMcpTokenMatchesHub` is deterministic
+// regardless of whether `codex` is actually installed where these tests
+// run. Default: behave as if `codex` isn't installed (ENOENT), matching
+// most CI environments; individual tests override via mockImplementationOnce.
+const execFileSyncMock = vi.fn<(...args: unknown[]) => string>(() => {
+  const err = new Error('spawn codex ENOENT') as NodeJS.ErrnoException;
+  err.code = 'ENOENT';
+  throw err;
+});
+vi.mock('child_process', () => ({
+  execFileSync: (...args: unknown[]) => execFileSyncMock(...args),
+}));
+
 vi.mock('../shared/dataDir', () => ({
   resolveDataDir: () => ({
     dir: tmpDir,
@@ -56,6 +70,13 @@ describe('authDoctorCommand', () => {
 
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     process.exitCode = undefined;
+
+    execFileSyncMock.mockClear();
+    execFileSyncMock.mockImplementation(() => {
+      const err = new Error('spawn codex ENOENT') as NodeJS.ErrnoException;
+      err.code = 'ENOENT';
+      throw err;
+    });
   });
 
   afterEach(() => {
@@ -213,5 +234,62 @@ describe('authDoctorCommand', () => {
     const { authDoctorCommand } = await import('./authDoctorCommand.js');
     await authDoctorCommand();
     expect(allLogLines()).toContain('scoped 認可: 有効');
+  });
+
+  describe('Codex MCP token check', () => {
+    it('reports a notice (not a failure) when the codex CLI is not installed', async () => {
+      // default mock already throws ENOENT
+      const { authDoctorCommand } = await import('./authDoctorCommand.js');
+      await authDoctorCommand();
+
+      expect(process.exitCode).toBeUndefined();
+      expect(allLogLines()).toContain('codex コマンドが見つかりません');
+      expect(allLogLines()).toContain('[-- ] Codex MCP settings');
+    });
+
+    it('passes (not-configured) when codex is installed but azt-mcp is not registered', async () => {
+      execFileSyncMock.mockImplementation(() => {
+        const err = new Error('Command failed') as NodeJS.ErrnoException & { status?: number };
+        err.status = 1;
+        throw err;
+      });
+      const { authDoctorCommand } = await import('./authDoctorCommand.js');
+      await authDoctorCommand();
+
+      expect(process.exitCode).toBeUndefined();
+      expect(allLogLines()).toContain('Codex に azt-mcp が登録されていません');
+    });
+
+    it('fails when the Codex azt-mcp token does not match the hub token', async () => {
+      process.env.AZITO_UI_TOKEN = 'hub-token';
+      execFileSyncMock.mockImplementation(
+        () => JSON.stringify({ transport: { env: { AZITO_UI_TOKEN: 'stale-codex-token' } } }),
+      );
+      const { authDoctorCommand } = await import('./authDoctorCommand.js');
+      await authDoctorCommand();
+
+      expect(process.exitCode).toBe(1);
+      expect(allLogLines()).toContain('Codex 側の azt-mcp トークンとハブの現在値');
+    });
+
+    it('passes when the Codex azt-mcp token matches the hub token', async () => {
+      process.env.AZITO_UI_TOKEN = 'hub-token';
+      execFileSyncMock.mockImplementation(
+        () => JSON.stringify({ transport: { env: { AZITO_UI_TOKEN: 'hub-token' } } }),
+      );
+      const { authDoctorCommand } = await import('./authDoctorCommand.js');
+      await authDoctorCommand();
+
+      expect(process.exitCode).toBeUndefined();
+    });
+
+    it('fails independently when the codex JSON output cannot be parsed', async () => {
+      execFileSyncMock.mockImplementation(() => 'not json');
+      const { authDoctorCommand } = await import('./authDoctorCommand.js');
+      await authDoctorCommand();
+
+      expect(process.exitCode).toBe(1);
+      expect(allLogLines()).toContain('JSON パースに失敗しました');
+    });
   });
 });

@@ -47,7 +47,18 @@ export async function resolveKillOutcome(execTmux: Promise<ExecResult>): Promise
   // window") and kill-session ("can't find session" / "no such session") —
   // matching the shared "can't find" substring plus the session-only
   // "no such session" phrasing covers both without the caller having to
-  // pick a pattern.
-  const alreadyGone = output.includes("can't find") || output.includes('no such session');
+  // pick a pattern. "no server running" is the third case: the tmux server
+  // process itself is gone (e.g. it exited after its last session was
+  // killed), which trivially means every window/session under it is also
+  // gone — `TmuxClient.listSessions()` already treats this same string as
+  // "nothing here" (returns `[]`) rather than an error, and this function
+  // must classify it the same way, or a target that is provably absent
+  // (no tmux server = no sessions = no windows) gets misreported as a kill
+  // failure, which blocks callers (rollback, cleanup) that retry on
+  // `success: false` and only proceed once `alreadyGone` is true.
+  const alreadyGone =
+    output.includes("can't find") ||
+    output.includes('no such session') ||
+    output.includes('no server running');
   return { success: alreadyGone, alreadyGone, result };
 }

@@ -91,7 +91,18 @@ automatically**, not `setup.sh`, not `azitoctl`, not any hook script. To use it:
 
 ```bash
 source ~/.azito/operator.env
-azito token rotate     # now running with operator authority
+azito units list       # or any other azito CLI command that needs operator authority
+```
+
+**Do not `source` this file before `azito token rotate`.** `rotate` refuses to run whenever
+`AZITO_UI_TOKEN` is already set in the environment — sourcing `operator.env` puts it there, so
+"source, then rotate" in the same shell deterministically aborts (`resolveCurrentUiToken()` treats
+env as authoritative over the token file it's about to rewrite; see `azito token rotate`'s own
+abort message for why). Run `rotate` with that variable unset instead, either in a fresh shell that
+never sourced `operator.env`, or explicitly:
+
+```bash
+env -u AZITO_UI_TOKEN azito token rotate
 ```
 
 `~/.azito/azitoctl*.env` (used by `azitoctl` / `azs`, the scripts that task-execution processes

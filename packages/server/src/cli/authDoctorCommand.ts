@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { execFileSync } from 'child_process';
 import { findAzitoctlEnvFiles } from '../shared/azitoctlEnv';
 import { resolveCurrentUiToken } from '../shared/currentUiToken';
 import { resolveScopedAuthEnabled } from '../shared/auth/scopedAuthFlag';
@@ -17,6 +18,16 @@ interface CheckResult {
   ok: boolean;
   label: string;
   detail: string;
+  /**
+   * True when this check couldn't actually verify anything (its
+   * prerequisite tool/config is absent) rather than having verified
+   * something and found it fine or broken. Rendered as its own marker
+   * (`--`) instead of `OK`/`NG` and never fails the command — "we didn't
+   * check" must stay visually distinct from "we checked and it's fine",
+   * or a human reading a green `azito auth doctor` run would wrongly
+   * believe the Codex MCP token was confirmed in sync with the hub.
+   */
+  notice?: boolean;
 }
 
 function operatorEnvPath(): string {
@@ -181,7 +192,99 @@ function checkMcpTokenMatchesHub(): CheckResult {
   };
 }
 
-// (d) AZITO_SCOPED_AUTH の現在値
+// (d) Codex 側の azt-mcp トークンがハブの現在値と一致するか
+//
+// setup.sh は `codex mcp add azt-mcp --env AZITO_UI_TOKEN=... -- node ...` で
+// Codex CLI にも azt-mcp を登録するが、`azito token rotate` は意図的に
+// Codex 側の登録を更新しない（同期先が増えるほど「rotate 後にどこかが
+// 401 になる」経路が増えるため、rotate はトークンファイル + operator.env +
+// Claude の MCP settings のみを更新し、それ以外は harness/setup.sh の
+// 再配布に委ねる設計 — checkMcpTokenMatchesHub の Claude 側と同じ理由）。
+// これまで doctor は Claude 側の MCP 設定しか見ていなかったため、Codex を
+// 使っている環境では「doctor が green でも Codex の azt-mcp は旧トークンの
+// まま」というドリフトを検出できなかった。
+//
+// `codex` CLI 自体が入っていない環境（Codex を使わない開発者・サーバー）は
+// 「確認不能」であって「壊れている」わけではないので、NG にはせず notice
+// として報告する。
+function checkCodexMcpTokenMatchesHub(): CheckResult {
+  const label = 'Codex MCP settings の azt-mcp トークンがハブの現在値と一致';
+
+  let stdout: string;
+  try {
+    stdout = execFileSync('codex', ['mcp', 'get', 'azt-mcp', '--json'], {
+      encoding: 'utf-8',
+      timeout: 5000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException & { status?: number };
+    if (e.code === 'ENOENT') {
+      return {
+        ok: true,
+        notice: true,
+        label,
+        detail: 'codex コマンドが見つかりません（Codex を使わない環境では確認不能・問題ありません）',
+      };
+    }
+    // `codex mcp get` exits non-zero when azt-mcp isn't registered in Codex
+    // at all (or on some other CLI-side error) — that's "nothing to check",
+    // the same "not configured" treatment `checkMcpTokenMatchesHub` gives
+    // an absent Claude entry, not a doctor failure.
+    return {
+      ok: true,
+      label,
+      detail: 'Codex に azt-mcp が登録されていません（このマシンで Codex を使わない場合は問題ありません）',
+    };
+  }
+
+  let parsed: { transport?: { env?: Record<string, string> } };
+  try {
+    parsed = JSON.parse(stdout) as { transport?: { env?: Record<string, string> } };
+  } catch (err) {
+    return {
+      ok: false,
+      label,
+      detail:
+        `codex mcp get azt-mcp --json の出力の JSON パースに失敗しました: ${err instanceof Error ? err.message : String(err)}\n` +
+        '  修正: `codex mcp get azt-mcp --json` を手動で実行して出力を確認してください。',
+    };
+  }
+  const codexToken = parsed.transport?.env?.AZITO_UI_TOKEN;
+  if (!codexToken) {
+    return {
+      ok: true,
+      label,
+      detail: 'Codex 側の azt-mcp に AZITO_UI_TOKEN が未設定です（このマシンから Codex 経由で MCP を使わない場合は問題ありません）',
+    };
+  }
+
+  const current = resolveCurrentUiToken();
+  if (!current) {
+    return {
+      ok: false,
+      label,
+      detail:
+        'このマシンからハブの現在の UI トークンを読めませんでした' +
+        '（AZITO_UI_TOKEN env / サーバー .env / data/ui-token のいずれも見つかりません）。' +
+        'リモートハブの場合はハブが動いているサーバー上で doctor を実行してください。',
+    };
+  }
+
+  if (codexToken === current.token) {
+    return { ok: true, label, detail: `codex mcp get azt-mcp（一致元: ${current.source}）` };
+  }
+  return {
+    ok: false,
+    label,
+    detail:
+      `Codex 側の azt-mcp トークンとハブの現在値（一致元: ${current.source}）が不一致です。\n` +
+      '  修正: `azito token rotate` は Codex の登録を更新しません。' +
+      'harness/setup.sh --ui-token <token> を再実行して Codex 側の azt-mcp を更新してください。',
+  };
+}
+
+// (e) AZITO_SCOPED_AUTH の現在値
 function checkScopedAuthFlag(): CheckResult {
   const enabled = resolveScopedAuthEnabled();
   return {
@@ -207,12 +310,13 @@ export async function authDoctorCommand(): Promise<void> {
     checkAzitoctlEnvNoUiToken(),
     checkOperatorEnvPermissions(),
     checkMcpTokenMatchesHub(),
+    checkCodexMcpTokenMatchesHub(),
     checkScopedAuthFlag(),
   ];
 
   let hasFailure = false;
   for (const check of checks) {
-    const mark = colorize(check.ok, check.ok ? 'OK ' : 'NG ');
+    const mark = check.notice ? (process.stdout.isTTY ? '\x1b[33m-- \x1b[0m' : '-- ') : colorize(check.ok, check.ok ? 'OK ' : 'NG ');
     console.log(`[${mark}] ${check.label}`);
     for (const line of check.detail.split('\n')) {
       console.log(`      ${line}`);

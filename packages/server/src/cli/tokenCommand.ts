@@ -111,6 +111,9 @@ export async function tokenCommand(args: string[]): Promise<void> {
     if (current && current.source !== paths.uiToken) {
       console.error(`Cannot rotate: the hub's effective AZITO_UI_TOKEN currently comes from ${current.source}, not the token file (${paths.uiToken}).`);
       console.error('Rotating the token file would produce a new value the running hub never reads, while still overwriting operator.env / MCP settings with that unusable token.');
+      if (current.source === 'env') {
+        console.error('Hint: if you got here by running `source ~/.azito/operator.env` first, that is the cause — it puts AZITO_UI_TOKEN into this shell\'s env, which this check treats as authoritative. Do not source operator.env in a shell you also plan to run `azito token rotate` from; use `env -u AZITO_UI_TOKEN azito token rotate` or a fresh shell instead.');
+      }
       // `azito token rotate` is not the fix here (third-party review
       // finding: re-running it deterministically hits this same abort again
       // — env/.env stays authoritative until a human edits it) — the
