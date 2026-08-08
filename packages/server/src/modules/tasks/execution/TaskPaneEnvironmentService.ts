@@ -53,7 +53,7 @@ export class TaskPaneEnvironmentService {
    * something a task pane carries at all (design v3 §2 — browser-ops moving
    * off direct CDP-in-the-task-env is a separate round, "E").
    */
-  buildEnvForNewWindow(task: Task, server: ServerConfig): Record<string, string> {
+  buildEnvForNewWindow(task: Task, server: ServerConfig): { env: Record<string, string>; tokenId: number } {
     const issued = this.taskTokenRepo.issueNextGeneration(task.id, 'window_regenerated');
     const env: Record<string, string> = {
       AZITO_TASK_TOKEN: issued.token,
@@ -100,7 +100,7 @@ export class TaskPaneEnvironmentService {
       env.AZITO_UI_TOKEN = '';
       env.AZITO_AGENT_TOKEN = '';
     }
-    return env;
+    return { env, tokenId: issued.id };
   }
 
   /**
@@ -138,11 +138,21 @@ export class TaskPaneEnvironmentService {
   }
 
   /**
-   * Revokes every currently-active token generation for `taskId` because its
-   * backing tmux window was just destroyed and, per design v3 §2's
+   * Revokes exactly the token generation `tokenId` because its backing tmux
+   * window was just destroyed (or never came up) and, per design v3 §2's
    * generation-bound contract ("ウィンドウが再利用可能な間だけトークンが
    * 有効"), a destroyed window can never again be resumed onto — so nothing
    * should still hold a live credential for it.
+   *
+   * Scoped to the single generation `tokenId` identifies — NOT every active
+   * generation for the task (Issue #28 third-party review, WindowRotation.ts
+   * finding: a blanket `revokeAllForTask` here could revoke a DIFFERENT,
+   * newer generation than the one this rollback is actually cleaning up, if
+   * a concurrent rotation for the same task had already issued and persisted
+   * it — see ITaskTokenRepository.revoke's doc comment). Callers pass the
+   * `tokenId` returned by the `buildEnvForNewWindow` call that issued the
+   * generation being rolled back — see WindowRotation.ts's
+   * createRotatedWindow/rollbackWindowReference.
    *
    * This is deliberately NOT routed through SqliteTaskRepository's
    * TOKEN_REVOKING_STATUSES (the status-transition side of this same
@@ -157,6 +167,24 @@ export class TaskPaneEnvironmentService {
    * this (Issue #28 third-party review finding: revoking on a kill attempt
    * that silently failed would 401 a pane that is, in fact, still alive and
    * in use).
+   */
+  revokeGeneration(tokenId: number, reason: string): void {
+    this.taskTokenRepo.revoke(tokenId, reason);
+  }
+
+  /**
+   * Revokes every currently-active token generation for `taskId`. Unlike
+   * {@link revokeGeneration}, this is for callers that are NOT rolling back
+   * one specific `createRotatedWindow`/`buildEnvForNewWindow` issuance they
+   * hold the `tokenId` for — e.g. an operator killing a task's tmux window
+   * directly from the terminal UI (`onTaskWindowDestroyed`,
+   * `revokeTaskWindowGeneration` in app/buildServer.ts) — where whatever
+   * generation is currently active for the task, known or not, needs to go.
+   * Kept alongside `revokeGeneration` rather than folded into it: using this
+   * broader form from a rotation-rollback path is exactly the Issue #28
+   * third-party review finding `revokeGeneration` exists to avoid (see its
+   * doc comment) — a caller that DOES know its own `tokenId` must use
+   * `revokeGeneration`, not this method.
    */
   revokeForDestroyedWindow(taskId: number, reason: string): void {
     this.taskTokenRepo.revokeAllForTask(taskId, reason);

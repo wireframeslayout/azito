@@ -11,6 +11,7 @@ export class SqliteTaskTokenRepository implements ITaskTokenRepository {
   private insertStmt;
   private findActiveHashesByTaskStmt;
   private revokeAllForTaskStmt;
+  private revokeByIdStmt;
   private nextGenerationStmt;
   private activeGenerationStmt;
 
@@ -23,6 +24,9 @@ export class SqliteTaskTokenRepository implements ITaskTokenRepository {
     );
     this.revokeAllForTaskStmt = db.prepare(
       "UPDATE task_tokens SET revoked_at = datetime('now'), revoke_reason = ? WHERE task_id = ? AND revoked_at IS NULL",
+    );
+    this.revokeByIdStmt = db.prepare(
+      "UPDATE task_tokens SET revoked_at = datetime('now'), revoke_reason = ? WHERE id = ? AND revoked_at IS NULL",
     );
     // MAX() over ALL rows (not just active ones) — a generation number must
     // never be reused even after its token was revoked, or a revoked
@@ -58,6 +62,11 @@ export class SqliteTaskTokenRepository implements ITaskTokenRepository {
 
   revokeAllForTask(taskId: number, reason: string): number {
     const result = this.revokeAllForTaskStmt.run(reason, taskId);
+    return result.changes;
+  }
+
+  revoke(tokenId: number, reason: string): number {
+    const result = this.revokeByIdStmt.run(reason, tokenId);
     return result.changes;
   }
 

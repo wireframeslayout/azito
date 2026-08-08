@@ -243,10 +243,16 @@ function buildService(opts: {
   // plausible env Record so respawn()'s task-owned branch has something to
   // pass through.
   const paneEnvService = {
-    buildEnvForNewWindow: vi.fn(() => ({ AZITO_TASK_TOKEN: 'azt.task.1.' + 'a'.repeat(64), AZITO_TASK_ID: '1' })),
+    buildEnvForNewWindow: vi.fn(() => ({
+      env: { AZITO_TASK_TOKEN: 'azt.task.1.' + 'a'.repeat(64), AZITO_TASK_ID: '1' },
+      tokenId: 5,
+    })),
     // Issue #28 multi-window token collision fix: a SECONDARY task window's
     // (re)creation calls this instead — never rotates/issues a task token.
     buildEnvForSecondaryWindow: vi.fn(() => ({ AZITO_TASK_ID: '1' })),
+    // Scoped to the specific generation (`tokenId`, mocked as 5 above), not
+    // the whole task, per the WindowRotation.ts revokeGeneration fix.
+    revokeGeneration: vi.fn(),
     revokeForDestroyedWindow: vi.fn(),
   } as any;
 
@@ -368,7 +374,7 @@ describe('WindowRespawnService.respawn — supervisor wrap', () => {
 
     await service.respawn(1, makeServer());
 
-    const rotatedEnv = paneEnvService.buildEnvForNewWindow.mock.results[0].value;
+    const rotatedEnv = paneEnvService.buildEnvForNewWindow.mock.results[0].value.env;
     expect(tmux.splitPane).toHaveBeenCalledTimes(2);
     for (const call of tmux.splitPane.mock.calls) {
       expect(call[3]).toBe(rotatedEnv);
@@ -660,7 +666,7 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
     // replacement window never came up, that generation must be revoked
     // rather than left as a live, unused credential.
     expect(paneEnvService.buildEnvForNewWindow).toHaveBeenCalledTimes(1);
-    expect(paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(5, 'respawn_create_failed');
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(5, 'respawn_create_failed');
   });
 
   it('throws on invalid tmuxTarget without window part', async () => {
@@ -1170,7 +1176,7 @@ describe('WindowRespawnService.resumeLegacySession rollback safety (Issue #28 th
 
     await expect(service.resumeLegacySession(7, makeServer())).rejects.toThrow(/Failed to create tmux window/);
 
-    expect(paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(7, 'resume_legacy_create_failed');
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(5, 'resume_legacy_create_failed');
     expect(tmux.sendKeys).not.toHaveBeenCalled();
     expect(taskRepo.update).not.toHaveBeenCalledWith(7, expect.objectContaining({ tmuxWindow: expect.anything() }));
   });
@@ -1185,7 +1191,7 @@ describe('WindowRespawnService.resumeLegacySession rollback safety (Issue #28 th
     await expect(service.resumeLegacySession(7, makeServer())).rejects.toThrow(/no such pane/);
 
     expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:task-7-new');
-    expect(paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(7, 'resume_legacy_launch_failed_rollback');
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(5, 'resume_legacy_launch_failed_rollback');
     expect(taskRepo.update).not.toHaveBeenCalledWith(7, expect.objectContaining({ tmuxWindow: expect.anything() }));
   });
 
@@ -1199,7 +1205,7 @@ describe('WindowRespawnService.resumeLegacySession rollback safety (Issue #28 th
 
     await expect(service.resumeLegacySession(7, makeServer())).rejects.toThrow(/no such pane/);
 
-    expect(paneEnvService.revokeForDestroyedWindow).not.toHaveBeenCalled();
+    expect(paneEnvService.revokeGeneration).not.toHaveBeenCalled();
   });
 
   // Issue #28 third-party review, second round: the branch above used to
@@ -1218,7 +1224,7 @@ describe('WindowRespawnService.resumeLegacySession rollback safety (Issue #28 th
 
     await expect(service.resumeLegacySession(7, makeServer())).rejects.toThrow(/no such pane/);
 
-    expect(paneEnvService.revokeForDestroyedWindow).not.toHaveBeenCalled();
+    expect(paneEnvService.revokeGeneration).not.toHaveBeenCalled();
     expect(taskRepo.update).toHaveBeenCalledWith(7, { tmuxWindow: 'task-7-new' });
   });
 });

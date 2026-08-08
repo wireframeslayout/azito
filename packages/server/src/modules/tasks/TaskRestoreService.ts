@@ -7,7 +7,7 @@ import type { IUnitRepository } from '../units/Unit';
 import type { IWindowRepository } from '../windows/Window';
 import type { SqliteProjectSecretRepository } from '../projects/SqliteProjectSecretRepository';
 import type { TmuxClient } from '../tmux/TmuxClient';
-import { createRotatedWindow, rollbackWindowReference } from './execution/WindowRotation';
+import { createRotatedWindow, rollbackWindowReference, runExclusiveForTask } from './execution/WindowRotation';
 import type { WorktreeServiceFactory } from '../git/WorktreeServiceFactory';
 import { PathResolverFactory, assertDirectoryContained } from '../git/PathContainment';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
@@ -170,7 +170,19 @@ export class TaskRestoreService {
     let worktreePath: string | null = null;
     let windowRowId: number | null = null;
     let repoDir: string | null = null;
+    // Set once createRotatedWindow issues a generation below — the specific
+    // row the catch block's rollbackWindowReference call revokes (Issue #28
+    // third-party review, WindowRotation.ts finding: never a blanket
+    // revoke-all, which could clobber a newer generation a concurrent
+    // rotation for this task already persisted).
+    let tokenId: number | null = null;
 
+    // The whole issue->create->persist span this function performs (plus its
+    // own rollback below) runs under a per-task lock (design v3 §2 — see
+    // runExclusiveForTask's doc comment in WindowRotation.ts): without it, a
+    // concurrent execute()/respawn() for the same task could revoke this
+    // generation before restore() finishes persisting it.
+    return await runExclusiveForTask(task.id, async () => {
     try {
       // Window generation point — rotates the task token (design v3 §2/§6:
       // restore() always (re)creates the task's window from scratch, so it
@@ -190,6 +202,7 @@ export class TaskRestoreService {
         tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: env }),
       );
       windowName = created.windowName;
+      tokenId = created.tokenId;
 
       const windowTarget = `${tmuxSession}:${windowName}`;
       const paneId = await tmux.resolvePaneId(server, windowTarget);
@@ -341,10 +354,16 @@ export class TaskRestoreService {
           // below, regardless of whether the kill above actually succeeded —
           // used to delete the only DB reference to a window that was still
           // alive and still holding a valid token whenever the kill failed.
+          // Scoped to `tokenId!` (non-null here — set right after
+          // createRotatedWindow, same branch condition as `windowName`
+          // being set), not `task.id` — a blanket revoke could otherwise
+          // clobber a newer generation a concurrent rotation for this task
+          // already persisted (Issue #28 third-party review, WindowRotation.ts
+          // finding).
           await rollbackWindowReference(
             tmux.killWindow(server, `${tmuxSession}:${windowName}`),
             paneEnvService,
-            task.id,
+            tokenId!,
             'restore_rollback',
             () => {
               if (windowRowId) {
@@ -377,5 +396,6 @@ export class TaskRestoreService {
       }
       throw err;
     }
+    });
   }
 }

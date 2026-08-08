@@ -192,10 +192,16 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
     // asserted on in this file (see TaskPaneEnvironmentService.test.ts for
     // that) — just needs to return a plausible env Record.
     paneEnvService: {
-      buildEnvForNewWindow: vi.fn(() => ({ AZITO_TASK_TOKEN: 'azt.task.1.' + 'a'.repeat(64), AZITO_TASK_ID: '1' })),
+      buildEnvForNewWindow: vi.fn(() => ({
+        env: { AZITO_TASK_TOKEN: 'azt.task.1.' + 'a'.repeat(64), AZITO_TASK_ID: '1' },
+        tokenId: 1,
+      })),
       // Issue #28 third-party review fix: restore()'s catch-block rollback
       // calls this after successfully killing the freshly-created window —
-      // several tests below exercise that rollback path.
+      // several tests below exercise that rollback path. Scoped to the
+      // specific generation (`tokenId`, mocked as 1 above), not the whole
+      // task, per the WindowRotation.ts revokeGeneration fix.
+      revokeGeneration: vi.fn(),
       revokeForDestroyedWindow: vi.fn(),
     } as unknown as TaskRestoreDeps['paneEnvService'],
     ...overrides,
@@ -434,7 +440,7 @@ describe('TaskRestoreService', () => {
     // TOKEN_REVOKING_STATUSES again), so the generation this restore()
     // attempt just issued via buildEnvForNewWindow would otherwise leak —
     // revoke it directly once the kill above is confirmed.
-    expect(deps.paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(1, 'restore_rollback');
+    expect(deps.paneEnvService.revokeGeneration).toHaveBeenCalledWith(1, 'restore_rollback');
   });
 
   it('throws when tmux window creation fails and task remains archived', async () => {
@@ -460,7 +466,7 @@ describe('TaskRestoreService', () => {
     // itself before rethrowing, so the revoke must still happen here even
     // though nothing was ever created (no window to kill — killWindow must
     // NOT be called for a window that never came into existence).
-    expect(deps.paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(1, 'restore_create_failed');
+    expect(deps.paneEnvService.revokeGeneration).toHaveBeenCalledWith(1, 'restore_create_failed');
     expect(deps.tmux.killWindow).not.toHaveBeenCalled();
   });
 
@@ -485,7 +491,7 @@ describe('TaskRestoreService', () => {
     await expect(service.restore(task, log)).rejects.toThrow(/Failed to create tmux window/);
     expect(deps.taskRepo.update).not.toHaveBeenCalled();
     expect(deps.windowRepo.add).not.toHaveBeenCalled();
-    expect(deps.paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(1, 'restore_create_failed');
+    expect(deps.paneEnvService.revokeGeneration).toHaveBeenCalledWith(1, 'restore_create_failed');
     expect(deps.tmux.killWindow).not.toHaveBeenCalled();
   });
 
@@ -515,7 +521,7 @@ describe('TaskRestoreService', () => {
 
     await expect(service.restore(task, log)).rejects.toThrow('worktree failed');
     expect(deps.tmux.killWindow).toHaveBeenCalled();
-    expect(deps.paneEnvService.revokeForDestroyedWindow).not.toHaveBeenCalled();
+    expect(deps.paneEnvService.revokeGeneration).not.toHaveBeenCalled();
   });
 
   it('does not remove the Window row when the rollback kill fails after the row was already persisted — the still-live window must stay discoverable', async () => {
@@ -540,7 +546,7 @@ describe('TaskRestoreService', () => {
     expect(deps.windowRepo.add).toHaveBeenCalled();
     expect(deps.tmux.killWindow).toHaveBeenCalled();
     expect(deps.windowRepo.remove).not.toHaveBeenCalled();
-    expect(deps.paneEnvService.revokeForDestroyedWindow).not.toHaveBeenCalled();
+    expect(deps.paneEnvService.revokeGeneration).not.toHaveBeenCalled();
   });
 
   it('removes the Window row and revokes the generation when the rollback kill succeeds after the row was already persisted', async () => {
@@ -557,7 +563,7 @@ describe('TaskRestoreService', () => {
     await expect(service.restore(task, log)).rejects.toThrow('db write failed');
     expect(deps.windowRepo.add).toHaveBeenCalled();
     expect(deps.windowRepo.remove).toHaveBeenCalledWith(100);
-    expect(deps.paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(1, 'restore_rollback');
+    expect(deps.paneEnvService.revokeGeneration).toHaveBeenCalledWith(1, 'restore_rollback');
   });
 
   it('throws when server cannot be resolved', async () => {

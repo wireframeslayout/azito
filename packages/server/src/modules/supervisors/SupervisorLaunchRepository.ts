@@ -28,7 +28,20 @@ export interface IssuedSupervisorLaunch {
 }
 
 export interface ISupervisorLaunchRepository {
-  /** Persists a new launch row (status 'pending') with a fresh random launchId + bootstrap secret. */
+  /**
+   * Persists a new launch row (status 'pending') with a fresh random launchId
+   * + bootstrap secret. ALSO marks every still-`pending`/`active` prior
+   * launch for the SAME `(serverName, target)` as `replaced`, in the same
+   * transaction (Issue #28 third-party review, Important finding): without
+   * this, issuing a new launch for a key that already has one outstanding
+   * left the old launch's session token able to `register()` again later
+   * (e.g. after the new supervisor's connection drops) and be treated as
+   * `bound` — see `verifySession`'s doc comment for the other half of this
+   * fix. A launch is scoped one-to-one to the wrap it was issued for
+   * (`SupervisorRegistry.issueLaunch()`, called immediately before a fresh
+   * `wrapWithSupervisor()`), so an old one for the same key is by
+   * construction obsolete the moment a new one is issued.
+   */
   create(expectation: SupervisorLaunchExpectation): IssuedSupervisorLaunch;
 
   findByLaunchId(launchId: string): SupervisorLaunchRow | null;
@@ -38,8 +51,16 @@ export interface ISupervisorLaunchRepository {
   /** True iff `token` hashes to `row.bootstrapHash` and the row is still `pending` (one-shot). */
   verifyBootstrap(row: Pick<SupervisorLaunchRow, 'bootstrapHash' | 'status'>, token: string): boolean;
 
-  /** True iff `token` hashes to `row.sessionHash`. */
-  verifySession(row: Pick<SupervisorLaunchRow, 'sessionHash'>, token: string): boolean;
+  /**
+   * True iff `token` hashes to `row.sessionHash` AND the row is still
+   * `active` (Issue #28 third-party review, Important finding: a session
+   * hash alone used to be accepted regardless of `status`, so a launch that
+   * `create()`'s supersede step — or any other status transition — had since
+   * marked `replaced`/`expired` could still authenticate a reconnect with its
+   * old session token; `bound: true` is meaningless once the launch it was
+   * issued for is no longer the current one for its key).
+   */
+  verifySession(row: Pick<SupervisorLaunchRow, 'sessionHash' | 'status'>, token: string): boolean;
 
   /**
    * Consumes the bootstrap secret (moving the row out of `pending`) and mints a fresh session
@@ -100,6 +121,7 @@ export class SqliteSupervisorLaunchRepository implements ISupervisorLaunchReposi
   private activateStmt;
   private touchStmt;
   private markStatusStmt;
+  private supersedeForTargetStmt;
 
   constructor(private db: SqliteDatabase) {
     this.insertStmt = db.prepare(
@@ -113,19 +135,22 @@ export class SqliteSupervisorLaunchRepository implements ISupervisorLaunchReposi
     );
     this.touchStmt = db.prepare("UPDATE supervisor_launches SET last_registered_at = datetime('now') WHERE launch_id = ?");
     this.markStatusStmt = db.prepare('UPDATE supervisor_launches SET status = ? WHERE launch_id = ?');
+    // Every outstanding (pending/active) launch for the SAME key, superseded
+    // in the same transaction as the fresh insert below — see create()'s doc
+    // comment on ISupervisorLaunchRepository.
+    this.supersedeForTargetStmt = db.prepare(
+      "UPDATE supervisor_launches SET status = 'replaced' WHERE server_name = ? AND target = ? AND status IN ('pending', 'active')",
+    );
   }
 
   create(expectation: SupervisorLaunchExpectation): IssuedSupervisorLaunch {
     const launchId = crypto.randomUUID();
     const bootstrapToken = crypto.randomBytes(32).toString('hex');
-    this.insertStmt.run(
-      launchId,
-      expectation.serverName,
-      expectation.target,
-      expectation.taskId,
-      expectation.unitId,
-      hashToken(bootstrapToken),
-    );
+    const run = this.db.transaction((exp: SupervisorLaunchExpectation, id: string, hash: string): void => {
+      this.supersedeForTargetStmt.run(exp.serverName, exp.target);
+      this.insertStmt.run(id, exp.serverName, exp.target, exp.taskId, exp.unitId, hash);
+    });
+    run(expectation, launchId, hashToken(bootstrapToken));
     return { launchId, bootstrapToken };
   }
 
@@ -144,8 +169,13 @@ export class SqliteSupervisorLaunchRepository implements ISupervisorLaunchReposi
     return timingSafeHashEquals(row.bootstrapHash, token);
   }
 
-  verifySession(row: Pick<SupervisorLaunchRow, 'sessionHash'>, token: string): boolean {
+  verifySession(row: Pick<SupervisorLaunchRow, 'sessionHash' | 'status'>, token: string): boolean {
     if (!row.sessionHash) return false;
+    // Issue #28 third-party review, Important finding: a launch superseded
+    // by a newer one for the same (serverName, target) — see create()'s doc
+    // comment — must never authenticate again, even with a session token
+    // that still hashes correctly. Only `active` is a currently-live launch.
+    if (row.status !== 'active') return false;
     return timingSafeHashEquals(row.sessionHash, token);
   }
 

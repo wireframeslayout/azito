@@ -510,20 +510,75 @@ describe('SupervisorRegistry — launch binding (Issue #28 Phase C, design v3 §
   it('rejects a same-key registration from a DIFFERENT launchId while a bound connection is live (no eviction)', () => {
     const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
     const issuedA = registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })!;
-    const issuedB = registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })!;
 
     const first = new MockSocket();
     registry.register(asSocket(first), registerWith({ launchId: issuedA.launchId, bootstrapToken: issuedA.bootstrapToken }));
     expect(first.closed).toBeNull();
 
+    // The in-memory eviction guard (register()'s EXCEPTION branch) fires
+    // before any DB lookup for the intruder's launchId — a forged/unrelated
+    // launchId is enough to exercise it (a REAL second `issueLaunch()` for
+    // this same key would supersede issuedA in the DB per create()'s own
+    // fix — see the "supersedes prior launches" describe block below — so
+    // this guard is specifically about protecting a still-live BOUND
+    // connection from being evicted by a differently-identified register,
+    // independent of whether that other identity is itself valid).
     const intruder = new MockSocket();
-    registry.register(asSocket(intruder), registerWith({ launchId: issuedB.launchId, bootstrapToken: issuedB.bootstrapToken }));
+    registry.register(asSocket(intruder), registerWith({ launchId: 'unrelated-forged-launch-id', bootstrapToken: 'irrelevant' }));
 
     expect(intruder.closed?.code).toBe(4009);
     // The original connection must still be live and untouched.
     expect(first.closed).toBeNull();
     expect(registry.snapshot()).toHaveLength(1);
     expect(auditRecord).toHaveBeenCalledWith(expect.objectContaining({ event: 'supervisor_launch.replace_rejected' }));
+  });
+
+  // Issue #28 third-party review, Important finding: issuing a fresh launch
+  // for a key that already had one outstanding must invalidate the old one
+  // — the actual exploit was a disconnected old supervisor reconnecting with
+  // its still-hash-valid session token after a NEW launch (and NEW window
+  // generation) had already been issued for the same key.
+  describe('SupervisorRegistry — re-launch supersedes the prior launch for the same key', () => {
+    it('rejects a reconnect with the OLD session token once a new launch has been issued for the same key', () => {
+      const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
+      const issuedA = registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })!;
+
+      const first = new MockSocket();
+      registry.register(asSocket(first), registerWith({ launchId: issuedA.launchId, bootstrapToken: issuedA.bootstrapToken }));
+      const sessionToken = (first.sent[0] as { sessionToken: string }).sessionToken;
+      // The old supervisor's connection drops (e.g. its tmux window was
+      // killed as part of a fresh execute()/respawn() for this task) —
+      // nothing left in `connections` for this key to protect it via the
+      // in-memory eviction guard.
+      first.close();
+      registry.handleSocketClosed(asSocket(first));
+
+      // A fresh execute()/respawn() issues a NEW launch for the SAME key —
+      // this must supersede issuedA (SqliteSupervisorLaunchRepository.create()).
+      registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 });
+
+      // The old supervisor process (unaware anything changed) reconnects
+      // with its still-cryptographically-valid old session token.
+      const reconnect = new MockSocket();
+      registry.register(asSocket(reconnect), registerWith({ launchId: issuedA.launchId, sessionToken }));
+
+      expect(reconnect.closed?.code).toBe(4001);
+      expect(auditRecord).toHaveBeenCalledWith(expect.objectContaining({ event: 'supervisor_launch.session_rejected' }));
+      expect(registry.snapshot()).toHaveLength(0);
+    });
+
+    it('rejects a bootstrap-token registration for a launch that has since been superseded', () => {
+      const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
+      const issuedA = registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })!;
+      // Superseded before issuedA ever registers at all.
+      registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 });
+
+      const socket = new MockSocket();
+      registry.register(asSocket(socket), registerWith({ launchId: issuedA.launchId, bootstrapToken: issuedA.bootstrapToken }));
+
+      expect(socket.closed?.code).toBe(4001);
+      expect(auditRecord).toHaveBeenCalledWith(expect.objectContaining({ event: 'supervisor_launch.bootstrap_rejected' }));
+    });
   });
 
   it('a same-launchId reconnection still replaces the previous connection (normal reconnect)', () => {

@@ -333,10 +333,16 @@ function buildUseCase(opts: {
   // tmux.createWindow call sequencing/branching, not on the exact env
   // contents (see TaskPaneEnvironmentService.test.ts for those).
   const paneEnvService = {
-    buildEnvForNewWindow: vi.fn(() => ({ AZITO_TASK_TOKEN: 'azt.task.1.' + 'a'.repeat(64), AZITO_TASK_ID: '1' })),
+    buildEnvForNewWindow: vi.fn(() => ({
+      env: { AZITO_TASK_TOKEN: 'azt.task.1.' + 'a'.repeat(64), AZITO_TASK_ID: '1' },
+      tokenId: 101,
+    })),
     // Issue #28 third-party review fix: the worktree/working-directory
     // rollback branches call this after successfully killing the
     // just-created window — several tests below exercise those branches.
+    // Scoped to the specific generation (`tokenId`, mocked as 101 above),
+    // not the whole task, per the WindowRotation.ts revokeGeneration fix.
+    revokeGeneration: vi.fn(),
     revokeForDestroyedWindow: vi.fn(),
   };
 
@@ -914,7 +920,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
       { check: vi.fn(async () => ({ ok: true, reasons: [], memAvailablePercent: null, loadPerCore: null, memAvailablePercentMin: 10, loadPerCoreMax: 2 })) } as any,
       projectSecretRepo as any,
       new EventEmitter(),
-      { buildEnvForNewWindow: vi.fn(() => ({})) } as any,
+      { buildEnvForNewWindow: vi.fn(() => ({ env: {}, tokenId: 1 })), revokeGeneration: vi.fn() } as any,
     );
 
     await useCase.followUp(42, 1, 'please continue');
@@ -1076,7 +1082,7 @@ describe('ExecuteTaskUseCase working-directory containment (Issue #27)', () => {
     // generation would otherwise leak — the rollback must kill the window
     // AND revoke it directly, once the kill is confirmed.
     expect(tmux.killWindow).toHaveBeenCalled();
-    expect(paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(4, 'worktree_path_rejected_rollback');
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'worktree_path_rejected_rollback');
   });
 
   it('skips containment checks when the project has no configured working directory (legacy behavior preserved)', async () => {
@@ -1197,7 +1203,7 @@ describe('ExecuteTaskUseCase window-rotation rollback safety (Issue #28 third-pa
 
     await expect(useCase.execute(31, 41)).rejects.toThrow(/Failed to create tmux window/);
 
-    expect(paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(41, 'execute_create_failed');
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'execute_create_failed');
     expect(windowRepo.add).not.toHaveBeenCalled();
     expect(taskRepo.update).not.toHaveBeenCalledWith(41, expect.objectContaining({ tmuxWindow: 'w1' }));
   });
@@ -1215,7 +1221,7 @@ describe('ExecuteTaskUseCase window-rotation rollback safety (Issue #28 third-pa
 
     await expect(useCase.execute(32, 42)).rejects.toThrow(/Failed to create tmux window/);
 
-    expect(paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(42, 'execute_create_failed');
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'execute_create_failed');
     expect(windowRepo.add).not.toHaveBeenCalled();
   });
 
@@ -1232,7 +1238,7 @@ describe('ExecuteTaskUseCase window-rotation rollback safety (Issue #28 third-pa
 
     await expect(useCase.followUp(33, 43, 'continue')).rejects.toThrow(/Failed to create tmux window/);
 
-    expect(paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(43, 'followup_create_failed');
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'followup_create_failed');
     expect(taskRepo.update).not.toHaveBeenCalledWith(43, expect.objectContaining({ tmuxWindow: 'w2' }));
   });
 
@@ -1249,7 +1255,7 @@ describe('ExecuteTaskUseCase window-rotation rollback safety (Issue #28 third-pa
 
     await expect(useCase.followUp(34, 44, 'continue')).rejects.toThrow(/Failed to create tmux window/);
 
-    expect(paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(44, 'followup_create_failed');
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'followup_create_failed');
   });
 });
 
@@ -1293,7 +1299,7 @@ describe('ExecuteTaskUseCase rollback keeps the window reference tracked when th
     await expect(useCase.execute(50, 60)).rejects.toThrow(/Worktree creation failed/);
 
     expect(taskRepo.update).not.toHaveBeenCalledWith(60, expect.objectContaining({ tmuxWindow: null }));
-    expect(paneEnvService.revokeForDestroyedWindow).not.toHaveBeenCalled();
+    expect(paneEnvService.revokeGeneration).not.toHaveBeenCalled();
   });
 
   it('execute(): worktree-path-rejection rollback keeps tmuxWindow set and does not revoke the generation when the rollback kill fails', async () => {
@@ -1314,7 +1320,7 @@ describe('ExecuteTaskUseCase rollback keeps the window reference tracked when th
     await expect(useCase.execute(51, 61)).rejects.toThrow(/Worktree path rejected/);
 
     expect(taskRepo.update).not.toHaveBeenCalledWith(61, expect.objectContaining({ tmuxWindow: null }));
-    expect(paneEnvService.revokeForDestroyedWindow).not.toHaveBeenCalled();
+    expect(paneEnvService.revokeGeneration).not.toHaveBeenCalled();
   });
 
   it('followUp(): working-directory-rejection rollback keeps tmuxWindow set and does not revoke the generation when the rollback kill fails', async () => {
@@ -1332,7 +1338,7 @@ describe('ExecuteTaskUseCase rollback keeps the window reference tracked when th
     await expect(useCase.followUp(52, 62, 'please continue')).rejects.toThrow(/Follow-up working directory rejected/);
 
     expect(taskRepo.update).not.toHaveBeenCalledWith(62, expect.objectContaining({ tmuxWindow: null }));
-    expect(paneEnvService.revokeForDestroyedWindow).not.toHaveBeenCalled();
+    expect(paneEnvService.revokeGeneration).not.toHaveBeenCalled();
   });
 });
 
@@ -1370,7 +1376,7 @@ describe('ExecuteTaskUseCase.followUp working-directory containment (Issue #27 r
     // token) for this follow-up — 'failed' doesn't auto-revoke, so the
     // rollback must kill the window AND revoke it directly.
     expect(tmux.killWindow).toHaveBeenCalled();
-    expect(paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(7, 'followup_working_directory_rejected_rollback');
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'followup_working_directory_rejected_rollback');
   });
 
   it('rejects a persisted task.worktreePath that exists on disk but resolves outside the project working directory (regression: existence was previously treated as trust)', async () => {
@@ -1648,7 +1654,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       { check: vi.fn(async () => ({ ok: true, reasons: [], memAvailablePercent: null, loadPerCore: null, memAvailablePercentMin: 10, loadPerCoreMax: 2 })) } as any,
       projectSecretRepo as any,
       new EventEmitter(),
-      { buildEnvForNewWindow: vi.fn(() => ({})) } as any,
+      { buildEnvForNewWindow: vi.fn(() => ({ env: {}, tokenId: 1 })), revokeGeneration: vi.fn() } as any,
     );
 
     // execute() itself resolves once setup (session/window/worktree

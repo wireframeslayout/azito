@@ -39,6 +39,23 @@ export interface ITaskTokenRepository {
   revokeAllForTask(taskId: number, reason: string): number;
 
   /**
+   * Revokes exactly one token row by id, leaving every other (possibly
+   * newer) active generation for the same task untouched. Used to roll back
+   * a SPECIFIC window-generation issuance that failed (Issue #28 third-party
+   * review, WindowRotation.ts finding): `revokeAllForTask` is too broad for
+   * this purpose — issuing generation 2 for a task already revokes
+   * generation 1 as part of `issueNextGeneration`'s own transaction, so if
+   * generation 1's window creation was still in flight and its rollback
+   * called `revokeAllForTask` after generation 2 had already been issued
+   * (and its window created and persisted), that call would revoke
+   * generation 2 too, even though generation 2 is the one actually backing
+   * the task's live window. Revoking by the specific row id this issuance
+   * returned cannot affect any other generation. No-op (0 rows) if the row
+   * is already revoked. Returns the number of rows revoked (0 or 1).
+   */
+  revoke(tokenId: number, reason: string): number;
+
+  /**
    * Window-generation-bound rotation (Issue #28 Phase A後半,
    * TaskPaneEnvironmentService's sole write path): revokes every
    * currently-active token for `taskId` (recorded with `revokeReason`) and

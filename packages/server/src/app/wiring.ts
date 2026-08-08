@@ -305,7 +305,7 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
     paneEnvService: taskPaneEnvironmentService,
   });
   const usageService = new UsageService(infra.agentRegistry);
-  const agentSignalService = new AgentSignalService(repos.agentTurnRepo, infra.turnSignalHub, repos.logRepo);
+  const agentSignalService = new AgentSignalService(repos.agentTurnRepo, infra.turnSignalHub, repos.logRepo, repos.auditLogService);
   return { sessionStrategyFactory, sessionCaptureService, windowRespawnService, taskRestoreService, usageService, agentSignalService, taskEvents, originationService, taskPaneEnvironmentService };
 }
 

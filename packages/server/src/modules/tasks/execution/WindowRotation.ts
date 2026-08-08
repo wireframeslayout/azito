@@ -22,11 +22,64 @@ import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
  * resolved-with-non-zero-exit-code one — see killOutcome.ts's doc comment
  * for why `TmuxClient.createWindow`/`createSession` can resolve "successfully"
  * with a non-zero code on an `agent`-type server).
+ *
+ * Every call site is expected to run its own step-1/step-2 span through
+ * {@link runExclusiveForTask} for the task being rotated — see that
+ * function's doc comment for the interleaving bug this closes — and to
+ * route any rollback of the generation it issued through the `tokenId`
+ * {@link createRotatedWindow} returns, not a blanket revoke-all.
  */
 
 export interface KillTarget {
   target: string;
   kind: 'window' | 'pane';
+}
+
+/** One in-flight chain per taskId — see {@link runExclusiveForTask}. */
+const taskRotationLocks = new Map<number, Promise<unknown>>();
+
+/**
+ * Serializes the "confirm old window gone → rotate token → create new
+ * window → persist" sequence per task (Issue #28 third-party review, design
+ * v3 §2: "タスク単位ロック下で発行→作成→有効化"). Without this, two
+ * concurrent rotations for the SAME task (e.g. an `execute()` racing a
+ * `respawn()` triggered from the UI) can interleave in a way per-token
+ * revocation scoping alone does not fix:
+ *
+ *   1. call A issues generation 1 (`issueNextGeneration`)
+ *   2. call B issues generation 2 — this REVOKES generation 1 as part of its
+ *      own transaction, before A's window creation has even resolved
+ *   3. A's `create()` (already in flight) succeeds and persists `tmuxWindow`
+ *      pointing at generation 1's window — but generation 1 was just
+ *      revoked in step 2, so the pane that just came up authenticates with
+ *      a dead token
+ *
+ * Queuing every rotation for a given taskId through this function means
+ * step 2 can only start once step 1's entire issue→create→persist sequence
+ * has settled, so no in-flight generation is ever revoked out from under a
+ * creation that is still relying on it. A single in-memory `Map<taskId,
+ * Promise>` queue is sufficient (not a DB-backed lock): the hub is a single
+ * process, and every rotation site already awaits this promise chain, so
+ * there is no cross-process concurrency to coordinate.
+ *
+ * `fn`'s rejection is preserved on the returned promise; only the internal
+ * queue chain swallows it (so a failed rotation doesn't leave every later
+ * queued rotation for the same task permanently rejected). The map entry is
+ * dropped once its chain is the last one queued and has settled, so a task
+ * that stops rotating doesn't leak an entry forever.
+ */
+export function runExclusiveForTask<T>(taskId: number, fn: () => Promise<T>): Promise<T> {
+  const prior = taskRotationLocks.get(taskId) ?? Promise.resolve();
+  const run = prior.catch(() => undefined).then(fn);
+  const tail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  taskRotationLocks.set(taskId, tail);
+  tail.finally(() => {
+    if (taskRotationLocks.get(taskId) === tail) taskRotationLocks.delete(taskId);
+  });
+  return run;
 }
 
 /**
@@ -76,17 +129,23 @@ export async function createRotatedWindow(
   task: Task,
   reasonOnFailure: string,
   create: (env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string }>,
-): Promise<{ windowName: string; env: Record<string, string> }> {
-  const env = paneEnvService.buildEnvForNewWindow(task, server);
+): Promise<{ windowName: string; env: Record<string, string>; tokenId: number }> {
+  const { env, tokenId } = paneEnvService.buildEnvForNewWindow(task, server);
   let created: { result: ExecResult; windowName: string };
   try {
     created = await create(env);
   } catch (err) {
-    paneEnvService.revokeForDestroyedWindow(task.id, reasonOnFailure);
+    // Revoke only the generation THIS call just issued (`tokenId`), never a
+    // blanket revokeAllForTask — a concurrent rotation for the same task may
+    // already have issued and persisted a newer generation by the time this
+    // failure is handled (see runExclusiveForTask's doc comment for why
+    // callers are expected to serialize rotations per task in the first
+    // place; this scoping is the second, independent half of that fix).
+    paneEnvService.revokeGeneration(tokenId, reasonOnFailure);
     throw err;
   }
   if (created.result.code !== 0) {
-    paneEnvService.revokeForDestroyedWindow(task.id, reasonOnFailure);
+    paneEnvService.revokeGeneration(tokenId, reasonOnFailure);
     throw new Error(
       `Failed to create tmux window (exit ${created.result.code}): ${created.result.stderr || created.result.stdout}`,
     );
@@ -97,8 +156,10 @@ export async function createRotatedWindow(
   // `extraEnv`): only the window's first pane inherits what new-window/
   // new-session's own `-e` set, so a later split-window must be told the same
   // env explicitly or it silently inherits the tmux SESSION's environment
-  // instead (see splitPane's doc comment).
-  return { windowName: created.windowName, env };
+  // instead (see splitPane's doc comment). `tokenId` is returned so a caller
+  // that later needs to roll THIS generation back (rollbackWindowReference,
+  // for a failure downstream of window creation) can do so precisely.
+  return { windowName: created.windowName, env, tokenId };
 }
 
 /**
@@ -128,7 +189,7 @@ export async function createRotatedWindow(
 export async function rollbackWindowReference(
   killExec: Promise<ExecResult>,
   paneEnvService: TaskPaneEnvironmentService,
-  taskId: number,
+  tokenId: number,
   revokeReason: string,
   onGone: () => void,
   onStillAlive: () => void,
@@ -136,7 +197,11 @@ export async function rollbackWindowReference(
   const outcome = await resolveKillOutcome(killExec);
   if (outcome.success) {
     onGone();
-    paneEnvService.revokeForDestroyedWindow(taskId, revokeReason);
+    // Scoped to the specific generation `createRotatedWindow` issued for
+    // this window (see revokeGeneration's doc comment) — not a blanket
+    // revokeAllForTask, which could otherwise revoke a newer, still-valid
+    // generation a concurrent rotation for the same task already persisted.
+    paneEnvService.revokeGeneration(tokenId, revokeReason);
   } else {
     onStillAlive();
   }

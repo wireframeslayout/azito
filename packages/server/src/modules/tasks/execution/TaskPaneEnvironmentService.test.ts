@@ -65,9 +65,10 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
 }
 
 function makeDeps(scopedAuthEnabled: boolean) {
-  const taskTokenRepo: Pick<ITaskTokenRepository, 'issueNextGeneration' | 'revokeAllForTask'> = {
+  const taskTokenRepo: Pick<ITaskTokenRepository, 'issueNextGeneration' | 'revokeAllForTask' | 'revoke'> = {
     issueNextGeneration: vi.fn(() => ({ id: 1, token: 'azt.task.1.' + 'a'.repeat(64) })),
     revokeAllForTask: vi.fn(() => 1),
+    revoke: vi.fn(() => 1),
   };
   const projectSecretRepo = {
     findByProjectWithValues: vi.fn(() => [{ id: 1, projectId: 7, name: 'FOO', value: 'bar', createdAt: '', updatedAt: '' }]),
@@ -77,19 +78,20 @@ function makeDeps(scopedAuthEnabled: boolean) {
 }
 
 describe('TaskPaneEnvironmentService.buildEnvForNewWindow', () => {
-  it('always sets AZITO_TASK_TOKEN/AZITO_TASK_ID and project secrets, rotating via issueNextGeneration', () => {
+  it('always sets AZITO_TASK_TOKEN/AZITO_TASK_ID and project secrets, rotating via issueNextGeneration, and returns the issued row id as tokenId', () => {
     const { service, taskTokenRepo } = makeDeps(false);
-    const env = service.buildEnvForNewWindow(makeTask({ id: 5, projectId: 7 }), makeServer());
+    const { env, tokenId } = service.buildEnvForNewWindow(makeTask({ id: 5, projectId: 7 }), makeServer());
 
     expect(taskTokenRepo.issueNextGeneration).toHaveBeenCalledWith(5, 'window_regenerated');
     expect(env.AZITO_TASK_TOKEN).toMatch(/^azt\.task\.1\./);
     expect(env.AZITO_TASK_ID).toBe('5');
     expect(env.AZITO_SECRET_FOO).toBe('bar');
+    expect(tokenId).toBe(1);
   });
 
   it('injects AZITO_UI_TOKEN when the scoped-auth flag is off (compat mode)', () => {
     const { service } = makeDeps(false);
-    const env = service.buildEnvForNewWindow(makeTask(), makeServer());
+    const { env } = service.buildEnvForNewWindow(makeTask(), makeServer());
     expect(env.AZITO_UI_TOKEN).toBe('ui-token-123');
   });
 
@@ -102,7 +104,7 @@ describe('TaskPaneEnvironmentService.buildEnvForNewWindow', () => {
     // exposed to whatever the session's own environment happens to carry
     // (e.g. a project session created with `tmux.uiTokenEnv()`).
     const { service } = makeDeps(true);
-    const env = service.buildEnvForNewWindow(makeTask(), makeServer());
+    const { env } = service.buildEnvForNewWindow(makeTask(), makeServer());
     expect(env.AZITO_UI_TOKEN).toBe('');
   });
 
@@ -110,19 +112,19 @@ describe('TaskPaneEnvironmentService.buildEnvForNewWindow', () => {
     const agentServer = makeServer({ type: 'agent', agentPort: 4001, agentToken: 'secret-agent-token' });
 
     const off = makeDeps(false);
-    const envOff = off.service.buildEnvForNewWindow(makeTask(), agentServer);
+    const { env: envOff } = off.service.buildEnvForNewWindow(makeTask(), agentServer);
     expect(envOff.AZITO_AGENT_TOKEN).toBe('secret-agent-token');
     expect(envOff.AZITO_AGENT_PORT).toBe('4001');
 
     const on = makeDeps(true);
-    const envOn = on.service.buildEnvForNewWindow(makeTask(), agentServer);
+    const { env: envOn } = on.service.buildEnvForNewWindow(makeTask(), agentServer);
     expect(envOn.AZITO_AGENT_TOKEN).toBe('');
     expect(envOn.AZITO_AGENT_PORT).toBeUndefined();
   });
 
   it('never injects AZITO_AGENT_TOKEN for a local server even in compat mode', () => {
     const { service } = makeDeps(false);
-    const env = service.buildEnvForNewWindow(makeTask(), makeServer({ type: 'local' }));
+    const { env } = service.buildEnvForNewWindow(makeTask(), makeServer({ type: 'local' }));
     expect(env.AZITO_AGENT_TOKEN).toBeUndefined();
   });
 });
@@ -168,5 +170,18 @@ describe('TaskPaneEnvironmentService.revokeForDestroyedWindow', () => {
     const { service, taskTokenRepo } = makeDeps(true);
     service.revokeForDestroyedWindow(5, 'worktree_creation_failed_rollback');
     expect(taskTokenRepo.revokeAllForTask).toHaveBeenCalledWith(5, 'worktree_creation_failed_rollback');
+  });
+});
+
+// Issue #28 third-party review finding: a rotation rollback (createRotatedWindow/
+// rollbackWindowReference in WindowRotation.ts) must revoke only the specific
+// generation it just issued, never every active generation for the task —
+// otherwise it can revoke a DIFFERENT, newer generation a concurrent rotation
+// for the same task already persisted.
+describe('TaskPaneEnvironmentService.revokeGeneration', () => {
+  it('delegates straight to taskTokenRepo.revoke with the given tokenId and reason', () => {
+    const { service, taskTokenRepo } = makeDeps(true);
+    service.revokeGeneration(7, 'execute_create_failed');
+    expect(taskTokenRepo.revoke).toHaveBeenCalledWith(7, 'execute_create_failed');
   });
 });

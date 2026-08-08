@@ -12,7 +12,7 @@ import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoade
 import type { SidekickSyncService } from '../../sidekicks/SidekickSyncService';
 import type { IExecutionLogRepository, LogType } from '../ExecutionLog';
 import type { TmuxClient } from '../../tmux/TmuxClient';
-import { confirmOldWindowGone, createRotatedWindow, rollbackWindowReference } from './WindowRotation';
+import { confirmOldWindowGone, createRotatedWindow, rollbackWindowReference, runExclusiveForTask } from './WindowRotation';
 import type { IWorktreeService, WorktreeInfo } from '../../git/IWorktreeService';
 import type { WorktreeServiceFactory } from '../../git/WorktreeServiceFactory';
 import { PathResolverFactory, assertDirectoryContained } from '../../git/PathContainment';
@@ -501,37 +501,48 @@ export class ExecuteTaskUseCase {
     // with the token this rotation is about to revoke, and the old task
     // window would linger alongside the freshly-created one instead of being
     // replaced by it.
-    if (task.tmuxWindow) {
-      const preCheck = await this.tmux.listSessions(server);
-      const preSession = preCheck.find((s) => s.name === tmuxSession);
-      const oldWin = preSession?.windows.find((w) => w.name === task.tmuxWindow);
-      await confirmOldWindowGone(
-        this.tmux,
-        server,
-        oldWin ? { target: `${tmuxSession}:${oldWin.index}`, kind: 'window' } : null,
-        task.id,
-      );
-      if (oldWin) await sleep(300);
-    }
-
-    // Create a new tmux window for the task — this call is the actual
-    // window-generation point, so it's the one that rotates the task token
-    // (TaskPaneEnvironmentService.buildEnvForNewWindow; design v3 §2).
-    // createRotatedWindow revokes the freshly-issued generation if creation
-    // fails, whether by throwing (local transport) or resolving with a
-    // non-zero exit code (agent transport — see WindowRotation.ts's doc
-    // comment; Issue #28 third-party review finding).
+    // The whole confirm-kill -> rotate-token -> create -> persist span runs
+    // under a per-task lock (Issue #28 third-party review, design v3 §2):
+    // without it, a concurrent rotation for this same task (e.g. a respawn
+    // triggered from the UI while this execute() is still creating its
+    // window) could issue a newer generation that revokes THIS generation
+    // before it gets persisted below — see runExclusiveForTask's doc comment
+    // in WindowRotation.ts.
     let windowName: string;
+    let tokenId: number;
     try {
-      const created = await createRotatedWindow(this.paneEnvService, server, task, 'execute_create_failed', (env) =>
-        this.tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: env }),
-      );
-      windowName = created.windowName;
+      ({ windowName, tokenId } = await runExclusiveForTask(taskId, async () => {
+        if (task.tmuxWindow) {
+          const preCheck = await this.tmux.listSessions(server);
+          const preSession = preCheck.find((s) => s.name === tmuxSession);
+          const oldWin = preSession?.windows.find((w) => w.name === task.tmuxWindow);
+          await confirmOldWindowGone(
+            this.tmux,
+            server,
+            oldWin ? { target: `${tmuxSession}:${oldWin.index}`, kind: 'window' } : null,
+            task.id,
+          );
+          if (oldWin) await sleep(300);
+        }
+
+        // Create a new tmux window for the task — this call is the actual
+        // window-generation point, so it's the one that rotates the task
+        // token (TaskPaneEnvironmentService.buildEnvForNewWindow; design v3
+        // §2). createRotatedWindow revokes the freshly-issued generation if
+        // creation fails, whether by throwing (local transport) or
+        // resolving with a non-zero exit code (agent transport — see
+        // WindowRotation.ts's doc comment; Issue #28 third-party review
+        // finding).
+        const created = await createRotatedWindow(this.paneEnvService, server, task, 'execute_create_failed', (env) =>
+          this.tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: env }),
+        );
+
+        this.taskRepo.update(taskId, { status: 'in_progress' as TaskStatus, tmuxWindow: created.windowName });
+        return { windowName: created.windowName, tokenId: created.tokenId };
+      }));
     } catch (err) {
       throw new Error(`Failed to create tmux window: ${err instanceof Error ? err.message : err}`);
     }
-
-    this.taskRepo.update(taskId, { status: 'in_progress' as TaskStatus, tmuxWindow: windowName });
 
     const windowTarget = `${tmuxSession}:${windowName}`;
     const target = await this.tmux.resolvePaneId(server, windowTarget);
@@ -555,17 +566,21 @@ export class ExecuteTaskUseCase {
         // window-generation token this createWindow() just issued would
         // otherwise leak — revoke it directly, but only once the kill below
         // actually confirms the window is gone (Issue #28 third-party review
-        // finding; see TaskPaneEnvironmentService.revokeForDestroyedWindow's
-        // doc comment). Routed through rollbackWindowReference (Issue #28
+        // finding; see TaskPaneEnvironmentService.revokeGeneration's doc
+        // comment). Routed through rollbackWindowReference (Issue #28
         // third-party review, second round) so `tmuxWindow` is cleared ONLY
         // once the kill is confirmed — a kill failure leaves the DB row
         // pointing at the still-live, still-authenticated window instead of
-        // silently untracking it.
+        // silently untracking it. Scoped to `tokenId` (the generation
+        // createRotatedWindow issued above, inside runExclusiveForTask), not
+        // the whole task — a blanket revoke here could otherwise clobber a
+        // newer generation a concurrent rotation for this task already
+        // persisted (Issue #28 third-party review, WindowRotation.ts finding).
         try {
           await rollbackWindowReference(
             this.tmux.killWindow(server, `${tmuxSession}:${windowName}`),
             this.paneEnvService,
-            taskId,
+            tokenId,
             'worktree_creation_failed_rollback',
             () => this.taskRepo.update(taskId, { tmuxWindow: null } as Partial<Task>),
             () => {},
@@ -608,12 +623,13 @@ export class ExecuteTaskUseCase {
           // Same generation-leak fix as the worktree_failed branch above —
           // see that branch's comment. `tmuxWindow` is cleared inside
           // rollbackWindowReference's onGone callback, not unconditionally
-          // above, for the same reason.
+          // above, for the same reason. Scoped to `tokenId`, same reasoning
+          // as the worktree_failed branch's rollbackWindowReference call.
           try {
             await rollbackWindowReference(
               this.tmux.killWindow(server, `${tmuxSession}:${windowName}`),
               this.paneEnvService,
-              taskId,
+              tokenId,
               'worktree_path_rejected_rollback',
               () => this.taskRepo.update(taskId, { tmuxWindow: null } as Partial<Task>),
               () => {},
@@ -897,6 +913,10 @@ export class ExecuteTaskUseCase {
       }
     } catch {}
 
+    // Threaded to the working-directory-rejected rollback below (needs the
+    // specific generation to revoke — see that branch's comment); stays null
+    // when the `windowExists` branch is taken, since nothing was rotated.
+    let tokenId: number | null = null;
     if (!windowExists) {
       try {
         // Window generation point for a follow-up that has no window to
@@ -911,12 +931,18 @@ export class ExecuteTaskUseCase {
         // third-party review, followUp() rollback-safety finding; see
         // WindowRotation.ts's doc comment). The DB is only updated with
         // `windowName` once creation is confirmed to have actually
-        // succeeded.
-        const created = await createRotatedWindow(this.paneEnvService, server, task, 'followup_create_failed', (env) =>
-          this.tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: env }),
-        );
-        windowName = created.windowName;
-        this.taskRepo.update(taskId, { tmuxWindow: windowName } as Partial<Task>);
+        // succeeded. The whole issue->create->persist span runs under a
+        // per-task lock (see runExclusiveForTask's doc comment in
+        // WindowRotation.ts) so a concurrent rotation for this same task
+        // (e.g. execute() or a respawn) cannot revoke this generation out
+        // from under the persist below.
+        ({ windowName, tokenId } = await runExclusiveForTask(taskId, async () => {
+          const created = await createRotatedWindow(this.paneEnvService, server, task, 'followup_create_failed', (env) =>
+            this.tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: env }),
+          );
+          this.taskRepo.update(taskId, { tmuxWindow: created.windowName } as Partial<Task>);
+          return { windowName: created.windowName, tokenId: created.tokenId };
+        }));
       } catch (err) {
         throw new Error(`Failed to create tmux window: ${err instanceof Error ? err.message : err}`);
       }
@@ -951,14 +977,16 @@ export class ExecuteTaskUseCase {
           this.taskRepo.update(taskId, { status: 'failed' as TaskStatus } as Partial<Task>);
           // Same generation-leak fix as execute()'s worktree_failed branch
           // above — this branch only runs when !windowExists just created a
-          // fresh window (and rotated the task token) for this follow-up.
-          // `tmuxWindow` is cleared inside rollbackWindowReference's onGone
-          // callback, not unconditionally above, for the same reason.
+          // fresh window (and rotated the task token, so `tokenId` is
+          // non-null here) for this follow-up. `tmuxWindow` is cleared
+          // inside rollbackWindowReference's onGone callback, not
+          // unconditionally above, for the same reason. Scoped to `tokenId`,
+          // same reasoning as execute()'s rollbackWindowReference calls.
           try {
             await rollbackWindowReference(
               this.tmux.killWindow(server, `${tmuxSession}:${windowName}`),
               this.paneEnvService,
-              taskId,
+              tokenId!,
               'followup_working_directory_rejected_rollback',
               () => this.taskRepo.update(taskId, { tmuxWindow: null } as Partial<Task>),
               () => {},

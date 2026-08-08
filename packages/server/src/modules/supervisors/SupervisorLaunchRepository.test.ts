@@ -97,4 +97,62 @@ describe('SqliteSupervisorLaunchRepository', () => {
     expect(repo.findByLaunchId('nope')).toBeNull();
     expect(repo.findBySessionHash('nope')).toBeNull();
   });
+
+  // Issue #28 third-party review, Important finding: issuing a new launch
+  // for the same (serverName, target) must invalidate every prior
+  // pending/active launch for that key, so its session token can never
+  // authenticate a later reconnect.
+  describe('create() supersedes prior pending/active launches for the same (serverName, target)', () => {
+    it('marks a still-pending prior launch for the same key as replaced', () => {
+      const first = repo.create(expectation);
+      const second = repo.create(expectation);
+
+      expect(repo.findByLaunchId(first.launchId)!.status).toBe('replaced');
+      expect(repo.findByLaunchId(second.launchId)!.status).toBe('pending');
+    });
+
+    it('marks a still-active prior launch (already bound, with a live session) for the same key as replaced', () => {
+      const first = repo.create(expectation);
+      const sessionToken = repo.activateWithSession(first.launchId);
+      expect(repo.findByLaunchId(first.launchId)!.status).toBe('active');
+
+      const second = repo.create(expectation);
+
+      const firstRow = repo.findByLaunchId(first.launchId)!;
+      expect(firstRow.status).toBe('replaced');
+      // The old session token must never authenticate again once superseded
+      // — this is the actual exploit the third-party review flagged (a
+      // disconnected old supervisor reconnecting with its stale session
+      // token after a new launch was issued for the same key).
+      expect(repo.verifySession(firstRow, sessionToken)).toBe(false);
+      expect(repo.findByLaunchId(second.launchId)!.status).toBe('pending');
+    });
+
+    it('does not touch a launch for a DIFFERENT (serverName, target) key', () => {
+      const other = repo.create(expectation);
+      repo.create({ ...expectation, target: 'session:0.2' });
+
+      expect(repo.findByLaunchId(other.launchId)!.status).toBe('pending');
+    });
+
+    it('does not resurrect an already-replaced/expired launch for the key', () => {
+      const first = repo.create(expectation);
+      repo.markStatus(first.launchId, 'expired');
+      repo.create(expectation);
+
+      expect(repo.findByLaunchId(first.launchId)!.status).toBe('expired');
+    });
+  });
+
+  describe('verifySession status gating', () => {
+    it('rejects a correct session token once the launch is no longer active', () => {
+      const issued = repo.create(expectation);
+      const sessionToken = repo.activateWithSession(issued.launchId);
+      const activeRow = repo.findByLaunchId(issued.launchId)!;
+      expect(repo.verifySession(activeRow, sessionToken)).toBe(true);
+
+      const replacedRow = { ...activeRow, status: 'replaced' as const };
+      expect(repo.verifySession(replacedRow, sessionToken)).toBe(false);
+    });
+  });
 });
