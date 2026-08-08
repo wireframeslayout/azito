@@ -143,9 +143,21 @@ export default function ObjectsSidebar({
     activeTabId === `terminal:${serverName}/${target}`,
   [activeTabId]);
 
+  // タスク所有ウィンドウ（ownerType='task'）の実体。project.windows には構造上入らない
+  // （project_id=NULL, task_id=<taskId>）ため、現在のプロジェクトに属するタスク（tasks prop、
+  // 他プロジェクトの allTasks は含まない）から集める。
+  const taskOwnedWindows = useMemo(() => {
+    const list: Window[] = [];
+    for (const task of tasks) {
+      if (!task.windows) continue;
+      for (const w of task.windows) list.push(w);
+    }
+    return list;
+  }, [tasks]);
+
   const sections = useMemo(
-    () => buildObjectSections(project.windows, taskWindows ?? [], browserGroups, browserCapableServerNames),
-    [project.windows, taskWindows, browserGroups, browserCapableServerNames],
+    () => buildObjectSections(project.windows, taskWindows ?? [], taskOwnedWindows, browserGroups, browserCapableServerNames),
+    [project.windows, taskWindows, taskOwnedWindows, browserGroups, browserCapableServerNames],
   );
 
   // agentByType（ラベル解決）専用。押下可否の判定は agentDefsLoading/agentDefsError props（useAddWindowModal 側の取得）を使う。
