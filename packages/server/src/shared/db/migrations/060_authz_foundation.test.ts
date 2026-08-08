@@ -237,4 +237,52 @@ describe('migration 060: authz_foundation', () => {
     const columns = db.prepare('PRAGMA index_info(idx_tasks_created_by)').all() as Array<{ name: string }>;
     expect(columns.map((c) => c.name)).toEqual(['created_by_kind', 'created_by_id', 'created_via_generation']);
   });
+
+  it('creates supervisor_launches with the expected columns and defaults', () => {
+    const db = buildSeededDb();
+    m060.up(db);
+
+    db.prepare(
+      `INSERT INTO supervisor_launches (launch_id, server_name, target, task_id, unit_id, bootstrap_hash)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run('launch-1', 'srv-a', 'session:0.1', 1, 2, 'a'.repeat(64));
+
+    const row = db.prepare('SELECT * FROM supervisor_launches WHERE launch_id = ?').get('launch-1') as Record<string, unknown>;
+    expect(row.server_name).toBe('srv-a');
+    expect(row.target).toBe('session:0.1');
+    expect(row.task_id).toBe(1);
+    expect(row.unit_id).toBe(2);
+    expect(row.bootstrap_hash).toBe('a'.repeat(64));
+    expect(row.session_hash).toBeNull();
+    expect(row.status).toBe('pending');
+    expect(row.created_at).toBeTruthy();
+    expect(row.last_registered_at).toBeNull();
+  });
+
+  it('rejects a duplicate launch_id (unique index)', () => {
+    const db = buildSeededDb();
+    m060.up(db);
+
+    db.prepare(`INSERT INTO supervisor_launches (launch_id, server_name, target, bootstrap_hash) VALUES (?, ?, ?, ?)`)
+      .run('dup', 'srv-a', 'session:0.1', 'a'.repeat(64));
+    expect(() =>
+      db.prepare(`INSERT INTO supervisor_launches (launch_id, server_name, target, bootstrap_hash) VALUES (?, ?, ?, ?)`)
+        .run('dup', 'srv-a', 'session:0.2', 'b'.repeat(64)),
+    ).toThrow();
+  });
+
+  it('allows multiple NULL session_hash rows but rejects a duplicate non-null session_hash', () => {
+    const db = buildSeededDb();
+    m060.up(db);
+
+    db.prepare(`INSERT INTO supervisor_launches (launch_id, server_name, target, bootstrap_hash) VALUES (?, ?, ?, ?)`)
+      .run('launch-a', 'srv-a', 'session:0.1', 'a'.repeat(64));
+    db.prepare(`INSERT INTO supervisor_launches (launch_id, server_name, target, bootstrap_hash) VALUES (?, ?, ?, ?)`)
+      .run('launch-b', 'srv-a', 'session:0.2', 'b'.repeat(64));
+
+    db.prepare(`UPDATE supervisor_launches SET session_hash = ?, status = 'active' WHERE launch_id = 'launch-a'`).run('s'.repeat(64));
+    expect(() =>
+      db.prepare(`UPDATE supervisor_launches SET session_hash = ?, status = 'active' WHERE launch_id = 'launch-b'`).run('s'.repeat(64)),
+    ).toThrow();
+  });
 });

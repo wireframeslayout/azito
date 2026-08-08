@@ -13,6 +13,12 @@ import {
   type SendKeysMessage,
   type SupervisorToHubMessage,
 } from './protocol';
+import type {
+  ISupervisorLaunchRepository,
+  SupervisorLaunchExpectation,
+  IssuedSupervisorLaunch,
+} from './SupervisorLaunchRepository';
+import type { AuditLogService } from '../../shared/audit/AuditLogService';
 
 const ACK_TIMEOUT_MS = 10_000;
 const PING_INTERVAL_MS = 15_000;
@@ -72,6 +78,17 @@ interface SupervisorConnection {
   pendingAcks: Map<string, PendingAck>;
   /** Set once the child TUI has reported 'ready' on this connection. See handleMessage's 'ready' case. */
   ready: boolean;
+  /**
+   * True iff this connection's identity was verified against a persisted
+   * `supervisor_launches` row (Issue #28 Phase C, design v3 §8). False for a
+   * launchId-less registration (manual `azs`) once `AZITO_SCOPED_AUTH` is
+   * on — an "unbound" connection is display-only: it must never drive
+   * AgentActivityMonitor's Tier 0 override or a task turn's idle-timer
+   * refresh, since nothing verified it actually corresponds to the task/unit
+   * it claims. See resolveLaunchAuth().
+   */
+  bound: boolean;
+  launchId: string | null;
 }
 
 export interface SupervisorEntry {
@@ -84,6 +101,7 @@ export interface SupervisorEntry {
   connectedAt: number;
   lastHeartbeatAt: number;
   ready: boolean;
+  bound: boolean;
 }
 
 export interface SupervisorActivityEvent {
@@ -99,6 +117,8 @@ export interface SupervisorActivityEvent {
    * carried through so callers can derive a display label for supervised
    * panes that have no `windows` table row. */
   childCommand: string;
+  /** See SupervisorConnection.bound's doc comment — false means "display only, do not drive Tier 0 / turn idle refresh". */
+  bound: boolean;
 }
 
 export interface SupervisorReadyEvent {
@@ -114,11 +134,13 @@ export interface SupervisorChildExitEvent {
   taskId: number | null;
   exitCode: number | null;
   signal: number | null;
+  bound: boolean;
 }
 
 export interface SupervisorDisconnectedEvent {
   serverName: string;
   target: string;
+  bound: boolean;
 }
 
 function keyFor(serverName: string, target: string): string {
@@ -137,7 +159,30 @@ function keyFor(serverName: string, target: string): string {
  * happens in ws/supervisorSocketHandler.ts; this class only deals with
  * already-typed messages.
  */
+type LaunchAuthResult =
+  | { ok: true; bound: boolean; launchId: string | null; sessionToken?: string }
+  | { ok: false; event: string; reason: string };
+
 export class SupervisorRegistry extends EventEmitter {
+  /**
+   * @param launchRepo Persists/validates `--launch-id`/`--bootstrap-token` launches (Issue #28
+   *   Phase C). Undefined only where no DB is available (e.g. some test/dev infra) — a
+   *   launchId-bearing register is then rejected outright (fail closed) rather than silently
+   *   trusted, since there is no way to validate it.
+   * @param auditLogService Best-effort audit trail for launch bind/reject/unbound decisions
+   *   (design v3 §10). Undefined is tolerated (tests) — audit calls are then skipped.
+   * @param scopedAuthEnabled Compat gate (design v3 §12): while false, a launchId-less register
+   *   (manual `azs`, or a pre-Phase-C supervisor) is treated as `bound` exactly like before this
+   *   phase — flipping it to `unbound` only takes effect once the flag is on.
+   */
+  constructor(
+    private launchRepo?: ISupervisorLaunchRepository,
+    private auditLogService?: AuditLogService,
+    private scopedAuthEnabled: boolean = false,
+  ) {
+    super();
+  }
+
   private connections = new Map<string, SupervisorConnection>();
   private socketKeys = new WeakMap<WebSocket, string>();
   private pingTimers = new Map<string, NodeJS.Timeout>();
@@ -166,10 +211,98 @@ export class SupervisorRegistry extends EventEmitter {
   }
 
   /**
+   * Issues a fresh `supervisor_launches` row for a launch about to be wrapped
+   * (`wrapWithSupervisor()`, called immediately after) — Issue #28 Phase C,
+   * design v3 §8. Returns undefined when no `launchRepo` was injected (no DB
+   * available at this hub instance); callers fall back to wrapping without
+   * `--launch-id`/`--bootstrap-token`, which registers as `unbound` under
+   * scoped auth (or `bound` under the compat flag, same as always).
+   */
+  issueLaunch(expectation: SupervisorLaunchExpectation): IssuedSupervisorLaunch | undefined {
+    return this.launchRepo?.create(expectation);
+  }
+
+  private audit(event: string, detail: Record<string, unknown>): void {
+    try {
+      this.auditLogService?.record({ actorClass: 'runtime', actorId: null, event, detail });
+    } catch {
+      // Best-effort — never let an audit write failure affect registration handling.
+    }
+  }
+
+  /**
+   * Decides whether `info` is `bound` (verified against a persisted launch)
+   * or should be rejected outright. Never throws. See SupervisorConnection.bound's
+   * doc comment for what `bound` gates downstream.
+   */
+  private resolveLaunchAuth(info: RegisterMessage): LaunchAuthResult {
+    if (info.launchId === undefined) {
+      // Manual `azs`, or a supervisor build predating launch binding.
+      if (!this.scopedAuthEnabled) {
+        // Compat mode (design v3 §12): unchanged behavior — treated as bound.
+        return { ok: true, bound: true, launchId: null };
+      }
+      this.audit('supervisor_launch.unbound', { serverName: info.serverName, target: info.target });
+      return { ok: true, bound: false, launchId: null };
+    }
+
+    if (!this.launchRepo) {
+      return { ok: false, event: 'supervisor_launch.no_repo', reason: 'launch repository unavailable' };
+    }
+
+    const row = this.launchRepo.findByLaunchId(info.launchId);
+    if (!row) {
+      this.audit('supervisor_launch.unknown', { launchId: info.launchId, serverName: info.serverName, target: info.target });
+      return { ok: false, event: 'supervisor_launch.unknown', reason: 'unknown launch id' };
+    }
+
+    const mismatch =
+      row.serverName !== info.serverName ||
+      row.target !== info.target ||
+      row.taskId !== info.taskId ||
+      row.unitId !== info.unitId;
+    if (mismatch) {
+      this.audit('supervisor_launch.mismatch', {
+        launchId: info.launchId,
+        expected: { serverName: row.serverName, target: row.target, taskId: row.taskId, unitId: row.unitId },
+        claimed: { serverName: info.serverName, target: info.target, taskId: info.taskId, unitId: info.unitId },
+      });
+      return { ok: false, event: 'supervisor_launch.mismatch', reason: 'declared identity does not match the issued launch' };
+    }
+
+    if (info.sessionToken !== undefined) {
+      if (!this.launchRepo.verifySession(row, info.sessionToken)) {
+        this.audit('supervisor_launch.session_rejected', { launchId: info.launchId });
+        return { ok: false, event: 'supervisor_launch.session_rejected', reason: 'invalid session token' };
+      }
+      this.launchRepo.touchRegistered(info.launchId);
+      return { ok: true, bound: true, launchId: info.launchId };
+    }
+
+    if (info.bootstrapToken !== undefined) {
+      if (!this.launchRepo.verifyBootstrap(row, info.bootstrapToken)) {
+        this.audit('supervisor_launch.bootstrap_rejected', { launchId: info.launchId, status: row.status });
+        return { ok: false, event: 'supervisor_launch.bootstrap_rejected', reason: 'invalid or already-consumed bootstrap token' };
+      }
+      const sessionToken = this.launchRepo.activateWithSession(info.launchId);
+      this.audit('supervisor_launch.bound', { launchId: info.launchId, serverName: info.serverName, target: info.target });
+      return { ok: true, bound: true, launchId: info.launchId, sessionToken };
+    }
+
+    return { ok: false, event: 'supervisor_launch.missing_credential', reason: 'launchId present without a bootstrap/session token' };
+  }
+
+  /**
    * Registers a supervisor connection. Same-key re-registration replaces the
    * previous connection (closes the old socket with code 1000 and rejects its
    * pending acks) rather than rejecting the new one — a supervisor process
    * reconnecting after a hub restart/network blip is the expected case.
+   *
+   * EXCEPTION (Issue #28 Phase C): if the existing connection on this key is
+   * `bound` to a launchId and the new registration's launchId differs (or is
+   * absent), the new registration is rejected and the existing connection is
+   * left untouched — a different launch must never evict a bound one
+   * (design v3 §8: "異なる launchId からの置換（追い出し）は拒否").
    */
   register(socket: WebSocket, info: RegisterMessage): void {
     if (info.protocolVersion !== SUPERVISOR_PROTOCOL_VERSION) {
@@ -183,6 +316,24 @@ export class SupervisorRegistry extends EventEmitter {
 
     const key = keyFor(info.serverName, info.target);
     const existing = this.connections.get(key);
+
+    if (existing?.bound && existing.launchId !== null && existing.launchId !== (info.launchId ?? null)) {
+      this.audit('supervisor_launch.replace_rejected', {
+        serverName: info.serverName,
+        target: info.target,
+        existingLaunchId: existing.launchId,
+        newLaunchId: info.launchId ?? null,
+      });
+      this.safeClose(socket, 4009, 'existing bound connection retained (launch id mismatch)');
+      return;
+    }
+
+    const authResult = this.resolveLaunchAuth(info);
+    if (!authResult.ok) {
+      this.safeClose(socket, 4001, authResult.reason);
+      return;
+    }
+
     if (existing) {
       this.socketKeys.delete(existing.socket);
       this.teardown(key, existing, new Error('replaced by new registration'));
@@ -210,6 +361,8 @@ export class SupervisorRegistry extends EventEmitter {
       // behavior) rather than leaving `ready: false` forever and forcing every frontend open of
       // that pane to sit out the full loading-overlay timeout.
       ready: info.reportsReady === true ? false : true,
+      bound: authResult.bound,
+      launchId: authResult.launchId,
     };
     this.connections.set(key, conn);
     this.socketKeys.set(socket, key);
@@ -218,7 +371,7 @@ export class SupervisorRegistry extends EventEmitter {
       conn.missedPongs = 0;
     });
 
-    this.safeSend(socket, { type: 'registered' });
+    this.safeSend(socket, authResult.sessionToken ? { type: 'registered', sessionToken: authResult.sessionToken } : { type: 'registered' });
     this.startPing(key, conn);
   }
 
@@ -243,6 +396,7 @@ export class SupervisorRegistry extends EventEmitter {
           state: msg.state,
           status: msg.status,
           childCommand: conn.childCommand,
+          bound: conn.bound,
         } satisfies SupervisorActivityEvent);
         break;
 
@@ -272,6 +426,7 @@ export class SupervisorRegistry extends EventEmitter {
           taskId: conn.taskId,
           exitCode: msg.exitCode,
           signal: msg.signal,
+          bound: conn.bound,
         } satisfies SupervisorChildExitEvent);
         this.socketKeys.delete(conn.socket);
         this.teardown(key, conn, new Error('supervisor child exited'));
@@ -311,7 +466,7 @@ export class SupervisorRegistry extends EventEmitter {
     // supervisor process crashing and being relaunched) — unlike an explicit
     // child_exit, this only releases the key back to Tier 1/2 detection
     // rather than asserting idle. See AgentActivityMonitor.recordSupervisorSignal.
-    this.emit('disconnected', { serverName: conn.serverName, target: conn.target } satisfies SupervisorDisconnectedEvent);
+    this.emit('disconnected', { serverName: conn.serverName, target: conn.target, bound: conn.bound } satisfies SupervisorDisconnectedEvent);
   }
 
   isConnected(serverName: string, target: string): boolean {
@@ -358,6 +513,7 @@ export class SupervisorRegistry extends EventEmitter {
       connectedAt: conn.connectedAt,
       lastHeartbeatAt: conn.lastHeartbeatAt,
       ready: conn.ready,
+      bound: conn.bound,
     }));
   }
 

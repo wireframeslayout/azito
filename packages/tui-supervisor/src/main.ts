@@ -40,6 +40,11 @@ if (hubEnv) {
       unitId: args.unitId ?? null,
       pid: process.pid,
       childCommand: args.command,
+      // Issue #28 Phase C launch binding (design v3 §8) — both undefined for
+      // a manual `azs` invocation (no --launch-id/--bootstrap-token), in
+      // which case the hub registers this connection as unbound.
+      ...(args.launchId !== null ? { launchId: args.launchId } : {}),
+      ...(args.bootstrapToken !== null ? { bootstrapToken: args.bootstrapToken } : {}),
     },
     write: (data) => proxy.write(data),
     readiness,

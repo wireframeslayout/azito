@@ -268,7 +268,13 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
 
       const supervised = shouldSupervise(srv.type, win.windowType);
       const paneId = await tmux.resolvePaneId(srv, stripPaneSuffix(win.tmuxTarget));
-      const cmd = supervised ? wrapWithSupervisor(effectiveCommand, { server: srv, target: win.tmuxTarget }) : effectiveCommand;
+      const cmd = supervised
+        ? wrapWithSupervisor(effectiveCommand, {
+            server: srv,
+            target: win.tmuxTarget,
+            ...supervisorRegistry.issueLaunch({ serverName: srv.name, target: win.tmuxTarget, taskId: null, unitId: null }),
+          })
+        : effectiveCommand;
 
       if (supervised) {
         supervisorRegistry.clearExitMarker(srv.name, win.tmuxTarget);

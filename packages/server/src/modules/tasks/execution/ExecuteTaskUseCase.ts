@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { randomUUID } from 'crypto';
+import { randomUUID, randomBytes } from 'crypto';
 import type { ITaskRepository, Task } from '../Task';
 import type { TaskStatus } from '../TaskStatus';
 import type { IUnitRepository, Unit } from '../../units/Unit';
@@ -150,7 +150,7 @@ export class ExecuteTaskUseCase {
       this.workerInput,
     );
     this.httpSignalCoordinator = new HttpSignalTurnCoordinator(this.turnRepo, this.turnSignalHub);
-    const tuiRuntime = new TuiWorkerRuntime(this.tmux, this.workerInput, this.workerWaiter, this.httpSignalCoordinator);
+    const tuiRuntime = new TuiWorkerRuntime(this.tmux, this.workerInput, this.workerWaiter, this.httpSignalCoordinator, this.supervisorRegistry);
     this.runtimeRegistry = new WorkerRuntimeRegistry();
     this.runtimeRegistry.register('tui', tuiRuntime);
     this.phaseLoopRunner = new PhaseLoopRunner(
@@ -1013,7 +1013,10 @@ export class ExecuteTaskUseCase {
 
     const runFollowUp = async () => {
       // Generate unique markers for follow-up
-      const nonce = Math.random().toString(36).slice(2, 8);
+      // crypto.randomBytes (not Math.random) — the nonce is also embedded in
+      // turnToken (design v3 §8), which /api/agent-signals now accepts as a
+      // standalone credential, so it must not be predictable.
+      const nonce = randomBytes(16).toString('hex');
       const doneMarker = `AZITO_DONE_${taskId}_${nonce}`;
       const questionsMarker = `AZITO_QUESTIONS_${taskId}_${nonce}`;
       const testFailedMarker = `AZITO_TEST_FAILED_${taskId}_${nonce}`;

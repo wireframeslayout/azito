@@ -218,7 +218,7 @@ function buildService(opts: {
   };
 
   const clearExitMarker = vi.fn();
-  const supervisorRegistry = { clearExitMarker } as any;
+  const supervisorRegistry = { clearExitMarker, issueLaunch: vi.fn(() => undefined) } as any;
 
   const logRepo = { append: vi.fn() } as any;
 

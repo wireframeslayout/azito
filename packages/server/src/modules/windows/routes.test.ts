@@ -19,6 +19,7 @@ function makeSupervisorRegistry(
     snapshot: () => entries,
     hasRecentChildExit: (_serverName: string, target: string) => exitedTargets.includes(target),
     clearExitMarker: vi.fn(),
+    issueLaunch: vi.fn(() => undefined),
   } as unknown as SupervisorRegistry;
 }
 
@@ -344,6 +345,7 @@ describe('GET /api/windows/pane-loading-state', () => {
       connectedAt: Date.now(),
       lastHeartbeatAt: Date.now(),
       ready: false,
+      bound: true,
     };
     app = await setup(win, [entry]);
     const res = await app.inject({

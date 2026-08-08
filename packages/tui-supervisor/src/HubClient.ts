@@ -14,7 +14,7 @@ export interface HubClientOptions {
   /** Hub base URL (http/https — converted to ws/wss internally). */
   url: string;
   token: string;
-  register: Omit<RegisterMessage, 'type' | 'protocolVersion'>;
+  register: Omit<RegisterMessage, 'type' | 'protocolVersion' | 'reportsReady' | 'sessionToken'>;
   /** Writes raw bytes into the child PTY. Exceptions are caught and reported via ack. */
   write: (data: string) => void;
   /**
@@ -75,6 +75,15 @@ export class HubClient {
   private pendingChildExit: ChildExitMessage | null = null;
   private firstInjectSeen = false;
   private closed = false;
+  /**
+   * Issue #28 Phase C (design v3 §8): once the hub returns a `sessionToken`
+   * (ack for a register that consumed `options.register.bootstrapToken`),
+   * every later register on this process — reconnects after a network blip
+   * — must use it instead: `bootstrapToken` is one-shot and would be
+   * rejected the second time. Cleared never; the token is valid for this
+   * launch's whole process lifetime.
+   */
+  private sessionToken: string | undefined;
 
   constructor(options: HubClientOptions) {
     this.options = {
@@ -97,10 +106,16 @@ export class HubClient {
       this.ws = ws;
 
       ws.on('open', () => {
+        const { bootstrapToken, ...registerRest } = this.options.register;
         this.safeSend({
           type: 'register',
           protocolVersion: SUPERVISOR_PROTOCOL_VERSION,
-          ...this.options.register,
+          ...registerRest,
+          // Once a sessionToken has been issued (a prior register on THIS
+          // process consumed the one-shot bootstrapToken), every later
+          // register — including this reconnect — must use it instead; the
+          // bootstrapToken would be rejected as already-consumed.
+          ...(this.sessionToken !== undefined ? { sessionToken: this.sessionToken } : { bootstrapToken }),
           // This build always reports a 'ready' frame once the child TUI boots — fixed here
           // rather than threaded through `options.register` (every current HubClient does this,
           // there's no variant that doesn't).
@@ -171,6 +186,9 @@ export class HubClient {
       case 'registered':
         this.registered = true;
         this.reconnectAttempts = 0;
+        if (msg.sessionToken !== undefined) {
+          this.sessionToken = msg.sessionToken;
+        }
         this.startHeartbeat();
         if (this.pendingChildExit) {
           this.safeSend(this.pendingChildExit);

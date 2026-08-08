@@ -84,6 +84,10 @@ if [[ "$SUBCOMMAND" == "fail" ]]; then
 fi
 
 # ── env解決: 環境変数優先、欠けていれば ~/.azito/azitoctl.env を source ──
+# AZITO_WEBHOOK_TOKEN はもはや必須ではない（Issue #28 Phase C）:
+# /api/agent-signals は強化 turnToken（crypto.randomBytes(16)、--turn で
+# 渡される）単独でも認証を受理するため、webhook トークンの読み込みに失敗
+# しても送信自体は試みる。AZITO_URL だけは送信先そのものなので必須のまま。
 if [[ -z "${AZITO_URL:-}" || -z "${AZITO_WEBHOOK_TOKEN:-}" ]]; then
   ENV_FILE="$HOME/.azito/azitoctl.env"
   if [[ -f "$ENV_FILE" ]]; then
@@ -92,8 +96,8 @@ if [[ -z "${AZITO_URL:-}" || -z "${AZITO_WEBHOOK_TOKEN:-}" ]]; then
   fi
 fi
 
-if [[ -z "${AZITO_URL:-}" || -z "${AZITO_WEBHOOK_TOKEN:-}" ]]; then
-  echo "azitoctl: AZITO_URL/AZITO_WEBHOOK_TOKEN not set (env or ~/.azito/azitoctl.env)" >&2
+if [[ -z "${AZITO_URL:-}" ]]; then
+  echo "azitoctl: AZITO_URL not set (env or ~/.azito/azitoctl.env)" >&2
   exit 3
 fi
 
@@ -192,16 +196,29 @@ printf '%s' "$BODY" > "$BODY_TMP"
 
 # --retry-connrefused: デフォルトの --retry は connection refused を
 # リトライしないため明示する（ハブ再起動直後の取りこぼし対策）。
-HTTP_CODE="$(curl --retry 3 --retry-connrefused --max-time 15 -sS -f -o /dev/null -w '%{http_code}' \
-  -X POST "${AZITO_URL}/api/agent-signals" \
-  -H "Content-Type: application/json" \
-  --config - \
-  --data-binary @"$BODY_TMP" <<CURLCFG
+# Authorization ヘッダは AZITO_WEBHOOK_TOKEN が読み込めた場合のみ付与する
+# （--config - 経由・stdin、トークンを argv/ps に出さない）。未設定でも
+# turnToken 単独でハブ側が認証するため、ヘッダ無しで送信を試みる。
+if [[ -n "${AZITO_WEBHOOK_TOKEN:-}" ]]; then
+  HTTP_CODE="$(curl --retry 3 --retry-connrefused --max-time 15 -sS -f -o /dev/null -w '%{http_code}' \
+    -X POST "${AZITO_URL}/api/agent-signals" \
+    -H "Content-Type: application/json" \
+    --config - \
+    --data-binary @"$BODY_TMP" <<CURLCFG
 header = "Authorization: Bearer ${AZITO_WEBHOOK_TOKEN}"
 CURLCFG
-)" || {
-  echo "azitoctl: failed to send $SUBCOMMAND signal" >&2
-  exit 1
-}
+  )" || {
+    echo "azitoctl: failed to send $SUBCOMMAND signal" >&2
+    exit 1
+  }
+else
+  HTTP_CODE="$(curl --retry 3 --retry-connrefused --max-time 15 -sS -f -o /dev/null -w '%{http_code}' \
+    -X POST "${AZITO_URL}/api/agent-signals" \
+    -H "Content-Type: application/json" \
+    --data-binary @"$BODY_TMP")" || {
+    echo "azitoctl: failed to send $SUBCOMMAND signal" >&2
+    exit 1
+  }
+fi
 
 echo "$HTTP_CODE"

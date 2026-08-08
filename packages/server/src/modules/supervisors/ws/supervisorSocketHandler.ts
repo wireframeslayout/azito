@@ -15,6 +15,9 @@ function validateRegisterMessage(raw: Record<string, unknown>): RegisterMessage 
   if (raw.unitId !== null && typeof raw.unitId !== 'number') return null;
   if (typeof raw.pid !== 'number') return null;
   if (typeof raw.childCommand !== 'string') return null;
+  if (raw.launchId !== undefined && typeof raw.launchId !== 'string') return null;
+  if (raw.bootstrapToken !== undefined && typeof raw.bootstrapToken !== 'string') return null;
+  if (raw.sessionToken !== undefined && typeof raw.sessionToken !== 'string') return null;
 
   return {
     type: 'register',
@@ -28,6 +31,9 @@ function validateRegisterMessage(raw: Record<string, unknown>): RegisterMessage 
     // Anything other than the literal `true` (including undefined — supervisors predating this
     // field) is treated as "does not report ready"; only an exact `true` is passed through.
     ...(raw.reportsReady === true ? { reportsReady: true as const } : {}),
+    ...(typeof raw.launchId === 'string' ? { launchId: raw.launchId } : {}),
+    ...(typeof raw.bootstrapToken === 'string' ? { bootstrapToken: raw.bootstrapToken } : {}),
+    ...(typeof raw.sessionToken === 'string' ? { sessionToken: raw.sessionToken } : {}),
   };
 }
 

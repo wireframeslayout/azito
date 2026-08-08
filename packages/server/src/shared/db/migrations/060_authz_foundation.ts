@@ -84,4 +84,46 @@ export function up(db: Database.Database): void {
   // index serves each (the generation-scoped query is a prefix match on the
   // lifetime-scoped one's columns).
   db.exec('CREATE INDEX idx_tasks_created_by ON tasks(created_by_kind, created_by_id, created_via_generation)');
+
+  // Extending this still-unreleased migration a third time (same rationale
+  // as the two comments above — 060 has never shipped). Issue #28 Phase C
+  // (design v3 §8): persists one row per `tui-supervisor` launch so a
+  // `register` message's claimed identity (serverName/target/taskId/unitId)
+  // can be checked against what the hub itself expected when it wrapped the
+  // launch command with `--launch-id`/`--bootstrap-token`
+  // (SupervisorLaunch.ts's wrapWithSupervisor), surviving a hub restart.
+  //
+  // `bootstrap_hash` / `session_hash` store only sha256 of the respective
+  // secret (same "plaintext never stored" rule as task_tokens.token_hash
+  // above) — `bootstrap_hash` authenticates the FIRST register (one-shot:
+  // the service layer only accepts it while `status = 'pending'`);
+  // `session_hash` is minted on that first successful register and
+  // authenticates every reconnect after (process restarts of the same
+  // launch, network blips) without re-spending the bootstrap secret.
+  //
+  // `status` (`pending` | `active` | `replaced` | `expired`) records the
+  // launch's lifecycle for audit/debugging; the authoritative "is this
+  // launch still current" check is always a fresh column read, never cached.
+  //
+  // `task_id`/`unit_id` intentionally have no FOREIGN KEY, mirroring
+  // `task_tokens.task_id` above (same "no cascade rule to keep in sync with
+  // deletes" reasoning) — a launch row is a point-in-time record of what the
+  // hub expected to see register, not a live reference.
+  db.exec(`
+    CREATE TABLE supervisor_launches (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      launch_id TEXT NOT NULL,
+      server_name TEXT NOT NULL,
+      target TEXT NOT NULL,
+      task_id INTEGER,
+      unit_id INTEGER,
+      bootstrap_hash TEXT NOT NULL,
+      session_hash TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_registered_at TEXT
+    )
+  `);
+  db.exec('CREATE UNIQUE INDEX idx_supervisor_launches_launch_id ON supervisor_launches(launch_id)');
+  db.exec('CREATE UNIQUE INDEX idx_supervisor_launches_session_hash ON supervisor_launches(session_hash)');
 }

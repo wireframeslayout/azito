@@ -307,6 +307,49 @@ describe('HubClient', () => {
     });
   });
 
+  describe('launch binding (Issue #28 Phase C)', () => {
+    it('sends bootstrapToken on the first register, then sessionToken (not bootstrapToken) on reconnect', async () => {
+      // Simulate the hub: ack the first register (bootstrapToken present) with a sessionToken.
+      autoRegister = false;
+      server.removeAllListeners('connection');
+      server.on('connection', (socket, request) => {
+        const conn: Conn = { socket, request, messages: [] };
+        connections.push(conn);
+        socket.on('message', (raw) => {
+          const msg = JSON.parse(raw.toString()) as SupervisorToHubMessage;
+          conn.messages.push(msg);
+          if (msg.type === 'register') {
+            socket.send(JSON.stringify({ type: 'registered', sessionToken: 'session-secret' }));
+          }
+        });
+      });
+
+      makeClient({
+        register: {
+          serverName: 'local',
+          target: 'sess:1.0',
+          taskId: 42,
+          unitId: null,
+          pid: process.pid,
+          childCommand: 'claude',
+          launchId: 'launch-1',
+          bootstrapToken: 'bootstrap-secret',
+        } as any,
+      }).connect();
+
+      await waitFor(() => connections.length === 1 && connections[0].messages.length >= 1);
+      expect(connections[0].messages[0]).toMatchObject({ launchId: 'launch-1', bootstrapToken: 'bootstrap-secret' });
+      expect((connections[0].messages[0] as any).sessionToken).toBeUndefined();
+
+      connections[0].socket.terminate();
+      await waitFor(() => connections.length === 2);
+      await waitFor(() => connections[1].messages.some((m) => m.type === 'register'));
+
+      expect(connections[1].messages[0]).toMatchObject({ launchId: 'launch-1', sessionToken: 'session-secret' });
+      expect((connections[1].messages[0] as any).bootstrapToken).toBeUndefined();
+    });
+  });
+
   it('reconnects with backoff after a disconnect', async () => {
     makeClient().connect();
     await waitFor(() => connections.length === 1 && connections[0].messages.length >= 1);

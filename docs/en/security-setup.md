@@ -160,6 +160,17 @@ also accepts the legacy UI-token-only flow, so nothing breaks mid-rollout. Roll 
 4. **Flip `AZITO_SCOPED_AUTH` on** once `azito auth doctor` reports all green on every server. This
    is the point where task principals actually become restricted to the allowlisted APIs (design
    §4) instead of just being *issued* scoped tokens.
+
+   This also changes how supervisor registrations are treated (design §8). A `tui-supervisor`
+   started by task execution registers with a hub-issued `--launch-id`/`--bootstrap-token`, and is
+   marked **bound** — driving the dashboard activity display, a task turn's idle-timer refresh, and
+   AgentActivityMonitor's Tier 0 signal — only once its claimed serverName/target/taskId/unitId
+   match what the hub recorded for that launch. A manually started `azs` (bare `tui-supervisor`,
+   e.g. for local debugging) carries no `--launch-id`, so registration is still accepted but marked
+   **unbound** (display-only): it no longer refreshes a turn's idle timer or drives Tier 0 activity
+   detection at all. This is a behavior change from before the flag — a manual `azs` used to count
+   as real task activity, and no longer does. While the flag is off, no downgrade happens: every
+   registration is treated as bound regardless of `--launch-id`, exactly as before this phase.
 5. **Rotate the UI token last.** Run `azito token rotate`, then update the browser (re-enter the
    token), any MCP client config it didn't reach automatically, and `operator.env` on any other
    machine you use as an operator.

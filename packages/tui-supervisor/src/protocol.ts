@@ -28,6 +28,21 @@ export interface RegisterMessage {
    * exists so older, still-running supervisor processes keep working without a protocol bump.
    */
   reportsReady?: true;
+  /**
+   * Launch binding (Issue #28 Phase C, design v3 §8). Set when this process
+   * was invoked with `--launch-id`/`--bootstrap-token` (or `--session-token`
+   * on a reconnect). Absent for a manually started `azs` — the hub registers
+   * those as `unbound` (display-only).
+   */
+  launchId?: string;
+  /**
+   * Exactly one of `bootstrapToken`/`sessionToken` accompanies `launchId`:
+   * `bootstrapToken` on the FIRST register after this launch was wrapped
+   * (one-shot), `sessionToken` on every reconnect after (see
+   * RegisteredMessage.sessionToken).
+   */
+  bootstrapToken?: string;
+  sessionToken?: string;
 }
 
 export interface HeartbeatMessage {
@@ -91,6 +106,12 @@ export type SupervisorToHubMessage =
 
 export interface RegisteredMessage {
   type: 'registered';
+  /**
+   * Returned exactly once, in the ack for a register that consumed a
+   * `bootstrapToken`. Must be held in memory and sent as `sessionToken` on
+   * every subsequent register for this process's lifetime.
+   */
+  sessionToken?: string;
 }
 
 export interface InjectPromptMessage {

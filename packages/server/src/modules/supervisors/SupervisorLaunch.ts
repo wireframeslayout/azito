@@ -11,6 +11,15 @@ export interface WrapWithSupervisorOptions {
   target: string;
   taskId?: number;
   unitId?: number;
+  /**
+   * Launch binding (Issue #28 Phase C, design v3 §8) — pass both together,
+   * normally sourced from `SupervisorRegistry.issueLaunch()` right before
+   * calling this function. Omitted only when no DB-backed launch repository
+   * is available at this call site (falls back to an unbound launch, exactly
+   * the pre-Phase-C behavior); every production call site has one.
+   */
+  launchId?: string;
+  bootstrapToken?: string;
 }
 
 /**
@@ -37,6 +46,9 @@ export function wrapWithSupervisor(cmd: string, opts: WrapWithSupervisorOptions)
   }
   if (opts.unitId !== undefined) {
     parts.push('--unit-id', String(opts.unitId));
+  }
+  if (opts.launchId !== undefined && opts.bootstrapToken !== undefined) {
+    parts.push('--launch-id', shellQuote(opts.launchId), '--bootstrap-token', shellQuote(opts.bootstrapToken));
   }
 
   parts.push('--', shellQuote(cmd));

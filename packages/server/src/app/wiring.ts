@@ -57,6 +57,7 @@ import { SidekickPackageService } from '../modules/sidekicks/SidekickPackageServ
 import { SidekickSyncService } from '../modules/sidekicks/SidekickSyncService';
 import { UnitTypeLoader } from '../modules/sidekicks/UnitTypeLoader';
 import { SupervisorRegistry } from '../modules/supervisors/SupervisorRegistry';
+import { SqliteSupervisorLaunchRepository } from '../modules/supervisors/SupervisorLaunchRepository';
 import { BrowserSessionManager } from '../modules/browser/BrowserSessionManager';
 import { SqliteBrowserSnapshotRepository } from '../modules/browser/SqliteBrowserSnapshotRepository';
 
@@ -169,7 +170,7 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
 
 // ─── Per-module factories ───
 
-function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, db?: SqliteDatabase, fingerprintStore?: FingerprintStore): SharedInfra {
+function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, db?: SqliteDatabase, fingerprintStore?: FingerprintStore, auditLogService?: AuditLogService, scopedAuthEnabled: boolean = false): SharedInfra {
   const sshClient = new SshClient(fingerprintStore);
   const agentInstaller = new AgentInstaller(sshClient, agentBundler);
   const harnessInstaller = new HarnessInstaller(sshClient);
@@ -190,7 +191,8 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
   const sidekickSyncService = new SidekickSyncService();
   const unitTypeLoader = new UnitTypeLoader();
   const turnSignalHub = new TurnSignalHub();
-  const supervisorRegistry = new SupervisorRegistry();
+  const supervisorLaunchRepo = db ? new SqliteSupervisorLaunchRepository(db) : undefined;
+  const supervisorRegistry = new SupervisorRegistry(supervisorLaunchRepo, auditLogService, scopedAuthEnabled);
   const browserSnapshotRepo = db ? new SqliteBrowserSnapshotRepository(db) : undefined;
   const browserSessionManager = new BrowserSessionManager(
     dataPaths.browserProfile,
@@ -416,14 +418,16 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
       if (srv) repos.serverRepo.updateFingerprint(srv.name, fingerprint);
     },
   };
-  const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, db, fingerprintStore);
-  const pushNotification = buildPushNotificationModule(repos.pushSubRepo);
-  const agentUpdater = buildAgentUpdater(agentBundler, infra, repos);
   // Resolved once here (Resolve at the Boundary) — see scopedAuthFlag.ts's
   // doc comment for why buildServer.ts must read the SAME resolved value
   // (via wiring.scopedAuthEnabled) instead of independently re-reading
-  // process.env.
+  // process.env. Moved ahead of buildSharedInfra (Issue #28 Phase C) so
+  // SupervisorRegistry — constructed inside it — can be given the same
+  // resolved flag instead of re-reading process.env itself.
   const scopedAuthEnabled = resolveScopedAuthEnabled();
+  const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, db, fingerprintStore, repos.auditLogService, scopedAuthEnabled);
+  const pushNotification = buildPushNotificationModule(repos.pushSubRepo);
+  const agentUpdater = buildAgentUpdater(agentBundler, infra, repos);
   const appServices = buildApplicationServices(infra, repos, uiToken, scopedAuthEnabled);
   const resourceGuard = new ResourceGuard(infra.transportFactory, repos.resourceGuardSettingsRepo);
   const executeTaskUseCase = buildExecuteTaskUseCase(infra, repos, appServices, resourceGuard);

@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto';
 import type { ITaskRepository, Task } from '../Task';
 import { extractPhaseSummary } from '../extractPhaseSummary';
 import type { TaskStatus } from '../TaskStatus';
@@ -328,7 +329,10 @@ export class PhaseLoopRunner {
         return null;
       })();
 
-      const nonce = Math.random().toString(36).slice(2, 8);
+      // crypto.randomBytes (not Math.random) — the nonce is also embedded in
+      // turnToken (design v3 §8), which /api/agent-signals now accepts as a
+      // standalone credential, so it must not be predictable.
+      const nonce = randomBytes(16).toString('hex');
 
       const effectiveWorkerType = unit.workerType ?? 'generic';
       let prompt: string;

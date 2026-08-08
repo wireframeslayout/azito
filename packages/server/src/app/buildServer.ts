@@ -172,6 +172,11 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // (C) ready bridge — forwards the child TUI's boot-complete signal to the
   //     frontend as a `supervisor:ready` notification (events WS).
   supervisorRegistry.on('activity', (event) => {
+    // Issue #28 Phase C (design v3 §8): an `unbound` connection (manual `azs`
+    // under scoped auth) is display-only — it must never refresh a task
+    // turn's idle timer or override AgentActivityMonitor's Tier 0, since its
+    // claimed taskId/unitId were never verified against a persisted launch.
+    if (!event.bound) return;
     bridgeSupervisorActivityToProgress(event, { agentTurnRepo, turnSignalHub });
     // Label a "pure supervised" entry (no windows-table row) from the child
     // command's first token (e.g. "claude --dangerously-skip-permissions" →
@@ -181,9 +186,11 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     agentActivityMonitor.recordSupervisorSignal(event.serverName, event.target, event.state, event.taskId, label, event.status);
   });
   supervisorRegistry.on('child_exit', (event) => {
+    if (!event.bound) return;
     agentActivityMonitor.recordSupervisorSignal(event.serverName, event.target, 'exited');
   });
   supervisorRegistry.on('disconnected', (event) => {
+    if (!event.bound) return;
     agentActivityMonitor.recordSupervisorSignal(event.serverName, event.target, 'exited');
   });
   supervisorRegistry.on('ready', (event) => {
@@ -370,7 +377,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     verifyToken: verifyWebhookToken,
     recordAgentActivity: (signal) => agentActivityMonitor.recordHookSignal(signal),
   });
-  await app.register(agentSignalRoutes, { agentSignalService, verifyToken: verifyWebhookToken });
+  await app.register(agentSignalRoutes, { agentSignalService, verifyToken: verifyWebhookToken, auditLogService });
   await app.register(hooksRoutes, { notificationBus, verifyToken: verifyWebhookToken });
   const taskPromptVarsResolver = new TaskPromptVarsResolver(
     taskRepo,

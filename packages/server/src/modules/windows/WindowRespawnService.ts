@@ -439,7 +439,18 @@ export class WindowRespawnService {
         this.supervisorRegistry.clearExitMarker(server.name, windowTarget);
       }
       const sendCmd = isSupervised
-        ? wrapWithSupervisor(resumeCommand, { server, target: windowTarget, taskId: task.id, unitId: task.unitId ?? undefined })
+        ? wrapWithSupervisor(resumeCommand, {
+            server,
+            target: windowTarget,
+            taskId: task.id,
+            unitId: task.unitId ?? undefined,
+            ...this.supervisorRegistry.issueLaunch({
+              serverName: server.name,
+              target: windowTarget,
+              taskId: task.id,
+              unitId: task.unitId ?? null,
+            }),
+          })
         : resumeCommand;
       await this.tmux.sendKeys(server, paneId, [sendCmd, 'Enter']);
     } catch (err) {
@@ -544,6 +555,12 @@ export class WindowRespawnService {
       target: supervisorTarget,
       taskId: supervision.taskId ?? undefined,
       unitId: supervision.unitId ?? undefined,
+      ...this.supervisorRegistry.issueLaunch({
+        serverName: server.name,
+        target: supervisorTarget,
+        taskId: supervision.taskId ?? null,
+        unitId: supervision.unitId ?? null,
+      }),
     });
   }
 

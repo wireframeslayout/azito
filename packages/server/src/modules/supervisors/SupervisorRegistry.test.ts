@@ -1,8 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import type { WebSocket } from 'ws';
+import Database from 'better-sqlite3';
 import { SupervisorRegistry } from './SupervisorRegistry';
 import { SUPERVISOR_PROTOCOL_VERSION, type RegisterMessage } from './protocol';
+import { SqliteSupervisorLaunchRepository } from './SupervisorLaunchRepository';
+import type { AuditLogService } from '../../shared/audit/AuditLogService';
 
 /** Minimal ws.WebSocket stand-in: EventEmitter + the handful of members the registry touches. */
 class MockSocket extends EventEmitter {
@@ -157,7 +160,7 @@ describe('SupervisorRegistry', () => {
     registry.on('disconnected', onDisconnected);
     registry.handleSocketClosed(asSocket(socket));
 
-    expect(onDisconnected).toHaveBeenCalledWith({ serverName: 'local', target: 'test:0.1' });
+    expect(onDisconnected).toHaveBeenCalledWith({ serverName: 'local', target: 'test:0.1', bound: true });
   });
 
   it('does not emit disconnected for a stale close from an already-replaced socket', () => {
@@ -186,7 +189,9 @@ describe('SupervisorRegistry', () => {
       taskId: 42,
       unitId: 7,
       state: 'active',
+      status: undefined,
       childCommand: 'bash',
+      bound: true,
     });
   });
 
@@ -204,6 +209,7 @@ describe('SupervisorRegistry', () => {
       taskId: 42,
       exitCode: 0,
       signal: null,
+      bound: true,
     });
     expect(registry.isConnected('local', 'test:0.1')).toBe(false);
   });
@@ -354,5 +360,196 @@ describe('SupervisorRegistry', () => {
     vi.advanceTimersByTime(15_000);
 
     expect(socket.terminated).toBe(false);
+  });
+});
+
+describe('SupervisorRegistry — launch binding (Issue #28 Phase C, design v3 §8)', () => {
+  let db: Database.Database;
+  let launchRepo: SqliteSupervisorLaunchRepository;
+  let auditLogService: AuditLogService;
+  let auditRecord: ReturnType<typeof vi.fn>;
+
+  function buildDb(): Database.Database {
+    const d = new Database(':memory:');
+    d.exec(`
+      CREATE TABLE supervisor_launches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        launch_id TEXT NOT NULL,
+        server_name TEXT NOT NULL,
+        target TEXT NOT NULL,
+        task_id INTEGER,
+        unit_id INTEGER,
+        bootstrap_hash TEXT NOT NULL,
+        session_hash TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        last_registered_at TEXT
+      )
+    `);
+    d.exec('CREATE UNIQUE INDEX idx_supervisor_launches_launch_id ON supervisor_launches(launch_id)');
+    d.exec('CREATE UNIQUE INDEX idx_supervisor_launches_session_hash ON supervisor_launches(session_hash)');
+    return d;
+  }
+
+  beforeEach(() => {
+    db = buildDb();
+    launchRepo = new SqliteSupervisorLaunchRepository(db as any);
+    auditRecord = vi.fn();
+    auditLogService = { record: auditRecord } as unknown as AuditLogService;
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  function registerWith(overrides: Partial<RegisterMessage>): RegisterMessage {
+    return registerMessage(overrides);
+  }
+
+  it('scopedAuthEnabled=false (compat): a launchId-less register is bound, no DB/audit interaction', () => {
+    const registry = new SupervisorRegistry(launchRepo, auditLogService, false);
+    const socket = new MockSocket();
+    registry.register(asSocket(socket), registerWith({}));
+
+    expect(registry.snapshot()[0].bound).toBe(true);
+    expect(auditRecord).not.toHaveBeenCalled();
+  });
+
+  it('scopedAuthEnabled=true: a launchId-less register is accepted but marked unbound, and audited', () => {
+    const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
+    const socket = new MockSocket();
+    registry.register(asSocket(socket), registerWith({}));
+
+    expect(socket.closed).toBeNull();
+    expect(registry.snapshot()[0].bound).toBe(false);
+    expect(auditRecord).toHaveBeenCalledWith(expect.objectContaining({ event: 'supervisor_launch.unbound' }));
+  });
+
+  it('accepts a bootstrapToken matching an issued launch, marks bound, and returns a sessionToken', () => {
+    const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
+    const issued = registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })!;
+    const socket = new MockSocket();
+
+    registry.register(asSocket(socket), registerWith({ launchId: issued.launchId, bootstrapToken: issued.bootstrapToken }));
+
+    expect(socket.closed).toBeNull();
+    expect(registry.snapshot()[0].bound).toBe(true);
+    const registered = socket.sent[0] as { type: string; sessionToken?: string };
+    expect(registered.type).toBe('registered');
+    expect(registered.sessionToken).toBeTruthy();
+    expect(auditRecord).toHaveBeenCalledWith(expect.objectContaining({ event: 'supervisor_launch.bound' }));
+  });
+
+  it('rejects a bootstrapToken reused a second time (one-shot)', () => {
+    const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
+    const issued = registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })!;
+
+    const first = new MockSocket();
+    registry.register(asSocket(first), registerWith({ launchId: issued.launchId, bootstrapToken: issued.bootstrapToken }));
+    expect(first.closed).toBeNull();
+
+    const replay = new MockSocket();
+    registry.register(asSocket(replay), registerWith({ launchId: issued.launchId, bootstrapToken: issued.bootstrapToken }));
+    expect(replay.closed?.code).toBe(4001);
+    expect(auditRecord).toHaveBeenCalledWith(expect.objectContaining({ event: 'supervisor_launch.bootstrap_rejected' }));
+  });
+
+  it('rejects a register whose claimed identity does not match the issued launch', () => {
+    const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
+    const issued = registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })!;
+    const socket = new MockSocket();
+
+    registry.register(
+      asSocket(socket),
+      registerWith({ launchId: issued.launchId, bootstrapToken: issued.bootstrapToken, taskId: 999 }),
+    );
+
+    expect(socket.closed?.code).toBe(4001);
+    expect(auditRecord).toHaveBeenCalledWith(expect.objectContaining({ event: 'supervisor_launch.mismatch' }));
+  });
+
+  it('accepts a reconnect via the returned sessionToken after the bootstrap round', () => {
+    const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
+    const issued = registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })!;
+
+    const first = new MockSocket();
+    registry.register(asSocket(first), registerWith({ launchId: issued.launchId, bootstrapToken: issued.bootstrapToken }));
+    const sessionToken = (first.sent[0] as { sessionToken: string }).sessionToken;
+    first.close();
+
+    const reconnect = new MockSocket();
+    registry.register(asSocket(reconnect), registerWith({ launchId: issued.launchId, sessionToken }));
+
+    expect(reconnect.closed).toBeNull();
+    expect(registry.snapshot()[0].bound).toBe(true);
+  });
+
+  it('rejects a reconnect with a wrong sessionToken', () => {
+    const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
+    const issued = registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })!;
+    const first = new MockSocket();
+    registry.register(asSocket(first), registerWith({ launchId: issued.launchId, bootstrapToken: issued.bootstrapToken }));
+    first.close();
+
+    const reconnect = new MockSocket();
+    registry.register(asSocket(reconnect), registerWith({ launchId: issued.launchId, sessionToken: 'wrong' }));
+
+    expect(reconnect.closed?.code).toBe(4001);
+    expect(auditRecord).toHaveBeenCalledWith(expect.objectContaining({ event: 'supervisor_launch.session_rejected' }));
+  });
+
+  it('rejects registration for an unknown launchId', () => {
+    const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
+    const socket = new MockSocket();
+    registry.register(asSocket(socket), registerWith({ launchId: 'nope', bootstrapToken: 'anything' }));
+
+    expect(socket.closed?.code).toBe(4001);
+    expect(auditRecord).toHaveBeenCalledWith(expect.objectContaining({ event: 'supervisor_launch.unknown' }));
+  });
+
+  it('rejects a same-key registration from a DIFFERENT launchId while a bound connection is live (no eviction)', () => {
+    const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
+    const issuedA = registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })!;
+    const issuedB = registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })!;
+
+    const first = new MockSocket();
+    registry.register(asSocket(first), registerWith({ launchId: issuedA.launchId, bootstrapToken: issuedA.bootstrapToken }));
+    expect(first.closed).toBeNull();
+
+    const intruder = new MockSocket();
+    registry.register(asSocket(intruder), registerWith({ launchId: issuedB.launchId, bootstrapToken: issuedB.bootstrapToken }));
+
+    expect(intruder.closed?.code).toBe(4009);
+    // The original connection must still be live and untouched.
+    expect(first.closed).toBeNull();
+    expect(registry.snapshot()).toHaveLength(1);
+    expect(auditRecord).toHaveBeenCalledWith(expect.objectContaining({ event: 'supervisor_launch.replace_rejected' }));
+  });
+
+  it('a same-launchId reconnection still replaces the previous connection (normal reconnect)', () => {
+    const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
+    const issued = registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })!;
+
+    const first = new MockSocket();
+    registry.register(asSocket(first), registerWith({ launchId: issued.launchId, bootstrapToken: issued.bootstrapToken }));
+    const sessionToken = (first.sent[0] as { sessionToken: string }).sessionToken;
+
+    const second = new MockSocket();
+    registry.register(asSocket(second), registerWith({ launchId: issued.launchId, sessionToken }));
+
+    expect(second.closed).toBeNull();
+    expect(first.closed).toEqual({ code: 1000, reason: 'replaced by new registration' });
+  });
+
+  it('gates AgentActivityMonitor/turn-progress bridging via the emitted bound flag', () => {
+    const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
+    const socket = new MockSocket();
+    registry.register(asSocket(socket), registerWith({}));
+
+    const onActivity = vi.fn();
+    registry.on('activity', onActivity);
+    registry.handleMessage(asSocket(socket), { type: 'activity', state: 'active', bytesInWindow: 12, ts: Date.now() });
+
+    expect(onActivity).toHaveBeenCalledWith(expect.objectContaining({ bound: false }));
   });
 });

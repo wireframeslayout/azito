@@ -7,6 +7,7 @@ import { usesHttpSignalPath } from '../../../units/Unit';
 import { renderForStateMachine } from '../../../prompt/PhasePromptRenderer';
 import { FOLLOW_UP_CAPABILITY, stateMachineEnvelope } from '../../../prompt/executionEnvelope';
 import { shouldSupervise, wrapWithSupervisor } from '../../../supervisors/SupervisorLaunch';
+import type { SupervisorRegistry } from '../../../supervisors/SupervisorRegistry';
 import type {
   IWorkerRuntime,
   WorkerLaunchContext,
@@ -43,6 +44,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
     private workerInput: WorkerInputService,
     private workerWaiter: WorkerWaiter,
     private httpSignalCoordinator: HttpSignalTurnCoordinator,
+    private supervisorRegistry: Pick<SupervisorRegistry, 'issueLaunch'>,
   ) {}
 
   async launch(ctx: WorkerLaunchContext): Promise<string> {
@@ -52,6 +54,16 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
           target: ctx.supervisorTarget,
           taskId: ctx.taskId,
           unitId: ctx.unitId,
+          // Issue #28 Phase C — issueLaunch() returns undefined only when no
+          // DB-backed launch repository exists (see its doc comment); the
+          // spread then omits both flags and wrapWithSupervisor falls back to
+          // an unbound launch, exactly the pre-Phase-C command shape.
+          ...this.supervisorRegistry.issueLaunch({
+            serverName: ctx.server.name,
+            target: ctx.supervisorTarget,
+            taskId: ctx.taskId ?? null,
+            unitId: ctx.unitId ?? null,
+          }),
         })
       : ctx.effectiveLaunchCommand;
     await this.tmux.sendKeys(ctx.server, ctx.target, [sendCommand, 'Enter']);
