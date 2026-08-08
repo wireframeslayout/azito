@@ -15,7 +15,12 @@ interface WindowPaneTreeProps {
   windows: WindowItem[];
   sessionData: Record<string, Session[]>;
   isActive?: (serverName: string, target: string, level: 'window' | 'pane') => boolean;
-  onPaneClick: (serverName: string, target: string) => void;
+  /**
+   * クリックされた行の `WindowItem` 自体を第3引数で渡す（同じ物理ウィンドウを別々のタスクが
+   * 持つ場合、呼び出し元が物理ターゲットから Map で引き直して取り違えないようにするため）。
+   * 既存の呼び出し元（2引数のみ受け取る）は後方互換のため無視して構わない。
+   */
+  onPaneClick: (serverName: string, target: string, w: WindowItem) => void;
   onContextMenu?: (e: React.MouseEvent, w: WindowItem, extra?: ContextMenuExtra) => void;
   onLongPress?: (x: number, y: number, w: WindowItem, extra?: ContextMenuExtra) => void;
   extra?: (w: WindowItem) => React.ReactNode;
@@ -87,7 +92,7 @@ interface WindowRowProps {
   expandedWindows: Set<string>;
   onToggle: (key: string) => void;
   onUnzoom: (serverName: string, sessionName: string, windowName: string) => void;
-  onPaneClick: (serverName: string, target: string) => void;
+  onPaneClick: (serverName: string, target: string, w: WindowItem) => void;
   onContextMenu?: (e: React.MouseEvent, w: WindowItem, extra?: ContextMenuExtra) => void;
   onLongPress?: (x: number, y: number, w: WindowItem, extra?: ContextMenuExtra) => void;
   extra?: React.ReactNode;
@@ -160,7 +165,7 @@ function OfflineRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra,
   const subtitle = renderSubtitle?.(w);
   return (
     <div
-      onClick={onPaneClick ? () => onPaneClick(w.serverName, w.tmuxTarget) : undefined}
+      onClick={onPaneClick ? () => onPaneClick(w.serverName, w.tmuxTarget, w) : undefined}
       onContextMenu={onContextMenu ? (e) => onContextMenu(e, w) : undefined}
       {...(onLongPress ? bindLongPress((x, y) => onLongPress(x, y, w)) : {})}
       className={clickable ? `row-hover${active ? ' row-selected' : ''}` : undefined}
@@ -255,7 +260,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
           return (
             <div
               key={`${w.id}-${sw.index}-${pane.index}`}
-              onClick={() => onPaneClick(w.serverName, target)}
+              onClick={() => onPaneClick(w.serverName, target, w)}
               onContextMenu={onContextMenu ? (e) => onContextMenu(e, w, ctxExtra) : undefined}
               {...(onLongPress ? bindLongPress((x, y) => onLongPress(x, y, w, ctxExtra)) : {})}
               className={`row-hover${active ? ' row-selected' : focused ? ' row-selected' : ''}${activityClassName ? ` ${activityClassName}` : ''}`}
@@ -374,7 +379,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
               return (
                 <div
                   key={`${w.id}-${sw.index}-${pane.index}`}
-                  onClick={() => onPaneClick(w.serverName, target)}
+                  onClick={() => onPaneClick(w.serverName, target, w)}
                   onContextMenu={onContextMenu ? (e) => onContextMenu(e, w, paneCtxExtra) : undefined}
                   {...(onLongPress ? bindLongPress((x, y) => onLongPress(x, y, w, paneCtxExtra)) : {})}
                   className={`row-hover${(active || focused) ? ' row-selected' : ''}`}
