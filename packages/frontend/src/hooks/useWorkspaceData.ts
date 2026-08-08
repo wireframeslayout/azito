@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { api } from '../api/client';
 import { useNotificationChannel } from './useNotificationChannel';
 import type { PersistedTab } from './useTabPersistence';
@@ -22,6 +22,12 @@ export function useWorkspaceData(
   const [tasks, setTasks] = useState<Task[]>([]);
   const [servers, setServers] = useState<Server[]>([]);
   const [sessionData, setSessionData] = useState<Record<string, Session[]>>({});
+
+  // refreshSessions が最新の tasks を読めるようにする ref（tabsRef と同じパターン）。
+  // useCallback の依存に tasks を直接入れると、タスク一覧が更新されるたびに refreshSessions の
+  // 参照が変わり、それに依存する useEffect（初回fetch/ポーリング）が再実行されてしまうため避ける。
+  const tasksRef = useRef(tasks);
+  tasksRef.current = tasks;
 
   // Project list for cross-project tab colors
   const [projectList, setProjectList] = useState<{ id: number; name: string }[]>([]);
@@ -78,7 +84,11 @@ export function useWorkspaceData(
     const tabServerNames = tabsRef.current
       .filter((t) => t.type === 'terminal' && t.serverName)
       .map((t) => t.serverName!);
-    const serverNames = [...new Set([...projectServerNames, ...tabServerNames])];
+    // タスク所有ウィンドウ（ownerType='task'）は project.windows に構造上入らない（project_id=NULL）ため、
+    // そのサーバーが project.windows / 開いているタブのどちらにも現れないことがある。含めないと、
+    // 稼働中でもセッション情報が無く「オフライン」表示になってしまう。
+    const taskWindowServerNames = tasksRef.current.flatMap((t) => (t.windows ?? []).map((w) => w.serverName));
+    const serverNames = [...new Set([...projectServerNames, ...tabServerNames, ...taskWindowServerNames])];
     const results = await Promise.allSettled(serverNames.map(async (name) => {
       const r = await api<Session[]>(`/servers/${name}/sessions`);
       return { name, sessions: Array.isArray(r) ? r : [] };
@@ -117,6 +127,22 @@ export function useWorkspaceData(
     }, 60000);
     return () => clearInterval(fallback);
   }, [refreshWorkspace, refreshSessions, sidebarMode]);
+
+  // タスク所有ウィンドウのサーバー集合が変わったときだけ refreshSessions を再実行する。
+  // refreshSessions 自体は tasksRef 経由で最新値を読むだけで参照は [projectId] にしか依存しないため、
+  // ここで明示的に監視しないとタスク一覧更新時にセッションが古いまま（新サーバーがオフライン扱い）になる。
+  const taskWindowServerNamesKey = useMemo(
+    () => [...new Set(tasks.flatMap((t) => (t.windows ?? []).map((w) => w.serverName)))].sort().join(','),
+    [tasks],
+  );
+  const prevTaskWindowServerNamesKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    const prev = prevTaskWindowServerNamesKeyRef.current;
+    prevTaskWindowServerNamesKeyRef.current = taskWindowServerNamesKey;
+    if (prev !== null && prev !== taskWindowServerNamesKey) {
+      refreshSessions();
+    }
+  }, [taskWindowServerNamesKey, refreshSessions]);
 
   // Load project list for project bar
   useEffect(() => {

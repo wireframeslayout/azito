@@ -17,9 +17,22 @@ export interface ObjectSections {
   totalCount: number;
 }
 
-/** serverName + pane-suffix-stripped tmuxTarget の一意キー。オペレーション行の重複排除に使う */
-function windowDedupeKey(w: Window): string {
+/**
+ * serverName + pane-suffix-stripped tmuxTarget の物理ウィンドウキー。
+ * taskId を含まないため、「同じ物理ウィンドウかどうか」の判定（isOperation 分類）専用。
+ * 重複排除（別タスクが同じ物理ウィンドウを持つケースを潰さない）には使わないこと。
+ */
+function windowPhysicalKey(w: Window): string {
   return `${w.serverName}/${stripPaneSuffix(w.tmuxTarget)}`;
+}
+
+/**
+ * オペレーション行の重複排除キー。物理ウィンドウ（serverName + pane-suffix-stripped tmuxTarget）に
+ * taskId を含める。project 側ミラー行とタスク由来行は「同じタスクに解決される場合にのみ」重複とみなす。
+ * taskId が異なる（あるいは片方が未解決）行は別々の物理ウィンドウ登録として扱い、潰さずそれぞれ出す。
+ */
+function windowDedupeKey(w: Window): string {
+  return `${windowPhysicalKey(w)}/${w.taskId ?? 'none'}`;
 }
 
 export function buildObjectSections(
@@ -36,14 +49,17 @@ export function buildObjectSections(
 
   // タスク所有ウィンドウ（ownerType='task', project_id=NULL）は project.windows に構造上入らないため、
   // 呼び出し元がプロジェクト範囲のタスクから集めた実体を別途受け取り、ここでマージする。
-  const taskOwnedKeys = new Set(taskOwnedWindows.map(windowDedupeKey));
-  const isOperation = (w: Window) => w.ownerType === 'task' || w.taskId != null || taskOwnedKeys.has(windowDedupeKey(w));
+  const taskOwnedPhysicalKeys = new Set(taskOwnedWindows.map(windowPhysicalKey));
+  const isOperation = (w: Window) => w.ownerType === 'task' || w.taskId != null || taskOwnedPhysicalKeys.has(windowPhysicalKey(w));
   const projectWindows = resolved.filter((w) => !isOperation(w));
   const operationFromProject = resolved.filter(isOperation);
 
   // 同じ窓が project 側（taskWindows で解決されたもの）と taskOwnedWindows の両方から来ることがあるため、
-  // server+target で重複排除する。taskOwnedWindows は完全なウィンドウ実体（workerType/agentSessionId等）を
-  // 持つので、重複時はそちらを優先する。
+  // server+target+taskId で重複排除する。taskId まで一致した場合のみ同一行とみなし、taskOwnedWindows は
+  // 完全なウィンドウ実体（workerType/agentSessionId等）を持つので重複時はそちらを優先する。
+  // taskWindows API/リポジトリに一意制約は無く、別々のタスクが同じ物理ウィンドウ（server+target）を
+  // 持ちうる（実装確認済み: windows テーブルの一意インデックスは owner_type='project' のみが対象）。
+  // taskId が異なる／片方が未解決の場合は別行として残し、タスク帰属を黙って上書きしない。
   const operationMap = new Map<string, Window>();
   for (const w of operationFromProject) operationMap.set(windowDedupeKey(w), w);
   for (const w of taskOwnedWindows) operationMap.set(windowDedupeKey(w), w);

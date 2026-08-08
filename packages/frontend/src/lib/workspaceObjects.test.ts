@@ -77,6 +77,39 @@ describe('buildObjectSections', () => {
     expect(result.operationWindows).toHaveLength(1);
   });
 
+  it('does not collapse two different tasks that own the same physical window (server+target), keeping both rows with correct task attribution', () => {
+    // Task windows have no uniqueness constraint on (serverName, tmuxTarget) — two tasks can
+    // register a row against the same physical tmux window. Dedup must key on taskId too, or
+    // the later-inserted row silently wins and clicks/context-menus resolve to the wrong task.
+    const taskOwnedWindows = [
+      makeWindow({ id: 1, serverName: 'srv1', tmuxTarget: 'agent:1', ownerType: 'task', taskId: 60, workerType: 'claude' }),
+      makeWindow({ id: 2, serverName: 'srv1', tmuxTarget: 'agent:1', ownerType: 'task', taskId: 61, workerType: 'codex' }),
+    ];
+    const result = buildObjectSections([], [], taskOwnedWindows, {}, ['srv1']);
+    expect(result.operationWindows).toHaveLength(2);
+    const byTaskId = new Map(result.operationWindows.map((w) => [w.taskId, w]));
+    expect(byTaskId.get(60)?.id).toBe(1);
+    expect(byTaskId.get(60)?.workerType).toBe('claude');
+    expect(byTaskId.get(61)?.id).toBe(2);
+    expect(byTaskId.get(61)?.workerType).toBe('codex');
+  });
+
+  it('does not collapse a project-side mirror row against a task-owned row when they resolve to different tasks', () => {
+    // project.windows resolves taskId=70 via taskWindows for this target, but a *different* task (71)
+    // separately registered a task-owned window against the same physical window. Both must survive.
+    const projectWindows = [
+      makeWindow({ id: 1, serverName: 'srv1', tmuxTarget: 'agent:1', ownerType: 'project' }),
+    ];
+    const taskWindows = [{ serverName: 'srv1', tmuxTarget: 'agent:1', taskId: 70 }];
+    const taskOwnedWindows = [
+      makeWindow({ id: 2, serverName: 'srv1', tmuxTarget: 'agent:1', ownerType: 'task', taskId: 71 }),
+    ];
+    const result = buildObjectSections(projectWindows, taskWindows, taskOwnedWindows, {}, ['srv1']);
+    expect(result.operationWindows).toHaveLength(2);
+    const taskIds = result.operationWindows.map((w) => w.taskId).sort();
+    expect(taskIds).toEqual([70, 71]);
+  });
+
   it('sorts operationWindows by taskId then label then id for a stable order', () => {
     const taskOwnedWindows = [
       makeWindow({ id: 3, serverName: 'srv1', tmuxTarget: 'agent:3', ownerType: 'task', taskId: 20, label: 'b' }),
