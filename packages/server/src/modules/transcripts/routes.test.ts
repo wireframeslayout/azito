@@ -71,7 +71,7 @@ describe('GET /api/transcripts/:sessionId/panes', () => {
       listPaneCandidates: async () => ({
         cwd: '/home/user/project',
         panes: [
-          { paneId: '%1', sessionName: 's', windowName: 'w', currentPath: '/home/user/project', currentCommand: 'claude', cwdMatch: true },
+          { paneId: '%1', sessionName: 's', windowIndex: 0, windowName: 'w', paneIndex: 0, currentPath: '/home/user/project', currentCommand: 'claude', cwdMatch: true },
         ],
       }),
     });
@@ -80,7 +80,7 @@ describe('GET /api/transcripts/:sessionId/panes', () => {
     expect(res.json()).toEqual({
       cwd: '/home/user/project',
       panes: [
-        { paneId: '%1', sessionName: 's', windowName: 'w', currentPath: '/home/user/project', currentCommand: 'claude', cwdMatch: true },
+        { paneId: '%1', sessionName: 's', windowIndex: 0, windowName: 'w', paneIndex: 0, currentPath: '/home/user/project', currentCommand: 'claude', cwdMatch: true },
       ],
     });
     await app.close();

@@ -23,6 +23,7 @@ function buildDeps(overrides: {
   listAllPanes?: TmuxClient['listAllPanes'];
   checkPaneExists?: TmuxClient['checkPaneExists'];
   sendKeys?: TmuxClient['sendKeys'];
+  sendLiteralText?: TmuxClient['sendLiteralText'];
   servers?: ServerConfig[];
 } = {}) {
   const transcriptService = {
@@ -33,6 +34,7 @@ function buildDeps(overrides: {
     listAllPanes: overrides.listAllPanes ?? (async () => []),
     checkPaneExists: overrides.checkPaneExists ?? (async () => true),
     sendKeys: overrides.sendKeys ?? (async () => {}),
+    sendLiteralText: overrides.sendLiteralText ?? (async () => {}),
   } as unknown as TmuxClient;
 
   const serverRepo = {
@@ -52,8 +54,8 @@ describe('TranscriptPaneService', () => {
 
     it('marks panes whose currentPath matches the session cwd as cwdMatch: true', async () => {
       const panes: TmuxPaneInfo[] = [
-        { paneId: '%1', sessionName: 'main', windowName: 'w1', currentPath: '/home/user/proj', currentCommand: 'claude' },
-        { paneId: '%2', sessionName: 'main', windowName: 'w2', currentPath: '/home/user/other', currentCommand: 'bash' },
+        { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w1', paneIndex: 0, currentPath: '/home/user/proj', currentCommand: 'claude' },
+        { paneId: '%2', sessionName: 'main', windowIndex: 1, windowName: 'w2', paneIndex: 0, currentPath: '/home/user/other', currentCommand: 'bash' },
       ];
       const { transcriptService, tmuxClient, serverRepo } = buildDeps({
         getSessionCwd: () => ({ cwd: '/home/user/proj' }),
@@ -69,7 +71,7 @@ describe('TranscriptPaneService', () => {
 
     it('marks all panes cwdMatch: false when the session has no recorded cwd', async () => {
       const panes: TmuxPaneInfo[] = [
-        { paneId: '%1', sessionName: 'main', windowName: 'w1', currentPath: '/home/user/proj', currentCommand: 'claude' },
+        { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w1', paneIndex: 0, currentPath: '/home/user/proj', currentCommand: 'claude' },
       ];
       const { transcriptService, tmuxClient, serverRepo } = buildDeps({
         getSessionCwd: () => ({ cwd: null }),
@@ -106,17 +108,40 @@ describe('TranscriptPaneService', () => {
       expect(await service.sendInput(SID, '%1', 'hello')).toBe('pane_not_found');
     });
 
-    it('sends the text followed by Enter and returns ok', async () => {
+    it('sends the text as literal, then Enter as a separate keypress, and returns ok', async () => {
       const sendKeys = vi.fn(async () => {});
+      const sendLiteralText = vi.fn(async () => {});
       const { transcriptService, tmuxClient, serverRepo } = buildDeps({
         getSessionCwd: () => ({ cwd: '/x' }),
         checkPaneExists: async () => true,
         sendKeys,
+        sendLiteralText,
       });
       const service = new TranscriptPaneService(transcriptService, tmuxClient, serverRepo);
       const result = await service.sendInput(SID, '%1', 'hello world');
       expect(result).toBe('ok');
-      expect(sendKeys).toHaveBeenCalledWith(LOCAL_SERVER, '%1', ['hello world', 'Enter']);
+      expect(sendLiteralText).toHaveBeenCalledWith(LOCAL_SERVER, '%1', 'hello world');
+      expect(sendKeys).toHaveBeenCalledWith(LOCAL_SERVER, '%1', ['Enter']);
+    });
+
+    it('sends body text like "C-c" via the literal path, never as a special key', async () => {
+      const sendKeys = vi.fn(async () => {});
+      const sendLiteralText = vi.fn(async () => {});
+      const { transcriptService, tmuxClient, serverRepo } = buildDeps({
+        getSessionCwd: () => ({ cwd: '/x' }),
+        checkPaneExists: async () => true,
+        sendKeys,
+        sendLiteralText,
+      });
+      const service = new TranscriptPaneService(transcriptService, tmuxClient, serverRepo);
+      const result = await service.sendInput(SID, '%1', 'C-c');
+      expect(result).toBe('ok');
+      // The literal text "C-c" must go through sendLiteralText (always -l), never through
+      // sendKeys with "C-c" as an element — sendKeys would interpret that as an interrupt key.
+      expect(sendLiteralText).toHaveBeenCalledWith(LOCAL_SERVER, '%1', 'C-c');
+      expect(sendKeys).toHaveBeenCalledTimes(1);
+      expect(sendKeys).toHaveBeenCalledWith(LOCAL_SERVER, '%1', ['Enter']);
+      expect(sendKeys).not.toHaveBeenCalledWith(LOCAL_SERVER, '%1', ['C-c', 'Enter']);
     });
   });
 });

@@ -41,7 +41,9 @@ export interface TranscriptErrorResponse {
 export interface PaneCandidate {
   paneId: string;
   sessionName: string;
+  windowIndex: number;
   windowName: string;
+  paneIndex: number;
   currentPath: string;
   currentCommand: string;
   cwdMatch: boolean;

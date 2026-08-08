@@ -32,6 +32,8 @@
     "otherPanes": "その他のペイン",
     "noPanes": "tmuxペインが見つかりません",
     "noCommand": "(アイドル)",
-    "sendError": "送信に失敗しました"
+    "sendError": "送信に失敗しました",
+    "loadError": "ペインの取得に失敗しました",
+    "retry": "再試行"
   }
 }

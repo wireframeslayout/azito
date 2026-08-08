@@ -7,7 +7,9 @@ import type { TranscriptService } from './TranscriptService';
 export interface PaneCandidate {
   paneId: string;
   sessionName: string;
+  windowIndex: number;
   windowName: string;
+  paneIndex: number;
   currentPath: string;
   currentCommand: string;
   /** cwd がセッションの記録済み cwd と完全一致するか。false でも候補として提示する。 */
@@ -56,7 +58,9 @@ export class TranscriptPaneService {
     const panes: PaneCandidate[] = allPanes.map((pane) => ({
       paneId: pane.paneId,
       sessionName: pane.sessionName,
+      windowIndex: pane.windowIndex,
       windowName: pane.windowName,
+      paneIndex: pane.paneIndex,
       currentPath: pane.currentPath,
       currentCommand: pane.currentCommand,
       cwdMatch: meta.cwd !== null && pane.currentPath === meta.cwd,
@@ -73,7 +77,8 @@ export class TranscriptPaneService {
     const exists = await this.tmuxClient.checkPaneExists(server, paneId);
     if (!exists) return 'pane_not_found';
 
-    await this.tmuxClient.sendKeys(server, paneId, [text, 'Enter']);
+    await this.tmuxClient.sendLiteralText(server, paneId, text);
+    await this.tmuxClient.sendKeys(server, paneId, ['Enter']);
     return 'ok';
   }
 }

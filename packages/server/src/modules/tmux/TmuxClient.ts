@@ -35,7 +35,9 @@ export interface TmuxSession {
 export interface TmuxPaneInfo {
   paneId: string;
   sessionName: string;
+  windowIndex: number;
   windowName: string;
+  paneIndex: number;
   currentPath: string;
   currentCommand: string;
 }
@@ -317,15 +319,23 @@ export class TmuxClient {
    */
   async listAllPanes(server: ServerConfig): Promise<TmuxPaneInfo[]> {
     const format = [
-      '#{pane_id}', '#{session_name}', '#{window_name}', '#{pane_current_path}', '#{pane_current_command}',
+      '#{pane_id}', '#{session_name}', '#{window_index}', '#{window_name}', '#{pane_index}', '#{pane_current_path}', '#{pane_current_command}',
     ].join('|||');
 
     try {
       const { stdout } = await this.runTmuxCommand(server, ['list-panes', '-a', '-F', format]);
       return stdout.trim().split('\n').filter(Boolean)
         .map((line) => {
-          const [paneId, sessionName, windowName, currentPath, currentCommand] = line.split('|||');
-          return { paneId, sessionName, windowName, currentPath, currentCommand };
+          const [paneId, sessionName, windowIndex, windowName, paneIndex, currentPath, currentCommand] = line.split('|||');
+          return {
+            paneId,
+            sessionName,
+            windowIndex: parseInt(windowIndex, 10),
+            windowName,
+            paneIndex: parseInt(paneIndex, 10),
+            currentPath,
+            currentCommand,
+          };
         })
         .filter((pane) => !pane.sessionName.startsWith('_azito_'));
     } catch (err: unknown) {
@@ -388,6 +398,19 @@ export class TmuxClient {
       } else {
         await this.runTmuxCommand(server, ['send-keys', '-t', target, '-l', key]);
       }
+    }
+  }
+
+  /**
+   * `sendKeys` は "Enter"/"C-c"/"Escape" 等の完全一致文字列を特殊キーとして解釈するため、
+   * ユーザーが自由入力した本文（例: "C-c" という一行）をそのまま渡すと割り込み等の制御シーケンスに
+   * 誤解釈されうる。任意テキストを送る場合は必ずこちらを使い、特殊キー判定を一切通さない。
+   */
+  async sendLiteralText(server: ServerConfig, target: string, text: string): Promise<void> {
+    if (Buffer.byteLength(text, 'utf8') > 500) {
+      await this.sendLongText(server, target, text);
+    } else {
+      await this.runTmuxCommand(server, ['send-keys', '-t', target, '-l', text]);
     }
   }
 

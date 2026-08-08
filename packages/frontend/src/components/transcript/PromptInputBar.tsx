@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { apiWithStatus } from '../../api/client';
 import { Icon } from '../ui/Icon';
 import { Spinner } from '../ui/Spinner';
+import { Button } from '../ui/Button';
 import { useClickOutside } from '../../hooks/useClickOutside';
 import { isErrorResponse, pathBasename } from './transcriptFormat';
 import type { PaneCandidate, PaneCandidatesResult, TranscriptErrorResponse } from './transcriptTypes';
@@ -16,22 +17,78 @@ interface PromptInputBarProps {
   onSent: () => void;
 }
 
+/** sessionStorage に保存するペイン選択。tmux 再起動で paneId が別ペインに再割当されうるため、
+ * 復元時は全フィールドが現在の候補と一致する場合のみ選択を復元する。 */
+interface StoredPaneSelection {
+  paneId: string;
+  sessionName: string;
+  windowIndex: number;
+  paneIndex: number;
+  currentPath: string;
+}
+
 function storageKey(sessionId: string): string {
   return `azito.transcript.selectedPane.${sessionId}`;
 }
 
+/** 保存値を読む。旧形式（paneId 単独の文字列）は JSON.parse に失敗するため自動的に破棄される。 */
+function readStoredPaneSelection(sessionId: string): StoredPaneSelection | null {
+  const raw = sessionStorage.getItem(storageKey(sessionId));
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      parsed !== null && typeof parsed === 'object' &&
+      typeof (parsed as StoredPaneSelection).paneId === 'string' &&
+      typeof (parsed as StoredPaneSelection).sessionName === 'string' &&
+      typeof (parsed as StoredPaneSelection).windowIndex === 'number' &&
+      typeof (parsed as StoredPaneSelection).paneIndex === 'number' &&
+      typeof (parsed as StoredPaneSelection).currentPath === 'string'
+    ) {
+      return parsed as StoredPaneSelection;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function paneMatchesStored(pane: PaneCandidate, stored: StoredPaneSelection): boolean {
+  return (
+    pane.paneId === stored.paneId &&
+    pane.sessionName === stored.sessionName &&
+    pane.windowIndex === stored.windowIndex &&
+    pane.paneIndex === stored.paneIndex &&
+    pane.currentPath === stored.currentPath
+  );
+}
+
+function writeStoredPaneSelection(sessionId: string, pane: PaneCandidate): void {
+  const stored: StoredPaneSelection = {
+    paneId: pane.paneId,
+    sessionName: pane.sessionName,
+    windowIndex: pane.windowIndex,
+    paneIndex: pane.paneIndex,
+    currentPath: pane.currentPath,
+  };
+  sessionStorage.setItem(storageKey(sessionId), JSON.stringify(stored));
+}
+
+/** 同一ウィンドウの分割ペインを一意に識別できるよう window/pane index を含める。 */
 function paneLabel(pane: PaneCandidate): string {
-  return `${pane.sessionName}:${pane.windowName}`;
+  return `${pane.sessionName}:${pane.windowIndex}.${pane.paneIndex} (${pane.windowName})`;
 }
 
 interface PanePopoverProps {
   panes: PaneCandidate[];
   selectedPaneId: string | null;
-  onSelect: (paneId: string) => void;
+  error: string | null;
+  onSelect: (pane: PaneCandidate) => void;
   onClose: () => void;
+  onRetry: () => void;
 }
 
-function PanePopover({ panes, selectedPaneId, onSelect, onClose }: PanePopoverProps) {
+function PanePopover({ panes, selectedPaneId, error, onSelect, onClose, onRetry }: PanePopoverProps) {
   const { t } = useTranslation('transcript');
   const ref = useClickOutside<HTMLDivElement>(onClose);
   const matched = panes.filter((p) => p.cwdMatch);
@@ -42,7 +99,7 @@ function PanePopover({ panes, selectedPaneId, onSelect, onClose }: PanePopoverPr
       key={pane.paneId}
       type="button"
       onClick={() => {
-        onSelect(pane.paneId);
+        onSelect(pane);
         onClose();
       }}
       style={{
@@ -60,8 +117,9 @@ function PanePopover({ panes, selectedPaneId, onSelect, onClose }: PanePopoverPr
         cursor: 'pointer',
       }}
     >
-      <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--font-sm)', fontWeight: 600 }}>
+      <span style={{ display: 'flex', alignItems: 'baseline', gap: 6, fontSize: 'var(--font-sm)', fontWeight: 600 }}>
         {paneLabel(pane)}
+        <span style={{ fontSize: 'var(--font-2xs)', fontWeight: 400, color: 'var(--text-dim)' }}>{pane.paneId}</span>
         {pane.paneId === selectedPaneId && <Icon name="check" size={14} style={{ color: 'var(--accent)' }} />}
       </span>
       <span style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -92,7 +150,12 @@ function PanePopover({ panes, selectedPaneId, onSelect, onClose }: PanePopoverPr
         padding: 6,
       }}
     >
-      {panes.length === 0 ? (
+      {error ? (
+        <div style={{ padding: '10px', display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start' }}>
+          <span style={{ fontSize: 'var(--font-sm)', color: 'var(--danger)' }}>{error}</span>
+          <Button variant="ghost" size="sm" onClick={onRetry}>{t('promptBar.retry')}</Button>
+        </div>
+      ) : panes.length === 0 ? (
         <div style={{ padding: '10px', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
           {t('promptBar.noPanes')}
         </div>
@@ -128,6 +191,8 @@ export default function PromptInputBar({ sessionId, onSent }: PromptInputBarProp
   const { t } = useTranslation('transcript');
   const [panes, setPanes] = useState<PaneCandidate[]>([]);
   const [panesLoaded, setPanesLoaded] = useState(false);
+  const [panesError, setPanesError] = useState<string | null>(null);
+  const [reloadTick, setReloadTick] = useState(0);
   const [selectedPaneId, setSelectedPaneId] = useState<string | null>(null);
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [text, setText] = useState('');
@@ -135,10 +200,11 @@ export default function PromptInputBar({ sessionId, onSent }: PromptInputBarProp
   const [sendError, setSendError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // 会話ビュー表示時（セッション切り替え時）に候補ペインを取得し、自動選択 or 復元する。
+  // 会話ビュー表示時（セッション切り替え時、または再試行時）に候補ペインを取得し、自動選択 or 復元する。
   useEffect(() => {
     let cancelled = false;
     setPanesLoaded(false);
+    setPanesError(null);
     setPanes([]);
     setSelectedPaneId(null);
     setSendError(null);
@@ -148,15 +214,16 @@ export default function PromptInputBar({ sessionId, onSent }: PromptInputBarProp
         if (cancelled) return;
         if (status !== 200 || isErrorResponse(body)) {
           setPanesLoaded(true);
+          setPanesError(isErrorResponse(body) ? body.error : t('promptBar.loadError'));
           return;
         }
         setPanes(body.panes);
         setPanesLoaded(true);
 
-        const stored = sessionStorage.getItem(storageKey(sessionId));
-        const storedValid = stored !== null && body.panes.some((p) => p.paneId === stored);
-        if (storedValid) {
-          setSelectedPaneId(stored);
+        const stored = readStoredPaneSelection(sessionId);
+        const storedPane = stored ? body.panes.find((p) => paneMatchesStored(p, stored)) : undefined;
+        if (storedPane) {
+          setSelectedPaneId(storedPane.paneId);
           return;
         }
         const matched = body.panes.filter((p) => p.cwdMatch);
@@ -164,18 +231,25 @@ export default function PromptInputBar({ sessionId, onSent }: PromptInputBarProp
           setSelectedPaneId(matched[0].paneId);
         }
       })
-      .catch(() => {
-        if (!cancelled) setPanesLoaded(true);
+      .catch((err) => {
+        if (!cancelled) {
+          setPanesLoaded(true);
+          setPanesError(err instanceof Error ? err.message : t('promptBar.loadError'));
+        }
       });
 
     return () => {
       cancelled = true;
     };
-  }, [sessionId]);
+  }, [sessionId, reloadTick, t]);
 
-  const selectPane = useCallback((paneId: string) => {
-    setSelectedPaneId(paneId);
-    sessionStorage.setItem(storageKey(sessionId), paneId);
+  const retryLoadPanes = useCallback(() => {
+    setReloadTick((n) => n + 1);
+  }, []);
+
+  const selectPane = useCallback((pane: PaneCandidate) => {
+    setSelectedPaneId(pane.paneId);
+    writeStoredPaneSelection(sessionId, pane);
   }, [sessionId]);
 
   const resizeTextarea = (el: HTMLTextAreaElement) => {
@@ -244,20 +318,34 @@ export default function PromptInputBar({ sessionId, onSent }: PromptInputBarProp
           }}
         >
           <Icon name="terminal" size={14} />
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {selectedPane ? paneLabel(selectedPane) : t('promptBar.choosePane')}
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'baseline', gap: 4 }}>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {selectedPane ? paneLabel(selectedPane) : t('promptBar.choosePane')}
+            </span>
+            {selectedPane && (
+              <span style={{ fontSize: 'var(--font-2xs)', opacity: 0.75 }}>{selectedPane.paneId}</span>
+            )}
           </span>
           <Icon name="chevron-down" size={14} />
         </button>
-        {!selectedPaneId && panesLoaded && (
-          <span style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>{t('promptBar.selectPaneHint')}</span>
+        {panesError ? (
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--font-xs)', color: 'var(--danger)' }}>
+            {panesError}
+            <Button variant="ghost" size="sm" onClick={retryLoadPanes}>{t('promptBar.retry')}</Button>
+          </span>
+        ) : (
+          !selectedPaneId && panesLoaded && (
+            <span style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>{t('promptBar.selectPaneHint')}</span>
+          )
         )}
         {popoverOpen && (
           <PanePopover
             panes={panes}
             selectedPaneId={selectedPaneId}
+            error={panesError}
             onSelect={selectPane}
             onClose={() => setPopoverOpen(false)}
+            onRetry={retryLoadPanes}
           />
         )}
       </div>

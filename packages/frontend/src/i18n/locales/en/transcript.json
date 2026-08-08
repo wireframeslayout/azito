@@ -32,6 +32,8 @@
     "otherPanes": "Other panes",
     "noPanes": "No tmux panes found",
     "noCommand": "(idle)",
-    "sendError": "Failed to send"
+    "sendError": "Failed to send",
+    "loadError": "Failed to load panes",
+    "retry": "Retry"
   }
 }

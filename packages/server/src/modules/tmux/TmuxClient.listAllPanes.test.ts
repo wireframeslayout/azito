@@ -15,19 +15,19 @@ function makeClient(execTmux: (args: string[]) => Promise<{ stdout: string; stde
 describe('TmuxClient.listAllPanes', () => {
   it('parses pane rows into TmuxPaneInfo', async () => {
     const client = makeClient(async () => ({
-      stdout: '%1|||main|||w1|||/home/user/proj|||claude\n%2|||main|||w2|||/home/user/other|||bash\n',
+      stdout: '%1|||main|||0|||w1|||0|||/home/user/proj|||claude\n%2|||main|||1|||w2|||0|||/home/user/other|||bash\n',
       stderr: '',
       code: 0,
     }));
     await expect(client.listAllPanes(srv)).resolves.toEqual([
-      { paneId: '%1', sessionName: 'main', windowName: 'w1', currentPath: '/home/user/proj', currentCommand: 'claude' },
-      { paneId: '%2', sessionName: 'main', windowName: 'w2', currentPath: '/home/user/other', currentCommand: 'bash' },
+      { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w1', paneIndex: 0, currentPath: '/home/user/proj', currentCommand: 'claude' },
+      { paneId: '%2', sessionName: 'main', windowIndex: 1, windowName: 'w2', paneIndex: 0, currentPath: '/home/user/other', currentCommand: 'bash' },
     ]);
   });
 
   it('excludes _azito_-prefixed linked sessions', async () => {
     const client = makeClient(async () => ({
-      stdout: '%1|||main|||w1|||/home/user/proj|||claude\n%2|||_azito_abc123|||w1|||/home/user/proj|||claude\n',
+      stdout: '%1|||main|||0|||w1|||0|||/home/user/proj|||claude\n%2|||_azito_abc123|||0|||w1|||0|||/home/user/proj|||claude\n',
       stderr: '',
       code: 0,
     }));
