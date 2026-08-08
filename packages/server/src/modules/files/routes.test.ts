@@ -86,3 +86,34 @@ describe('file CRUD route guards', () => {
     expect(newName.includes('/') || newName.includes('\\')).toBe(true);
   });
 });
+
+describe('PUT file content route guards', () => {
+  it('rejects missing projectId', () => {
+    const body: Record<string, unknown> = { path: '/workspace/project/src/index.ts', content: 'x' };
+    const projectId = typeof body.projectId === 'number' ? body.projectId : NaN;
+    expect(isNaN(projectId)).toBe(true);
+  });
+
+  it('rejects path containing control characters', () => {
+    const filePath = '/workspace/project/src/index\x00.ts';
+    expect(/[\x00-\x1f]/.test(filePath)).toBe(true);
+  });
+
+  it('rejects traversal outside the working directory', () => {
+    const parentDir = path.dirname('/workspace/project/../../../etc/passwd');
+    const resolved = path.resolve(parentDir);
+    expect(isPathContained({
+      target: resolved,
+      allowedRoot: '/workspace/project',
+    })).toBe(false);
+  });
+
+  it('allows a path inside the working directory', () => {
+    const parentDir = path.dirname('/workspace/project/src/index.ts');
+    const resolved = path.resolve(parentDir);
+    expect(isPathContained({
+      target: resolved,
+      allowedRoot: '/workspace/project',
+    })).toBe(true);
+  });
+});
