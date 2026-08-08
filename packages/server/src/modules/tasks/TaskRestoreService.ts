@@ -308,7 +308,21 @@ export class TaskRestoreService {
       return { tmuxTarget: dbTarget, worktreePath };
     } catch (err) {
       if (windowName) {
-        try { await tmux.killWindow(server, `${tmuxSession}:${windowName}`); } catch (e) {
+        try {
+          await tmux.killWindow(server, `${tmuxSession}:${windowName}`);
+          // The createWindow() above (line ~177) already rotated the task
+          // token for THIS window generation via buildEnvForNewWindow. The
+          // task's status stays 'archived' throughout this rollback (no
+          // taskRepo.update touches status here) — 'archived' IS in
+          // TOKEN_REVOKING_STATUSES, but that revocation already fired back
+          // when the task was originally archived, before this restore
+          // attempt; no status WRITE happens on this failure path to trigger
+          // it again for the freshly-issued generation. Revoke it directly,
+          // same fix as ExecuteTaskUseCase's rollback branches (Issue #28
+          // third-party review finding) — only once the kill above confirms
+          // the window is actually gone.
+          paneEnvService.revokeForDestroyedWindow(task.id, 'restore_rollback');
+        } catch (e) {
           log.warn(`[task-restore] Failed to rollback tmux window: ${(e as Error).message}`);
         }
       }

@@ -15,13 +15,15 @@ const UI_TOKEN = 'a'.repeat(64);
 const TASK_SECRET = 'b'.repeat(64);
 const TASK_ID = 7;
 
-function buildApp(opts: { scopedAuthEnabled: boolean; verifyResult?: boolean }): {
+function buildApp(opts: { scopedAuthEnabled: boolean; verifyResult?: boolean; auditThrows?: boolean }): {
   app: FastifyInstance;
   auditRecord: ReturnType<typeof vi.fn>;
 } {
   const verifyUiToken = createTokenVerifier(UI_TOKEN);
   const taskTokenRepo = { verify: vi.fn((_taskId: number, secret: string) => (opts.verifyResult ?? secret === TASK_SECRET)) };
-  const auditRecord = vi.fn();
+  const auditRecord = opts.auditThrows
+    ? vi.fn(() => { throw new Error('audit db write failed'); })
+    : vi.fn();
 
   const app = Fastify();
 
@@ -40,17 +42,24 @@ function buildApp(opts: { scopedAuthEnabled: boolean; verifyResult?: boolean }):
 
     const { allowed, operation } = evaluateRouteAuth(principal, request);
     if (!allowed) {
-      auditRecord({
-        actorClass: principal.class,
-        actorId: principal.id ?? null,
-        event: opts.scopedAuthEnabled ? 'route_auth.denied' : 'route_auth.would_deny',
-        // Same shape as buildServer.ts's real hook (Issue #28 third-party
-        // review finding 2, a later round): url falls back to the fixed
-        // UNMATCHED_ROUTE placeholder, never request.url, so an unmatched
-        // route's raw (caller-controlled, query-string-bearing) URL never
-        // reaches audit_log.
-        detail: { operation, method: request.method, url: request.routeOptions.url ?? UNMATCHED_ROUTE },
-      });
+      // Mirrors buildServer.ts's real hook (Issue #28 third-party review
+      // finding, a later round): a throwing audit write must not overturn
+      // the authorization decision already computed above.
+      try {
+        auditRecord({
+          actorClass: principal.class,
+          actorId: principal.id ?? null,
+          event: opts.scopedAuthEnabled ? 'route_auth.denied' : 'route_auth.would_deny',
+          // Same shape as buildServer.ts's real hook (Issue #28 third-party
+          // review finding 2, a later round): url falls back to the fixed
+          // UNMATCHED_ROUTE placeholder, never request.url, so an unmatched
+          // route's raw (caller-controlled, query-string-bearing) URL never
+          // reaches audit_log.
+          detail: { operation, method: request.method, url: request.routeOptions.url ?? UNMATCHED_ROUTE },
+        });
+      } catch (err) {
+        request.log.error({ err, operation }, 'route_auth audit log write failed; continuing with computed decision');
+      }
       if (opts.scopedAuthEnabled) {
         return reply.status(403).send({ error: 'operator_required', operation });
       }
@@ -219,6 +228,34 @@ describe('buildServer route auth (Issue #28 Phase A)', () => {
         expect(call[0].detail.url).not.toContain('secret-token-value');
         expect(call[0].detail.url).not.toContain('a-completely-different-value');
       }
+    });
+  });
+
+  // Fix 4 (Issue #28 third-party review, this round): an audit write failure
+  // must not change the outcome of a request whose authorization decision
+  // was already computed. Enforcement mode keeps its 403; compat mode keeps
+  // passing the request through — either way, never a 500 from the audit
+  // call itself.
+  describe('audit log write failure does not change the authorization outcome', () => {
+    it('AZITO_SCOPED_AUTH on: still 403s with operator_required, not 500', async () => {
+      ({ app } = buildApp({ scopedAuthEnabled: true, auditThrows: true }));
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/operator-only',
+        headers: { authorization: `Bearer azt.task.${TASK_ID}.${TASK_SECRET}` },
+      });
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toEqual({ error: 'operator_required', operation: 'GET /api/operator-only' });
+    });
+
+    it('AZITO_SCOPED_AUTH off: still passes the request through, not 500', async () => {
+      ({ app } = buildApp({ scopedAuthEnabled: false, auditThrows: true }));
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/operator-only',
+        headers: { authorization: `Bearer azt.task.${TASK_ID}.${TASK_SECRET}` },
+      });
+      expect(res.statusCode).toBe(200);
     });
   });
 });

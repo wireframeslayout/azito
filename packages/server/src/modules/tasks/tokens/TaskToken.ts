@@ -57,4 +57,19 @@ export interface ITaskTokenRepository {
    * revoke and the insert.
    */
   issueNextGeneration(taskId: number, revokeReason: string): IssuedTaskToken;
+
+  /**
+   * The `window_generation` of `taskId`'s currently active (non-revoked)
+   * token, or `null` if it has none (never issued, or every generation has
+   * been revoked). Backs `POST /api/tasks/:id/children`'s per-run rate limit
+   * (Issue #28 third-party review fix — see `Task.createdViaGeneration`'s
+   * doc comment): the route resolves the CALLING task principal's current
+   * generation here, at request time, rather than trusting anything the
+   * caller's request body could claim about its own generation.
+   *
+   * `issueNextGeneration`'s revoke-then-insert transaction guarantees at
+   * most one active row per task at any time, so this is a plain lookup, not
+   * a MAX() over a set that could otherwise contain more than one candidate.
+   */
+  getActiveGeneration(taskId: number): number | null;
 }

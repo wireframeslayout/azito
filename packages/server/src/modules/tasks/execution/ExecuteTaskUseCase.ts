@@ -530,7 +530,17 @@ export class ExecuteTaskUseCase {
           message,
         });
         this.taskRepo.update(taskId, { status: 'failed' as TaskStatus, tmuxWindow: null } as Partial<Task>);
-        try { await this.tmux.killWindow(server, `${tmuxSession}:${windowName}`); } catch {}
+        // 'failed' is deliberately NOT in TOKEN_REVOKING_STATUSES (a failed
+        // task is resumable via follow-up onto a later window), so the
+        // window-generation token this createWindow() just issued would
+        // otherwise leak — revoke it directly, but only once the kill below
+        // actually confirms the window is gone (Issue #28 third-party review
+        // finding; see TaskPaneEnvironmentService.revokeForDestroyedWindow's
+        // doc comment).
+        try {
+          await this.tmux.killWindow(server, `${tmuxSession}:${windowName}`);
+          this.paneEnvService.revokeForDestroyedWindow(taskId, 'worktree_creation_failed_rollback');
+        } catch {}
         throw new Error(`Worktree creation failed: ${message}`);
       }
 
@@ -566,7 +576,12 @@ export class ExecuteTaskUseCase {
             worktreePath: null,
             worktreeBranch: null,
           } as Partial<Task>);
-          try { await this.tmux.killWindow(server, `${tmuxSession}:${windowName}`); } catch {}
+          // Same generation-leak fix as the worktree_failed branch above —
+          // see that branch's comment.
+          try {
+            await this.tmux.killWindow(server, `${tmuxSession}:${windowName}`);
+            this.paneEnvService.revokeForDestroyedWindow(taskId, 'worktree_path_rejected_rollback');
+          } catch {}
           throw new Error(`Worktree path rejected: ${message}`);
         }
       }
@@ -887,7 +902,13 @@ export class ExecuteTaskUseCase {
           const message = err instanceof Error ? err.message : String(err);
           this.appendLog(taskId, unitId, 'command', { type: 'working_directory_rejected', message });
           this.taskRepo.update(taskId, { status: 'failed' as TaskStatus, tmuxWindow: null } as Partial<Task>);
-          try { await this.tmux.killWindow(server, `${tmuxSession}:${windowName}`); } catch {}
+          // Same generation-leak fix as execute()'s worktree_failed branch
+          // above — this branch only runs when !windowExists just created a
+          // fresh window (and rotated the task token) for this follow-up.
+          try {
+            await this.tmux.killWindow(server, `${tmuxSession}:${windowName}`);
+            this.paneEnvService.revokeForDestroyedWindow(taskId, 'followup_working_directory_rejected_rollback');
+          } catch {}
           throw new Error(`Follow-up working directory rejected: ${message}`);
         }
       }

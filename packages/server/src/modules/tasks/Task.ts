@@ -49,6 +49,30 @@ export interface Task {
   /** The class-specific origin id (e.g. the parent task's id for `createdByKind: 'task'`). Null for `'operator'`/`'system'`, which have no single subject. */
   createdById: number | null;
   /**
+   * The creating task-token's `window_generation` at the moment `POST
+   * /api/tasks/:id/children` created this row (Issue #28 third-party review
+   * fix: "children count limit was lifetime, not per-run"). NULL when this
+   * task wasn't created by a task principal at all (`createdByKind !==
+   * 'task'`, e.g. `POST /api/tasks`/`import-issue`) OR when an OPERATOR
+   * principal called `POST /api/tasks/:id/children` directly (design v3 §4
+   * fixes `origin.kind` to `'task'` regardless of which principal actually
+   * called it — see TaskOriginationService's doc comment — but only a task
+   * principal has a token generation to stamp here).
+   *
+   * This is what makes the children-count rate limit reset across follow-up
+   * calls instead of accumulating forever: `countChildrenInGeneration` scopes
+   * the count to `createdByKind = 'task' AND createdById = parentId AND
+   * createdViaGeneration = <the parent's CURRENT active generation>`, so a
+   * parent whose window was regenerated (a fresh execute()/follow-up/respawn)
+   * gets a fresh N=20 budget for the new run — the OLD generation's already-
+   * created children remain in the table (a full audit trail) but no longer
+   * count toward the limit. An operator-originated child (generation NULL)
+   * is counted by the separate, looser lifetime cap instead (see
+   * `countChildren`'s doc comment) since there is no generation to scope it
+   * to.
+   */
+  createdViaGeneration: number | null;
+  /**
    * Fingerprint (see ExecutionManifest.hashExecutionManifest) of the
    * RESOLVED execution manifest — not raw task columns — that a human most
    * recently approved for unattended execution while input_trust =
@@ -438,13 +462,30 @@ export interface ITaskRepository {
 
   /**
    * Count of tasks with `createdByKind: 'task'` and `createdById:
-   * parentTaskId` — backs `POST /api/tasks/:id/children`'s per-parent rate
-   * limit (Issue #28 design v3 §4, N=20). Counts every child ever created
-   * for this parent (not scoped to "this execution run" — the task schema
-   * has no run/turn identifier a child's origination could be tied to, so
-   * this is the simpler, strictly-more-conservative bound: a parent that
-   * hits the limit across several runs is capped exactly the same as one
-   * that hits it in a single run).
+   * parentTaskId` — LIFETIME total, across every generation and every caller
+   * (task principal or operator). Backs the loose operator-path cap on `POST
+   * /api/tasks/:id/children` (Issue #28 third-party review fix: an operator
+   * call has no window generation to scope a per-run limit to — see
+   * `createdViaGeneration`'s doc comment — so it falls back to this
+   * unscoped, deliberately-looser lifetime bound rather than being
+   * unlimited). Also used as a general "how many children has this task ever
+   * spawned" figure wherever the per-generation number isn't the right
+   * question.
    */
   countChildren(parentTaskId: number): number;
+  /**
+   * Count of tasks with `createdByKind: 'task'`, `createdById: parentTaskId`,
+   * AND `createdViaGeneration: generation` — backs the per-run N=20 cap on
+   * `POST /api/tasks/:id/children` when the caller is a task principal
+   * (Issue #28 third-party review fix: the previous `countChildren` cap
+   * counted the parent's ENTIRE lifetime child count, so a parent that spans
+   * multiple follow-up runs could never spawn more children at all once the
+   * lifetime total crossed 20, even though only the CURRENT run should be
+   * bounded). `generation` is the parent's currently active
+   * `task_tokens.window_generation` (see
+   * `ITaskTokenRepository.getActiveGeneration`), resolved by the route at
+   * request time — never the caller-supplied body, which cannot be trusted
+   * to report its own generation honestly.
+   */
+  countChildrenInGeneration(parentTaskId: number, generation: number): number;
 }

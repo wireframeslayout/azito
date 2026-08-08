@@ -12,6 +12,7 @@ export class SqliteTaskTokenRepository implements ITaskTokenRepository {
   private findActiveHashesByTaskStmt;
   private revokeAllForTaskStmt;
   private nextGenerationStmt;
+  private activeGenerationStmt;
 
   constructor(private db: SqliteDatabase) {
     this.insertStmt = db.prepare(
@@ -29,6 +30,12 @@ export class SqliteTaskTokenRepository implements ITaskTokenRepository {
     // bookkeeping.
     this.nextGenerationStmt = db.prepare(
       'SELECT COALESCE(MAX(window_generation), 0) + 1 AS gen FROM task_tokens WHERE task_id = ?',
+    );
+    // At most one active row per task by construction (issueNextGeneration's
+    // revoke-then-insert transaction) — MAX() here is defensive, not a
+    // "pick the latest of several" aggregation.
+    this.activeGenerationStmt = db.prepare(
+      'SELECT MAX(window_generation) AS gen FROM task_tokens WHERE task_id = ? AND revoked_at IS NULL',
     );
   }
 
@@ -64,5 +71,10 @@ export class SqliteTaskTokenRepository implements ITaskTokenRepository {
       return { id: Number(result.lastInsertRowid), token: formatTaskToken(tId, secret) };
     });
     return run(taskId, revokeReason);
+  }
+
+  getActiveGeneration(taskId: number): number | null {
+    const row = this.activeGenerationStmt.get(taskId) as { gen: number | null };
+    return row.gen;
   }
 }

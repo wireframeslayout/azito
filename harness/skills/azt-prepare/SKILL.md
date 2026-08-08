@@ -10,6 +10,8 @@ argument-hint: [task_id]
 
 # azt-prepare — タスクの作業環境を準備する
 
+> **オペレーター専用**（UI トークンが必要）。タスクペインで実行すると operator_required になる。
+
 ## 引数
 
 - `task_id`: AZITOのタスクID（数値）
@@ -21,7 +23,7 @@ argument-hint: [task_id]
 
 ```bash
 AZITO="${AZITO_URL:-http://localhost:3001}"
-TASK=$(curl -sf -H "Authorization: Bearer ${AZITO_TASK_TOKEN:-$AZITO_UI_TOKEN}" "${AZITO}/api/tasks/<task_id>")
+TASK=$(curl -sf -H "Authorization: Bearer ${AZITO_UI_TOKEN}" "${AZITO}/api/tasks/<task_id>")
 ```
 
 HTTP エラー（404 等）の場合はエラー内容を提示して終了する。
@@ -38,8 +40,8 @@ HTTP エラー（404 等）の場合はエラー内容を提示して終了す�
 ## Step 2: プロジェクト・サーバー情報を取得する
 
 ```bash
-PROJECT=$(curl -sf -H "Authorization: Bearer ${AZITO_TASK_TOKEN:-$AZITO_UI_TOKEN}" "${AZITO}/api/projects/<projectId>")
-SERVERS=$(curl -sf -H "Authorization: Bearer ${AZITO_TASK_TOKEN:-$AZITO_UI_TOKEN}" "${AZITO}/api/projects/<projectId>/servers")
+PROJECT=$(curl -sf -H "Authorization: Bearer ${AZITO_UI_TOKEN}" "${AZITO}/api/projects/<projectId>")
+SERVERS=$(curl -sf -H "Authorization: Bearer ${AZITO_UI_TOKEN}" "${AZITO}/api/projects/<projectId>/servers")
 ```
 
 `SERVERS` 配列の先頭エントリからプロジェクトサーバーのデフォルト値を取得する:
@@ -76,7 +78,7 @@ SERVERS=$(curl -sf -H "Authorization: Bearer ${AZITO_TASK_TOKEN:-$AZITO_UI_TOKEN
 Step 3a〜3c で確定した値を PUT でタスクに書き戻す:
 
 ```bash
-curl -sf -X PUT -H "Authorization: Bearer ${AZITO_TASK_TOKEN:-$AZITO_UI_TOKEN}" "${AZITO}/api/tasks/<task_id>" \
+curl -sf -X PUT -H "Authorization: Bearer ${AZITO_UI_TOKEN}" "${AZITO}/api/tasks/<task_id>" \
   -H "Content-Type: application/json" \
   -d '{"working_directory": "<確定値>", "base_branch": "<確定値>", "branch": "<確定値>"}'
 ```
@@ -112,7 +114,7 @@ git -C <workingDirectory> rev-parse --verify origin/<branch> 2>/dev/null
 ### 5c: worktree 情報を書き戻す
 
 ```bash
-curl -sf -X PUT -H "Authorization: Bearer ${AZITO_TASK_TOKEN:-$AZITO_UI_TOKEN}" "${AZITO}/api/tasks/<task_id>" \
+curl -sf -X PUT -H "Authorization: Bearer ${AZITO_UI_TOKEN}" "${AZITO}/api/tasks/<task_id>" \
   -H "Content-Type: application/json" \
   -d '{"worktree_path": "<WORKTREE_PATH>", "worktree_branch": "<branch>"}'
 ```

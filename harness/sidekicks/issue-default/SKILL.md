@@ -6,6 +6,8 @@ isDefault: false
 ---
 # issue-default -- イシュー作成スキル
 
+> **オペレーター専用**（UI トークンが必要）。タスクペインで実行すると operator_required になる。
+
 ユーザーの要望をヒアリングし、**sonnet級の自律エージェントがそのまま実装に着手できる詳細度** のイシューを作成する。
 
 （harness/skills/azt-issue/SKILL.md はこのパッケージを取得して従う薄いラッパー。実装手順の本体はここ。）
@@ -126,17 +128,17 @@ ISSUE_EOF
 
 1. プロジェクト一覧を取得し、ユーザーに登録先プロジェクトを選択させる:
    ```bash
-   curl -sf -H "Authorization: Bearer ${AZITO_TASK_TOKEN:-$AZITO_UI_TOKEN}" "${AZITO_URL:-http://localhost:3001}/api/projects"
+   curl -sf -H "Authorization: Bearer ${AZITO_UI_TOKEN}" "${AZITO_URL:-http://localhost:3001}/api/projects"
    ```
 
 2. Unit 一覧を取得し、担当 Unit を選択させる:
    ```bash
-   curl -sf -H "Authorization: Bearer ${AZITO_TASK_TOKEN:-$AZITO_UI_TOKEN}" "${AZITO_URL:-http://localhost:3001}/api/units"
+   curl -sf -H "Authorization: Bearer ${AZITO_UI_TOKEN}" "${AZITO_URL:-http://localhost:3001}/api/units"
    ```
 
 3. タスクを作成する:
    ```bash
-   curl -sf -X POST -H "Authorization: Bearer ${AZITO_TASK_TOKEN:-$AZITO_UI_TOKEN}" "${AZITO_URL:-http://localhost:3001}/api/tasks" \
+   curl -sf -X POST -H "Authorization: Bearer ${AZITO_UI_TOKEN}" "${AZITO_URL:-http://localhost:3001}/api/tasks" \
      -H "Content-Type: application/json" \
      -d '{"project_id": <id>, "unit_id": <id>, "title": "<タイトル>", "description": "<イシュー本文>"}'
    ```

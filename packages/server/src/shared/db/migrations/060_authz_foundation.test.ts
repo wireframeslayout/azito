@@ -198,4 +198,28 @@ describe('migration 060: authz_foundation', () => {
     expect(row.created_by_kind).toBe('task');
     expect(row.created_by_id).toBe(42);
   });
+
+  // Issue #28 third-party review fix: created_via_generation backs the
+  // per-run (not lifetime) children rate limit — see Task.ts's
+  // createdViaGeneration doc comment.
+  it('adds a nullable created_via_generation column, defaulting to NULL for existing rows', () => {
+    const db = buildSeededDb();
+    const taskId = insertTask(db);
+    m060.up(db);
+
+    const row = db.prepare('SELECT created_via_generation FROM tasks WHERE id = ?').get(taskId) as Record<string, unknown>;
+    expect(row.created_via_generation).toBeNull();
+  });
+
+  it('accepts an explicit created_via_generation for a newly-inserted task row', () => {
+    const db = buildSeededDb();
+    m060.up(db);
+
+    db.prepare(
+      `INSERT INTO tasks (project_id, title, status, priority, self_review_count, require_plan_approval, source, skip_pr, created_by_kind, created_by_id, created_via_generation)
+       VALUES (1, 'Generation-scoped child', 'open', 0, 0, 1, 'local', 0, 'task', 42, 3)`,
+    ).run();
+    const row = db.prepare("SELECT created_via_generation FROM tasks WHERE title = 'Generation-scoped child'").get() as Record<string, unknown>;
+    expect(row.created_via_generation).toBe(3);
+  });
 });

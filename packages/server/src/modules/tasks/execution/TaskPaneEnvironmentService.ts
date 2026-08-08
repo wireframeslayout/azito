@@ -64,4 +64,29 @@ export class TaskPaneEnvironmentService {
     }
     return env;
   }
+
+  /**
+   * Revokes every currently-active token generation for `taskId` because its
+   * backing tmux window was just destroyed and, per design v3 §2's
+   * generation-bound contract ("ウィンドウが再利用可能な間だけトークンが
+   * 有効"), a destroyed window can never again be resumed onto — so nothing
+   * should still hold a live credential for it.
+   *
+   * This is deliberately NOT routed through SqliteTaskRepository's
+   * TOKEN_REVOKING_STATUSES (the status-transition side of this same
+   * contract, see ITaskTokenRepository's doc comment): the call sites this
+   * method exists for kill a just-created window on a rollback path that
+   * leaves the task at a status TOKEN_REVOKING_STATUSES intentionally does
+   * NOT auto-revoke (e.g. 'failed', which stays resumable via follow-up onto
+   * a DIFFERENT, later window) — this generation specifically, not the task
+   * as a whole, is what just became unusable.
+   *
+   * Callers MUST confirm the window kill actually succeeded before calling
+   * this (Issue #28 third-party review finding: revoking on a kill attempt
+   * that silently failed would 401 a pane that is, in fact, still alive and
+   * in use).
+   */
+  revokeForDestroyedWindow(taskId: number, reason: string): void {
+    this.taskTokenRepo.revokeAllForTask(taskId, reason);
+  }
 }

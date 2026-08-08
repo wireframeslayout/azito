@@ -79,7 +79,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     pushService, vapidKeys, notificationBus, sidekickPackageService, sidekickPackageLoader,
     sidekickSyncService, unitTypeLoader, agentSignalService, supervisorRegistry, agentTurnRepo, turnSignalHub,
     browserSessionManager, deployModeDetector, systemUpdateService, channelResolver, auditLogService,
-    originationService, scopedAuthEnabled,
+    originationService, scopedAuthEnabled, taskPaneEnvironmentService,
   } = wiring;
 
   // ─── Webhook token ───
@@ -275,24 +275,35 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
 
     const { allowed, operation } = evaluateRouteAuth(principal, request);
     if (!allowed) {
-      auditLogService.record({
-        actorClass: principal.class,
-        actorId: principal.id ?? null,
-        event: scopedAuthEnabled ? 'route_auth.denied' : 'route_auth.would_deny',
-        // The normalized ROUTE path (e.g. '/api/tasks/:id'), never
-        // request.url — that includes the raw query string, which can carry
-        // arbitrary caller-supplied values (search terms, tokens pasted into
-        // a query param by mistake, etc.) into audit_log (Issue #28
-        // third-party review finding 3). An UNMATCHED route (no route at all
-        // — routeOptions.url is undefined) falls back to the fixed
-        // UNMATCHED_ROUTE placeholder, never request.url: the raw URL here
-        // is fully caller-controlled (an unmatched path always 403s before
-        // this point) and varying its query string on every probe would
-        // otherwise defeat AuditLogService's flood dedup, which keys on the
-        // full JSON-serialized `detail` (Issue #28 third-party review
-        // finding 2 — a later round on the same file).
-        detail: { operation, method: request.method, url: request.routeOptions.url ?? UNMATCHED_ROUTE },
-      });
+      // Audit persistence is best-effort: a write failure (disk full, locked
+      // DB, etc.) must never overturn the authorization decision already
+      // computed above. Without this catch, a throwing record() would
+      // propagate out of this hook and Fastify would answer with a generic
+      // 500 instead of the 403 (enforcement) / pass-through (compat) the
+      // evaluation actually produced — silently upgrading a would-be-denied
+      // request's visible failure mode (Issue #28 third-party review finding).
+      try {
+        auditLogService.record({
+          actorClass: principal.class,
+          actorId: principal.id ?? null,
+          event: scopedAuthEnabled ? 'route_auth.denied' : 'route_auth.would_deny',
+          // The normalized ROUTE path (e.g. '/api/tasks/:id'), never
+          // request.url — that includes the raw query string, which can carry
+          // arbitrary caller-supplied values (search terms, tokens pasted into
+          // a query param by mistake, etc.) into audit_log (Issue #28
+          // third-party review finding 3). An UNMATCHED route (no route at all
+          // — routeOptions.url is undefined) falls back to the fixed
+          // UNMATCHED_ROUTE placeholder, never request.url: the raw URL here
+          // is fully caller-controlled (an unmatched path always 403s before
+          // this point) and varying its query string on every probe would
+          // otherwise defeat AuditLogService's flood dedup, which keys on the
+          // full JSON-serialized `detail` (Issue #28 third-party review
+          // finding 2 — a later round on the same file).
+          detail: { operation, method: request.method, url: request.routeOptions.url ?? UNMATCHED_ROUTE },
+        });
+      } catch (err) {
+        request.log.error({ err, operation }, 'route_auth audit log write failed; continuing with computed decision');
+      }
       if (scopedAuthEnabled) {
         return reply.status(403).send({ error: 'operator_required', operation });
       }
@@ -302,13 +313,16 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // ─── HTTP routes ───
 
   await app.register(serversRoutes, { serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix });
-  await app.register(sessionsRoutes, { serverRepo, tmux: tmuxClient, windowRepo, notificationBus, resourceGuard });
+  await app.register(sessionsRoutes, {
+    serverRepo, tmux: tmuxClient, windowRepo, notificationBus, resourceGuard,
+    onTaskWindowDestroyed: (taskId, reason) => taskPaneEnvironmentService.revokeForDestroyedWindow(taskId, reason),
+  });
   await app.register(fileBrowseRoutes, { serverRepo, tmux: tmuxClient });
   await app.register(gitRoutes, { serverRepo, transportFactory });
   await app.register(projectsRoutes, { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux: tmuxClient, serverRepo, projectSecretRepo, originationService });
   await app.register(unitsRoutes, { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, projectServerRepo, serverRepo, sidekickLoader: sidekickPackageLoader, unitTypeLoader });
   await app.register(operationsRoutes, { executeTaskUseCase, agentActivityMonitor });
-  await app.register(tasksRoutes, { taskRepo, auditLogService, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux: tmuxClient, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService: windowRespawnService, taskRestoreService, unitTypeLoader, sidekickLoader: sidekickPackageLoader, projectSecretRepo, originationService });
+  await app.register(tasksRoutes, { taskRepo, auditLogService, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux: tmuxClient, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService: windowRespawnService, taskRestoreService, unitTypeLoader, sidekickLoader: sidekickPackageLoader, projectSecretRepo, originationService, taskTokenRepo });
   await app.register(windowsRoutes, { windowRepo, projectRepo, taskRepo, tmux: tmuxClient, serverRepo, respawnService: windowRespawnService, sessionStrategyFactory, sessionCaptureService, supervisorRegistry, notificationBus, resourceGuard });
   await app.register(providersRoutes, { providerRepo: wiring.providerRepo });
   const renderSkillPromptUseCase = new RenderSkillPromptUseCase(

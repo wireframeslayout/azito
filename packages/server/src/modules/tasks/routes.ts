@@ -29,6 +29,7 @@ import type { Principal } from '../../shared/auth/Principal';
 import { OPERATOR_PRINCIPAL } from '../../shared/auth/Principal';
 import type { RouteAuthRequirement } from '../../shared/auth/routeAuth';
 import { TaskOriginationService } from './origination/TaskOriginationService';
+import type { ITaskTokenRepository } from './tokens/TaskToken';
 
 /**
  * Maps an authenticated principal to the `Task['createdByKind']` it
@@ -103,6 +104,8 @@ export interface TasksRouteOptions {
   auditLogService: AuditLogService;
   /** Issue #28 Phase A後半: the sole task-creation funnel — see TaskOriginationService's own doc comment. */
   originationService: TaskOriginationService;
+  /** Issue #28 third-party review fix: POST /api/tasks/:id/children resolves the calling task principal's active window generation here to scope its rate limit — see getActiveGeneration's doc comment. */
+  taskTokenRepo: ITaskTokenRepository;
 }
 
 /** POST /api/tasks/:id/children: a task principal may only create children under its own (parent) task; operator always passes (Issue #28 design v3 §4). */
@@ -115,8 +118,30 @@ const childrenAuth: RouteAuthRequirement = {
   },
 };
 
-/** Per-parent-task cap on POST /api/tasks/:id/children (Issue #28 design v3 §4: "実行あたり件数制限N=20"; see ITaskRepository.countChildren's doc comment for why this counts lifetime, not per-run). */
-const MAX_CHILDREN_PER_PARENT = 20;
+/**
+ * Per-run cap on POST /api/tasks/:id/children when the caller is a task
+ * principal (Issue #28 design v3 §4: "実行あたり件数制限N=20") — scoped to the
+ * parent's CURRENT active window generation via
+ * `countChildrenInGeneration`/`getActiveGeneration` (Issue #28 third-party
+ * review fix: the original implementation counted the parent's entire
+ * lifetime child count, so a parent that crossed 20 children across several
+ * follow-up runs could never spawn another child again, in ANY future run).
+ */
+const MAX_CHILDREN_PER_GENERATION = 20;
+
+/**
+ * Looser lifetime cap applied when an OPERATOR principal calls POST
+ * /api/tasks/:id/children directly (Issue #28 third-party review fix): an
+ * operator call has no window generation to scope a per-run limit to (see
+ * `Task.createdViaGeneration`'s doc comment), so this path can't reuse
+ * `MAX_CHILDREN_PER_GENERATION`'s per-run reset — but leaving it fully
+ * unbounded would let a compromised/scripted operator credential spawn
+ * unlimited child tasks. 100 is deliberately generous relative to the N=20
+ * per-run task-principal cap (an operator is a human/trusted-credential
+ * caller, not an autonomous agent looping on its own output) while still
+ * being a real ceiling.
+ */
+const MAX_CHILDREN_PER_PARENT_OPERATOR = 100;
 
 /** GET /api/tasks/:id: a task principal may only read its own record (Issue #28 design v3 §4). */
 const taskSelfAuth: RouteAuthRequirement = {
@@ -146,7 +171,7 @@ function toListItem(task: Task, windows: unknown[]): Record<string, unknown> {
 }
 
 const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, done) => {
-  const { taskRepo, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService, taskRestoreService, unitTypeLoader, sidekickLoader, projectSecretRepo, auditLogService, originationService } = opts;
+  const { taskRepo, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService, taskRestoreService, unitTypeLoader, sidekickLoader, projectSecretRepo, auditLogService, originationService, taskTokenRepo } = opts;
   const taskCleanupService = new TaskCleanupService({ serverRepo, tmux, worktreeServiceFactory, transportFactory, projectServerRepo, projectRepo });
 
   // ── GET /api/tasks ──
@@ -674,16 +699,26 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         unitId = unit_id;
       }
 
-      const existingChildren = taskRepo.countChildren(parentId);
-      if (existingChildren >= MAX_CHILDREN_PER_PARENT) {
-        const actor = request.principal ?? OPERATOR_PRINCIPAL;
+      const actor = request.principal ?? OPERATOR_PRINCIPAL;
+      // Task principal -> scope the count/cap to the PARENT's current active
+      // window generation (per-run N=20, resets on every new generation).
+      // Operator (or a task principal with no active generation, which
+      // `childrenAuth`'s condition above should never actually let through
+      // — defensive fallback only) -> the looser, ungenerationed lifetime
+      // cap. See the two constants' doc comments above.
+      const generation = actor.class === 'task' ? taskTokenRepo.getActiveGeneration(parentId) : null;
+      const existingChildren = generation !== null
+        ? taskRepo.countChildrenInGeneration(parentId, generation)
+        : taskRepo.countChildren(parentId);
+      const limit = generation !== null ? MAX_CHILDREN_PER_GENERATION : MAX_CHILDREN_PER_PARENT_OPERATOR;
+      if (existingChildren >= limit) {
         auditLogService.record({
           actorClass: actor.class,
           actorId: actor.id ?? null,
           event: 'tasks.children.limit_exceeded',
-          detail: { parentTaskId: parentId, existingChildren, limit: MAX_CHILDREN_PER_PARENT },
+          detail: { parentTaskId: parentId, existingChildren, limit, generation },
         });
-        return reply.status(429).send({ error: `Task ${parentId} already has ${existingChildren} children (limit ${MAX_CHILDREN_PER_PARENT})` });
+        return reply.status(429).send({ error: `Task ${parentId} already has ${existingChildren} children (limit ${limit})` });
       }
 
       const id = originationService.create({
@@ -720,7 +755,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         pendingOperation: null,
         pendingOperationWindowId: null,
         pendingOperationPriorStatus: null,
-      }, { kind: 'task', id: parentId }, request.principal ?? OPERATOR_PRINCIPAL);
+      }, { kind: 'task', id: parentId, generation }, actor);
 
       return reply.status(201).send({ ok: true, id });
     },

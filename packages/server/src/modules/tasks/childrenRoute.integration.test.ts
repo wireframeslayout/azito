@@ -60,6 +60,7 @@ function makeTask(id: number, overrides: Partial<Task> = {}): Task {
     pendingOperationPriorStatus: null,
     createdByKind: 'operator',
     createdById: null,
+    createdViaGeneration: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -67,7 +68,7 @@ function makeTask(id: number, overrides: Partial<Task> = {}): Task {
 }
 
 /** Builds a Fastify app with the SAME onRequest auth pipeline app/buildServer.ts installs, in front of tasksRoutes only. */
-function buildApp(scopedAuthEnabled: boolean, db: SqliteDatabase, createCalls: Record<string, unknown>[]): { app: FastifyInstance; taskTokenRepo: SqliteTaskTokenRepository } {
+function buildApp(scopedAuthEnabled: boolean, db: SqliteDatabase, createCalls: Record<string, unknown>[]): { app: FastifyInstance; taskTokenRepo: SqliteTaskTokenRepository; taskRepo: TasksRouteOptions['taskRepo'] } {
   const taskTokenRepo = new SqliteTaskTokenRepository(db);
   const verifyUiToken = createTokenVerifier(UI_TOKEN);
   const auditLogService = new AuditLogService({ record: vi.fn() });
@@ -93,6 +94,7 @@ function buildApp(scopedAuthEnabled: boolean, db: SqliteDatabase, createCalls: R
     recordExecutionGateBlock: vi.fn(() => true),
     preApproveExecution: vi.fn(() => true),
     countChildren: vi.fn(() => 0),
+    countChildrenInGeneration: vi.fn(() => 0),
   };
   const originationService = new TaskOriginationService(taskRepo as unknown as ITaskRepository, auditLogService);
 
@@ -115,6 +117,7 @@ function buildApp(scopedAuthEnabled: boolean, db: SqliteDatabase, createCalls: R
     projectSecretRepo: { findByProject: vi.fn(() => []) } as unknown as TasksRouteOptions['projectSecretRepo'],
     auditLogService,
     originationService,
+    taskTokenRepo,
   };
 
   const app = Fastify();
@@ -133,7 +136,7 @@ function buildApp(scopedAuthEnabled: boolean, db: SqliteDatabase, createCalls: R
   });
   app.register(tasksRoutes, opts);
 
-  return { app, taskTokenRepo };
+  return { app, taskTokenRepo, taskRepo };
 }
 
 describe('POST /api/tasks/:id/children + POST /api/tasks — task-principal surface (Issue #28 design v3 §4)', () => {
@@ -170,7 +173,75 @@ describe('POST /api/tasks/:id/children + POST /api/tasks — task-principal surf
         createdByKind: 'task',
         createdById: 1,
         source: 'local',
+        // Issue #28 third-party review fix: stamped with the calling
+        // token's active generation (taskTokenRepo.issue(1, 1) above minted
+        // window_generation 1), not left null the way an operator-created
+        // child would be.
+        createdViaGeneration: 1,
       });
+    });
+
+    // Issue #28 third-party review finding: the per-parent children cap was
+    // a lifetime count, so a parent that crossed N=20 across several
+    // follow-up runs could never spawn another child again in ANY future
+    // run. Fixed by scoping the count to the parent's CURRENT active window
+    // generation — this test verifies the reset actually happens across a
+    // generation rotation (issueNextGeneration, as a real
+    // execute()/follow-up/respawn would perform).
+    it('resets the per-run child count when the parent token generation rotates, but keeps counting within the SAME generation', async () => {
+      const { app, taskTokenRepo, taskRepo } = buildApp(true, db, createCalls);
+      await app.ready();
+
+      // Generation 1: already at the per-run cap.
+      const gen1 = taskTokenRepo.issue(1, 1);
+      (taskRepo.countChildrenInGeneration as ReturnType<typeof vi.fn>).mockImplementation(
+        (_parentId: number, generation: number) => (generation === 1 ? 20 : 0),
+      );
+
+      const blockedRes = await app.inject({
+        method: 'POST',
+        url: '/api/tasks/1/children',
+        headers: { authorization: `Bearer ${gen1.token}` },
+        payload: { title: 'One too many for generation 1' },
+      });
+      expect(blockedRes.statusCode).toBe(429);
+      expect(createCalls).toHaveLength(0);
+
+      // Generation 2: a fresh rotation (what a real execute()/follow-up/
+      // respawn does via TaskPaneEnvironmentService.buildEnvForNewWindow) —
+      // the mocked countChildrenInGeneration above returns 0 for any
+      // generation other than 1, so this must succeed.
+      const gen2 = taskTokenRepo.issueNextGeneration(1, 'window_regenerated');
+      const allowedRes = await app.inject({
+        method: 'POST',
+        url: '/api/tasks/1/children',
+        headers: { authorization: `Bearer ${gen2.token}` },
+        payload: { title: 'First child of generation 2' },
+      });
+      expect(allowedRes.statusCode).toBe(201);
+      expect(createCalls).toHaveLength(1);
+      expect(createCalls[0]).toMatchObject({ createdViaGeneration: 2 });
+    });
+
+    // Issue #28 third-party review fix: an operator call has no window
+    // generation, so it falls back to the looser, ungenerationed lifetime
+    // cap (MAX_CHILDREN_PER_PARENT_OPERATOR = 100) rather than either the
+    // task-principal per-run cap or no cap at all.
+    it("caps an operator's children at the looser lifetime limit, not the per-generation N=20", async () => {
+      const { app, taskRepo } = buildApp(true, db, createCalls);
+      await app.ready();
+      (taskRepo.countChildren as ReturnType<typeof vi.fn>).mockReturnValue(100);
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/tasks/1/children',
+        headers: { authorization: `Bearer ${UI_TOKEN}` },
+        payload: { title: 'Over the operator lifetime cap' },
+      });
+
+      expect(res.statusCode).toBe(429);
+      expect(res.json()).toMatchObject({ error: 'Task 1 already has 100 children (limit 100)' });
+      expect(createCalls).toHaveLength(0);
     });
 
     // Issue #28 third-party review finding 4: `description` was cast to

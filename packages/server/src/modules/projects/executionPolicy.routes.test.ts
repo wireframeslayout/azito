@@ -28,6 +28,7 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
     recordExecutionGateBlock: vi.fn(() => true),
     preApproveExecution: vi.fn(() => true),
     countChildren: vi.fn(() => 0),
+    countChildrenInGeneration: vi.fn(() => 0),
   };
   // A real TaskOriginationService wrapping the mock taskRepo above — so
   // import-issue's "task ends up untrusted" assertions below still exercise

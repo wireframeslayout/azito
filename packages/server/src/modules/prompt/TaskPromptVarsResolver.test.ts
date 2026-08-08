@@ -45,6 +45,7 @@ const makeTask = (overrides = {}) => ({
   pendingOperationPriorStatus: null,
   createdByKind: 'operator' as const,
   createdById: null,
+  createdViaGeneration: null,
   createdAt: '2024-01-01',
   updatedAt: '2024-01-01',
   ...overrides,

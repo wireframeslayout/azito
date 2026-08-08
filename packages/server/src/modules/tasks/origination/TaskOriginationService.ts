@@ -3,12 +3,20 @@ import { deriveInputTrust } from '../Task';
 import type { AuditLogService } from '../../../shared/audit/AuditLogService';
 import type { Principal } from '../../../shared/auth/Principal';
 
-/** Everything a caller must supply to create a task, EXCEPT the fields this service itself derives/stamps (inputTrust, createdByKind, createdById) or the repository stamps (id/createdAt/updatedAt). */
-export type TaskOriginationFields = Omit<Task, 'id' | 'createdAt' | 'updatedAt' | 'inputTrust' | 'createdByKind' | 'createdById'>;
+/** Everything a caller must supply to create a task, EXCEPT the fields this service itself derives/stamps (inputTrust, createdByKind, createdById, createdViaGeneration) or the repository stamps (id/createdAt/updatedAt). */
+export type TaskOriginationFields = Omit<Task, 'id' | 'createdAt' | 'updatedAt' | 'inputTrust' | 'createdByKind' | 'createdById' | 'createdViaGeneration'>;
 
 export interface TaskOrigin {
   kind: Task['createdByKind'];
   id: number | null;
+  /**
+   * The creating task-token's active `window_generation` (Issue #28
+   * third-party review fix — see `Task.createdViaGeneration`'s doc comment).
+   * Optional/omittable and defaults to `null`: only `POST
+   * /api/tasks/:id/children` ever has a generation to report, and only when
+   * the caller is a task principal (not an operator calling the same route).
+   */
+  generation?: number | null;
 }
 
 /**
@@ -48,6 +56,7 @@ export class TaskOriginationService {
       inputTrust,
       createdByKind: origin.kind,
       createdById: origin.id,
+      createdViaGeneration: origin.generation ?? null,
     });
     // Best-effort, not part of the creation transaction (Issue #28
     // third-party review finding 3): the task row above is the thing the

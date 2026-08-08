@@ -93,6 +93,7 @@ interface TaskRow {
   implement_subagent: string | null;
   created_by_kind: string;
   created_by_id: number | null;
+  created_via_generation: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -128,6 +129,7 @@ export class SqliteTaskRepository implements ITaskRepository {
   private deleteStmt;
   private findAgentSessionIdsByServerStmt;
   private countChildrenStmt;
+  private countChildrenInGenerationStmt;
   constructor(private db: SqliteDatabase, private taskTokenRepo: ITaskTokenRepository) {
     this.listStmt = db.prepare('SELECT * FROM tasks ORDER BY priority DESC, created_at DESC');
     this.listByProjectStmt = db.prepare('SELECT * FROM tasks WHERE project_id = ? ORDER BY priority DESC, created_at DESC');
@@ -135,7 +137,7 @@ export class SqliteTaskRepository implements ITaskRepository {
     this.listByStatusStmt = db.prepare('SELECT * FROM tasks WHERE status = ? ORDER BY priority DESC, created_at DESC');
     this.getStmt = db.prepare('SELECT * FROM tasks WHERE id = ?');
     this.createStmt = db.prepare(
-      'INSERT INTO tasks (project_id, unit_id, server_name, title, description, priority, tmux_window, self_review_max_attempts, require_plan_approval, source, source_ref, worktree_path, worktree_branch, base_branch, target_branch, skip_pr, working_directory, branch, plan_markdown, pending_questions, changed_files, summary_json, pr_url, agent_session_id, review_subagent, implement_subagent, input_trust, execution_approved_fingerprint_hash, pending_operation, pending_operation_window_id, pending_operation_prior_status, created_by_kind, created_by_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO tasks (project_id, unit_id, server_name, title, description, priority, tmux_window, self_review_max_attempts, require_plan_approval, source, source_ref, worktree_path, worktree_branch, base_branch, target_branch, skip_pr, working_directory, branch, plan_markdown, pending_questions, changed_files, summary_json, pr_url, agent_session_id, review_subagent, implement_subagent, input_trust, execution_approved_fingerprint_hash, pending_operation, pending_operation_window_id, pending_operation_prior_status, created_by_kind, created_by_id, created_via_generation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
     this.updateStmt = db.prepare(
       "UPDATE tasks SET title = ?, description = ?, status = ?, unit_id = ?, server_name = ?, priority = ?, tmux_window = ?, self_review_max_attempts = ?, require_plan_approval = ?, source = ?, source_ref = ?, worktree_path = ?, worktree_branch = ?, base_branch = ?, target_branch = ?, skip_pr = ?, working_directory = ?, branch = ?, plan_markdown = ?, pending_questions = ?, changed_files = ?, summary_json = ?, pr_url = ?, agent_session_id = ?, review_subagent = ?, implement_subagent = ?, input_trust = ?, execution_approved_fingerprint_hash = ?, pending_operation = ?, pending_operation_window_id = ?, pending_operation_prior_status = ?, updated_at = datetime('now') WHERE id = ?",
@@ -184,6 +186,9 @@ export class SqliteTaskRepository implements ITaskRepository {
     );
     this.countChildrenStmt = db.prepare(
       "SELECT COUNT(*) AS n FROM tasks WHERE created_by_kind = 'task' AND created_by_id = ?",
+    );
+    this.countChildrenInGenerationStmt = db.prepare(
+      "SELECT COUNT(*) AS n FROM tasks WHERE created_by_kind = 'task' AND created_by_id = ? AND created_via_generation = ?",
     );
   }
 
@@ -248,6 +253,7 @@ export class SqliteTaskRepository implements ITaskRepository {
       data.pendingOperationPriorStatus ?? null,
       data.createdByKind,
       data.createdById ?? null,
+      data.createdViaGeneration ?? null,
     );
     return Number(result.lastInsertRowid);
   }
@@ -396,6 +402,11 @@ export class SqliteTaskRepository implements ITaskRepository {
     return row.n;
   }
 
+  countChildrenInGeneration(parentTaskId: number, generation: number): number {
+    const row = this.countChildrenInGenerationStmt.get(parentTaskId, generation) as { n: number };
+    return row.n;
+  }
+
   private toEntity(row: TaskRow): Task {
     return {
       id: row.id,
@@ -443,6 +454,7 @@ export class SqliteTaskRepository implements ITaskRepository {
       pendingOperationPriorStatus: (row.pending_operation_prior_status ?? null) as TaskStatus | null,
       createdByKind: row.created_by_kind as Task['createdByKind'],
       createdById: row.created_by_id ?? null,
+      createdViaGeneration: row.created_via_generation ?? null,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };

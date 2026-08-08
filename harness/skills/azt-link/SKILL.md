@@ -10,6 +10,8 @@ argument-hint: [task_id] [issue_url]
 
 # azt-link — azitoタスクへのイシューリンク
 
+> **オペレーター専用**（UI トークンが必要）。タスクペインで実行すると operator_required になる。
+
 ## 引数
 
 - `task_id`: azito のタスクID（数値）
@@ -31,7 +33,7 @@ ISSUE_URL="$2"
 以下でタスクを GET する。失敗した場合は、エラーを提示して終了する。
 
 ```bash
-TASK_JSON="$(curl -sf -H "Authorization: Bearer ${AZITO_TASK_TOKEN:-$AZITO_UI_TOKEN}" "${AZITO_URL:-http://localhost:3001}/api/tasks/${TASK_ID}")"
+TASK_JSON="$(curl -sf -H "Authorization: Bearer ${AZITO_UI_TOKEN}" "${AZITO_URL:-http://localhost:3001}/api/tasks/${TASK_ID}")"
 ```
 
 ## Step 3: URL パース
@@ -56,7 +58,7 @@ GET レスポンスの `sourceRef` フィールドが `null` でない場合、A
 ## Step 5: PUT でタスク更新
 
 ```bash
-curl -sf -X PUT -H "Authorization: Bearer ${AZITO_TASK_TOKEN:-$AZITO_UI_TOKEN}" "${AZITO_URL:-http://localhost:3001}/api/tasks/${TASK_ID}" \
+curl -sf -X PUT -H "Authorization: Bearer ${AZITO_UI_TOKEN}" "${AZITO_URL:-http://localhost:3001}/api/tasks/${TASK_ID}" \
   -H "Content-Type: application/json" \
   -d '{"source": "<SOURCE>", "source_ref": "<SOURCE_REF>"}'
 ```

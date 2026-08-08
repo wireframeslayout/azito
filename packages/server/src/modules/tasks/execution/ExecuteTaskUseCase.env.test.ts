@@ -52,6 +52,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     pendingOperationPriorStatus: null,
     createdByKind: 'operator',
     createdById: null,
+    createdViaGeneration: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -217,6 +218,7 @@ function buildUseCase(opts: {
     }),
     preApproveExecution: vi.fn(() => true),
     countChildren: vi.fn(() => 0),
+    countChildrenInGeneration: vi.fn(() => 0),
   };
 
   const unitRepo: IUnitRepository = {
@@ -330,7 +332,13 @@ function buildUseCase(opts: {
   // Stands in for TaskPaneEnvironmentService — this file's tests assert on
   // tmux.createWindow call sequencing/branching, not on the exact env
   // contents (see TaskPaneEnvironmentService.test.ts for those).
-  const paneEnvService = { buildEnvForNewWindow: vi.fn(() => ({ AZITO_TASK_TOKEN: 'azt.task.1.' + 'a'.repeat(64), AZITO_TASK_ID: '1' })) };
+  const paneEnvService = {
+    buildEnvForNewWindow: vi.fn(() => ({ AZITO_TASK_TOKEN: 'azt.task.1.' + 'a'.repeat(64), AZITO_TASK_ID: '1' })),
+    // Issue #28 third-party review fix: the worktree/working-directory
+    // rollback branches call this after successfully killing the
+    // just-created window — several tests below exercise those branches.
+    revokeForDestroyedWindow: vi.fn(),
+  };
 
   const useCase = new ExecuteTaskUseCase(
     taskRepo,
@@ -789,6 +797,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
       recordExecutionGateBlock: vi.fn(() => true),
       preApproveExecution: vi.fn(() => true),
       countChildren: vi.fn(() => 0),
+      countChildrenInGeneration: vi.fn(() => 0),
     };
     const unitRepo: IUnitRepository = {
       findAll: vi.fn(() => [unit]),
@@ -1044,7 +1053,7 @@ describe('ExecuteTaskUseCase working-directory containment (Issue #27)', () => {
   it('rejects when the created worktree path resolves outside the project working directory (symlink escape)', async () => {
     const unit = makeUnit({ id: 13, workerType: 'claude', workerModel: 'opus' });
     const task = makeTask({ id: 4, serverName: 'local-server', unitId: 13 });
-    const { useCase, taskRepo, windowRepo, logRepo, worktreeServiceFactory } = buildUseCase({
+    const { useCase, taskRepo, windowRepo, logRepo, worktreeServiceFactory, tmux, paneEnvService } = buildUseCase({
       task,
       project: makeProject({ defaultUnitId: null }),
       units: [unit],
@@ -1062,6 +1071,12 @@ describe('ExecuteTaskUseCase working-directory containment (Issue #27)', () => {
     expect(taskRepo.update).toHaveBeenCalledWith(4, expect.objectContaining({ status: 'failed' }));
     expect(windowRepo.add).not.toHaveBeenCalled();
     expect(logRepo.append).toHaveBeenCalledWith(4, 13, 'command', expect.objectContaining({ type: 'worktree_path_rejected' }));
+    // Issue #28 third-party review fix: 'failed' doesn't auto-revoke (see
+    // TOKEN_REVOKING_STATUSES), so the just-created window's token
+    // generation would otherwise leak — the rollback must kill the window
+    // AND revoke it directly, once the kill is confirmed.
+    expect(tmux.killWindow).toHaveBeenCalled();
+    expect(paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(4, 'worktree_path_rejected_rollback');
   });
 
   it('skips containment checks when the project has no configured working directory (legacy behavior preserved)', async () => {
@@ -1130,7 +1145,7 @@ describe('ExecuteTaskUseCase.followUp working-directory containment (Issue #27 r
   it('rejects a task.workingDirectory that escapes the project working directory (no tmux window exists yet)', async () => {
     const unit = makeUnit({ id: 20, workerType: 'claude', workerModel: 'opus' });
     const task = makeTask({ id: 7, serverName: 'local-server', unitId: 20, tmuxWindow: null, workingDirectory: outsideDir });
-    const { useCase, taskRepo, worktreeServiceFactory } = buildUseCase({
+    const { useCase, taskRepo, worktreeServiceFactory, tmux, paneEnvService } = buildUseCase({
       task,
       project: makeProject({ defaultUnitId: null }),
       units: [unit],
@@ -1141,6 +1156,12 @@ describe('ExecuteTaskUseCase.followUp working-directory containment (Issue #27 r
     await expect(useCase.followUp(20, 7, 'please continue')).rejects.toThrow(/Follow-up working directory rejected/);
 
     expect(taskRepo.update).toHaveBeenCalledWith(7, expect.objectContaining({ status: 'failed' }));
+    // Issue #28 third-party review fix: this branch only runs when
+    // !windowExists just created a fresh window (and rotated the task
+    // token) for this follow-up — 'failed' doesn't auto-revoke, so the
+    // rollback must kill the window AND revoke it directly.
+    expect(tmux.killWindow).toHaveBeenCalled();
+    expect(paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(7, 'followup_working_directory_rejected_rollback');
   });
 
   it('rejects a persisted task.worktreePath that exists on disk but resolves outside the project working directory (regression: existence was previously treated as trust)', async () => {

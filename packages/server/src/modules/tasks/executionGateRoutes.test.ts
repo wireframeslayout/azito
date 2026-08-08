@@ -48,6 +48,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     pendingOperationPriorStatus: null,
     createdByKind: 'operator',
     createdById: null,
+    createdViaGeneration: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -73,6 +74,7 @@ function makeOpts(existingTask: Task): { opts: TasksRouteOptions; createCalls: R
     recordExecutionGateBlock: vi.fn(() => true),
     preApproveExecution: vi.fn(() => true),
     countChildren: vi.fn(() => 0),
+    countChildrenInGeneration: vi.fn(() => 0),
   };
   // A real TaskOriginationService wrapping the mock taskRepo above, so this
   // file's "what did taskRepo.create() actually receive" assertions
@@ -163,6 +165,7 @@ function makeOpts(existingTask: Task): { opts: TasksRouteOptions; createCalls: R
     projectSecretRepo: { findByProject: vi.fn(() => []) } as unknown as TasksRouteOptions['projectSecretRepo'],
     auditLogService: { record: vi.fn() } as unknown as TasksRouteOptions['auditLogService'],
     originationService,
+    taskTokenRepo: { issue: vi.fn(), verify: vi.fn(() => false), revokeAllForTask: vi.fn(() => 0), issueNextGeneration: vi.fn(), getActiveGeneration: vi.fn(() => null) } as unknown as TasksRouteOptions['taskTokenRepo'],
   };
   return { opts, createCalls };
 }

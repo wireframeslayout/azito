@@ -182,6 +182,7 @@ describe("task token survives a 'review' transition (Issue #28 review finding 1 
       pendingOperationPriorStatus: null,
       createdByKind: 'operator',
       createdById: null,
+      createdViaGeneration: null,
     } as Omit<Task, 'id' | 'createdAt' | 'updatedAt'>);
 
     const app = Fastify();

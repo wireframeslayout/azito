@@ -64,4 +64,15 @@ export function up(db: Database.Database): void {
   // (see Task.ts's `createdById` doc comment).
   db.exec("ALTER TABLE tasks ADD COLUMN created_by_kind TEXT NOT NULL DEFAULT 'operator'");
   db.exec('ALTER TABLE tasks ADD COLUMN created_by_id INTEGER');
+
+  // Extending this still-unreleased migration further, same rationale as the
+  // origination columns' own comment above (Issue #28 third-party review
+  // fix): POST /api/tasks/:id/children's per-parent rate limit originally
+  // counted a parent's ENTIRE lifetime child count, so a parent that ever
+  // crossed N=20 across several follow-up runs could never spawn another
+  // child again — not "N=20 per execution run" as intended. Nullable, no
+  // backfill needed (no historical row could have had a generation to
+  // record before this column existed). See Task.ts's `createdViaGeneration`
+  // doc comment for the full contract.
+  db.exec('ALTER TABLE tasks ADD COLUMN created_via_generation INTEGER');
 }

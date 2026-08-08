@@ -41,6 +41,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     pendingOperationPriorStatus: null,
     createdByKind: 'operator',
     createdById: null,
+    createdViaGeneration: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -64,8 +65,9 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
 }
 
 function makeDeps(scopedAuthEnabled: boolean) {
-  const taskTokenRepo: Pick<ITaskTokenRepository, 'issueNextGeneration'> = {
+  const taskTokenRepo: Pick<ITaskTokenRepository, 'issueNextGeneration' | 'revokeAllForTask'> = {
     issueNextGeneration: vi.fn(() => ({ id: 1, token: 'azt.task.1.' + 'a'.repeat(64) })),
+    revokeAllForTask: vi.fn(() => 1),
   };
   const projectSecretRepo = {
     findByProjectWithValues: vi.fn(() => [{ id: 1, projectId: 7, name: 'FOO', value: 'bar', createdAt: '', updatedAt: '' }]),
@@ -115,5 +117,17 @@ describe('TaskPaneEnvironmentService.buildEnvForNewWindow', () => {
     const { service } = makeDeps(false);
     const env = service.buildEnvForNewWindow(makeTask(), makeServer({ type: 'local' }));
     expect(env.AZITO_AGENT_TOKEN).toBeUndefined();
+  });
+});
+
+// Issue #28 third-party review finding: window-destroy paths (route
+// kill-window, execute()/restore() rollback branches) must revoke the
+// generation this class just issued when the window it belongs to is
+// confirmed destroyed and won't be resumed onto.
+describe('TaskPaneEnvironmentService.revokeForDestroyedWindow', () => {
+  it('delegates straight to taskTokenRepo.revokeAllForTask with the given reason', () => {
+    const { service, taskTokenRepo } = makeDeps(true);
+    service.revokeForDestroyedWindow(5, 'worktree_creation_failed_rollback');
+    expect(taskTokenRepo.revokeAllForTask).toHaveBeenCalledWith(5, 'worktree_creation_failed_rollback');
   });
 });

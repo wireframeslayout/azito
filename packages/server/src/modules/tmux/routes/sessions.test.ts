@@ -11,15 +11,21 @@ function makeServerRepo(srv: ServerConfig): IServerRepository {
   } as unknown as IServerRepository;
 }
 
-function makeWindowRepo(): SqliteWindowRepository & { removeByServerAndTarget: ReturnType<typeof vi.fn> } {
+function makeWindowRepo(): SqliteWindowRepository & { removeByServerAndTarget: ReturnType<typeof vi.fn>; findByServerAndTarget: ReturnType<typeof vi.fn> } {
   return {
     removeByServerAndTarget: vi.fn(() => 0),
-  } as unknown as SqliteWindowRepository & { removeByServerAndTarget: ReturnType<typeof vi.fn> };
+    // Undefined by default (no task-owned window row found) — the DELETE
+    // handler looks this up before killing to decide whether to revoke a
+    // task token (Issue #28 third-party review finding); most of this
+    // file's existing tests aren't about task windows at all.
+    findByServerAndTarget: vi.fn(() => undefined),
+  } as unknown as SqliteWindowRepository & { removeByServerAndTarget: ReturnType<typeof vi.fn>; findByServerAndTarget: ReturnType<typeof vi.fn> };
 }
 
 async function buildApp(opts: {
   tmux: Partial<TmuxClient>;
   windowRepo: SqliteWindowRepository;
+  onTaskWindowDestroyed?: ReturnType<typeof vi.fn>;
 }): Promise<FastifyInstance> {
   const srv: ServerConfig = { name: 'srv1', type: 'local' } as ServerConfig;
   const app = Fastify();
@@ -27,6 +33,7 @@ async function buildApp(opts: {
     serverRepo: makeServerRepo(srv),
     tmux: opts.tmux as TmuxClient,
     windowRepo: opts.windowRepo,
+    onTaskWindowDestroyed: opts.onTaskWindowDestroyed as ((taskId: number, reason: string) => void) | undefined,
   });
   await app.ready();
   return app;
@@ -97,5 +104,83 @@ describe('DELETE /api/servers/:name/windows/:target', () => {
     expect(windowRepo.removeByServerAndTarget).toHaveBeenCalledWith('srv1', 'session:2');
     expect(windowRepo.removeByServerAndTarget).toHaveBeenCalledWith('srv1', 'session:win--abcd');
     expect(windowRepo.removeByServerAndTarget).toHaveBeenCalledTimes(3);
+  });
+
+  // Issue #28 third-party review finding: destroying a task-owned window
+  // through this generic kill route must revoke that task's token
+  // generation the same way the task-execution rollback paths do — a
+  // destroyed window can never again be resumed onto.
+  describe('task token revocation on window destroy (Issue #28 third-party review)', () => {
+    it('revokes the owning task token when the killed window belongs to a task', async () => {
+      const windowRepo = makeWindowRepo();
+      (windowRepo.findByServerAndTarget as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 5, ownerType: 'task', taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:2',
+      });
+      const tmux: Partial<TmuxClient> = {
+        getWindowIdentity: vi.fn(async () => null),
+        killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
+      };
+      const onTaskWindowDestroyed = vi.fn();
+      app = await buildApp({ tmux, windowRepo, onTaskWindowDestroyed });
+
+      const res = await app.inject({ method: 'DELETE', url: '/api/servers/srv1/windows/session:2' });
+
+      expect(res.statusCode).toBe(200);
+      expect(onTaskWindowDestroyed).toHaveBeenCalledWith(42, 'window_killed_via_sessions_route');
+    });
+
+    it('does NOT revoke when the killed window is project-owned (not a task window)', async () => {
+      const windowRepo = makeWindowRepo();
+      (windowRepo.findByServerAndTarget as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 5, ownerType: 'project', taskId: null, projectId: 1, serverName: 'srv1', tmuxTarget: 'session:2',
+      });
+      const tmux: Partial<TmuxClient> = {
+        getWindowIdentity: vi.fn(async () => null),
+        killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
+      };
+      const onTaskWindowDestroyed = vi.fn();
+      app = await buildApp({ tmux, windowRepo, onTaskWindowDestroyed });
+
+      const res = await app.inject({ method: 'DELETE', url: '/api/servers/srv1/windows/session:2' });
+
+      expect(res.statusCode).toBe(200);
+      expect(onTaskWindowDestroyed).not.toHaveBeenCalled();
+    });
+
+    it('does NOT revoke when kill-window fails for a reason other than "already gone" (window may still be alive)', async () => {
+      const windowRepo = makeWindowRepo();
+      (windowRepo.findByServerAndTarget as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 5, ownerType: 'task', taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:2',
+      });
+      const tmux: Partial<TmuxClient> = {
+        getWindowIdentity: vi.fn(async () => null),
+        killWindow: vi.fn(async () => ({ stdout: '', stderr: 'some other tmux error', code: 1 })),
+      };
+      const onTaskWindowDestroyed = vi.fn();
+      app = await buildApp({ tmux, windowRepo, onTaskWindowDestroyed });
+
+      const res = await app.inject({ method: 'DELETE', url: '/api/servers/srv1/windows/session:2' });
+
+      expect(res.statusCode).toBe(500);
+      expect(onTaskWindowDestroyed).not.toHaveBeenCalled();
+    });
+
+    it('still revokes when kill-window reports the window already gone ("can\'t find")', async () => {
+      const windowRepo = makeWindowRepo();
+      (windowRepo.findByServerAndTarget as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 5, ownerType: 'task', taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:2',
+      });
+      const tmux: Partial<TmuxClient> = {
+        getWindowIdentity: vi.fn(async () => null),
+        killWindow: vi.fn(async () => ({ stdout: '', stderr: "can't find window: 2", code: 1 })),
+      };
+      const onTaskWindowDestroyed = vi.fn();
+      app = await buildApp({ tmux, windowRepo, onTaskWindowDestroyed });
+
+      const res = await app.inject({ method: 'DELETE', url: '/api/servers/srv1/windows/session:2' });
+
+      expect(res.statusCode).toBe(200);
+      expect(onTaskWindowDestroyed).toHaveBeenCalledWith(42, 'window_killed_via_sessions_route');
+    });
   });
 });

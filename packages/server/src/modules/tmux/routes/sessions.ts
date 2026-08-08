@@ -13,6 +13,21 @@ export interface SessionsRouteOptions {
   windowRepo?: SqliteWindowRepository;
   notificationBus?: NotificationBus;
   resourceGuard?: ResourceGuard;
+  /**
+   * Issue #28 third-party review finding: kill-window here must revoke a
+   * task-owned window's token generation the same way the task-execution
+   * rollback paths do (see
+   * TaskPaneEnvironmentService.revokeForDestroyedWindow's doc comment) —
+   * this is the generic tmux-kill route (terminal UI "close window",
+   * ProjectSettings, etc.), so it has no other reason to know a window
+   * belongs to a task without this. A plain callback, not a
+   * `TaskPaneEnvironmentService` import, because `tmux` is a base-layer
+   * module (.dependency-cruiser.cjs's `base-tmux-limited-upward` rule) and
+   * must not depend on `tasks` (an upper-layer module) — buildServer.ts (the
+   * composition root) closes over the real service and passes just this
+   * function.
+   */
+  onTaskWindowDestroyed?: (taskId: number, reason: string) => void;
 }
 
 // ─── Session cache (30 s TTL) ───
@@ -171,6 +186,15 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         // its canonical name/index, and the sidebar's index-form target ("session:2") won't match
         // the name-form target ("session:win--xxxx") the DB row was stored under.
         const identity = await tmux.getWindowIdentity(srv, target);
+        // Resolved before the DB cleanup below removes the row(s) — this is
+        // the only chance to learn whether the window being destroyed
+        // belonged to a task (Issue #28 third-party review finding: this
+        // generic kill route must revoke that task's token generation the
+        // same as the task-execution rollback paths, since a destroyed
+        // window can never again be resumed onto).
+        const windowRow = opts.windowRepo?.findByServerAndTarget(request.params.name, target)
+          ?? (identity ? opts.windowRepo?.findByServerAndTarget(request.params.name, `${identity.sessionName}:${identity.windowName}`) : undefined)
+          ?? (identity ? opts.windowRepo?.findByServerAndTarget(request.params.name, `${identity.sessionName}:${identity.windowIndex}`) : undefined);
         // The local transport throws on failure while agent/SSH resolve with a non-zero
         // code — normalize both into an ExecResult so the already-gone check covers all.
         const result = await tmux.killWindow(srv, target)
@@ -187,6 +211,11 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         if (identity) {
           opts.windowRepo?.removeByServerAndTarget(request.params.name, `${identity.sessionName}:${identity.windowName}`);
           opts.windowRepo?.removeByServerAndTarget(request.params.name, `${identity.sessionName}:${identity.windowIndex}`);
+        }
+        // Reaching here means the window is confirmed gone (kill-window
+        // succeeded, or tmux already reported it missing) — safe to revoke.
+        if (windowRow?.ownerType === 'task' && windowRow.taskId !== null) {
+          opts.onTaskWindowDestroyed?.(windowRow.taskId, 'window_killed_via_sessions_route');
         }
         // Clients hold terminal tabs under both name-form and index-form targets;
         // return the resolved identity so they can close every matching tab.

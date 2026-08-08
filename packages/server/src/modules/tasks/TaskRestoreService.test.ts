@@ -53,6 +53,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     pendingOperationPriorStatus: null,
     createdByKind: 'operator',
     createdById: null,
+    createdViaGeneration: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -78,6 +79,7 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
       recordExecutionGateBlock: vi.fn(() => true),
       preApproveExecution: vi.fn(() => true),
       countChildren: vi.fn(() => 0),
+      countChildrenInGeneration: vi.fn(() => 0),
     },
     serverRepo: {
       findAll: vi.fn(() => []),
@@ -190,6 +192,10 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
     // that) — just needs to return a plausible env Record.
     paneEnvService: {
       buildEnvForNewWindow: vi.fn(() => ({ AZITO_TASK_TOKEN: 'azt.task.1.' + 'a'.repeat(64), AZITO_TASK_ID: '1' })),
+      // Issue #28 third-party review fix: restore()'s catch-block rollback
+      // calls this after successfully killing the freshly-created window —
+      // several tests below exercise that rollback path.
+      revokeForDestroyedWindow: vi.fn(),
     } as unknown as TaskRestoreDeps['paneEnvService'],
     ...overrides,
   };
@@ -422,6 +428,12 @@ describe('TaskRestoreService', () => {
       expect.objectContaining({ name: 'test-server' }),
       'azito:task-1',
     );
+    // Issue #28 third-party review fix: the task stays 'archived' throughout
+    // this rollback (no status WRITE happens here to trigger
+    // TOKEN_REVOKING_STATUSES again), so the generation this restore()
+    // attempt just issued via buildEnvForNewWindow would otherwise leak —
+    // revoke it directly once the kill above is confirmed.
+    expect(deps.paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(1, 'restore_rollback');
   });
 
   it('throws when tmux window creation fails and task remains archived', async () => {

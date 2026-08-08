@@ -61,6 +61,7 @@ describe('SqliteTaskRepository.consumePendingApproval (Issue #328 ninth-round re
       pendingOperationPriorStatus: 'open',
       createdByKind: 'operator',
       createdById: null,
+      createdViaGeneration: null,
     });
     // create() doesn't accept `status` (it's always inserted as the
     // schema's 'open' default) — set it directly to reach the
@@ -174,6 +175,7 @@ describe('SqliteTaskRepository.recordExecutionGateBlock (Issue #328 review round
       pendingOperationWindowId: null,
       createdByKind: 'operator',
       createdById: null,
+      createdViaGeneration: null,
       pendingOperationPriorStatus: null,
     });
     // create() always inserts status = the schema default ('open') — set it
@@ -352,6 +354,7 @@ describe('SqliteTaskRepository.preApproveExecution (task/328 follow-up)', () => 
       pendingOperationPriorStatus: null,
       createdByKind: 'operator',
       createdById: null,
+      createdViaGeneration: null,
     });
   }
 
@@ -461,6 +464,7 @@ describe('SqliteTaskRepository token-revoking-status revocation (Issue #28 revie
       pendingOperationPriorStatus: 'open',
       createdByKind: 'operator',
       createdById: null,
+      createdViaGeneration: null,
     });
     repo.updateStatus(taskId, 'running');
   });
@@ -558,5 +562,94 @@ describe('SqliteTaskRepository token-revoking-status revocation (Issue #28 revie
 
     expect(consumed).toBe(true);
     expect(tokenRepo.verify(taskId, secret)).toBe(true);
+  });
+});
+
+// Issue #28 third-party review fix: the original countChildren()-based cap
+// counted a parent's ENTIRE lifetime child count, so a parent that crossed
+// N=20 across several follow-up runs could never spawn another child again,
+// in ANY future run. countChildrenInGeneration scopes the count to a single
+// window generation instead.
+describe('SqliteTaskRepository.countChildrenInGeneration (Issue #28 third-party review fix)', () => {
+  let db: SqliteDatabase;
+  let repo: SqliteTaskRepository;
+  let parentId: number;
+
+  function makeChildFields(overrides: Partial<Parameters<SqliteTaskRepository['create']>[0]> = {}) {
+    return {
+      projectId: 1,
+      unitId: null,
+      serverName: null,
+      title: 'Child task',
+      description: null,
+      status: 'open' as const,
+      currentPhase: null,
+      selfReviewCount: 0,
+      priority: 0,
+      tmuxWindow: null,
+      selfReviewMaxAttempts: null,
+      requirePlanApproval: true,
+      source: 'local' as const,
+      sourceRef: null,
+      worktreePath: null,
+      worktreeBranch: null,
+      baseBranch: null,
+      targetBranch: null,
+      skipPr: false,
+      workingDirectory: null,
+      branch: null,
+      planMarkdown: null,
+      pendingQuestions: null,
+      changedFiles: null,
+      summaryJson: null,
+      prUrl: null,
+      agentSessionId: null,
+      reviewSubagent: null,
+      implementSubagent: null,
+      inputTrust: 'untrusted' as const,
+      executionApprovedFingerprintHash: null,
+      pendingOperation: null,
+      pendingOperationWindowId: null,
+      pendingOperationPriorStatus: null,
+      createdByKind: 'task' as const,
+      createdById: parentId,
+      createdViaGeneration: null,
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    db = openDatabase(':memory:');
+    repo = new SqliteTaskRepository(db, new SqliteTaskTokenRepository(db));
+    db.prepare("INSERT INTO projects (id, name, slug, default_branch) VALUES (1, 'P', 'p', 'main')").run();
+    parentId = repo.create(makeChildFields({ title: 'Parent task', createdByKind: 'operator', createdById: null }));
+  });
+
+  it('counts only children created under the given generation', () => {
+    repo.create(makeChildFields({ createdViaGeneration: 1 }));
+    repo.create(makeChildFields({ createdViaGeneration: 1 }));
+    repo.create(makeChildFields({ createdViaGeneration: 2 }));
+
+    expect(repo.countChildrenInGeneration(parentId, 1)).toBe(2);
+    expect(repo.countChildrenInGeneration(parentId, 2)).toBe(1);
+    expect(repo.countChildrenInGeneration(parentId, 3)).toBe(0);
+  });
+
+  it('does not count operator-originated children (createdViaGeneration NULL) toward any generation', () => {
+    repo.create(makeChildFields({ createdViaGeneration: null }));
+    repo.create(makeChildFields({ createdViaGeneration: 1 }));
+
+    expect(repo.countChildrenInGeneration(parentId, 1)).toBe(1);
+    // countChildren() (lifetime, ungenerationed) still sees both.
+    expect(repo.countChildren(parentId)).toBe(2);
+  });
+
+  it('does not count another parent\'s children even under the same generation number', () => {
+    const otherParentId = repo.create(makeChildFields({ title: 'Other parent', createdByKind: 'operator', createdById: null }));
+    repo.create(makeChildFields({ createdViaGeneration: 1 }));
+    repo.create(makeChildFields({ createdById: otherParentId, createdViaGeneration: 1 }));
+
+    expect(repo.countChildrenInGeneration(parentId, 1)).toBe(1);
+    expect(repo.countChildrenInGeneration(otherParentId, 1)).toBe(1);
   });
 });

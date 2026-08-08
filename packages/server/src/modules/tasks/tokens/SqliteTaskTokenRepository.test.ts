@@ -115,4 +115,30 @@ describe('SqliteTaskTokenRepository', () => {
       expect(row.window_generation).toBe(6);
     });
   });
+
+  // Issue #28 third-party review fix: backs POST /api/tasks/:id/children's
+  // per-run rate limit — the route resolves the calling task's CURRENT
+  // generation through this method.
+  describe('getActiveGeneration()', () => {
+    it('returns null for a task that has never had a token issued', () => {
+      expect(repo.getActiveGeneration(taskId)).toBeNull();
+    });
+
+    it('returns the generation of the single active token', () => {
+      repo.issueNextGeneration(taskId, 'window_regenerated');
+      expect(repo.getActiveGeneration(taskId)).toBe(1);
+    });
+
+    it('returns the NEW generation after a rotation, not the revoked one', () => {
+      repo.issueNextGeneration(taskId, 'window_regenerated');
+      repo.issueNextGeneration(taskId, 'window_regenerated');
+      expect(repo.getActiveGeneration(taskId)).toBe(2);
+    });
+
+    it('returns null once every generation has been revoked (no rotation, direct revokeAllForTask)', () => {
+      repo.issueNextGeneration(taskId, 'window_regenerated');
+      repo.revokeAllForTask(taskId, 'task_status:archived');
+      expect(repo.getActiveGeneration(taskId)).toBeNull();
+    });
+  });
 });
