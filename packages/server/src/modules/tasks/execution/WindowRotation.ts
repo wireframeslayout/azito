@@ -301,11 +301,23 @@ export async function rollbackWindowReference(
     if (onGoneFailed) {
       if (revokeFailed) {
         console.warn(`[WindowRotation] revokeGeneration ALSO failed for tokenId=${tokenId} after a confirmed kill (onGone failed too)`, revokeError);
+        // Issue #28 third-party review, follow-up (batch-2) fix: the doc
+        // comment above always promised the revoke error is "attached as
+        // its cause", but this used to just log it — a caller inspecting
+        // `err.cause` (rather than grepping console output) had no
+        // structural way to learn the revoke also failed. Attached via the
+        // standard `Error.cause` mechanism (Node >= 16.9) whenever
+        // `onGoneError` is an `Error`; a non-Error throw (e.g. a caller that
+        // `throw`s a plain string) has no `cause` slot to attach to, so this
+        // degrades to the log-only behavior in that one edge case.
+        if (onGoneError instanceof Error) {
+          onGoneError.cause = revokeError;
+        }
       }
       // onGone's error is the caller's own domain failure and always wins
       // over the revoke's (mirrors the pre-existing single-failure test
-      // below) — thrown as-is, not wrapped, so callers keep matching on it
-      // the same way they did before this fix.
+      // below) — thrown as-is (message/identity unchanged), not wrapped, so
+      // callers keep matching on it the same way they did before this fix.
       throw onGoneError;
     }
     if (revokeFailed) {

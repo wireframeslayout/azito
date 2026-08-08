@@ -391,21 +391,31 @@ describe('rollbackWindowReference: onGone throwing must not skip the revoke', ()
       throw new Error('revoke transport failed');
     });
 
-    await expect(
-      rollbackWindowReference(
+    let thrown: unknown;
+    try {
+      await rollbackWindowReference(
         Promise.resolve({ stdout: '', stderr: '', code: 0 }),
         paneEnvService,
         created.tokenId,
         'kill_confirmed',
         onGone,
         onStillAlive,
-      ),
-    ).rejects.toThrow('reference bookkeeping failed');
+      );
+    } catch (err) {
+      thrown = err;
+    }
 
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toBe('reference bookkeeping failed');
     expect(onGone).toHaveBeenCalledTimes(1);
     // The revoke was still attempted despite onGone having already failed.
     expect(revokeSpy).toHaveBeenCalledWith(created.tokenId, 'kill_confirmed');
     expect(onStillAlive).not.toHaveBeenCalled();
+    // Issue #28 third-party review, follow-up (batch-2) fix: the doc comment
+    // promises the revoke error is attached as onGone's error's `cause` when
+    // both fail — verify it structurally, not just via a console.warn.
+    expect((thrown as Error).cause).toBeInstanceOf(Error);
+    expect(((thrown as Error).cause as Error).message).toBe('revoke transport failed');
   });
 
   // Follow-up fix (Issue #28 batch review): a prior version of this function

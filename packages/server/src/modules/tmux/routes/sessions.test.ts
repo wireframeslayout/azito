@@ -14,6 +14,7 @@ function makeServerRepo(srv: ServerConfig): IServerRepository {
 
 type FakeWindowRepo = SqliteWindowRepository & {
   removeByServerAndTarget: ReturnType<typeof vi.fn>;
+  remove: ReturnType<typeof vi.fn>;
   findByServerAndTarget: ReturnType<typeof vi.fn>;
   findByServerAndSession: ReturnType<typeof vi.fn>;
 };
@@ -21,6 +22,11 @@ type FakeWindowRepo = SqliteWindowRepository & {
 function makeWindowRepo(): FakeWindowRepo {
   return {
     removeByServerAndTarget: vi.fn(() => 0),
+    // Issue #28 third-party review, batch-2 finding: the session-delete
+    // route's "remaining rows" cleanup now deletes by row `id` (captured in
+    // a pre-kill snapshot) instead of re-fetching-and-matching by `target`
+    // after the kill, since tmux window targets get reused for new windows.
+    remove: vi.fn(),
     // Undefined by default (no task-owned window row found) — the DELETE
     // handler looks this up before killing to decide whether to revoke a
     // task token (Issue #28 third-party review finding); most of this
@@ -327,8 +333,35 @@ describe('DELETE /api/servers/:name/sessions/:session', () => {
     ]);
     expect(windowRepo.removeByServerAndTarget).toHaveBeenCalledWith('srv1', 'session:task-42');
     expect(windowRepo.removeByServerAndTarget).toHaveBeenCalledWith('srv1', 'session:task-43');
-    expect(windowRepo.removeByServerAndTarget).toHaveBeenCalledWith('srv1', 'session:extra');
-    expect(windowRepo.removeByServerAndTarget).toHaveBeenCalledWith('srv1', 'session:task-44-secondary');
+    // The non-primary rows (project window + secondary task window) are
+    // NOT handled by destroySessionWindows, so the route's own cleanup
+    // deletes them by their captured row id, not by target.
+    expect(windowRepo.remove).toHaveBeenCalledWith(3);
+    expect(windowRepo.remove).toHaveBeenCalledWith(4);
+    expect(windowRepo.remove).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not delete a row created after the pre-kill snapshot even if it reuses a killed window\'s target (Issue #28 third-party review, batch-2 fix)', async () => {
+    const windowRepo = makeWindowRepo();
+    // Pre-kill snapshot: one project window at "session:extra" (row id 3).
+    windowRepo.findByServerAndSession.mockReturnValue([
+      { id: 3, ownerType: 'project', taskId: null, projectId: 1, serverName: 'srv1', tmuxTarget: 'session:extra', isPrimary: false },
+    ]);
+    const tmux: Partial<TmuxClient> = {
+      killSession: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
+    };
+    const destroySessionWindows = makeDestroySessionWindows();
+    app = await buildApp({ tmux, windowRepo, destroySessionWindows });
+
+    const res = await app.inject({ method: 'DELETE', url: '/api/servers/srv1/sessions/session' });
+
+    expect(res.statusCode).toBe(200);
+    // Only the row id captured in the pre-kill snapshot is deleted — never a
+    // target-based delete, which could hit a brand-new row (a different id)
+    // that reused the same "session:extra" target after the kill.
+    expect(windowRepo.remove).toHaveBeenCalledWith(3);
+    expect(windowRepo.remove).toHaveBeenCalledTimes(1);
+    expect(windowRepo.removeByServerAndTarget).not.toHaveBeenCalledWith('srv1', 'session:extra');
   });
 
   it('does not revoke or clean up when kill-session fails for a reason other than "already gone"', async () => {
@@ -416,9 +449,10 @@ describe('DELETE /api/servers/:name/sessions/:session', () => {
     const res = await app.inject({ method: 'DELETE', url: '/api/servers/srv1/sessions/session' });
 
     expect(res.statusCode).toBe(200);
-    expect(windowRepo.removeByServerAndTarget).toHaveBeenCalledWith('srv1', 'session:task-42');
-    expect(windowRepo.removeByServerAndTarget).toHaveBeenCalledWith('srv1', 'session:extra');
-    expect(windowRepo.removeByServerAndTarget).toHaveBeenCalledTimes(2);
+    expect(windowRepo.remove).toHaveBeenCalledWith(1);
+    expect(windowRepo.remove).toHaveBeenCalledWith(2);
+    expect(windowRepo.remove).toHaveBeenCalledTimes(2);
+    expect(windowRepo.removeByServerAndTarget).not.toHaveBeenCalled();
   });
 });
 

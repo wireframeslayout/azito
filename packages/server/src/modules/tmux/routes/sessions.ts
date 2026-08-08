@@ -332,8 +332,28 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         // the same tasks (Issue #28 third-party review, follow-up fix — see
         // TaskWindowDestruction.destroyPrimaryTaskWindowsForSessionKill's doc
         // comment for the race this closes).
+        // Full row-ID snapshot of the session, captured as a side effect of
+        // every `resolvePrimaryTaskWindows()` call (see below). Issue #28
+        // third-party review, batch-2 finding: the OLD "remaining rows"
+        // cleanup re-fetched `findByServerAndSession` AFTER the kill and
+        // deleted by `target` — but tmux window targets ("session:2") are
+        // reused for brand-new windows, so a row created for a NEW window in
+        // the gap between kill and that re-fetch (same session, same reused
+        // index) could be deleted here even though it has nothing to do with
+        // the window this call killed. Deleting by row `id` instead (a value
+        // that can never be reused) makes that impossible: only rows that
+        // actually existed at the captured snapshot moment are ever removed.
+        // `resolvePrimaryTaskWindows` is re-invoked by `destroySessionWindows`
+        // INSIDE its per-task lock, immediately before the kill (see its own
+        // doc comment) — the LAST call before the kill actually runs is the
+        // authoritative one, so this snapshot always reflects that same
+        // instant. Recording it as a side effect of an already-idempotent,
+        // already-DB-only read (no tmux/network calls) does not change its
+        // observable behavior for any existing caller.
+        let sessionRowSnapshot: Array<{ id: number; tmuxTarget: string }> = [];
         const resolvePrimaryTaskWindows = (): Array<{ taskId: number; windowName: string; target: string; onDestroyed: () => void }> => {
           const rows = opts.windowRepo?.findByServerAndSession(request.params.name, request.params.session) ?? [];
+          sessionRowSnapshot = rows.map((win) => ({ id: win.id, tmuxTarget: win.tmuxTarget }));
           const out: Array<{ taskId: number; windowName: string; target: string; onDestroyed: () => void }> = [];
           for (const win of rows) {
             if (win.taskId === null || !isPrimaryTaskWindow(win)) continue;
@@ -367,6 +387,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           // or not) is still cleaned up unconditionally below on success —
           // Issue #28 third-party review, D-track fix 3: a row must never be
           // silently left behind just because no revoke callback was wired.
+          // Capture the snapshot immediately before the kill (no lock exists
+          // in this fallback path) so the by-id cleanup below still applies.
+          resolvePrimaryTaskWindows();
           outcome = await resolveKillOutcome(tmux.killSession(srv, request.params.session));
         }
 
@@ -377,15 +400,14 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
 
         // Clean up every remaining row (secondary task windows, project
         // windows, and — when destroySessionWindows wasn't used — the
-        // primary task windows too) not already handled above. Re-fetched
-        // AFTER the kill, not from a pre-kill snapshot: this is plain DB row
-        // hygiene (no revoke decision rides on it, unlike
-        // resolvePrimaryTaskWindows above), so reading the current table
-        // state here is strictly more correct than a possibly-stale one.
-        const remainingWindows = opts.windowRepo?.findByServerAndSession(request.params.name, request.params.session) ?? [];
-        for (const win of remainingWindows) {
+        // primary task windows too) not already handled above. Deleted by
+        // `id` from the pre-kill snapshot captured above — never by
+        // re-fetching `findByServerAndSession` after the kill and matching on
+        // `target`, which a reused tmux target can turn into deleting a
+        // brand-new row (see sessionRowSnapshot's doc comment).
+        for (const win of sessionRowSnapshot) {
           if (handledTargets.has(win.tmuxTarget)) continue;
-          opts.windowRepo?.removeByServerAndTarget(request.params.name, win.tmuxTarget);
+          opts.windowRepo?.remove(win.id);
         }
         return { ok: true };
       } catch (err: unknown) {
