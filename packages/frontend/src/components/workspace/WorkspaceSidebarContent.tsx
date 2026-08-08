@@ -216,7 +216,7 @@ export default function WorkspaceSidebarContent({
                     {t('sidebar.gitDiff')}
                   </button>
                 </div>
-                <FileExplorer serverName={selectedFileServer} rootPath={rootPath} onFileSelect={onFileSelect} />
+                <FileExplorer serverName={selectedFileServer} rootPath={rootPath} projectId={project?.id} onFileSelect={onFileSelect} />
               </>
             );
           })()}

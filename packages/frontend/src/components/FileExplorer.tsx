@@ -17,6 +17,14 @@ import yaml from 'highlight.js/lib/languages/yaml';
 import sql from 'highlight.js/lib/languages/sql';
 import 'highlight.js/styles/github-dark.min.css';
 import { LoadingState } from './ui';
+import { useContextMenu } from './ContextMenu';
+import ContextMenu from './ContextMenu';
+import { useLongPress } from '../hooks/useLongPress';
+import { useFileTree } from './files/useFileTree';
+import type { TreeNode } from './files/useFileTree';
+import { useFileCrud } from './files/useFileCrud';
+import FileTree from './files/FileTree';
+import DeleteConfirmModal from './files/DeleteConfirmModal';
 
 hljs.registerLanguage('typescript', typescript);
 hljs.registerLanguage('javascript', javascript);
@@ -30,13 +38,6 @@ hljs.registerLanguage('yaml', yaml);
 hljs.registerLanguage('sql', sql);
 
 /* ── Types ── */
-
-interface FileEntry {
-  name: string;
-  type: 'file' | 'directory';
-  path: string;
-  size?: number;
-}
 
 interface FileContent {
   content: string;
@@ -63,78 +64,33 @@ interface PdfContent {
 
 type FileResponse = (FileContent & { type?: undefined; error?: string }) | (ImageContent & { error?: string }) | (PdfContent & { error?: string });
 
-interface TreeNode extends FileEntry {
-  children?: TreeNode[];
-  loaded?: boolean;
-  expanded?: boolean;
-}
-
 export interface FileExplorerProps {
   serverName: string;
   rootPath: string;
-  /** Called when a file is selected for preview in the main area */
+  projectId?: number;
   onFileSelect?: (serverName: string, filePath: string) => void;
 }
 
 /* ── File Explorer (tree only, for sidebar) ── */
 
-export default function FileExplorer({ serverName, rootPath, onFileSelect }: FileExplorerProps) {
+export default function FileExplorer({ serverName, rootPath, projectId, onFileSelect }: FileExplorerProps) {
   const { t } = useTranslation('files');
-  const [tree, setTree] = useState<TreeNode[]>([]);
-  const [loading, setLoading] = useState(false);
+  const { showToast } = useToast();
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { tree, loading, error, loadRoot, toggleDir, expandDir, refreshDir, getSiblingNames } = useFileTree(serverName, rootPath);
+  const { menu: contextMenu, show: showContextMenu, showAt: showContextMenuAt, hide: hideContextMenu } = useContextMenu();
+  const bindLongPress = useLongPress();
 
-  const loadDir = useCallback(async (dirPath: string): Promise<TreeNode[]> => {
-    try {
-      const entries = await api<FileEntry[]>(`/servers/${serverName}/files?path=${encodeURIComponent(dirPath)}`);
-      if (!Array.isArray(entries)) return [];
-      return entries.map((e) => ({
-        ...e,
-        children: e.type === 'directory' ? [] : undefined,
-        loaded: false,
-        expanded: false,
-      }));
-    } catch {
-      return [];
-    }
-  }, [serverName]);
-
-  const loadRoot = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const nodes = await loadDir(rootPath);
-      setTree(nodes);
-    } catch {
-      setError('Failed to load directory');
-    }
-    setLoading(false);
-  }, [rootPath, loadDir]);
-
-  useEffect(() => { loadRoot(); }, [loadRoot]);
-
-  const toggleDir = useCallback(async (path: string) => {
-    const updateNodes = async (nodes: TreeNode[]): Promise<TreeNode[]> => {
-      const result: TreeNode[] = [];
-      for (const node of nodes) {
-        if (node.path === path && node.type === 'directory') {
-          if (!node.loaded) {
-            const children = await loadDir(node.path);
-            result.push({ ...node, expanded: true, loaded: true, children });
-          } else {
-            result.push({ ...node, expanded: !node.expanded });
-          }
-        } else if (node.children) {
-          result.push({ ...node, children: await updateNodes(node.children) });
-        } else {
-          result.push(node);
-        }
-      }
-      return result;
-    };
-    setTree(await updateNodes(tree));
-  }, [tree, loadDir]);
+  const crud = useFileCrud({
+    serverName,
+    projectId,
+    expandDir,
+    refreshDir,
+    onFileCreated: (filePath) => {
+      setSelectedPath(filePath);
+      onFileSelect?.(serverName, filePath);
+    },
+  });
 
   const handleClick = useCallback((node: TreeNode) => {
     if (node.type === 'directory') {
@@ -145,46 +101,48 @@ export default function FileExplorer({ serverName, rootPath, onFileSelect }: Fil
     }
   }, [toggleDir, serverName, onFileSelect]);
 
-  const renderNode = (node: TreeNode, depth: number): React.ReactElement => {
+  const buildMenuItems = useCallback((node: TreeNode) => {
     const isDir = node.type === 'directory';
-    const isSelected = node.path === selectedPath;
-    return (
-      <div key={node.path}>
-        <div
-          onClick={() => handleClick(node)}
-          className={`row-hover${isSelected ? ' row-selected' : ''}`}
-          style={{
-            padding: '3px 8px 3px ' + (8 + depth * 16) + 'px',
-            fontSize: 'var(--font-md)',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 4,
-            color: isSelected ? 'var(--accent)' : 'var(--text)',
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            borderRadius: 'var(--radius-sm)',
-            minHeight: 26,
-          }}
-        >
-          <span style={{ width: 16, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, color: 'var(--text-dim)' }}>
-            {isDir ? <Icon name="chevron-right" size={14} rotate={node.expanded ? 90 : 0} /> : null}
-          </span>
-          <span style={{ width: 18, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <Icon name={isDir ? (node.expanded ? 'folder-open' : 'files') : 'file'} size={14} />
-          </span>
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{node.name}</span>
-          {!isDir && node.size != null && (
-            <span style={{ marginLeft: 'auto', fontSize: 'var(--font-2xs)', color: 'var(--text-dim)', flexShrink: 0 }}>
-              {node.size < 1024 ? node.size + 'B' : Math.round(node.size / 1024) + 'KB'}
-            </span>
-          )}
-        </div>
-        {isDir && node.expanded && node.children?.map((child) => renderNode(child, depth + 1))}
-      </div>
-    );
-  };
+    const parentPath = isDir ? node.path : (node.path.substring(0, node.path.lastIndexOf('/')) || rootPath);
+    return [
+      { label: t('explorer.newFile'), icon: <Icon name="file-plus" size={14} />, onClick: () => crud.startCreate(parentPath, 'file') },
+      { label: t('explorer.newFolder'), icon: <Icon name="folder-plus" size={14} />, onClick: () => crud.startCreate(parentPath, 'directory') },
+      { separator: true, label: '', onClick: () => {} },
+      { label: t('explorer.rename'), icon: <Icon name="edit" size={14} />, onClick: () => crud.startRename(node.path, node.name) },
+      { label: t('explorer.copyPath'), icon: <Icon name="clipboard" size={14} />, onClick: () => { navigator.clipboard.writeText(node.path); showToast(t('explorer.pathCopied')); } },
+      {
+        label: t('explorer.download'),
+        icon: <Icon name="download" size={14} />,
+        disabled: isDir,
+        title: isDir ? t('explorer.downloadNotSupported') : undefined,
+        onClick: () => {
+          if (isDir) return;
+          fetchBlob(`/servers/${encodeURIComponent(serverName)}/files/download?path=${encodeURIComponent(node.path)}`)
+            .then((blob) => {
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = node.name;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+            })
+            .catch(() => showToast(t('explorer.downloadFailed')));
+        },
+      },
+      { separator: true, label: '', onClick: () => {} },
+      { label: t('explorer.delete'), icon: <Icon name="trash" size={14} />, danger: true, onClick: () => crud.startDelete(node.path, node.type) },
+    ];
+  }, [t, crud, rootPath, serverName, showToast]);
+
+  const handleContextMenu = useCallback((node: TreeNode, e: React.MouseEvent) => {
+    showContextMenu(e, buildMenuItems(node));
+  }, [showContextMenu, buildMenuItems]);
+
+  const handleLongPress = useCallback((node: TreeNode, x: number, y: number) => {
+    showContextMenuAt(x, y, buildMenuItems(node));
+  }, [showContextMenuAt, buildMenuItems]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
@@ -239,8 +197,31 @@ export default function FileExplorer({ serverName, rootPath, onFileSelect }: Fil
         {!loading && !error && tree.length === 0 && (
           <div style={{ padding: 12, fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{t('explorer.emptyDirectory')}</div>
         )}
-        {tree.map((node) => renderNode(node, 0))}
+        <FileTree
+          nodes={tree}
+          selectedPath={selectedPath}
+          rootPath={rootPath}
+          pendingCreate={crud.pendingCreate}
+          pendingRename={crud.pendingRename}
+          onSelect={handleClick}
+          onContextMenu={handleContextMenu}
+          onLongPress={handleLongPress}
+          onCommitCreate={crud.commitCreate}
+          onCancelCreate={crud.cancelCreate}
+          onCommitRename={crud.commitRename}
+          onCancelRename={crud.cancelRename}
+          getSiblingNames={getSiblingNames}
+          longPressHandlers={bindLongPress}
+        />
       </div>
+
+      {contextMenu && <ContextMenu menu={contextMenu} onClose={hideContextMenu} />}
+      <DeleteConfirmModal
+        target={crud.deleteTarget ? { ...crud.deleteTarget, serverName } : null}
+        onConfirm={crud.confirmDelete}
+        onClose={crud.cancelDelete}
+        loading={crud.deleteLoading}
+      />
     </div>
   );
 }
