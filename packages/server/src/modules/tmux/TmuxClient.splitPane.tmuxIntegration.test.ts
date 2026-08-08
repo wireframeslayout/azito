@@ -27,7 +27,11 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForPane(target: string, predicate: (text: string) => boolean, timeoutMs = 15000): Promise<string> {
+// Test-stabilization fix (third-party review): raised from 15000ms — under
+// full-suite parallel execution a real tmux round trip can take longer than
+// that when many other test files' workers are competing for CPU. See the
+// matching fix/comment in TaskPaneEnvironmentService.tmuxIntegration.test.ts.
+async function waitForPane(target: string, predicate: (text: string) => boolean, timeoutMs = 20000): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   let last = '';
   while (Date.now() < deadline) {
@@ -43,7 +47,7 @@ afterEach(() => {
 });
 
 describe('TmuxClient.splitPane x real tmux: session-env inheritance', () => {
-  it('without extraEnv, a split pane inherits the session-level value (documents the gap)', { timeout: 20000 }, async () => {
+  it('without extraEnv, a split pane inherits the session-level value (documents the gap)', { timeout: 30000 }, async () => {
     tmux('new-session', '-d', '-s', SESSION, '-n', 'w1', '-e', 'AZITO_UI_TOKEN=leaked-full-power-token');
     const target = `${SESSION}:w1`;
     await waitForPane(target, (text) => text.trim().length > 0);
@@ -62,7 +66,7 @@ describe('TmuxClient.splitPane x real tmux: session-env inheritance', () => {
     expect(captured).toContain('AZITO_UI_TOKEN_IS=[leaked-full-power-token]');
   });
 
-  it('extraEnv overrides the inherited session-level value in the new pane', { timeout: 20000 }, async () => {
+  it('extraEnv overrides the inherited session-level value in the new pane', { timeout: 30000 }, async () => {
     tmux('new-session', '-d', '-s', SESSION, '-n', 'w1', '-e', 'AZITO_UI_TOKEN=leaked-full-power-token');
     const target = `${SESSION}:w1`;
     await waitForPane(target, (text) => text.trim().length > 0);

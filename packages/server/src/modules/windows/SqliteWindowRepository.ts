@@ -2,6 +2,13 @@ import type { Database as SqliteDatabase } from 'better-sqlite3';
 import type { Window, PaneLayout, IWindowRepository } from './Window';
 import { isSameWindowTarget } from './paneTarget';
 
+// Re-exported so tmux/routes/sessions.ts (base layer — dependency-cruiser's
+// `base-tmux-limited-upward` rule only allow-lists this file, not Window.ts
+// itself) can share the exact same primary-window judgment
+// WindowRespawnService uses, instead of re-deriving it inline (Issue #28
+// third-party review finding — see isPrimaryTaskWindow's own doc comment).
+export { isPrimaryTaskWindow } from './Window';
+
 interface WindowRow {
   id: number;
   owner_type: string;

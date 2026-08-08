@@ -244,6 +244,9 @@ function buildService(opts: {
   // pass through.
   const paneEnvService = {
     buildEnvForNewWindow: vi.fn(() => ({ AZITO_TASK_TOKEN: 'azt.task.1.' + 'a'.repeat(64), AZITO_TASK_ID: '1' })),
+    // Issue #28 multi-window token collision fix: a SECONDARY task window's
+    // (re)creation calls this instead — never rotates/issues a task token.
+    buildEnvForSecondaryWindow: vi.fn(() => ({ AZITO_TASK_ID: '1' })),
     revokeForDestroyedWindow: vi.fn(),
   } as any;
 
@@ -392,6 +395,61 @@ describe('WindowRespawnService.respawn — supervisor wrap', () => {
 
     expect(tmux.splitPane).toHaveBeenCalledTimes(1);
     expect(tmux.splitPane.mock.calls[0][3]).toEqual(tmux.uiTokenEnv());
+  });
+});
+
+// Issue #28 third-party review finding (multi-window token rotation
+// collision): a task's AZITO_TASK_TOKEN generation is bound one-to-one to
+// its PRIMARY worker window (isPrimary: true, matching task.tmuxWindow) —
+// respawning a SECONDARY task-owned window (added via
+// POST /api/tasks/:id/windows, isPrimary: false) must neither rotate nor
+// revoke that token, or it would 401 the still-live primary pane. Respawning
+// the primary window itself must keep rotating exactly as before.
+describe('WindowRespawnService.respawn — primary vs. secondary task window token scoping (Issue #28)', () => {
+  it('respawning a SECONDARY task window does not rotate the task token, and the primary pane keeps working (masked env only)', async () => {
+    const task = makeTask({ id: 5, unitId: 10, tmuxWindow: 'task-5' });
+    const unit = makeUnit({ id: 10 });
+    const secondaryWin = makeWindow({ id: 2, taskId: 5, isPrimary: false, tmuxTarget: 'azito:task-5-side.1', windowType: 'terminal', workerType: null });
+    const { service, tmux, paneEnvService } = buildService({ window: secondaryWin, task, unit });
+
+    await service.respawn(2, makeServer());
+
+    expect(paneEnvService.buildEnvForNewWindow).not.toHaveBeenCalled();
+    expect(paneEnvService.buildEnvForSecondaryWindow).toHaveBeenCalledWith(task, expect.anything());
+    expect(tmux.createWindow).toHaveBeenCalledWith(
+      expect.anything(), 'azito', 'task-5-side', { exactName: true, extraEnv: { AZITO_TASK_ID: '1' } },
+    );
+  });
+
+  it('respawning a SECONDARY task window does not require confirming the old window is gone as fatal (no token at stake) — a kill failure does not block it', async () => {
+    const task = makeTask({ id: 5, unitId: 10 });
+    const unit = makeUnit({ id: 10 });
+    const secondaryWin = makeWindow({ id: 2, taskId: 5, isPrimary: false, tmuxTarget: 'azito:task-5-side.1', windowType: 'terminal', workerType: null });
+    const { service, tmux } = buildService({ window: secondaryWin, task, unit });
+    tmux.listSessions.mockResolvedValue([{
+      name: 'azito',
+      windowCount: 1,
+      attached: false,
+      created: 0,
+      windows: [{ name: 'task-5-side', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+    tmux.killWindow.mockRejectedValueOnce(new Error('kill failed'));
+
+    await service.respawn(2, makeServer());
+
+    expect(tmux.createWindow).toHaveBeenCalled();
+  });
+
+  it('respawning the PRIMARY task window still rotates the task token as before', async () => {
+    const task = makeTask({ id: 5, unitId: 10, tmuxWindow: 'task-5' });
+    const unit = makeUnit({ id: 10 });
+    const primaryWin = makeWindow({ id: 1, taskId: 5, isPrimary: true, tmuxTarget: 'azito:task-5.1' });
+    const { service, paneEnvService } = buildService({ window: primaryWin, task, unit });
+
+    await service.respawn(1, makeServer());
+
+    expect(paneEnvService.buildEnvForNewWindow).toHaveBeenCalledTimes(1);
+    expect(paneEnvService.buildEnvForSecondaryWindow).not.toHaveBeenCalled();
   });
 });
 

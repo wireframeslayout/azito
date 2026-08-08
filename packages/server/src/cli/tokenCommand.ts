@@ -111,10 +111,17 @@ export async function tokenCommand(args: string[]): Promise<void> {
     if (current && current.source !== paths.uiToken) {
       console.error(`Cannot rotate: the hub's effective AZITO_UI_TOKEN currently comes from ${current.source}, not the token file (${paths.uiToken}).`);
       console.error('Rotating the token file would produce a new value the running hub never reads, while still overwriting operator.env / MCP settings with that unusable token.');
+      // `azito token rotate` is not the fix here (third-party review
+      // finding: re-running it deterministically hits this same abort again
+      // — env/.env stays authoritative until a human edits it) — the
+      // authoritative source itself must be updated by hand, then every
+      // consumer that reads a *copy* of the token (harness/setup.sh's
+      // operator.env, azitoctl*.env, MCP settings) re-synced from that new
+      // value via setup.sh, not via rotate.
       if (current.source === 'env') {
-        console.error('Fix: change the AZITO_UI_TOKEN environment variable directly, restart the server, then re-run `azito token rotate`.');
+        console.error('Fix: set the AZITO_UI_TOKEN environment variable to a new value and restart the server, then run `harness/setup.sh --ui-token <new value>` locally and on each server to update operator.env / azitoctl*.env / MCP settings.');
       } else {
-        console.error(`Fix: edit AZITO_UI_TOKEN in ${current.source} directly, restart the server, then re-run \`azito token rotate\`.`);
+        console.error(`Fix: edit AZITO_UI_TOKEN in ${current.source} to a new value and restart the server, then run \`harness/setup.sh --ui-token <new value>\` locally and on each server to update operator.env / azitoctl*.env / MCP settings.`);
       }
       process.exit(1);
     }

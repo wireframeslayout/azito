@@ -114,6 +114,27 @@ describe('authDoctorCommand', () => {
     expect(process.exitCode).toBeUndefined();
   });
 
+  // Third-party review Minor finding: a broken symlink (or any unreadable
+  // file) among ~/.azito/azitoctl*.env used to throw straight out of
+  // `fs.readFileSync` inside this check's `.filter()` — uncaught, that
+  // crashed the entire `azito auth doctor` command (a human running it would
+  // see neither this nor any of the other three checks' results at all, not
+  // even a clean NG). It must instead surface as its own failing check.
+  it('fails independently (without crashing the whole command) when an azitoctl*.env entry is unreadable', async () => {
+    const azitoDir = path.join(fakeHome, '.azito');
+    fs.mkdirSync(azitoDir, { recursive: true });
+    fs.symlinkSync(path.join(azitoDir, 'does-not-exist-target'), path.join(azitoDir, 'azitoctl.env'));
+
+    const { authDoctorCommand } = await import('./authDoctorCommand.js');
+    await authDoctorCommand();
+
+    expect(process.exitCode).toBe(1);
+    expect(allLogLines()).toContain('読み取りに失敗しました');
+    // The other three checks must still have run and reported (proof the
+    // command didn't abort partway through).
+    expect(allLogLines()).toContain('AZITO_SCOPED_AUTH の現在値');
+  });
+
   it('fails when operator.env permissions are not 0600', async () => {
     const azitoDir = path.join(fakeHome, '.azito');
     fs.mkdirSync(azitoDir, { recursive: true });

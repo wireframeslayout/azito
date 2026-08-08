@@ -28,6 +28,16 @@ function mcpSettingsPath(): string {
 }
 
 // (a) azitoctl*.env に AZITO_UI_TOKEN が残っていないか
+//
+// Third-party review Minor finding: `fs.readFileSync` here used to run
+// unguarded — a file the process can't read (permission bits changed
+// out-of-band) or a broken symlink (a stale target from a since-removed
+// setup) threw straight out of the `.filter()` and crashed the ENTIRE
+// `azito auth doctor` command, not just this one check, so a human never
+// even saw the other three checks' results. Each file is now read
+// independently inside try/catch, mirroring `readMcpUiToken`'s
+// present/absent/unreadable split below: an unreadable file is reported as
+// its own NG with repair guidance instead of aborting the whole command.
 function checkAzitoctlEnvNoUiToken(): CheckResult {
   const label = 'azitoctl*.env に AZITO_UI_TOKEN が残っていない';
   const files = findAzitoctlEnvFiles();
@@ -35,18 +45,39 @@ function checkAzitoctlEnvNoUiToken(): CheckResult {
     return { ok: true, label, detail: '~/.azito/azitoctl*.env が見つかりません（未セットアップ、または対象外）' };
   }
 
-  const offenders = files.filter(file => /^AZITO_UI_TOKEN=/m.test(fs.readFileSync(file, 'utf-8')));
-  if (offenders.length === 0) {
+  const offenders: string[] = [];
+  const unreadable: string[] = [];
+  for (const file of files) {
+    let content: string;
+    try {
+      content = fs.readFileSync(file, 'utf-8');
+    } catch (err) {
+      unreadable.push(`${file}（${err instanceof Error ? err.message : String(err)}）`);
+      continue;
+    }
+    if (/^AZITO_UI_TOKEN=/m.test(content)) offenders.push(file);
+  }
+
+  if (offenders.length === 0 && unreadable.length === 0) {
     return { ok: true, label, detail: `確認済み: ${files.join(', ')}` };
   }
-  return {
-    ok: false,
-    label,
-    detail:
-      `AZITO_UI_TOKEN が残っています: ${offenders.join(', ')}\n` +
+
+  const lines: string[] = [];
+  if (offenders.length > 0) {
+    lines.push(
+      `AZITO_UI_TOKEN が残っています: ${offenders.join(', ')}`,
       '  修正: harness/setup.sh を（同じ --azito-url --webhook-token で）再実行してください。' +
       'このファイルは毎回丸ごと書き直されるため、UI トークン行は自動的に消えます。',
-  };
+    );
+  }
+  if (unreadable.length > 0) {
+    lines.push(
+      `読み取りに失敗しました: ${unreadable.join(', ')}`,
+      '  修正: ファイルのパーミッションを確認する（自分の所有か、読み取り権限があるか）か、' +
+      'シンボリックリンクが壊れていないか確認してください。解決しない場合は harness/setup.sh を再実行して作り直してください。',
+    );
+  }
+  return { ok: false, label, detail: lines.join('\n') };
 }
 
 // (b) operator.env のパーミッションが 0600 か

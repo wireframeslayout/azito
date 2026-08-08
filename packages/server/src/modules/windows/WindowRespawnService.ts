@@ -1,4 +1,4 @@
-import type { IWindowRepository, PaneLayout, Window } from './Window';
+import { isPrimaryTaskWindow, type IWindowRepository, type PaneLayout, type Window } from './Window';
 import type { ServerConfig } from '../servers/Server';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { ISessionStrategyFactory } from '../agents/SessionStrategy';
@@ -171,6 +171,15 @@ export class WindowRespawnService {
       unitId = this.enforceExecutionGate(task, server, 'respawn', windowId, buildRespawnManifestInput(win));
     }
 
+    // Whether `win` is the task's PRIMARY worker window — the only window a
+    // task token generation is bound to (Issue #28 third-party review
+    // finding: a secondary window, added via POST /api/tasks/:id/windows,
+    // must never rotate or revoke that token — see isPrimaryTaskWindow's doc
+    // comment on windows/Window.ts). `task` is required in addition to the
+    // window-row check: a window whose owning task was deleted (task is
+    // null) has nothing to rotate either.
+    const isPrimary = task !== null && isPrimaryTaskWindow(win);
+
     // Resolve and verify every working directory this respawn will `cd`
     // into before touching tmux or the DB at all. Containment verification
     // used to run per-pane inside restorePaneLayout/setupSinglePane, i.e.
@@ -200,23 +209,27 @@ export class WindowRespawnService {
       this.tmux,
       server,
       windowAlive ? { target: `${sessionName}:${windowPart}`, kind: 'window' } : null,
-      task ? task.id : null,
+      isPrimary ? task!.id : null,
     );
 
     // Window-generation point for this window: EITHER branch below actually
     // (re)creates the window that becomes the respawned pane (unlike
     // ExecuteTaskUseCase's throwaway-session-then-real-window split, respawn
     // has no separate bootstrap step — whichever tmux call runs here IS the
-    // respawn target). A task-owned window rotates its task token via
-    // TaskPaneEnvironmentService (createRotatedWindow, which also rolls the
-    // new generation back on a creation failure — whether thrown or
-    // resolved with a non-zero exit code, see WindowRotation.ts); a plain
-    // (non-task) window keeps getting the legacy default UI-token env
-    // instead and has no generation to roll back (Issue #28 design v3 §3/§5
-    // only scope task panes — a manual terminal respawn is unaffected). The
-    // rotation itself only happens once the old window's demise is confirmed
-    // above, so a task pane is never left holding a revoked token for a
-    // window that, in fact, survived the kill attempt.
+    // respawn target). Only the task's PRIMARY worker window rotates its
+    // task token via TaskPaneEnvironmentService (createRotatedWindow, which
+    // also rolls the new generation back on a creation failure — whether
+    // thrown or resolved with a non-zero exit code, see WindowRotation.ts);
+    // a secondary task window gets a masked-only env (buildEnvForSecondaryWindow
+    // — never a task token, never rotates/revokes) and a plain (non-task)
+    // window keeps getting the legacy default UI-token env instead — neither
+    // has a generation to roll back (Issue #28 design v3 §3/§5 only scope
+    // task panes; the third-party review's multi-window finding further
+    // scopes the token itself to the primary window alone — see
+    // isPrimaryTaskWindow's doc comment). The rotation itself only happens
+    // once the old window's demise is confirmed above, so the primary pane
+    // is never left holding a revoked token for a window that, in fact,
+    // survived the kill attempt.
     const doCreate = (env: Record<string, string>) => (!sessionExists
       ? this.tmux.createSession(server, sessionName, { windowName: windowPart, exactName: true, extraEnv: env })
       : this.tmux.createWindow(server, sessionName, windowPart, { exactName: true, extraEnv: env }));
@@ -227,10 +240,14 @@ export class WindowRespawnService {
     // why a split pane needs the SAME env explicitly, not just the first
     // pane new-window/new-session set (Issue #28 review Critical finding).
     let windowEnv: Record<string, string>;
-    if (task) {
-      const created = await createRotatedWindow(this.paneEnvService, server, task, 'respawn_create_failed', doCreate);
+    if (isPrimary) {
+      const created = await createRotatedWindow(this.paneEnvService, server, task!, 'respawn_create_failed', doCreate);
       newName = created.windowName;
       windowEnv = created.env;
+    } else if (task) {
+      windowEnv = this.paneEnvService.buildEnvForSecondaryWindow(task, server);
+      const created = await doCreate(windowEnv);
+      newName = created.windowName;
     } else {
       windowEnv = this.tmux.uiTokenEnv();
       const created = await doCreate(windowEnv);

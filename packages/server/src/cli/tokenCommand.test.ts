@@ -137,6 +137,14 @@ describe('tokenCommand', () => {
     // fresh value that 401s against it. rotate must abort instead, leaving
     // every file untouched, and tell the operator to update the
     // authoritative source directly.
+    //
+    // Third-party review finding: the guidance used to end with "re-run
+    // `azito token rotate`" — but rotate deterministically hits this same
+    // abort again as long as env/.env stays authoritative, so that advice
+    // was a dead end. It must instead point at an actionable procedure:
+    // update the authoritative source's AZITO_UI_TOKEN by hand, restart,
+    // then run `harness/setup.sh --ui-token <new value>` to re-sync
+    // operator.env / azitoctl*.env / MCP settings from it.
     it('aborts without writing anything when .env has AZITO_UI_TOKEN (the authoritative source)', async () => {
       fs.writeFileSync(dotEnvPath, 'AZITO_UI_TOKEN=existing\n');
       const azitoDir = path.join(fakeHome, '.azito');
@@ -149,6 +157,8 @@ describe('tokenCommand', () => {
 
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Cannot rotate'));
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(dotEnvPath));
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('harness/setup.sh --ui-token'));
+      expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining('re-run `azito token rotate`'));
       expect(fs.existsSync(uiTokenPath)).toBe(false);
       expect(fs.readFileSync(operatorEnvPath, 'utf-8')).toContain('old-token');
     });
@@ -160,6 +170,8 @@ describe('tokenCommand', () => {
 
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Cannot rotate'));
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('environment variable'));
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('harness/setup.sh --ui-token'));
+      expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining('re-run `azito token rotate`'));
       expect(fs.existsSync(uiTokenPath)).toBe(false);
     });
 

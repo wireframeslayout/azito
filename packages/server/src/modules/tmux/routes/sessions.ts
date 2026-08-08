@@ -2,6 +2,7 @@ import type { FastifyPluginCallback } from 'fastify';
 import type { IServerRepository } from '../../servers/Server';
 import type { TmuxClient, TmuxSession } from '../TmuxClient';
 import type { SqliteWindowRepository } from '../../windows/SqliteWindowRepository';
+import { isPrimaryTaskWindow } from '../../windows/SqliteWindowRepository';
 import type { NotificationBus } from '../../notifications/NotificationBus';
 import type { ResourceGuard } from '../../servers/resources/ResourceGuard';
 import { resolveKillOutcome } from '../killOutcome';
@@ -27,6 +28,14 @@ export interface SessionsRouteOptions {
    * must not depend on `tasks` (an upper-layer module) — buildServer.ts (the
    * composition root) closes over the real service and passes just this
    * function.
+   *
+   * Call sites below gate this with `isPrimaryTaskWindow(win)` (Issue #28
+   * third-party review finding — multi-window token rotation collision): a
+   * task's token generation is bound one-to-one to its PRIMARY worker
+   * window, so destroying a secondary window (added via
+   * `POST /api/tasks/:id/windows`) must never revoke it — that would 401 the
+   * still-live primary pane. See isPrimaryTaskWindow's doc comment
+   * (windows/Window.ts) for the shared judgment.
    */
   onTaskWindowDestroyed?: (taskId: number, reason: string) => void;
 }
@@ -192,7 +201,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         // (never a second revocation implementation).
         for (const win of sessionWindows) {
           opts.windowRepo?.removeByServerAndTarget(request.params.name, win.tmuxTarget);
-          if (win.ownerType === 'task' && win.taskId !== null) {
+          if (win.taskId !== null && isPrimaryTaskWindow(win)) {
             opts.onTaskWindowDestroyed?.(win.taskId, 'window_killed_via_session_delete');
           }
         }
@@ -241,7 +250,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         }
         // Reaching here means the window is confirmed gone (kill-window
         // succeeded, or tmux already reported it missing) — safe to revoke.
-        if (windowRow?.ownerType === 'task' && windowRow.taskId !== null) {
+        if (windowRow && windowRow.taskId !== null && isPrimaryTaskWindow(windowRow)) {
           opts.onTaskWindowDestroyed?.(windowRow.taskId, 'window_killed_via_sessions_route');
         }
         // Clients hold terminal tabs under both name-form and index-form targets;

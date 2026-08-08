@@ -127,6 +127,38 @@ describe('TaskPaneEnvironmentService.buildEnvForNewWindow', () => {
   });
 });
 
+// Issue #28 third-party review finding (multi-window token rotation
+// collision): a secondary task window must never rotate/issue the task's
+// AZITO_TASK_TOKEN — that generation is bound one-to-one to the task's
+// primary worker window, and issueNextGeneration revokes every other
+// outstanding generation for the task as part of rotating.
+describe('TaskPaneEnvironmentService.buildEnvForSecondaryWindow', () => {
+  it('never calls issueNextGeneration and never sets AZITO_TASK_TOKEN or project secrets', () => {
+    const { service, taskTokenRepo, projectSecretRepo } = makeDeps(false);
+    const env = service.buildEnvForSecondaryWindow(makeTask({ id: 5, projectId: 7 }), makeServer());
+
+    expect(taskTokenRepo.issueNextGeneration).not.toHaveBeenCalled();
+    expect(projectSecretRepo.findByProjectWithValues).not.toHaveBeenCalled();
+    expect(env.AZITO_TASK_TOKEN).toBeUndefined();
+    expect('AZITO_SECRET_FOO' in env).toBe(false);
+    expect(env.AZITO_TASK_ID).toBe('5');
+  });
+
+  it('injects AZITO_UI_TOKEN when the scoped-auth flag is off (compat mode)', () => {
+    const { service } = makeDeps(false);
+    const env = service.buildEnvForSecondaryWindow(makeTask(), makeServer());
+    expect(env.AZITO_UI_TOKEN).toBe('ui-token-123');
+  });
+
+  it('explicitly overrides AZITO_UI_TOKEN/AZITO_AGENT_TOKEN to empty when the scoped-auth flag is on', () => {
+    const { service } = makeDeps(true);
+    const agentServer = makeServer({ type: 'agent', agentPort: 4001, agentToken: 'secret-agent-token' });
+    const env = service.buildEnvForSecondaryWindow(makeTask(), agentServer);
+    expect(env.AZITO_UI_TOKEN).toBe('');
+    expect(env.AZITO_AGENT_TOKEN).toBe('');
+  });
+});
+
 // Issue #28 third-party review finding: window-destroy paths (route
 // kill-window, execute()/restore() rollback branches) must revoke the
 // generation this class just issued when the window it belongs to is

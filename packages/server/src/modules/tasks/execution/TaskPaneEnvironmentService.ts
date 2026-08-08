@@ -21,6 +21,17 @@ import type { SqliteProjectSecretRepository } from '../../projects/SqliteProject
  * resume onto an existing window has nowhere to deliver a rotated token
  * anyway; those call sites (e.g. ExecuteTaskUseCase.followUp when the window
  * already exists) simply don't call this at all.
+ *
+ * ALSO only call {@link buildEnvForNewWindow} for the task's PRIMARY worker
+ * window (Issue #28 third-party review finding — multi-window token rotation
+ * collision): the token generation this issues is bound one-to-one to the
+ * primary window (`task.tmuxWindow`), and `issueNextGeneration` revokes every
+ * other outstanding generation for the task as part of rotating — calling
+ * this for a secondary window (added via `POST /api/tasks/:id/windows`)
+ * would invalidate the still-live primary pane's token. A secondary window's
+ * (re)creation must use {@link buildEnvForSecondaryWindow} instead; see
+ * `isPrimaryTaskWindow` (windows/Window.ts) for the shared judgment every
+ * call site uses to tell the two apart.
  */
 export class TaskPaneEnvironmentService {
   constructor(
@@ -86,6 +97,40 @@ export class TaskPaneEnvironmentService {
       // already-running sessions' leftover env unnecessary: any task window
       // created from here on is safe no matter what a session's own env
       // holds.
+      env.AZITO_UI_TOKEN = '';
+      env.AZITO_AGENT_TOKEN = '';
+    }
+    return env;
+  }
+
+  /**
+   * Env for a task-owned window that is NOT the task's primary worker window
+   * (Issue #28 third-party review finding — multi-window token rotation
+   * collision): a secondary window (added via `POST /api/tasks/:id/windows`)
+   * is not a caller of the task's own API surface, so it has no reason to
+   * hold `AZITO_TASK_TOKEN` — and unlike {@link buildEnvForNewWindow}, this
+   * method never calls `issueNextGeneration` (which would revoke the primary
+   * window's own still-live generation as a side effect; `ITaskTokenRepository`
+   * keeps at most one active generation per task) or touches the token
+   * repository at all. It still applies the same AZITO_UI_TOKEN/
+   * AZITO_AGENT_TOKEN compat-mode-or-mask split {@link buildEnvForNewWindow}
+   * does — a secondary window is exactly as exposed to a leftover session
+   * environment as a primary one (see that method's masking comment) — just
+   * without ever handing out a task token or the project's secrets.
+   *
+   * Callers: `WindowRespawnService.respawn()` for a secondary window's
+   * (re)creation. Never call this for the primary window — see
+   * `isPrimaryTaskWindow`'s doc comment for how callers tell the two apart.
+   */
+  buildEnvForSecondaryWindow(task: Task, server: ServerConfig): Record<string, string> {
+    const env: Record<string, string> = { AZITO_TASK_ID: String(task.id) };
+    if (!this.scopedAuthEnabled) {
+      if (this.uiToken) env.AZITO_UI_TOKEN = this.uiToken;
+      if (server.type === 'agent') {
+        if (server.agentPort) env.AZITO_AGENT_PORT = String(server.agentPort);
+        if (server.agentToken) env.AZITO_AGENT_TOKEN = server.agentToken;
+      }
+    } else {
       env.AZITO_UI_TOKEN = '';
       env.AZITO_AGENT_TOKEN = '';
     }

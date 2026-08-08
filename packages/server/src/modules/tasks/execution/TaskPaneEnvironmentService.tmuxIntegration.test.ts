@@ -27,8 +27,20 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Polls capture-pane until `predicate` matches or `timeoutMs` elapses (shell startup time under a loaded test run is not fixed). */
-async function waitForPane(target: string, predicate: (text: string) => boolean, timeoutMs = 5000): Promise<string> {
+/**
+ * Polls capture-pane until `predicate` matches or `timeoutMs` elapses (shell
+ * startup time under a loaded test run is not fixed). Test-stabilization fix
+ * (third-party review): this used to default to 5000ms, which this file's
+ * lone `it()` also relied on as its own implicit vitest test timeout — under
+ * full-suite parallel execution (many other test files' workers competing
+ * for CPU), a real `tmux new-window`/shell-startup round trip can take
+ * noticeably longer than that, so the poll would still be waiting when
+ * vitest's own test timeout fired first. Raised well above what's been
+ * observed necessary even under load; the `it()` below sets a matching
+ * explicit timeout (see TmuxClient.splitPane.tmuxIntegration.test.ts, which
+ * already did this).
+ */
+async function waitForPane(target: string, predicate: (text: string) => boolean, timeoutMs = 20000): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   let last = '';
   while (Date.now() < deadline) {
@@ -44,7 +56,7 @@ afterEach(() => {
 });
 
 describe('TaskPaneEnvironmentService x real tmux: session-env leak', () => {
-  it('a task window created inside a session that already carries AZITO_UI_TOKEN does not see it', async () => {
+  it('a task window created inside a session that already carries AZITO_UI_TOKEN does not see it', { timeout: 30000 }, async () => {
     // Simulate a session whose environment was polluted with the UI token —
     // e.g. by a project session bootstrap or manual terminal creation that
     // used `tmux.uiTokenEnv()` on `createSession` (which sets SESSION-level
