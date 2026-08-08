@@ -8,6 +8,7 @@ import type { TmuxClient } from '../tmux/TmuxClient';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { FileBrowseService, FileBrowseError } from './FileBrowseService';
+import type { FileSearchService } from './FileSearchService';
 import { assertDirectoryContained, assertPathContained, PathResolverFactory } from '../git/PathContainment';
 
 export function sanitizeFileName(raw: string): string {
@@ -182,10 +183,11 @@ export interface FileBrowseRouteOptions {
   tmux: TmuxClient;
   projectServerRepo: IProjectServerRepository;
   transportFactory: TransportFactory;
+  searchService: FileSearchService;
 }
 
 export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (fastify, opts, done) => {
-  const { serverRepo, tmux, projectServerRepo, transportFactory } = opts;
+  const { serverRepo, tmux, projectServerRepo, transportFactory, searchService } = opts;
   const fileBrowseService = new FileBrowseService(tmux);
   const resolverFactory = new PathResolverFactory();
 
@@ -361,6 +363,59 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
           return reply.status(400).send({ error: message });
         }
         return reply.status(500).send({ error: message });
+      }
+    },
+  );
+
+  // ── GET /api/servers/:name/files/search ──
+  fastify.get<{ Params: { name: string }; Querystring: { q?: string; project_id?: string; root?: string; name?: string; content?: string; case?: string; regex?: string } }>(
+    '/api/servers/:name/files/search',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+
+      const q = (request.query.q || '').trim();
+      if (!q) return reply.status(400).send({ error: 'q is required' });
+      if (q.length > 200) return reply.status(400).send({ error: 'q must be 200 characters or fewer' });
+      if (/[\x00-\x1f]/.test(q)) return reply.status(400).send({ error: 'Invalid query' });
+
+      const projectId = parseInt(request.query.project_id || '', 10);
+      if (isNaN(projectId)) return reply.status(400).send({ error: 'project_id is required' });
+
+      const matchName = request.query.name !== 'false';
+      const matchContent = request.query.content !== 'false';
+      if (!matchName && !matchContent) return reply.status(400).send({ error: 'At least one of name or content must be enabled' });
+
+      const ps = projectServerRepo.find(projectId, srv.name);
+      if (!ps?.workingDirectory) return reply.status(400).send({ error: 'Project server has no working directory' });
+
+      let root = (request.query.root || '').trim() || ps.workingDirectory;
+      if (/[\x00-\x1f]/.test(root)) return reply.status(400).send({ error: 'Invalid root path' });
+
+      try {
+        const transport = srv.type !== 'local' ? transportFactory.getTransport(srv) : undefined;
+        root = await assertDirectoryContained(resolverFactory, srv.type, transport, { target: root, allowedRoot: ps.workingDirectory }, 'search root');
+      } catch (err: unknown) {
+        const message = (err as Error).message;
+        if (message.includes('escapes the allowed directory') || message.includes('Cannot verify')) {
+          return reply.status(400).send({ error: message });
+        }
+        return reply.status(500).send({ error: message });
+      }
+
+      try {
+        const result = await searchService.search(srv, {
+          query: q,
+          root,
+          matchName,
+          matchContent,
+          caseSensitive: request.query.case === 'true',
+          regex: request.query.regex === 'true',
+        });
+        return result;
+      } catch (err: unknown) {
+        if (err instanceof FileBrowseError) return reply.status(err.status).send({ error: err.message });
+        return reply.status(500).send({ error: (err as Error).message });
       }
     },
   );

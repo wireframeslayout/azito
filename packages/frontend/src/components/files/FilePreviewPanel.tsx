@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, fetchBlob } from '../../api/client';
 import { useToast } from '../../hooks/useToast';
@@ -57,7 +57,7 @@ type FileResponse = (FileContent & { type?: undefined; error?: string }) | (Imag
 
 /* ── Internal components ── */
 
-function HighlightedCode({ content, language }: { content: string; language: string }) {
+function HighlightedCode({ content, language, initialLine }: { content: string; language: string; initialLine?: number }) {
   const highlighted = useMemo(() => {
     const lang = language === 'text' ? undefined : language;
     if (lang && hljs.getLanguage(lang)) {
@@ -72,9 +72,17 @@ function HighlightedCode({ content, language }: { content: string; language: str
   }, [content, language]);
 
   const lines = content.split('\n');
+  const targetRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (initialLine && targetRef.current) {
+      const el = targetRef.current.querySelector(`[data-line="${initialLine}"]`);
+      el?.scrollIntoView({ block: 'center' });
+    }
+  }, [initialLine, content]);
 
   return (
-    <div style={{ display: 'flex', fontFamily: "'JetBrainsMono Nerd Font', 'JetBrains Mono', 'Consolas', monospace", fontSize: 'var(--font-md)', lineHeight: 1.6 }}>
+    <div ref={targetRef} style={{ display: 'flex', fontFamily: "'JetBrainsMono Nerd Font', 'JetBrains Mono', 'Consolas', monospace", fontSize: 'var(--font-md)', lineHeight: 1.6 }}>
       <div style={{
         padding: '12px 12px 12px 16px',
         textAlign: 'right',
@@ -84,8 +92,22 @@ function HighlightedCode({ content, language }: { content: string; language: str
         flexShrink: 0,
         borderRight: '1px solid var(--border)',
         whiteSpace: 'pre',
+        display: 'flex',
+        flexDirection: 'column',
       }}>
-        {lines.map((_, i) => i + 1).join('\n')}
+        {lines.map((_, i) => {
+          const lineNum = i + 1;
+          const isTarget = lineNum === initialLine;
+          return (
+            <span
+              key={lineNum}
+              data-line={lineNum}
+              style={isTarget ? { background: 'var(--accent-a15)', borderRadius: 2, opacity: 1 } : undefined}
+            >
+              {lineNum}
+            </span>
+          );
+        })}
       </div>
       <pre
         className="hljs"
@@ -129,7 +151,7 @@ function MarkdownFileView({ content, language, mode }: { content: string; langua
 
 /* ── File Preview Panel (for main area) ── */
 
-export function FilePreviewPanel({ serverName, filePath }: { serverName: string; filePath: string }) {
+export function FilePreviewPanel({ serverName, filePath, initialLine }: { serverName: string; filePath: string; initialLine?: number }) {
   const { t } = useTranslation('files');
   const { showToast } = useToast();
   const [file, setFile] = useState<FileContent | null>(null);
@@ -300,7 +322,7 @@ export function FilePreviewPanel({ serverName, filePath }: { serverName: string;
         {file && isMarkdown ? (
           <MarkdownFileView content={file.content} language={file.language} mode={mdViewMode} />
         ) : file ? (
-          <HighlightedCode content={file.content} language={file.language} />
+          <HighlightedCode content={file.content} language={file.language} initialLine={initialLine} />
         ) : null}
         {image && (
           <div style={{

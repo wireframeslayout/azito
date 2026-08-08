@@ -44,6 +44,21 @@
     "copiedUrl": "API URL copied (for agents — requires an auth token)",
     "dropToUpload": "Drop to upload"
   },
+  "search": {
+    "placeholder": "Search file names and content…",
+    "byName": "Name",
+    "byContent": "Content",
+    "caseSensitive": "Aa",
+    "regex": ".*",
+    "excluded": "Excluded: node_modules, .git, dist, .worktrees",
+    "summary": "{{files}} files · {{hits}} hits ({{engine}}, {{time}}ms)",
+    "truncated": "Showing top 200 results — refine your query",
+    "noMatch": "No matches found",
+    "noMatchHint": "Check excluded patterns",
+    "timedOut": "Search timed out (10s)",
+    "failed": "Search failed",
+    "nameMatch": "Name match"
+  },
   "worktrees": {
     "title": "Worktrees",
     "mainLabel": "Main",

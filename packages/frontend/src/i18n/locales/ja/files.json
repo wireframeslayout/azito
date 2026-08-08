@@ -44,6 +44,21 @@
     "copiedUrl": "API URL をコピーしました（エージェント用。ブラウザでは開けません）",
     "dropToUpload": "ドロップしてアップロード"
   },
+  "search": {
+    "placeholder": "ファイル名・内容を検索…",
+    "byName": "名前",
+    "byContent": "内容",
+    "caseSensitive": "Aa",
+    "regex": ".*",
+    "excluded": "除外: node_modules, .git, dist, .worktrees",
+    "summary": "{{files}} ファイル · {{hits}} 件 ({{engine}}, {{time}}ms)",
+    "truncated": "上位 200 件を表示しています — 絞り込んでください",
+    "noMatch": "一致するものがありません",
+    "noMatchHint": "除外パターンを確認してください",
+    "timedOut": "検索がタイムアウトしました（10秒）",
+    "failed": "検索に失敗しました",
+    "nameMatch": "ファイル名一致"
+  },
   "worktrees": {
     "title": "ワークツリー",
     "mainLabel": "本流",

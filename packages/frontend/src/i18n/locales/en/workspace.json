@@ -160,7 +160,9 @@
     "noServerConfigured": "No server environments configured.",
     "noWorkingDir": "No working directory set for this server.",
     "projectSettings": "Project Settings",
-    "gitDiff": "Git Diff"
+    "gitDiff": "Git Diff",
+    "searchFiles": "Search files",
+    "fileTree": "File tree"
   },
   "welcome": {
     "createFirst": "Create your first project to start commanding agents.",
