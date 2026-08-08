@@ -35,7 +35,16 @@ function updateOperatorEnvToken(newToken: string): boolean {
     return line;
   });
   if (updated) {
-    fs.writeFileSync(filePath, newLines.join('\n'));
+    // Force 0600 regardless of the file's current mode (third-party review
+    // Important finding): `mode` on writeFileSync only applies when the file
+    // is newly created, and this file always pre-exists (checked above), so
+    // it alone would not correct a file that somehow ended up more
+    // permissive (e.g. written by an older setup.sh before the umask 077 +
+    // atomic-mv fix, or restored from a backup). chmod before writing too,
+    // so the content is never briefly readable under a looser mode between
+    // this chmod and the write.
+    fs.chmodSync(filePath, 0o600);
+    fs.writeFileSync(filePath, newLines.join('\n'), { mode: 0o600 });
   }
   return updated;
 }

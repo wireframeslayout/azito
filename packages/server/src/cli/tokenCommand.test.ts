@@ -209,6 +209,22 @@ describe('tokenCommand', () => {
       expect(updated).toContain('AZITO_URL=http://localhost:3001');
     });
 
+    it('forces operator.env to mode 0600 even if it was previously more permissive', async () => {
+      const azitoDir = path.join(fakeHome, '.azito');
+      fs.mkdirSync(azitoDir, { recursive: true });
+      const operatorEnvPath = path.join(azitoDir, 'operator.env');
+      fs.writeFileSync(operatorEnvPath, 'AZITO_URL=http://localhost:3001\nAZITO_UI_TOKEN=old-token\n');
+      // Simulate a file left over from before the umask 077 + atomic-mv fix
+      // (or restored from a backup) that ended up world-readable.
+      fs.chmodSync(operatorEnvPath, 0o644);
+
+      const { tokenCommand } = await import('./tokenCommand.js');
+      await tokenCommand(['rotate']);
+
+      const mode = fs.statSync(operatorEnvPath).mode & 0o777;
+      expect(mode).toBe(0o600);
+    });
+
     it('does nothing when operator.env does not exist', async () => {
       const { tokenCommand } = await import('./tokenCommand.js');
       await expect(tokenCommand(['rotate'])).resolves.not.toThrow();

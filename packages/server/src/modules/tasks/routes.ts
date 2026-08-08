@@ -843,23 +843,40 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       // execution's kill-and-rotate (createRotatedWindow, via
       // confirmOldWindowGone) to find and kill — the token then never
       // expired and the next run's fresh generation existed alongside it,
-      // not in place of it. A kill failure (still-live pane) intentionally
-      // leaves the generation alone, same rationale as every other
-      // kill-then-revoke call site (WindowRotation.ts's
-      // confirmOldWindowGone / createRotatedWindow).
+      // not in place of it.
+      //
+      // Fail-closed on an unconfirmed kill (third-party review, Phase B):
+      // a kill failure or an unresolvable server used to still clear
+      // `tmuxWindow` and reset the task to `open`, so a still-live pane
+      // kept running — with its still-valid token — completely untracked
+      // (no `tmuxWindow` left to find it by, and no generation revoked).
+      // Both the status reset AND the `tmuxWindow`/generation clearing now
+      // happen only once the kill is confirmed (success or already-gone);
+      // otherwise the task is left exactly as it was and the request fails,
+      // so the caller can check the server / kill the pane by hand and
+      // retry.
       if (task.tmuxWindow) {
         const resolvedServerName = resolveTaskServerName(task, projectServerRepo);
         const srv = resolvedServerName ? serverRepo.findByName(resolvedServerName) : null;
-        if (resolvedServerName && srv) {
-          const tmuxSession = resolveTmuxSession(task.projectId, resolvedServerName, projectServerRepo);
-          const outcome = await resolveKillOutcome(tmux.killWindow(srv, `${tmuxSession}:${task.tmuxWindow}`));
-          if (outcome.success) {
-            revokeTaskWindowGeneration(id, 'retry_abandoned_window');
-          }
+        if (!resolvedServerName || !srv) {
+          return reply.status(409).send({
+            error: `Could not resolve the server for task ${id}'s abandoned tmux window '${task.tmuxWindow}'; ` +
+              'the pane could not be confirmed dead. Check the server is reachable, kill the window manually if needed, then retry.',
+          });
         }
+        const tmuxSession = resolveTmuxSession(task.projectId, resolvedServerName, projectServerRepo);
+        const outcome = await resolveKillOutcome(tmux.killWindow(srv, `${tmuxSession}:${task.tmuxWindow}`));
+        if (!outcome.success) {
+          return reply.status(409).send({
+            error: `Failed to kill task ${id}'s abandoned tmux window '${tmuxSession}:${task.tmuxWindow}'; ` +
+              'it may still be running with a valid token. Check the server / kill the window manually, then retry.',
+          });
+        }
+        revokeTaskWindowGeneration(id, 'retry_abandoned_window');
       }
 
-      // Reset task status and clear tmux window
+      // Reset task status and clear tmux window — only reached once any
+      // abandoned window has been confirmed dead (or there was none).
       taskRepo.update(id, { status: 'open' as TaskStatus, tmuxWindow: null });
 
       return { ok: true };

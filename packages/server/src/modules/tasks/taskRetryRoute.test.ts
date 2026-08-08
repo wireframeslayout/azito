@@ -174,6 +174,12 @@ function makeOpts(taskOverrides?: Partial<Task>, killWindowImpl?: () => Promise<
 // losing `tmuxWindow` meant the next execution's kill-and-rotate had nothing
 // left to find. These tests confirm the fixed order: kill first, revoke only
 // once the kill is confirmed, then clear tmuxWindow.
+//
+// Phase B follow-up (third-party review, still Important): a kill failure —
+// or an unresolvable server — used to still reset the task and clear
+// `tmuxWindow` anyway (fail-open). It must now fail-closed: the task is left
+// untouched and the request errors, so the abandoned pane and its token stay
+// tracked until a human confirms it is actually dead.
 describe('POST /api/tasks/:id/retry', () => {
   it('kills the abandoned tmux window and revokes its token generation before clearing tmuxWindow', async () => {
     const opts = makeOpts({ status: 'failed', tmuxWindow: 'task-1' });
@@ -193,7 +199,7 @@ describe('POST /api/tasks/:id/retry', () => {
     expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { status: 'open', tmuxWindow: null });
   });
 
-  it('does not revoke the token generation when the kill fails (still-live pane)', async () => {
+  it('fails closed and leaves tmuxWindow/status untouched when the kill fails (still-live pane)', async () => {
     const opts = makeOpts(
       { status: 'failed', tmuxWindow: 'task-1' },
       async () => ({ stdout: '', stderr: 'some other tmux error', code: 1 }),
@@ -204,13 +210,30 @@ describe('POST /api/tasks/:id/retry', () => {
 
     const res = await app.inject({ method: 'POST', url: '/api/tasks/1/retry' });
 
-    expect(res.statusCode).toBe(200);
+    expect(res.statusCode).toBe(409);
+    expect(JSON.parse(res.payload).error).toMatch(/Failed to kill/);
     expect(opts.tmux.killWindow).toHaveBeenCalled();
     expect(opts.revokeTaskWindowGeneration).not.toHaveBeenCalled();
-    // Task is still reset to retryable even though the old pane could not be
-    // confirmed dead — the same "leave the generation alone, not the retry
-    // itself" tradeoff every other kill-then-revoke call site makes.
-    expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { status: 'open', tmuxWindow: null });
+    // Fail-closed: the task must NOT be reset — the abandoned pane may still
+    // be running with a still-valid token, so `tmuxWindow` and `status` stay
+    // exactly as they were for the next attempt to find.
+    expect(opts.taskRepo.update).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the abandoned window\'s server cannot be resolved', async () => {
+    const opts = makeOpts({ status: 'failed', tmuxWindow: 'task-1' });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/retry' });
+
+    expect(res.statusCode).toBe(409);
+    expect(JSON.parse(res.payload).error).toMatch(/Could not resolve the server/);
+    expect(opts.tmux.killWindow).not.toHaveBeenCalled();
+    expect(opts.revokeTaskWindowGeneration).not.toHaveBeenCalled();
+    expect(opts.taskRepo.update).not.toHaveBeenCalled();
   });
 
   it('skips the kill/revoke step entirely when the task has no tmuxWindow', async () => {

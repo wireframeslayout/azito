@@ -222,31 +222,40 @@ if [[ -n "$AZITO_URL" && -n "$AZITO_WEBHOOK_TOKEN" ]]; then
   AZITOCTL_ENV_DIR="$HOME/.azito"
   AZITOCTL_ENV_FILE="$AZITOCTL_ENV_DIR/azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env"
   mkdir -p "$AZITOCTL_ENV_DIR"
-  # azitoctl / azs がこのファイルを source するため、値は printf %q で必ず
-  # シェルクォートする（生値だと空白・引用符で壊れ、$() は任意コマンド
-  # 実行になる）。hook コマンドの ENV_PREFIX 埋め込みと同じ流儀。
-  {
-    printf 'AZITO_URL=%q\n' "$AZITO_URL"
-    printf 'AZITO_WEBHOOK_TOKEN=%q\n' "$AZITO_WEBHOOK_TOKEN"
-    if [[ -n "$AZITO_SERVER_NAME" ]]; then
-      printf 'AZITO_SERVER_NAME=%q\n' "$AZITO_SERVER_NAME"
-    fi
-    # AZITO_SUPERVISOR_PATH: azs が実行する supervisor バンドルの絶対パス
-    # （実行ファイルのパスのみ。ランナーは azs 側の AZITO_SUPERVISOR_RUNNER で
-    # 固定的に前置され、既定は node）。azs はこの値を eval せず 1 引数として
-    # 扱うため、$(...) 等が混入しても実行されない。
-    # setup.sh 単体では local/agent/ssh のどの種別に対して実行されているか
-    # 判別できないため、agent サーバーの既定パス
-    # (~/.azito/agent/current/azito-supervisor.cjs、AgentInstaller.ts が
-    # デプロイする場所、SupervisorPath.ts の AGENT_SUPERVISOR_PATH と同じ)
-    # を書いておく。$HOME はここでは展開せず、azs 側が source した時点の
-    # 実行時ユーザーの $HOME で展開されるようにする（%q は使わない — %q だと
-    # $ がエスケープされ展開自体が止まる。パスに空白は無いので単純代入で安全）。
-    # local チェックアウトではこのパスが存在しないため、azs 側の探索順 b
-    # （スクリプト位置から repo dist を解決、存在チェック）へフォールバックする。
-    printf 'AZITO_SUPERVISOR_PATH=$HOME/.azito/agent/current/azito-supervisor.cjs\n'
-  } > "$AZITOCTL_ENV_FILE"
-  chmod 600 "$AZITOCTL_ENV_FILE"
+  # AZITO_WEBHOOK_TOKEN を含むため、書き込み中も world-readable にならないよう
+  # umask 077 のサブシェルで隣接一時ファイルに書き、chmod 600 確定後に mv で
+  # アトミックに置換する（operator.env と同じ対策、third-party review Important
+  # finding）。同一ディレクトリ内の mktemp なので mv はリネームのみで済む。
+  AZITOCTL_ENV_TMP="$(mktemp "$AZITOCTL_ENV_DIR/.azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env.XXXXXX")"
+  (
+    umask 077
+    # azitoctl / azs がこのファイルを source するため、値は printf %q で必ず
+    # シェルクォートする（生値だと空白・引用符で壊れ、$() は任意コマンド
+    # 実行になる）。hook コマンドの ENV_PREFIX 埋め込みと同じ流儀。
+    {
+      printf 'AZITO_URL=%q\n' "$AZITO_URL"
+      printf 'AZITO_WEBHOOK_TOKEN=%q\n' "$AZITO_WEBHOOK_TOKEN"
+      if [[ -n "$AZITO_SERVER_NAME" ]]; then
+        printf 'AZITO_SERVER_NAME=%q\n' "$AZITO_SERVER_NAME"
+      fi
+      # AZITO_SUPERVISOR_PATH: azs が実行する supervisor バンドルの絶対パス
+      # （実行ファイルのパスのみ。ランナーは azs 側の AZITO_SUPERVISOR_RUNNER で
+      # 固定的に前置され、既定は node）。azs はこの値を eval せず 1 引数として
+      # 扱うため、$(...) 等が混入しても実行されない。
+      # setup.sh 単体では local/agent/ssh のどの種別に対して実行されているか
+      # 判別できないため、agent サーバーの既定パス
+      # (~/.azito/agent/current/azito-supervisor.cjs、AgentInstaller.ts が
+      # デプロイする場所、SupervisorPath.ts の AGENT_SUPERVISOR_PATH と同じ)
+      # を書いておく。$HOME はここでは展開せず、azs 側が source した時点の
+      # 実行時ユーザーの $HOME で展開されるようにする（%q は使わない — %q だと
+      # $ がエスケープされ展開自体が止まる。パスに空白は無いので単純代入で安全）。
+      # local チェックアウトではこのパスが存在しないため、azs 側の探索順 b
+      # （スクリプト位置から repo dist を解決、存在チェック）へフォールバックする。
+      printf 'AZITO_SUPERVISOR_PATH=$HOME/.azito/agent/current/azito-supervisor.cjs\n'
+    } > "$AZITOCTL_ENV_TMP"
+  )
+  chmod 600 "$AZITOCTL_ENV_TMP"
+  mv -f "$AZITOCTL_ENV_TMP" "$AZITOCTL_ENV_FILE"
   echo "  $AZITOCTL_ENV_FILE: 書き出しました（AZITO_UI_TOKEN は含みません）"
 else
   echo "  スキップ (--azito-url と --webhook-token の両方が必要)"
@@ -263,17 +272,27 @@ if [[ -n "$AZITO_UI_TOKEN" ]]; then
   OPERATOR_ENV_DIR="$HOME/.azito"
   OPERATOR_ENV_FILE="$OPERATOR_ENV_DIR/operator.env"
   mkdir -p "$OPERATOR_ENV_DIR"
-  {
-    echo "# AZITO operator credentials"
-    echo "#"
-    echo "# このファイルは人間が明示的に \`source ~/.azito/operator.env\` して使う"
-    echo "# ためのものです。setup.sh を含むいかなるスクリプトからも自動 source"
-    echo "# してはいけません。source した時点でそのシェルはオペレーター権限"
-    echo "# （全権）で動作します。"
-    printf 'AZITO_URL=%q\n' "$AZITO_URL_VALUE"
-    printf 'AZITO_UI_TOKEN=%q\n' "$AZITO_UI_TOKEN"
-  } > "$OPERATOR_ENV_FILE"
-  chmod 600 "$OPERATOR_ENV_FILE"
+  # AZITO_UI_TOKEN（全権トークン）を含むため、書き込み中も world-readable に
+  # ならないよう umask 077 のサブシェルで隣接一時ファイルに書き、chmod 600
+  # 確定後に mv でアトミックに置換する。umask 022 環境で `>` 直書き＋事後
+  # chmod だと、書き込みが始まった瞬間から chmod が効くまでの間 0644 で
+  # トークンが露出する窓ができていた（third-party review Important finding）。
+  OPERATOR_ENV_TMP="$(mktemp "$OPERATOR_ENV_DIR/.operator.env.XXXXXX")"
+  (
+    umask 077
+    {
+      echo "# AZITO operator credentials"
+      echo "#"
+      echo "# このファイルは人間が明示的に \`source ~/.azito/operator.env\` して使う"
+      echo "# ためのものです。setup.sh を含むいかなるスクリプトからも自動 source"
+      echo "# してはいけません。source した時点でそのシェルはオペレーター権限"
+      echo "# （全権）で動作します。"
+      printf 'AZITO_URL=%q\n' "$AZITO_URL_VALUE"
+      printf 'AZITO_UI_TOKEN=%q\n' "$AZITO_UI_TOKEN"
+    } > "$OPERATOR_ENV_TMP"
+  )
+  chmod 600 "$OPERATOR_ENV_TMP"
+  mv -f "$OPERATOR_ENV_TMP" "$OPERATOR_ENV_FILE"
   echo "  $OPERATOR_ENV_FILE: 書き出しました（使うには: source $OPERATOR_ENV_FILE）"
 else
   echo "  スキップ (--ui-token が未指定)"
