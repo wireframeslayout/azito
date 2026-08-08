@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { resolveDataDir } from '../shared/dataDir';
-import { readEnvValue, resolveServerEnvPath } from '../shared/envFile';
+import { resolveServerEnvPath } from '../shared/envFile';
 import { resolveCurrentUiToken } from '../shared/currentUiToken';
 
 interface McpServerEnv {
@@ -86,17 +86,35 @@ export async function tokenCommand(args: string[]): Promise<void> {
 
   if (subcommand === 'rotate') {
     const paths = resolveDataDir();
+
+    // Issue #28 review Important finding: `resolveCurrentUiToken()` mirrors
+    // the SAME env -> .env -> token-file precedence the running hub applies
+    // (see that function's own doc comment). When env or the server .env
+    // wins, the token FILE this command is about to rewrite is not what the
+    // hub actually authenticates with at all — rotating it used to still
+    // write a brand-new (unusable) token into operator.env and MCP
+    // settings, silently breaking every downstream consumer (harness
+    // skills, azt-mcp) that reads those while the hub itself kept accepting
+    // the OLD token indefinitely. Resolve BEFORE writing anything and abort
+    // with guidance instead, rather than distributing a token nobody can
+    // actually use.
+    const current = resolveCurrentUiToken();
+    if (current && current.source !== paths.uiToken) {
+      console.error(`Cannot rotate: the hub's effective AZITO_UI_TOKEN currently comes from ${current.source}, not the token file (${paths.uiToken}).`);
+      console.error('Rotating the token file would produce a new value the running hub never reads, while still overwriting operator.env / MCP settings with that unusable token.');
+      if (current.source === 'env') {
+        console.error('Fix: change the AZITO_UI_TOKEN environment variable directly, restart the server, then re-run `azito token rotate`.');
+      } else {
+        console.error(`Fix: edit AZITO_UI_TOKEN in ${current.source} directly, restart the server, then re-run \`azito token rotate\`.`);
+      }
+      process.exit(1);
+    }
+
     const newToken = crypto.randomBytes(32).toString('hex');
 
     fs.mkdirSync(path.dirname(paths.uiToken), { recursive: true, mode: 0o700 });
     fs.writeFileSync(paths.uiToken, newToken, { mode: 0o600 });
     console.log(`New UI token written to ${paths.uiToken}`);
-
-    const envFilePath = resolveServerEnvPath();
-    const dotenvToken = readEnvValue(envFilePath, 'AZITO_UI_TOKEN');
-    if (dotenvToken) {
-      console.warn(`\nWarning: ${envFilePath} に AZITO_UI_TOKEN が設定されているため、rotate したファイルトークンより .env の値が優先されます。.env 側も更新してください。`);
-    }
 
     // Issue #28 Phase B: rotate は ~/.azito/azitoctl*.env へ UI トークンを
     // 再配置しない（全権トークンをタスク実行プロセスが source するファイルに

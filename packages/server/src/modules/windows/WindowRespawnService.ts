@@ -222,11 +222,18 @@ export class WindowRespawnService {
       : this.tmux.createWindow(server, sessionName, windowPart, { exactName: true, extraEnv: env }));
 
     let newName: string;
+    // `windowEnv` is reused below for every additional pane restorePaneLayout
+    // creates via splitPane() — see TmuxClient.splitPane's doc comment for
+    // why a split pane needs the SAME env explicitly, not just the first
+    // pane new-window/new-session set (Issue #28 review Critical finding).
+    let windowEnv: Record<string, string>;
     if (task) {
       const created = await createRotatedWindow(this.paneEnvService, server, task, 'respawn_create_failed', doCreate);
       newName = created.windowName;
+      windowEnv = created.env;
     } else {
-      const created = await doCreate(this.tmux.uiTokenEnv());
+      windowEnv = this.tmux.uiTokenEnv();
+      const created = await doCreate(windowEnv);
       newName = created.windowName;
     }
     await sleep(sessionExists ? 300 : 500);
@@ -242,7 +249,7 @@ export class WindowRespawnService {
     const supervision: SupervisionContext = { supervise, taskId: win.taskId, unitId };
 
     if (win.paneLayout) {
-      await this.restorePaneLayout(server, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds);
+      await this.restorePaneLayout(server, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv);
     } else {
       const paneId = await this.tmux.resolvePaneId(server, baseTarget);
       await this.setupSinglePane(server, paneId, baseTarget, win, supervision, resolvedCwds.singleCwd);
@@ -551,11 +558,19 @@ export class WindowRespawnService {
     win: { workerType: string | null; agentSessionId: string | null; workerModel: string | null; workingDirectory: string | null },
     supervision: SupervisionContext,
     paneCwds: Map<number, string>,
+    // `paneEnv` (Issue #28 review Critical finding): the SAME env the
+    // window's first pane was created with (task token + rotated
+    // generation, or the legacy uiTokenEnv() for a non-task window) — must
+    // be passed to every splitPane() call below, since `split-window -e`
+    // is the only thing that keeps an additional pane from silently
+    // inheriting the tmux SESSION's own environment instead (see
+    // TmuxClient.splitPane's doc comment).
+    paneEnv: Record<string, string>,
   ): Promise<void> {
     const paneCount = paneLayout.panes.length;
     const firstPaneId = await this.tmux.resolvePaneId(server, baseTarget);
     for (let i = 1; i < paneCount; i++) {
-      await this.tmux.splitPane(server, firstPaneId, i % 2 === 0 ? 'v' : 'h');
+      await this.tmux.splitPane(server, firstPaneId, i % 2 === 0 ? 'v' : 'h', paneEnv);
       await sleep(200);
     }
 

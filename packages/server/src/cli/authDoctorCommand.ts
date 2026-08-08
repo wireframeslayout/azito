@@ -72,14 +72,30 @@ interface McpSettingsFile {
   mcpServers?: Record<string, { env?: Record<string, string> }>;
 }
 
-function readMcpUiToken(settingsPath: string): string | undefined {
-  if (!fs.existsSync(settingsPath)) return undefined;
+// Issue #28 review Minor finding: a broken/unreadable settings.json used to
+// be indistinguishable from "azt-mcp has no AZITO_UI_TOKEN configured" —
+// both fell through the same `catch { return undefined; }` and `readMcpUiToken`
+// resulted in `checkMcpTokenMatchesHub` reporting green (`ok: true`, "未設定
+// なので問題ありません"). A human running `azito auth doctor` after editing
+// settings.json by hand (or after a tool crashed mid-write) would see a
+// clean pass and never learn the file was actually broken — the read/parse
+// failure must surface as its own, independently-failing check with its own
+// repair guidance, not be silently folded into the "not configured" case.
+type McpUiTokenResult =
+  | { status: 'absent' }
+  | { status: 'unreadable'; error: string }
+  | { status: 'present'; token: string };
+
+function readMcpUiToken(settingsPath: string): McpUiTokenResult {
+  if (!fs.existsSync(settingsPath)) return { status: 'absent' };
+  let settings: McpSettingsFile;
   try {
-    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as McpSettingsFile;
-    return settings.mcpServers?.['azt-mcp']?.env?.AZITO_UI_TOKEN;
-  } catch {
-    return undefined;
+    settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as McpSettingsFile;
+  } catch (err) {
+    return { status: 'unreadable', error: err instanceof Error ? err.message : String(err) };
   }
+  const token = settings.mcpServers?.['azt-mcp']?.env?.AZITO_UI_TOKEN;
+  return token ? { status: 'present', token } : { status: 'absent' };
 }
 
 // (c) MCP settings の AZITO_UI_TOKEN がハブの現在値と一致するか
@@ -87,15 +103,27 @@ function readMcpUiToken(settingsPath: string): string | undefined {
 function checkMcpTokenMatchesHub(): CheckResult {
   const label = 'MCP settings の AZITO_UI_TOKEN がハブの現在値と一致';
   const settingsPath = mcpSettingsPath();
-  const mcpToken = readMcpUiToken(settingsPath);
+  const mcpTokenResult = readMcpUiToken(settingsPath);
 
-  if (!mcpToken) {
+  if (mcpTokenResult.status === 'unreadable') {
+    return {
+      ok: false,
+      label,
+      detail:
+        `${settingsPath} の読み取りまたは JSON パースに失敗しました: ${mcpTokenResult.error}\n` +
+        '  修正: ファイルの内容を確認し、壊れた JSON を修復してください' +
+        '（バックアップから復元するか、azt-mcp の設定を再登録してください）。',
+    };
+  }
+
+  if (mcpTokenResult.status === 'absent') {
     return {
       ok: true,
       label,
       detail: `${settingsPath} に azt-mcp の AZITO_UI_TOKEN が未設定です（このマシンから MCP を使わない場合は問題ありません）`,
     };
   }
+  const mcpToken = mcpTokenResult.token;
 
   const current = resolveCurrentUiToken();
   if (!current) {

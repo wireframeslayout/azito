@@ -17,6 +17,7 @@ import type { TaskRestoreService } from './TaskRestoreService';
 import { TaskCleanupService } from './TaskCleanupService';
 import { SAFE_PATH_PATTERN, SAFE_BRANCH_PATTERN } from '../git/assertSafeGitArgs';
 import { resolveTaskServerName, resolveTmuxSession, resolveUnitId } from './execution/TaskExecutionEnv';
+import { resolveKillOutcome } from '../tmux/killOutcome';
 import { replyToExecutionGateError } from './execution/ExecutionGate';
 import { hashExecutionManifest } from './execution/ExecutionManifest';
 import { failAsyncTaskOperation } from './execution/AppendLog';
@@ -106,6 +107,19 @@ export interface TasksRouteOptions {
   originationService: TaskOriginationService;
   /** Issue #28 third-party review fix: POST /api/tasks/:id/children resolves the calling task principal's active window generation here to scope its rate limit — see getActiveGeneration's doc comment. */
   taskTokenRepo: ITaskTokenRepository;
+  /**
+   * Issue #28 review Important finding: POST /api/tasks/:id/retry used to
+   * clear `task.tmuxWindow` without killing the abandoned tmux window or
+   * revoking its task-token generation — the pane kept running with a
+   * still-valid token, and losing the `tmuxWindow` reference meant the next
+   * execution's kill-and-rotate (createRotatedWindow, via
+   * confirmOldWindowGone) had nothing left to find and kill either. Mirrors
+   * `onTaskWindowDestroyed` (registered the same way for sessionsRoutes in
+   * buildServer.ts) instead of taking a `TaskPaneEnvironmentService`
+   * directly, so this module only depends on the one method it actually
+   * calls.
+   */
+  revokeTaskWindowGeneration: (taskId: number, reason: string) => void;
 }
 
 /** POST /api/tasks/:id/children: a task principal may only create children under its own (parent) task; operator always passes (Issue #28 design v3 §4). */
@@ -171,7 +185,7 @@ function toListItem(task: Task, windows: unknown[]): Record<string, unknown> {
 }
 
 const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, done) => {
-  const { taskRepo, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService, taskRestoreService, unitTypeLoader, sidekickLoader, projectSecretRepo, auditLogService, originationService, taskTokenRepo } = opts;
+  const { taskRepo, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService, taskRestoreService, unitTypeLoader, sidekickLoader, projectSecretRepo, auditLogService, originationService, taskTokenRepo, revokeTaskWindowGeneration } = opts;
   const taskCleanupService = new TaskCleanupService({ serverRepo, tmux, worktreeServiceFactory, transportFactory, projectServerRepo, projectRepo });
 
   // ── GET /api/tasks ──
@@ -821,6 +835,29 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
 
       // Try to stop any running execution for this task
       executeTaskUseCase.stopByTaskId(id);
+
+      // Kill the abandoned tmux window (if any) and revoke its task-token
+      // generation BEFORE clearing tmuxWindow (Issue #28 review Important
+      // finding): clearing the reference first left an abandoned pane
+      // running with a still-valid token and no `tmuxWindow` for the next
+      // execution's kill-and-rotate (createRotatedWindow, via
+      // confirmOldWindowGone) to find and kill — the token then never
+      // expired and the next run's fresh generation existed alongside it,
+      // not in place of it. A kill failure (still-live pane) intentionally
+      // leaves the generation alone, same rationale as every other
+      // kill-then-revoke call site (WindowRotation.ts's
+      // confirmOldWindowGone / createRotatedWindow).
+      if (task.tmuxWindow) {
+        const resolvedServerName = resolveTaskServerName(task, projectServerRepo);
+        const srv = resolvedServerName ? serverRepo.findByName(resolvedServerName) : null;
+        if (resolvedServerName && srv) {
+          const tmuxSession = resolveTmuxSession(task.projectId, resolvedServerName, projectServerRepo);
+          const outcome = await resolveKillOutcome(tmux.killWindow(srv, `${tmuxSession}:${task.tmuxWindow}`));
+          if (outcome.success) {
+            revokeTaskWindowGeneration(id, 'retry_abandoned_window');
+          }
+        }
+      }
 
       // Reset task status and clear tmux window
       taskRepo.update(id, { status: 'open' as TaskStatus, tmuxWindow: null });

@@ -167,6 +167,7 @@ function makeOpts(existingTask: Task): { opts: TasksRouteOptions; createCalls: R
     auditLogService: { record: vi.fn() } as unknown as TasksRouteOptions['auditLogService'],
     originationService,
     taskTokenRepo: { issue: vi.fn(), verify: vi.fn(() => false), revokeAllForTask: vi.fn(() => 0), issueNextGeneration: vi.fn(), getActiveGeneration: vi.fn(() => null) } as unknown as TasksRouteOptions['taskTokenRepo'],
+    revokeTaskWindowGeneration: vi.fn(),
   };
   return { opts, createCalls };
 }

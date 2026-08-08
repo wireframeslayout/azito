@@ -118,6 +118,7 @@ function buildApp(scopedAuthEnabled: boolean, db: SqliteDatabase, createCalls: R
     auditLogService,
     originationService,
     taskTokenRepo,
+    revokeTaskWindowGeneration: vi.fn(),
   };
 
   const app = Fastify();

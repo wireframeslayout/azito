@@ -342,9 +342,36 @@ export class TmuxClient {
     }
   }
 
-  async splitPane(server: ServerConfig, target: string, direction: 'h' | 'v'): Promise<ExecResult> {
+  /**
+   * `extraEnv` (Issue #28 review Critical finding): `tmux new-window -e` only
+   * affects the FIRST pane of a newly-created window — every pane a
+   * subsequent `split-window` adds to that window inherits the tmux
+   * SESSION's environment instead (verified against tmux 3.4, same
+   * inheritance behavior TaskPaneEnvironmentService.buildEnvForNewWindow's
+   * denylist-override comment documents for `new-window` into an existing
+   * session). A task-owned window with more than one pane therefore left
+   * every pane after the first authenticating with whatever the session
+   * happened to carry (the operator's own AZITO_UI_TOKEN in a pre-existing
+   * session) instead of the task's scoped AZITO_TASK_TOKEN, and never
+   * received the task token at all. `split-window -e` accepts the same
+   * `-e KEY=VALUE` env override `new-window`/`new-session` do — supported
+   * since tmux 3.0 (`new-window -e` and `split-window -e` were added
+   * together in that release; this codebase targets tmux 3.4, see
+   * AGENTS.md). Callers that (re)create panes for a task-owned window MUST
+   * pass the same env `createRotatedWindow()` used for the window's first
+   * pane so every pane in the window carries an identical, correctly-scoped
+   * environment; a plain (non-task) manual pane split passes nothing, same
+   * as before.
+   */
+  async splitPane(server: ServerConfig, target: string, direction: 'h' | 'v', extraEnv?: Record<string, string>): Promise<ExecResult> {
     const flag = direction === 'h' ? '-h' : '-v';
-    return this.runTmuxCommand(server, ['split-window', flag, '-t', target]);
+    const args = ['split-window', flag, '-t', target];
+    if (extraEnv) {
+      for (const [k, v] of Object.entries(extraEnv)) {
+        args.push('-e', `${k}=${v}`);
+      }
+    }
+    return this.runTmuxCommand(server, args);
   }
 
   async killSession(server: ServerConfig, sessionName: string): Promise<ExecResult> {

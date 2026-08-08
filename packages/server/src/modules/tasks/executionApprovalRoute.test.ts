@@ -180,6 +180,7 @@ function makeOpts(existingTask: Task | null): TasksRouteOptions {
     auditLogService: { record: vi.fn() } as unknown as TasksRouteOptions['auditLogService'],
     originationService: { create: vi.fn(() => 1) } as unknown as TasksRouteOptions['originationService'],
     taskTokenRepo: { issue: vi.fn(), verify: vi.fn(() => false), revokeAllForTask: vi.fn(() => 0), issueNextGeneration: vi.fn(), getActiveGeneration: vi.fn(() => null) } as unknown as TasksRouteOptions['taskTokenRepo'],
+    revokeTaskWindowGeneration: vi.fn(),
   };
 }
 

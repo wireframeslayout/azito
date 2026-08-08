@@ -129,13 +129,50 @@ describe('tokenCommand', () => {
   });
 
   describe('rotate', () => {
-    it('warns when .env has AZITO_UI_TOKEN', async () => {
+    // Issue #28 review Important finding: when .env (or the AZITO_UI_TOKEN
+    // env var) is the authoritative source, rotating the token FILE used to
+    // still overwrite operator.env/MCP settings with a token the running
+    // hub never actually reads — the hub keeps authenticating with the OLD
+    // .env/env value forever, while every local consumer gets handed a
+    // fresh value that 401s against it. rotate must abort instead, leaving
+    // every file untouched, and tell the operator to update the
+    // authoritative source directly.
+    it('aborts without writing anything when .env has AZITO_UI_TOKEN (the authoritative source)', async () => {
       fs.writeFileSync(dotEnvPath, 'AZITO_UI_TOKEN=existing\n');
+      const azitoDir = path.join(fakeHome, '.azito');
+      fs.mkdirSync(azitoDir, { recursive: true });
+      const operatorEnvPath = path.join(azitoDir, 'operator.env');
+      fs.writeFileSync(operatorEnvPath, 'AZITO_URL=http://localhost:3001\nAZITO_UI_TOKEN=old-token\n');
+
+      const { tokenCommand } = await import('./tokenCommand.js');
+      await expect(tokenCommand(['rotate'])).rejects.toThrow('process.exit');
+
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Cannot rotate'));
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(dotEnvPath));
+      expect(fs.existsSync(uiTokenPath)).toBe(false);
+      expect(fs.readFileSync(operatorEnvPath, 'utf-8')).toContain('old-token');
+    });
+
+    it('aborts without writing anything when AZITO_UI_TOKEN env var is the authoritative source', async () => {
+      process.env.AZITO_UI_TOKEN = 'env-authoritative';
+      const { tokenCommand } = await import('./tokenCommand.js');
+      await expect(tokenCommand(['rotate'])).rejects.toThrow('process.exit');
+
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Cannot rotate'));
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('environment variable'));
+      expect(fs.existsSync(uiTokenPath)).toBe(false);
+    });
+
+    it('proceeds normally when the token file is already the authoritative source (rotating it forward)', async () => {
+      fs.mkdirSync(path.dirname(uiTokenPath), { recursive: true });
+      fs.writeFileSync(uiTokenPath, 'previous-file-token\n');
       const { tokenCommand } = await import('./tokenCommand.js');
       await tokenCommand(['rotate']);
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('.env の値が優先されます'),
-      );
+
+      expect(errorSpy).not.toHaveBeenCalled();
+      const rotated = fs.readFileSync(uiTokenPath, 'utf-8');
+      expect(rotated).not.toContain('previous-file-token');
+      expect(rotated).toMatch(/^[0-9a-f]{64}$/);
     });
 
     it('does not warn when .env has no AZITO_UI_TOKEN', async () => {

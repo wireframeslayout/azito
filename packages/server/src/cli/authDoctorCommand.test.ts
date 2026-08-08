@@ -81,7 +81,7 @@ describe('authDoctorCommand', () => {
   });
 
   function allLogLines(): string {
-    return logSpy.mock.calls.map(c => c.join(' ')).join('\n');
+    return logSpy.mock.calls.map((c: unknown[]) => c.join(' ')).join('\n');
   }
 
   it('passes when nothing is set up yet', async () => {
@@ -168,6 +168,23 @@ describe('authDoctorCommand', () => {
     await authDoctorCommand();
 
     expect(process.exitCode).toBeUndefined();
+  });
+
+  // Issue #28 review Minor finding: an unreadable/broken settings.json used
+  // to be indistinguishable from "azt-mcp has no token configured", which
+  // this doctor check reported as a pass — a human editing the file by hand
+  // (or a tool that crashed mid-write) would never learn the file was
+  // actually broken.
+  it('fails independently when MCP settings.json is not valid JSON', async () => {
+    const claudeDir = path.join(fakeHome, '.claude');
+    fs.mkdirSync(claudeDir, { recursive: true });
+    fs.writeFileSync(path.join(claudeDir, 'settings.json'), '{ this is not valid json');
+
+    const { authDoctorCommand } = await import('./authDoctorCommand.js');
+    await authDoctorCommand();
+
+    expect(process.exitCode).toBe(1);
+    expect(allLogLines()).toContain('読み取りまたは JSON パースに失敗');
   });
 
   it('reports AZITO_SCOPED_AUTH current value', async () => {

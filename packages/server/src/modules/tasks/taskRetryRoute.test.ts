@@ -48,7 +48,10 @@ function makeTask(overrides: Partial<Task> = {}): Task {
   };
 }
 
-function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
+// Reuses the same fixture shape as taskArchiveRestore.test.ts's makeOpts —
+// this file only tweaks the pieces POST /api/tasks/:id/retry actually
+// touches (killWindow's outcome, revokeTaskWindowGeneration).
+function makeOpts(taskOverrides?: Partial<Task>, killWindowImpl?: () => Promise<{ stdout: string; stderr: string; code: number }>): TasksRouteOptions {
   const task = makeTask(taskOverrides);
   return {
     taskRepo: {
@@ -109,7 +112,7 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
       listSessions: vi.fn(async () => []),
       createSession: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'w' })),
       createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' })),
-      killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
+      killWindow: vi.fn(killWindowImpl ?? (async () => ({ stdout: '', stderr: '', code: 0 }))),
       sendKeys: vi.fn(async () => {}),
       checkPaneExists: vi.fn(async () => true),
       killPane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
@@ -165,164 +168,83 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
   };
 }
 
-describe('POST /api/tasks/:id/archive', () => {
-  it('archives a task: stops execution, cleans up, removes windows, sets status to archived', async () => {
+// Issue #28 review Important finding: retry used to clear `tmuxWindow`
+// without killing the abandoned window or revoking its task-token
+// generation — an abandoned pane kept running with a still-valid token, and
+// losing `tmuxWindow` meant the next execution's kill-and-rotate had nothing
+// left to find. These tests confirm the fixed order: kill first, revoke only
+// once the kill is confirmed, then clear tmuxWindow.
+describe('POST /api/tasks/:id/retry', () => {
+  it('kills the abandoned tmux window and revokes its token generation before clearing tmuxWindow', async () => {
+    const opts = makeOpts({ status: 'failed', tmuxWindow: 'task-1' });
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/retry' });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.payload)).toEqual({ ok: true });
+    expect(opts.tmux.killWindow).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'test-server' }),
+      'azito:task-1',
+    );
+    expect(opts.revokeTaskWindowGeneration).toHaveBeenCalledWith(1, 'retry_abandoned_window');
+    expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { status: 'open', tmuxWindow: null });
+  });
+
+  it('does not revoke the token generation when the kill fails (still-live pane)', async () => {
+    const opts = makeOpts(
+      { status: 'failed', tmuxWindow: 'task-1' },
+      async () => ({ stdout: '', stderr: 'some other tmux error', code: 1 }),
+    );
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/retry' });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.tmux.killWindow).toHaveBeenCalled();
+    expect(opts.revokeTaskWindowGeneration).not.toHaveBeenCalled();
+    // Task is still reset to retryable even though the old pane could not be
+    // confirmed dead — the same "leave the generation alone, not the retry
+    // itself" tradeoff every other kill-then-revoke call site makes.
+    expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { status: 'open', tmuxWindow: null });
+  });
+
+  it('skips the kill/revoke step entirely when the task has no tmuxWindow', async () => {
+    const opts = makeOpts({ status: 'failed', tmuxWindow: null });
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/retry' });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.tmux.killWindow).not.toHaveBeenCalled();
+    expect(opts.revokeTaskWindowGeneration).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 for a non-retryable status', async () => {
     const opts = makeOpts({ status: 'open' });
     const app = Fastify();
     await app.register(tasksRoutes, opts);
     await app.ready();
 
-    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/archive' });
-
-    expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.payload)).toEqual({ ok: true });
-    expect(opts.executeTaskUseCase.stopByTaskId).toHaveBeenCalledWith(1);
-    expect(opts.windowRepo.remove).toHaveBeenCalledWith(50);
-    expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { status: 'archived', tmuxWindow: null });
-  });
-
-  it('returns ok when task is already archived (idempotent)', async () => {
-    const opts = makeOpts({ status: 'archived' });
-    const app = Fastify();
-    await app.register(tasksRoutes, opts);
-    await app.ready();
-
-    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/archive' });
-
-    expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.payload)).toEqual({ ok: true });
-    expect(opts.executeTaskUseCase.stopByTaskId).not.toHaveBeenCalled();
-  });
-
-  it('returns 404 when task does not exist', async () => {
-    const opts = makeOpts();
-    const app = Fastify();
-    await app.register(tasksRoutes, opts);
-    await app.ready();
-
-    const res = await app.inject({ method: 'POST', url: '/api/tasks/999/archive' });
-
-    expect(res.statusCode).toBe(404);
-  });
-
-  // Issue #328: archiving a `pending_approval` task used to overwrite
-  // `status` to 'archived' while leaving `pendingOperation` set — the same
-  // "changes status without consuming the pending approval" bug PUT
-  // /api/tasks/:id's pending_approval guard already closed for arbitrary
-  // status edits. That left the task un-approvable (GET
-  // .../execution-approval 404s once status isn't 'pending_approval') AND
-  // un-restorable (checkExecutionGate still blocks on the leftover
-  // pendingOperation) — permanently stuck. The fix consumes the pending
-  // approval as a denial (landing on 'archived', not denial's usual
-  // 'failed') atomically before archiving, via the SAME denyPendingApproval()
-  // path POST /api/tasks/:id/approve-execution's denial branch uses.
-  it('consumes a pending approval as a denial before archiving a task stuck in pending_approval (Issue #328)', async () => {
-    const opts = makeOpts({
-      status: 'pending_approval',
-      pendingOperation: 'execute',
-      pendingOperationWindowId: null,
-      pendingOperationPriorStatus: 'open',
-    });
-    // Stateful consumePendingApproval mock (mirrors executionApprovalRoute.
-    // test.ts's makeStatefulOpts pattern) — the base fixture's `vi.fn(() =>
-    // false)` would make this test indistinguishable from "the approval was
-    // never consumed", which is exactly the bug this test guards against.
-    const task = opts.taskRepo.findById(1) as Task;
-    opts.taskRepo.consumePendingApproval = vi.fn((id: number, fields: { status?: Task['status']; executionApprovedFingerprintHash?: string }) => {
-      if (id !== 1 || task.status !== 'pending_approval' || task.pendingOperation === null) return false;
-      Object.assign(task, {
-        ...(fields.status !== undefined ? { status: fields.status } : {}),
-        ...(fields.executionApprovedFingerprintHash !== undefined ? { executionApprovedFingerprintHash: fields.executionApprovedFingerprintHash } : {}),
-        pendingOperation: null,
-        pendingOperationWindowId: null,
-        pendingOperationPriorStatus: null,
-      });
-      return true;
-    });
-
-    const app = Fastify();
-    await app.register(tasksRoutes, opts);
-    await app.ready();
-
-    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/archive' });
-
-    expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.payload)).toEqual({ ok: true });
-    expect(opts.taskRepo.consumePendingApproval).toHaveBeenCalledWith(1, { status: 'archived' });
-    expect(opts.logRepo.append).toHaveBeenCalledWith(1, 20, 'status_change', { status: 'archived', reason: 'execution_denied' });
-    // Not left stuck: pendingOperation is cleared and status actually landed
-    // on 'archived' — neither the un-approvable nor un-restorable dead end
-    // the pre-fix code left behind.
-    expect(task.pendingOperation).toBeNull();
-    expect(task.status).toBe('archived');
-  });
-
-  it('returns 409 without archiving when the pending approval was already resolved by a concurrent request', async () => {
-    const opts = makeOpts({
-      status: 'pending_approval',
-      pendingOperation: 'execute',
-      pendingOperationWindowId: null,
-      pendingOperationPriorStatus: 'open',
-    });
-    opts.taskRepo.consumePendingApproval = vi.fn(() => false);
-    const app = Fastify();
-    await app.register(tasksRoutes, opts);
-    await app.ready();
-
-    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/archive' });
-
-    expect(res.statusCode).toBe(409);
-    expect(opts.executeTaskUseCase.stopByTaskId).not.toHaveBeenCalled();
-    expect(opts.taskRepo.update).not.toHaveBeenCalled();
-  });
-});
-
-describe('POST /api/tasks/:id/restore', () => {
-  it('restores an archived task via taskRestoreService', async () => {
-    const opts = makeOpts({ status: 'archived' });
-    const app = Fastify();
-    await app.register(tasksRoutes, opts);
-    await app.ready();
-
-    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/restore' });
-
-    expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.payload)).toEqual({ ok: true, tmuxTarget: 'azito:task-1.1', worktreePath: '/work/.worktrees/task-1' });
-    expect(opts.taskRestoreService.restore).toHaveBeenCalled();
-  });
-
-  it('returns 400 when task is not archived', async () => {
-    const opts = makeOpts({ status: 'open' });
-    const app = Fastify();
-    await app.register(tasksRoutes, opts);
-    await app.ready();
-
-    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/restore' });
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/retry' });
 
     expect(res.statusCode).toBe(400);
-    expect(JSON.parse(res.payload)).toEqual({ error: "Task status 'open' is not restorable" });
+    expect(opts.tmux.killWindow).not.toHaveBeenCalled();
   });
 
-  it('returns 500 when restore fails', async () => {
-    const opts = makeOpts({ status: 'archived' });
-    (opts.taskRestoreService.restore as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('Server unreachable'));
-    const app = Fastify();
-    await app.register(tasksRoutes, opts);
-    await app.ready();
-
-    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/restore' });
-
-    expect(res.statusCode).toBe(500);
-    expect(JSON.parse(res.payload)).toEqual({ error: 'Server unreachable' });
-  });
-
-  it('returns 404 when task does not exist', async () => {
+  it('returns 404 when the task does not exist', async () => {
     const opts = makeOpts();
     const app = Fastify();
     await app.register(tasksRoutes, opts);
     await app.ready();
 
-    const res = await app.inject({ method: 'POST', url: '/api/tasks/999/restore' });
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/999/retry' });
 
     expect(res.statusCode).toBe(404);
   });

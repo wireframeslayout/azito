@@ -180,7 +180,7 @@ function buildService(opts: {
     sendKeys: vi.fn(async (_server: unknown, _target: string, keys: string[]) => {
       sentCommands.push(keys[0]);
     }),
-    splitPane: vi.fn(async () => {}),
+    splitPane: vi.fn(async (_server: unknown, _target: string, _direction: 'h' | 'v', _extraEnv?: Record<string, string>) => {}),
     resolvePaneId: vi.fn(async () => '%0'),
     listPaneIds: vi.fn(async () => [{ index: 0, paneId: '%0' }]),
     execCommand: vi.fn(async () => ({ stdout: '' })),
@@ -338,6 +338,60 @@ describe('WindowRespawnService.respawn — supervisor wrap', () => {
     await service.respawn(1, makeServer());
 
     expect(tmux.sendKeys).toHaveBeenCalledTimes(1);
+  });
+
+  // Issue #28 review Critical finding: `new-window -e`/`new-session -e` only
+  // set env for a window's FIRST pane — restorePaneLayout() must pass the
+  // SAME task-rotated env to every additional pane it creates via
+  // splitPane(), or those panes silently inherit the tmux session's own
+  // environment instead (see TmuxClient.splitPane's doc comment and the
+  // real-tmux test in TmuxClient.splitPane.tmuxIntegration.test.ts).
+  it('passes the task-rotated window env to every splitPane call when restoring a multi-pane task window', async () => {
+    const win = makeWindow({
+      id: 1,
+      taskId: 5,
+      windowType: 'agent',
+      workerType: 'claude',
+      paneLayout: {
+        layout: '',
+        panes: [
+          { index: 0, command: null, workingDirectory: null, title: null },
+          { index: 1, command: null, workingDirectory: null, title: null },
+          { index: 2, command: null, workingDirectory: null, title: null },
+        ],
+      },
+    });
+    const { service, tmux, paneEnvService } = buildService({ window: win, task: makeTask({ id: 5 }) });
+
+    await service.respawn(1, makeServer());
+
+    const rotatedEnv = paneEnvService.buildEnvForNewWindow.mock.results[0].value;
+    expect(tmux.splitPane).toHaveBeenCalledTimes(2);
+    for (const call of tmux.splitPane.mock.calls) {
+      expect(call[3]).toBe(rotatedEnv);
+    }
+  });
+
+  it('passes the legacy uiTokenEnv() to splitPane calls for a non-task multi-pane window', async () => {
+    const win = makeWindow({
+      id: 1,
+      taskId: null,
+      windowType: 'terminal',
+      workerType: null,
+      paneLayout: {
+        layout: '',
+        panes: [
+          { index: 0, command: null, workingDirectory: null, title: null },
+          { index: 1, command: null, workingDirectory: null, title: null },
+        ],
+      },
+    });
+    const { service, tmux } = buildService({ window: win });
+
+    await service.respawn(1, makeServer());
+
+    expect(tmux.splitPane).toHaveBeenCalledTimes(1);
+    expect(tmux.splitPane.mock.calls[0][3]).toEqual(tmux.uiTokenEnv());
   });
 });
 

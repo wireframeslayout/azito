@@ -76,7 +76,7 @@ export async function createRotatedWindow(
   task: Task,
   reasonOnFailure: string,
   create: (env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string }>,
-): Promise<{ windowName: string }> {
+): Promise<{ windowName: string; env: Record<string, string> }> {
   const env = paneEnvService.buildEnvForNewWindow(task, server);
   let created: { result: ExecResult; windowName: string };
   try {
@@ -91,5 +91,12 @@ export async function createRotatedWindow(
       `Failed to create tmux window (exit ${created.result.code}): ${created.result.stderr || created.result.stdout}`,
     );
   }
-  return { windowName: created.windowName };
+  // `env` (Issue #28 review Critical finding) — returned so a caller that
+  // (re)creates a MULTI-pane window can pass this exact env to every
+  // subsequent split-window it does for the same window (TmuxClient.splitPane's
+  // `extraEnv`): only the window's first pane inherits what new-window/
+  // new-session's own `-e` set, so a later split-window must be told the same
+  // env explicitly or it silently inherits the tmux SESSION's environment
+  // instead (see splitPane's doc comment).
+  return { windowName: created.windowName, env };
 }
