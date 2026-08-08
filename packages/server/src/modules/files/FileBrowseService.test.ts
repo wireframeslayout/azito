@@ -69,8 +69,8 @@ describe('FileBrowseService shell quoting', () => {
     ).rejects.toThrow('Not a regular file');
   });
 
-  it('uses -- separator in cat and base64 commands', async () => {
-    const mock = createMockTmux();
+  it('uses -- separator in the remote base64 read command', async () => {
+    const mock = createMockTmux({ 'test -f': 'ok' });
     const svc = new FileBrowseService(mock as any);
     const srv = { type: 'agent', name: 'test', host: 'user@host' };
 
@@ -78,17 +78,17 @@ describe('FileBrowseService shell quoting', () => {
       await svc.getFileContent(srv as any, '/tmp/normal.txt');
     } catch {}
 
-    const catCmd = mock.commands.find(c => c.startsWith('cat'));
-    if (catCmd) {
-      expect(catCmd).toContain('cat --');
-    }
+    const base64Cmd = mock.commands.find(c => c.startsWith('base64'));
+    expect(base64Cmd).toBeDefined();
+    expect(base64Cmd).toContain('base64 -w0 --');
+    expect(base64Cmd).toContain('base64 --');
   });
 
   // Issue #27 review Critical 1: the mtime lookup at the end of the remote
   // getFileContent() path used to interpolate filePath inside bare double
   // quotes (`stat -c%Y "${filePath}"`), which lets a path containing
   // `$(...)` execute as a subshell. Drives a full success path (typeCheck ->
-  // sizeResult -> cat -> mtime) so the mtime command itself is inspected,
+  // sizeResult -> base64 read -> mtime) so the mtime command itself is inspected,
   // not just the first (already-quoted) typeCheck command the two tests
   // above cover.
   it('quotes filePath in the mtime lookup command, not raw double-quote interpolation', async () => {
@@ -100,7 +100,7 @@ describe('FileBrowseService shell quoting', () => {
         commands.push(cmd);
         if (cmd.startsWith('test -f')) return { stdout: 'ok\n', stderr: '', code: 0 };
         if (cmd.startsWith('stat -c%s') || cmd.includes('stat -f%z')) return { stdout: '5\n', stderr: '', code: 0 };
-        if (cmd.startsWith('cat')) return { stdout: 'hello', stderr: '', code: 0 };
+        if (cmd.startsWith('base64')) return { stdout: Buffer.from('hello', 'utf-8').toString('base64'), stderr: '', code: 0 };
         // mtime lookup (stat -c%.Y / -c%Y / -f%m chain)
         return { stdout: '1750000000\n', stderr: '', code: 0 };
       },
@@ -117,6 +117,89 @@ describe('FileBrowseService shell quoting', () => {
     // that is exactly the shape ("${filePath}") that let $(...) expand.
     expect(mtimeCmd).not.toContain(`"${injectionPath}"`);
     expect(mtimeCmd).not.toContain('"');
+  });
+});
+
+// Review Important 1 (remote read): the old `cat -- <file>` read went through the persistent SSH
+// shell's marker-delimited output pipeline (SshClient.drainBuffer), which strips exactly one leading
+// and one trailing newline from every command's stdout to remove the shell's own newlines around the
+// `\x02AGENTMGR_B/E` markers. For `cat` output that boundary trim is indistinguishable from "the
+// file's own trailing newline" — a normal text file ending in `\n` had it silently stripped, so the
+// hash the client fetched (from the newline-stripped content) could never match the real on-disk bytes
+// `sha256sum` sees at save time, and every such save 409'd (or, with `force`, truncated the newline for
+// real). These tests model that same boundary-stripping behavior on the mocked stdout to prove the
+// base64-based read is immune to it: base64's alphabet contains no `\r`/`\n`, so a boundary trim can
+// only ever eat wrapping whitespace `base64` itself added, never a content byte.
+describe('FileBrowseService.getFileContent (remote) — lossless base64 read', () => {
+  // Mirrors SshClient.drainBuffer's exact boundary-trim (see SshClient.ts): strip one leading
+  // `\r?\n`, one trailing `\r?\n` or `\r`, then normalize any remaining `\r\n` to `\n`.
+  function simulateSshBoundaryTrim(output: string): string {
+    return output.replace(/^\r?\n/, '').replace(/\r?\n$/, '').replace(/\r$/, '').replace(/\r\n/g, '\n');
+  }
+
+  it('reads a file ending in a newline and produces a hash matching the exact original bytes', async () => {
+    const originalContent = 'line one\nline two\n'; // trailing newline — the corruption-prone case
+    const b64 = Buffer.from(originalContent, 'utf-8').toString('base64');
+    const expectedHash = createHash('sha256').update(originalContent, 'utf-8').digest('hex');
+
+    const mock = {
+      execCommand: async (_srv: unknown, cmd: string) => {
+        if (cmd.startsWith('test -f')) return { stdout: 'ok\n', stderr: '', code: 0 };
+        if (cmd.startsWith('stat -c%s') || cmd.includes('stat -f%z')) {
+          return { stdout: `${Buffer.byteLength(originalContent, 'utf-8')}\n`, stderr: '', code: 0 };
+        }
+        if (cmd.startsWith('base64')) {
+          // Simulate the persistent-shell boundary trim landing on the base64 payload, exactly as it
+          // would on real stdout — base64 has no \r/\n of its own here (single line, no wrapping), so
+          // trimming a "leading/trailing newline" has nothing to remove and the payload survives intact.
+          return { stdout: simulateSshBoundaryTrim(b64), stderr: '', code: 0 };
+        }
+        // mtime lookup
+        return { stdout: '1750000000\n', stderr: '', code: 0 };
+      },
+    };
+    const svc = new FileBrowseService(mock as any);
+    const srv = { type: 'agent', name: 'test', host: 'user@host' };
+
+    const result = await svc.getFileContent(srv as any, '/tmp/trailing-newline.txt');
+    expect('content' in result).toBe(true);
+    if ('content' in result) {
+      expect(result.content).toBe(originalContent);
+      expect(result.hash).toBe(expectedHash);
+    }
+  });
+
+  it('recovers the exact bytes even when the shell boundary-trim eats a synthetic wrap newline', async () => {
+    // Simulate a non-GNU `base64` build that wraps output at 76 chars (the `-w0` fallback branch),
+    // where the SSH shell's boundary trim removes a leading/trailing newline that is pure formatting,
+    // not file content. Whitespace-stripping the whole payload in Node must still recover byte-exact
+    // content regardless of exactly where that formatting newline landed.
+    const originalContent = 'x'.repeat(120) + '\n';
+    const rawB64 = Buffer.from(originalContent, 'utf-8').toString('base64');
+    const wrapped = rawB64.replace(/(.{76})/g, '$1\n'); // simulate non -w0 base64 wrapping
+    const expectedHash = createHash('sha256').update(originalContent, 'utf-8').digest('hex');
+
+    const mock = {
+      execCommand: async (_srv: unknown, cmd: string) => {
+        if (cmd.startsWith('test -f')) return { stdout: 'ok\n', stderr: '', code: 0 };
+        if (cmd.startsWith('stat -c%s') || cmd.includes('stat -f%z')) {
+          return { stdout: `${Buffer.byteLength(originalContent, 'utf-8')}\n`, stderr: '', code: 0 };
+        }
+        if (cmd.startsWith('base64')) {
+          return { stdout: simulateSshBoundaryTrim(wrapped), stderr: '', code: 0 };
+        }
+        return { stdout: '1750000000\n', stderr: '', code: 0 };
+      },
+    };
+    const svc = new FileBrowseService(mock as any);
+    const srv = { type: 'agent', name: 'test', host: 'user@host' };
+
+    const result = await svc.getFileContent(srv as any, '/tmp/wrapped.txt');
+    expect('content' in result).toBe(true);
+    if ('content' in result) {
+      expect(result.content).toBe(originalContent);
+      expect(result.hash).toBe(expectedHash);
+    }
   });
 });
 
@@ -387,6 +470,34 @@ describe('FileBrowseService.writeFileContent (remote)', () => {
     ).rejects.toMatchObject({ status: 409 });
   });
 
+  // Review followup (macOS/BSD remote hosts): GNU coreutils `base64` decodes with `-d`, but BSD/macOS
+  // `base64` has no `-d` flag at all — it uses `-D` — so a save against a macOS remote host previously
+  // failed outright (or, if $qDecoded happened to already exist, could replace the target with empty
+  // content) once the decode step's own success marker was verified (Issue #27 review Important 1).
+  // The write command must retry with `base64 -D` when `-d` fails, after truncating the decode
+  // destination back to empty so the retry doesn't build on a partial `-d` attempt.
+  it('falls back to base64 -D when base64 -d fails (BSD/macOS remote)', async () => {
+    const commands: string[] = [];
+    const tmuxMock = {
+      execCommand: async (_srv: unknown, cmd: string) => {
+        commands.push(cmd);
+        if (cmd.includes('base64 -d <')) return { stdout: 'AZITO_WRITE_OK\n', stderr: '', code: 0 };
+        if (cmd.startsWith('stat ')) return { stdout: '1750000000\n', stderr: '', code: 0 };
+        return { stdout: '', stderr: '', code: 0 };
+      },
+    };
+    const service = new FileBrowseService(tmuxMock as any);
+    const srv = { name: 'remote-macos', type: 'ssh' } as any;
+
+    await service.writeFileContent(srv, '/tmp/macos-target.txt', 'content');
+
+    const writeCmd = commands.find((c) => c.includes('base64 -d <') && c.includes('mv -f'));
+    expect(writeCmd).toBeDefined();
+    // The -d attempt is tried first, silenced, then the -D fallback runs against a truncated decode
+    // destination if -d failed.
+    expect(writeCmd).toMatch(/base64 -d < .+? > .+? 2>\/dev\/null \|\| \{ : > .+?; base64 -D < .+? > .+?; \}/);
+  });
+
   // Review Important 3: replacing an existing remote file via decode-to-tempfile
   // + `mv -f` used to drop the original file's permission bits (e.g. 0755 ->
   // the tempfile's default 0644 from the shell redirection). The write command
@@ -541,7 +652,7 @@ describe('FileBrowseService.writeFileContent (remote)', () => {
     // those same tokens — i.e. the cleanup string is quoted as one unit, not assembled by nesting two
     // pre-quoted tokens inside a hand-written outer pair of single quotes.
     const uploadToken = writeCmd!.match(/wc -c < (.+?) \| tr -d/)?.[1];
-    const decodedToken = writeCmd!.match(/base64 -d < .+? > (.+?)(?: &&| >)/)?.[1];
+    const decodedToken = writeCmd!.match(/base64 -d < .+? > (.+?) 2>\/dev\/null/)?.[1];
     expect(uploadToken).toBeDefined();
     expect(decodedToken).toBeDefined();
     const expectedCleanup = `rm -f ${uploadToken} ${decodedToken}`;

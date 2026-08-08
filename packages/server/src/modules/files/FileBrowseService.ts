@@ -320,7 +320,23 @@ export class FileBrowseService {
       const hash = sha256Hex(content);
       return { content, path: filePath, size: stat.size, language, mtime: stat.mtimeMs, hash };
     } else {
-      // Remote: reject non-regular files, then check size, then cat
+      // Remote: reject non-regular files, then check size, then fetch content losslessly via base64.
+      //
+      // Using `cat -- <file>` here used to feed the raw bytes through the persistent SSH shell's
+      // marker-delimited output pipeline (SshClient.drainBuffer), which strips exactly one leading and
+      // one trailing newline from every command's stdout to remove the shell's own echoed
+      // newlines around the markers. For a `cat` of file content that is itself indistinguishable from
+      // "the file's own trailing newline", so any ordinary text file ending in `\n` (the POSIX norm) had
+      // that newline silently stripped before hashing — the save-time hash the client computed from the
+      // originally-fetched content could never match what `writeFileContentLocked`'s
+      // sha256sum/shasum re-hash of the (correct, newline-intact) on-disk bytes found, so every such
+      // save 409'd, and `force`-saving would then truncate the newline for real. `base64` output
+      // contains none of `cat`'s content bytes directly — it's re-encoded into an alphabet with no `\r`
+      // or `\n` at all — so drainBuffer's boundary trim can only ever remove wrapping/formatting
+      // whitespace `base64` itself added, never a byte that was part of the file. Decoding the
+      // whitespace-stripped base64 string in Node recovers the exact original byte sequence, from which
+      // content/hash/binary-detection/size are all derived (so they all agree on the same bytes, the way
+      // the local branch's `fs.readFileSync` result already does).
       const typeCheck = await this.tmux.execCommand(srv, `test -f ${sq(filePath)} && echo ok || echo ng`);
       if (typeCheck.stdout.trim() !== 'ok') throw new FileBrowseError('Not a regular file', 400);
       const sizeResult = await this.tmux.execCommand(srv, `stat -c%s ${sq(filePath)} 2>/dev/null || stat -f%z ${sq(filePath)} 2>/dev/null`);
@@ -328,11 +344,19 @@ export class FileBrowseService {
       if (size > MAX_FILE_SIZE) {
         throw new FileBrowseError(`File too large (${Math.round(size / 1024)}KB). Maximum is 500KB.`, 400);
       }
-      const result = await this.tmux.execCommand(srv, `cat -- ${sq(filePath)}`);
-      const content = result.stdout;
-      if (content.includes('\0')) {
+      const result = await this.tmux.execCommand(srv, `base64 -w0 -- ${sq(filePath)} 2>/dev/null || base64 -- ${sq(filePath)} 2>/dev/null`);
+      // `stripTerminalArtifacts` is a no-op here in practice (its patterns target ANSI/control bytes and
+      // PUA/emoji ranges, none of which overlap the base64 alphabet `[A-Za-z0-9+/=]`) — applied anyway
+      // for the same defense-in-depth reason every other remote stdout read in this file applies it.
+      // The `[\r\n]` strip removes the line-wrapping some `base64` builds (notably non-GNU ones lacking
+      // `-w0`) insert every ~76 chars; unlike the old `cat` path, this is safe because those wrap
+      // newlines were never part of the file's content in the first place.
+      const b64 = stripTerminalArtifacts(result.stdout).replace(/[\r\n]/g, '');
+      const buf = Buffer.from(b64, 'base64');
+      if (buf.includes(0)) {
         throw new FileBrowseError('Binary file cannot be displayed', 400);
       }
+      const content = buf.toString('utf-8');
       const mtimeResult = await this.getRemoteMtimeMs(srv, filePath);
       // Computed from the already-fetched `content` on the Node side — no extra remote round-trip.
       // This is the read-side counterpart to writeFileContentLocked's `sha256sum`/`shasum` verification
@@ -601,6 +625,14 @@ export class FileBrowseService {
         // against the known-correct `b64.length` catches that before any decode/replace happens.
         const chmodStep = existingMode != null ? ` && chmod ${sq(existingMode)} ${qDecoded}` : '';
         const expectedB64Len = b64.length;
+        // GNU coreutils `base64` decodes with `-d`; BSD/macOS `base64` has no `-d` flag at all and uses
+        // `-D` instead, so on a macOS remote host `base64 -d` fails outright (not merely a different
+        // default) and would leave `$qDecoded` empty or absent — the following `chmod`/`mv` would then
+        // either fail or (worse, if `$qDecoded` happens to exist empty) replace the target with an empty
+        // file. `2>/dev/null || { : > qDecoded; base64 -D ... }` retries with the BSD flag, first
+        // truncating `$qDecoded` back to empty so the retry starts clean rather than potentially
+        // appending to (or leaving stale bytes from) a partial `-d` attempt.
+        const decodeStep = `(base64 -d < ${qUpload} > ${qDecoded} 2>/dev/null || { : > ${qDecoded}; base64 -D < ${qUpload} > ${qDecoded}; })`;
         // `trap ... EXIT` (rather than a trailing `; rm -f ...`) cleans up the staging files on every
         // exit path of this script — including inside the `if`/`else` branches below — instead of only
         // the happy path a bare trailing command would cover.
@@ -616,7 +648,7 @@ export class FileBrowseService {
           `umask 077; trap ${sq(cleanup)} EXIT; ` +
           `u=$(wc -c < ${qUpload} | tr -d ' '); ` +
           `if [ "$u" = ${expectedB64Len} ]; then ` +
-          `base64 -d < ${qUpload} > ${qDecoded}${chmodStep} && mv -f ${qDecoded} ${q} && echo AZITO_WRITE_OK; ` +
+          `${decodeStep}${chmodStep} && mv -f ${qDecoded} ${q} && echo AZITO_WRITE_OK; ` +
           `else echo AZITO_WRITE_SIZE_MISMATCH; fi`;
         const writeResult = await this.tmux.execCommand(srv, writeCmd);
         const writeStdout = stripTerminalArtifacts(writeResult.stdout);

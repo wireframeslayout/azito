@@ -1,7 +1,13 @@
-import { describe, it, expect } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import { createHash } from 'crypto';
+import Fastify from 'fastify';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import path from 'path';
-import { sanitizeFileName } from './routes';
+import { sanitizeFileName, fileBrowseRoutes } from './routes';
 import { isPathContained } from '../git/PathContainment';
+import type { IServerRepository } from '../servers/Server';
+import type { IProjectServerRepository } from '../projects/ProjectServer';
 
 describe('sanitizeFileName', () => {
   it('preserves Japanese filename', () => {
@@ -129,5 +135,110 @@ describe('PUT file content route guards', () => {
       target: resolvedTargetOfSymlink,
       allowedRoot: '/workspace/project',
     })).toBe(false);
+  });
+});
+
+// Issue #27 review followup (Important 2): `baseMtime`/`baseHash` used to fall back to `undefined`
+// whenever the value was missing OR malformed (wrong type, NaN, non-hex), and `undefined` is exactly
+// what `writeFileContent` treats as "no conflict check requested" — the same value it receives when
+// the caller explicitly passes `force: true`. So a client bug or a stripped/mistyped field silently
+// bypassed the optimistic lock without ever asking for `force`. These drive the real route (via
+// `fastify.inject`, not just the string-level guards above) against a real local file so the fix is
+// verified end-to-end: malformed/missing fields must 400 before any write happens, and `force: true`
+// must still work without them.
+describe('PUT /api/servers/:name/files/content — baseMtime/baseHash enforcement', () => {
+  let tmpDir: string;
+  let filePath: string;
+  let app: ReturnType<typeof Fastify>;
+
+  beforeEach(async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-routes-test-'));
+    filePath = path.join(tmpDir, 'target.txt');
+    fs.writeFileSync(filePath, 'original\n');
+
+    const serverRepo: Partial<IServerRepository> = {
+      findByName: (name: string) =>
+        name === 'test-local' ? ({ name: 'test-local', type: 'local', directory: tmpDir } as any) : null,
+    };
+    const projectServerRepo: Partial<IProjectServerRepository> = {
+      find: () => ({ workingDirectory: tmpDir } as any),
+    };
+
+    app = Fastify();
+    app.register(fileBrowseRoutes, {
+      serverRepo: serverRepo as IServerRepository,
+      tmux: {} as any,
+      projectServerRepo: projectServerRepo as IProjectServerRepository,
+      transportFactory: {} as any,
+      searchService: {} as any,
+    });
+    await app.ready();
+  });
+
+  afterEach(async () => {
+    await app.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  const validHash = () => createHash('sha256').update('original\n', 'utf-8').digest('hex');
+  const currentMtime = () => fs.statSync(filePath).mtimeMs;
+
+  it('rejects with 400 when baseMtime and baseHash are both omitted (no force)', async () => {
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/servers/test-local/files/content',
+      payload: { path: filePath, content: 'updated\n', projectId: 1 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(fs.readFileSync(filePath, 'utf-8')).toBe('original\n');
+  });
+
+  it('rejects with 400 when baseMtime is malformed (non-numeric)', async () => {
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/servers/test-local/files/content',
+      payload: { path: filePath, content: 'updated\n', projectId: 1, baseMtime: 'not-a-number', baseHash: validHash() },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(fs.readFileSync(filePath, 'utf-8')).toBe('original\n');
+  });
+
+  it('rejects with 400 when baseHash is not a 64-hex-digit sha256', async () => {
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/servers/test-local/files/content',
+      payload: { path: filePath, content: 'updated\n', projectId: 1, baseMtime: currentMtime(), baseHash: 'not-a-hash' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(fs.readFileSync(filePath, 'utf-8')).toBe('original\n');
+  });
+
+  it('rejects with 400 when baseHash is uppercase hex (must be lowercase 64-digit hex)', async () => {
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/servers/test-local/files/content',
+      payload: { path: filePath, content: 'updated\n', projectId: 1, baseMtime: currentMtime(), baseHash: validHash().toUpperCase() },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('succeeds when both baseMtime and baseHash are valid and current', async () => {
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/servers/test-local/files/content',
+      payload: { path: filePath, content: 'updated\n', projectId: 1, baseMtime: currentMtime(), baseHash: validHash() },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(fs.readFileSync(filePath, 'utf-8')).toBe('updated\n');
+  });
+
+  it('does not require baseMtime/baseHash when force is true', async () => {
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/servers/test-local/files/content',
+      payload: { path: filePath, content: 'forced\n', projectId: 1, force: true },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(fs.readFileSync(filePath, 'utf-8')).toBe('forced\n');
   });
 });

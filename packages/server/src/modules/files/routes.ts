@@ -276,9 +276,25 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
       if (/[\x00-\x1f]/.test(filePath)) return reply.status(400).send({ error: 'Invalid path' });
       if (typeof body.content !== 'string') return reply.status(400).send({ error: 'content is required' });
       const content = body.content;
-      const baseMtime = typeof body.baseMtime === 'number' ? body.baseMtime : undefined;
-      const baseHash = typeof body.baseHash === 'string' ? body.baseHash : undefined;
       const force = body.force === true;
+      // Optimistic-lock inputs are required unless the caller explicitly opts into `force`. Previously
+      // any missing/malformed baseMtime or baseHash silently became `undefined` (typeof-narrowing to
+      // "absent" rather than "invalid"), which writeFileContent treats identically to force — the lock
+      // was bypassed without the caller ever asking for that. `Number.isFinite` rejects NaN/Infinity in
+      // addition to non-numbers; the hash is validated as a 64-hex-digit sha256 so a malformed value
+      // can't slip through as "present" only to fail comparison against the real hash in a confusing way.
+      let baseMtime: number | undefined;
+      let baseHash: string | undefined;
+      if (!force) {
+        if (typeof body.baseMtime !== 'number' || !Number.isFinite(body.baseMtime)) {
+          return reply.status(400).send({ error: 'baseMtime is required unless force is true' });
+        }
+        if (typeof body.baseHash !== 'string' || !/^[0-9a-f]{64}$/.test(body.baseHash)) {
+          return reply.status(400).send({ error: 'baseHash is required unless force is true' });
+        }
+        baseMtime = body.baseMtime;
+        baseHash = body.baseHash;
+      }
       const projectId = typeof body.projectId === 'number' ? body.projectId : NaN;
       if (isNaN(projectId)) return reply.status(400).send({ error: 'projectId is required' });
 
@@ -336,8 +352,8 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
           srv,
           writeTargetPath,
           content,
-          force ? undefined : baseMtime,
-          force ? undefined : baseHash,
+          baseMtime,
+          baseHash,
         );
         return { ok: true, mtime: result.mtime, hash: result.hash };
       } catch (err: unknown) {
