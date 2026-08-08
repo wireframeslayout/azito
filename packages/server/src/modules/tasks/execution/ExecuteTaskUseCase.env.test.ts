@@ -634,6 +634,193 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
   });
 });
 
+// Issue #28 third-party review finding (Important, TOCTOU): the confirm-kill
+// -> rotate-token -> create -> persist span inside runExclusiveForTask used
+// to read task/tmux window state captured BEFORE the lock was even queued
+// for. Two execute() calls racing for the same task could both compute
+// "the old window to kill" from the SAME pre-lock snapshot; the second call
+// (running after the first has already created and persisted its own
+// generation) would then decide there is nothing to kill, create ANOTHER
+// window, and — via issueNextGeneration()'s revoke-everything-else contract
+// — revoke the first call's still-live generation without ever having killed
+// its window. That orphans the first call's pane with a dead token. The fix
+// re-reads task state from the repository INSIDE the lock callback, so each
+// queued rotation always acts on whatever the immediately-prior rotation
+// actually persisted.
+describe('ExecuteTaskUseCase concurrent execute() serialization (Issue #28 review: TOCTOU inside the per-task lock)', () => {
+  it('two concurrent execute() calls for the same task converge to exactly one live tmux window with exactly one valid (non-revoked) token generation', async () => {
+    vi.useFakeTimers();
+    try {
+      const unit = makeUnit({ id: 42, workerType: 'claude', workerModel: 'opus' });
+      const task = makeTask({ id: 1, serverName: 'local-server', unitId: 42, tmuxWindow: null });
+
+      // Canonical "DB row" separate from any single call's snapshot of it —
+      // this is what actually distinguishes the bug from the fix. Both
+      // concurrent execute() calls fetch their OWN task snapshot via
+      // taskRepo.findById() at the top of execute() (a fresh copy, exactly
+      // like a real SQLite row read); only the code path re-reading via
+      // taskRepo.findById() INSIDE the lock (the fix under test) observes
+      // the other call's persisted tmuxWindow. Without that re-read, each
+      // call would keep using its OWN stale top-of-execute() snapshot for
+      // the entire confirm-kill decision, which is exactly the TOCTOU this
+      // test guards against.
+      let dbTask: Task = { ...task };
+
+      // Shared fake tmux window store — both concurrent execute() calls read
+      // and write the SAME store, so a call's re-read inside the lock sees
+      // whatever the previously-queued call actually persisted.
+      let windows: { name: string; index: number }[] = [];
+      let windowCounter = 0;
+      let tokenCounter = 0;
+      const liveTokens = new Set<number>();
+
+      const { useCase, taskRepo, tmux, paneEnvService } = buildUseCase({
+        task,
+        project: makeProject({ defaultUnitId: null }),
+        units: [unit],
+        projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito' },
+      });
+
+      (taskRepo.findById as ReturnType<typeof vi.fn>).mockImplementation(() => ({ ...dbTask }));
+      (taskRepo.update as ReturnType<typeof vi.fn>).mockImplementation((_id: number, updates: Partial<Task>) => {
+        dbTask = { ...dbTask, ...updates };
+      });
+
+      (tmux.listSessions as ReturnType<typeof vi.fn>).mockImplementation(async () => [{ name: 'azito', windows: [...windows] }]);
+      (tmux.createSession as ReturnType<typeof vi.fn>).mockImplementation(async () => {});
+      (tmux.createWindow as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        const name = `w${++windowCounter}`;
+        windows.push({ name, index: windows.length });
+        return { result: { stdout: '', stderr: '', code: 0 }, windowName: name };
+      });
+      // confirmOldWindowGone (execute()'s old-window kill) addresses the
+      // target as `${tmuxSession}:${oldWin.index}` (tmux index-based), while
+      // rollbackWindowReference's kills address it as
+      // `${tmuxSession}:${windowName}` (name-based) — this mock matches
+      // either form against the shared window store, same as real tmux would
+      // resolve either addressing scheme to the same window.
+      (tmux.killWindow as ReturnType<typeof vi.fn>).mockImplementation(async (_server: unknown, target: string) => {
+        const seg = (target as string).split(':')[1];
+        windows = windows.filter((w) => w.name !== seg && String(w.index) !== seg);
+        return { stdout: '', stderr: '', code: 0 };
+      });
+
+      (paneEnvService.buildEnvForNewWindow as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        // Mirrors the real ITaskTokenRepository.issueNextGeneration contract
+        // (see TaskPaneEnvironmentService's doc comment): issuing a new
+        // generation revokes every other outstanding generation for the
+        // task, so at most one is ever live.
+        liveTokens.clear();
+        const tokenId = ++tokenCounter;
+        liveTokens.add(tokenId);
+        return { env: { AZITO_TASK_TOKEN: `t${tokenId}`, AZITO_TASK_ID: '1' }, tokenId };
+      });
+      (paneEnvService.revokeGeneration as ReturnType<typeof vi.fn>).mockImplementation((tokenId: number) => {
+        liveTokens.delete(tokenId);
+      });
+
+      const runA = useCase.execute(42, 1);
+      const runB = useCase.execute(42, 1);
+      await vi.runAllTimersAsync();
+      await Promise.all([runA, runB]);
+
+      // Exactly one tmux window survives — the other was either never
+      // created without its predecessor being killed first, or was killed as
+      // part of the later rotation's confirm-kill step.
+      expect(windows).toHaveLength(1);
+      // The task's persisted tmuxWindow points at that same surviving window
+      // — never a stale reference to a window that was actually killed.
+      expect(dbTask.tmuxWindow).toBe(windows[0].name);
+      // Exactly one token generation is left live (the real
+      // ITaskTokenRepository.issueNextGeneration always enforces this by
+      // revoking every prior generation as part of issuing a new one — see
+      // this mock's buildEnvForNewWindow above). What the TOCTOU bug this
+      // test guards against actually breaks is NOT this invariant, but the
+      // window/token pairing above: without the fix, the surviving window
+      // can be the ORPHANED one — created by the call whose own generation
+      // then got revoked by the other call's rotation — while `windows`
+      // ends up with more than one live entry because neither call's kill
+      // targeted the window the other actually created.
+      expect(liveTokens.size).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Same TOCTOU shape as execute() above, but for followUp(): the old code
+  // computed `windowExists` from a task/tmux snapshot taken BEFORE
+  // runExclusiveForTask was even entered. Two concurrent follow-ups for the
+  // same not-yet-running task could both observe "no window yet" from their
+  // own pre-lock snapshot, both enter the rotation, and the second's
+  // issueNextGeneration() would revoke the first's still-being-created
+  // generation. The fix moves the ENTIRE read-decide-act sequence
+  // (`taskRepo.findById` + the tmux existence check) inside the lock.
+  it('two concurrent followUp() calls for a task with no window yet converge to exactly one live tmux window with exactly one valid generation', async () => {
+    vi.useFakeTimers();
+    try {
+      const unit = makeUnit({ id: 42, workerType: 'claude', workerModel: 'opus' });
+      const task = makeTask({ id: 1, serverName: 'local-server', unitId: 42, tmuxWindow: null });
+      let dbTask: Task = { ...task };
+
+      let windows: { name: string; index: number }[] = [];
+      let windowCounter = 0;
+      let tokenCounter = 0;
+      const liveTokens = new Set<number>();
+
+      const { useCase, taskRepo, tmux, paneEnvService } = buildUseCase({
+        task,
+        project: makeProject({ defaultUnitId: null }),
+        units: [unit],
+        projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito' },
+      });
+
+      (taskRepo.findById as ReturnType<typeof vi.fn>).mockImplementation(() => ({ ...dbTask }));
+      (taskRepo.update as ReturnType<typeof vi.fn>).mockImplementation((_id: number, updates: Partial<Task>) => {
+        dbTask = { ...dbTask, ...updates };
+      });
+
+      (tmux.listSessions as ReturnType<typeof vi.fn>).mockImplementation(async () => [{ name: 'azito', windows: [...windows] }]);
+      (tmux.createSession as ReturnType<typeof vi.fn>).mockImplementation(async () => {});
+      (tmux.createWindow as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        const name = `w${++windowCounter}`;
+        windows.push({ name, index: windows.length });
+        return { result: { stdout: '', stderr: '', code: 0 }, windowName: name };
+      });
+      (tmux.killWindow as ReturnType<typeof vi.fn>).mockImplementation(async (_server: unknown, target: string) => {
+        const seg = (target as string).split(':')[1];
+        windows = windows.filter((w) => w.name !== seg && String(w.index) !== seg);
+        return { stdout: '', stderr: '', code: 0 };
+      });
+
+      (paneEnvService.buildEnvForNewWindow as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        liveTokens.clear();
+        const tokenId = ++tokenCounter;
+        liveTokens.add(tokenId);
+        return { env: { AZITO_TASK_TOKEN: `t${tokenId}`, AZITO_TASK_ID: '1' }, tokenId };
+      });
+      (paneEnvService.revokeGeneration as ReturnType<typeof vi.fn>).mockImplementation((tokenId: number) => {
+        liveTokens.delete(tokenId);
+      });
+
+      const runA = useCase.followUp(42, 1, 'go');
+      const runB = useCase.followUp(42, 1, 'go');
+      await vi.runAllTimersAsync();
+      await Promise.all([runA, runB]);
+
+      // followUp() never kills a pre-existing window (design v3 §2: it only
+      // rotates when NO window exists yet) — so unlike execute(), a correct
+      // outcome here is that the SECOND queued follow-up recognizes the
+      // window the first one just created and reuses it, rather than both
+      // creating their own.
+      expect(windows).toHaveLength(1);
+      expect(dbTask.tmuxWindow).toBe(windows[0].name);
+      expect(liveTokens.size).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('ExecuteTaskUseCase execution gate (Issue #328)', () => {
   const gateProjectServer = { workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const };
 

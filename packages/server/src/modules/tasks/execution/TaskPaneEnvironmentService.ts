@@ -54,12 +54,23 @@ export class TaskPaneEnvironmentService {
    * off direct CDP-in-the-task-env is a separate round, "E").
    */
   buildEnvForNewWindow(task: Task, server: ServerConfig): { env: Record<string, string>; tokenId: number } {
+    // Secrets are read BEFORE the token is rotated (third-party review
+    // finding): findByProjectWithValues() decrypts each secret's stored
+    // value, which can throw (corrupt row, master-key mismatch, etc). The
+    // old order called issueNextGeneration() first — a decrypt failure after
+    // that point revoked the previous generation (no window was ever
+    // created to carry the new one) with no way for the caller to recover
+    // it, since createRotatedWindow's own rollback only runs once `create()`
+    // itself has been invoked. Reading secrets first means the only
+    // remaining fallible step after rotation is `create()`, which
+    // createRotatedWindow already rolls back correctly.
+    const secretEntries = this.projectSecretRepo.findByProjectWithValues(task.projectId);
     const issued = this.taskTokenRepo.issueNextGeneration(task.id, 'window_regenerated');
     const env: Record<string, string> = {
       AZITO_TASK_TOKEN: issued.token,
       AZITO_TASK_ID: String(task.id),
     };
-    for (const secret of this.projectSecretRepo.findByProjectWithValues(task.projectId)) {
+    for (const secret of secretEntries) {
       env[`AZITO_SECRET_${secret.name}`] = secret.value;
     }
     if (!this.scopedAuthEnabled) {

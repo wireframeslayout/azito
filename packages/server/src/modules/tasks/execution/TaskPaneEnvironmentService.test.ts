@@ -127,6 +127,37 @@ describe('TaskPaneEnvironmentService.buildEnvForNewWindow', () => {
     const { env } = service.buildEnvForNewWindow(makeTask(), makeServer({ type: 'local' }));
     expect(env.AZITO_AGENT_TOKEN).toBeUndefined();
   });
+
+  // Third-party review finding (Important): secrets must be read BEFORE the
+  // token is rotated, so a decrypt/read failure never leaves the previous
+  // generation revoked with no new generation ever issued (or returned to
+  // the caller to roll back).
+  it('reads project secrets before rotating the token (call order)', () => {
+    const { service, taskTokenRepo, projectSecretRepo } = makeDeps(false);
+    const calls: string[] = [];
+    (projectSecretRepo.findByProjectWithValues as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      calls.push('secrets');
+      return [{ id: 1, projectId: 7, name: 'FOO', value: 'bar', createdAt: '', updatedAt: '' }];
+    });
+    (taskTokenRepo.issueNextGeneration as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      calls.push('rotate');
+      return { id: 1, token: 'azt.task.1.' + 'a'.repeat(64) };
+    });
+
+    service.buildEnvForNewWindow(makeTask(), makeServer());
+
+    expect(calls).toEqual(['secrets', 'rotate']);
+  });
+
+  it('does not rotate (revoke the previous generation) when reading secrets throws', () => {
+    const { service, taskTokenRepo, projectSecretRepo } = makeDeps(false);
+    (projectSecretRepo.findByProjectWithValues as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      throw new Error('decrypt failed: master key mismatch');
+    });
+
+    expect(() => service.buildEnvForNewWindow(makeTask(), makeServer())).toThrow(/decrypt failed/);
+    expect(taskTokenRepo.issueNextGeneration).not.toHaveBeenCalled();
+  });
 });
 
 // Issue #28 third-party review finding (multi-window token rotation

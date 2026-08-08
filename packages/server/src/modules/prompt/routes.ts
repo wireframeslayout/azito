@@ -12,12 +12,26 @@ import type { RouteAuthRequirement } from '../../shared/auth/routeAuth';
  * (Issue #28 design v3 §4: "無指定は拒否" — a missing task_id is a deny, not
  * an operator-scope fallback). Self-contained (no cross-module lookup), so
  * it's declared locally rather than in buildServer.ts.
+ *
+ * `render === 'skill'` is also required (third-party review, task-authz
+ * finding): without this, a task principal omitting `render` (or passing
+ * anything other than 'skill') would still pass task_id=self and reach the
+ * read-only *synthesized* branch below — which returns the devops UnitType's
+ * per-phase default Sidekick body regardless of the task's OWN Unit's
+ * phaseConfig assignment, including Sidekicks never assigned to that task's
+ * Unit at all. That let a task token route around `/api/sidekicks/:name`'s
+ * own assignment restriction simply by not asking for `render=skill`. The
+ * synthesized (non-render) branch is intended as an operator-only read (the
+ * settings screen's phase-prompt preview); a task principal has no legitimate
+ * use for it, only for its own resolved render.
  */
 const phasePromptSelfAuth: RouteAuthRequirement = {
   classes: ['task'],
   operation: 'phase-prompts.render',
   condition: (principal, request) => {
-    const taskIdParam = (request.query as { task_id?: string }).task_id;
+    const query = request.query as { task_id?: string; render?: string };
+    if (query.render !== 'skill') return false;
+    const taskIdParam = query.task_id;
     if (!taskIdParam) return false;
     const taskId = Number(taskIdParam);
     return Number.isInteger(taskId) && principal.id === taskId;

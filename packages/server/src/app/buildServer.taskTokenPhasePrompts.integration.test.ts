@@ -122,6 +122,43 @@ describe('task pane env with AZITO_TASK_TOKEN only (Issue #28 fix 1: harness ski
 
     await app.close();
   });
+
+  // Third-party review finding (Important): omitting `render` (or passing
+  // anything other than 'skill') must NOT let a task token reach the
+  // read-only synthesized branch — that branch returns the devops UnitType's
+  // per-phase default Sidekick body regardless of the task's own Unit's
+  // phaseConfig assignment, bypassing /api/sidekicks/:name's own assignment
+  // restriction. Only the render=skill path (which resolves the task's OWN
+  // assigned Sidekick via RenderSkillPromptUseCase) is a legitimate task read.
+  it('a task token with task_id=self but no render=skill is rejected (cannot reach the synthesized view)', async () => {
+    const { app, renderSkillPromptUseCase } = buildApp({ scopedAuthEnabled: true });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/phase-prompts/planning?task_id=${TASK_ID}`,
+      headers: { authorization: `Bearer ${TASK_TOKEN}` },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(renderSkillPromptUseCase.render).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it('a task token with task_id=self and render set to something other than "skill" is rejected', async () => {
+    const { app, renderSkillPromptUseCase } = buildApp({ scopedAuthEnabled: true });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/phase-prompts/planning?render=raw&task_id=${TASK_ID}`,
+      headers: { authorization: `Bearer ${TASK_TOKEN}` },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(renderSkillPromptUseCase.render).not.toHaveBeenCalled();
+
+    await app.close();
+  });
 });
 
 /**

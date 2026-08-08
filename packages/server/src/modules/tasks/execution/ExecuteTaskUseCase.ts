@@ -512,10 +512,29 @@ export class ExecuteTaskUseCase {
     let tokenId: number;
     try {
       ({ windowName, tokenId } = await runExclusiveForTask(taskId, async () => {
-        if (task.tmuxWindow) {
+        // Task/tmux state is re-read HERE, inside the lock (Issue #28
+        // third-party review, TOCTOU finding) — not taken from the `task`
+        // captured before this lock was even queued for. Without this, a
+        // second execute()/followUp() queued behind this one on
+        // runExclusiveForTask still decides what to kill using the SAME
+        // stale `task.tmuxWindow` its own pre-lock snapshot had, i.e. the
+        // window that existed before EITHER call started — not the window
+        // this call is about to create. Concretely: call A (this one) creates
+        // generation A's window; call B, still holding its own stale
+        // snapshot, sees that same old (pre-A) window as "the" window to
+        // kill, finds it already gone (or races the kill against A live),
+        // and creates generation B — whose issueNextGeneration() revokes
+        // generation A regardless, since A's window was never what B tried
+        // to kill. Generation A's pane is now orphaned with a dead token.
+        // Re-fetching `currentTask` here means each queued rotation always
+        // targets whatever the immediately-prior rotation for this task
+        // actually persisted.
+        const currentTask = this.taskRepo.findById(taskId);
+        if (!currentTask) throw new Error(`Task ${taskId} not found`);
+        if (currentTask.tmuxWindow) {
           const preCheck = await this.tmux.listSessions(server);
           const preSession = preCheck.find((s) => s.name === tmuxSession);
-          const oldWin = preSession?.windows.find((w) => w.name === task.tmuxWindow);
+          const oldWin = preSession?.windows.find((w) => w.name === currentTask.tmuxWindow);
           await confirmOldWindowGone(
             this.tmux,
             server,
@@ -533,7 +552,7 @@ export class ExecuteTaskUseCase {
         // resolving with a non-zero exit code (agent transport — see
         // WindowRotation.ts's doc comment; Issue #28 third-party review
         // finding).
-        const created = await createRotatedWindow(this.paneEnvService, server, task, 'execute_create_failed', (env) =>
+        const created = await createRotatedWindow(this.paneEnvService, server, currentTask, 'execute_create_failed', (env) =>
           this.tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: env }),
         );
 
@@ -906,12 +925,12 @@ export class ExecuteTaskUseCase {
     this.appendLog(taskId, unitId, 'user_comment', { text: comment });
     this.taskRepo.updateStatus(taskId, 'in_progress');
 
-    let windowName = task.tmuxWindow || `task-${task.id}`;
-
-    // Ensure tmux session and window exist. Same throwaway-bootstrap-window
-    // reasoning as execute() above: no env at all when a session must be
-    // created here, since the real task window (created just below, if it
-    // doesn't already exist) is what actually gets AZITO_TASK_TOKEN.
+    // Ensure tmux session exists. Same throwaway-bootstrap-window reasoning
+    // as execute() above: no env at all when a session must be created here,
+    // since the real task window (created just below, if it doesn't already
+    // exist) is what actually gets AZITO_TASK_TOKEN. Session creation itself
+    // is not part of the task-token rotation, so it stays outside the
+    // per-task lock below (idempotent/harmless to race).
     const existingSessions = await this.tmux.listSessions(server);
     const sessionExists = existingSessions.some((s) => s.name === tmuxSession);
     if (!sessionExists) {
@@ -919,48 +938,63 @@ export class ExecuteTaskUseCase {
       await sleep(500);
     }
 
-    let windowExists = false;
-    try {
-      const sessions = await this.tmux.listSessions(server);
-      const session = sessions.find((s) => s.name === tmuxSession);
-      if (session) {
-        windowExists = session.windows.some((w) => w.name === windowName);
-      }
-    } catch {}
-
     // Threaded to the working-directory-rejected rollback below (needs the
     // specific generation to revoke — see that branch's comment); stays null
-    // when the `windowExists` branch is taken, since nothing was rotated.
-    let tokenId: number | null = null;
-    if (!windowExists) {
-      try {
+    // when the `windowExists` result is true, since nothing was rotated.
+    let windowName: string;
+    let windowExists: boolean;
+    let tokenId: number | null;
+    try {
+      // The ENTIRE "read current window state -> decide whether to rotate ->
+      // create -> persist" sequence now runs inside runExclusiveForTask, not
+      // just the create/persist half (Issue #28 third-party review, TOCTOU
+      // finding): the old code computed `windowExists` from a `task`/tmux
+      // snapshot taken BEFORE the lock. Two concurrent follow-ups for the
+      // same not-yet-running task could both observe "no window yet" from
+      // their own pre-lock snapshot, both enter the rotation, and the
+      // second's issueNextGeneration() would revoke the first's
+      // still-being-created generation before its window creation even
+      // resolved — runExclusiveForTask only serializes the callbacks, it
+      // doesn't protect state read before either callback started. Reading
+      // `task.tmuxWindow` fresh from the repository INSIDE the lock, and
+      // re-checking tmux for it there too, means the decision is always made
+      // against the latest state any prior queued rotation for this task
+      // (execute()/followUp()/respawn()) actually persisted.
+      ({ windowName, windowExists, tokenId } = await runExclusiveForTask(taskId, async () => {
+        const currentTask = this.taskRepo.findById(taskId);
+        if (!currentTask) throw new Error(`Task ${taskId} not found`);
+        const candidateWindowName = currentTask.tmuxWindow || `task-${task.id}`;
+        let exists = false;
+        try {
+          const sessions = await this.tmux.listSessions(server);
+          const session = sessions.find((s) => s.name === tmuxSession);
+          if (session) exists = session.windows.some((w) => w.name === candidateWindowName);
+        } catch {}
+        if (exists) {
+          return { windowName: candidateWindowName, windowExists: true, tokenId: null };
+        }
+
         // Window generation point for a follow-up that has no window to
         // resume onto — rotates the task token, same as execute() above. A
         // follow-up onto an ALREADY-existing window (the common case) never
         // reaches this branch at all, matching design v3 §2's "resume onto
         // an existing window never rotates". No old window to kill here
-        // (windowExists is false), so unlike execute() this only needs the
+        // (exists is false), so unlike execute() this only needs the
         // create-failure rollback half of the shared operation —
         // createRotatedWindow revokes the freshly-issued generation whether
         // creation throws or resolves with a non-zero exit code (Issue #28
         // third-party review, followUp() rollback-safety finding; see
         // WindowRotation.ts's doc comment). The DB is only updated with
         // `windowName` once creation is confirmed to have actually
-        // succeeded. The whole issue->create->persist span runs under a
-        // per-task lock (see runExclusiveForTask's doc comment in
-        // WindowRotation.ts) so a concurrent rotation for this same task
-        // (e.g. execute() or a respawn) cannot revoke this generation out
-        // from under the persist below.
-        ({ windowName, tokenId } = await runExclusiveForTask(taskId, async () => {
-          const created = await createRotatedWindow(this.paneEnvService, server, task, 'followup_create_failed', (env) =>
-            this.tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: env }),
-          );
-          this.taskRepo.update(taskId, { tmuxWindow: created.windowName } as Partial<Task>);
-          return { windowName: created.windowName, tokenId: created.tokenId };
-        }));
-      } catch (err) {
-        throw new Error(`Failed to create tmux window: ${err instanceof Error ? err.message : err}`);
-      }
+        // succeeded.
+        const created = await createRotatedWindow(this.paneEnvService, server, currentTask, 'followup_create_failed', (env) =>
+          this.tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: env }),
+        );
+        this.taskRepo.update(taskId, { tmuxWindow: created.windowName } as Partial<Task>);
+        return { windowName: created.windowName, windowExists: false, tokenId: created.tokenId };
+      }));
+    } catch (err) {
+      throw new Error(`Failed to create tmux window: ${err instanceof Error ? err.message : err}`);
     }
 
     const windowTarget = `${tmuxSession}:${windowName}`;
