@@ -289,6 +289,29 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     operation: 'sidekicks.list',
   };
 
+  /**
+   * `POST /api/projects/:id/storage/upload`: a task principal may only
+   * upload into its OWN task's project (Issue #28 Phase E requirement 5 —
+   * this is the upload route `browser-ops` uses to save screenshots/assets).
+   * Built here, not in modules/files/routes.ts, for the same
+   * cross-module-lookup reason `sidekickDetailAuth` above is (files is an
+   * upper-layer module and must not depend on tasks, another upper-layer
+   * module — `.dependency-cruiser.cjs`). `:id` is a route PARAM (unlike
+   * `close-group`'s body-only `group` — see browserCloseGroupAuth's own doc
+   * comment), so it IS available at the onRequest stage this condition runs
+   * at, and a `condition` (not an in-handler check) is the right shape here.
+   */
+  const storageUploadAuth: RouteAuthRequirement = {
+    classes: ['task'],
+    operation: 'storage.upload',
+    condition: (principal, request) => {
+      const projectId = Number((request.params as { id: string }).id);
+      if (!Number.isInteger(projectId)) return false;
+      const task = principal.id !== undefined ? taskRepo.findById(principal.id) : undefined;
+      return task !== undefined && task !== null && task.projectId === projectId;
+    },
+  };
+
   app.addHook('onRequest', async (request, reply) => {
     if (!request.url.startsWith('/api')) return;
     if (request.url.startsWith('/api/health')) return;
@@ -426,7 +449,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   );
 
   await app.register(phasePromptsRoutes, { sidekickLoader: sidekickPackageLoader, renderSkillPromptUseCase, unitTypeLoader });
-  await app.register(storageRoutes, { projectRepo, storageSettingsRepo, storageClient });
+  await app.register(storageRoutes, { projectRepo, storageSettingsRepo, storageClient, uploadAuth: storageUploadAuth });
   await app.register(resourceGuardRoutes, { settingsRepo: resourceGuardSettingsRepo, resourceGuard, serverRepo, transportFactory });
   await app.register(notificationRoutes, { pushSubRepo, pushService, vapidKeys, agentWatchRepo });
   await app.register(usageRoutes, { usageService });

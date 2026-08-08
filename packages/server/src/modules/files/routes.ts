@@ -5,6 +5,7 @@ import type { MinioStorageClient } from './storage/MinioStorageClient';
 import type { IServerRepository } from '../servers/Server';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import { FileBrowseService, FileBrowseError } from './FileBrowseService';
+import type { RouteAuthRequirement } from '../../shared/auth/routeAuth';
 
 export function sanitizeFileName(raw: string): string {
   const nfc = raw.normalize('NFC');
@@ -19,6 +20,15 @@ export interface StorageRouteOptions {
   projectRepo: IProjectRepository;
   storageSettingsRepo: IStorageSettingsRepository;
   storageClient: MinioStorageClient;
+  /**
+   * Issue #28 Phase E requirement 5: scopes `POST /api/projects/:id/storage/
+   * upload` (the route `browser-ops` uses to save screenshots/assets) to a
+   * task principal's OWN project. Built in app/buildServer.ts, not here —
+   * see that requirement's own doc comment for why (cross-module lookup).
+   * Only the upload route is scoped; list/delete stay operator-only by
+   * omission, same as before this fix (browser-ops never calls them).
+   */
+  uploadAuth?: RouteAuthRequirement;
 }
 
 const storageRoutes: FastifyPluginCallback<StorageRouteOptions> = (fastify, opts, done) => {
@@ -44,6 +54,7 @@ const storageRoutes: FastifyPluginCallback<StorageRouteOptions> = (fastify, opts
   // ── POST /api/projects/:id/storage/upload ──
   fastify.post<{ Params: { id: string } }>(
     '/api/projects/:id/storage/upload',
+    { config: { auth: opts.uploadAuth } },
     async (request, reply) => {
       const projectId = parseInt(request.params.id, 10);
       if (!projectRepo.findById(projectId))
