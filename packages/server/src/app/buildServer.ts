@@ -406,6 +406,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     detailAuth: sidekickDetailAuth,
     listAuth: sidekickListAuth,
     resolveAssignedSidekickNames: resolveAssignedSidekickNamesForTask,
+    scopedAuthEnabled,
   });
   await app.register(supervisorsRoutes, { supervisorRegistry });
   await app.register(healthRoutes, { deployModeDetector });

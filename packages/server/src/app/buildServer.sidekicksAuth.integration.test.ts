@@ -56,7 +56,7 @@ interface FakeUnit {
   phaseConfig: null;
 }
 
-function buildApp(): {
+function buildApp(scopedAuthEnabled = true): {
   app: FastifyInstance;
   taskRepo: { findById: (id: number) => FakeTask | undefined };
   unitRepo: { findById: (id: number) => FakeUnit | undefined };
@@ -115,13 +115,21 @@ function buildApp(): {
 
   const app = Fastify();
 
+  // Mirrors buildServer.ts's real onRequest hook exactly (Phase C round-4
+  // review, Important finding): the 403 is only actually enforced when
+  // `scopedAuthEnabled` is true — while it's false (compat mode), a denied
+  // evaluation is logged but the request still passes through. Earlier
+  // versions of this test's hook always enforced (hardcoded to what is now
+  // `scopedAuthEnabled = true`), so it could never have caught the sibling
+  // bug this fix addresses: the sidekicksRoutes list handler applying its
+  // own task-principal filter unconditionally, even in compat mode.
   app.addHook('onRequest', async (request, reply) => {
     if (!request.url.startsWith('/api')) return;
     const principal = resolvePrincipal(request.headers.authorization, { verifyUiToken, taskTokenRepo });
     if (!principal) return reply.status(401).send({ error: 'Unauthorized' });
     request.principal = principal;
     const { allowed, operation } = evaluateRouteAuth(principal, request);
-    if (!allowed) {
+    if (!allowed && scopedAuthEnabled) {
       return reply.status(403).send({ error: 'operator_required', operation });
     }
   });
@@ -138,6 +146,7 @@ function buildApp(): {
     detailAuth,
     listAuth,
     resolveAssignedSidekickNames: resolveAssignedSidekickNamesForTask,
+    scopedAuthEnabled,
   });
 
   return { app, taskRepo, unitRepo };
@@ -206,5 +215,55 @@ describe('sidekicks task-pane auth wiring (Issue #28 third-party review fix 1+2)
       headers: { authorization: `Bearer ${TASK_TOKEN}` },
     });
     expect(res.statusCode).toBe(403);
+  });
+});
+
+// Phase C round-4 review, Important finding: GET /api/sidekicks used to
+// apply the task-principal narrowing filter unconditionally, regardless of
+// AZITO_SCOPED_AUTH — a task pane always carries a task token (azt-sidekick
+// prefers it over any operator credential it might also have), so a
+// compat-mode deployment (flag off, the default) still saw its list
+// silently narrowed to the task's assigned Sidekicks, breaking this PR's
+// core "flag off => behavior unchanged" guarantee. Detail requests were
+// never rejected in compat mode either (the onRequest hook only enforces
+// when the flag is on), so list and detail visibly disagreed with each
+// other on top of disagreeing with the flag's own contract.
+describe('sidekicks list filtering respects AZITO_SCOPED_AUTH (Phase C round-4 review)', () => {
+  let app: FastifyInstance;
+
+  afterEach(async () => {
+    await app.close();
+  });
+
+  it('compat mode (flag off): a task token still sees the FULL unfiltered list, same as an operator', async () => {
+    ({ app } = buildApp(false));
+    const res = await app.inject({ method: 'GET', url: '/api/sidekicks', headers: { authorization: `Bearer ${TASK_TOKEN}` } });
+    expect(res.statusCode).toBe(200);
+    const names: string[] = res.json().map((p: { name: string }) => p.name);
+    // issue-default carries no phase tag and is never assigned to any
+    // task's Unit — only an unfiltered list includes it. Compat mode must
+    // return it to a task principal too, exactly like it does for an
+    // operator UI token.
+    expect(names).toContain('issue-default');
+  });
+
+  it('compat mode (flag off): a request evaluateRouteAuth would deny is still let through (list unaffected)', async () => {
+    ({ app } = buildApp(false));
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/sidekicks/issue-default?render=1&task_id=${TASK_ID}`,
+      headers: { authorization: `Bearer ${TASK_TOKEN}` },
+    });
+    // In enforce mode this exact request 403s (see the detail-route test
+    // above) — in compat mode it must pass through unchanged.
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('scoped mode (flag on): a task token sees ONLY the assigned Sidekicks — behavior unchanged from before this fix', async () => {
+    ({ app } = buildApp(true));
+    const res = await app.inject({ method: 'GET', url: '/api/sidekicks', headers: { authorization: `Bearer ${TASK_TOKEN}` } });
+    expect(res.statusCode).toBe(200);
+    const names: string[] = res.json().map((p: { name: string }) => p.name);
+    expect(names).not.toContain('issue-default');
   });
 });

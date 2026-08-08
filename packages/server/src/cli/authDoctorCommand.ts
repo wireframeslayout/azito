@@ -549,7 +549,26 @@ export async function authDoctorCommand(): Promise<void> {
     checkScopedAuthFlag(),
   ];
 
+  // Fix (Phase C round-4 review, Minor): `hasFailure` used to be the only
+  // thing this loop tallied, so a run with nothing but `warning`/`notice`
+  // entries (leftover legacy panes, an unreachable server, a `codex` CLI
+  // this doctor couldn't verify) still printed "すべての検査に合格しました"
+  // and exited 0 — indistinguishable from a run where every check actually
+  // verified something and found it clean. That made this command unusable
+  // as a migration gate in automation: a script polling for "green" would
+  // proceed past an unfinished drain or an unreachable server it never
+  // actually confirmed. `hasWarning`/`hasNotice` are tallied separately so
+  // the summary — and `process.exitCode` — can distinguish all four states:
+  // clean (every check verified something and it's fine), failure (`ok:
+  // false`, exit 1, unchanged from before), warning (advisory, nothing
+  // currently broken but action recommended, exit 2), and unverifiable
+  // (couldn't check at least one thing, exit 3). Only the clean state may
+  // report "すべての検査に合格しました" / exit 0 — warning and
+  // unverifiable are each reported with their own message and exit code so
+  // neither can be mistaken for "all checks passed".
   let hasFailure = false;
+  let hasWarning = false;
+  let hasNotice = false;
   for (const check of checks) {
     const mark = check.notice
       ? (process.stdout.isTTY ? '\x1b[33m-- \x1b[0m' : '-- ')
@@ -561,12 +580,20 @@ export async function authDoctorCommand(): Promise<void> {
       console.log(`      ${line}`);
     }
     if (!check.ok) hasFailure = true;
+    if (check.warning) hasWarning = true;
+    if (check.notice) hasNotice = true;
   }
 
   console.log('');
   if (hasFailure) {
     console.log(colorize(false, '一部の検査に失敗しました。上記の修正手順に従ってください。'));
     process.exitCode = 1;
+  } else if (hasWarning) {
+    console.log(colorize(false, '失敗はありませんが、対応を推奨する warning があります。上記の案内を確認してください。'));
+    process.exitCode = 2;
+  } else if (hasNotice) {
+    console.log(colorize(false, '失敗はありませんが、確認できなかった項目があります（unverifiable）。上記の案内に従って再確認してください。'));
+    process.exitCode = 3;
   } else {
     console.log(colorize(true, 'すべての検査に合格しました。'));
   }

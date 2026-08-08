@@ -129,11 +129,19 @@ describe('authDoctorCommand', () => {
   // test timeout can be too tight purely from scheduling contention.
   // Explicit timeout bump, same pattern as the tmux-integration tests'
   // per-test `{ timeout: 30000 }` (see TmuxClient.splitPane.tmuxIntegration.test.ts).
-  it('passes when nothing is set up yet', { timeout: 20000 }, async () => {
+  // "Nothing set up yet" still has two unverifiable checks by default in
+  // this suite: the hub DB doesn't exist yet (drain check) and the codex
+  // CLI isn't mocked as installed (Codex MCP check) — both are `notice`
+  // (unverifiable), not failures. Phase C round-4 review: exit 0 / "すべて
+  // の検査に合格しました" must be reserved for a run where every check
+  // actually verified something and found it clean, so this now exits 3
+  // ("確認できなかった項目があります") instead of the old blanket "all
+  // checks passed" that couldn't be told apart from a genuinely clean run.
+  it('reports unverifiable (not a pass) when nothing is set up yet', { timeout: 20000 }, async () => {
     const { authDoctorCommand } = await import('./authDoctorCommand.js');
     await authDoctorCommand();
-    expect(process.exitCode).toBeUndefined();
-    expect(allLogLines()).toContain('すべての検査に合格しました');
+    expect(process.exitCode).toBe(3);
+    expect(allLogLines()).toContain('確認できなかった項目があります');
   });
 
   it('fails when azitoctl*.env still has AZITO_UI_TOKEN', async () => {
@@ -148,7 +156,7 @@ describe('authDoctorCommand', () => {
     expect(allLogLines()).toContain('azitoctl.env');
   });
 
-  it('passes when azitoctl*.env has no AZITO_UI_TOKEN', async () => {
+  it('passes this one check when azitoctl*.env has no AZITO_UI_TOKEN (overall exit is 3: hub DB + codex CLI still unverifiable in this test env)', async () => {
     const azitoDir = path.join(fakeHome, '.azito');
     fs.mkdirSync(azitoDir, { recursive: true });
     fs.writeFileSync(path.join(azitoDir, 'azitoctl.env'), 'AZITO_URL=http://x\nAZITO_WEBHOOK_TOKEN=y\n');
@@ -156,7 +164,11 @@ describe('authDoctorCommand', () => {
     const { authDoctorCommand } = await import('./authDoctorCommand.js');
     await authDoctorCommand();
 
-    expect(process.exitCode).toBeUndefined();
+    expect(allLogLines()).toContain('[OK ] azitoctl*.env');
+    // Overall exit reflects the OTHER checks' unverifiable state (no hub DB,
+    // codex CLI not mocked as installed), not this check — see the "reports
+    // unverifiable" test above for that combination in isolation.
+    expect(process.exitCode).toBe(3);
   });
 
   // Third-party review Minor finding: a broken symlink (or any unreadable
@@ -193,7 +205,7 @@ describe('authDoctorCommand', () => {
     expect(allLogLines()).toContain('operator.env');
   });
 
-  it('passes when operator.env is 0600', async () => {
+  it('passes this one check when operator.env is 0600 (overall exit is 3: hub DB + codex CLI still unverifiable in this test env)', async () => {
     const azitoDir = path.join(fakeHome, '.azito');
     fs.mkdirSync(azitoDir, { recursive: true });
     const operatorEnvPath = path.join(azitoDir, 'operator.env');
@@ -202,7 +214,8 @@ describe('authDoctorCommand', () => {
     const { authDoctorCommand } = await import('./authDoctorCommand.js');
     await authDoctorCommand();
 
-    expect(process.exitCode).toBeUndefined();
+    expect(allLogLines()).toContain('[OK ] operator.env');
+    expect(process.exitCode).toBe(3);
   });
 
   it('fails when MCP settings token does not match the hub token', async () => {
@@ -221,7 +234,7 @@ describe('authDoctorCommand', () => {
     expect(allLogLines()).toContain('MCP settings');
   });
 
-  it('passes when MCP settings token matches the hub token', async () => {
+  it('passes this one check when MCP settings token matches the hub token (overall exit is 3: hub DB + codex CLI still unverifiable in this test env)', async () => {
     process.env.AZITO_UI_TOKEN = 'hub-token';
     const claudeDir = path.join(fakeHome, '.claude');
     fs.mkdirSync(claudeDir, { recursive: true });
@@ -233,7 +246,8 @@ describe('authDoctorCommand', () => {
     const { authDoctorCommand } = await import('./authDoctorCommand.js');
     await authDoctorCommand();
 
-    expect(process.exitCode).toBeUndefined();
+    expect(allLogLines()).toContain('[OK ] MCP settings');
+    expect(process.exitCode).toBe(3);
   });
 
   // Issue #28 review Minor finding: an unreadable/broken settings.json used
@@ -260,6 +274,42 @@ describe('authDoctorCommand', () => {
     expect(allLogLines()).toContain('scoped 認可: 有効');
   });
 
+  // Phase C round-4 review: "all checks passed" / exit 0 must be reserved
+  // for a run where every check actually verified something and found it
+  // clean — none `notice` (unverifiable), none `warning`. This is the one
+  // scenario in the suite that clears all six checks: AZITO_SCOPED_AUTH
+  // enabled (skips the drain check cleanly, no live-pane concern), no stray
+  // AZITO_UI_TOKEN in azitoctl.env, operator.env at 0600, and both the
+  // Claude and Codex azt-mcp registrations matching the hub's current token.
+  it('reports a clean pass with exit 0 when every check actually verifies something and finds it clean', async () => {
+    process.env.AZITO_UI_TOKEN = 'hub-token';
+    process.env.AZITO_SCOPED_AUTH = '1';
+
+    const azitoDir = path.join(fakeHome, '.azito');
+    fs.mkdirSync(azitoDir, { recursive: true });
+    fs.writeFileSync(path.join(azitoDir, 'azitoctl.env'), 'AZITO_URL=http://x\nAZITO_WEBHOOK_TOKEN=y\n');
+    fs.writeFileSync(path.join(azitoDir, 'operator.env'), 'AZITO_UI_TOKEN=hub-token\n', { mode: 0o600 });
+
+    const claudeDir = path.join(fakeHome, '.claude');
+    fs.mkdirSync(claudeDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(claudeDir, 'settings.json'),
+      JSON.stringify({ mcpServers: { 'azt-mcp': { env: { AZITO_UI_TOKEN: 'hub-token' } } } }),
+    );
+
+    execFileSyncMock.mockImplementation(
+      () => JSON.stringify({ transport: { env: { AZITO_UI_TOKEN: 'hub-token' } } }),
+    );
+
+    const { authDoctorCommand } = await import('./authDoctorCommand.js');
+    await authDoctorCommand();
+
+    expect(process.exitCode).toBeUndefined();
+    expect(allLogLines()).toContain('すべての検査に合格しました');
+    expect(allLogLines()).not.toContain('[!! ]');
+    expect(allLogLines()).not.toContain('[-- ]');
+  });
+
   // Fix 1 (Phase C review, Important): while AZITO_SCOPED_AUTH is off,
   // `azito auth doctor` must be able to point out live task-owned tmux panes
   // on the local server — those keep AZITO_UI_TOKEN in their pane env for
@@ -284,30 +334,33 @@ describe('authDoctorCommand', () => {
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
       await authDoctorCommand();
 
-      expect(process.exitCode).toBeUndefined();
+      // Phase C round-4 review: unverifiable (`notice`) is no longer folded
+      // into exit 0 — it now gets its own non-zero code (3), distinct from
+      // both a clean pass (undefined/0) and an actual failure (1).
+      expect(process.exitCode).toBe(3);
       expect(allLogLines()).toContain('このホストはハブではありません');
       expect(allLogLines()).toContain('ハブが動いているサーバー上で');
     });
 
-    it('passes with no warning when no task-owned windows exist on the local server', async () => {
+    it('passes this check with no warning when no task-owned windows exist on the local server (overall exit is 3: codex CLI still unverifiable in this test env)', async () => {
       const { openDatabase } = await import('../shared/db/Database.js');
       openDatabase(path.join(tmpDir, 'data.db')).close(); // just runs migrations, seeds 'local' server
 
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
       await authDoctorCommand();
 
-      expect(process.exitCode).toBeUndefined();
+      expect(process.exitCode).toBe(3);
       expect(allLogLines()).toContain('タスク所有ウィンドウの登録がありません');
     });
 
-    it('passes with no warning when the registered task window has no live tmux pane', async () => {
+    it('passes this check with no warning when the registered task window has no live tmux pane (overall exit is 3: codex CLI still unverifiable in this test env)', async () => {
       await seedTaskWindow('sess:1.0');
       // default execFileMock behavior is "pane gone"
 
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
       await authDoctorCommand();
 
-      expect(process.exitCode).toBeUndefined();
+      expect(process.exitCode).toBe(3);
       expect(allLogLines()).toContain('生存中の tmux ペインはありません');
     });
 
@@ -318,7 +371,9 @@ describe('authDoctorCommand', () => {
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
       await authDoctorCommand();
 
-      expect(process.exitCode).toBeUndefined();
+      // warning (exit 2) takes precedence over the codex-CLI notice also
+      // present in this test env — see authDoctorCommand()'s severity order.
+      expect(process.exitCode).toBe(2);
       expect(allLogLines()).toContain('[!! ] scoped 認可 有効化前の生存タスクウィンドウ');
       expect(allLogLines()).toContain('生存中のタスク所有ウィンドウが 1 件見つかりました');
       expect(allLogLines()).toContain('scoped 有効化前に、これらのタスクを終端させるか再生成してください');
@@ -348,7 +403,7 @@ describe('authDoctorCommand', () => {
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
       await authDoctorCommand();
 
-      expect(process.exitCode).toBeUndefined();
+      expect(process.exitCode).toBe(3);
       expect(allLogLines()).toContain('[-- ] scoped 認可 有効化前の生存タスクウィンドウ');
       expect(allLogLines()).toContain('検査できないサーバー上にタスク所有ウィンドウが');
       expect(allLogLines()).toContain('到達不能');
@@ -372,7 +427,9 @@ describe('authDoctorCommand', () => {
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
       await authDoctorCommand();
 
-      expect(process.exitCode).toBeUndefined();
+      // warning (exit 2) takes precedence over the codex-CLI notice also
+      // present in this test env.
+      expect(process.exitCode).toBe(2);
       expect(allLogLines()).toContain('[!! ] scoped 認可 有効化前の生存タスクウィンドウ');
       expect(allLogLines()).toContain('生存中のタスク所有ウィンドウが 1 件見つかりました');
       expect(allLogLines()).toContain('検査できなかったタスク所有ウィンドウも');
@@ -425,7 +482,10 @@ describe('authDoctorCommand', () => {
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
       await authDoctorCommand();
 
-      expect(process.exitCode).toBeUndefined();
+      // Drain check itself is a clean skip (no notice/warning); the codex-CLI
+      // notice still present in this test env is what drives the overall
+      // exit code to 3.
+      expect(process.exitCode).toBe(3);
       expect(allLogLines()).not.toContain('[!! ]');
       expect(allLogLines()).toContain('この検査は未有効時のみ対象');
     });
@@ -437,12 +497,14 @@ describe('authDoctorCommand', () => {
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
       await authDoctorCommand();
 
-      expect(process.exitCode).toBeUndefined();
+      // Two independent notices here (codex CLI + no hub DB in this test
+      // env) both map to the same exit 3 ("unverifiable"), never exit 0.
+      expect(process.exitCode).toBe(3);
       expect(allLogLines()).toContain('codex コマンドが見つかりません');
       expect(allLogLines()).toContain('[-- ] Codex MCP settings');
     });
 
-    it('passes (not-configured) when codex is installed but azt-mcp is not registered', async () => {
+    it('passes this check (not-configured) when codex is installed but azt-mcp is not registered (overall exit is 3: hub DB still unverifiable in this test env)', async () => {
       execFileSyncMock.mockImplementation(() => {
         const err = new Error('Command failed') as NodeJS.ErrnoException & { status?: number; stderr?: string; stdout?: string };
         err.status = 1;
@@ -453,7 +515,7 @@ describe('authDoctorCommand', () => {
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
       await authDoctorCommand();
 
-      expect(process.exitCode).toBeUndefined();
+      expect(process.exitCode).toBe(3);
       expect(allLogLines()).toContain('Codex に azt-mcp が登録されていません');
     });
 
@@ -474,7 +536,7 @@ describe('authDoctorCommand', () => {
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
       await authDoctorCommand();
 
-      expect(process.exitCode).toBeUndefined();
+      expect(process.exitCode).toBe(3);
       expect(allLogLines()).toContain('登録状況を確認できませんでした');
       expect(allLogLines()).toContain('config.toml is corrupted');
       expect(allLogLines()).toContain('[-- ] Codex MCP settings');
@@ -492,7 +554,7 @@ describe('authDoctorCommand', () => {
       expect(allLogLines()).toContain('Codex 側の azt-mcp トークンとハブの現在値');
     });
 
-    it('passes when the Codex azt-mcp token matches the hub token', async () => {
+    it('passes this check when the Codex azt-mcp token matches the hub token (overall exit is 3: hub DB still unverifiable in this test env)', async () => {
       process.env.AZITO_UI_TOKEN = 'hub-token';
       execFileSyncMock.mockImplementation(
         () => JSON.stringify({ transport: { env: { AZITO_UI_TOKEN: 'hub-token' } } }),
@@ -500,7 +562,7 @@ describe('authDoctorCommand', () => {
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
       await authDoctorCommand();
 
-      expect(process.exitCode).toBeUndefined();
+      expect(process.exitCode).toBe(3);
     });
 
     it('fails independently when the codex JSON output cannot be parsed', async () => {

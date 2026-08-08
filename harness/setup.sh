@@ -10,6 +10,14 @@ AZITO_URL="${AZITO_URL:-}"
 AZITO_WEBHOOK_TOKEN="${AZITO_WEBHOOK_TOKEN:-}"
 AZITO_UI_TOKEN="${AZITO_UI_TOKEN:-}"
 AZITO_SERVER_NAME="${AZITO_SERVER_NAME:-}"
+# --prefix は任意の文字列を受け付ける（charset 制限なし。ドットを含む値
+# `--prefix prod.eu` も許可される）。生成される azitoctl*.env のファイル名は
+# `azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env` （下記 azitoctl.env 節参照）。
+# 読み出し側（packages/server/src/shared/azitoctlEnv.ts の
+# findAzitoctlEnvFiles）はこの文法に合わせて `^azitoctl(?:-.+)?\.env$` で
+# 発見する — 発見側の正規表現をここより狭めると、`azito auth doctor` が
+# ドット付き prefix のファイルを見逃したまま "all checks passed" を返す
+# （Phase C third-party review 指摘）。
 AZITO_PREFIX="${AZITO_PREFIX:-}"
 
 # ── 引数パース ──
