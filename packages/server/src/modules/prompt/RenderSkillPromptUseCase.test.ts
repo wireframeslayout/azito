@@ -159,6 +159,7 @@ function makeRepos(overrides: {
     preApproveExecution: vi.fn(() => true),
     countChildren: vi.fn(() => 0),
     countChildrenInGeneration: vi.fn(() => 0),
+    clearTmuxWindowIfMatches: vi.fn(() => true),
     ...overrides.task,
   };
 

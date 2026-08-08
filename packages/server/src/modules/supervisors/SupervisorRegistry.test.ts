@@ -440,7 +440,15 @@ describe('SupervisorRegistry — launch binding (Issue #28 Phase C, design v3 §
     expect(auditRecord).toHaveBeenCalledWith(expect.objectContaining({ event: 'supervisor_launch.bound' }));
   });
 
-  it('rejects a bootstrapToken reused a second time (one-shot)', () => {
+  // Fix 2 (Issue #28 third-party review, Important finding): this used to be
+  // titled "one-shot" and relied on the bootstrap token being consumed at
+  // the DB layer the instant it verified once. That DB-level one-shot
+  // property is deliberately relaxed now (see verifyBootstrap's doc comment)
+  // — what still makes a replay against a LIVE connection fail is the
+  // in-memory `hasLiveConnectionForLaunch` guard in `register()`: the first
+  // registration's connection is still live (never disconnected) when the
+  // replay arrives, so it's rejected regardless of DB state.
+  it('rejects a bootstrapToken reused while the first connection for the same launch is still live', () => {
     const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
     const issued = registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })!;
 
@@ -451,6 +459,63 @@ describe('SupervisorRegistry — launch binding (Issue #28 Phase C, design v3 §
     const replay = new MockSocket();
     registry.register(asSocket(replay), registerWith({ launchId: issued.launchId, bootstrapToken: issued.bootstrapToken }));
     expect(replay.closed?.code).toBe(4001);
+    expect(auditRecord).toHaveBeenCalledWith(expect.objectContaining({ event: 'supervisor_launch.bootstrap_rejected' }));
+    // The original live connection must be untouched by the rejected replay.
+    expect(first.closed).toBeNull();
+    expect(registry.snapshot()).toHaveLength(1);
+  });
+
+  // Fix 2 (Issue #28 third-party review, Important finding): reproduces the
+  // actual bug. The hub verifies the bootstrap, mints a session token, and
+  // sends 'registered' — but the client disconnects before that response
+  // arrives (simulated here by driving the real close path,
+  // `handleSocketClosed`, exactly as ws/supervisorSocketHandler.ts does on a
+  // socket 'close' event). The client then reconnects using the SAME
+  // bootstrap token (it never received a session token to use instead). This
+  // must succeed and bind — not permanently strand the launch.
+  it('a disconnect before the client receives the registered response does not strand the launch — retrying with the same bootstrap token binds', () => {
+    const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
+    const issued = registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })!;
+
+    const first = new MockSocket();
+    registry.register(asSocket(first), registerWith({ launchId: issued.launchId, bootstrapToken: issued.bootstrapToken }));
+    expect(first.sent[0]).toMatchObject({ type: 'registered' });
+    // Client never actually received the above — the connection drops before delivery.
+    registry.handleSocketClosed(asSocket(first));
+
+    const retry = new MockSocket();
+    registry.register(asSocket(retry), registerWith({ launchId: issued.launchId, bootstrapToken: issued.bootstrapToken }));
+
+    expect(retry.closed).toBeNull();
+    expect(registry.snapshot()).toHaveLength(1);
+    expect(registry.snapshot()[0].bound).toBe(true);
+    const registered = retry.sent[0] as { type: string; sessionToken?: string };
+    expect(registered.type).toBe('registered');
+    expect(registered.sessionToken).toBeTruthy();
+  });
+
+  // Fix 2: the flip side of the above — once a session-token register has
+  // actually completed (proving the client DID receive a session token),
+  // the bootstrap token must stop working, per the invariant in the task
+  // description: "セッショントークンでの登録が一度成立した時点で bootstrap 失効".
+  it('once a session-token register has completed, the original bootstrap token no longer verifies', () => {
+    const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
+    const issued = registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })!;
+
+    const first = new MockSocket();
+    registry.register(asSocket(first), registerWith({ launchId: issued.launchId, bootstrapToken: issued.bootstrapToken }));
+    const sessionToken = (first.sent[0] as { sessionToken: string }).sessionToken;
+    registry.handleSocketClosed(asSocket(first));
+
+    const reconnect = new MockSocket();
+    registry.register(asSocket(reconnect), registerWith({ launchId: issued.launchId, sessionToken }));
+    expect(reconnect.closed).toBeNull();
+    registry.handleSocketClosed(asSocket(reconnect));
+
+    const bootstrapRetry = new MockSocket();
+    registry.register(asSocket(bootstrapRetry), registerWith({ launchId: issued.launchId, bootstrapToken: issued.bootstrapToken }));
+
+    expect(bootstrapRetry.closed?.code).toBe(4001);
     expect(auditRecord).toHaveBeenCalledWith(expect.objectContaining({ event: 'supervisor_launch.bootstrap_rejected' }));
   });
 

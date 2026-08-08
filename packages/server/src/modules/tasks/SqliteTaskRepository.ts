@@ -130,6 +130,7 @@ export class SqliteTaskRepository implements ITaskRepository {
   private findAgentSessionIdsByServerStmt;
   private countChildrenStmt;
   private countChildrenInGenerationStmt;
+  private clearTmuxWindowIfMatchesStmt;
   constructor(private db: SqliteDatabase, private taskTokenRepo: ITaskTokenRepository) {
     this.listStmt = db.prepare('SELECT * FROM tasks ORDER BY priority DESC, created_at DESC');
     this.listByProjectStmt = db.prepare('SELECT * FROM tasks WHERE project_id = ? ORDER BY priority DESC, created_at DESC');
@@ -189,6 +190,14 @@ export class SqliteTaskRepository implements ITaskRepository {
     );
     this.countChildrenInGenerationStmt = db.prepare(
       "SELECT COUNT(*) AS n FROM tasks WHERE created_by_kind = 'task' AND created_by_id = ? AND created_via_generation = ?",
+    );
+    // Guarded compare-and-clear for clearTmuxWindowIfMatches() — see that
+    // method's doc comment on ITaskRepository (Issue #28 third-party review,
+    // Fix 3). Only clears when the row's current tmux_window still equals
+    // the caller's own generation's window name; a concurrent rotation that
+    // already replaced it with a newer window leaves this a no-op.
+    this.clearTmuxWindowIfMatchesStmt = db.prepare(
+      "UPDATE tasks SET tmux_window = NULL, updated_at = datetime('now') WHERE id = ? AND tmux_window = ?",
     );
   }
 
@@ -405,6 +414,11 @@ export class SqliteTaskRepository implements ITaskRepository {
   countChildrenInGeneration(parentTaskId: number, generation: number): number {
     const row = this.countChildrenInGenerationStmt.get(parentTaskId, generation) as { n: number };
     return row.n;
+  }
+
+  clearTmuxWindowIfMatches(id: number, expectedWindowName: string): boolean {
+    const result = this.clearTmuxWindowIfMatchesStmt.run(id, expectedWindowName);
+    return result.changes > 0;
   }
 
   private toEntity(row: TaskRow): Task {

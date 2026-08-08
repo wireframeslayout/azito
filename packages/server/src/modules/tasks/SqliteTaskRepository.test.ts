@@ -653,3 +653,80 @@ describe('SqliteTaskRepository.countChildrenInGeneration (Issue #28 third-party 
     expect(repo.countChildrenInGeneration(otherParentId, 1)).toBe(1);
   });
 });
+
+// clearTmuxWindowIfMatches() (Issue #28 third-party review, Fix 3): backs
+// ExecuteTaskUseCase's rollback of a just-created tmux window when
+// downstream setup (worktree creation, containment checks) fails AFTER the
+// per-task rotation lock has already released. A concurrent rotation for the
+// same task can persist a NEWER `tmux_window` in that gap; this guarded
+// UPDATE must only clear the row when it still holds the exact window name
+// the caller's own (failed) generation created, never a newer one.
+describe('SqliteTaskRepository.clearTmuxWindowIfMatches (Issue #28 third-party review, Fix 3)', () => {
+  let db: SqliteDatabase;
+  let repo: SqliteTaskRepository;
+  let taskId: number;
+
+  beforeEach(() => {
+    db = openDatabase(':memory:');
+    repo = new SqliteTaskRepository(db, new SqliteTaskTokenRepository(db));
+    db.prepare("INSERT INTO projects (id, name, slug, default_branch) VALUES (1, 'P', 'p', 'main')").run();
+    taskId = repo.create({
+      projectId: 1,
+      unitId: null,
+      serverName: null,
+      title: 'Test task',
+      description: null,
+      status: 'in_progress',
+      currentPhase: null,
+      selfReviewCount: 0,
+      priority: 0,
+      tmuxWindow: 'w1',
+      selfReviewMaxAttempts: null,
+      requirePlanApproval: true,
+      source: 'local',
+      sourceRef: null,
+      worktreePath: null,
+      worktreeBranch: null,
+      baseBranch: null,
+      targetBranch: null,
+      skipPr: false,
+      workingDirectory: null,
+      branch: null,
+      planMarkdown: null,
+      pendingQuestions: null,
+      changedFiles: null,
+      summaryJson: null,
+      prUrl: null,
+      agentSessionId: null,
+      reviewSubagent: null,
+      implementSubagent: null,
+      inputTrust: 'trusted',
+      executionApprovedFingerprintHash: null,
+      pendingOperation: null,
+      pendingOperationWindowId: null,
+      pendingOperationPriorStatus: null,
+      createdByKind: 'operator',
+      createdById: null,
+      createdViaGeneration: null,
+    });
+  });
+
+  it('clears tmux_window and returns true when it still matches the expected window name', () => {
+    expect(repo.clearTmuxWindowIfMatches(taskId, 'w1')).toBe(true);
+    expect(repo.findById(taskId)!.tmuxWindow).toBeNull();
+  });
+
+  it('leaves tmux_window untouched and returns false when a newer generation has already replaced it', () => {
+    // Simulates a concurrent execute()/followUp() for the same task having
+    // already rotated to a new window between this caller's window creation
+    // and its (failed) downstream setup.
+    repo.update(taskId, { tmuxWindow: 'w2' });
+
+    expect(repo.clearTmuxWindowIfMatches(taskId, 'w1')).toBe(false);
+    expect(repo.findById(taskId)!.tmuxWindow).toBe('w2');
+  });
+
+  it('returns false and does nothing for an unknown task id', () => {
+    expect(repo.clearTmuxWindowIfMatches(999999, 'w1')).toBe(false);
+  });
+});

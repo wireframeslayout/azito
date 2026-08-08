@@ -80,6 +80,7 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
       preApproveExecution: vi.fn(() => true),
       countChildren: vi.fn(() => 0),
       countChildrenInGeneration: vi.fn(() => 0),
+      clearTmuxWindowIfMatches: vi.fn(() => true),
     },
     serverRepo: {
       findAll: vi.fn(() => []),

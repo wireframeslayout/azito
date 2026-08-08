@@ -123,7 +123,13 @@ describe('authDoctorCommand', () => {
     return logSpy.mock.calls.map((c: unknown[]) => c.join(' ')).join('\n');
   }
 
-  it('passes when nothing is set up yet', async () => {
+  // Observed timing out under full-suite parallel execution (never in
+  // isolation) — this test does nothing CPU/IO-heavy itself, but with 158
+  // other unit test files' workers competing for CPU, vitest's default 5s
+  // test timeout can be too tight purely from scheduling contention.
+  // Explicit timeout bump, same pattern as the tmux-integration tests'
+  // per-test `{ timeout: 30000 }` (see TmuxClient.splitPane.tmuxIntegration.test.ts).
+  it('passes when nothing is set up yet', { timeout: 20000 }, async () => {
     const { authDoctorCommand } = await import('./authDoctorCommand.js');
     await authDoctorCommand();
     expect(process.exitCode).toBeUndefined();
@@ -370,6 +376,45 @@ describe('authDoctorCommand', () => {
       expect(allLogLines()).toContain('[!! ] scoped 認可 有効化前の生存タスクウィンドウ');
       expect(allLogLines()).toContain('生存中のタスク所有ウィンドウが 1 件見つかりました');
       expect(allLogLines()).toContain('検査できなかったタスク所有ウィンドウも');
+    });
+
+    // Fix 1 (Issue #28 third-party review, Important): existing tests above
+    // only ever seed plaintext agent_token values, so they never exercised
+    // `open()`'s throw path. In production, `servers.agent_token` is stored
+    // SecretBox-encrypted (`v1.<iv>.<tag>.<ciphertext>`), and the dispatch in
+    // main.ts used to call `authDoctorCommand()` before `initSecretBox()`
+    // ran — so any encrypted token crashed `open()` with "SecretBox not
+    // initialized", which propagated all the way out of
+    // `checkTaskOwnedWindowsBeforeScopedAuth` and killed the ENTIRE `azito
+    // auth doctor` run (a human would see none of the six checks' results,
+    // not even a clean NG). This test intentionally does NOT call
+    // `initSecretBox` (this file never does), reproducing that exact
+    // uninitialized state; the command must now report that one server as
+    // unverifiable and keep running every other check instead of throwing.
+    it('does not crash when a server row has an encrypted agent_token and SecretBox has not been initialized', async () => {
+      const { openDatabase } = await import('../shared/db/Database.js');
+      const db = openDatabase(path.join(tmpDir, 'data.db'));
+      db.prepare(
+        "INSERT INTO servers (name, type, host, agent_port, agent_token) VALUES " +
+          "('remote1', 'agent', '127.0.0.1', 1, 'v1.aWl2aWl2aWl2aWl2aWl2aWl2.dGFndGFndGFndGFndGFndGFn.Y2lwaGVydGV4dA==')",
+      ).run();
+      db.prepare("INSERT INTO projects (name) VALUES ('p')").run();
+      db.prepare("INSERT INTO tasks (project_id, title) VALUES (1, 't')").run();
+      db.prepare(
+        "INSERT INTO windows (owner_type, task_id, server_name, tmux_target) VALUES ('task', 1, 'remote1', 'sess:1.0')",
+      ).run();
+      db.close();
+
+      const { authDoctorCommand } = await import('./authDoctorCommand.js');
+      await authDoctorCommand();
+
+      // The whole command must have completed (not thrown) and every other
+      // check must still have run — proof the decrypt failure was contained
+      // to this one server, not fatal to the whole run.
+      expect(allLogLines()).toContain('[-- ] scoped 認可 有効化前の生存タスクウィンドウ');
+      expect(allLogLines()).toContain('検査できないサーバー上にタスク所有ウィンドウが');
+      expect(allLogLines()).toContain('サーバー設定の復号に失敗');
+      expect(allLogLines()).toContain('AZITO_SCOPED_AUTH の現在値');
     });
 
     it('is skipped once AZITO_SCOPED_AUTH is already enabled, even with a live task-owned pane', async () => {

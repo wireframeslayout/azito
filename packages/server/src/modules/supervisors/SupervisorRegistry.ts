@@ -277,7 +277,22 @@ export class SupervisorRegistry extends EventEmitter {
    * or should be rejected outright. Never throws. See SupervisorConnection.bound's
    * doc comment for what `bound` gates downstream.
    */
-  private resolveLaunchAuth(info: RegisterMessage): LaunchAuthResult {
+  /**
+   * @param hasLiveConnectionForLaunch True iff a connection is CURRENTLY live
+   *   (present in `this.connections`) for this exact launchId. Fix 2 (Issue
+   *   #28 third-party review, Important finding): bootstrap tokens are no
+   *   longer strictly one-shot at the DB layer (see `verifyBootstrap`'s doc
+   *   comment — they remain valid until a session-token register completes),
+   *   so THIS is what actually keeps a bootstrap replay from hijacking an
+   *   already-established live connection: if this key already has a live
+   *   connection bound to this launchId, a bootstrapToken-based register is
+   *   redundant at best (the launch is already connected) and a captured/
+   *   replayed bootstrap token at worst — reject it without touching launch
+   *   state. Only once that live connection is actually gone (a genuine
+   *   disconnect — `handleSocketClosed` removed it from `this.connections`)
+   *   does a retry with the same bootstrap token get to verify again.
+   */
+  private resolveLaunchAuth(info: RegisterMessage, hasLiveConnectionForLaunch: boolean): LaunchAuthResult {
     if (info.launchId === undefined) {
       // Manual `azs`, or a supervisor build predating launch binding.
       if (!this.scopedAuthEnabled) {
@@ -322,6 +337,10 @@ export class SupervisorRegistry extends EventEmitter {
     }
 
     if (info.bootstrapToken !== undefined) {
+      if (hasLiveConnectionForLaunch) {
+        this.audit('supervisor_launch.bootstrap_rejected', { launchId: info.launchId, status: row.status, reason: 'already_connected' });
+        return { ok: false, event: 'supervisor_launch.bootstrap_rejected', reason: 'a live connection for this launch is already registered' };
+      }
       if (!this.launchRepo.verifyBootstrap(row, info.bootstrapToken)) {
         this.audit('supervisor_launch.bootstrap_rejected', { launchId: info.launchId, status: row.status });
         return { ok: false, event: 'supervisor_launch.bootstrap_rejected', reason: 'invalid or already-consumed bootstrap token' };
@@ -376,7 +395,9 @@ export class SupervisorRegistry extends EventEmitter {
 
     const key = keyFor(info.serverName, info.target);
     const existing = this.connections.get(key);
-    const authResult = this.resolveLaunchAuth(info);
+    const hasLiveConnectionForLaunch =
+      info.launchId !== undefined && existing !== undefined && existing.launchId === info.launchId;
+    const authResult = this.resolveLaunchAuth(info, hasLiveConnectionForLaunch);
 
     if (existing?.bound && existing.launchId !== null && existing.launchId !== (info.launchId ?? null)) {
       const isAuthenticatedReplacement = info.launchId !== undefined && authResult.ok;

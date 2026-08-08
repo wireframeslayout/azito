@@ -576,13 +576,25 @@ export class ExecuteTaskUseCase {
         // the whole task — a blanket revoke here could otherwise clobber a
         // newer generation a concurrent rotation for this task already
         // persisted (Issue #28 third-party review, WindowRotation.ts finding).
+        //
+        // Fix 3 (Issue #28 third-party review, Important finding): onGone
+        // clears `tmuxWindow` via clearTmuxWindowIfMatches, NOT a blanket
+        // `update(taskId, { tmuxWindow: null })` — this whole span (worktree
+        // creation + its own rollback) runs OUTSIDE runExclusiveForTask, so a
+        // concurrent execute()/followUp() for the SAME task could have
+        // already acquired the lock, created a NEWER window generation, and
+        // persisted its own `tmuxWindow` by the time this rollback runs. An
+        // unconditional null-out would clobber that newer, still-live
+        // reference. Gating on `windowName` (this call's own generation)
+        // makes the clear a no-op when the row has already moved on — see
+        // ITaskRepository.clearTmuxWindowIfMatches's doc comment.
         try {
           await rollbackWindowReference(
             this.tmux.killWindow(server, `${tmuxSession}:${windowName}`),
             this.paneEnvService,
             tokenId,
             'worktree_creation_failed_rollback',
-            () => this.taskRepo.update(taskId, { tmuxWindow: null } as Partial<Task>),
+            () => this.taskRepo.clearTmuxWindowIfMatches(taskId, windowName),
             () => {},
           );
         } catch {}
@@ -625,13 +637,16 @@ export class ExecuteTaskUseCase {
           // rollbackWindowReference's onGone callback, not unconditionally
           // above, for the same reason. Scoped to `tokenId`, same reasoning
           // as the worktree_failed branch's rollbackWindowReference call.
+          // Fix 3: same clearTmuxWindowIfMatches reasoning as the
+          // worktree_failed branch above — this span also runs outside
+          // runExclusiveForTask.
           try {
             await rollbackWindowReference(
               this.tmux.killWindow(server, `${tmuxSession}:${windowName}`),
               this.paneEnvService,
               tokenId,
               'worktree_path_rejected_rollback',
-              () => this.taskRepo.update(taskId, { tmuxWindow: null } as Partial<Task>),
+              () => this.taskRepo.clearTmuxWindowIfMatches(taskId, windowName),
               () => {},
             );
           } catch {}
@@ -982,13 +997,17 @@ export class ExecuteTaskUseCase {
           // inside rollbackWindowReference's onGone callback, not
           // unconditionally above, for the same reason. Scoped to `tokenId`,
           // same reasoning as execute()'s rollbackWindowReference calls.
+          // Fix 3 (Issue #28 third-party review, Important finding): same
+          // clearTmuxWindowIfMatches reasoning as execute()'s
+          // rollbackWindowReference calls — this span also runs outside
+          // runExclusiveForTask.
           try {
             await rollbackWindowReference(
               this.tmux.killWindow(server, `${tmuxSession}:${windowName}`),
               this.paneEnvService,
               tokenId!,
               'followup_working_directory_rejected_rollback',
-              () => this.taskRepo.update(taskId, { tmuxWindow: null } as Partial<Task>),
+              () => this.taskRepo.clearTmuxWindowIfMatches(taskId, windowName),
               () => {},
             );
           } catch {}

@@ -411,24 +411,42 @@ async function checkTaskOwnedWindowsBeforeScopedAuth(): Promise<CheckResult> {
     const serverRowStmt = db.prepare(
       'SELECT name, type, host, agent_port, agent_token, agent_version, ssh_host, mux_runtime, ssh_host_fingerprint, created_at FROM servers WHERE name = ?',
     );
+    // Fix 1 (Issue #28 third-party review, Important): `open()` throws both
+    // when SecretBox hasn't been initialized at all AND when a given
+    // server's `agent_token` fails to decrypt (corrupted ciphertext, master
+    // key rotated/lost without re-encrypting existing rows, etc). Either
+    // way, one bad row must not take down the whole doctor run — it's
+    // reported as "unverifiable" for that server (same bucket as an
+    // unreachable server below), and every other server/check still runs.
     const serverConfigCache = new Map<string, ServerConfig | null>();
+    const serverDecryptFailures = new Map<string, string>();
     function resolveServerConfig(serverName: string): ServerConfig | null {
       if (serverConfigCache.has(serverName)) return serverConfigCache.get(serverName)!;
       const row = serverRowStmt.get(serverName) as Record<string, unknown> | undefined;
-      const config: ServerConfig | null = row
-        ? {
-            name: row.name as string,
-            type: row.type as ServerConfig['type'],
-            host: (row.host as string) ?? null,
-            agentPort: (row.agent_port as number) ?? null,
-            agentToken: open(row.agent_token as string | null),
-            agentVersion: (row.agent_version as string) ?? null,
-            sshHost: (row.ssh_host as string) ?? null,
-            muxRuntime: (row.mux_runtime as MuxRuntime) ?? 'system',
-            sshHostFingerprint: (row.ssh_host_fingerprint as string) ?? null,
-            createdAt: row.created_at as string,
-          }
-        : null;
+      if (!row) {
+        serverConfigCache.set(serverName, null);
+        return null;
+      }
+      let agentToken: string | null;
+      try {
+        agentToken = open(row.agent_token as string | null);
+      } catch (err) {
+        serverDecryptFailures.set(serverName, err instanceof Error ? err.message : String(err));
+        serverConfigCache.set(serverName, null);
+        return null;
+      }
+      const config: ServerConfig = {
+        name: row.name as string,
+        type: row.type as ServerConfig['type'],
+        host: (row.host as string) ?? null,
+        agentPort: (row.agent_port as number) ?? null,
+        agentToken,
+        agentVersion: (row.agent_version as string) ?? null,
+        sshHost: (row.ssh_host as string) ?? null,
+        muxRuntime: (row.mux_runtime as MuxRuntime) ?? 'system',
+        sshHostFingerprint: (row.ssh_host_fingerprint as string) ?? null,
+        createdAt: row.created_at as string,
+      };
       serverConfigCache.set(serverName, config);
       return config;
     }
@@ -441,9 +459,16 @@ async function checkTaskOwnedWindowsBeforeScopedAuth(): Promise<CheckResult> {
       const descriptor = `task #${w.taskId}（${w.serverName}:${w.tmuxTarget}）`;
       const config = resolveServerConfig(w.serverName);
       if (!config) {
-        // The window row references a server that's no longer registered —
-        // stale data, not something we can drive a transport through.
-        unverifiable.push(`${descriptor}（サーバー未登録）`);
+        const decryptError = serverDecryptFailures.get(w.serverName);
+        // The window row either references a server that's no longer
+        // registered (stale data), or its agent_token failed to decrypt
+        // (corrupted ciphertext / master key mismatch) — either way there's
+        // no transport we can drive to check this pane.
+        unverifiable.push(
+          decryptError
+            ? `${descriptor}（サーバー設定の復号に失敗: ${decryptError}）`
+            : `${descriptor}（サーバー未登録）`,
+        );
         continue;
       }
       const { alive: isAlive, verified } = await tmux.checkPaneLiveness(config, w.tmuxTarget);

@@ -29,6 +29,7 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
     preApproveExecution: vi.fn(() => true),
     countChildren: vi.fn(() => 0),
     countChildrenInGeneration: vi.fn(() => 0),
+    clearTmuxWindowIfMatches: vi.fn(() => true),
   };
   // A real TaskOriginationService wrapping the mock taskRepo above — so
   // import-issue's "task ends up untrusted" assertions below still exercise

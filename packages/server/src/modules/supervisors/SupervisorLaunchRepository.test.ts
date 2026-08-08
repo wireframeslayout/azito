@@ -66,12 +66,16 @@ describe('SqliteSupervisorLaunchRepository', () => {
     expect(repo.verifyBootstrap(activeRow, issued.bootstrapToken)).toBe(false);
   });
 
-  it('activateWithSession mints a session token findable by hash and flips status to active', () => {
+  // Fix 2 (Issue #28 third-party review, Important finding): activateWithSession
+  // deliberately no longer flips status to 'active' — see its doc comment on
+  // the interface. The launch stays 'pending' (bootstrap still retryable)
+  // until a session-token register actually completes via touchRegistered.
+  it('activateWithSession mints a session token findable by hash and leaves status pending', () => {
     const issued = repo.create(expectation);
     const sessionToken = repo.activateWithSession(issued.launchId);
 
     const row = repo.findByLaunchId(issued.launchId)!;
-    expect(row.status).toBe('active');
+    expect(row.status).toBe('pending');
     expect(row.sessionHash).toBeTruthy();
     expect(repo.verifySession(row, sessionToken)).toBe(true);
     expect(repo.verifySession(row, 'wrong')).toBe(false);
@@ -85,6 +89,51 @@ describe('SqliteSupervisorLaunchRepository', () => {
     expect(repo.findByLaunchId(issued.launchId)!.lastRegisteredAt).toBeNull();
     repo.touchRegistered(issued.launchId);
     expect(repo.findByLaunchId(issued.launchId)!.lastRegisteredAt).toBeTruthy();
+  });
+
+  // Fix 2: this is the actual moment the bootstrap token retires — see
+  // touchRegistered's and verifyBootstrap's doc comments.
+  it('touchRegistered promotes a pending launch to active on its first call, and bootstrap stops verifying from then on', () => {
+    const issued = repo.create(expectation);
+    repo.activateWithSession(issued.launchId);
+    expect(repo.findByLaunchId(issued.launchId)!.status).toBe('pending');
+    expect(repo.verifyBootstrap(repo.findByLaunchId(issued.launchId)!, issued.bootstrapToken)).toBe(true);
+
+    repo.touchRegistered(issued.launchId);
+
+    const row = repo.findByLaunchId(issued.launchId)!;
+    expect(row.status).toBe('active');
+    expect(repo.verifyBootstrap(row, issued.bootstrapToken)).toBe(false);
+  });
+
+  it('touchRegistered is a no-op on status for an already-active (or replaced/expired) launch', () => {
+    const issued = repo.create(expectation);
+    repo.activateWithSession(issued.launchId);
+    repo.touchRegistered(issued.launchId);
+    expect(repo.findByLaunchId(issued.launchId)!.status).toBe('active');
+
+    repo.touchRegistered(issued.launchId);
+    expect(repo.findByLaunchId(issued.launchId)!.status).toBe('active');
+
+    repo.markStatus(issued.launchId, 'replaced');
+    repo.touchRegistered(issued.launchId);
+    expect(repo.findByLaunchId(issued.launchId)!.status).toBe('replaced');
+  });
+
+  // Fix 2: reproduces the bug directly — a disconnect between the hub
+  // minting the session token and the client receiving it must not strand
+  // the launch. The client retries with the same (still-pending) bootstrap
+  // token and gets a usable new session token.
+  it('verifyBootstrap keeps succeeding for retries against the same still-pending launch after activateWithSession', () => {
+    const issued = repo.create(expectation);
+    repo.activateWithSession(issued.launchId); // first attempt — client never received the response
+    const row = repo.findByLaunchId(issued.launchId)!;
+    expect(repo.verifyBootstrap(row, issued.bootstrapToken)).toBe(true);
+
+    const secondSessionToken = repo.activateWithSession(issued.launchId); // retry — mints a fresh session
+    const row2 = repo.findByLaunchId(issued.launchId)!;
+    expect(row2.status).toBe('pending');
+    expect(repo.verifySession(row2, secondSessionToken)).toBe(true);
   });
 
   it('markStatus updates status', () => {
@@ -114,6 +163,7 @@ describe('SqliteSupervisorLaunchRepository', () => {
     it('marks a still-active prior launch (already bound, with a live session) for the same key as replaced', () => {
       const first = repo.create(expectation);
       const sessionToken = repo.activateWithSession(first.launchId);
+      repo.touchRegistered(first.launchId); // Fix 2: this is what promotes pending -> active now
       expect(repo.findByLaunchId(first.launchId)!.status).toBe('active');
 
       const second = repo.create(expectation);
@@ -148,7 +198,9 @@ describe('SqliteSupervisorLaunchRepository', () => {
     it('rejects a correct session token once the launch is no longer active', () => {
       const issued = repo.create(expectation);
       const sessionToken = repo.activateWithSession(issued.launchId);
+      repo.touchRegistered(issued.launchId);
       const activeRow = repo.findByLaunchId(issued.launchId)!;
+      expect(activeRow.status).toBe('active');
       expect(repo.verifySession(activeRow, sessionToken)).toBe(true);
 
       const replacedRow = { ...activeRow, status: 'replaced' as const };

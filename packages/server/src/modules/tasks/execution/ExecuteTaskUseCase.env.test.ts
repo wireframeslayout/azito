@@ -219,6 +219,15 @@ function buildUseCase(opts: {
     preApproveExecution: vi.fn(() => true),
     countChildren: vi.fn(() => 0),
     countChildrenInGeneration: vi.fn(() => 0),
+    // Fix 3 (Issue #28 third-party review): mirrors SqliteTaskRepository's
+    // guarded UPDATE — only "clears" (here: nulls opts.task.tmuxWindow,
+    // findById always returns the same object reference) when the current
+    // tmuxWindow still matches the caller's own generation's window name.
+    clearTmuxWindowIfMatches: vi.fn((_id: number, expectedWindowName: string) => {
+      if (opts.task.tmuxWindow !== expectedWindowName) return false;
+      opts.task.tmuxWindow = null;
+      return true;
+    }),
   };
 
   const unitRepo: IUnitRepository = {
@@ -804,6 +813,11 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
       preApproveExecution: vi.fn(() => true),
       countChildren: vi.fn(() => 0),
       countChildrenInGeneration: vi.fn(() => 0),
+      clearTmuxWindowIfMatches: vi.fn((_id: number, expectedWindowName: string) => {
+        if (task.tmuxWindow !== expectedWindowName) return false;
+        task.tmuxWindow = null;
+        return true;
+      }),
     };
     const unitRepo: IUnitRepository = {
       findAll: vi.fn(() => [unit]),
@@ -1339,6 +1353,99 @@ describe('ExecuteTaskUseCase rollback keeps the window reference tracked when th
 
     expect(taskRepo.update).not.toHaveBeenCalledWith(62, expect.objectContaining({ tmuxWindow: null }));
     expect(paneEnvService.revokeGeneration).not.toHaveBeenCalled();
+  });
+});
+
+// Fix 3 (Issue #28 third-party review, Important finding): the worktree
+// creation step (and its own failure rollback) runs OUTSIDE
+// runExclusiveForTask — see WindowRotation.ts's doc comment for why (the lock
+// only needs to cover confirm-kill -> rotate-token -> create -> persist, not
+// the potentially-slow worktree creation that follows). That gap means a
+// SECOND, concurrent execute()/followUp() for the SAME task can acquire the
+// lock, create a NEWER window generation, and persist its own `tmuxWindow`
+// while the FIRST call's worktree step is still failing. These tests
+// reproduce that interleaving directly (mutating the shared task object mid-
+// worktree-creation, exactly where the real race would land) and confirm the
+// rollback no longer clobbers the newer generation's window reference — only
+// the failed call's OWN token generation gets revoked.
+describe('ExecuteTaskUseCase rollback does not clobber a newer window generation persisted by a concurrent execute()/followUp() for the same task (Issue #28 third-party review, Fix 3)', () => {
+  let allowedRoot: string;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    allowedRoot = mkdtempSync(path.join(tmpdir(), 'azito-exec-race-root-'));
+  });
+
+  afterEach(() => {
+    rmSync(allowedRoot, { recursive: true, force: true });
+  });
+
+  it('execute(): a worktree-creation failure does not null out a newer tmuxWindow a concurrent rotation already persisted', async () => {
+    const unit = makeUnit({ id: 70, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 70, serverName: 'local-server', unitId: 70 });
+    const { useCase, taskRepo, paneEnvService, worktreeServiceFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: { workingDirectory: allowedRoot, branch: null, tmuxSession: 'azito' },
+    });
+    worktreeServiceFactory.create.mockReturnValue({
+      // This runs AFTER runExclusiveForTask's window-creation span has
+      // already released the lock and persisted `tmuxWindow: 'w1'` (this
+      // call's own generation) — exactly where a concurrent execute()/
+      // followUp() for the same task would slot in, acquire the lock, create
+      // window 'w2', and persist ITS OWN tmuxWindow before this worktree
+      // creation fails.
+      create: vi.fn(async () => {
+        task.tmuxWindow = 'w2';
+        throw new Error('worktree failed');
+      }),
+    });
+
+    await expect(useCase.execute(70, 70)).rejects.toThrow(/Worktree creation failed/);
+
+    // The rollback must have attempted to clear ITS OWN generation ('w1')...
+    expect(taskRepo.clearTmuxWindowIfMatches).toHaveBeenCalledWith(70, 'w1');
+    // ...but since the row had already moved on to 'w2', the clear must be a
+    // no-op — the newer generation's window reference stays intact.
+    expect(task.tmuxWindow).toBe('w2');
+    // The failed call's OWN token generation is still revoked regardless —
+    // token cleanup for the generation THIS call issued must not depend on
+    // whether the DB reference clear succeeded.
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'worktree_creation_failed_rollback');
+  });
+
+  it('followUp(): a working-directory-rejection rollback does not null out a newer tmuxWindow a concurrent rotation already persisted', async () => {
+    const outsideDir = mkdtempSync(path.join(tmpdir(), 'azito-exec-race-outside-'));
+    try {
+      const unit = makeUnit({ id: 71, workerType: 'claude', workerModel: 'opus' });
+      const task = makeTask({ id: 71, serverName: 'local-server', unitId: 71, tmuxWindow: null, worktreePath: outsideDir });
+      const { useCase, taskRepo, paneEnvService, worktreeServiceFactory } = buildUseCase({
+        task,
+        project: makeProject({ defaultUnitId: null }),
+        units: [unit],
+        projectServer: { workingDirectory: allowedRoot, branch: null, tmuxSession: 'azito' },
+      });
+      worktreeServiceFactory.create.mockReturnValue({
+        // followUp() awaits this while resolving followUpDir, which runs
+        // after window creation released the lock and persisted
+        // `tmuxWindow: 'w1'` — same race window as execute() above,
+        // simulated the same way. Returning true routes followUpDir to
+        // task.worktreePath (outsideDir), which then fails containment.
+        exists: vi.fn(async () => {
+          task.tmuxWindow = 'w2';
+          return true;
+        }),
+      });
+
+      await expect(useCase.followUp(71, 71, 'please continue')).rejects.toThrow(/Follow-up working directory rejected/);
+
+      expect(taskRepo.clearTmuxWindowIfMatches).toHaveBeenCalledWith(71, 'w1');
+      expect(task.tmuxWindow).toBe('w2');
+      expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'followup_working_directory_rejected_rollback');
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
   });
 });
 

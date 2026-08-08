@@ -48,27 +48,64 @@ export interface ISupervisorLaunchRepository {
 
   findBySessionHash(sessionHash: string): SupervisorLaunchRow | null;
 
-  /** True iff `token` hashes to `row.bootstrapHash` and the row is still `pending` (one-shot). */
+  /**
+   * True iff `token` hashes to `row.bootstrapHash` and the row is still
+   * `pending`.
+   *
+   * NOT one-shot in the sense of "exactly once" (Fix 2, Issue #28
+   * third-party review, Important finding): the row stays `pending` — and
+   * this keeps succeeding for the SAME bootstrap token — until a session
+   * token minted from it actually completes a `register()` round trip (see
+   * `touchRegistered`'s doc comment). Without this, a disconnect between the
+   * hub minting the session token (`activateWithSession`, which used to flip
+   * status straight to `active`) and that `registered` response actually
+   * reaching the client left the client holding a bootstrap token that could
+   * never verify again (status no longer `pending`) and no usable session
+   * token either (it never received it) — that launch's bind was permanently
+   * stuck. The one-shot property that matters — a DIFFERENT launch can never
+   * reuse this bootstrap — is preserved by `create()`'s supersede step, which
+   * marks any outstanding `pending`/`active` row for the same key `replaced`
+   * the moment a new launch is issued for it.
+   */
   verifyBootstrap(row: Pick<SupervisorLaunchRow, 'bootstrapHash' | 'status'>, token: string): boolean;
 
   /**
-   * True iff `token` hashes to `row.sessionHash` AND the row is still
+   * True iff `token` hashes to `row.sessionHash` AND the row is `pending` or
    * `active` (Issue #28 third-party review, Important finding: a session
    * hash alone used to be accepted regardless of `status`, so a launch that
    * `create()`'s supersede step — or any other status transition — had since
    * marked `replaced`/`expired` could still authenticate a reconnect with its
    * old session token; `bound: true` is meaningless once the launch it was
-   * issued for is no longer the current one for its key).
+   * issued for is no longer the current one for its key). `pending` is
+   * included (Fix 2) because a session token can legitimately be used for
+   * the FIRST time while the row is still `pending` — see `touchRegistered`.
    */
   verifySession(row: Pick<SupervisorLaunchRow, 'sessionHash' | 'status'>, token: string): boolean;
 
   /**
-   * Consumes the bootstrap secret (moving the row out of `pending`) and mints a fresh session
-   * secret for subsequent reconnects. Returns the plaintext session token — never persisted.
+   * Verifies the bootstrap secret and (re-)mints a fresh session secret for
+   * this launch. Returns the plaintext session token — never persisted.
+   *
+   * Fix 2: deliberately does NOT change `status` (stays `pending`) — see
+   * `verifyBootstrap`'s doc comment. Safe to call more than once for the same
+   * launchId (each call overwrites the previous session hash with a new one);
+   * only a completed session-token-authenticated `register()` — via
+   * `touchRegistered` — actually retires the bootstrap.
    */
   activateWithSession(launchId: string): string;
 
-  /** Marks `last_registered_at = now()` for a reconnect authenticated via the existing session token. */
+  /**
+   * Marks `last_registered_at = now()` for a reconnect authenticated via the
+   * existing session token — AND, if this is the first time a session token
+   * for this launch has successfully verified (`status` still `pending`),
+   * promotes it to `active` (Fix 2, Issue #28 third-party review, Important
+   * finding). This is the actual moment the bootstrap token retires: once
+   * `status` is `active`, `verifyBootstrap` above no longer accepts it,
+   * closing the retry window that `activateWithSession` deliberately left
+   * open. A launch that never completes a session-authenticated round trip
+   * (client crashed before reconnecting at all) simply never promotes —
+   * still cleaned up by the normal supersede-on-relaunch path.
+   */
   touchRegistered(launchId: string): void;
 
   markStatus(launchId: string, status: SupervisorLaunchStatus): void;
@@ -130,10 +167,18 @@ export class SqliteSupervisorLaunchRepository implements ISupervisorLaunchReposi
     );
     this.findByLaunchIdStmt = db.prepare('SELECT * FROM supervisor_launches WHERE launch_id = ?');
     this.findBySessionHashStmt = db.prepare('SELECT * FROM supervisor_launches WHERE session_hash = ?');
+    // Fix 2: no longer touches `status` — see activateWithSession's doc comment on the interface.
     this.activateStmt = db.prepare(
-      "UPDATE supervisor_launches SET status = 'active', session_hash = ?, last_registered_at = datetime('now') WHERE launch_id = ?",
+      "UPDATE supervisor_launches SET session_hash = ?, last_registered_at = datetime('now') WHERE launch_id = ?",
     );
-    this.touchStmt = db.prepare("UPDATE supervisor_launches SET last_registered_at = datetime('now') WHERE launch_id = ?");
+    // Fix 2: promotes 'pending' -> 'active' on the first successful session-token register (the CASE
+    // is a no-op once already 'active'/'replaced'/'expired') — see touchRegistered's doc comment.
+    this.touchStmt = db.prepare(
+      `UPDATE supervisor_launches
+       SET status = CASE WHEN status = 'pending' THEN 'active' ELSE status END,
+           last_registered_at = datetime('now')
+       WHERE launch_id = ?`,
+    );
     this.markStatusStmt = db.prepare('UPDATE supervisor_launches SET status = ? WHERE launch_id = ?');
     // Every outstanding (pending/active) launch for the SAME key, superseded
     // in the same transaction as the fresh insert below — see create()'s doc
@@ -174,8 +219,11 @@ export class SqliteSupervisorLaunchRepository implements ISupervisorLaunchReposi
     // Issue #28 third-party review, Important finding: a launch superseded
     // by a newer one for the same (serverName, target) — see create()'s doc
     // comment — must never authenticate again, even with a session token
-    // that still hashes correctly. Only `active` is a currently-live launch.
-    if (row.status !== 'active') return false;
+    // that still hashes correctly. `active` is a currently-live launch;
+    // `pending` (Fix 2) is a launch whose session token was minted but has
+    // not yet completed its first successful register — both are legitimate,
+    // only `replaced`/`expired` are not.
+    if (row.status !== 'active' && row.status !== 'pending') return false;
     return timingSafeHashEquals(row.sessionHash, token);
   }
 

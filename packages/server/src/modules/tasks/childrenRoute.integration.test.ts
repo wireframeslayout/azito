@@ -95,6 +95,7 @@ function buildApp(scopedAuthEnabled: boolean, db: SqliteDatabase, createCalls: R
     preApproveExecution: vi.fn(() => true),
     countChildren: vi.fn(() => 0),
     countChildrenInGeneration: vi.fn(() => 0),
+    clearTmuxWindowIfMatches: vi.fn(() => true),
   };
   const originationService = new TaskOriginationService(taskRepo as unknown as ITaskRepository, auditLogService);
 

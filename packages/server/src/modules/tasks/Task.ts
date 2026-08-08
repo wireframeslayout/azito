@@ -488,4 +488,29 @@ export interface ITaskRepository {
    * to report its own generation honestly.
    */
   countChildrenInGeneration(parentTaskId: number, generation: number): number;
+
+  /**
+   * Atomically clears `tmuxWindow` — but ONLY if it still equals
+   * `expectedWindowName` — and reports whether it did (Issue #28 third-party
+   * review, Fix 3: rollback-race finding). `ExecuteTaskUseCase.execute()`/
+   * `followUp()` create a new tmux window generation under
+   * `runExclusiveForTask` (see WindowRotation.ts), but everything downstream
+   * of that (worktree creation and ITS OWN failure rollback) runs OUTSIDE
+   * the lock — deliberately, since worktree creation can be a slow
+   * network/SSH round trip and holding the in-memory per-task lock that long
+   * would serialize unrelated work for no benefit. That gap means a second,
+   * concurrent `execute()`/`followUp()` call for the SAME task (e.g. a UI
+   * respawn racing a follow-up) can acquire the lock, create ITS OWN newer
+   * window generation, and persist ITS `tmuxWindow` — all while the FIRST
+   * call's worktree step is still failing and about to roll back. A plain
+   * `update(id, { tmuxWindow: null })` at that point would blindly null out
+   * the newer generation's window reference (whichever one happens to be in
+   * the row right now), untracking a live pane and its token. This method's
+   * WHERE-guarded UPDATE makes the rollback a no-op instead whenever the row
+   * has already moved on to a different window — the caller's own rollback
+   * (kill + token revoke, scoped to the tokenId IT issued) still runs
+   * unconditionally, since that part only ever affects the generation this
+   * specific call created.
+   */
+  clearTmuxWindowIfMatches(id: number, expectedWindowName: string): boolean;
 }
