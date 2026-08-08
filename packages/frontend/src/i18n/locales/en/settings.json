@@ -5,7 +5,14 @@
     "storage": "Storage",
     "resources": "Resource Guard",
     "notifications": "Notifications",
+    "security": "Security",
     "system": "System"
+  },
+  "auditLog": {
+    "description": "The {{count}} most recent security audit events (task token issuance/revocation, denied requests, approvals, supervisor registration, etc.). This is an operational record, not tamper-evident.",
+    "loadError": "Failed to load the audit log.",
+    "empty": "No audit events yet.",
+    "recentEvents": "{{count}} events"
   },
   "appearance": {
     "preview": "Preview",

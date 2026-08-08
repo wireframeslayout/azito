@@ -161,7 +161,9 @@
     "launchTimeout": "起動がタイムアウトしました",
     "supervisedMonitoring": "エージェントの起動を監視中…",
     "continueDisplay": "そのまま表示を続けます",
-    "respawning": "再起動中…"
+    "respawning": "再起動中…",
+    "taskOwnedPaneBadge": "タスク実行（権限制限あり）",
+    "taskOwnedPaneTooltip": "このペインへの入力は権限を昇格しません。オペレーター操作はブラウザまたは operator.env を読み込んだセッションから行ってください。"
   },
   "resourceWarning": {
     "title": "サーバーのリソースがひっ迫しています",
@@ -190,5 +192,8 @@
     "backToWorkspace": "ワークスペースに戻る",
     "workspace": "ワークスペース",
     "serversList": "Servers 一覧"
+  },
+  "errors": {
+    "operatorRequired": "この操作にはオペレーター権限が必要です（{{operation}}）。トークン入力欄に誤って task トークンを貼り付けた場合は、オペレーター用の UI トークンを使ってください。"
   }
 }

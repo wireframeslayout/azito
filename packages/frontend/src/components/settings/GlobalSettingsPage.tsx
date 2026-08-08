@@ -9,6 +9,7 @@ import SettingsSectionList from './SettingsSectionList';
 import StorageSection from './sections/StorageSection';
 import ResourceGuardSection from './sections/ResourceGuardSection';
 import NotificationsSection from './sections/NotificationsSection';
+import AuditLogSection from './sections/AuditLogSection';
 import { DEFAULT_SETTINGS_SECTION, SETTINGS_SECTIONS, normalizeSettingsSection } from './settingsSections';
 import type { SettingsSectionId } from './settingsSections';
 import { PageContainer, PageHeader, PageBody, LoadingState, EyebrowBack } from '../ui';
@@ -69,6 +70,7 @@ export default function GlobalSettingsPage({ initialSection }: GlobalSettingsPag
       {activeSection === 'storage' && <StorageSection />}
       {activeSection === 'resources' && <ResourceGuardSection />}
       {activeSection === 'notifications' && <NotificationsSection />}
+      {activeSection === 'security' && <AuditLogSection />}
       {activeSection === 'system' && <SystemSection />}
     </Suspense>
   );

@@ -1,4 +1,4 @@
-import type { AuditLogEntry, IAuditLogRepository } from './AuditLogRepository';
+import type { AuditLogEntry, AuditLogRow, IAuditLogRepository } from './AuditLogRepository';
 
 /**
  * Collapses repeats of the exact same actor+event+detail within a short
@@ -59,6 +59,11 @@ export class AuditLogService {
     this.repo.record(entry);
     this.lastLoggedAt.set(key, nowMs);
     this.evictOldestIfOverCap();
+  }
+
+  /** Read path (Issue #28 Phase D-4) — a plain passthrough to the repository, no dedup involved (dedup only applies to writes). */
+  list(limit: number): AuditLogRow[] {
+    return this.repo.listRecent(limit);
   }
 
   private sweepExpired(nowMs: number): void {

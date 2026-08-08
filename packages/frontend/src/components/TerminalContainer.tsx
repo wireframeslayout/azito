@@ -2,7 +2,8 @@ import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { IconButton } from './ui/IconButton';
 import { Icon } from './ui/Icon';
-import { WindowStatusDropdown, findWindow } from './WindowStatusDropdown';
+import { WindowStatusDropdown, findWindow, isTaskOwnedWindow } from './WindowStatusDropdown';
+import { TaskOwnedPaneBadge } from './workspace/TaskOwnedPaneBadge';
 import XTermView from './XTermView';
 import ResourceWarningDialog, { type ResourceStatus } from './ResourceWarningDialog';
 import { api } from '../api/client';
@@ -57,10 +58,21 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
   const [respawnError, setRespawnError] = useState<string | null>(null);
   const [resourceWarning, setResourceWarning] = useState<{ resources: ResourceStatus; retry: () => void } | null>(null);
 
+  // Issue #28 Phase D-2: computed unconditionally (not just when
+  // windowMissing, unlike the old dbWindow-only lookup) so the task-owned
+  // badge below can reflect the `windows` row's real ownerType/taskId
+  // regardless of pane liveness — "this pane is a task's execution pane" is
+  // true whether or not the window happens to be missing right now.
+  const currentWindow = useMemo(
+    () => findWindow(serverName, target, project ?? null, allTasks ?? []),
+    [serverName, target, project, allTasks],
+  );
+  const isTaskOwnedPane = isTaskOwnedWindow(currentWindow);
+
   const dbWindow = useMemo(() => {
     if (!windowMissing) return null;
-    return findWindow(serverName, target, project ?? null, allTasks ?? []);
-  }, [windowMissing, serverName, target, project, allTasks]);
+    return currentWindow;
+  }, [windowMissing, currentWindow]);
 
   const handleRespawn = useCallback(async function perform(force = false) {
     if (!dbWindow) return;
@@ -188,6 +200,7 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
           </div>
         )}
         <div style={{ marginLeft: activePaneName ? undefined : 'auto', display: 'flex', alignItems: 'center', gap: 2, paddingRight: 4 }}>
+          {isTaskOwnedPane && <TaskOwnedPaneBadge />}
           <WindowStatusDropdown
             serverName={serverName}
             target={target}

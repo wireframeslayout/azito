@@ -23,6 +23,7 @@ import serversRoutes from '../modules/servers/routes';
 import projectsRoutes from '../modules/projects/routes';
 import unitsRoutes from '../modules/units/routes';
 import operationsRoutes from '../modules/operations/routes';
+import auditLogRoutes from '../modules/audit/routes';
 import tasksRoutes from '../modules/tasks/routes';
 import providersRoutes from '../modules/agents/routes';
 import phasePromptsRoutes from '../modules/prompt/routes';
@@ -359,6 +360,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   await app.register(projectsRoutes, { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux: tmuxClient, serverRepo, projectSecretRepo, originationService });
   await app.register(unitsRoutes, { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, projectServerRepo, serverRepo, sidekickLoader: sidekickPackageLoader, unitTypeLoader });
   await app.register(operationsRoutes, { executeTaskUseCase, agentActivityMonitor });
+  await app.register(auditLogRoutes, { auditLogService });
   await app.register(tasksRoutes, {
     taskRepo, auditLogService, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux: tmuxClient, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService: windowRespawnService, taskRestoreService, unitTypeLoader, sidekickLoader: sidekickPackageLoader, projectSecretRepo, originationService, taskTokenRepo,
     revokeTaskWindowGeneration: (taskId, reason) => taskPaneEnvironmentService.revokeForDestroyedWindow(taskId, reason),

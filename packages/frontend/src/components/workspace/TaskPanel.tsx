@@ -4,7 +4,7 @@ import { api } from '../../api/client';
 import { useNotificationChannel } from '../../hooks/useNotificationChannel';
 import { useWindowActions } from '../../hooks/useWindowActions';
 import { StatusDot } from '../StatusBadge';
-import { MiniTabBar, IconButton, Button, PanelHeader, Spinner, WindowActivityIndicator } from '../ui';
+import { MiniTabBar, IconButton, Button, PanelHeader, Spinner, WindowActivityIndicator, SecretNamesValue } from '../ui';
 import type { MiniTab } from '../ui';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
 import TaskRefBadges from '../TaskRefBadges';
@@ -1337,9 +1337,7 @@ export default function TaskPanel({
                   </span>
 
                   <span style={{ color: 'var(--text-dim)' }}>{t('executionApproval.fields.secrets')}</span>
-                  <span style={{ color: 'var(--text)', wordBreak: 'break-word' }}>
-                    {approvalData.secretNames.length > 0 ? approvalData.secretNames.join(', ') : t('executionApproval.noSecrets')}
-                  </span>
+                  <SecretNamesValue names={approvalData.secretNames} />
                 </div>
               </div>
 

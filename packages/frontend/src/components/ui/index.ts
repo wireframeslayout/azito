@@ -9,6 +9,8 @@ export { SectionHeader } from './SectionHeader';
 export { MiniTabBar } from './MiniTabBar';
 export type { MiniTab } from './MiniTabBar';
 export { MetadataField } from './MetadataField';
+export { SecretNamesValue } from './SecretNamesValue';
+export type { SecretNamesState } from './SecretNamesValue';
 export { WindowPaneTree } from './WindowPaneTree';
 export type { WindowItem } from './WindowPaneTree';
 export { InstallSteps } from './InstallSteps';

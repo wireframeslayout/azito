@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { MetadataField, Button } from '../ui';
+import { MetadataField, Button, SecretNamesValue } from '../ui';
+import type { SecretNamesState } from '../ui';
 import { buildIssueUrl, parseSourceRef } from '../../lib/issueRef';
 import { isSupportedProvider } from '../../lib/gitProvider';
 import { Icon } from '../ui/Icon';
@@ -30,6 +31,31 @@ export default function TaskGitTab({ task, projectId, onSwitchToDiff, onRefresh 
       .catch(() => {});
     return () => { cancelled = true; };
   }, [projectId]);
+
+  // Issue #28 Phase D-3: "which secrets will this task's agent receive"
+  // shown unconditionally for the task's project — GET /api/projects/:id/secrets
+  // returns names only (no `value` field), same endpoint/shape TaskFormView's
+  // untrusted-import banner already reads. Not gated behind isLinked/hasUnit
+  // etc.: every task in this project runs with the same secret set regardless
+  // of git-linkage state.
+  const [secretNames, setSecretNames] = useState<string[]>([]);
+  const [secretsState, setSecretsState] = useState<SecretNamesState>('loading');
+  const [secretsFetchNonce, setSecretsFetchNonce] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    setSecretsState('loading');
+    api<{ name: string }[]>(`/projects/${projectId}/secrets`)
+      .then((rows) => {
+        if (cancelled) return;
+        setSecretNames(rows.map((r) => r.name).sort());
+        setSecretsState('loaded');
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSecretsState('error');
+      });
+    return () => { cancelled = true; };
+  }, [projectId, secretsFetchNonce]);
 
   const hasChangedFiles = !!task.changedFiles;
   let files: { status: string; file: string }[] = [];
@@ -74,6 +100,9 @@ export default function TaskGitTab({ task, projectId, onSwitchToDiff, onRefresh 
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, fontSize: 'var(--font-md)' }}>
+      <MetadataField label={t('tasks:executionApproval.fields.secrets')}>
+        <SecretNamesValue names={secretNames} state={secretsState} onRetry={() => setSecretsFetchNonce((n) => n + 1)} />
+      </MetadataField>
       {isLinked && (() => {
         const parsed = parseSourceRef(task.sourceRef!);
         const matchedRepo = parsed

@@ -161,7 +161,9 @@
     "launchTimeout": "Launch timed out",
     "supervisedMonitoring": "Monitoring agent launch…",
     "continueDisplay": "Continuing to display",
-    "respawning": "Respawning…"
+    "respawning": "Respawning…",
+    "taskOwnedPaneBadge": "Task execution (restricted privileges)",
+    "taskOwnedPaneTooltip": "Input into this pane does not elevate privileges. Perform operator actions from the browser or a session that has sourced operator.env."
   },
   "resourceWarning": {
     "title": "Server resources are constrained",
@@ -190,5 +192,8 @@
     "backToWorkspace": "Back to workspace",
     "workspace": "Workspace",
     "serversList": "Servers list"
+  },
+  "errors": {
+    "operatorRequired": "Operator privileges are required for this operation ({{operation}}). If you pasted a task token into the token prompt by mistake, use your operator UI token instead."
   }
 }

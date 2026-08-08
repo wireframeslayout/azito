@@ -1,10 +1,22 @@
 import { describe, it, expect, vi } from 'vitest';
 import { AuditLogService } from './AuditLogService';
-import type { IAuditLogRepository } from './AuditLogRepository';
+import type { AuditLogRow, IAuditLogRepository } from './AuditLogRepository';
 
-function makeRepo(): IAuditLogRepository & { record: ReturnType<typeof vi.fn<(entry: unknown) => void>> } {
-  return { record: vi.fn<(entry: unknown) => void>() };
+function makeRepo(): IAuditLogRepository & { record: ReturnType<typeof vi.fn<(entry: unknown) => void>>; listRecent: ReturnType<typeof vi.fn<(limit: number) => AuditLogRow[]>> } {
+  return { record: vi.fn<(entry: unknown) => void>(), listRecent: vi.fn<(limit: number) => AuditLogRow[]>(() => []) };
 }
+
+describe('AuditLogService.list (Issue #28 Phase D-4)', () => {
+  it('passes the limit through to the repository and returns its rows unchanged', () => {
+    const repo = makeRepo();
+    const rows: AuditLogRow[] = [{ id: 1, ts: 't', actorClass: 'operator', actorId: null, event: 'e', detail: null }];
+    repo.listRecent.mockReturnValue(rows);
+    const svc = new AuditLogService(repo);
+
+    expect(svc.list(50)).toBe(rows);
+    expect(repo.listRecent).toHaveBeenCalledWith(50);
+  });
+});
 
 describe('AuditLogService dedup (Issue #28 review finding 2)', () => {
   it('suppresses an exact repeat of the same actor+event+detail within the flood window', () => {

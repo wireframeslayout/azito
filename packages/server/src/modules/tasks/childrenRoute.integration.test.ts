@@ -71,7 +71,7 @@ function makeTask(id: number, overrides: Partial<Task> = {}): Task {
 function buildApp(scopedAuthEnabled: boolean, db: SqliteDatabase, createCalls: Record<string, unknown>[], auditRecordImpl: (...args: unknown[]) => unknown = vi.fn()): { app: FastifyInstance; taskTokenRepo: SqliteTaskTokenRepository; taskRepo: TasksRouteOptions['taskRepo'] } {
   const taskTokenRepo = new SqliteTaskTokenRepository(db);
   const verifyUiToken = createTokenVerifier(UI_TOKEN);
-  const auditLogService = new AuditLogService({ record: auditRecordImpl });
+  const auditLogService = new AuditLogService({ record: auditRecordImpl, listRecent: vi.fn(() => []) });
 
   const tasks = new Map<number, Task>([
     [1, makeTask(1)],
