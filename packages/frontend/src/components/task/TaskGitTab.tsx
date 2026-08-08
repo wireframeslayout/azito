@@ -38,6 +38,18 @@ export default function TaskGitTab({ task, projectId, onSwitchToDiff, onRefresh 
   // untrusted-import banner already reads. Not gated behind isLinked/hasUnit
   // etc.: every task in this project runs with the same secret set regardless
   // of git-linkage state.
+  //
+  // Labeled "next launch", not "injected" (Issue #28 third-party review Minor
+  // finding): this reads the PROJECT's current secret configuration, which
+  // can drift from the set actually injected into an already-running task
+  // pane (a pane's env is fixed at the tmux window's creation time — see
+  // TaskPaneEnvironmentService — while this fetch is live and re-runs on
+  // every render/nonce bump). Reconciling this against the live pane would
+  // mean snapshotting the exact secret set at each window-(re)creation and
+  // exposing that snapshot back to the UI — real scope, not a one-line fix,
+  // and not what this tab needs: an operator reading this tab wants to know
+  // "what will this task get if it (re)launches now", which is exactly what
+  // the project's current config answers. Deferred out of this fix's scope.
   const [secretNames, setSecretNames] = useState<string[]>([]);
   const [secretsState, setSecretsState] = useState<SecretNamesState>('loading');
   const [secretsFetchNonce, setSecretsFetchNonce] = useState(0);
@@ -100,7 +112,7 @@ export default function TaskGitTab({ task, projectId, onSwitchToDiff, onRefresh 
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, fontSize: 'var(--font-md)' }}>
-      <MetadataField label={t('tasks:executionApproval.fields.secrets')}>
+      <MetadataField label={t('tasks:git.secretsNextLaunch')}>
         <SecretNamesValue names={secretNames} state={secretsState} onRetry={() => setSecretsFetchNonce((n) => n + 1)} />
       </MetadataField>
       {isLinked && (() => {

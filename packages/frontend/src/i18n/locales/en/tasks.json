@@ -210,7 +210,8 @@
     "linkIssue": "Link Issue",
     "linkConfirm": "Update the task title and description with the issue content?",
     "linkOnly": "Link Only",
-    "linkAndOverwrite": "Link & Overwrite"
+    "linkAndOverwrite": "Link & Overwrite",
+    "secretsNextLaunch": "Secrets passed on next launch"
   },
   "summary": {
     "noSummary": "No summary available",

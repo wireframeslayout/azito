@@ -13,6 +13,7 @@ import { StatusBar } from './StatusBar';
 import { useServerResources, ServerResourcesProvider } from '../hooks/useServerResources';
 import { ServerStatusProvider } from '../hooks/useServerStatuses';
 import { SystemUpdateProvider } from '../hooks/useSystemUpdate';
+import { HealthProvider } from '../hooks/useHealth';
 import { UpdateOverlay } from './system/UpdateOverlay';
 import { LoadingState } from './ui';
 
@@ -35,6 +36,7 @@ export default function Layout() {
       <ServerResourcesProvider servers={servers}>
       <ServerStatusProvider>
       <SystemUpdateProvider>
+      <HealthProvider>
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
         <div style={{ flex: 1, overflow: 'hidden', display: 'flex', background: 'var(--bg-card)' }}>
           <div className="project-sidebar-desktop" style={{ height: '100%' }}>
@@ -69,6 +71,7 @@ export default function Layout() {
           }
         `}</style>
       </div>
+      </HealthProvider>
       </SystemUpdateProvider>
       </ServerStatusProvider>
       </ServerResourcesProvider>

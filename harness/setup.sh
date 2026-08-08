@@ -238,7 +238,13 @@ if [[ -f "$AZITOCTL_ENV_FILE" ]] && grep -q '^AZITO_UI_TOKEN=' "$AZITOCTL_ENV_FI
   AZITOCTL_ENV_CLEAN_TMP="$(mktemp "$AZITOCTL_ENV_DIR/.azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env.XXXXXX")"
   (
     umask 077
-    grep -v '^AZITO_UI_TOKEN=' "$AZITOCTL_ENV_FILE" > "$AZITOCTL_ENV_CLEAN_TMP"
+    # `grep -v` はマッチ行を除いた結果が0行になる場合（＝除去対象の
+    # AZITO_UI_TOKEN 行のみのファイル）に exit 1 を返し、set -e でセット
+    # アップ全体を中止させてしまう（third-party review Important finding、
+    # 実再現あり）。awk の `!/pattern/` は該当0件でも常に exit 0 なので
+    # 同じ用途に置き換える（真の read エラー時は awk 自身が非ゼロで落ちる
+    # ため、その場合はここも失敗する＝挙動は保たれる）。
+    awk '!/^AZITO_UI_TOKEN=/' "$AZITOCTL_ENV_FILE" > "$AZITOCTL_ENV_CLEAN_TMP"
   )
   chmod 600 "$AZITOCTL_ENV_CLEAN_TMP"
   mv -f "$AZITOCTL_ENV_CLEAN_TMP" "$AZITOCTL_ENV_FILE"

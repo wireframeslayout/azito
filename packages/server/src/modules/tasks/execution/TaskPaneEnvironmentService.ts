@@ -2,6 +2,8 @@ import type { ServerConfig } from '../../servers/Server';
 import type { Task } from '../Task';
 import type { ITaskTokenRepository } from '../tokens/TaskToken';
 import type { SqliteProjectSecretRepository } from '../../projects/SqliteProjectSecretRepository';
+import type { AuditLogService } from '../../../shared/audit/AuditLogService';
+import { recordAuditBestEffort } from '../../../shared/audit/recordAuditBestEffort';
 
 /**
  * Single builder for the env a task's tmux pane launches with (Issue #28
@@ -39,6 +41,15 @@ export class TaskPaneEnvironmentService {
     private projectSecretRepo: SqliteProjectSecretRepository,
     private uiToken: string,
     private scopedAuthEnabled: boolean,
+    // Optional (Issue #28 third-party review Important finding): the
+    // audit UI's own description claims task-token issuance/revocation as
+    // a category it shows (settings.auditLog.description), but nothing
+    // ever called `auditLogService.record()` for either — this class is the
+    // sole write path for both (see the class doc comment), so it's the one
+    // place that can close that gap for every call site at once.
+    // best-effort only (recordAuditBestEffort) — an audit-write failure must
+    // never block a token from actually being issued or revoked.
+    private auditLogService?: AuditLogService,
   ) {}
 
   /**
@@ -66,6 +77,15 @@ export class TaskPaneEnvironmentService {
     // createRotatedWindow already rolls back correctly.
     const secretEntries = this.projectSecretRepo.findByProjectWithValues(task.projectId);
     const issued = this.taskTokenRepo.issueNextGeneration(task.id, 'window_regenerated');
+    // Generation number + reason only (design v3 §10: detail must never
+    // carry secret material) — `issued.token` (the plaintext) is
+    // deliberately excluded.
+    recordAuditBestEffort(this.auditLogService, {
+      actorClass: 'task',
+      actorId: task.id,
+      event: 'task_token.issued',
+      detail: { taskId: task.id, tokenId: issued.id, reason: 'window_regenerated' },
+    });
     const env: Record<string, string> = {
       AZITO_TASK_TOKEN: issued.token,
       AZITO_TASK_ID: String(task.id),
@@ -180,7 +200,22 @@ export class TaskPaneEnvironmentService {
    * in use).
    */
   revokeGeneration(tokenId: number, reason: string): void {
-    this.taskTokenRepo.revoke(tokenId, reason);
+    const revokedCount = this.taskTokenRepo.revoke(tokenId, reason);
+    // Only log an actual revoke (Issue #28 review: the flood-dedup key
+    // already collapses identical repeats, but a no-op call — the row was
+    // already revoked — must not fabricate a revocation event that didn't
+    // happen). No taskId is available at this call's scope (see the class's
+    // callers — WindowRotation.ts only holds `tokenId`), so this is
+    // recorded against the generation alone; `revokeForDestroyedWindow`
+    // below is the task-scoped counterpart.
+    if (revokedCount > 0) {
+      recordAuditBestEffort(this.auditLogService, {
+        actorClass: 'task',
+        actorId: null,
+        event: 'task_token.revoked',
+        detail: { tokenId, reason },
+      });
+    }
   }
 
   /**
@@ -198,6 +233,14 @@ export class TaskPaneEnvironmentService {
    * `revokeGeneration`, not this method.
    */
   revokeForDestroyedWindow(taskId: number, reason: string): void {
-    this.taskTokenRepo.revokeAllForTask(taskId, reason);
+    const revokedCount = this.taskTokenRepo.revokeAllForTask(taskId, reason);
+    if (revokedCount > 0) {
+      recordAuditBestEffort(this.auditLogService, {
+        actorClass: 'task',
+        actorId: taskId,
+        event: 'task_token.revoked',
+        detail: { taskId, reason, revokedCount },
+      });
+    }
   }
 }

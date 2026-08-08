@@ -694,6 +694,68 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
   });
 });
 
+// Issue #28 third-party review Important finding: a pane restore/resolve/
+// launch failure AFTER the new window was already created (and, for the
+// primary window, its task token already rotated) used to propagate straight
+// out of respawn() with no cleanup — leaving that window alive, untracked
+// (the DB row still points at the OLD tmuxTarget), and, for the primary
+// window, its freshly-issued generation neither killed nor revoked.
+describe('WindowRespawnService.respawn — rollback on pane-restore failure (Issue #28)', () => {
+  it('kills the new window and revokes the freshly-issued generation when pane setup fails for the PRIMARY task window, then rethrows', async () => {
+    const task = makeTask({ id: 5, unitId: 10 });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ id: 1, taskId: 5, isPrimary: true, tmuxTarget: 'azito:task-1--ab12.1' });
+    const { service, tmux, windowRepo, paneEnvService } = buildService({ window: win, task, unit });
+    tmux.resolvePaneId.mockRejectedValueOnce(new Error('pane resolve failed'));
+
+    await expect(service.respawn(1, makeServer())).rejects.toThrow('pane resolve failed');
+
+    // The new window (freshly created) must be killed, not left running
+    // untracked.
+    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:task-1--ab12');
+    // Since the kill is confirmed (default mock resolves { code: 0 }), the
+    // just-issued generation must be revoked — never left as a live,
+    // orphaned credential.
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(5, 'respawn_restore_failed_rollback');
+    // The DB row must NOT be updated to point at the now-killed new window.
+    expect(windowRepo.update).not.toHaveBeenCalledWith(1, { tmuxTarget: 'azito:task-1--ab12.1' });
+  });
+
+  it('persists the new tmuxTarget (keeps it discoverable) instead of revoking, when the post-failure kill itself fails for the PRIMARY window', async () => {
+    const task = makeTask({ id: 5, unitId: 10 });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ id: 1, taskId: 5, isPrimary: true, tmuxTarget: 'azito:task-1--ab12.1' });
+    const { service, tmux, windowRepo, paneEnvService } = buildService({ window: win, task, unit });
+    tmux.resolvePaneId.mockRejectedValueOnce(new Error('pane resolve failed'));
+    // The default fixture never kills an OLD window here (listSessions
+    // reports no matching window, so confirmOldWindowGone is a no-op) —
+    // this is the only killWindow call, and it's the rollback kill of the
+    // newly-created window, which itself fails (window still alive).
+    tmux.killWindow.mockRejectedValueOnce(new Error('rollback kill failed'));
+
+    await expect(service.respawn(1, makeServer())).rejects.toThrow('pane resolve failed');
+
+    // A still-alive orphan must never be silently revoked — the pane would
+    // then hold a dead credential while still serving traffic.
+    expect(paneEnvService.revokeGeneration).not.toHaveBeenCalled();
+    // Instead it stays discoverable: the DB row is updated to the new
+    // (still-alive) tmuxTarget so an operator can find and clean it up.
+    expect(windowRepo.update).toHaveBeenCalledWith(1, { tmuxTarget: 'azito:task-1--ab12.1' });
+  });
+
+  it('kills the new window (no revoke — nothing to revoke) when pane setup fails for a non-task window, then rethrows', async () => {
+    const win = makeWindow({ id: 1, taskId: null, tmuxTarget: 'azito:task-1--ab12.1' });
+    const { service, tmux, windowRepo, paneEnvService } = buildService({ window: win });
+    tmux.resolvePaneId.mockRejectedValueOnce(new Error('pane resolve failed'));
+
+    await expect(service.respawn(1, makeServer())).rejects.toThrow('pane resolve failed');
+
+    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:task-1--ab12');
+    expect(paneEnvService.revokeGeneration).not.toHaveBeenCalled();
+    expect(windowRepo.update).not.toHaveBeenCalledWith(1, { tmuxTarget: 'azito:task-1--ab12.1' });
+  });
+});
+
 describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
   // Containment resolves real paths via fs.realpath (LocalPathResolver), so
   // these fixtures need to exist on disk — a literal string like '/work'

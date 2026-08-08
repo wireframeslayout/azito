@@ -21,6 +21,7 @@ import { appendLogAndEmit } from '../tasks/execution/AppendLog';
 import type { TaskPaneEnvironmentService } from '../tasks/execution/TaskPaneEnvironmentService';
 import { resolveTmuxSession } from '../tasks/execution/TaskExecutionEnv';
 import { confirmOldWindowGone, createRotatedWindow, rollbackWindowReference, runExclusiveForTask } from '../tasks/execution/WindowRotation';
+import { resolveKillOutcome } from '../tmux/killOutcome';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { EventEmitter } from 'events';
@@ -293,10 +294,15 @@ export class WindowRespawnService {
       // why a split pane needs the SAME env explicitly, not just the first
       // pane new-window/new-session set (Issue #28 review Critical finding).
       let windowEnv: Record<string, string>;
+      // Only set for the primary branch — the only branch that rotated a
+      // task token (createRotatedWindow) and therefore has a generation to
+      // roll back below on a downstream failure.
+      let tokenId: number | null = null;
       if (isPrimary) {
         const created = await createRotatedWindow(this.paneEnvService, server, task!, 'respawn_create_failed', doCreate);
         newName = created.windowName;
         windowEnv = created.env;
+        tokenId = created.tokenId;
       } else if (task) {
         windowEnv = this.paneEnvService.buildEnvForSecondaryWindow(task, server);
         const created = await doCreate(windowEnv);
@@ -314,11 +320,51 @@ export class WindowRespawnService {
       // Pane restoration now runs INSIDE this same lock turn, before the
       // final persist below — see the design-rationale comment above this
       // function for the orphaning bug this ordering closes.
-      if (win.paneLayout) {
-        await this.restorePaneLayout(server, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv);
-      } else {
-        const paneId = await this.tmux.resolvePaneId(server, baseTarget);
-        await this.setupSinglePane(server, paneId, baseTarget, win, supervision, resolvedCwds.singleCwd);
+      //
+      // Everything from here through the final persist is wrapped in
+      // try/catch (Issue #28 third-party review Important finding): a
+      // restore/resolve/launch failure AFTER the new window was already
+      // created — and, for the primary window, its task token already
+      // rotated — used to propagate straight out of run(), leaving that new
+      // window alive and completely untracked (the DB row still points at
+      // the OLD, already-killed tmuxTarget) and, for the primary window, its
+      // freshly-issued generation neither killed nor revoked. Same
+      // generation-leak shape resumeLegacySession()'s own rollback closes
+      // (its doc comment above), applied here via the same
+      // rollbackWindowReference helper: kill the just-created window, and
+      // only revoke the generation once that kill is CONFIRMED (agent
+      // transports resolve, not reject, on a failed kill — see
+      // resolveKillOutcome's doc comment) — a still-alive orphan instead
+      // gets its dbTarget persisted so it stays discoverable, exactly like
+      // resumeLegacySession's onStillAlive branch. A non-primary window has
+      // no generation to protect, so it only needs the kill + discoverability
+      // half (no revoke call).
+      try {
+        if (win.paneLayout) {
+          await this.restorePaneLayout(server, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv);
+        } else {
+          const paneId = await this.tmux.resolvePaneId(server, baseTarget);
+          await this.setupSinglePane(server, paneId, baseTarget, win, supervision, resolvedCwds.singleCwd);
+        }
+      } catch (err) {
+        try {
+          if (isPrimary && tokenId !== null) {
+            await rollbackWindowReference(
+              this.tmux.killWindow(server, baseTarget),
+              this.paneEnvService,
+              tokenId,
+              'respawn_restore_failed_rollback',
+              () => {},
+              () => this.windowRepo.update(windowId, { tmuxTarget: dbTarget }),
+            );
+          } else {
+            const outcome = await resolveKillOutcome(this.tmux.killWindow(server, baseTarget));
+            if (!outcome.success) {
+              this.windowRepo.update(windowId, { tmuxTarget: dbTarget });
+            }
+          }
+        } catch {}
+        throw err;
       }
 
       this.windowRepo.update(windowId, { tmuxTarget: dbTarget });

@@ -163,7 +163,9 @@
     "continueDisplay": "そのまま表示を続けます",
     "respawning": "再起動中…",
     "taskOwnedPaneBadge": "タスク実行（権限制限あり）",
-    "taskOwnedPaneTooltip": "このペインへの入力は権限を昇格しません。オペレーター操作はブラウザまたは operator.env を読み込んだセッションから行ってください。"
+    "taskOwnedPaneTooltip": "このペインへの入力は権限を昇格しません。オペレーター操作はブラウザまたは operator.env を読み込んだセッションから行ってください。",
+    "taskOwnedPaneBadgeCompat": "タスク実行（互換モード — 権限制限は未適用）",
+    "taskOwnedPaneTooltipCompat": "このハブでは scoped authorization がまだ有効化されていないため、このペインへの入力も他のペインと同様にオペレーター相当の権限を持ちます。このバッジ本来の制限を有効にするには AZITO_SCOPED_AUTH を有効化してください。"
   },
   "resourceWarning": {
     "title": "サーバーのリソースがひっ迫しています",

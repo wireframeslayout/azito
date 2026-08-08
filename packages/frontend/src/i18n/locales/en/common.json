@@ -163,7 +163,9 @@
     "continueDisplay": "Continuing to display",
     "respawning": "Respawning…",
     "taskOwnedPaneBadge": "Task execution (restricted privileges)",
-    "taskOwnedPaneTooltip": "Input into this pane does not elevate privileges. Perform operator actions from the browser or a session that has sourced operator.env."
+    "taskOwnedPaneTooltip": "Input into this pane does not elevate privileges. Perform operator actions from the browser or a session that has sourced operator.env.",
+    "taskOwnedPaneBadgeCompat": "Task execution (compat mode — restrictions not enforced)",
+    "taskOwnedPaneTooltipCompat": "Scoped authorization is not yet enabled on this hub, so input into this pane currently carries operator-equivalent privileges, same as any other pane. Enable AZITO_SCOPED_AUTH to enforce the restriction this badge otherwise describes."
   },
   "resourceWarning": {
     "title": "Server resources are constrained",

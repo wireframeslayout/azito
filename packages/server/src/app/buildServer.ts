@@ -411,7 +411,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     scopedAuthEnabled,
   });
   await app.register(supervisorsRoutes, { supervisorRegistry });
-  await app.register(healthRoutes, { deployModeDetector });
+  await app.register(healthRoutes, { deployModeDetector, scopedAuthEnabled });
   await app.register(systemRoutes, { systemUpdateService, channelResolver });
   await app.register(browserRoutes, {
     browserSessionManager,

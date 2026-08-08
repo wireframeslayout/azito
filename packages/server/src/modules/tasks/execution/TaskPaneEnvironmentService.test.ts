@@ -73,8 +73,11 @@ function makeDeps(scopedAuthEnabled: boolean) {
   const projectSecretRepo = {
     findByProjectWithValues: vi.fn(() => [{ id: 1, projectId: 7, name: 'FOO', value: 'bar', createdAt: '', updatedAt: '' }]),
   };
-  const service = new TaskPaneEnvironmentService(taskTokenRepo as ITaskTokenRepository, projectSecretRepo as any, 'ui-token-123', scopedAuthEnabled);
-  return { service, taskTokenRepo, projectSecretRepo };
+  const auditLogService = { record: vi.fn() };
+  const service = new TaskPaneEnvironmentService(
+    taskTokenRepo as ITaskTokenRepository, projectSecretRepo as any, 'ui-token-123', scopedAuthEnabled, auditLogService as any,
+  );
+  return { service, taskTokenRepo, projectSecretRepo, auditLogService };
 }
 
 describe('TaskPaneEnvironmentService.buildEnvForNewWindow', () => {
@@ -158,6 +161,36 @@ describe('TaskPaneEnvironmentService.buildEnvForNewWindow', () => {
     expect(() => service.buildEnvForNewWindow(makeTask(), makeServer())).toThrow(/decrypt failed/);
     expect(taskTokenRepo.issueNextGeneration).not.toHaveBeenCalled();
   });
+
+  // Issue #28 third-party review Important finding: the audit UI's own
+  // description claims task-token issuance as a category it shows, but
+  // nothing ever recorded it — this is the sole write path (issueNextGeneration)
+  // for a (re)created window's token.
+  it('records a task_token.issued audit event with the generation id but never the plaintext token', () => {
+    const { service, auditLogService } = makeDeps(false);
+    service.buildEnvForNewWindow(makeTask({ id: 5 }), makeServer());
+
+    expect(auditLogService.record).toHaveBeenCalledWith({
+      actorClass: 'task',
+      actorId: 5,
+      event: 'task_token.issued',
+      detail: { taskId: 5, tokenId: 1, reason: 'window_regenerated' },
+    });
+    const detailJson = JSON.stringify(auditLogService.record.mock.calls[0][0].detail);
+    expect(detailJson).not.toContain('azt.task.');
+  });
+
+  it('does not throw when auditLogService is not provided', () => {
+    const taskTokenRepo: Pick<ITaskTokenRepository, 'issueNextGeneration' | 'revokeAllForTask' | 'revoke'> = {
+      issueNextGeneration: vi.fn(() => ({ id: 1, token: 'azt.task.1.' + 'a'.repeat(64) })),
+      revokeAllForTask: vi.fn(() => 1),
+      revoke: vi.fn(() => 1),
+    };
+    const projectSecretRepo = { findByProjectWithValues: vi.fn(() => []) };
+    const service = new TaskPaneEnvironmentService(taskTokenRepo as ITaskTokenRepository, projectSecretRepo as any, 'ui-token-123', false);
+
+    expect(() => service.buildEnvForNewWindow(makeTask(), makeServer())).not.toThrow();
+  });
 });
 
 // Issue #28 third-party review finding (multi-window token rotation
@@ -202,6 +235,32 @@ describe('TaskPaneEnvironmentService.revokeForDestroyedWindow', () => {
     service.revokeForDestroyedWindow(5, 'worktree_creation_failed_rollback');
     expect(taskTokenRepo.revokeAllForTask).toHaveBeenCalledWith(5, 'worktree_creation_failed_rollback');
   });
+
+  // Issue #28 third-party review Important finding: the audit UI's own
+  // description claims task-token revocation as a category it shows, but
+  // nothing ever recorded it.
+  it('records a task_token.revoked audit event when at least one generation was actually revoked', () => {
+    const { service, taskTokenRepo, auditLogService } = makeDeps(true);
+    (taskTokenRepo.revokeAllForTask as ReturnType<typeof vi.fn>).mockReturnValue(2);
+
+    service.revokeForDestroyedWindow(5, 'worktree_creation_failed_rollback');
+
+    expect(auditLogService.record).toHaveBeenCalledWith({
+      actorClass: 'task',
+      actorId: 5,
+      event: 'task_token.revoked',
+      detail: { taskId: 5, reason: 'worktree_creation_failed_rollback', revokedCount: 2 },
+    });
+  });
+
+  it('does not record an audit event for a no-op revoke (nothing was active to revoke)', () => {
+    const { service, taskTokenRepo, auditLogService } = makeDeps(true);
+    (taskTokenRepo.revokeAllForTask as ReturnType<typeof vi.fn>).mockReturnValue(0);
+
+    service.revokeForDestroyedWindow(5, 'task_deleted');
+
+    expect(auditLogService.record).not.toHaveBeenCalled();
+  });
 });
 
 // Issue #28 third-party review finding: a rotation rollback (createRotatedWindow/
@@ -214,5 +273,29 @@ describe('TaskPaneEnvironmentService.revokeGeneration', () => {
     const { service, taskTokenRepo } = makeDeps(true);
     service.revokeGeneration(7, 'execute_create_failed');
     expect(taskTokenRepo.revoke).toHaveBeenCalledWith(7, 'execute_create_failed');
+  });
+
+  // Issue #28 third-party review Important finding: the audit UI's own
+  // description claims task-token revocation as a category it shows, but
+  // nothing ever recorded it.
+  it('records a task_token.revoked audit event (generation id + reason, no taskId available at this scope)', () => {
+    const { service, auditLogService } = makeDeps(true);
+    service.revokeGeneration(7, 'execute_create_failed');
+
+    expect(auditLogService.record).toHaveBeenCalledWith({
+      actorClass: 'task',
+      actorId: null,
+      event: 'task_token.revoked',
+      detail: { tokenId: 7, reason: 'execute_create_failed' },
+    });
+  });
+
+  it('does not record an audit event when the generation was already revoked (no-op)', () => {
+    const { service, taskTokenRepo, auditLogService } = makeDeps(true);
+    (taskTokenRepo.revoke as ReturnType<typeof vi.fn>).mockReturnValue(0);
+
+    service.revokeGeneration(7, 'execute_create_failed');
+
+    expect(auditLogService.record).not.toHaveBeenCalled();
   });
 });

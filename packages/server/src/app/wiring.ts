@@ -284,7 +284,7 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
   // own doc comment for why this must be ONE instance, not one per class.
   const taskEvents = new EventEmitter();
   const originationService = new TaskOriginationService(repos.taskRepo, repos.auditLogService);
-  const taskPaneEnvironmentService = new TaskPaneEnvironmentService(repos.taskTokenRepo, repos.projectSecretRepo, uiToken, scopedAuthEnabled);
+  const taskPaneEnvironmentService = new TaskPaneEnvironmentService(repos.taskTokenRepo, repos.projectSecretRepo, uiToken, scopedAuthEnabled, repos.auditLogService);
   const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.tmuxClient, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, repos.serverRepo, repos.projectSecretRepo, taskEvents, taskPaneEnvironmentService, sessionCaptureService);
   const taskRestoreService = new TaskRestoreService({
     taskRepo: repos.taskRepo,
