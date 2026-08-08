@@ -1,11 +1,17 @@
 import type { FastifyPluginCallback } from 'fastify';
 import type { IServerRepository } from '../servers/Server';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
+import type { ITaskRepository } from '../tasks/Task';
+import type { IProjectServerRepository } from '../projects/ProjectServer';
 import { GitDiffService, SAFE_PATH, SAFE_BRANCH, SAFE_HASH } from './GitDiffService';
+import type { WorktreeServiceFactory } from './WorktreeServiceFactory';
 
 export interface GitRouteOptions {
   serverRepo: IServerRepository;
   transportFactory: TransportFactory;
+  taskRepo?: ITaskRepository;
+  projectServerRepo?: IProjectServerRepository;
+  worktreeServiceFactory?: WorktreeServiceFactory;
 }
 
 const gitRoutes: FastifyPluginCallback<GitRouteOptions> = (fastify, opts, done) => {
@@ -55,6 +61,52 @@ const gitRoutes: FastifyPluginCallback<GitRouteOptions> = (fastify, opts, done) 
         return await gitDiffService.getDiff(srv, dirPath, base, commit || undefined);
       } catch (e) {
         return reply.status(500).send({ error: e instanceof Error ? e.message : 'Failed to get diff' });
+      }
+    },
+  );
+
+  // ── GET /api/servers/:name/git/worktrees ──
+  fastify.get<{ Params: { name: string }; Querystring: { project_id?: string } }>(
+    '/api/servers/:name/git/worktrees',
+    async (request, reply) => {
+      const { worktreeServiceFactory: wsf, taskRepo, projectServerRepo } = opts;
+      if (!wsf || !taskRepo || !projectServerRepo) {
+        return reply.status(501).send({ error: 'Worktree listing not configured' });
+      }
+
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+
+      const projectId = request.query.project_id ? parseInt(request.query.project_id, 10) : NaN;
+      if (isNaN(projectId)) return reply.status(400).send({ error: 'project_id query parameter required' });
+
+      const projectServer = projectServerRepo.find(projectId, request.params.name);
+      const workingDir = projectServer?.workingDirectory;
+      if (!workingDir) return reply.status(400).send({ error: 'No working directory configured for this project server' });
+
+      try {
+        const transport = transportFactory.getTransport(srv);
+        const worktreeService = wsf.create(srv.type, transport);
+        const entries = await worktreeService.list(workingDir);
+        const worktrees = entries.map((entry) => {
+          const match = entry.path.match(/\/\.worktrees\/task-(\d+)$/);
+          const task = match ? taskRepo.findById(parseInt(match[1], 10)) : null;
+          return {
+            path: entry.path,
+            branch: entry.branch,
+            head: entry.head,
+            isMain: entry.isMain,
+            locked: entry.locked,
+            taskId: task?.id ?? null,
+            taskTitle: task?.title ?? null,
+            taskStatus: task?.status ?? null,
+            orphaned: match != null && task == null,
+          };
+        });
+
+        return { worktrees };
+      } catch (error) {
+        return reply.status(500).send({ error: error instanceof Error ? error.message : 'Failed to list worktrees' });
       }
     },
   );

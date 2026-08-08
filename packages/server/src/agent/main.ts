@@ -28,6 +28,8 @@ if (bind === '0.0.0.0') {
   console.error('AZITO_AGENT_BIND must not be 0.0.0.0 — bind to a Tailscale IP instead');
   process.exit(1);
 }
+/** Same value as `bind`, restated so its non-undefined type survives into main(). */
+const BIND_ADDRESS: string = bind;
 
 const token = process.env.AZITO_AGENT_TOKEN;
 if (!token) {
@@ -71,7 +73,7 @@ async function main(): Promise<void> {
   await app.register(websocket);
 
   // Health endpoint (no auth) + tmux hook receiver + browser routes
-  await app.register(agentRoutes, { agentVersion, startedAt, agentEventBus, browserSessionManager });
+  await app.register(agentRoutes, { agentVersion, startedAt, agentEventBus, browserSessionManager, bindAddress: BIND_ADDRESS });
 
   // Auth hook for all routes except /health and /api/hooks/tmux (localhost-only)
   app.addHook('onRequest', async (request, reply) => {

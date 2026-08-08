@@ -1,16 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { ServerConfig } from '../servers/Server';
-
-// Local copy of modules/agents/shellQuote.ts — modules/supervisors is
-// base-layer (see .dependency-cruiser.cjs base-supervisors-limited) and may
-// not import mid-layer modules/agents; importing SupervisorLaunch's copy
-// would be circular (SupervisorLaunch imports this file). Keep in sync with
-// modules/agents/shellQuote.ts if either changes.
-function shellQuote(s: string): string {
-  return `'${s.replace(/'/g, "'\\''")}'`;
-}
-
+import { shellQuote } from '../../shared/shellQuote';
 import { resolveRoot } from '../../shared/releaseInfo';
 
 const REPO_ROOT = resolveRoot();

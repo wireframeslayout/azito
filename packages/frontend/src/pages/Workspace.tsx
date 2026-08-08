@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useLocation, matchPath } from 'react-router-dom';
 import { paths, matchWorkspacePath } from '../paths';
@@ -15,6 +15,7 @@ import { useBrailleSpinner } from '../hooks/useBrailleSpinner';
 import { useWorkspaceTargets } from '../hooks/useWorkspaceTargets';
 import { useAgentActivity } from '../hooks/useAgentActivity';
 import { useNotificationChannel } from '../hooks/useNotificationChannel';
+import { useRecentTasks } from '../hooks/useRecentTasks';
 import { useWorkspaceData } from '../hooks/useWorkspaceData';
 import { useSidebarState } from '../hooks/useSidebarState';
 import { useWindowActions } from '../hooks/useWindowActions';
@@ -34,6 +35,7 @@ import WorkspaceSidebarContent from '../components/workspace/WorkspaceSidebarCon
 import ActiveWindowsSection from '../components/workspace/ActiveWindowsSection';
 import WorkspaceLayout from '../components/workspace/WorkspaceLayout';
 import AddWindowModal from '../components/workspace/AddWindowModal';
+import QuickAddWindowModal from '../components/workspace/QuickAddWindowModal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import ResourceWarningDialog, { type ResourceStatus } from '../components/ResourceWarningDialog';
 import TabContentRenderer from '../components/workspace/TabContentRenderer';
@@ -109,11 +111,15 @@ function WorkspaceInner() {
   const data = useWorkspaceData(id, tabs, sidebarMode);
   const { project, allUnits, tasks, servers, sessionData, allProjects, allTasks, projectsLoaded, projectServers, selectedFileServer, setSelectedFileServer, refreshWorkspace } = data;
 
-  const browserCapableServers = useMemo(
-    () => servers.filter((s) => s.type === 'local' || s.type === 'agent').map((s) => s.name),
-    [servers],
-  );
-  const browserGroups = useBrowserGroups(browserCapableServers);
+  // プロジェクトに紐づくサーバー（projectServers）と、ブラウザ対応（local/agent型）サーバー（servers）の積集合。
+  // servers は全サーバーなのでそのまま使うと他プロジェクトのサーバーまで拾ってしまう。
+  const browserCapableServers = useMemo(() => {
+    const projectServerNames = new Set(projectServers.map((ps) => ps.serverName));
+    return servers
+      .filter((s) => (s.type === 'local' || s.type === 'agent') && projectServerNames.has(s.name))
+      .map((s) => s.name);
+  }, [servers, projectServers]);
+  const { groups: browserGroups, errors: browserErrors, refresh: refreshBrowserGroups, loaded: browserGroupsLoaded } = useBrowserGroups(browserCapableServers);
 
   const taskWindows = useMemo(() => {
     const entries: Array<{ tmuxTarget: string; taskId: number; serverName: string }> = [];
@@ -148,6 +154,7 @@ function WorkspaceInner() {
 
   const { showToast } = useToast();
   const confirm = useConfirm();
+  const { recordOpened: recordTaskOpened } = useRecentTasks();
 
   useNotificationChannel({
     onBrowserOpened: useCallback((payload: BrowserOpenedPayload) => {
@@ -170,8 +177,8 @@ function WorkspaceInner() {
   });
 
   const handleSelectTab = useCallback((tabId: string) => {
-    setActiveTabId(tabId);
     const tab = tabs.find((t) => t.id === tabId);
+    setActiveTabId(tabId);
     if (tab?.projectId && tab.projectId !== currentProjectId) {
       navigate(`/workspace/${tab.projectId}`);
     }
@@ -217,6 +224,23 @@ function WorkspaceInner() {
     const pane = layout.state.focusedPaneId ? findPane(layout.state.root, layout.state.focusedPaneId) : null;
     return pane ? pane.activeTabId : activeTabId;
   }, [layout.state.root, layout.state.focusedPaneId, activeTabId]);
+
+  // Single recording point for the sidebar's "recent" order: every
+  // activation path (initial open, tab-bar reselect, pane focus, drag-drop,
+  // context-menu pane move, post-close successor selection, notification
+  // auto-open) funnels into focusedActiveTabId — the focused pane's active
+  // tab, falling back to the global activeTabId. Recording here instead of
+  // at each call site means no activation path can be missed. lastRecordedTaskIdRef
+  // guards against re-recording (localStorage write + subscriber notify) on
+  // every render while the same task tab stays focused.
+  const lastRecordedTaskIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    const tab = tabs.find((t) => t.id === focusedActiveTabId);
+    const taskId = tab?.type === 'task' && tab.entityId != null ? tab.entityId : null;
+    if (taskId === lastRecordedTaskIdRef.current) return;
+    lastRecordedTaskIdRef.current = taskId;
+    if (taskId != null) recordTaskOpened(taskId);
+  }, [focusedActiveTabId, tabs, recordTaskOpened]);
 
   // Pane-local tab selection: keeps the pane's own active tab and the
   // pane-focus in sync, mirrors the selection into useTabPersistence's
@@ -264,6 +288,22 @@ function WorkspaceInner() {
   // Mirrors usePaneLayout's own close() computation (same pure closeTab() +
   // focusedPaneId fallback) purely to read the resulting active tab
   // synchronously, since the hook's own state update is async.
+  // Wraps the flat closeTab() with a browser-groups sidebar refresh: closing a
+  // browser tab already tears down its server-side group (see closeTab's own
+  // closeBrowserGroup call), but the sidebar's browser list (useBrowserGroups)
+  // is a separately-polled hook that doesn't know a tab just closed. Every
+  // path that can close a tab (desktop pane-aware close, mobile TabBar close,
+  // mobile in-panel close) routes through this so the sidebar list drops the
+  // row immediately instead of waiting for the next 30s poll.
+  const closeTabAndRefreshBrowser = useCallback((tabId: string) => {
+    const wasBrowser = tabs.some((t) => t.id === tabId && t.type === 'browser');
+    const closed = closeTab(tabId);
+    // Wait for the server-side group teardown (closeTab's own closeBrowserGroup
+    // call) to settle before refetching, or the sidebar list can still see the
+    // group as present. The tab itself already closed synchronously above.
+    if (wasBrowser) void closed.then(refreshBrowserGroups);
+  }, [tabs, closeTab, refreshBrowserGroups]);
+
   const handlePaneCloseTab = useCallback((paneId: string, tabId: string) => {
     const newRoot = closeTabInLayoutTree(layout.state.root, paneId, tabId);
     const newFocusedPaneId = layout.state.focusedPaneId && findPane(newRoot, layout.state.focusedPaneId)
@@ -272,11 +312,11 @@ function WorkspaceInner() {
     const nextActiveTabId = findPane(newRoot, newFocusedPaneId)?.activeTabId ?? null;
 
     layout.close(paneId, tabId);
-    closeTab(tabId);
+    closeTabAndRefreshBrowser(tabId);
     if (nextActiveTabId && activeTabId !== nextActiveTabId) {
       setActiveTabId(nextActiveTabId);
     }
-  }, [layout, closeTab, activeTabId, setActiveTabId]);
+  }, [layout, closeTabAndRefreshBrowser, activeTabId, setActiveTabId]);
 
   // Single entry point for "close this tab by id" that every close affordance
   // (pane TabBar's ✕, the shared tab context menu's "Close tab" item, and
@@ -290,9 +330,9 @@ function WorkspaceInner() {
     if (pane) {
       handlePaneCloseTab(pane.id, tabId);
     } else {
-      closeTab(tabId);
+      closeTabAndRefreshBrowser(tabId);
     }
-  }, [layout, handlePaneCloseTab, closeTab]);
+  }, [layout, handlePaneCloseTab, closeTabAndRefreshBrowser]);
 
   const connectPane = useCallback((serverName: string, target: string, projectId?: number) => {
     connectPaneRaw(serverName, target, projectId ?? currentProjectId);
@@ -359,8 +399,8 @@ function WorkspaceInner() {
     }
   }, [resolveOverlayTarget, showToast]);
 
-  const openFile = useCallback((serverName: string, filePath: string) => {
-    openFileRaw(serverName, filePath, currentProjectId);
+  const openFile = useCallback((serverName: string, filePath: string, line?: number) => {
+    openFileRaw(serverName, filePath, currentProjectId, line);
   }, [openFileRaw, currentProjectId]);
 
   const openDiff = useCallback((serverName: string, path: string, baseBranch?: string) => {
@@ -515,8 +555,8 @@ function WorkspaceInner() {
     navigate(location.pathname, { replace: true });
   }, [location.search]);
 
-  const handleFileSelect = useCallback((serverName: string, filePath: string) => {
-    openFile(serverName, filePath);
+  const handleFileSelect = useCallback((serverName: string, filePath: string, line?: number) => {
+    openFile(serverName, filePath, line);
     if (mobile) setSidebarOpen(false);
   }, [openFile, mobile, setSidebarOpen]);
 
@@ -536,13 +576,23 @@ function WorkspaceInner() {
       });
       return;
     }
+    if (res.error === 'execution_pending_approval') {
+      // The execution gate (Issue #51/#328) blocked this task BEFORE any
+      // worker/worktree/secret was touched and flipped its status to
+      // 'pending_approval' server-side. Not a hard failure to toast and drop
+      // — refetch so the task's new status reaches TaskPanel, which renders
+      // the approval panel for 'pending_approval' on its own.
+      showToast(t('workspace:toast.executionPendingApproval'));
+      refreshWorkspace();
+      return;
+    }
     if (res.error) return showToast(res.error);
     refreshWorkspace();
-  }, [refreshWorkspace, showToast, confirm]);
+  }, [refreshWorkspace, showToast, confirm, t]);
 
-  const stopTask = useCallback(async (unitId: number | null) => {
+  const stopTask = useCallback(async (unitId: number | null, taskId: number) => {
     if (!unitId) return;
-    await api(`/units/${unitId}/stop`, { method: 'POST' });
+    await api(`/units/${unitId}/stop`, { method: 'POST', body: JSON.stringify({ taskId }) });
     refreshWorkspace();
   }, [refreshWorkspace]);
 
@@ -763,6 +813,15 @@ function WorkspaceInner() {
       tasks={tasks}
       openTask={openTask}
       openProjectTasks={openProjectTasks}
+      onCreateTask={() => openTaskForm({ mode: 'create', projectId: currentProjectId })}
+      onOpenTaskWindow={(taskId, title, terminal) => {
+        selectTaskTerminal(taskId, terminal);
+        openTask(taskId, title);
+      }}
+      onOpenTaskBrowser={(taskId, title, browser) => {
+        addBrowserToTaskLayout(taskId, browser.serverName, browser.groupId);
+        openTask(taskId, title);
+      }}
       projectServers={projectServers}
       selectedFileServer={selectedFileServer}
       onSelectFileServer={setSelectedFileServer}
@@ -770,6 +829,9 @@ function WorkspaceInner() {
       onSelectRepo={handleSelectRepo}
       connectPane={connectPane}
       onOpenAddWindow={addWindowModal.openAddWindow}
+      onOpenQuickAdd={addWindowModal.openQuickAddWindow}
+      agentDefsLoading={addWindowModal.agentPresetsLoading}
+      agentDefsError={addWindowModal.agentPresetsError}
       showWindowContextMenu={windowActions.showWindowContextMenu}
       onSwitchSidebarMode={handleSwitchSidebarMode}
       onFileSelect={handleFileSelect}
@@ -777,11 +839,19 @@ function WorkspaceInner() {
       mobile={mobile}
       onCloseMobileSidebar={() => setSidebarOpen(false)}
       tabs={tabs}
-      closeTab={closeTab}
+      closeTab={closeTabPaneAware}
       connectPaneRaw={connectPaneRaw}
       openServer={openServer}
       openBrowser={openBrowser}
       browserGroups={browserGroups}
+      browserErrors={browserErrors}
+      refreshBrowserGroups={refreshBrowserGroups}
+      browserGroupsLoaded={browserGroupsLoaded}
+      browserCapableServerNames={browserCapableServers}
+      showContextMenu={showContextMenu}
+      showContextMenuAt={showContextMenuAt}
+      onCapturePanes={windowActions.handleCapturePanes}
+      onStopOperation={stopTask}
       openStorageFileRaw={openStorageFileRaw}
       projectSettings={sidebarProjectSettings}
       onOpenDiff={openDiff}
@@ -837,6 +907,20 @@ function WorkspaceInner() {
         servers={servers}
         projectServers={addWindowModal.awEffectiveProjectServers ?? projectServers}
         project={addWindowModal.awEffectiveProject ?? project}
+      />
+      <QuickAddWindowModal
+        open={addWindowModal.awQuickAddOpen}
+        onClose={() => addWindowModal.closeQuickAddWindow()}
+        loading={addWindowModal.addWindowLoading || addWindowModal.awQuickAddLoading}
+        onSubmit={() => addWindowModal.handleAddWindow()}
+        serverName={addWindowModal.awServer}
+        agentLabel={addWindowModal.awQuickAddAgent === 'terminal' ? t('common:labels.terminal') : (addWindowModal.agentPresets[addWindowModal.awQuickAddAgent]?.label ?? addWindowModal.awQuickAddAgent)}
+        showModel={addWindowModal.awAgent !== 'none' && addWindowModal.awWorkerModels.length > 0}
+        workDir={addWindowModal.awWorkDir}
+        onWorkDirChange={addWindowModal.setAwWorkDir}
+        agentModel={addWindowModal.awAgentModel}
+        onAgentModelChange={addWindowModal.setAwAgentModel}
+        workerModels={addWindowModal.awWorkerModels}
       />
       <ResourceWarningDialog
         open={addWindowModal.awResourceWarning !== null}
@@ -910,7 +994,7 @@ function WorkspaceInner() {
               tabs={tabs.map(buildTabItem)}
               activeId={activeTabId}
               onSelect={handleSelectTab}
-              onClose={closeTab}
+              onClose={closeTabAndRefreshBrowser}
               onReorder={reorderTab}
               draggable
               onTabContextMenu={windowActions.handleTabContextMenu}
@@ -924,7 +1008,7 @@ function WorkspaceInner() {
                 </div>
               )}
 
-              {tabs.map((tab) => renderTabContent(tab, { position: 'absolute', inset: 0 }, tab.id === activeTabId, closeTab))}
+              {tabs.map((tab) => renderTabContent(tab, { position: 'absolute', inset: 0 }, tab.id === activeTabId, closeTabAndRefreshBrowser))}
             </div>
           </>
         ) : (
@@ -1032,6 +1116,7 @@ function WorkspaceInner() {
           updateBrowserActiveTab={updateBrowserActiveTab}
           openFile={openFile}
           setTabDirty={setTabDirty}
+          refreshBrowserGroups={refreshBrowserGroups}
         />
       </div>
     );

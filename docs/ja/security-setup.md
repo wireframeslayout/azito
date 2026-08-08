@@ -13,7 +13,7 @@
 
 | 変更点 | 影響 | 必要な対応 |
 |---|---|---|
-| API / WebSocket に認証が必須 | 未認証リクエストは 401、WS は `close(1008)` | `AZITO_UI_TOKEN` は自動生成される。`azito token show` で確認し、ブラウザ初回アクセス時に入力。固定したい場合は env に設定 |
+| API / WebSocket に認証が必須 | 未認証リクエストは 401、WS は `close(1008)` | `AZITO_UI_TOKEN` は自動生成される。`azito token show`（リリース版のみ）で確認し、ブラウザ初回アクセス時に入力。固定したい場合は env に設定 |
 | bind アドレスが `127.0.0.1` 既定 | LAN / Tailscale からアクセスできない | 必要なら `AZITO_BIND` を設定 |
 | CORS が許可オリジン限定 | 未登録オリジンからのブラウザアクセスが失敗 | 必要なら `AZITO_ALLOWED_ORIGINS` を設定 |
 | MinIO の資格情報が必須 | `docker compose up` が失敗 | ルートの `.env` に資格情報を設定 |
@@ -38,14 +38,20 @@
 
 | 変数 | 必須 | 既定値 | 説明 |
 |---|---|---|---|
-| `AZITO_UI_TOKEN` | 任意 | `$AZITO_DATA_DIR/ui-token` を自動生成 | API / WebSocket 認証用トークン。env → ファイル → 自動生成の順で解決。`azito token show` で確認、`azito token rotate` でローテーション可能 |
+| `AZITO_UI_TOKEN` | 任意 | `$AZITO_DATA_DIR/ui-token` を自動生成 | API / WebSocket 認証用トークン。env → ファイル → 自動生成の順で解決。`azito token show`（リリース版）で確認、`azito token rotate` でローテーション可能。ソース版では `packages/server/.env` または `data/ui-token` を直接参照。`azito token rotate` 実行時は `~/.azito/azitoctl*.env` の `AZITO_UI_TOKEN` も自動更新される |
 | `AZITO_DATA_DIR` | 任意 | リポジトリルート直下（`data.db`, `data/*`） | 永続データディレクトリ。設定すると `data.db`, `master.key`, `vapid-keys.json`, `ui-token`, `browser-profile/`, `sidekicks/` がこのディレクトリ配下に統合される（mode 700）。バージョンディレクトリ方式での運用時に必須 |
 | `AZITO_BIND` | 任意 | `127.0.0.1` | 待ち受けアドレス。`0.0.0.0` と `::` は明示的に拒否される。リモートアクセス時は Tailscale IP を指定 |
 | `AZITO_ALLOWED_ORIGINS` | 任意 | `http://localhost:5173,http://localhost:3001` | CORS と WebSocket の Origin 検証で許可するオリジン（カンマ区切り） |
 | `AZITO_WEBHOOK_TOKEN` | 任意 | 起動ごとにランダム生成 | hook / agent-signal / supervisor 用の共有トークン。固定したい場合に設定 |
 | `AZITO_MASTER_KEY` | 任意 | `$AZITO_DATA_DIR/master.key` を自動生成 | DB の秘密カラム暗号化キー（hex 64文字）。環境変数を優先 |
 | `AZITO_SIDEKICKS_DIR` | 任意 | `$AZITO_DATA_DIR/sidekicks` | ユーザー層 Sidekick パッケージの格納先。`AZITO_DATA_DIR` 設定時はその配下の `sidekicks/` がデフォルト |
-| `AZITO_VAPID_SUBJECT` | 任意 | なし | プッシュ通知の VAPID subject |
+| `AZITO_VAPID_SUBJECT` | 任意 | `mailto:admin@example.com` | プッシュ通知の VAPID subject |
+| `AZITO_PUBLIC_URL` | 任意 | なし | supervisor・リモート Agent がハブへ到達するための URL。`tailscale serve` 利用時は `https://<MagicDNS>` を設定 |
+| `AZITO_MUX_RUNTIME` | 任意 | `system` | サーバーの tmux 実行系統（`system` / `managed`） |
+| `AZITO_UNIT_TYPES_DIR` | 任意 | `data/unit-types` | ユーザー層 UnitType TOML 定義の読み込みディレクトリ（ビルトイン層 `harness/unit-types/` は常に読まれる） |
+| `AZITO_HARNESS_PREFIX` | 任意 | なし | UI 経由の harness リモート配置で `~/.azito/harness-<prefix>` のように識別子として付加される |
+| `AZITO_RELEASE_REPO` | 任意 | `wireframeslayout/azito` | 更新チェック・ダウンロードに使う GitHub リポジトリ |
+| `AZITO_GITHUB_TOKEN` | 任意 | なし | GitHub API レート制限を回避するための PAT（更新チェック時に使用） |
 | `PORT` | 任意 | `3001` | サーバーのポート |
 
 ### ルートの `.env`
@@ -81,7 +87,7 @@ npm ci
 
 ### Step 2. サーバーの環境変数を設定する
 
-> `AZITO_UI_TOKEN` を設定しなくても、初回起動時に自動生成されます（`azito token show` で確認可能）。固定トークンを使いたい場合のみ以下の手順で設定してください。
+> `AZITO_UI_TOKEN` を設定しなくても、初回起動時に自動生成されます（リリース版: `azito token show`、ソース版: `packages/server/.env` または `data/ui-token`）。固定トークンを使いたい場合のみ以下の手順で設定してください。
 
 ```bash
 openssl rand -hex 32   # 出力をコピー
@@ -257,7 +263,7 @@ npm ci
 
 ### 2. サーバーの環境変数を作成する
 
-> `AZITO_UI_TOKEN` を設定しなくても、初回起動時に自動生成されます（`azito token show` で確認可能）。固定トークンを使いたい場合のみ以下で設定してください。
+> `AZITO_UI_TOKEN` を設定しなくても、初回起動時に自動生成されます（リリース版: `azito token show`、ソース版: `packages/server/.env` または `data/ui-token`）。固定トークンを使いたい場合のみ以下で設定してください。
 
 ```bash
 cat > packages/server/.env <<EOF
@@ -412,7 +418,7 @@ systemctl --user start azito
 
 | 症状 | 原因 | 対処 |
 |---|---|---|
-| UI トークンが分からない | 自動生成されたトークンの確認方法 | `azito token show` で表示。TTY 起動時は初回生成時に端末に表示される |
+| UI トークンが分からない | 自動生成されたトークンの確認方法 | リリース版: `azito token show`。ソース版: `grep AZITO_UI_TOKEN packages/server/.env` または `cat data/ui-token` |
 | `AZITO_BIND must not be 0.0.0.0 or ::` で落ちる | 全インターフェース bind は明示的に禁止 | `127.0.0.1` か Tailscale IP を指定 |
 | ブラウザからアクセスできない（接続拒否） | `127.0.0.1` のみで待ち受けている | `AZITO_BIND` に Tailscale IP を設定して再起動 |
 | UI が API 401 のままループする | 入力トークンがサーバーの値と不一致 | `packages/server/.env` の値を確認。ブラウザのセッションを閉じて再入力 |

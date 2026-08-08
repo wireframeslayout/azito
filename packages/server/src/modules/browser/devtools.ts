@@ -128,7 +128,7 @@ const devtoolsRoutes: FastifyPluginCallback<DevtoolsRouteOptions> = (fastify, op
       const rev = await getDevtoolsRev(srv ?? null);
 
       const inspectorUrl = `/devtools-fe/@${rev}/devtools_app.html?${proto}=${encodeURIComponent(wsPath)}`;
-      return reply.redirect(inspectorUrl);
+      return reply.send({ inspectorUrl });
     } catch (err: unknown) {
       return reply.status(500).send({ error: (err as Error).message });
     }

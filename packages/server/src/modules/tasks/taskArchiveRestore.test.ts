@@ -34,6 +34,11 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     summaryJson: null,
     prUrl: null,
     agentSessionId: null,
+    inputTrust: 'trusted',
+    executionApprovedFingerprintHash: null,
+    pendingOperation: null,
+    pendingOperationWindowId: null,
+    pendingOperationPriorStatus: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -56,6 +61,9 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
       updateCurrentPhase: vi.fn(),
       touch: vi.fn(),
       delete: vi.fn(),
+      consumePendingApproval: vi.fn(() => false),
+      recordExecutionGateBlock: vi.fn(() => true),
+      preApproveExecution: vi.fn(() => true),
     },
     projectRepo: {
       findAll: vi.fn(() => []),
@@ -68,9 +76,9 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
       removeRepository: vi.fn(),
     },
     projectServerRepo: {
-      findByProject: vi.fn(() => [{ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito' }]),
+      findByProject: vi.fn(() => [{ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const }]),
       findByServer: vi.fn(() => []),
-      find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito' })),
+      find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const })),
       upsert: vi.fn(),
       remove: vi.fn(),
     },
@@ -121,6 +129,7 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
       getTransport: vi.fn(() => ({})),
     } as unknown as TasksRouteOptions['transportFactory'],
     windowRepo: {
+      findByTaskIds: vi.fn(() => new Map()),
       add: vi.fn(() => 100),
       findAll: vi.fn(() => []),
       findById: vi.fn(() => undefined),
@@ -141,7 +150,8 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
       restore: vi.fn(async () => ({ tmuxTarget: 'azito:task-1.1', worktreePath: '/work/.worktrees/task-1' })),
     } as unknown as TasksRouteOptions['taskRestoreService'],
     unitTypeLoader: { getOrThrow: vi.fn(() => ({ name: 'devops', label: 'DevOps', description: '', phases: [] })) } as unknown as TasksRouteOptions['unitTypeLoader'],
-    supervisorRegistry: {} as any,
+    sidekickLoader: { get: vi.fn(() => undefined) } as unknown as TasksRouteOptions['sidekickLoader'],
+    projectSecretRepo: { findByProject: vi.fn(() => []) } as unknown as TasksRouteOptions['projectSecretRepo'],
   };
 }
 
@@ -183,6 +193,77 @@ describe('POST /api/tasks/:id/archive', () => {
     const res = await app.inject({ method: 'POST', url: '/api/tasks/999/archive' });
 
     expect(res.statusCode).toBe(404);
+  });
+
+  // Issue #328: archiving a `pending_approval` task used to overwrite
+  // `status` to 'archived' while leaving `pendingOperation` set — the same
+  // "changes status without consuming the pending approval" bug PUT
+  // /api/tasks/:id's pending_approval guard already closed for arbitrary
+  // status edits. That left the task un-approvable (GET
+  // .../execution-approval 404s once status isn't 'pending_approval') AND
+  // un-restorable (checkExecutionGate still blocks on the leftover
+  // pendingOperation) — permanently stuck. The fix consumes the pending
+  // approval as a denial (landing on 'archived', not denial's usual
+  // 'failed') atomically before archiving, via the SAME denyPendingApproval()
+  // path POST /api/tasks/:id/approve-execution's denial branch uses.
+  it('consumes a pending approval as a denial before archiving a task stuck in pending_approval (Issue #328)', async () => {
+    const opts = makeOpts({
+      status: 'pending_approval',
+      pendingOperation: 'execute',
+      pendingOperationWindowId: null,
+      pendingOperationPriorStatus: 'open',
+    });
+    // Stateful consumePendingApproval mock (mirrors executionApprovalRoute.
+    // test.ts's makeStatefulOpts pattern) — the base fixture's `vi.fn(() =>
+    // false)` would make this test indistinguishable from "the approval was
+    // never consumed", which is exactly the bug this test guards against.
+    const task = opts.taskRepo.findById(1) as Task;
+    opts.taskRepo.consumePendingApproval = vi.fn((id: number, fields: { status?: Task['status']; executionApprovedFingerprintHash?: string }) => {
+      if (id !== 1 || task.status !== 'pending_approval' || task.pendingOperation === null) return false;
+      Object.assign(task, {
+        ...(fields.status !== undefined ? { status: fields.status } : {}),
+        ...(fields.executionApprovedFingerprintHash !== undefined ? { executionApprovedFingerprintHash: fields.executionApprovedFingerprintHash } : {}),
+        pendingOperation: null,
+        pendingOperationWindowId: null,
+        pendingOperationPriorStatus: null,
+      });
+      return true;
+    });
+
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/archive' });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.payload)).toEqual({ ok: true });
+    expect(opts.taskRepo.consumePendingApproval).toHaveBeenCalledWith(1, { status: 'archived' });
+    expect(opts.logRepo.append).toHaveBeenCalledWith(1, 20, 'status_change', { status: 'archived', reason: 'execution_denied' });
+    // Not left stuck: pendingOperation is cleared and status actually landed
+    // on 'archived' — neither the un-approvable nor un-restorable dead end
+    // the pre-fix code left behind.
+    expect(task.pendingOperation).toBeNull();
+    expect(task.status).toBe('archived');
+  });
+
+  it('returns 409 without archiving when the pending approval was already resolved by a concurrent request', async () => {
+    const opts = makeOpts({
+      status: 'pending_approval',
+      pendingOperation: 'execute',
+      pendingOperationWindowId: null,
+      pendingOperationPriorStatus: 'open',
+    });
+    opts.taskRepo.consumePendingApproval = vi.fn(() => false);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/archive' });
+
+    expect(res.statusCode).toBe(409);
+    expect(opts.executeTaskUseCase.stopByTaskId).not.toHaveBeenCalled();
+    expect(opts.taskRepo.update).not.toHaveBeenCalled();
   });
 });
 

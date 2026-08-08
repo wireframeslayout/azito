@@ -90,7 +90,7 @@ export default function ProjectSidebar() {
   const currentProjectId = wsMatch
     ? parseInt(wsMatch.id, 10)
     : storedProjectId ? parseInt(storedProjectId, 10) : null;
-  const { projects: visibleProjects, hasMore } = rail.getVisibleProjects(projects);
+  const visibleProjects = rail.getVisibleProjects(projects);
   // 並べ替えの基準は常に完全な pinned 配列（rail.pinnedIds）を使う。visibleProjects はレール表示用に
   // 上位6件へ切り詰められているため、これを基準にすると7件目以降のピンで並べ替えが壊れる。
   const { pinnedIds } = rail;
@@ -407,33 +407,34 @@ export default function ProjectSidebar() {
             </button>
           );
         })}
-        {hasMore && (
-          <button
-            ref={moreButtonRef}
-            onClick={() => setSearchOpen(true)}
-            title={t('sidebar.moreProjects')}
-            style={{
-              width: 36,
-              height: 36,
-              borderRadius: 'var(--radius-md)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              background: 'transparent',
-              color: 'var(--text-dim)',
-              border: '1px dashed var(--border)',
-              fontSize: 'var(--font-xl)',
-              cursor: 'pointer',
-              flexShrink: 0,
-              marginBottom: 8,
-              transition: 'border-color 0.15s ease, color 0.15s ease',
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.color = 'var(--accent)'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text-dim)'; }}
-          >
-            <Icon name="more" size={16} />
-          </button>
-        )}
+        <button
+          ref={moreButtonRef}
+          onClick={() => setSearchOpen((v) => !v)}
+          aria-haspopup="dialog"
+          aria-expanded={searchOpen}
+          aria-label={t('sidebar.projectMenu')}
+          title={t('sidebar.projectMenu')}
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: 'var(--radius-md)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'transparent',
+            color: 'var(--text-dim)',
+            border: '1px dashed var(--border)',
+            fontSize: 'var(--font-xl)',
+            cursor: 'pointer',
+            flexShrink: 0,
+            marginBottom: 8,
+            transition: 'border-color 0.15s ease, color 0.15s ease',
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.color = 'var(--accent)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text-dim)'; }}
+        >
+          <Icon name="more" size={16} />
+        </button>
       </div>
 
       <ProjectSearchPopover

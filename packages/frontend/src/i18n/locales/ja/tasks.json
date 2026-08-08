@@ -33,10 +33,47 @@
     "submitAnswers": "回答を送信",
     "submitting": "送信中..."
   },
+  "executionApproval": {
+    "regionLabel": "実行承認が必要です",
+    "title": "実行承認が必要です",
+    "whyRequired": "このタスクの内容は外部（GitHub/GitLab のイシュー）から取り込まれたものです。エージェントがこのプロジェクトのサーバーとシークレットにアクセスして無人で実行される前に、以下の内容を確認してください。",
+    "loading": "承認内容を読み込み中...",
+    "loadError": "承認内容の読み込みに失敗しました。もう一度お試しください。",
+    "untrustedContentLabel": "未信頼の外部コンテンツ（プレーンテキスト表示・レンダリングされません）",
+    "noDescription": "（説明なし）",
+    "contextLabel": "実行される内容",
+    "fields": {
+      "unit": "Unit",
+      "server": "サーバー",
+      "workingDirectory": "作業ディレクトリ",
+      "branches": "ブランチ",
+      "phases": "フェーズ",
+      "repository": "PR 宛先",
+      "secrets": "渡されるシークレット"
+    },
+    "branchesValue": "base: {{base}} → work: {{work}} → target: {{target}}",
+    "unresolved": "（未解決）",
+    "noRepository": "（リポジトリ未設定）",
+    "noSecrets": "（なし）",
+    "reapprovalNote": "承認後にこのタスクのタイトルまたは本文を編集すると、再承認が必要になります。",
+    "approve": "承認",
+    "deny": "拒否",
+    "approving": "承認中...",
+    "denying": "拒否中...",
+    "contentChanged": "この画面を開いた後にタスクの内容が変更されました。下記の最新内容を確認してから、あらためて承認してください。"
+  },
   "sidebar": {
     "title": "タスク",
     "noRecentTasks": "最近のタスクはありません",
-    "allTasks": "すべてのタスク"
+    "allTasks": "すべてのタスク",
+    "searchPlaceholder": "タスクを検索…",
+    "newTask": "新規タスク",
+    "groupRunning": "稼働中",
+    "groupFinished": "作業完了",
+    "groupRecent": "最近",
+    "noSearchResults": "一致するタスクがありません",
+    "noTasks": "タスクはまだありません",
+    "browserTabs": "{{count}}タブ"
   },
   "contextMenu": {
     "showView": "{{view}} を表示",
@@ -53,7 +90,20 @@
     "importFromGitHub": "GitHubからインポート",
     "source": "ソース: {{ref}}",
     "titleRequired": "タイトルは必須です",
-    "serverRequired": "サーバーは必須です: このプロジェクトには複数のサーバーがあるため、実行サーバーを指定してください"
+    "serverRequired": "サーバーは必須です: このプロジェクトには複数のサーバーがあるため、実行サーバーを指定してください",
+    "createTaskApproved": "タスクを作成（実行承認を伴う）"
+  },
+  "untrustedImport": {
+    "bannerTitle": "未信頼の外部コンテンツ",
+    "bannerBody": "以下のタイトル・説明は外部の GitHub/GitLab イシューから取り込まれたものです。上のボタンで作成すると、この確認が実行承認として記録され、初回実行時に承認画面を経由せず実行されます。作成前に、内容と下記の実行条件を確認してください。",
+    "contextLabel": "実行される条件",
+    "workingDirectoryDefault": "（未設定 — サーバーの既定の作業ディレクトリが適用されます）",
+    "secretsLoadError": "このプロジェクトのシークレット名の取得に失敗しました。",
+    "secretsRetry": "再試行",
+    "secretsUnavailableNote": "承認には、エージェントに渡されるシークレットを正確に確認する必要があります。上で再試行するか、下のボタンで通常のタスクとして作成してください（その場合、初回実行前にタスクの承認パネルから承認が必要になります）。",
+    "preApprovedToast": "タスクを作成し、実行を承認済みにしました。初回実行時に承認画面は表示されません。",
+    "preApprovalFailedToast": "タスクは作成されましたが、自動承認に失敗しました: {{error}}。実行前に、タスクの承認パネルから承認してください。",
+    "contentMismatchToast": "タスクは作成されましたが、実際に実行される内容が上記表示と異なっていました（{{fields}}）。タスクの承認パネルで最新内容を確認してから承認してください。"
   },
   "fields": {
     "project": "プロジェクト",

@@ -8,6 +8,7 @@ import type { FastifyInstance } from 'fastify';
 import { getPushMessage } from '../modules/notifications/push/pushCatalog';
 import websocket from '@fastify/websocket';
 import multipart from '@fastify/multipart';
+import compress from '@fastify/compress';
 import fastifyStatic from '@fastify/static';
 import cors from '@fastify/cors';
 import crypto from 'crypto';
@@ -26,6 +27,7 @@ import tasksRoutes from '../modules/tasks/routes';
 import providersRoutes from '../modules/agents/routes';
 import phasePromptsRoutes from '../modules/prompt/routes';
 import storageRoutes, { fileBrowseRoutes } from '../modules/files/routes';
+import { FileSearchService } from '../modules/files/FileSearchService';
 import notificationRoutes from '../modules/notifications/routes';
 import usageRoutes from '../modules/usage/routes';
 import webhookRoutes from '../modules/notifications/webhooks';
@@ -99,6 +101,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     codex_error:       'task.codexError',
     waiting_for_human: 'task.waitingForHuman',
     phase_review:      'task.phaseReview',
+    pending_approval:  'task.pendingApproval',
   };
 
   executeTaskUseCase.events.on('log', (entry: { taskId: number; type: string; content: { status?: string } }) => {
@@ -191,6 +194,10 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   await app.register(cors, { origin: allowedOrigins, credentials: false });
   await app.register(websocket);
   await app.register(multipart, { limits: { fileSize: 52_428_800 } });
+  // Responses are served over Tailscale, often from mobile networks where the
+  // task list's size dominates every other cost. `threshold` keeps the small,
+  // frequent responses (health, sessions) from paying compression overhead.
+  await app.register(compress, { global: true, threshold: 1024, encodings: ['gzip', 'deflate'] });
 
   app.addHook('onRequest', async (request, reply) => {
     if (!request.url.startsWith('/api')) return;
@@ -208,12 +215,13 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
 
   await app.register(serversRoutes, { serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix });
   await app.register(sessionsRoutes, { serverRepo, tmux: tmuxClient, windowRepo, notificationBus, resourceGuard });
-  await app.register(fileBrowseRoutes, { serverRepo, tmux: tmuxClient });
-  await app.register(gitRoutes, { serverRepo, transportFactory });
+  const fileSearchService = new FileSearchService(transportFactory);
+  await app.register(fileBrowseRoutes, { serverRepo, tmux: tmuxClient, projectServerRepo, transportFactory, searchService: fileSearchService });
+  await app.register(gitRoutes, { serverRepo, transportFactory, taskRepo, projectServerRepo, worktreeServiceFactory });
   await app.register(projectsRoutes, { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux: tmuxClient, serverRepo, projectSecretRepo });
-  await app.register(unitsRoutes, { unitRepo, taskRepo, logRepo, executeTaskUseCase, sidekickLoader: sidekickPackageLoader, unitTypeLoader });
+  await app.register(unitsRoutes, { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, projectServerRepo, serverRepo, sidekickLoader: sidekickPackageLoader, unitTypeLoader });
   await app.register(operationsRoutes, { executeTaskUseCase, agentActivityMonitor });
-  await app.register(tasksRoutes, { taskRepo, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux: tmuxClient, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService: windowRespawnService, taskRestoreService, supervisorRegistry, unitTypeLoader });
+  await app.register(tasksRoutes, { taskRepo, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux: tmuxClient, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService: windowRespawnService, taskRestoreService, unitTypeLoader, sidekickLoader: sidekickPackageLoader, projectSecretRepo });
   await app.register(windowsRoutes, { windowRepo, projectRepo, taskRepo, tmux: tmuxClient, serverRepo, respawnService: windowRespawnService, sessionStrategyFactory, sessionCaptureService, supervisorRegistry, notificationBus, resourceGuard });
   await app.register(providersRoutes, { providerRepo: wiring.providerRepo });
   const renderSkillPromptUseCase = new RenderSkillPromptUseCase(

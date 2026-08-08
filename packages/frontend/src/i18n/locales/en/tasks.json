@@ -33,10 +33,47 @@
     "submitAnswers": "Submit Answers",
     "submitting": "Submitting..."
   },
+  "executionApproval": {
+    "regionLabel": "Execution approval required",
+    "title": "Execution approval required",
+    "whyRequired": "This task's content was imported from an external source (a GitHub/GitLab issue). Review it below before an agent runs unattended with access to this project's server and secrets.",
+    "loading": "Loading approval details...",
+    "loadError": "Failed to load approval details. Please try again.",
+    "untrustedContentLabel": "Untrusted external content (plain text, not rendered)",
+    "noDescription": "(no description)",
+    "contextLabel": "What will run",
+    "fields": {
+      "unit": "Unit",
+      "server": "Server",
+      "workingDirectory": "Working directory",
+      "branches": "Branches",
+      "phases": "Phases",
+      "repository": "PR destination",
+      "secrets": "Secrets injected"
+    },
+    "branchesValue": "base: {{base}} → work: {{work}} → target: {{target}}",
+    "unresolved": "(unresolved)",
+    "noRepository": "(no repository configured)",
+    "noSecrets": "(none)",
+    "reapprovalNote": "Editing this task's title or description after approval will require re-approval.",
+    "approve": "Approve",
+    "deny": "Deny",
+    "approving": "Approving...",
+    "denying": "Denying...",
+    "contentChanged": "This task's content changed since you loaded this screen. Please review the updated details below before approving again."
+  },
   "sidebar": {
     "title": "Tasks",
     "noRecentTasks": "No recent tasks",
-    "allTasks": "All Tasks"
+    "allTasks": "All Tasks",
+    "searchPlaceholder": "Search tasks…",
+    "newTask": "New task",
+    "groupRunning": "Running",
+    "groupFinished": "Finished",
+    "groupRecent": "Recent",
+    "noSearchResults": "No matching tasks",
+    "noTasks": "No tasks yet",
+    "browserTabs": "{{count}} tab(s)"
   },
   "contextMenu": {
     "showView": "Show {{view}}",
@@ -53,7 +90,20 @@
     "importFromGitHub": "Import from GitHub",
     "source": "Source: {{ref}}",
     "titleRequired": "Title is required",
-    "serverRequired": "Server is required: this project has multiple servers, so the execution server cannot be inferred"
+    "serverRequired": "Server is required: this project has multiple servers, so the execution server cannot be inferred",
+    "createTaskApproved": "Create Task (approves execution)"
+  },
+  "untrustedImport": {
+    "bannerTitle": "Untrusted external content",
+    "bannerBody": "This task's title and description below come from an external GitHub/GitLab issue. Creating it with the button above records your review as execution approval — the task will run its first phase without a separate approval screen. Review the content and the execution context below before creating.",
+    "contextLabel": "Will run with",
+    "workingDirectoryDefault": "(not set — server will apply this server's default working directory)",
+    "secretsLoadError": "Failed to load this project's secret names.",
+    "secretsRetry": "Retry",
+    "secretsUnavailableNote": "Approval requires seeing exactly which secrets will be shared with the agent. Retry above, or create the task normally below — it will require approval from the task's approval panel before its first run.",
+    "preApprovedToast": "Task created and execution pre-approved — no approval screen needed on first run.",
+    "preApprovalFailedToast": "Task created, but automatic approval failed: {{error}}. Approve it from the task's approval panel before running.",
+    "contentMismatchToast": "Task created, but what will actually run differs from what was shown above ({{fields}}). Review the updated details in the task's approval panel before approving."
   },
   "fields": {
     "project": "Project",

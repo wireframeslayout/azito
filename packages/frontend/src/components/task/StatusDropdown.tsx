@@ -1,9 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-const RUNNING_STATUSES = new Set([
+// タスクが「実行中」（何らかの形で走っている/一時停止中で継続の見込みがある）とみなす status 集合。
+// フェーズ実行中の主状態は 'running'、follow-up 中断時は 'in_progress'、計画承認待ち/質問回答待ちは
+// 'phase_review'/'waiting_input'。他の実行中判定（例: オペレーション停止メニューの表示条件）でも
+// この集合を再利用する。
+export const RUNNING_STATUSES = new Set([
   'running', 'in_progress', 'phase_review', 'waiting_input',
 ]);
+
+// 'pending_approval' is locked the same way — never a MANUAL_OPTIONS target
+// and never selectable while current (see isDisabled below). Manually
+// overwriting status away from pending_approval would leave the task's
+// pendingOperation/executionApprovedFingerprintHash bookkeeping stuck
+// mid-gate without ever consuming the approval decision (Issue #51) — the
+// only valid way out is POST /api/tasks/:id/approve-execution (the
+// dedicated approval panel), which atomically clears that state.
+const LOCKED_STATUSES = new Set(['archived', 'pending_approval']);
 
 const MANUAL_OPTIONS = ['open', 'done'] as const;
 
@@ -11,6 +24,7 @@ const badgeColors: Record<string, { bg: string; color: string }> = {
   open: { bg: 'var(--accent-a15)', color: 'var(--accent)' },
   running: { bg: 'var(--warning-a15)', color: 'var(--warning)' },
   phase_review: { bg: 'var(--accent-a15)', color: 'var(--accent)' },
+  pending_approval: { bg: 'var(--danger-a15)', color: 'var(--danger)' },
   review: { bg: 'var(--accent-a15)', color: 'var(--accent)' },
   waiting_input: { bg: 'var(--accent-a15)', color: 'var(--accent)' },
   in_progress: { bg: 'var(--warning-a15)', color: 'var(--warning)' },
@@ -22,6 +36,7 @@ const badgeColors: Record<string, { bg: string; color: string }> = {
 const STATUS_KEY_MAP: Record<string, string> = {
   waiting_input: 'waitingInput',
   phase_review: 'phaseReview',
+  pending_approval: 'pendingApproval',
   in_progress: 'inProgress',
 };
 
@@ -41,7 +56,7 @@ export default function StatusDropdown({ status, onChange, disabled }: StatusDro
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const isRunning = RUNNING_STATUSES.has(status);
-  const isDisabled = disabled || isRunning || status === 'archived';
+  const isDisabled = disabled || isRunning || LOCKED_STATUSES.has(status);
 
   const handleToggle = useCallback(() => {
     if (!isDisabled) setOpen((v) => !v);

@@ -1,14 +1,20 @@
 import type { FastifyPluginCallback } from 'fastify';
 import type { IUnitRepository, SubagentConfig, WorkerExecutionMode, WorkerRuntime } from './Unit';
-import type { ITaskRepository } from '../tasks/Task';
+import type { ITaskRepository, Task } from '../tasks/Task';
 import type { TaskStatus } from '../tasks/TaskStatus';
 import type { IExecutionLogRepository } from '../tasks/ExecutionLog';
 import type { ExecuteTaskUseCase } from '../tasks/execution/ExecuteTaskUseCase';
+import type { IProjectRepository } from '../projects/Project';
+import type { IProjectServerRepository } from '../projects/ProjectServer';
+import type { IServerRepository } from '../servers/Server';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { PhaseConfig, PhaseEntryConfig } from '../sidekicks/PhaseConfig';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import { resolvePhaseSidekick } from '../sidekicks/resolvePhaseSidekick';
 import { ResourceExhaustedError } from '../servers/resources/ResourceGuard';
+import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
+import { resolveTaskServerName } from '../tasks/execution/TaskExecutionEnv';
+import { failAsyncTaskOperation } from '../tasks/execution/AppendLog';
 
 // ─── Types ───
 
@@ -17,6 +23,9 @@ export interface UnitsRouteOptions {
   taskRepo: ITaskRepository;
   logRepo: IExecutionLogRepository;
   executeTaskUseCase: ExecuteTaskUseCase;
+  projectRepo: IProjectRepository;
+  projectServerRepo: IProjectServerRepository;
+  serverRepo: IServerRepository;
   sidekickLoader: SidekickPackageLoader;
   unitTypeLoader: UnitTypeLoader;
 }
@@ -80,7 +89,7 @@ function parseWorkerRuntimeInput(raw: unknown): WorkerRuntime | undefined {
 // ─── Plugin ───
 
 const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, done) => {
-  const { unitRepo, taskRepo, logRepo, executeTaskUseCase, sidekickLoader, unitTypeLoader } = opts;
+  const { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, projectServerRepo, serverRepo, sidekickLoader, unitTypeLoader } = opts;
 
   // ── GET /api/units ──
   fastify.get('/api/units', async () => {
@@ -237,6 +246,7 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
       } catch (err: unknown) {
         if (err instanceof ResourceExhaustedError)
           return reply.status(409).send({ error: 'insufficient_resources', resources: err.status });
+        if (replyToExecutionGateError(err, reply)) return;
         return reply.status(400).send({ error: (err as Error).message });
       }
     },
@@ -284,6 +294,7 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
         await executeTaskUseCase.followUp(id, taskId, finalComment);
         return { ok: true };
       } catch (err: unknown) {
+        if (replyToExecutionGateError(err, reply)) return;
         return reply.status(400).send({ error: (err as Error).message });
       }
     },
@@ -321,23 +332,76 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
         return reply.status(400).send({ error: 'Task is not in phase_review state' });
       }
 
+      // Both branches below that actually resume a worker (feedback-driven
+      // followUp / approved resumeStateMachine) need the resolved server for
+      // the untrusted-input execution gate (Issue #328) — resolved once here
+      // and gate-checked synchronously in each branch, BEFORE either mutates
+      // task.status/currentPhase or persists `feedback`. Previously those
+      // mutations ran first and the resume call was fire-and-forget with
+      // `.catch(() => {})`: a gate block silently discarded `feedback` (never
+      // persisted anywhere else) while leaving the task stuck in a status
+      // ('running'/'planning' or 'running'/'implementing') that no longer
+      // matched what actually happened (sixth-round review finding 1, same
+      // failure mode as /api/tasks/:id/answer).
+      //
+      // Gate checks below pass 'resume_await_plan_review', NOT plain
+      // 'resume' (seventh-round review symptom A): `feedback` is not
+      // persisted anywhere until AFTER the gate check passes, so a block here
+      // must not auto-resume via resumeStateMachine() on approval — that
+      // would restart the task without ever delivering the feedback the
+      // human just typed. The approval handler (approve-execution below)
+      // instead restores task.status to 'phase_review' and leaves it for the
+      // human to resubmit this same approve-plan call. See the transition
+      // table on Task.pendingOperation.
+      const resolvedServerName = resolveTaskServerName(task, projectServerRepo);
+      const server = resolvedServerName ? serverRepo.findByName(resolvedServerName) : null;
+      if (!server) return reply.status(404).send({ error: 'Server not found' });
+
+      // Delegates to failAsyncTaskOperation() (tasks/execution/AppendLog.ts)
+      // — the same shared helper approve-execution's failApprovedOperation
+      // and POST /api/tasks/:id/answer's follow-up catch use, so this
+      // failure ALSO emits on the shared events EventEmitter (not just
+      // logRepo.append()), and therefore reaches other connected clients as
+      // a `task:status` WS event / push notification instead of leaving
+      // them stuck showing `phase_review` forever.
+      const failResumedOperation = (op: string, err: unknown): void => {
+        failAsyncTaskOperation({ taskRepo, logRepo, events: executeTaskUseCase.events, log: request.log }, taskId, id, op, err, `approve-plan ${op} failed`);
+      };
+
       if (!approved) {
         // Rejected
         if (feedback) {
           // Send feedback and restart planning via followUp
+          try {
+            executeTaskUseCase.enforceExecutionGate(task, id, 'resume_await_plan_review');
+          } catch (err) {
+            if (replyToExecutionGateError(err, reply)) return;
+            throw err;
+          }
           logRepo.append(taskId, id, 'status_change', { status: 'plan_changes_requested', feedback });
           taskRepo.updateStatus(taskId, 'running');
           taskRepo.updateCurrentPhase(taskId, 'planning');
-          executeTaskUseCase.followUp(id, taskId, feedback).catch(() => {});
+          executeTaskUseCase.followUp(id, taskId, feedback).catch((err: unknown) => failResumedOperation('follow-up', err));
         } else {
-          // No feedback = full rejection
+          // No feedback = full rejection — no worker is resumed, so no gate check needed.
           logRepo.append(taskId, id, 'status_change', { status: 'plan_rejected' });
           taskRepo.updateStatus(taskId, 'failed' as TaskStatus);
         }
         return { ok: true };
       }
 
-      // Approved - resume execution from implementing phase
+      // Approved - resume execution from implementing phase. Same
+      // 'resume_await_plan_review' operation as the rejected-with-feedback
+      // branch above: an approved-with-feedback plan appends `feedback` to
+      // planMarkdown only AFTER this gate check passes (below), so a block
+      // here must not auto-resume either — see the comment above this
+      // handler and the transition table on Task.pendingOperation.
+      try {
+        executeTaskUseCase.enforceExecutionGate(task, id, 'resume_await_plan_review');
+      } catch (err) {
+        if (replyToExecutionGateError(err, reply)) return;
+        throw err;
+      }
       logRepo.append(taskId, id, 'status_change', { status: 'plan_approved', feedback: feedback || undefined });
       if (feedback) {
         const plan = task.planMarkdown || '';
@@ -345,10 +409,19 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
       }
       taskRepo.updateStatus(taskId, 'running');
       taskRepo.updateCurrentPhase(taskId, 'implementing');
-      executeTaskUseCase.resumeStateMachine(id, taskId).catch(() => {});
+      executeTaskUseCase.resumeStateMachine(id, taskId).catch((err: unknown) => failResumedOperation('resume', err));
       return { ok: true };
     },
   );
+
+  // POST /api/units/:id/approve-execution was removed (Issue #328 hardening
+  // follow-up): it approved the SAME untrusted-input execution gate as
+  // POST /api/tasks/:id/approve-execution (modules/tasks/routes.ts,
+  // decideExecutionApproval()) but never required the `fingerprint` the
+  // TOCTOU close (Issue #328 review fix 1) depends on — a second reachable
+  // path to the same approval that skipped the one check fix 1 exists for.
+  // Approval is task-scoped (matches the design: a human approves running
+  // a specific TASK, not a Unit) and now has exactly one entry point.
 
   // ── GET /api/units/:id/logs ──
   fastify.get<{ Params: { id: string } }>(

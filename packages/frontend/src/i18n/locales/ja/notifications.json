@@ -15,6 +15,7 @@
   "kinds": {
     "qa": "タスクが質問しています: {{title}}",
     "planApproval": "プラン承認待ち: {{title}}",
+    "executionApproval": "実行承認待ち: {{title}}",
     "taskDone": "タスク完了: {{title}}",
     "taskFailed": "タスク失敗: {{title}}",
     "agentFinished": "エージェント終了: {{label}}"

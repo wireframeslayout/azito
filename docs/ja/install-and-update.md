@@ -62,7 +62,7 @@ bash "$TMP/install.sh"; rm -rf "$TMP"
 
 | ソフトウェア | 必須度 | 用途 |
 |---|---|---|
-| tmux 3.4+ | **必須** | AZITO はホストの tmux セッションを操作する。`install.sh` が検出して導入を促す |
+| tmux | **必須** | AZITO はホストの tmux セッションを操作する。`install.sh` は tmux の有無を検出して導入を促す（バージョン検証はしない）。推奨 3.4 以上 |
 | git | **必須** | タスクごとの worktree 作成。同上 |
 | Node.js v24+ | 機能により必要 | ブラウザランタイム導入（`npx` を使う）、supervised ウィンドウ（`azs` が `node` で supervisor を起動）。**ハブの起動自体には不要** |
 | Tailscale | 任意 | 他端末からのアクセス、HTTPS 経由のプッシュ通知 |
@@ -248,6 +248,18 @@ SemVer 2.0 のプレリリース識別子に揃え、`-rc.N`（ドット区切�
 | 安定版への昇格 | 最後の rc と同一コミットに安定版タグを打つ |
 | GitHub 上の扱い | ハイフンを含むタグは pre-release として公開する |
 
+## Agent サーバーの自動更新
+
+Hub 起動時に、登録済みの Agent サーバーすべてのバージョンを自動で確認します。更新はコンテンツハッシュ（バンドルファイルの SHA256）で判定されます。
+
+| 状態 | 挙動 |
+|---|---|
+| ハッシュ不一致 | 自動で再配備（ビルド → SSH 転送 → 再起動） |
+| 実行中タスクあり | 延期（deferred）。次回の Hub 起動時に再チェック |
+| ハッシュ一致 | 何もしない（`up_to_date`） |
+
+手動で更新する場合は Servers → 対象サーバー → Setup → Agent Server の「Reinstall」を使用します。
+
 ## ロールバック
 
 ```bash
@@ -277,6 +289,8 @@ azito token rotate   # UI トークン再生成
 azito version        # バージョン表示
 ```
 
+> **注意:** `azito` CLI はリリース版（`install.sh` で導入した環境）専用です。ソース版（`git clone` + `npm run dev`）には CLI ラッパーがないため、トークンは `packages/server/.env` または `data/ui-token` を直接参照してください。
+
 ## サポートプラットフォーム
 
 | OS | アーキテクチャ | 状態 |
@@ -298,9 +312,9 @@ npm run build:hub -- --repo wireframeslayout/azito
 AZITO_RELEASE_REPO=wireframeslayout/azito npm run build:hub
 ```
 
-## macOS の手動更新
+## macOS の手動更新（フォールバック）
 
-macOS（launchd）環境では画面からの自動更新は未対応です。以下の手順で手動更新してください。
+macOS（launchd）環境でも Settings → System から画面上で更新できます（`launchctl kickstart` で自動再起動）。画面更新が使えない場合のフォールバック手順として以下を残します。
 
 ```bash
 # 1. 最新バージョンを確認

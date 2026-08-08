@@ -1,9 +1,18 @@
 import { execFileSync } from 'child_process';
 import { existsSync, mkdirSync, rmSync } from 'fs';
-import type { IWorktreeService, WorktreeInfo } from './IWorktreeService';
+import type { IWorktreeService, WorktreeInfo, WorktreeEntry } from './IWorktreeService';
 import { assertSafePath, assertSafeBranch } from './assertSafeGitArgs';
+import { parseWorktreePorcelain } from './parseWorktreePorcelain';
 
 export class LocalWorktreeService implements IWorktreeService {
+  async list(workingDir: string): Promise<WorktreeEntry[]> {
+    assertSafePath(workingDir, 'workingDir');
+    const output = execFileSync('git', ['worktree', 'list', '--porcelain'], {
+      cwd: workingDir, encoding: 'utf-8', timeout: 15000,
+    });
+    return parseWorktreePorcelain(output);
+  }
+
   async create(workingDir: string, taskId: number, taskSlug: string, baseBranch: string, branchName?: string): Promise<WorktreeInfo> {
     assertSafePath(workingDir, 'workingDir');
     assertSafeBranch(taskSlug, 'taskSlug');

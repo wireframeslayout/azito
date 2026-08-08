@@ -5,6 +5,7 @@
   "clipboardDenied": "ブラウザによりクリップボードへのアクセスが拒否されました",
   "fileSizeExceeded": "ファイルサイズが上限（10MB）を超えています: {{names}}",
   "fileReadFailed": "ファイルの読み取りに失敗しました",
+  "devtoolsOpenFailed": "DevTools を開けませんでした",
   "keyboardInputAriaLabel": "ブラウザキーボード入力",
   "historyAriaLabel": "閲覧履歴",
   "dialog": {

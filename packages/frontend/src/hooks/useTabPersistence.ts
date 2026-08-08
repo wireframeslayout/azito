@@ -23,6 +23,7 @@ export interface PersistedTab {
   target?: string;
   // File-specific
   filePath?: string;
+  line?: number;
   // Unit/Task-specific
   entityId?: number;
   // Task navigation origin
@@ -232,13 +233,15 @@ export function useTabPersistence(storageKey?: string) {
         const fromChanged = tab.from !== undefined && existing.from !== tab.from;
         const settingsSectionChanged = tab.settingsSection !== undefined && existing.settingsSection !== tab.settingsSection;
         const projectIdChanged = tab.projectId !== undefined && existing.projectId !== tab.projectId;
-        if (fromChanged || settingsSectionChanged || projectIdChanged) {
+        const lineChanged = tab.line !== undefined && existing.line !== tab.line;
+        if (fromChanged || settingsSectionChanged || projectIdChanged || lineChanged) {
           return prev.map((t) => t.id === tab.id
             ? {
               ...t,
               ...(fromChanged ? { from: tab.from } : {}),
               ...(settingsSectionChanged ? { settingsSection: tab.settingsSection } : {}),
               ...(projectIdChanged ? { projectId: tab.projectId } : {}),
+              ...(lineChanged ? { line: tab.line } : {}),
             }
             : t);
         }
@@ -278,10 +281,10 @@ export function useTabPersistence(storageKey?: string) {
     });
   }, [openTab]);
 
-  const openFile = useCallback((serverName: string, filePath: string, projectId?: number) => {
+  const openFile = useCallback((serverName: string, filePath: string, projectId?: number, line?: number) => {
     const tabId = `file:${serverName}:${filePath}`;
     const fileName = filePath.split('/').pop() || filePath;
-    openTab({ id: tabId, type: 'file', label: fileName, serverName, filePath, projectId });
+    openTab({ id: tabId, type: 'file', label: fileName, serverName, filePath, projectId, line });
   }, [openTab]);
 
   const openUnit = useCallback((unitId: number, name: string, projectId?: number, openerTabId?: string) => {
@@ -299,7 +302,7 @@ export function useTabPersistence(storageKey?: string) {
     openTab({ id: tabId, type: 'issue', label: `#${issueNumber} ${title}`, issueData: { repoId, owner, repo, number: issueNumber }, projectId });
   }, [openTab]);
 
-  const closeTab = useCallback((tabId: string) => {
+  const closeTab = useCallback((tabId: string): Promise<void> => {
     console.log('[useTabPersistence] closeTab called:', tabId);
     // Snapshot before setTabs mutates state, so the activeTabId fallback logic
     // below can inspect the closed tab's opener and its position among siblings.
@@ -307,10 +310,13 @@ export function useTabPersistence(storageKey?: string) {
     const closedIndex = prevTabs.findIndex((t) => t.id === tabId);
     const closedTab = closedIndex !== -1 ? prevTabs[closedIndex] : undefined;
 
-    if (closedTab?.type === 'browser' && closedTab.browserData) {
-      const { serverName, pageId } = closedTab.browserData;
-      closeBrowserGroup(serverName, pageId);
-    }
+    // The tab itself closes synchronously below regardless of this promise —
+    // only callers that need to know the server-side group teardown has
+    // settled (e.g. before refreshing the browser-groups sidebar) should
+    // await the returned promise.
+    const browserGroupClosed = closedTab?.type === 'browser' && closedTab.browserData
+      ? closeBrowserGroup(closedTab.browserData.serverName, closedTab.browserData.pageId)
+      : Promise.resolve();
 
     setTabs((prev) => {
       const next = prev.filter((t) => t.id !== tabId);
@@ -332,6 +338,8 @@ export function useTabPersistence(storageKey?: string) {
       const adjacentIndex = Math.min(closedIndex, remaining.length - 1);
       return remaining[adjacentIndex].id;
     });
+
+    return browserGroupClosed;
   }, []);
 
   /**

@@ -2,7 +2,7 @@ import type { ISessionStrategy } from '../SessionStrategy';
 import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import { buildListCandidatesWithMeta, normalizePath, parseCandidates } from '../sessionScanUtils';
-import { shellQuote } from '../shellQuote';
+import { shellQuote } from '../../../shared/shellQuote';
 import { buildCodexLaunchCommand } from './launchCommand';
 
 export class CodexSessionStrategy implements ISessionStrategy {

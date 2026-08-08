@@ -30,7 +30,7 @@ import { computeTabOverlayStyle } from './paneTabOverlay';
 import BrowserView from '../BrowserView';
 import { useBrowserKeepalive, type BrowserGroupRef } from '../../hooks/useBrowserKeepalive';
 import { closeBrowserGroup } from '../../lib/browserGroup';
-import type { Task, Unit, Window, Session, Project } from '../../pages/workspace/types';
+import type { Task, Unit, Window, Session, Project, ExecutionApprovalData } from '../../pages/workspace/types';
 import type { PersistedTab } from '../../hooks/useTabPersistence';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { isSameWindowTarget } from '../../utils/tmuxTarget';
@@ -45,6 +45,7 @@ import {
   resolveDisplayedTaskTerminal, selectTaskTerminal,
   type FixedView, type TerminalRef,
 } from '../task/taskPaneLayout';
+import { ApprovalRequestTracker, isApprovalDataForTask } from '../task/executionApprovalRequest';
 
 // Re-exported so existing external imports (`from './TaskPanel'`) keep working —
 // the actual implementation lives in taskPaneLayout.ts, alongside the rest of the
@@ -97,17 +98,40 @@ interface TaskPanelProps {
   projectServers?: { serverName: string }[];
   /** Diff ビューの ✎「エディターで開く」導線。作業ディレクトリ基準の相対パスを file タブとして開く。 */
   onOpenFile?: (serverName: string, filePath: string) => void;
+  /**
+   * Notifies the caller once a task-scoped browser tab's page has actually been created
+   * server-side, so the sidebar's "ブラウザ" section (server-wide, not task-scoped) can
+   * refetch immediately instead of waiting for its next poll. Mirrors the same prop on
+   * the workspace-level browser tab (TabContentRenderer's `BrowserView`).
+   */
+  onBrowserPageReady?: () => void;
 }
 
 export default function TaskPanel({
   taskId, isVisible = true, isPaneFocused = true, allUnits, tasks, allTasks, projects, currentProject, sessionData,
   executeTask, stopTask, onRefresh, onBack, onDelete, onEdit, onOpenAddWindow,
-  onSplitPane, onOpenTask, tabs, closeTab, projectServers, onOpenFile,
+  onSplitPane, onOpenTask, tabs, closeTab, projectServers, onOpenFile, onBrowserPageReady,
 }: TaskPanelProps) {
   const { t } = useTranslation(['tasks', 'workspace', 'common']);
-  const task = tasks.find((t) => t.id === taskId) ?? allTasks.find((t) => t.id === taskId);
+  // The list response omits the detail-only documents (description, plan, summary,
+  // changed files) — they made the payload unusable on mobile networks. `fetchTaskData`
+  // below already pulls the full record from `/tasks/:id`; merge it over the list item
+  // so every tab reads one object regardless of where each field came from.
+  const taskListItem = tasks.find((t) => t.id === taskId) ?? allTasks.find((t) => t.id === taskId);
+  const [taskDetail, setTaskDetail] = useState<Task | null>(null);
+  const detailLoaded = taskDetail !== null && taskDetail.id === taskId;
+  const task = detailLoaded ? { ...taskListItem, ...taskDetail } as Task : taskListItem;
   const { unitTypes } = useUnitTypes();
   const [submittingAnswers, setSubmittingAnswers] = useState(false);
+  // Execution-approval gate (Issue #51): fetched on demand only while the
+  // task is actually pending_approval — see the fetch effect below, which
+  // keys off `task?.status` so re-approval after an edit (server clears the
+  // fingerprint, status goes back to pending_approval) triggers a fresh
+  // fetch rather than showing stale content from a previous approval round.
+  const [approvalData, setApprovalData] = useState<ExecutionApprovalData | null>(null);
+  const [approvalLoading, setApprovalLoading] = useState(false);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
+  const [submittingApproval, setSubmittingApproval] = useState<'approve' | 'deny' | null>(null);
   const [windows, setWindows] = useState<Window[]>([]);
   // Tracks whether this task's windows have been *successfully* fetched at least once
   // since the panel last switched to this taskId. `allTabIds` starts out windowless
@@ -265,8 +289,9 @@ export default function TaskPanel({
   const fetchTaskData = useCallback(async () => {
     if (!taskId) return;
     try {
-      const res = await api<{ windows?: Window[] }>(`/tasks/${taskId}`);
+      const res = await api<Task & { windows?: Window[] }>(`/tasks/${taskId}`);
       if (currentTaskIdRef.current !== taskId) return; // stale response for a previous task
+      setTaskDetail(res);
       if (res.windows) setWindows(res.windows);
       setWindowsReady(true);
     } catch {
@@ -294,6 +319,7 @@ export default function TaskPanel({
   useEffect(() => {
     setWindows([]);
     setWindowsReady(false);
+    setTaskDetail(null);
     if (!taskId) return;
     fetchTaskData();
     const interval = setInterval(() => {
@@ -403,6 +429,115 @@ export default function TaskPanel({
     fetchTaskData();
   }, [taskId, onRefresh, fetchTaskData]);
 
+  // Cancels a stale in-flight GET when a newer one supersedes it (task
+  // switched, or the same task's approval was re-fetched after a 409
+  // fingerprint-mismatch) — see fetchApprovalData below. `approvalTracker`'s
+  // generation guard is invalidated (with no new controller) whenever the
+  // task stops being pending_approval, so a response already in flight at
+  // that moment cannot land after the fact. See executionApprovalRequest.ts
+  // for why this is a plain (non-React) class — it lets the exact guard
+  // logic be unit tested without mounting TaskPanel's render tree.
+  const approvalAbortRef = useRef<AbortController | null>(null);
+  const approvalTrackerRef = useRef<ApprovalRequestTracker | null>(null);
+  if (approvalTrackerRef.current === null) approvalTrackerRef.current = new ApprovalRequestTracker();
+  const approvalTracker = approvalTrackerRef.current;
+
+  // Shared by the fetch-on-open effect below AND by handleExecutionApproval's
+  // 409 fingerprint-mismatch handling (Issue #328 review fix 1): a stale
+  // approval is refused, and this same fetch is what re-presents the human
+  // with what actually changed instead of silently resubmitting against it.
+  //
+  // Cancellation + generation guard (Issue #328 review — TaskPanel approval
+  // race): switching between two `pending_approval` tasks in quick
+  // succession used to let whichever GET happened to resolve LAST win,
+  // regardless of which task was actually being requested first — so
+  // `approvalData` (and therefore the taskId the Approve/Deny buttons submit
+  // against) could end up holding a DIFFERENT task than the one on screen.
+  // `approvalAbortRef` additionally cancels the previous request's
+  // underlying fetch so it doesn't do pointless work.
+  const fetchApprovalData = useCallback(async (id: number) => {
+    approvalAbortRef.current?.abort();
+    const controller = new AbortController();
+    approvalAbortRef.current = controller;
+    const requestId = approvalTracker.begin();
+    // Clear immediately — never leave a PREVIOUS task's approval content (and
+    // its taskId/fingerprint) on screen, submittable, while a new task's
+    // fetch is in flight.
+    setApprovalData(null);
+    setApprovalLoading(true);
+    setApprovalError(null);
+    try {
+      const res = await api<ExecutionApprovalData & { error?: string }>(`/tasks/${id}/execution-approval`, { signal: controller.signal });
+      if (!approvalTracker.isCurrent(requestId)) return; // superseded
+      if (res.error) {
+        setApprovalError(res.error);
+        setApprovalData(null);
+      } else {
+        setApprovalData(res);
+      }
+    } catch {
+      if (controller.signal.aborted) return; // superseded — a newer request already owns the UI
+      if (!approvalTracker.isCurrent(requestId)) return;
+      setApprovalError(t('executionApproval.loadError'));
+    } finally {
+      if (approvalTracker.isCurrent(requestId)) setApprovalLoading(false);
+    }
+  }, [t]);
+
+  useEffect(() => {
+    if (!task || task.status !== 'pending_approval') {
+      approvalAbortRef.current?.abort();
+      approvalTracker.invalidate(); // invalidate any request still in flight
+      setApprovalData(null);
+      setApprovalError(null);
+      return;
+    }
+    fetchApprovalData(task.id);
+    // fetchApprovalData is intentionally omitted: it's stable in practice
+    // (only depends on `t`), and including it would re-fetch on every
+    // locale-driven re-render instead of only when the task/status changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [task?.id, task?.status]);
+
+  const handleExecutionApproval = useCallback(async (approved: boolean) => {
+    if (!approvalData || submittingApproval) return;
+    // Defense in depth alongside the generation guard in fetchApprovalData
+    // above: never submit an approval decision against a task other than
+    // the one currently displayed (Issue #328 review — approving the wrong
+    // task is a human-judgment integrity issue, not just a display glitch).
+    if (!isApprovalDataForTask(approvalData, taskId)) {
+      showToast(t('executionApproval.loadError'));
+      return;
+    }
+    setSubmittingApproval(approved ? 'approve' : 'deny');
+    try {
+      const res = await api<{ error?: string; code?: string }>(`/tasks/${approvalData.taskId}/approve-execution`, {
+        method: 'POST',
+        // origin: 'approval_panel' (task/328 follow-up, part B) — audit-only,
+        // marks this decision as made through the pending_approval panel
+        // (as opposed to the create-form's own auto pre-approval flow), so
+        // the two are distinguishable in the execution log later.
+        body: JSON.stringify(approved ? { approved, fingerprint: approvalData.fingerprint, origin: 'approval_panel' } : { approved, origin: 'approval_panel' }),
+      });
+      if (res.error) {
+        if (res.code === 'fingerprint_mismatch') {
+          // Do NOT resubmit — the content the human approved is not the
+          // content that would actually run. Refetch and show them the
+          // current state instead (Issue #328 review fix 1).
+          showToast(t('executionApproval.contentChanged'));
+          await fetchApprovalData(approvalData.taskId);
+        } else {
+          showToast(res.error);
+        }
+        return;
+      }
+      onRefresh();
+      fetchTaskData();
+    } finally {
+      setSubmittingApproval(null);
+    }
+  }, [approvalData, submittingApproval, taskId, showToast, onRefresh, fetchTaskData, fetchApprovalData, t]);
+
   const handlePlanAction = useCallback(async (planTask: Task, approved: boolean) => {
     if (!planTask.unitId) return;
     const el = document.querySelector('[data-plan-feedback]') as HTMLTextAreaElement | null;
@@ -511,11 +646,18 @@ export default function TaskPanel({
     // doesn't get re-included in `allTabIds` on the next render.
     const browser = parseBrowserTabId(tabId);
     if (browser) {
-      closeBrowserGroup(browser.serverName, browser.pageId);
       setBrowserTabIds((prev) => prev.filter((id) => id !== tabId));
+      // The sidebar's browser list (useBrowserGroups) polls independently of this
+      // task's tab layout, so it wouldn't otherwise notice this group is gone
+      // until its next 30s poll — nudge it the same way page-open already does
+      // (see onBrowserPageReady usage below). Wait for the close-group call to
+      // settle first, or the refetch can race ahead of the server-side teardown
+      // and still find the group present. The tab close itself stays synchronous
+      // above; only this notification is deferred.
+      void closeBrowserGroup(browser.serverName, browser.pageId).then(() => onBrowserPageReady?.());
     }
     layout.close(paneId, tabId);
-  }, [layout]);
+  }, [layout, onBrowserPageReady]);
 
   const handlePaneDrop = useCallback((paneId: string, zone: DropZone, index?: number) => {
     if (!paneDrag) return;
@@ -724,6 +866,16 @@ export default function TaskPanel({
     // that's the multi-pane split's whole point.
     if (!tabVisible || !isVisible) return null;
     const viewName = parseViewTabId(tabId);
+    // These tabs render fields that only `/tasks/:id` returns. Until it resolves they
+    // are absent, which is indistinguishable from "empty" — show the pending state
+    // instead of claiming the task has no description/plan/summary/diff.
+    if (!detailLoaded && (viewName === 'description' || viewName === 'unit' || viewName === 'git' || viewName === 'summary')) {
+      return (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+          <Spinner />
+        </div>
+      );
+    }
     if (viewName === 'description') {
       return (
         <div className="mobile-scroll-inset" style={{ height: '100%', overflowY: 'auto', padding: '16px 24px' }}>
@@ -856,6 +1008,7 @@ export default function TaskPanel({
           // default tab. Left as a real (no-op) callback rather than omitted, so this stays
           // a deliberate choice (documented here) instead of looking like a forgotten wire-up.
           onActiveTabChange={() => {}}
+          onPageReady={onBrowserPageReady}
         />
       );
     }
@@ -1089,6 +1242,143 @@ export default function TaskPanel({
           </div>
         );
       })()}
+
+      {/* Execution approval gate (Issue #51) — untrusted-origin task blocked
+          before any worker/worktree/secret is touched. Deliberately renders
+          task.title/description as PLAIN TEXT (never MarkdownRenderer): this
+          content can be attacker-authored (imported from an external
+          GitHub/GitLab issue), and rendering it as markdown/HTML on an
+          approval screen would let it forge links, images, or layout that
+          impersonates AZITO's own UI. */}
+      {task.status === 'pending_approval' && (
+        <div
+          role="region"
+          aria-label={t('executionApproval.regionLabel')}
+          style={{ borderBottom: '1px solid var(--border)', background: 'var(--danger-a08)', flexShrink: 0, maxHeight: '60%', overflowY: 'auto' }}
+        >
+          <div style={{ padding: '12px 16px 4px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={{ fontSize: 'var(--font-md)', color: 'var(--danger)', fontWeight: 600 }}>
+              {t('executionApproval.title')}
+            </span>
+            <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
+              {t('executionApproval.whyRequired')}
+            </span>
+          </div>
+
+          <div aria-live="polite" style={{ padding: '0 16px' }}>
+            {approvalLoading && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0', color: 'var(--text-dim)', fontSize: 'var(--font-sm)' }}>
+                <Spinner size={14} />
+                {t('executionApproval.loading')}
+              </div>
+            )}
+            {!approvalLoading && approvalError && (
+              <div style={{ padding: '8px 0', color: 'var(--danger)', fontSize: 'var(--font-sm)' }}>
+                {approvalError}
+              </div>
+            )}
+          </div>
+
+          {!approvalLoading && approvalData && (
+            <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {/* Untrusted content — plain text, visually distinct from AZITO's own UI chrome. */}
+              <div>
+                <div style={{ fontSize: 'var(--font-xs)', color: 'var(--danger)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 }}>
+                  {t('executionApproval.untrustedContentLabel')}
+                </div>
+                <div style={{
+                  border: '1px dashed var(--danger-a35)', borderRadius: 'var(--radius-md)', background: 'var(--bg)',
+                  padding: '10px 12px', maxHeight: 260, overflowY: 'auto',
+                }}>
+                  <div style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', marginBottom: 6, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                    {approvalData.title}
+                  </div>
+                  <pre style={{
+                    margin: 0, fontFamily: 'inherit', fontSize: 'var(--font-sm)', color: 'var(--text)',
+                    whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                  }}>
+                    {approvalData.description || t('executionApproval.noDescription')}
+                  </pre>
+                </div>
+              </div>
+
+              {/* Resolved execution context — where/what/which secrets. */}
+              <div>
+                <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 }}>
+                  {t('executionApproval.contextLabel')}
+                </div>
+                <div style={{
+                  border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', background: 'var(--bg)',
+                  padding: '10px 12px', display: 'grid', gridTemplateColumns: 'max-content 1fr', rowGap: 6, columnGap: 12,
+                  fontSize: 'var(--font-sm)',
+                }}>
+                  <span style={{ color: 'var(--text-dim)' }}>{t('executionApproval.fields.unit')}</span>
+                  <span style={{ color: 'var(--text)', wordBreak: 'break-word' }}>{approvalData.execution.unitName ?? t('executionApproval.unresolved')}</span>
+
+                  <span style={{ color: 'var(--text-dim)' }}>{t('executionApproval.fields.server')}</span>
+                  <span style={{ color: 'var(--text)', wordBreak: 'break-word' }}>{approvalData.execution.serverName ?? t('executionApproval.unresolved')}</span>
+
+                  <span style={{ color: 'var(--text-dim)' }}>{t('executionApproval.fields.workingDirectory')}</span>
+                  <span style={{ color: 'var(--text)', wordBreak: 'break-word' }}>{approvalData.execution.workingDirectory ?? t('executionApproval.unresolved')}</span>
+
+                  <span style={{ color: 'var(--text-dim)' }}>{t('executionApproval.fields.branches')}</span>
+                  <span style={{ color: 'var(--text)', wordBreak: 'break-word' }}>
+                    {t('executionApproval.branchesValue', {
+                      base: approvalData.execution.branches.base || '—',
+                      target: approvalData.execution.branches.target || '—',
+                      work: approvalData.execution.branches.work || '—',
+                    })}
+                  </span>
+
+                  <span style={{ color: 'var(--text-dim)' }}>{t('executionApproval.fields.phases')}</span>
+                  <span style={{ color: 'var(--text)', wordBreak: 'break-word' }}>
+                    {approvalData.execution.phases.length > 0
+                      ? approvalData.execution.phases.map((p) => `${p.phase} (${p.sidekickName ?? t('executionApproval.unresolved')})`).join(', ')
+                      : t('executionApproval.unresolved')}
+                  </span>
+
+                  <span style={{ color: 'var(--text-dim)' }}>{t('executionApproval.fields.repository')}</span>
+                  <span style={{ color: 'var(--text)', wordBreak: 'break-word' }}>
+                    {approvalData.execution.repository
+                      ? (approvalData.execution.repository.owner && approvalData.execution.repository.repoName
+                        ? `${approvalData.execution.repository.owner}/${approvalData.execution.repository.repoName}`
+                        : approvalData.execution.repository.url)
+                      : t('executionApproval.noRepository')}
+                  </span>
+
+                  <span style={{ color: 'var(--text-dim)' }}>{t('executionApproval.fields.secrets')}</span>
+                  <span style={{ color: 'var(--text)', wordBreak: 'break-word' }}>
+                    {approvalData.secretNames.length > 0 ? approvalData.secretNames.join(', ') : t('executionApproval.noSecrets')}
+                  </span>
+                </div>
+              </div>
+
+              <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
+                {t('executionApproval.reapprovalNote')}
+              </div>
+
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  disabled={submittingApproval !== null}
+                  loading={submittingApproval === 'deny'}
+                  loadingLabel={t('executionApproval.denying')}
+                  onClick={() => handleExecutionApproval(false)}
+                >{t('executionApproval.deny')}</Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  disabled={submittingApproval !== null}
+                  loading={submittingApproval === 'approve'}
+                  loadingLabel={t('executionApproval.approving')}
+                  onClick={() => handleExecutionApproval(true)}
+                >{t('executionApproval.approve')}</Button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Main content area (full width, no sidebar) */}
       {isMobile ? (

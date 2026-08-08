@@ -1,8 +1,10 @@
+import * as path from 'path';
 import type { ServerConfig } from '../servers/Server';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import { stripTerminalArtifacts } from '../../shared/utils/stripTerminalArtifacts';
+import { shellQuote } from '../../shared/shellQuote';
 
-const sq = (p: string): string => `'${p.replace(/'/g, "'\\''")}'`;
+const sq = shellQuote;
 
 // ─── File type lookup tables ───
 
@@ -370,6 +372,61 @@ export class FileBrowseService {
       }
       return { mtime: newMtime };
     }
+  }
+
+  async createEntry(srv: ServerConfig, targetPath: string, type: 'file' | 'directory'): Promise<void> {
+    if (srv.type === 'local') {
+      const fs = await import('fs');
+      if (fs.existsSync(targetPath)) throw new FileBrowseError('Already exists', 409);
+      if (type === 'directory') {
+        fs.mkdirSync(targetPath);
+      } else {
+        fs.writeFileSync(targetPath, '', { flag: 'wx' });
+      }
+      return;
+    }
+    const q = sq(targetPath);
+    const exists = await this.tmux.execCommand(srv, `test -e ${q} && echo yes || echo no`);
+    if (stripTerminalArtifacts(exists.stdout).trim() === 'yes') throw new FileBrowseError('Already exists', 409);
+    const cmd = type === 'directory' ? `mkdir ${q}` : `set -C; : > ${q}`;
+    await this.tmux.execCommand(srv, cmd);
+    const verify = await this.tmux.execCommand(srv, `test -e ${q} && echo ok || echo ng`);
+    if (stripTerminalArtifacts(verify.stdout).trim() !== 'ok') throw new FileBrowseError('Create failed', 500);
+  }
+
+  async deleteEntry(srv: ServerConfig, targetPath: string): Promise<void> {
+    if (srv.type === 'local') {
+      const fs = await import('fs');
+      if (!fs.existsSync(targetPath)) throw new FileBrowseError('Not found', 404);
+      fs.rmSync(targetPath, { recursive: true, force: true });
+      return;
+    }
+    const q = sq(targetPath);
+    const exists = await this.tmux.execCommand(srv, `test -e ${q} && echo yes || echo no`);
+    if (stripTerminalArtifacts(exists.stdout).trim() !== 'yes') throw new FileBrowseError('Not found', 404);
+    await this.tmux.execCommand(srv, `rm -rf ${q}`);
+    const verify = await this.tmux.execCommand(srv, `test -e ${q} && echo yes || echo no`);
+    if (stripTerminalArtifacts(verify.stdout).trim() === 'yes') throw new FileBrowseError('Delete failed', 500);
+  }
+
+  async renameEntry(srv: ServerConfig, oldPath: string, newName: string): Promise<void> {
+    const newPath = path.join(path.dirname(oldPath), newName);
+    if (srv.type === 'local') {
+      const fs = await import('fs');
+      if (!fs.existsSync(oldPath)) throw new FileBrowseError('Not found', 404);
+      if (fs.existsSync(newPath)) throw new FileBrowseError('Already exists', 409);
+      fs.renameSync(oldPath, newPath);
+      return;
+    }
+    const qOld = sq(oldPath);
+    const qNew = sq(newPath);
+    const existsOld = await this.tmux.execCommand(srv, `test -e ${qOld} && echo yes || echo no`);
+    if (stripTerminalArtifacts(existsOld.stdout).trim() !== 'yes') throw new FileBrowseError('Not found', 404);
+    const existsNew = await this.tmux.execCommand(srv, `test -e ${qNew} && echo yes || echo no`);
+    if (stripTerminalArtifacts(existsNew.stdout).trim() === 'yes') throw new FileBrowseError('Already exists', 409);
+    await this.tmux.execCommand(srv, `mv -n ${qOld} ${qNew}`);
+    const verify = await this.tmux.execCommand(srv, `test -e ${qNew} && echo ok || echo ng`);
+    if (stripTerminalArtifacts(verify.stdout).trim() !== 'ok') throw new FileBrowseError('Rename failed', 500);
   }
 
   /** GET /api/servers/:name/files/download 用: ファイルダウンロード */

@@ -24,19 +24,28 @@ Multi-language code highlighting is supported via highlight.js.
 
 | Language | Extensions |
 |---|---|
-| JavaScript | `.js`, `.jsx` |
 | TypeScript | `.ts`, `.tsx` |
-| Python | `.py` |
-| Rust | `.rs` |
-| Go | `.go` |
-| HTML | `.html` |
-| CSS | `.css` |
+| JavaScript | `.js`, `.jsx` |
 | JSON | `.json` |
-| YAML | `.yml`, `.yaml` |
+| CSS | `.css` |
+| XML / HTML | `.xml`, `.html`, `.svg` |
 | Markdown | `.md` |
-| Shell | `.sh`, `.bash` |
+| Python | `.py` |
+| Bash / Shell | `.sh`, `.bash` |
+| YAML | `.yml`, `.yaml` |
+| SQL | `.sql` |
 
-Other languages are auto-detected within the range highlight.js supports.
+These are the explicitly registered languages. Others are attempted via highlight.js auto-detection.
+
+#### Markdown Display Modes
+
+Markdown files support three display modes:
+
+| Mode | Description |
+|---|---|
+| Source | Displayed as source code with syntax highlighting |
+| Preview | Rendered Markdown view |
+| Split | Side-by-side Source and Preview |
 
 ### Image Preview
 
@@ -81,7 +90,7 @@ GET /api/servers/:name/files/download?path=<filepath>
 
 ## External Editor Integration
 
-You can open files and folders directly in an external editor from the file preview view.
+You can open files directly in an external editor from the file preview view.
 
 ### Supported Editors
 
@@ -90,13 +99,40 @@ You can open files and folders directly in an external editor from the file prev
 | VS Code | "Open in VS Code" | `vscode://` |
 | Zed | "Open in Zed" | `zed://` |
 
+In both cases, the **file's parent directory** is opened as the editor's workspace.
+
 ### Automatic Tailscale Hostname Detection
 
 When opening a file on a remote server in an external editor, AZITO automatically detects the Tailscale hostname and generates a URI for an SSH remote connection.
 
-- The server's Tailscale hostname is retrieved automatically.
-- For VS Code: a URI of the form `vscode://vscode-remote/ssh-remote+<host>/<path>` is generated.
+- VS Code: `vscode://vscode-remote/ssh-remote+<host>/<parent-dir>`
+- Zed: `zed://ssh/<host>/<parent-dir>`
 
-### Folder-Level Operations
+## Browser Runtime (Chromium)
 
-Beyond a single file, you can also open a directory (folder) in an external editor. Performing the action on a directory in the file explorer opens that directory as a workspace in the external editor.
+To use AZITO's CDP browser features (tab snapshots, agent operations, etc.), Chromium must be installed on the server.
+
+### Prerequisites
+
+- **Linux or macOS** only (Windows is not supported)
+- **Node.js v24+** must be installed on the host (required for `npx`)
+
+### Installation
+
+1. Go to Servers → target server → Setup tab
+2. Click the **Install** button under "Browser runtime (Chromium)"
+3. Wait for the installation to complete (timeout: 10 minutes)
+
+Internally this runs `npx playwright install chromium`, pinned to the Playwright version installed on the Hub.
+
+### Additional Steps on Linux
+
+On Linux, the **Noto Sans CJK JP** font is automatically installed for Japanese text rendering (placed in `~/.local/share/fonts/`). Font installation failure does not block the Chromium install (non-fatal).
+
+### API
+
+```
+POST /api/servers/:name/install-browser-runtime
+```
+
+Response: `{ ok, chromiumVersion, fontInstalled, warning }`

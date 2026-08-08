@@ -6,6 +6,7 @@ const STATUS_TONE: Record<string, ChipTone> = {
   open: 'accent',
   running: 'orange',
   phase_review: 'accent',
+  pending_approval: 'red',
   review: 'accent',
   waiting_input: 'accent',
   in_progress: 'orange',
@@ -18,6 +19,7 @@ const STATUS_TONE: Record<string, ChipTone> = {
 const STATUS_LABEL_KEYS: Record<string, string> = {
   waiting_input: 'status.waitingInput',
   phase_review: 'status.planReview',
+  pending_approval: 'status.pendingApproval',
   archived: 'status.archived',
 };
 
@@ -43,6 +45,7 @@ const DOT_COLORS: Record<string, string> = {
   open: 'var(--accent)',
   running: 'var(--warning)',
   phase_review: 'var(--accent)',
+  pending_approval: 'var(--danger)',
   review: 'var(--accent)',
   waiting_input: 'var(--accent)',
   in_progress: 'var(--warning)',

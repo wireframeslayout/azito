@@ -24,19 +24,28 @@ highlight.js による多言語対応のコードハイライトに対応して�
 
 | 言語 | 拡張子 |
 |---|---|
-| JavaScript | `.js`, `.jsx` |
 | TypeScript | `.ts`, `.tsx` |
-| Python | `.py` |
-| Rust | `.rs` |
-| Go | `.go` |
-| HTML | `.html` |
-| CSS | `.css` |
+| JavaScript | `.js`, `.jsx` |
 | JSON | `.json` |
-| YAML | `.yml`, `.yaml` |
+| CSS | `.css` |
+| XML / HTML | `.xml`, `.html`, `.svg` |
 | Markdown | `.md` |
-| Shell | `.sh`, `.bash` |
+| Python | `.py` |
+| Bash / Shell | `.sh`, `.bash` |
+| YAML | `.yml`, `.yaml` |
+| SQL | `.sql` |
 
-その他の言語も highlight.js がサポートする範囲で自動検出されます。
+上記は明示的に登録されている言語です。それ以外も highlight.js の自動検出が試みられます。
+
+#### Markdown の表示モード
+
+Markdown ファイルは3つの表示モードを切り替えられます。
+
+| モード | 説明 |
+|---|---|
+| Source | ソースコードとして表示（シンタックスハイライト付き） |
+| Preview | レンダリングされた Markdown として表示 |
+| Split | 左右に Source と Preview を並べて表示 |
 
 ### 画像プレビュー
 
@@ -81,7 +90,7 @@ GET /api/servers/:name/files/download?path=<filepath>
 
 ## 外部エディタ連携
 
-ファイルプレビュー画面から外部エディタでファイルやフォルダを直接開くことができます。
+ファイルプレビュー画面から外部エディタでファイルを直接開くことができます。
 
 ### 対応エディタ
 
@@ -90,13 +99,40 @@ GET /api/servers/:name/files/download?path=<filepath>
 | VS Code | 「Open in VS Code」 | `vscode://` |
 | Zed | 「Open in Zed」 | `zed://` |
 
+いずれの場合も、**ファイルの親ディレクトリ**がエディタのワークスペースとして開かれます。
+
 ### Tailscale ホスト名の自動検出
 
 リモートサーバーのファイルを外部エディタで開く場合、AZITO は Tailscale のホスト名を自動検出し、SSH リモート接続用の URI を生成します。
 
-- サーバーの Tailscale ホスト名が自動的に取得されます
-- VS Code の場合: `vscode://vscode-remote/ssh-remote+<host>/<path>` 形式の URI が生成されます
+- VS Code: `vscode://vscode-remote/ssh-remote+<host>/<parent-dir>` 形式
+- Zed: `zed://ssh/<host>/<parent-dir>` 形式
 
-### フォルダレベルの操作
+## Browser runtime（Chromium）
 
-ファイル単体だけでなく、ディレクトリ（フォルダ）を外部エディタで開くことも可能です。ファイルエクスプローラーのディレクトリに対して操作すると、そのディレクトリをワークスペースとして外部エディタが開きます。
+AZITO の CDP ブラウザ機能（タブスナップショット、エージェント操作など）を利用するには、サーバーに Chromium をインストールする必要があります。
+
+### 前提条件
+
+- **Linux または macOS** のみ対応（Windows は非対応）
+- **Node.js v24 以上** がホストにインストールされていること（`npx` を使用するため）
+
+### インストール手順
+
+1. Servers → 対象サーバー → Setup タブを開く
+2. 「Browser runtime (Chromium)」セクションの **Install** ボタンをクリック
+3. インストールが完了するまで待つ（タイムアウト: 10分）
+
+内部的には `npx playwright install chromium` を実行し、Hub にインストールされている Playwright のバージョンに固定された Chromium をインストールします。
+
+### Linux での追加処理
+
+Linux 環境では、日本語表示に必要な **Noto Sans CJK JP** フォントが自動的にインストールされます（`~/.local/share/fonts/` に配置）。フォントのインストールに失敗しても Chromium 自体のインストールは成功します（non-fatal）。
+
+### API
+
+```
+POST /api/servers/:name/install-browser-runtime
+```
+
+レスポンス: `{ ok, chromiumVersion, fontInstalled, warning }`

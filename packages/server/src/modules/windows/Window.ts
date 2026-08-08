@@ -54,6 +54,9 @@ export interface IWindowRepository {
   findById(id: number): Window | undefined;
   findByProject(projectId: number): Window[];
   findByTask(taskId: number): Window[];
+  /** Batch form of findByTask — one query for many tasks, keyed by task id.
+   *  Task ids with no windows are absent from the map. */
+  findByTaskIds(taskIds: number[]): Map<number, Window[]>;
   findAgentSessionIdsByServer(serverName: string): Set<string>;
   /** Window-granularity lookup (pane suffix stripped on both sides — see paneTarget.ts). */
   findByServerAndTarget(serverName: string, tmuxTarget: string): Window | undefined;

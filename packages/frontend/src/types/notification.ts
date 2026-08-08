@@ -20,6 +20,7 @@ export interface AgentActivityPayload {
 export type AppNotificationKind =
   | 'qa'
   | 'plan_approval'
+  | 'execution_approval'
   | 'task_done'
   | 'task_failed'
   | 'agent_finished';

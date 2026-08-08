@@ -65,7 +65,8 @@ async function main(): Promise<void> {
   }
   const publicUrl = await resolvePublicUrl(PORT, HOST);
 
-  const wiring = await buildWiring(db, publicUrl, paths, uiToken);
+  const localUrl = `http://127.0.0.1:${PORT}`;
+  const wiring = await buildWiring(db, publicUrl, localUrl, paths, uiToken);
   const { tmuxHookManager, agentEventStreams } = await buildServer(app, wiring, PORT);
 
   app.log.info(`Public URL: ${publicUrl}`);

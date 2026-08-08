@@ -6,6 +6,8 @@ interface CodeEditorViewProps {
   language: string;
   readOnly?: boolean;
   vimMode?: boolean;
+  /** Line to scroll to and place the cursor on when the editor first mounts (1-based). */
+  initialLine?: number;
   onChange?: (value: string) => void;
   onSave?: () => void;
   onCursorChange?: (line: number, col: number) => void;
@@ -17,6 +19,7 @@ export default function CodeEditorView({
   language,
   readOnly = false,
   vimMode = false,
+  initialLine,
   onChange,
   onSave,
   onCursorChange,
@@ -205,7 +208,17 @@ export default function CodeEditorView({
       });
 
       viewRef.current = view;
-      onCursorRef.current?.(1, 1);
+
+      if (initialLine && initialLine >= 1 && initialLine <= state.doc.lines) {
+        const line = state.doc.line(initialLine);
+        view.dispatch({
+          selection: { anchor: line.from },
+          effects: EditorView.scrollIntoView(line.from, { y: 'center' }),
+        });
+        onCursorRef.current?.(initialLine, 1);
+      } else {
+        onCursorRef.current?.(1, 1);
+      }
 
       let vimObserver: MutationObserver | undefined;
       if (vimMode) {

@@ -1,13 +1,6 @@
 import type { ServerConfig } from '../servers/Server';
 import { resolveSupervisorCommand } from './SupervisorPath';
-
-// modules/supervisors is base-layer (see .dependency-cruiser.cjs
-// base-supervisors-limited) and may not import modules/agents/shellQuote.ts
-// (a mid-layer module) — duplicated here rather than reaching upward.
-// Keep in sync with modules/agents/shellQuote.ts if either changes.
-function shellQuote(s: string): string {
-  return `'${s.replace(/'/g, "'\\''")}'`;
-}
+import { shellQuote } from '../../shared/shellQuote';
 
 export function shouldSupervise(serverType: ServerConfig['type'], windowType: string): boolean {
   return windowType === 'agent';
