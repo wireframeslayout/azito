@@ -43,5 +43,16 @@
     "deleteFile": "Delete",
     "copiedUrl": "API URL copied (for agents — requires an auth token)",
     "dropToUpload": "Drop to upload"
+  },
+  "worktrees": {
+    "title": "Worktrees",
+    "mainLabel": "Main",
+    "orphaned": "Orphaned",
+    "running": "Running",
+    "empty": "No worktrees yet",
+    "loadError": "Failed to load worktrees",
+    "retry": "Retry",
+    "openTask": "Open task",
+    "changedFiles": "{{count}} files changed"
   }
 }
