@@ -372,6 +372,30 @@ describe('POST /api/tasks/:id/approve-execution (Issue #328 review)', () => {
     expect(opts.executeTaskUseCase.execute).toHaveBeenCalledWith(20, 1);
   });
 
+  // Issue #28 Phase E follow-up (third-party review, D-track gap finding):
+  // the audit UI promises an "approved" event lands in audit_log for every
+  // execution-approval decision — this used to only ever write to
+  // execution_log (the 'execution_approved' entry above).
+  it('records an execution.approved audit_log entry (distinct from the execution_log command entry) on approval', async () => {
+    const task = makeTask({ pendingOperation: 'execute' });
+    const { opts } = makeStatefulOpts(task);
+    const fingerprint = currentFingerprint(opts, task);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.auditLogService.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorClass: 'operator',
+        event: 'execution.approved',
+        detail: expect.objectContaining({ taskId: task.id, operation: 'execute' }),
+      }),
+    );
+  });
+
   it('a STALE fingerprint (task edited after the approval screen loaded) is rejected with 409 and consumes nothing', async () => {
     const task = makeTask({ pendingOperation: 'execute', title: 'Original title' });
     const { opts, getTask } = makeStatefulOpts(task);
@@ -410,6 +434,16 @@ describe('POST /api/tasks/:id/approve-execution (Issue #328 review)', () => {
     expect(res.statusCode).toBe(200);
     expect(getTask().status).toBe('archived');
     expect(getTask().pendingOperation).toBeNull();
+    // Issue #28 Phase E follow-up: a denial records execution.denied the
+    // same way an approval records execution.approved (see the sibling
+    // test above).
+    expect(opts.auditLogService.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorClass: 'operator',
+        event: 'execution.denied',
+        detail: expect.objectContaining({ taskId: task.id, operation: 'restore', targetStatus: 'archived' }),
+      }),
+    );
   });
 
   it("a task whose Unit cannot be resolved can still be APPROVED for a 'restore' (which does not need a Unit to run)", async () => {

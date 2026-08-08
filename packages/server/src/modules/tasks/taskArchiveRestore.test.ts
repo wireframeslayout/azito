@@ -260,6 +260,15 @@ describe('POST /api/tasks/:id/archive', () => {
     // the pre-fix code left behind.
     expect(task.pendingOperation).toBeNull();
     expect(task.status).toBe('archived');
+    // Issue #28 Phase E follow-up: archive-triggered denials go through the
+    // same denyPendingApproval() audit path as an explicit Deny.
+    expect(opts.auditLogService.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorClass: 'operator',
+        event: 'execution.denied',
+        detail: expect.objectContaining({ taskId: 1, operation: 'execute', targetStatus: 'archived' }),
+      }),
+    );
   });
 
   it('returns 409 without archiving when the pending approval was already resolved by a concurrent request', async () => {

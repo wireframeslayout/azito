@@ -525,8 +525,8 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       }
 
       const outcome = decideExecutionApproval(
-        { taskRepo, logRepo, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, windowRepo, respawnService, executeTaskUseCase, taskRestoreService },
-        { taskId, unitId, approved: body.approved, fingerprint: body.approved ? (body.fingerprint as string) : undefined, origin },
+        { taskRepo, logRepo, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, windowRepo, respawnService, executeTaskUseCase, taskRestoreService, auditLog: auditLogService },
+        { taskId, unitId, approved: body.approved, fingerprint: body.approved ? (body.fingerprint as string) : undefined, origin, actor: request.principal ?? OPERATOR_PRINCIPAL },
         request.log,
       );
       return reply.status(outcome.status).send(outcome.body);
@@ -1092,7 +1092,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       if (task.status === ('pending_approval' as TaskStatus)) {
         const project = projectRepo.findById(task.projectId);
         const unitId = resolveUnitId(task, project);
-        const outcome = denyPendingApproval({ taskRepo, logRepo, executeTaskUseCase }, task, unitId, 'archived' as TaskStatus);
+        const outcome = denyPendingApproval({ taskRepo, logRepo, executeTaskUseCase, auditLog: auditLogService }, task, unitId, 'archived' as TaskStatus, request.principal ?? OPERATOR_PRINCIPAL);
         if (!outcome.consumed) {
           return reply.status(409).send({ error: `Task ${id}'s pending approval was already resolved by a concurrent request` });
         }
