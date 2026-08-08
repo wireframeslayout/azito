@@ -581,6 +581,58 @@ describe('SupervisorRegistry — launch binding (Issue #28 Phase C, design v3 §
     });
   });
 
+  // Issue #28 Phase C review, Important finding: the eviction guard used to
+  // reject a DIFFERENT-launchId registration purely on launchId mismatch,
+  // before checking whether that new registration was itself a legitimately
+  // authenticated (and DB-current) replacement launch. That meant a genuine
+  // re-launch for the same key (new launch issued, superseding the old one)
+  // was permanently blocked as long as the OLD supervisor's WebSocket
+  // happened to still be connected when the new one tried to register —
+  // exactly the case a hub hasn't yet observed the old process's exit.
+  it('an authenticated NEW launch replaces a still-connected OLD bound connection (no dead-key stranding)', () => {
+    const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
+    const issuedA = registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })!;
+
+    const oldSocket = new MockSocket();
+    registry.register(asSocket(oldSocket), registerWith({ launchId: issuedA.launchId, bootstrapToken: issuedA.bootstrapToken }));
+    expect(oldSocket.closed).toBeNull();
+
+    // A fresh execute()/respawn() issues a NEW launch for the SAME key while
+    // the old connection is still live in `connections` (hub hasn't seen it
+    // disconnect yet) — this supersedes issuedA in the DB.
+    const issuedB = registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })!;
+
+    const newSocket = new MockSocket();
+    registry.register(asSocket(newSocket), registerWith({ launchId: issuedB.launchId, bootstrapToken: issuedB.bootstrapToken }));
+
+    expect(newSocket.closed).toBeNull();
+    expect(oldSocket.closed).toEqual({ code: 1000, reason: 'replaced by new registration' });
+    expect(registry.snapshot()).toHaveLength(1);
+    expect(registry.snapshot()[0].bound).toBe(true);
+    expect(auditRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'supervisor_launch.bound', detail: expect.objectContaining({ launchId: issuedB.launchId }) }),
+    );
+    expect(auditRecord).not.toHaveBeenCalledWith(expect.objectContaining({ event: 'supervisor_launch.replace_rejected' }));
+  });
+
+  it('an UNAUTHENTICATED replacement attempt (bad token) is still rejected, leaving the bound connection untouched', () => {
+    const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
+    const issuedA = registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })!;
+
+    const oldSocket = new MockSocket();
+    registry.register(asSocket(oldSocket), registerWith({ launchId: issuedA.launchId, bootstrapToken: issuedA.bootstrapToken }));
+
+    const issuedB = registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })!;
+
+    const intruder = new MockSocket();
+    registry.register(asSocket(intruder), registerWith({ launchId: issuedB.launchId, bootstrapToken: 'wrong-token' }));
+
+    expect(intruder.closed?.code).toBe(4009);
+    expect(oldSocket.closed).toBeNull();
+    expect(registry.snapshot()).toHaveLength(1);
+    expect(auditRecord).toHaveBeenCalledWith(expect.objectContaining({ event: 'supervisor_launch.replace_rejected' }));
+  });
+
   it('a same-launchId reconnection still replaces the previous connection (normal reconnect)', () => {
     const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
     const issued = registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })!;

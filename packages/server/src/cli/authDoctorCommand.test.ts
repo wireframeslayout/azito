@@ -18,8 +18,21 @@ const execFileSyncMock = vi.fn<(...args: unknown[]) => string>(() => {
   err.code = 'ENOENT';
   throw err;
 });
+// `checkTaskOwnedWindowsBeforeScopedAuth` drives a real TmuxClient ->
+// LocalTransport -> `execFile('tmux', ['list-panes', ...], cb)` call to check
+// pane liveness. Mocked here (rather than shelling out to a real tmux) so
+// the "pane alive" / "pane gone" outcome is deterministic per test. Defaults
+// to "pane gone" (callback with an error) — matching a plain `list-panes`
+// failure for a target that doesn't exist — so tests that don't care about
+// this check aren't affected by whatever tmux happens to be on the host.
+const execFileMock = vi.fn(
+  (_cmd: string, _args: string[], _opts: unknown, callback: (err: Error | null, stdout?: string, stderr?: string) => void) => {
+    callback(new Error("can't find pane"));
+  },
+);
 vi.mock('child_process', () => ({
   execFileSync: (...args: unknown[]) => execFileSyncMock(...args),
+  execFile: (...args: unknown[]) => (execFileMock as unknown as (...a: unknown[]) => void)(...args),
 }));
 
 vi.mock('../shared/dataDir', () => ({
@@ -76,6 +89,11 @@ describe('authDoctorCommand', () => {
       const err = new Error('spawn codex ENOENT') as NodeJS.ErrnoException;
       err.code = 'ENOENT';
       throw err;
+    });
+
+    execFileMock.mockClear();
+    execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+      callback(new Error("can't find pane"));
     });
   });
 
@@ -236,6 +254,85 @@ describe('authDoctorCommand', () => {
     expect(allLogLines()).toContain('scoped 認可: 有効');
   });
 
+  // Fix 1 (Phase C review, Important): while AZITO_SCOPED_AUTH is off,
+  // `azito auth doctor` must be able to point out live task-owned tmux panes
+  // on the local server — those keep AZITO_UI_TOKEN in their pane env for
+  // life, so a still-live pane created before enabling the flag can keep
+  // acting as an operator-equivalent principal after the flag flips.
+  describe('task-owned window drain check', () => {
+    async function seedTaskWindow(tmuxTarget: string): Promise<void> {
+      const { openDatabase } = await import('../shared/db/Database.js');
+      const db = openDatabase(path.join(tmpDir, 'data.db'));
+      try {
+        db.prepare("INSERT INTO projects (name) VALUES ('p')").run();
+        db.prepare("INSERT INTO tasks (project_id, title) VALUES (1, 't')").run();
+        db.prepare(
+          "INSERT INTO windows (owner_type, task_id, server_name, tmux_target) VALUES ('task', 1, 'local', ?)",
+        ).run(tmuxTarget);
+      } finally {
+        db.close();
+      }
+    }
+
+    it('passes quietly when the DB has not been created on this machine yet', async () => {
+      const { authDoctorCommand } = await import('./authDoctorCommand.js');
+      await authDoctorCommand();
+
+      expect(process.exitCode).toBeUndefined();
+      expect(allLogLines()).toContain('が見つかりません（未セットアップ、またはこのマシンでハブを実行していません）');
+    });
+
+    it('passes with no warning when no task-owned windows exist on the local server', async () => {
+      const { openDatabase } = await import('../shared/db/Database.js');
+      openDatabase(path.join(tmpDir, 'data.db')).close(); // just runs migrations, seeds 'local' server
+
+      const { authDoctorCommand } = await import('./authDoctorCommand.js');
+      await authDoctorCommand();
+
+      expect(process.exitCode).toBeUndefined();
+      expect(allLogLines()).toContain('タスク所有ウィンドウの登録がありません');
+    });
+
+    it('passes with no warning when the registered task window has no live tmux pane', async () => {
+      await seedTaskWindow('sess:1.0');
+      // default execFileMock behavior is "pane gone"
+
+      const { authDoctorCommand } = await import('./authDoctorCommand.js');
+      await authDoctorCommand();
+
+      expect(process.exitCode).toBeUndefined();
+      expect(allLogLines()).toContain('生存中の tmux ペインはありません');
+    });
+
+    it('warns (without failing) when a task-owned window has a live tmux pane and AZITO_SCOPED_AUTH is off', async () => {
+      await seedTaskWindow('sess:1.0');
+      execFileMock.mockImplementation((_cmd, _args, _opts, callback) => callback(null, '', ''));
+
+      const { authDoctorCommand } = await import('./authDoctorCommand.js');
+      await authDoctorCommand();
+
+      expect(process.exitCode).toBeUndefined();
+      expect(allLogLines()).toContain('[!! ] scoped 認可 有効化前の生存タスクウィンドウ');
+      expect(allLogLines()).toContain('生存中のタスク所有ウィンドウが 1 件見つかりました');
+      expect(allLogLines()).toContain('scoped 有効化前に、これらのタスクを終端させるか再生成してください');
+      expect(allLogLines()).toContain('azito token rotate');
+      expect(allLogLines()).toContain('リモートサーバー');
+    });
+
+    it('is skipped once AZITO_SCOPED_AUTH is already enabled, even with a live task-owned pane', async () => {
+      await seedTaskWindow('sess:1.0');
+      execFileMock.mockImplementation((_cmd, _args, _opts, callback) => callback(null, '', ''));
+      process.env.AZITO_SCOPED_AUTH = '1';
+
+      const { authDoctorCommand } = await import('./authDoctorCommand.js');
+      await authDoctorCommand();
+
+      expect(process.exitCode).toBeUndefined();
+      expect(allLogLines()).not.toContain('[!! ]');
+      expect(allLogLines()).toContain('この検査は未有効時のみ対象');
+    });
+  });
+
   describe('Codex MCP token check', () => {
     it('reports a notice (not a failure) when the codex CLI is not installed', async () => {
       // default mock already throws ENOENT
@@ -249,8 +346,10 @@ describe('authDoctorCommand', () => {
 
     it('passes (not-configured) when codex is installed but azt-mcp is not registered', async () => {
       execFileSyncMock.mockImplementation(() => {
-        const err = new Error('Command failed') as NodeJS.ErrnoException & { status?: number };
+        const err = new Error('Command failed') as NodeJS.ErrnoException & { status?: number; stderr?: string; stdout?: string };
         err.status = 1;
+        err.stderr = "Error: No MCP server named 'azt-mcp' found.\n";
+        err.stdout = '';
         throw err;
       });
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
@@ -258,6 +357,29 @@ describe('authDoctorCommand', () => {
 
       expect(process.exitCode).toBeUndefined();
       expect(allLogLines()).toContain('Codex に azt-mcp が登録されていません');
+    });
+
+    // Nit finding (Issue #28 Phase C review): a non-ENOENT failure that is
+    // NOT the "not registered" shape (timeout, permission error, corrupted
+    // config) used to be rounded down to the same green "not registered"
+    // result as a genuine absence — a human would never learn the check
+    // couldn't actually verify anything. It must surface as a notice with
+    // the original error, not a pass.
+    it('reports a notice (not a pass) when codex mcp get fails for a reason other than "not registered"', async () => {
+      execFileSyncMock.mockImplementation(() => {
+        const err = new Error('Command failed') as NodeJS.ErrnoException & { status?: number; stderr?: string; stdout?: string };
+        err.status = 1;
+        err.stderr = 'Error: config.toml is corrupted\n';
+        err.stdout = '';
+        throw err;
+      });
+      const { authDoctorCommand } = await import('./authDoctorCommand.js');
+      await authDoctorCommand();
+
+      expect(process.exitCode).toBeUndefined();
+      expect(allLogLines()).toContain('登録状況を確認できませんでした');
+      expect(allLogLines()).toContain('config.toml is corrupted');
+      expect(allLogLines()).toContain('[-- ] Codex MCP settings');
     });
 
     it('fails when the Codex azt-mcp token does not match the hub token', async () => {

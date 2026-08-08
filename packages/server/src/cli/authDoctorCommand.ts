@@ -4,6 +4,11 @@ import { execFileSync } from 'child_process';
 import { findAzitoctlEnvFiles } from '../shared/azitoctlEnv';
 import { resolveCurrentUiToken } from '../shared/currentUiToken';
 import { resolveScopedAuthEnabled } from '../shared/auth/scopedAuthFlag';
+import { resolveDataDir } from '../shared/dataDir';
+import { openDatabase } from '../shared/db/Database';
+import { TmuxClient } from '../modules/tmux/TmuxClient';
+import { TransportFactory } from '../modules/servers/transport/TransportFactory';
+import type { ServerConfig, MuxRuntime } from '../modules/servers/Server';
 
 // ─── azito auth doctor (Issue #28 Phase B, design §12 step 1) ───
 //
@@ -28,6 +33,15 @@ interface CheckResult {
    * believe the Codex MCP token was confirmed in sync with the hub.
    */
   notice?: boolean;
+  /**
+   * True when this check verified something and found a condition worth the
+   * operator's attention, but not one that makes the current state broken —
+   * distinct from `!ok` (NG, "this is currently wrong") and from `notice`
+   * ("we couldn't check"). Rendered with its own `!!` marker and never flips
+   * `process.exitCode` — a warning is advisory guidance (e.g. ahead of a
+   * planned `AZITO_SCOPED_AUTH` migration step), not a doctor failure.
+   */
+  warning?: boolean;
 }
 
 function operatorEnvPath(): string {
@@ -207,6 +221,14 @@ function checkMcpTokenMatchesHub(): CheckResult {
 // `codex` CLI 自体が入っていない環境（Codex を使わない開発者・サーバー）は
 // 「確認不能」であって「壊れている」わけではないので、NG にはせず notice
 // として報告する。
+// `codex mcp get <name> --json` prints this exact message to stderr (and
+// exits non-zero) when the named MCP server isn't registered at all —
+// confirmed against codex-cli 0.146.0. Only this specific shape means
+// "nothing to check"; any other non-zero exit (timeout, permission error,
+// corrupted `~/.codex/config.toml`, etc.) is a real failure we can't verify
+// through, not an absence, and must not be reported as green.
+const CODEX_MCP_NOT_REGISTERED_RE = /no mcp server named/i;
+
 function checkCodexMcpTokenMatchesHub(): CheckResult {
   const label = 'Codex MCP settings の azt-mcp トークンがハブの現在値と一致';
 
@@ -218,7 +240,7 @@ function checkCodexMcpTokenMatchesHub(): CheckResult {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (err) {
-    const e = err as NodeJS.ErrnoException & { status?: number };
+    const e = err as NodeJS.ErrnoException & { status?: number; stderr?: string; stdout?: string };
     if (e.code === 'ENOENT') {
       return {
         ok: true,
@@ -227,14 +249,34 @@ function checkCodexMcpTokenMatchesHub(): CheckResult {
         detail: 'codex コマンドが見つかりません（Codex を使わない環境では確認不能・問題ありません）',
       };
     }
-    // `codex mcp get` exits non-zero when azt-mcp isn't registered in Codex
-    // at all (or on some other CLI-side error) — that's "nothing to check",
-    // the same "not configured" treatment `checkMcpTokenMatchesHub` gives
-    // an absent Claude entry, not a doctor failure.
+
+    const combinedOutput = `${e.stderr ?? ''}\n${e.stdout ?? ''}`;
+    if (CODEX_MCP_NOT_REGISTERED_RE.test(combinedOutput)) {
+      // `codex mcp get` exits non-zero specifically because azt-mcp isn't
+      // registered in Codex at all — that's "nothing to check", the same
+      // "not configured" treatment `checkMcpTokenMatchesHub` gives an absent
+      // Claude entry, not a doctor failure.
+      return {
+        ok: true,
+        label,
+        detail: 'Codex に azt-mcp が登録されていません（このマシンで Codex を使わない場合は問題ありません）',
+      };
+    }
+
+    // Any other failure (timeout, permission error, corrupted config, an
+    // unrecognized CLI error shape) is genuinely "we couldn't verify this" —
+    // rounding it down to green would hide a real problem behind a clean
+    // `azito auth doctor` run. Report as notice (not NG, since it's not a
+    // confirmed mismatch either) with the original error attached.
+    const message = e.stderr?.trim() || (err instanceof Error ? err.message : String(err));
     return {
       ok: true,
+      notice: true,
       label,
-      detail: 'Codex に azt-mcp が登録されていません（このマシンで Codex を使わない場合は問題ありません）',
+      detail:
+        `codex mcp get azt-mcp --json の実行に失敗し、登録状況を確認できませんでした: ${message}\n` +
+        '  修正: `codex mcp get azt-mcp --json` を手動で実行して原因を確認してください' +
+        '（タイムアウト・権限エラー・設定ファイル破損などが考えられます）。',
     };
   }
 
@@ -284,7 +326,113 @@ function checkCodexMcpTokenMatchesHub(): CheckResult {
   };
 }
 
-// (e) AZITO_SCOPED_AUTH の現在値
+// (e) scoped 有効化前の生存タスク所有ウィンドウ検査
+//
+// Design v3 §12's migration procedure calls for draining (finishing or
+// recreating) task windows before flipping AZITO_SCOPED_AUTH on — a window
+// created in compat mode keeps AZITO_UI_TOKEN in its pane environment for
+// its whole lifetime, so a still-live task pane created before the flag was
+// enabled can keep acting as an operator-equivalent principal even after
+// the flag flips (nothing re-derives its env from the new mode on the fly).
+// There was no way to actually VERIFY the drain step happened, though — a
+// human just had to trust they remembered to finish every task first. This
+// check makes that concrete: while AZITO_SCOPED_AUTH is still off, look for
+// task-owned windows whose tmux pane is still alive on the LOCAL server
+// (the only server this process can inspect — see the file's own header
+// notice about being local-only).
+//
+// Deliberately a `warning`, not an NG: while the flag is off, a live task
+// window is completely normal/expected, not evidence of anything already
+// broken. It only matters as pre-flight guidance for someone about to flip
+// the flag on. Once AZITO_SCOPED_AUTH is actually enabled, this check is a
+// no-op (skipped) — draining is a one-time migration step, not an ongoing
+// invariant this command should keep flagging.
+async function checkTaskOwnedWindowsBeforeScopedAuth(): Promise<CheckResult> {
+  const label = 'scoped 認可 有効化前の生存タスクウィンドウ（ローカルのみ検査可能）';
+
+  if (resolveScopedAuthEnabled()) {
+    return {
+      ok: true,
+      label,
+      detail: 'AZITO_SCOPED_AUTH が既に有効です（この検査は未有効時のみ対象）',
+    };
+  }
+
+  const paths = resolveDataDir();
+  if (!fs.existsSync(paths.db)) {
+    return {
+      ok: true,
+      label,
+      detail: `${paths.db} が見つかりません（未セットアップ、またはこのマシンでハブを実行していません）`,
+    };
+  }
+
+  let db: ReturnType<typeof openDatabase> | undefined;
+  try {
+    db = openDatabase(paths.db);
+
+    const localServer = db
+      .prepare("SELECT name, mux_runtime FROM servers WHERE type = 'local' LIMIT 1")
+      .get() as { name: string; mux_runtime: MuxRuntime } | undefined;
+    if (!localServer) {
+      return { ok: true, label, detail: 'ローカルサーバーの登録が見つかりません（検査対象なし）' };
+    }
+
+    const taskWindows = db
+      .prepare("SELECT task_id AS taskId, tmux_target AS tmuxTarget FROM windows WHERE owner_type = 'task' AND server_name = ?")
+      .all(localServer.name) as { taskId: number; tmuxTarget: string }[];
+    if (taskWindows.length === 0) {
+      return { ok: true, label, detail: 'タスク所有ウィンドウの登録がありません（ローカル範囲）' };
+    }
+
+    const serverConfig: ServerConfig = {
+      name: localServer.name,
+      type: 'local',
+      host: null,
+      agentPort: null,
+      agentToken: null,
+      agentVersion: null,
+      sshHost: null,
+      muxRuntime: localServer.mux_runtime ?? 'system',
+      sshHostFingerprint: null,
+      createdAt: '',
+    };
+    const tmux = new TmuxClient(new TransportFactory(''), '', '', '');
+
+    const alive: string[] = [];
+    for (const w of taskWindows) {
+      const exists = await tmux.checkPaneExists(serverConfig, w.tmuxTarget);
+      if (exists) alive.push(`task #${w.taskId}（${w.tmuxTarget}）`);
+    }
+
+    if (alive.length === 0) {
+      return {
+        ok: true,
+        label,
+        detail: 'タスク所有ウィンドウの登録はありますが、生存中の tmux ペインはありません（ローカル範囲で確認）',
+      };
+    }
+
+    return {
+      ok: true,
+      warning: true,
+      label,
+      detail:
+        `生存中のタスク所有ウィンドウが ${alive.length} 件見つかりました（ローカル範囲のみ検査可能）: ${alive.join(', ')}\n` +
+        '  案内: scoped 有効化前に、これらのタスクを終端させるか再生成してください。' +
+        '互換モードで作られたペインは env に AZITO_UI_TOKEN を保持したまま残るため、' +
+        '有効化後も残存ペインが operator 相当として振る舞える可能性があります。\n' +
+        '  有効化後に `azito token rotate` を実行すると、残存 env のトークンも最終的に無効化されます' +
+        '（最後の rotate が実質的なドレインの仕上げを兼ねます）。\n' +
+        '  リモートサーバー（ssh/agent）上のタスクウィンドウはここでは検査できません。' +
+        'そのサーバー上で `azito auth doctor` を実行してください。',
+    };
+  } finally {
+    db?.close();
+  }
+}
+
+// (f) AZITO_SCOPED_AUTH の現在値
 function checkScopedAuthFlag(): CheckResult {
   const enabled = resolveScopedAuthEnabled();
   return {
@@ -311,12 +459,17 @@ export async function authDoctorCommand(): Promise<void> {
     checkOperatorEnvPermissions(),
     checkMcpTokenMatchesHub(),
     checkCodexMcpTokenMatchesHub(),
+    await checkTaskOwnedWindowsBeforeScopedAuth(),
     checkScopedAuthFlag(),
   ];
 
   let hasFailure = false;
   for (const check of checks) {
-    const mark = check.notice ? (process.stdout.isTTY ? '\x1b[33m-- \x1b[0m' : '-- ') : colorize(check.ok, check.ok ? 'OK ' : 'NG ');
+    const mark = check.notice
+      ? (process.stdout.isTTY ? '\x1b[33m-- \x1b[0m' : '-- ')
+      : check.warning
+        ? (process.stdout.isTTY ? '\x1b[33m!! \x1b[0m' : '!! ')
+        : colorize(check.ok, check.ok ? 'OK ' : 'NG ');
     console.log(`[${mark}] ${check.label}`);
     for (const line of check.detail.split('\n')) {
       console.log(`      ${line}`);

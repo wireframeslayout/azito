@@ -300,9 +300,27 @@ export class SupervisorRegistry extends EventEmitter {
    *
    * EXCEPTION (Issue #28 Phase C): if the existing connection on this key is
    * `bound` to a launchId and the new registration's launchId differs (or is
-   * absent), the new registration is rejected and the existing connection is
-   * left untouched — a different launch must never evict a bound one
-   * (design v3 §8: "異なる launchId からの置換（追い出し）は拒否").
+   * absent), the new registration is normally rejected and the existing
+   * connection is left untouched — a different launch must never evict a
+   * bound one (design v3 §8: "異なる launchId からの置換（追い出し）は拒否").
+   *
+   * Sub-exception (Issue #28 Phase C review, Important finding): credentials
+   * are checked BEFORE that eviction guard, not after. A legitimate
+   * re-launch for the same key (e.g. WindowRespawnService re-executing a
+   * task) issues a fresh `supervisor_launches` row that supersedes the old
+   * one — `SqliteSupervisorLaunchRepository.create()` invalidates the prior
+   * row so its bootstrap/session token stops verifying. If the OLD
+   * supervisor's WebSocket is still connected (hub hasn't yet observed the
+   * disconnect) when the NEW supervisor process registers with its NEW,
+   * already-authenticated launchId, `resolveLaunchAuth` below has already
+   * confirmed the new registration IS the current launch for this key (an
+   * old/superseded/forged launchId simply fails auth and never reaches this
+   * branch as "authenticated"). Refusing it anyway — as a pre-auth ordering
+   * used to — would strand the task with a dead old connection forever,
+   * since the old process is never coming back to free the key. Only a
+   * registration that failed authentication (unknown/mismatched/invalid
+   * token, or no launchId at all) is still refused outright here, leaving
+   * the existing bound connection untouched.
    */
   register(socket: WebSocket, info: RegisterMessage): void {
     if (info.protocolVersion !== SUPERVISOR_PROTOCOL_VERSION) {
@@ -316,19 +334,24 @@ export class SupervisorRegistry extends EventEmitter {
 
     const key = keyFor(info.serverName, info.target);
     const existing = this.connections.get(key);
+    const authResult = this.resolveLaunchAuth(info);
 
     if (existing?.bound && existing.launchId !== null && existing.launchId !== (info.launchId ?? null)) {
-      this.audit('supervisor_launch.replace_rejected', {
-        serverName: info.serverName,
-        target: info.target,
-        existingLaunchId: existing.launchId,
-        newLaunchId: info.launchId ?? null,
-      });
-      this.safeClose(socket, 4009, 'existing bound connection retained (launch id mismatch)');
-      return;
+      const isAuthenticatedReplacement = info.launchId !== undefined && authResult.ok;
+      if (!isAuthenticatedReplacement) {
+        this.audit('supervisor_launch.replace_rejected', {
+          serverName: info.serverName,
+          target: info.target,
+          existingLaunchId: existing.launchId,
+          newLaunchId: info.launchId ?? null,
+        });
+        this.safeClose(socket, 4009, 'existing bound connection retained (launch id mismatch)');
+        return;
+      }
+      // Falls through: authResult.ok is true, so the new registration is the
+      // verified current launch for this key — evict the stale connection below.
     }
 
-    const authResult = this.resolveLaunchAuth(info);
     if (!authResult.ok) {
       this.safeClose(socket, 4001, authResult.reason);
       return;

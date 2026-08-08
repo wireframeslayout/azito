@@ -124,9 +124,19 @@ It checks, **on the machine it runs on only** (it does not reach out to remote s
 - (b) `~/.azito/operator.env` (if present) is mode 600
 - (c) the MCP token in `~/.claude/settings.json` (if present) matches the hub's current token, as
   far as it can be read locally
-- (d) the current value of `AZITO_SCOPED_AUTH`
+- (d) the Codex-side `azt-mcp` token matches the hub's current token (only when the `codex` CLI is
+  present)
+- (e) **only while `AZITO_SCOPED_AUTH` is still off**: whether any task-owned tmux pane is still
+  alive on the local server (this is the drain check for Step 4 of the migration below — it's
+  reported as a warning, `!!`, not `NG`, since a live pane is completely normal while the flag is
+  off; it only matters as guidance ahead of flipping the flag). If it finds one, finish or
+  re-create that task before enabling the flag — a pane created in compatibility mode keeps
+  `AZITO_UI_TOKEN` in its env for its whole life, so it can still act as an operator-equivalent
+  principal even after the flag flips. **This check can only see the local server** — a remote
+  server's live panes are invisible to it; run `azito auth doctor` on that server too
+- (f) the current value of `AZITO_SCOPED_AUTH`
 
-Each check prints a fix instruction when it fails. Run it again on every remote server after
+Each failing (`NG`) check prints a fix instruction. Run it again on every remote server after
 migrating — a single run only covers the machine it executed on.
 
 ### The same-Unix-user limitation
@@ -161,6 +171,13 @@ also accepts the legacy UI-token-only flow, so nothing breaks mid-rollout. Roll 
    is the point where task principals actually become restricted to the allowlisted APIs (design
    §4) instead of just being *issued* scoped tokens.
 
+   **Drain first.** A task pane created in compatibility mode keeps `AZITO_UI_TOKEN` in its process
+   environment for its whole life, so flipping the flag doesn't retroactively restrict a pane that
+   was already running — it can still act as an operator-equivalent principal until it exits. If
+   `azito auth doctor`'s task-owned-window check (item (e) above) warns that a pane is still alive,
+   finish or re-create that task before enabling the flag. That check only covers the local
+   server, so check each remote server independently by running `azito auth doctor` on it.
+
    This also changes how supervisor registrations are treated (design §8). A `tui-supervisor`
    started by task execution registers with a hub-issued `--launch-id`/`--bootstrap-token`, and is
    marked **bound** — driving the dashboard activity display, a task turn's idle-timer refresh, and
@@ -173,7 +190,9 @@ also accepts the legacy UI-token-only flow, so nothing breaks mid-rollout. Roll 
    registration is treated as bound regardless of `--launch-id`, exactly as before this phase.
 5. **Rotate the UI token last.** Run `azito token rotate`, then update the browser (re-enter the
    token), any MCP client config it didn't reach automatically, and `operator.env` on any other
-   machine you use as an operator.
+   machine you use as an operator. **This last rotate also finishes invalidating any leftover pane
+   that slipped through the Step 4 drain check** — rotate changes the actual token the hub accepts,
+   so even a pane you missed can no longer authenticate with its old, now-stale token.
 
 ---
 
