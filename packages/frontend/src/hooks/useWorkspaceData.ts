@@ -128,21 +128,24 @@ export function useWorkspaceData(
     return () => clearInterval(fallback);
   }, [refreshWorkspace, refreshSessions, sidebarMode]);
 
-  // タスク所有ウィンドウのサーバー集合が変わったときだけ refreshSessions を再実行する。
+  // タスク所有ウィンドウの (サーバー名, tmuxターゲット) 集合が変わったときだけ refreshSessions を再実行する。
+  // サーバー名だけをキーにすると、既にキーに含まれているサーバー上でタスクウィンドウが増減しても
+  // キーが変化せず再取得が走らない（新しいウィンドウがオフライン扱いのまま残る）ため、
+  // ウィンドウ単位（サーバー名+tmuxターゲット）まで粒度を上げる。
   // refreshSessions 自体は tasksRef 経由で最新値を読むだけで参照は [projectId] にしか依存しないため、
   // ここで明示的に監視しないとタスク一覧更新時にセッションが古いまま（新サーバーがオフライン扱い）になる。
-  const taskWindowServerNamesKey = useMemo(
-    () => [...new Set(tasks.flatMap((t) => (t.windows ?? []).map((w) => w.serverName)))].sort().join(','),
+  const taskWindowKeysKey = useMemo(
+    () => [...new Set(tasks.flatMap((t) => (t.windows ?? []).map((w) => `${w.serverName}:${w.tmuxTarget}`)))].sort().join(','),
     [tasks],
   );
-  const prevTaskWindowServerNamesKeyRef = useRef<string | null>(null);
+  const prevTaskWindowKeysKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    const prev = prevTaskWindowServerNamesKeyRef.current;
-    prevTaskWindowServerNamesKeyRef.current = taskWindowServerNamesKey;
-    if (prev !== null && prev !== taskWindowServerNamesKey) {
+    const prev = prevTaskWindowKeysKeyRef.current;
+    prevTaskWindowKeysKeyRef.current = taskWindowKeysKey;
+    if (prev !== null && prev !== taskWindowKeysKey) {
       refreshSessions();
     }
-  }, [taskWindowServerNamesKey, refreshSessions]);
+  }, [taskWindowKeysKey, refreshSessions]);
 
   // Load project list for project bar
   useEffect(() => {
