@@ -93,6 +93,18 @@ export interface IWindowRepository {
    * hold").
    */
   findByServerAndSession(serverName: string, sessionName: string): Window[];
+  /**
+   * The DB's own current timestamp, in the exact same string format as
+   * `created_at` on every row (Issue #28 third-party review finding: the
+   * session-delete route's post-kill safety-net cleanup — see
+   * `tmux/routes/sessions.ts`'s `DELETE /api/servers/:name/sessions/:session`
+   * handler — needs a cutoff instant to bound "was this row created before
+   * the kill started", and comparing against a Node-side `Date.now()`/ISO
+   * string risks both clock skew against the DB process and a format
+   * mismatch with `created_at`'s `datetime('now')` format). Never cached —
+   * always a fresh read.
+   */
+  now(): string;
   update(id: number, data: Partial<Pick<Window,
     'tmuxTarget' | 'label' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType'
   >>): void;

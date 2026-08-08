@@ -17,6 +17,7 @@ type FakeWindowRepo = SqliteWindowRepository & {
   remove: ReturnType<typeof vi.fn>;
   findByServerAndTarget: ReturnType<typeof vi.fn>;
   findByServerAndSession: ReturnType<typeof vi.fn>;
+  now: ReturnType<typeof vi.fn>;
 };
 
 function makeWindowRepo(): FakeWindowRepo {
@@ -37,6 +38,14 @@ function makeWindowRepo(): FakeWindowRepo {
     // held (Issue #28 third-party review finding 4); most existing tests
     // aren't about session-wide delete at all.
     findByServerAndSession: vi.fn(() => []),
+    // Issue #28 third-party review, D-track fix 3: the DELETE session
+    // handler reads this to bound its post-kill safety-net cleanup — see
+    // `killStartedAt`'s doc comment in sessions.ts. A fixed value is fine
+    // for every existing test: none of the fake window rows below carry a
+    // `createdAt`, so the `<=` comparison in that safety net always
+    // resolves to `false` (undefined is never `<=` anything) and the net
+    // never fires for them.
+    now: vi.fn(() => '2026-01-01 00:00:00'),
   } as unknown as FakeWindowRepo;
 }
 
@@ -407,6 +416,67 @@ describe('DELETE /api/servers/:name/sessions/:session', () => {
     const [resolveWindows] = destroySessionWindows.mock.calls[0]!;
     expect(resolveWindows()).toEqual([{ taskId: 42, windowName: 'task-42', target: 'session:task-42', onDestroyed: expect.any(Function) }]);
     expect(windowRepo.removeByServerAndTarget).toHaveBeenCalledWith('srv1', 'session:task-42');
+  });
+
+  // Issue #28 third-party review, D-track fix 3: a secondary/project window
+  // row can be INSERTed between the pre-kill snapshot and the kill actually
+  // completing (secondary-window creation isn't serialized by the per-task
+  // lock). The post-kill safety net must catch it — it was killed in tmux
+  // right along with everything else, but the pre-kill snapshot never saw
+  // it, so the by-id cleanup alone would leave its row behind forever.
+  it('cleans up a secondary window row created in the gap between the pre-kill snapshot and kill completion (D-track fix 3)', async () => {
+    const windowRepo = makeWindowRepo();
+    (windowRepo.now as ReturnType<typeof vi.fn>).mockReturnValue('2026-01-01 00:00:05');
+    // First call (the pre-kill snapshot, taken inside destroySessionWindows'
+    // resolvePrimaryTaskWindows) sees only the primary task window. The
+    // SECOND call is the route's own post-kill safety-net re-query — it
+    // finds an extra row (id 9) that appeared in the gap, created BEFORE
+    // killStartedAt, so it must be cleaned up too.
+    windowRepo.findByServerAndSession
+      .mockReturnValueOnce([
+        { id: 1, ownerType: 'task', taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:task-42', isPrimary: true, createdAt: '2026-01-01 00:00:00' },
+      ])
+      .mockReturnValueOnce([
+        { id: 1, ownerType: 'task', taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:task-42', isPrimary: true, createdAt: '2026-01-01 00:00:00' },
+        { id: 9, ownerType: 'project', taskId: null, projectId: 3, serverName: 'srv1', tmuxTarget: 'session:extra-late', isPrimary: false, createdAt: '2026-01-01 00:00:02' },
+      ]);
+    const tmux: Partial<TmuxClient> = {
+      killSession: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
+    };
+    const destroySessionWindows = makeDestroySessionWindows();
+    app = await buildApp({ tmux, windowRepo, destroySessionWindows });
+
+    const res = await app.inject({ method: 'DELETE', url: '/api/servers/srv1/sessions/session' });
+
+    expect(res.statusCode).toBe(200);
+    // The primary task window is handled via destroySessionWindows/removeByServerAndTarget.
+    expect(windowRepo.removeByServerAndTarget).toHaveBeenCalledWith('srv1', 'session:task-42');
+    // The late-arriving row (created before killStartedAt) is cleaned up by
+    // the post-kill safety net, by id.
+    expect(windowRepo.remove).toHaveBeenCalledWith(9);
+  });
+
+  // The mirror case: a row created AFTER the kill (e.g. a brand-new session
+  // that reused the same session name moments later) must survive the
+  // safety net — its created_at is after killStartedAt.
+  it('does not delete a row created AFTER killStartedAt (a brand-new session reusing the same name)', async () => {
+    const windowRepo = makeWindowRepo();
+    (windowRepo.now as ReturnType<typeof vi.fn>).mockReturnValue('2026-01-01 00:00:05');
+    windowRepo.findByServerAndSession
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([
+        { id: 10, ownerType: 'project', taskId: null, projectId: 3, serverName: 'srv1', tmuxTarget: 'session:brand-new', isPrimary: false, createdAt: '2026-01-01 00:00:09' },
+      ]);
+    const tmux: Partial<TmuxClient> = {
+      killSession: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
+    };
+    const destroySessionWindows = makeDestroySessionWindows();
+    app = await buildApp({ tmux, windowRepo, destroySessionWindows });
+
+    const res = await app.inject({ method: 'DELETE', url: '/api/servers/srv1/sessions/session' });
+
+    expect(res.statusCode).toBe(200);
+    expect(windowRepo.remove).not.toHaveBeenCalledWith(10);
   });
 
   it('does not revoke anything when the session has no windows at all', async () => {

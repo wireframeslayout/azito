@@ -196,9 +196,20 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
   const supervisorLaunchRepo = db ? new SqliteSupervisorLaunchRepository(db) : undefined;
   const supervisorRegistry = new SupervisorRegistry(supervisorLaunchRepo, auditLogService, scopedAuthEnabled);
   const browserSnapshotRepo = db ? new SqliteBrowserSnapshotRepository(db) : undefined;
+  // Separate instance from `buildRepositories`'s own `browserGroupRepo`
+  // (both are thin, stateless wrappers over prepared statements against the
+  // same `db` handle — Repositories.browserGroupRepo backs the route-level
+  // ownership check in browser/routes.ts; this one lets BrowserSessionManager
+  // clean up ownership rows itself on session stop / idle-TTL group expiry,
+  // Issue #28 review fix 4). `undefined` when `db` isn't wired (matches
+  // `browserSnapshotRepo` right above) — BrowserSessionManager already
+  // treats a missing repo as a no-op (same as the agent process, which never
+  // has one at all).
+  const browserGroupRepo = db ? new SqliteBrowserGroupRepository(db) : undefined;
   const browserSessionManager = new BrowserSessionManager(
     dataPaths.browserProfile,
     browserSnapshotRepo,
+    browserGroupRepo,
   );
 
   return {

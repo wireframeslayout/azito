@@ -18,6 +18,7 @@ export class SqliteBrowserGroupRepository {
   private recordStmt;
   private findStmt;
   private removeStmt;
+  private removeAllForServerStmt;
 
   constructor(private db: SqliteDatabase) {
     this.recordStmt = db.prepare(
@@ -28,6 +29,9 @@ export class SqliteBrowserGroupRepository {
     );
     this.removeStmt = db.prepare(
       'DELETE FROM browser_groups WHERE server_name = ? AND group_id = ?',
+    );
+    this.removeAllForServerStmt = db.prepare(
+      'DELETE FROM browser_groups WHERE server_name = ?',
     );
   }
 
@@ -53,5 +57,19 @@ export class SqliteBrowserGroupRepository {
   /** Best-effort hygiene call from `close-group` — never the sole source of truth for "is this group gone" (BrowserSessionManager owns that). */
   remove(serverName: string, groupId: string): void {
     this.removeStmt.run(serverName, groupId);
+  }
+
+  /**
+   * Clears every ownership row for `serverName` in one statement (Issue #28
+   * review fix 4). Called from `BrowserSessionManager.stop()` — a whole
+   * browser session shutdown (explicit `POST /api/browser/stop` or the idle
+   * session timeout) destroys every group that session held, so every
+   * ownership row scoped to that server is stale the instant it completes.
+   * Without this, a server whose browser process gets stopped and later
+   * relaunched would carry forward `browser_groups` rows for groups that no
+   * longer exist anywhere.
+   */
+  removeAllForServer(serverName: string): void {
+    this.removeAllForServerStmt.run(serverName);
   }
 }

@@ -39,6 +39,7 @@ export class SqliteWindowRepository implements IWindowRepository {
   private findProjectWindowStmt;
   private findByServerStmt;
   private findAgentSessionIdsByServerStmt;
+  private nowStmt;
 
   constructor(private db: SqliteDatabase) {
     this.addStmt = db.prepare(`
@@ -58,6 +59,11 @@ export class SqliteWindowRepository implements IWindowRepository {
     this.findAgentSessionIdsByServerStmt = db.prepare(
       'SELECT DISTINCT agent_session_id FROM windows WHERE server_name = ? AND agent_session_id IS NOT NULL',
     );
+    this.nowStmt = db.prepare("SELECT datetime('now') as ts");
+  }
+
+  now(): string {
+    return (this.nowStmt.get() as { ts: string }).ts;
   }
 
   add(window: Omit<Window, 'id' | 'createdAt'>): number {

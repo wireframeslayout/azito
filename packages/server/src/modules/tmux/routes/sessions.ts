@@ -350,10 +350,34 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         // instant. Recording it as a side effect of an already-idempotent,
         // already-DB-only read (no tmux/network calls) does not change its
         // observable behavior for any existing caller.
+        // Issue #28 third-party review, D-track fix 3: `sessionRowSnapshot`
+        // above is captured at the LAST `resolvePrimaryTaskWindows()` call
+        // before the kill actually runs — but a secondary/project window row
+        // can still be INSERTed between that snapshot instant and the kill
+        // finishing, because secondary-window creation is not serialized by
+        // the per-task lock `destroySessionWindows` takes (only primary-window
+        // mutations are). The old snapshot-only cleanup below therefore
+        // silently left such a row behind — killed in tmux, but never removed
+        // from `windows`. `killStartedAt` records the DB's own "now" at the
+        // same instant as the snapshot (a cutoff for the post-kill safety net
+        // further down), and is intentionally read from the DB itself, not
+        // `Date.now()`/`new Date().toISOString()` — a Node-side timestamp
+        // risks both clock skew against the DB process and a string-format
+        // mismatch against `created_at`'s `datetime('now')` format, either of
+        // which would make the `<=` comparison below silently wrong. This is
+        // a SAFETY NET, not a replacement for the by-id cleanup: it re-checks
+        // AFTER the kill instead of trusting the pre-kill snapshot alone —
+        // see that cleanup's own comment for why the cutoff (not a bare
+        // re-fetch-and-delete-everything) is what keeps this from ever
+        // touching a brand-new session that reused the same tmux target
+        // right after the kill (such a row's `created_at` is always AFTER
+        // `killStartedAt`).
         let sessionRowSnapshot: Array<{ id: number; tmuxTarget: string }> = [];
+        let killStartedAt = '';
         const resolvePrimaryTaskWindows = (): Array<{ taskId: number; windowName: string; target: string; onDestroyed: () => void }> => {
           const rows = opts.windowRepo?.findByServerAndSession(request.params.name, request.params.session) ?? [];
           sessionRowSnapshot = rows.map((win) => ({ id: win.id, tmuxTarget: win.tmuxTarget }));
+          killStartedAt = opts.windowRepo?.now() ?? '';
           const out: Array<{ taskId: number; windowName: string; target: string; onDestroyed: () => void }> = [];
           for (const win of rows) {
             if (win.taskId === null || !isPrimaryTaskWindow(win)) continue;
@@ -408,6 +432,26 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         for (const win of sessionRowSnapshot) {
           if (handledTargets.has(win.tmuxTarget)) continue;
           opts.windowRepo?.remove(win.id);
+        }
+
+        // Post-kill safety net (Issue #28 third-party review, D-track fix 3
+        // — see `killStartedAt`'s own doc comment above for the full race
+        // this closes). Re-query the session's rows AFTER the kill and
+        // remove any row that (a) was NOT in the pre-kill snapshot (so the
+        // by-id cleanup above never saw it) and (b) was created at or before
+        // `killStartedAt` — i.e. it existed in the gap between the snapshot
+        // and the kill completing, so it died along with everything else the
+        // kill took down. Condition (b) is exactly what makes this safe to
+        // run unconditionally on every call: a brand-new session that reuses
+        // this same session name immediately after the kill always has
+        // `created_at > killStartedAt`, so its rows are never touched here.
+        if (killStartedAt) {
+          const knownIds = new Set(sessionRowSnapshot.map((win) => win.id));
+          const postKillRows = opts.windowRepo?.findByServerAndSession(request.params.name, request.params.session) ?? [];
+          for (const win of postKillRows) {
+            if (knownIds.has(win.id) || win.createdAt > killStartedAt) continue;
+            opts.windowRepo?.remove(win.id);
+          }
         }
         return { ok: true };
       } catch (err: unknown) {

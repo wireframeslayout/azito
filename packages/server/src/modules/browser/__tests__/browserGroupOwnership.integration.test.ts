@@ -125,6 +125,35 @@ describe('Task-owned browser groups (Issue #28 Phase E, design v3 §11)', () => 
     expect(browserGroupRepo.findOwnerTaskId('srv1', groupId)).toBe(1);
   });
 
+  it("review fix 1: an operator open with a body taskId never grants that task's token close authority (metadata is not authorization)", async () => {
+    const { app, taskTokenRepo, browserGroupRepo } = buildApp(true, db);
+    const { token: victimToken } = taskTokenRepo.issue(7, 1);
+
+    const openRes = await app.inject({
+      method: 'POST',
+      url: '/api/browser/open',
+      headers: { authorization: `Bearer ${UI_TOKEN}` },
+      // An operator's own open, carrying an unverified `taskId` in the
+      // body — this must stay pure metadata (e.g. for the browser:opened
+      // notification), never become the recorded owner.
+      payload: { server: 'srv1', taskId: 7 },
+    });
+    const { groupId } = openRes.json();
+    expect(browserGroupRepo.findOwnerTaskId('srv1', groupId)).toBeNull();
+
+    const closeRes = await app.inject({
+      method: 'POST',
+      url: '/api/browser/close-group',
+      headers: { authorization: `Bearer ${victimToken}` },
+      payload: { server: 'srv1', group: groupId },
+    });
+
+    expect(closeRes.statusCode).toBe(403);
+    expect(closeRes.json()).toEqual({ error: 'operator_required', operation: 'browser.close_group' });
+    // The group is untouched by the denied attempt.
+    expect(browserGroupRepo.findOwnerTaskId('srv1', groupId)).toBeNull();
+  });
+
   it('a task principal can close-group the group it opened', async () => {
     const { app, taskTokenRepo, browserGroupRepo } = buildApp(true, db);
     const { token } = taskTokenRepo.issue(1, 1);

@@ -163,6 +163,7 @@ function buildService(opts: {
     remove: vi.fn(),
     removeByServerAndTarget: vi.fn(() => 0),
     updatePaneLayout: vi.fn(),
+    now: vi.fn(() => '2026-01-01 00:00:00'),
   };
 
   const sentCommands: string[] = [];
@@ -1335,6 +1336,7 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
       remove: vi.fn(),
       removeByServerAndTarget: vi.fn(() => 0),
       updatePaneLayout: vi.fn(),
+      now: vi.fn(() => '2026-01-01 00:00:00'),
     };
 
     // In-memory tmux session/window state, keyed 'sessionName:windowName'.

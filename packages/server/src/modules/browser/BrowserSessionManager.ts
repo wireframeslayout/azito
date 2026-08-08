@@ -1,5 +1,6 @@
 import { BrowserSession, type BrowserSessionOptions } from './BrowserSession';
 import type { SqliteBrowserSnapshotRepository, BrowserTabSnapshot } from './SqliteBrowserSnapshotRepository';
+import type { SqliteBrowserGroupRepository } from './SqliteBrowserGroupRepository';
 
 const IDLE_TIMEOUT_MS = 15 * 60 * 1000;
 
@@ -18,6 +19,11 @@ export class BrowserSessionManager {
   constructor(
     private defaultProfileBaseDir: string,
     private snapshotRepo?: SqliteBrowserSnapshotRepository,
+    // Optional: the agent process (agent/main.ts) constructs this class
+    // with no browser-group ownership concept at all — ownership tracking
+    // is a hub-only concern (Issue #28 Phase E). Same optionality pattern
+    // as `snapshotRepo` above.
+    private browserGroupRepo?: SqliteBrowserGroupRepository,
   ) {}
 
   async getOrCreate(serverName: string, opts?: Partial<BrowserSessionOptions>): Promise<BrowserSession> {
@@ -57,7 +63,21 @@ export class BrowserSessionManager {
     // below (an intentional close, not an expiry).
     session.onGroupTabsChanged((groupId) => {
       const tabs = session.listGroupTabs(groupId);
-      if (tabs.length === 0) return;
+      if (tabs.length === 0) {
+        // Issue #28 review fix 4: a group whose tabs just dropped to zero
+        // through BrowserSession's OWN idle-TTL sweeper (sweepIdleGroups —
+        // a non-forced close BrowserSessionManager.closeGroup() never sees,
+        // so its own `browserGroupRepo.remove()` call never runs for this
+        // path) still owes this hub's ownership row a cleanup — otherwise a
+        // `browser_groups` row for a group nothing references anymore
+        // lingers until the whole session eventually stops. Deliberately
+        // does NOT touch `this.snapshots`/`snapshotRepo` here (see the
+        // comment above this block) — snapshot retention and ownership
+        // tracking are separate concerns; restoration must keep working
+        // even after ownership is cleared.
+        this.browserGroupRepo?.remove(serverName, groupId);
+        return;
+      }
       this.snapshots.set(snapshotKey(serverName, groupId), tabs);
       this.snapshotRepo?.saveGroup(serverName, groupId, tabs);
     });
@@ -126,6 +146,14 @@ export class BrowserSessionManager {
       await session.stop();
       this.sessions.delete(serverName);
     }
+    // Issue #28 review fix 4: a whole-session stop (explicit `POST
+    // /api/browser/stop` or the idle session timeout below) destroys every
+    // group that session held, so every `browser_groups` ownership row
+    // scoped to this server is stale the instant this completes. Always
+    // run — not just when `session` was found above — so a `stop()` call
+    // that races after the session already tore itself down still clears
+    // any row a slower-to-land `open` left behind.
+    this.browserGroupRepo?.removeAllForServer(serverName);
   }
 
   getStatus(serverName: string): { running: boolean; clientCount: number; pages: { id: string; group: string; clientCount: number; url: string | null }[] } {

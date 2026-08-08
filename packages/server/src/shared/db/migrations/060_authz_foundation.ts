@@ -143,17 +143,28 @@ export function up(db: Database.Database): void {
   // `task_tokens.task_id`/`supervisor_launches.task_id` elsewhere in this
   // migration: no FOREIGN KEY, since a group row is a point-in-time record
   // of what opened it, not a live reference a task delete needs to cascade
-  // into. `group_id` is the primary key (not an autoincrement `id`) because
-  // every lookup and delete this repository does is by that value alone.
-  // Added directly to this still-unreleased migration rather than a new
-  // one (per AGENTS.md instructions for this phase), same as the
-  // origination columns and supervisor_launches table above.
+  // into. Primary key is the composite `(server_name, group_id)` (Issue #28
+  // review fix 4, third-party review of this still-unreleased migration) —
+  // NOT `group_id` alone as originally shipped here: every lookup, delete,
+  // and the route-level ownership check
+  // (`SqliteBrowserGroupRepository.findOwnerTaskId`) already scope by
+  // `server_name AND group_id` together, so `group_id` alone was never the
+  // actual uniqueness invariant this table needs to enforce — it just
+  // happened to hold in practice because `group_id` is randomly generated
+  // per open. A `group_id`-only PRIMARY KEY made a same-named group opened
+  // on two DIFFERENT servers (astronomically unlikely, but not the
+  // invariant this table declares) an INSERT failure instead of two
+  // legitimately distinct rows. Added directly to this still-unreleased
+  // migration rather than a new one (per AGENTS.md instructions for this
+  // phase), same as the origination columns and supervisor_launches table
+  // above.
   db.exec(`
     CREATE TABLE browser_groups (
-      group_id TEXT PRIMARY KEY,
+      group_id TEXT NOT NULL,
       server_name TEXT NOT NULL,
       task_id INTEGER,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (server_name, group_id)
     )
   `);
   db.exec('CREATE INDEX idx_browser_groups_task_id ON browser_groups(task_id)');

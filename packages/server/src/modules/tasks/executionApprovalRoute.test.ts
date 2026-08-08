@@ -151,6 +151,7 @@ function makeOpts(existingTask: Task | null): TasksRouteOptions {
       remove: vi.fn(),
       removeByServerAndTarget: vi.fn(() => 0),
       updatePaneLayout: vi.fn(),
+      now: vi.fn(() => '2026-01-01 00:00:00'),
     },
     respawnService: {
       respawn: vi.fn(async () => ({ tmuxTarget: 'azito:task-1.1' })),

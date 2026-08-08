@@ -318,13 +318,34 @@ describe('migration 060: authz_foundation', () => {
     expect(unowned.task_id).toBeNull();
   });
 
-  it('rejects a duplicate browser_groups.group_id (primary key)', () => {
+  it('rejects a duplicate (server_name, group_id) pair (composite primary key)', () => {
     const db = buildSeededDb();
     m060.up(db);
 
     db.prepare(`INSERT INTO browser_groups (group_id, server_name, task_id) VALUES (?, ?, ?)`).run('agent-dup', 'srv-a', 1);
     expect(() =>
-      db.prepare(`INSERT INTO browser_groups (group_id, server_name, task_id) VALUES (?, ?, ?)`).run('agent-dup', 'srv-b', 2),
+      db.prepare(`INSERT INTO browser_groups (group_id, server_name, task_id) VALUES (?, ?, ?)`).run('agent-dup', 'srv-a', 2),
     ).toThrow();
+  });
+
+  // Issue #28 review fix 4: the primary key is `(server_name, group_id)`,
+  // not `group_id` alone — every route-level lookup/delete already scopes
+  // by both columns together (SqliteBrowserGroupRepository), so the same
+  // `group_id` recorded under two DIFFERENT servers must be two distinct
+  // rows, not a collision.
+  it('allows the same group_id to be recorded under two different servers', () => {
+    const db = buildSeededDb();
+    m060.up(db);
+
+    db.prepare(`INSERT INTO browser_groups (group_id, server_name, task_id) VALUES (?, ?, ?)`).run('agent-shared', 'srv-a', 1);
+    expect(() =>
+      db.prepare(`INSERT INTO browser_groups (group_id, server_name, task_id) VALUES (?, ?, ?)`).run('agent-shared', 'srv-b', 2),
+    ).not.toThrow();
+
+    const rows = db.prepare('SELECT server_name, task_id FROM browser_groups WHERE group_id = ? ORDER BY server_name').all('agent-shared');
+    expect(rows).toEqual([
+      { server_name: 'srv-a', task_id: 1 },
+      { server_name: 'srv-b', task_id: 2 },
+    ]);
   });
 });
