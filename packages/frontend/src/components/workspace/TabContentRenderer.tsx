@@ -155,7 +155,7 @@ export default function TabContentRenderer({
         />
       )}
       {tab.type === 'file' && tab.serverName && tab.filePath && (
-        <FilePreviewPanel serverName={tab.serverName} filePath={tab.filePath} />
+        <FilePreviewPanel serverName={tab.serverName} filePath={tab.filePath} initialLine={tab.line} />
       )}
       {tab.type === 'storage-file' && tab.storageFileData && (
         <StorageFilePreview

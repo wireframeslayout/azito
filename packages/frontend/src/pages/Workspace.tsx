@@ -399,8 +399,8 @@ function WorkspaceInner() {
     }
   }, [resolveOverlayTarget, showToast]);
 
-  const openFile = useCallback((serverName: string, filePath: string) => {
-    openFileRaw(serverName, filePath, currentProjectId);
+  const openFile = useCallback((serverName: string, filePath: string, line?: number) => {
+    openFileRaw(serverName, filePath, currentProjectId, line);
   }, [openFileRaw, currentProjectId]);
 
   const openDiff = useCallback((serverName: string, path: string, baseBranch?: string) => {
@@ -555,8 +555,8 @@ function WorkspaceInner() {
     navigate(location.pathname, { replace: true });
   }, [location.search]);
 
-  const handleFileSelect = useCallback((serverName: string, filePath: string) => {
-    openFile(serverName, filePath);
+  const handleFileSelect = useCallback((serverName: string, filePath: string, line?: number) => {
+    openFile(serverName, filePath, line);
     if (mobile) setSidebarOpen(false);
   }, [openFile, mobile, setSidebarOpen]);
 

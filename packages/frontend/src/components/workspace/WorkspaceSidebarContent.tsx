@@ -5,6 +5,8 @@ import type { PersistedTab } from '../../hooks/useTabPersistence';
 import type { BrowserGroupInfo } from '../../hooks/useBrowserGroups';
 import type { ContextMenuItem } from '../ContextMenu';
 import FileExplorer from '../FileExplorer';
+import { FileSearchPanel } from '../files/FileSearchPanel';
+import { Icon } from '../ui/Icon';
 import RepoSidebar from '../RepoSidebar';
 import StoragePanel from '../StoragePanel';
 import { WorktreeSection } from '../files/WorktreeSection';
@@ -36,7 +38,7 @@ interface WorkspaceSidebarContentProps {
   agentDefsError: string | null;
   showWindowContextMenu: (e: React.MouseEvent, w: Window, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void;
   onSwitchSidebarMode: (mode: SidebarMode) => void;
-  onFileSelect: (serverName: string, filePath: string) => void;
+  onFileSelect: (serverName: string, filePath: string, line?: number) => void;
   onRefresh: () => void;
   mobile: boolean;
   onCloseMobileSidebar: () => void;
@@ -111,6 +113,7 @@ export default function WorkspaceSidebarContent({
 }: WorkspaceSidebarContentProps) {
   const { t } = useTranslation('workspace');
   const [selectedWorktreePath, setSelectedWorktreePath] = useState<string | null>(null);
+  const [filesView, setFilesView] = useState<'tree' | 'search'>('tree');
 
   useEffect(() => {
     setSelectedWorktreePath(null);
@@ -214,11 +217,11 @@ export default function WorkspaceSidebarContent({
                     onSelect={setSelectedWorktreePath}
                   />
                 )}
-                <div style={{ padding: '6px 12px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+                <div style={{ padding: '6px 12px', borderBottom: '1px solid var(--border)', flexShrink: 0, display: 'flex', gap: 6 }}>
                   <button
                     onClick={() => { onOpenDiff(selectedFileServer, effectiveRoot); if (mobile) onCloseMobileSidebar(); }}
                     style={{
-                      width: '100%',
+                      flex: 1,
                       padding: '5px 10px',
                       fontSize: 'var(--font-sm)',
                       color: 'var(--accent)',
@@ -231,8 +234,41 @@ export default function WorkspaceSidebarContent({
                   >
                     {t('sidebar.gitDiff')}
                   </button>
+                  <button
+                    onClick={() => setFilesView(filesView === 'search' ? 'tree' : 'search')}
+                    title={filesView === 'search' ? t('sidebar.fileTree') : t('sidebar.searchFiles')}
+                    aria-pressed={filesView === 'search'}
+                    style={{
+                      padding: '5px 8px',
+                      fontSize: 'var(--font-sm)',
+                      color: filesView === 'search' ? 'var(--accent)' : 'var(--text-dim)',
+                      background: filesView === 'search' ? 'var(--accent-a15)' : 'var(--accent-a08)',
+                      border: '1px solid',
+                      borderColor: filesView === 'search' ? 'var(--accent-a35)' : 'var(--accent-a15)',
+                      borderRadius: 'var(--radius-sm)',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      flexShrink: 0,
+                    }}
+                  >
+                    <Icon name="search" size={14} />
+                  </button>
                 </div>
-                <FileExplorer serverName={selectedFileServer} rootPath={effectiveRoot} projectId={project?.id} onFileSelect={onFileSelect} />
+                {filesView === 'search' && project ? (
+                  <FileSearchPanel
+                    serverName={selectedFileServer}
+                    projectId={project.id}
+                    root={effectiveRoot}
+                    onOpenHit={(path, line) => {
+                      onFileSelect(selectedFileServer, path, line);
+                      if (mobile) onCloseMobileSidebar();
+                    }}
+                    onClose={() => setFilesView('tree')}
+                  />
+                ) : (
+                  <FileExplorer serverName={selectedFileServer} rootPath={effectiveRoot} projectId={project?.id} onFileSelect={onFileSelect} />
+                )}
               </>
             );
           })()}

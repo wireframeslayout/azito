@@ -23,6 +23,7 @@ export interface PersistedTab {
   target?: string;
   // File-specific
   filePath?: string;
+  line?: number;
   // Unit/Task-specific
   entityId?: number;
   // Task navigation origin
@@ -230,13 +231,15 @@ export function useTabPersistence(storageKey?: string) {
         const fromChanged = tab.from !== undefined && existing.from !== tab.from;
         const settingsSectionChanged = tab.settingsSection !== undefined && existing.settingsSection !== tab.settingsSection;
         const projectIdChanged = tab.projectId !== undefined && existing.projectId !== tab.projectId;
-        if (fromChanged || settingsSectionChanged || projectIdChanged) {
+        const lineChanged = tab.line !== undefined && existing.line !== tab.line;
+        if (fromChanged || settingsSectionChanged || projectIdChanged || lineChanged) {
           return prev.map((t) => t.id === tab.id
             ? {
               ...t,
               ...(fromChanged ? { from: tab.from } : {}),
               ...(settingsSectionChanged ? { settingsSection: tab.settingsSection } : {}),
               ...(projectIdChanged ? { projectId: tab.projectId } : {}),
+              ...(lineChanged ? { line: tab.line } : {}),
             }
             : t);
         }
@@ -276,10 +279,10 @@ export function useTabPersistence(storageKey?: string) {
     });
   }, [openTab]);
 
-  const openFile = useCallback((serverName: string, filePath: string, projectId?: number) => {
+  const openFile = useCallback((serverName: string, filePath: string, projectId?: number, line?: number) => {
     const tabId = `file:${serverName}:${filePath}`;
     const fileName = filePath.split('/').pop() || filePath;
-    openTab({ id: tabId, type: 'file', label: fileName, serverName, filePath, projectId });
+    openTab({ id: tabId, type: 'file', label: fileName, serverName, filePath, projectId, line });
   }, [openTab]);
 
   const openUnit = useCallback((unitId: number, name: string, projectId?: number, openerTabId?: string) => {

@@ -160,7 +160,9 @@
     "noServerConfigured": "サーバー環境が設定されていません。",
     "noWorkingDir": "このサーバーの作業ディレクトリが未設定です。",
     "projectSettings": "プロジェクト設定",
-    "gitDiff": "Git 差分"
+    "gitDiff": "Git 差分",
+    "searchFiles": "ファイルを検索",
+    "fileTree": "ファイルツリー"
   },
   "welcome": {
     "createFirst": "最初のプロジェクトを作成して、エージェントの指揮を始めましょう。",
