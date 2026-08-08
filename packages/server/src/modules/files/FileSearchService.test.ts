@@ -44,10 +44,10 @@ describe('FileSearchService', () => {
 
       expect(cmd).toContain('-iname');
       expect(cmd).toContain("'*test*'");
-      expect(cmd).toContain("'*/node_modules/*'");
-      expect(cmd).toContain("'*/.git/*'");
-      expect(cmd).toContain("'*/dist/*'");
-      expect(cmd).toContain("'*/.worktrees/*'");
+      expect(cmd).toContain("-name 'node_modules'");
+      expect(cmd).toContain("-name '.git'");
+      expect(cmd).toContain("-name 'dist'");
+      expect(cmd).toContain("-name '.worktrees'");
       expect(cmd).toContain('head -200');
     });
 

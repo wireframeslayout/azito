@@ -1,14 +1,18 @@
-import * as path from 'path';
 import type { ServerConfig } from '../servers/Server';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { shellQuote } from '../../shared/shellQuote';
 import { FileBrowseError } from './FileBrowseService';
-import { parseRipgrepJson, type RipgrepMatch } from './parseRipgrepJson';
+import { parseRipgrepJson } from './parseRipgrepJson';
 
 const MAX_RESULTS = 200;
 const SEARCH_TIMEOUT_MS = 10_000;
 const RG_CHECK_TTL_MS = 5 * 60 * 1000;
 const EXCLUDED_DIRS = ['node_modules', '.git', 'dist', '.worktrees'];
+
+function isTimeoutError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return (err as Error & { killed?: boolean }).killed === true || err.message.includes('timed out');
+}
 
 export interface SearchOptions {
   query: string;
@@ -94,7 +98,7 @@ export class FileSearchService {
         .map(p => p.startsWith(root) ? p.slice(root.length) : p)
         .slice(0, MAX_RESULTS);
     } catch (err: unknown) {
-      if ((err as Error).message?.includes('timeout')) {
+      if (isTimeoutError(err)) {
         throw new FileBrowseError('Search timed out', 504);
       }
       return [];
@@ -127,7 +131,7 @@ export class FileSearchService {
 
       return this.parseGrepOutput(result.stdout, root, opts).slice(0, MAX_RESULTS);
     } catch (err: unknown) {
-      if ((err as Error).message?.includes('timeout')) {
+      if (isTimeoutError(err)) {
         throw new FileBrowseError('Search timed out', 504);
       }
       return [];
@@ -139,7 +143,7 @@ export class FileSearchService {
     const root = sq(opts.root);
 
     const pruneExprs = EXCLUDED_DIRS
-      .map(d => `-path ${sq('*/' + d + '/*')}`)
+      .map(d => `-name ${sq(d)}`)
       .join(' -o ');
 
     const nameFlag = opts.regex
