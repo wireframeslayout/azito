@@ -13,9 +13,10 @@ interface DiffViewerProps {
   baseBranch?: string;
   commit?: string;
   initialFile?: string | null;
+  onOpenFile?: (relPath: string) => void;
 }
 
-export default function DiffViewer({ serverName, path, baseBranch, commit, initialFile }: DiffViewerProps) {
+export default function DiffViewer({ serverName, path, baseBranch, commit, initialFile, onOpenFile }: DiffViewerProps) {
   const { t } = useTranslation('git');
   const [data, setData] = useState<DiffResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -145,6 +146,7 @@ export default function DiffViewer({ serverName, path, baseBranch, commit, initi
                 files={data.files}
                 activeFile={activeFile}
                 onFileClick={handleFileClick}
+                onOpenFile={onOpenFile}
               />
             </div>
             <button

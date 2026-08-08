@@ -96,6 +96,8 @@ interface TaskPanelProps {
    * browser onto some other project's server.
    */
   projectServers?: { serverName: string }[];
+  /** Diff ビューの ✎「エディターで開く」導線。作業ディレクトリ基準の相対パスを file タブとして開く。 */
+  onOpenFile?: (serverName: string, filePath: string) => void;
   /**
    * Notifies the caller once a task-scoped browser tab's page has actually been created
    * server-side, so the sidebar's "ブラウザ" section (server-wide, not task-scoped) can
@@ -108,7 +110,7 @@ interface TaskPanelProps {
 export default function TaskPanel({
   taskId, isVisible = true, isPaneFocused = true, allUnits, tasks, allTasks, projects, currentProject, sessionData,
   executeTask, stopTask, onRefresh, onBack, onDelete, onEdit, onOpenAddWindow,
-  onSplitPane, onOpenTask, tabs, closeTab, projectServers, onBrowserPageReady,
+  onSplitPane, onOpenTask, tabs, closeTab, projectServers, onOpenFile, onBrowserPageReady,
 }: TaskPanelProps) {
   const { t } = useTranslation(['tasks', 'workspace', 'common']);
   // The list response omits the detail-only documents (description, plan, summary,
@@ -156,6 +158,12 @@ export default function TaskPanel({
 
   const diffPath = task ? (task.worktreePath || task.workingDirectory) : null;
   const diffServerName = (windows.find((w) => w.isPrimary) || windows[windows.length - 1])?.serverName || task?.serverName || undefined;
+  const handleOpenDiffFile = onOpenFile && diffPath && diffServerName
+    ? (relPath: string) => {
+        const base = diffPath.endsWith('/') ? diffPath : diffPath + '/';
+        onOpenFile(diffServerName, base + relPath);
+      }
+    : undefined;
   // Server a brand-new ＋ menu "ブラウザ" tab connects to: primary window's serverName →
   // task.serverName (same two steps as diffServerName above) → the current project's first
   // server, guarded the same way projectDefaultUnitId is (only trusted when currentProject
@@ -951,6 +959,7 @@ export default function TaskPanel({
                 serverName={diffServerName}
                 path={diffPath}
                 commit={selectedCommit}
+                onOpenFile={handleOpenDiffFile}
               />
             </div>
           )}
@@ -965,6 +974,7 @@ export default function TaskPanel({
           path={diffPath}
           baseBranch={taskData.baseBranch || undefined}
           initialFile={diffActiveFile}
+          onOpenFile={handleOpenDiffFile}
         />
       );
     }

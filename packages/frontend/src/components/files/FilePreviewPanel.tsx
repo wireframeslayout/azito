@@ -1,32 +1,10 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, fetchBlob } from '../../api/client';
 import { useToast } from '../../hooks/useToast';
 import MarkdownRenderer, { mdStyles } from '../MarkdownRenderer';
 import { Icon } from '../ui/Icon';
-import hljs from 'highlight.js/lib/core';
-import typescript from 'highlight.js/lib/languages/typescript';
-import javascript from 'highlight.js/lib/languages/javascript';
-import json from 'highlight.js/lib/languages/json';
-import css from 'highlight.js/lib/languages/css';
-import xml from 'highlight.js/lib/languages/xml';
-import markdown from 'highlight.js/lib/languages/markdown';
-import python from 'highlight.js/lib/languages/python';
-import bash from 'highlight.js/lib/languages/bash';
-import yaml from 'highlight.js/lib/languages/yaml';
-import sql from 'highlight.js/lib/languages/sql';
-import 'highlight.js/styles/github-dark.min.css';
-
-hljs.registerLanguage('typescript', typescript);
-hljs.registerLanguage('javascript', javascript);
-hljs.registerLanguage('json', json);
-hljs.registerLanguage('css', css);
-hljs.registerLanguage('html', xml);
-hljs.registerLanguage('markdown', markdown);
-hljs.registerLanguage('python', python);
-hljs.registerLanguage('shell', bash);
-hljs.registerLanguage('yaml', yaml);
-hljs.registerLanguage('sql', sql);
+import { LoadingState } from '../ui';
 
 /* ── Types ── */
 
@@ -35,6 +13,8 @@ interface FileContent {
   path: string;
   size: number;
   language: string;
+  mtime: number;
+  hash: string;
 }
 
 interface ImageContent {
@@ -57,89 +37,120 @@ type FileResponse = (FileContent & { type?: undefined; error?: string }) | (Imag
 
 /* ── Internal components ── */
 
-function HighlightedCode({ content, language, initialLine }: { content: string; language: string; initialLine?: number }) {
-  const highlighted = useMemo(() => {
-    const lang = language === 'text' ? undefined : language;
-    if (lang && hljs.getLanguage(lang)) {
-      try {
-        return hljs.highlight(content, { language: lang }).value;
-      } catch {}
-    }
-    try {
-      return hljs.highlightAuto(content).value;
-    } catch {}
-    return content.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  }, [content, language]);
+type MdViewMode = 'source' | 'preview' | 'split';
+type SaveStatus = 'clean' | 'dirty' | 'saving' | 'saved' | 'conflict';
 
-  const lines = content.split('\n');
-  const targetRef = useRef<HTMLDivElement>(null);
+const LazyCodeEditorView = React.lazy(() => import('../editor/CodeEditorView'));
+const LazyEditorStatusBar = React.lazy(() => import('../editor/EditorStatusBar'));
 
-  useEffect(() => {
-    if (initialLine && targetRef.current) {
-      const el = targetRef.current.querySelector(`[data-line="${initialLine}"]`);
-      el?.scrollIntoView({ block: 'center' });
-    }
-  }, [initialLine, content]);
+function EditorWithStatusBar({
+  content,
+  language,
+  initialLine,
+  vimMode,
+  saveStatus,
+  onContentChange,
+  onSave,
+  onVimToggle,
+}: {
+  content: string;
+  language: string;
+  initialLine?: number;
+  vimMode: boolean;
+  saveStatus: SaveStatus;
+  onContentChange: (val: string) => void;
+  onSave: () => void;
+  onVimToggle: () => void;
+}) {
+  const [cursorPos, setCursorPos] = useState({ line: initialLine ?? 1, col: 1 });
+  const [vimModeDisplay, setVimModeDisplay] = useState('');
 
   return (
-    <div ref={targetRef} style={{ display: 'flex', fontFamily: "'JetBrainsMono Nerd Font', 'JetBrains Mono', 'Consolas', monospace", fontSize: 'var(--font-md)', lineHeight: 1.6 }}>
-      <div style={{
-        padding: '12px 12px 12px 16px',
-        textAlign: 'right',
-        color: 'var(--text-dim)',
-        opacity: 0.4,
-        userSelect: 'none',
-        flexShrink: 0,
-        borderRight: '1px solid var(--border)',
-        whiteSpace: 'pre',
-        display: 'flex',
-        flexDirection: 'column',
-      }}>
-        {lines.map((_, i) => {
-          const lineNum = i + 1;
-          const isTarget = lineNum === initialLine;
-          return (
-            <span
-              key={lineNum}
-              data-line={lineNum}
-              style={isTarget ? { background: 'var(--accent-a15)', borderRadius: 2, opacity: 1 } : undefined}
-            >
-              {lineNum}
-            </span>
-          );
-        })}
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+        <React.Suspense fallback={<LoadingState />}>
+          <LazyCodeEditorView
+            value={content}
+            language={language}
+            initialLine={initialLine}
+            vimMode={vimMode}
+            onChange={onContentChange}
+            onSave={onSave}
+            onCursorChange={(line, col) => setCursorPos({ line, col })}
+            onVimModeDisplay={setVimModeDisplay}
+          />
+        </React.Suspense>
       </div>
-      <pre
-        className="hljs"
-        dangerouslySetInnerHTML={{ __html: highlighted }}
-        style={{
-          padding: '12px 16px',
-          margin: 0,
-          flex: 1,
-          overflow: 'auto',
-          whiteSpace: 'pre',
-          background: 'transparent',
-          tabSize: 4,
-        }}
-      />
+      <React.Suspense fallback={null}>
+        <LazyEditorStatusBar
+          vimModeDisplay={vimModeDisplay}
+          line={cursorPos.line}
+          col={cursorPos.col}
+          vimEnabled={vimMode}
+          onVimToggle={onVimToggle}
+          saveStatus={saveStatus}
+        />
+      </React.Suspense>
     </div>
   );
 }
 
-type MdViewMode = 'source' | 'preview' | 'split';
-
-function MarkdownFileView({ content, language, mode }: { content: string; language: string; mode: MdViewMode }) {
-  if (mode === 'source') return <HighlightedCode content={content} language={language} />;
-  if (mode === 'preview') return (
-    <div style={{ padding: '24px 32px', maxWidth: 900, margin: '0 auto' }}>
-      <style>{mdStyles}</style>
-      <MarkdownRenderer content={content} />
-    </div>
-  );
+function MarkdownFileView({
+  content,
+  language,
+  mode,
+  initialLine,
+  vimMode,
+  saveStatus,
+  onContentChange,
+  onSave,
+  onVimToggle,
+}: {
+  content: string;
+  language: string;
+  mode: MdViewMode;
+  initialLine?: number;
+  vimMode: boolean;
+  saveStatus: SaveStatus;
+  onContentChange: (val: string) => void;
+  onSave: () => void;
+  onVimToggle: () => void;
+}) {
+  if (mode === 'source') {
+    return (
+      <EditorWithStatusBar
+        content={content}
+        language={language}
+        initialLine={initialLine}
+        vimMode={vimMode}
+        saveStatus={saveStatus}
+        onContentChange={onContentChange}
+        onSave={onSave}
+        onVimToggle={onVimToggle}
+      />
+    );
+  }
+  if (mode === 'preview') {
+    return (
+      <div style={{ padding: '24px 32px', maxWidth: 900, margin: '0 auto' }}>
+        <style>{mdStyles}</style>
+        <MarkdownRenderer content={content} />
+      </div>
+    );
+  }
   return (
     <div style={{ display: 'flex', height: '100%' }}>
-      <div style={{ flex: 1, overflow: 'auto', borderRight: '1px solid var(--border)' }}>
-        <HighlightedCode content={content} language={language} />
+      <div style={{ flex: 1, overflow: 'hidden', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column' }}>
+        <EditorWithStatusBar
+          content={content}
+          language={language}
+          initialLine={initialLine}
+          vimMode={vimMode}
+          saveStatus={saveStatus}
+          onContentChange={onContentChange}
+          onSave={onSave}
+          onVimToggle={onVimToggle}
+        />
       </div>
       <div style={{ flex: 1, overflow: 'auto', padding: '24px 32px' }}>
         <style>{mdStyles}</style>
@@ -149,9 +160,30 @@ function MarkdownFileView({ content, language, mode }: { content: string; langua
   );
 }
 
+interface SaveResponse {
+  ok?: boolean;
+  mtime?: number;
+  hash?: string;
+  error?: string;
+  currentMtime?: number;
+}
+
 /* ── File Preview Panel (for main area) ── */
 
-export function FilePreviewPanel({ serverName, filePath, initialLine }: { serverName: string; filePath: string; initialLine?: number }) {
+export function FilePreviewPanel({
+  serverName,
+  filePath,
+  projectId,
+  initialLine,
+  onDirtyChange,
+}: {
+  serverName: string;
+  filePath: string;
+  /** Required to save edits: the containment check on the server resolves the allowed root from the project's working directory. */
+  projectId?: number;
+  initialLine?: number;
+  onDirtyChange?: (dirty: boolean) => void;
+}) {
   const { t } = useTranslation('files');
   const { showToast } = useToast();
   const [file, setFile] = useState<FileContent | null>(null);
@@ -164,34 +196,147 @@ export function FilePreviewPanel({ serverName, filePath, initialLine }: { server
     return stored === 'source' || stored === 'preview' || stored === 'split' ? stored : 'preview';
   });
 
+  const [editedContent, setEditedContent] = useState<string | null>(null);
+  // Mirrors editedContent synchronously (setEditedContent is only reflected in the `editedContent`
+  // binding after the next render). handleSave needs the *current* value at response-arrival time to
+  // detect whether the user typed more since the request was sent, so it reads this ref instead of the
+  // closed-over `editedContent` from when handleSave was created.
+  const editedContentRef = useRef<string | null>(null);
+  const [baseMtime, setBaseMtime] = useState<number | null>(null);
+  const [baseHash, setBaseHash] = useState<string | null>(null);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>('clean');
+  const [vimMode, setVimMode] = useState(() => {
+    if (window.matchMedia('(max-width: 768px)').matches) return false;
+    return localStorage.getItem('azito-editor-vim-mode') === 'true';
+  });
+  const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onDirtyChangeRef = useRef(onDirtyChange);
+  onDirtyChangeRef.current = onDirtyChange;
+
+  useEffect(() => () => {
+    if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+  }, []);
+
   const isMarkdown = file?.language === 'markdown';
+  const isDirty = editedContent !== null;
+  const currentContent = editedContent ?? file?.content ?? '';
+
+  useEffect(() => {
+    onDirtyChangeRef.current?.(isDirty);
+  }, [isDirty]);
 
   const handleMdViewMode = (mode: MdViewMode) => {
     setMdViewMode(mode);
     localStorage.setItem('azito-md-view-mode', mode);
   };
 
-  useEffect(() => {
-    let cancelled = false;
+  const handleVimToggle = useCallback(() => {
+    setVimMode(prev => {
+      const next = !prev;
+      localStorage.setItem('azito-editor-vim-mode', String(next));
+      return next;
+    });
+  }, []);
+
+  const fetchFileRef = useRef(0);
+
+  const fetchFile = useCallback(async () => {
+    const seq = ++fetchFileRef.current;
     setLoading(true);
     setError(null);
     setFile(null);
     setImage(null);
     setPdf(null);
-    api<FileResponse>(`/servers/${serverName}/files/content?path=${encodeURIComponent(filePath)}`)
-      .then((res) => {
-        if (cancelled) return;
-        if (res.error) { setError(res.error); }
-        else if (res.type === 'image') { setImage(res); }
-        else if (res.type === 'pdf') { setPdf(res); }
-        else { setFile(res as FileContent); }
-        setLoading(false);
-      })
-      .catch(() => {
-        if (!cancelled) { setError('Failed to load file'); setLoading(false); }
-      });
-    return () => { cancelled = true; };
+    editedContentRef.current = null;
+    setEditedContent(null);
+    setSaveStatus('clean');
+    try {
+      const res = await api<FileResponse>(`/servers/${serverName}/files/content?path=${encodeURIComponent(filePath)}`);
+      if (seq !== fetchFileRef.current) return;
+      if (res.error) { setError(res.error); }
+      else if (res.type === 'image') { setImage(res); }
+      else if (res.type === 'pdf') { setPdf(res); }
+      else {
+        const fc = res as FileContent;
+        setFile(fc);
+        setBaseMtime(fc.mtime ?? null);
+        setBaseHash(fc.hash ?? null);
+      }
+    } catch {
+      if (seq !== fetchFileRef.current) return;
+      setError('Failed to load file');
+    }
+    if (seq === fetchFileRef.current) setLoading(false);
   }, [serverName, filePath]);
+
+  useEffect(() => { fetchFile(); }, [fetchFile]);
+
+  const handleContentChange = useCallback((val: string) => {
+    editedContentRef.current = val;
+    setEditedContent(val);
+    setSaveStatus('dirty');
+  }, []);
+
+  const handleSave = useCallback(async (force = false) => {
+    if (!file || saveStatus === 'saving') return;
+    if (projectId == null) {
+      setError('Save failed: projectId is required');
+      return;
+    }
+    // Snapshot both the raw edited-content state (possibly null, meaning "unedited") and the resolved
+    // content sent to the server. The user can keep typing while the request is in flight; compare
+    // against editedContentRef.current on response to decide whether their newer edits must survive.
+    const editedContentAtSend = editedContent;
+    const content = editedContentAtSend ?? file.content;
+    setSaveStatus('saving');
+    try {
+      const res = await api<SaveResponse>(`/servers/${serverName}/files/content`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          path: filePath,
+          content,
+          projectId,
+          baseMtime: force ? undefined : baseMtime,
+          baseHash: force ? undefined : baseHash,
+          force,
+        }),
+      });
+      if (res.error === 'conflict') {
+        setSaveStatus('conflict');
+        return;
+      }
+      if (res.ok && res.mtime != null) {
+        setBaseMtime(res.mtime);
+        if (res.hash != null) setBaseHash(res.hash);
+        setFile(prev => prev ? { ...prev, content, mtime: res.mtime!, hash: res.hash ?? prev.hash } : prev);
+        const hasNewerEdits = editedContentRef.current !== editedContentAtSend;
+        if (hasNewerEdits) {
+          // The user edited again after this save was dispatched — keep the panel dirty so the newer
+          // text is not silently discarded or mislabeled as saved.
+          setSaveStatus('dirty');
+        } else {
+          editedContentRef.current = null;
+          setEditedContent(null);
+          setSaveStatus('saved');
+          if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+          savedTimerRef.current = setTimeout(() => setSaveStatus('clean'), 2000);
+        }
+      } else if (res.error && res.error !== 'conflict') {
+        setSaveStatus('dirty');
+        setError(`Save failed: ${res.error}`);
+      }
+    } catch {
+      setSaveStatus('dirty');
+    }
+  }, [file, editedContent, serverName, filePath, projectId, baseMtime, baseHash, saveStatus]);
+
+  const handleReload = useCallback(() => {
+    fetchFile();
+  }, [fetchFile]);
+
+  const handleForceOverwrite = useCallback(() => {
+    handleSave(true);
+  }, [handleSave]);
 
   const openInEditor = async (editor: 'vscode' | 'zed') => {
     try {
@@ -243,6 +388,29 @@ export function FilePreviewPanel({ serverName, filePath, initialLine }: { server
             {activeSize < 1024 ? activeSize + ' B' : Math.round(activeSize / 1024) + ' KB'}
             {file ? ' · ' + file.language : image ? ' · ' + image.mimeType : pdf ? ' · PDF' : ''}
           </span>
+        )}
+        {file && (
+          <button
+            onClick={() => handleSave()}
+            disabled={!isDirty || saveStatus === 'saving' || saveStatus === 'conflict'}
+            title="Save (Ctrl+S)"
+            style={{
+              background: isDirty ? 'var(--accent)' : 'transparent',
+              border: isDirty ? '1px solid var(--accent)' : '1px solid var(--border)',
+              color: isDirty ? '#fff' : 'var(--text-dim)',
+              cursor: isDirty ? 'pointer' : 'default',
+              fontSize: 11,
+              fontWeight: 600,
+              padding: '3px 12px',
+              borderRadius: 4,
+              whiteSpace: 'nowrap',
+              flexShrink: 0,
+              opacity: isDirty ? 1 : 0.5,
+              minHeight: 24,
+            }}
+          >
+            {saveStatus === 'saving' ? 'Saving…' : saveStatus === 'saved' ? '✓ Saved' : 'Save'}
+          </button>
         )}
         {isMarkdown && (
           <div style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }} role="group" aria-label="Markdown view mode">
@@ -311,8 +479,55 @@ export function FilePreviewPanel({ serverName, filePath, initialLine }: { server
         </button>
       </div>
 
+      {/* Conflict banner */}
+      {saveStatus === 'conflict' && (
+        <div style={{
+          padding: '8px 16px',
+          background: 'var(--orange-a08)',
+          borderBottom: '1px solid var(--orange)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          fontSize: 12,
+          flexShrink: 0,
+        }}>
+          <span style={{ color: 'var(--orange)', fontWeight: 600, flex: 1 }}>
+            This file has been modified on the server.
+          </span>
+          <button
+            onClick={handleReload}
+            style={{
+              background: 'var(--accent)',
+              border: '1px solid var(--accent)',
+              color: '#fff',
+              cursor: 'pointer',
+              fontSize: 11,
+              fontWeight: 600,
+              padding: '3px 12px',
+              borderRadius: 4,
+            }}
+          >
+            Reload
+          </button>
+          <button
+            onClick={handleForceOverwrite}
+            style={{
+              background: 'transparent',
+              border: '1px solid var(--border)',
+              color: 'var(--text-dim)',
+              cursor: 'pointer',
+              fontSize: 11,
+              padding: '3px 12px',
+              borderRadius: 4,
+            }}
+          >
+            Overwrite
+          </button>
+        </div>
+      )}
+
       {/* Content */}
-      <div style={{ flex: 1, overflow: 'auto', padding: 0 }}>
+      <div style={{ flex: 1, overflow: file ? 'hidden' : 'auto', padding: 0, minHeight: 0 }}>
         {loading && (
           <div style={{ padding: 24, color: 'var(--text-dim)', fontSize: 'var(--font-md)' }}>Loading {fileName}...</div>
         )}
@@ -320,9 +535,28 @@ export function FilePreviewPanel({ serverName, filePath, initialLine }: { server
           <div style={{ padding: 24, color: 'var(--danger)', fontSize: 'var(--font-md)' }}>{error}</div>
         )}
         {file && isMarkdown ? (
-          <MarkdownFileView content={file.content} language={file.language} mode={mdViewMode} />
+          <MarkdownFileView
+            content={currentContent}
+            language={file.language}
+            mode={mdViewMode}
+            initialLine={initialLine}
+            vimMode={vimMode}
+            saveStatus={saveStatus}
+            onContentChange={handleContentChange}
+            onSave={() => handleSave()}
+            onVimToggle={handleVimToggle}
+          />
         ) : file ? (
-          <HighlightedCode content={file.content} language={file.language} initialLine={initialLine} />
+          <EditorWithStatusBar
+            content={currentContent}
+            language={file.language}
+            initialLine={initialLine}
+            vimMode={vimMode}
+            saveStatus={saveStatus}
+            onContentChange={handleContentChange}
+            onSave={() => handleSave()}
+            onVimToggle={handleVimToggle}
+          />
         ) : null}
         {image && (
           <div style={{

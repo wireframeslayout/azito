@@ -1,4 +1,9 @@
 {
+  "tab": {
+    "closeDirtyTitle": "Close tab with unsaved changes?",
+    "closeDirtyMessage": "\"{{name}}\" has unsaved changes. Closing this tab will discard them.",
+    "closeDirtyConfirm": "Discard and close"
+  },
   "pane": {
     "splitRight": "Split right",
     "splitBelow": "Split below",

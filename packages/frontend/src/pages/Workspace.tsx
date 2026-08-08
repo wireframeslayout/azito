@@ -86,7 +86,7 @@ function WorkspaceInner() {
     setThemeProjectId(activeProjectId || null);
   }, [activeProjectId, setThemeProjectId]);
 
-  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, closeTab, retargetTab, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, reorderTab, openProjectTasks, openSettings: openSettingsRaw, togglePin } = useTabPersistence();
+  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, closeTab, retargetTab, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, reorderTab, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence();
 
   const openServer = useCallback((serverName: string) => {
     navigate(paths.server(serverName, 'overview'));
@@ -281,6 +281,21 @@ function WorkspaceInner() {
     setPaneDrag(null);
   }, [paneDrag, layout, activeTabId, setActiveTabId]);
 
+  // Confirms before closing a dirty (unsaved-edits) tab. Every close
+  // affordance below awaits this first, so an editor tab with unsaved
+  // changes never disappears silently (Issue #27 review Important 4).
+  // Resolves `true` immediately (no dialog) for a clean or unknown tab.
+  const confirmTabClose = useCallback((tabId: string): Promise<boolean> => {
+    const tab = tabs.find((t) => t.id === tabId);
+    if (!tab?.dirty) return Promise.resolve(true);
+    return confirm({
+      title: t('workspace:tab.closeDirtyTitle'),
+      message: t('workspace:tab.closeDirtyMessage', { name: tab.label }),
+      confirmLabel: t('workspace:tab.closeDirtyConfirm'),
+      danger: true,
+    });
+  }, [tabs, confirm, t]);
+
   // Pane-aware tab close: closing a pane's tab must hand focus to that
   // pane's own successor tab (or the pane usePaneLayout's close() falls back
   // to), not whatever the global flat-tab-list closeTab() would pick — that
@@ -295,7 +310,12 @@ function WorkspaceInner() {
   // path that can close a tab (desktop pane-aware close, mobile TabBar close,
   // mobile in-panel close) routes through this so the sidebar list drops the
   // row immediately instead of waiting for the next 30s poll.
-  const closeTabAndRefreshBrowser = useCallback((tabId: string) => {
+  // Unconfirmed core: assumes the dirty-tab confirmation (if any) already
+  // happened. Only `closeTabAndRefreshBrowser` (below) and
+  // `handlePaneCloseTab` call this directly, each after its own
+  // `confirmTabClose` — never call this one from a new call site without
+  // confirming first, or an unsaved editor tab can close silently.
+  const closeTabAndRefreshBrowserUnconfirmed = useCallback((tabId: string) => {
     const wasBrowser = tabs.some((t) => t.id === tabId && t.type === 'browser');
     const closed = closeTab(tabId);
     // Wait for the server-side group teardown (closeTab's own closeBrowserGroup
@@ -304,19 +324,54 @@ function WorkspaceInner() {
     if (wasBrowser) void closed.then(refreshBrowserGroups);
   }, [tabs, closeTab, refreshBrowserGroups]);
 
-  const handlePaneCloseTab = useCallback((paneId: string, tabId: string) => {
-    const newRoot = closeTabInLayoutTree(layout.state.root, paneId, tabId);
-    const newFocusedPaneId = layout.state.focusedPaneId && findPane(newRoot, layout.state.focusedPaneId)
-      ? layout.state.focusedPaneId
-      : listPanes(newRoot)[0].id;
-    const nextActiveTabId = findPane(newRoot, newFocusedPaneId)?.activeTabId ?? null;
+  const closeTabAndRefreshBrowser = useCallback((tabId: string) => {
+    void confirmTabClose(tabId).then((ok) => {
+      if (ok) closeTabAndRefreshBrowserUnconfirmed(tabId);
+    });
+  }, [confirmTabClose, closeTabAndRefreshBrowserUnconfirmed]);
 
-    layout.close(paneId, tabId);
-    closeTabAndRefreshBrowser(tabId);
-    if (nextActiveTabId && activeTabId !== nextActiveTabId) {
-      setActiveTabId(nextActiveTabId);
-    }
-  }, [layout, closeTabAndRefreshBrowser, activeTabId, setActiveTabId]);
+  const handlePaneCloseTab = useCallback((paneId: string, tabId: string) => {
+    void confirmTabClose(tabId).then((ok) => {
+      if (!ok) return;
+      const newRoot = closeTabInLayoutTree(layout.state.root, paneId, tabId);
+      const newFocusedPaneId = layout.state.focusedPaneId && findPane(newRoot, layout.state.focusedPaneId)
+        ? layout.state.focusedPaneId
+        : listPanes(newRoot)[0].id;
+      const nextActiveTabId = findPane(newRoot, newFocusedPaneId)?.activeTabId ?? null;
+
+      layout.close(paneId, tabId);
+      closeTabAndRefreshBrowserUnconfirmed(tabId);
+      if (nextActiveTabId && activeTabId !== nextActiveTabId) {
+        setActiveTabId(nextActiveTabId);
+      }
+    });
+  }, [layout, closeTabAndRefreshBrowserUnconfirmed, activeTabId, setActiveTabId, confirmTabClose]);
+
+  // beforeunload guard: as long as any tab has unsaved edits, warn before the
+  // browser tab/window itself is closed or reloaded (Issue #27 review
+  // Important 4). Per-tab close confirmation above only covers in-app tab
+  // closes; this covers leaving the page entirely. Most browsers ignore the
+  // custom message and show their own generic prompt — `returnValue` is set
+  // for the older API surface some engines still require.
+  const hasDirtyTabs = useMemo(() => tabs.some((t) => t.dirty), [tabs]);
+  useEffect(() => {
+    if (!hasDirtyTabs) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [hasDirtyTabs]);
+
+  // No in-app router-transition guard here: Workspace stays mounted for the app's entire lifetime
+  // (Layout.tsx keeps it in the DOM, just `display: none`, even while a global page is showing —
+  // every route in router.tsx renders the same Layout element), so an in-app navigation never
+  // actually discards tab state; only leaving the page for real (reload/close/external navigation)
+  // does, and the `beforeunload` guard above already covers that. A `useBlocker` on pathname change
+  // was added previously but warned on transitions that lose nothing, and its confirm/cancel timing
+  // raced with `activeTabId`/pane-focus updates that already happen before the blocker had a chance
+  // to intervene — removed rather than reconciled, since there is nothing here for it to guard.
 
   // Single entry point for "close this tab by id" that every close affordance
   // (pane TabBar's ✕, the shared tab context menu's "Close tab" item, and
@@ -399,8 +454,14 @@ function WorkspaceInner() {
     }
   }, [resolveOverlayTarget, showToast]);
 
-  const openFile = useCallback((serverName: string, filePath: string, line?: number) => {
-    openFileRaw(serverName, filePath, currentProjectId, line);
+  // `projectId` is the caller's own tab.projectId (or, for callers with no owning tab yet — e.g. the
+  // sidebar FileExplorer, which is always scoped to the routed project — currentProjectId), never
+  // inferred from "whichever project is currently routed" here. A split-pane tab opening a file from
+  // a different project's diff/task view must attribute the new file tab to *its own* project, or the
+  // save-path containment check runs against the wrong project's workingDirectory (Issue #27 review
+  // Important 2).
+  const openFile = useCallback((serverName: string, filePath: string, projectId?: number, line?: number) => {
+    openFileRaw(serverName, filePath, projectId ?? currentProjectId, line);
   }, [openFileRaw, currentProjectId]);
 
   const openDiff = useCallback((serverName: string, path: string, baseBranch?: string) => {
@@ -556,9 +617,9 @@ function WorkspaceInner() {
   }, [location.search]);
 
   const handleFileSelect = useCallback((serverName: string, filePath: string, line?: number) => {
-    openFile(serverName, filePath, line);
+    openFile(serverName, filePath, currentProjectId, line);
     if (mobile) setSidebarOpen(false);
-  }, [openFile, mobile, setSidebarOpen]);
+  }, [openFile, currentProjectId, mobile, setSidebarOpen]);
 
   const [executeResourceWarning, setExecuteResourceWarning] = useState<{ resources: ResourceStatus; retry: () => void } | null>(null);
 
@@ -727,6 +788,7 @@ function WorkspaceInner() {
         ? (allProjects.find(p => p.id === tab.projectId)?.color || getProjectColorFallback(tab.projectId))
         : undefined,
       extra: running ? <span className="tab-braille-spinner" style={{ fontSize: 'var(--font-xs)', lineHeight: 1 }}>{brailleFrame}</span> : undefined,
+      dirty: tab.dirty,
     };
   }, [getTerminalTabLabel, shouldShowActivity, shouldShowTaskActivity, allProjects, brailleFrame]);
 
@@ -1113,6 +1175,8 @@ function WorkspaceInner() {
           openIssue={openIssue}
           openProjectTasks={openProjectTasks}
           updateBrowserActiveTab={updateBrowserActiveTab}
+          openFile={openFile}
+          setTabDirty={setTabDirty}
           refreshBrowserGroups={refreshBrowserGroups}
         />
       </div>

@@ -9,7 +9,7 @@ import type { IProjectServerRepository } from '../projects/ProjectServer';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { FileBrowseService, FileBrowseError } from './FileBrowseService';
 import type { FileSearchService } from './FileSearchService';
-import { assertDirectoryContained, assertPathContained, PathResolverFactory } from '../git/PathContainment';
+import { assertDirectoryContained, isPathContained, PathResolverFactory } from '../git/PathContainment';
 
 export function sanitizeFileName(raw: string): string {
   const nfc = raw.normalize('NFC');
@@ -259,6 +259,115 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
         return reply.send(buffer);
       } catch (err: unknown) {
         if (err instanceof FileBrowseError) return reply.status(err.status).send({ error: err.message });
+        return reply.status(500).send({ error: (err as Error).message });
+      }
+    },
+  );
+
+  // ── PUT /api/servers/:name/files/content ──
+  fastify.put<{ Params: { name: string } }>(
+    '/api/servers/:name/files/content',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const body = request.body as Record<string, unknown>;
+      const filePath = typeof body.path === 'string' ? body.path.trim() : '';
+      if (!filePath) return reply.status(400).send({ error: 'path is required' });
+      if (/[\x00-\x1f]/.test(filePath)) return reply.status(400).send({ error: 'Invalid path' });
+      if (typeof body.content !== 'string') return reply.status(400).send({ error: 'content is required' });
+      const content = body.content;
+      const force = body.force === true;
+      // Optimistic-lock inputs are required unless the caller explicitly opts into `force`. Previously
+      // any missing/malformed baseMtime or baseHash silently became `undefined` (typeof-narrowing to
+      // "absent" rather than "invalid"), which writeFileContent treats identically to force — the lock
+      // was bypassed without the caller ever asking for that. `Number.isFinite` rejects NaN/Infinity in
+      // addition to non-numbers; the hash is validated as a 64-hex-digit sha256 so a malformed value
+      // can't slip through as "present" only to fail comparison against the real hash in a confusing way.
+      let baseMtime: number | undefined;
+      let baseHash: string | undefined;
+      if (!force) {
+        if (typeof body.baseMtime !== 'number' || !Number.isFinite(body.baseMtime)) {
+          return reply.status(400).send({ error: 'baseMtime is required unless force is true' });
+        }
+        if (typeof body.baseHash !== 'string' || !/^[0-9a-f]{64}$/.test(body.baseHash)) {
+          return reply.status(400).send({ error: 'baseHash is required unless force is true' });
+        }
+        baseMtime = body.baseMtime;
+        baseHash = body.baseHash;
+      }
+      const projectId = typeof body.projectId === 'number' ? body.projectId : NaN;
+      if (isNaN(projectId)) return reply.status(400).send({ error: 'projectId is required' });
+
+      const ps = projectServerRepo.find(projectId, srv.name);
+      if (!ps?.workingDirectory) return reply.status(400).send({ error: 'Project server has no working directory' });
+
+      let writeTargetPath = filePath;
+      try {
+        const transport = srv.type !== 'local' ? transportFactory.getTransport(srv) : undefined;
+        const parentDir = path.dirname(filePath);
+        // Containment is verified here (ancestor directories resolved to their real path via
+        // assertDirectoryContained, then the target itself below) and the resolved real path is what
+        // actually gets written (see writeTargetPath below) — not the raw request path. What this does
+        // NOT close: an ancestor directory could be swapped for a symlink pointing outside
+        // ps.workingDirectory *after* this check runs but *before* writeFileContent() opens the file
+        // (TOCTOU). Closing that gap requires atomic "resolve + open" primitives the Node fs API doesn't
+        // expose today — namely openat2(RESOLVE_BENEATH)/O_BENEATH-style syscalls that refuse to resolve
+        // through a symlink race at the kernel level, not just re-check after the fact. Node's fs.open
+        // has no such flag, and the local write already uses O_NOFOLLOW to close the narrower case of the
+        // save target *itself* becoming a symlink after resolveExistingTargetRealPath() below runs.
+        // Per this repo's established policy (see the execution-gate TOCTOU notes), this residual race on
+        // ancestor directories is accepted and documented rather than worked around with a partial
+        // mitigation that would give false confidence.
+        await assertDirectoryContained(resolverFactory, srv.type, transport, { target: parentDir, allowedRoot: ps.workingDirectory }, 'target path');
+
+        // Parent-directory containment alone doesn't catch a save target
+        // that is itself a symlink pointing outside workingDirectory — the
+        // write would land at the symlink's target. When the target already
+        // exists, resolve its real path and re-verify containment on that
+        // (Issue #27 review Critical 2); a target that doesn't exist yet has
+        // no symlink to escape through, so it's created directly under the
+        // already-contained parent.
+        const existingRealPath = await fileBrowseService.resolveExistingTargetRealPath(srv, filePath);
+        if (existingRealPath != null) {
+          const resolver = resolverFactory.create(srv.type, transport);
+          const resolvedRoot = await resolver.resolveRealPath(ps.workingDirectory);
+          if (!isPathContained({ target: existingRealPath, allowedRoot: resolvedRoot })) {
+            return reply.status(400).send({ error: 'target path escapes the allowed directory' });
+          }
+          // Use the resolved real path — not the original request path — for
+          // the actual write, so the verified path is what's acted on rather
+          // than the pre-verification value (TOCTOU-adjacent discard).
+          writeTargetPath = existingRealPath;
+        }
+      } catch (err: unknown) {
+        const message = (err as Error).message;
+        if (message.includes('escapes the allowed directory') || message.includes('Cannot verify')) {
+          return reply.status(400).send({ error: message });
+        }
+        return reply.status(500).send({ error: message });
+      }
+
+      try {
+        const result = await fileBrowseService.writeFileContent(
+          srv,
+          writeTargetPath,
+          content,
+          baseMtime,
+          baseHash,
+        );
+        return { ok: true, mtime: result.mtime, hash: result.hash };
+      } catch (err: unknown) {
+        if (err instanceof FileBrowseError) {
+          if (err.status === 409) {
+            try {
+              const parsed = JSON.parse(err.message);
+              return reply.status(409).send({ error: 'conflict', currentMtime: parsed.currentMtime });
+            } catch {
+              return reply.status(409).send({ error: 'conflict' });
+            }
+          }
+          return reply.status(err.status).send({ error: err.message });
+        }
         return reply.status(500).send({ error: (err as Error).message });
       }
     },
