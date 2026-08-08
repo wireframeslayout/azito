@@ -209,6 +209,13 @@ fi
 # ファイルとして残しておく。
 # AZITO_SERVER_NAME / AZITO_SUPERVISOR_PATH は azs (harness/bin/azs) が同じ
 # ファイルを source して使う。
+#
+# NOTE (Issue #28 Phase B): このファイルには AZITO_UI_TOKEN を書かない。
+# azitoctl / azs は task principal（AZITO_TASK_TOKEN）文脈で動くプロセスから
+# source されるため、全権トークンをここに置くと配布経路の穴になる。
+# --ui-token が指定された場合の書き込み先は operator.env（下記）のみ。
+# 全体を都度 `>` で書き直すため、過去バージョンの setup.sh が残した
+# AZITO_UI_TOKEN 行があっても、この節を通れば自動的に消える。
 echo ""
 echo "=== azitoctl.env ==="
 if [[ -n "$AZITO_URL" && -n "$AZITO_WEBHOOK_TOKEN" ]]; then
@@ -221,9 +228,6 @@ if [[ -n "$AZITO_URL" && -n "$AZITO_WEBHOOK_TOKEN" ]]; then
   {
     printf 'AZITO_URL=%q\n' "$AZITO_URL"
     printf 'AZITO_WEBHOOK_TOKEN=%q\n' "$AZITO_WEBHOOK_TOKEN"
-    if [[ -n "$AZITO_UI_TOKEN" ]]; then
-      printf 'AZITO_UI_TOKEN=%q\n' "$AZITO_UI_TOKEN"
-    fi
     if [[ -n "$AZITO_SERVER_NAME" ]]; then
       printf 'AZITO_SERVER_NAME=%q\n' "$AZITO_SERVER_NAME"
     fi
@@ -243,9 +247,36 @@ if [[ -n "$AZITO_URL" && -n "$AZITO_WEBHOOK_TOKEN" ]]; then
     printf 'AZITO_SUPERVISOR_PATH=$HOME/.azito/agent/current/azito-supervisor.cjs\n'
   } > "$AZITOCTL_ENV_FILE"
   chmod 600 "$AZITOCTL_ENV_FILE"
-  echo "  $AZITOCTL_ENV_FILE: 書き出しました"
+  echo "  $AZITOCTL_ENV_FILE: 書き出しました（AZITO_UI_TOKEN は含みません）"
 else
   echo "  スキップ (--azito-url と --webhook-token の両方が必要)"
+fi
+
+# ── operator.env (人間が明示的に source する運用者用資格情報) ──
+# --ui-token が渡されたときのみ書き出す。azitoctl.env とは別ファイルにする
+# ことで、「タスク実行プロセスが自動的に読む設定」と「人間が明示的に有効化する
+# 全権クレデンシャル」を混在させない（設計 §9）。setup.sh 自身はこのファイルを
+# 一切 source しない。
+echo ""
+echo "=== operator.env ==="
+if [[ -n "$AZITO_UI_TOKEN" ]]; then
+  OPERATOR_ENV_DIR="$HOME/.azito"
+  OPERATOR_ENV_FILE="$OPERATOR_ENV_DIR/operator.env"
+  mkdir -p "$OPERATOR_ENV_DIR"
+  {
+    echo "# AZITO operator credentials"
+    echo "#"
+    echo "# このファイルは人間が明示的に \`source ~/.azito/operator.env\` して使う"
+    echo "# ためのものです。setup.sh を含むいかなるスクリプトからも自動 source"
+    echo "# してはいけません。source した時点でそのシェルはオペレーター権限"
+    echo "# （全権）で動作します。"
+    printf 'AZITO_URL=%q\n' "$AZITO_URL_VALUE"
+    printf 'AZITO_UI_TOKEN=%q\n' "$AZITO_UI_TOKEN"
+  } > "$OPERATOR_ENV_FILE"
+  chmod 600 "$OPERATOR_ENV_FILE"
+  echo "  $OPERATOR_ENV_FILE: 書き出しました（使うには: source $OPERATOR_ENV_FILE）"
+else
+  echo "  スキップ (--ui-token が未指定)"
 fi
 
 # node が使えれば自動マージ、なければ手動案内にフォールバック

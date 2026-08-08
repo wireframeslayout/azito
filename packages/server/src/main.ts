@@ -14,6 +14,7 @@ import { RecoverStuckTasksUseCase } from './modules/tasks/recovery/RecoverStuckT
 import { AgentEventStream } from './modules/servers/transport/AgentEventStream';
 import { invalidateSessionCache } from './modules/tmux/routes/sessions';
 import { tokenCommand } from './cli/tokenCommand';
+import { authDoctorCommand } from './cli/authDoctorCommand';
 import { runUpdate } from './modules/system/updateScript';
 
 // ─── Graceful shutdown ───
@@ -25,6 +26,11 @@ const SHUTDOWN_HARD_CAP_MS = 8000;
 async function main(): Promise<void> {
   if (process.argv[2] === 'token') {
     await tokenCommand(process.argv.slice(3));
+    return;
+  }
+
+  if (process.argv[2] === 'auth' && process.argv[3] === 'doctor') {
+    await authDoctorCommand();
     return;
   }
 

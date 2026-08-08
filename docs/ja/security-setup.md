@@ -22,6 +22,7 @@
 | SSH ホスト鍵の TOFU 検証 | ホスト鍵変更時に SSH 接続が拒否される | 意図した変更なら fingerprint をリセット |
 | agent の token 配送方式変更 | 既存 agent は旧形式のまま動作 | 再インストールで移行（任意） |
 | ブランチ名・パスの境界検証 | 記号を含む値が 400 で拒否される | 該当タスクの値を修正 |
+| harness 配布方式の分離（Issue #28 Phase B） | `~/.azito/azitoctl*.env` に `AZITO_UI_TOKEN` が含まれなくなり、代わりに `~/.azito/operator.env` に置かれる | `setup.sh` を再実行。`azito auth doctor` で残留を確認 |
 
 ## 環境変数リファレンス
 
@@ -38,7 +39,7 @@
 
 | 変数 | 必須 | 既定値 | 説明 |
 |---|---|---|---|
-| `AZITO_UI_TOKEN` | 任意 | `$AZITO_DATA_DIR/ui-token` を自動生成 | API / WebSocket 認証用トークン。env → ファイル → 自動生成の順で解決。`azito token show`（リリース版）で確認、`azito token rotate` でローテーション可能。ソース版では `packages/server/.env` または `data/ui-token` を直接参照。`azito token rotate` 実行時は `~/.azito/azitoctl*.env` の `AZITO_UI_TOKEN` も自動更新される |
+| `AZITO_UI_TOKEN` | 任意 | `$AZITO_DATA_DIR/ui-token` を自動生成 | API / WebSocket 認証用トークン（operator の全権クレデンシャル）。env → ファイル → 自動生成の順で解決。`azito token show`（リリース版）で確認、`azito token rotate` でローテーション可能。ソース版では `packages/server/.env` または `data/ui-token` を直接参照。`azito token rotate` はローカルの `~/.azito/operator.env` と `~/.claude/settings.json` の MCP トークン（存在する場合のみ）を自動更新する。**`~/.azito/azitoctl*.env` は更新しない**（Issue #28 Phase B: このファイルには置かない） |
 | `AZITO_DATA_DIR` | 任意 | リポジトリルート直下（`data.db`, `data/*`） | 永続データディレクトリ。設定すると `data.db`, `master.key`, `vapid-keys.json`, `ui-token`, `browser-profile/`, `sidekicks/` がこのディレクトリ配下に統合される（mode 700）。バージョンディレクトリ方式での運用時に必須 |
 | `AZITO_BIND` | 任意 | `127.0.0.1` | 待ち受けアドレス。`0.0.0.0` と `::` は明示的に拒否される。リモートアクセス時は Tailscale IP を指定 |
 | `AZITO_ALLOWED_ORIGINS` | 任意 | `http://localhost:5173,http://localhost:3001` | CORS と WebSocket の Origin 検証で許可するオリジン（カンマ区切り） |
@@ -60,6 +61,96 @@
 |---|---|---|
 | `MINIO_ROOT_USER` | MinIO を使う場合は**必須** | 未設定だと `docker compose up` が失敗する |
 | `MINIO_ROOT_PASSWORD` | MinIO を使う場合は**必須** | 同上。十分に長い値を設定する |
+
+---
+
+## 主体分離(operator / task)
+
+Issue #28 では、API を呼び出しているのが**誰か**を区別する `principal`（主体）モデルを導入しました。
+**operator**（人間、または全権で操作するブラウザセッション・CLI）と **task**（worktree 内で
+自律的に動くエージェント。自分自身のリソースにスコープされる）の2種類です。本節では、それぞれが
+持つ資格情報と、operator の全権トークンを task 側プロセスが読むファイルへ置かないための
+harness 配布分離（Phase B）を説明します。
+
+### 主体ごとの資格情報
+
+| 主体 | 資格情報 | 置き場所 |
+|---|---|---|
+| operator | `AZITO_UI_TOKEN` | ブラウザのセッションストレージ、または `~/.azito/operator.env`（人間が明示的に source した場合のみ有効） |
+| task | `AZITO_TASK_TOKEN` | ハブがそのタスクのワーカーウィンドウ作成（再作成）時にのみ、そのウィンドウの tmux ペイン env へ注入する |
+
+`azt-*` スキルはまず `AZITO_TASK_TOKEN` を探し、無ければ `AZITO_UI_TOKEN` にフォールバックする
+ため、タスクのペイン内から呼ばれても、人間が手動で開いたターミナルから呼ばれても同じスキルが動作
+します。
+
+### `~/.azito/operator.env`
+
+`setup.sh` に `--ui-token` を渡すと、`AZITO_URL` と `AZITO_UI_TOKEN` を `~/.azito/operator.env`
+（mode 600）に書き出します。**このファイルは `setup.sh` 自身を含め、いかなるスクリプトからも
+自動的に読み込まれません。** 使うには:
+
+```bash
+source ~/.azito/operator.env
+azito token rotate     # これで operator 権限で実行される
+```
+
+`~/.azito/azitoctl*.env`（`azitoctl` / `azs` が source する、タスク実行プロセスや hook スクリプト
+向けのファイル）には `AZITO_UI_TOKEN` は一切書かれません。もしこれらのファイルに
+`AZITO_UI_TOKEN=` 行が残っていたら、この変更より前の `setup.sh` が書いた残留物です。`setup.sh`
+を再実行すれば（ファイル全体を書き直すため）自動的に消えます。`azito auth doctor` で確認できます。
+
+### `azito auth doctor`
+
+各サーバー上でローカルに実行し、意図した状態からのズレを検査します。
+
+```bash
+azito auth doctor
+```
+
+**実行したマシンのローカルのみ**を検査します（リモートサーバーへは一切アクセスしません）。
+
+- (a) `~/.azito/azitoctl*.env` に `AZITO_UI_TOKEN` 行が残っていないか
+- (b) `~/.azito/operator.env`（存在する場合）のパーミッションが 0600 か
+- (c) `~/.claude/settings.json` の MCP トークン（存在する場合）が、ローカルで読める範囲で
+  ハブの現在のトークンと一致するか
+- (d) `AZITO_SCOPED_AUTH` の現在値
+
+失敗した項目には修正手順が表示されます。移行後は各リモートサーバー上でも実行してください
+（1回の実行はそのマシンのみをカバーします）。
+
+### 同一 UNIX ユーザーであることの限界
+
+この分離は**行儀の良いコードパス同士の権限境界**であり、サンドボックスではありません。
+`chmod 600` は*別の UNIX ユーザー*からの読み取りを防ぐだけで、同じユーザーで動く別プロセスが
+直接ファイルを読む、`/proc/<pid>/environ` を辿る、ptrace する、といった経路には無力です。
+タスクワーカーが攻撃者に制御されたコードを実行した場合、そのコードは `~/.claude/settings.json`
+や兄弟プロセスの環境変数など、この UNIX ユーザーが読めるものすべてを読めます — 原理的には
+`operator.env` も、もしタスク側のシェルがそれを継承したり読んだりすれば同様です（だからこそ
+どこからも自動 source しません）。**悪意あるコード**からの隔離（**行儀の良いコード**のアクセス
+構造化とは別物）はここでの対象外であり、別イシュー（#29、OS レベルの隔離）で扱います。同様に、
+この Phase が書く監査ログは運用上のデバッグ・レビュー記録であり、改ざん耐性は主張しません。
+
+### 移行手順（段階的活性化）
+
+新ハブは**互換モード**で出荷されます。裏では task トークンを注入しつつ、旧来の UI トークン
+のみの経路も引き続き受け付けるため、移行途中で壊れることはありません。以下の順で進めてください。
+
+1. **先に修正済み CLI を配布する。** どのサーバーの harness にも触れる前に、ハブの
+   `packages/server` コード（またはリリースビルド）を更新し、`azito token rotate` と
+   `azito auth doctor` を使える状態にします。
+2. **各サーバーの harness を更新する。** これまでと同じ引数で `setup.sh` を再実行します。
+   `azitoctl*.env` への `AZITO_UI_TOKEN` 書き込みが止まり、`--ui-token` を渡していれば
+   代わりに `operator.env` が書かれます。Phase A で `AZITO_TASK_TOKEN` フォールバックが
+   `azt-*` スキルに入っているため、サーバーごとに順次実施して問題ありません。
+3. **ハブ自体を更新する**（まだ互換モード）。ハブ再起動時に実行中だったタスクは自然終端する
+   か、再生成が必要になります（kill する必要はありませんが、ペイン env は再起動前の状態の
+   ままです）。
+4. **`AZITO_SCOPED_AUTH` を有効化する。** 全サーバーで `azito auth doctor` が全 green に
+   なってから切り替えます。この時点で初めて、task principal が実際に allowlist 済み API
+   （設計 §4）のみに制限されます（それまでは scoped トークンが*発行*されるだけです）。
+5. **最後に UI トークンをローテートする。** `azito token rotate` を実行し、ブラウザ（トークン
+   再入力）・自動更新が届かなかった MCP クライアント設定・他の operator 用マシンの
+   `operator.env` を更新します。
 
 ---
 
@@ -435,6 +526,8 @@ systemctl --user start azito
 | SSH 接続が `Host key mismatch` で失敗 | 保存済み fingerprint と不一致（サーバー再構築 or 中間者攻撃） | 意図した変更なら Servers → 対象サーバー → Danger Zone で「SSH fingerprint をリセット」 |
 | agent サーバーが全 API 401 | agent token 不一致 | Servers → Setup → Agent Server の「Reinstall」で再配備 |
 | supervised ペインを開くたびに 10 秒待ちになる | `AZITO_PUBLIC_URL` 未設定で Tailscale IP が使われているが `127.0.0.1` bind のため到達不能 | `.env` に `AZITO_PUBLIC_URL=https://<MagicDNS名>` を追記 → サービス再起動 → supervised ウィンドウを respawn（既存ペインのシェルは古い `AZITO_URL` を保持するため respawn 必須。`GET /api/supervisors` が `[]` なら本問題） |
+| `azito auth doctor` が `azitoctl*.env に AZITO_UI_TOKEN が残っています` を報告する | 旧バージョンの `setup.sh` が書いた行が残っている | 同じ `--azito-url` `--webhook-token` で `setup.sh` を再実行（ファイルは毎回丸ごと書き直されるため自動的に消える） |
+| `azito auth doctor` が MCP settings のトークン不一致を報告する | `azito token rotate` 後に MCP 設定へ反映されていない、または別サーバーで rotate した | `harness/setup.sh --ui-token <最新トークン>` を再実行するか、operator.env を最新化してから `azito token rotate` を再実行 |
 
 ## 復旧（ロールバック）
 

@@ -3,16 +3,26 @@ import fs from 'fs';
 import path from 'path';
 import { resolveDataDir } from '../shared/dataDir';
 import { readEnvValue, resolveServerEnvPath } from '../shared/envFile';
+import { resolveCurrentUiToken } from '../shared/currentUiToken';
 
-function findAzitoctlEnvFiles(): string[] {
-  const dir = path.join(process.env.HOME || '', '.azito');
-  if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir)
-    .filter(f => /^azitoctl(-[^.]+)?\.env$/.test(f))
-    .map(f => path.join(dir, f));
+interface McpServerEnv {
+  env?: Record<string, string>;
 }
 
-function updateAzitoctlEnvToken(filePath: string, newToken: string): boolean {
+interface McpSettingsFile {
+  mcpServers?: Record<string, McpServerEnv>;
+}
+
+function operatorEnvPath(): string {
+  return path.join(process.env.HOME || '', '.azito', 'operator.env');
+}
+
+// operator.env は `KEY=value` を1行1エントリで持つ（harness/setup.sh が
+// printf %q で書き出す形式）。ローテート後は AZITO_UI_TOKEN 行だけを
+// 書き換える。新トークンは crypto.randomBytes(32).toString('hex') で
+// 常に英数字のみなのでシェルクォートは不要（生値のまま書いてよい）。
+function updateOperatorEnvToken(newToken: string): boolean {
+  const filePath = operatorEnvPath();
   if (!fs.existsSync(filePath)) return false;
   const content = fs.readFileSync(filePath, 'utf-8');
   const lines = content.split('\n');
@@ -30,28 +40,38 @@ function updateAzitoctlEnvToken(filePath: string, newToken: string): boolean {
   return updated;
 }
 
-function resolveToken(): { token: string; source: string } | null {
-  const envToken = process.env.AZITO_UI_TOKEN;
-  if (envToken) return { token: envToken, source: 'env' };
+function mcpSettingsPath(): string {
+  return path.join(process.env.HOME || '', '.claude', 'settings.json');
+}
 
-  const envFilePath = resolveServerEnvPath();
-  const dotenvToken = readEnvValue(envFilePath, 'AZITO_UI_TOKEN');
-  if (dotenvToken) return { token: dotenvToken, source: envFilePath };
+// ~/.claude/settings.json の mcpServers['azt-mcp'].env.AZITO_UI_TOKEN を
+// 更新する。ファイルが無い/JSON として読めない/azt-mcp が未登録/トークンが
+// 未設定のいずれの場合も何もしない（新規登録は harness/setup.sh の役割）。
+function updateMcpSettingsToken(newToken: string): boolean {
+  const filePath = mcpSettingsPath();
+  if (!fs.existsSync(filePath)) return false;
 
-  const paths = resolveDataDir();
-  if (fs.existsSync(paths.uiToken)) {
-    const fileToken = fs.readFileSync(paths.uiToken, 'utf-8').trim();
-    if (fileToken) return { token: fileToken, source: paths.uiToken };
+  let settings: McpSettingsFile;
+  try {
+    settings = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as McpSettingsFile;
+  } catch {
+    return false;
   }
 
-  return null;
+  const mcpEnv = settings.mcpServers?.['azt-mcp']?.env;
+  if (!mcpEnv || typeof mcpEnv.AZITO_UI_TOKEN !== 'string') return false;
+  if (mcpEnv.AZITO_UI_TOKEN === newToken) return false;
+
+  mcpEnv.AZITO_UI_TOKEN = newToken;
+  fs.writeFileSync(filePath, JSON.stringify(settings, null, 2) + '\n');
+  return true;
 }
 
 export async function tokenCommand(args: string[]): Promise<void> {
   const subcommand = args[0];
 
   if (subcommand === 'show') {
-    const result = resolveToken();
+    const result = resolveCurrentUiToken();
     if (result) {
       console.log(result.token);
       return;
@@ -78,11 +98,15 @@ export async function tokenCommand(args: string[]): Promise<void> {
       console.warn(`\nWarning: ${envFilePath} に AZITO_UI_TOKEN が設定されているため、rotate したファイルトークンより .env の値が優先されます。.env 側も更新してください。`);
     }
 
-    const envFiles = findAzitoctlEnvFiles();
-    for (const envFile of envFiles) {
-      if (updateAzitoctlEnvToken(envFile, newToken)) {
-        console.log(`Updated AZITO_UI_TOKEN in ${envFile}`);
-      }
+    // Issue #28 Phase B: rotate は ~/.azito/azitoctl*.env へ UI トークンを
+    // 再配置しない（全権トークンをタスク実行プロセスが source するファイルに
+    // 置かない、という配布分離の方針。設計 §9/§12）。ローカルにある operator.env
+    // と MCP settings（人間が操作する経路）だけを更新する。
+    if (updateOperatorEnvToken(newToken)) {
+      console.log(`Updated AZITO_UI_TOKEN in ${operatorEnvPath()}`);
+    }
+    if (updateMcpSettingsToken(newToken)) {
+      console.log(`Updated AZITO_UI_TOKEN in ${mcpSettingsPath()}`);
     }
 
     if (process.stdout.isTTY) {
@@ -91,6 +115,7 @@ export async function tokenCommand(args: string[]): Promise<void> {
       console.log('New token written. Read it from the file above.');
     }
     console.log('Restart the server for the new token to take effect.');
+    console.log('Remote servers keep their own harness config — re-run harness/setup.sh --ui-token <token> on each of them (see docs/*/security-setup.md).');
     return;
   }
 

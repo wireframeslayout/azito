@@ -6,6 +6,7 @@ import os from 'os';
 let tmpDir: string;
 let uiTokenPath: string;
 let dotEnvPath: string;
+let fakeHome: string;
 
 vi.mock('../shared/dataDir', () => ({
   resolveDataDir: () => ({
@@ -32,6 +33,7 @@ vi.mock('../shared/envFile', async (importOriginal) => {
 
 describe('tokenCommand', () => {
   let originalEnv: string | undefined;
+  let originalHome: string | undefined;
   let exitSpy: ReturnType<typeof vi.spyOn>;
   let errorSpy: ReturnType<typeof vi.spyOn>;
   let logSpy: ReturnType<typeof vi.spyOn>;
@@ -43,6 +45,14 @@ describe('tokenCommand', () => {
     dotEnvPath = path.join(tmpDir, '.env');
     originalEnv = process.env.AZITO_UI_TOKEN;
     delete process.env.AZITO_UI_TOKEN;
+
+    // rotate() also touches ~/.azito/operator.env and ~/.claude/settings.json
+    // (Issue #28 Phase B). HOME MUST be sandboxed here — without this, running
+    // this suite on a real developer machine would silently overwrite their
+    // actual operator.env / Claude settings.json with a freshly rotated token.
+    originalHome = process.env.HOME;
+    fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'token-cmd-home-'));
+    process.env.HOME = fakeHome;
 
     exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => { throw new Error('process.exit'); });
     errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -56,7 +66,13 @@ describe('tokenCommand', () => {
     } else {
       delete process.env.AZITO_UI_TOKEN;
     }
+    if (originalHome !== undefined) {
+      process.env.HOME = originalHome;
+    } else {
+      delete process.env.HOME;
+    }
     fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(fakeHome, { recursive: true, force: true });
     vi.restoreAllMocks();
   });
 
@@ -126,6 +142,79 @@ describe('tokenCommand', () => {
       const { tokenCommand } = await import('./tokenCommand.js');
       await tokenCommand(['rotate']);
       expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    it('does not create or modify ~/.azito/azitoctl*.env (Issue #28 Phase B)', async () => {
+      const azitoDir = path.join(fakeHome, '.azito');
+      fs.mkdirSync(azitoDir, { recursive: true });
+      const azitoctlEnvPath = path.join(azitoDir, 'azitoctl.env');
+      const before = 'AZITO_URL=http://localhost:3001\nAZITO_WEBHOOK_TOKEN=abc\n';
+      fs.writeFileSync(azitoctlEnvPath, before);
+
+      const { tokenCommand } = await import('./tokenCommand.js');
+      await tokenCommand(['rotate']);
+
+      expect(fs.readFileSync(azitoctlEnvPath, 'utf-8')).toBe(before);
+    });
+
+    it('updates AZITO_UI_TOKEN in ~/.azito/operator.env when present', async () => {
+      const azitoDir = path.join(fakeHome, '.azito');
+      fs.mkdirSync(azitoDir, { recursive: true });
+      const operatorEnvPath = path.join(azitoDir, 'operator.env');
+      fs.writeFileSync(operatorEnvPath, 'AZITO_URL=http://localhost:3001\nAZITO_UI_TOKEN=old-token\n');
+
+      const { tokenCommand } = await import('./tokenCommand.js');
+      await tokenCommand(['rotate']);
+
+      const updated = fs.readFileSync(operatorEnvPath, 'utf-8');
+      expect(updated).not.toContain('old-token');
+      expect(updated).toMatch(/AZITO_UI_TOKEN=[0-9a-f]{64}/);
+      expect(updated).toContain('AZITO_URL=http://localhost:3001');
+    });
+
+    it('does nothing when operator.env does not exist', async () => {
+      const { tokenCommand } = await import('./tokenCommand.js');
+      await expect(tokenCommand(['rotate'])).resolves.not.toThrow();
+      expect(fs.existsSync(path.join(fakeHome, '.azito', 'operator.env'))).toBe(false);
+    });
+
+    it('updates azt-mcp AZITO_UI_TOKEN in ~/.claude/settings.json when present', async () => {
+      const claudeDir = path.join(fakeHome, '.claude');
+      fs.mkdirSync(claudeDir, { recursive: true });
+      const settingsPath = path.join(claudeDir, 'settings.json');
+      const before = {
+        mcpServers: {
+          'azt-mcp': {
+            command: 'node',
+            args: ['/path/to/index.js'],
+            env: { AZITO_URL: 'http://localhost:3001', AZITO_UI_TOKEN: 'old-mcp-token' },
+          },
+        },
+      };
+      fs.writeFileSync(settingsPath, JSON.stringify(before, null, 2));
+
+      const { tokenCommand } = await import('./tokenCommand.js');
+      await tokenCommand(['rotate']);
+
+      const updated = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+      expect(updated.mcpServers['azt-mcp'].env.AZITO_UI_TOKEN).toMatch(/^[0-9a-f]{64}$/);
+      expect(updated.mcpServers['azt-mcp'].env.AZITO_UI_TOKEN).not.toBe('old-mcp-token');
+      expect(updated.mcpServers['azt-mcp'].env.AZITO_URL).toBe('http://localhost:3001');
+      expect(updated.mcpServers['azt-mcp'].command).toBe('node');
+    });
+
+    it('does not touch settings.json when azt-mcp has no AZITO_UI_TOKEN', async () => {
+      const claudeDir = path.join(fakeHome, '.claude');
+      fs.mkdirSync(claudeDir, { recursive: true });
+      const settingsPath = path.join(claudeDir, 'settings.json');
+      const before = { mcpServers: { 'azt-mcp': { command: 'node', args: [], env: { AZITO_URL: 'http://localhost:3001' } } } };
+      fs.writeFileSync(settingsPath, JSON.stringify(before, null, 2));
+
+      const { tokenCommand } = await import('./tokenCommand.js');
+      await tokenCommand(['rotate']);
+
+      const updated = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+      expect(updated.mcpServers['azt-mcp'].env.AZITO_UI_TOKEN).toBeUndefined();
     });
   });
 });

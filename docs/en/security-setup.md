@@ -22,6 +22,7 @@ For installation from release bundles, see [Installation and Updates](install-an
 | SSH host key TOFU verification | SSH connections are refused when the host key changes | Reset the fingerprint if the change was intended |
 | agent token delivery changed | Existing agents keep working in the old form | Reinstall to migrate (optional) |
 | Branch name / path boundary validation | Values containing special characters are rejected with 400 | Fix the offending task values |
+| harness distribution split (Issue #28 Phase B) | `~/.azito/azitoctl*.env` no longer carries `AZITO_UI_TOKEN`; a new `~/.azito/operator.env` holds it instead | Re-run `setup.sh`; run `azito auth doctor` to check for drift |
 
 ## Environment variable reference
 
@@ -38,7 +39,7 @@ Both are git-ignored. Templates live in `.env.example`.
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `AZITO_UI_TOKEN` | No | auto-generates `$AZITO_DATA_DIR/ui-token` | Token for API / WebSocket auth. Resolution order: env -> file -> auto-generate. Use `azito token show` to view, `azito token rotate` to rotate. For source checkouts, check `packages/server/.env` or `data/ui-token` directly. Running `azito token rotate` also updates `AZITO_UI_TOKEN` in all `~/.azito/azitoctl*.env` files automatically |
+| `AZITO_UI_TOKEN` | No | auto-generates `$AZITO_DATA_DIR/ui-token` | Token for API / WebSocket auth (the operator's full-power credential). Resolution order: env -> file -> auto-generate. Use `azito token show` to view, `azito token rotate` to rotate. For source checkouts, check `packages/server/.env` or `data/ui-token` directly. `azito token rotate` auto-updates the local `~/.azito/operator.env` and the MCP token in `~/.claude/settings.json` (only if already present). **It does not touch `~/.azito/azitoctl*.env`** (Issue #28 Phase B — that file must never carry this token) |
 | `AZITO_DATA_DIR` | No | repo root (`data.db`, `data/*`) | Persistent data directory. When set, `data.db`, `master.key`, `vapid-keys.json`, `ui-token`, `browser-profile/`, `sidekicks/` are consolidated under this directory (mode 700). Required for versioned directory deployments |
 | `AZITO_BIND` | No | `127.0.0.1` | Listen address. `0.0.0.0` and `::` are explicitly rejected. Use a Tailscale IP for remote access |
 | `AZITO_ALLOWED_ORIGINS` | No | `http://localhost:5173,http://localhost:3001` | Comma-separated origins allowed by CORS and the WebSocket Origin check |
@@ -60,6 +61,97 @@ Both are git-ignored. Templates live in `.env.example`.
 |---|---|---|
 | `MINIO_ROOT_USER` | **Yes** when using MinIO | `docker compose up` fails if unset |
 | `MINIO_ROOT_PASSWORD` | **Yes** when using MinIO | Same. Use a sufficiently long value |
+
+---
+
+## Principal separation (operator / task)
+
+Issue #28 introduces a `principal` model that distinguishes *who* is calling the API: an
+**operator** (a human, or a browser session / CLI acting with full authority) versus a **task**
+(an autonomous agent running inside a worktree, scoped to its own resources). This section
+explains the credentials each side gets and the harness distribution split (Phase B) that keeps
+the operator's full-power token out of files that task-side processes read.
+
+### Credentials by principal
+
+| Principal | Credential | Where it lives |
+|---|---|---|
+| operator | `AZITO_UI_TOKEN` | Browser session storage, or `~/.azito/operator.env` (only if a human explicitly `source`s it) |
+| task | `AZITO_TASK_TOKEN` | Injected only into the tmux pane env of the task's own worker window, by the hub, at window (re)creation time |
+
+`azt-*` skills look for `AZITO_TASK_TOKEN` first and fall back to `AZITO_UI_TOKEN`, so the same
+skill works whether it's invoked from inside a task pane or from a human's manually-started
+terminal.
+
+### `~/.azito/operator.env`
+
+When you pass `--ui-token` to `setup.sh`, it writes `AZITO_URL` and `AZITO_UI_TOKEN` into
+`~/.azito/operator.env` (mode 600) — **and nothing else reads or sources this file
+automatically**, not `setup.sh`, not `azitoctl`, not any hook script. To use it:
+
+```bash
+source ~/.azito/operator.env
+azito token rotate     # now running with operator authority
+```
+
+`~/.azito/azitoctl*.env` (used by `azitoctl` / `azs`, the scripts that task-execution processes
+and hooks source) never carries `AZITO_UI_TOKEN`. If you find a `AZITO_UI_TOKEN=` line in one of
+those files, that's a leftover from before this change — re-run `setup.sh` to strip it (it
+rewrites the whole file), or run `azito auth doctor` to confirm it's gone.
+
+### `azito auth doctor`
+
+Run locally on any server to check for drift between the intended state and reality:
+
+```bash
+azito auth doctor
+```
+
+It checks, **on the machine it runs on only** (it does not reach out to remote servers):
+
+- (a) no `AZITO_UI_TOKEN` line remains in any `~/.azito/azitoctl*.env`
+- (b) `~/.azito/operator.env` (if present) is mode 600
+- (c) the MCP token in `~/.claude/settings.json` (if present) matches the hub's current token, as
+  far as it can be read locally
+- (d) the current value of `AZITO_SCOPED_AUTH`
+
+Each check prints a fix instruction when it fails. Run it again on every remote server after
+migrating — a single run only covers the machine it executed on.
+
+### The same-Unix-user limitation
+
+This separation is a **capability boundary between well-behaved code paths**, not a sandbox.
+`chmod 600` only stops *other Unix users* from reading a file — it does nothing against another
+process running as the same user that reads it directly, walks `/proc/<pid>/environ`, or ptraces
+the process. If a task worker runs attacker-controlled code, that code can read
+`~/.claude/settings.json`, environment variables of sibling processes, and anything else this
+Unix user can read — including, in principle, `operator.env` if the task process's shell also
+happens to inherit or read it (which is exactly why nothing auto-sources it). Isolating against
+**malicious code**, as opposed to structuring **well-behaved code's** access, is out of scope
+here and tracked separately (#29, OS-level isolation). Likewise, the audit log this phase writes
+is an operational record for debugging and review — it makes no tamper-resistance claim.
+
+### Migration steps (staged activation)
+
+The new hub ships in a **compatibility mode**: it still injects task tokens under the hood but
+also accepts the legacy UI-token-only flow, so nothing breaks mid-rollout. Roll out in this order:
+
+1. **Deploy the fixed CLI first.** Update the hub's `packages/server` code (or upgrade the release
+   build) so `azito token rotate` and `azito auth doctor` are available, *before* touching any
+   server's harness.
+2. **Update the harness on each server.** Re-run `setup.sh` with the same flags as before — it
+   will stop writing `AZITO_UI_TOKEN` into `azitoctl*.env` and, if `--ui-token` is given, start
+   writing `operator.env` instead. `azt-*` skills already have the `AZITO_TASK_TOKEN` fallback
+   from Phase A, so this step is safe to do server-by-server.
+3. **Update the hub itself** (still in compatibility mode). Tasks that were already running when
+   you restart the hub will either finish naturally or need to be re-created — they don't need to
+   be killed, but their pane env was captured before the restart.
+4. **Flip `AZITO_SCOPED_AUTH` on** once `azito auth doctor` reports all green on every server. This
+   is the point where task principals actually become restricted to the allowlisted APIs (design
+   §4) instead of just being *issued* scoped tokens.
+5. **Rotate the UI token last.** Run `azito token rotate`, then update the browser (re-enter the
+   token), any MCP client config it didn't reach automatically, and `operator.env` on any other
+   machine you use as an operator.
 
 ---
 
@@ -434,6 +526,8 @@ systemctl --user start azito
 | SSH fails with `Host key mismatch` | Stored fingerprint differs (host rebuilt, or a man-in-the-middle) | If intended, use Servers → target server → Danger Zone → "Reset SSH fingerprint" |
 | An agent server returns 401 on every API | agent token mismatch | Servers → Setup → Agent Server → "Reinstall" |
 | Opening a supervised pane always waits 10 seconds | `AZITO_PUBLIC_URL` not set; the auto-detected Tailscale IP is unreachable because bind is `127.0.0.1` | Add `AZITO_PUBLIC_URL=https://<MagicDNS>` to `.env` → restart the service → respawn supervised windows (existing shell panes keep the old `AZITO_URL`; check with `GET /api/supervisors` — `[]` confirms this issue) |
+| `azito auth doctor` reports `AZITO_UI_TOKEN remains in azitoctl*.env` | Leftover line from an older `setup.sh` | Re-run `setup.sh` with the same `--azito-url` `--webhook-token` (the file is rewritten in full each run, so the line disappears automatically) |
+| `azito auth doctor` reports an MCP token mismatch | `azito token rotate` ran but wasn't followed by an MCP settings update, or a different machine rotated the token | Re-run `harness/setup.sh --ui-token <latest token>`, or refresh `operator.env` and re-run `azito token rotate` |
 
 ## Recovery / rollback
 
