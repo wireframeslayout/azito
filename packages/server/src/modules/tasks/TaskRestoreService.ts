@@ -7,8 +7,7 @@ import type { IUnitRepository } from '../units/Unit';
 import type { IWindowRepository } from '../windows/Window';
 import type { SqliteProjectSecretRepository } from '../projects/SqliteProjectSecretRepository';
 import type { TmuxClient } from '../tmux/TmuxClient';
-import { resolveKillOutcome } from '../tmux/killOutcome';
-import { createRotatedWindow } from './execution/WindowRotation';
+import { createRotatedWindow, rollbackWindowReference } from './execution/WindowRotation';
 import type { WorktreeServiceFactory } from '../git/WorktreeServiceFactory';
 import { PathResolverFactory, assertDirectoryContained } from '../git/PathContainment';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
@@ -324,12 +323,6 @@ export class TaskRestoreService {
     } catch (err) {
       if (windowName) {
         try {
-          // resolveKillOutcome normalizes local (throws on failure) vs agent
-          // (resolves with a non-zero code) transports into one verdict —
-          // see its doc comment; a bare await here previously read an
-          // agent-transport kill failure as success (Issue #28 third-party
-          // review finding 2).
-          const outcome = await resolveKillOutcome(tmux.killWindow(server, `${tmuxSession}:${windowName}`));
           // The createWindow() above (line ~177) already rotated the task
           // token for THIS window generation via buildEnvForNewWindow. The
           // task's status stays 'archived' throughout this rollback (no
@@ -339,13 +332,38 @@ export class TaskRestoreService {
           // attempt; no status WRITE happens on this failure path to trigger
           // it again for the freshly-issued generation. Revoke it directly,
           // same fix as ExecuteTaskUseCase's rollback branches (Issue #28
-          // third-party review finding) — only once the kill above confirms
-          // the window is actually gone.
-          if (outcome.success) {
-            paneEnvService.revokeForDestroyedWindow(task.id, 'restore_rollback');
-          }
+          // third-party review finding) — only once rollbackWindowReference
+          // confirms the kill actually worked.
+          //
+          // The Window row (windowRowId, added at line ~283) is removed
+          // inside the SAME success branch (Issue #28 third-party review,
+          // second round): removing it unconditionally — as a separate step
+          // below, regardless of whether the kill above actually succeeded —
+          // used to delete the only DB reference to a window that was still
+          // alive and still holding a valid token whenever the kill failed.
+          await rollbackWindowReference(
+            tmux.killWindow(server, `${tmuxSession}:${windowName}`),
+            paneEnvService,
+            task.id,
+            'restore_rollback',
+            () => {
+              if (windowRowId) {
+                try { windowRepo.remove(windowRowId); } catch (e) {
+                  log.warn(`[task-restore] Failed to rollback window row: ${(e as Error).message}`);
+                }
+              }
+            },
+            () => {},
+          );
         } catch (e) {
           log.warn(`[task-restore] Failed to rollback tmux window: ${(e as Error).message}`);
+        }
+      } else if (windowRowId) {
+        // Defensive fallback only — windowRowId is never set before
+        // windowName in the try block above, so this branch should be
+        // unreachable in practice.
+        try { windowRepo.remove(windowRowId); } catch (e) {
+          log.warn(`[task-restore] Failed to rollback window row: ${(e as Error).message}`);
         }
       }
       if (worktreePath && repoDir) {
@@ -355,11 +373,6 @@ export class TaskRestoreService {
           await worktreeService.remove(repoDir, worktreePath);
         } catch (e) {
           log.warn(`[task-restore] Failed to rollback worktree: ${(e as Error).message}`);
-        }
-      }
-      if (windowRowId) {
-        try { windowRepo.remove(windowRowId); } catch (e) {
-          log.warn(`[task-restore] Failed to rollback window row: ${(e as Error).message}`);
         }
       }
       throw err;

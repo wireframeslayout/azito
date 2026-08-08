@@ -1253,6 +1253,89 @@ describe('ExecuteTaskUseCase window-rotation rollback safety (Issue #28 third-pa
   });
 });
 
+// Issue #28 third-party review, second round: all 3 rollback sites used to
+// clear their DB reference to the just-created window (tmuxWindow: null /
+// removing the Window row) either before confirming the kill, or regardless
+// of whether it succeeded. A kill failure then left a still-live,
+// still-token-authenticated window completely untracked. The 3 sites now
+// route through WindowRotation.rollbackWindowReference, which only clears
+// the reference once resolveKillOutcome confirms the window is actually
+// gone; on failure the reference (and the token) is left alone.
+describe('ExecuteTaskUseCase rollback keeps the window reference tracked when the rollback kill fails (Issue #28 third-party review, second round)', () => {
+  let allowedRoot: string;
+  let outsideDir: string;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    allowedRoot = mkdtempSync(path.join(tmpdir(), 'azito-exec-rollback-root-'));
+    outsideDir = mkdtempSync(path.join(tmpdir(), 'azito-exec-rollback-outside-'));
+  });
+
+  afterEach(() => {
+    rmSync(allowedRoot, { recursive: true, force: true });
+    rmSync(outsideDir, { recursive: true, force: true });
+  });
+
+  it('execute(): worktree-creation-failure rollback keeps tmuxWindow set and does not revoke the generation when the rollback kill fails', async () => {
+    const unit = makeUnit({ id: 50, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 60, serverName: 'local-server', unitId: 50 });
+    const { useCase, tmux, taskRepo, paneEnvService, worktreeServiceFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: { workingDirectory: allowedRoot, branch: null, tmuxSession: 'azito' },
+    });
+    worktreeServiceFactory.create.mockReturnValue({
+      create: vi.fn(async () => { throw new Error('worktree failed'); }),
+    });
+    tmux.killWindow.mockResolvedValue({ stdout: '', stderr: 'device busy', code: 1 });
+
+    await expect(useCase.execute(50, 60)).rejects.toThrow(/Worktree creation failed/);
+
+    expect(taskRepo.update).not.toHaveBeenCalledWith(60, expect.objectContaining({ tmuxWindow: null }));
+    expect(paneEnvService.revokeForDestroyedWindow).not.toHaveBeenCalled();
+  });
+
+  it('execute(): worktree-path-rejection rollback keeps tmuxWindow set and does not revoke the generation when the rollback kill fails', async () => {
+    const unit = makeUnit({ id: 51, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 61, serverName: 'local-server', unitId: 51 });
+    const { useCase, tmux, taskRepo, paneEnvService, worktreeServiceFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: { workingDirectory: allowedRoot, branch: null, tmuxSession: 'azito' },
+    });
+    worktreeServiceFactory.create.mockReturnValue({
+      create: vi.fn(async () => ({ path: outsideDir, branch: 'task/61-slug' })),
+      remove: vi.fn(async () => {}),
+    });
+    tmux.killWindow.mockResolvedValue({ stdout: '', stderr: 'device busy', code: 1 });
+
+    await expect(useCase.execute(51, 61)).rejects.toThrow(/Worktree path rejected/);
+
+    expect(taskRepo.update).not.toHaveBeenCalledWith(61, expect.objectContaining({ tmuxWindow: null }));
+    expect(paneEnvService.revokeForDestroyedWindow).not.toHaveBeenCalled();
+  });
+
+  it('followUp(): working-directory-rejection rollback keeps tmuxWindow set and does not revoke the generation when the rollback kill fails', async () => {
+    const unit = makeUnit({ id: 52, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 62, serverName: 'local-server', unitId: 52, tmuxWindow: null, workingDirectory: outsideDir });
+    const { useCase, tmux, taskRepo, paneEnvService, worktreeServiceFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: { workingDirectory: allowedRoot, branch: null, tmuxSession: 'azito' },
+    });
+    worktreeServiceFactory.create.mockReturnValue({ exists: vi.fn(async () => false) });
+    tmux.killWindow.mockResolvedValue({ stdout: '', stderr: 'device busy', code: 1 });
+
+    await expect(useCase.followUp(52, 62, 'please continue')).rejects.toThrow(/Follow-up working directory rejected/);
+
+    expect(taskRepo.update).not.toHaveBeenCalledWith(62, expect.objectContaining({ tmuxWindow: null }));
+    expect(paneEnvService.revokeForDestroyedWindow).not.toHaveBeenCalled();
+  });
+});
+
 describe('ExecuteTaskUseCase.followUp working-directory containment (Issue #27 review finding 1)', () => {
   let allowedRoot: string;
   let outsideDir: string;

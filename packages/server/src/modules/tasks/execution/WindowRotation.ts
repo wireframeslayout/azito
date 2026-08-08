@@ -1,7 +1,7 @@
 import type { ServerConfig } from '../../servers/Server';
 import type { ExecResult } from '../../servers/transport/ServerTransport';
 import type { TmuxClient } from '../../tmux/TmuxClient';
-import { resolveKillOutcome } from '../../tmux/killOutcome';
+import { resolveKillOutcome, type KillOutcome } from '../../tmux/killOutcome';
 import type { Task } from '../Task';
 import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
 
@@ -99,4 +99,46 @@ export async function createRotatedWindow(
   // env explicitly or it silently inherits the tmux SESSION's environment
   // instead (see splitPane's doc comment).
   return { windowName: created.windowName, env };
+}
+
+/**
+ * Shared "rollback kill → reference bookkeeping" operation (Issue #28
+ * third-party review, second round: 3 rollback sites each independently
+ * cleared their reference to the about-to-be-killed window BEFORE — or
+ * regardless of — confirming the kill actually worked, so a kill failure
+ * left a still-live, still-token-authenticated window with nothing in the
+ * DB pointing at it). The one correct order, now enforced in one place
+ * instead of 3 copies that can drift again:
+ *
+ *   1. resolve the kill outcome via {@link resolveKillOutcome} (already-gone
+ *      counts as success — see its own doc comment)
+ *   2. success (or already-gone): clear the caller's reference via
+ *      `onGone` (e.g. `tmuxWindow: null`, removing the Window row) AND
+ *      revoke the just-issued token generation
+ *   3. failure: call `onStillAlive` — the caller MUST use this to keep (or
+ *      create, if not yet persisted) a reference to the window, never to
+ *      clear one — and do NOT revoke the generation, so a still-live pane
+ *      keeps a valid token and stays discoverable for an operator to clean
+ *      up later
+ *
+ * Mirrors each site's original `catch {}` around the kill itself — this
+ * never throws on the kill/resolve path; callers keep deciding whether (and
+ * how) to surface their own domain-specific rollback error.
+ */
+export async function rollbackWindowReference(
+  killExec: Promise<ExecResult>,
+  paneEnvService: TaskPaneEnvironmentService,
+  taskId: number,
+  revokeReason: string,
+  onGone: () => void,
+  onStillAlive: () => void,
+): Promise<KillOutcome> {
+  const outcome = await resolveKillOutcome(killExec);
+  if (outcome.success) {
+    onGone();
+    paneEnvService.revokeForDestroyedWindow(taskId, revokeReason);
+  } else {
+    onStillAlive();
+  }
+  return outcome;
 }

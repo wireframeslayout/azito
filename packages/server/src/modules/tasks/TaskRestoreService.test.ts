@@ -489,6 +489,77 @@ describe('TaskRestoreService', () => {
     expect(deps.tmux.killWindow).not.toHaveBeenCalled();
   });
 
+  // Issue #28 third-party review, second round: TaskRestoreService's rollback
+  // used to remove the Window row (and, before that, clear the DB reference
+  // in ExecuteTaskUseCase's siblings) regardless of whether the rollback kill
+  // itself actually succeeded — a kill failure left a still-live,
+  // still-token-authenticated window with no DB row left pointing at it. The
+  // 3 sites now share WindowRotation.rollbackWindowReference, which only
+  // clears/removes the reference once the kill is confirmed.
+  it('does not revoke the generation when the rollback kill fails during worktree-creation-failure rollback (a still-live pane must keep a valid token)', async () => {
+    const task = makeTask({ serverName: 'test-server' });
+    deps = makeDeps({
+      ...deps,
+      worktreeServiceFactory: {
+        create: vi.fn(() => ({
+          create: vi.fn(async () => { throw new Error('worktree failed'); }),
+          remove: vi.fn(async () => {}),
+        })),
+      } as unknown as TaskRestoreDeps['worktreeServiceFactory'],
+      tmux: {
+        ...deps.tmux,
+        killWindow: vi.fn(async () => ({ stdout: '', stderr: 'device busy', code: 1 })),
+      } as unknown as TaskRestoreDeps['tmux'],
+    });
+    service = new TaskRestoreService(deps);
+
+    await expect(service.restore(task, log)).rejects.toThrow('worktree failed');
+    expect(deps.tmux.killWindow).toHaveBeenCalled();
+    expect(deps.paneEnvService.revokeForDestroyedWindow).not.toHaveBeenCalled();
+  });
+
+  it('does not remove the Window row when the rollback kill fails after the row was already persisted — the still-live window must stay discoverable', async () => {
+    const task = makeTask({ serverName: 'test-server' });
+    deps = makeDeps({
+      ...deps,
+      taskRepo: {
+        ...deps.taskRepo,
+        // Forces restore()'s final success-path taskRepo.update (after
+        // windowRepo.add has already run) to throw, so the outer catch runs
+        // with windowRowId already set — the scenario the fix targets.
+        update: vi.fn(() => { throw new Error('db write failed'); }),
+      },
+      tmux: {
+        ...deps.tmux,
+        killWindow: vi.fn(async () => ({ stdout: '', stderr: 'device busy', code: 1 })),
+      } as unknown as TaskRestoreDeps['tmux'],
+    });
+    service = new TaskRestoreService(deps);
+
+    await expect(service.restore(task, log)).rejects.toThrow('db write failed');
+    expect(deps.windowRepo.add).toHaveBeenCalled();
+    expect(deps.tmux.killWindow).toHaveBeenCalled();
+    expect(deps.windowRepo.remove).not.toHaveBeenCalled();
+    expect(deps.paneEnvService.revokeForDestroyedWindow).not.toHaveBeenCalled();
+  });
+
+  it('removes the Window row and revokes the generation when the rollback kill succeeds after the row was already persisted', async () => {
+    const task = makeTask({ serverName: 'test-server' });
+    deps = makeDeps({
+      ...deps,
+      taskRepo: {
+        ...deps.taskRepo,
+        update: vi.fn(() => { throw new Error('db write failed'); }),
+      },
+    });
+    service = new TaskRestoreService(deps);
+
+    await expect(service.restore(task, log)).rejects.toThrow('db write failed');
+    expect(deps.windowRepo.add).toHaveBeenCalled();
+    expect(deps.windowRepo.remove).toHaveBeenCalledWith(100);
+    expect(deps.paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(1, 'restore_rollback');
+  });
+
   it('throws when server cannot be resolved', async () => {
     const task = makeTask({ serverName: null });
     deps = makeDeps({

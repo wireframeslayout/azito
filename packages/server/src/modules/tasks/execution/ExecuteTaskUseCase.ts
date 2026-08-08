@@ -12,8 +12,7 @@ import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoade
 import type { SidekickSyncService } from '../../sidekicks/SidekickSyncService';
 import type { IExecutionLogRepository, LogType } from '../ExecutionLog';
 import type { TmuxClient } from '../../tmux/TmuxClient';
-import { resolveKillOutcome } from '../../tmux/killOutcome';
-import { confirmOldWindowGone, createRotatedWindow } from './WindowRotation';
+import { confirmOldWindowGone, createRotatedWindow, rollbackWindowReference } from './WindowRotation';
 import type { IWorktreeService, WorktreeInfo } from '../../git/IWorktreeService';
 import type { WorktreeServiceFactory } from '../../git/WorktreeServiceFactory';
 import { PathResolverFactory, assertDirectoryContained } from '../../git/PathContainment';
@@ -550,26 +549,27 @@ export class ExecuteTaskUseCase {
           type: 'worktree_failed',
           message,
         });
-        this.taskRepo.update(taskId, { status: 'failed' as TaskStatus, tmuxWindow: null } as Partial<Task>);
+        this.taskRepo.update(taskId, { status: 'failed' as TaskStatus } as Partial<Task>);
         // 'failed' is deliberately NOT in TOKEN_REVOKING_STATUSES (a failed
         // task is resumable via follow-up onto a later window), so the
         // window-generation token this createWindow() just issued would
         // otherwise leak — revoke it directly, but only once the kill below
         // actually confirms the window is gone (Issue #28 third-party review
         // finding; see TaskPaneEnvironmentService.revokeForDestroyedWindow's
-        // doc comment).
+        // doc comment). Routed through rollbackWindowReference (Issue #28
+        // third-party review, second round) so `tmuxWindow` is cleared ONLY
+        // once the kill is confirmed — a kill failure leaves the DB row
+        // pointing at the still-live, still-authenticated window instead of
+        // silently untracking it.
         try {
-          // resolveKillOutcome normalizes local (throws on failure) vs agent
-          // (resolves with a non-zero code) transports into one verdict —
-          // only revoke the generation once the kill actually confirms the
-          // window is gone (Issue #28 third-party review finding 2: a bare
-          // await here previously treated an agent-transport kill failure as
-          // success and revoked anyway, leaving a still-live pane holding a
-          // dead credential).
-          const outcome = await resolveKillOutcome(this.tmux.killWindow(server, `${tmuxSession}:${windowName}`));
-          if (outcome.success) {
-            this.paneEnvService.revokeForDestroyedWindow(taskId, 'worktree_creation_failed_rollback');
-          }
+          await rollbackWindowReference(
+            this.tmux.killWindow(server, `${tmuxSession}:${windowName}`),
+            this.paneEnvService,
+            taskId,
+            'worktree_creation_failed_rollback',
+            () => this.taskRepo.update(taskId, { tmuxWindow: null } as Partial<Task>),
+            () => {},
+          );
         } catch {}
         throw new Error(`Worktree creation failed: ${message}`);
       }
@@ -602,19 +602,22 @@ export class ExecuteTaskUseCase {
           }
           this.taskRepo.update(taskId, {
             status: 'failed' as TaskStatus,
-            tmuxWindow: null,
             worktreePath: null,
             worktreeBranch: null,
           } as Partial<Task>);
           // Same generation-leak fix as the worktree_failed branch above —
-          // see that branch's comment.
+          // see that branch's comment. `tmuxWindow` is cleared inside
+          // rollbackWindowReference's onGone callback, not unconditionally
+          // above, for the same reason.
           try {
-            // See the worktree_creation_failed_rollback branch above for why
-            // this checks resolveKillOutcome's verdict before revoking.
-            const outcome = await resolveKillOutcome(this.tmux.killWindow(server, `${tmuxSession}:${windowName}`));
-            if (outcome.success) {
-              this.paneEnvService.revokeForDestroyedWindow(taskId, 'worktree_path_rejected_rollback');
-            }
+            await rollbackWindowReference(
+              this.tmux.killWindow(server, `${tmuxSession}:${windowName}`),
+              this.paneEnvService,
+              taskId,
+              'worktree_path_rejected_rollback',
+              () => this.taskRepo.update(taskId, { tmuxWindow: null } as Partial<Task>),
+              () => {},
+            );
           } catch {}
           throw new Error(`Worktree path rejected: ${message}`);
         }
@@ -945,17 +948,21 @@ export class ExecuteTaskUseCase {
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           this.appendLog(taskId, unitId, 'command', { type: 'working_directory_rejected', message });
-          this.taskRepo.update(taskId, { status: 'failed' as TaskStatus, tmuxWindow: null } as Partial<Task>);
+          this.taskRepo.update(taskId, { status: 'failed' as TaskStatus } as Partial<Task>);
           // Same generation-leak fix as execute()'s worktree_failed branch
           // above — this branch only runs when !windowExists just created a
           // fresh window (and rotated the task token) for this follow-up.
+          // `tmuxWindow` is cleared inside rollbackWindowReference's onGone
+          // callback, not unconditionally above, for the same reason.
           try {
-            // See the worktree_creation_failed_rollback branch above for why
-            // this checks resolveKillOutcome's verdict before revoking.
-            const outcome = await resolveKillOutcome(this.tmux.killWindow(server, `${tmuxSession}:${windowName}`));
-            if (outcome.success) {
-              this.paneEnvService.revokeForDestroyedWindow(taskId, 'followup_working_directory_rejected_rollback');
-            }
+            await rollbackWindowReference(
+              this.tmux.killWindow(server, `${tmuxSession}:${windowName}`),
+              this.paneEnvService,
+              taskId,
+              'followup_working_directory_rejected_rollback',
+              () => this.taskRepo.update(taskId, { tmuxWindow: null } as Partial<Task>),
+              () => {},
+            );
           } catch {}
           throw new Error(`Follow-up working directory rejected: ${message}`);
         }

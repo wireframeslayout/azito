@@ -1201,4 +1201,24 @@ describe('WindowRespawnService.resumeLegacySession rollback safety (Issue #28 th
 
     expect(paneEnvService.revokeForDestroyedWindow).not.toHaveBeenCalled();
   });
+
+  // Issue #28 third-party review, second round: the branch above used to
+  // leave the just-created window with NO DB reference at all when the
+  // rollback kill failed — the window kept running, still holding a valid
+  // token, but nothing pointed at it anymore. rollbackWindowReference's
+  // onStillAlive callback now persists `tmuxWindow` in that case so the
+  // window stays discoverable.
+  it('persists tmuxWindow for the still-live window when the rollback kill fails, so it stays discoverable instead of going untracked', async () => {
+    const task = makeTask({ id: 7, unitId: 10, agentSessionId: 'sess-abc', inputTrust: 'trusted' });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 7 });
+    const { service, tmux, taskRepo, paneEnvService } = buildService({ window: win, task, unit });
+    tmux.resolvePaneId.mockRejectedValue(new Error('no such pane'));
+    tmux.killWindow.mockResolvedValue({ stdout: '', stderr: 'device busy', code: 1 });
+
+    await expect(service.resumeLegacySession(7, makeServer())).rejects.toThrow(/no such pane/);
+
+    expect(paneEnvService.revokeForDestroyedWindow).not.toHaveBeenCalled();
+    expect(taskRepo.update).toHaveBeenCalledWith(7, { tmuxWindow: 'task-7-new' });
+  });
 });

@@ -20,8 +20,7 @@ import { resolveExecutionManifest, hashExecutionManifest, type RespawnManifestIn
 import { appendLogAndEmit } from '../tasks/execution/AppendLog';
 import type { TaskPaneEnvironmentService } from '../tasks/execution/TaskPaneEnvironmentService';
 import { resolveTmuxSession } from '../tasks/execution/TaskExecutionEnv';
-import { confirmOldWindowGone, createRotatedWindow } from '../tasks/execution/WindowRotation';
-import { resolveKillOutcome } from '../tmux/killOutcome';
+import { confirmOldWindowGone, createRotatedWindow, rollbackWindowReference } from '../tasks/execution/WindowRotation';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { EventEmitter } from 'events';
@@ -449,15 +448,22 @@ export class WindowRespawnService {
       // persisted) holding a live token generation — same generation-leak
       // shape as ExecuteTaskUseCase's worktree-failure rollback branches
       // (Issue #28 third-party review finding 2). Kill the just-created
-      // window and only revoke the generation once resolveKillOutcome
-      // confirms the kill actually worked; a kill failure leaves the
-      // generation alone (a still-live pane must keep a valid token) and the
-      // original launch error is what surfaces to the caller either way.
+      // window via rollbackWindowReference: only revoke the generation once
+      // the kill is confirmed to have actually worked, and — the second-round
+      // fix — when it DIDN'T work, persist `tmuxWindow` (onStillAlive) instead
+      // of leaving the just-created window with no DB reference at all; a
+      // still-live pane must both keep its valid token AND stay discoverable
+      // for an operator to find and clean up. The original launch error is
+      // what surfaces to the caller either way.
       try {
-        const outcome = await resolveKillOutcome(this.tmux.killWindow(server, windowTarget));
-        if (outcome.success) {
-          this.paneEnvService.revokeForDestroyedWindow(task.id, 'resume_legacy_launch_failed_rollback');
-        }
+        await rollbackWindowReference(
+          this.tmux.killWindow(server, windowTarget),
+          this.paneEnvService,
+          task.id,
+          'resume_legacy_launch_failed_rollback',
+          () => {},
+          () => this.taskRepo.update(taskId, { tmuxWindow: windowName } as Partial<Task>),
+        );
       } catch {}
       throw err;
     }
