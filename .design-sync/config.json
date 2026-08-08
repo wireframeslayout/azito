@@ -1,0 +1,27 @@
+{
+  "projectId": "f6287ee3-9fa6-423b-a9cb-78aa7b96290a",
+  "shape": "package",
+  "pkg": "@azito/frontend",
+  "globalName": "Azito",
+  "srcDir": "src/components",
+  "cssEntry": "src/styles/global.css",
+  "readmeHeader": ".design-sync/conventions.md",
+  "extraEntries": ["../../../.design-sync/default-exports-entry.ts"],
+  "extraFonts": ["../../../.design-sync/fonts/jetbrains-mono.css"],
+  "provider": { "component": "AzitoDarkSurface" },
+  "overrides": {
+    "Modal": { "cardMode": "single", "primaryStory": "ConfirmDialog", "viewport": "640x420" },
+    "ContextMenu": { "cardMode": "single", "primaryStory": "WindowMenu", "viewport": "320x340" }
+  },
+  "componentSrcMap": {
+    "TokenGate": null,
+    "AgentActivityProvider": null,
+    "NotificationCenterProvider": null,
+    "ServerResourcesProvider": null,
+    "ServerStatusProvider": null,
+    "SystemUpdateProvider": null,
+    "TerminalThemeProvider": null,
+    "ToastProvider": null,
+    "Layout": null
+  }
+}

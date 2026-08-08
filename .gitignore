@@ -19,3 +19,10 @@ data/sidekicks/
 **/data/browser-profile/
 data/master.key
 **/data/master.key
+
+# design-sync (staged scripts / build output / machine state)
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules
