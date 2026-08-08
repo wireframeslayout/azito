@@ -8,10 +8,10 @@ import type { WindowItem } from '../ui';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
 import { WindowActivityIndicator } from '../ui';
 import { buildObjectSections, type BrowserObject } from '../../lib/workspaceObjects';
+import { resolveOperationClick } from '../../lib/operationWindowClick';
 import type { BrowserGroupInfo } from '../../hooks/useBrowserGroups';
 import type { PersistedTab } from '../../hooks/useTabPersistence';
 import type { Project, Session, Window, Task } from '../../pages/workspace/types';
-import { stripPaneSuffix } from '../../utils/tmuxTarget';
 import { useToast } from '../../hooks/useToast';
 import type { ContextMenuItem } from '../ContextMenu';
 import ObjectSection from './objects/ObjectSection';
@@ -232,24 +232,18 @@ export default function ObjectsSidebar({
 
   const taskById = useMemo(() => new Map(tasks.map((task) => [task.id, task])), [tasks]);
 
-  // serverName + pane-suffix-stripped target -> operation window (for routing clicks to the owning task panel)
-  const operationWindowByKey = useMemo(() => {
-    const map = new Map<string, Window>();
-    for (const w of sections.operationWindows) {
-      map.set(`${w.serverName}/${stripPaneSuffix(w.tmuxTarget)}`, w);
-    }
-    return map;
-  }, [sections.operationWindows]);
-
-  const handleOperationPaneClick = useCallback((serverName: string, target: string) => {
-    const w = operationWindowByKey.get(`${serverName}/${stripPaneSuffix(target)}`);
-    if (w?.taskId != null && onOpenTaskWindow) {
-      onOpenTaskWindow(w.taskId, t('tasks:detail.taskRef', { id: w.taskId }), { serverName: w.serverName, target: w.tmuxTarget });
+  // クリックされた行の WindowItem 自体（w）から taskId を得る。物理ターゲット（serverName+target）で
+  // Map を引き直すと、同じ物理 tmux ウィンドウを別々のタスクが持つ場合に取り違える
+  // （後勝ちで上書きされた1件に固定されてしまう）ため、行の実体を直接使う。
+  const handleOperationPaneClick = useCallback((serverName: string, target: string, w: WindowItem) => {
+    const decision = resolveOperationClick(w, serverName, target);
+    if (decision.kind === 'task' && onOpenTaskWindow) {
+      onOpenTaskWindow(decision.taskId, t('tasks:detail.taskRef', { id: decision.taskId }), { serverName: decision.serverName, target: decision.target });
       if (mobile) onCloseMobileSidebar();
       return;
     }
     handlePaneClick(serverName, target);
-  }, [operationWindowByKey, onOpenTaskWindow, t, mobile, onCloseMobileSidebar, handlePaneClick]);
+  }, [onOpenTaskWindow, t, mobile, onCloseMobileSidebar, handlePaneClick]);
 
   const renderOperationExtra = useCallback((w: WindowItem) => {
     const status = windowIndicator(w.serverName, w.tmuxTarget);
@@ -366,7 +360,7 @@ export default function ObjectsSidebar({
     items.push({
       label: t('objects.openTerminal'),
       icon: <Icon name="external-link" size={16} />,
-      onClick: () => handleOperationPaneClick(w.serverName, extra?.paneTarget ?? w.tmuxTarget),
+      onClick: () => handleOperationPaneClick(w.serverName, extra?.paneTarget ?? w.tmuxTarget, w),
     });
     if (extra?.online) {
       items.push({ label: t('windows.capturePanes'), icon: <Icon name="camera" size={16} />, onClick: () => onCapturePanes(w.id) });
