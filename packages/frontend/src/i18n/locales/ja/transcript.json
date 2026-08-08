@@ -1,0 +1,25 @@
+{
+  "list": {
+    "title": "Transcript",
+    "empty": "セッションがありません",
+    "emptyDescription": "Claude Code のセッションが作成されると、ここに会話ログが表示されます。",
+    "noPreview": "(プレビューなし)",
+    "loadError": "セッション一覧の取得に失敗しました"
+  },
+  "conversation": {
+    "backToList": "セッション一覧に戻る",
+    "notFound": "セッションが見つかりません",
+    "loadError": "会話ログの取得に失敗しました",
+    "empty": "このセッションにはまだメッセージがありません",
+    "jumpToLatest": "最新へ",
+    "jumpToLatestWithCount": "新着 {{count}} 件",
+    "olderTruncated": "古いメッセージは省略されています",
+    "blockTruncated": "…省略",
+    "thinking": "思考",
+    "toolUse": "ツール呼び出し: {{name}}",
+    "toolResult": "ツール結果",
+    "toolResultError": "ツールエラー",
+    "system": "システム",
+    "other": "その他"
+  }
+}

@@ -189,6 +189,7 @@
   "globalPages": {
     "backToWorkspace": "Back to workspace",
     "workspace": "Workspace",
-    "serversList": "Servers list"
+    "serversList": "Servers list",
+    "transcript": "Transcript"
   }
 }

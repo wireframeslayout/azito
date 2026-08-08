@@ -59,6 +59,8 @@ import {
   Link,
   Activity,
   GitCommitHorizontal,
+  MessagesSquare,
+  ArrowDownToLine,
   type LucideIcon,
 } from 'lucide-react';
 import { SidekickBot, UnitsSquad } from './custom-icons';
@@ -128,6 +130,8 @@ const ICONS = {
   operations: Activity,
   sidekicks: SidekickBot,
   'git-commit': GitCommitHorizontal,
+  transcript: MessagesSquare,
+  'scroll-to-bottom': ArrowDownToLine,
 } satisfies Record<string, LucideIcon>;
 
 export type IconName = keyof typeof ICONS;

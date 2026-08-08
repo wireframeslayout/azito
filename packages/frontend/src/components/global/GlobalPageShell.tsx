@@ -13,6 +13,7 @@ const ProjectsPanel = lazy(() => import('../workspace/ProjectsPanel'));
 const ProjectFormView = lazy(() => import('../ProjectFormView'));
 const ServersListPage = lazy(() => import('../servers/ServersListPage'));
 const ServerDetailPage = lazy(() => import('../servers/ServerDetailPage'));
+const Transcript = lazy(() => import('../../pages/Transcript'));
 
 function LoadingFallback() {
   const { t } = useTranslation('common');
@@ -177,6 +178,16 @@ export default function GlobalPageShell() {
       <GlobalPageLayout title="Projects">
         <Suspense fallback={<LoadingFallback />}>
           <ProjectsPanel onCreateProject={() => navigate(paths.projectNew())} />
+        </Suspense>
+      </GlobalPageLayout>
+    );
+  }
+
+  if (pathname === '/transcript') {
+    return (
+      <GlobalPageLayout title={t('globalPages.transcript')}>
+        <Suspense fallback={<LoadingFallback />}>
+          <Transcript />
         </Suspense>
       </GlobalPageLayout>
     );
