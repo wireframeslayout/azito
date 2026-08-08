@@ -4,6 +4,7 @@ import type { TmuxClient, TmuxSession } from '../TmuxClient';
 import type { SqliteWindowRepository } from '../../windows/SqliteWindowRepository';
 import type { NotificationBus } from '../../notifications/NotificationBus';
 import type { ResourceGuard } from '../../servers/resources/ResourceGuard';
+import { resolveKillOutcome } from '../killOutcome';
 
 // ─── Types ───
 
@@ -173,17 +174,15 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         // single-window DELETE route below did, via onTaskWindowDestroyed).
         const sessionWindows = opts.windowRepo?.findByServerAndSession(request.params.name, request.params.session) ?? [];
 
-        // The local transport throws on failure while agent/SSH resolve with a non-zero
-        // code — normalize both into an ExecResult, same as the single-window route below.
-        const result = await tmux.killSession(srv, request.params.session)
-          .catch((err: Error) => ({ stdout: '', stderr: err.message, code: 1 }));
-        if (result.code !== 0) {
-          const output = `${result.stderr || ''}${result.stdout || ''}`;
-          const alreadyGone = output.includes("can't find session") || output.includes('no such session');
-          if (!alreadyGone)
-            return reply.status(500).send({ error: `kill-session failed: ${result.stderr || result.stdout}` });
-          // Already gone — fall through to DB cleanup + revocation below.
+        // resolveKillOutcome normalizes local (throws on failure) vs agent
+        // (resolves with a non-zero code) transports into one verdict — see
+        // its doc comment.
+        const outcome = await resolveKillOutcome(tmux.killSession(srv, request.params.session));
+        if (!outcome.success) {
+          return reply.status(500).send({ error: `kill-session failed: ${outcome.result.stderr || outcome.result.stdout}` });
         }
+        // Success (killed, or tmux already reported it missing) — fall
+        // through to DB cleanup + revocation below.
         notifySessionsChanged(request.params.name);
 
         // Reaching here means the session is confirmed gone (killed, or
@@ -225,17 +224,15 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         const windowRow = opts.windowRepo?.findByServerAndTarget(request.params.name, target)
           ?? (identity ? opts.windowRepo?.findByServerAndTarget(request.params.name, `${identity.sessionName}:${identity.windowName}`) : undefined)
           ?? (identity ? opts.windowRepo?.findByServerAndTarget(request.params.name, `${identity.sessionName}:${identity.windowIndex}`) : undefined);
-        // The local transport throws on failure while agent/SSH resolve with a non-zero
-        // code — normalize both into an ExecResult so the already-gone check covers all.
-        const result = await tmux.killWindow(srv, target)
-          .catch((err: Error) => ({ stdout: '', stderr: err.message, code: 1 }));
-        if (result.code !== 0) {
-          const output = `${result.stderr || ''}${result.stdout || ''}`;
-          const alreadyGone = output.includes("can't find");
-          if (!alreadyGone)
-            return reply.status(500).send({ error: `kill-window failed: ${result.stderr || result.stdout}` });
-          // Already gone — fall through to DB cleanup below.
+        // resolveKillOutcome normalizes local (throws on failure) vs agent
+        // (resolves with a non-zero code) transports into one verdict — see
+        // its doc comment.
+        const outcome = await resolveKillOutcome(tmux.killWindow(srv, target));
+        if (!outcome.success) {
+          return reply.status(500).send({ error: `kill-window failed: ${outcome.result.stderr || outcome.result.stdout}` });
         }
+        // Success (killed, or tmux already reported it missing) — fall
+        // through to DB cleanup below.
         notifySessionsChanged(request.params.name);
         opts.windowRepo?.removeByServerAndTarget(request.params.name, target);
         if (identity) {

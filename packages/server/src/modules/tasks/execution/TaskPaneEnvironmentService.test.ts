@@ -93,13 +93,20 @@ describe('TaskPaneEnvironmentService.buildEnvForNewWindow', () => {
     expect(env.AZITO_UI_TOKEN).toBe('ui-token-123');
   });
 
-  it('does not inject AZITO_UI_TOKEN when the scoped-auth flag is on', () => {
+  it('explicitly overrides AZITO_UI_TOKEN to empty when the scoped-auth flag is on', () => {
+    // Issue #28 third-party review finding (Critical): an explicit empty
+    // override, not just omission, is required — tmux `new-window -e` only
+    // masks a key a new pane would otherwise inherit from the tmux
+    // SESSION's environment if this call actually sets that key itself.
+    // Merely never assigning AZITO_UI_TOKEN here would leave a task pane
+    // exposed to whatever the session's own environment happens to carry
+    // (e.g. a project session created with `tmux.uiTokenEnv()`).
     const { service } = makeDeps(true);
     const env = service.buildEnvForNewWindow(makeTask(), makeServer());
-    expect(env.AZITO_UI_TOKEN).toBeUndefined();
+    expect(env.AZITO_UI_TOKEN).toBe('');
   });
 
-  it('injects AZITO_AGENT_TOKEN/AZITO_AGENT_PORT for an agent server only when the flag is off', () => {
+  it('injects AZITO_AGENT_TOKEN/AZITO_AGENT_PORT for an agent server only when the flag is off, and explicitly blanks AZITO_AGENT_TOKEN when on', () => {
     const agentServer = makeServer({ type: 'agent', agentPort: 4001, agentToken: 'secret-agent-token' });
 
     const off = makeDeps(false);
@@ -109,7 +116,7 @@ describe('TaskPaneEnvironmentService.buildEnvForNewWindow', () => {
 
     const on = makeDeps(true);
     const envOn = on.service.buildEnvForNewWindow(makeTask(), agentServer);
-    expect(envOn.AZITO_AGENT_TOKEN).toBeUndefined();
+    expect(envOn.AZITO_AGENT_TOKEN).toBe('');
     expect(envOn.AZITO_AGENT_PORT).toBeUndefined();
   });
 

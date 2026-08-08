@@ -12,6 +12,7 @@ import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoade
 import type { SidekickSyncService } from '../../sidekicks/SidekickSyncService';
 import type { IExecutionLogRepository, LogType } from '../ExecutionLog';
 import type { TmuxClient } from '../../tmux/TmuxClient';
+import { resolveKillOutcome } from '../../tmux/killOutcome';
 import type { IWorktreeService, WorktreeInfo } from '../../git/IWorktreeService';
 import type { WorktreeServiceFactory } from '../../git/WorktreeServiceFactory';
 import { PathResolverFactory, assertDirectoryContained } from '../../git/PathContainment';
@@ -538,8 +539,17 @@ export class ExecuteTaskUseCase {
         // finding; see TaskPaneEnvironmentService.revokeForDestroyedWindow's
         // doc comment).
         try {
-          await this.tmux.killWindow(server, `${tmuxSession}:${windowName}`);
-          this.paneEnvService.revokeForDestroyedWindow(taskId, 'worktree_creation_failed_rollback');
+          // resolveKillOutcome normalizes local (throws on failure) vs agent
+          // (resolves with a non-zero code) transports into one verdict —
+          // only revoke the generation once the kill actually confirms the
+          // window is gone (Issue #28 third-party review finding 2: a bare
+          // await here previously treated an agent-transport kill failure as
+          // success and revoked anyway, leaving a still-live pane holding a
+          // dead credential).
+          const outcome = await resolveKillOutcome(this.tmux.killWindow(server, `${tmuxSession}:${windowName}`));
+          if (outcome.success) {
+            this.paneEnvService.revokeForDestroyedWindow(taskId, 'worktree_creation_failed_rollback');
+          }
         } catch {}
         throw new Error(`Worktree creation failed: ${message}`);
       }
@@ -579,8 +589,12 @@ export class ExecuteTaskUseCase {
           // Same generation-leak fix as the worktree_failed branch above —
           // see that branch's comment.
           try {
-            await this.tmux.killWindow(server, `${tmuxSession}:${windowName}`);
-            this.paneEnvService.revokeForDestroyedWindow(taskId, 'worktree_path_rejected_rollback');
+            // See the worktree_creation_failed_rollback branch above for why
+            // this checks resolveKillOutcome's verdict before revoking.
+            const outcome = await resolveKillOutcome(this.tmux.killWindow(server, `${tmuxSession}:${windowName}`));
+            if (outcome.success) {
+              this.paneEnvService.revokeForDestroyedWindow(taskId, 'worktree_path_rejected_rollback');
+            }
           } catch {}
           throw new Error(`Worktree path rejected: ${message}`);
         }
@@ -906,8 +920,12 @@ export class ExecuteTaskUseCase {
           // above — this branch only runs when !windowExists just created a
           // fresh window (and rotated the task token) for this follow-up.
           try {
-            await this.tmux.killWindow(server, `${tmuxSession}:${windowName}`);
-            this.paneEnvService.revokeForDestroyedWindow(taskId, 'followup_working_directory_rejected_rollback');
+            // See the worktree_creation_failed_rollback branch above for why
+            // this checks resolveKillOutcome's verdict before revoking.
+            const outcome = await resolveKillOutcome(this.tmux.killWindow(server, `${tmuxSession}:${windowName}`));
+            if (outcome.success) {
+              this.paneEnvService.revokeForDestroyedWindow(taskId, 'followup_working_directory_rejected_rollback');
+            }
           } catch {}
           throw new Error(`Follow-up working directory rejected: ${message}`);
         }

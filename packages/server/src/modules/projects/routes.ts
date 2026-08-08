@@ -233,7 +233,22 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
           const sessions = await tmux.listSessions(srv);
           const exists = sessions.some((s) => s.name === project.slug);
           if (!exists) {
-            await tmux.createSession(srv, project.slug, { extraEnv: tmux.uiTokenEnv() });
+            // No token in extraEnv (Issue #28 third-party review finding,
+            // Critical): `tmux new-session -e` sets the SESSION's own
+            // environment, not just this call's window — every window
+            // created later in this session (including a task's, via
+            // ExecuteTaskUseCase/TaskRestoreService's `createWindow` into
+            // this exact `project.slug` session) would inherit
+            // AZITO_UI_TOKEN from here and bypass scoped task-token auth
+            // entirely, with no reference anywhere to this createSession
+            // call to explain why (verified empirically against tmux 3.4:
+            // a session-level var set via `-e` on `new-session` propagates
+            // to windows added afterwards with `new-window`, even with no
+            // `-e` of their own). This first window is an unmanaged
+            // generated-name placeholder nobody uses directly (same as
+            // ExecuteTaskUseCase's own throwaway-session bootstrap window),
+            // so it has no legitimate need for the token either.
+            await tmux.createSession(srv, project.slug, { extraEnv: {} });
             sessionCreated = true;
           }
         } catch {

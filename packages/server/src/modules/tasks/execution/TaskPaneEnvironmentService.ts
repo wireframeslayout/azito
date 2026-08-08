@@ -61,6 +61,33 @@ export class TaskPaneEnvironmentService {
         if (server.agentPort) env.AZITO_AGENT_PORT = String(server.agentPort);
         if (server.agentToken) env.AZITO_AGENT_TOKEN = server.agentToken;
       }
+    } else {
+      // Denylist override (Issue #28 third-party review finding, Critical):
+      // `tmux new-window -e KEY=...` only stops THIS call from injecting a
+      // key — it does NOT stop the new pane from inheriting a key already
+      // present in the tmux SESSION's own environment (`tmux new-session -e`
+      // persists into the session, and every window created afterwards in
+      // that session inherits it — verified directly against tmux 3.4). A
+      // task window is very often created inside a pre-existing session
+      // (e.g. a project's tmux session, created via
+      // `POST /api/projects/:id/servers/:name` with `tmux.uiTokenEnv()`, or
+      // any manual "New Session" a human made from the terminal UI) — if
+      // that session's env still carries AZITO_UI_TOKEN/AZITO_AGENT_TOKEN
+      // from before, a task pane would inherit the full-power UI token (or
+      // the hub<->agent-server token) straight through the session, bypassing
+      // scoped auth entirely despite this branch never assigning either key
+      // itself. Explicitly setting both to '' here forces THIS pane's `-e`
+      // override to win regardless of what the session carries — tmux
+      // applies a new pane's own `-e` values on top of the inherited session
+      // environment, so an explicit empty value always masks an inherited
+      // one (confirmed empirically: a session-level var set via `-e` on
+      // `new-session` is overridden to empty by `-e KEY=` on a later
+      // `new-window` into that same session). This makes cleaning up
+      // already-running sessions' leftover env unnecessary: any task window
+      // created from here on is safe no matter what a session's own env
+      // holds.
+      env.AZITO_UI_TOKEN = '';
+      env.AZITO_AGENT_TOKEN = '';
     }
     return env;
   }

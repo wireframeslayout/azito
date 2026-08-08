@@ -68,10 +68,10 @@ function makeTask(id: number, overrides: Partial<Task> = {}): Task {
 }
 
 /** Builds a Fastify app with the SAME onRequest auth pipeline app/buildServer.ts installs, in front of tasksRoutes only. */
-function buildApp(scopedAuthEnabled: boolean, db: SqliteDatabase, createCalls: Record<string, unknown>[]): { app: FastifyInstance; taskTokenRepo: SqliteTaskTokenRepository; taskRepo: TasksRouteOptions['taskRepo'] } {
+function buildApp(scopedAuthEnabled: boolean, db: SqliteDatabase, createCalls: Record<string, unknown>[], auditRecordImpl: (...args: unknown[]) => unknown = vi.fn()): { app: FastifyInstance; taskTokenRepo: SqliteTaskTokenRepository; taskRepo: TasksRouteOptions['taskRepo'] } {
   const taskTokenRepo = new SqliteTaskTokenRepository(db);
   const verifyUiToken = createTokenVerifier(UI_TOKEN);
-  const auditLogService = new AuditLogService({ record: vi.fn() });
+  const auditLogService = new AuditLogService({ record: auditRecordImpl });
 
   const tasks = new Map<number, Task>([
     [1, makeTask(1)],
@@ -239,6 +239,29 @@ describe('POST /api/tasks/:id/children + POST /api/tasks — task-principal surf
         payload: { title: 'Over the operator lifetime cap' },
       });
 
+      expect(res.statusCode).toBe(429);
+      expect(res.json()).toMatchObject({ error: 'Task 1 already has 100 children (limit 100)' });
+      expect(createCalls).toHaveLength(0);
+    });
+
+    // Issue #28 third-party review finding (Minor): the limit-exceeded audit
+    // write must be best-effort, same as every other audit call site — a
+    // throwing record() must not turn the already-computed 429 into a
+    // generic 500.
+    it('still returns 429 when the limit-exceeded audit write throws', async () => {
+      const throwingRecord = vi.fn(() => { throw new Error('audit db is locked'); });
+      const { app, taskRepo } = buildApp(true, db, createCalls, throwingRecord);
+      await app.ready();
+      (taskRepo.countChildren as ReturnType<typeof vi.fn>).mockReturnValue(100);
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/tasks/1/children',
+        headers: { authorization: `Bearer ${UI_TOKEN}` },
+        payload: { title: 'Over the operator lifetime cap, audit write fails' },
+      });
+
+      expect(throwingRecord).toHaveBeenCalled();
       expect(res.statusCode).toBe(429);
       expect(res.json()).toMatchObject({ error: 'Task 1 already has 100 children (limit 100)' });
       expect(createCalls).toHaveLength(0);

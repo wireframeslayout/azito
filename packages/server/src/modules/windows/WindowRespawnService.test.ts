@@ -174,7 +174,7 @@ function buildService(opts: {
     createWindow: vi.fn(async (_server: unknown, _session: string, baseName?: string, options?: { exactName?: boolean }) => ({
       windowName: options?.exactName && baseName ? baseName : `${baseName || 'win'}-new`,
     })),
-    killWindow: vi.fn(async () => ({})),
+    killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
     sendKeys: vi.fn(async (_server: unknown, _target: string, keys: string[]) => {
       sentCommands.push(keys[0]);
     }),
@@ -475,6 +475,54 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
     expect(paneEnvService.buildEnvForNewWindow).not.toHaveBeenCalled();
     expect(tmux.createWindow).not.toHaveBeenCalled();
     expect(tmux.createSession).not.toHaveBeenCalled();
+  });
+
+  it('does not rotate the task token when killing the old window fails on an agent server (resolves with a non-zero code instead of rejecting) — Issue #28 third-party review finding 2', async () => {
+    // AgentTransport.execTmux never rejects on the remote tmux command's own
+    // exit code — it only rejects on an HTTP-level failure, resolving with
+    // whatever ExecResult (including a non-zero code) the agent process
+    // returns. A bare `.then(() => true, () => false)` on killWindow's
+    // promise previously read this resolve as "kill succeeded" regardless
+    // of `code`, so this exact scenario used to rotate the task token and
+    // proceed even though the old pane was, in fact, still alive.
+    const task = makeTask({ id: 5, unitId: 10 });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 5, tmuxTarget: 'azito:task-1--ab12.1' });
+    const { service, tmux, paneEnvService } = buildService({ window: win, task, unit });
+    tmux.listSessions.mockResolvedValue([{
+      name: 'azito',
+      windowCount: 1,
+      attached: false,
+      created: 0,
+      windows: [{ name: 'task-1--ab12', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+    tmux.killWindow.mockResolvedValueOnce({ stdout: '', stderr: 'client refused connection', code: 1 });
+
+    await expect(service.respawn(1, makeServer({ type: 'agent' }))).rejects.toThrow(/task token was not rotated/);
+
+    expect(paneEnvService.buildEnvForNewWindow).not.toHaveBeenCalled();
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(tmux.createSession).not.toHaveBeenCalled();
+  });
+
+  it('proceeds with rotation when the agent-transport kill resolves with a non-zero code but the window was already gone', async () => {
+    const task = makeTask({ id: 5, unitId: 10 });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 5, tmuxTarget: 'azito:task-1--ab12.1' });
+    const { service, tmux, paneEnvService } = buildService({ window: win, task, unit });
+    tmux.listSessions.mockResolvedValue([{
+      name: 'azito',
+      windowCount: 1,
+      attached: false,
+      created: 0,
+      windows: [{ name: 'task-1--ab12', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+    tmux.killWindow.mockResolvedValueOnce({ stdout: '', stderr: "can't find window task-1--ab12", code: 1 });
+
+    await service.respawn(1, makeServer({ type: 'agent' }));
+
+    expect(paneEnvService.buildEnvForNewWindow).toHaveBeenCalledTimes(1);
+    expect(tmux.createWindow).toHaveBeenCalled();
   });
 
   it('revokes the freshly-issued generation when window creation fails after a confirmed kill (Issue #28 third-party review fix 3)', async () => {

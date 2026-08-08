@@ -7,6 +7,7 @@ import type { IUnitRepository } from '../units/Unit';
 import type { IWindowRepository } from '../windows/Window';
 import type { SqliteProjectSecretRepository } from '../projects/SqliteProjectSecretRepository';
 import type { TmuxClient } from '../tmux/TmuxClient';
+import { resolveKillOutcome } from '../tmux/killOutcome';
 import type { WorktreeServiceFactory } from '../git/WorktreeServiceFactory';
 import { PathResolverFactory, assertDirectoryContained } from '../git/PathContainment';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
@@ -309,7 +310,12 @@ export class TaskRestoreService {
     } catch (err) {
       if (windowName) {
         try {
-          await tmux.killWindow(server, `${tmuxSession}:${windowName}`);
+          // resolveKillOutcome normalizes local (throws on failure) vs agent
+          // (resolves with a non-zero code) transports into one verdict —
+          // see its doc comment; a bare await here previously read an
+          // agent-transport kill failure as success (Issue #28 third-party
+          // review finding 2).
+          const outcome = await resolveKillOutcome(tmux.killWindow(server, `${tmuxSession}:${windowName}`));
           // The createWindow() above (line ~177) already rotated the task
           // token for THIS window generation via buildEnvForNewWindow. The
           // task's status stays 'archived' throughout this rollback (no
@@ -321,7 +327,9 @@ export class TaskRestoreService {
           // same fix as ExecuteTaskUseCase's rollback branches (Issue #28
           // third-party review finding) — only once the kill above confirms
           // the window is actually gone.
-          paneEnvService.revokeForDestroyedWindow(task.id, 'restore_rollback');
+          if (outcome.success) {
+            paneEnvService.revokeForDestroyedWindow(task.id, 'restore_rollback');
+          }
         } catch (e) {
           log.warn(`[task-restore] Failed to rollback tmux window: ${(e as Error).message}`);
         }

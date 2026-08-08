@@ -712,12 +712,23 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         : taskRepo.countChildren(parentId);
       const limit = generation !== null ? MAX_CHILDREN_PER_GENERATION : MAX_CHILDREN_PER_PARENT_OPERATOR;
       if (existingChildren >= limit) {
-        auditLogService.record({
-          actorClass: actor.class,
-          actorId: actor.id ?? null,
-          event: 'tasks.children.limit_exceeded',
-          detail: { parentTaskId: parentId, existingChildren, limit, generation },
-        });
+        // Audit persistence is best-effort, same as every other audit write
+        // site (TaskOriginationService.create, buildServer.ts's route-auth
+        // hook) — a write failure here (disk full, locked DB, etc.) must
+        // never turn an already-decided 429 into a generic 500 (Issue #28
+        // third-party review finding, Minor). The 429 below is the response
+        // this branch computed regardless of whether the audit write
+        // actually landed.
+        try {
+          auditLogService.record({
+            actorClass: actor.class,
+            actorId: actor.id ?? null,
+            event: 'tasks.children.limit_exceeded',
+            detail: { parentTaskId: parentId, existingChildren, limit, generation },
+          });
+        } catch (err) {
+          console.error(`[tasks.children] audit log write failed for parent task ${parentId} (429 still returned):`, err);
+        }
         return reply.status(429).send({ error: `Task ${parentId} already has ${existingChildren} children (limit ${limit})` });
       }
 

@@ -20,6 +20,7 @@ import { resolveExecutionManifest, hashExecutionManifest, type RespawnManifestIn
 import { appendLogAndEmit } from '../tasks/execution/AppendLog';
 import type { TaskPaneEnvironmentService } from '../tasks/execution/TaskPaneEnvironmentService';
 import { resolveTmuxSession } from '../tasks/execution/TaskExecutionEnv';
+import { resolveKillOutcome } from '../tmux/killOutcome';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { EventEmitter } from 'events';
@@ -197,7 +198,12 @@ export class WindowRespawnService {
       const session = sessions.find((s) => s.name === sessionName);
       const windowAlive = session?.windows.some((w) => w.name === windowPart);
       if (windowAlive) {
-        oldWindowGone = await this.tmux.killWindow(server, `${sessionName}:${windowPart}`).then(() => true, () => false);
+        // resolveKillOutcome normalizes local (throws on failure) vs agent
+        // (resolves with a non-zero code — a bare `.then(() => true, () =>
+        // false)` here previously read that resolve as success even when
+        // the kill actually failed, Issue #28 third-party review finding 2)
+        // transports into one verdict.
+        oldWindowGone = (await resolveKillOutcome(this.tmux.killWindow(server, `${sessionName}:${windowPart}`))).success;
       }
     }
     if (task && !oldWindowGone) {
