@@ -1,0 +1,79 @@
+import type { TmuxClient } from '../tmux/TmuxClient';
+import type { IServerRepository, ServerConfig } from '../servers/Server';
+import type { TranscriptService } from './TranscriptService';
+
+// ─── Types ───
+
+export interface PaneCandidate {
+  paneId: string;
+  sessionName: string;
+  windowName: string;
+  currentPath: string;
+  currentCommand: string;
+  /** cwd がセッションの記録済み cwd と完全一致するか。false でも候補として提示する。 */
+  cwdMatch: boolean;
+}
+
+export interface PaneCandidatesResult {
+  cwd: string | null;
+  panes: PaneCandidate[];
+}
+
+export type SendInputResult = 'ok' | 'session_not_found' | 'pane_not_found';
+
+// ─── Service ───
+
+/**
+ * トランスクリプトのセッションと、それが動いている可能性のある tmux ペインを
+ * cwd ベースで橋渡しするサービス。セッション→ペインの確実な対応表は存在しないため、
+ * 候補提示（cwdMatch）＋ユーザー選択（paneId 指定）という前提で設計している。
+ */
+export class TranscriptPaneService {
+  constructor(
+    private readonly transcriptService: TranscriptService,
+    private readonly tmuxClient: TmuxClient,
+    private readonly serverRepo: IServerRepository,
+  ) {}
+
+  /**
+   * ローカルサーバーの ServerConfig を取得する。トランスクリプトはローカルの
+   * `~/.claude/projects` 配下のみを走査するため、対応する tmux ペインも常にローカル。
+   * seed migration（003）で必ず1件作成されるため、見つからない場合は構成不整合として
+   * エラーにする（フォールバックで空候補を返して隠さない）。
+   */
+  private findLocalServer(): ServerConfig {
+    const server = this.serverRepo.findAll().find((s) => s.type === 'local');
+    if (!server) throw new Error('No local server is configured');
+    return server;
+  }
+
+  async listPaneCandidates(sessionId: string): Promise<PaneCandidatesResult | null> {
+    const meta = this.transcriptService.getSessionCwd(sessionId);
+    if (!meta) return null;
+
+    const server = this.findLocalServer();
+    const allPanes = await this.tmuxClient.listAllPanes(server);
+    const panes: PaneCandidate[] = allPanes.map((pane) => ({
+      paneId: pane.paneId,
+      sessionName: pane.sessionName,
+      windowName: pane.windowName,
+      currentPath: pane.currentPath,
+      currentCommand: pane.currentCommand,
+      cwdMatch: meta.cwd !== null && pane.currentPath === meta.cwd,
+    }));
+
+    return { cwd: meta.cwd, panes };
+  }
+
+  async sendInput(sessionId: string, paneId: string, text: string): Promise<SendInputResult> {
+    const meta = this.transcriptService.getSessionCwd(sessionId);
+    if (!meta) return 'session_not_found';
+
+    const server = this.findLocalServer();
+    const exists = await this.tmuxClient.checkPaneExists(server, paneId);
+    if (!exists) return 'pane_not_found';
+
+    await this.tmuxClient.sendKeys(server, paneId, [text, 'Enter']);
+    return 'ok';
+  }
+}

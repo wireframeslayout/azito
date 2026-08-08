@@ -32,6 +32,14 @@ export interface TmuxSession {
   windows: TmuxWindow[];
 }
 
+export interface TmuxPaneInfo {
+  paneId: string;
+  sessionName: string;
+  windowName: string;
+  currentPath: string;
+  currentCommand: string;
+}
+
 // ─── Special keys for send-keys ───
 
 const SPECIAL_KEYS = new Set([
@@ -300,6 +308,33 @@ export class TmuxClient {
       const [idx, id] = line.split('|||');
       return { index: parseInt(idx, 10), paneId: id };
     });
+  }
+
+  /**
+   * 全セッション・全ウィンドウのペインを列挙する（pane_current_path 込み）。
+   * `_azito_` プレフィックスのリンクドセッション（ブラウザタブごとの一時セッション）は
+   * 実ペインの重複表示になるため除外する。
+   */
+  async listAllPanes(server: ServerConfig): Promise<TmuxPaneInfo[]> {
+    const format = [
+      '#{pane_id}', '#{session_name}', '#{window_name}', '#{pane_current_path}', '#{pane_current_command}',
+    ].join('|||');
+
+    try {
+      const { stdout } = await this.runTmuxCommand(server, ['list-panes', '-a', '-F', format]);
+      return stdout.trim().split('\n').filter(Boolean)
+        .map((line) => {
+          const [paneId, sessionName, windowName, currentPath, currentCommand] = line.split('|||');
+          return { paneId, sessionName, windowName, currentPath, currentCommand };
+        })
+        .filter((pane) => !pane.sessionName.startsWith('_azito_'));
+    } catch (err: unknown) {
+      const e = err as { message?: string; stderr?: string };
+      if (e.message?.includes('no server running') || e.stderr?.includes('no server running')) {
+        return [];
+      }
+      throw err;
+    }
   }
 
   async checkPaneExists(server: ServerConfig, target: string): Promise<boolean> {

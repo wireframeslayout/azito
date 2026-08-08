@@ -20,7 +20,7 @@ export type TranscriptBlock =
   | { kind: 'tool_use'; name: string; input: string; truncated: boolean }
   | { kind: 'tool_result'; text: string; truncated: boolean; isError?: boolean };
 
-export type TranscriptEntryType = 'user' | 'assistant' | 'system' | 'other';
+export type TranscriptEntryType = 'user' | 'assistant' | 'system' | 'tool' | 'other';
 
 export interface TranscriptEntry {
   uuid: string;
@@ -196,8 +196,17 @@ function truncateText(text: string, limit: number): { text: string; truncated: b
   return { text: text.slice(0, limit), truncated: true };
 }
 
-function normalizeEntryType(rawType: unknown): TranscriptEntryType {
-  if (rawType === 'user' || rawType === 'assistant' || rawType === 'system') return rawType;
+/**
+ * Claude Code の JSONL では tool_result は role=user のメッセージとして記録される。
+ * blocks が tool_result のみ（text を1つも含まない）の user エントリは 'tool' として
+ * 再分類し、フロントで人間のプロンプトと混同されないようにする。
+ */
+function normalizeEntryType(rawType: unknown, blocks: TranscriptBlock[]): TranscriptEntryType {
+  if (rawType === 'user') {
+    const isToolResultOnly = blocks.every((block) => block.kind === 'tool_result');
+    return isToolResultOnly ? 'tool' : 'user';
+  }
+  if (rawType === 'assistant' || rawType === 'system') return rawType;
   return 'other';
 }
 
@@ -258,7 +267,7 @@ function normalizeEntry(record: unknown): TranscriptEntry | null {
 
   return {
     uuid: record.uuid,
-    type: normalizeEntryType(record.type),
+    type: normalizeEntryType(record.type, blocks),
     timestamp: typeof record.timestamp === 'string' ? record.timestamp : null,
     blocks,
   };
@@ -338,6 +347,18 @@ export class TranscriptService {
     const files = listSessionFiles(this.projectsDir());
     const match = files.find(({ file }) => path.basename(file, '.jsonl') === sessionId);
     return match ? match.file : null;
+  }
+
+  /**
+   * セッションの cwd（JSONL 行の cwd フィールド）を取得する。セッションが存在しない
+   * （不正な sessionId またはファイル未検出）場合は null を返す。cwd を記録した行が
+   * 見つからない場合は `{ cwd: null }` を返す（セッション自体は存在する）。
+   */
+  getSessionCwd(sessionId: string): { cwd: string | null } | null {
+    const file = this.findSessionFile(sessionId);
+    if (!file) return null;
+    const { cwd } = scanSessionMeta(file, this.previewScanBytes);
+    return { cwd };
   }
 
   readSession(sessionId: string, offset?: number): ReadSessionResult | null {

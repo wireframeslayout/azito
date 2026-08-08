@@ -124,6 +124,25 @@ describe('TranscriptService', () => {
     });
   });
 
+  describe('getSessionCwd', () => {
+    it('returns null for a non-UUID or nonexistent session', () => {
+      expect(service.getSessionCwd('not-a-uuid')).toBeNull();
+      expect(service.getSessionCwd(SID_A)).toBeNull();
+    });
+
+    it('returns the cwd found in the JSONL when present', () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        { type: 'user', uuid: 'u1', cwd: '/home/server01/workspace/azito-wt-transcript', message: { content: 'Hello' } },
+      ]);
+      expect(service.getSessionCwd(SID_A)).toEqual({ cwd: '/home/server01/workspace/azito-wt-transcript' });
+    });
+
+    it('returns { cwd: null } when the session exists but no line carries cwd', () => {
+      writeSession(dir, 'proj-a', SID_A, [{ type: 'user', uuid: 'u1', message: { content: 'Hello' } }]);
+      expect(service.getSessionCwd(SID_A)).toEqual({ cwd: null });
+    });
+  });
+
   describe('readSession', () => {
     it('rejects non-UUID session ids', () => {
       expect(service.readSession('not-a-uuid')).toBeNull();
@@ -341,6 +360,47 @@ describe('TranscriptService', () => {
       const result = service.readSession(SID_A);
       const block = result!.entries[0].blocks[0];
       expect(block).toMatchObject({ kind: 'tool_result', text: '', truncated: false });
+    });
+
+    it('reclassifies a user entry whose blocks are tool_result-only as type "tool"', () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        {
+          type: 'user',
+          uuid: 'u1',
+          message: {
+            content: [{ type: 'tool_result', tool_use_id: 't1', content: 'result text', is_error: false }],
+          },
+        },
+      ]);
+      const result = service.readSession(SID_A);
+      expect(result!.entries).toHaveLength(1);
+      expect(result!.entries[0].type).toBe('tool');
+    });
+
+    it('keeps type "user" when a user entry mixes tool_result with a text block', () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        {
+          type: 'user',
+          uuid: 'u1',
+          message: {
+            content: [
+              { type: 'tool_result', tool_use_id: 't1', content: 'result text', is_error: false },
+              { type: 'text', text: 'a follow-up prompt' },
+            ],
+          },
+        },
+      ]);
+      const result = service.readSession(SID_A);
+      expect(result!.entries).toHaveLength(1);
+      expect(result!.entries[0].type).toBe('user');
+    });
+
+    it('keeps type "user" for a plain user text message (no tool_result)', () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        { type: 'user', uuid: 'u1', message: { content: 'plain human prompt' } },
+      ]);
+      const result = service.readSession(SID_A);
+      expect(result!.entries[0].type).toBe('user');
     });
 
     it('drops entries whose blocks end up empty (e.g. only unrecognized block types)', () => {
