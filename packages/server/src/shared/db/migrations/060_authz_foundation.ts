@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 
 export const version = 60;
-export const description = 'task_tokens capability table + audit_log + task origination columns (Issue #28 Phase A)';
+export const description = 'task_tokens capability table + audit_log + task origination columns + browser_groups ownership (Issue #28 Phase A/E)';
 
 export function up(db: Database.Database): void {
   // Capability row per issued task token (design v3 §2). Plaintext is never
@@ -131,4 +131,30 @@ export function up(db: Database.Database): void {
   // new launch to invalidate prior pending/active rows for the same
   // server+target — without this index that scans the whole table.
   db.exec('CREATE INDEX idx_supervisor_launches_server_target_status ON supervisor_launches(server_name, target, status)');
+
+  // Task-owned browser group registry (design v3 §11, Issue #28 Phase E).
+  // `POST /api/browser/open` always mints a brand-new `group_id` (never
+  // caller-supplied — see openBrowserTab.ts/the agent process's own
+  // equivalent), so this is a pure record of "who opened this group",
+  // written once at open time and read by the route auth layer to scope a
+  // task principal's `close-group` calls to groups it actually owns.
+  // `task_id` is nullable — an operator-opened group (the browser panel's
+  // own UI, unrelated to any task) is unowned/shared, same treatment as
+  // `task_tokens.task_id`/`supervisor_launches.task_id` elsewhere in this
+  // migration: no FOREIGN KEY, since a group row is a point-in-time record
+  // of what opened it, not a live reference a task delete needs to cascade
+  // into. `group_id` is the primary key (not an autoincrement `id`) because
+  // every lookup and delete this repository does is by that value alone.
+  // Added directly to this still-unreleased migration rather than a new
+  // one (per AGENTS.md instructions for this phase), same as the
+  // origination columns and supervisor_launches table above.
+  db.exec(`
+    CREATE TABLE browser_groups (
+      group_id TEXT PRIMARY KEY,
+      server_name TEXT NOT NULL,
+      task_id INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  db.exec('CREATE INDEX idx_browser_groups_task_id ON browser_groups(task_id)');
 }

@@ -60,6 +60,7 @@ import { SupervisorRegistry } from '../modules/supervisors/SupervisorRegistry';
 import { SqliteSupervisorLaunchRepository } from '../modules/supervisors/SupervisorLaunchRepository';
 import { BrowserSessionManager } from '../modules/browser/BrowserSessionManager';
 import { SqliteBrowserSnapshotRepository } from '../modules/browser/SqliteBrowserSnapshotRepository';
+import { SqliteBrowserGroupRepository } from '../modules/browser/SqliteBrowserGroupRepository';
 
 import { AgentRegistry, createDefaultRegistry } from '../modules/agents/registry';
 
@@ -121,6 +122,7 @@ export interface Repositories {
   resourceGuardSettingsRepo: SqliteResourceGuardSettingsRepository;
   auditLogRepo: SqliteAuditLogRepository;
   auditLogService: AuditLogService;
+  browserGroupRepo: SqliteBrowserGroupRepository;
 }
 
 export interface PushNotificationModule {
@@ -243,6 +245,7 @@ function buildRepositories(db: SqliteDatabase): Repositories {
   const resourceGuardSettingsRepo = new SqliteResourceGuardSettingsRepository(db);
   const auditLogRepo = new SqliteAuditLogRepository(db);
   const auditLogService = new AuditLogService(auditLogRepo);
+  const browserGroupRepo = new SqliteBrowserGroupRepository(db);
 
   return {
     serverRepo,
@@ -262,6 +265,7 @@ function buildRepositories(db: SqliteDatabase): Repositories {
     resourceGuardSettingsRepo,
     auditLogRepo,
     auditLogService,
+    browserGroupRepo,
   };
 }
 

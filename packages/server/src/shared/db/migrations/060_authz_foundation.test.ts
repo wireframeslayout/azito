@@ -301,4 +301,30 @@ describe('migration 060: authz_foundation', () => {
     const columns = db.prepare('PRAGMA index_info(idx_supervisor_launches_server_target_status)').all() as Array<{ name: string }>;
     expect(columns.map((c) => c.name)).toEqual(['server_name', 'target', 'status']);
   });
+
+  it('creates browser_groups with the expected columns and a nullable task_id', () => {
+    const db = buildSeededDb();
+    m060.up(db);
+
+    db.prepare(`INSERT INTO browser_groups (group_id, server_name, task_id) VALUES (?, ?, ?)`).run('agent-abc12345', 'srv-a', 7);
+    db.prepare(`INSERT INTO browser_groups (group_id, server_name, task_id) VALUES (?, ?, ?)`).run('agent-def67890', 'srv-a', null);
+
+    const owned = db.prepare('SELECT * FROM browser_groups WHERE group_id = ?').get('agent-abc12345') as Record<string, unknown>;
+    expect(owned.server_name).toBe('srv-a');
+    expect(owned.task_id).toBe(7);
+    expect(owned.created_at).toBeTruthy();
+
+    const unowned = db.prepare('SELECT * FROM browser_groups WHERE group_id = ?').get('agent-def67890') as Record<string, unknown>;
+    expect(unowned.task_id).toBeNull();
+  });
+
+  it('rejects a duplicate browser_groups.group_id (primary key)', () => {
+    const db = buildSeededDb();
+    m060.up(db);
+
+    db.prepare(`INSERT INTO browser_groups (group_id, server_name, task_id) VALUES (?, ?, ?)`).run('agent-dup', 'srv-a', 1);
+    expect(() =>
+      db.prepare(`INSERT INTO browser_groups (group_id, server_name, task_id) VALUES (?, ?, ?)`).run('agent-dup', 'srv-b', 2),
+    ).toThrow();
+  });
 });

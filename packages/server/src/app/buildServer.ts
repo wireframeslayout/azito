@@ -80,7 +80,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     executeTaskUseCase, agentActivityMonitor, windowRespawnService, taskRestoreService, sessionStrategyFactory, sessionCaptureService, usageService,
     pushService, vapidKeys, notificationBus, sidekickPackageService, sidekickPackageLoader,
     sidekickSyncService, unitTypeLoader, agentSignalService, supervisorRegistry, agentTurnRepo, turnSignalHub,
-    browserSessionManager, deployModeDetector, systemUpdateService, channelResolver, auditLogService,
+    browserSessionManager, browserGroupRepo, deployModeDetector, systemUpdateService, channelResolver, auditLogService,
     originationService, scopedAuthEnabled, taskPaneEnvironmentService,
   } = wiring;
 
@@ -462,6 +462,8 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   await app.register(browserRoutes, {
     browserSessionManager,
     serverRepo,
+    browserGroupRepo,
+    auditLogService,
     onTabOpened: (payload) => {
       notificationBus.emit({ type: 'browser:opened', payload });
     },
