@@ -29,29 +29,8 @@ import type { AuditLogService } from '../../shared/audit/AuditLogService';
 import type { Principal } from '../../shared/auth/Principal';
 import { OPERATOR_PRINCIPAL } from '../../shared/auth/Principal';
 import type { RouteAuthRequirement } from '../../shared/auth/routeAuth';
-import { TaskOriginationService } from './origination/TaskOriginationService';
+import { TaskOriginationService, originFromPrincipal } from './origination/TaskOriginationService';
 import type { ITaskTokenRepository } from './tokens/TaskToken';
-
-/**
- * Maps an authenticated principal to the `Task['createdByKind']` it
- * originates a task under (Issue #28 design v3 §5) — `runtime`/`agent`
- * principals have no task-creation route wired to them today, but fall back
- * to `'system'` rather than silently mis-recording as `'operator'` if one
- * ever does. `origin.id` (the class-specific subject) is only meaningful for
- * `'task'` — an operator/system origin has no single subject to record.
- *
- * `request.principal` is always set by buildServer.ts's onRequest hook
- * before any handler here runs in production — the `?? OPERATOR_PRINCIPAL`
- * fallback exists only for route-level unit tests that register this plugin
- * directly against a bare Fastify instance (bypassing that hook).
- */
-function originFromPrincipal(principal: Principal | undefined): { kind: Task['createdByKind']; id: number | null } {
-  const p = principal ?? OPERATOR_PRINCIPAL;
-  if (p.class === 'operator' || p.class === 'task' || p.class === 'trigger') {
-    return { kind: p.class, id: p.class === 'task' ? p.id ?? null : null };
-  }
-  return { kind: 'system', id: null };
-}
 
 function parseSubagentConfigInput(raw: unknown, fieldName: string): SubagentConfig | null {
   if (raw === null || raw === undefined) return null;

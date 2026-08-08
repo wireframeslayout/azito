@@ -222,13 +222,29 @@ fi
 # azitoctl / azs は task principal（AZITO_TASK_TOKEN）文脈で動くプロセスから
 # source されるため、全権トークンをここに置くと配布経路の穴になる。
 # --ui-token が指定された場合の書き込み先は operator.env（下記）のみ。
-# 全体を都度 `>` で書き直すため、過去バージョンの setup.sh が残した
-# AZITO_UI_TOKEN 行があっても、この節を通れば自動的に消える。
+# 全体を都度 `>` で書き直すため、--azito-url / --webhook-token が両方揃った
+# 実行では過去バージョンの setup.sh が残した AZITO_UI_TOKEN 行も自動的に消える。
+# 一方 webhook トークン省略時（下の else 節）は書き直し自体をスキップするため、
+# 過去に書かれた AZITO_UI_TOKEN 行が残り続けてしまう（Phase C 残件1）。
+# そのため掃除は書き直し条件と独立に、常に先に行う。
 echo ""
 echo "=== azitoctl.env ==="
+AZITOCTL_ENV_DIR="$HOME/.azito"
+AZITOCTL_ENV_FILE="$AZITOCTL_ENV_DIR/azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env"
+# 既存ファイルに AZITO_UI_TOKEN 行が残っていれば、書き直し条件に関わらず
+# 除去する（冪等: 該当行が無ければ何もしない）。umask 077 + アトミック置換は
+# 下の書き直し節と同じ作法。
+if [[ -f "$AZITOCTL_ENV_FILE" ]] && grep -q '^AZITO_UI_TOKEN=' "$AZITOCTL_ENV_FILE" 2>/dev/null; then
+  AZITOCTL_ENV_CLEAN_TMP="$(mktemp "$AZITOCTL_ENV_DIR/.azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env.XXXXXX")"
+  (
+    umask 077
+    grep -v '^AZITO_UI_TOKEN=' "$AZITOCTL_ENV_FILE" > "$AZITOCTL_ENV_CLEAN_TMP"
+  )
+  chmod 600 "$AZITOCTL_ENV_CLEAN_TMP"
+  mv -f "$AZITOCTL_ENV_CLEAN_TMP" "$AZITOCTL_ENV_FILE"
+  echo "  $AZITOCTL_ENV_FILE: 旧 AZITO_UI_TOKEN 行を除去しました"
+fi
 if [[ -n "$AZITO_URL" && -n "$AZITO_WEBHOOK_TOKEN" ]]; then
-  AZITOCTL_ENV_DIR="$HOME/.azito"
-  AZITOCTL_ENV_FILE="$AZITOCTL_ENV_DIR/azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env"
   mkdir -p "$AZITOCTL_ENV_DIR"
   # AZITO_WEBHOOK_TOKEN を含むため、書き込み中も world-readable にならないよう
   # umask 077 のサブシェルで隣接一時ファイルに書き、chmod 600 確定後に mv で

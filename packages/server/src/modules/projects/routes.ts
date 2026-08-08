@@ -3,10 +3,11 @@ import type { IProjectRepository, RepositoryProvider } from './Project';
 import type { IProjectServerRepository } from './ProjectServer';
 import type { ITaskRepository } from '../tasks/Task';
 import type { TaskOriginationService } from '../tasks/origination/TaskOriginationService';
+import { originFromPrincipal } from '../tasks/origination/TaskOriginationService';
 // request.principal is always set by buildServer.ts's onRequest hook in
 // production; the fallback below exists only for route-level unit tests
 // that register this plugin directly (bypassing that hook) — same
-// convention as modules/tasks/routes.ts's originFromPrincipal().
+// convention as originFromPrincipal() itself.
 import { OPERATOR_PRINCIPAL } from '../../shared/auth/Principal';
 import type { GitProviderService } from '../git/providers/GitProviderService';
 import type { TmuxClient } from '../tmux/TmuxClient';
@@ -458,7 +459,7 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
           pendingOperation: null,
           pendingOperationWindowId: null,
           pendingOperationPriorStatus: null,
-        }, { kind: 'operator', id: null }, request.principal ?? OPERATOR_PRINCIPAL);
+        }, originFromPrincipal(request.principal), request.principal ?? OPERATOR_PRINCIPAL);
         return { ok: true, taskId, issue: { number: issue.number, title: issue.title } };
       } catch (err: unknown) {
         return reply.status(502).send({ error: (err as Error).message });

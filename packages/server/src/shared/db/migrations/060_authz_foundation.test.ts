@@ -285,4 +285,20 @@ describe('migration 060: authz_foundation', () => {
       db.prepare(`UPDATE supervisor_launches SET session_hash = ?, status = 'active' WHERE launch_id = 'launch-b'`).run('s'.repeat(64)),
     ).toThrow();
   });
+
+  // SupervisorLaunchRepository.supersedeForTargetStmt filters by exactly
+  // this triple on every launch creation — without this index it's a full
+  // table scan (same reasoning as idx_tasks_created_by above).
+  it('creates a composite index on (server_name, target, status)', () => {
+    const db = buildSeededDb();
+    m060.up(db);
+
+    const index = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_supervisor_launches_server_target_status'")
+      .get();
+    expect(index).toBeTruthy();
+
+    const columns = db.prepare('PRAGMA index_info(idx_supervisor_launches_server_target_status)').all() as Array<{ name: string }>;
+    expect(columns.map((c) => c.name)).toEqual(['server_name', 'target', 'status']);
+  });
 });

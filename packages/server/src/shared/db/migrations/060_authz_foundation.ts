@@ -126,4 +126,9 @@ export function up(db: Database.Database): void {
   `);
   db.exec('CREATE UNIQUE INDEX idx_supervisor_launches_launch_id ON supervisor_launches(launch_id)');
   db.exec('CREATE UNIQUE INDEX idx_supervisor_launches_session_hash ON supervisor_launches(session_hash)');
+  // SupervisorLaunchRepository.supersedePending() filters by exactly this
+  // triple (`server_name = ? AND target = ? AND status IN (...)`) on every
+  // new launch to invalidate prior pending/active rows for the same
+  // server+target — without this index that scans the whole table.
+  db.exec('CREATE INDEX idx_supervisor_launches_server_target_status ON supervisor_launches(server_name, target, status)');
 }

@@ -2,6 +2,7 @@ import type { ITaskRepository, Task } from '../Task';
 import { deriveInputTrust } from '../Task';
 import type { AuditLogService } from '../../../shared/audit/AuditLogService';
 import type { Principal } from '../../../shared/auth/Principal';
+import { OPERATOR_PRINCIPAL } from '../../../shared/auth/Principal';
 
 /** Everything a caller must supply to create a task, EXCEPT the fields this service itself derives/stamps (inputTrust, createdByKind, createdById, createdViaGeneration) or the repository stamps (id/createdAt/updatedAt). */
 export type TaskOriginationFields = Omit<Task, 'id' | 'createdAt' | 'updatedAt' | 'inputTrust' | 'createdByKind' | 'createdById' | 'createdViaGeneration'>;
@@ -43,6 +44,33 @@ export interface TaskOrigin {
  * correct if either route's auth declaration widens later without every
  * caller needing to remember to update this argument too).
  */
+/**
+ * Maps an authenticated principal to the `Task['createdByKind']`/`id` a
+ * {@link TaskOrigin} originates a task under (Issue #28 design v3 §5) —
+ * `runtime`/`agent` principals have no task-creation route wired to them
+ * today, but fall back to `'system'` rather than silently mis-recording as
+ * `'operator'` if one ever does. `id` (the class-specific subject) is only
+ * meaningful for `'task'` — an operator/system origin has no single subject
+ * to record.
+ *
+ * The single implementation shared by every route that derives origin from
+ * `request.principal` rather than fixing it (POST /api/tasks and
+ * POST /api/projects/:id/import-issue — see this file's class doc comment;
+ * POST /api/tasks/:id/children fixes origin to the parent task instead).
+ *
+ * `request.principal` is always set by buildServer.ts's onRequest hook
+ * before any handler runs in production — the `?? OPERATOR_PRINCIPAL`
+ * fallback exists only for route-level unit tests that register a plugin
+ * directly against a bare Fastify instance (bypassing that hook).
+ */
+export function originFromPrincipal(principal: Principal | undefined): TaskOrigin {
+  const p = principal ?? OPERATOR_PRINCIPAL;
+  if (p.class === 'operator' || p.class === 'task' || p.class === 'trigger') {
+    return { kind: p.class, id: p.class === 'task' ? p.id ?? null : null };
+  }
+  return { kind: 'system', id: null };
+}
+
 export class TaskOriginationService {
   constructor(
     private taskRepo: ITaskRepository,

@@ -49,13 +49,20 @@ const agentSignalRoutes: FastifyPluginCallback<AgentSignalRouteOptions> = (fasti
     // and AgentSignalService already appends an 'invalid' turn event for a
     // turnToken/turn mismatch. detail carries no secret value, per the
     // audit_log doc comment on migration 060.
+    //
+    // A turnToken is always required for a 200 (AgentSignalService's actual
+    // arbiter of validity, per this file's doc comment) — the webhook token
+    // is opportunistic on top of it, never a substitute. So a success where
+    // webhookAuthenticated is true means BOTH credentials were presented and
+    // valid, not "webhook only"; recording the basis as bare 'webhook' would
+    // misstate that the turnToken requirement was bypassed.
     if (result.status === 200) {
       try {
         auditLogService.record({
           actorClass: 'runtime',
           actorId: null,
           event: 'agent_signal.authenticated',
-          detail: { basis: webhookAuthenticated ? 'webhook' : 'turn_token' },
+          detail: { basis: webhookAuthenticated ? 'webhook_and_turn_token' : 'turn_token' },
         });
       } catch (err) {
         request.log.error({ err }, 'agent_signal audit log write failed; continuing');
