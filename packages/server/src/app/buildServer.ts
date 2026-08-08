@@ -357,21 +357,25 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
         supervisorRegistry.expireResolvedLaunch(launchId);
       });
     },
-    destroySessionWindows: (taskIds, windows, serverName, reason, killSession) => {
-      // Same resolve-before-kill pattern as destroyPrimaryTaskWindow above,
-      // applied per window — each window may belong to a launch registered
-      // under its own target.
-      const resolved = windows.map((w) => ({ ...w, launchId: supervisorRegistry.resolveLaunchForExpiry(serverName, w.target) }));
+    destroySessionWindows: (resolveWindows, serverName, reason, killSession) => {
       return destroyPrimaryTaskWindowsForSessionKill(
-        taskIds,
-        resolved.map((w) => ({
-          taskId: w.taskId,
-          windowName: w.windowName,
-          onDestroyed: () => {
-            w.onDestroyed();
-            supervisorRegistry.expireResolvedLaunch(w.launchId);
-          },
-        })),
+        () => resolveWindows().map((w) => {
+          // Same resolve-before-kill pattern as destroyPrimaryTaskWindow
+          // above, applied per window — each window may belong to a launch
+          // registered under its own target. `resolveWindows` (and so this
+          // whole mapping) is re-invoked by destroyPrimaryTaskWindowsForSessionKill
+          // right before the kill actually runs (see its doc comment), so
+          // `resolveLaunchForExpiry` is resolved at that same authoritative
+          // moment — never against a snapshot taken before the lock.
+          const launchId = supervisorRegistry.resolveLaunchForExpiry(serverName, w.target);
+          return {
+            ...w,
+            onDestroyed: () => {
+              w.onDestroyed();
+              supervisorRegistry.expireResolvedLaunch(launchId);
+            },
+          };
+        }),
         taskRepo,
         taskPaneEnvironmentService,
         reason,

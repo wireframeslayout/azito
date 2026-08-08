@@ -407,4 +407,41 @@ describe('rollbackWindowReference: onGone throwing must not skip the revoke', ()
     expect(revokeSpy).toHaveBeenCalledWith(created.tokenId, 'kill_confirmed');
     expect(onStillAlive).not.toHaveBeenCalled();
   });
+
+  // Follow-up fix (Issue #28 batch review): a prior version of this function
+  // made a lone revoke failure log-only when `onGone` succeeded, so the
+  // whole call reported success even though the just-killed window's token
+  // generation was still live. A standalone revoke failure must now
+  // propagate to the caller just like a standalone onGone failure does.
+  it('propagates the revoke error when the revoke ALONE fails (onGone succeeds)', async () => {
+    const { paneEnvService } = makeServices();
+    const server = makeServer();
+    const task = makeTask({ id: 52 });
+
+    const created = await createRotatedWindow(paneEnvService, server, task, 'unused', async () => ({
+      result: { stdout: '', stderr: '', code: 0 },
+      windowName: 'w',
+    }));
+
+    const onGone = vi.fn();
+    const onStillAlive = vi.fn();
+    const revokeSpy = vi.spyOn(paneEnvService, 'revokeGeneration').mockImplementation(() => {
+      throw new Error('revoke transport failed');
+    });
+
+    await expect(
+      rollbackWindowReference(
+        Promise.resolve({ stdout: '', stderr: '', code: 0 }),
+        paneEnvService,
+        created.tokenId,
+        'kill_confirmed',
+        onGone,
+        onStillAlive,
+      ),
+    ).rejects.toThrow('revoke transport failed');
+
+    expect(onGone).toHaveBeenCalledTimes(1);
+    expect(revokeSpy).toHaveBeenCalledWith(created.tokenId, 'kill_confirmed');
+    expect(onStillAlive).not.toHaveBeenCalled();
+  });
 });

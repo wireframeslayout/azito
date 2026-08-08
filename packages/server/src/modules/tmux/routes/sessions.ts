@@ -89,19 +89,23 @@ export interface SessionsRouteOptions {
    * lock can no longer tell that new generation was destroyed too, and
    * leaves its token valid forever).
    *
-   * `windows` is every PRIMARY task-owned window the session holds (secondary
-   * task windows and non-task windows are cleaned up by the route directly —
-   * see the route body). `taskIds` is `windows`' deduplicated, ascending-sorted
-   * task ID set — see `runExclusiveForTasks`'s doc comment for why the
-   * ordering is hygiene rather than a correctness requirement here.
+   * `resolveWindows` re-lists every PRIMARY task-owned window the session
+   * CURRENTLY holds (secondary task windows and non-task windows are cleaned
+   * up by the route directly — see the route body) — a callback, not a
+   * pre-resolved array, because `destroyPrimaryTaskWindowsForSessionKill`
+   * calls it again INSIDE the lock, right before the kill, to guard against
+   * the pre-lock listing going stale while this call was queued behind an
+   * in-flight rotation for one of the same tasks (see that function's doc
+   * comment). Returns the `target`s of every window it actually
+   * killed/revoked, via `handledTargets`, so the route's own cleanup of
+   * secondary/non-task rows can skip them.
    */
   destroySessionWindows?: (
-    taskIds: number[],
-    windows: Array<{ taskId: number; windowName: string; target: string; onDestroyed: () => void }>,
+    resolveWindows: () => Array<{ taskId: number; windowName: string; target: string; onDestroyed: () => void }>,
     serverName: string,
     reason: string,
     killSession: () => Promise<ExecResult>,
-  ) => Promise<KillOutcome>;
+  ) => Promise<{ outcome: KillOutcome; handledTargets: Set<string> }>;
 
   /**
    * Issue #28 third-party review finding (manual "add pane" route leaking
@@ -320,47 +324,43 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       try {
-        // Resolve every window this session holds BEFORE killing it — once
-        // the session is gone, tmux can no longer tell us which windows it
-        // held, and this is the only chance to learn which of them were
-        // task-owned (Issue #28 third-party review finding 4: deleting a
-        // whole session previously revoked no task tokens at all — only the
-        // single-window DELETE route below did, via
-        // destroyPrimaryTaskWindow).
-        const sessionWindows = opts.windowRepo?.findByServerAndSession(request.params.name, request.params.session) ?? [];
-
-        // Every PRIMARY task-owned window the session holds, resolved to the
-        // (taskId, windowName, target) shape destroySessionWindows needs.
-        // Issue #28 third-party review, D-track fix 1: the kill itself must
-        // run INSIDE a lock spanning ALL of these tasks at once, acquired
-        // BEFORE killSession runs — see destroySessionWindows' doc comment
-        // for the race a per-window-after-the-kill lock cannot close.
-        const primaryTaskWindows: Array<{ taskId: number; windowName: string; target: string }> = [];
-        for (const win of sessionWindows) {
-          if (win.taskId === null || !isPrimaryTaskWindow(win)) continue;
-          const windowName = windowNameFromTarget(win.tmuxTarget);
-          if (windowName) primaryTaskWindows.push({ taskId: win.taskId, windowName, target: win.tmuxTarget });
-        }
-        // Ascending, deduplicated — see runExclusiveForTasks' doc comment
-        // (acquisition-order hygiene; this queue implementation has no
-        // actual deadlock to order away, but a stable order keeps
-        // concurrent multi-task calls' logs/traces predictable).
-        const taskIds = [...new Set(primaryTaskWindows.map((w) => w.taskId))].sort((a, b) => a - b);
+        // Re-resolvable listing of every PRIMARY task-owned window the
+        // session CURRENTLY holds. Passed as a callback (not a one-shot
+        // snapshot) — destroySessionWindows re-invokes it INSIDE its lock,
+        // right before the kill, since a snapshot taken here (before any
+        // lock is held) can go stale behind an in-flight rotation for one of
+        // the same tasks (Issue #28 third-party review, follow-up fix — see
+        // TaskWindowDestruction.destroyPrimaryTaskWindowsForSessionKill's doc
+        // comment for the race this closes).
+        const resolvePrimaryTaskWindows = (): Array<{ taskId: number; windowName: string; target: string; onDestroyed: () => void }> => {
+          const rows = opts.windowRepo?.findByServerAndSession(request.params.name, request.params.session) ?? [];
+          const out: Array<{ taskId: number; windowName: string; target: string; onDestroyed: () => void }> = [];
+          for (const win of rows) {
+            if (win.taskId === null || !isPrimaryTaskWindow(win)) continue;
+            const windowName = windowNameFromTarget(win.tmuxTarget);
+            if (windowName) {
+              out.push({
+                taskId: win.taskId,
+                windowName,
+                target: win.tmuxTarget,
+                onDestroyed: () => opts.windowRepo?.removeByServerAndTarget(request.params.name, win.tmuxTarget),
+              });
+            }
+          }
+          return out;
+        };
 
         let outcome: KillOutcome;
+        let handledTargets = new Set<string>();
         if (opts.destroySessionWindows) {
-          outcome = await opts.destroySessionWindows(
-            taskIds,
-            primaryTaskWindows.map((w) => ({
-              taskId: w.taskId,
-              windowName: w.windowName,
-              target: w.target,
-              onDestroyed: () => opts.windowRepo?.removeByServerAndTarget(request.params.name, w.target),
-            })),
+          const result = await opts.destroySessionWindows(
+            resolvePrimaryTaskWindows,
             request.params.name,
             'window_killed_via_session_delete',
             () => tmux.killSession(srv, request.params.session),
           );
+          outcome = result.outcome;
+          handledTargets = result.handledTargets;
         } else {
           // No task-window-aware callback wired (e.g. minimal test setups) —
           // fall back to a plain, unlocked kill. Every window row (task-owned
@@ -377,11 +377,13 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
 
         // Clean up every remaining row (secondary task windows, project
         // windows, and — when destroySessionWindows wasn't used — the
-        // primary task windows too) not already handled above.
-        const handledTargets = opts.destroySessionWindows
-          ? new Set(primaryTaskWindows.map((w) => w.target))
-          : new Set<string>();
-        for (const win of sessionWindows) {
+        // primary task windows too) not already handled above. Re-fetched
+        // AFTER the kill, not from a pre-kill snapshot: this is plain DB row
+        // hygiene (no revoke decision rides on it, unlike
+        // resolvePrimaryTaskWindows above), so reading the current table
+        // state here is strictly more correct than a possibly-stale one.
+        const remainingWindows = opts.windowRepo?.findByServerAndSession(request.params.name, request.params.session) ?? [];
+        for (const win of remainingWindows) {
           if (handledTargets.has(win.tmuxTarget)) continue;
           opts.windowRepo?.removeByServerAndTarget(request.params.name, win.tmuxTarget);
         }

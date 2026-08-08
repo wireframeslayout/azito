@@ -239,8 +239,15 @@ export async function createRotatedWindow(
  *      DB write failing, say) must not skip the revoke, or the just-killed
  *      window's generation is left valid forever with nothing in the DB
  *      pointing at it to ever clean it up — worse than either failure
- *      alone. `onGone`'s error still propagates (via `finally`, not a
- *      swallowed `catch {}`) once the revoke has also been attempted.
+ *      alone. Both errors are captured independently and NEITHER is allowed
+ *      to silently replace the other (Issue #28 follow-up review: a prior
+ *      version of this fix made a revoke failure log-only, so `onGone`
+ *      succeeding alone reported the whole call as a success even though the
+ *      just-killed window's credential was still live) — `onGone`'s error
+ *      wins when both fail (it is the caller's own domain failure and the
+ *      more actionable one; the revoke error is attached as its `cause` and
+ *      also logged), otherwise a revoke-only failure now propagates on its
+ *      own instead of being swallowed into a `console.warn`.
  *   3. failure: call `onStillAlive` — the caller MUST use this to keep (or
  *      create, if not yet persisted) a reference to the window, never to
  *      clear one — and do NOT revoke the generation, so a still-live pane
@@ -278,6 +285,8 @@ export async function rollbackWindowReference(
       onGoneFailed = true;
       onGoneError = err;
     }
+    let revokeFailed = false;
+    let revokeError: unknown;
     try {
       // Scoped to the specific generation `createRotatedWindow` issued for
       // this window (see revokeGeneration's doc comment) — not a blanket
@@ -285,10 +294,31 @@ export async function rollbackWindowReference(
       // generation a concurrent rotation for the same task already
       // persisted.
       paneEnvService.revokeGeneration(tokenId, revokeReason);
-    } catch (revokeErr) {
-      console.warn(`[WindowRotation] revokeGeneration failed for tokenId=${tokenId} after a confirmed kill`, revokeErr);
+    } catch (err) {
+      revokeFailed = true;
+      revokeError = err;
     }
-    if (onGoneFailed) throw onGoneError;
+    if (onGoneFailed) {
+      if (revokeFailed) {
+        console.warn(`[WindowRotation] revokeGeneration ALSO failed for tokenId=${tokenId} after a confirmed kill (onGone failed too)`, revokeError);
+      }
+      // onGone's error is the caller's own domain failure and always wins
+      // over the revoke's (mirrors the pre-existing single-failure test
+      // below) — thrown as-is, not wrapped, so callers keep matching on it
+      // the same way they did before this fix.
+      throw onGoneError;
+    }
+    if (revokeFailed) {
+      // onGone succeeded but the revoke did not — this must surface as a
+      // failure of the whole call, not just a logged warning: a caller that
+      // reads success here would wrongly believe the just-killed window's
+      // token generation was revoked, when it is still live.
+      console.warn(`[WindowRotation] revokeGeneration failed for tokenId=${tokenId} after a confirmed kill`, revokeError);
+      throw new Error(
+        `revokeGeneration failed for tokenId=${tokenId} after a confirmed kill (onGone succeeded): ${revokeError instanceof Error ? revokeError.message : String(revokeError)}`,
+        { cause: revokeError },
+      );
+    }
   } else {
     onStillAlive();
   }

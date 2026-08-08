@@ -62,26 +62,31 @@ function makeDestroyPrimaryTaskWindow() {
 
 /**
  * Fake `destroySessionWindows` that mirrors
- * `destroyPrimaryTaskWindowsForSessionKill`'s contract (kill-session → on
- * success: run every window's `onDestroyed` → resolve a `KillOutcome`)
- * without the multi-task lock — these route-level tests only need to
- * confirm the ROUTE calls it with the right (taskIds, windows, serverName,
- * reason) and reacts correctly to its resolved outcome; the lock/reread
- * behavior itself is covered by TaskWindowDestruction.test.ts.
+ * `destroyPrimaryTaskWindowsForSessionKill`'s contract (re-resolve → kill
+ * session → on success: run every window's `onDestroyed` → resolve a
+ * `KillOutcome` + `handledTargets`) without the multi-task lock or the
+ * stale-snapshot retry loop — these route-level tests only need to confirm
+ * the ROUTE calls it with a working `resolveWindows`/serverName/reason and
+ * reacts correctly to its resolved result; the lock/reread/retry behavior
+ * itself is covered by TaskWindowDestruction.test.ts.
  */
 function makeDestroySessionWindows() {
   return vi.fn(async (
-    _taskIds: number[],
-    windows: Array<{ taskId: number; windowName: string; target: string; onDestroyed: () => void }>,
+    resolveWindows: () => Array<{ taskId: number; windowName: string; target: string; onDestroyed: () => void }>,
     _serverName: string,
     _reason: string,
     killSession: () => Promise<{ stdout: string; stderr: string; code: number }>,
   ) => {
+    const windows = resolveWindows();
     const outcome = await resolveKillOutcome(killSession());
+    const handledTargets = new Set<string>();
     if (outcome.success) {
-      for (const w of windows) w.onDestroyed();
+      for (const w of windows) {
+        w.onDestroyed();
+        handledTargets.add(w.target);
+      }
     }
-    return outcome;
+    return { outcome, handledTargets };
   });
 }
 
@@ -315,9 +320,8 @@ describe('DELETE /api/servers/:name/sessions/:session', () => {
     // task windows' reread/revoke run inside ONE call — locked against both
     // task IDs at once — never per-window after an unlocked kill.
     expect(destroySessionWindows).toHaveBeenCalledTimes(1);
-    const [taskIds, windows] = destroySessionWindows.mock.calls[0]!;
-    expect(taskIds).toEqual([42, 43]);
-    expect(windows).toEqual([
+    const [resolveWindows] = destroySessionWindows.mock.calls[0]!;
+    expect(resolveWindows()).toEqual([
       { taskId: 42, windowName: 'task-42', target: 'session:task-42', onDestroyed: expect.any(Function) },
       { taskId: 43, windowName: 'task-43', target: 'session:task-43', onDestroyed: expect.any(Function) },
     ]);
@@ -362,12 +366,13 @@ describe('DELETE /api/servers/:name/sessions/:session', () => {
 
     expect(res.statusCode).toBe(200);
     expect(destroySessionWindows).toHaveBeenCalledWith(
-      [42],
-      [{ taskId: 42, windowName: 'task-42', target: 'session:task-42', onDestroyed: expect.any(Function) }],
+      expect.any(Function),
       'srv1',
       'window_killed_via_session_delete',
       expect.any(Function),
     );
+    const [resolveWindows] = destroySessionWindows.mock.calls[0]!;
+    expect(resolveWindows()).toEqual([{ taskId: 42, windowName: 'task-42', target: 'session:task-42', onDestroyed: expect.any(Function) }]);
     expect(windowRepo.removeByServerAndTarget).toHaveBeenCalledWith('srv1', 'session:task-42');
   });
 
@@ -382,7 +387,9 @@ describe('DELETE /api/servers/:name/sessions/:session', () => {
     const res = await app.inject({ method: 'DELETE', url: '/api/servers/srv1/sessions/session' });
 
     expect(res.statusCode).toBe(200);
-    expect(destroySessionWindows).toHaveBeenCalledWith([], [], 'srv1', 'window_killed_via_session_delete', expect.any(Function));
+    expect(destroySessionWindows).toHaveBeenCalledWith(expect.any(Function), 'srv1', 'window_killed_via_session_delete', expect.any(Function));
+    const [resolveWindows] = destroySessionWindows.mock.calls[0]!;
+    expect(resolveWindows()).toEqual([]);
     expect(windowRepo.removeByServerAndTarget).not.toHaveBeenCalled();
   });
 

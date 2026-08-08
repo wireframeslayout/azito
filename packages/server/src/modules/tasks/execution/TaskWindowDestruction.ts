@@ -63,11 +63,33 @@ export async function destroyPrimaryTaskWindow(
   });
 }
 
-/** One window belonging to a task, as resolved before a whole-session kill. */
+/** One window belonging to a task, as resolved by a {@link ResolveSessionKillWindows} call. */
 export interface SessionKillTaskWindow {
   taskId: number;
   windowName: string;
+  /** Canonical `windows` table target (`session:windowName`) — used to report `handledTargets` to the caller. */
+  target: string;
   onDestroyed: () => void;
+}
+
+/**
+ * Re-resolves the FULL, current set of PRIMARY task-owned windows a session
+ * holds. Must be safely callable more than once (idempotent, no side
+ * effects beyond its own reads) — {@link destroyPrimaryTaskWindowsForSessionKill}
+ * calls it once per lock-acquisition attempt, discarding every result but
+ * the last (see that function's doc comment for why a single pre-lock call
+ * is not enough).
+ */
+export type ResolveSessionKillWindows = () => SessionKillTaskWindow[];
+
+const MAX_TASK_SET_RESOLVE_RETRIES = 5;
+
+function uniqueSortedTaskIds(windows: SessionKillTaskWindow[]): number[] {
+  return [...new Set(windows.map((w) => w.taskId))].sort((a, b) => a - b);
+}
+
+function sameTaskIdSet(a: number[], b: number[]): boolean {
+  return a.length === b.length && a.every((id, i) => id === b[i]);
 }
 
 /**
@@ -94,36 +116,83 @@ export interface SessionKillTaskWindow {
  * {@link runExclusiveForTasks} BEFORE calling `killSession`, and only THEN
  * kill + reread + revoke + clean up each window — mirroring
  * `destroyPrimaryTaskWindow`'s single-task span, just widened to cover every
- * task the session's windows belong to. No rotation for ANY of those tasks
- * can land a new window between this call's window-listing (done by the
- * caller, before this is invoked) and its kill, because by the time this
- * function's `fn` actually starts, every one of `taskIds`' queues has
- * already drained past this point.
+ * task the session's windows belong to.
  *
- * `taskIds` must be the FULL, deduplicated set of task IDs `windows` covers
- * (callers are expected to pass them pre-sorted ascending — see
- * `runExclusiveForTasks`'s doc comment for why this is hygiene, not a
- * correctness requirement of this specific queue implementation).
+ * Follow-up fix (Issue #28 batch review): the FIRST version of this function
+ * still took `windows`/`taskIds` as plain, already-resolved arrays, computed
+ * by the caller BEFORE `runExclusiveForTasks` acquired anything. That
+ * snapshot is only used to pick which tasks' queues to wait on — once this
+ * call actually reaches the front of every one of those queues (which can be
+ * arbitrarily later, e.g. behind an already-in-flight respawn for one of the
+ * same tasks), the snapshot can be stale: a respawn that completes WHILE
+ * this call is waiting on the lock lands a new window generation under a new
+ * name, and the stale `windowName` this call still holds no longer matches
+ * `task.tmuxWindow` — so `clearTmuxWindowIfMatches` (correctly, given a
+ * stale input) reports "no longer current" and skips revoking a window that
+ * `killSession` is about to destroy right along with everything else in the
+ * session. Worse than the original race: a still-referenced, still-killed
+ * window's token is now never revoked.
+ *
+ * Fix: `resolveWindows` is a callback, not a value — this function calls it
+ * once for an initial (best-effort) lock-target list, then AGAIN inside the
+ * lock, immediately before the kill, to get an authoritative snapshot. If
+ * the re-resolved task ID set differs from the one the lock was acquired
+ * for (a task entered or left the session's window set while this call was
+ * queued), the lock is released and reacquired for the NEW set, and the
+ * whole span retries — up to {@link MAX_TASK_SET_RESOLVE_RETRIES} times, so
+ * a pathologically fast churn of respawns cannot wedge this call forever.
+ * Once the task ID set is confirmed stable across a lock acquisition, no
+ * further rotation for any of those tasks can land between that
+ * confirmation and the kill (same guarantee `runExclusiveForTasks` always
+ * provided — it just needed a fresh read to apply it to).
+ *
+ * Returns the `target`s of every window this call actually killed/reread/
+ * revoked (`handledTargets`) so the caller's own separate cleanup of
+ * secondary/non-task rows can skip them.
  */
 export async function destroyPrimaryTaskWindowsForSessionKill(
-  taskIds: number[],
-  windows: SessionKillTaskWindow[],
+  resolveWindows: ResolveSessionKillWindows,
   taskRepo: Pick<ITaskRepository, 'clearTmuxWindowIfMatches'>,
   paneEnvService: TaskPaneEnvironmentService,
   reason: string,
   killSession: () => Promise<ExecResult>,
-): Promise<KillOutcome> {
-  return runExclusiveForTasks(taskIds, async () => {
-    const outcome = await resolveKillOutcome(killSession());
-    if (outcome.success) {
-      for (const win of windows) {
-        const stillCurrent = taskRepo.clearTmuxWindowIfMatches(win.taskId, win.windowName);
-        if (stillCurrent) {
-          paneEnvService.revokeForDestroyedWindow(win.taskId, reason);
-        }
-        win.onDestroyed();
+): Promise<{ outcome: KillOutcome; handledTargets: Set<string> }> {
+  let taskIds = uniqueSortedTaskIds(resolveWindows());
+
+  for (let attempt = 0; ; attempt++) {
+    const attemptResult = await runExclusiveForTasks(taskIds, async () => {
+      // Authoritative re-read, taken INSIDE the lock this call now holds for
+      // `taskIds` — the only point at which "no concurrent rotation for any
+      // of these tasks can be mid-flight" is actually guaranteed.
+      const freshWindows = resolveWindows();
+      const freshTaskIds = uniqueSortedTaskIds(freshWindows);
+      if (!sameTaskIdSet(taskIds, freshTaskIds)) {
+        return { retry: true as const, freshTaskIds };
       }
+
+      const outcome = await resolveKillOutcome(killSession());
+      const handledTargets = new Set<string>();
+      if (outcome.success) {
+        for (const win of freshWindows) {
+          const stillCurrent = taskRepo.clearTmuxWindowIfMatches(win.taskId, win.windowName);
+          if (stillCurrent) {
+            paneEnvService.revokeForDestroyedWindow(win.taskId, reason);
+          }
+          win.onDestroyed();
+          handledTargets.add(win.target);
+        }
+      }
+      return { retry: false as const, outcome, handledTargets };
+    });
+
+    if (!attemptResult.retry) {
+      return { outcome: attemptResult.outcome, handledTargets: attemptResult.handledTargets };
     }
-    return outcome;
-  });
+    if (attempt >= MAX_TASK_SET_RESOLVE_RETRIES) {
+      throw new Error(
+        `destroyPrimaryTaskWindowsForSessionKill: the session's task set kept changing across ${MAX_TASK_SET_RESOLVE_RETRIES} lock-reacquire retries — giving up`,
+      );
+    }
+    taskIds = attemptResult.freshTaskIds;
+  }
 }
