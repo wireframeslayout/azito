@@ -215,13 +215,29 @@ export class TmuxClient {
     return this.uiToken ? { AZITO_UI_TOKEN: this.uiToken } : {};
   }
 
+  /**
+   * Post-creation decoration only (the tmux status-bar window label), called
+   * by both `createSession` and `createWindow` right after the window itself
+   * is already up. Deliberately best-effort (Issue #28 Phase A last-round
+   * fix): a failure here is a cosmetic status-bar miss, not a reason to fail
+   * the whole `createWindow`/`createSession` call — the caller's window was
+   * already created, and `WindowRotation.createRotatedWindow` treats any
+   * rejection out of its `create` callback as "nothing was actually
+   * created," revoking the just-issued task-token generation. Letting this
+   * decoration failure propagate would misreport a real, live, untracked
+   * pane as never having been created, leaving it holding a revoked token.
+   * Failures are still surfaced via a warn log rather than swallowed
+   * silently, so they remain visible for diagnosis.
+   */
   private async setWindowStatusFormat(server: ServerConfig, sessionName: string, windowName: string): Promise<void> {
     const id = extractWindowId(windowName);
     if (!id) return;
     await this.runTmuxCommand(server, [
       'set-window-option', '-t', `${sessionName}:${windowName}`,
       'window-status-format', `#I:${windowName}`,
-    ]).catch(() => {});
+    ]).catch((err: unknown) => {
+      console.warn(`[tmux] Failed to set window-status-format for ${sessionName}:${windowName}: ${err instanceof Error ? err.message : err}`);
+    });
   }
 
   /**

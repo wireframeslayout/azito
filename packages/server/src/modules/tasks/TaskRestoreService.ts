@@ -8,6 +8,7 @@ import type { IWindowRepository } from '../windows/Window';
 import type { SqliteProjectSecretRepository } from '../projects/SqliteProjectSecretRepository';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import { resolveKillOutcome } from '../tmux/killOutcome';
+import { createRotatedWindow } from './execution/WindowRotation';
 import type { WorktreeServiceFactory } from '../git/WorktreeServiceFactory';
 import { PathResolverFactory, assertDirectoryContained } from '../git/PathContainment';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
@@ -174,8 +175,21 @@ export class TaskRestoreService {
     try {
       // Window generation point — rotates the task token (design v3 §2/§6:
       // restore() always (re)creates the task's window from scratch, so it
-      // always rotates, same as execute()).
-      const created = await tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: paneEnvService.buildEnvForNewWindow(task, server) });
+      // always rotates, same as execute()). Routed through
+      // createRotatedWindow() (Issue #28 Phase A last-round fix) instead of
+      // calling paneEnvService.buildEnvForNewWindow() + tmux.createWindow()
+      // directly: the direct-call form only assigned `windowName` AFTER
+      // creation resolved, so a thrown creation failure skipped this
+      // function's own `if (windowName)` rollback below and left the
+      // freshly-issued generation valid with no window backing it; it also
+      // never checked a non-zero exit code on an agent-transport creation.
+      // createRotatedWindow revokes the just-issued generation itself before
+      // rethrowing/throwing in both cases, so `windowName` staying null here
+      // on failure is correct — there is nothing left for the outer catch to
+      // roll back.
+      const created = await createRotatedWindow(paneEnvService, server, task, 'restore_create_failed', (env) =>
+        tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: env }),
+      );
       windowName = created.windowName;
 
       const windowTarget = `${tmuxSession}:${windowName}`;
