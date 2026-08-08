@@ -222,4 +222,19 @@ describe('migration 060: authz_foundation', () => {
     const row = db.prepare("SELECT created_via_generation FROM tasks WHERE title = 'Generation-scoped child'").get() as Record<string, unknown>;
     expect(row.created_via_generation).toBe(3);
   });
+
+  // Issue #28 third-party review, Minor finding: the children-count queries
+  // in SqliteTaskRepository.ts (`WHERE created_by_kind = 'task' AND
+  // created_by_id = ?` and the same plus `created_via_generation = ?`) had no
+  // supporting index — a full table scan on every child-task creation.
+  it('creates a composite index on (created_by_kind, created_by_id, created_via_generation)', () => {
+    const db = buildSeededDb();
+    m060.up(db);
+
+    const index = db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_tasks_created_by'").get();
+    expect(index).toBeTruthy();
+
+    const columns = db.prepare('PRAGMA index_info(idx_tasks_created_by)').all() as Array<{ name: string }>;
+    expect(columns.map((c) => c.name)).toEqual(['created_by_kind', 'created_by_id', 'created_via_generation']);
+  });
 });

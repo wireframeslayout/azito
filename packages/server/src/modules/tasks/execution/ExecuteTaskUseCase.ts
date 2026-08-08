@@ -494,6 +494,14 @@ export class ExecuteTaskUseCase {
     // — a kill failure left a still-live pane while a fresh token was issued
     // anyway. confirmOldWindowGone throws (aborting execute() before any
     // rotation happens) when a task-owned old window survives the kill.
+    //
+    // kind MUST be 'window', not 'pane' (Issue #28 third-party review finding
+    // 1): a task window can hold multiple panes (e.g. a split terminal the
+    // user opened alongside the worker pane), and killPane only kills the
+    // active pane. A surviving sibling pane would still be authenticated
+    // with the token this rotation is about to revoke, and the old task
+    // window would linger alongside the freshly-created one instead of being
+    // replaced by it.
     if (task.tmuxWindow) {
       const preCheck = await this.tmux.listSessions(server);
       const preSession = preCheck.find((s) => s.name === tmuxSession);
@@ -501,7 +509,7 @@ export class ExecuteTaskUseCase {
       await confirmOldWindowGone(
         this.tmux,
         server,
-        oldWin ? { target: `${tmuxSession}:${oldWin.index}`, kind: 'pane' } : null,
+        oldWin ? { target: `${tmuxSession}:${oldWin.index}`, kind: 'window' } : null,
         task.id,
       );
       if (oldWin) await sleep(300);

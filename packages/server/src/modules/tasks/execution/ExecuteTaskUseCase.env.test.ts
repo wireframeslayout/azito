@@ -1148,13 +1148,40 @@ describe('ExecuteTaskUseCase window-rotation rollback safety (Issue #28 third-pa
     // Agent-transport style failure: resolves (doesn't throw) with a
     // non-zero code — a bare await/`.then` here previously read this as
     // success (Issue #28 third-party review finding 2).
-    tmux.killPane.mockResolvedValue({ stdout: '', stderr: 'device busy', code: 1 });
+    tmux.killWindow.mockResolvedValue({ stdout: '', stderr: 'device busy', code: 1 });
 
-    await expect(useCase.execute(30, 40)).rejects.toThrow(/Failed to kill pane .* before rotating window/);
+    await expect(useCase.execute(30, 40)).rejects.toThrow(/Failed to kill window .* before rotating window/);
 
     expect(paneEnvService.buildEnvForNewWindow).not.toHaveBeenCalled();
     expect(tmux.createWindow).not.toHaveBeenCalled();
     expect(windowRepo.add).not.toHaveBeenCalled();
+  });
+
+  it('execute(): kills the whole leftover window (not just the active pane) so a surviving second pane cannot keep the old token alive (Issue #28 third-party review finding 1)', async () => {
+    const unit = makeUnit({ id: 35, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 45, serverName: 'local-server', unitId: 35, tmuxWindow: 'old-window' });
+    const { useCase, tmux, windowRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: null,
+    });
+    // The old task window has two panes (e.g. a split terminal the user
+    // opened alongside the worker pane) — not modeled in this listSessions
+    // mock's minimal { name, index } shape, but that's exactly the point:
+    // confirmOldWindowGone must target the whole window regardless of how
+    // many panes it holds. Only killWindow removes all of them; a killPane
+    // call targeting just the active pane would leave a sibling pane (and
+    // the old token it still holds) alive.
+    tmux.listSessions.mockResolvedValue([
+      { name: 'azito', windows: [{ name: 'old-window', index: 5 }] },
+    ]);
+
+    await useCase.execute(35, 45);
+
+    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:5');
+    expect(tmux.killPane).not.toHaveBeenCalled();
+    expect(windowRepo.add).toHaveBeenCalled();
   });
 
   it('execute(): revokes the new token generation and does not persist the window when createWindow resolves with a non-zero exit code', async () => {

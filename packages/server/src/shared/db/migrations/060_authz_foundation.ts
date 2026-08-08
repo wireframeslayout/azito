@@ -75,4 +75,13 @@ export function up(db: Database.Database): void {
   // record before this column existed). See Task.ts's `createdViaGeneration`
   // doc comment for the full contract.
   db.exec('ALTER TABLE tasks ADD COLUMN created_via_generation INTEGER');
+
+  // Composite index (Issue #28 third-party review, Minor finding) backing
+  // the two children-count queries above (SqliteTaskRepository.ts's
+  // countChildren-style lookups): `WHERE created_by_kind = 'task' AND
+  // created_by_id = ?` and the same predicate plus `created_via_generation =
+  // ?`. Column order matches both queries' equality predicates so a single
+  // index serves each (the generation-scoped query is a prefix match on the
+  // lifetime-scoped one's columns).
+  db.exec('CREATE INDEX idx_tasks_created_by ON tasks(created_by_kind, created_by_id, created_via_generation)');
 }

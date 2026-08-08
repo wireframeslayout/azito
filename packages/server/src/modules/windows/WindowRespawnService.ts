@@ -21,6 +21,7 @@ import { appendLogAndEmit } from '../tasks/execution/AppendLog';
 import type { TaskPaneEnvironmentService } from '../tasks/execution/TaskPaneEnvironmentService';
 import { resolveTmuxSession } from '../tasks/execution/TaskExecutionEnv';
 import { confirmOldWindowGone, createRotatedWindow } from '../tasks/execution/WindowRotation';
+import { resolveKillOutcome } from '../tmux/killOutcome';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { EventEmitter } from 'events';
@@ -392,24 +393,50 @@ export class WindowRespawnService {
     this.enforceExecutionGate(task, server, 'recover_session_legacy', null);
 
     const tmuxSession = resolveTmuxSession(task.projectId, server.name, this.projectServerRepo);
-    // Window generation point — rotates the task token, same as respawn()/
-    // execute()/restore().
-    const { windowName } = await this.tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: this.paneEnvService.buildEnvForNewWindow(task, server) });
+    // Window generation point — rotates the task token via createRotatedWindow,
+    // the same shared operation respawn()/execute()/followUp() use (Issue #28
+    // third-party review finding 2): this used to call
+    // paneEnvService.buildEnvForNewWindow() + tmux.createWindow() directly,
+    // bypassing createRotatedWindow's rollback entirely — a createWindow that
+    // resolved with a non-zero exit code (agent transport) was read as
+    // success and the freshly-issued generation was never revoked.
+    const { windowName } = await createRotatedWindow(this.paneEnvService, server, task, 'resume_legacy_create_failed', (env) =>
+      this.tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: env }),
+    );
     const windowTarget = `${tmuxSession}:${windowName}`;
-    const paneId = await this.tmux.resolvePaneId(server, windowTarget);
-    // --strict-mcp-config (Issue #28 design v3 §3): this is a claude worker
-    // launch, same as buildClaudeLaunchCommand's, just hardcoded here instead
-    // of going through it (see that function's own doc comment for why the
-    // rest of its flags don't apply to a `--resume` relaunch).
-    const resumeCommand = `claude --resume ${task.agentSessionId} --dangerously-skip-permissions --strict-mcp-config`;
-    const isSupervised = shouldSupervise(server.type, 'agent');
-    if (isSupervised) {
-      this.supervisorRegistry.clearExitMarker(server.name, windowTarget);
+    try {
+      const paneId = await this.tmux.resolvePaneId(server, windowTarget);
+      // --strict-mcp-config (Issue #28 design v3 §3): this is a claude worker
+      // launch, same as buildClaudeLaunchCommand's, just hardcoded here instead
+      // of going through it (see that function's own doc comment for why the
+      // rest of its flags don't apply to a `--resume` relaunch).
+      const resumeCommand = `claude --resume ${task.agentSessionId} --dangerously-skip-permissions --strict-mcp-config`;
+      const isSupervised = shouldSupervise(server.type, 'agent');
+      if (isSupervised) {
+        this.supervisorRegistry.clearExitMarker(server.name, windowTarget);
+      }
+      const sendCmd = isSupervised
+        ? wrapWithSupervisor(resumeCommand, { server, target: windowTarget, taskId: task.id, unitId: task.unitId ?? undefined })
+        : resumeCommand;
+      await this.tmux.sendKeys(server, paneId, [sendCmd, 'Enter']);
+    } catch (err) {
+      // resolvePaneId()/sendKeys() failing after createRotatedWindow already
+      // succeeded used to leave an untracked window (tmuxWindow never
+      // persisted) holding a live token generation — same generation-leak
+      // shape as ExecuteTaskUseCase's worktree-failure rollback branches
+      // (Issue #28 third-party review finding 2). Kill the just-created
+      // window and only revoke the generation once resolveKillOutcome
+      // confirms the kill actually worked; a kill failure leaves the
+      // generation alone (a still-live pane must keep a valid token) and the
+      // original launch error is what surfaces to the caller either way.
+      try {
+        const outcome = await resolveKillOutcome(this.tmux.killWindow(server, windowTarget));
+        if (outcome.success) {
+          this.paneEnvService.revokeForDestroyedWindow(task.id, 'resume_legacy_launch_failed_rollback');
+        }
+      } catch {}
+      throw err;
     }
-    const sendCmd = isSupervised
-      ? wrapWithSupervisor(resumeCommand, { server, target: windowTarget, taskId: task.id, unitId: task.unitId ?? undefined })
-      : resumeCommand;
-    await this.tmux.sendKeys(server, paneId, [sendCmd, 'Enter']);
     this.taskRepo.update(taskId, { tmuxWindow: windowName } as Partial<Task>);
     return { windowName };
   }

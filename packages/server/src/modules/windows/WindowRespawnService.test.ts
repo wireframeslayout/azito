@@ -1040,3 +1040,53 @@ describe('WindowRespawnService.resumeLegacySession (Issue #328 fourth-round revi
     ]);
   });
 });
+
+// Issue #28 third-party review, Important finding 2: resumeLegacySession()
+// used to call paneEnvService.buildEnvForNewWindow() + tmux.createWindow()
+// directly instead of routing through createRotatedWindow() — a non-zero
+// exit code from createWindow() (agent transport) was read as success, and a
+// resolvePaneId()/sendKeys() failure after a successful create left an
+// untracked window holding a live token generation with nothing rolling it
+// back.
+describe('WindowRespawnService.resumeLegacySession rollback safety (Issue #28 third-party review finding 2)', () => {
+  it('routes window creation through createRotatedWindow: revokes the new generation and does not persist tmuxWindow when createWindow resolves with a non-zero exit code', async () => {
+    const task = makeTask({ id: 7, unitId: 10, agentSessionId: 'sess-abc', inputTrust: 'trusted' });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 7 });
+    const { service, tmux, taskRepo, paneEnvService } = buildService({ window: win, task, unit });
+    tmux.createWindow.mockResolvedValue({ result: { stdout: '', stderr: 'boom', code: 1 }, windowName: 'task-7-new' });
+
+    await expect(service.resumeLegacySession(7, makeServer())).rejects.toThrow(/Failed to create tmux window/);
+
+    expect(paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(7, 'resume_legacy_create_failed');
+    expect(tmux.sendKeys).not.toHaveBeenCalled();
+    expect(taskRepo.update).not.toHaveBeenCalledWith(7, expect.objectContaining({ tmuxWindow: expect.anything() }));
+  });
+
+  it('rolls back (kills the window, revokes the new generation) when resolvePaneId fails after a successful createWindow', async () => {
+    const task = makeTask({ id: 7, unitId: 10, agentSessionId: 'sess-abc', inputTrust: 'trusted' });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 7 });
+    const { service, tmux, taskRepo, paneEnvService } = buildService({ window: win, task, unit });
+    tmux.resolvePaneId.mockRejectedValue(new Error('no such pane'));
+
+    await expect(service.resumeLegacySession(7, makeServer())).rejects.toThrow(/no such pane/);
+
+    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:task-7-new');
+    expect(paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(7, 'resume_legacy_launch_failed_rollback');
+    expect(taskRepo.update).not.toHaveBeenCalledWith(7, expect.objectContaining({ tmuxWindow: expect.anything() }));
+  });
+
+  it('rolls back but does NOT revoke the generation when the rollback kill itself fails (a still-live pane must keep a valid token)', async () => {
+    const task = makeTask({ id: 7, unitId: 10, agentSessionId: 'sess-abc', inputTrust: 'trusted' });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 7 });
+    const { service, tmux, paneEnvService } = buildService({ window: win, task, unit });
+    tmux.resolvePaneId.mockRejectedValue(new Error('no such pane'));
+    tmux.killWindow.mockResolvedValue({ stdout: '', stderr: 'device busy', code: 1 });
+
+    await expect(service.resumeLegacySession(7, makeServer())).rejects.toThrow(/no such pane/);
+
+    expect(paneEnvService.revokeForDestroyedWindow).not.toHaveBeenCalled();
+  });
+});
