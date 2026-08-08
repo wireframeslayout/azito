@@ -344,15 +344,39 @@ export class FileBrowseService {
       if (size > MAX_FILE_SIZE) {
         throw new FileBrowseError(`File too large (${Math.round(size / 1024)}KB). Maximum is 500KB.`, 400);
       }
-      const result = await this.tmux.execCommand(srv, `base64 -w0 -- ${sq(filePath)} 2>/dev/null || base64 -- ${sq(filePath)} 2>/dev/null`);
+      // `base64 -- <file>` (argument form) is GNU-only for the `--` end-of-options marker in front of a
+      // filename; BSD/macOS `base64` does not accept `--` there at all, so that form silently fails (and
+      // previously fell through to empty stdout being decoded as "empty file", see below). Redirecting via
+      // `< file` instead of passing the path as an argument avoids the incompatibility entirely and works
+      // identically on both. `-w0` (no wrapping) is GNU-only, so it is tried first and falls back to the
+      // BSD/macOS default (wrapped) form, whose wrap newlines are stripped below same as before.
+      // A trailing `&& echo AZITO_READ_OK` marker distinguishes "both base64 invocations failed" (or the
+      // file vanished between the `stat` above and this read) from a genuinely empty file — without it,
+      // empty stdout from a failed command was indistinguishable from an empty file's correct output, so
+      // it was silently accepted and returned as a new, incorrectly-hashed empty document.
+      const result = await this.tmux.execCommand(
+        srv,
+        `(base64 -w0 < ${sq(filePath)} 2>/dev/null || base64 < ${sq(filePath)} 2>/dev/null) && echo AZITO_READ_OK`,
+      );
+      const rawStdout = stripTerminalArtifacts(result.stdout);
+      if (!rawStdout.includes('AZITO_READ_OK')) {
+        throw new FileBrowseError('Failed to read file', 500);
+      }
       // `stripTerminalArtifacts` is a no-op here in practice (its patterns target ANSI/control bytes and
       // PUA/emoji ranges, none of which overlap the base64 alphabet `[A-Za-z0-9+/=]`) — applied anyway
       // for the same defense-in-depth reason every other remote stdout read in this file applies it.
       // The `[\r\n]` strip removes the line-wrapping some `base64` builds (notably non-GNU ones lacking
-      // `-w0`) insert every ~76 chars; unlike the old `cat` path, this is safe because those wrap
-      // newlines were never part of the file's content in the first place.
-      const b64 = stripTerminalArtifacts(result.stdout).replace(/[\r\n]/g, '');
+      // `-w0`) insert every ~76 chars, plus the marker line just appended above; unlike the old `cat`
+      // path, this is safe because those wrap newlines were never part of the file's content in the
+      // first place.
+      const b64 = rawStdout.replace('AZITO_READ_OK', '').replace(/[\r\n]/g, '');
       const buf = Buffer.from(b64, 'base64');
+      // Cross-check the decoded byte count against the `stat` size fetched above (same TOCTOU-shrinking
+      // purpose as the write path's `wc -c` check): a partial/truncated transport read that still reports
+      // success would otherwise decode into a shorter-but-valid document with no error.
+      if (buf.length !== size) {
+        throw new FileBrowseError('Failed to read file: content size mismatch', 500);
+      }
       if (buf.includes(0)) {
         throw new FileBrowseError('Binary file cannot be displayed', 400);
       }
@@ -559,15 +583,20 @@ export class FileBrowseService {
       // whole-second precision (the BSD/macOS `-f%m` fallback in getRemoteMtimeMs), the mtime check
       // above cannot distinguish an external edit that landed within the same second as the read this
       // save is based on — the write would silently clobber it. sha256sum/shasum catches that because
-      // it compares actual bytes rather than a coarse timestamp. When neither tool is available,
-      // getRemoteSha256 returns null; that is "verification unavailable", not "hashes match" — the
-      // save proceeds on the mtime check alone (already run above) and this gap is logged so it's
-      // visible in server logs rather than silently accepted.
+      // it compares actual bytes rather than a coarse timestamp. When neither tool is available (or the
+      // file disappeared), getRemoteSha256 returns null; that is "verification unavailable", not "hashes
+      // match", and a caller that supplied baseHash asked for hash-backed conflict detection — silently
+      // downgrading to mtime-only would accept a save that a same-second external edit already raced past
+      // undetected (review Important 1). Fail closed: reject with a 409 distinguishing this from an actual
+      // hash mismatch, so the only bypass is the caller explicitly passing `force: true` (which never
+      // reaches this branch — routes.ts omits baseHash/baseMtime entirely in that case).
       if (baseHash != null) {
         const currentHash = await this.getRemoteSha256(srv, filePath);
         if (currentHash == null) {
-          // eslint-disable-next-line no-console
-          console.warn(`[FileBrowseService] sha256sum/shasum unavailable on ${srv.name}; falling back to mtime-only conflict detection for ${filePath}`);
+          throw new FileBrowseError(
+            JSON.stringify({ conflict: true, currentMtime: null, hashUnavailable: true }),
+            409,
+          );
         } else if (currentHash !== baseHash) {
           const current = await this.getRemoteMtimeMs(srv, filePath);
           throw new FileBrowseError(

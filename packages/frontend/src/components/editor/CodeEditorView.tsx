@@ -46,6 +46,17 @@ export default function CodeEditorView({
   const vimCompRef = useRef<unknown>(null);
   const readOnlyCompRef = useRef<unknown>(null);
   const vimCmRef = useRef<object | null>(null);
+  // Holds the dynamically-imported `EditorView` class (for its static
+  // `scrollIntoView` effect builder) once the mount effect below has loaded it,
+  // so the initialLine-jump effect further down can build the same dispatch
+  // without re-importing `@codemirror/view` itself.
+  const editorViewClassRef = useRef<{ scrollIntoView(pos: number, opts?: { y?: string }): unknown } | null>(null);
+  // The `initialLine` value the mount effect already applied (or, before mount
+  // completes, the value it captured at initialization). Lets the jump effect
+  // below tell "the prop actually changed since we last handled it" apart from
+  // "this is the same render-triggered invocation the mount effect will also
+  // handle" without double-jumping on first mount.
+  const appliedLineRef = useRef<number | undefined>(initialLine);
   const [loaded, setLoaded] = useState(false);
 
   const onSaveRef = useRef(onSave);
@@ -243,6 +254,7 @@ export default function CodeEditorView({
       });
 
       viewRef.current = view;
+      editorViewClassRef.current = EditorView;
 
       if (vimMode) {
         const cm = vimMod.getCM(view);
@@ -343,6 +355,33 @@ export default function CodeEditorView({
       view.dispatch({ effects: comp.reconfigure(EditorState.readOnly.of(readOnly)) });
     })();
   }, [readOnly]);
+
+  // Review Minor 3: `initialLine` used to be applied only inside the mount effect
+  // above, so clicking a different line of an already-open file (e.g. a second
+  // search result in the same file) updated the tab's `line` and re-rendered this
+  // component with a new `initialLine` prop, but nothing scrolled — the mount
+  // effect had already run and won't run again for an existing EditorView.
+  // `appliedLineRef` starts at the same value the mount effect captured, so this
+  // effect's first invocation (which fires on every mount, same as any other
+  // effect) is a no-op; only a genuine change to `initialLine` after that
+  // dispatches a jump. A same-value re-click never reaches here in the first
+  // place — useTabPersistence's openTab only updates a tab's `line` field when
+  // it actually differs from the existing value, so the prop itself doesn't
+  // change and this effect doesn't re-run.
+  useEffect(() => {
+    if (appliedLineRef.current === initialLine) return;
+    appliedLineRef.current = initialLine;
+    const view = viewRef.current as { state: { doc: { lines: number; line(n: number): { from: number } } }; dispatch(spec: unknown): void } | null;
+    const EditorView = editorViewClassRef.current;
+    if (!view || !EditorView || initialLine == null) return;
+    if (initialLine < 1 || initialLine > view.state.doc.lines) return;
+    const line = view.state.doc.line(initialLine);
+    view.dispatch({
+      selection: { anchor: line.from },
+      effects: EditorView.scrollIntoView(line.from, { y: 'center' }),
+    });
+    onCursorRef.current?.(initialLine, 1);
+  }, [initialLine]);
 
   return (
     <div ref={containerRef} style={{ height: '100%', overflow: 'hidden' }}>

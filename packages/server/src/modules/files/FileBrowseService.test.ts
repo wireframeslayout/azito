@@ -69,7 +69,10 @@ describe('FileBrowseService shell quoting', () => {
     ).rejects.toThrow('Not a regular file');
   });
 
-  it('uses -- separator in the remote base64 read command', async () => {
+  // `base64 -- <file>` (argument form) is GNU-only for the `--` marker in front of a filename — BSD/macOS
+  // `base64` rejects it outright, so the read command uses `< file` redirection instead, which both
+  // implementations accept identically.
+  it('uses redirection (not -- argument form) in the remote base64 read command', async () => {
     const mock = createMockTmux({ 'test -f': 'ok' });
     const svc = new FileBrowseService(mock as any);
     const srv = { type: 'agent', name: 'test', host: 'user@host' };
@@ -78,10 +81,12 @@ describe('FileBrowseService shell quoting', () => {
       await svc.getFileContent(srv as any, '/tmp/normal.txt');
     } catch {}
 
-    const base64Cmd = mock.commands.find(c => c.startsWith('base64'));
+    const base64Cmd = mock.commands.find(c => c.includes('base64'));
     expect(base64Cmd).toBeDefined();
-    expect(base64Cmd).toContain('base64 -w0 --');
-    expect(base64Cmd).toContain('base64 --');
+    expect(base64Cmd).toContain('base64 -w0 <');
+    expect(base64Cmd).toContain('base64 <');
+    expect(base64Cmd).not.toContain('base64 --');
+    expect(base64Cmd).toContain('AZITO_READ_OK');
   });
 
   // Issue #27 review Critical 1: the mtime lookup at the end of the remote
@@ -100,7 +105,9 @@ describe('FileBrowseService shell quoting', () => {
         commands.push(cmd);
         if (cmd.startsWith('test -f')) return { stdout: 'ok\n', stderr: '', code: 0 };
         if (cmd.startsWith('stat -c%s') || cmd.includes('stat -f%z')) return { stdout: '5\n', stderr: '', code: 0 };
-        if (cmd.startsWith('base64')) return { stdout: Buffer.from('hello', 'utf-8').toString('base64'), stderr: '', code: 0 };
+        if (cmd.includes('base64')) {
+          return { stdout: `${Buffer.from('hello', 'utf-8').toString('base64')}\nAZITO_READ_OK\n`, stderr: '', code: 0 };
+        }
         // mtime lookup (stat -c%.Y / -c%Y / -f%m chain)
         return { stdout: '1750000000\n', stderr: '', code: 0 };
       },
@@ -148,11 +155,11 @@ describe('FileBrowseService.getFileContent (remote) — lossless base64 read', (
         if (cmd.startsWith('stat -c%s') || cmd.includes('stat -f%z')) {
           return { stdout: `${Buffer.byteLength(originalContent, 'utf-8')}\n`, stderr: '', code: 0 };
         }
-        if (cmd.startsWith('base64')) {
-          // Simulate the persistent-shell boundary trim landing on the base64 payload, exactly as it
-          // would on real stdout — base64 has no \r/\n of its own here (single line, no wrapping), so
-          // trimming a "leading/trailing newline" has nothing to remove and the payload survives intact.
-          return { stdout: simulateSshBoundaryTrim(b64), stderr: '', code: 0 };
+        if (cmd.includes('base64')) {
+          // Simulate the persistent-shell boundary trim landing on the base64 payload + success marker,
+          // exactly as it would on real stdout — base64 has no \r/\n of its own here (single line, no
+          // wrapping), so trimming a "leading/trailing newline" only ever eats the marker's own newlines.
+          return { stdout: simulateSshBoundaryTrim(`${b64}\nAZITO_READ_OK`), stderr: '', code: 0 };
         }
         // mtime lookup
         return { stdout: '1750000000\n', stderr: '', code: 0 };
@@ -185,8 +192,8 @@ describe('FileBrowseService.getFileContent (remote) — lossless base64 read', (
         if (cmd.startsWith('stat -c%s') || cmd.includes('stat -f%z')) {
           return { stdout: `${Buffer.byteLength(originalContent, 'utf-8')}\n`, stderr: '', code: 0 };
         }
-        if (cmd.startsWith('base64')) {
-          return { stdout: simulateSshBoundaryTrim(wrapped), stderr: '', code: 0 };
+        if (cmd.includes('base64')) {
+          return { stdout: simulateSshBoundaryTrim(`${wrapped}\nAZITO_READ_OK`), stderr: '', code: 0 };
         }
         return { stdout: '1750000000\n', stderr: '', code: 0 };
       },
@@ -200,6 +207,44 @@ describe('FileBrowseService.getFileContent (remote) — lossless base64 read', (
       expect(result.content).toBe(originalContent);
       expect(result.hash).toBe(expectedHash);
     }
+  });
+
+  // Review Important 2: both base64 invocations failing (missing binary, transient error) or the file
+  // vanishing between `stat` and the read used to leave stdout empty, which was silently decoded as "an
+  // empty file" and returned as a new, incorrectly-hashed empty document. The AZITO_READ_OK success
+  // marker distinguishes that from a genuinely empty file.
+  it('rejects the read when the base64 command produces no success marker (empty output)', async () => {
+    const mock = {
+      execCommand: async (_srv: unknown, cmd: string) => {
+        if (cmd.startsWith('test -f')) return { stdout: 'ok\n', stderr: '', code: 0 };
+        if (cmd.startsWith('stat -c%s') || cmd.includes('stat -f%z')) return { stdout: '5\n', stderr: '', code: 0 };
+        if (cmd.includes('base64')) return { stdout: '', stderr: '', code: 0 };
+        return { stdout: '1750000000\n', stderr: '', code: 0 };
+      },
+    };
+    const svc = new FileBrowseService(mock as any);
+    const srv = { type: 'agent', name: 'test', host: 'user@host' };
+
+    await expect(svc.getFileContent(srv as any, '/tmp/vanished.txt')).rejects.toThrow('Failed to read file');
+  });
+
+  // Review Important 2 (size cross-check): a transport hiccup that silently truncates the base64 payload
+  // but still reports the success marker must not be accepted as a shorter-but-valid document — the
+  // decoded byte count is compared against the `stat` size fetched moments earlier.
+  it('rejects the read when the decoded byte count does not match the stat size', async () => {
+    const truncatedB64 = Buffer.from('hel', 'utf-8').toString('base64'); // 3 bytes, but stat says 5
+    const mock = {
+      execCommand: async (_srv: unknown, cmd: string) => {
+        if (cmd.startsWith('test -f')) return { stdout: 'ok\n', stderr: '', code: 0 };
+        if (cmd.startsWith('stat -c%s') || cmd.includes('stat -f%z')) return { stdout: '5\n', stderr: '', code: 0 };
+        if (cmd.includes('base64')) return { stdout: `${truncatedB64}\nAZITO_READ_OK\n`, stderr: '', code: 0 };
+        return { stdout: '1750000000\n', stderr: '', code: 0 };
+      },
+    };
+    const svc = new FileBrowseService(mock as any);
+    const srv = { type: 'agent', name: 'test', host: 'user@host' };
+
+    await expect(svc.getFileContent(srv as any, '/tmp/truncated.txt')).rejects.toThrow('content size mismatch');
   });
 });
 
@@ -592,14 +637,17 @@ describe('FileBrowseService.writeFileContent (remote)', () => {
     expect(result.hash).toBe(createHash('sha256').update('new content', 'utf-8').digest('hex'));
   });
 
-  // Issue #27 review Important 3: when neither sha256sum nor shasum is available on the remote host,
-  // hash verification must be treated as "unavailable", not "matches" — the save proceeds on the
-  // (already-run) mtime check alone rather than either blocking every save on that host or silently
-  // skipping conflict detection with a false "verified" signal.
-  it('falls back to mtime-only conflict detection when no remote hash tool is available', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  // Issue #27 review followup (Important 1): when neither sha256sum nor shasum is available on the
+  // remote host (or the file disappeared), hash verification is "unavailable", not "matches" — a caller
+  // that supplied baseHash asked for hash-backed conflict detection, so silently downgrading to
+  // mtime-only would accept a save past a same-second external edit undetected. Fail closed instead: the
+  // save is rejected with a 409, and no write command ever runs. The only bypass is `force: true`
+  // (routes.ts omits baseHash/baseMtime in that case, so this branch is never reached).
+  it('rejects the save (fail closed) when no remote hash tool is available', async () => {
+    const commands: string[] = [];
     const tmuxMock = {
       execCommand: async (_srv: unknown, cmd: string) => {
+        commands.push(cmd);
         // Both sha256sum and shasum fail/are absent — empty stdout, as `2>/dev/null || ...` yields
         // when neither tool exists.
         if (cmd.startsWith('sha256sum') || cmd.includes('shasum -a 256')) {
@@ -613,10 +661,10 @@ describe('FileBrowseService.writeFileContent (remote)', () => {
     const service = new FileBrowseService(tmuxMock as any);
     const srv = { name: 'remote', type: 'ssh' } as any;
 
-    const result = await service.writeFileContent(srv, '/tmp/no-hash-tool.txt', 'new content', undefined, 'c'.repeat(64));
-    expect(result.mtime).toBe(1750000000 * 1000);
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('sha256sum/shasum unavailable'));
-    warnSpy.mockRestore();
+    await expect(
+      service.writeFileContent(srv, '/tmp/no-hash-tool.txt', 'new content', undefined, 'c'.repeat(64)),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(commands.some((c) => c.includes('base64 -d <') && c.includes('mv -f'))).toBe(false);
   });
 
   // Critical fix (nested single-quote breakage in the trap): the trap command must be built by

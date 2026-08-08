@@ -56,7 +56,10 @@ export interface PersistedTab {
   // Browser-specific
   browserData?: { serverName: string; pageId: string; lastActiveTabId?: string };
   reconnectKey?: number;
-  // Editor dirty state (not persisted to localStorage)
+  // Editor dirty state. In-memory only — stripped before writing to
+  // localStorage (serialize effect below) and stripped again on hydration
+  // (stripDirty via normalizeLegacyTabs) so a stale flag from an older
+  // client build can't resurface as a false "unsaved changes" warning.
   dirty?: boolean;
 }
 
@@ -137,13 +140,30 @@ function normalizeLegacyTabId(id: string): string {
 }
 
 /**
+ * Strips the `dirty` flag from a hydrated tab. `dirty` is meant to be pure
+ * in-memory editor state (see its field comment), but earlier code persisted
+ * it verbatim (serializeTabsForStorage below now strips it going forward) —
+ * so localStorage entries written before that fix can still carry a stale
+ * `dirty: true` from whatever the editor's unsaved state happened to be at
+ * last write. Applied on every hydration path so a reload never resurrects a
+ * false "unsaved changes" warning for a tab whose actual editor was never
+ * reopened dirty this session.
+ */
+export function stripDirty(tab: PersistedTab): PersistedTab {
+  if (!('dirty' in tab)) return tab;
+  const { dirty: _dirty, ...rest } = tab;
+  return rest;
+}
+
+/**
  * Normalize tabs persisted under a previous schema version.
  * Drops removed global page tabs and legacy types, dedupes by id.
  */
-function normalizeLegacyTabs(tabs: PersistedTab[]): PersistedTab[] {
+export function normalizeLegacyTabs(tabs: PersistedTab[]): PersistedTab[] {
   const next: PersistedTab[] = [];
   const seenIds = new Set<string>();
-  for (const tab of tabs) {
+  for (const rawTab of tabs) {
+    const tab = stripDirty(rawTab);
     const rawType = tab.type as string;
     if (rawType === 'worker-profiles-list' || rawType === 'tasks-list' || rawType === 'operations-running') continue;
     if (rawType === 'projects-list' || rawType === 'units-list' || rawType === 'sidekicks-list' || rawType === 'global-settings' || rawType === 'project-form') continue;
@@ -215,7 +235,10 @@ export function useTabPersistence(storageKey?: string) {
 
   useEffect(() => {
     if (!initialized.current) return;
-    localStorage.setItem(effectiveKey, JSON.stringify(tabs.filter((t) => !(FORM_TAB_TYPES as readonly string[]).includes(t.type))));
+    const persistable = tabs
+      .filter((t) => !(FORM_TAB_TYPES as readonly string[]).includes(t.type))
+      .map(stripDirty);
+    localStorage.setItem(effectiveKey, JSON.stringify(persistable));
   }, [tabs, effectiveKey]);
 
   useEffect(() => {
