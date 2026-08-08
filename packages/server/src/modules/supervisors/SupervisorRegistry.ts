@@ -266,10 +266,10 @@ export class SupervisorRegistry extends EventEmitter {
 
   /**
    * Marks a launch `expired` in the persisted `supervisor_launches` row
-   * (best-effort — never throws). Only place this and `child_exit`'s own
-   * call route through — see `markLaunchExpired`'s doc comment for the
-   * second entry point (task/window destruction, Issue #28 third-party
-   * review, second round).
+   * (best-effort — never throws). Call sites: `child_exit` (below — a
+   * connected supervisor reporting its own child's exit) and
+   * {@link expireResolvedLaunch} (the task/window-destruction path — see its
+   * doc comment).
    */
   private expireLaunchId(launchId: string): void {
     try {
@@ -280,23 +280,37 @@ export class SupervisorRegistry extends EventEmitter {
   }
 
   /**
-   * Second entry point for launch expiry (Issue #28 third-party review,
-   * second round — the first is `child_exit`, above). A task/window
-   * destroyed through `destroyPrimaryTaskWindow`
+   * Resolves the current (pending/active) launch for `(serverName, target)`
+   * — the same key `wrapWithSupervisor()`/`issueLaunch()` register a launch
+   * under — as a DB-backed lookup (Issue #28 third-party review, D-track fix
+   * 2). Superseded an earlier in-memory-only `markLaunchExpired`, which
+   * looked up the launchId via the live `connections` map AT CLEANUP time —
+   * a task/window destroyed through `destroyPrimaryTaskWindow`
    * (modules/tasks/execution/TaskWindowDestruction.ts) kills the WHOLE tmux
-   * window/pane — the supervisor process wrapping the child dies right
-   * along with it, with no chance to send its own `child_exit` message
-   * first, so that path alone never expires the launch. Best-effort and
-   * in-memory-lookup-only: if there's no live connection for this key (the
-   * common case — the window is usually already gone by the time a caller
-   * gets here), this is a no-op; the launch's bootstrap TTL
-   * (`PENDING_BOOTSTRAP_TTL_MS`) and `create()`'s own supersede-on-relaunch
-   * step are what actually bound its usable lifetime either way, so a missed
-   * expiry here is a narrowing, not the only guard.
+   * window/pane, so the supervisor process wrapping the child (and its
+   * WebSocket connection) has usually already died along with it by the time
+   * a caller got around to expiring the launch — that in-memory lookup found
+   * nothing to expire in exactly the case it existed to handle.
+   *
+   * Callers are expected to call this BEFORE issuing the kill and hold onto
+   * just the returned launchId (not a live reference), then pass it to
+   * {@link expireResolvedLaunch} once the kill is confirmed. Resolving here,
+   * ahead of the kill, and expiring the SPECIFIC launchId this returned
+   * (never a target-based re-query at expiry time) means a concurrent
+   * relaunch that issues a brand-new launch for the same key while the kill
+   * is in flight is never wrongly expired by this call.
+   *
+   * Returns null (a legitimate, silent no-op for the paired
+   * `expireResolvedLaunch` call) when no `launchRepo` is available or no
+   * pending/active launch exists for the key.
    */
-  markLaunchExpired(serverName: string, target: string): void {
-    const conn = this.connections.get(keyFor(serverName, target));
-    if (conn?.launchId) this.expireLaunchId(conn.launchId);
+  resolveLaunchForExpiry(serverName: string, target: string): string | null {
+    return this.launchRepo?.findActiveByTarget(serverName, target)?.launchId ?? null;
+  }
+
+  /** Pairs with {@link resolveLaunchForExpiry} — expires the exact launchId it resolved, if any. No-op for null. */
+  expireResolvedLaunch(launchId: string | null): void {
+    if (launchId) this.expireLaunchId(launchId);
   }
 
   private audit(event: string, detail: Record<string, unknown>): void {

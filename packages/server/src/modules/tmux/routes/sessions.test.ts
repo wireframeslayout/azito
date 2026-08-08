@@ -60,10 +60,36 @@ function makeDestroyPrimaryTaskWindow() {
   });
 }
 
+/**
+ * Fake `destroySessionWindows` that mirrors
+ * `destroyPrimaryTaskWindowsForSessionKill`'s contract (kill-session → on
+ * success: run every window's `onDestroyed` → resolve a `KillOutcome`)
+ * without the multi-task lock — these route-level tests only need to
+ * confirm the ROUTE calls it with the right (taskIds, windows, serverName,
+ * reason) and reacts correctly to its resolved outcome; the lock/reread
+ * behavior itself is covered by TaskWindowDestruction.test.ts.
+ */
+function makeDestroySessionWindows() {
+  return vi.fn(async (
+    _taskIds: number[],
+    windows: Array<{ taskId: number; windowName: string; target: string; onDestroyed: () => void }>,
+    _serverName: string,
+    _reason: string,
+    killSession: () => Promise<{ stdout: string; stderr: string; code: number }>,
+  ) => {
+    const outcome = await resolveKillOutcome(killSession());
+    if (outcome.success) {
+      for (const w of windows) w.onDestroyed();
+    }
+    return outcome;
+  });
+}
+
 async function buildApp(opts: {
   tmux: Partial<TmuxClient>;
   windowRepo: SqliteWindowRepository;
   destroyPrimaryTaskWindow?: ReturnType<typeof makeDestroyPrimaryTaskWindow>;
+  destroySessionWindows?: ReturnType<typeof makeDestroySessionWindows>;
   buildSecondaryWindowEnv?: ReturnType<typeof vi.fn>;
 }): Promise<FastifyInstance> {
   const srv: ServerConfig = { name: 'srv1', type: 'local' } as ServerConfig;
@@ -73,6 +99,7 @@ async function buildApp(opts: {
     tmux: opts.tmux as TmuxClient,
     windowRepo: opts.windowRepo,
     destroyPrimaryTaskWindow: opts.destroyPrimaryTaskWindow,
+    destroySessionWindows: opts.destroySessionWindows,
     buildSecondaryWindowEnv: opts.buildSecondaryWindowEnv as ((taskId: number, server: ServerConfig) => Record<string, string>) | undefined,
   });
   await app.ready();
@@ -278,15 +305,22 @@ describe('DELETE /api/servers/:name/sessions/:session', () => {
     const tmux: Partial<TmuxClient> = {
       killSession: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
     };
-    const destroyPrimaryTaskWindow = makeDestroyPrimaryTaskWindow();
-    app = await buildApp({ tmux, windowRepo, destroyPrimaryTaskWindow });
+    const destroySessionWindows = makeDestroySessionWindows();
+    app = await buildApp({ tmux, windowRepo, destroySessionWindows });
 
     const res = await app.inject({ method: 'DELETE', url: '/api/servers/srv1/sessions/session' });
 
     expect(res.statusCode).toBe(200);
-    expect(destroyPrimaryTaskWindow).toHaveBeenCalledWith(42, 'task-42', 'srv1', 'session:task-42', 'window_killed_via_session_delete', expect.any(Function), expect.any(Function));
-    expect(destroyPrimaryTaskWindow).toHaveBeenCalledWith(43, 'task-43', 'srv1', 'session:task-43', 'window_killed_via_session_delete', expect.any(Function), expect.any(Function));
-    expect(destroyPrimaryTaskWindow).toHaveBeenCalledTimes(2);
+    // Issue #28 third-party review, D-track fix 1: the kill and BOTH primary
+    // task windows' reread/revoke run inside ONE call — locked against both
+    // task IDs at once — never per-window after an unlocked kill.
+    expect(destroySessionWindows).toHaveBeenCalledTimes(1);
+    const [taskIds, windows] = destroySessionWindows.mock.calls[0]!;
+    expect(taskIds).toEqual([42, 43]);
+    expect(windows).toEqual([
+      { taskId: 42, windowName: 'task-42', target: 'session:task-42', onDestroyed: expect.any(Function) },
+      { taskId: 43, windowName: 'task-43', target: 'session:task-43', onDestroyed: expect.any(Function) },
+    ]);
     expect(windowRepo.removeByServerAndTarget).toHaveBeenCalledWith('srv1', 'session:task-42');
     expect(windowRepo.removeByServerAndTarget).toHaveBeenCalledWith('srv1', 'session:task-43');
     expect(windowRepo.removeByServerAndTarget).toHaveBeenCalledWith('srv1', 'session:extra');
@@ -301,13 +335,15 @@ describe('DELETE /api/servers/:name/sessions/:session', () => {
     const tmux: Partial<TmuxClient> = {
       killSession: vi.fn(async () => ({ stdout: '', stderr: 'some other tmux error', code: 1 })),
     };
-    const destroyPrimaryTaskWindow = makeDestroyPrimaryTaskWindow();
-    app = await buildApp({ tmux, windowRepo, destroyPrimaryTaskWindow });
+    const destroySessionWindows = makeDestroySessionWindows();
+    app = await buildApp({ tmux, windowRepo, destroySessionWindows });
 
     const res = await app.inject({ method: 'DELETE', url: '/api/servers/srv1/sessions/session' });
 
     expect(res.statusCode).toBe(500);
-    expect(destroyPrimaryTaskWindow).not.toHaveBeenCalled();
+    // The batched kill still runs (it's INSIDE destroySessionWindows now),
+    // but its unsuccessful outcome means no window's onDestroyed fires.
+    expect(destroySessionWindows).toHaveBeenCalledTimes(1);
     expect(windowRepo.removeByServerAndTarget).not.toHaveBeenCalled();
   });
 
@@ -319,13 +355,19 @@ describe('DELETE /api/servers/:name/sessions/:session', () => {
     const tmux: Partial<TmuxClient> = {
       killSession: vi.fn(async () => ({ stdout: '', stderr: "can't find session: session", code: 1 })),
     };
-    const destroyPrimaryTaskWindow = makeDestroyPrimaryTaskWindow();
-    app = await buildApp({ tmux, windowRepo, destroyPrimaryTaskWindow });
+    const destroySessionWindows = makeDestroySessionWindows();
+    app = await buildApp({ tmux, windowRepo, destroySessionWindows });
 
     const res = await app.inject({ method: 'DELETE', url: '/api/servers/srv1/sessions/session' });
 
     expect(res.statusCode).toBe(200);
-    expect(destroyPrimaryTaskWindow).toHaveBeenCalledWith(42, 'task-42', 'srv1', 'session:task-42', 'window_killed_via_session_delete', expect.any(Function), expect.any(Function));
+    expect(destroySessionWindows).toHaveBeenCalledWith(
+      [42],
+      [{ taskId: 42, windowName: 'task-42', target: 'session:task-42', onDestroyed: expect.any(Function) }],
+      'srv1',
+      'window_killed_via_session_delete',
+      expect.any(Function),
+    );
     expect(windowRepo.removeByServerAndTarget).toHaveBeenCalledWith('srv1', 'session:task-42');
   });
 
@@ -334,14 +376,42 @@ describe('DELETE /api/servers/:name/sessions/:session', () => {
     const tmux: Partial<TmuxClient> = {
       killSession: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
     };
-    const destroyPrimaryTaskWindow = makeDestroyPrimaryTaskWindow();
-    app = await buildApp({ tmux, windowRepo, destroyPrimaryTaskWindow });
+    const destroySessionWindows = makeDestroySessionWindows();
+    app = await buildApp({ tmux, windowRepo, destroySessionWindows });
 
     const res = await app.inject({ method: 'DELETE', url: '/api/servers/srv1/sessions/session' });
 
     expect(res.statusCode).toBe(200);
-    expect(destroyPrimaryTaskWindow).not.toHaveBeenCalled();
+    expect(destroySessionWindows).toHaveBeenCalledWith([], [], 'srv1', 'window_killed_via_session_delete', expect.any(Function));
     expect(windowRepo.removeByServerAndTarget).not.toHaveBeenCalled();
+  });
+
+  // Issue #28 third-party review, D-track fix 3: when no destroySessionWindows
+  // callback is wired at all (e.g. a minimal test/dev setup), every window
+  // row the session held — including a PRIMARY task window's — must still be
+  // cleaned up unconditionally on a confirmed kill. The previous shape
+  // (`opts.destroyPrimaryTaskWindow?.(...)` inside an `if` branch that only
+  // falls to the row-cleanup `else` for NON-primary-task windows) silently
+  // left a primary task window's row behind whenever the optional callback
+  // was absent.
+  it('falls back to a plain kill + full row cleanup (including primary task windows) when destroySessionWindows is not wired', async () => {
+    const windowRepo = makeWindowRepo();
+    windowRepo.findByServerAndSession.mockReturnValue([
+      { id: 1, ownerType: 'task', taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:task-42', isPrimary: true },
+      { id: 2, ownerType: 'project', taskId: null, projectId: 1, serverName: 'srv1', tmuxTarget: 'session:extra', isPrimary: false },
+    ]);
+    const tmux: Partial<TmuxClient> = {
+      killSession: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
+    };
+    // No destroySessionWindows passed at all.
+    app = await buildApp({ tmux, windowRepo });
+
+    const res = await app.inject({ method: 'DELETE', url: '/api/servers/srv1/sessions/session' });
+
+    expect(res.statusCode).toBe(200);
+    expect(windowRepo.removeByServerAndTarget).toHaveBeenCalledWith('srv1', 'session:task-42');
+    expect(windowRepo.removeByServerAndTarget).toHaveBeenCalledWith('srv1', 'session:extra');
+    expect(windowRepo.removeByServerAndTarget).toHaveBeenCalledTimes(2);
   });
 });
 

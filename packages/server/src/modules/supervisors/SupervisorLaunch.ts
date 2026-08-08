@@ -77,8 +77,9 @@ export function wrapWithSupervisor(cmd: string, opts: WrapWithSupervisorOptions)
     //
     // Fix 4's bootstrap TTL (`PENDING_BOOTSTRAP_TTL_MS`, 15 min) and the
     // `child_exit`/task-window-destroy expiry paths (`SupervisorRegistry.
-    // expireLaunchId`/`markLaunchExpired`) already bound how long a
-    // captured token stays useful even under the current argv exposure.
+    // expireLaunchId`/`resolveLaunchForExpiry`+`expireResolvedLaunch`)
+    // already bound how long a captured token stays useful even under the
+    // current argv exposure.
     parts.push('--launch-id', shellQuote(opts.launchId), '--bootstrap-token', shellQuote(opts.bootstrapToken));
   }
 

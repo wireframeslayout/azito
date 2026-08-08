@@ -62,6 +62,27 @@ export interface ISupervisorLaunchRepository {
   findBySessionHash(sessionHash: string): SupervisorLaunchRow | null;
 
   /**
+   * Returns the current (`pending` or `active`) launch row for
+   * `(serverName, target)`, if any — the same key `wrapWithSupervisor()`/
+   * `issueLaunch()` register a launch under. Issue #28 third-party review,
+   * D-track fix 2: `SupervisorRegistry.markLaunchExpired`'s original
+   * in-memory-only lookup (via the live `connections` map) missed every case
+   * where the supervisor's WebSocket had already died along with the killed
+   * pane/window by the time a caller got here — the common case for a whole
+   * window/pane kill, since the supervisor process wrapping the child dies
+   * right along with it. This is a DB-backed lookup instead, so it works
+   * whether or not a live connection still exists.
+   *
+   * Callers are expected to resolve this BEFORE issuing the kill (see
+   * `SupervisorRegistry.resolveLaunchForExpiry`'s doc comment) and expire the
+   * SPECIFIC row this returns (by launchId) once the kill is confirmed — not
+   * re-query by `(serverName, target)` at expiry time, which could otherwise
+   * expire a brand-new launch a concurrent relaunch already issued for the
+   * same key in the interim.
+   */
+  findActiveByTarget(serverName: string, target: string): SupervisorLaunchRow | null;
+
+  /**
    * True iff `token` hashes to `row.bootstrapHash` and the row is still
    * `pending`.
    *
@@ -187,6 +208,7 @@ export class SqliteSupervisorLaunchRepository implements ISupervisorLaunchReposi
   private insertStmt;
   private findByLaunchIdStmt;
   private findBySessionHashStmt;
+  private findActiveByTargetStmt;
   private activateStmt;
   private touchStmt;
   private markStatusStmt;
@@ -199,6 +221,14 @@ export class SqliteSupervisorLaunchRepository implements ISupervisorLaunchReposi
     );
     this.findByLaunchIdStmt = db.prepare('SELECT * FROM supervisor_launches WHERE launch_id = ?');
     this.findBySessionHashStmt = db.prepare('SELECT * FROM supervisor_launches WHERE session_hash = ?');
+    // Most recent (highest id) pending/active row for the key — `create()`'s
+    // supersede step already marks any older outstanding row `replaced`, so
+    // in practice at most one pending/active row exists per key, but
+    // ordering by id desc keeps this correct even if that step is ever
+    // skipped (e.g. a launchRepo-less test double).
+    this.findActiveByTargetStmt = db.prepare(
+      "SELECT * FROM supervisor_launches WHERE server_name = ? AND target = ? AND status IN ('pending', 'active') ORDER BY id DESC LIMIT 1",
+    );
     // Fix 2: no longer touches `status` — see activateWithSession's doc comment on the interface.
     this.activateStmt = db.prepare(
       "UPDATE supervisor_launches SET session_hash = ?, last_registered_at = datetime('now') WHERE launch_id = ?",
@@ -238,6 +268,11 @@ export class SqliteSupervisorLaunchRepository implements ISupervisorLaunchReposi
 
   findBySessionHash(sessionHash: string): SupervisorLaunchRow | null {
     const row = this.findBySessionHashStmt.get(sessionHash) as LaunchRawRow | undefined;
+    return row ? toRow(row) : null;
+  }
+
+  findActiveByTarget(serverName: string, target: string): SupervisorLaunchRow | null {
+    const row = this.findActiveByTargetStmt.get(serverName, target) as LaunchRawRow | undefined;
     return row ? toRow(row) : null;
   }
 

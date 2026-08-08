@@ -83,6 +83,65 @@ export function runExclusiveForTask<T>(taskId: number, fn: () => Promise<T>): Pr
 }
 
 /**
+ * Multi-task variant of {@link runExclusiveForTask} — serializes `fn`
+ * against every one of `taskIds`' individual rotation queues at once (Issue
+ * #28 third-party review, D-track fix 1). A whole-session kill
+ * (`DELETE /api/servers/:name/sessions/:session`) can tear down several
+ * tasks' primary windows in one tmux call; without this, that single kill
+ * had to run OUTSIDE any per-task lock (there is no single `taskId` to lock
+ * on), which reopened exactly the race `runExclusiveForTask` exists to
+ * close: window listing happens, a concurrent respawn for one of the
+ * affected tasks lands a brand-new window generation, then the session kill
+ * destroys everything (old AND new) while the DB layer — reading the
+ * pre-kill window listing — still thinks the new generation is a
+ * still-current, still-live window and skips revoking it.
+ *
+ * Queuing `fn` onto ALL of `taskIds`' queues, not just one, closes that: no
+ * rotation for ANY of those tasks can be mid-issue while the session kill's
+ * "kill -> reread -> revoke -> cleanup" span is running, and conversely this
+ * call cannot start until every one of those tasks' own in-flight rotations
+ * (if any) have settled.
+ *
+ * `taskIds` are read in whatever order the caller passes (callers are
+ * expected to pass them pre-sorted, e.g. ascending, purely so concurrent
+ * multi-task callers observe a consistent acquisition order in logs/traces —
+ * see the doc comment below for why this queue design has no actual
+ * deadlock to order away). Duplicates are harmless (`Set`-deduped).
+ *
+ * Deadlock note: unlike a true acquire/release mutex — where two callers
+ * locking the same two taskIds in opposite orders can deadlock each other
+ * mid-acquisition — this queue only ever *appends* a callback to each
+ * taskId's promise chain. Reading every prior tail (`Promise.all` below) and
+ * writing every new tail back happens synchronously, in one script turn,
+ * before this function returns control to the event loop; no other
+ * `runExclusiveForTask`/`runExclusiveForTasks` call can interleave between
+ * "read priors" and "write tails" for ANY of the taskIds involved. There is
+ * therefore no possible partial-acquisition state — an ordering convention
+ * is good hygiene (and is what the doc comment above asks callers for) but
+ * is not, in this specific implementation, load-bearing for correctness.
+ */
+export function runExclusiveForTasks<T>(taskIds: number[], fn: () => Promise<T>): Promise<T> {
+  const uniqueIds = [...new Set(taskIds)];
+  if (uniqueIds.length === 0) return fn();
+
+  const priors = uniqueIds.map((id) => taskRotationLocks.get(id) ?? Promise.resolve());
+  const run = Promise.all(priors.map((p) => p.catch(() => undefined))).then(fn);
+  const tail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  for (const id of uniqueIds) {
+    taskRotationLocks.set(id, tail);
+  }
+  tail.finally(() => {
+    for (const id of uniqueIds) {
+      if (taskRotationLocks.get(id) === tail) taskRotationLocks.delete(id);
+    }
+  });
+  return run;
+}
+
+/**
  * Confirms `killTarget` (when non-null) is actually gone before returning.
  * `taskId` gates whether a still-alive target is fatal: a task-owned
  * rotation MUST NOT proceed with a live old window (Issue #28 finding — a
@@ -202,17 +261,34 @@ export async function rollbackWindowReference(
 ): Promise<KillOutcome> {
   const outcome = await resolveKillOutcome(killExec);
   if (outcome.success) {
+    // Issue #28 third-party review, D-track fix 4: `onGone` and the revoke
+    // below are both ALWAYS attempted (point 2 above), but a plain
+    // `try { onGone() } finally { revoke() }` let a revoke failure silently
+    // REPLACE onGone's error (a `finally` block's own throw always wins over
+    // whatever was propagating) — the caller's actual domain failure (e.g. a
+    // DB write) was lost and only the revoke's unrelated error surfaced
+    // instead. Both are now caught independently: the revoke failure is
+    // logged (never silently dropped) but never allowed to mask onGone's
+    // error, which is rethrown below when present.
+    let onGoneFailed = false;
+    let onGoneError: unknown;
     try {
       onGone();
-    } finally {
-      // Always attempted, even if `onGone` threw above — see the doc
-      // comment's point 2. Scoped to the specific generation
-      // `createRotatedWindow` issued for this window (see
-      // revokeGeneration's doc comment) — not a blanket revokeAllForTask,
-      // which could otherwise revoke a newer, still-valid generation a
-      // concurrent rotation for the same task already persisted.
-      paneEnvService.revokeGeneration(tokenId, revokeReason);
+    } catch (err) {
+      onGoneFailed = true;
+      onGoneError = err;
     }
+    try {
+      // Scoped to the specific generation `createRotatedWindow` issued for
+      // this window (see revokeGeneration's doc comment) — not a blanket
+      // revokeAllForTask, which could otherwise revoke a newer, still-valid
+      // generation a concurrent rotation for the same task already
+      // persisted.
+      paneEnvService.revokeGeneration(tokenId, revokeReason);
+    } catch (revokeErr) {
+      console.warn(`[WindowRotation] revokeGeneration failed for tokenId=${tokenId} after a confirmed kill`, revokeErr);
+    }
+    if (onGoneFailed) throw onGoneError;
   } else {
     onStillAlive();
   }

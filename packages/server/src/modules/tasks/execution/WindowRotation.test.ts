@@ -366,4 +366,45 @@ describe('rollbackWindowReference: onGone throwing must not skip the revoke', ()
     // The critical assertion: despite onGone throwing, the revoke still ran.
     expect(tokenRepo.isActive(created.tokenId)).toBe(false);
   });
+
+  // Issue #28 third-party review, D-track fix 4: a plain `try { onGone() }
+  // finally { revoke() }` lets a revoke failure REPLACE onGone's error (a
+  // `finally` block's own throw always wins) — the caller's real domain
+  // failure (e.g. a DB write) was silently lost behind an unrelated revoke
+  // error. Both must be attempted independently, and onGone's error must be
+  // the one that propagates.
+  it('propagates onGone\'s error (not the revoke\'s) when BOTH onGone and the revoke fail', async () => {
+    const { tokenRepo, paneEnvService } = makeServices();
+    const server = makeServer();
+    const task = makeTask({ id: 51 });
+
+    const created = await createRotatedWindow(paneEnvService, server, task, 'unused', async () => ({
+      result: { stdout: '', stderr: '', code: 0 },
+      windowName: 'w',
+    }));
+
+    const onGone = vi.fn(() => {
+      throw new Error('reference bookkeeping failed');
+    });
+    const onStillAlive = vi.fn();
+    const revokeSpy = vi.spyOn(paneEnvService, 'revokeGeneration').mockImplementation(() => {
+      throw new Error('revoke transport failed');
+    });
+
+    await expect(
+      rollbackWindowReference(
+        Promise.resolve({ stdout: '', stderr: '', code: 0 }),
+        paneEnvService,
+        created.tokenId,
+        'kill_confirmed',
+        onGone,
+        onStillAlive,
+      ),
+    ).rejects.toThrow('reference bookkeeping failed');
+
+    expect(onGone).toHaveBeenCalledTimes(1);
+    // The revoke was still attempted despite onGone having already failed.
+    expect(revokeSpy).toHaveBeenCalledWith(created.tokenId, 'kill_confirmed');
+    expect(onStillAlive).not.toHaveBeenCalled();
+  });
 });

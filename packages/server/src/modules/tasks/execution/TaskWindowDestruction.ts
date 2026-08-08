@@ -2,7 +2,7 @@ import type { ExecResult } from '../../servers/transport/ServerTransport';
 import { resolveKillOutcome, type KillOutcome } from '../../tmux/killOutcome';
 import type { ITaskRepository } from '../Task';
 import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
-import { runExclusiveForTask } from './WindowRotation';
+import { runExclusiveForTask, runExclusiveForTasks } from './WindowRotation';
 
 /**
  * Shared "destroy a task's PRIMARY window for good" operation (Issue #28
@@ -58,6 +58,71 @@ export async function destroyPrimaryTaskWindow(
       // a confirmed kill regardless of whether the token revoke fired, since
       // the destroyed window's own row must go either way.
       onDestroyed();
+    }
+    return outcome;
+  });
+}
+
+/** One window belonging to a task, as resolved before a whole-session kill. */
+export interface SessionKillTaskWindow {
+  taskId: number;
+  windowName: string;
+  onDestroyed: () => void;
+}
+
+/**
+ * Session-wide sibling of {@link destroyPrimaryTaskWindow} (Issue #28
+ * third-party review, D-track fix 1): `DELETE
+ * /api/servers/:name/sessions/:session` kills an entire tmux session in ONE
+ * call, which can tear down several tasks' primary windows at once — there
+ * is no single `taskId` to serialize the kill against.
+ *
+ * Calling `killSession` OUTSIDE any per-task lock (the previous shape)
+ * reopened the exact race `destroyPrimaryTaskWindow` exists to close, just
+ * at session scope: the caller resolves which windows the session holds,
+ * then — before `killSession` runs — a concurrent respawn for one of those
+ * tasks (via `runExclusiveForTask` elsewhere) can land a brand-new window
+ * generation. `killSession` then destroys everything (the old window AND
+ * the new one, since both live in the same tmux session), but the caller's
+ * pre-kill window listing still describes the OLD generation, so the
+ * per-window reread (`clearTmuxWindowIfMatches`) correctly reports "no
+ * longer current" for the new generation and skips revoking it — leaving a
+ * destroyed pane's token valid forever (worse than the old blanket-revoke
+ * behavior this whole design replaced).
+ *
+ * Fix: acquire every affected task's rotation lock via
+ * {@link runExclusiveForTasks} BEFORE calling `killSession`, and only THEN
+ * kill + reread + revoke + clean up each window — mirroring
+ * `destroyPrimaryTaskWindow`'s single-task span, just widened to cover every
+ * task the session's windows belong to. No rotation for ANY of those tasks
+ * can land a new window between this call's window-listing (done by the
+ * caller, before this is invoked) and its kill, because by the time this
+ * function's `fn` actually starts, every one of `taskIds`' queues has
+ * already drained past this point.
+ *
+ * `taskIds` must be the FULL, deduplicated set of task IDs `windows` covers
+ * (callers are expected to pass them pre-sorted ascending — see
+ * `runExclusiveForTasks`'s doc comment for why this is hygiene, not a
+ * correctness requirement of this specific queue implementation).
+ */
+export async function destroyPrimaryTaskWindowsForSessionKill(
+  taskIds: number[],
+  windows: SessionKillTaskWindow[],
+  taskRepo: Pick<ITaskRepository, 'clearTmuxWindowIfMatches'>,
+  paneEnvService: TaskPaneEnvironmentService,
+  reason: string,
+  killSession: () => Promise<ExecResult>,
+): Promise<KillOutcome> {
+  return runExclusiveForTasks(taskIds, async () => {
+    const outcome = await resolveKillOutcome(killSession());
+    if (outcome.success) {
+      for (const win of windows) {
+        const stillCurrent = taskRepo.clearTmuxWindowIfMatches(win.taskId, win.windowName);
+        if (stillCurrent) {
+          paneEnvService.revokeForDestroyedWindow(win.taskId, reason);
+        }
+        win.onDestroyed();
+      }
     }
     return outcome;
   });

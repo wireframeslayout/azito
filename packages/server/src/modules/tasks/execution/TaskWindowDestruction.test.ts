@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import { destroyPrimaryTaskWindow } from './TaskWindowDestruction';
+import { destroyPrimaryTaskWindow, destroyPrimaryTaskWindowsForSessionKill } from './TaskWindowDestruction';
+import { runExclusiveForTask } from './WindowRotation';
 import type { ITaskRepository } from '../Task';
 import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
 
@@ -154,5 +155,138 @@ describe('destroyPrimaryTaskWindow', () => {
     await b;
 
     expect(order).toEqual(['a-start', 'a-cleanup', 'b-start', 'b-cleanup']);
+  });
+});
+
+/** Same CAS semantics as makeTaskRepo, but tracks `tmuxWindow` per taskId (a whole session can span multiple tasks). */
+function makeMultiTaskRepo(initial: Record<number, string | null>) {
+  const tmuxWindows = new Map<number, string | null>(Object.entries(initial).map(([id, w]) => [Number(id), w]));
+  const clearTmuxWindowIfMatches = vi.fn((id: number, expectedWindowName: string) => {
+    if (tmuxWindows.get(id) !== expectedWindowName) return false;
+    tmuxWindows.set(id, null);
+    return true;
+  });
+  return {
+    repo: { clearTmuxWindowIfMatches } as unknown as Pick<ITaskRepository, 'clearTmuxWindowIfMatches'>,
+    clearTmuxWindowIfMatches,
+    setTmuxWindow: (id: number, name: string | null) => tmuxWindows.set(id, name),
+  };
+}
+
+describe('destroyPrimaryTaskWindowsForSessionKill', () => {
+  it('kills once, then rereads/revokes/cleans up every window', async () => {
+    const { repo, clearTmuxWindowIfMatches } = makeMultiTaskRepo({ 1: 'task-1', 2: 'task-2' });
+    const paneEnvService = makePaneEnvServiceSpy();
+    const killSession = vi.fn(async () => ({ stdout: '', stderr: '', code: 0 }));
+    const onDestroyed1 = vi.fn();
+    const onDestroyed2 = vi.fn();
+
+    const outcome = await destroyPrimaryTaskWindowsForSessionKill(
+      [1, 2],
+      [
+        { taskId: 1, windowName: 'task-1', onDestroyed: onDestroyed1 },
+        { taskId: 2, windowName: 'task-2', onDestroyed: onDestroyed2 },
+      ],
+      repo,
+      paneEnvService,
+      'window_killed_via_session_delete',
+      killSession,
+    );
+
+    expect(outcome.success).toBe(true);
+    expect(killSession).toHaveBeenCalledTimes(1);
+    expect(clearTmuxWindowIfMatches).toHaveBeenCalledWith(1, 'task-1');
+    expect(clearTmuxWindowIfMatches).toHaveBeenCalledWith(2, 'task-2');
+    expect(paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(1, 'window_killed_via_session_delete');
+    expect(paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(2, 'window_killed_via_session_delete');
+    expect(onDestroyed1).toHaveBeenCalledTimes(1);
+    expect(onDestroyed2).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not revoke or clean up when the kill fails', async () => {
+    const { repo, clearTmuxWindowIfMatches } = makeMultiTaskRepo({ 1: 'task-1' });
+    const paneEnvService = makePaneEnvServiceSpy();
+    const onDestroyed = vi.fn();
+
+    const outcome = await destroyPrimaryTaskWindowsForSessionKill(
+      [1],
+      [{ taskId: 1, windowName: 'task-1', onDestroyed }],
+      repo,
+      paneEnvService,
+      'window_killed_via_session_delete',
+      async () => ({ stdout: '', stderr: 'some other tmux error', code: 1 }),
+    );
+
+    expect(outcome.success).toBe(false);
+    expect(clearTmuxWindowIfMatches).not.toHaveBeenCalled();
+    expect(paneEnvService.revokeForDestroyedWindow).not.toHaveBeenCalled();
+    expect(onDestroyed).not.toHaveBeenCalled();
+  });
+
+  // Issue #28 third-party review, D-track fix 1 — the core race this function
+  // exists to close. Session-wide kill vs. a concurrent respawn for one of
+  // the SAME tasks: the respawn must not be able to land a new window
+  // generation while the session kill's "kill -> reread -> revoke -> cleanup"
+  // span is in flight, and vice versa.
+  it('locks ALL affected task IDs before killing — a concurrent respawn for one of them cannot interleave', async () => {
+    const { repo, setTmuxWindow, clearTmuxWindowIfMatches } = makeMultiTaskRepo({ 1: 'task-1-gen1', 2: 'task-2' });
+    const paneEnvService = makePaneEnvServiceSpy();
+    const order: string[] = [];
+    const killGate = (() => {
+      let release!: (v: { stdout: string; stderr: string; code: number }) => void;
+      const promise = new Promise<{ stdout: string; stderr: string; code: number }>((resolve) => { release = resolve; });
+      return { promise, release };
+    })();
+
+    const sessionKillPromise = destroyPrimaryTaskWindowsForSessionKill(
+      [1, 2],
+      [
+        { taskId: 1, windowName: 'task-1-gen1', onDestroyed: () => order.push('session-kill-cleanup-1') },
+        { taskId: 2, windowName: 'task-2', onDestroyed: () => order.push('session-kill-cleanup-2') },
+      ],
+      repo,
+      paneEnvService,
+      'window_killed_via_session_delete',
+      async () => {
+        order.push('session-kill-start');
+        return killGate.promise;
+      },
+    );
+
+    // A concurrent respawn for task 1 (the same taskId the session kill is
+    // about to destroy a window for) queues behind the session kill's lock —
+    // it must NOT run until the session kill's whole span (kill -> reread ->
+    // revoke -> cleanup) has settled.
+    const respawnPromise = runExclusiveForTask(1, async () => {
+      order.push('respawn-start');
+      setTmuxWindow(1, 'task-1-gen2');
+      order.push('respawn-done');
+      return { stdout: '', stderr: '', code: 0 };
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    // Only the session kill's own (gated) kill call has run so far — the
+    // respawn is still queued behind the lock.
+    expect(order).toEqual(['session-kill-start']);
+
+    killGate.release({ stdout: '', stderr: '', code: 0 });
+    const outcome = await sessionKillPromise;
+    await respawnPromise;
+
+    expect(outcome.success).toBe(true);
+    // The session kill's reread ran BEFORE the respawn touched task 1's
+    // window — so it correctly saw the OLD generation as still current and
+    // revoked it (the respawn had not landed a new one yet).
+    expect(clearTmuxWindowIfMatches).toHaveBeenCalledWith(1, 'task-1-gen1');
+    expect(paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(1, 'window_killed_via_session_delete');
+    expect(order).toEqual([
+      'session-kill-start',
+      'session-kill-cleanup-1',
+      'session-kill-cleanup-2',
+      'respawn-start',
+      'respawn-done',
+    ]);
   });
 });

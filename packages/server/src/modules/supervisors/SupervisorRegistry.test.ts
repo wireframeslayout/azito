@@ -929,20 +929,52 @@ describe('SupervisorRegistry — launch binding (Issue #28 Phase C, design v3 §
       ).not.toThrow();
     });
 
-    it('markLaunchExpired expires the launch for a live connection at (serverName, target)', () => {
+    // Issue #28 third-party review, D-track fix 2: resolveLaunchForExpiry/
+    // expireResolvedLaunch replace the old in-memory-connection-only
+    // markLaunchExpired — a DB-backed lookup that works whether or not a
+    // live connection still exists (the common case for a whole-window
+    // kill, where the supervisor's socket usually died with the pane).
+    it('resolveLaunchForExpiry + expireResolvedLaunch expire the launch by (serverName, target), independent of any live connection', () => {
       const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
       const issued = registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })!;
       const socket = new MockSocket();
       registry.register(asSocket(socket), registerWith({ launchId: issued.launchId, bootstrapToken: issued.bootstrapToken }));
+      // Simulate the connection having already died (the pane was killed) —
+      // resolveLaunchForExpiry/expireResolvedLaunch must not depend on it.
+      registry.handleSocketClosed(asSocket(socket));
 
-      registry.markLaunchExpired('local', 'test:0.1');
+      const launchId = registry.resolveLaunchForExpiry('local', 'test:0.1');
+      expect(launchId).toBe(issued.launchId);
+      registry.expireResolvedLaunch(launchId);
 
       expect(launchRepo.findByLaunchId(issued.launchId)!.status).toBe('expired');
     });
 
-    it('markLaunchExpired is a no-op when there is no live connection for the key (window already gone)', () => {
+    it('resolveLaunchForExpiry returns null (and expireResolvedLaunch no-ops) when there is no pending/active launch for the key', () => {
       const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
-      expect(() => registry.markLaunchExpired('local', 'no-such-target')).not.toThrow();
+      expect(registry.resolveLaunchForExpiry('local', 'no-such-target')).toBeNull();
+      expect(() => registry.expireResolvedLaunch(null)).not.toThrow();
+    });
+
+    it('expireResolvedLaunch only expires the SPECIFIC launchId resolved earlier — a relaunch issued in the interim for the same key is unaffected', () => {
+      const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
+      const first = registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })!;
+
+      const launchId = registry.resolveLaunchForExpiry('local', 'test:0.1');
+      expect(launchId).toBe(first.launchId);
+
+      // A concurrent relaunch for the SAME key supersedes `first` (its own
+      // `create()` step marks it `replaced`) before the original caller's
+      // expiry actually runs.
+      const second = registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })!;
+      expect(launchRepo.findByLaunchId(first.launchId)!.status).toBe('replaced');
+
+      registry.expireResolvedLaunch(launchId);
+
+      // The already-replaced first launch stays `replaced` (expiring it is a
+      // no-op status-wise from the caller's perspective — either way it can
+      // never authenticate again), and the NEW launch is untouched.
+      expect(launchRepo.findByLaunchId(second.launchId)!.status).toBe('pending');
     });
   });
 });
