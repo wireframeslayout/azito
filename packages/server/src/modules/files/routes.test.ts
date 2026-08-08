@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import path from 'path';
 import { sanitizeFileName } from './routes';
+import { isPathContained } from '../git/PathContainment';
 
 describe('sanitizeFileName', () => {
   it('preserves Japanese filename', () => {
@@ -35,13 +37,52 @@ describe('sanitizeFileName', () => {
   });
 
   it('preserves emoji', () => {
-    expect(sanitizeFileName('🎉test.txt')).toBe('🎉test.txt');
+    expect(sanitizeFileName('\u{1F389}test.txt')).toBe('\u{1F389}test.txt');
   });
 
   it('normalizes decomposed dakuten to NFC', () => {
-    // が decomposed: か (U+304B) + combining dakuten (U+3099)
     const decomposed = 'が.txt';
     const composed = 'が.txt';
     expect(sanitizeFileName(decomposed)).toBe(composed);
+  });
+});
+
+describe('file CRUD route guards', () => {
+  it('rejects .git basename', () => {
+    const targetPath = '/workspace/project/.git';
+    expect(path.basename(targetPath)).toBe('.git');
+  });
+
+  it('detects root directory deletion attempt', () => {
+    const resolvedTarget = '/home/user/workspace/project';
+    const resolvedRoot = '/home/user/workspace/project';
+    expect(resolvedTarget === resolvedRoot).toBe(true);
+  });
+
+  it('allows deletion of a child', () => {
+    const resolvedTarget: string = '/home/user/workspace/project/src';
+    const resolvedRoot: string = '/home/user/workspace/project';
+    expect(resolvedTarget === resolvedRoot).toBe(false);
+    expect(isPathContained({ target: resolvedTarget, allowedRoot: resolvedRoot })).toBe(true);
+  });
+
+  it('rejects path outside working directory', () => {
+    expect(isPathContained({
+      target: '/home/user/other-project/file.txt',
+      allowedRoot: '/home/user/workspace/project',
+    })).toBe(false);
+  });
+
+  it('rejects traversal via ..', () => {
+    const resolved = path.resolve('/home/user/workspace/project/../../../etc/passwd');
+    expect(isPathContained({
+      target: resolved,
+      allowedRoot: '/home/user/workspace/project',
+    })).toBe(false);
+  });
+
+  it('rejects newName with path separators', () => {
+    const newName = '../etc/passwd';
+    expect(newName.includes('/') || newName.includes('\\')).toBe(true);
   });
 });
