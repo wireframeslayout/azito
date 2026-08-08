@@ -84,6 +84,20 @@ describe('TranscriptService', () => {
       expect(sessions[0].preview).toBe('Head text that is within the scan window');
     });
 
+    it('extracts cwd from a JSONL line and exposes it on SessionSummary', () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        { type: 'user', uuid: 'u1', cwd: '/home/server01/workspace/azito-wt-transcript', message: { content: 'Hello' } },
+      ]);
+      const sessions = service.listSessions();
+      expect(sessions[0].cwd).toBe('/home/server01/workspace/azito-wt-transcript');
+    });
+
+    it('returns cwd null when no line carries a cwd field', () => {
+      writeSession(dir, 'proj-a', SID_A, [{ type: 'user', uuid: 'u1', message: { content: 'Hello' } }]);
+      const sessions = service.listSessions();
+      expect(sessions[0].cwd).toBeNull();
+    });
+
     it('respects the limit parameter', () => {
       writeSession(dir, 'proj-a', SID_A, [{ type: 'user', uuid: 'u1', message: { content: 'a' } }]);
       writeSession(dir, 'proj-b', SID_B, [{ type: 'user', uuid: 'u2', message: { content: 'b' } }]);
@@ -227,6 +241,44 @@ describe('TranscriptService', () => {
       // Reading forward from nextOffset should yield nothing new (no data left).
       const follow = smallWindowService.readSession(SID_A, result!.nextOffset);
       expect(follow!.entries).toHaveLength(0);
+    });
+
+    it('caps each incremental read to incrementalReadMaxBytes, requiring multiple polls to drain a large append', () => {
+      const smallWindowService = new TranscriptService(dir, { incrementalReadMaxBytes: 200 });
+      const file = writeSession(dir, 'proj-a', SID_A, [{ type: 'user', uuid: 'seed', message: { content: 'seed' } }]);
+      const first = smallWindowService.readSession(SID_A);
+      const startOffset = first!.nextOffset;
+
+      // Append far more than the 200-byte incremental window in one go (simulates a burst of writes
+      // between polls). A naive readFromOffset(EOF) would read all of this synchronously in one call.
+      const appended: string[] = [];
+      for (let i = 0; i < 50; i++) {
+        appended.push(JSON.stringify({ type: 'user', uuid: `u${i}`, message: { content: `bulk-${i}` } }));
+      }
+      fs.appendFileSync(file, appended.join('\n') + '\n');
+      const fileSize = fs.statSync(file).size;
+      expect(fileSize - startOffset).toBeGreaterThan(200);
+
+      // Drain via repeated polling from nextOffset, as the client does; collect every entry seen.
+      const collected: string[] = [];
+      let offset = startOffset;
+      let iterations = 0;
+      while (offset < fileSize && iterations < 100) {
+        const result = smallWindowService.readSession(SID_A, offset)!;
+        for (const entry of result.entries) {
+          if (entry.blocks[0].kind === 'text') collected.push(entry.blocks[0].text);
+        }
+        expect(result.nextOffset).toBeGreaterThanOrEqual(offset);
+        // Each single read call must not have consumed the whole remaining file in one shot;
+        // it should have stopped within (or near) the incremental window.
+        expect(result.nextOffset - offset).toBeLessThanOrEqual(200 + JSON.stringify({ type: 'user', uuid: 'u0', message: { content: 'bulk-0' } }).length);
+        offset = result.nextOffset;
+        iterations++;
+      }
+
+      expect(iterations).toBeGreaterThan(1); // proves multiple reads were required, i.e. the window was enforced
+      expect(offset).toBe(fileSize);
+      expect(collected).toEqual(appended.map((_, i) => `bulk-${i}`));
     });
 
     it('handles both string and block-array content shapes for a user/assistant message', () => {

@@ -3,7 +3,7 @@ import { useApi } from '../../hooks/useApi';
 import { LoadingState, EmptyState, ListRow, ListRowGroup, PageContainer, PageHeader, PageBody } from '../ui';
 import { Icon } from '../ui/Icon';
 import { formatRelativeTime } from '../../utils/time';
-import { formatBytes, lastPathSegment } from './transcriptFormat';
+import { formatBytes, pathBasename } from './transcriptFormat';
 import type { SessionSummary } from './transcriptTypes';
 
 interface SessionListViewProps {
@@ -34,7 +34,13 @@ export default function SessionListView({ onSelect }: SessionListViewProps) {
                 ariaLabel={session.preview || session.sessionId}
                 icon={<Icon name="transcript" size={16} />}
                 title={session.preview || t('list.noPreview')}
-                description={lastPathSegment(session.projectDir)}
+                description={
+                  session.cwd ? (
+                    <span title={session.cwd}>{pathBasename(session.cwd)}</span>
+                  ) : (
+                    session.projectDir
+                  )
+                }
                 chips={
                   <span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-xs)', whiteSpace: 'nowrap' }}>
                     {formatRelativeTime(session.mtimeMs, i18n.language)} · {formatBytes(session.sizeBytes)}

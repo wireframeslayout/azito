@@ -7,6 +7,8 @@ import os from 'os';
 export interface SessionSummary {
   sessionId: string;
   projectDir: string;
+  /** JSONL 行の cwd フィールドから拾った実パス。見つからなければ null（projectDir はエンコード済みで復元不能なため）。 */
+  cwd: string | null;
   mtimeMs: number;
   sizeBytes: number;
   preview: string;
@@ -43,12 +45,16 @@ const TAIL_ENTRY_LIMIT = 500;
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** 初回読みで末尾から遡って読む最大バイト数。これを超える古い部分は初回表示対象外（truncated: true）。 */
 const DEFAULT_INITIAL_READ_MAX_BYTES = 5 * 1024 * 1024;
+/** 差分読み（offset指定）で1回のポーリングにつき offset から読む最大バイト数。超過分は次回ポーリングで続きを取得する。 */
+const DEFAULT_INCREMENTAL_READ_MAX_BYTES = 5 * 1024 * 1024;
 /** 一覧 preview 生成のためにファイル先頭から読むバイト数。 */
 const DEFAULT_PREVIEW_SCAN_BYTES = 64 * 1024;
 
 export interface TranscriptServiceOptions {
   /** 初回読みで末尾から遡って読む最大バイト数（テスト用に上書き可能）。既定値は DEFAULT_INITIAL_READ_MAX_BYTES。 */
   initialReadMaxBytes?: number;
+  /** 差分読みで1回に読む最大バイト数（テスト用に上書き可能）。既定値は DEFAULT_INCREMENTAL_READ_MAX_BYTES。 */
+  incrementalReadMaxBytes?: number;
   /** 一覧 preview 生成のためにファイル先頭から読むバイト数（テスト用に上書き可能）。既定値は DEFAULT_PREVIEW_SCAN_BYTES。 */
   previewScanBytes?: number;
 }
@@ -113,7 +119,13 @@ function readChunk(fd: number, size: number, position: number, length: number): 
   return buf;
 }
 
-function buildPreview(file: string, previewScanBytes: number): string {
+interface SessionScanResult {
+  preview: string;
+  cwd: string | null;
+}
+
+/** 一覧表示用に、ファイル先頭 previewScanBytes 分だけを走査して preview テキストと cwd を拾う。 */
+function scanSessionMeta(file: string, previewScanBytes: number): SessionScanResult {
   let content: string;
   try {
     const fd = fs.openSync(file, 'r');
@@ -124,9 +136,11 @@ function buildPreview(file: string, previewScanBytes: number): string {
       fs.closeSync(fd);
     }
   } catch {
-    return '';
+    return { preview: '', cwd: null };
   }
 
+  let preview = '';
+  let cwd: string | null = null;
   const lines = content.split('\n');
   for (let i = 0; i < Math.min(lines.length, PREVIEW_SCAN_LINES); i++) {
     const line = lines[i];
@@ -137,13 +151,23 @@ function buildPreview(file: string, previewScanBytes: number): string {
     } catch {
       continue;
     }
-    if (!isRecord(record) || record.type !== 'user') continue;
-    const message = record.message;
-    if (!isRecord(message)) continue;
-    const previewText = extractPreviewText(message.content);
-    if (previewText) return previewText.slice(0, PREVIEW_LENGTH);
+    if (!isRecord(record)) continue;
+
+    if (cwd === null && typeof record.cwd === 'string' && record.cwd.length > 0) {
+      cwd = record.cwd;
+    }
+
+    if (!preview && record.type === 'user') {
+      const message = record.message;
+      if (isRecord(message)) {
+        const previewText = extractPreviewText(message.content);
+        if (previewText) preview = previewText.slice(0, PREVIEW_LENGTH);
+      }
+    }
+
+    if (preview && cwd !== null) break;
   }
-  return '';
+  return { preview, cwd };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -262,6 +286,7 @@ function parseLine(line: string): TranscriptEntry | null {
 
 export class TranscriptService {
   private readonly initialReadMaxBytes: number;
+  private readonly incrementalReadMaxBytes: number;
   private readonly previewScanBytes: number;
 
   constructor(
@@ -269,6 +294,7 @@ export class TranscriptService {
     options: TranscriptServiceOptions = {},
   ) {
     this.initialReadMaxBytes = options.initialReadMaxBytes ?? DEFAULT_INITIAL_READ_MAX_BYTES;
+    this.incrementalReadMaxBytes = options.incrementalReadMaxBytes ?? DEFAULT_INCREMENTAL_READ_MAX_BYTES;
     this.previewScanBytes = options.previewScanBytes ?? DEFAULT_PREVIEW_SCAN_BYTES;
   }
 
@@ -294,13 +320,17 @@ export class TranscriptService {
     stated.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
     const limited = stated.slice(0, limit);
 
-    return limited.map(({ file, projectDir, sessionId, stat }) => ({
-      sessionId,
-      projectDir,
-      mtimeMs: stat.mtimeMs,
-      sizeBytes: stat.size,
-      preview: buildPreview(file, this.previewScanBytes),
-    }));
+    return limited.map(({ file, projectDir, sessionId, stat }) => {
+      const { preview, cwd } = scanSessionMeta(file, this.previewScanBytes);
+      return {
+        sessionId,
+        projectDir,
+        cwd,
+        mtimeMs: stat.mtimeMs,
+        sizeBytes: stat.size,
+        preview,
+      };
+    });
   }
 
   private findSessionFile(sessionId: string): string | null {
@@ -369,10 +399,14 @@ export class TranscriptService {
     };
   }
 
-  /** 差分読み: offset 以降を位置指定で読み、最後の改行位置までのみ消費する。 */
+  /**
+   * 差分読み: offset 以降を最大 incrementalReadMaxBytes バイトだけ位置指定で読み、
+   * 読んだウィンドウ内の最後の改行位置までのみ消費する。ウィンドウを超える残りは
+   * 次回のポーリング（返却された nextOffset を offset に指定した呼び出し）で取得される。
+   */
   private readFromOffset(fd: number, size: number, offset: number): ReadSessionResult {
     const start = Math.min(Math.max(offset, 0), size);
-    const buf = readChunk(fd, size, start, size - start);
+    const buf = readChunk(fd, size, start, this.incrementalReadMaxBytes);
     const lastNewline = findLastNewline(buf);
 
     if (lastNewline === -1) {

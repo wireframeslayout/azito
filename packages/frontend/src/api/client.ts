@@ -21,6 +21,33 @@ export async function api<T = unknown>(
   return res.json();
 }
 
+/**
+ * api() と同じ呼び出し規約だが、レスポンスの HTTP ステータスも返す。
+ * 呼び出し元が「404（見つからない）」と「その他のエラー（一時的な 500 等）」を区別したい場合に使う。
+ * api() の既存挙動（ステータス無視で body を返す）は変更しない。
+ */
+export async function apiWithStatus<T = unknown>(
+  path: string,
+  options?: RequestInit,
+): Promise<{ status: number; body: T }> {
+  const token = getUiToken();
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  if (options?.body) {
+    headers['Content-Type'] = 'application/json';
+  }
+  const res = await fetch(`/api${path}`, {
+    ...options,
+    headers,
+  });
+  if (res.status === 401) {
+    clearUiToken();
+    throw new Error('Unauthorized');
+  }
+  const body = (await res.json()) as T;
+  return { status: res.status, body };
+}
+
 export async function fetchBlob(path: string): Promise<Blob> {
   const token = getUiToken();
   const headers: Record<string, string> = {};

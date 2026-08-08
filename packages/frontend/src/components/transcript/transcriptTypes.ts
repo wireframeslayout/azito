@@ -4,6 +4,7 @@
 export interface SessionSummary {
   sessionId: string;
   projectDir: string;
+  cwd: string | null;
   mtimeMs: number;
   sizeBytes: number;
   preview: string;

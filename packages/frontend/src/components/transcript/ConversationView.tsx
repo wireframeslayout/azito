@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api } from '../../api/client';
+import { apiWithStatus } from '../../api/client';
 import { EmptyState, IconButton, LoadingState, PanelHeader } from '../ui';
 import { Icon } from '../ui/Icon';
 import MessageBubble from './MessageBubble';
@@ -59,17 +59,22 @@ export default function ConversationView({ sessionId, onBack }: ConversationView
     nextOffsetRef.current = null;
     nearBottomRef.current = true;
 
-    api<ReadSessionResult | TranscriptErrorResponse>(`/transcripts/${encodeURIComponent(sessionId)}`)
-      .then((result) => {
+    apiWithStatus<ReadSessionResult | TranscriptErrorResponse>(`/transcripts/${encodeURIComponent(sessionId)}`)
+      .then(({ status, body }) => {
         if (cancelled) return;
-        if (isErrorResponse(result)) {
+        if (status === 404) {
           setNotFound(true);
           setLoading(false);
           return;
         }
-        setEntries(result.entries);
-        setTruncatedInitial(result.truncated);
-        nextOffsetRef.current = result.nextOffset;
+        if (status !== 200 || isErrorResponse(body)) {
+          setError(isErrorResponse(body) ? body.error : `HTTP ${status}`);
+          setLoading(false);
+          return;
+        }
+        setEntries(body.entries);
+        setTruncatedInitial(body.truncated);
+        nextOffsetRef.current = body.nextOffset;
         setLoading(false);
         requestAnimationFrame(() => scrollToBottom('auto'));
       })
@@ -97,21 +102,25 @@ export default function ConversationView({ sessionId, onBack }: ConversationView
       if (nextOffsetRef.current === null) return;
       inFlight = true;
       try {
-        const result = await api<ReadSessionResult | TranscriptErrorResponse>(
+        const { status, body } = await apiWithStatus<ReadSessionResult | TranscriptErrorResponse>(
           `/transcripts/${encodeURIComponent(sessionId)}?offset=${nextOffsetRef.current}`,
         );
         if (disposed) return;
-        if (isErrorResponse(result)) {
+        if (status === 404) {
           setNotFound(true);
           return;
         }
-        nextOffsetRef.current = result.nextOffset;
-        if (result.entries.length > 0) {
-          setEntries((prev) => [...prev, ...result.entries]);
+        if (status !== 200 || isErrorResponse(body)) {
+          // 一時的なサーバーエラー: 次回tickでリトライする（UIには出さない、ポーリングは継続）
+          return;
+        }
+        nextOffsetRef.current = body.nextOffset;
+        if (body.entries.length > 0) {
+          setEntries((prev) => [...prev, ...body.entries]);
           if (nearBottomRef.current) {
             requestAnimationFrame(() => scrollToBottom('smooth'));
           } else {
-            setNewCount((c) => c + result.entries.length);
+            setNewCount((c) => c + body.entries.length);
           }
         }
       } catch {

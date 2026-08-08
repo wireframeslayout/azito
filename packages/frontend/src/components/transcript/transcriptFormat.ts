@@ -7,11 +7,10 @@ export function formatBytes(bytes: number): string {
   return `${mb.toFixed(mb < 10 ? 1 : 0)} MB`;
 }
 
-/** projectDir（Claude Code の ~/.claude/projects/ 配下ディレクトリ名）から表示用の末尾要素を取り出す。 */
-export function lastPathSegment(projectDir: string): string {
-  const normalized = projectDir.replace(/^-+/, '').replace(/-/g, '/');
-  const segments = normalized.split('/').filter(Boolean);
-  return segments.length > 0 ? segments[segments.length - 1] : projectDir;
+/** 実パス（例: cwd）の末尾セグメントを取り出す。 */
+export function pathBasename(fullPath: string): string {
+  const segments = fullPath.split('/').filter(Boolean);
+  return segments.length > 0 ? segments[segments.length - 1] : fullPath;
 }
 
 /** タイムスタンプを表示用に整形する。同日ならHH:mm、それ以外は日付付き。不正な値は空文字。 */
