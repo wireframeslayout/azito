@@ -25,12 +25,31 @@ import type { LaunchOptions } from '../AgentProvider';
  */
 const CODEX_MCP_DISABLE_FLAG = ` -c mcp_servers.azt-mcp.enabled=false`;
 
-export function buildCodexLaunchCommand({ model, extraArgs }: LaunchOptions): string {
+/**
+ * Shared base builder for both a fresh `codex` launch and a `codex resume
+ * <id>` relaunch (Issue #28 third-party review, respawn-MCP-bypass fix):
+ * the two previously diverged (buildRespawnCommand in SessionStrategy.ts
+ * hand-rolled its own resume string), and the resume path silently missed
+ * `CODEX_MCP_DISABLE_FLAG` — a respawned codex worker pane could load the
+ * operator's azt-mcp (full-power AZITO_UI_TOKEN) and bypass task-token
+ * scoping. Both paths now go through this one function so the flag can't
+ * drift out of sync again.
+ */
+function buildCodexCommand(agentSessionId: string | null, { model, extraArgs }: LaunchOptions): string {
+  const resumePrefix = agentSessionId ? `resume ${agentSessionId} ` : '';
   const modelFlag = model ? ` --model ${shellQuote(model)}` : '';
   const extra = extraArgs?.trim()
     ? ' ' + extraArgs.trim().split(/\s+/).map(shellQuote).join(' ')
     : '';
-  return `codex --dangerously-bypass-approvals-and-sandbox${CODEX_MCP_DISABLE_FLAG}${modelFlag}${extra}`;
+  return `codex ${resumePrefix}--dangerously-bypass-approvals-and-sandbox${CODEX_MCP_DISABLE_FLAG}${modelFlag}${extra}`;
+}
+
+export function buildCodexLaunchCommand(opts: LaunchOptions): string {
+  return buildCodexCommand(null, opts);
+}
+
+export function buildCodexRespawnCommand(agentSessionId: string, opts: LaunchOptions): string {
+  return buildCodexCommand(agentSessionId, opts);
 }
 
 /**

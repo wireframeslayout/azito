@@ -37,16 +37,35 @@ Sidekick には Robin / Falcon のような固有のペルソナ名を付ける�
 ## Step 1: 引数を解析する
 
 引数が空なら Step 2 へ進み、一覧提示のみ行って終了する（ユーザーの選択を待つ）。
-引数がある場合、**最後の引数が数値かどうか**を判定する:
-- 数値である場合: それを `TASK_ID` とし、残りの引数を実行対象の Sidekick 名リスト（順序維持）とする
-- 数値でない場合: `TASK_ID` は環境変数 `AZITO_TASK_ID`（task ペインに既に注入されている自タスクのID。
-  `TASK_ID="${LAST_ARG:-$AZITO_TASK_ID}"` の形で、明示引数を優先しつつ既定値として使う）、
-  全引数を Sidekick 名リストとする
+引数がある場合、**最後の引数が正の整数（`^[0-9]+$`）に一致するときだけ** それを `TASK_ID` として
+消費し、Sidekick 名リストから除外する。一致しない場合（Sidekick 名が数字だけで構成されることはない
+運用前提）は、全引数を Sidekick 名リストとし、`TASK_ID` は環境変数 `AZITO_TASK_ID`（task ペインに
+既に注入されている自タスクのID）にフォールバックする。
+
+明示的な数値判定を使うこと。**`TASK_ID="${LAST_ARG:-$AZITO_TASK_ID}"` のような bash のデフォルト値
+展開（`${VAR:-default}`）だけで判定してはいけない** —
+これは `LAST_ARG` が「空文字列かどうか」しか見ておらず、最後の引数が Sidekick 名（例:
+`planning-default`）であっても常に真になるため、`task_id=planning-default` のような壊れたリクエストを
+組み立ててしまう（第三者レビュー指摘）。
+
+```bash
+ARGS=("$@")
+LAST_INDEX=$((${#ARGS[@]} - 1))
+LAST_ARG="${ARGS[$LAST_INDEX]:-}"
+
+if [[ "$LAST_ARG" =~ ^[0-9]+$ ]]; then
+  TASK_ID="$LAST_ARG"
+  NAMES=("${ARGS[@]:0:$LAST_INDEX}")
+else
+  TASK_ID="${AZITO_TASK_ID:-}"
+  NAMES=("${ARGS[@]}")
+fi
+```
 
 `AZITO_TASK_ID` も未設定（operator のペイン等）の場合は `TASK_ID` は空のままでよい
 （task/project 系テンプレート変数は未展開のまま残る、従来どおりの standalone 実行）。
 
-Sidekick 名リストが得られたら Step 3 へ進む。
+Sidekick 名リスト（`NAMES`）が得られたら Step 3 へ進む。
 
 ## Step 2 (name 未指定時): 一覧を表示して選択を促す
 

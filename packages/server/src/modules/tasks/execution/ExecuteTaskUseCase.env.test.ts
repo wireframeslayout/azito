@@ -278,11 +278,11 @@ function buildUseCase(opts: {
 
 
   const tmux = {
-    listSessions: vi.fn(async () => []),
+    listSessions: vi.fn(async (): Promise<{ name: string; windows: { name: string; index: number }[] }[]> => []),
     createSession: vi.fn(async () => {}),
-    createWindow: vi.fn(async () => ({ windowName: 'w1' })),
+    createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'w1' })),
     resolvePaneId: vi.fn(async () => '%0'),
-    killPane: vi.fn(async () => {}),
+    killPane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
     killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
     sendKeys: vi.fn(async () => {}),
     checkPaneExists: vi.fn(async () => true),
@@ -842,9 +842,9 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
     const tmux = {
       listSessions: vi.fn(async () => [{ name: 'azito', windows: [{ name: 'task-1', index: 1 }] }]),
       createSession: vi.fn(async () => {}),
-      createWindow: vi.fn(async () => ({ windowName: 'task-1' })),
+      createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' })),
       resolvePaneId: vi.fn(async () => '%0'),
-      killPane: vi.fn(async () => {}),
+      killPane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       sendKeys: vi.fn(async (_server: unknown, _target: string, _keys: string[]) => {}),
       startPipePane: vi.fn(async () => {}),
@@ -1127,6 +1127,105 @@ describe('ExecuteTaskUseCase working-directory containment (Issue #27)', () => {
   });
 });
 
+// Issue #28 third-party review: execute()/followUp() must apply the same
+// rollback-safe window-rotation order respawn() already established (kill
+// old window → confirm gone → rotate token → create; revoke the new
+// generation if creation fails, whether by throwing or by resolving with a
+// non-zero exit code). See WindowRotation.ts.
+describe('ExecuteTaskUseCase window-rotation rollback safety (Issue #28 third-party review)', () => {
+  it('execute(): aborts before rotating the token when killing the leftover task window fails (non-zero exit code)', async () => {
+    const unit = makeUnit({ id: 30, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 40, serverName: 'local-server', unitId: 30, tmuxWindow: 'old-window' });
+    const { useCase, tmux, paneEnvService, windowRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: null,
+    });
+    tmux.listSessions.mockResolvedValue([
+      { name: 'azito', windows: [{ name: 'old-window', index: 5 }] },
+    ]);
+    // Agent-transport style failure: resolves (doesn't throw) with a
+    // non-zero code — a bare await/`.then` here previously read this as
+    // success (Issue #28 third-party review finding 2).
+    tmux.killPane.mockResolvedValue({ stdout: '', stderr: 'device busy', code: 1 });
+
+    await expect(useCase.execute(30, 40)).rejects.toThrow(/Failed to kill pane .* before rotating window/);
+
+    expect(paneEnvService.buildEnvForNewWindow).not.toHaveBeenCalled();
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(windowRepo.add).not.toHaveBeenCalled();
+  });
+
+  it('execute(): revokes the new token generation and does not persist the window when createWindow resolves with a non-zero exit code', async () => {
+    const unit = makeUnit({ id: 31, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 41, serverName: 'local-server', unitId: 31, tmuxWindow: null });
+    const { useCase, tmux, paneEnvService, windowRepo, taskRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: null,
+    });
+    tmux.createWindow.mockResolvedValue({ result: { stdout: '', stderr: 'boom', code: 1 }, windowName: 'w1' });
+
+    await expect(useCase.execute(31, 41)).rejects.toThrow(/Failed to create tmux window/);
+
+    expect(paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(41, 'execute_create_failed');
+    expect(windowRepo.add).not.toHaveBeenCalled();
+    expect(taskRepo.update).not.toHaveBeenCalledWith(41, expect.objectContaining({ tmuxWindow: 'w1' }));
+  });
+
+  it('execute(): revokes the new token generation when createWindow throws', async () => {
+    const unit = makeUnit({ id: 32, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 42, serverName: 'local-server', unitId: 32, tmuxWindow: null });
+    const { useCase, tmux, paneEnvService, windowRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: null,
+    });
+    tmux.createWindow.mockRejectedValue(new Error('tmux new-window failed'));
+
+    await expect(useCase.execute(32, 42)).rejects.toThrow(/Failed to create tmux window/);
+
+    expect(paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(42, 'execute_create_failed');
+    expect(windowRepo.add).not.toHaveBeenCalled();
+  });
+
+  it('followUp(): revokes the new token generation and does not persist tmuxWindow when createWindow resolves with a non-zero exit code', async () => {
+    const unit = makeUnit({ id: 33, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 43, serverName: 'local-server', unitId: 33, tmuxWindow: null });
+    const { useCase, tmux, paneEnvService, taskRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: null,
+    });
+    tmux.createWindow.mockResolvedValue({ result: { stdout: '', stderr: 'boom', code: 1 }, windowName: 'w2' });
+
+    await expect(useCase.followUp(33, 43, 'continue')).rejects.toThrow(/Failed to create tmux window/);
+
+    expect(paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(43, 'followup_create_failed');
+    expect(taskRepo.update).not.toHaveBeenCalledWith(43, expect.objectContaining({ tmuxWindow: 'w2' }));
+  });
+
+  it('followUp(): revokes the new token generation when createWindow throws', async () => {
+    const unit = makeUnit({ id: 34, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 44, serverName: 'local-server', unitId: 34, tmuxWindow: null });
+    const { useCase, tmux, paneEnvService } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: null,
+    });
+    tmux.createWindow.mockRejectedValue(new Error('tmux new-window failed'));
+
+    await expect(useCase.followUp(34, 44, 'continue')).rejects.toThrow(/Failed to create tmux window/);
+
+    expect(paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(44, 'followup_create_failed');
+  });
+});
+
 describe('ExecuteTaskUseCase.followUp working-directory containment (Issue #27 review finding 1)', () => {
   let allowedRoot: string;
   let outsideDir: string;
@@ -1369,9 +1468,9 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
     const tmux = {
       listSessions: vi.fn(async () => []),
       createSession: vi.fn(async () => {}),
-      createWindow: vi.fn(async () => ({ windowName: 'w1' })),
+      createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'w1' })),
       resolvePaneId: vi.fn(async () => '%0'),
-      killPane: vi.fn(async () => {}),
+      killPane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       sendKeys: vi.fn(async () => {}),
       checkPaneExists: vi.fn(async () => true),

@@ -169,9 +169,11 @@ function buildService(opts: {
   const tmux = {
     listSessions: vi.fn(async () => [{ name: 'azito', windowCount: 0, attached: false, created: 0, windows: [] as { name: string; index: number; active: boolean; panes: unknown[]; activity: number }[] }]),
     createSession: vi.fn(async (_server: unknown, _session: string, options?: { windowName?: string; exactName?: boolean }) => ({
+      result: { stdout: '', stderr: '', code: 0 },
       windowName: options?.exactName && options.windowName ? options.windowName : `${options?.windowName || 'win'}--rand`,
     })),
     createWindow: vi.fn(async (_server: unknown, _session: string, baseName?: string, options?: { exactName?: boolean }) => ({
+      result: { stdout: '', stderr: '', code: 0 },
       windowName: options?.exactName && baseName ? baseName : `${baseName || 'win'}-new`,
     })),
     killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
