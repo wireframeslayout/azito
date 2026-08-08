@@ -20,7 +20,7 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
       const { sessionId } = request.params;
       const rawOffset = request.query.offset;
       const offset = rawOffset !== undefined ? Number(rawOffset) : undefined;
-      if (offset !== undefined && (!Number.isFinite(offset) || offset < 0)) {
+      if (offset !== undefined && (!Number.isSafeInteger(offset) || offset < 0)) {
         return reply.status(400).send({ error: 'Invalid offset' });
       }
 

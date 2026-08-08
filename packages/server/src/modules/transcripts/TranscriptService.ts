@@ -41,6 +41,17 @@ const PREVIEW_LENGTH = 120;
 const PREVIEW_SCAN_LINES = 20;
 const TAIL_ENTRY_LIMIT = 500;
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** 初回読みで末尾から遡って読む最大バイト数。これを超える古い部分は初回表示対象外（truncated: true）。 */
+const DEFAULT_INITIAL_READ_MAX_BYTES = 5 * 1024 * 1024;
+/** 一覧 preview 生成のためにファイル先頭から読むバイト数。 */
+const DEFAULT_PREVIEW_SCAN_BYTES = 64 * 1024;
+
+export interface TranscriptServiceOptions {
+  /** 初回読みで末尾から遡って読む最大バイト数（テスト用に上書き可能）。既定値は DEFAULT_INITIAL_READ_MAX_BYTES。 */
+  initialReadMaxBytes?: number;
+  /** 一覧 preview 生成のためにファイル先頭から読むバイト数（テスト用に上書き可能）。既定値は DEFAULT_PREVIEW_SCAN_BYTES。 */
+  previewScanBytes?: number;
+}
 
 // ─── Helpers ───
 
@@ -91,10 +102,27 @@ function extractPreviewText(content: unknown): string | null {
   return null;
 }
 
-function buildPreview(file: string): string {
+/** ファイルの [position, position+length) を位置指定で読む。ファイル末尾を超える分は切り詰める。 */
+function readChunk(fd: number, size: number, position: number, length: number): Buffer {
+  const start = Math.min(Math.max(position, 0), size);
+  const readLength = Math.min(length, size - start);
+  const buf = Buffer.alloc(Math.max(readLength, 0));
+  if (buf.length > 0) {
+    fs.readSync(fd, buf, 0, buf.length, start);
+  }
+  return buf;
+}
+
+function buildPreview(file: string, previewScanBytes: number): string {
   let content: string;
   try {
-    content = fs.readFileSync(file, 'utf-8');
+    const fd = fs.openSync(file, 'r');
+    try {
+      const size = fs.fstatSync(fd).size;
+      content = readChunk(fd, size, 0, previewScanBytes).toString('utf-8');
+    } finally {
+      fs.closeSync(fd);
+    }
   } catch {
     return '';
   }
@@ -131,12 +159,12 @@ function stringifyToolResultContent(content: unknown): string {
       if (isRecord(block) && block.type === 'text' && typeof block.text === 'string') {
         parts.push(block.text);
       } else {
-        parts.push(JSON.stringify(block));
+        parts.push(JSON.stringify(block) ?? '');
       }
     }
     return parts.join('\n');
   }
-  return JSON.stringify(content);
+  return JSON.stringify(content) ?? '';
 }
 
 function truncateText(text: string, limit: number): { text: string; truncated: boolean } {
@@ -212,6 +240,13 @@ function normalizeEntry(record: unknown): TranscriptEntry | null {
   };
 }
 
+function findLastNewline(buf: Buffer): number {
+  for (let i = buf.length - 1; i >= 0; i--) {
+    if (buf[i] === 0x0a) return i;
+  }
+  return -1;
+}
+
 function parseLine(line: string): TranscriptEntry | null {
   if (!line) return null;
   let record: unknown;
@@ -226,7 +261,16 @@ function parseLine(line: string): TranscriptEntry | null {
 // ─── Service ───
 
 export class TranscriptService {
-  constructor(private readonly projectsDirOverride?: string) {}
+  private readonly initialReadMaxBytes: number;
+  private readonly previewScanBytes: number;
+
+  constructor(
+    private readonly projectsDirOverride?: string,
+    options: TranscriptServiceOptions = {},
+  ) {
+    this.initialReadMaxBytes = options.initialReadMaxBytes ?? DEFAULT_INITIAL_READ_MAX_BYTES;
+    this.previewScanBytes = options.previewScanBytes ?? DEFAULT_PREVIEW_SCAN_BYTES;
+  }
 
   private projectsDir(): string {
     return resolveProjectsDir(this.projectsDirOverride);
@@ -235,7 +279,7 @@ export class TranscriptService {
   listSessions(limit = 50): SessionSummary[] {
     const files = listSessionFiles(this.projectsDir());
 
-    const summaries: SessionSummary[] = [];
+    const stated: { file: string; projectDir: string; sessionId: string; stat: fs.Stats }[] = [];
     for (const { file, projectDir } of files) {
       let stat: fs.Stats;
       try {
@@ -243,18 +287,20 @@ export class TranscriptService {
       } catch {
         continue;
       }
-      const sessionId = path.basename(file, '.jsonl');
-      summaries.push({
-        sessionId,
-        projectDir,
-        mtimeMs: stat.mtimeMs,
-        sizeBytes: stat.size,
-        preview: buildPreview(file),
-      });
+      stated.push({ file, projectDir, sessionId: path.basename(file, '.jsonl'), stat });
     }
 
-    summaries.sort((a, b) => b.mtimeMs - a.mtimeMs);
-    return summaries.slice(0, limit);
+    // mtime 降順ソート + limit 適用を先に行い、limit 件だけ preview を生成する（全件 preview 生成を避ける）。
+    stated.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
+    const limited = stated.slice(0, limit);
+
+    return limited.map(({ file, projectDir, sessionId, stat }) => ({
+      sessionId,
+      projectDir,
+      mtimeMs: stat.mtimeMs,
+      sizeBytes: stat.size,
+      preview: buildPreview(file, this.previewScanBytes),
+    }));
   }
 
   private findSessionFile(sessionId: string): string | null {
@@ -268,43 +314,72 @@ export class TranscriptService {
     const file = this.findSessionFile(sessionId);
     if (!file) return null;
 
-    let buf: Buffer;
+    let fd: number;
     try {
-      buf = fs.readFileSync(file);
+      fd = fs.openSync(file, 'r');
     } catch {
       return null;
     }
 
-    if (offset === undefined) {
-      const lines = buf.toString('utf-8').split('\n');
-      const entries: TranscriptEntry[] = [];
-      for (const line of lines) {
+    try {
+      const size = fs.fstatSync(fd).size;
+      return offset === undefined ? this.readInitial(fd, size) : this.readFromOffset(fd, size, offset);
+    } finally {
+      fs.closeSync(fd);
+    }
+  }
+
+  /**
+   * 初回読み: ファイル末尾から最大 initialReadMaxBytes バイトだけ位置指定で読む。
+   * 5MB 制限で頭を切った場合はその範囲内の最初の完全行から処理し、末尾の未完結行は消費しない
+   * （差分読みと同じ規則: nextOffset = 最後の改行位置+1）。
+   */
+  private readInitial(fd: number, size: number): ReadSessionResult {
+    const windowStart = Math.max(size - this.initialReadMaxBytes, 0);
+    const byteCapped = windowStart > 0;
+
+    let readStart = windowStart;
+    if (byteCapped) {
+      // ウィンドウの先頭が行の途中から始まっている可能性があるため、最初の改行の直後までスキップする。
+      const probe = readChunk(fd, size, windowStart, size - windowStart);
+      const firstNewline = probe.indexOf(0x0a);
+      readStart = firstNewline === -1 ? size : windowStart + firstNewline + 1;
+    }
+
+    const buf = readChunk(fd, size, readStart, size - readStart);
+    const lastNewline = findLastNewline(buf);
+    const consumedLength = lastNewline === -1 ? 0 : lastNewline;
+    const entries: TranscriptEntry[] = [];
+    if (consumedLength > 0) {
+      const consumed = buf.subarray(0, consumedLength).toString('utf-8');
+      for (const line of consumed.split('\n')) {
         const entry = parseLine(line);
         if (entry) entries.push(entry);
       }
-      return {
-        entries: entries.slice(-TAIL_ENTRY_LIMIT),
-        nextOffset: buf.length,
-        truncated: true,
-      };
     }
 
-    const start = Math.min(Math.max(offset, 0), buf.length);
-    const chunk = buf.subarray(start);
+    const nextOffset = lastNewline === -1 ? readStart : readStart + lastNewline + 1;
+    const tailEntries = entries.slice(-TAIL_ENTRY_LIMIT);
+    const entryTruncated = tailEntries.length < entries.length;
 
-    let lastNewline = -1;
-    for (let i = chunk.length - 1; i >= 0; i--) {
-      if (chunk[i] === 0x0a) {
-        lastNewline = i;
-        break;
-      }
-    }
+    return {
+      entries: tailEntries,
+      nextOffset,
+      truncated: byteCapped || entryTruncated,
+    };
+  }
+
+  /** 差分読み: offset 以降を位置指定で読み、最後の改行位置までのみ消費する。 */
+  private readFromOffset(fd: number, size: number, offset: number): ReadSessionResult {
+    const start = Math.min(Math.max(offset, 0), size);
+    const buf = readChunk(fd, size, start, size - start);
+    const lastNewline = findLastNewline(buf);
 
     if (lastNewline === -1) {
       return { entries: [], nextOffset: start, truncated: false };
     }
 
-    const consumed = chunk.subarray(0, lastNewline).toString('utf-8');
+    const consumed = buf.subarray(0, lastNewline).toString('utf-8');
     const entries: TranscriptEntry[] = [];
     for (const line of consumed.split('\n')) {
       const entry = parseLine(line);

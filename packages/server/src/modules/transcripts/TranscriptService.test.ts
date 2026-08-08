@@ -62,6 +62,28 @@ describe('TranscriptService', () => {
       expect(sessions[0].projectDir).toBe('proj-b');
     });
 
+    it('builds preview from only the first previewScanBytes of the file, ignoring later huge content', () => {
+      const smallScanService = new TranscriptService(dir, { previewScanBytes: 200 });
+      const firstLine = JSON.stringify({
+        type: 'user',
+        uuid: 'u1',
+        message: { content: 'Head text that is within the scan window' },
+      });
+      // A giant line appended after the first one must not be read at all (would be slow/huge for a real fixture).
+      const hugeLine = JSON.stringify({
+        type: 'user',
+        uuid: 'u2',
+        message: { content: 'z'.repeat(1_000_000) },
+      });
+      const file = path.join(dir, 'proj-a');
+      fs.mkdirSync(file, { recursive: true });
+      fs.writeFileSync(path.join(file, `${SID_A}.jsonl`), `${firstLine}\n${hugeLine}\n`);
+
+      const sessions = smallScanService.listSessions();
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0].preview).toBe('Head text that is within the scan window');
+    });
+
     it('respects the limit parameter', () => {
       writeSession(dir, 'proj-a', SID_A, [{ type: 'user', uuid: 'u1', message: { content: 'a' } }]);
       writeSession(dir, 'proj-b', SID_B, [{ type: 'user', uuid: 'u2', message: { content: 'b' } }]);
@@ -156,6 +178,57 @@ describe('TranscriptService', () => {
       expect(result!.entries[0].uuid).toBe('u1');
     });
 
+    it('initial read carries over an incomplete trailing line, kept for the next read', () => {
+      const file = writeSession(dir, 'proj-a', SID_A, [{ type: 'user', uuid: 'u1', message: { content: 'first' } }]);
+      // Append a complete line followed by a partial (unterminated) line, simulating a write in progress.
+      const completeLine = JSON.stringify({ type: 'user', uuid: 'u2', message: { content: 'second' } });
+      const partialLine = JSON.stringify({ type: 'user', uuid: 'u3', message: { content: 'third' } }).slice(0, 10);
+      fs.appendFileSync(file, completeLine + '\n' + partialLine);
+
+      const result = service.readSession(SID_A);
+      expect(result).not.toBeNull();
+      expect(result!.entries).toHaveLength(2);
+      expect(result!.entries[0].uuid).toBe('u1');
+      expect(result!.entries[1].uuid).toBe('u2');
+      // nextOffset must stop right after the complete line's newline, not consuming the partial tail.
+      const expectedOffset = Buffer.byteLength(
+        [JSON.stringify({ type: 'user', uuid: 'u1', message: { content: 'first' } }), completeLine].join('\n') + '\n',
+      );
+      expect(result!.nextOffset).toBe(expectedOffset);
+
+      // Completing the partial line and reading again from the same nextOffset should now surface it.
+      const rest = JSON.stringify({ type: 'user', uuid: 'u3', message: { content: 'third' } }).slice(10) + '\n';
+      fs.appendFileSync(file, rest);
+      const follow = service.readSession(SID_A, result!.nextOffset);
+      expect(follow!.entries).toHaveLength(1);
+      expect(follow!.entries[0].uuid).toBe('u3');
+    });
+
+    it('caps the initial read window to initialReadMaxBytes and marks it truncated', () => {
+      const smallWindowService = new TranscriptService(dir, { initialReadMaxBytes: 200 });
+      const lines: unknown[] = [];
+      for (let i = 0; i < 50; i++) {
+        lines.push({ type: 'user', uuid: `u${i}`, timestamp: null, message: { content: `message-${i}` } });
+      }
+      const file = writeSession(dir, 'proj-a', SID_A, lines);
+      const fileSize = fs.statSync(file).size;
+      expect(fileSize).toBeGreaterThan(200);
+
+      const result = smallWindowService.readSession(SID_A);
+      expect(result).not.toBeNull();
+      expect(result!.truncated).toBe(true);
+      expect(result!.entries.length).toBeGreaterThan(0);
+      expect(result!.entries.length).toBeLessThan(50);
+      // The earliest entries (u0, u1, ...) fell outside the 200-byte tail window.
+      expect(result!.entries[0].uuid).not.toBe('u0');
+      // nextOffset should be at EOF since the file ends with a complete trailing newline.
+      expect(result!.nextOffset).toBe(fileSize);
+
+      // Reading forward from nextOffset should yield nothing new (no data left).
+      const follow = smallWindowService.readSession(SID_A, result!.nextOffset);
+      expect(follow!.entries).toHaveLength(0);
+    });
+
     it('handles both string and block-array content shapes for a user/assistant message', () => {
       writeSession(dir, 'proj-a', SID_A, [
         { type: 'user', uuid: 'u1', message: { content: 'plain string content' } },
@@ -201,6 +274,21 @@ describe('TranscriptService', () => {
       if (toolUseBlock.kind === 'tool_use') expect(toolUseBlock.input.length).toBe(2000);
       expect(toolResultBlock).toMatchObject({ kind: 'tool_result', truncated: true, isError: false });
       if (toolResultBlock.kind === 'tool_result') expect(toolResultBlock.text.length).toBe(4000);
+    });
+
+    it('falls back to an empty string for a tool_result with missing content, instead of "undefined"', () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        {
+          type: 'user',
+          uuid: 'u1',
+          message: {
+            content: [{ type: 'tool_result', tool_use_id: 't1', is_error: false }],
+          },
+        },
+      ]);
+      const result = service.readSession(SID_A);
+      const block = result!.entries[0].blocks[0];
+      expect(block).toMatchObject({ kind: 'tool_result', text: '', truncated: false });
     });
 
     it('drops entries whose blocks end up empty (e.g. only unrecognized block types)', () => {
