@@ -37,4 +37,24 @@ export interface ITaskTokenRepository {
    * automatically. Returns the number of rows revoked.
    */
   revokeAllForTask(taskId: number, reason: string): number;
+
+  /**
+   * Window-generation-bound rotation (Issue #28 Phase A後半,
+   * TaskPaneEnvironmentService's sole write path): revokes every
+   * currently-active token for `taskId` (recorded with `revokeReason`) and
+   * issues a fresh one at `MAX(window_generation) + 1` for the task — all in
+   * one DB transaction, so no caller ever observes two simultaneously-active
+   * tokens for the same task or has to compute the next generation number
+   * itself. Only called from a code path that is ACTUALLY (re)creating the
+   * task's tmux window (design v3 §2: "発行は実際にウィンドウを作り直すとき
+   * のみ") — resuming an existing window must not call this.
+   *
+   * The "タスク単位の直列化" this needs (design v3 §2) comes for free from
+   * better-sqlite3's synchronous execution: the whole read-modify-write
+   * sequence below runs inside `db.transaction(...)`, which is a single
+   * synchronous call with no `await` inside it, so no other request on this
+   * process can interleave a second issuance for the same task between the
+   * revoke and the insert.
+   */
+  issueNextGeneration(taskId: number, revokeReason: string): IssuedTaskToken;
 }

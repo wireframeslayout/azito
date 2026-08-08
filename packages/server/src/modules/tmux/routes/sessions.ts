@@ -89,7 +89,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           return reply.status(409).send({ error: 'insufficient_resources', resources: status });
       }
       try {
-        const { result, windowName } = await tmux.createSession(srv, name, { command, windowName: reqWindowName });
+        const { result, windowName } = await tmux.createSession(srv, name, { command, windowName: reqWindowName, extraEnv: tmux.uiTokenEnv() });
         // Agent/SSH transports resolve with a non-zero code instead of throwing — surface it.
         if (result.code !== 0)
           return reply.status(500).send({ error: `new-session failed: ${result.stderr || result.stdout}` });
@@ -114,7 +114,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           return reply.status(409).send({ error: 'insufficient_resources', resources: status });
       }
       try {
-        const { result, windowName } = await tmux.createWindow(srv, request.params.session, reqName || undefined);
+        const { result, windowName } = await tmux.createWindow(srv, request.params.session, reqName || undefined, { extraEnv: tmux.uiTokenEnv() });
         if (result.code !== 0)
           return reply.status(500).send({ error: `new-window failed: ${result.stderr || result.stdout}` });
         notifySessionsChanged(request.params.name);

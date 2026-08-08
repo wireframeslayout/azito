@@ -175,4 +175,27 @@ describe('migration 060: authz_foundation', () => {
     expect(row.actor_id).toBeNull();
     expect(row.detail).toBeNull();
   });
+
+  it('backfills existing tasks rows with created_by_kind = operator and created_by_id = NULL', () => {
+    const db = buildSeededDb();
+    const taskId = insertTask(db);
+    m060.up(db);
+
+    const row = db.prepare('SELECT created_by_kind, created_by_id FROM tasks WHERE id = ?').get(taskId) as Record<string, unknown>;
+    expect(row.created_by_kind).toBe('operator');
+    expect(row.created_by_id).toBeNull();
+  });
+
+  it('accepts an explicit created_by_kind/created_by_id for a newly-inserted task row', () => {
+    const db = buildSeededDb();
+    m060.up(db);
+
+    db.prepare(
+      `INSERT INTO tasks (project_id, title, status, priority, self_review_count, require_plan_approval, source, skip_pr, created_by_kind, created_by_id)
+       VALUES (1, 'Child task', 'open', 0, 0, 1, 'local', 0, 'task', 42)`,
+    ).run();
+    const row = db.prepare("SELECT created_by_kind, created_by_id FROM tasks WHERE title = 'Child task'").get() as Record<string, unknown>;
+    expect(row.created_by_kind).toBe('task');
+    expect(row.created_by_id).toBe(42);
+  });
 });

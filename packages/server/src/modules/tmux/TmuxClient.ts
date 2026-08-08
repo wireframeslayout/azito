@@ -174,7 +174,6 @@ export class TmuxClient {
       ? options.windowName
       : generateWindowName(options?.windowName || 'win');
     const args = ['new-session', '-d', '-s', sessionName, '-n', windowName, '-e', `AZITO_URL=${this.hubUrlFor(server)}`];
-    if (this.uiToken) args.push('-e', `AZITO_UI_TOKEN=${this.uiToken}`);
     if (options?.extraEnv) {
       for (const [k, v] of Object.entries(options.extraEnv)) {
         args.push('-e', `${k}=${v}`);
@@ -189,7 +188,6 @@ export class TmuxClient {
   async createWindow(server: ServerConfig, sessionName: string, baseName?: string, options?: { exactName?: boolean; extraEnv?: Record<string, string> }): Promise<{ result: ExecResult; windowName: string }> {
     const windowName = options?.exactName && baseName ? baseName : generateWindowName(baseName || 'win');
     const args = ['new-window', '-t', sessionName, '-n', windowName, '-e', `AZITO_URL=${this.hubUrlFor(server)}`];
-    if (this.uiToken) args.push('-e', `AZITO_UI_TOKEN=${this.uiToken}`);
     if (options?.extraEnv) {
       for (const [k, v] of Object.entries(options.extraEnv)) {
         args.push('-e', `${k}=${v}`);
@@ -198,6 +196,23 @@ export class TmuxClient {
     const result = await this.runTmuxCommand(server, args);
     await this.setWindowStatusFormat(server, sessionName, windowName);
     return { result, windowName };
+  }
+
+  /**
+   * Legacy default env for a window that is NOT a task pane (Issue #28
+   * Phase A後半): `createSession`/`createWindow` above used to inject
+   * AZITO_UI_TOKEN unconditionally into every window they created,
+   * regardless of caller — that meant a task pane always carried the
+   * all-powerful UI token too, which is exactly what design v3 §2 (task
+   * panes get a scoped AZITO_TASK_TOKEN instead) needs to stop. The
+   * unconditional injection is gone; every caller now decides its own
+   * `extraEnv` explicitly. Callers that open a plain terminal/manual/project
+   * window (not a task's — those go through TaskPaneEnvironmentService
+   * instead, which decides UI-token inclusion via the AZITO_SCOPED_AUTH
+   * flag) call this to reproduce the old default.
+   */
+  uiTokenEnv(): Record<string, string> {
+    return this.uiToken ? { AZITO_UI_TOKEN: this.uiToken } : {};
   }
 
   private async setWindowStatusFormat(server: ServerConfig, sessionName: string, windowName: string): Promise<void> {

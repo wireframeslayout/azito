@@ -44,6 +44,7 @@ import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionMani
 import { TuiWorkerRuntime } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
 import { resolveTaskServerName, resolveTmuxSession, resolveUnitId, resolveBaseBranch } from './TaskExecutionEnv';
+import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
 import type { SqliteAgentTurnRepository } from '../turns/SqliteAgentTurnRepository';
 import type { TurnSignalHub } from '../turns/TurnSignalHub';
 import type { AgentTurn } from '../turns/AgentTurn';
@@ -120,6 +121,11 @@ export class ExecuteTaskUseCase {
     // silently unnotified. See AppendLog.ts's appendLogAndEmit() doc
     // comment for the shared helper this and those two classes now all use.
     public readonly events: EventEmitter,
+    // Issue #28 Phase A後半: the sole task-pane env builder — see
+    // TaskPaneEnvironmentService's own doc comment. Replaces this class's
+    // former private buildExtraEnv() (removed), which only ever assembled
+    // secrets + agent-server env and left AZITO_TASK_TOKEN unissued.
+    private paneEnvService: TaskPaneEnvironmentService,
   ) {
     this.gitInfoCollector = new GitInfoCollector(this.tmux);
     this.pushVerifier = new PushVerifier(this.tmux, this.gitProvider);
@@ -168,19 +174,6 @@ export class ExecuteTaskUseCase {
       this.serverRepo,
       this.projectSecretRepo,
     );
-  }
-
-  private buildExtraEnv(projectId: number, server: ServerConfig): Record<string, string> {
-    const secrets = this.projectSecretRepo.findByProjectWithValues(projectId);
-    const env: Record<string, string> = {};
-    for (const s of secrets) {
-      env[`AZITO_SECRET_${s.name}`] = s.value;
-    }
-    if (server.type === 'agent') {
-      if (server.agentPort) env.AZITO_AGENT_PORT = String(server.agentPort);
-      if (server.agentToken) env.AZITO_AGENT_TOKEN = server.agentToken;
-    }
-    return env;
   }
 
   private getWorktreeService(server: ServerConfig): IWorktreeService {
@@ -480,11 +473,15 @@ export class ExecuteTaskUseCase {
       }
     }
 
-    // Ensure tmux session exists
+    // Ensure tmux session exists. This bootstrap window (if the session
+    // doesn't exist yet) is immediately abandoned in favor of the real task
+    // window created below — it deliberately gets no env at all (no task
+    // token, no UI token) rather than issuing/rotating a token for a window
+    // nobody uses.
     const existingSessions = await this.tmux.listSessions(server);
     const sessionExists = existingSessions.some((s) => s.name === tmuxSession);
     if (!sessionExists) {
-      await this.tmux.createSession(server, tmuxSession, {});
+      await this.tmux.createSession(server, tmuxSession, { extraEnv: {} });
       await sleep(500);
     }
 
@@ -503,10 +500,12 @@ export class ExecuteTaskUseCase {
       } catch {}
     }
 
-    // Create a new tmux window for the task
+    // Create a new tmux window for the task — this call is the actual
+    // window-generation point, so it's the one that rotates the task token
+    // (TaskPaneEnvironmentService.buildEnvForNewWindow; design v3 §2).
     let windowName: string;
     try {
-      const created = await this.tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: this.buildExtraEnv(task.projectId, server) });
+      const created = await this.tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: this.paneEnvService.buildEnvForNewWindow(task, server) });
       windowName = created.windowName;
     } catch (err) {
       throw new Error(`Failed to create tmux window: ${err instanceof Error ? err.message : err}`);
@@ -826,11 +825,14 @@ export class ExecuteTaskUseCase {
 
     let windowName = task.tmuxWindow || `task-${task.id}`;
 
-    // Ensure tmux session and window exist
+    // Ensure tmux session and window exist. Same throwaway-bootstrap-window
+    // reasoning as execute() above: no env at all when a session must be
+    // created here, since the real task window (created just below, if it
+    // doesn't already exist) is what actually gets AZITO_TASK_TOKEN.
     const existingSessions = await this.tmux.listSessions(server);
     const sessionExists = existingSessions.some((s) => s.name === tmuxSession);
     if (!sessionExists) {
-      await this.tmux.createSession(server, tmuxSession, {});
+      await this.tmux.createSession(server, tmuxSession, { extraEnv: {} });
       await sleep(500);
     }
 
@@ -845,7 +847,12 @@ export class ExecuteTaskUseCase {
 
     if (!windowExists) {
       try {
-        const created = await this.tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: this.buildExtraEnv(task.projectId, server) });
+        // Window generation point for a follow-up that has no window to
+        // resume onto — rotates the task token, same as execute() above. A
+        // follow-up onto an ALREADY-existing window (the common case) never
+        // reaches this branch at all, matching design v3 §2's "resume onto
+        // an existing window never rotates".
+        const created = await this.tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: this.paneEnvService.buildEnvForNewWindow(task, server) });
         windowName = created.windowName;
         this.taskRepo.update(taskId, { tmuxWindow: windowName } as Partial<Task>);
       } catch (err) {

@@ -86,6 +86,8 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     pendingOperation: null,
     pendingOperationWindowId: null,
     pendingOperationPriorStatus: null,
+    createdByKind: 'operator',
+    createdById: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -178,6 +180,7 @@ function buildService(opts: {
     resolvePaneId: vi.fn(async () => '%0'),
     listPaneIds: vi.fn(async () => [{ index: 0, paneId: '%0' }]),
     execCommand: vi.fn(async () => ({ stdout: '' })),
+    uiTokenEnv: vi.fn(() => ({ AZITO_UI_TOKEN: 'ui-token-fixture' })),
   };
 
   const sessionStrategyFactory = {
@@ -230,6 +233,14 @@ function buildService(opts: {
   // real EventEmitter so appendLogAndEmit()'s emit() call is a no-op rather
   // than a crash when no test subscribes to it.
   const events = new EventEmitter();
+  // Issue #28 Phase A後半: real TmuxClient.createWindow/createSession
+  // extraEnv contents aren't asserted on in this file (see
+  // TaskPaneEnvironmentService.test.ts for that) — just needs to return a
+  // plausible env Record so respawn()'s task-owned branch has something to
+  // pass through.
+  const paneEnvService = {
+    buildEnvForNewWindow: vi.fn(() => ({ AZITO_TASK_TOKEN: 'azt.task.1.' + 'a'.repeat(64), AZITO_TASK_ID: '1' })),
+  } as any;
 
   const service = new WindowRespawnService(
     windowRepo,
@@ -247,10 +258,11 @@ function buildService(opts: {
     serverRepo,
     projectSecretRepo,
     events,
+    paneEnvService,
     undefined,
   );
 
-  return { service, windowRepo, tmux, sentCommands, clearExitMarker, taskRepo, logRepo, serverRepo, projectSecretRepo, events };
+  return { service, windowRepo, tmux, sentCommands, clearExitMarker, taskRepo, logRepo, serverRepo, projectSecretRepo, events, paneEnvService };
 }
 
 describe('WindowRespawnService.respawn — supervisor wrap', () => {
@@ -434,7 +446,7 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
 
     expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:task-1--ab12');
     expect(tmux.createWindow).toHaveBeenCalledWith(
-      expect.anything(), 'azito', 'task-1--ab12', { exactName: true },
+      expect.anything(), 'azito', 'task-1--ab12', { exactName: true, extraEnv: { AZITO_UI_TOKEN: 'ui-token-fixture' } },
     );
   });
 
@@ -456,7 +468,7 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
     const result = await service.respawn(1, makeServer());
 
     expect(tmux.createSession).toHaveBeenCalledWith(
-      expect.anything(), 'azito', { windowName: 'task-1--ab12', exactName: true },
+      expect.anything(), 'azito', { windowName: 'task-1--ab12', exactName: true, extraEnv: { AZITO_UI_TOKEN: 'ui-token-fixture' } },
     );
     expect(tmux.createWindow).not.toHaveBeenCalled();
     expect(result.tmuxTarget).toBe('azito:task-1--ab12.1');
@@ -872,7 +884,7 @@ describe('WindowRespawnService.resumeLegacySession (Issue #328 fourth-round revi
 
     const result = await service.resumeLegacySession(7, makeServer());
 
-    expect(tmux.createWindow).toHaveBeenCalledWith(expect.anything(), 'azito', 'task-7');
+    expect(tmux.createWindow).toHaveBeenCalledWith(expect.anything(), 'azito', 'task-7', { extraEnv: expect.objectContaining({ AZITO_TASK_TOKEN: expect.any(String), AZITO_TASK_ID: '1' }) });
     expect(sentCommands).toHaveLength(1);
     expect(sentCommands[0]).toMatch(/supervisor/);
     expect(sentCommands[0]).toContain('claude --resume sess-abc --dangerously-skip-permissions');

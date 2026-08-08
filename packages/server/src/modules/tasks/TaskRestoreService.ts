@@ -18,6 +18,7 @@ import { shellQuote } from '../../shared/shellQuote';
 import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError } from './execution/ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest } from './execution/ExecutionManifest';
 import { appendLogAndEmit } from './execution/AppendLog';
+import type { TaskPaneEnvironmentService } from './execution/TaskPaneEnvironmentService';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { EventEmitter } from 'events';
@@ -55,6 +56,8 @@ export interface TaskRestoreDeps {
   // AppendLog.ts's doc comment for why a second, unwired notification path
   // is exactly how the bug this fixes happened.
   events: EventEmitter;
+  /** Issue #28 Phase A後半: the sole task-pane env builder — this is the "TaskRestoreService" entry point design v3 §6 lists explicitly. */
+  paneEnvService: TaskPaneEnvironmentService;
 }
 
 export class TaskRestoreService {
@@ -63,7 +66,7 @@ export class TaskRestoreService {
   constructor(private deps: TaskRestoreDeps) {}
 
   async restore(task: Task, log: { warn: (msg: string) => void }): Promise<{ tmuxTarget: string; worktreePath: string | null }> {
-    const { taskRepo, serverRepo, projectRepo, projectServerRepo, unitRepo, windowRepo, tmux, worktreeServiceFactory, transportFactory, contentExtractor, logRepo, unitTypeLoader, sidekickLoader, projectSecretRepo, events } = this.deps;
+    const { taskRepo, serverRepo, projectRepo, projectServerRepo, unitRepo, windowRepo, tmux, worktreeServiceFactory, transportFactory, contentExtractor, logRepo, unitTypeLoader, sidekickLoader, projectSecretRepo, events, paneEnvService } = this.deps;
 
     const serverName = resolveTaskServerName(task, projectServerRepo);
     if (!serverName) {
@@ -154,7 +157,11 @@ export class TaskRestoreService {
     const existingSessions = await tmux.listSessions(server);
     const sessionExists = existingSessions.some((s) => s.name === tmuxSession);
     if (!sessionExists) {
-      await tmux.createSession(server, tmuxSession, {});
+      // Throwaway bootstrap window — the real task window is created just
+      // below via createWindow, which is what actually gets AZITO_TASK_TOKEN
+      // (see the comment there and TaskPaneEnvironmentService's own doc
+      // comment).
+      await tmux.createSession(server, tmuxSession, { extraEnv: {} });
       await sleep(500);
     }
 
@@ -164,7 +171,10 @@ export class TaskRestoreService {
     let repoDir: string | null = null;
 
     try {
-      const created = await tmux.createWindow(server, tmuxSession, `task-${task.id}`);
+      // Window generation point — rotates the task token (design v3 §2/§6:
+      // restore() always (re)creates the task's window from scratch, so it
+      // always rotates, same as execute()).
+      const created = await tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: paneEnvService.buildEnvForNewWindow(task, server) });
       windowName = created.windowName;
 
       const windowTarget = `${tmuxSession}:${windowName}`;

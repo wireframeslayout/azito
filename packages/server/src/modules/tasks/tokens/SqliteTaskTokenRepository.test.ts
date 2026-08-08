@@ -80,4 +80,39 @@ describe('SqliteTaskTokenRepository', () => {
   it('revokeAllForTask() is a no-op (returns 0) when no active tokens exist', () => {
     expect(repo.revokeAllForTask(taskId, 'task_deleted')).toBe(0);
   });
+
+  describe('issueNextGeneration()', () => {
+    it('issues generation 1 for a task with no prior tokens', () => {
+      const issued = repo.issueNextGeneration(taskId, 'window_regenerated');
+      const row = db.prepare('SELECT window_generation FROM task_tokens WHERE id = ?').get(issued.id) as { window_generation: number };
+      expect(row.window_generation).toBe(1);
+    });
+
+    it('revokes the previously-active token and issues the next generation, so exactly one token is ever active at a time', () => {
+      const first = repo.issueNextGeneration(taskId, 'window_regenerated');
+      const firstSecret = parseTaskTokenHeader(`Bearer ${first.token}`)!.secret;
+
+      const second = repo.issueNextGeneration(taskId, 'window_regenerated');
+      const secondSecret = parseTaskTokenHeader(`Bearer ${second.token}`)!.secret;
+
+      expect(repo.verify(taskId, firstSecret)).toBe(false);
+      expect(repo.verify(taskId, secondSecret)).toBe(true);
+
+      const rows = db.prepare('SELECT window_generation, revoked_at FROM task_tokens WHERE task_id = ? ORDER BY id').all(taskId) as
+        { window_generation: number; revoked_at: string | null }[];
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toMatchObject({ window_generation: 1 });
+      expect(rows[0].revoked_at).toBeTruthy();
+      expect(rows[1]).toMatchObject({ window_generation: 2, revoked_at: null });
+    });
+
+    it('never reuses a generation number even for a task whose only prior token was revoked via revokeAllForTask directly', () => {
+      repo.issue(taskId, 5);
+      repo.revokeAllForTask(taskId, 'task_status:review');
+
+      const next = repo.issueNextGeneration(taskId, 'window_regenerated');
+      const row = db.prepare('SELECT window_generation FROM task_tokens WHERE id = ?').get(next.id) as { window_generation: number };
+      expect(row.window_generation).toBe(6);
+    });
+  });
 });

@@ -4,33 +4,33 @@ import { buildHeadlessLaunchCommand, buildWorkerLaunchCommand } from './LaunchCo
 describe('buildWorkerLaunchCommand', () => {
   it('builds claude command with no model or extra args', () => {
     expect(buildWorkerLaunchCommand('claude', null, null)).toBe(
-      'claude --dangerously-skip-permissions',
+      'claude --dangerously-skip-permissions --strict-mcp-config',
     );
   });
 
   it('builds claude command with model', () => {
     expect(buildWorkerLaunchCommand('claude', 'claude-opus-4-5', null)).toBe(
-      "claude --dangerously-skip-permissions --model 'claude-opus-4-5'",
+      "claude --dangerously-skip-permissions --strict-mcp-config --model 'claude-opus-4-5'",
     );
   });
 
   it('single-quotes Claude 1M context model suffix to avoid shell glob expansion', () => {
     const result = buildWorkerLaunchCommand('claude', 'claude-opus-4-6[1m]', null);
     expect(result).toBe(
-      "claude --dangerously-skip-permissions --model 'claude-opus-4-6[1m]'",
+      "claude --dangerously-skip-permissions --strict-mcp-config --model 'claude-opus-4-6[1m]'",
     );
   });
 
   it('appends extraArgs after model flag (shell-quoted)', () => {
     const result = buildWorkerLaunchCommand('claude', 'claude-sonnet-4-6', '--verbose');
     expect(result).toBe(
-      "claude --dangerously-skip-permissions --model 'claude-sonnet-4-6' '--verbose'",
+      "claude --dangerously-skip-permissions --strict-mcp-config --model 'claude-sonnet-4-6' '--verbose'",
     );
   });
 
   it('trims whitespace from extraArgs', () => {
     const result = buildWorkerLaunchCommand('claude', null, '  --verbose  ');
-    expect(result).toBe("claude --dangerously-skip-permissions '--verbose'");
+    expect(result).toBe("claude --dangerously-skip-permissions --strict-mcp-config '--verbose'");
   });
 
   it('builds codex command with model', () => {

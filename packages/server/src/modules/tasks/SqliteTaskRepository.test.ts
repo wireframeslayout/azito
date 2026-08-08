@@ -59,6 +59,8 @@ describe('SqliteTaskRepository.consumePendingApproval (Issue #328 ninth-round re
       pendingOperation: 'execute',
       pendingOperationWindowId: null,
       pendingOperationPriorStatus: 'open',
+      createdByKind: 'operator',
+      createdById: null,
     });
     // create() doesn't accept `status` (it's always inserted as the
     // schema's 'open' default) — set it directly to reach the
@@ -170,6 +172,8 @@ describe('SqliteTaskRepository.recordExecutionGateBlock (Issue #328 review round
       executionApprovedFingerprintHash: null,
       pendingOperation: null,
       pendingOperationWindowId: null,
+      createdByKind: 'operator',
+      createdById: null,
       pendingOperationPriorStatus: null,
     });
     // create() always inserts status = the schema default ('open') — set it
@@ -346,6 +350,8 @@ describe('SqliteTaskRepository.preApproveExecution (task/328 follow-up)', () => 
       pendingOperation: overrides.pendingOperation ?? null,
       pendingOperationWindowId: null,
       pendingOperationPriorStatus: null,
+      createdByKind: 'operator',
+      createdById: null,
     });
   }
 
@@ -390,5 +396,131 @@ describe('SqliteTaskRepository.preApproveExecution (task/328 follow-up)', () => 
     expect(secondWrite).toBe(false);
     // First write's value survives untouched.
     expect(repo.findById(taskId)?.executionApprovedFingerprintHash).toBe('hash-abc');
+  });
+});
+
+// Terminal-status token revocation (Issue #28 third-party review finding 1):
+// updateStatus() was the ONLY status-writing method that revoked outstanding
+// task_tokens on a terminal status. update() (used by, e.g., archive routes
+// and async-failure handlers) and consumePendingApproval() (used by deny
+// decisions, which can land on 'failed'/'archived') could each write a
+// terminal status while leaving tokens live. These tests exercise the real
+// SqliteTaskTokenRepository (not a mock) to prove every status-writing path
+// now revokes in the same transaction as its status write.
+describe('SqliteTaskRepository terminal-status token revocation (Issue #28 review finding 1)', () => {
+  let db: SqliteDatabase;
+  let repo: SqliteTaskRepository;
+  let tokenRepo: SqliteTaskTokenRepository;
+  let taskId: number;
+
+  beforeEach(() => {
+    db = openDatabase(':memory:');
+    tokenRepo = new SqliteTaskTokenRepository(db);
+    repo = new SqliteTaskRepository(db, tokenRepo);
+    db.prepare(
+      "INSERT INTO projects (id, name, slug, default_branch) VALUES (1, 'P', 'p', 'main')",
+    ).run();
+    taskId = repo.create({
+      projectId: 1,
+      unitId: null,
+      serverName: null,
+      title: 'Test task',
+      description: null,
+      status: 'running',
+      currentPhase: null,
+      selfReviewCount: 0,
+      priority: 0,
+      tmuxWindow: null,
+      selfReviewMaxAttempts: null,
+      requirePlanApproval: true,
+      source: 'github',
+      sourceRef: null,
+      worktreePath: null,
+      worktreeBranch: null,
+      baseBranch: null,
+      targetBranch: null,
+      skipPr: false,
+      workingDirectory: null,
+      branch: null,
+      planMarkdown: null,
+      pendingQuestions: null,
+      changedFiles: null,
+      summaryJson: null,
+      prUrl: null,
+      agentSessionId: null,
+      reviewSubagent: null,
+      implementSubagent: null,
+      inputTrust: 'untrusted',
+      executionApprovedFingerprintHash: null,
+      pendingOperation: 'execute',
+      pendingOperationWindowId: null,
+      pendingOperationPriorStatus: 'open',
+      createdByKind: 'operator',
+      createdById: null,
+    });
+    repo.updateStatus(taskId, 'running');
+  });
+
+  it('updateStatus() to a terminal status revokes every active token (baseline)', () => {
+    const { token } = tokenRepo.issue(taskId, 1);
+    const secret = token.split('.')[3];
+    expect(tokenRepo.verify(taskId, secret)).toBe(true);
+
+    repo.updateStatus(taskId, 'failed');
+
+    expect(tokenRepo.verify(taskId, secret)).toBe(false);
+  });
+
+  it('update({ status: "failed" }) revokes every active token — the read-then-write path archive/async-failure handlers use', () => {
+    const { token } = tokenRepo.issue(taskId, 1);
+    const secret = token.split('.')[3];
+    expect(tokenRepo.verify(taskId, secret)).toBe(true);
+
+    repo.update(taskId, { status: 'failed' });
+
+    expect(tokenRepo.verify(taskId, secret)).toBe(false);
+    expect(repo.findById(taskId)?.status).toBe('failed');
+  });
+
+  it('update({ status: "archived" }) revokes every active token', () => {
+    const { token } = tokenRepo.issue(taskId, 1);
+    const secret = token.split('.')[3];
+
+    repo.update(taskId, { status: 'archived' });
+
+    expect(tokenRepo.verify(taskId, secret)).toBe(false);
+  });
+
+  it('update() writing an unrelated field (no status change) leaves active tokens alone', () => {
+    const { token } = tokenRepo.issue(taskId, 1);
+    const secret = token.split('.')[3];
+
+    repo.update(taskId, { agentSessionId: 'session-abc' });
+
+    expect(tokenRepo.verify(taskId, secret)).toBe(true);
+  });
+
+  it('consumePendingApproval() landing on a terminal deny status revokes every active token', () => {
+    repo.updateStatus(taskId, 'pending_approval');
+    const { token } = tokenRepo.issue(taskId, 1);
+    const secret = token.split('.')[3];
+    expect(tokenRepo.verify(taskId, secret)).toBe(true);
+
+    const consumed = repo.consumePendingApproval(taskId, { status: 'failed' });
+
+    expect(consumed).toBe(true);
+    expect(tokenRepo.verify(taskId, secret)).toBe(false);
+    expect(repo.findById(taskId)?.status).toBe('failed');
+  });
+
+  it('consumePendingApproval() approving into a non-terminal status leaves active tokens alone', () => {
+    repo.updateStatus(taskId, 'pending_approval');
+    const { token } = tokenRepo.issue(taskId, 1);
+    const secret = token.split('.')[3];
+
+    const consumed = repo.consumePendingApproval(taskId, { status: 'running' });
+
+    expect(consumed).toBe(true);
+    expect(tokenRepo.verify(taskId, secret)).toBe(true);
   });
 });

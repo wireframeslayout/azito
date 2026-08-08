@@ -53,9 +53,18 @@ describe('validateTaskSourceFields', () => {
 });
 
 describe('deriveInputTrust', () => {
-  it("maps 'github'/'gitlab' to 'untrusted' and 'local' to 'trusted'", () => {
-    expect(deriveInputTrust('github')).toBe('untrusted');
-    expect(deriveInputTrust('gitlab')).toBe('untrusted');
-    expect(deriveInputTrust('local')).toBe('trusted');
+  it("trusts ONLY the combination of createdByKind='operator' and source='local'", () => {
+    expect(deriveInputTrust('operator', 'local')).toBe('trusted');
+  });
+
+  it("stays untrusted for an operator origin with source 'github'/'gitlab' (Issue #328 original rule preserved)", () => {
+    expect(deriveInputTrust('operator', 'github')).toBe('untrusted');
+    expect(deriveInputTrust('operator', 'gitlab')).toBe('untrusted');
+  });
+
+  it("is untrusted for a non-operator origin even with source='local' (Issue #28 design v3 §5 fail-safe reversal)", () => {
+    expect(deriveInputTrust('task', 'local')).toBe('untrusted');
+    expect(deriveInputTrust('trigger', 'local')).toBe('untrusted');
+    expect(deriveInputTrust('system', 'local')).toBe('untrusted');
   });
 });

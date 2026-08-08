@@ -49,6 +49,8 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     pendingOperation: 'execute',
     pendingOperationWindowId: null,
     pendingOperationPriorStatus: 'open',
+    createdByKind: 'operator',
+    createdById: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -73,6 +75,7 @@ function makeOpts(existingTask: Task | null): TasksRouteOptions {
       consumePendingApproval: vi.fn(() => false),
       recordExecutionGateBlock: vi.fn(() => true),
       preApproveExecution: vi.fn(() => true),
+      countChildren: vi.fn(() => 0),
     },
     projectRepo: {
       findAll: vi.fn(() => []),
@@ -173,6 +176,7 @@ function makeOpts(existingTask: Task | null): TasksRouteOptions {
     } as unknown as TasksRouteOptions['projectSecretRepo'],
     taskTokenRepo: { issue: vi.fn(), verify: vi.fn(() => false), revokeAllForTask: vi.fn(() => 0) } as unknown as TasksRouteOptions['taskTokenRepo'],
     auditLogService: { record: vi.fn() } as unknown as TasksRouteOptions['auditLogService'],
+    originationService: { create: vi.fn(() => 1) } as unknown as TasksRouteOptions['originationService'],
   };
 }
 

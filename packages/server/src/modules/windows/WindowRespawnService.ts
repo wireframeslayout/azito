@@ -18,6 +18,7 @@ import type { SessionCaptureService } from './SessionCaptureService';
 import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError } from '../tasks/execution/ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest, type RespawnManifestInput } from '../tasks/execution/ExecutionManifest';
 import { appendLogAndEmit } from '../tasks/execution/AppendLog';
+import type { TaskPaneEnvironmentService } from '../tasks/execution/TaskPaneEnvironmentService';
 import { resolveTmuxSession } from '../tasks/execution/TaskExecutionEnv';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
@@ -126,6 +127,13 @@ export class WindowRespawnService {
     // THIS emitter's 'log' event, not to logRepo.append() rows directly. See
     // AppendLog.ts's appendLogAndEmit() doc comment.
     private events: EventEmitter,
+    // Issue #28 Phase A後半: the sole task-pane env builder — see
+    // TaskPaneEnvironmentService's own doc comment. respawn()'s
+    // window-(re)creation calls (both branches — session exists or not) and
+    // resumeLegacySession() all go through this now; a plain (non-task)
+    // window respawn instead falls back to TmuxClient.uiTokenEnv() (see
+    // resolveRespawnEnv() below).
+    private paneEnvService: TaskPaneEnvironmentService,
     private sessionCaptureService?: SessionCaptureService,
   ) {}
 
@@ -176,12 +184,22 @@ export class WindowRespawnService {
     const sessions = await this.tmux.listSessions(server);
     const sessionExists = sessions.some((s) => s.name === sessionName);
 
+    // Window-generation point for this window: EITHER branch below actually
+    // (re)creates the window that becomes the respawned pane (unlike
+    // ExecuteTaskUseCase's throwaway-session-then-real-window split, respawn
+    // has no separate bootstrap step — whichever tmux call runs here IS the
+    // respawn target). A task-owned window rotates its task token via
+    // TaskPaneEnvironmentService; a plain (non-task) window keeps getting
+    // the legacy default UI-token env instead (Issue #28 design v3 §3/§5
+    // only scope task panes — a manual terminal respawn is unaffected).
+    const respawnEnv = task ? this.paneEnvService.buildEnvForNewWindow(task, server) : this.tmux.uiTokenEnv();
+
     let newName: string;
     if (!sessionExists) {
       // The session's mandatory first window IS the respawn target — creating the
       // session with a generated name and then adding the real window separately
       // would strand that first window as an unmanaged bare shell.
-      newName = (await this.tmux.createSession(server, sessionName, { windowName: windowPart, exactName: true })).windowName;
+      newName = (await this.tmux.createSession(server, sessionName, { windowName: windowPart, exactName: true, extraEnv: respawnEnv })).windowName;
       await sleep(500);
     } else {
       const session = sessions.find((s) => s.name === sessionName);
@@ -189,7 +207,7 @@ export class WindowRespawnService {
       if (windowAlive) {
         await this.tmux.killWindow(server, `${sessionName}:${windowPart}`).catch(() => {});
       }
-      newName = (await this.tmux.createWindow(server, sessionName, windowPart, { exactName: true })).windowName;
+      newName = (await this.tmux.createWindow(server, sessionName, windowPart, { exactName: true, extraEnv: respawnEnv })).windowName;
       await sleep(300);
     }
 
@@ -355,10 +373,16 @@ export class WindowRespawnService {
     this.enforceExecutionGate(task, server, 'recover_session_legacy', null);
 
     const tmuxSession = resolveTmuxSession(task.projectId, server.name, this.projectServerRepo);
-    const { windowName } = await this.tmux.createWindow(server, tmuxSession, `task-${task.id}`);
+    // Window generation point — rotates the task token, same as respawn()/
+    // execute()/restore().
+    const { windowName } = await this.tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: this.paneEnvService.buildEnvForNewWindow(task, server) });
     const windowTarget = `${tmuxSession}:${windowName}`;
     const paneId = await this.tmux.resolvePaneId(server, windowTarget);
-    const resumeCommand = `claude --resume ${task.agentSessionId} --dangerously-skip-permissions`;
+    // --strict-mcp-config (Issue #28 design v3 §3): this is a claude worker
+    // launch, same as buildClaudeLaunchCommand's, just hardcoded here instead
+    // of going through it (see that function's own doc comment for why the
+    // rest of its flags don't apply to a `--resume` relaunch).
+    const resumeCommand = `claude --resume ${task.agentSessionId} --dangerously-skip-permissions --strict-mcp-config`;
     const isSupervised = shouldSupervise(server.type, 'agent');
     if (isSupervised) {
       this.supervisorRegistry.clearExitMarker(server.name, windowTarget);

@@ -46,6 +46,9 @@ import { SqliteAgentTurnRepository } from '../modules/tasks/turns/SqliteAgentTur
 import { SqliteResourceGuardSettingsRepository } from '../modules/servers/resources/SqliteResourceGuardSettingsRepository';
 import { SqliteAuditLogRepository } from '../shared/audit/AuditLogRepository';
 import { AuditLogService } from '../shared/audit/AuditLogService';
+import { resolveScopedAuthEnabled } from '../shared/auth/scopedAuthFlag';
+import { TaskOriginationService } from '../modules/tasks/origination/TaskOriginationService';
+import { TaskPaneEnvironmentService } from '../modules/tasks/execution/TaskPaneEnvironmentService';
 import { ResourceGuard } from '../modules/servers/resources/ResourceGuard';
 import { TurnSignalHub } from '../modules/tasks/turns/TurnSignalHub';
 import { AgentSignalService } from '../modules/tasks/turns/AgentSignalService';
@@ -141,6 +144,10 @@ export interface ApplicationServices {
   // (the previous shape) silently dropped notifications from every entry
   // point except ExecuteTaskUseCase's own.
   taskEvents: EventEmitter;
+  /** Issue #28 Phase A後半: the sole task-creation funnel — see TaskOriginationService's own doc comment. */
+  originationService: TaskOriginationService;
+  /** Issue #28 Phase A後半: the sole task-pane env builder — see TaskPaneEnvironmentService's own doc comment. */
+  taskPaneEnvironmentService: TaskPaneEnvironmentService;
 }
 
 export interface SystemUpdateModule {
@@ -156,6 +163,8 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
   executeTaskUseCase: ExecuteTaskUseCase;
   agentActivityMonitor: AgentActivityMonitor;
   resourceGuard: ResourceGuard;
+  /** Issue #28 Phase A: resolved once here (the composition root boundary) via shared/auth/scopedAuthFlag.ts, then threaded through — see that file's doc comment for why buildServer.ts reads this instead of process.env directly. */
+  scopedAuthEnabled: boolean;
 }
 
 // ─── Per-module factories ───
@@ -265,14 +274,16 @@ function buildAgentUpdater(agentBundler: AgentBundler, infra: SharedInfra, repos
   return new AgentUpdater(agentBundler, infra.agentInstaller, repos.serverRepo, repos.taskRepo);
 }
 
-function buildApplicationServices(infra: SharedInfra, repos: Repositories): ApplicationServices {
+function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiToken: string, scopedAuthEnabled: boolean): ApplicationServices {
   const sessionStrategyFactory = new SessionStrategyFactory(infra.agentRegistry, infra.transportFactory);
   const sessionCaptureService = new SessionCaptureService(repos.windowRepo, repos.taskRepo, repos.serverRepo, sessionStrategyFactory);
   // Constructed here (ahead of ExecuteTaskUseCase, built later in
   // buildWiring) and shared with it below — see ApplicationServices.taskEvents'
   // own doc comment for why this must be ONE instance, not one per class.
   const taskEvents = new EventEmitter();
-  const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.tmuxClient, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, repos.serverRepo, repos.projectSecretRepo, taskEvents, sessionCaptureService);
+  const originationService = new TaskOriginationService(repos.taskRepo, repos.auditLogService);
+  const taskPaneEnvironmentService = new TaskPaneEnvironmentService(repos.taskTokenRepo, repos.projectSecretRepo, uiToken, scopedAuthEnabled);
+  const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.tmuxClient, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, repos.serverRepo, repos.projectSecretRepo, taskEvents, taskPaneEnvironmentService, sessionCaptureService);
   const taskRestoreService = new TaskRestoreService({
     taskRepo: repos.taskRepo,
     serverRepo: repos.serverRepo,
@@ -289,10 +300,11 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories): Appl
     sidekickLoader: infra.sidekickPackageLoader,
     projectSecretRepo: repos.projectSecretRepo,
     events: taskEvents,
+    paneEnvService: taskPaneEnvironmentService,
   });
   const usageService = new UsageService(infra.agentRegistry);
   const agentSignalService = new AgentSignalService(repos.agentTurnRepo, infra.turnSignalHub, repos.logRepo);
-  return { sessionStrategyFactory, sessionCaptureService, windowRespawnService, taskRestoreService, usageService, agentSignalService, taskEvents };
+  return { sessionStrategyFactory, sessionCaptureService, windowRespawnService, taskRestoreService, usageService, agentSignalService, taskEvents, originationService, taskPaneEnvironmentService };
 }
 
 function buildExecuteTaskUseCase(
@@ -326,6 +338,7 @@ function buildExecuteTaskUseCase(
     resourceGuard,
     repos.projectSecretRepo,
     appServices.taskEvents,
+    appServices.taskPaneEnvironmentService,
   );
 }
 
@@ -406,7 +419,12 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, db, fingerprintStore);
   const pushNotification = buildPushNotificationModule(repos.pushSubRepo);
   const agentUpdater = buildAgentUpdater(agentBundler, infra, repos);
-  const appServices = buildApplicationServices(infra, repos);
+  // Resolved once here (Resolve at the Boundary) — see scopedAuthFlag.ts's
+  // doc comment for why buildServer.ts must read the SAME resolved value
+  // (via wiring.scopedAuthEnabled) instead of independently re-reading
+  // process.env.
+  const scopedAuthEnabled = resolveScopedAuthEnabled();
+  const appServices = buildApplicationServices(infra, repos, uiToken, scopedAuthEnabled);
   const resourceGuard = new ResourceGuard(infra.transportFactory, repos.resourceGuardSettingsRepo);
   const executeTaskUseCase = buildExecuteTaskUseCase(infra, repos, appServices, resourceGuard);
   const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService);
@@ -423,6 +441,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
     executeTaskUseCase,
     agentActivityMonitor,
     resourceGuard,
+    scopedAuthEnabled,
     ...systemUpdateModule,
   };
 }

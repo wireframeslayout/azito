@@ -30,6 +30,25 @@ export interface Task {
    */
   inputTrust: 'trusted' | 'untrusted';
   /**
+   * Who/what originated this task (Issue #28 design v3 §5,
+   * TaskOriginationService) — set once at creation by the single
+   * `TaskOriginationService.create()` every task-creation path funnels
+   * through (`POST /api/tasks`, `POST /api/projects/:id/import-issue`,
+   * `POST /api/tasks/:id/children`, and the future #62 trigger layer) and
+   * never updated afterward. `'system'` is the catch-all for a principal
+   * class with no single human/task subject (`runtime`/`agent`) — nothing
+   * in this phase actually creates a task under that principal, but the
+   * type exists so a future trigger/system entry point has somewhere to
+   * land instead of being force-fit into `'operator'`.
+   *
+   * This is the ONLY input {@link deriveInputTrust} trusts to decide
+   * `inputTrust` — unlike `source` (freely rewritable via /azt-link),
+   * `createdByKind`/`createdById` are never accepted from a request body.
+   */
+  createdByKind: 'operator' | 'task' | 'trigger' | 'system';
+  /** The class-specific origin id (e.g. the parent task's id for `createdByKind: 'task'`). Null for `'operator'`/`'system'`, which have no single subject. */
+  createdById: number | null;
+  /**
    * Fingerprint (see ExecutionManifest.hashExecutionManifest) of the
    * RESOLVED execution manifest — not raw task columns — that a human most
    * recently approved for unattended execution while input_trust =
@@ -155,19 +174,34 @@ export interface Task {
 }
 
 /**
- * The single source of truth for how `Task['source']` maps to
- * `Task['inputTrust']` (Issue #328 hardening) — every task-creation and
- * task-update code path MUST derive `inputTrust` through this function
- * rather than deciding it inline. Before this function existed, `POST
+ * The single source of truth for how a task's origin maps to
+ * `Task['inputTrust']` (Issue #28 design v3 §5, fail-safe reversal of the
+ * Issue #328 original) — every task-creation and task-update code path MUST
+ * derive `inputTrust` through this function rather than deciding it inline.
+ *
+ * Trusted requires BOTH conditions: `createdByKind === 'operator'` (a human
+ * acting through the UI/CLI with a UI token, not a task/trigger/system
+ * principal) AND `source === 'local'` (not an imported external issue).
+ * Every other combination — `task`/`trigger`/`system` origin regardless of
+ * `source`, or `operator` origin with `source` `'github'`/`'gitlab'` — is
+ * `'untrusted'`. This is deliberately fail-safe in the direction that
+ * matters: a new `source` value or a new principal class added later that
+ * nobody updates this function for falls through to `'untrusted'`, not
+ * `'trusted'` (the earlier, Issue #328 version of this function inverted
+ * that: it listed the untrusted cases and defaulted everything else to
+ * trusted, so a forgotten update silently widened trust instead of
+ * narrowing it).
+ *
+ * Before Issue #328's original version of this function existed, `POST
  * /api/tasks` hardcoded `inputTrust: 'trusted'` regardless of `source`
  * while `POST /api/projects/:id/import-issue` independently hardcoded
  * `'untrusted'` — the two decisions drifted, and the browser's actual
  * GitHub-issue-import flow (which posts to `/api/tasks`, not
  * `import-issue`) went through the always-`'trusted'` path, defeating the
- * execution gate entirely for externally-sourced tasks.
- *
- * `github`/`gitlab` (untrusted external content, not yet reviewed by a
- * human) map to `'untrusted'`; `local` maps to `'trusted'`.
+ * execution gate entirely for externally-sourced tasks. Issue #28's
+ * TaskOriginationService (modules/tasks/origination/TaskOriginationService.ts)
+ * is now the ONLY caller of this function at creation time, closing that gap
+ * for good — no route decides `inputTrust` on its own anymore.
  *
  * This function is intentionally one-directional in effect only when
  * combined with the monotonicity rule enforced at each call site (never
@@ -175,11 +209,11 @@ export interface Task {
  * `PUT /api/tasks/:id` in modules/tasks/routes.ts, which floors the
  * derived value at the task's current trust level instead of applying
  * this function's output unconditionally). This function alone is a pure
- * mapping from `source` and does not know about a task's prior trust
- * level.
+ * mapping from `createdByKind`/`source` and does not know about a task's
+ * prior trust level.
  */
-export function deriveInputTrust(source: Task['source']): Task['inputTrust'] {
-  return source === 'github' || source === 'gitlab' ? 'untrusted' : 'trusted';
+export function deriveInputTrust(createdByKind: Task['createdByKind'], source: Task['source']): Task['inputTrust'] {
+  return createdByKind === 'operator' && source === 'local' ? 'trusted' : 'untrusted';
 }
 
 /** The only values {@link deriveInputTrust} (and thus the execution gate) understands. */
@@ -401,4 +435,16 @@ export interface ITaskRepository {
    * caller must reject, not silently retry with a different manifest).
    */
   preApproveExecution(id: number, fingerprintHash: string): boolean;
+
+  /**
+   * Count of tasks with `createdByKind: 'task'` and `createdById:
+   * parentTaskId` — backs `POST /api/tasks/:id/children`'s per-parent rate
+   * limit (Issue #28 design v3 §4, N=20). Counts every child ever created
+   * for this parent (not scoped to "this execution run" — the task schema
+   * has no run/turn identifier a child's origination could be tied to, so
+   * this is the simpler, strictly-more-conservative bound: a parent that
+   * hits the limit across several runs is capped exactly the same as one
+   * that hits it in a single run).
+   */
+  countChildren(parentTaskId: number): number;
 }

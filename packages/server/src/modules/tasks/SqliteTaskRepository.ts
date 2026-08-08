@@ -7,11 +7,16 @@ import type { ITaskTokenRepository } from './tokens/TaskToken';
 /**
  * Terminal statuses that must revoke every outstanding task_tokens row for
  * the task (Issue #28 design v3 §2: "失効はリポジトリの状態遷移 API 1箇所に
- * 集約"). Enforced inside updateStatus() below rather than at each of the
- * ~25 scattered `taskRepo.updateStatus(...)` call sites across
- * PhaseLoopRunner/ExecuteTaskUseCase/RecoverStuckTasksUseCase/units routes —
- * every one of those call sites benefits automatically, and none of them
- * needs to know task_tokens exists.
+ * 集約"). Enforced by {@link SqliteTaskRepository.revokeIfTerminal}, the
+ * single internal helper every status-writing method (updateStatus(),
+ * update(), consumePendingApproval()) routes through in the same
+ * transaction as its status write — every one of the ~25 scattered
+ * `taskRepo.updateStatus(...)`/`taskRepo.update(..., { status })` call sites
+ * across PhaseLoopRunner/ExecuteTaskUseCase/RecoverStuckTasksUseCase/units
+ * routes benefits automatically, and none of them needs to know task_tokens
+ * exists. (recordExecutionGateBlock()/preApproveExecution() never write a
+ * terminal status — see their own doc comments on ITaskRepository — so they
+ * do not need this helper.)
  */
 const TERMINAL_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set(['review', 'done', 'failed', 'archived']);
 
@@ -51,6 +56,8 @@ interface TaskRow {
   agent_session_id: string | null;
   review_subagent: string | null;
   implement_subagent: string | null;
+  created_by_kind: string;
+  created_by_id: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -85,6 +92,7 @@ export class SqliteTaskRepository implements ITaskRepository {
   private touchStmt;
   private deleteStmt;
   private findAgentSessionIdsByServerStmt;
+  private countChildrenStmt;
   constructor(private db: SqliteDatabase, private taskTokenRepo: ITaskTokenRepository) {
     this.listStmt = db.prepare('SELECT * FROM tasks ORDER BY priority DESC, created_at DESC');
     this.listByProjectStmt = db.prepare('SELECT * FROM tasks WHERE project_id = ? ORDER BY priority DESC, created_at DESC');
@@ -92,7 +100,7 @@ export class SqliteTaskRepository implements ITaskRepository {
     this.listByStatusStmt = db.prepare('SELECT * FROM tasks WHERE status = ? ORDER BY priority DESC, created_at DESC');
     this.getStmt = db.prepare('SELECT * FROM tasks WHERE id = ?');
     this.createStmt = db.prepare(
-      'INSERT INTO tasks (project_id, unit_id, server_name, title, description, priority, tmux_window, self_review_max_attempts, require_plan_approval, source, source_ref, worktree_path, worktree_branch, base_branch, target_branch, skip_pr, working_directory, branch, plan_markdown, pending_questions, changed_files, summary_json, pr_url, agent_session_id, review_subagent, implement_subagent, input_trust, execution_approved_fingerprint_hash, pending_operation, pending_operation_window_id, pending_operation_prior_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO tasks (project_id, unit_id, server_name, title, description, priority, tmux_window, self_review_max_attempts, require_plan_approval, source, source_ref, worktree_path, worktree_branch, base_branch, target_branch, skip_pr, working_directory, branch, plan_markdown, pending_questions, changed_files, summary_json, pr_url, agent_session_id, review_subagent, implement_subagent, input_trust, execution_approved_fingerprint_hash, pending_operation, pending_operation_window_id, pending_operation_prior_status, created_by_kind, created_by_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
     this.updateStmt = db.prepare(
       "UPDATE tasks SET title = ?, description = ?, status = ?, unit_id = ?, server_name = ?, priority = ?, tmux_window = ?, self_review_max_attempts = ?, require_plan_approval = ?, source = ?, source_ref = ?, worktree_path = ?, worktree_branch = ?, base_branch = ?, target_branch = ?, skip_pr = ?, working_directory = ?, branch = ?, plan_markdown = ?, pending_questions = ?, changed_files = ?, summary_json = ?, pr_url = ?, agent_session_id = ?, review_subagent = ?, implement_subagent = ?, input_trust = ?, execution_approved_fingerprint_hash = ?, pending_operation = ?, pending_operation_window_id = ?, pending_operation_prior_status = ?, updated_at = datetime('now') WHERE id = ?",
@@ -138,6 +146,9 @@ export class SqliteTaskRepository implements ITaskRepository {
     this.deleteStmt = db.prepare('DELETE FROM tasks WHERE id = ?');
     this.findAgentSessionIdsByServerStmt = db.prepare(
       'SELECT DISTINCT agent_session_id FROM tasks WHERE server_name = ? AND agent_session_id IS NOT NULL',
+    );
+    this.countChildrenStmt = db.prepare(
+      "SELECT COUNT(*) AS n FROM tasks WHERE created_by_kind = 'task' AND created_by_id = ?",
     );
   }
 
@@ -200,6 +211,8 @@ export class SqliteTaskRepository implements ITaskRepository {
       data.pendingOperation ?? null,
       data.pendingOperationWindowId ?? null,
       data.pendingOperationPriorStatus ?? null,
+      data.createdByKind,
+      data.createdById ?? null,
     );
     return Number(result.lastInsertRowid);
   }
@@ -207,6 +220,18 @@ export class SqliteTaskRepository implements ITaskRepository {
   update(id: number, data: Partial<Task>): void {
     const current = this.getStmt.get(id) as TaskRow | undefined;
     if (!current) return;
+    const run = this.db.transaction(() => {
+      this.runUpdateStmt(id, data, current);
+      // Only an explicit status write can move the task into a terminal
+      // status here — a write that leaves status untouched can't newly
+      // terminate it, and revoking on every unrelated field write (e.g. a
+      // plain agentSessionId update) would just be dead work.
+      if (data.status !== undefined) this.revokeIfTerminal(id, data.status);
+    });
+    run();
+  }
+
+  private runUpdateStmt(id: number, data: Partial<Task>, current: TaskRow): void {
     this.updateStmt.run(
       data.title ?? current.title,
       data.description ?? current.description,
@@ -244,8 +269,17 @@ export class SqliteTaskRepository implements ITaskRepository {
   }
 
   consumePendingApproval(id: number, fields: { status?: TaskStatus; executionApprovedFingerprintHash?: string }): boolean {
-    const result = this.consumePendingApprovalStmt.run(fields.status ?? null, fields.executionApprovedFingerprintHash ?? null, id);
-    return result.changes > 0;
+    const run = this.db.transaction(() => {
+      const result = this.consumePendingApprovalStmt.run(fields.status ?? null, fields.executionApprovedFingerprintHash ?? null, id);
+      // A deny decision can land the task on a terminal status (e.g.
+      // 'failed'/'archived' — see ExecutionApprovalDecision.ts's denyStatus)
+      // in this same guarded UPDATE, never through updateStatus(). Route it
+      // through the same revocation helper so that path isn't a token-leak
+      // gap — see the doc comment on TERMINAL_TASK_STATUSES above.
+      if (result.changes > 0 && fields.status !== undefined) this.revokeIfTerminal(id, fields.status);
+      return result.changes > 0;
+    });
+    return run();
   }
 
   recordExecutionGateBlock(
@@ -282,17 +316,24 @@ export class SqliteTaskRepository implements ITaskRepository {
   }
 
   updateStatus(id: number, status: TaskStatus): void {
-    // Terminal statuses revoke every outstanding task token in the same
-    // transaction as the status write — see TERMINAL_TASK_STATUSES above.
+    const run = this.db.transaction(() => {
+      this.updateStatusStmt.run(status, id);
+      this.revokeIfTerminal(id, status);
+    });
+    run();
+  }
+
+  /**
+   * Single internal chokepoint for terminal-status token revocation — see
+   * the doc comment on TERMINAL_TASK_STATUSES above. Callers MUST invoke
+   * this inside the same `this.db.transaction(...)` as the status-writing
+   * UPDATE it follows, so a crash between the two can never leave a
+   * terminal status with live tokens.
+   */
+  private revokeIfTerminal(id: number, status: TaskStatus): void {
     if (TERMINAL_TASK_STATUSES.has(status)) {
-      const run = this.db.transaction(() => {
-        this.updateStatusStmt.run(status, id);
-        this.taskTokenRepo.revokeAllForTask(id, `task_status:${status}`);
-      });
-      run();
-      return;
+      this.taskTokenRepo.revokeAllForTask(id, `task_status:${status}`);
     }
-    this.updateStatusStmt.run(status, id);
   }
 
   updateCurrentPhase(id: number, phase: string | null): void {
@@ -311,6 +352,11 @@ export class SqliteTaskRepository implements ITaskRepository {
       this.deleteStmt.run(id);
     });
     run();
+  }
+
+  countChildren(parentTaskId: number): number {
+    const row = this.countChildrenStmt.get(parentTaskId) as { n: number };
+    return row.n;
   }
 
   private toEntity(row: TaskRow): Task {
@@ -358,6 +404,8 @@ export class SqliteTaskRepository implements ITaskRepository {
         | null,
       pendingOperationWindowId: row.pending_operation_window_id ?? null,
       pendingOperationPriorStatus: (row.pending_operation_prior_status ?? null) as TaskStatus | null,
+      createdByKind: row.created_by_kind as Task['createdByKind'],
+      createdById: row.created_by_id ?? null,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };

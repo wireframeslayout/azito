@@ -51,6 +51,8 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     pendingOperation: null,
     pendingOperationWindowId: null,
     pendingOperationPriorStatus: null,
+    createdByKind: 'operator',
+    createdById: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -75,6 +77,7 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
       consumePendingApproval: vi.fn(() => false),
       recordExecutionGateBlock: vi.fn(() => true),
       preApproveExecution: vi.fn(() => true),
+      countChildren: vi.fn(() => 0),
     },
     serverRepo: {
       findAll: vi.fn(() => []),
@@ -182,6 +185,12 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
     // a real EventEmitter so appendLogAndEmit()'s emit() call is a no-op
     // rather than a crash when no test subscribes to it.
     events: new EventEmitter(),
+    // Issue #28 Phase A後半: real TmuxClient.createWindow call args aren't
+    // asserted on in this file (see TaskPaneEnvironmentService.test.ts for
+    // that) — just needs to return a plausible env Record.
+    paneEnvService: {
+      buildEnvForNewWindow: vi.fn(() => ({ AZITO_TASK_TOKEN: 'azt.task.1.' + 'a'.repeat(64), AZITO_TASK_ID: '1' })),
+    } as unknown as TaskRestoreDeps['paneEnvService'],
     ...overrides,
   };
 }
@@ -215,6 +224,7 @@ describe('TaskRestoreService', () => {
       expect.objectContaining({ name: 'test-server' }),
       'azito',
       'task-1',
+      { extraEnv: expect.objectContaining({ AZITO_TASK_TOKEN: expect.any(String), AZITO_TASK_ID: '1' }) },
     );
     expect(deps.windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({
       ownerType: 'task',
@@ -461,7 +471,7 @@ describe('TaskRestoreService', () => {
     expect(deps.tmux.createSession).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'test-server' }),
       'azito',
-      {},
+      { extraEnv: {} },
     );
   });
 

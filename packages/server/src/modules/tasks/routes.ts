@@ -27,7 +27,32 @@ import type { SqliteProjectSecretRepository } from '../projects/SqliteProjectSec
 import type { ITaskTokenRepository } from './tokens/TaskToken';
 import type { AuditLogService } from '../../shared/audit/AuditLogService';
 import type { Principal } from '../../shared/auth/Principal';
+import { OPERATOR_PRINCIPAL } from '../../shared/auth/Principal';
 import type { RouteAuthRequirement } from '../../shared/auth/routeAuth';
+import { TaskOriginationService } from './origination/TaskOriginationService';
+
+/**
+ * Maps an authenticated principal to the `Task['createdByKind']` it
+ * originates a task under (Issue #28 design v3 §5) — `runtime`/`agent`
+ * principals have no task-creation route wired to them today, but fall back
+ * to `'system'` rather than silently mis-recording as `'operator'` if one
+ * ever does. `origin.id` (the class-specific subject) is only meaningful for
+ * `'task'` — an operator/system origin has no single subject to record.
+ *
+ * `request.principal` is always set by buildServer.ts's onRequest hook
+ * before any handler here runs in production — the `?? OPERATOR_PRINCIPAL`
+ * fallback exists only for route-level unit tests that register this plugin
+ * directly against a bare Fastify instance (bypassing that hook), matching
+ * the same defensive convention the pre-existing POST /api/tasks/:id/tokens
+ * handler already uses (`request.principal?.class ?? 'operator'`).
+ */
+function originFromPrincipal(principal: Principal | undefined): { kind: Task['createdByKind']; id: number | null } {
+  const p = principal ?? OPERATOR_PRINCIPAL;
+  if (p.class === 'operator' || p.class === 'task' || p.class === 'trigger') {
+    return { kind: p.class, id: p.class === 'task' ? p.id ?? null : null };
+  }
+  return { kind: 'system', id: null };
+}
 
 function parseSubagentConfigInput(raw: unknown, fieldName: string): SubagentConfig | null {
   if (raw === null || raw === undefined) return null;
@@ -81,7 +106,22 @@ export interface TasksRouteOptions {
   /** Issue #28 Phase A: backs GET /api/tasks/:id (task-self read) and POST /api/tasks/:id/tokens (operator-only issuance). */
   taskTokenRepo: ITaskTokenRepository;
   auditLogService: AuditLogService;
+  /** Issue #28 Phase A後半: the sole task-creation funnel — see TaskOriginationService's own doc comment. */
+  originationService: TaskOriginationService;
 }
+
+/** POST /api/tasks/:id/children: a task principal may only create children under its own (parent) task; operator always passes (Issue #28 design v3 §4). */
+const childrenAuth: RouteAuthRequirement = {
+  classes: ['task'],
+  operation: 'tasks.children.create',
+  condition: (principal: Principal, request) => {
+    const id = Number((request.params as { id: string }).id);
+    return Number.isInteger(id) && principal.id === id;
+  },
+};
+
+/** Per-parent-task cap on POST /api/tasks/:id/children (Issue #28 design v3 §4: "実行あたり件数制限N=20"; see ITaskRepository.countChildren's doc comment for why this counts lifetime, not per-run). */
+const MAX_CHILDREN_PER_PARENT = 20;
 
 /** GET /api/tasks/:id: a task principal may only read its own record (Issue #28 design v3 §4). */
 const taskSelfAuth: RouteAuthRequirement = {
@@ -111,7 +151,7 @@ function toListItem(task: Task, windows: unknown[]): Record<string, unknown> {
 }
 
 const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, done) => {
-  const { taskRepo, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService, taskRestoreService, unitTypeLoader, sidekickLoader, projectSecretRepo, taskTokenRepo, auditLogService } = opts;
+  const { taskRepo, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService, taskRestoreService, unitTypeLoader, sidekickLoader, projectSecretRepo, taskTokenRepo, auditLogService, originationService } = opts;
   const taskCleanupService = new TaskCleanupService({ serverRepo, tmux, worktreeServiceFactory, transportFactory, projectServerRepo, projectRepo });
 
   // ── GET /api/tasks ──
@@ -182,7 +222,14 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       // created that way. A caller-supplied `source` therefore now decides
       // trust, not the endpoint used to reach this route.
       const resolvedSource = sourceFields.source ?? 'local';
-      const id = taskRepo.create({
+      // This route has no `config.auth` declaration, so it default-denies
+      // any non-operator principal (Issue #28 design v3 §4: "通常の POST
+      // /api/tasks は task principal から不可のまま") — request.principal is
+      // still 'task'-classed here in AZITO_SCOPED_AUTH compat mode (the
+      // onRequest hook audits, not blocks, while the flag is off), so origin
+      // is still derived honestly from the actual caller rather than
+      // hardcoded to 'operator'.
+      const id = originationService.create({
         projectId: project_id as number,
         unitId: (unit_id as number) ?? null,
         serverName: (server_name as string) ?? null,
@@ -212,12 +259,11 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         agentSessionId: null,
         reviewSubagent,
         implementSubagent,
-        inputTrust: deriveInputTrust(resolvedSource),
         executionApprovedFingerprintHash: null,
         pendingOperation: null,
         pendingOperationWindowId: null,
         pendingOperationPriorStatus: null,
-      });
+      }, originFromPrincipal(request.principal), request.principal ?? OPERATOR_PRINCIPAL);
       return { ok: true, id };
     } catch (err: unknown) {
       return reply.status(500).send({ error: (err as Error).message });
@@ -528,8 +574,11 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         // edited back to 'local' — otherwise that edit would be exactly the
         // bypass this gate exists to prevent.
         const effectiveSource = sourceFields.source !== undefined ? sourceFields.source : existing.source;
+        // createdByKind is immutable (set once at origination — see Task.ts's
+        // doc comment) and reused here unchanged; only `source` can move
+        // between local/github/gitlab via this PUT.
         const nextInputTrust: Task['inputTrust'] =
-          existing.inputTrust === 'untrusted' ? 'untrusted' : deriveInputTrust(effectiveSource);
+          existing.inputTrust === 'untrusted' ? 'untrusted' : deriveInputTrust(existing.createdByKind, effectiveSource);
         taskRepo.update(id, {
           title: (title as string) || existing.title,
           description:
@@ -607,6 +656,96 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         detail: { taskId: id, tokenId: issued.id, windowGeneration },
       });
       return reply.status(201).send({ id: issued.id, token: issued.token });
+    },
+  );
+
+  // ── POST /api/tasks/:id/children ── task-self or operator (Issue #28 design v3 §4).
+  //
+  // The only way a task principal may create a task at all — plain POST
+  // /api/tasks stays operator-only by omission (default-deny). Fixed to the
+  // PARENT's project (a body `project_id` would let a task spawn work in a
+  // project it has no relationship to — silently dropped, not merely
+  // ignored, by never reading it from the body below) and always
+  // `inputTrust: 'untrusted'` regardless of the caller's own trust level or
+  // any `source` the body might try to set — `source` itself is not even
+  // accepted here, it is fixed to `'local'` and `created_by_kind: 'task'`
+  // (recorded by TaskOriginationService from the `origin` argument, not from
+  // the body) is what actually records the real origin. See
+  // TaskOriginationService's doc comment for why `origin` is fixed to the
+  // PARENT task regardless of which principal (task or operator) issued this
+  // request.
+  fastify.post<{ Params: { id: string } }>(
+    '/api/tasks/:id/children',
+    { config: { auth: childrenAuth } },
+    async (request, reply) => {
+      const parentId = parseInt(request.params.id, 10);
+      const parent = taskRepo.findById(parentId);
+      if (!parent) return reply.status(404).send({ error: 'Task not found' });
+
+      const { title, description, unit_id, base_branch, branch } = request.body as Record<string, unknown>;
+      if (!title || typeof title !== 'string') {
+        return reply.status(400).send({ error: 'title required' });
+      }
+      const gitError = validateGitFields(request.body as Record<string, unknown>);
+      if (gitError) return reply.status(400).send({ error: gitError });
+
+      let unitId: number | null = null;
+      if (unit_id !== undefined && unit_id !== null) {
+        if (typeof unit_id !== 'number' || !unitRepo.findById(unit_id)) {
+          return reply.status(400).send({ error: 'unit_id not found' });
+        }
+        unitId = unit_id;
+      }
+
+      const existingChildren = taskRepo.countChildren(parentId);
+      if (existingChildren >= MAX_CHILDREN_PER_PARENT) {
+        const actor = request.principal ?? OPERATOR_PRINCIPAL;
+        auditLogService.record({
+          actorClass: actor.class,
+          actorId: actor.id ?? null,
+          event: 'tasks.children.limit_exceeded',
+          detail: { parentTaskId: parentId, existingChildren, limit: MAX_CHILDREN_PER_PARENT },
+        });
+        return reply.status(429).send({ error: `Task ${parentId} already has ${existingChildren} children (limit ${MAX_CHILDREN_PER_PARENT})` });
+      }
+
+      const id = originationService.create({
+        projectId: parent.projectId,
+        unitId,
+        serverName: null,
+        title,
+        description: (description as string) ?? null,
+        status: 'open',
+        currentPhase: null,
+        selfReviewCount: 0,
+        priority: 0,
+        tmuxWindow: null,
+        selfReviewMaxAttempts: null,
+        requirePlanApproval: true,
+        source: 'local',
+        sourceRef: null,
+        worktreePath: null,
+        worktreeBranch: null,
+        baseBranch: (base_branch as string) || null,
+        targetBranch: null,
+        skipPr: false,
+        workingDirectory: null,
+        branch: (branch as string) || null,
+        planMarkdown: null,
+        pendingQuestions: null,
+        changedFiles: null,
+        summaryJson: null,
+        prUrl: null,
+        agentSessionId: null,
+        reviewSubagent: null,
+        implementSubagent: null,
+        executionApprovedFingerprintHash: null,
+        pendingOperation: null,
+        pendingOperationWindowId: null,
+        pendingOperationPriorStatus: null,
+      }, { kind: 'task', id: parentId }, request.principal ?? OPERATOR_PRINCIPAL);
+
+      return reply.status(201).send({ ok: true, id });
     },
   );
 

@@ -79,6 +79,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     pushService, vapidKeys, notificationBus, sidekickPackageService, sidekickPackageLoader,
     sidekickSyncService, unitTypeLoader, agentSignalService, supervisorRegistry, agentTurnRepo, turnSignalHub,
     browserSessionManager, deployModeDetector, systemUpdateService, channelResolver, auditLogService,
+    originationService, scopedAuthEnabled,
   } = wiring;
 
   // ─── Webhook token ───
@@ -210,11 +211,15 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // actually enforced (403) or only audit-logged as "would have been
   // denied" (design v3 §12 staged migration: A~E all merge behind this
   // flag, then it flips on once every stage is deployed). Default off keeps
-  // every existing behavior byte-for-byte identical — a task token is a new
-  // credential shape that simply doesn't exist anywhere in the system yet
-  // outside this file and the (unwired) issuance endpoint, so recognizing
-  // it here changes nothing observable until AZITO_SCOPED_AUTH=1.
-  const scopedAuthEnabled = process.env.AZITO_SCOPED_AUTH === '1' || process.env.AZITO_SCOPED_AUTH === 'true';
+  // every existing behavior byte-for-byte identical except that task panes
+  // now always carry an AZITO_TASK_TOKEN (see TaskPaneEnvironmentService) —
+  // a credential nothing recognized before Phase A, so its presence changes
+  // nothing observable until AZITO_SCOPED_AUTH=1.
+  //
+  // Resolved ONCE in app/wiring.ts (shared/auth/scopedAuthFlag.ts) — not
+  // read from process.env here — so this file and
+  // TaskPaneEnvironmentService (constructed earlier, in wiring.ts) can never
+  // disagree about which mode the hub is running in.
 
   // ── GET /api/sidekicks/:name?render=1&task_id= task-principal condition ──
   // Cross-module (task -> project -> unit -> phaseConfig -> Sidekick tags)
@@ -274,7 +279,14 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
         actorClass: principal.class,
         actorId: principal.id ?? null,
         event: scopedAuthEnabled ? 'route_auth.denied' : 'route_auth.would_deny',
-        detail: { operation, method: request.method, url: request.url },
+        // The normalized ROUTE path (e.g. '/api/tasks/:id'), never
+        // request.url — that includes the raw query string, which can carry
+        // arbitrary caller-supplied values (search terms, tokens pasted into
+        // a query param by mistake, etc.) into audit_log (Issue #28
+        // third-party review finding 3). Fall back to request.url only if
+        // routing somehow didn't populate routeOptions (defensive; should
+        // not happen for a matched request reaching this hook).
+        detail: { operation, method: request.method, url: request.routeOptions.url ?? request.url },
       });
       if (scopedAuthEnabled) {
         return reply.status(403).send({ error: 'operator_required', operation });
@@ -288,10 +300,10 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   await app.register(sessionsRoutes, { serverRepo, tmux: tmuxClient, windowRepo, notificationBus, resourceGuard });
   await app.register(fileBrowseRoutes, { serverRepo, tmux: tmuxClient });
   await app.register(gitRoutes, { serverRepo, transportFactory });
-  await app.register(projectsRoutes, { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux: tmuxClient, serverRepo, projectSecretRepo });
+  await app.register(projectsRoutes, { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux: tmuxClient, serverRepo, projectSecretRepo, originationService });
   await app.register(unitsRoutes, { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, projectServerRepo, serverRepo, sidekickLoader: sidekickPackageLoader, unitTypeLoader });
   await app.register(operationsRoutes, { executeTaskUseCase, agentActivityMonitor });
-  await app.register(tasksRoutes, { taskRepo, taskTokenRepo, auditLogService, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux: tmuxClient, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService: windowRespawnService, taskRestoreService, unitTypeLoader, sidekickLoader: sidekickPackageLoader, projectSecretRepo });
+  await app.register(tasksRoutes, { taskRepo, taskTokenRepo, auditLogService, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux: tmuxClient, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService: windowRespawnService, taskRestoreService, unitTypeLoader, sidekickLoader: sidekickPackageLoader, projectSecretRepo, originationService });
   await app.register(windowsRoutes, { windowRepo, projectRepo, taskRepo, tmux: tmuxClient, serverRepo, respawnService: windowRespawnService, sessionStrategyFactory, sessionCaptureService, supervisorRegistry, notificationBus, resourceGuard });
   await app.register(providersRoutes, { providerRepo: wiring.providerRepo });
   const renderSkillPromptUseCase = new RenderSkillPromptUseCase(

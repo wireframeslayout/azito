@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 import Fastify from 'fastify';
 import projectsRoutes from './routes';
 import type { ProjectsRouteOptions } from './routes';
+import { TaskOriginationService } from '../tasks/origination/TaskOriginationService';
+import type { AuditLogService } from '../../shared/audit/AuditLogService';
 
 // Covers Issue #328's project-server-policy surface: 'allow' must be
 // rejected at the API boundary (no isolated execution profile exists yet to
@@ -9,6 +11,30 @@ import type { ProjectsRouteOptions } from './routes';
 // regardless of what `source`/`unit_id` etc. are passed.
 
 function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteOptions {
+  const taskRepo: ProjectsRouteOptions['taskRepo'] = {
+    findAll: vi.fn(() => []),
+    findByProject: vi.fn(() => []),
+    findByUnit: vi.fn(() => []),
+    findByStatus: vi.fn(() => []),
+    findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
+    findById: vi.fn(() => null),
+    create: vi.fn(() => 99),
+    update: vi.fn(),
+    updateStatus: vi.fn(),
+    updateCurrentPhase: vi.fn(),
+    touch: vi.fn(),
+    delete: vi.fn(),
+    consumePendingApproval: vi.fn(() => false),
+    recordExecutionGateBlock: vi.fn(() => true),
+    preApproveExecution: vi.fn(() => true),
+    countChildren: vi.fn(() => 0),
+  };
+  // A real TaskOriginationService wrapping the mock taskRepo above — so
+  // import-issue's "task ends up untrusted" assertions below still exercise
+  // the actual deriveInputTrust() mapping (via taskRepo.create's recorded
+  // call args) rather than a hand-maintained duplicate of that logic here.
+  const originationService = new TaskOriginationService(taskRepo, { record: vi.fn() } as unknown as AuditLogService);
+
   return {
     projectRepo: {
       findAll: vi.fn(() => []),
@@ -27,23 +53,8 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
       upsert: vi.fn(),
       remove: vi.fn(),
     },
-    taskRepo: {
-      findAll: vi.fn(() => []),
-      findByProject: vi.fn(() => []),
-      findByUnit: vi.fn(() => []),
-      findByStatus: vi.fn(() => []),
-      findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
-      findById: vi.fn(() => null),
-      create: vi.fn(() => 99),
-      update: vi.fn(),
-      updateStatus: vi.fn(),
-      updateCurrentPhase: vi.fn(),
-      touch: vi.fn(),
-      delete: vi.fn(),
-      consumePendingApproval: vi.fn(() => false),
-      recordExecutionGateBlock: vi.fn(() => true),
-      preApproveExecution: vi.fn(() => true),
-    },
+    taskRepo,
+    originationService,
     gitProvider: {
       getIssue: vi.fn(async () => ({ number: 5, title: 'Fix the thing', body: 'External issue body', state: 'open', htmlUrl: 'https://github.com/acme/widgets/issues/5' })),
     } as unknown as ProjectsRouteOptions['gitProvider'],

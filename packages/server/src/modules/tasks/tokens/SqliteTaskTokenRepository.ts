@@ -11,6 +11,7 @@ export class SqliteTaskTokenRepository implements ITaskTokenRepository {
   private insertStmt;
   private findActiveHashesByTaskStmt;
   private revokeAllForTaskStmt;
+  private nextGenerationStmt;
 
   constructor(private db: SqliteDatabase) {
     this.insertStmt = db.prepare(
@@ -21,6 +22,13 @@ export class SqliteTaskTokenRepository implements ITaskTokenRepository {
     );
     this.revokeAllForTaskStmt = db.prepare(
       "UPDATE task_tokens SET revoked_at = datetime('now'), revoke_reason = ? WHERE task_id = ? AND revoked_at IS NULL",
+    );
+    // MAX() over ALL rows (not just active ones) — a generation number must
+    // never be reused even after its token was revoked, or a revoked
+    // capability's hash could coincidentally collide with a fresh one's
+    // bookkeeping.
+    this.nextGenerationStmt = db.prepare(
+      'SELECT COALESCE(MAX(window_generation), 0) + 1 AS gen FROM task_tokens WHERE task_id = ?',
     );
   }
 
@@ -44,5 +52,17 @@ export class SqliteTaskTokenRepository implements ITaskTokenRepository {
   revokeAllForTask(taskId: number, reason: string): number {
     const result = this.revokeAllForTaskStmt.run(reason, taskId);
     return result.changes;
+  }
+
+  issueNextGeneration(taskId: number, revokeReason: string): IssuedTaskToken {
+    const run = this.db.transaction((tId: number, reason: string): IssuedTaskToken => {
+      this.revokeAllForTaskStmt.run(reason, tId);
+      const { gen } = this.nextGenerationStmt.get(tId) as { gen: number };
+      const secret = crypto.randomBytes(32).toString('hex');
+      const hash = hashSecret(secret).toString('hex');
+      const result = this.insertStmt.run(tId, hash, gen);
+      return { id: Number(result.lastInsertRowid), token: formatTaskToken(tId, secret) };
+    });
+    return run(taskId, revokeReason);
   }
 }

@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 
 export const version = 60;
-export const description = 'task_tokens capability table + audit_log (Issue #28 Phase A)';
+export const description = 'task_tokens capability table + audit_log + task origination columns (Issue #28 Phase A)';
 
 export function up(db: Database.Database): void {
   // Capability row per issued task token (design v3 §2). Plaintext is never
@@ -45,4 +45,23 @@ export function up(db: Database.Database): void {
     )
   `);
   db.exec('CREATE INDEX idx_audit_log_ts ON audit_log(ts)');
+
+  // Origination columns (Issue #28 Phase A後半, TaskOriginationService —
+  // design v3 §5). Extending this still-unreleased migration directly
+  // rather than adding a new one (per AGENTS.md instructions for this
+  // phase): 060 has never shipped, so there is no deployed schema to
+  // migrate forward from.
+  //
+  // `created_by_kind` defaults to 'operator' with a NOT NULL backfill for
+  // every existing row (design v3 §5: "既存行のバックフィルは 'operator' /
+  // null") — every task in the table before this column existed was, in
+  // fact, created through the pre-Phase-A `POST /api/tasks`/`import-issue`
+  // handlers, which only ever ran as an authenticated operator (no task
+  // principal existed yet to create anything). `created_by_id` has no
+  // matching backfill value (no historical row recorded which task/trigger
+  // originated it, because nothing but 'operator' could originate one) and
+  // stays NULL, matching 'operator''s own "no single subject" semantics
+  // (see Task.ts's `createdById` doc comment).
+  db.exec("ALTER TABLE tasks ADD COLUMN created_by_kind TEXT NOT NULL DEFAULT 'operator'");
+  db.exec('ALTER TABLE tasks ADD COLUMN created_by_id INTEGER');
 }

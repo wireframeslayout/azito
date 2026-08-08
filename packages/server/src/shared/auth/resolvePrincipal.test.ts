@@ -33,4 +33,21 @@ describe('resolvePrincipal', () => {
     const taskTokenRepo = { verify: vi.fn().mockReturnValue(false) };
     expect(resolvePrincipal(undefined, { verifyUiToken, taskTokenRepo })).toBeNull();
   });
+
+  // Issue #28 third-party review finding 4: an oversized taskId used to
+  // parse into a non-safe-integer that better-sqlite3 would throw on,
+  // turning a malformed token into a 500 instead of a clean 401. It must
+  // never even reach taskTokenRepo.verify().
+  it('never calls taskTokenRepo.verify() for a task-token-shaped header whose taskId overflows a safe integer, and does not throw', () => {
+    const verifyUiToken = vi.fn().mockReturnValue(false);
+    const taskTokenRepo = { verify: vi.fn().mockReturnValue(true) };
+    const secret = 'c'.repeat(64);
+    const hugeTaskId = '9'.repeat(20);
+    let principal;
+    expect(() => {
+      principal = resolvePrincipal(`Bearer azt.task.${hugeTaskId}.${secret}`, { verifyUiToken, taskTokenRepo });
+    }).not.toThrow();
+    expect(principal).toBeNull();
+    expect(taskTokenRepo.verify).not.toHaveBeenCalled();
+  });
 });
