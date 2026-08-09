@@ -42,7 +42,8 @@ function BlockList({ blocks, markdownText, thinkingSeconds }: {
               <CollapsibleBlock
                 key={i}
                 icon="terminal"
-                label={t('conversation.toolUse', { name: block.name })}
+                label={t('conversation.toolChip', { name: block.name })}
+                expandedLabel={t('conversation.toolUse', { name: block.name })}
                 truncatedNote={block.truncated ? t('conversation.blockTruncated') : undefined}
               >
                 {block.input}
@@ -55,7 +56,8 @@ function BlockList({ blocks, markdownText, thinkingSeconds }: {
                 icon="file"
                 tone={block.isError ? 'danger' : 'default'}
                 status={block.isError ? 'error' : 'success'}
-                label={block.isError ? t('conversation.toolResultError') : t('conversation.toolResult')}
+                label={block.isError ? t('conversation.toolResultChipError') : t('conversation.toolResultChip')}
+                expandedLabel={block.isError ? t('conversation.toolResultError') : t('conversation.toolResult')}
                 truncatedNote={block.truncated ? t('conversation.blockTruncated') : undefined}
               >
                 {block.text}

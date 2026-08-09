@@ -74,6 +74,18 @@ export function HistoryPopover({ onSelect, onClose }: HistoryPopoverProps) {
           </button>
         ))
       )}
+      {/* Ctrl/Cmd+Enter送信のヒントは placeholder から移設（SP実機の3行折返し対策、F5）。 */}
+      <div
+        style={{
+          marginTop: 4,
+          padding: '6px 10px 2px',
+          borderTop: '1px solid var(--border)',
+          fontSize: 'var(--font-2xs)',
+          color: 'var(--text-dim)',
+        }}
+      >
+        {t('promptBar.sendShortcutHint')}
+      </div>
     </div>
   );
 }

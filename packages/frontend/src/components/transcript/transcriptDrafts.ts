@@ -39,3 +39,42 @@ export function clearDraft(sessionId: string): void {
     // 上記と同様。
   }
 }
+
+export interface DebouncedDraftSaver {
+  /** 保存を delayMs 後に予約する。連続呼び出しは直前の予約を上書きする（デバウンス）。 */
+  schedule(sessionId: string, text: string): void;
+  /** 保留中の予約があれば、待たずに即座に保存して予約を消化する。無ければ何もしない。 */
+  flush(): void;
+}
+
+/**
+ * デバウンス保存を行うヘルパー。呼び出し側（PromptInputBar）はコンポーネントの生存期間中
+ * 1つのインスタンスを ref に保持し、アンマウント時・依存キー変更時のクリーンアップで
+ * `cancel` ではなく `flush` を呼ぶことで、デバウンス猶予内の離脱による下書き消失を防ぐ。
+ */
+export function createDebouncedDraftSaver(delayMs: number): DebouncedDraftSaver {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let pending: { sessionId: string; text: string } | null = null;
+
+  function flush(): void {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    if (pending) {
+      saveDraft(pending.sessionId, pending.text);
+      pending = null;
+    }
+  }
+
+  function schedule(sessionId: string, text: string): void {
+    if (timer !== null) clearTimeout(timer);
+    pending = { sessionId, text };
+    timer = setTimeout(() => {
+      timer = null;
+      flush();
+    }, delayMs);
+  }
+
+  return { schedule, flush };
+}

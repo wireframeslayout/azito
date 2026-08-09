@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { apiWithStatus } from '../../api/client';
 import { Icon } from '../ui/Icon';
 import { Spinner } from '../ui/Spinner';
-import { clearDraft, loadDraft, saveDraft } from './transcriptDrafts';
+import { clearDraft, createDebouncedDraftSaver, loadDraft } from './transcriptDrafts';
 import { loadHistory, pushHistory } from './inputHistory';
 import { HistoryPopover } from './HistoryPopover';
 import { PaneChip } from './PaneChip';
@@ -41,6 +41,7 @@ export default function PromptInputBar({ sessionId, onSent }: PromptInputBarProp
   const [sendError, setSendError] = useState<string | null>(null);
   const [showRestoredHint, setShowRestoredHint] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const draftSaverRef = useRef(createDebouncedDraftSaver(DRAFT_SAVE_DEBOUNCE_MS));
 
   // 会話ビュー表示時（セッション切り替え時、または再試行時）に候補ペインを取得し、自動選択 or 復元する。
   useEffect(() => {
@@ -85,12 +86,14 @@ export default function PromptInputBar({ sessionId, onSent }: PromptInputBarProp
   }, [sessionId, reloadTick, t]);
 
   // セッション切り替え時に下書きを復元する（F2）。復元があった場合のみ短時間ヒントを出す。
+  // 直前のセッションでタイマーが残っていてもここで必ず setShowRestoredHint を再設定するため、
+  // 「復元」表示が次のセッションに残留することはない（クリーンアップでタイマーは毎回破棄される）。
   useEffect(() => {
     const draft = loadDraft(sessionId);
     setText(draft);
     setHistoryIndex(-1);
+    setShowRestoredHint(draft !== '');
     if (draft !== '') {
-      setShowRestoredHint(true);
       const timer = setTimeout(() => setShowRestoredHint(false), RESTORED_HINT_MS);
       return () => clearTimeout(timer);
     }
@@ -99,9 +102,17 @@ export default function PromptInputBar({ sessionId, onSent }: PromptInputBarProp
 
   // 入力変更を300msデバウンスして下書き保存する（F2）。
   useEffect(() => {
-    const timer = setTimeout(() => saveDraft(sessionId, text), DRAFT_SAVE_DEBOUNCE_MS);
-    return () => clearTimeout(timer);
+    draftSaverRef.current.schedule(sessionId, text);
   }, [sessionId, text]);
+
+  // アンマウント時・セッション切り替え時は、保留中の保存を cancel せず flush する
+  // （300ms未満での離脱・切り替えによる最新下書きの取りこぼしを防ぐ）。
+  useEffect(() => {
+    const saver = draftSaverRef.current;
+    return () => {
+      saver.flush();
+    };
+  }, [sessionId]);
 
   // テキスト内容に応じて textarea の高さを追従させる（ユーザー入力・履歴挿入・送信後クリアの全経路）。
   useEffect(() => {
@@ -193,12 +204,41 @@ export default function PromptInputBar({ sessionId, onSent }: PromptInputBarProp
   return (
     <div
       style={{
+        position: 'relative',
         flexShrink: 0,
         borderTop: '1px solid var(--border)',
         background: 'var(--bg-card)',
         padding: '8px 16px calc(8px + env(safe-area-inset-bottom))',
       }}
     >
+      {/* 復元注記はレイアウト幅に影響させないよう、バー上に絶対配置の1.5秒オーバーレイとして表示する（F2/SP狭幅対策）。 */}
+      {showRestoredHint && (
+        <div
+          role="status"
+          style={{
+            position: 'absolute',
+            bottom: '100%',
+            right: 16,
+            marginBottom: 6,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4,
+            padding: '4px 10px',
+            borderRadius: 'var(--radius-md)',
+            background: 'var(--bg-elevated)',
+            border: '1px solid var(--border)',
+            boxShadow: 'var(--shadow-2)',
+            fontSize: 'var(--font-2xs)',
+            color: 'var(--text-dim)',
+            whiteSpace: 'nowrap',
+            pointerEvents: 'none',
+          }}
+        >
+          <Icon name="edit" size={14} />
+          {t('promptBar.draftRestored')}
+        </div>
+      )}
+
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
         <PaneChip
           panes={panes}
@@ -208,13 +248,6 @@ export default function PromptInputBar({ sessionId, onSent }: PromptInputBarProp
           onSelect={selectPane}
           onRetry={retryLoadPanes}
         />
-
-        {showRestoredHint && (
-          <span style={{ display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0, fontSize: 'var(--font-2xs)', color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>
-            <Icon name="edit" size={14} />
-            {t('promptBar.draftRestored')}
-          </span>
-        )}
 
         <textarea
           ref={textareaRef}
@@ -230,6 +263,7 @@ export default function PromptInputBar({ sessionId, onSent }: PromptInputBarProp
           aria-label={t('promptBar.placeholder')}
           style={{
             flex: 1,
+            minWidth: 0,
             background: 'var(--bg)',
             border: '1px solid var(--border)',
             borderRadius: 'var(--radius-md)',
@@ -276,8 +310,8 @@ export default function PromptInputBar({ sessionId, onSent }: PromptInputBarProp
           type="button"
           onClick={handleSend}
           disabled={!canSend}
-          aria-label={t('promptBar.send')}
-          title={t('promptBar.send')}
+          aria-label={t('promptBar.sendWithShortcut')}
+          title={t('promptBar.sendWithShortcut')}
           style={{
             display: 'flex',
             alignItems: 'center',

@@ -21,6 +21,9 @@
     "toolUse": "Tool call: {{name}}",
     "toolResult": "Tool result",
     "toolResultError": "Tool error",
+    "toolChip": "{{name}}",
+    "toolResultChip": "Result",
+    "toolResultChipError": "Error",
     "system": "System",
     "other": "Other",
     "liveThinking": "Thinking… {{seconds}}s",
@@ -44,8 +47,10 @@
     }
   },
   "promptBar": {
-    "placeholder": "Type a prompt… (Ctrl/Cmd+Enter to send)",
+    "placeholder": "Type a prompt…",
     "send": "Send",
+    "sendWithShortcut": "Send (Ctrl/Cmd+Enter)",
+    "sendShortcutHint": "Press Ctrl/Cmd+Enter to send",
     "choosePane": "Choose pane",
     "selectPane": "Select destination pane",
     "selectPaneHint": "Select a destination pane",

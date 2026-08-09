@@ -3,7 +3,10 @@ import { Icon, type IconName } from '../ui/Icon';
 
 interface CollapsibleBlockProps {
   icon: IconName;
+  /** 折りたたみ時（既定）に表示する短いラベル。狭幅でも読み切れる長さにする。 */
   label: string;
+  /** 展開時のみラベルを差し替えたい場合に指定する（省略時は `label` を使い続ける）。 */
+  expandedLabel?: string;
   tone?: 'default' | 'danger';
   /**
    * 確定した結果の成否のみを表す（tool_result 専用）。省略時はグリフを出さない。
@@ -30,11 +33,12 @@ function chipPreview(text: string): string {
  * 成功/失敗グリフを横並びにする。展開すると内容全文をブロック表示する。
  * ネイティブ <details>/<summary> を使い、キーボード操作・フォーカスを無償で得る。
  */
-export function CollapsibleBlock({ icon, label, tone = 'default', status, truncatedNote, children }: CollapsibleBlockProps) {
+export function CollapsibleBlock({ icon, label, expandedLabel, tone = 'default', status, truncatedNote, children }: CollapsibleBlockProps) {
   const [open, setOpen] = useState(false);
   const statusColor = status === 'error' ? 'var(--danger)' : 'var(--success)';
   const statusGlyph = status === 'error' ? '✗' : '✓';
   const preview = chipPreview(children);
+  const displayLabel = open && expandedLabel ? expandedLabel : label;
 
   return (
     <details
@@ -76,7 +80,7 @@ export function CollapsibleBlock({ icon, label, tone = 'default', status, trunca
             whiteSpace: 'nowrap',
           }}
         >
-          {label}
+          {displayLabel}
         </span>
         {preview && (
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flexShrink: 1 }}>{preview}</span>

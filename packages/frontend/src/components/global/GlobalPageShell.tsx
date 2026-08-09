@@ -187,7 +187,7 @@ export default function GlobalPageShell() {
     // 会話ビュー表示中（?session=...）は Transcript 側の ConversationView が自前のヘッダー
     // （戻る＋タイトル＋アクション）を描画するため、このレイアウトの共通ヘッダーは抑制する
     // （二重ヘッダーで SP 実機の縦スペースを浪費しないため）。
-    const inConversation = new URLSearchParams(location.search).has('session');
+    const inConversation = Boolean(new URLSearchParams(location.search).get('session'));
     return (
       <GlobalPageLayout title={t('globalPages.transcript')} hideHeader={inConversation}>
         <Suspense fallback={<LoadingFallback />}>

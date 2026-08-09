@@ -21,6 +21,9 @@
     "toolUse": "ツール呼び出し: {{name}}",
     "toolResult": "ツール結果",
     "toolResultError": "ツールエラー",
+    "toolChip": "{{name}}",
+    "toolResultChip": "結果",
+    "toolResultChipError": "エラー",
     "system": "システム",
     "other": "その他",
     "liveThinking": "思考中… {{seconds}}s",
@@ -44,8 +47,10 @@
     }
   },
   "promptBar": {
-    "placeholder": "プロンプトを入力…（Ctrl/Cmd+Enterで送信）",
+    "placeholder": "プロンプトを入力…",
     "send": "送信",
+    "sendWithShortcut": "送信（Ctrl/Cmd+Enter）",
+    "sendShortcutHint": "Ctrl/Cmd+Enterで送信できます",
     "choosePane": "ペインを選択",
     "selectPane": "送信先ペインを選択",
     "selectPaneHint": "送信先ペインを選択してください",

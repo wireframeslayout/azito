@@ -37,20 +37,22 @@ export function PaneChip({ panes, panesLoaded, panesError, selectedPane, onSelec
           alignItems: 'center',
           gap: 4,
           height: CHIP_HEIGHT,
+          maxWidth: '40%',
           padding: '0 10px',
           borderRadius: 'var(--radius-md)',
           cursor: 'pointer',
           fontSize: 'var(--font-xs)',
           fontWeight: 600,
           fontFamily: 'inherit',
-          whiteSpace: 'nowrap',
           color: hasProblem ? 'var(--warning)' : (selectedPane ? 'var(--accent)' : 'var(--text-dim)'),
           background: hasProblem ? 'var(--warning-a08)' : (selectedPane ? 'var(--accent-a08)' : 'var(--bg)'),
           border: `1px solid ${hasProblem ? 'var(--warning-a35)' : (selectedPane ? 'var(--accent-a35)' : 'var(--border)')}`,
         }}
       >
-        <Icon name={hasProblem ? 'warning' : 'terminal'} size={14} />
-        {selectedPane ? selectedPane.paneId : t('promptBar.choosePane')}
+        <Icon name={hasProblem ? 'warning' : 'terminal'} size={14} style={{ flexShrink: 0 }} />
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+          {selectedPane ? selectedPane.paneId : t('promptBar.choosePane')}
+        </span>
       </button>
       {open && (
         <PanePopover
