@@ -2,7 +2,7 @@
   "list": {
     "title": "Transcript",
     "empty": "No sessions found",
-    "emptyDescription": "Claude Code conversation logs will appear here once a session exists.",
+    "emptyDescription": "Claude Code and Codex conversation logs will appear here once a session exists.",
     "noPreview": "(no preview)",
     "loadError": "Failed to load sessions"
   },
@@ -63,6 +63,7 @@
     "retry": "Retry",
     "history": "Input history",
     "historyEmpty": "No history yet",
-    "draftRestored": "Draft restored"
+    "draftRestored": "Draft restored",
+    "unsupportedAgent": "Sending input to this agent ({{agentType}}) is not supported yet."
   }
 }

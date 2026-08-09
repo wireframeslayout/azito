@@ -1,8 +1,10 @@
-// GET /api/transcripts, GET /api/transcripts/:sessionId のレスポンス型。
-// サーバー側の型（packages/server/src/modules/transcripts/TranscriptService.ts）とフィールドを一致させる。
+// GET /api/transcripts, GET /api/transcripts/:agent/:id のレスポンス型。
+// サーバー側の型（packages/server/src/modules/transcripts/sources/TranscriptSource.ts）とフィールドを一致させる。
 
 export interface SessionSummary {
   sessionId: string;
+  /** このセッションを供給したソースの agentType（'claude' | 'codex' など）。 */
+  agentType: string;
   projectDir: string;
   cwd: string | null;
   mtimeMs: number;
@@ -35,7 +37,7 @@ export interface TranscriptErrorResponse {
   error: string;
 }
 
-// GET /api/transcripts/:sessionId/panes のレスポンス型。
+// GET /api/transcripts/:agent/:id/panes のレスポンス型（claude のみ対応）。
 // サーバー側の型（packages/server/src/modules/transcripts/TranscriptPaneService.ts）とフィールドを一致させる。
 
 export interface PaneCandidate {

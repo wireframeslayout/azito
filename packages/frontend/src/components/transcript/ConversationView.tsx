@@ -4,6 +4,7 @@ import { apiWithStatus } from '../../api/client';
 import { useApi } from '../../hooks/useApi';
 import { EmptyState, IconButton, LoadingState, PanelHeader } from '../ui';
 import { Icon } from '../ui/Icon';
+import { AgentBadge } from './AgentBadge';
 import { ConversationMenu } from './ConversationMenu';
 import { groupEntries } from './groupEntries';
 import { LiveStatusRow } from './LiveStatusRow';
@@ -28,13 +29,16 @@ const STYLE_ENTRY_COMPONENTS: Record<TranscriptStyle, ComponentType<StyleGroupPr
 
 const POLL_INTERVAL_MS = 2000;
 const NEAR_BOTTOM_THRESHOLD_PX = 80;
+/** ペイン候補提示・入力送信は tmux ペインとの cwd 突合が前提のため、現状 Claude のみ対応。 */
+const PANE_CAPABLE_AGENT_TYPE = 'claude';
 
 interface ConversationViewProps {
   sessionId: string;
+  agentType: string;
   onBack: () => void;
 }
 
-export default function ConversationView({ sessionId, onBack }: ConversationViewProps) {
+export default function ConversationView({ sessionId, agentType, onBack }: ConversationViewProps) {
   const { t } = useTranslation('transcript');
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -44,11 +48,12 @@ export default function ConversationView({ sessionId, onBack }: ConversationView
   const [newCount, setNewCount] = useState(0);
   const [style, setStyle] = useTranscriptStyle();
   const EntryComponent = STYLE_ENTRY_COMPONENTS[style];
+  const canSendInput = agentType === PANE_CAPABLE_AGENT_TYPE;
 
   // ヘッダー1段化（Issue #69）: タイトルはセッションの cwd basename。一覧経由でない直リンク
   // 表示時は一覧未取得のため sessionId 先頭8文字で代替し、一覧取得後に自動で補完する。
   const { data: sessionsData } = useApi<{ sessions: SessionSummary[] }>('/transcripts');
-  const matchedCwd = sessionsData?.sessions.find((s) => s.sessionId === sessionId)?.cwd ?? null;
+  const matchedCwd = sessionsData?.sessions.find((s) => s.sessionId === sessionId && s.agentType === agentType)?.cwd ?? null;
   const headerTitle = matchedCwd ? pathBasename(matchedCwd) : sessionId.slice(0, 8);
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -89,7 +94,9 @@ export default function ConversationView({ sessionId, onBack }: ConversationView
     nextOffsetRef.current = null;
     nearBottomRef.current = true;
 
-    apiWithStatus<ReadSessionResult | TranscriptErrorResponse>(`/transcripts/${encodeURIComponent(sessionId)}`)
+    apiWithStatus<ReadSessionResult | TranscriptErrorResponse>(
+      `/transcripts/${encodeURIComponent(agentType)}/${encodeURIComponent(sessionId)}`,
+    )
       .then(({ status, body }) => {
         if (cancelled) return;
         if (status === 404) {
@@ -117,7 +124,7 @@ export default function ConversationView({ sessionId, onBack }: ConversationView
     return () => {
       cancelled = true;
     };
-  }, [sessionId, scrollToBottom]);
+  }, [sessionId, agentType, scrollToBottom]);
 
   // ライブ追従: 2秒間隔でoffset以降を取得し追記する。タブが非表示の間は取得しない。
   useEffect(() => {
@@ -133,7 +140,7 @@ export default function ConversationView({ sessionId, onBack }: ConversationView
       inFlight = true;
       try {
         const { status, body } = await apiWithStatus<ReadSessionResult | TranscriptErrorResponse>(
-          `/transcripts/${encodeURIComponent(sessionId)}?offset=${nextOffsetRef.current}`,
+          `/transcripts/${encodeURIComponent(agentType)}/${encodeURIComponent(sessionId)}?offset=${nextOffsetRef.current}`,
         );
         if (disposed) return;
         if (status === 404) {
@@ -171,7 +178,7 @@ export default function ConversationView({ sessionId, onBack }: ConversationView
       clearInterval(intervalId);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [sessionId, loading, notFound, error, scrollToBottom]);
+  }, [sessionId, agentType, loading, notFound, error, scrollToBottom]);
 
   // ライブ状態行の出現は「新着」バッジのカウント対象にしない。最下部粘着中のみ追従スクロールする。
   useEffect(() => {
@@ -189,8 +196,11 @@ export default function ConversationView({ sessionId, onBack }: ConversationView
           </IconButton>
         }
         title={
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={matchedCwd ?? sessionId}>
-            {headerTitle}
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+            <AgentBadge agentType={agentType} />
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={matchedCwd ?? sessionId}>
+              {headerTitle}
+            </span>
           </span>
         }
         actions={
@@ -264,7 +274,23 @@ export default function ConversationView({ sessionId, onBack }: ConversationView
       </div>
 
       {!loading && !notFound && !error && (
-        <PromptInputBar sessionId={sessionId} onSent={() => scrollToBottom('smooth')} />
+        canSendInput ? (
+          <PromptInputBar sessionId={sessionId} onSent={() => scrollToBottom('smooth')} />
+        ) : (
+          <div
+            style={{
+              flexShrink: 0,
+              borderTop: '1px solid var(--border)',
+              background: 'var(--bg-card)',
+              padding: '10px 16px calc(10px + env(safe-area-inset-bottom))',
+              fontSize: 'var(--font-xs)',
+              color: 'var(--text-dim)',
+              textAlign: 'center',
+            }}
+          >
+            {t('promptBar.unsupportedAgent', { agentType })}
+          </div>
+        )
       )}
     </div>
   );

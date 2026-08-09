@@ -2,7 +2,7 @@
   "list": {
     "title": "Transcript",
     "empty": "セッションがありません",
-    "emptyDescription": "Claude Code のセッションが作成されると、ここに会話ログが表示されます。",
+    "emptyDescription": "Claude Code / Codex のセッションが作成されると、ここに会話ログが表示されます。",
     "noPreview": "(プレビューなし)",
     "loadError": "セッション一覧の取得に失敗しました"
   },
@@ -63,6 +63,7 @@
     "retry": "再試行",
     "history": "入力履歴",
     "historyEmpty": "履歴はまだありません",
-    "draftRestored": "下書きを復元しました"
+    "draftRestored": "下書きを復元しました",
+    "unsupportedAgent": "このエージェント（{{agentType}}）への送信は未対応です。"
   }
 }

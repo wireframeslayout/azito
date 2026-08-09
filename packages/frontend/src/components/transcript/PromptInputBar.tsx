@@ -22,6 +22,9 @@ interface PromptInputBarProps {
   onSent: () => void;
 }
 
+/** ペイン候補提示・入力送信は tmux ペインとの cwd 突合が前提のため、現状 Claude のみがこのコンポーネントを描画する。 */
+const PANE_CAPABLE_AGENT_TYPE = 'claude';
+
 /**
  * 会話ビュー下部の固定入力バー。cwd が一致する tmux ペインへプロンプトを送信する。
  * 送信内容自体は既存の JSONL ポーリングで会話に反映される（オプティミスティック表示はしない）。
@@ -52,7 +55,9 @@ export default function PromptInputBar({ sessionId, onSent }: PromptInputBarProp
     setSelectedPaneId(null);
     setSendError(null);
 
-    apiWithStatus<PaneCandidatesResult | TranscriptErrorResponse>(`/transcripts/${encodeURIComponent(sessionId)}/panes`)
+    apiWithStatus<PaneCandidatesResult | TranscriptErrorResponse>(
+      `/transcripts/${PANE_CAPABLE_AGENT_TYPE}/${encodeURIComponent(sessionId)}/panes`,
+    )
       .then(({ status, body }) => {
         if (cancelled) return;
         if (status !== 200 || isErrorResponse(body)) {
@@ -139,7 +144,7 @@ export default function PromptInputBar({ sessionId, onSent }: PromptInputBarProp
     setSendError(null);
     try {
       const { status, body } = await apiWithStatus<{ ok: true } | TranscriptErrorResponse>(
-        `/transcripts/${encodeURIComponent(sessionId)}/input`,
+        `/transcripts/${PANE_CAPABLE_AGENT_TYPE}/${encodeURIComponent(sessionId)}/input`,
         { method: 'POST', body: JSON.stringify({ paneId: selectedPaneId, text: trimmed }) },
       );
       if (status !== 200 || isErrorResponse(body)) {

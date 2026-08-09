@@ -3,11 +3,12 @@ import { useApi } from '../../hooks/useApi';
 import { LoadingState, EmptyState, ListRow, ListRowGroup, PageContainer, PageHeader, PageBody } from '../ui';
 import { Icon } from '../ui/Icon';
 import { formatRelativeTime } from '../../utils/time';
+import { AgentBadge } from './AgentBadge';
 import { formatBytes, pathBasename } from './transcriptFormat';
 import type { SessionSummary } from './transcriptTypes';
 
 interface SessionListViewProps {
-  onSelect: (sessionId: string) => void;
+  onSelect: (sessionId: string, agentType: string) => void;
 }
 
 export default function SessionListView({ onSelect }: SessionListViewProps) {
@@ -29,8 +30,8 @@ export default function SessionListView({ onSelect }: SessionListViewProps) {
           <ListRowGroup>
             {sessions.map((session) => (
               <ListRow
-                key={session.sessionId}
-                onClick={() => onSelect(session.sessionId)}
+                key={`${session.agentType}:${session.sessionId}`}
+                onClick={() => onSelect(session.sessionId, session.agentType)}
                 ariaLabel={session.preview || session.sessionId}
                 icon={<Icon name="transcript" size={16} />}
                 title={session.preview || t('list.noPreview')}
@@ -42,8 +43,11 @@ export default function SessionListView({ onSelect }: SessionListViewProps) {
                   )
                 }
                 chips={
-                  <span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-xs)', whiteSpace: 'nowrap' }}>
-                    {formatRelativeTime(session.mtimeMs, i18n.language)} · {formatBytes(session.sizeBytes)}
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                    <AgentBadge agentType={session.agentType} />
+                    <span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-xs)', whiteSpace: 'nowrap' }}>
+                      {formatRelativeTime(session.mtimeMs, i18n.language)} · {formatBytes(session.sizeBytes)}
+                    </span>
                   </span>
                 }
               />
