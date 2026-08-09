@@ -62,6 +62,8 @@ import {
   Link,
   Activity,
   GitCommitHorizontal,
+  Info,
+  CircleCheck,
   type LucideIcon,
 } from 'lucide-react';
 import { SidekickBot, UnitsSquad } from './custom-icons';
@@ -134,6 +136,8 @@ const ICONS = {
   operations: Activity,
   sidekicks: SidekickBot,
   'git-commit': GitCommitHorizontal,
+  info: Info,
+  'circle-check': CircleCheck,
 } satisfies Record<string, LucideIcon>;
 
 export type IconName = keyof typeof ICONS;

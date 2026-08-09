@@ -40,3 +40,5 @@ export { PageBody } from './PageBody';
 export { default as WindowActivityIndicator } from './WindowActivityIndicator';
 export { Slider } from './Slider';
 export { ColorSwatchInput } from './ColorSwatchInput';
+export { Notice } from './Notice';
+export type { NoticeTone } from './Notice';
