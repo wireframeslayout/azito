@@ -11,7 +11,8 @@ function buildClaudeSource(overrides: Partial<TranscriptSource> = {}): Transcrip
   return {
     agentType: 'claude',
     listSessions: () => [],
-    readSession: () => ({ entries: [], nextOffset: 0, truncated: false }),
+    readSession: () => ({ entries: [], nextOffset: 0, truncated: false, startOffset: 0, hasOlder: false }),
+    readSessionBefore: () => ({ entries: [], prevOffset: 0, hasOlder: false }),
     getSessionCwd: () => ({ cwd: null }),
     ...overrides,
   } as unknown as TranscriptSource;
@@ -21,7 +22,8 @@ function buildCodexSource(overrides: Partial<TranscriptSource> = {}): Transcript
   return {
     agentType: 'codex',
     listSessions: () => [],
-    readSession: () => ({ entries: [], nextOffset: 0, truncated: false }),
+    readSession: () => ({ entries: [], nextOffset: 0, truncated: false, startOffset: 0, hasOlder: false }),
+    readSessionBefore: () => ({ entries: [], prevOffset: 0, hasOlder: false }),
     getSessionCwd: () => ({ cwd: null }),
     ...overrides,
   } as unknown as TranscriptSource;
@@ -114,7 +116,7 @@ describe('GET /api/transcripts/:agent/:id', () => {
     const codex = buildCodexSource({
       readSession: (sessionId: string, offset?: number) => {
         received = { sessionId, offset };
-        return { entries: [], nextOffset: 0, truncated: false };
+        return { entries: [], nextOffset: 0, truncated: false, startOffset: 0, hasOlder: false };
       },
     });
     const app = buildApp([buildClaudeSource(), codex]);
@@ -127,6 +129,50 @@ describe('GET /api/transcripts/:agent/:id', () => {
   it('returns 404 when the session is not found', async () => {
     const app = buildApp([buildClaudeSource({ readSession: () => null })]);
     const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}` });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('rejects a non-integer before with 400', async () => {
+    const app = buildApp();
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?before=1.5` });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('rejects a negative before with 400', async () => {
+    const app = buildApp();
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?before=-1` });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('rejects specifying both offset and before with 400', async () => {
+    const app = buildApp();
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?offset=1&before=1` });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('reads via readSessionBefore when before is given', async () => {
+    let received: { sessionId: string; before: number } | null = null;
+    const claude = buildClaudeSource({
+      readSessionBefore: (sessionId: string, before: number) => {
+        received = { sessionId, before };
+        return { entries: [], prevOffset: 10, hasOlder: true };
+      },
+    });
+    const app = buildApp([claude]);
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?before=42` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ entries: [], prevOffset: 10, hasOlder: true });
+    expect(received).toEqual({ sessionId: SID, before: 42 });
+    await app.close();
+  });
+
+  it('returns 404 from readSessionBefore when the session is not found', async () => {
+    const app = buildApp([buildClaudeSource({ readSessionBefore: () => null })]);
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?before=42` });
     expect(res.statusCode).toBe(404);
     await app.close();
   });
@@ -287,6 +333,21 @@ describe('GET /api/transcripts/:sessionId (legacy)', () => {
     const app = buildApp([buildClaudeSource({ readSession: () => null })]);
     const res = await app.inject({ method: 'GET', url: `/api/transcripts/${SID}` });
     expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('reads via readSessionBefore when before is given', async () => {
+    const app = buildApp([buildClaudeSource({ readSessionBefore: () => ({ entries: [], prevOffset: 0, hasOlder: false }) })]);
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/${SID}?before=10` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ entries: [], prevOffset: 0, hasOlder: false });
+    await app.close();
+  });
+
+  it('rejects specifying both offset and before with 400', async () => {
+    const app = buildApp();
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/${SID}?offset=1&before=1` });
+    expect(res.statusCode).toBe(400);
     await app.close();
   });
 });

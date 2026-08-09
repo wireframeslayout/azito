@@ -35,6 +35,21 @@ export function formatEntryTimestamp(timestamp: string | null, language: string)
   return new Intl.DateTimeFormat(language, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(d);
 }
 
+/** タイムスタンプからローカル日付のキー（YYYY-M-D）を作る。日付セパレータの境界判定に使う。不正な値は null。 */
+export function dateKeyOf(timestamp: string | null): string | null {
+  if (!timestamp) return null;
+  const d = new Date(timestamp);
+  if (!Number.isFinite(d.getTime())) return null;
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
+
+/** 日付セパレータの表示ラベル（例: 8月9日（土）、ロケール依存）。不正な値は空文字。 */
+export function formatDateSeparator(timestamp: string, language: string): string {
+  const d = new Date(timestamp);
+  if (!Number.isFinite(d.getTime())) return '';
+  return new Intl.DateTimeFormat(language, { month: 'long', day: 'numeric', weekday: 'short' }).format(d);
+}
+
 /**
  * 直前エントリとの経過秒数を算出する（thinking チップの秒数併記用、C2）。
  * 1〜300秒の範囲外、またはタイムスタンプが不正・欠落している場合は null を返す。

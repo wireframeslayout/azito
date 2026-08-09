@@ -31,6 +31,19 @@ export interface ReadSessionResult {
   entries: TranscriptEntry[];
   nextOffset: number;
   truncated: boolean;
+  /** 返却範囲の先頭バイト位置。上方向ページング（?before=）に渡す境界値。 */
+  startOffset: number;
+  /** startOffset より前にまだ読んでいないデータがあるか（上方向ページング可能か）。 */
+  hasOlder: boolean;
+}
+
+/** GET /api/transcripts/:agent/:id?before=<offset> のレスポンス型（上方向ページング）。 */
+export interface ReadSessionBeforeResult {
+  entries: TranscriptEntry[];
+  /** 返却範囲の先頭バイト位置。次の上方向ページングではこの値を before に渡す。 */
+  prevOffset: number;
+  /** prevOffset より前にまだ読んでいないデータがあるか。 */
+  hasOlder: boolean;
 }
 
 export interface TranscriptErrorResponse {

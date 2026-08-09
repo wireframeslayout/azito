@@ -2,8 +2,16 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { isRecord, truncateText, TOOL_USE_INPUT_LIMIT, TOOL_RESULT_TEXT_LIMIT } from './entryHelpers';
-import { readChunk, readInitialWindow, readIncrementalWindow } from './jsonlWindowReader';
-import type { ReadSessionResult, SessionSummary, TranscriptBlock, TranscriptEntry, TranscriptEntryType, TranscriptSource } from './TranscriptSource';
+import { readChunk, readInitialWindow, readIncrementalWindow, readBeforeWindow } from './jsonlWindowReader';
+import type {
+  ReadSessionBeforeResult,
+  ReadSessionResult,
+  SessionSummary,
+  TranscriptBlock,
+  TranscriptEntry,
+  TranscriptEntryType,
+  TranscriptSource,
+} from './TranscriptSource';
 
 // ─── Constants ───
 
@@ -321,6 +329,25 @@ export class ClaudeTranscriptSource implements TranscriptSource {
       return offset === undefined
         ? readInitialWindow(fd, size, this.initialReadMaxBytes, parseLine, TAIL_ENTRY_LIMIT)
         : readIncrementalWindow(fd, size, offset, this.incrementalReadMaxBytes, parseLine);
+    } finally {
+      fs.closeSync(fd);
+    }
+  }
+
+  readSessionBefore(sessionId: string, before: number): ReadSessionBeforeResult | null {
+    const file = this.findSessionFile(sessionId);
+    if (!file) return null;
+
+    let fd: number;
+    try {
+      fd = fs.openSync(file, 'r');
+    } catch {
+      return null;
+    }
+
+    try {
+      const size = fs.fstatSync(fd).size;
+      return readBeforeWindow(fd, size, before, this.incrementalReadMaxBytes, parseLine);
     } finally {
       fs.closeSync(fd);
     }

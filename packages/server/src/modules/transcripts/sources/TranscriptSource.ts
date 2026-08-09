@@ -34,6 +34,18 @@ export interface ReadSessionResult {
   entries: TranscriptEntry[];
   nextOffset: number;
   truncated: boolean;
+  /** 返却範囲の先頭バイト位置。上方向ページング（readSessionBefore の before）に渡す境界値。 */
+  startOffset: number;
+  /** startOffset より前にまだ読んでいないデータがあるか（上方向ページング可能か）。 */
+  hasOlder: boolean;
+}
+
+export interface ReadSessionBeforeResult {
+  entries: TranscriptEntry[];
+  /** 返却範囲の先頭バイト位置。次の後方ページングではこの値を before に渡す。 */
+  prevOffset: number;
+  /** prevOffset より前にまだ読んでいないデータがあるか。 */
+  hasOlder: boolean;
 }
 
 /**
@@ -44,5 +56,7 @@ export interface TranscriptSource {
   readonly agentType: string;
   listSessions(limit?: number): SessionSummary[];
   readSession(sessionId: string, offset?: number): ReadSessionResult | null;
+  /** before（既知の行境界バイト位置）より前を後方ページングで読む。セッション未検出は null。 */
+  readSessionBefore(sessionId: string, before: number): ReadSessionBeforeResult | null;
   getSessionCwd(sessionId: string): { cwd: string | null } | null;
 }

@@ -13,7 +13,7 @@
     "empty": "このセッションにはまだメッセージがありません",
     "jumpToLatest": "最新へ",
     "jumpToLatestWithCount": "新着 {{count}} 件",
-    "olderTruncated": "古いメッセージは省略されています",
+    "loadingOlder": "以前のメッセージを読み込み中…",
     "blockTruncated": "…省略",
     "thinking": "思考",
     "thinkingWithSeconds": "思考 {{seconds}}秒",

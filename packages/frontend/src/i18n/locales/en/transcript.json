@@ -13,7 +13,7 @@
     "empty": "This session has no messages yet",
     "jumpToLatest": "Jump to latest",
     "jumpToLatestWithCount": "{{count}} new",
-    "olderTruncated": "Older messages were omitted",
+    "loadingOlder": "Loading older messages…",
     "blockTruncated": "…truncated",
     "thinking": "Thinking",
     "thinkingWithSeconds": "Thinking {{seconds}}s",

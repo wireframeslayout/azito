@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ComponentType } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ComponentType } from 'react';
 import { useTranslation } from 'react-i18next';
 import { apiWithStatus } from '../../api/client';
 import { useApi } from '../../hooks/useApi';
@@ -6,6 +6,7 @@ import { EmptyState, IconButton, LoadingState, PanelHeader } from '../ui';
 import { Icon } from '../ui/Icon';
 import { AgentBadge } from './AgentBadge';
 import { ConversationMenu } from './ConversationMenu';
+import { DateDivider } from './DateDivider';
 import { groupEntries } from './groupEntries';
 import { LiveStatusRow } from './LiveStatusRow';
 import { deriveLiveStatus } from './liveStatus';
@@ -16,9 +17,15 @@ import FlowEntry from './styles/FlowEntry';
 import RailEntry from './styles/RailEntry';
 import TuiEntry from './styles/TuiEntry';
 import type { StyleGroupProps } from './styles/types';
-import { isErrorResponse, pathBasename } from './transcriptFormat';
+import { dateKeyOf, formatDateSeparator, isErrorResponse, pathBasename } from './transcriptFormat';
 import { useTranscriptStyle, type TranscriptStyle } from './transcriptStyle';
-import type { ReadSessionResult, SessionSummary, TranscriptEntry, TranscriptErrorResponse } from './transcriptTypes';
+import type {
+  ReadSessionBeforeResult,
+  ReadSessionResult,
+  SessionSummary,
+  TranscriptEntry,
+  TranscriptErrorResponse,
+} from './transcriptTypes';
 
 const STYLE_ENTRY_COMPONENTS: Record<TranscriptStyle, ComponentType<StyleGroupProps>> = {
   bubble: BubbleEntry,
@@ -39,12 +46,12 @@ interface ConversationViewProps {
 }
 
 export default function ConversationView({ sessionId, agentType, onBack }: ConversationViewProps) {
-  const { t } = useTranslation('transcript');
+  const { t, i18n } = useTranslation('transcript');
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [truncatedInitial, setTruncatedInitial] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [newCount, setNewCount] = useState(0);
   const [style, setStyle] = useTranscriptStyle();
   const EntryComponent = STYLE_ENTRY_COMPONENTS[style];
@@ -57,8 +64,17 @@ export default function ConversationView({ sessionId, agentType, onBack }: Conve
   const headerTitle = matchedCwd ? pathBasename(matchedCwd) : sessionId.slice(0, 8);
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
   const nearBottomRef = useRef(true);
   const nextOffsetRef = useRef<number | null>(null);
+
+  // 上方向ページング（Issue #69 Phase C）: startOffsetRef/hasOlderRef が判定の正（UI表示は
+  // loadingOlder state のみに依存し、hasOlder 自体は再レンダー不要なため ref だけで持つ）。
+  const startOffsetRef = useRef<number | null>(null);
+  const hasOlderRef = useRef(false);
+  const loadingOlderInFlightRef = useRef(false);
+  // 上方向ページングでの prepend 直前のスクロール位置。反映後の useLayoutEffect でアンカー補正する。
+  const pendingAnchorRef = useRef<{ prevScrollHeight: number; prevScrollTop: number } | null>(null);
 
   // ライブ状態インジケータ（C1）: kind/toolName の算出のみ行う。経過秒の1秒毎更新と90秒経過での
   // 非表示化は LiveStatusRow 側の責務（親の再レンダーを entries 更新時のみに抑えるため）。
@@ -83,6 +99,34 @@ export default function ConversationView({ sessionId, agentType, onBack }: Conve
     if (near) setNewCount(0);
   }, []);
 
+  // 上方向ページング（Issue #69 Phase C）: センチネルが可視になったら before=startOffset で
+  // 過去分を1回だけ取得し、entries の先頭に prepend する。多重発火は inFlight フラグで防ぐ。
+  const loadOlder = useCallback(async () => {
+    if (loadingOlderInFlightRef.current || !hasOlderRef.current || startOffsetRef.current === null) return;
+    loadingOlderInFlightRef.current = true;
+    setLoadingOlder(true);
+    try {
+      const { status, body } = await apiWithStatus<ReadSessionBeforeResult | TranscriptErrorResponse>(
+        `/transcripts/${encodeURIComponent(agentType)}/${encodeURIComponent(sessionId)}?before=${startOffsetRef.current}`,
+      );
+      if (status !== 200 || isErrorResponse(body)) return; // 一時的なエラー: 次回のスクロール到達で再試行
+      if (body.entries.length > 0) {
+        const container = containerRef.current;
+        if (container) {
+          pendingAnchorRef.current = { prevScrollHeight: container.scrollHeight, prevScrollTop: container.scrollTop };
+        }
+        setEntries((prev) => [...body.entries, ...prev]);
+      }
+      startOffsetRef.current = body.prevOffset;
+      hasOlderRef.current = body.hasOlder;
+    } catch {
+      // ネットワーク一時エラー: 次回のスクロール到達で再試行
+    } finally {
+      loadingOlderInFlightRef.current = false;
+      setLoadingOlder(false);
+    }
+  }, [sessionId, agentType]);
+
   // 初回読み込み: セッション切り替え毎に全状態をリセットして末尾から取得する。
   useEffect(() => {
     let cancelled = false;
@@ -91,7 +135,12 @@ export default function ConversationView({ sessionId, agentType, onBack }: Conve
     setError(null);
     setEntries([]);
     setNewCount(0);
+    setLoadingOlder(false);
     nextOffsetRef.current = null;
+    startOffsetRef.current = null;
+    hasOlderRef.current = false;
+    loadingOlderInFlightRef.current = false;
+    pendingAnchorRef.current = null;
     nearBottomRef.current = true;
 
     apiWithStatus<ReadSessionResult | TranscriptErrorResponse>(
@@ -110,8 +159,9 @@ export default function ConversationView({ sessionId, agentType, onBack }: Conve
           return;
         }
         setEntries(body.entries);
-        setTruncatedInitial(body.truncated);
         nextOffsetRef.current = body.nextOffset;
+        startOffsetRef.current = body.startOffset;
+        hasOlderRef.current = body.hasOlder;
         setLoading(false);
         requestAnimationFrame(() => scrollToBottom('auto'));
       })
@@ -180,6 +230,38 @@ export default function ConversationView({ sessionId, agentType, onBack }: Conve
     };
   }, [sessionId, agentType, loading, notFound, error, scrollToBottom]);
 
+  // 上方向ページングのトリガー: センチネル（先頭に置いたダミー要素）がスクロールコンテナ内で
+  // 可視になったら loadOlder を呼ぶ。hasOlder/inFlight の判定は loadOlder 内部で行う。
+  useEffect(() => {
+    if (loading || notFound || error) return;
+    const sentinel = sentinelRef.current;
+    const container = containerRef.current;
+    if (!sentinel || !container) return;
+
+    const observer = new IntersectionObserver(
+      (observerEntries) => {
+        if (observerEntries[0]?.isIntersecting) void loadOlder();
+      },
+      { root: container, threshold: 0 },
+    );
+    observer.observe(sentinel);
+
+    return () => observer.disconnect();
+  }, [loading, notFound, error, loadOlder]);
+
+  // 上方向ページングのスクロール位置アンカー補正: prepend 直前に記録した scrollHeight/scrollTop を
+  // 元に、描画後の差分だけ scrollTop を進めて視界を固定する（entries 反映後に同期実行する必要が
+  // あるため useLayoutEffect を使う）。
+  useLayoutEffect(() => {
+    const anchor = pendingAnchorRef.current;
+    if (!anchor) return;
+    pendingAnchorRef.current = null;
+    const container = containerRef.current;
+    if (!container) return;
+    const newScrollHeight = container.scrollHeight;
+    container.scrollTop = anchor.prevScrollTop + (newScrollHeight - anchor.prevScrollHeight);
+  }, [entries]);
+
   // ライブ状態行の出現は「新着」バッジのカウント対象にしない。最下部粘着中のみ追従スクロールする。
   useEffect(() => {
     if (hasLiveStatus && nearBottomRef.current) {
@@ -227,16 +309,34 @@ export default function ConversationView({ sessionId, agentType, onBack }: Conve
             <EmptyState title={t('conversation.empty')} />
           ) : (
             <>
-              {truncatedInitial && (
-                <div style={{ textAlign: 'center', fontSize: 'var(--font-xs)', color: 'var(--text-dim)', margin: '0 0 12px' }}>
-                  {t('conversation.olderTruncated')}
-                </div>
-              )}
-              {groupEntries(entries).map((group, i, groups) => {
-                const prevGroup = i > 0 ? groups[i - 1] : null;
-                const prevTimestamp = prevGroup ? prevGroup.entries[prevGroup.entries.length - 1].timestamp : null;
-                return <EntryComponent key={group.entries[0].uuid} group={group} prevTimestamp={prevTimestamp} />;
-              })}
+              <div ref={sentinelRef} style={{ minHeight: 1 }}>
+                {loadingOlder && (
+                  <div style={{ textAlign: 'center', fontSize: 'var(--font-xs)', color: 'var(--text-dim)', padding: '8px 0 12px' }}>
+                    {t('conversation.loadingOlder')}
+                  </div>
+                )}
+              </div>
+              {(() => {
+                const groups = groupEntries(entries);
+                let currentDateKey: string | null = null;
+                return groups.map((group, i) => {
+                  const prevGroup = i > 0 ? groups[i - 1] : null;
+                  const prevTimestamp = prevGroup ? prevGroup.entries[prevGroup.entries.length - 1].timestamp : null;
+                  const groupDateKey = dateKeyOf(group.entries[0].timestamp);
+                  const showDateDivider = groupDateKey !== null && groupDateKey !== currentDateKey;
+                  if (groupDateKey !== null) currentDateKey = groupDateKey;
+
+                  return (
+                    <div
+                      key={group.entries[0].uuid}
+                      style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 200px' }}
+                    >
+                      {showDateDivider && <DateDivider label={formatDateSeparator(group.entries[0].timestamp!, i18n.language)} />}
+                      <EntryComponent group={group} prevTimestamp={prevTimestamp} />
+                    </div>
+                  );
+                });
+              })()}
               {liveStatus && lastEntryTimestamp && (
                 <LiveStatusRow status={liveStatus} lastTimestamp={lastEntryTimestamp} style={style} />
               )}

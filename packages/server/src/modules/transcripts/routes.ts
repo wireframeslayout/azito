@@ -17,12 +17,38 @@ function findSource(sources: TranscriptSource[], agentType: string): TranscriptS
   return sources.find((s) => s.agentType === agentType);
 }
 
-/** offset クエリを検証する。未指定は undefined、不正値は 'invalid' を返す。 */
-function parseOffset(raw: string | undefined): number | undefined | 'invalid' {
+/** offset/before クエリを検証する。未指定は undefined、不正値は 'invalid' を返す。 */
+function parseNonNegativeInt(raw: string | undefined): number | undefined | 'invalid' {
   if (raw === undefined) return undefined;
-  const offset = Number(raw);
-  if (!Number.isSafeInteger(offset) || offset < 0) return 'invalid';
-  return offset;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0) return 'invalid';
+  return value;
+}
+
+/**
+ * 単一セッション読み取りの GET ハンドラ本体。offset（差分読み・初回読み）と before（後方ページング）
+ * は排他: 同時指定は 400。
+ */
+async function handleReadSession(source: TranscriptSource, sessionId: string, query: { offset?: string; before?: string }, reply: FastifyReply) {
+  const { offset: offsetRaw, before: beforeRaw } = query;
+  if (offsetRaw !== undefined && beforeRaw !== undefined) {
+    return reply.status(400).send({ error: 'Cannot specify both offset and before' });
+  }
+
+  if (beforeRaw !== undefined) {
+    const before = parseNonNegativeInt(beforeRaw);
+    if (before === 'invalid' || before === undefined) return reply.status(400).send({ error: 'Invalid before' });
+    const result = source.readSessionBefore(sessionId, before);
+    if (!result) return reply.status(404).send({ error: 'Session not found' });
+    return result;
+  }
+
+  const offset = parseNonNegativeInt(offsetRaw);
+  if (offset === 'invalid') return reply.status(400).send({ error: 'Invalid offset' });
+
+  const result = source.readSession(sessionId, offset);
+  if (!result) return reply.status(404).send({ error: 'Session not found' });
+  return result;
 }
 
 const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fastify, opts, done) => {
@@ -37,19 +63,14 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
     return { sessions };
   });
 
-  // ── GET /api/transcripts/:agent/:id ── 単一セッションの読み取り（offset で差分読み）
-  fastify.get<{ Params: { agent: string; id: string }; Querystring: { offset?: string } }>(
+  // ── GET /api/transcripts/:agent/:id ── 単一セッションの読み取り（offset で差分読み、before で後方ページング）
+  fastify.get<{ Params: { agent: string; id: string }; Querystring: { offset?: string; before?: string } }>(
     '/api/transcripts/:agent/:id',
     async (request, reply) => {
       const source = findSource(sources, request.params.agent);
       if (!source) return reply.status(404).send({ error: 'Unknown agent type' });
 
-      const offset = parseOffset(request.query.offset);
-      if (offset === 'invalid') return reply.status(400).send({ error: 'Invalid offset' });
-
-      const result = source.readSession(request.params.id, offset);
-      if (!result) return reply.status(404).send({ error: 'Session not found' });
-      return result;
+      return handleReadSession(source, request.params.id, request.query, reply);
     },
   );
 
@@ -76,18 +97,13 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
 
   // ── 後方互換ルート（旧 UUID 直下パス、claude 固定） ──
 
-  fastify.get<{ Params: { sessionId: string }; Querystring: { offset?: string } }>(
+  fastify.get<{ Params: { sessionId: string }; Querystring: { offset?: string; before?: string } }>(
     '/api/transcripts/:sessionId',
     async (request, reply) => {
       const source = findSource(sources, PANE_CAPABLE_AGENT_TYPE);
       if (!source) return reply.status(404).send({ error: 'Unknown agent type' });
 
-      const offset = parseOffset(request.query.offset);
-      if (offset === 'invalid') return reply.status(400).send({ error: 'Invalid offset' });
-
-      const result = source.readSession(request.params.sessionId, offset);
-      if (!result) return reply.status(404).send({ error: 'Session not found' });
-      return result;
+      return handleReadSession(source, request.params.sessionId, request.query, reply);
     },
   );
 

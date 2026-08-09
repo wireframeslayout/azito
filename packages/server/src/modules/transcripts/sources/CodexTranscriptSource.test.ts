@@ -309,4 +309,41 @@ describe('CodexTranscriptSource', () => {
       ]);
     });
   });
+
+  describe('readSessionBefore', () => {
+    it('returns null for an invalid session id', () => {
+      expect(source.readSessionBefore('not-a-uuid', 0)).toBeNull();
+    });
+
+    it('returns null when the session file does not exist', () => {
+      expect(source.readSessionBefore(SID_A, 0)).toBeNull();
+    });
+
+    it('drains the session backward with no duplicate entries across multiple before reads', () => {
+      const smallWindowSource = new CodexTranscriptSource(dir, { initialReadMaxBytes: 400, incrementalReadMaxBytes: 400 });
+      const lines: unknown[] = [SESSION_META(SID_A, '/home/user/proj-a')];
+      for (let i = 0; i < 20; i++) lines.push(USER_MESSAGE(`msg-${i}`));
+      writeSession(dir, SID_A, lines);
+
+      const initial = smallWindowSource.readSession(SID_A);
+      expect(initial!.hasOlder).toBe(true);
+
+      const collected: string[] = initial!.entries.map((e) => (e.blocks[0].kind === 'text' ? e.blocks[0].text : ''));
+      let before = initial!.startOffset;
+      let hasOlder = initial!.hasOlder;
+      let iterations = 0;
+      while (hasOlder && iterations < 100) {
+        const page = smallWindowSource.readSessionBefore(SID_A, before)!;
+        expect(page.prevOffset).toBeLessThan(before);
+        collected.unshift(...page.entries.map((e) => (e.blocks[0].kind === 'text' ? e.blocks[0].text : '')));
+        before = page.prevOffset;
+        hasOlder = page.hasOlder;
+        iterations++;
+      }
+
+      expect(iterations).toBeGreaterThan(1);
+      expect(before).toBe(0);
+      expect(collected).toEqual(Array.from({ length: 20 }, (_, i) => `msg-${i}`));
+    });
+  });
 });

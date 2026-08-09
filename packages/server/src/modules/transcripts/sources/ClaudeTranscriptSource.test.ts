@@ -412,5 +412,51 @@ describe('ClaudeTranscriptSource', () => {
       expect(result!.entries).toHaveLength(1);
       expect(result!.entries[0].uuid).toBe('u2');
     });
+
+    it('exposes startOffset/hasOlder on the initial read result', () => {
+      writeSession(dir, 'proj-a', SID_A, [{ type: 'user', uuid: 'u1', message: { content: 'only entry' } }]);
+      const result = service.readSession(SID_A);
+      expect(result!.startOffset).toBe(0);
+      expect(result!.hasOlder).toBe(false);
+    });
+  });
+
+  describe('readSessionBefore', () => {
+    it('rejects non-UUID session ids', () => {
+      expect(service.readSessionBefore('not-a-uuid', 0)).toBeNull();
+    });
+
+    it('returns null when session file does not exist', () => {
+      expect(service.readSessionBefore(SID_A, 0)).toBeNull();
+    });
+
+    it('drains an entire session backward via repeated before reads with no duplicates', () => {
+      const smallWindowService = new ClaudeTranscriptSource(dir, { initialReadMaxBytes: 120, incrementalReadMaxBytes: 120 });
+      const lines: unknown[] = [];
+      for (let i = 0; i < 30; i++) {
+        lines.push({ type: 'user', uuid: `u${i}`, timestamp: null, message: { content: `message ${i}` } });
+      }
+      writeSession(dir, 'proj-a', SID_A, lines);
+
+      const initial = smallWindowService.readSession(SID_A);
+      expect(initial!.hasOlder).toBe(true);
+
+      const collected: string[] = initial!.entries.map((e) => (e.blocks[0].kind === 'text' ? e.blocks[0].text : ''));
+      let before = initial!.startOffset;
+      let hasOlder = initial!.hasOlder;
+      let iterations = 0;
+      while (hasOlder && iterations < 100) {
+        const page = smallWindowService.readSessionBefore(SID_A, before)!;
+        expect(page.prevOffset).toBeLessThan(before);
+        collected.unshift(...page.entries.map((e) => (e.blocks[0].kind === 'text' ? e.blocks[0].text : '')));
+        before = page.prevOffset;
+        hasOlder = page.hasOlder;
+        iterations++;
+      }
+
+      expect(iterations).toBeGreaterThan(1);
+      expect(before).toBe(0);
+      expect(collected).toEqual(lines.map((_, i) => `message ${i}`));
+    });
   });
 });
