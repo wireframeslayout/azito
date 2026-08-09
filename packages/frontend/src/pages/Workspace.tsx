@@ -32,6 +32,8 @@ import { findPane, findPaneByTab, listPanes, closeTab as closeTabInLayoutTree, t
 import { addBrowserToTaskLayout } from '../components/task/taskPaneLayout';
 import type { BrowserOpenedPayload } from '../types/notification';
 import WorkspaceSidebarContent from '../components/workspace/WorkspaceSidebarContent';
+import { MobileTabChipRow } from '../components/workspace/MobileTabChipRow';
+import { MobileTabSwitcherSheet } from '../components/workspace/MobileTabSwitcherSheet';
 import ActiveWindowsSection from '../components/workspace/ActiveWindowsSection';
 import WorkspaceLayout from '../components/workspace/WorkspaceLayout';
 import AddWindowModal from '../components/workspace/AddWindowModal';
@@ -86,7 +88,7 @@ function WorkspaceInner() {
     setThemeProjectId(activeProjectId || null);
   }, [activeProjectId, setThemeProjectId]);
 
-  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, closeTab, retargetTab, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, reorderTab, openProjectTasks, openSettings: openSettingsRaw, togglePin } = useTabPersistence();
+  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, closeTab, retargetTab, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin } = useTabPersistence();
 
   const openServer = useCallback((serverName: string) => {
     navigate(paths.server(serverName, 'overview'));
@@ -137,6 +139,15 @@ function WorkspaceInner() {
   const mobile = useIsMobile();
   const sidebarCollapsedEffective = sidebarCollapsed;
   const currentProjectId = parseInt(id || '0', 10);
+
+  // SP タブスイッチャー（Issue #69 Phase E-3）: 開閉状態のみここで持つ。タブ本体の
+  // 開閉・選択は既存の useTabPersistence ストア（tabs/activeTabId/closeTab/
+  // setActiveTabId）をそのまま共有し、新しいタブ状態体系は作らない。
+  const [mobileTabSwitcherOpen, setMobileTabSwitcherOpen] = useState(false);
+  const handleOpenAddTabFromSwitcher = useCallback(() => {
+    switchSidebarMode('windows');
+    setSidebarOpen(true);
+  }, [switchSidebarMode, setSidebarOpen]);
 
   // Sidebar section clicks must both update the sidebar highlight (projectSettings.setSection)
   // and update the settings tab's persisted settingsSection so SettingsTabContent's effect
@@ -986,18 +997,29 @@ function WorkspaceInner() {
       connectPane={connectPaneFromActiveWindow}
       openTask={openTaskFromActiveWindow}
       taskWindows={taskWindows}
+      hideMenuBar={mobile && !!activeTabId}
     >
         {mobile ? (
           <>
-            <TabBar
-              tabs={tabs.map(buildTabItem)}
-              activeId={activeTabId}
-              onSelect={handleSelectTab}
-              onClose={closeTabAndRefreshBrowser}
-              onReorder={reorderTab}
-              draggable
-              onTabContextMenu={windowActions.handleTabContextMenu}
-              onTabLongPress={windowActions.handleTabLongPress}
+            <MobileTabChipRow
+              activeTab={(() => {
+                const tab = tabs.find((t) => t.id === activeTabId);
+                return tab ? buildTabItem(tab) : null;
+              })()}
+              tabCount={tabs.length}
+              onOpenSwitcher={() => setMobileTabSwitcherOpen(true)}
+              onOpenMenu={() => setSidebarOpen(true)}
+            />
+            <MobileTabSwitcherSheet
+              open={mobileTabSwitcherOpen}
+              onClose={() => setMobileTabSwitcherOpen(false)}
+              tabs={tabs}
+              activeTabId={activeTabId}
+              allProjects={allProjects}
+              buildTabItem={buildTabItem}
+              onSelectTab={handleSelectTab}
+              onCloseTab={closeTabAndRefreshBrowser}
+              onOpenAddTab={handleOpenAddTabFromSwitcher}
             />
 
             <div style={{ flex: 1, position: 'relative', background: 'var(--ws-content)' }}>

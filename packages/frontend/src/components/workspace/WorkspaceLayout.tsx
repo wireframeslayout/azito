@@ -71,6 +71,13 @@ interface WorkspaceLayoutProps {
   connectPane?: (serverName: string, target: string, projectId?: number) => void;
   openTask?: (taskId: number, title: string, projectId?: number) => void;
   taskWindows?: Array<{ serverName: string; tmuxTarget: string; taskId: number }>;
+  /**
+   * SP タブチップ行導入（Issue #69 Phase E-3）: ターミナル/チャット表示中は
+   * 下部フローティングメニューバーを自動退避させる。バーの恒久非表示にはせず
+   * — タブ未選択時（sidebarOpen と同様に）は従来どおり表示する。既存の
+   * sidebarOpen による非表示条件とは OR で合成される。
+   */
+  hideMenuBar?: boolean;
 }
 
 export default function WorkspaceLayout({
@@ -99,6 +106,7 @@ export default function WorkspaceLayout({
   connectPane,
   openTask,
   taskWindows,
+  hideMenuBar,
 }: WorkspaceLayoutProps) {
   const { t } = useTranslation(['workspace', 'common', 'projects']);
   const navigate = useNavigate();
@@ -363,7 +371,7 @@ export default function WorkspaceLayout({
           sidebarMode={sidebarMode}
           onSwitchMode={handleMobileMenuOpenMode}
           onSendKey={onSendKey}
-          hidden={sidebarOpen}
+          hidden={sidebarOpen || hideMenuBar}
           connectPane={connectPane}
           openTask={openTask}
           taskWindows={taskWindows}

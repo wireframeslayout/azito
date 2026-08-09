@@ -147,7 +147,14 @@
     "notificationsUnread": "通知（{{count}}件未読）",
     "serverHealth": "サーバーヘルス",
     "updateAvailable": "更新あり",
-    "mobileMenu": "モバイルメニュー"
+    "mobileMenu": "モバイルメニュー",
+    "noTabSelected": "タブが選択されていません",
+    "tabSwitcherOpen": "開いているタブ ({{count}}) — タブ一覧を開く",
+    "tabSwitcherTitle": "開いているタブ",
+    "tabSwitcherClose": "タブ一覧を閉じる",
+    "tabSwitcherEmpty": "開いているタブはありません",
+    "tabSwitcherUngrouped": "その他",
+    "tabSwitcherNewTab": "新しいタブ"
   },
   "sessionTree": {
     "installingAgent": "エージェントをインストール中...",

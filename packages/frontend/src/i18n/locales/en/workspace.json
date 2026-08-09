@@ -147,7 +147,14 @@
     "notificationsUnread": "Notifications ({{count}} unread)",
     "serverHealth": "Server Health",
     "updateAvailable": "Update available",
-    "mobileMenu": "Mobile menu"
+    "mobileMenu": "Mobile menu",
+    "noTabSelected": "No tab selected",
+    "tabSwitcherOpen": "Open tabs ({{count}}) — open tab switcher",
+    "tabSwitcherTitle": "Open tabs",
+    "tabSwitcherClose": "Close tab switcher",
+    "tabSwitcherEmpty": "No tabs are open",
+    "tabSwitcherUngrouped": "Other",
+    "tabSwitcherNewTab": "New tab"
   },
   "sessionTree": {
     "installingAgent": "Installing agent...",
