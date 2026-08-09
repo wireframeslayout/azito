@@ -1,5 +1,6 @@
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { LiveStatus } from './liveStatus';
+import { LIVE_STATUS_MAX_AGE_SECONDS, type LiveStatus } from './liveStatus';
 import { LIVE_THINKING_ICON_COLOR } from './styles/mockupColors';
 import type { TranscriptStyle } from './transcriptStyle';
 
@@ -9,7 +10,7 @@ const TUI_INDENT_PX = 22;
 
 interface LiveStatusRowProps {
   status: LiveStatus;
-  elapsedSeconds: number;
+  lastTimestamp: string;
   style: TranscriptStyle;
 }
 
@@ -17,10 +18,26 @@ interface LiveStatusRowProps {
  * 会話ビュー末尾の「いま起きていること」ライブインジケータ（承認済みモックアップ C1）。
  * シマーテキスト＋経過秒で、エージェントが応答準備中/ツール実行中であることを示す。
  * 全表示スタイル共通（tui のみ等幅フォント＋インデントで ⏺ 列に揃える）。
+ *
+ * 経過秒の算出と1秒毎の自己更新はこのコンポーネント内で完結させる（親の再レンダーを避けるため）。
+ * 90秒経過での自動消滅もここで判定し、親の再計算を待たずに null を描画して非表示化する。
  */
-export function LiveStatusRow({ status, elapsedSeconds, style }: LiveStatusRowProps) {
+export function LiveStatusRow({ status, lastTimestamp, style }: LiveStatusRowProps) {
   const { t } = useTranslation('transcript');
   const isTui = style === 'tui';
+
+  const lastMs = new Date(lastTimestamp).getTime();
+  const [elapsedSeconds, setElapsedSeconds] = useState(() => Math.max(0, Math.floor((Date.now() - lastMs) / 1000)));
+
+  useEffect(() => {
+    setElapsedSeconds(Math.max(0, Math.floor((Date.now() - lastMs) / 1000)));
+    const id = setInterval(() => {
+      setElapsedSeconds(Math.max(0, Math.floor((Date.now() - lastMs) / 1000)));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [lastMs]);
+
+  if (elapsedSeconds > LIVE_STATUS_MAX_AGE_SECONDS) return null;
 
   const label = status.kind === 'thinking'
     ? t('conversation.liveThinking', { seconds: elapsedSeconds })

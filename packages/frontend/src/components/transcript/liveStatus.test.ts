@@ -39,6 +39,16 @@ describe('deriveLiveStatus', () => {
     expect(deriveLiveStatus(entries, NOW)).toEqual({ kind: 'thinking' });
   });
 
+  it('tolerates a small future timestamp within clock skew', () => {
+    const entries = [entry({ type: 'user', timestamp: new Date(NOW + 3_000).toISOString() })];
+    expect(deriveLiveStatus(entries, NOW)).toEqual({ kind: 'thinking' });
+  });
+
+  it('returns null when the timestamp is far in the future (beyond clock skew tolerance)', () => {
+    const entries = [entry({ type: 'user', timestamp: new Date(NOW + 6_000).toISOString() })];
+    expect(deriveLiveStatus(entries, NOW)).toBeNull();
+  });
+
   it('returns thinking when the last entry is from the user', () => {
     const entries = [entry({ type: 'user' })];
     expect(deriveLiveStatus(entries, NOW)).toEqual({ kind: 'thinking' });

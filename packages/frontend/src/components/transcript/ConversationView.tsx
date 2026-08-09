@@ -46,25 +46,11 @@ export default function ConversationView({ sessionId, onBack }: ConversationView
   const nearBottomRef = useRef(true);
   const nextOffsetRef = useRef<number | null>(null);
 
-  // ライブ状態インジケータ（C1）: entries が更新される度に now をリセットし、表示中のみ1秒毎に
-  // 経過秒を更新する。新規エントリの到着や90秒経過での非表示化は deriveLiveStatus 側で判定する。
-  const [liveNow, setLiveNow] = useState<number>(() => Date.now());
-  useEffect(() => {
-    setLiveNow(Date.now());
-  }, [entries]);
-  const liveStatus = deriveLiveStatus(entries, liveNow);
+  // ライブ状態インジケータ（C1）: kind/toolName の算出のみ行う。経過秒の1秒毎更新と90秒経過での
+  // 非表示化は LiveStatusRow 側の責務（親の再レンダーを entries 更新時のみに抑えるため）。
+  const liveStatus = deriveLiveStatus(entries, Date.now());
   const hasLiveStatus = liveStatus !== null;
-  useEffect(() => {
-    if (!hasLiveStatus) return;
-    const id = setInterval(() => setLiveNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [hasLiveStatus]);
-  const lastEntryTimestampMs = liveStatus && entries.length > 0 && entries[entries.length - 1].timestamp
-    ? new Date(entries[entries.length - 1].timestamp as string).getTime()
-    : null;
-  const liveElapsedSeconds = lastEntryTimestampMs !== null
-    ? Math.max(0, Math.floor((liveNow - lastEntryTimestampMs) / 1000))
-    : 0;
+  const lastEntryTimestamp = liveStatus && entries.length > 0 ? entries[entries.length - 1].timestamp : null;
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior) => {
     const el = containerRef.current;
@@ -221,7 +207,9 @@ export default function ConversationView({ sessionId, onBack }: ConversationView
               {entries.map((entry, i) => (
                 <EntryComponent key={entry.uuid} entry={entry} prevTimestamp={i > 0 ? entries[i - 1].timestamp : null} />
               ))}
-              {liveStatus && <LiveStatusRow status={liveStatus} elapsedSeconds={liveElapsedSeconds} style={style} />}
+              {liveStatus && lastEntryTimestamp && (
+                <LiveStatusRow status={liveStatus} lastTimestamp={lastEntryTimestamp} style={style} />
+              )}
             </>
           )}
         </div>

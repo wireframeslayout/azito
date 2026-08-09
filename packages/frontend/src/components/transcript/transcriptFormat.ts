@@ -58,9 +58,10 @@ export interface TextSegment {
 /**
  * ```lang\n...\n``` 形式のフェンスドコードブロックを検出し、text/code のセグメントに分割する。
  * TUI スタイル（簡略 markdown: 改行・コードブロックのみ保持しそれ以外はプレーンテキスト表示）で使う。
+ * 言語名は `c++`/`c#` のような記号を含む場合があるため `[^\r\n]*` で許容し、CRLF 改行にも対応する。
  */
 export function splitCodeBlocks(text: string): TextSegment[] {
-  const pattern = /```(\w*)\n([\s\S]*?)```/g;
+  const pattern = /```([^\r\n]*)\r?\n([\s\S]*?)```/g;
   const segments: TextSegment[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -68,7 +69,8 @@ export function splitCodeBlocks(text: string): TextSegment[] {
     if (match.index > lastIndex) {
       segments.push({ kind: 'text', text: text.slice(lastIndex, match.index) });
     }
-    segments.push({ kind: 'code', text: match[2].replace(/\n$/, ''), lang: match[1] || undefined });
+    const lang = match[1].trim();
+    segments.push({ kind: 'code', text: match[2].replace(/\r?\n$/, ''), lang: lang || undefined });
     lastIndex = pattern.lastIndex;
   }
   if (lastIndex < text.length) {

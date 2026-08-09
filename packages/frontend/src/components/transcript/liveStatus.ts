@@ -1,7 +1,13 @@
 import type { TranscriptEntry } from './transcriptTypes';
 
 /** この秒数より古い最終エントリはライブ状態を表示しない（応答が止まっているとみなす）。 */
-const LIVE_STATUS_MAX_AGE_SECONDS = 90;
+export const LIVE_STATUS_MAX_AGE_SECONDS = 90;
+
+/**
+ * 許容するクロックスキュー（秒）。サーバー/クライアント間の時計のずれで timestamp が
+ * 未来になるケースを許容しつつ、大きく未来にずれている場合は不正な値として扱う。
+ */
+const CLOCK_SKEW_TOLERANCE_SECONDS = -5;
 
 export type LiveStatus =
   | { kind: 'thinking' }
@@ -29,6 +35,7 @@ export function deriveLiveStatus(entries: TranscriptEntry[], now: number): LiveS
 
   const elapsedSeconds = (now - lastMs) / 1000;
   if (elapsedSeconds > LIVE_STATUS_MAX_AGE_SECONDS) return null;
+  if (elapsedSeconds < CLOCK_SKEW_TOLERANCE_SECONDS) return null;
 
   switch (last.type) {
     case 'user':
