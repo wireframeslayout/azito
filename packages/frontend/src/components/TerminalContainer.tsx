@@ -2,13 +2,21 @@ import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { IconButton } from './ui/IconButton';
 import { Icon } from './ui/Icon';
+import { SegmentedToggle, type SegmentedToggleOption } from './ui/SegmentedToggle';
 import { WindowStatusDropdown, findWindow } from './WindowStatusDropdown';
 import XTermView from './XTermView';
+import WindowChatPanel from './transcript/WindowChatPanel';
 import ResourceWarningDialog, { type ResourceStatus } from './ResourceWarningDialog';
 import { api } from '../api/client';
 import { isInsufficientResources } from '../hooks/useAddWindowModal';
 import type { Project, Task, Session } from '../pages/workspace/types';
 import { resolveActivePane, paneDisplayName } from '../lib/tmuxPane';
+
+type WindowViewMode = 'terminal' | 'chat';
+
+function viewModeStorageKey(windowId: number): string {
+  return `azito.windowView.${windowId}`;
+}
 
 const SPINNER_KEYFRAMES_ID = 'terminal-container-spinner-keyframes';
 
@@ -57,10 +65,34 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
   const [respawnError, setRespawnError] = useState<string | null>(null);
   const [resourceWarning, setResourceWarning] = useState<{ resources: ResourceStatus; retry: () => void } | null>(null);
 
-  const dbWindow = useMemo(() => {
-    if (!windowMissing) return null;
-    return findWindow(serverName, target, project ?? null, allTasks ?? []);
-  }, [windowMissing, serverName, target, project, allTasks]);
+  // 端末⇄チャット切替（Issue #69 Phase E-2）にはウィンドウの永続 id が必要なため、windowMissing に
+  // 関係なく常に解決する（respawn 導線の従来挙動は変えない）。project/allTasks 経由で見つからない
+  // 表示経路（プレーンな pane 直接表示等）では windowId は null になり、トグル自体を出さない。
+  const dbWindow = useMemo(
+    () => findWindow(serverName, target, project ?? null, allTasks ?? []),
+    [serverName, target, project, allTasks],
+  );
+  const windowId = dbWindow?.id ?? null;
+
+  const [viewMode, setViewModeState] = useState<WindowViewMode>('terminal');
+  useEffect(() => {
+    if (windowId === null) {
+      setViewModeState('terminal');
+      return;
+    }
+    const stored = localStorage.getItem(viewModeStorageKey(windowId));
+    setViewModeState(stored === 'chat' ? 'chat' : 'terminal');
+  }, [windowId]);
+
+  const setViewMode = useCallback((mode: WindowViewMode) => {
+    setViewModeState(mode);
+    if (windowId !== null) localStorage.setItem(viewModeStorageKey(windowId), mode);
+  }, [windowId]);
+
+  const viewModeOptions: SegmentedToggleOption<WindowViewMode>[] = useMemo(() => [
+    { value: 'terminal', label: t('terminal.viewMode.terminal'), icon: 'terminal' },
+    { value: 'chat', label: t('terminal.viewMode.chat'), icon: 'transcript' },
+  ], [t]);
 
   const handleRespawn = useCallback(async function perform(force = false) {
     if (!dbWindow) return;
@@ -187,7 +219,15 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
             {activePaneName}
           </div>
         )}
-        <div style={{ marginLeft: activePaneName ? undefined : 'auto', display: 'flex', alignItems: 'center', gap: 2, paddingRight: 4 }}>
+        <div style={{ marginLeft: activePaneName ? undefined : 'auto', display: 'flex', alignItems: 'center', gap: 8, paddingRight: 4 }}>
+          {windowId !== null && (
+            <SegmentedToggle
+              options={viewModeOptions}
+              value={viewMode}
+              onChange={setViewMode}
+              ariaLabel={t('terminal.viewMode.ariaLabel')}
+            />
+          )}
           <WindowStatusDropdown
             serverName={serverName}
             target={target}
@@ -203,6 +243,10 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
         </div>
       </div>
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+        {viewMode === 'chat' && windowId !== null ? (
+          <WindowChatPanel windowId={windowId} />
+        ) : (
+          <>
         {!windowMissing && (
           <XTermView key={xtermKey} serverName={serverName} target={target} onDisconnect={onDisconnect} onWindowNotFound={() => setWindowMissing(true)} onMaxRetriesReached={() => setDisconnected(true)} />
         )}
@@ -301,6 +345,8 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
               )}
             </div>
           </div>
+        )}
+          </>
         )}
       </div>
       <ResourceWarningDialog

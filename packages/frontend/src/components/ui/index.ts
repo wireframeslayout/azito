@@ -5,6 +5,8 @@ export { LoadingState } from './LoadingState';
 export { Spinner } from './Spinner';
 export { EmptyState } from './EmptyState';
 export { IconButton } from './IconButton';
+export { SegmentedToggle } from './SegmentedToggle';
+export type { SegmentedToggleOption } from './SegmentedToggle';
 export { SectionHeader } from './SectionHeader';
 export { MiniTabBar } from './MiniTabBar';
 export type { MiniTab } from './MiniTabBar';

@@ -74,5 +74,14 @@
     "historyEmpty": "履歴はまだありません",
     "draftRestored": "下書きを復元しました",
     "unsupportedAgent": "このエージェント（{{agentType}}）への送信は未対応です。"
+  },
+  "windowChat": {
+    "loading": "セッションを解決中…",
+    "notFound": {
+      "unsupported_server": "このサーバーではチャット表示に対応していません",
+      "no_recent_session": "最近のセッションが見つかりません",
+      "error": "セッションの解決に失敗しました"
+    },
+    "retry": "再試行"
   }
 }

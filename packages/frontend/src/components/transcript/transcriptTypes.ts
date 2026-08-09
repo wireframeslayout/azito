@@ -68,3 +68,9 @@ export interface PaneCandidatesResult {
   cwd: string | null;
   panes: PaneCandidate[];
 }
+
+// GET /api/transcripts/resolve-window のレスポンス型（Issue #69 Phase E-1/E-2）。
+// サーバー側の型（packages/server/src/modules/transcripts/WindowSessionResolver.ts）とフィールドを一致させる。
+export type ResolveWindowResult =
+  | { resolved: true; agentType: string; sessionId: string; paneId: string }
+  | { resolved: false; reason: 'unsupported_server' | 'no_recent_session' };

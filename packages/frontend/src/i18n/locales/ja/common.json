@@ -161,7 +161,12 @@
     "launchTimeout": "起動がタイムアウトしました",
     "supervisedMonitoring": "エージェントの起動を監視中…",
     "continueDisplay": "そのまま表示を続けます",
-    "respawning": "再起動中…"
+    "respawning": "再起動中…",
+    "viewMode": {
+      "ariaLabel": "表示モード",
+      "terminal": "端末",
+      "chat": "チャット"
+    }
   },
   "resourceWarning": {
     "title": "サーバーのリソースがひっ迫しています",

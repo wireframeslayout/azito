@@ -74,5 +74,14 @@
     "historyEmpty": "No history yet",
     "draftRestored": "Draft restored",
     "unsupportedAgent": "Sending input to this agent ({{agentType}}) is not supported yet."
+  },
+  "windowChat": {
+    "loading": "Resolving session…",
+    "notFound": {
+      "unsupported_server": "Chat view is not supported on this server",
+      "no_recent_session": "No recent session found",
+      "error": "Failed to resolve the session"
+    },
+    "retry": "Retry"
   }
 }

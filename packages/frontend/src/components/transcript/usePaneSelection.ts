@@ -33,7 +33,7 @@ interface PaneSelectionOwned {
   paneId: string;
 }
 
-export function usePaneSelection(sessionId: string, enabled: boolean): UsePaneSelectionResult {
+export function usePaneSelection(sessionId: string, enabled: boolean, initialPaneId: string | null = null): UsePaneSelectionResult {
   const { t } = useTranslation('transcript');
   const [panes, setPanes] = useState<PaneCandidate[]>([]);
   const [panesLoaded, setPanesLoaded] = useState(false);
@@ -74,6 +74,15 @@ export function usePaneSelection(sessionId: string, enabled: boolean): UsePaneSe
           setSelection({ sessionId, paneId: storedPane.paneId });
           return;
         }
+        // 埋め込み表示（ウィンドウのチャットモード, Issue #69 Phase E-2）: resolve-window が
+        // 解決したペインを初期選択として採用する。保存済み選択より優先度は下（ユーザーの手動選択を尊重）。
+        if (initialPaneId) {
+          const initial = body.panes.find((p) => p.paneId === initialPaneId);
+          if (initial) {
+            setSelection({ sessionId, paneId: initial.paneId });
+            return;
+          }
+        }
         const matched = body.panes.filter((p) => p.cwdMatch);
         if (matched.length === 1) {
           setSelection({ sessionId, paneId: matched[0].paneId });
@@ -89,7 +98,7 @@ export function usePaneSelection(sessionId: string, enabled: boolean): UsePaneSe
     return () => {
       cancelled = true;
     };
-  }, [sessionId, enabled, reloadTick, t]);
+  }, [sessionId, enabled, reloadTick, initialPaneId, t]);
 
   const retryLoadPanes = useCallback(() => {
     setReloadTick((n) => n + 1);

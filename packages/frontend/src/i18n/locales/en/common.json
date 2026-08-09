@@ -161,7 +161,12 @@
     "launchTimeout": "Launch timed out",
     "supervisedMonitoring": "Monitoring agent launch…",
     "continueDisplay": "Continuing to display",
-    "respawning": "Respawning…"
+    "respawning": "Respawning…",
+    "viewMode": {
+      "ariaLabel": "Display mode",
+      "terminal": "Terminal",
+      "chat": "Chat"
+    }
   },
   "resourceWarning": {
     "title": "Server resources are constrained",
