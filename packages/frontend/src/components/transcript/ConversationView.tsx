@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type ComponentType } from 'react';
 import { useTranslation } from 'react-i18next';
 import { apiWithStatus } from '../../api/client';
+import { useApi } from '../../hooks/useApi';
 import { EmptyState, IconButton, LoadingState, PanelHeader } from '../ui';
 import { Icon } from '../ui/Icon';
+import { ConversationMenu } from './ConversationMenu';
 import { groupEntries } from './groupEntries';
 import { LiveStatusRow } from './LiveStatusRow';
 import { deriveLiveStatus } from './liveStatus';
@@ -13,9 +15,9 @@ import FlowEntry from './styles/FlowEntry';
 import RailEntry from './styles/RailEntry';
 import TuiEntry from './styles/TuiEntry';
 import type { StyleGroupProps } from './styles/types';
-import { isErrorResponse } from './transcriptFormat';
+import { isErrorResponse, pathBasename } from './transcriptFormat';
 import { useTranscriptStyle, type TranscriptStyle } from './transcriptStyle';
-import type { ReadSessionResult, TranscriptEntry, TranscriptErrorResponse } from './transcriptTypes';
+import type { ReadSessionResult, SessionSummary, TranscriptEntry, TranscriptErrorResponse } from './transcriptTypes';
 
 const STYLE_ENTRY_COMPONENTS: Record<TranscriptStyle, ComponentType<StyleGroupProps>> = {
   bubble: BubbleEntry,
@@ -42,6 +44,12 @@ export default function ConversationView({ sessionId, onBack }: ConversationView
   const [newCount, setNewCount] = useState(0);
   const [style, setStyle] = useTranscriptStyle();
   const EntryComponent = STYLE_ENTRY_COMPONENTS[style];
+
+  // ヘッダー1段化（Issue #69）: タイトルはセッションの cwd basename。一覧経由でない直リンク
+  // 表示時は一覧未取得のため sessionId 先頭8文字で代替し、一覧取得後に自動で補完する。
+  const { data: sessionsData } = useApi<{ sessions: SessionSummary[] }>('/transcripts');
+  const matchedCwd = sessionsData?.sessions.find((s) => s.sessionId === sessionId)?.cwd ?? null;
+  const headerTitle = matchedCwd ? pathBasename(matchedCwd) : sessionId.slice(0, 8);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const nearBottomRef = useRef(true);
@@ -180,8 +188,17 @@ export default function ConversationView({ sessionId, onBack }: ConversationView
             <Icon name="arrow-left" size={16} />
           </IconButton>
         }
-        title={sessionId}
-        actions={<StyleSwitcher value={style} onChange={setStyle} />}
+        title={
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={matchedCwd ?? sessionId}>
+            {headerTitle}
+          </span>
+        }
+        actions={
+          <>
+            <StyleSwitcher value={style} onChange={setStyle} compact />
+            <ConversationMenu sessionId={sessionId} />
+          </>
+        }
       />
 
       <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>

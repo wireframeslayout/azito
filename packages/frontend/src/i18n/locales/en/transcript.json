@@ -24,7 +24,11 @@
     "system": "System",
     "other": "Other",
     "liveThinking": "Thinking… {{seconds}}s",
-    "liveTool": "{{name}} running… {{seconds}}s"
+    "liveTool": "{{name}} running… {{seconds}}s",
+    "menu": {
+      "ariaLabel": "More",
+      "sessionId": "Session ID"
+    }
   },
   "styleSwitcher": {
     "ariaLabel": "Transcript display style",
@@ -51,6 +55,9 @@
     "noCommand": "(idle)",
     "sendError": "Failed to send",
     "loadError": "Failed to load panes",
-    "retry": "Retry"
+    "retry": "Retry",
+    "history": "Input history",
+    "historyEmpty": "No history yet",
+    "draftRestored": "Draft restored"
   }
 }

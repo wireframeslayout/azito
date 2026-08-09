@@ -3,189 +3,29 @@ import { useTranslation } from 'react-i18next';
 import { apiWithStatus } from '../../api/client';
 import { Icon } from '../ui/Icon';
 import { Spinner } from '../ui/Spinner';
-import { Button } from '../ui/Button';
-import { useClickOutside } from '../../hooks/useClickOutside';
-import { isErrorResponse, pathBasename } from './transcriptFormat';
+import { clearDraft, loadDraft, saveDraft } from './transcriptDrafts';
+import { loadHistory, pushHistory } from './inputHistory';
+import { HistoryPopover } from './HistoryPopover';
+import { PaneChip } from './PaneChip';
+import { resolveStoredPaneSelection, writeStoredPaneSelection } from './paneSelectionStorage';
+import { isErrorResponse } from './transcriptFormat';
 import type { PaneCandidate, PaneCandidatesResult, TranscriptErrorResponse } from './transcriptTypes';
 
 const TEXTAREA_MIN_HEIGHT = 38;
 const TEXTAREA_MAX_HEIGHT = 120;
+const DRAFT_SAVE_DEBOUNCE_MS = 300;
+const RESTORED_HINT_MS = 1500;
 
 interface PromptInputBarProps {
   sessionId: string;
-  /** 送信成功直後に呼ばれる（最下部へスクロールするため）。新着メッセージ自体はポーリングで反映される。 */
+  /** 送信成功直後に呼ばれる(最下部へスクロールするため)。新着メッセージ自体はポーリングで反映される。 */
   onSent: () => void;
-}
-
-/** sessionStorage に保存するペイン選択。tmux 再起動で paneId が別ペインに再割当されうるため、
- * 復元時は全フィールドが現在の候補と一致する場合のみ選択を復元する。 */
-interface StoredPaneSelection {
-  paneId: string;
-  sessionName: string;
-  windowIndex: number;
-  paneIndex: number;
-  currentPath: string;
-}
-
-function storageKey(sessionId: string): string {
-  return `azito.transcript.selectedPane.${sessionId}`;
-}
-
-/** 保存値を読む。旧形式（paneId 単独の文字列）は JSON.parse に失敗するため自動的に破棄される。 */
-function readStoredPaneSelection(sessionId: string): StoredPaneSelection | null {
-  const raw = sessionStorage.getItem(storageKey(sessionId));
-  if (!raw) return null;
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (
-      parsed !== null && typeof parsed === 'object' &&
-      typeof (parsed as StoredPaneSelection).paneId === 'string' &&
-      typeof (parsed as StoredPaneSelection).sessionName === 'string' &&
-      typeof (parsed as StoredPaneSelection).windowIndex === 'number' &&
-      typeof (parsed as StoredPaneSelection).paneIndex === 'number' &&
-      typeof (parsed as StoredPaneSelection).currentPath === 'string'
-    ) {
-      return parsed as StoredPaneSelection;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function paneMatchesStored(pane: PaneCandidate, stored: StoredPaneSelection): boolean {
-  return (
-    pane.paneId === stored.paneId &&
-    pane.sessionName === stored.sessionName &&
-    pane.windowIndex === stored.windowIndex &&
-    pane.paneIndex === stored.paneIndex &&
-    pane.currentPath === stored.currentPath
-  );
-}
-
-function writeStoredPaneSelection(sessionId: string, pane: PaneCandidate): void {
-  const stored: StoredPaneSelection = {
-    paneId: pane.paneId,
-    sessionName: pane.sessionName,
-    windowIndex: pane.windowIndex,
-    paneIndex: pane.paneIndex,
-    currentPath: pane.currentPath,
-  };
-  sessionStorage.setItem(storageKey(sessionId), JSON.stringify(stored));
-}
-
-/** 同一ウィンドウの分割ペインを一意に識別できるよう window/pane index を含める。 */
-function paneLabel(pane: PaneCandidate): string {
-  return `${pane.sessionName}:${pane.windowIndex}.${pane.paneIndex} (${pane.windowName})`;
-}
-
-interface PanePopoverProps {
-  panes: PaneCandidate[];
-  selectedPaneId: string | null;
-  error: string | null;
-  onSelect: (pane: PaneCandidate) => void;
-  onClose: () => void;
-  onRetry: () => void;
-}
-
-function PanePopover({ panes, selectedPaneId, error, onSelect, onClose, onRetry }: PanePopoverProps) {
-  const { t } = useTranslation('transcript');
-  const ref = useClickOutside<HTMLDivElement>(onClose);
-  const matched = panes.filter((p) => p.cwdMatch);
-  const others = panes.filter((p) => !p.cwdMatch);
-
-  const renderRow = (pane: PaneCandidate) => (
-    <button
-      key={pane.paneId}
-      type="button"
-      onClick={() => {
-        onSelect(pane);
-        onClose();
-      }}
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 2,
-        width: '100%',
-        padding: '7px 10px',
-        border: 'none',
-        borderRadius: 'var(--radius-sm)',
-        background: pane.paneId === selectedPaneId ? 'var(--accent-a08)' : 'none',
-        color: 'var(--text)',
-        fontFamily: 'inherit',
-        textAlign: 'left',
-        cursor: 'pointer',
-      }}
-    >
-      <span style={{ display: 'flex', alignItems: 'baseline', gap: 6, fontSize: 'var(--font-sm)', fontWeight: 600 }}>
-        {paneLabel(pane)}
-        <span style={{ fontSize: 'var(--font-2xs)', fontWeight: 400, color: 'var(--text-dim)' }}>{pane.paneId}</span>
-        {pane.paneId === selectedPaneId && <Icon name="check" size={14} style={{ color: 'var(--accent)' }} />}
-      </span>
-      <span style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {pane.currentCommand || t('promptBar.noCommand')} · …/{pathBasename(pane.currentPath)}
-      </span>
-    </button>
-  );
-
-  return (
-    <div
-      ref={ref}
-      role="menu"
-      aria-label={t('promptBar.selectPane')}
-      style={{
-        position: 'absolute',
-        bottom: '100%',
-        left: 0,
-        marginBottom: 6,
-        zIndex: 100,
-        background: 'var(--bg-solid)',
-        border: '1px solid var(--border)',
-        borderRadius: 'var(--radius-md)',
-        boxShadow: 'var(--shadow-2)',
-        minWidth: 260,
-        maxWidth: 'min(360px, calc(100vw - 32px))',
-        maxHeight: 320,
-        overflowY: 'auto',
-        padding: 6,
-      }}
-    >
-      {error ? (
-        <div style={{ padding: '10px', display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start' }}>
-          <span style={{ fontSize: 'var(--font-sm)', color: 'var(--danger)' }}>{error}</span>
-          <Button variant="ghost" size="sm" onClick={onRetry}>{t('promptBar.retry')}</Button>
-        </div>
-      ) : panes.length === 0 ? (
-        <div style={{ padding: '10px', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
-          {t('promptBar.noPanes')}
-        </div>
-      ) : (
-        <>
-          {matched.length > 0 && (
-            <>
-              <div style={{ fontSize: 'var(--font-2xs)', letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-dim)', padding: '4px 10px' }}>
-                {t('promptBar.matchingCwd')}
-              </div>
-              {matched.map(renderRow)}
-            </>
-          )}
-          {others.length > 0 && (
-            <>
-              <div style={{ fontSize: 'var(--font-2xs)', letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-dim)', padding: '4px 10px', marginTop: matched.length > 0 ? 4 : 0 }}>
-                {t('promptBar.otherPanes')}
-              </div>
-              {others.map(renderRow)}
-            </>
-          )}
-        </>
-      )}
-    </div>
-  );
 }
 
 /**
  * 会話ビュー下部の固定入力バー。cwd が一致する tmux ペインへプロンプトを送信する。
  * 送信内容自体は既存の JSONL ポーリングで会話に反映される（オプティミスティック表示はしない）。
+ * ペインチップ＋textarea＋履歴🕘＋送信↑ の1行構成（SP実機の高さ節約のため）。
  */
 export default function PromptInputBar({ sessionId, onSent }: PromptInputBarProps) {
   const { t } = useTranslation('transcript');
@@ -194,10 +34,12 @@ export default function PromptInputBar({ sessionId, onSent }: PromptInputBarProp
   const [panesError, setPanesError] = useState<string | null>(null);
   const [reloadTick, setReloadTick] = useState(0);
   const [selectedPaneId, setSelectedPaneId] = useState<string | null>(null);
-  const [popoverOpen, setPopoverOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [text, setText] = useState('');
+  const [historyIndex, setHistoryIndex] = useState(-1); // -1 = 履歴を辿っていない
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [showRestoredHint, setShowRestoredHint] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // 会話ビュー表示時（セッション切り替え時、または再試行時）に候補ペインを取得し、自動選択 or 復元する。
@@ -220,8 +62,7 @@ export default function PromptInputBar({ sessionId, onSent }: PromptInputBarProp
         setPanes(body.panes);
         setPanesLoaded(true);
 
-        const stored = readStoredPaneSelection(sessionId);
-        const storedPane = stored ? body.panes.find((p) => paneMatchesStored(p, stored)) : undefined;
+        const storedPane = resolveStoredPaneSelection(sessionId, body.panes);
         if (storedPane) {
           setSelectedPaneId(storedPane.paneId);
           return;
@@ -243,6 +84,33 @@ export default function PromptInputBar({ sessionId, onSent }: PromptInputBarProp
     };
   }, [sessionId, reloadTick, t]);
 
+  // セッション切り替え時に下書きを復元する（F2）。復元があった場合のみ短時間ヒントを出す。
+  useEffect(() => {
+    const draft = loadDraft(sessionId);
+    setText(draft);
+    setHistoryIndex(-1);
+    if (draft !== '') {
+      setShowRestoredHint(true);
+      const timer = setTimeout(() => setShowRestoredHint(false), RESTORED_HINT_MS);
+      return () => clearTimeout(timer);
+    }
+    return undefined;
+  }, [sessionId]);
+
+  // 入力変更を300msデバウンスして下書き保存する（F2）。
+  useEffect(() => {
+    const timer = setTimeout(() => saveDraft(sessionId, text), DRAFT_SAVE_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [sessionId, text]);
+
+  // テキスト内容に応じて textarea の高さを追従させる（ユーザー入力・履歴挿入・送信後クリアの全経路）。
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, TEXTAREA_MAX_HEIGHT) + 'px';
+  }, [text]);
+
   const retryLoadPanes = useCallback(() => {
     setReloadTick((n) => n + 1);
   }, []);
@@ -251,11 +119,6 @@ export default function PromptInputBar({ sessionId, onSent }: PromptInputBarProp
     setSelectedPaneId(pane.paneId);
     writeStoredPaneSelection(sessionId, pane);
   }, [sessionId]);
-
-  const resizeTextarea = (el: HTMLTextAreaElement) => {
-    el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, TEXTAREA_MAX_HEIGHT) + 'px';
-  };
 
   const handleSend = useCallback(async () => {
     const trimmed = text.trim();
@@ -273,9 +136,9 @@ export default function PromptInputBar({ sessionId, onSent }: PromptInputBarProp
         return;
       }
       setText('');
-      if (textareaRef.current) {
-        textareaRef.current.style.height = `${TEXTAREA_MIN_HEIGHT}px`;
-      }
+      setHistoryIndex(-1);
+      clearDraft(sessionId);
+      pushHistory(trimmed);
       onSent();
     } catch (err) {
       setSendError(err instanceof Error ? err.message : t('promptBar.sendError'));
@@ -283,6 +146,46 @@ export default function PromptInputBar({ sessionId, onSent }: PromptInputBarProp
       setSending(false);
     }
   }, [text, selectedPaneId, sending, sessionId, onSent, t]);
+
+  const insertFromHistory = useCallback((value: string) => {
+    setText(value);
+    setHistoryIndex(-1);
+    setHistoryOpen(false);
+    textareaRef.current?.focus();
+  }, []);
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      handleSend();
+      return;
+    }
+    // IME変換中の矢印キーは候補選択に使われるため履歴ナビゲーションの対象外とする。
+    if (e.nativeEvent.isComposing) return;
+
+    if (e.key === 'ArrowUp' && (text.length === 0 || historyIndex !== -1)) {
+      const history = loadHistory();
+      if (history.length === 0) return;
+      const nextIndex = Math.min(historyIndex + 1, history.length - 1);
+      if (nextIndex === historyIndex) return;
+      e.preventDefault();
+      setHistoryIndex(nextIndex);
+      setText(history[nextIndex]);
+      return;
+    }
+    if (e.key === 'ArrowDown' && historyIndex !== -1) {
+      e.preventDefault();
+      const nextIndex = historyIndex - 1;
+      if (nextIndex < 0) {
+        setHistoryIndex(-1);
+        setText('');
+        return;
+      }
+      const history = loadHistory();
+      setHistoryIndex(nextIndex);
+      setText(history[nextIndex] ?? '');
+    }
+  };
 
   const selectedPane = panes.find((p) => p.paneId === selectedPaneId) ?? null;
   const canSend = text.trim().length > 0 && selectedPaneId !== null && !sending;
@@ -293,77 +196,34 @@ export default function PromptInputBar({ sessionId, onSent }: PromptInputBarProp
         flexShrink: 0,
         borderTop: '1px solid var(--border)',
         background: 'var(--bg-card)',
-        padding: '8px 16px',
+        padding: '8px 16px calc(8px + env(safe-area-inset-bottom))',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, position: 'relative' }}>
-        <button
-          type="button"
-          onClick={() => setPopoverOpen((o) => !o)}
-          aria-haspopup="menu"
-          aria-expanded={popoverOpen}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            fontSize: 'var(--font-xs)',
-            fontWeight: 500,
-            padding: '3px 10px',
-            borderRadius: 'var(--radius-full)',
-            cursor: 'pointer',
-            color: selectedPane ? 'var(--accent)' : 'var(--text-dim)',
-            background: selectedPane ? 'var(--accent-a08)' : 'var(--bg)',
-            border: `1px solid ${selectedPane ? 'var(--accent-a35)' : 'var(--border)'}`,
-            maxWidth: '100%',
-          }}
-        >
-          <Icon name="terminal" size={14} />
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'baseline', gap: 4 }}>
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {selectedPane ? paneLabel(selectedPane) : t('promptBar.choosePane')}
-            </span>
-            {selectedPane && (
-              <span style={{ fontSize: 'var(--font-2xs)', opacity: 0.75 }}>{selectedPane.paneId}</span>
-            )}
-          </span>
-          <Icon name="chevron-down" size={14} />
-        </button>
-        {panesError ? (
-          <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--font-xs)', color: 'var(--danger)' }}>
-            {panesError}
-            <Button variant="ghost" size="sm" onClick={retryLoadPanes}>{t('promptBar.retry')}</Button>
-          </span>
-        ) : (
-          !selectedPaneId && panesLoaded && (
-            <span style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>{t('promptBar.selectPaneHint')}</span>
-          )
-        )}
-        {popoverOpen && (
-          <PanePopover
-            panes={panes}
-            selectedPaneId={selectedPaneId}
-            error={panesError}
-            onSelect={selectPane}
-            onClose={() => setPopoverOpen(false)}
-            onRetry={retryLoadPanes}
-          />
-        )}
-      </div>
-
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+        <PaneChip
+          panes={panes}
+          panesLoaded={panesLoaded}
+          panesError={panesError}
+          selectedPane={selectedPane}
+          onSelect={selectPane}
+          onRetry={retryLoadPanes}
+        />
+
+        {showRestoredHint && (
+          <span style={{ display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0, fontSize: 'var(--font-2xs)', color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>
+            <Icon name="edit" size={14} />
+            {t('promptBar.draftRestored')}
+          </span>
+        )}
+
         <textarea
           ref={textareaRef}
           value={text}
           onChange={(e) => {
             setText(e.target.value);
-            resizeTextarea(e.target);
+            setHistoryIndex(-1);
           }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault();
-              handleSend();
-            }
-          }}
+          onKeyDown={handleKeyDown}
           rows={1}
           disabled={sending}
           placeholder={t('promptBar.placeholder')}
@@ -383,6 +243,35 @@ export default function PromptInputBar({ sessionId, onSent }: PromptInputBarProp
             maxHeight: TEXTAREA_MAX_HEIGHT,
           }}
         />
+
+        <div style={{ position: 'relative', flexShrink: 0 }}>
+          <button
+            type="button"
+            onClick={() => setHistoryOpen((o) => !o)}
+            aria-haspopup="menu"
+            aria-expanded={historyOpen}
+            aria-label={t('promptBar.history')}
+            title={t('promptBar.history')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 38,
+              height: TEXTAREA_MIN_HEIGHT,
+              background: historyOpen ? 'var(--bg-hover)' : 'var(--bg)',
+              border: '1px solid var(--border)',
+              borderRadius: 'var(--radius-md)',
+              color: 'var(--text-dim)',
+              cursor: 'pointer',
+            }}
+          >
+            <Icon name="history" size={16} />
+          </button>
+          {historyOpen && (
+            <HistoryPopover onSelect={insertFromHistory} onClose={() => setHistoryOpen(false)} />
+          )}
+        </div>
+
         <button
           type="button"
           onClick={handleSend}

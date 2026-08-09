@@ -6,13 +6,15 @@ import { TRANSCRIPT_STYLES, type TranscriptStyle } from './transcriptStyle';
 interface StyleSwitcherProps {
   value: TranscriptStyle;
   onChange: (style: TranscriptStyle) => void;
+  /** アイコンのみのトリガーにする（会話ヘッダーの1段化でヘッダー幅を節約するため）。 */
+  compact?: boolean;
 }
 
 /**
  * トランスクリプト表示スタイルの切替ドロップダウン。ConversationView のヘッダー右側に置く。
  * 位置決め・外側クリック/Esc で閉じる挙動は UsageDropdown の慣習に合わせている。
  */
-export function StyleSwitcher({ value, onChange }: StyleSwitcherProps) {
+export function StyleSwitcher({ value, onChange, compact = false }: StyleSwitcherProps) {
   const { t } = useTranslation('transcript');
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -52,12 +54,14 @@ export function StyleSwitcher({ value, onChange }: StyleSwitcherProps) {
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={t('styleSwitcher.ariaLabel')}
+        title={compact ? t(`styleSwitcher.option.${value}`) : undefined}
         className="icon-btn"
         style={{
           display: 'flex',
           alignItems: 'center',
           gap: 6,
-          padding: '4px 10px',
+          height: 38,
+          padding: compact ? '0 8px' : '4px 10px',
           borderRadius: 'var(--radius-md)',
           border: '1px solid var(--border)',
           background: open ? 'var(--bg-hover)' : 'transparent',
@@ -67,8 +71,14 @@ export function StyleSwitcher({ value, onChange }: StyleSwitcherProps) {
           whiteSpace: 'nowrap',
         }}
       >
-        {t(`styleSwitcher.option.${value}`)}
-        <Icon name="chevrons-up-down" size={14} />
+        {compact ? (
+          <Icon name="palette" size={16} />
+        ) : (
+          <>
+            {t(`styleSwitcher.option.${value}`)}
+            <Icon name="chevrons-up-down" size={14} />
+          </>
+        )}
       </button>
 
       {open && (
