@@ -1,6 +1,7 @@
 import type { FastifyPluginCallback, FastifyReply } from 'fastify';
 import type { TranscriptSource } from './sources/TranscriptSource';
 import type { TranscriptPaneService } from './TranscriptPaneService';
+import { getAgentTranscriptProfile, type InterruptKey } from './sources/profiles';
 
 export interface TranscriptsRouteOptions {
   sources: TranscriptSource[];
@@ -95,6 +96,18 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
     },
   );
 
+  // ── POST /api/transcripts/:agent/:id/signal ── 実行中エージェントへ割り込み/制御キーを送出。
+  // paneId 検証・pane 404 は /input と同様だが、cwd 一致を前提にしないため claude 以外（プロファイルが
+  // 定義されたエージェント種別）にも許可する。新機能のためレガシー :id ルートには追加しない。
+  fastify.post<{ Params: { agent: string; id: string }; Body: { paneId?: unknown; action?: unknown; key?: unknown } }>(
+    '/api/transcripts/:agent/:id/signal',
+    async (request, reply) => {
+      const source = findSource(sources, request.params.agent);
+      if (!source) return reply.status(404).send({ error: 'Unknown agent type' });
+      return handleSendSignal(transcriptPaneService, source, request.params.agent, request.params.id, request.body, reply);
+    },
+  );
+
   // ── 後方互換ルート（旧 UUID 直下パス、claude 固定） ──
 
   fastify.get<{ Params: { sessionId: string }; Querystring: { offset?: string; before?: string } }>(
@@ -137,6 +150,43 @@ async function handleSendInput(
   }
 
   const result = await transcriptPaneService.sendInput(sessionId, paneId, text);
+  if (result === 'session_not_found') return reply.status(404).send({ error: 'Session not found' });
+  if (result === 'pane_not_found') return reply.status(404).send({ error: 'Pane not found' });
+  return { ok: true };
+}
+
+function isInterruptKey(value: unknown): value is InterruptKey {
+  return value === 'Escape' || value === 'C-c';
+}
+
+async function handleSendSignal(
+  transcriptPaneService: TranscriptPaneService,
+  source: TranscriptSource,
+  agentType: string,
+  sessionId: string,
+  body: { paneId?: unknown; action?: unknown; key?: unknown } | undefined,
+  reply: FastifyReply,
+) {
+  const { paneId, action, key } = body ?? {};
+
+  if (typeof paneId !== 'string' || !PANE_ID_PATTERN.test(paneId)) {
+    return reply.status(400).send({ error: 'Invalid paneId' });
+  }
+  if (action !== 'interrupt' && action !== 'key') {
+    return reply.status(400).send({ error: 'Invalid action' });
+  }
+
+  let resolvedKey: InterruptKey;
+  if (action === 'interrupt') {
+    const profile = getAgentTranscriptProfile(agentType);
+    if (!profile) return reply.status(400).send({ error: `No transcript profile for agent type "${agentType}"` });
+    resolvedKey = profile.interruptKey;
+  } else {
+    if (!isInterruptKey(key)) return reply.status(400).send({ error: 'Invalid key' });
+    resolvedKey = key;
+  }
+
+  const result = await transcriptPaneService.sendSignal(source, sessionId, paneId, resolvedKey);
   if (result === 'session_not_found') return reply.status(404).send({ error: 'Session not found' });
   if (result === 'pane_not_found') return reply.status(404).send({ error: 'Pane not found' });
   return { ok: true };

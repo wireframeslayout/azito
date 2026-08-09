@@ -2,16 +2,26 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { LIVE_STATUS_MAX_AGE_SECONDS, type LiveStatus } from './liveStatus';
 import { LIVE_THINKING_ICON_COLOR } from './styles/mockupColors';
+import { StopButton } from './StopButton';
 import type { TranscriptStyle } from './transcriptStyle';
 
 const MONO_FONT = "'JetBrainsMono Nerd Font', 'JetBrains Mono', monospace";
 // TUI スタイルの ⏺ 列（22px グリッド）に揃えるためのインデント。
 const TUI_INDENT_PX = 22;
 
+/** 停止ボタンの送信先。ペイン未選択、または送信先ペイン解決に対応しないエージェント種別
+ * （現状 claude 以外、Issue #69 Phase E で拡張予定）では null にし、ボタン自体を出さない。 */
+export interface StopTarget {
+  sessionId: string;
+  agentType: string;
+  paneId: string;
+}
+
 interface LiveStatusRowProps {
   status: LiveStatus;
   lastTimestamp: string;
   style: TranscriptStyle;
+  stopTarget: StopTarget | null;
 }
 
 /**
@@ -22,7 +32,7 @@ interface LiveStatusRowProps {
  * 経過秒の算出と1秒毎の自己更新はこのコンポーネント内で完結させる（親の再レンダーを避けるため）。
  * 90秒経過での自動消滅もここで判定し、親の再計算を待たずに null を描画して非表示化する。
  */
-export function LiveStatusRow({ status, lastTimestamp, style }: LiveStatusRowProps) {
+export function LiveStatusRow({ status, lastTimestamp, style, stopTarget }: LiveStatusRowProps) {
   const { t } = useTranslation('transcript');
   const isTui = style === 'tui';
 
@@ -65,6 +75,9 @@ export function LiveStatusRow({ status, lastTimestamp, style }: LiveStatusRowPro
         <span aria-hidden="true" style={{ color: 'var(--warning)' }}>⚙</span>
       )}
       <span className="transcript-shimmer">{label}</span>
+      {stopTarget && (
+        <StopButton sessionId={stopTarget.sessionId} agentType={stopTarget.agentType} paneId={stopTarget.paneId} />
+      )}
     </div>
   );
 }

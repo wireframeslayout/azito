@@ -144,4 +144,48 @@ describe('TranscriptPaneService', () => {
       expect(sendKeys).not.toHaveBeenCalledWith(LOCAL_SERVER, '%1', ['C-c', 'Enter']);
     });
   });
+
+  describe('sendSignal', () => {
+    it('returns session_not_found when the given source has no such session', async () => {
+      const { claudeTranscriptSource, tmuxClient, serverRepo } = buildDeps({ getSessionCwd: () => null });
+      const service = new TranscriptPaneService(claudeTranscriptSource, tmuxClient, serverRepo);
+      expect(await service.sendSignal(claudeTranscriptSource, SID, '%1', 'Escape')).toBe('session_not_found');
+    });
+
+    it('returns pane_not_found when the pane no longer exists', async () => {
+      const { claudeTranscriptSource, tmuxClient, serverRepo } = buildDeps({
+        getSessionCwd: () => ({ cwd: '/x' }),
+        checkPaneExists: async () => false,
+      });
+      const service = new TranscriptPaneService(claudeTranscriptSource, tmuxClient, serverRepo);
+      expect(await service.sendSignal(claudeTranscriptSource, SID, '%1', 'Escape')).toBe('pane_not_found');
+    });
+
+    it('sends the given key via sendKeys (special-key path, not literal text) and returns ok', async () => {
+      const sendKeys = vi.fn(async () => {});
+      const { claudeTranscriptSource, tmuxClient, serverRepo } = buildDeps({
+        getSessionCwd: () => ({ cwd: '/x' }),
+        checkPaneExists: async () => true,
+        sendKeys,
+      });
+      const service = new TranscriptPaneService(claudeTranscriptSource, tmuxClient, serverRepo);
+      const result = await service.sendSignal(claudeTranscriptSource, SID, '%1', 'C-c');
+      expect(result).toBe('ok');
+      expect(sendKeys).toHaveBeenCalledWith(LOCAL_SERVER, '%1', ['C-c']);
+    });
+
+    it('resolves the session via the passed-in source, not the constructor-injected one', async () => {
+      // The constructor-injected source (claude) has no matching session, but the source passed
+      // explicitly into sendSignal (a stand-in for a codex source) does — this is what lets
+      // sendSignal support agent types other than claude despite the service being constructed
+      // with a single claude-bound source.
+      const { claudeTranscriptSource, tmuxClient, serverRepo } = buildDeps({
+        getSessionCwd: () => null,
+        checkPaneExists: async () => true,
+      });
+      const otherSource = { getSessionCwd: () => ({ cwd: null }) } as unknown as TranscriptSource;
+      const service = new TranscriptPaneService(claudeTranscriptSource, tmuxClient, serverRepo);
+      expect(await service.sendSignal(otherSource, SID, '%1', 'Escape')).toBe('ok');
+    });
+  });
 });

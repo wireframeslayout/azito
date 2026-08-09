@@ -1,6 +1,7 @@
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { TranscriptSource } from './sources/TranscriptSource';
+import type { InterruptKey } from './sources/profiles';
 
 // ─── Types ───
 
@@ -22,6 +23,7 @@ export interface PaneCandidatesResult {
 }
 
 export type SendInputResult = 'ok' | 'session_not_found' | 'pane_not_found';
+export type SendSignalResult = 'ok' | 'session_not_found' | 'pane_not_found';
 
 // ─── Service ───
 
@@ -79,6 +81,25 @@ export class TranscriptPaneService {
 
     await this.tmuxClient.sendLiteralText(server, paneId, text);
     await this.tmuxClient.sendKeys(server, paneId, ['Enter']);
+    return 'ok';
+  }
+
+  /**
+   * 指定ペインへ割り込み/制御キー（Esc・Ctrl+C 相当）を送出する。sendInput と異なり cwd 一致は
+   * 前提にしないため、対応する TranscriptSource は呼び出し元（routes）が agentType から解決して
+   * 渡す — sendInput/listPaneCandidates が claude 固定で構築時注入の claudeTranscriptSource を使うのとは
+   * 意図的に別経路にし、claude 以外のエージェント種別（プロファイルさえあれば codex 等）でも
+   * 正しくセッション存在確認できるようにしている。
+   */
+  async sendSignal(source: TranscriptSource, sessionId: string, paneId: string, key: InterruptKey): Promise<SendSignalResult> {
+    const meta = source.getSessionCwd(sessionId);
+    if (!meta) return 'session_not_found';
+
+    const server = this.findLocalServer();
+    const exists = await this.tmuxClient.checkPaneExists(server, paneId);
+    if (!exists) return 'pane_not_found';
+
+    await this.tmuxClient.sendKeys(server, paneId, [key]);
     return 'ok';
   }
 }

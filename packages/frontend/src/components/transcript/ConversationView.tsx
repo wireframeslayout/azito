@@ -12,6 +12,7 @@ import { LiveStatusRow } from './LiveStatusRow';
 import { deriveLiveStatus } from './liveStatus';
 import PromptInputBar from './PromptInputBar';
 import { StyleSwitcher } from './StyleSwitcher';
+import { usePaneSelection, PANE_CAPABLE_AGENT_TYPE } from './usePaneSelection';
 import BubbleEntry from './styles/BubbleEntry';
 import FlowEntry from './styles/FlowEntry';
 import RailEntry from './styles/RailEntry';
@@ -36,8 +37,6 @@ const STYLE_ENTRY_COMPONENTS: Record<TranscriptStyle, ComponentType<StyleGroupPr
 
 const POLL_INTERVAL_MS = 2000;
 const NEAR_BOTTOM_THRESHOLD_PX = 80;
-/** ペイン候補提示・入力送信は tmux ペインとの cwd 突合が前提のため、現状 Claude のみ対応。 */
-const PANE_CAPABLE_AGENT_TYPE = 'claude';
 
 interface ConversationViewProps {
   sessionId: string;
@@ -56,6 +55,10 @@ export default function ConversationView({ sessionId, agentType, onBack }: Conve
   const [style, setStyle] = useTranscriptStyle();
   const EntryComponent = STYLE_ENTRY_COMPONENTS[style];
   const canSendInput = agentType === PANE_CAPABLE_AGENT_TYPE;
+
+  // 送信先ペイン選択は入力バー（PromptInputBar）とライブ行の停止ボタン（LiveStatusRow 経由 StopButton）
+  // の双方が必要とするため、ここで1つのフックとして持ち、両方へ props で渡す（Issue #69 Phase D）。
+  const paneSelection = usePaneSelection(sessionId, canSendInput);
 
   // ヘッダー1段化（Issue #69）: タイトルはセッションの cwd basename。一覧経由でない直リンク
   // 表示時は一覧未取得のため sessionId 先頭8文字で代替し、一覧取得後に自動で補完する。
@@ -393,7 +396,14 @@ export default function ConversationView({ sessionId, agentType, onBack }: Conve
                 ));
               })()}
               {liveStatus && lastEntryTimestamp && (
-                <LiveStatusRow status={liveStatus} lastTimestamp={lastEntryTimestamp} style={style} />
+                <LiveStatusRow
+                  status={liveStatus}
+                  lastTimestamp={lastEntryTimestamp}
+                  style={style}
+                  stopTarget={canSendInput && paneSelection.selectedPaneId
+                    ? { sessionId, agentType, paneId: paneSelection.selectedPaneId }
+                    : null}
+                />
               )}
             </>
           )}
@@ -430,7 +440,7 @@ export default function ConversationView({ sessionId, agentType, onBack }: Conve
 
       {!loading && !notFound && !error && (
         canSendInput ? (
-          <PromptInputBar sessionId={sessionId} onSent={() => scrollToBottom('smooth')} />
+          <PromptInputBar sessionId={sessionId} paneSelection={paneSelection} onSent={() => scrollToBottom('smooth')} />
         ) : (
           <div
             style={{

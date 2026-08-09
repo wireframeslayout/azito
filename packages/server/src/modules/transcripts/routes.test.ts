@@ -36,6 +36,7 @@ function buildApp(
   const transcriptPaneService = {
     listPaneCandidates: async () => ({ cwd: null, panes: [] }),
     sendInput: async () => 'ok' as const,
+    sendSignal: async () => 'ok' as const,
     ...paneOverrides,
   } as unknown as TranscriptPaneService;
 
@@ -308,6 +309,151 @@ describe('POST /api/transcripts/:agent/:id/input', () => {
       payload: { paneId: PANE_ID, text: 'hello' },
     });
     expect(res.statusCode).toBe(501);
+    await app.close();
+  });
+});
+
+describe('POST /api/transcripts/:agent/:id/signal', () => {
+  it('rejects a malformed paneId with 400', async () => {
+    const app = buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/transcripts/claude/${SID}/signal`,
+      payload: { paneId: 'not-a-pane', action: 'interrupt' },
+    });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('rejects an invalid action with 400', async () => {
+    const app = buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/transcripts/claude/${SID}/signal`,
+      payload: { paneId: PANE_ID, action: 'bogus' },
+    });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('sends the profile interrupt key for action:"interrupt" and returns ok', async () => {
+    let received: { source: unknown; sessionId: string; paneId: string; key: string } | null = null;
+    const app = buildApp([buildClaudeSource()], {
+      sendSignal: async (source: unknown, sessionId: string, paneId: string, key: string) => {
+        received = { source, sessionId, paneId, key };
+        return 'ok';
+      },
+    });
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/transcripts/claude/${SID}/signal`,
+      payload: { paneId: PANE_ID, action: 'interrupt' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(received).not.toBeNull();
+    expect(received!.sessionId).toBe(SID);
+    expect(received!.paneId).toBe(PANE_ID);
+    expect(received!.key).toBe('Escape'); // claude profile's interruptKey
+    await app.close();
+  });
+
+  it('allows action:"interrupt" for a non-claude agent that has a profile (codex)', async () => {
+    const app = buildApp([buildClaudeSource(), buildCodexSource()], {
+      sendSignal: async () => 'ok',
+    });
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/transcripts/codex/${SID}/signal`,
+      payload: { paneId: PANE_ID, action: 'interrupt' },
+    });
+    expect(res.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it('returns 400 for action:"interrupt" when the agent has no transcript profile', async () => {
+    // stub a source with an agentType that has no profile entry in sources/profiles.ts
+    const otherSource = buildClaudeSource({ agentType: 'other', getSessionCwd: () => ({ cwd: null }) });
+    const app = buildApp([otherSource], { sendSignal: async () => 'ok' });
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/transcripts/other/${SID}/signal`,
+      payload: { paneId: PANE_ID, action: 'interrupt' },
+    });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('sends the given key for action:"key" and returns ok', async () => {
+    let receivedKey: string | null = null;
+    const app = buildApp([buildClaudeSource()], {
+      sendSignal: async (_source: unknown, _sessionId: string, _paneId: string, key: string) => {
+        receivedKey = key;
+        return 'ok';
+      },
+    });
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/transcripts/claude/${SID}/signal`,
+      payload: { paneId: PANE_ID, action: 'key', key: 'C-c' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(receivedKey).toBe('C-c');
+    await app.close();
+  });
+
+  it('rejects action:"key" with an invalid key value with 400', async () => {
+    const app = buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/transcripts/claude/${SID}/signal`,
+      payload: { paneId: PANE_ID, action: 'key', key: 'Enter' },
+    });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('rejects action:"key" with a missing key with 400', async () => {
+    const app = buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/transcripts/claude/${SID}/signal`,
+      payload: { paneId: PANE_ID, action: 'key' },
+    });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('returns 404 when the pane no longer exists', async () => {
+    const app = buildApp([buildClaudeSource()], { sendSignal: async () => 'pane_not_found' });
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/transcripts/claude/${SID}/signal`,
+      payload: { paneId: PANE_ID, action: 'interrupt' },
+    });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('returns 404 when the session is not found', async () => {
+    const app = buildApp([buildClaudeSource()], { sendSignal: async () => 'session_not_found' });
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/transcripts/claude/${SID}/signal`,
+      payload: { paneId: PANE_ID, action: 'interrupt' },
+    });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('returns 404 for an unknown agent type', async () => {
+    const app = buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/transcripts/unknown/${SID}/signal`,
+      payload: { paneId: PANE_ID, action: 'interrupt' },
+    });
+    expect(res.statusCode).toBe(404);
     await app.close();
   });
 });

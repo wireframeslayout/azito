@@ -7,9 +7,9 @@ import { clearDraft, createDebouncedDraftSaver, loadDraft } from './transcriptDr
 import { loadHistory, pushHistory } from './inputHistory';
 import { HistoryPopover } from './HistoryPopover';
 import { PaneChip } from './PaneChip';
-import { resolveStoredPaneSelection, writeStoredPaneSelection } from './paneSelectionStorage';
 import { isErrorResponse } from './transcriptFormat';
-import type { PaneCandidate, PaneCandidatesResult, TranscriptErrorResponse } from './transcriptTypes';
+import { PANE_CAPABLE_AGENT_TYPE, type UsePaneSelectionResult } from './usePaneSelection';
+import type { TranscriptErrorResponse } from './transcriptTypes';
 
 const TEXTAREA_MIN_HEIGHT = 38;
 const TEXTAREA_MAX_HEIGHT = 120;
@@ -18,25 +18,20 @@ const RESTORED_HINT_MS = 1500;
 
 interface PromptInputBarProps {
   sessionId: string;
+  /** 送信先ペイン選択の状態。停止ボタン(LiveStatusRow)と選択状態を共有するため ConversationView から渡す。 */
+  paneSelection: UsePaneSelectionResult;
   /** 送信成功直後に呼ばれる(最下部へスクロールするため)。新着メッセージ自体はポーリングで反映される。 */
   onSent: () => void;
 }
-
-/** ペイン候補提示・入力送信は tmux ペインとの cwd 突合が前提のため、現状 Claude のみがこのコンポーネントを描画する。 */
-const PANE_CAPABLE_AGENT_TYPE = 'claude';
 
 /**
  * 会話ビュー下部の固定入力バー。cwd が一致する tmux ペインへプロンプトを送信する。
  * 送信内容自体は既存の JSONL ポーリングで会話に反映される（オプティミスティック表示はしない）。
  * ペインチップ＋textarea＋履歴🕘＋送信↑ の1行構成（SP実機の高さ節約のため）。
  */
-export default function PromptInputBar({ sessionId, onSent }: PromptInputBarProps) {
+export default function PromptInputBar({ sessionId, paneSelection, onSent }: PromptInputBarProps) {
   const { t } = useTranslation('transcript');
-  const [panes, setPanes] = useState<PaneCandidate[]>([]);
-  const [panesLoaded, setPanesLoaded] = useState(false);
-  const [panesError, setPanesError] = useState<string | null>(null);
-  const [reloadTick, setReloadTick] = useState(0);
-  const [selectedPaneId, setSelectedPaneId] = useState<string | null>(null);
+  const { panes, panesLoaded, panesError, selectedPaneId, selectedPane, selectPane, retryLoadPanes } = paneSelection;
   const [historyOpen, setHistoryOpen] = useState(false);
   const [text, setText] = useState('');
   const [historyIndex, setHistoryIndex] = useState(-1); // -1 = 履歴を辿っていない
@@ -46,49 +41,11 @@ export default function PromptInputBar({ sessionId, onSent }: PromptInputBarProp
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const draftSaverRef = useRef(createDebouncedDraftSaver(DRAFT_SAVE_DEBOUNCE_MS));
 
-  // 会話ビュー表示時（セッション切り替え時、または再試行時）に候補ペインを取得し、自動選択 or 復元する。
+  // セッション切り替え時は前セッションの送信エラー表示を持ち越さない(ペイン候補の取得・自動/復元選択
+  // 自体は usePaneSelection 側が sessionId の変化に反応して行う)。
   useEffect(() => {
-    let cancelled = false;
-    setPanesLoaded(false);
-    setPanesError(null);
-    setPanes([]);
-    setSelectedPaneId(null);
     setSendError(null);
-
-    apiWithStatus<PaneCandidatesResult | TranscriptErrorResponse>(
-      `/transcripts/${PANE_CAPABLE_AGENT_TYPE}/${encodeURIComponent(sessionId)}/panes`,
-    )
-      .then(({ status, body }) => {
-        if (cancelled) return;
-        if (status !== 200 || isErrorResponse(body)) {
-          setPanesLoaded(true);
-          setPanesError(isErrorResponse(body) ? body.error : t('promptBar.loadError'));
-          return;
-        }
-        setPanes(body.panes);
-        setPanesLoaded(true);
-
-        const storedPane = resolveStoredPaneSelection(sessionId, body.panes);
-        if (storedPane) {
-          setSelectedPaneId(storedPane.paneId);
-          return;
-        }
-        const matched = body.panes.filter((p) => p.cwdMatch);
-        if (matched.length === 1) {
-          setSelectedPaneId(matched[0].paneId);
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setPanesLoaded(true);
-          setPanesError(err instanceof Error ? err.message : t('promptBar.loadError'));
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionId, reloadTick, t]);
+  }, [sessionId]);
 
   // セッション切り替え時に下書きを復元する（F2）。復元があった場合のみ短時間ヒントを出す。
   // 直前のセッションでタイマーが残っていてもここで必ず setShowRestoredHint を再設定するため、
@@ -126,15 +83,6 @@ export default function PromptInputBar({ sessionId, onSent }: PromptInputBarProp
     el.style.height = 'auto';
     el.style.height = Math.min(el.scrollHeight, TEXTAREA_MAX_HEIGHT) + 'px';
   }, [text]);
-
-  const retryLoadPanes = useCallback(() => {
-    setReloadTick((n) => n + 1);
-  }, []);
-
-  const selectPane = useCallback((pane: PaneCandidate) => {
-    setSelectedPaneId(pane.paneId);
-    writeStoredPaneSelection(sessionId, pane);
-  }, [sessionId]);
 
   const handleSend = useCallback(async () => {
     const trimmed = text.trim();
@@ -203,7 +151,6 @@ export default function PromptInputBar({ sessionId, onSent }: PromptInputBarProp
     }
   };
 
-  const selectedPane = panes.find((p) => p.paneId === selectedPaneId) ?? null;
   const canSend = text.trim().length > 0 && selectedPaneId !== null && !sending;
 
   return (

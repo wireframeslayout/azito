@@ -33,6 +33,15 @@
       "sessionId": "Session ID"
     }
   },
+  "liveStatus": {
+    "stop": "Stop",
+    "stopHint": "Interrupt the running agent (tap: default interrupt key, long-press/right-click: choose Esc or Ctrl+C)",
+    "stopError": "Failed to send",
+    "sendEscape": "Send Esc",
+    "sendEscapeHint": "Interrupts generation only — the agent process keeps running",
+    "sendCtrlC": "Send Ctrl+C",
+    "sendCtrlCHint": "May terminate the agent process"
+  },
   "styleSwitcher": {
     "ariaLabel": "Transcript display style",
     "option": {

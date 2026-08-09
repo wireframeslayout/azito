@@ -33,6 +33,15 @@
       "sessionId": "セッションID"
     }
   },
+  "liveStatus": {
+    "stop": "停止",
+    "stopHint": "実行中のエージェントを中断します（タップ: 既定の割り込みキー、長押し/右クリック: Esc・Ctrl+C を選択）",
+    "stopError": "送信に失敗しました",
+    "sendEscape": "Esc を送信",
+    "sendEscapeHint": "生成のみ中断します（エージェントのプロセスは終了しません）",
+    "sendCtrlC": "Ctrl+C を送信",
+    "sendCtrlCHint": "エージェントのプロセスが終了する可能性があります"
+  },
   "styleSwitcher": {
     "ariaLabel": "トランスクリプトの表示スタイル",
     "option": {
