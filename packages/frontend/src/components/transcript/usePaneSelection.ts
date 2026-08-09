@@ -26,20 +26,27 @@ export interface UsePaneSelectionResult {
  *
  * `enabled: false`（非対応エージェント種別）の間は候補取得・状態更新を一切行わない。
  */
+/** 選択状態はどの sessionId に対して選ばれたかを併せて保持し、sessionId が切り替わった
+ * 直後（effect が走り直すまでの1レンダー間）に旧セッションの選択を晒さないようにする。 */
+interface PaneSelectionOwned {
+  sessionId: string;
+  paneId: string;
+}
+
 export function usePaneSelection(sessionId: string, enabled: boolean): UsePaneSelectionResult {
   const { t } = useTranslation('transcript');
   const [panes, setPanes] = useState<PaneCandidate[]>([]);
   const [panesLoaded, setPanesLoaded] = useState(false);
   const [panesError, setPanesError] = useState<string | null>(null);
   const [reloadTick, setReloadTick] = useState(0);
-  const [selectedPaneId, setSelectedPaneId] = useState<string | null>(null);
+  const [selection, setSelection] = useState<PaneSelectionOwned | null>(null);
 
   useEffect(() => {
     if (!enabled) {
       setPanes([]);
       setPanesLoaded(false);
       setPanesError(null);
-      setSelectedPaneId(null);
+      setSelection(null);
       return;
     }
 
@@ -47,7 +54,7 @@ export function usePaneSelection(sessionId: string, enabled: boolean): UsePaneSe
     setPanesLoaded(false);
     setPanesError(null);
     setPanes([]);
-    setSelectedPaneId(null);
+    setSelection(null);
 
     apiWithStatus<PaneCandidatesResult | TranscriptErrorResponse>(
       `/transcripts/${PANE_CAPABLE_AGENT_TYPE}/${encodeURIComponent(sessionId)}/panes`,
@@ -64,12 +71,12 @@ export function usePaneSelection(sessionId: string, enabled: boolean): UsePaneSe
 
         const storedPane = resolveStoredPaneSelection(sessionId, body.panes);
         if (storedPane) {
-          setSelectedPaneId(storedPane.paneId);
+          setSelection({ sessionId, paneId: storedPane.paneId });
           return;
         }
         const matched = body.panes.filter((p) => p.cwdMatch);
         if (matched.length === 1) {
-          setSelectedPaneId(matched[0].paneId);
+          setSelection({ sessionId, paneId: matched[0].paneId });
         }
       })
       .catch((err) => {
@@ -89,10 +96,13 @@ export function usePaneSelection(sessionId: string, enabled: boolean): UsePaneSe
   }, []);
 
   const selectPane = useCallback((pane: PaneCandidate) => {
-    setSelectedPaneId(pane.paneId);
+    setSelection({ sessionId, paneId: pane.paneId });
     writeStoredPaneSelection(sessionId, pane);
   }, [sessionId]);
 
+  // 所有 sessionId が現在の sessionId と一致する場合のみ選択を有効とみなす。
+  // sessionId 変更後、effect が選択をリセットするまでの1レンダー間も旧選択を漏らさない。
+  const selectedPaneId = selection && selection.sessionId === sessionId ? selection.paneId : null;
   const selectedPane = panes.find((p) => p.paneId === selectedPaneId) ?? null;
 
   return { panes, panesLoaded, panesError, selectedPaneId, selectedPane, selectPane, retryLoadPanes };
