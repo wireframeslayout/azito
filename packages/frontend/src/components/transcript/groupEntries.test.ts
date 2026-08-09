@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { groupEntries } from './groupEntries';
 import type { TranscriptEntry } from './transcriptTypes';
 
-function entry(uuid: string, type: TranscriptEntry['type']): TranscriptEntry {
-  return { uuid, type, timestamp: null, blocks: [] };
+function entry(uuid: string, type: TranscriptEntry['type'], timestamp: string | null = null): TranscriptEntry {
+  return { uuid, type, timestamp, blocks: [] };
 }
 
 describe('groupEntries', () => {
@@ -47,6 +47,32 @@ describe('groupEntries', () => {
       { type: 'user', entries: [u] },
       { type: 'tool', entries: [tl] },
     ]);
+  });
+
+  it('splits a group when the local date changes across midnight, even for the same type', () => {
+    // 24時間離れたタイムスタンプはどのタイムゾーンでもローカル日付が変わる（オフセット差の上限は26時間）。
+    const a1 = entry('1', 'assistant', '2026-08-09T12:00:00Z');
+    const a2 = entry('2', 'assistant', '2026-08-10T12:00:00Z');
+    const groups = groupEntries([a1, a2]);
+    expect(groups).toEqual([
+      { type: 'assistant', entries: [a1] },
+      { type: 'assistant', entries: [a2] },
+    ]);
+  });
+
+  it('keeps merging same-type entries that share the same local date', () => {
+    const a1 = entry('1', 'assistant', '2026-08-10T09:00:00Z');
+    const a2 = entry('2', 'assistant', '2026-08-10T09:05:00Z');
+    const groups = groupEntries([a1, a2]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toEqual({ type: 'assistant', entries: [a1, a2] });
+  });
+
+  it('does not split on a missing timestamp (dateKeyOf null on both sides is treated as the same date)', () => {
+    const a1 = entry('1', 'assistant', null);
+    const a2 = entry('2', 'assistant', null);
+    const groups = groupEntries([a1, a2]);
+    expect(groups).toHaveLength(1);
   });
 
   it('merges consecutive system and other entries', () => {

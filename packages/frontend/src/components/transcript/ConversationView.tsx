@@ -7,7 +7,7 @@ import { Icon } from '../ui/Icon';
 import { AgentBadge } from './AgentBadge';
 import { ConversationMenu } from './ConversationMenu';
 import { DateDivider } from './DateDivider';
-import { groupEntries } from './groupEntries';
+import { groupEntries, type EntryGroup } from './groupEntries';
 import { LiveStatusRow } from './LiveStatusRow';
 import { deriveLiveStatus } from './liveStatus';
 import PromptInputBar from './PromptInputBar';
@@ -68,6 +68,12 @@ export default function ConversationView({ sessionId, agentType, onBack }: Conve
   const nearBottomRef = useRef(true);
   const nextOffsetRef = useRef<number | null>(null);
 
+  // 世代トークン（Important #1）: sessionId/agentType が切り替わるたびに発行し直す。飛行中の
+  // 非同期応答（初回読み込み・ポーリング・older 読み込み）は、応答受信時にこの値が発行時と一致する
+  // 場合のみ state/ref を更新する。不一致（＝別セッションへ切り替え済み、またはアンマウント済み）
+  // なら黙って破棄し、旧セッションのエントリが新セッションの表示に混入するのを防ぐ。
+  const generationRef = useRef(0);
+
   // 上方向ページング（Issue #69 Phase C）: startOffsetRef/hasOlderRef が判定の正（UI表示は
   // loadingOlder state のみに依存し、hasOlder 自体は再レンダー不要なため ref だけで持つ）。
   const startOffsetRef = useRef<number | null>(null);
@@ -103,12 +109,14 @@ export default function ConversationView({ sessionId, agentType, onBack }: Conve
   // 過去分を1回だけ取得し、entries の先頭に prepend する。多重発火は inFlight フラグで防ぐ。
   const loadOlder = useCallback(async () => {
     if (loadingOlderInFlightRef.current || !hasOlderRef.current || startOffsetRef.current === null) return;
+    const myGeneration = generationRef.current;
     loadingOlderInFlightRef.current = true;
     setLoadingOlder(true);
     try {
       const { status, body } = await apiWithStatus<ReadSessionBeforeResult | TranscriptErrorResponse>(
         `/transcripts/${encodeURIComponent(agentType)}/${encodeURIComponent(sessionId)}?before=${startOffsetRef.current}`,
       );
+      if (generationRef.current !== myGeneration) return; // 別セッションへ切替済み: 破棄
       if (status !== 200 || isErrorResponse(body)) return; // 一時的なエラー: 次回のスクロール到達で再試行
       if (body.entries.length > 0) {
         const container = containerRef.current;
@@ -122,14 +130,17 @@ export default function ConversationView({ sessionId, agentType, onBack }: Conve
     } catch {
       // ネットワーク一時エラー: 次回のスクロール到達で再試行
     } finally {
-      loadingOlderInFlightRef.current = false;
-      setLoadingOlder(false);
+      if (generationRef.current === myGeneration) {
+        loadingOlderInFlightRef.current = false;
+        setLoadingOlder(false);
+      }
     }
   }, [sessionId, agentType]);
 
   // 初回読み込み: セッション切り替え毎に全状態をリセットして末尾から取得する。
   useEffect(() => {
-    let cancelled = false;
+    generationRef.current += 1;
+    const myGeneration = generationRef.current;
     setLoading(true);
     setNotFound(false);
     setError(null);
@@ -147,7 +158,7 @@ export default function ConversationView({ sessionId, agentType, onBack }: Conve
       `/transcripts/${encodeURIComponent(agentType)}/${encodeURIComponent(sessionId)}`,
     )
       .then(({ status, body }) => {
-        if (cancelled) return;
+        if (generationRef.current !== myGeneration) return;
         if (status === 404) {
           setNotFound(true);
           setLoading(false);
@@ -166,13 +177,14 @@ export default function ConversationView({ sessionId, agentType, onBack }: Conve
         requestAnimationFrame(() => scrollToBottom('auto'));
       })
       .catch((err) => {
-        if (cancelled) return;
+        if (generationRef.current !== myGeneration) return;
         setError(err instanceof Error ? err.message : String(err));
         setLoading(false);
       });
 
     return () => {
-      cancelled = true;
+      // アンマウント/次セッションへの切替直前にも世代を進め、直後にまだ飛行中の応答を確実に破棄する。
+      generationRef.current += 1;
     };
   }, [sessionId, agentType, scrollToBottom]);
 
@@ -180,19 +192,19 @@ export default function ConversationView({ sessionId, agentType, onBack }: Conve
   useEffect(() => {
     if (loading || notFound || error) return;
 
-    let disposed = false;
     let inFlight = false;
 
     const tick = async () => {
-      if (disposed || inFlight) return;
+      if (inFlight) return;
       if (document.visibilityState !== 'visible') return;
       if (nextOffsetRef.current === null) return;
+      const myGeneration = generationRef.current;
       inFlight = true;
       try {
         const { status, body } = await apiWithStatus<ReadSessionResult | TranscriptErrorResponse>(
           `/transcripts/${encodeURIComponent(agentType)}/${encodeURIComponent(sessionId)}?offset=${nextOffsetRef.current}`,
         );
-        if (disposed) return;
+        if (generationRef.current !== myGeneration) return;
         if (status === 404) {
           setNotFound(true);
           return;
@@ -224,7 +236,6 @@ export default function ConversationView({ sessionId, agentType, onBack }: Conve
     document.addEventListener('visibilitychange', onVisibilityChange);
 
     return () => {
-      disposed = true;
       clearInterval(intervalId);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
@@ -261,6 +272,27 @@ export default function ConversationView({ sessionId, agentType, onBack }: Conve
     const newScrollHeight = container.scrollHeight;
     container.scrollTop = anchor.prevScrollTop + (newScrollHeight - anchor.prevScrollHeight);
   }, [entries]);
+
+  // 連続読み込み（Minor #3）: IntersectionObserver は isIntersecting の遷移（enter/exit）でしか
+  // 発火しないため、prepend 後もセンチネルが可視のままだと再発火しない（例: ビューポートが広く
+  // 1回の prepend では埋まらない場合）。entries 反映・アンカー補正後のレイアウト確定を待って
+  // （rAF）センチネルの可視判定を行い、可視かつ hasOlder ならもう一度 loadOlder を呼ぶ。inFlight
+  // ガードは loadOlder 内部で行われる。ネットワークエラー時は loadOlder が hasOlderRef/entries を
+  // 更新しないため、この effect は entries の変化でしか再発火せず自然に打ち切られる。
+  useEffect(() => {
+    if (loading || notFound || error) return;
+    const raf = requestAnimationFrame(() => {
+      if (loadingOlderInFlightRef.current || !hasOlderRef.current) return;
+      const sentinel = sentinelRef.current;
+      const container = containerRef.current;
+      if (!sentinel || !container) return;
+      const sentinelRect = sentinel.getBoundingClientRect();
+      const containerRect = container.getBoundingClientRect();
+      const isVisible = sentinelRect.bottom > containerRect.top && sentinelRect.top < containerRect.bottom;
+      if (isVisible) void loadOlder();
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [entries, loading, notFound, error, loadOlder]);
 
   // ライブ状態行の出現は「新着」バッジのカウント対象にしない。最下部粘着中のみ追従スクロールする。
   useEffect(() => {
@@ -318,24 +350,47 @@ export default function ConversationView({ sessionId, agentType, onBack }: Conve
               </div>
               {(() => {
                 const groups = groupEntries(entries);
+
+                // グループを「日付コンテナ」単位にまとめ直す（Minor #5）: sticky 日付チップの
+                // containing block を1グループの高さに閉じ込めず、その日の全グループを包む
+                // コンテナに広げることで、スクロール中その日の間ずっとチップが上端に留まるようにする。
+                // content-visibility は個々のグループ側に残す（仮想化の粒度は変えない）。
+                interface DayContainer {
+                  key: string;
+                  dateLabel: string | null;
+                  items: { group: EntryGroup; prevTimestamp: string | null }[];
+                }
+                const dayContainers: DayContainer[] = [];
                 let currentDateKey: string | null = null;
-                return groups.map((group, i) => {
+                groups.forEach((group, i) => {
                   const prevGroup = i > 0 ? groups[i - 1] : null;
                   const prevTimestamp = prevGroup ? prevGroup.entries[prevGroup.entries.length - 1].timestamp : null;
                   const groupDateKey = dateKeyOf(group.entries[0].timestamp);
-                  const showDateDivider = groupDateKey !== null && groupDateKey !== currentDateKey;
+                  const isNewDateContainer = groupDateKey !== null && groupDateKey !== currentDateKey;
                   if (groupDateKey !== null) currentDateKey = groupDateKey;
 
-                  return (
-                    <div
-                      key={group.entries[0].uuid}
-                      style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 200px' }}
-                    >
-                      {showDateDivider && <DateDivider label={formatDateSeparator(group.entries[0].timestamp!, i18n.language)} />}
-                      <EntryComponent group={group} prevTimestamp={prevTimestamp} />
-                    </div>
-                  );
+                  const lastContainer = dayContainers[dayContainers.length - 1];
+                  if (!lastContainer || isNewDateContainer) {
+                    dayContainers.push({
+                      key: group.entries[0].uuid,
+                      dateLabel: isNewDateContainer ? formatDateSeparator(group.entries[0].timestamp!, i18n.language) : null,
+                      items: [{ group, prevTimestamp }],
+                    });
+                  } else {
+                    lastContainer.items.push({ group, prevTimestamp });
+                  }
                 });
+
+                return dayContainers.map((day) => (
+                  <div key={day.key}>
+                    {day.dateLabel && <DateDivider label={day.dateLabel} />}
+                    {day.items.map(({ group, prevTimestamp }) => (
+                      <div key={group.entries[0].uuid} style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 200px' }}>
+                        <EntryComponent group={group} prevTimestamp={prevTimestamp} />
+                      </div>
+                    ))}
+                  </div>
+                ));
               })()}
               {liveStatus && lastEntryTimestamp && (
                 <LiveStatusRow status={liveStatus} lastTimestamp={lastEntryTimestamp} style={style} />

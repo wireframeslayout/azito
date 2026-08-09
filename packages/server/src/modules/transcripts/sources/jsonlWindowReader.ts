@@ -41,6 +41,13 @@ export function findLastNewline(buf: Buffer): number {
   return -1;
 }
 
+/** [from, from+len) を読み、範囲内で最初に見つかった改行のファイル内絶対バイト位置を返す（無ければ -1）。 */
+function findFirstNewlineAbsolute(fd: number, size: number, from: number, len: number): number {
+  const buf = readChunk(fd, size, from, len);
+  const idx = buf.indexOf(0x0a);
+  return idx === -1 ? -1 : from + idx;
+}
+
 /**
  * buf[0, consumedLength) を行に分割し、各行のファイル内絶対バイト開始位置（base + buf内オフセット）を添える。
  * consumedLength が buf の途中（最終行が改行を含まない）でも、その末尾セグメントを最終行として含める
@@ -154,11 +161,20 @@ export function readIncrementalWindow<T>(
   };
 }
 
+/** readBeforeWindow のウィンドウ拡張上限（1回の呼び出しで遡る最大バイト数 = maxBytes の何倍か）。 */
+const MAX_EXPAND_WINDOWS = 8;
+
 /**
  * 後方ページング: before（呼び出し側が既に把握している行境界 — readInitialWindow/
  * readIncrementalWindow の startOffset や、この関数自身が返した prevOffset）より前を
  * 最大 maxBytes バイトだけ位置指定で読む。ウィンドウ先頭が行の途中から始まっている場合は
  * 最初の改行の直後までスキップし、before 直前の改行までの完全行だけをパースする。
+ *
+ * 直前レコード（before の直前の1行）が maxBytes を超える巨大行の場合、単一ウィンドウ内には
+ * 改行が見つからない。この場合はウィンドウを maxBytes 単位でさらに前方へ拡張し、改行を探す
+ * （最大 MAX_EXPAND_WINDOWS 窓 = maxBytes * MAX_EXPAND_WINDOWS バイトまで）。それでも見つからない
+ * 場合のみ、その行は読み取り不能として丸ごとスキップする（cursor を拡張済みの範囲の先頭まで厳密に
+ * 減少させ、無限ループを防止しつつ、さらに前方にデータがあれば hasOlder は維持する）。
  */
 export function readBeforeWindow<T>(
   fd: number,
@@ -172,19 +188,32 @@ export function readBeforeWindow<T>(
   const byteCapped = windowStart > 0;
 
   let readStart = windowStart;
-  let hasOlder = byteCapped;
+  const hasOlder = byteCapped;
+
   if (byteCapped) {
-    const probe = readChunk(fd, size, windowStart, beforeClamped - windowStart);
-    const firstNewline = probe.indexOf(0x0a);
-    if (firstNewline === -1) {
-      // ウィンドウ全体が改行を含まない（1行が maxBytes を超える異常系）。行境界を確定できないため、
-      // このウィンドウは読み取り不能として扱い hasOlder を false にする（無限ループ防止。
-      // フォールバック合成はせず、単に「これ以上遡れない」という事実を返す）。
-      readStart = beforeClamped;
-      hasOlder = false;
-    } else {
-      readStart = windowStart + firstNewline + 1;
+    // beforeClamped-1 は「before の直前レコードの終端改行」そのものであり、before が正しい行境界で
+    // ある限り常にそこに存在する。これを「見つかった改行」として扱うと、窓の中に他の改行が無い
+    // （＝直前レコードが巨大行で窓を埋め尽くしている）場合でも readStart = beforeClamped となり
+    // 0 バイト読みで前進しなくなる。そのため最初の探索ではこの末尾1バイトを除外する。
+    const searchEnd = beforeClamped - 1;
+    let curWindowStart = windowStart;
+    let newlineAbs =
+      searchEnd > curWindowStart ? findFirstNewlineAbsolute(fd, size, curWindowStart, searchEnd - curWindowStart) : -1;
+    let windows = 1;
+    while (newlineAbs === -1 && curWindowStart > 0 && windows < MAX_EXPAND_WINDOWS) {
+      const nextWindowStart = Math.max(curWindowStart - maxBytes, 0);
+      newlineAbs = findFirstNewlineAbsolute(fd, size, nextWindowStart, curWindowStart - nextWindowStart);
+      curWindowStart = nextWindowStart;
+      windows++;
     }
+
+    if (newlineAbs === -1) {
+      // 上限まで遡っても改行が見つからない: このレコードは読み取り不能としてスキップする。
+      // cursor は curWindowStart（今回探索した範囲の先頭）まで厳密に減少させ、その手前にまだ
+      // データがあれば hasOlder を維持する（次回呼び出しでさらに遡れる）。
+      return { entries: [], prevOffset: curWindowStart, hasOlder: curWindowStart > 0 };
+    }
+    readStart = newlineAbs + 1;
   }
 
   const buf = readChunk(fd, size, readStart, beforeClamped - readStart);

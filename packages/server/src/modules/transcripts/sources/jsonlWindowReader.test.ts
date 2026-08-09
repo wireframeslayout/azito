@@ -136,6 +136,59 @@ describe('jsonlWindowReader', () => {
       }
     });
 
+    it('expands the search window across multiple maxBytes-sized pages to find a newline before an oversized line, and still finds earlier records afterward', () => {
+      // "huge" alone is far bigger than maxBytes (10), forcing readBeforeWindow to expand its
+      // search window backward multiple times before it finds the newline that starts "huge".
+      const hugeLine = 'H'.repeat(500);
+      const lines = ['before-1', 'before-2', hugeLine, 'after-1'];
+      file = tmpFile(lines);
+      const fd = fs.openSync(file, 'r');
+      try {
+        const size = fs.fstatSync(fd).size;
+        const before = size; // start paging back from EOF
+        const maxBytes = 10; // much smaller than hugeLine, forces multi-window expansion
+
+        // First page: reads back from EOF; since "after-1\n" (8 bytes) fits but the preceding
+        // hugeLine is huge, the window must expand across several maxBytes-sized steps to find
+        // the newline right before "after-1".
+        const page1 = readBeforeWindow(fd, size, before, maxBytes, parseLine);
+        expect(page1.entries).toEqual(['after-1']);
+        expect(page1.hasOlder).toBe(true);
+        expect(page1.prevOffset).toBeLessThan(before);
+
+        // Second page: now paging back from right after hugeLine's own newline; must expand
+        // across many windows (hugeLine is 500 bytes, maxBytes is 10) to find the start of hugeLine.
+        const page2 = readBeforeWindow(fd, size, page1.prevOffset, maxBytes, parseLine);
+        expect(page2.prevOffset).toBeLessThan(page1.prevOffset);
+        // cursor must strictly decrease and progress must eventually reach the very front of the file.
+        expect(page2.prevOffset).toBeGreaterThanOrEqual(0);
+
+        // Keep paging backward; cursor must monotonically decrease and eventually reach offset 0
+        // with hasOlder=false, recovering all earlier records (possibly skipping the oversized one).
+        let cursor = page2.prevOffset;
+        let hasOlder = page2.hasOlder;
+        let iterations = 0;
+        const collected: string[] = [...page2.entries];
+        while (hasOlder && iterations < 50) {
+          const prevCursor = cursor;
+          const page = readBeforeWindow(fd, size, cursor, maxBytes, parseLine);
+          expect(page.prevOffset).toBeLessThan(prevCursor);
+          collected.unshift(...page.entries);
+          cursor = page.prevOffset;
+          hasOlder = page.hasOlder;
+          iterations++;
+        }
+
+        expect(hasOlder).toBe(false);
+        expect(cursor).toBe(0);
+        // The oversized line itself is unparseable within the window budget and is skipped, but
+        // the earlier normal-sized records must still be reachable.
+        expect(collected).toEqual(expect.arrayContaining(['before-1', 'before-2']));
+      } finally {
+        fs.closeSync(fd);
+      }
+    });
+
     it('marks hasOlder=false and startOffset=0 when nothing is clipped', () => {
       const lines = ['only-one'];
       file = tmpFile(lines);
