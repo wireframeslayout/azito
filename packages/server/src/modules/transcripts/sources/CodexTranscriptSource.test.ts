@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -66,6 +66,18 @@ const FUNCTION_CALL_OUTPUT = (callId: string, output: string) => ({
   timestamp: '2026-05-31T03:09:44.900Z',
   type: 'response_item',
   payload: { type: 'function_call_output', call_id: callId, output },
+});
+
+const CUSTOM_TOOL_CALL = (callId: string, name: string, input: string) => ({
+  timestamp: '2026-05-31T03:09:44.700Z',
+  type: 'response_item',
+  payload: { type: 'custom_tool_call', status: 'completed', call_id: callId, name, input },
+});
+
+const CUSTOM_TOOL_CALL_OUTPUT = (callId: string, output: unknown) => ({
+  timestamp: '2026-05-31T03:09:44.900Z',
+  type: 'response_item',
+  payload: { type: 'custom_tool_call_output', call_id: callId, output },
 });
 
 const EVENT_MSG = {
@@ -177,15 +189,62 @@ describe('CodexTranscriptSource', () => {
       expect(result!.entries[1].blocks).toEqual([{ kind: 'thinking', text: 'Thinking about the answer' }]);
 
       expect(result!.entries[2].type).toBe('tool');
-      expect(result!.entries[2].uuid).toBe('call_1');
+      expect(result!.entries[2].uuid).toBe('call_1:call');
       expect(result!.entries[2].blocks).toEqual([{ kind: 'tool_use', name: 'exec_command', input: '{"cmd":"ls"}', truncated: false }]);
 
       expect(result!.entries[3].type).toBe('tool');
-      expect(result!.entries[3].uuid).toBe('call_1');
+      expect(result!.entries[3].uuid).toBe('call_1:output');
       expect(result!.entries[3].blocks).toEqual([{ kind: 'tool_result', text: '4', truncated: false }]);
 
       expect(result!.entries[4].type).toBe('assistant');
       expect(result!.entries[4].blocks).toEqual([{ kind: 'text', text: 'The answer is 4.' }]);
+    });
+
+    it('assigns distinct uuids to function_call and its function_call_output sharing the same call_id', () => {
+      writeSession(dir, SID_A, [
+        SESSION_META(SID_A, '/home/user/proj-a'),
+        FUNCTION_CALL('call_dup'),
+        FUNCTION_CALL_OUTPUT('call_dup', 'result'),
+      ]);
+      const result = source.readSession(SID_A);
+      const uuids = result!.entries.map((e) => e.uuid);
+      expect(new Set(uuids).size).toBe(uuids.length);
+      expect(uuids).toEqual(['call_dup:call', 'call_dup:output']);
+    });
+
+    it('converts custom_tool_call/custom_tool_call_output (apply_patch/exec freeform tools) into tool_use/tool_result', () => {
+      writeSession(dir, SID_A, [
+        SESSION_META(SID_A, '/home/user/proj-a'),
+        CUSTOM_TOOL_CALL('call_ctc', 'apply_patch', '*** Begin Patch\n*** End Patch\n'),
+        CUSTOM_TOOL_CALL_OUTPUT('call_ctc', 'Success. Updated the following files:\n'),
+      ]);
+      const result = source.readSession(SID_A);
+      expect(result!.entries).toHaveLength(2);
+
+      expect(result!.entries[0].type).toBe('tool');
+      expect(result!.entries[0].uuid).toBe('call_ctc:call');
+      expect(result!.entries[0].blocks).toEqual([
+        { kind: 'tool_use', name: 'apply_patch', input: '*** Begin Patch\n*** End Patch\n', truncated: false },
+      ]);
+
+      expect(result!.entries[1].type).toBe('tool');
+      expect(result!.entries[1].uuid).toBe('call_ctc:output');
+      expect(result!.entries[1].blocks).toEqual([
+        { kind: 'tool_result', text: 'Success. Updated the following files:\n', truncated: false },
+      ]);
+    });
+
+    it('converts an array-form custom_tool_call_output.output into concatenated text', () => {
+      writeSession(dir, SID_A, [
+        SESSION_META(SID_A, '/home/user/proj-a'),
+        CUSTOM_TOOL_CALL('call_arr', 'exec', 'const r = await tools.exec_command({});'),
+        CUSTOM_TOOL_CALL_OUTPUT('call_arr', [
+          { type: 'input_text', text: 'Script completed' },
+          { type: 'input_text', text: 'Output:\nhello' },
+        ]),
+      ]);
+      const result = source.readSession(SID_A);
+      expect(result!.entries[1].blocks).toEqual([{ kind: 'tool_result', text: 'Script completed\nOutput:\nhello', truncated: false }]);
     });
 
     it('assigns stable fallback uuids to entries without a call_id, unique within the batch', () => {
@@ -211,6 +270,31 @@ describe('CodexTranscriptSource', () => {
       const second = source.readSession(SID_A, first!.nextOffset);
       expect(second!.entries).toHaveLength(1);
       expect(second!.entries[0].blocks).toEqual([{ kind: 'text', text: 'second' }]);
+    });
+
+    it('reuses the cached file path across repeated readSession calls (no re-scan of sessions dir)', () => {
+      writeSession(dir, SID_A, [SESSION_META(SID_A, '/home/user/proj-a'), USER_MESSAGE('first')]);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const scanSpy = vi.spyOn(source as any, 'scanSessionFiles');
+
+      const first = source.readSession(SID_A);
+      expect(first!.entries).toHaveLength(1);
+      expect(scanSpy).toHaveBeenCalledTimes(1); // cache miss on first call
+
+      const second = source.readSession(SID_A, first!.nextOffset);
+      expect(second!.entries).toHaveLength(0);
+      expect(scanSpy).toHaveBeenCalledTimes(1); // cache hit: no additional scan
+
+      source.getSessionCwd(SID_A);
+      expect(scanSpy).toHaveBeenCalledTimes(1); // still a cache hit
+    });
+
+    it('re-scans when the cached session file has been removed', () => {
+      const file = writeSession(dir, SID_A, [SESSION_META(SID_A, '/home/user/proj-a'), USER_MESSAGE('first')]);
+      source.readSession(SID_A); // warms the cache
+      fs.rmSync(file);
+
+      expect(source.readSession(SID_A)).toBeNull();
     });
 
     it('skips a malformed JSON line without throwing', () => {

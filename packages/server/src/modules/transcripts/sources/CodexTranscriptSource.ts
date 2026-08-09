@@ -11,7 +11,16 @@ import type { ReadSessionResult, SessionSummary, TranscriptBlock, TranscriptEntr
 //   session_meta（payload.id=セッションUUID, payload.cwd） / turn_context / event_msg
 //   （user_message/agent_message/task_started/task_complete/token_count 等、response_item と
 //   内容が重複するため無視） / response_item（payload.type: message/reasoning/function_call/
-//   function_call_output のみを変換。local_shell_call 等の他 type は実データ未確認のため未対応でスキップ）。
+//   function_call_output/custom_tool_call/custom_tool_call_output のみを変換。custom_tool_call は
+//   apply_patch/exec 等の freeform ツール呼び出しで、input は文字列（生パッチ/スクリプト本文）。
+//   対応する custom_tool_call_output.output は文字列・{type:'input_text',text}形の配列・null のいずれも
+//   実データで確認（配列は text を連結）。local_shell_call 等のその他 type は実データ未確認のため未対応でスキップ。
+
+// ─── ID Format ───
+//
+// function_call/function_call_output・custom_tool_call/custom_tool_call_output は呼び出しと結果が
+// 同じ call_id を共有するため、uuid は `${callId}:call` / `${callId}:output` で一意化する
+// （同一 call_id をそのまま uuid にすると React の key が重複する）。
 
 // ─── Constants ───
 
@@ -211,7 +220,32 @@ function normalizeMessageEntryType(role: unknown): TranscriptEntryType | null {
   return null;
 }
 
-function normalizeResponseItem(record: Record<string, unknown>, uuid: string): TranscriptEntry | null {
+/**
+ * custom_tool_call_output.output は文字列（生テキスト）・配列（{type:'input_text', text} 等の
+ * ブロック列）・null のいずれもあり得る（実データで確認）。配列は text プロパティを持つ要素を
+ * 連結し、それ以外（null 等）は既存の function_call_output と同じ JSON.stringify フォールバックに揃える。
+ */
+function normalizeToolOutputText(output: unknown): string {
+  if (typeof output === 'string') return output;
+  if (Array.isArray(output)) {
+    return output
+      .filter((item): item is Record<string, unknown> => isRecord(item) && typeof item.text === 'string')
+      .map((item) => item.text as string)
+      .join('\n');
+  }
+  return JSON.stringify(output ?? '');
+}
+
+/**
+ * call_id を持つ response_item（function_call/function_call_output, custom_tool_call/
+ * custom_tool_call_output）の uuid を生成する。呼び出しと結果は同じ call_id を共有するため、
+ * `:call` / `:output` サフィックスで一意化する（React key 重複防止）。
+ */
+function callUuid(callId: string, direction: 'call' | 'output'): string {
+  return `${callId}:${direction}`;
+}
+
+function normalizeResponseItem(record: Record<string, unknown>, callId: string | null, fallbackUuid: string): TranscriptEntry | null {
   const payload = record.payload;
   if (!isRecord(payload)) return null;
   const timestamp = typeof record.timestamp === 'string' ? record.timestamp : null;
@@ -222,35 +256,53 @@ function normalizeResponseItem(record: Record<string, unknown>, uuid: string): T
       if (entryType === null) return null;
       const blocks = normalizeMessageBlocks(payload.content);
       if (blocks.length === 0) return null;
-      return { uuid, type: entryType, timestamp, blocks };
+      return { uuid: fallbackUuid, type: entryType, timestamp, blocks };
     }
     case 'reasoning': {
       const blocks = normalizeReasoningBlocks(payload.summary);
       if (blocks.length === 0) return null;
-      return { uuid, type: 'assistant', timestamp, blocks };
+      return { uuid: fallbackUuid, type: 'assistant', timestamp, blocks };
     }
     case 'function_call': {
       if (typeof payload.name !== 'string') return null;
       const argsText = typeof payload.arguments === 'string' ? payload.arguments : JSON.stringify(payload.arguments ?? {});
       const { text, truncated } = truncateText(argsText, TOOL_USE_INPUT_LIMIT);
+      const uuid = callId ? callUuid(callId, 'call') : fallbackUuid;
       return { uuid, type: 'tool', timestamp, blocks: [{ kind: 'tool_use', name: payload.name, input: text, truncated }] };
     }
     case 'function_call_output': {
       const rawOutput = typeof payload.output === 'string' ? payload.output : JSON.stringify(payload.output ?? '');
       const { text, truncated } = truncateText(rawOutput, TOOL_RESULT_TEXT_LIMIT);
+      const uuid = callId ? callUuid(callId, 'output') : fallbackUuid;
+      return { uuid, type: 'tool', timestamp, blocks: [{ kind: 'tool_result', text, truncated }] };
+    }
+    case 'custom_tool_call': {
+      // freeform ツール（apply_patch/exec 等）。input は実データ上つねに文字列（生スクリプト/パッチ本文）。
+      if (typeof payload.name !== 'string') return null;
+      const argsText = typeof payload.input === 'string' ? payload.input : JSON.stringify(payload.input ?? {});
+      const { text, truncated } = truncateText(argsText, TOOL_USE_INPUT_LIMIT);
+      const uuid = callId ? callUuid(callId, 'call') : fallbackUuid;
+      return { uuid, type: 'tool', timestamp, blocks: [{ kind: 'tool_use', name: payload.name, input: text, truncated }] };
+    }
+    case 'custom_tool_call_output': {
+      const rawOutput = normalizeToolOutputText(payload.output);
+      const { text, truncated } = truncateText(rawOutput, TOOL_RESULT_TEXT_LIMIT);
+      const uuid = callId ? callUuid(callId, 'output') : fallbackUuid;
       return { uuid, type: 'tool', timestamp, blocks: [{ kind: 'tool_result', text, truncated }] };
     }
     default:
-      // local_shell_call・custom_tool_call 等、実データで未確認の type は変換不能としてスキップする（フォールバック合成禁止）
+      // local_shell_call 等、実データで未確認の type は変換不能としてスキップする（フォールバック合成禁止）
       return null;
   }
 }
 
 /**
- * 1行 → TranscriptEntry のパーサを作る。call_id を持つ function_call/function_call_output は
- * それを uuid に使う（呼び出しと結果の対応が視覚的にも安定する）。id を持たない
- * message/reasoning は、この読み取りウィンドウ内の行インデックスから安定生成する
- * （windowKey は offset 単位で一意なため、ウィンドウをまたいだ衝突はない）。
+ * 1行 → TranscriptEntry のパーサを作る。call_id を持つ function_call/function_call_output・
+ * custom_tool_call/custom_tool_call_output は、それを uuid のベースに使う（呼び出しと結果の
+ * 対応が視覚的にも安定する）。呼び出しと結果は同じ call_id を共有するため normalizeResponseItem
+ * 側で `:call`/`:output` サフィックスを付けて一意化する。id を持たない message/reasoning は、
+ * この読み取りウィンドウ内の行インデックスから安定生成する（windowKey は offset 単位で一意なため、
+ * ウィンドウをまたいだ衝突はない）。
  */
 function buildParseLine(windowKey: string): (line: string) => TranscriptEntry | null {
   let index = 0;
@@ -268,8 +320,8 @@ function buildParseLine(windowKey: string): (line: string) => TranscriptEntry | 
 
     const payload = record.payload;
     const callId = isRecord(payload) && typeof payload.call_id === 'string' ? payload.call_id : null;
-    const uuid = callId ?? `${windowKey}-${currentIndex}`;
-    return normalizeResponseItem(record, uuid);
+    const fallbackUuid = `${windowKey}-${currentIndex}`;
+    return normalizeResponseItem(record, callId, fallbackUuid);
   };
 }
 
@@ -291,12 +343,32 @@ export class CodexTranscriptSource implements TranscriptSource {
     this.previewScanBytes = options.previewScanBytes ?? DEFAULT_PREVIEW_SCAN_BYTES;
   }
 
+  /**
+   * sessionId → ファイルパスのキャッシュ（インスタンス寿命内で保持）。readSession は 2秒ポーリングで
+   * 呼ばれるため、毎回 sessions 配下を再帰走査するとサーバー台数×セッション数に比例してコストが増える。
+   * キャッシュヒット時は fs.existsSync でファイルの生存だけ確認して使い回す。消えていた場合と、
+   * 新規セッション（キャッシュミス）の場合のみ scanSessionFiles() で再走査する。
+   */
+  private readonly sessionFileCache = new Map<string, string>();
+
   private sessionsDir(): string {
     return resolveSessionsDir(this.sessionsDirOverride);
   }
 
+  /** テストから走査回数を spy できるよう、実際の再帰走査呼び出しをメソッドに切り出す。 */
+  private scanSessionFiles(): { file: string; sessionId: string }[] {
+    return listSessionFiles(this.sessionsDir());
+  }
+
+  private warmSessionFileCache(files: { file: string; sessionId: string }[]): void {
+    for (const { sessionId, file } of files) {
+      this.sessionFileCache.set(sessionId, file);
+    }
+  }
+
   listSessions(limit = 50): SessionSummary[] {
-    const files = listSessionFiles(this.sessionsDir());
+    const files = this.scanSessionFiles();
+    this.warmSessionFileCache(files);
 
     const stated: { file: string; sessionId: string; stat: fs.Stats }[] = [];
     for (const { file, sessionId } of files) {
@@ -329,7 +401,15 @@ export class CodexTranscriptSource implements TranscriptSource {
 
   private findSessionFile(sessionId: string): string | null {
     if (!SESSION_ID_PATTERN.test(sessionId)) return null;
-    const files = listSessionFiles(this.sessionsDir());
+
+    const cached = this.sessionFileCache.get(sessionId);
+    if (cached !== undefined) {
+      if (fs.existsSync(cached)) return cached;
+      this.sessionFileCache.delete(sessionId);
+    }
+
+    const files = this.scanSessionFiles();
+    this.warmSessionFileCache(files);
     const match = files.find((f) => f.sessionId === sessionId);
     return match ? match.file : null;
   }

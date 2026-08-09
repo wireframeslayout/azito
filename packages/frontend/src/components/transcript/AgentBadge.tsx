@@ -36,7 +36,10 @@ export function AgentBadge({ agentType, style }: AgentBadgeProps) {
         background: `color-mix(in srgb, ${color} 12%, transparent)`,
         border: `1px solid color-mix(in srgb, ${color} 35%, transparent)`,
         borderRadius: 'var(--radius-full)',
-        padding: '2px 8px',
+        // 垂直 2px はピルバッジの視覚的な高さ調整用の微調整値で --space-* (4px 刻み) に一致するものが無いため
+        // 既存の他ピルバッジ（Chip.tsx/ThinkingChip.tsx 等）と同じ raw px のまま維持する。水平 8px は
+        // --space-2 と厳密に一致するためトークン化する。
+        padding: '2px var(--space-2)',
         lineHeight: 1.4,
         whiteSpace: 'nowrap',
         ...style,
