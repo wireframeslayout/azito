@@ -5,6 +5,13 @@ interface CollapsibleBlockProps {
   icon: IconName;
   label: string;
   tone?: 'default' | 'danger';
+  /**
+   * 確定した結果の成否のみを表す（tool_result 専用）。省略時はグリフを出さない。
+   * tool_use は実行中/未確定のため常に省略、thinking もグリフ対象外。
+   * 「実行中」の可視化はライブ行（ThinkingChip 等）の責務であり、このチップに
+   * pending グリフは出さない方針。
+   */
+  status?: 'success' | 'error';
   truncatedNote?: string;
   children: string;
 }
@@ -23,10 +30,10 @@ function chipPreview(text: string): string {
  * 成功/失敗グリフを横並びにする。展開すると内容全文をブロック表示する。
  * ネイティブ <details>/<summary> を使い、キーボード操作・フォーカスを無償で得る。
  */
-export function CollapsibleBlock({ icon, label, tone = 'default', truncatedNote, children }: CollapsibleBlockProps) {
+export function CollapsibleBlock({ icon, label, tone = 'default', status, truncatedNote, children }: CollapsibleBlockProps) {
   const [open, setOpen] = useState(false);
-  const statusColor = tone === 'danger' ? 'var(--danger)' : 'var(--success)';
-  const statusGlyph = tone === 'danger' ? '✗' : '✓';
+  const statusColor = status === 'error' ? 'var(--danger)' : 'var(--success)';
+  const statusGlyph = status === 'error' ? '✗' : '✓';
   const preview = chipPreview(children);
 
   return (
@@ -53,13 +60,30 @@ export function CollapsibleBlock({ icon, label, tone = 'default', truncatedNote,
         }}
       >
         <Icon name={icon} size={14} style={{ color: 'var(--text-dim)', flexShrink: 0 }} />
-        <span style={{ fontWeight: 600, color: 'var(--text)', flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {/*
+          320px 幅でも状態グリフが常に見えるよう、縮む優先度はラベル > プレビューの順。
+          アイコン・状態グリフは flexShrink: 0 で固定幅を維持し、ラベルは flexShrink: 1 +
+          minWidth: 0 で ellipsis を効かせつつ縮む（長い翻訳ラベル・MCPツール名の折り返し崩れ対策）。
+        */}
+        <span
+          style={{
+            fontWeight: 600,
+            color: 'var(--text)',
+            flexShrink: 1,
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
           {label}
         </span>
         {preview && (
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{preview}</span>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flexShrink: 1 }}>{preview}</span>
         )}
-        <span aria-hidden="true" style={{ color: statusColor, fontWeight: 700, flexShrink: 0 }}>{statusGlyph}</span>
+        {status && (
+          <span aria-hidden="true" style={{ color: statusColor, fontWeight: 700, flexShrink: 0 }}>{statusGlyph}</span>
+        )}
         {open && truncatedNote && (
           <span style={{ color: 'var(--text-dim)', fontWeight: 400, flexShrink: 0 }}>{truncatedNote}</span>
         )}

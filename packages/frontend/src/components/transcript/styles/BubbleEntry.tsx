@@ -54,6 +54,7 @@ function BlockList({ blocks, markdownText, thinkingSeconds }: {
                 key={i}
                 icon="file"
                 tone={block.isError ? 'danger' : 'default'}
+                status={block.isError ? 'error' : 'success'}
                 label={block.isError ? t('conversation.toolResultError') : t('conversation.toolResult')}
                 truncatedNote={block.truncated ? t('conversation.blockTruncated') : undefined}
               >
