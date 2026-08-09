@@ -16,11 +16,26 @@
     "olderTruncated": "Older messages were omitted",
     "blockTruncated": "…truncated",
     "thinking": "Thinking",
+    "thinkingWithSeconds": "Thinking {{seconds}}s",
+    "moreLines": "… +{{count}} lines (tap to expand)",
     "toolUse": "Tool call: {{name}}",
     "toolResult": "Tool result",
     "toolResultError": "Tool error",
     "system": "System",
     "other": "Other"
+  },
+  "styleSwitcher": {
+    "ariaLabel": "Transcript display style",
+    "option": {
+      "bubble": "Bubble",
+      "flow": "Flow",
+      "rail": "Log",
+      "tui": "TUI"
+    },
+    "flow": {
+      "userLabel": "You",
+      "assistantLabel": "Claude"
+    }
   },
   "promptBar": {
     "placeholder": "Type a prompt… (Ctrl/Cmd+Enter to send)",

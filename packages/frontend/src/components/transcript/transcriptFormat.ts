@@ -34,3 +34,45 @@ export function formatEntryTimestamp(timestamp: string | null, language: string)
   }
   return new Intl.DateTimeFormat(language, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(d);
 }
+
+/**
+ * 直前エントリとの経過秒数を算出する（thinking チップの秒数併記用、C2）。
+ * 1〜300秒の範囲外、またはタイムスタンプが不正・欠落している場合は null を返す。
+ */
+export function computeThinkingGapSeconds(prevTimestamp: string | null, timestamp: string | null): number | null {
+  if (!prevTimestamp || !timestamp) return null;
+  const prevMs = new Date(prevTimestamp).getTime();
+  const curMs = new Date(timestamp).getTime();
+  if (!Number.isFinite(prevMs) || !Number.isFinite(curMs)) return null;
+  const diffSec = Math.round((curMs - prevMs) / 1000);
+  if (diffSec < 1 || diffSec > 300) return null;
+  return diffSec;
+}
+
+export interface TextSegment {
+  kind: 'text' | 'code';
+  text: string;
+  lang?: string;
+}
+
+/**
+ * ```lang\n...\n``` 形式のフェンスドコードブロックを検出し、text/code のセグメントに分割する。
+ * TUI スタイル（簡略 markdown: 改行・コードブロックのみ保持しそれ以外はプレーンテキスト表示）で使う。
+ */
+export function splitCodeBlocks(text: string): TextSegment[] {
+  const pattern = /```(\w*)\n([\s\S]*?)```/g;
+  const segments: TextSegment[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      segments.push({ kind: 'text', text: text.slice(lastIndex, match.index) });
+    }
+    segments.push({ kind: 'code', text: match[2].replace(/\n$/, ''), lang: match[1] || undefined });
+    lastIndex = pattern.lastIndex;
+  }
+  if (lastIndex < text.length) {
+    segments.push({ kind: 'text', text: text.slice(lastIndex) });
+  }
+  return segments.length > 0 ? segments : [{ kind: 'text', text }];
+}

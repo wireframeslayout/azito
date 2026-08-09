@@ -16,11 +16,26 @@
     "olderTruncated": "古いメッセージは省略されています",
     "blockTruncated": "…省略",
     "thinking": "思考",
+    "thinkingWithSeconds": "思考 {{seconds}}秒",
+    "moreLines": "… +{{count}} 行（タップで展開）",
     "toolUse": "ツール呼び出し: {{name}}",
     "toolResult": "ツール結果",
     "toolResultError": "ツールエラー",
     "system": "システム",
     "other": "その他"
+  },
+  "styleSwitcher": {
+    "ariaLabel": "トランスクリプトの表示スタイル",
+    "option": {
+      "bubble": "バブル",
+      "flow": "フロー",
+      "rail": "ログ",
+      "tui": "TUI"
+    },
+    "flow": {
+      "userLabel": "あなた",
+      "assistantLabel": "CLAUDE"
+    }
   },
   "promptBar": {
     "placeholder": "プロンプトを入力…（Ctrl/Cmd+Enterで送信）",

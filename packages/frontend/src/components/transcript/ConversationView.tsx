@@ -1,12 +1,25 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ComponentType } from 'react';
 import { useTranslation } from 'react-i18next';
 import { apiWithStatus } from '../../api/client';
 import { EmptyState, IconButton, LoadingState, PanelHeader } from '../ui';
 import { Icon } from '../ui/Icon';
-import MessageBubble from './MessageBubble';
 import PromptInputBar from './PromptInputBar';
+import { StyleSwitcher } from './StyleSwitcher';
+import BubbleEntry from './styles/BubbleEntry';
+import FlowEntry from './styles/FlowEntry';
+import RailEntry from './styles/RailEntry';
+import TuiEntry from './styles/TuiEntry';
+import type { StyleEntryProps } from './styles/types';
 import { isErrorResponse } from './transcriptFormat';
+import { useTranscriptStyle, type TranscriptStyle } from './transcriptStyle';
 import type { ReadSessionResult, TranscriptEntry, TranscriptErrorResponse } from './transcriptTypes';
+
+const STYLE_ENTRY_COMPONENTS: Record<TranscriptStyle, ComponentType<StyleEntryProps>> = {
+  bubble: BubbleEntry,
+  flow: FlowEntry,
+  rail: RailEntry,
+  tui: TuiEntry,
+};
 
 const POLL_INTERVAL_MS = 2000;
 const NEAR_BOTTOM_THRESHOLD_PX = 80;
@@ -24,6 +37,8 @@ export default function ConversationView({ sessionId, onBack }: ConversationView
   const [error, setError] = useState<string | null>(null);
   const [truncatedInitial, setTruncatedInitial] = useState(false);
   const [newCount, setNewCount] = useState(0);
+  const [style, setStyle] = useTranscriptStyle();
+  const EntryComponent = STYLE_ENTRY_COMPONENTS[style];
 
   const containerRef = useRef<HTMLDivElement>(null);
   const nearBottomRef = useRef(true);
@@ -150,6 +165,7 @@ export default function ConversationView({ sessionId, onBack }: ConversationView
           </IconButton>
         }
         title={sessionId}
+        actions={<StyleSwitcher value={style} onChange={setStyle} />}
       />
 
       <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
@@ -173,8 +189,8 @@ export default function ConversationView({ sessionId, onBack }: ConversationView
                   {t('conversation.olderTruncated')}
                 </div>
               )}
-              {entries.map((entry) => (
-                <MessageBubble key={entry.uuid} entry={entry} />
+              {entries.map((entry, i) => (
+                <EntryComponent key={entry.uuid} entry={entry} prevTimestamp={i > 0 ? entries[i - 1].timestamp : null} />
               ))}
             </>
           )}
