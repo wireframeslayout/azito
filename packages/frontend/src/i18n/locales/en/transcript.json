@@ -22,7 +22,9 @@
     "toolResult": "Tool result",
     "toolResultError": "Tool error",
     "system": "System",
-    "other": "Other"
+    "other": "Other",
+    "liveThinking": "Thinking… {{seconds}}s",
+    "liveTool": "{{name}} running… {{seconds}}s"
   },
   "styleSwitcher": {
     "ariaLabel": "Transcript display style",

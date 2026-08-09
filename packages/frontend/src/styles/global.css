@@ -757,6 +757,16 @@ a:hover {
   .tab-braille-spinner {
     animation: none !important;
   }
+  .transcript-shimmer {
+    animation: none !important;
+    background-image: none !important;
+    -webkit-background-clip: initial !important;
+    background-clip: initial !important;
+    color: var(--text-dim) !important;
+  }
+  .transcript-live-icon-thinking {
+    animation: none !important;
+  }
 }
 
 /* ---- Active Windows: working行のネオンシマー + brailleスピナー ---- */
@@ -859,6 +869,27 @@ a:hover {
   color: transparent;
   font-weight: 700;
   animation: aw-hue 9s linear infinite;
+}
+
+/* ---- Transcript: live status indicator (C1) ---- */
+@keyframes transcript-shimmer-sweep {
+  from { background-position: 0% 0; }
+  to { background-position: -200% 0; }
+}
+.transcript-shimmer {
+  background-image: linear-gradient(90deg, var(--text-dim) 20%, var(--text) 40%, var(--text-dim) 60%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: transcript-shimmer-sweep 2.2s linear infinite;
+}
+@keyframes transcript-live-spin {
+  to { transform: rotate(360deg); }
+}
+.transcript-live-icon-thinking {
+  display: inline-block;
+  animation: transcript-live-spin 1.6s linear infinite;
 }
 
 /* ---- Toggle switch ---- */

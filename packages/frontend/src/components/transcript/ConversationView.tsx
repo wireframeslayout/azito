@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { apiWithStatus } from '../../api/client';
 import { EmptyState, IconButton, LoadingState, PanelHeader } from '../ui';
 import { Icon } from '../ui/Icon';
+import { LiveStatusRow } from './LiveStatusRow';
+import { deriveLiveStatus } from './liveStatus';
 import PromptInputBar from './PromptInputBar';
 import { StyleSwitcher } from './StyleSwitcher';
 import BubbleEntry from './styles/BubbleEntry';
@@ -43,6 +45,26 @@ export default function ConversationView({ sessionId, onBack }: ConversationView
   const containerRef = useRef<HTMLDivElement>(null);
   const nearBottomRef = useRef(true);
   const nextOffsetRef = useRef<number | null>(null);
+
+  // ライブ状態インジケータ（C1）: entries が更新される度に now をリセットし、表示中のみ1秒毎に
+  // 経過秒を更新する。新規エントリの到着や90秒経過での非表示化は deriveLiveStatus 側で判定する。
+  const [liveNow, setLiveNow] = useState<number>(() => Date.now());
+  useEffect(() => {
+    setLiveNow(Date.now());
+  }, [entries]);
+  const liveStatus = deriveLiveStatus(entries, liveNow);
+  const hasLiveStatus = liveStatus !== null;
+  useEffect(() => {
+    if (!hasLiveStatus) return;
+    const id = setInterval(() => setLiveNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [hasLiveStatus]);
+  const lastEntryTimestampMs = liveStatus && entries.length > 0 && entries[entries.length - 1].timestamp
+    ? new Date(entries[entries.length - 1].timestamp as string).getTime()
+    : null;
+  const liveElapsedSeconds = lastEntryTimestampMs !== null
+    ? Math.max(0, Math.floor((liveNow - lastEntryTimestampMs) / 1000))
+    : 0;
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior) => {
     const el = containerRef.current;
@@ -156,6 +178,13 @@ export default function ConversationView({ sessionId, onBack }: ConversationView
     };
   }, [sessionId, loading, notFound, error, scrollToBottom]);
 
+  // ライブ状態行の出現は「新着」バッジのカウント対象にしない。最下部粘着中のみ追従スクロールする。
+  useEffect(() => {
+    if (hasLiveStatus && nearBottomRef.current) {
+      requestAnimationFrame(() => scrollToBottom('auto'));
+    }
+  }, [hasLiveStatus, scrollToBottom]);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <PanelHeader
@@ -192,6 +221,7 @@ export default function ConversationView({ sessionId, onBack }: ConversationView
               {entries.map((entry, i) => (
                 <EntryComponent key={entry.uuid} entry={entry} prevTimestamp={i > 0 ? entries[i - 1].timestamp : null} />
               ))}
+              {liveStatus && <LiveStatusRow status={liveStatus} elapsedSeconds={liveElapsedSeconds} style={style} />}
             </>
           )}
         </div>
