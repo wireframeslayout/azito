@@ -3,6 +3,8 @@ import Fastify from 'fastify';
 import transcriptsRoutes from './routes';
 import type { TranscriptSource } from './sources/TranscriptSource';
 import type { TranscriptPaneService } from './TranscriptPaneService';
+import type { WindowSessionResolver } from './WindowSessionResolver';
+import type { IWindowRepository, Window } from '../windows/Window';
 
 const SID = '11111111-1111-1111-1111-111111111111';
 const PANE_ID = '%3';
@@ -32,6 +34,7 @@ function buildCodexSource(overrides: Partial<TranscriptSource> = {}): Transcript
 function buildApp(
   sources: TranscriptSource[] = [buildClaudeSource()],
   paneOverrides: Partial<TranscriptPaneService> = {},
+  windowOverrides: { windowSessionResolver?: Partial<WindowSessionResolver>; windowRepo?: Partial<IWindowRepository> } = {},
 ) {
   const transcriptPaneService = {
     listPaneCandidates: async () => ({ cwd: null, panes: [] }),
@@ -40,8 +43,18 @@ function buildApp(
     ...paneOverrides,
   } as unknown as TranscriptPaneService;
 
+  const windowSessionResolver = {
+    resolve: async () => ({ resolved: false, reason: 'unsupported_server' as const }),
+    ...windowOverrides.windowSessionResolver,
+  } as unknown as WindowSessionResolver;
+
+  const windowRepo = {
+    findById: () => undefined,
+    ...windowOverrides.windowRepo,
+  } as unknown as IWindowRepository;
+
   const app = Fastify();
-  app.register(transcriptsRoutes, { sources, transcriptPaneService });
+  app.register(transcriptsRoutes, { sources, transcriptPaneService, windowSessionResolver, windowRepo });
   return app;
 }
 
@@ -549,6 +562,76 @@ describe('POST /api/transcripts/:sessionId/input (legacy)', () => {
       payload: { paneId: 'not-a-pane', text: 'hello' },
     });
     expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+});
+
+describe('GET /api/transcripts/resolve-window', () => {
+  const WINDOW: Window = {
+    id: 42,
+    ownerType: 'task',
+    projectId: 1,
+    taskId: 7,
+    serverName: 'local',
+    tmuxTarget: 'main:0',
+    label: null,
+    isPrimary: true,
+    windowType: 'agent',
+    workerType: 'claude',
+    workerModel: null,
+    agentSessionId: null,
+    launchCommand: null,
+    workingDirectory: null,
+    paneLayout: null,
+    createdAt: '2026-01-01T00:00:00Z',
+  };
+
+  it('rejects a non-numeric windowId with 400', async () => {
+    const app = buildApp();
+    const res = await app.inject({ method: 'GET', url: '/api/transcripts/resolve-window?windowId=abc' });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('rejects a missing windowId with 400', async () => {
+    const app = buildApp();
+    const res = await app.inject({ method: 'GET', url: '/api/transcripts/resolve-window' });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('returns 404 when the window does not exist', async () => {
+    const app = buildApp([buildClaudeSource()], {}, { windowRepo: { findById: () => undefined } });
+    const res = await app.inject({ method: 'GET', url: '/api/transcripts/resolve-window?windowId=42' });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('delegates to the resolver and returns its result for an existing window', async () => {
+    const resolve = async (window: Window) => {
+      expect(window.id).toBe(42);
+      return { resolved: true as const, agentType: 'claude', sessionId: SID, paneId: PANE_ID };
+    };
+    const app = buildApp(
+      [buildClaudeSource()],
+      {},
+      { windowRepo: { findById: () => WINDOW }, windowSessionResolver: { resolve } },
+    );
+    const res = await app.inject({ method: 'GET', url: '/api/transcripts/resolve-window?windowId=42' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ resolved: true, agentType: 'claude', sessionId: SID, paneId: PANE_ID });
+    await app.close();
+  });
+
+  it('returns the resolver\'s unresolved result as-is', async () => {
+    const app = buildApp(
+      [buildClaudeSource()],
+      {},
+      { windowRepo: { findById: () => WINDOW }, windowSessionResolver: { resolve: async () => ({ resolved: false, reason: 'no_recent_session' }) } },
+    );
+    const res = await app.inject({ method: 'GET', url: '/api/transcripts/resolve-window?windowId=42' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ resolved: false, reason: 'no_recent_session' });
     await app.close();
   });
 });

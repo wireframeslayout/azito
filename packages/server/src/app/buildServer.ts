@@ -43,6 +43,7 @@ import systemRoutes from '../modules/system/routes';
 import transcriptsRoutes from '../modules/transcripts/routes';
 import { TRANSCRIPT_SOURCES, claudeTranscriptSource } from '../modules/transcripts/sources/registry';
 import { TranscriptPaneService } from '../modules/transcripts/TranscriptPaneService';
+import { WindowSessionResolver } from '../modules/transcripts/WindowSessionResolver';
 
 import { createTokenVerifier } from '../modules/servers/auth/tokenAuth';
 
@@ -265,6 +266,8 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   await app.register(transcriptsRoutes, {
     sources: TRANSCRIPT_SOURCES,
     transcriptPaneService: new TranscriptPaneService(claudeTranscriptSource, tmuxClient, serverRepo),
+    windowSessionResolver: new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, TRANSCRIPT_SOURCES),
+    windowRepo,
   });
   await app.register(systemRoutes, { systemUpdateService, channelResolver });
   await app.register(browserRoutes, {

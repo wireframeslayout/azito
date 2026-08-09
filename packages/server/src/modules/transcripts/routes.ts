@@ -1,11 +1,15 @@
 import type { FastifyPluginCallback, FastifyReply } from 'fastify';
 import type { TranscriptSource } from './sources/TranscriptSource';
 import type { TranscriptPaneService } from './TranscriptPaneService';
+import type { WindowSessionResolver } from './WindowSessionResolver';
+import type { IWindowRepository } from '../windows/Window';
 import { getAgentTranscriptProfile, type InterruptKey } from './sources/profiles';
 
 export interface TranscriptsRouteOptions {
   sources: TranscriptSource[];
   transcriptPaneService: TranscriptPaneService;
+  windowSessionResolver: WindowSessionResolver;
+  windowRepo: IWindowRepository;
 }
 
 const PANE_ID_PATTERN = /^%\d+$/;
@@ -53,7 +57,22 @@ async function handleReadSession(source: TranscriptSource, sessionId: string, qu
 }
 
 const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fastify, opts, done) => {
-  const { sources, transcriptPaneService } = opts;
+  const { sources, transcriptPaneService, windowSessionResolver, windowRepo } = opts;
+
+  // ── GET /api/transcripts/resolve-window ── ウィンドウからエージェント会話セッションを自動解決する
+  // （Issue #69 Phase E-1）。windowId は数値検証、該当ウィンドウが存在しなければ 404。
+  fastify.get<{ Querystring: { windowId?: string } }>('/api/transcripts/resolve-window', async (request, reply) => {
+    const raw = request.query.windowId;
+    const windowId = raw === undefined ? NaN : Number(raw);
+    if (!Number.isSafeInteger(windowId) || windowId <= 0) {
+      return reply.status(400).send({ error: 'Invalid windowId' });
+    }
+
+    const window = windowRepo.findById(windowId);
+    if (!window) return reply.status(404).send({ error: 'Window not found' });
+
+    return windowSessionResolver.resolve(window);
+  });
 
   // ── GET /api/transcripts ── 全ソース横断のセッション一覧（mtime 降順）。?agent= で絞り込み可。
   fastify.get<{ Querystring: { agent?: string } }>('/api/transcripts', async (request) => {
