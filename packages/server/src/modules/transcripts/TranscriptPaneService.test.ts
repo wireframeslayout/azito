@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { TranscriptPaneService } from './TranscriptPaneService';
-import type { TranscriptService } from './TranscriptService';
+import type { TranscriptSource } from './sources/TranscriptSource';
 import type { TmuxClient, TmuxPaneInfo } from '../tmux/TmuxClient';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 
@@ -19,16 +19,16 @@ const LOCAL_SERVER: ServerConfig = {
 };
 
 function buildDeps(overrides: {
-  getSessionCwd?: TranscriptService['getSessionCwd'];
+  getSessionCwd?: TranscriptSource['getSessionCwd'];
   listAllPanes?: TmuxClient['listAllPanes'];
   checkPaneExists?: TmuxClient['checkPaneExists'];
   sendKeys?: TmuxClient['sendKeys'];
   sendLiteralText?: TmuxClient['sendLiteralText'];
   servers?: ServerConfig[];
 } = {}) {
-  const transcriptService = {
+  const claudeTranscriptSource = {
     getSessionCwd: overrides.getSessionCwd ?? (() => ({ cwd: null })),
-  } as unknown as TranscriptService;
+  } as unknown as TranscriptSource;
 
   const tmuxClient = {
     listAllPanes: overrides.listAllPanes ?? (async () => []),
@@ -41,14 +41,14 @@ function buildDeps(overrides: {
     findAll: () => overrides.servers ?? [LOCAL_SERVER],
   } as unknown as IServerRepository;
 
-  return { transcriptService, tmuxClient, serverRepo };
+  return { claudeTranscriptSource, tmuxClient, serverRepo };
 }
 
 describe('TranscriptPaneService', () => {
   describe('listPaneCandidates', () => {
     it('returns null when the session is not found', async () => {
-      const { transcriptService, tmuxClient, serverRepo } = buildDeps({ getSessionCwd: () => null });
-      const service = new TranscriptPaneService(transcriptService, tmuxClient, serverRepo);
+      const { claudeTranscriptSource, tmuxClient, serverRepo } = buildDeps({ getSessionCwd: () => null });
+      const service = new TranscriptPaneService(claudeTranscriptSource, tmuxClient, serverRepo);
       expect(await service.listPaneCandidates(SID)).toBeNull();
     });
 
@@ -57,11 +57,11 @@ describe('TranscriptPaneService', () => {
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w1', paneIndex: 0, currentPath: '/home/user/proj', currentCommand: 'claude' },
         { paneId: '%2', sessionName: 'main', windowIndex: 1, windowName: 'w2', paneIndex: 0, currentPath: '/home/user/other', currentCommand: 'bash' },
       ];
-      const { transcriptService, tmuxClient, serverRepo } = buildDeps({
+      const { claudeTranscriptSource, tmuxClient, serverRepo } = buildDeps({
         getSessionCwd: () => ({ cwd: '/home/user/proj' }),
         listAllPanes: async () => panes,
       });
-      const service = new TranscriptPaneService(transcriptService, tmuxClient, serverRepo);
+      const service = new TranscriptPaneService(claudeTranscriptSource, tmuxClient, serverRepo);
       const result = await service.listPaneCandidates(SID);
       expect(result).not.toBeNull();
       expect(result!.cwd).toBe('/home/user/proj');
@@ -73,51 +73,51 @@ describe('TranscriptPaneService', () => {
       const panes: TmuxPaneInfo[] = [
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w1', paneIndex: 0, currentPath: '/home/user/proj', currentCommand: 'claude' },
       ];
-      const { transcriptService, tmuxClient, serverRepo } = buildDeps({
+      const { claudeTranscriptSource, tmuxClient, serverRepo } = buildDeps({
         getSessionCwd: () => ({ cwd: null }),
         listAllPanes: async () => panes,
       });
-      const service = new TranscriptPaneService(transcriptService, tmuxClient, serverRepo);
+      const service = new TranscriptPaneService(claudeTranscriptSource, tmuxClient, serverRepo);
       const result = await service.listPaneCandidates(SID);
       expect(result!.panes[0].cwdMatch).toBe(false);
     });
 
     it('throws when no local server is configured', async () => {
-      const { transcriptService, tmuxClient, serverRepo } = buildDeps({
+      const { claudeTranscriptSource, tmuxClient, serverRepo } = buildDeps({
         getSessionCwd: () => ({ cwd: '/x' }),
         servers: [],
       });
-      const service = new TranscriptPaneService(transcriptService, tmuxClient, serverRepo);
+      const service = new TranscriptPaneService(claudeTranscriptSource, tmuxClient, serverRepo);
       await expect(service.listPaneCandidates(SID)).rejects.toThrow();
     });
   });
 
   describe('sendInput', () => {
     it('returns session_not_found when the session does not exist', async () => {
-      const { transcriptService, tmuxClient, serverRepo } = buildDeps({ getSessionCwd: () => null });
-      const service = new TranscriptPaneService(transcriptService, tmuxClient, serverRepo);
+      const { claudeTranscriptSource, tmuxClient, serverRepo } = buildDeps({ getSessionCwd: () => null });
+      const service = new TranscriptPaneService(claudeTranscriptSource, tmuxClient, serverRepo);
       expect(await service.sendInput(SID, '%1', 'hello')).toBe('session_not_found');
     });
 
     it('returns pane_not_found when the pane no longer exists', async () => {
-      const { transcriptService, tmuxClient, serverRepo } = buildDeps({
+      const { claudeTranscriptSource, tmuxClient, serverRepo } = buildDeps({
         getSessionCwd: () => ({ cwd: '/x' }),
         checkPaneExists: async () => false,
       });
-      const service = new TranscriptPaneService(transcriptService, tmuxClient, serverRepo);
+      const service = new TranscriptPaneService(claudeTranscriptSource, tmuxClient, serverRepo);
       expect(await service.sendInput(SID, '%1', 'hello')).toBe('pane_not_found');
     });
 
     it('sends the text as literal, then Enter as a separate keypress, and returns ok', async () => {
       const sendKeys = vi.fn(async () => {});
       const sendLiteralText = vi.fn(async () => {});
-      const { transcriptService, tmuxClient, serverRepo } = buildDeps({
+      const { claudeTranscriptSource, tmuxClient, serverRepo } = buildDeps({
         getSessionCwd: () => ({ cwd: '/x' }),
         checkPaneExists: async () => true,
         sendKeys,
         sendLiteralText,
       });
-      const service = new TranscriptPaneService(transcriptService, tmuxClient, serverRepo);
+      const service = new TranscriptPaneService(claudeTranscriptSource, tmuxClient, serverRepo);
       const result = await service.sendInput(SID, '%1', 'hello world');
       expect(result).toBe('ok');
       expect(sendLiteralText).toHaveBeenCalledWith(LOCAL_SERVER, '%1', 'hello world');
@@ -127,13 +127,13 @@ describe('TranscriptPaneService', () => {
     it('sends body text like "C-c" via the literal path, never as a special key', async () => {
       const sendKeys = vi.fn(async () => {});
       const sendLiteralText = vi.fn(async () => {});
-      const { transcriptService, tmuxClient, serverRepo } = buildDeps({
+      const { claudeTranscriptSource, tmuxClient, serverRepo } = buildDeps({
         getSessionCwd: () => ({ cwd: '/x' }),
         checkPaneExists: async () => true,
         sendKeys,
         sendLiteralText,
       });
-      const service = new TranscriptPaneService(transcriptService, tmuxClient, serverRepo);
+      const service = new TranscriptPaneService(claudeTranscriptSource, tmuxClient, serverRepo);
       const result = await service.sendInput(SID, '%1', 'C-c');
       expect(result).toBe('ok');
       // The literal text "C-c" must go through sendLiteralText (always -l), never through

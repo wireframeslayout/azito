@@ -1,6 +1,6 @@
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
-import type { TranscriptService } from './TranscriptService';
+import type { TranscriptSource } from './sources/TranscriptSource';
 
 // ─── Types ───
 
@@ -32,7 +32,7 @@ export type SendInputResult = 'ok' | 'session_not_found' | 'pane_not_found';
  */
 export class TranscriptPaneService {
   constructor(
-    private readonly transcriptService: TranscriptService,
+    private readonly claudeTranscriptSource: TranscriptSource,
     private readonly tmuxClient: TmuxClient,
     private readonly serverRepo: IServerRepository,
   ) {}
@@ -50,7 +50,7 @@ export class TranscriptPaneService {
   }
 
   async listPaneCandidates(sessionId: string): Promise<PaneCandidatesResult | null> {
-    const meta = this.transcriptService.getSessionCwd(sessionId);
+    const meta = this.claudeTranscriptSource.getSessionCwd(sessionId);
     if (!meta) return null;
 
     const server = this.findLocalServer();
@@ -70,7 +70,7 @@ export class TranscriptPaneService {
   }
 
   async sendInput(sessionId: string, paneId: string, text: string): Promise<SendInputResult> {
-    const meta = this.transcriptService.getSessionCwd(sessionId);
+    const meta = this.claudeTranscriptSource.getSessionCwd(sessionId);
     if (!meta) return 'session_not_found';
 
     const server = this.findLocalServer();

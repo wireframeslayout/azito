@@ -1,22 +1,36 @@
 import { describe, it, expect } from 'vitest';
 import Fastify from 'fastify';
 import transcriptsRoutes from './routes';
-import type { TranscriptService } from './TranscriptService';
+import type { TranscriptSource } from './sources/TranscriptSource';
 import type { TranscriptPaneService } from './TranscriptPaneService';
 
 const SID = '11111111-1111-1111-1111-111111111111';
 const PANE_ID = '%3';
 
-function buildApp(
-  overrides: Partial<TranscriptService> = {},
-  paneOverrides: Partial<TranscriptPaneService> = {},
-) {
-  const transcriptService = {
+function buildClaudeSource(overrides: Partial<TranscriptSource> = {}): TranscriptSource {
+  return {
+    agentType: 'claude',
     listSessions: () => [],
     readSession: () => ({ entries: [], nextOffset: 0, truncated: false }),
+    getSessionCwd: () => ({ cwd: null }),
     ...overrides,
-  } as unknown as TranscriptService;
+  } as unknown as TranscriptSource;
+}
 
+function buildCodexSource(overrides: Partial<TranscriptSource> = {}): TranscriptSource {
+  return {
+    agentType: 'codex',
+    listSessions: () => [],
+    readSession: () => ({ entries: [], nextOffset: 0, truncated: false }),
+    getSessionCwd: () => ({ cwd: null }),
+    ...overrides,
+  } as unknown as TranscriptSource;
+}
+
+function buildApp(
+  sources: TranscriptSource[] = [buildClaudeSource()],
+  paneOverrides: Partial<TranscriptPaneService> = {},
+) {
   const transcriptPaneService = {
     listPaneCandidates: async () => ({ cwd: null, panes: [] }),
     sendInput: async () => 'ok' as const,
@@ -24,28 +38,240 @@ function buildApp(
   } as unknown as TranscriptPaneService;
 
   const app = Fastify();
-  app.register(transcriptsRoutes, { transcriptService, transcriptPaneService });
+  app.register(transcriptsRoutes, { sources, transcriptPaneService });
   return app;
 }
 
-describe('GET /api/transcripts/:sessionId', () => {
-  it('rejects a non-integer offset with 400', async () => {
-    const app = buildApp();
-    const res = await app.inject({ method: 'GET', url: `/api/transcripts/${SID}?offset=1.5` });
-    expect(res.statusCode).toBe(400);
+describe('GET /api/transcripts', () => {
+  it('merges sessions across sources and sorts by mtime descending', async () => {
+    const claude = buildClaudeSource({
+      listSessions: () => [
+        { sessionId: 'a', agentType: 'claude', projectDir: 'p', cwd: null, mtimeMs: 100, sizeBytes: 1, preview: 'a' },
+      ],
+    });
+    const codex = buildCodexSource({
+      listSessions: () => [
+        { sessionId: 'b', agentType: 'codex', projectDir: 'p', cwd: null, mtimeMs: 200, sizeBytes: 1, preview: 'b' },
+      ],
+    });
+    const app = buildApp([claude, codex]);
+    const res = await app.inject({ method: 'GET', url: '/api/transcripts' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().sessions.map((s: { sessionId: string }) => s.sessionId)).toEqual(['b', 'a']);
     await app.close();
   });
 
-  it('rejects a non-numeric offset with 400', async () => {
+  it('filters by ?agent=', async () => {
+    const claude = buildClaudeSource({
+      listSessions: () => [
+        { sessionId: 'a', agentType: 'claude', projectDir: 'p', cwd: null, mtimeMs: 100, sizeBytes: 1, preview: 'a' },
+      ],
+    });
+    const codex = buildCodexSource({
+      listSessions: () => [
+        { sessionId: 'b', agentType: 'codex', projectDir: 'p', cwd: null, mtimeMs: 200, sizeBytes: 1, preview: 'b' },
+      ],
+    });
+    const app = buildApp([claude, codex]);
+    const res = await app.inject({ method: 'GET', url: '/api/transcripts?agent=codex' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().sessions.map((s: { sessionId: string }) => s.sessionId)).toEqual(['b']);
+    await app.close();
+  });
+});
+
+describe('GET /api/transcripts/:agent/:id', () => {
+  it('returns 404 for an unknown agent type', async () => {
     const app = buildApp();
-    const res = await app.inject({ method: 'GET', url: `/api/transcripts/${SID}?offset=abc` });
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/unknown/${SID}` });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('rejects a non-integer offset with 400', async () => {
+    const app = buildApp();
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?offset=1.5` });
     expect(res.statusCode).toBe(400);
     await app.close();
   });
 
   it('rejects a negative offset with 400', async () => {
     const app = buildApp();
-    const res = await app.inject({ method: 'GET', url: `/api/transcripts/${SID}?offset=-1` });
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?offset=-1` });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('accepts a valid integer offset', async () => {
+    const app = buildApp();
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?offset=42` });
+    expect(res.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it('reads from the matching agent source', async () => {
+    let received: { sessionId: string; offset: number | undefined } | null = null;
+    const codex = buildCodexSource({
+      readSession: (sessionId: string, offset?: number) => {
+        received = { sessionId, offset };
+        return { entries: [], nextOffset: 0, truncated: false };
+      },
+    });
+    const app = buildApp([buildClaudeSource(), codex]);
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/codex/${SID}` });
+    expect(res.statusCode).toBe(200);
+    expect(received).toEqual({ sessionId: SID, offset: undefined });
+    await app.close();
+  });
+
+  it('returns 404 when the session is not found', async () => {
+    const app = buildApp([buildClaudeSource({ readSession: () => null })]);
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}` });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+});
+
+describe('GET /api/transcripts/:agent/:id/panes', () => {
+  it('returns cwd and pane candidates for claude', async () => {
+    const app = buildApp([buildClaudeSource()], {
+      listPaneCandidates: async () => ({
+        cwd: '/home/user/project',
+        panes: [
+          { paneId: '%1', sessionName: 's', windowIndex: 0, windowName: 'w', paneIndex: 0, currentPath: '/home/user/project', currentCommand: 'claude', cwdMatch: true },
+        ],
+      }),
+    });
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}/panes` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      cwd: '/home/user/project',
+      panes: [
+        { paneId: '%1', sessionName: 's', windowIndex: 0, windowName: 'w', paneIndex: 0, currentPath: '/home/user/project', currentCommand: 'claude', cwdMatch: true },
+      ],
+    });
+    await app.close();
+  });
+
+  it('returns 404 when the session is not found', async () => {
+    const app = buildApp([buildClaudeSource()], { listPaneCandidates: async () => null });
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}/panes` });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('returns 501 for a non-claude agent', async () => {
+    const app = buildApp([buildClaudeSource(), buildCodexSource()]);
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/codex/${SID}/panes` });
+    expect(res.statusCode).toBe(501);
+    await app.close();
+  });
+});
+
+describe('POST /api/transcripts/:agent/:id/input', () => {
+  it('rejects a malformed paneId with 400', async () => {
+    const app = buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/transcripts/claude/${SID}/input`,
+      payload: { paneId: 'not-a-pane', text: 'hello' },
+    });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('rejects empty text with 400', async () => {
+    const app = buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/transcripts/claude/${SID}/input`,
+      payload: { paneId: PANE_ID, text: '' },
+    });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('rejects text over the max length with 400', async () => {
+    const app = buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/transcripts/claude/${SID}/input`,
+      payload: { paneId: PANE_ID, text: 'x'.repeat(32769) },
+    });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('rejects a missing text field with 400', async () => {
+    const app = buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/transcripts/claude/${SID}/input`,
+      payload: { paneId: PANE_ID },
+    });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('returns 404 when the session is not found', async () => {
+    const app = buildApp([buildClaudeSource()], { sendInput: async () => 'session_not_found' });
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/transcripts/claude/${SID}/input`,
+      payload: { paneId: PANE_ID, text: 'hello' },
+    });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('returns 404 when the pane no longer exists', async () => {
+    const app = buildApp([buildClaudeSource()], { sendInput: async () => 'pane_not_found' });
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/transcripts/claude/${SID}/input`,
+      payload: { paneId: PANE_ID, text: 'hello' },
+    });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('sends input and returns ok on success', async () => {
+    let received: { sessionId: string; paneId: string; text: string } | null = null;
+    const app = buildApp([buildClaudeSource()], {
+      sendInput: async (sessionId: string, paneId: string, text: string) => {
+        received = { sessionId, paneId, text };
+        return 'ok';
+      },
+    });
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/transcripts/claude/${SID}/input`,
+      payload: { paneId: PANE_ID, text: 'hello world' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(received).toEqual({ sessionId: SID, paneId: PANE_ID, text: 'hello world' });
+    await app.close();
+  });
+
+  it('returns 501 for a non-claude agent', async () => {
+    const app = buildApp([buildClaudeSource(), buildCodexSource()]);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/transcripts/codex/${SID}/input`,
+      payload: { paneId: PANE_ID, text: 'hello' },
+    });
+    expect(res.statusCode).toBe(501);
+    await app.close();
+  });
+});
+
+// ── 後方互換ルート（旧 UUID 直下パス、claude 固定） ──
+
+describe('GET /api/transcripts/:sessionId (legacy)', () => {
+  it('rejects a non-integer offset with 400', async () => {
+    const app = buildApp();
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/${SID}?offset=1.5` });
     expect(res.statusCode).toBe(400);
     await app.close();
   });
@@ -58,16 +284,16 @@ describe('GET /api/transcripts/:sessionId', () => {
   });
 
   it('returns 404 when the session is not found', async () => {
-    const app = buildApp({ readSession: () => null });
+    const app = buildApp([buildClaudeSource({ readSession: () => null })]);
     const res = await app.inject({ method: 'GET', url: `/api/transcripts/${SID}` });
     expect(res.statusCode).toBe(404);
     await app.close();
   });
 });
 
-describe('GET /api/transcripts/:sessionId/panes', () => {
+describe('GET /api/transcripts/:sessionId/panes (legacy)', () => {
   it('returns cwd and pane candidates', async () => {
-    const app = buildApp({}, {
+    const app = buildApp([buildClaudeSource()], {
       listPaneCandidates: async () => ({
         cwd: '/home/user/project',
         panes: [
@@ -77,93 +303,21 @@ describe('GET /api/transcripts/:sessionId/panes', () => {
     });
     const res = await app.inject({ method: 'GET', url: `/api/transcripts/${SID}/panes` });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({
-      cwd: '/home/user/project',
-      panes: [
-        { paneId: '%1', sessionName: 's', windowIndex: 0, windowName: 'w', paneIndex: 0, currentPath: '/home/user/project', currentCommand: 'claude', cwdMatch: true },
-      ],
-    });
     await app.close();
   });
 
   it('returns 404 when the session is not found', async () => {
-    const app = buildApp({}, { listPaneCandidates: async () => null });
+    const app = buildApp([buildClaudeSource()], { listPaneCandidates: async () => null });
     const res = await app.inject({ method: 'GET', url: `/api/transcripts/${SID}/panes` });
     expect(res.statusCode).toBe(404);
     await app.close();
   });
 });
 
-describe('POST /api/transcripts/:sessionId/input', () => {
-  it('rejects a malformed paneId with 400', async () => {
-    const app = buildApp();
-    const res = await app.inject({
-      method: 'POST',
-      url: `/api/transcripts/${SID}/input`,
-      payload: { paneId: 'not-a-pane', text: 'hello' },
-    });
-    expect(res.statusCode).toBe(400);
-    await app.close();
-  });
-
-  it('rejects empty text with 400', async () => {
-    const app = buildApp();
-    const res = await app.inject({
-      method: 'POST',
-      url: `/api/transcripts/${SID}/input`,
-      payload: { paneId: PANE_ID, text: '' },
-    });
-    expect(res.statusCode).toBe(400);
-    await app.close();
-  });
-
-  it('rejects text over the max length with 400', async () => {
-    const app = buildApp();
-    const res = await app.inject({
-      method: 'POST',
-      url: `/api/transcripts/${SID}/input`,
-      payload: { paneId: PANE_ID, text: 'x'.repeat(32769) },
-    });
-    expect(res.statusCode).toBe(400);
-    await app.close();
-  });
-
-  it('rejects a missing text field with 400', async () => {
-    const app = buildApp();
-    const res = await app.inject({
-      method: 'POST',
-      url: `/api/transcripts/${SID}/input`,
-      payload: { paneId: PANE_ID },
-    });
-    expect(res.statusCode).toBe(400);
-    await app.close();
-  });
-
-  it('returns 404 when the session is not found', async () => {
-    const app = buildApp({}, { sendInput: async () => 'session_not_found' });
-    const res = await app.inject({
-      method: 'POST',
-      url: `/api/transcripts/${SID}/input`,
-      payload: { paneId: PANE_ID, text: 'hello' },
-    });
-    expect(res.statusCode).toBe(404);
-    await app.close();
-  });
-
-  it('returns 404 when the pane no longer exists', async () => {
-    const app = buildApp({}, { sendInput: async () => 'pane_not_found' });
-    const res = await app.inject({
-      method: 'POST',
-      url: `/api/transcripts/${SID}/input`,
-      payload: { paneId: PANE_ID, text: 'hello' },
-    });
-    expect(res.statusCode).toBe(404);
-    await app.close();
-  });
-
+describe('POST /api/transcripts/:sessionId/input (legacy)', () => {
   it('sends input and returns ok on success', async () => {
     let received: { sessionId: string; paneId: string; text: string } | null = null;
-    const app = buildApp({}, {
+    const app = buildApp([buildClaudeSource()], {
       sendInput: async (sessionId: string, paneId: string, text: string) => {
         received = { sessionId, paneId, text };
         return 'ok';
@@ -177,6 +331,17 @@ describe('POST /api/transcripts/:sessionId/input', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(received).toEqual({ sessionId: SID, paneId: PANE_ID, text: 'hello world' });
+    await app.close();
+  });
+
+  it('rejects a malformed paneId with 400', async () => {
+    const app = buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/transcripts/${SID}/input`,
+      payload: { paneId: 'not-a-pane', text: 'hello' },
+    });
+    expect(res.statusCode).toBe(400);
     await app.close();
   });
 });

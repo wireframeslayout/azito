@@ -1,44 +1,12 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-
-// ─── Types ───
-
-export interface SessionSummary {
-  sessionId: string;
-  projectDir: string;
-  /** JSONL 行の cwd フィールドから拾った実パス。見つからなければ null（projectDir はエンコード済みで復元不能なため）。 */
-  cwd: string | null;
-  mtimeMs: number;
-  sizeBytes: number;
-  preview: string;
-}
-
-export type TranscriptBlock =
-  | { kind: 'text'; text: string }
-  | { kind: 'thinking'; text: string }
-  | { kind: 'tool_use'; name: string; input: string; truncated: boolean }
-  | { kind: 'tool_result'; text: string; truncated: boolean; isError?: boolean };
-
-export type TranscriptEntryType = 'user' | 'assistant' | 'system' | 'tool' | 'other';
-
-export interface TranscriptEntry {
-  uuid: string;
-  type: TranscriptEntryType;
-  timestamp: string | null;
-  blocks: TranscriptBlock[];
-}
-
-export interface ReadSessionResult {
-  entries: TranscriptEntry[];
-  nextOffset: number;
-  truncated: boolean;
-}
+import { isRecord, truncateText, TOOL_USE_INPUT_LIMIT, TOOL_RESULT_TEXT_LIMIT } from './entryHelpers';
+import { readChunk, readInitialWindow, readIncrementalWindow } from './jsonlWindowReader';
+import type { ReadSessionResult, SessionSummary, TranscriptBlock, TranscriptEntry, TranscriptEntryType, TranscriptSource } from './TranscriptSource';
 
 // ─── Constants ───
 
-const TOOL_USE_INPUT_LIMIT = 2000;
-const TOOL_RESULT_TEXT_LIMIT = 4000;
 const PREVIEW_LENGTH = 120;
 const PREVIEW_SCAN_LINES = 20;
 const TAIL_ENTRY_LIMIT = 500;
@@ -50,7 +18,7 @@ const DEFAULT_INCREMENTAL_READ_MAX_BYTES = 5 * 1024 * 1024;
 /** 一覧 preview 生成のためにファイル先頭から読むバイト数。 */
 const DEFAULT_PREVIEW_SCAN_BYTES = 64 * 1024;
 
-export interface TranscriptServiceOptions {
+export interface ClaudeTranscriptSourceOptions {
   /** 初回読みで末尾から遡って読む最大バイト数（テスト用に上書き可能）。既定値は DEFAULT_INITIAL_READ_MAX_BYTES。 */
   initialReadMaxBytes?: number;
   /** 差分読みで1回に読む最大バイト数（テスト用に上書き可能）。既定値は DEFAULT_INCREMENTAL_READ_MAX_BYTES。 */
@@ -108,17 +76,6 @@ function extractPreviewText(content: unknown): string | null {
   return null;
 }
 
-/** ファイルの [position, position+length) を位置指定で読む。ファイル末尾を超える分は切り詰める。 */
-function readChunk(fd: number, size: number, position: number, length: number): Buffer {
-  const start = Math.min(Math.max(position, 0), size);
-  const readLength = Math.min(length, size - start);
-  const buf = Buffer.alloc(Math.max(readLength, 0));
-  if (buf.length > 0) {
-    fs.readSync(fd, buf, 0, buf.length, start);
-  }
-  return buf;
-}
-
 interface SessionScanResult {
   preview: string;
   cwd: string | null;
@@ -170,10 +127,6 @@ function scanSessionMeta(file: string, previewScanBytes: number): SessionScanRes
   return { preview, cwd };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 /** tool_result の content（文字列 or ブロック配列）を表示用テキストに変換する。 */
 function stringifyToolResultContent(content: unknown): string {
   if (typeof content === 'string') return content;
@@ -189,11 +142,6 @@ function stringifyToolResultContent(content: unknown): string {
     return parts.join('\n');
   }
   return JSON.stringify(content) ?? '';
-}
-
-function truncateText(text: string, limit: number): { text: string; truncated: boolean } {
-  if (text.length <= limit) return { text, truncated: false };
-  return { text: text.slice(0, limit), truncated: true };
 }
 
 /**
@@ -273,13 +221,6 @@ function normalizeEntry(record: unknown): TranscriptEntry | null {
   };
 }
 
-function findLastNewline(buf: Buffer): number {
-  for (let i = buf.length - 1; i >= 0; i--) {
-    if (buf[i] === 0x0a) return i;
-  }
-  return -1;
-}
-
 function parseLine(line: string): TranscriptEntry | null {
   if (!line) return null;
   let record: unknown;
@@ -291,16 +232,18 @@ function parseLine(line: string): TranscriptEntry | null {
   return normalizeEntry(record);
 }
 
-// ─── Service ───
+// ─── Source ───
 
-export class TranscriptService {
+export class ClaudeTranscriptSource implements TranscriptSource {
+  readonly agentType = 'claude';
+
   private readonly initialReadMaxBytes: number;
   private readonly incrementalReadMaxBytes: number;
   private readonly previewScanBytes: number;
 
   constructor(
     private readonly projectsDirOverride?: string,
-    options: TranscriptServiceOptions = {},
+    options: ClaudeTranscriptSourceOptions = {},
   ) {
     this.initialReadMaxBytes = options.initialReadMaxBytes ?? DEFAULT_INITIAL_READ_MAX_BYTES;
     this.incrementalReadMaxBytes = options.incrementalReadMaxBytes ?? DEFAULT_INCREMENTAL_READ_MAX_BYTES;
@@ -333,6 +276,7 @@ export class TranscriptService {
       const { preview, cwd } = scanSessionMeta(file, this.previewScanBytes);
       return {
         sessionId,
+        agentType: this.agentType,
         projectDir,
         cwd,
         mtimeMs: stat.mtimeMs,
@@ -374,77 +318,11 @@ export class TranscriptService {
 
     try {
       const size = fs.fstatSync(fd).size;
-      return offset === undefined ? this.readInitial(fd, size) : this.readFromOffset(fd, size, offset);
+      return offset === undefined
+        ? readInitialWindow(fd, size, this.initialReadMaxBytes, parseLine, TAIL_ENTRY_LIMIT)
+        : readIncrementalWindow(fd, size, offset, this.incrementalReadMaxBytes, parseLine);
     } finally {
       fs.closeSync(fd);
     }
-  }
-
-  /**
-   * 初回読み: ファイル末尾から最大 initialReadMaxBytes バイトだけ位置指定で読む。
-   * 5MB 制限で頭を切った場合はその範囲内の最初の完全行から処理し、末尾の未完結行は消費しない
-   * （差分読みと同じ規則: nextOffset = 最後の改行位置+1）。
-   */
-  private readInitial(fd: number, size: number): ReadSessionResult {
-    const windowStart = Math.max(size - this.initialReadMaxBytes, 0);
-    const byteCapped = windowStart > 0;
-
-    let readStart = windowStart;
-    if (byteCapped) {
-      // ウィンドウの先頭が行の途中から始まっている可能性があるため、最初の改行の直後までスキップする。
-      const probe = readChunk(fd, size, windowStart, size - windowStart);
-      const firstNewline = probe.indexOf(0x0a);
-      readStart = firstNewline === -1 ? size : windowStart + firstNewline + 1;
-    }
-
-    const buf = readChunk(fd, size, readStart, size - readStart);
-    const lastNewline = findLastNewline(buf);
-    const consumedLength = lastNewline === -1 ? 0 : lastNewline;
-    const entries: TranscriptEntry[] = [];
-    if (consumedLength > 0) {
-      const consumed = buf.subarray(0, consumedLength).toString('utf-8');
-      for (const line of consumed.split('\n')) {
-        const entry = parseLine(line);
-        if (entry) entries.push(entry);
-      }
-    }
-
-    const nextOffset = lastNewline === -1 ? readStart : readStart + lastNewline + 1;
-    const tailEntries = entries.slice(-TAIL_ENTRY_LIMIT);
-    const entryTruncated = tailEntries.length < entries.length;
-
-    return {
-      entries: tailEntries,
-      nextOffset,
-      truncated: byteCapped || entryTruncated,
-    };
-  }
-
-  /**
-   * 差分読み: offset 以降を最大 incrementalReadMaxBytes バイトだけ位置指定で読み、
-   * 読んだウィンドウ内の最後の改行位置までのみ消費する。ウィンドウを超える残りは
-   * 次回のポーリング（返却された nextOffset を offset に指定した呼び出し）で取得される。
-   */
-  private readFromOffset(fd: number, size: number, offset: number): ReadSessionResult {
-    const start = Math.min(Math.max(offset, 0), size);
-    const buf = readChunk(fd, size, start, this.incrementalReadMaxBytes);
-    const lastNewline = findLastNewline(buf);
-
-    if (lastNewline === -1) {
-      return { entries: [], nextOffset: start, truncated: false };
-    }
-
-    const consumed = buf.subarray(0, lastNewline).toString('utf-8');
-    const entries: TranscriptEntry[] = [];
-    for (const line of consumed.split('\n')) {
-      const entry = parseLine(line);
-      if (entry) entries.push(entry);
-    }
-
-    return {
-      entries,
-      nextOffset: start + lastNewline + 1,
-      truncated: false,
-    };
   }
 }

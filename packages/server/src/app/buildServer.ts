@@ -41,7 +41,7 @@ import supervisorsRoutes from '../modules/supervisors/routes';
 import healthRoutes from '../modules/health/routes';
 import systemRoutes from '../modules/system/routes';
 import transcriptsRoutes from '../modules/transcripts/routes';
-import { TranscriptService } from '../modules/transcripts/TranscriptService';
+import { TRANSCRIPT_SOURCES, claudeTranscriptSource } from '../modules/transcripts/sources/registry';
 import { TranscriptPaneService } from '../modules/transcripts/TranscriptPaneService';
 
 import { createTokenVerifier } from '../modules/servers/auth/tokenAuth';
@@ -262,10 +262,9 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   await app.register(sidekicksRoutes, { sidekickService: sidekickPackageService, taskPromptVarsResolver, unitTypeLoader });
   await app.register(supervisorsRoutes, { supervisorRegistry });
   await app.register(healthRoutes, { deployModeDetector });
-  const transcriptService = new TranscriptService();
   await app.register(transcriptsRoutes, {
-    transcriptService,
-    transcriptPaneService: new TranscriptPaneService(transcriptService, tmuxClient, serverRepo),
+    sources: TRANSCRIPT_SOURCES,
+    transcriptPaneService: new TranscriptPaneService(claudeTranscriptSource, tmuxClient, serverRepo),
   });
   await app.register(systemRoutes, { systemUpdateService, channelResolver });
   await app.register(browserRoutes, {

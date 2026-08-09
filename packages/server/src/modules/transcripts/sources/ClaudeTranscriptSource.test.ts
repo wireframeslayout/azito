@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { TranscriptService } from './TranscriptService';
+import { ClaudeTranscriptSource } from './ClaudeTranscriptSource';
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'transcript-test-'));
@@ -19,13 +19,13 @@ function writeSession(projectsDir: string, projectName: string, sessionId: strin
 const SID_A = '11111111-1111-1111-1111-111111111111';
 const SID_B = '22222222-2222-2222-2222-222222222222';
 
-describe('TranscriptService', () => {
+describe('ClaudeTranscriptSource', () => {
   let dir: string;
-  let service: TranscriptService;
+  let service: ClaudeTranscriptSource;
 
   beforeEach(() => {
     dir = tmpDir();
-    service = new TranscriptService(dir);
+    service = new ClaudeTranscriptSource(dir);
   });
 
   afterEach(() => {
@@ -34,7 +34,7 @@ describe('TranscriptService', () => {
 
   describe('listSessions', () => {
     it('returns empty list when projects dir does not exist', () => {
-      const svc = new TranscriptService(path.join(dir, 'nonexistent'));
+      const svc = new ClaudeTranscriptSource(path.join(dir, 'nonexistent'));
       expect(svc.listSessions()).toEqual([]);
     });
 
@@ -63,7 +63,7 @@ describe('TranscriptService', () => {
     });
 
     it('builds preview from only the first previewScanBytes of the file, ignoring later huge content', () => {
-      const smallScanService = new TranscriptService(dir, { previewScanBytes: 200 });
+      const smallScanService = new ClaudeTranscriptSource(dir, { previewScanBytes: 200 });
       const firstLine = JSON.stringify({
         type: 'user',
         uuid: 'u1',
@@ -238,7 +238,7 @@ describe('TranscriptService', () => {
     });
 
     it('caps the initial read window to initialReadMaxBytes and marks it truncated', () => {
-      const smallWindowService = new TranscriptService(dir, { initialReadMaxBytes: 200 });
+      const smallWindowService = new ClaudeTranscriptSource(dir, { initialReadMaxBytes: 200 });
       const lines: unknown[] = [];
       for (let i = 0; i < 50; i++) {
         lines.push({ type: 'user', uuid: `u${i}`, timestamp: null, message: { content: `message-${i}` } });
@@ -263,7 +263,7 @@ describe('TranscriptService', () => {
     });
 
     it('caps each incremental read to incrementalReadMaxBytes, requiring multiple polls to drain a large append', () => {
-      const smallWindowService = new TranscriptService(dir, { incrementalReadMaxBytes: 200 });
+      const smallWindowService = new ClaudeTranscriptSource(dir, { incrementalReadMaxBytes: 200 });
       const file = writeSession(dir, 'proj-a', SID_A, [{ type: 'user', uuid: 'seed', message: { content: 'seed' } }]);
       const first = smallWindowService.readSession(SID_A);
       const startOffset = first!.nextOffset;
