@@ -1,13 +1,13 @@
 import { useTranslation } from 'react-i18next';
-import type { TranscriptEntry } from '../transcriptTypes';
+import type { TranscriptEntryType } from '../transcriptTypes';
 
 interface SystemOtherChipProps {
-  entry: TranscriptEntry;
+  entryType: Extract<TranscriptEntryType, 'system' | 'other'>;
   children: React.ReactNode;
 }
 
-/** system / other エントリ用の中央寄せチップ表示。全表示スタイル共通コンポーネント。 */
-export function SystemOtherChip({ entry, children }: SystemOtherChipProps) {
+/** system / other グループ用の中央寄せチップ表示。全表示スタイル共通コンポーネント。 */
+export function SystemOtherChip({ entryType, children }: SystemOtherChipProps) {
   const { t } = useTranslation('transcript');
   return (
     <div style={{ display: 'flex', justifyContent: 'center', margin: '10px 0' }}>
@@ -23,7 +23,7 @@ export function SystemOtherChip({ entry, children }: SystemOtherChipProps) {
         }}
       >
         <span style={{ fontWeight: 600, marginRight: 6 }}>
-          {entry.type === 'system' ? t('conversation.system') : t('conversation.other')}
+          {entryType === 'system' ? t('conversation.system') : t('conversation.other')}
         </span>
         {children}
       </div>

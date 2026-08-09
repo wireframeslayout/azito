@@ -8,9 +8,6 @@
  * （ここでの定数化は不要）。magenta のみトークンに対応する色が無いため定数化する。
  */
 
-/** thinking チップ展開時の左髪線（C2）。モックアップ指定値 rgba(255,154,193,0.35) 相当。 */
-export const THINKING_HAIRLINE_COLOR = 'rgba(255, 154, 193, 0.35)';
-
 /**
  * ライブ状態インジケータ（C1）の thinking アイコン（✳）用 magenta。
  * THINKING_HAIRLINE_COLOR と同じ基底色（255, 154, 193）だが、アイコン前景として視認できる

@@ -2,10 +2,11 @@ import { useTranslation } from 'react-i18next';
 import MarkdownRenderer from '../../MarkdownRenderer';
 import { CollapsibleBlock } from '../CollapsibleBlock';
 import { computeThinkingGapSeconds, formatEntryTimestamp } from '../transcriptFormat';
-import type { TranscriptBlock } from '../transcriptTypes';
+import type { TranscriptBlock, TranscriptEntry } from '../transcriptTypes';
+import { GroupHeading } from './GroupHeading';
 import { SystemOtherChip } from './SystemOtherChip';
 import { ThinkingChip } from './ThinkingChip';
-import type { StyleEntryProps } from './types';
+import type { StyleGroupProps } from './types';
 
 function TextBlock({ text, markdown }: { text: string; markdown: boolean }) {
   if (markdown) {
@@ -64,77 +65,81 @@ function BlockList({ blocks, markdownText, thinkingSeconds }: {
   );
 }
 
-function RoleRow({ isUser, timeLabel }: { isUser: boolean; timeLabel: string }) {
-  const { t } = useTranslation('transcript');
+/**
+ * user ターンのみカード面を敷き、assistant/tool はロール行の下にそのまま続ける。
+ * グループ内の各エントリを縦に連結して描画する（B1: ロールグルーピング）。gap は小さめ。
+ */
+function GroupEntries({ entries, prevTimestamp, isUser }: {
+  entries: TranscriptEntry[];
+  prevTimestamp: string | null;
+  isUser: boolean;
+}) {
+  let prevTs = prevTimestamp;
+
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-      <span
-        aria-hidden="true"
-        style={{
-          width: 6,
-          height: 6,
-          borderRadius: '50%',
-          flexShrink: 0,
-          background: isUser ? 'var(--accent)' : 'var(--text-dim)',
-        }}
-      />
-      <span
-        style={{
-          fontSize: 'var(--font-2xs)',
-          letterSpacing: '0.08em',
-          textTransform: 'uppercase',
-          fontWeight: 600,
-          color: 'var(--text-dim)',
-        }}
-      >
-        {isUser ? t('styleSwitcher.flow.userLabel') : t('styleSwitcher.flow.assistantLabel')}
-      </span>
-      <span style={{ flex: 1 }} />
-      {timeLabel && (
-        <span style={{ fontSize: 'var(--font-2xs)', color: 'var(--text-dim)' }}>{timeLabel}</span>
-      )}
-    </div>
+    <>
+      {entries.map((entry, i) => {
+        const thinkingSeconds = computeThinkingGapSeconds(prevTs, entry.timestamp);
+        prevTs = entry.timestamp;
+        const marginTop = i > 0 ? 6 : 0;
+        const markdownText = entry.type === 'assistant';
+        const content = <BlockList blocks={entry.blocks} markdownText={markdownText} thinkingSeconds={thinkingSeconds} />;
+
+        if (isUser && entry.type === 'user') {
+          return (
+            <div key={entry.uuid} style={{ marginTop, background: 'var(--bg-card)', borderRadius: 10, padding: '10px 14px' }}>
+              {content}
+            </div>
+          );
+        }
+
+        return (
+          <div key={entry.uuid} style={{ marginTop }}>
+            {content}
+          </div>
+        );
+      })}
+    </>
   );
 }
 
 /**
  * フロースタイル（モックアップ A2・既定）。バブルを廃止し、各ターンを全幅表示する。
- * user ターンのみカード面を敷き、assistant はロール行の下にそのまま続ける。
- * tool/thinking はロール行を持たない独立エントリのため、インデントなしで直下に続く。
+ * ロールグルーピング（B1）: 連続する同一種別のエントリは1グループとして扱い、見出しと時刻は
+ * グループにつき1回だけ描画する。
  */
-export default function FlowEntry({ entry, prevTimestamp }: StyleEntryProps) {
+export default function FlowEntry({ group, prevTimestamp }: StyleGroupProps) {
   const { i18n } = useTranslation('transcript');
-  const timeLabel = formatEntryTimestamp(entry.timestamp, i18n.language);
-  const thinkingSeconds = computeThinkingGapSeconds(prevTimestamp, entry.timestamp);
+  const lastEntry = group.entries[group.entries.length - 1];
+  const timeLabel = formatEntryTimestamp(lastEntry.timestamp, i18n.language);
 
-  if (entry.type === 'tool') {
+  if (group.type === 'tool') {
     return (
       <div style={{ margin: '2px 0 14px' }}>
-        <BlockList blocks={entry.blocks} markdownText={false} thinkingSeconds={thinkingSeconds} />
+        <GroupEntries entries={group.entries} prevTimestamp={prevTimestamp} isUser={false} />
       </div>
     );
   }
 
-  if (entry.type === 'system' || entry.type === 'other') {
+  if (group.type === 'system' || group.type === 'other') {
+    let prevTs = prevTimestamp;
     return (
-      <SystemOtherChip entry={entry}>
-        <BlockList blocks={entry.blocks} markdownText={false} thinkingSeconds={thinkingSeconds} />
+      <SystemOtherChip entryType={group.type}>
+        {group.entries.map((entry) => {
+          const thinkingSeconds = computeThinkingGapSeconds(prevTs, entry.timestamp);
+          prevTs = entry.timestamp;
+          return <BlockList key={entry.uuid} blocks={entry.blocks} markdownText={false} thinkingSeconds={thinkingSeconds} />;
+        })}
       </SystemOtherChip>
     );
   }
 
-  const isUser = entry.type === 'user';
+  const isUser = group.type === 'user';
 
   return (
     <div style={{ margin: '14px 0' }}>
-      <RoleRow isUser={isUser} timeLabel={timeLabel} />
-      <div
-        style={isUser
-          ? { background: 'var(--bg-card)', borderRadius: 10, padding: '10px 14px' }
-          : undefined}
-      >
-        <BlockList blocks={entry.blocks} markdownText={!isUser} thinkingSeconds={thinkingSeconds} />
-      </div>
+      <GroupHeading isUser={isUser} timeLabel={timeLabel} />
+      <GroupEntries entries={group.entries} prevTimestamp={prevTimestamp} isUser={isUser} />
     </div>
   );
 }

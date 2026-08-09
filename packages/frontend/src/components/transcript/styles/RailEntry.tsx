@@ -1,12 +1,15 @@
 import { useTranslation } from 'react-i18next';
 import MarkdownRenderer from '../../MarkdownRenderer';
 import { computeThinkingGapSeconds } from '../transcriptFormat';
-import type { TranscriptBlock } from '../transcriptTypes';
+import type { TranscriptBlock, TranscriptEntry } from '../transcriptTypes';
 import { SystemOtherChip } from './SystemOtherChip';
 import { ThinkingChip } from './ThinkingChip';
-import type { StyleEntryProps } from './types';
+import type { StyleGroupProps } from './types';
 
 const MONO_FONT = "'JetBrainsMono Nerd Font', 'JetBrains Mono', monospace";
+// グループ内2行目以降（先頭以外）は 22px グリフ列 + 8px gap 分だけインデントして、
+// 先頭行の内容列と揃える（B1: rail はグリフ列を先頭行のみに表示）。
+const CONTINUATION_INDENT = 30;
 
 function RailRow({ glyph, glyphColor, highlight, children }: {
   glyph: string;
@@ -129,34 +132,62 @@ function EntryBlocks({ blocks, markdownText, thinkingSeconds }: {
   );
 }
 
+/** system/other グループのブロックを連結して描画する。 */
+function GroupBlocks({ entries, prevTimestamp }: { entries: TranscriptEntry[]; prevTimestamp: string | null }) {
+  let prevTs = prevTimestamp;
+  return (
+    <>
+      {entries.map((entry) => {
+        const thinkingSeconds = computeThinkingGapSeconds(prevTs, entry.timestamp);
+        prevTs = entry.timestamp;
+        return <EntryBlocks key={entry.uuid} blocks={entry.blocks} markdownText={false} thinkingSeconds={thinkingSeconds} />;
+      })}
+    </>
+  );
+}
+
 /**
  * ログスタイル（モックアップ A3）。1カラムのログ表示で、行頭グリフで発話者/種別を示す。
  * user 行のみ面を敷き、tool は1行サマリ+タップ展開にして密度を高くする。
+ * ロールグルーピング（B1）: グリフ列（行頭記号）はグループ先頭行のみに表示し、以降のエントリは
+ * インデントのみで続ける。
  */
-export default function RailEntry({ entry, prevTimestamp }: StyleEntryProps) {
-  const thinkingSeconds = computeThinkingGapSeconds(prevTimestamp, entry.timestamp);
-
-  if (entry.type === 'tool') {
+export default function RailEntry({ group, prevTimestamp }: StyleGroupProps) {
+  if (group.type === 'system' || group.type === 'other') {
     return (
-      <RailRow glyph="⚙" glyphColor="var(--warning)">
-        <EntryBlocks blocks={entry.blocks} markdownText={false} thinkingSeconds={thinkingSeconds} />
-      </RailRow>
-    );
-  }
-
-  if (entry.type === 'system' || entry.type === 'other') {
-    return (
-      <SystemOtherChip entry={entry}>
-        <EntryBlocks blocks={entry.blocks} markdownText={false} thinkingSeconds={thinkingSeconds} />
+      <SystemOtherChip entryType={group.type}>
+        <GroupBlocks entries={group.entries} prevTimestamp={prevTimestamp} />
       </SystemOtherChip>
     );
   }
 
-  const isUser = entry.type === 'user';
+  let prevTs = prevTimestamp;
 
   return (
-    <RailRow glyph={isUser ? '❯' : '●'} glyphColor={isUser ? 'var(--accent)' : 'var(--text-dim)'} highlight={isUser}>
-      <EntryBlocks blocks={entry.blocks} markdownText={!isUser} thinkingSeconds={thinkingSeconds} />
-    </RailRow>
+    <>
+      {group.entries.map((entry, i) => {
+        const thinkingSeconds = computeThinkingGapSeconds(prevTs, entry.timestamp);
+        prevTs = entry.timestamp;
+        const markdownText = entry.type === 'assistant';
+        const content = <EntryBlocks blocks={entry.blocks} markdownText={markdownText} thinkingSeconds={thinkingSeconds} />;
+
+        if (i === 0) {
+          const isUser = entry.type === 'user';
+          const glyph = entry.type === 'tool' ? '⚙' : isUser ? '❯' : '●';
+          const glyphColor = entry.type === 'tool' ? 'var(--warning)' : isUser ? 'var(--accent)' : 'var(--text-dim)';
+          return (
+            <RailRow key={entry.uuid} glyph={glyph} glyphColor={glyphColor} highlight={isUser}>
+              {content}
+            </RailRow>
+          );
+        }
+
+        return (
+          <div key={entry.uuid} style={{ marginLeft: CONTINUATION_INDENT, marginBottom: 6 }}>
+            {content}
+          </div>
+        );
+      })}
+    </>
   );
 }

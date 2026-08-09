@@ -4,7 +4,7 @@ import { computeThinkingGapSeconds, splitCodeBlocks } from '../transcriptFormat'
 import type { TranscriptBlock } from '../transcriptTypes';
 import { SystemOtherChip } from './SystemOtherChip';
 import { ThinkingChip } from './ThinkingChip';
-import type { StyleEntryProps } from './types';
+import type { StyleGroupProps } from './types';
 
 const MONO_FONT = "'JetBrainsMono Nerd Font', 'JetBrains Mono', monospace";
 // 既存トークンに 12.5px はないため、直近の --font-md (13px) を使う（本スタイルは等幅ターミナル調のため
@@ -133,31 +133,44 @@ function EntryBlocks({ blocks, isUser, thinkingSeconds }: {
 /**
  * TUI スタイル（モックアップ B）。既存ターミナルと同じ等幅フォントで、Claude Code CLI の
  * 出力そのものに近い見た目にする。テキストは簡略 markdown（改行・コードブロックのみ保持）。
+ * ロールグルーピング（B1）: `⏺` プレフィックス等ブロック単位の見た目文法を崩さないため、
+ * グループ見出しは追加せず現状の1エントリ1行の見た目を維持する。
  */
-export default function TuiEntry({ entry, prevTimestamp }: StyleEntryProps) {
-  const thinkingSeconds = computeThinkingGapSeconds(prevTimestamp, entry.timestamp);
-  const isUser = entry.type === 'user';
+export default function TuiEntry({ group, prevTimestamp }: StyleGroupProps) {
+  let prevTs = prevTimestamp;
 
-  const body = (
-    <div style={{ fontFamily: MONO_FONT, fontSize: TUI_FONT_SIZE, margin: '3px 0' }}>
-      {isUser ? (
-        <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
-          <span aria-hidden="true" style={{ color: 'var(--accent)', flexShrink: 0, fontWeight: 700 }}>❯</span>
-          <EntryBlocks blocks={entry.blocks} isUser thinkingSeconds={thinkingSeconds} />
-        </div>
-      ) : (
-        <EntryBlocks blocks={entry.blocks} isUser={false} thinkingSeconds={thinkingSeconds} />
-      )}
-    </div>
-  );
-
-  if (entry.type === 'system' || entry.type === 'other') {
+  if (group.type === 'system' || group.type === 'other') {
     return (
-      <SystemOtherChip entry={entry}>
-        <EntryBlocks blocks={entry.blocks} isUser={false} thinkingSeconds={thinkingSeconds} />
+      <SystemOtherChip entryType={group.type}>
+        {group.entries.map((entry) => {
+          const thinkingSeconds = computeThinkingGapSeconds(prevTs, entry.timestamp);
+          prevTs = entry.timestamp;
+          return <EntryBlocks key={entry.uuid} blocks={entry.blocks} isUser={false} thinkingSeconds={thinkingSeconds} />;
+        })}
       </SystemOtherChip>
     );
   }
 
-  return body;
+  return (
+    <>
+      {group.entries.map((entry) => {
+        const thinkingSeconds = computeThinkingGapSeconds(prevTs, entry.timestamp);
+        prevTs = entry.timestamp;
+        const isUser = entry.type === 'user';
+
+        return (
+          <div key={entry.uuid} style={{ fontFamily: MONO_FONT, fontSize: TUI_FONT_SIZE, margin: '3px 0' }}>
+            {isUser ? (
+              <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+                <span aria-hidden="true" style={{ color: 'var(--accent)', flexShrink: 0, fontWeight: 700 }}>❯</span>
+                <EntryBlocks blocks={entry.blocks} isUser thinkingSeconds={thinkingSeconds} />
+              </div>
+            ) : (
+              <EntryBlocks blocks={entry.blocks} isUser={false} thinkingSeconds={thinkingSeconds} />
+            )}
+          </div>
+        );
+      })}
+    </>
+  );
 }

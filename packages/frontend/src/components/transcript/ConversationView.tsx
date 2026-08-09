@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { apiWithStatus } from '../../api/client';
 import { EmptyState, IconButton, LoadingState, PanelHeader } from '../ui';
 import { Icon } from '../ui/Icon';
+import { groupEntries } from './groupEntries';
 import { LiveStatusRow } from './LiveStatusRow';
 import { deriveLiveStatus } from './liveStatus';
 import PromptInputBar from './PromptInputBar';
@@ -11,12 +12,12 @@ import BubbleEntry from './styles/BubbleEntry';
 import FlowEntry from './styles/FlowEntry';
 import RailEntry from './styles/RailEntry';
 import TuiEntry from './styles/TuiEntry';
-import type { StyleEntryProps } from './styles/types';
+import type { StyleGroupProps } from './styles/types';
 import { isErrorResponse } from './transcriptFormat';
 import { useTranscriptStyle, type TranscriptStyle } from './transcriptStyle';
 import type { ReadSessionResult, TranscriptEntry, TranscriptErrorResponse } from './transcriptTypes';
 
-const STYLE_ENTRY_COMPONENTS: Record<TranscriptStyle, ComponentType<StyleEntryProps>> = {
+const STYLE_ENTRY_COMPONENTS: Record<TranscriptStyle, ComponentType<StyleGroupProps>> = {
   bubble: BubbleEntry,
   flow: FlowEntry,
   rail: RailEntry,
@@ -204,9 +205,11 @@ export default function ConversationView({ sessionId, onBack }: ConversationView
                   {t('conversation.olderTruncated')}
                 </div>
               )}
-              {entries.map((entry, i) => (
-                <EntryComponent key={entry.uuid} entry={entry} prevTimestamp={i > 0 ? entries[i - 1].timestamp : null} />
-              ))}
+              {groupEntries(entries).map((group, i, groups) => {
+                const prevGroup = i > 0 ? groups[i - 1] : null;
+                const prevTimestamp = prevGroup ? prevGroup.entries[prevGroup.entries.length - 1].timestamp : null;
+                return <EntryComponent key={group.entries[0].uuid} group={group} prevTimestamp={prevTimestamp} />;
+              })}
               {liveStatus && lastEntryTimestamp && (
                 <LiveStatusRow status={liveStatus} lastTimestamp={lastEntryTimestamp} style={style} />
               )}

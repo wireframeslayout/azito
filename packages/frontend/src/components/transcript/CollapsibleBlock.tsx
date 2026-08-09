@@ -1,52 +1,76 @@
-import type { ReactNode } from 'react';
+import { useState } from 'react';
 import { Icon, type IconName } from '../ui/Icon';
 
 interface CollapsibleBlockProps {
   icon: IconName;
-  label: ReactNode;
+  label: string;
   tone?: 'default' | 'danger';
   truncatedNote?: string;
-  children: ReactNode;
+  children: string;
+}
+
+const CHIP_PREVIEW_LENGTH = 40;
+
+/** チップに表示する内容プレビュー: 先頭行を最大40字に切り詰める。 */
+function chipPreview(text: string): string {
+  const firstLine = text.split('\n', 1)[0] ?? '';
+  return firstLine.length > CHIP_PREVIEW_LENGTH ? `${firstLine.slice(0, CHIP_PREVIEW_LENGTH)}…` : firstLine;
 }
 
 /**
  * thinking / tool_use / tool_result 用の折りたたみブロック。既定閉。
+ * 折りたたみ時は1行チップ表示（B2: ツールの密度改善）: アイコン・ラベル・内容プレビュー・
+ * 成功/失敗グリフを横並びにする。展開すると内容全文をブロック表示する。
  * ネイティブ <details>/<summary> を使い、キーボード操作・フォーカスを無償で得る。
  */
 export function CollapsibleBlock({ icon, label, tone = 'default', truncatedNote, children }: CollapsibleBlockProps) {
-  const color = tone === 'danger' ? 'var(--danger)' : 'var(--text-dim)';
+  const [open, setOpen] = useState(false);
+  const statusColor = tone === 'danger' ? 'var(--danger)' : 'var(--success)';
+  const statusGlyph = tone === 'danger' ? '✗' : '✓';
+  const preview = chipPreview(children);
+
   return (
     <details
-      style={{
-        margin: '6px 0',
-        border: `1px solid ${tone === 'danger' ? 'var(--danger-a35)' : 'var(--border)'}`,
-        borderRadius: 'var(--radius-sm)',
-        background: tone === 'danger' ? 'var(--danger-a08)' : 'var(--bg)',
-      }}
+      open={open}
+      onToggle={(e) => setOpen(e.currentTarget.open)}
+      style={{ margin: '2px 0' }}
     >
       <summary
         style={{
-          display: 'flex',
+          display: 'inline-flex',
           alignItems: 'center',
           gap: 6,
-          padding: '6px 10px',
+          maxWidth: '100%',
+          padding: '3px 10px',
+          borderRadius: 'var(--radius-md)',
+          background: 'var(--bg-hover)',
+          fontSize: '11px',
+          fontFamily: "'JetBrainsMono Nerd Font', 'JetBrains Mono', monospace",
+          color: 'var(--text-dim)',
           cursor: 'pointer',
-          fontSize: 'var(--font-xs)',
-          fontWeight: 600,
-          color,
           userSelect: 'none',
           listStyle: 'none',
         }}
       >
-        <Icon name={icon} size={14} style={{ color }} />
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{label}</span>
-        {truncatedNote && (
+        <Icon name={icon} size={14} style={{ color: 'var(--text-dim)', flexShrink: 0 }} />
+        <span style={{ fontWeight: 600, color: 'var(--text)', flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {label}
+        </span>
+        {preview && (
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{preview}</span>
+        )}
+        <span aria-hidden="true" style={{ color: statusColor, fontWeight: 700, flexShrink: 0 }}>{statusGlyph}</span>
+        {open && truncatedNote && (
           <span style={{ color: 'var(--text-dim)', fontWeight: 400, flexShrink: 0 }}>{truncatedNote}</span>
         )}
       </summary>
       <div
         style={{
-          padding: '0 10px 10px',
+          marginTop: 4,
+          padding: '8px 10px',
+          borderRadius: 'var(--radius-sm)',
+          background: tone === 'danger' ? 'var(--danger-a08)' : 'var(--bg)',
+          border: `1px solid ${tone === 'danger' ? 'var(--danger-a35)' : 'var(--border)'}`,
           fontSize: 'var(--font-xs)',
           color: 'var(--text-dim)',
           fontFamily: "'JetBrainsMono Nerd Font', 'JetBrains Mono', monospace",

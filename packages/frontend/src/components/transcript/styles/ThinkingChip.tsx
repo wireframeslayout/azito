@@ -1,5 +1,4 @@
 import { useTranslation } from 'react-i18next';
-import { THINKING_HAIRLINE_COLOR } from './mockupColors';
 
 interface ThinkingChipProps {
   text: string;
@@ -9,7 +8,8 @@ interface ThinkingChipProps {
 
 /**
  * thinking ブロックの折りたたみ痕跡チップ（C2）。全表示スタイル共通コンポーネント。
- * 既定閉。開くと斜体本文の左に magenta 系の細い縦線を表示する。
+ * 既定閉。開くとインデント＋斜体＋控えめな文字色のみで本文を示す
+ * （ステータスカラーの左ボーダーはプロジェクト全体で禁止のため使わない）。
  */
 export function ThinkingChip({ text, seconds }: ThinkingChipProps) {
   const { t } = useTranslation('transcript');
@@ -40,8 +40,7 @@ export function ThinkingChip({ text, seconds }: ThinkingChipProps) {
       <div
         style={{
           marginTop: 4,
-          padding: '2px 10px',
-          borderLeft: `2px solid ${THINKING_HAIRLINE_COLOR}`,
+          padding: '2px 10px 2px 14px',
           fontStyle: 'italic',
           color: 'var(--text-dim)',
           fontSize: 'var(--font-xs)',
