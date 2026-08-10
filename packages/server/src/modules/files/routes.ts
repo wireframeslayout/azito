@@ -477,7 +477,7 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
   );
 
   // ── GET /api/servers/:name/files/search ──
-  fastify.get<{ Params: { name: string }; Querystring: { q?: string; project_id?: string; root?: string; name?: string; content?: string; case?: string; regex?: string } }>(
+  fastify.get<{ Params: { name: string }; Querystring: { q?: string; project_id?: string; root?: string; case?: string; whole_word?: string; regex?: string; include?: string; exclude?: string } }>(
     '/api/servers/:name/files/search',
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
@@ -491,9 +491,9 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
       const projectId = parseInt(request.query.project_id || '', 10);
       if (isNaN(projectId)) return reply.status(400).send({ error: 'project_id is required' });
 
-      const matchName = request.query.name !== 'false';
-      const matchContent = request.query.content !== 'false';
-      if (!matchName && !matchContent) return reply.status(400).send({ error: 'At least one of name or content must be enabled' });
+      if (/[\x00-\x1f]/.test(request.query.include || '') || /[\x00-\x1f]/.test(request.query.exclude || '')) {
+        return reply.status(400).send({ error: 'Invalid search patterns' });
+      }
 
       const ps = projectServerRepo.find(projectId, srv.name);
       if (!ps?.workingDirectory) return reply.status(400).send({ error: 'Project server has no working directory' });
@@ -516,10 +516,11 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
         const result = await searchService.search(srv, {
           query: q,
           root,
-          matchName,
-          matchContent,
           caseSensitive: request.query.case === 'true',
+          wholeWord: request.query.whole_word === 'true',
           regex: request.query.regex === 'true',
+          include: request.query.include || undefined,
+          excludeExtra: request.query.exclude || undefined,
         });
         return result;
       } catch (err: unknown) {
