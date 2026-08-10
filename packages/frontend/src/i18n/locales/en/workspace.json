@@ -12,7 +12,8 @@
     "openTab": "Open tab",
     "splitSuccessH": "Pane split horizontally",
     "splitSuccessV": "Pane split vertically",
-    "splitFailed": "Split failed: {{error}}"
+    "splitFailed": "Split failed: {{error}}",
+    "viewSegments": "Task view switcher"
   },
   "activeWindows": {
     "title": "Active Windows",

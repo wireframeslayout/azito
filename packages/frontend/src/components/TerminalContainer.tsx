@@ -45,9 +45,17 @@ interface TerminalContainerProps {
   onCloseTab?: () => void;
   onRetargetTab?: (serverName: string, newTarget: string) => void;
   reconnectKey?: number;
+  /**
+   * SP タスク画面の「ウィンドウ」セグメント（Issue #69 修正3）向け: ウィンドウ選択
+   * ドロップダウン等をこのツールバーの先頭に差し込む。既存の端末⇄チャットトグル
+   * （Issue #69 Phase E-2）と同じツールバー行に並べることで、承認済みモックの
+   * 「ウィンドウバー＋右端にトグル」を1本のバーとして実現する — 呼び出し元が
+   * 明示的に渡さない限り何も描画しない（デスクトップ/他の呼び出し元は無変更）。
+   */
+  leading?: React.ReactNode;
 }
 
-export function TerminalContainer({ serverName, target, projectId, taskId, project, allTasks, sessions, onSplitPane, onOpenTask, onDisconnect, onWindowChanged, onCloseTab, onRetargetTab, reconnectKey }: TerminalContainerProps) {
+export function TerminalContainer({ serverName, target, projectId, taskId, project, allTasks, sessions, onSplitPane, onOpenTask, onDisconnect, onWindowChanged, onCloseTab, onRetargetTab, reconnectKey, leading }: TerminalContainerProps) {
   const { t } = useTranslation('common');
   const [windowMissing, setWindowMissing] = useState(false);
   const [disconnected, setDisconnected] = useState(false);
@@ -208,6 +216,7 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
           flexShrink: 0,
         }}
       >
+        {leading && <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', paddingLeft: 4 }}>{leading}</div>}
         {activePaneName && (
           <div
             title={activePaneName}

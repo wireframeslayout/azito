@@ -12,7 +12,8 @@
     "openTab": "タブを開く",
     "splitSuccessH": "ペインを水平分割しました",
     "splitSuccessV": "ペインを垂直分割しました",
-    "splitFailed": "分割に失敗しました: {{error}}"
+    "splitFailed": "分割に失敗しました: {{error}}",
+    "viewSegments": "表示切替"
   },
   "activeWindows": {
     "title": "アクティブウィンドウ",

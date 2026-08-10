@@ -18,7 +18,8 @@ import PhaseProgressBar from './PhaseProgressBar';
 import StatusDropdown from '../task/StatusDropdown';
 import TaskGitTab from '../task/TaskGitTab';
 import { useUnitTypes, findUnitType } from '../../hooks/useUnitTypes';
-import { Icon } from '../ui/Icon';
+import { Icon, type IconName } from '../ui/Icon';
+import { SegmentedToggle, type SegmentedToggleOption } from '../ui/SegmentedToggle';
 import TaskSummaryTab from '../task/TaskSummaryTab';
 import TaskUnitSetupForm from '../task/TaskUnitSetupForm';
 import TaskWindowDropdown from '../task/TaskWindowDropdown';
@@ -849,7 +850,7 @@ export default function TaskPanel({
     </div>
   ), []);
 
-  function renderTabBody(tabId: string, tabVisible: boolean, taskData: Task): React.ReactNode {
+  function renderTabBody(tabId: string, tabVisible: boolean, taskData: Task, windowLeading?: React.ReactNode): React.ReactNode {
     // Only the tab that's actually active in its own pane (and only while this whole task
     // panel is visible) mounts real content — matches the terminal tab's pre-existing
     // behavior, and stops background WS/polling (TaskLogView, TaskGitTab, CommitList,
@@ -871,6 +872,13 @@ export default function TaskPanel({
     if (viewName === 'description') {
       return (
         <div className="mobile-scroll-inset" style={{ height: '100%', overflowY: 'auto', padding: '16px 24px' }}>
+          {/* PC はヘッダー行にバッジを表示するが、SP はヘッダーをタイトル1行に統合した
+              （Issue #69 修正3）ため、置き場を失ったバッジ（タスクID/Issue/PR）をここに表示する。 */}
+          {isMobile && (
+            <div style={{ marginBottom: 12 }}>
+              <TaskRefBadges taskId={taskData.id} sourceRef={taskData.sourceRef} source={taskData.source} prUrl={taskData.prUrl} />
+            </div>
+          )}
           {taskData.description ? (
             <>
               <style>{mdStyles}</style>
@@ -983,6 +991,7 @@ export default function TaskPanel({
           onSplitPane={onSplitPane ? (dir) => onSplitPane(serverName, target, dir) : undefined}
           onOpenTask={onOpenTask}
           reconnectKey={reconnectKeys[tabId]}
+          leading={windowLeading}
         />
       );
     }
@@ -1005,20 +1014,64 @@ export default function TaskPanel({
     return null;
   }
 
-  // Mobile: single MiniTabBar + single view, reading off the same task-scoped layout
+  // Mobile: single segmented row + single view, reading off the same task-scoped layout
   // tree (the focused pane's active tab) rather than a parallel state/persistence
   // mechanism — smaller diff, and keeps one source of truth for both layouts.
   const mobileTabIds = useMemo(() => listPanes(layout.state.root).flatMap((p) => p.tabIds), [layout.state.root]);
   const mobileFocusedPane = layout.state.focusedPaneId ? findPane(layout.state.root, layout.state.focusedPaneId) : null;
   const mobileActiveTabId = mobileFocusedPane?.activeTabId ?? mobileTabIds[0] ?? viewTabId('description');
+  // layout.open()（既存の openTab）を使う — findPaneByTab + setActive では、まだどの
+  // ペインの tabIds にも入っていないタブ（Issue #69 修正3で常時セグメント表示になった
+  // unit/git/summary/commits/diff や、初回選択されるウィンドウタブ）を選択しても
+  // pane が見つからず無反応になる。open() は「既存なら activate、未登録なら追加して
+  // activate」を両方担うため、セグメント選択はこちらに統一する。
   const handleMobileSelect = useCallback((tabId: string) => {
-    const pane = findPaneByTab(layout.state.root, tabId);
-    if (pane) handlePaneSelectTab(pane.id, tabId);
-  }, [layout.state.root, handlePaneSelectTab]);
-  const handleMobileClose = useCallback((tabId: string) => {
-    const pane = findPaneByTab(layout.state.root, tabId);
-    if (pane) handlePaneCloseTab(pane.id, tabId);
-  }, [layout.state.root, handlePaneCloseTab]);
+    layout.open(tabId);
+  }, [layout]);
+
+  // SP タスク画面の2段ヘッダ統合（Issue #69 修正3）: 個々のウィンドウタブを列挙する代わりに
+  // 単一の「ウィンドウ」セグメントへ集約する — 実際の切替は既存のウィンドウ選択ドロップダウン
+  // （renderWindowDropdownTrigger/TaskWindowDropdown、承認済みモックの「ウィンドウバー」）が担う。
+  // セグメント側は「今どのウィンドウを表示中か」を覚えておく必要があるため、直近アクティブだった
+  // ウィンドウタブ id を保持する（未選択時/そのウィンドウが閉じられた時は先頭のウィンドウへ）。
+  const MOBILE_WINDOW_SEGMENT = '__windows__';
+  const lastMobileWindowTabIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (parseWindowTabId(mobileActiveTabId)) lastMobileWindowTabIdRef.current = mobileActiveTabId;
+  }, [mobileActiveTabId]);
+
+  const mobileSegments = useMemo((): SegmentedToggleOption<string>[] => [
+    ...availableFixedViews.map((v) => ({ value: viewTabId(v), label: t(`workspace:viewLabels.${v}`) })),
+    ...(windows.length > 0 ? [{ value: MOBILE_WINDOW_SEGMENT, label: t('workspace:windows.title'), icon: 'terminal' as IconName }] : []),
+    ...browserTabIds.map((id, idx) => ({
+      value: id,
+      label: idx <= 0 ? t('common:labels.browser') : `${t('common:labels.browser')} ${idx + 1}`,
+      icon: 'browser' as IconName,
+    })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [availableFixedViewsKey, windows.length, browserTabIdsKey, t]);
+
+  const mobileActiveSegment = parseWindowTabId(mobileActiveTabId) ? MOBILE_WINDOW_SEGMENT : mobileActiveTabId;
+
+  const handleMobileSegmentSelect = useCallback((key: string) => {
+    if (key === MOBILE_WINDOW_SEGMENT) {
+      const remembered = lastMobileWindowTabIdRef.current;
+      const target = remembered && windowTabIdsList.includes(remembered) ? remembered : windowTabIdsList[0];
+      if (target) handleMobileSelect(target);
+      return;
+    }
+    handleMobileSelect(key);
+  }, [handleMobileSelect, windowTabIdsList]);
+
+  // ウィンドウセグメント選択中に表示するウィンドウタブ id — mobileActiveTabId がまだ
+  // ウィンドウタブへ切り替わっていない最初のレンダーでも取りこぼさないよう、直近記憶値/
+  // 先頭ウィンドウへフォールバックする（承認済みモックの「ウィンドウバー」は常に何らかの
+  // ウィンドウを表示している状態を前提とするため）。
+  const mobileDisplayedWindowTabId = parseWindowTabId(mobileActiveTabId)
+    ? mobileActiveTabId
+    : (lastMobileWindowTabIdRef.current && windowTabIdsList.includes(lastMobileWindowTabIdRef.current)
+      ? lastMobileWindowTabIdRef.current
+      : windowTabIdsList[0]);
 
   if (!task) return <div style={{ padding: 24, color: 'var(--text-dim)', background: 'var(--ws-surface)', height: '100%' }}>{t('detail.notFound')}</div>;
 
@@ -1043,52 +1096,56 @@ export default function TaskPanel({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--ws-surface)' }}>
-      {/* Task header bar: SP = 2-row (badges row + clamped title), PC = single row */}
+      {/* Task header bar: SP = 2段構成（タイトル行 + セグメント行、承認済み S3 提案）, PC = single row */}
       {isMobile ? (
-        <PanelHeader
-          style={{ padding: '8px var(--space-4)', minHeight: 0 }}
-          title={
-            <div style={{ minWidth: 0, flex: 1 }}>
-              {/* Row 1: back + badges + status + more */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                {backButton}
-                <StatusDot status={task.status} />
-                <div style={{ minWidth: 0, overflow: 'hidden', flexShrink: 1 }}>
-                  <TaskRefBadges taskId={task.id} sourceRef={task.sourceRef} source={task.source} prUrl={task.prUrl} />
-                </div>
-                <StatusDropdown status={task.status} onChange={handleStatusChange} />
-                <div style={{ flex: 1, minWidth: 0 }} />
-                <button
-                  onClick={(e) => moreMenu.show(e, [
-                    ...(hasUnit && unit && task.status === 'open'
-                      ? [{ label: t('actions.execute'), icon: <Icon name="play" size={16} />, onClick: () => executeTask(task.id, unit.id) }]
-                      : []),
-                    ...(task.status === 'in_progress' && hasUnit && unit
-                      ? [{ label: t('actions.stop'), icon: <Icon name="stop" size={16} />, danger: true, onClick: () => stopTask(unit.id) }]
-                      : []),
-                    { label: t('actions.edit'), icon: <Icon name="edit" size={16} />, onClick: () => onEdit?.(taskId) },
-                    ...(task.status === 'archived'
-                      ? [{ label: t('actions.restore'), icon: <Icon name="refresh" size={16} />, onClick: handleRestore }]
-                      : [{ label: t('actions.archive'), icon: <Icon name="storage" size={16} />, onClick: handleArchive }]),
-                    { label: t('common:actions.delete'), icon: <Icon name="trash" size={16} />, danger: true, onClick: handleDelete },
-                  ])}
-                  className="icon-btn"
-                  style={moreButtonStyle}
-                  title={t('common:navigation.moreActions')}
-                ><Icon name="more" size={14} /></button>
-              </div>
-              {/* Row 2: title */}
-              <div style={{
-                fontSize: 'var(--font-base)', fontWeight: 600, lineHeight: 1.4,
-                paddingLeft: onBack ? 36 : 0, paddingTop: 4, paddingBottom: 2,
-                display: '-webkit-box', WebkitLineClamp: 2,
-                WebkitBoxOrient: 'vertical' as const, overflow: 'hidden',
-              }}>
-                {task.title}
-              </div>
+        <div className="ws-surface" style={{ background: 'var(--ws-surface-card)', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+          {/* Row 1: back + title (1行) + status（タップでドロップダウン）+ more */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 44, padding: '0 var(--space-3)' }}>
+            {backButton}
+            <span style={{
+              flex: 1, minWidth: 0, fontSize: 'var(--font-base)', fontWeight: 600,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>
+              {task.title}
+            </span>
+            <StatusDropdown status={task.status} onChange={handleStatusChange} />
+            <button
+              onClick={(e) => moreMenu.show(e, [
+                ...(hasUnit && unit && task.status === 'open'
+                  ? [{ label: t('actions.execute'), icon: <Icon name="play" size={16} />, onClick: () => executeTask(task.id, unit.id) }]
+                  : []),
+                ...(task.status === 'in_progress' && hasUnit && unit
+                  ? [{ label: t('actions.stop'), icon: <Icon name="stop" size={16} />, danger: true, onClick: () => stopTask(unit.id) }]
+                  : []),
+                { label: t('actions.edit'), icon: <Icon name="edit" size={16} />, onClick: () => onEdit?.(taskId) },
+                ...(task.status === 'archived'
+                  ? [{ label: t('actions.restore'), icon: <Icon name="refresh" size={16} />, onClick: handleRestore }]
+                  : [{ label: t('actions.archive'), icon: <Icon name="storage" size={16} />, onClick: handleArchive }]),
+                { label: t('common:actions.delete'), icon: <Icon name="trash" size={16} />, danger: true, onClick: handleDelete },
+              ])}
+              className="icon-btn"
+              style={moreButtonStyle}
+              title={t('common:navigation.moreActions')}
+            ><Icon name="more" size={14} /></button>
+          </div>
+          {/* Row 2: 横スクロールセグメント行（旧サブタブ列の後継。ウィンドウ選択は「ウィンドウ」
+              セグメントへ集約 — 個々のウィンドウ/ペインドロップダウンはセグメント選択後の
+              ウィンドウバーで行う）+ 常設の＋（ブラウザ追加/ウィンドウ追加） */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 var(--space-3) 8px', overflow: 'hidden' }}>
+            <div style={{ flex: 1, minWidth: 0, overflowX: 'auto' }} className="mobile-scroll-inset">
+              <SegmentedToggle
+                options={mobileSegments}
+                value={mobileActiveSegment}
+                onChange={handleMobileSegmentSelect}
+                size="md"
+                ariaLabel={t('workspace:pane.viewSegments')}
+              />
             </div>
-          }
-        />
+            <span onClick={(e) => showAddMenu(e, mobileFocusedPane ?? listPanes(layout.state.root)[0])} style={{ flexShrink: 0 }}>
+              <IconButton size="sm" title={t('workspace:pane.openTab')}><Icon name="plus" size={14} /></IconButton>
+            </span>
+          </div>
+        </div>
       ) : (
         <PanelHeader
           title={
@@ -1373,25 +1430,15 @@ export default function TaskPanel({
       {/* Main content area (full width, no sidebar) */}
       {isMobile ? (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
-          <div className="ws-surface" style={{ background: 'var(--ws-surface-card)', flexShrink: 0 }}>
-            <MiniTabBar
-              tabs={mobileTabIds.map(buildMiniTab)}
-              activeKey={mobileActiveTabId}
-              onSelect={handleMobileSelect}
-              onClose={handleMobileClose}
-              size="md"
-              trailing={
-                <>
-                  {renderWindowDropdownTrigger(mobileFocusedPane ?? listPanes(layout.state.root)[0])}
-                  <span onClick={(e) => showAddMenu(e, mobileFocusedPane ?? listPanes(layout.state.root)[0])}>
-                    <IconButton size="sm" title={t('workspace:pane.openTab')}><Icon name="plus" size={14} /></IconButton>
-                  </span>
-                </>
-              }
-            />
-          </div>
           <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-            {renderTabBody(mobileActiveTabId, true, task)}
+            {mobileActiveSegment === MOBILE_WINDOW_SEGMENT && mobileDisplayedWindowTabId
+              ? renderTabBody(
+                mobileDisplayedWindowTabId,
+                true,
+                task,
+                renderWindowDropdownTrigger(mobileFocusedPane ?? listPanes(layout.state.root)[0]),
+              )
+              : renderTabBody(mobileActiveTabId, true, task)}
           </div>
         </div>
       ) : (
