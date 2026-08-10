@@ -267,7 +267,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   await app.register(transcriptsRoutes, {
     sources: TRANSCRIPT_SOURCES,
     transcriptPaneService: new TranscriptPaneService(claudeTranscriptSource, tmuxClient, serverRepo),
-    windowSessionResolver: new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, TRANSCRIPT_SOURCES),
+    windowSessionResolver: new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, TRANSCRIPT_SOURCES, sessionCaptureService),
     windowInputService: new WindowInputService(windowRepo, tmuxClient, serverRepo),
     windowRepo,
   });

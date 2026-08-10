@@ -62,6 +62,21 @@ export class SessionCaptureService {
     return sessionId;
   }
 
+  /**
+   * WindowSessionResolver の cwd 照合フォールバック（tier3）で解決に成功したセッションを、
+   * まだ agentSessionId が未設定のウィンドウへ書き戻す（Issue #338）。既存の isAssigned ガードを
+   * そのまま再利用するため、対象セッションが（自分自身を含む）どこかのウィンドウ/タスクに既に
+   * 割り当て済みなら書き込まない。
+   */
+  adoptResolvedSession(winId: number, sessionId: string): boolean {
+    const win = this.windowRepo.findById(winId);
+    if (!win || win.agentSessionId) return false;
+    if (this.isAssigned(sessionId, win.serverName)) return false;
+
+    this.windowRepo.updateAgentSessionIdByWindow(win.serverName, win.tmuxTarget, sessionId);
+    return true;
+  }
+
   private isAssigned(sessionId: string, serverName: string): boolean {
     const assignedW = this.windowRepo.findAgentSessionIdsByServer(serverName);
     const assignedT = this.taskRepo.findAgentSessionIdsByServer(serverName);

@@ -4,8 +4,9 @@ import type { TmuxClient, TmuxPaneInfo } from '../tmux/TmuxClient';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 import { windowSpecMatches } from '../tmux/TmuxClient';
 import { stripPaneSuffix } from '../windows/paneTarget';
+import type { SessionCaptureService } from '../windows/SessionCaptureService';
 import type { TranscriptSource } from './sources/TranscriptSource';
-import { parsePsOutput, isAgentProcessRunning, findAgentProcessStartMs } from './agentProcessDetection';
+import { parsePsOutput, isAgentProcessRunning, findAgentProcessStartMs, findAgentProcessTypes } from './agentProcessDetection';
 import type { PsEntry } from './agentProcessDetection';
 
 // ─── Types ───
@@ -57,14 +58,23 @@ const PROCESS_START_SKEW_MS = 15 * 1000;
  *   — bash pane が cwd 一致だけで無関係な古いセッションに紐付いてしまう、今回の報告と同型の誤爆を
  *   防ぐため。
  * - 'detected': claude/codex プロセスを検出できた。processStartMs 以降に更新されていない候補は
- *   全層で拒否する。
+ *   全層で拒否する。agentTypes は実際にこのウィンドウの pane 群で見つかった実行体の種別集合
+ *   （通常は単一。claude/codex 両方を別 pane で動かしている場合のみ2件）— cwd 照合フォールバック
+ *   （優先順位3）の候補ソースをこの集合に限定するために使う（下記 resolveViaCwdMatch 参照。
+ *   Issue #338フォロー: 同 cwd に存在する「別ウィンドウで生きている別種エージェントのセッション」
+ *   を、mtime が新しいというだけで誤って拾ってしまうバグの修正）。
  */
-type ProcessGateState = { kind: 'unavailable' } | { kind: 'not_detected' } | { kind: 'detected'; processStartMs: number };
+type ProcessGateState =
+  | { kind: 'unavailable' }
+  | { kind: 'not_detected' }
+  | { kind: 'detected'; processStartMs: number; agentTypes: Set<'claude' | 'codex'> };
 
-function toGateState(detection: { entries: PsEntry[]; processStartMs: number | null } | null): ProcessGateState {
+function toGateState(
+  detection: { entries: PsEntry[]; processStartMs: number | null; agentTypes: Set<'claude' | 'codex'> } | null,
+): ProcessGateState {
   if (detection === null) return { kind: 'unavailable' };
   if (detection.processStartMs === null) return { kind: 'not_detected' };
-  return { kind: 'detected', processStartMs: detection.processStartMs };
+  return { kind: 'detected', processStartMs: detection.processStartMs, agentTypes: detection.agentTypes };
 }
 
 // ─── Helpers ───
@@ -164,6 +174,7 @@ export class WindowSessionResolver {
     private readonly tmuxClient: TmuxClient,
     private readonly serverRepo: IServerRepository,
     private readonly sources: TranscriptSource[],
+    private readonly sessionCaptureService: SessionCaptureService,
   ) {}
 
   async resolve(window: Window): Promise<WindowSessionResolution> {
@@ -201,18 +212,36 @@ export class WindowSessionResolver {
       // セッションを拾ってしまい得るため、エージェントが実際には動いていない pane（bash に戻った
       // 等）に別セッションの会話を誤って紐付けるバグ（今回の実機報告と同型）を再発させないため。
       if (gate.kind !== 'not_detected') {
-        const cwdMatched = this.resolveViaCwdMatch(windowPanes);
+        // gate が 'detected' の場合、cwd 照合フォールバックの候補ソースを実際にこのウィンドウで
+        // 検出できたエージェント種別に限定する（Issue #338フォロー）。同 cwd に「別ウィンドウで
+        // 生きている別種エージェントのセッション」が存在しても、そちらは mtime が新しいだけで
+        // このウィンドウの実行体とは無関係なため拾わない。
+        const allowedAgentTypes = gate.kind === 'detected' ? gate.agentTypes : null;
+        const cwdMatched = this.resolveViaCwdMatch(windowPanes, allowedAgentTypes);
         if (cwdMatched && this.passesSessionGate(gate, cwdMatched.agentType, cwdMatched.sessionId)) {
           const pane = await this.resolvePaneWithDetection(server, window, windowPanes, cwdMatched.sessionId, cwdMatched.agentType, psEntries);
-          if (pane) return { resolved: true, agentType: cwdMatched.agentType, sessionId: cwdMatched.sessionId, ...pane };
+          if (pane) {
+            // tier3（cwd 照合フォールバック）でのみ解決結果を windows テーブルへ書き戻す（Issue #338）。
+            // window.agentSessionId が未設定のウィンドウで respawn 後の再解決コストを下げるため。
+            // tier1（window 由来）は既に書き込み済みで対象外。tier2（task 由来）は
+            // SessionCaptureService.adoptResolvedSession 内の isAssigned ガードが「そのタスク自身への
+            // 割当」を検出して常に書き込みを拒否するため、自然に書き戻しをスキップする。
+            this.sessionCaptureService.adoptResolvedSession(window.id, cwdMatched.sessionId);
+            return { resolved: true, agentType: cwdMatched.agentType, sessionId: cwdMatched.sessionId, ...pane };
+          }
         }
       }
     }
 
     const reason: 'unsupported_server' | 'no_recent_session' = isLocal ? 'no_recent_session' : 'unsupported_server';
-    const fallback = await this.resolvePaneWithDetection(server, window, windowPanes, '', window.workerType ?? '', psEntries);
+    // best-effort な agentType の既定は workerType > プロセス検出（単一種別のみ判明している場合）
+    // > 既定なし。既定を 'claude' 等に倒すと未検出時に誤表示するため、判明しなければ undefined のまま
+    // フロントの警告表示に委ねる（Issue #338フォロー）。
+    const detectedType = gate.kind === 'detected' && gate.agentTypes.size === 1 ? [...gate.agentTypes][0] : undefined;
+    const fallbackAgentType = window.workerType ?? detectedType;
+    const fallback = await this.resolvePaneWithDetection(server, window, windowPanes, '', fallbackAgentType ?? '', psEntries);
     if (!fallback) return { resolved: false, reason, agentDetected: false };
-    return { resolved: false, reason, paneId: fallback.paneId, agentType: window.workerType ?? undefined, agentDetected: fallback.agentDetected };
+    return { resolved: false, reason, paneId: fallback.paneId, agentType: fallbackAgentType, agentDetected: fallback.agentDetected };
   }
 
   /**
@@ -245,7 +274,7 @@ export class WindowSessionResolver {
   private async detectWindowAgentProcess(
     server: ServerConfig,
     windowPanes: TmuxPaneInfo[],
-  ): Promise<{ entries: PsEntry[]; processStartMs: number | null } | null> {
+  ): Promise<{ entries: PsEntry[]; processStartMs: number | null; agentTypes: Set<'claude' | 'codex'> } | null> {
     if (windowPanes.length === 0) return null;
     try {
       const { stdout, code } = await this.tmuxClient.execCommand(server, PS_COMMAND);
@@ -254,6 +283,7 @@ export class WindowSessionResolver {
       const now = Date.now();
 
       let processStartMs: number | null = null;
+      const agentTypes = new Set<'claude' | 'codex'>();
       for (const pane of windowPanes) {
         const pid = await this.tmuxClient.getPanePid(server, pane.paneId);
         if (pid === null) continue;
@@ -261,8 +291,9 @@ export class WindowSessionResolver {
         if (startMs !== null && (processStartMs === null || startMs > processStartMs)) {
           processStartMs = startMs;
         }
+        for (const type of findAgentProcessTypes(entries, pid)) agentTypes.add(type);
       }
-      return { entries, processStartMs };
+      return { entries, processStartMs, agentTypes };
     } catch {
       return null;
     }
@@ -302,12 +333,23 @@ export class WindowSessionResolver {
     return null;
   }
 
-  /** 優先順位3: cwd 照合フォールバック。複数一致時は mtime 最新を採用。 */
-  private resolveViaCwdMatch(windowPanes: TmuxPaneInfo[]): { agentType: string; sessionId: string } | null {
+  /**
+   * 優先順位3: cwd 照合フォールバック。複数一致時は mtime 最新を採用。
+   * allowedAgentTypes が渡された場合（プロセス検出でこのウィンドウの実行体種別が判明している
+   * 場合）、候補をその種別のソースに限定する（Issue #338フォロー）。同 cwd で別ウィンドウの
+   * 別種エージェントが活動中でも、そのセッションは対象外にする — mtime だけで選ぶと、そちらが
+   * より新しいというだけで誤って採用してしまう（実機報告: codex ペインに claude セッションが
+   * 紐付く）。null（プロセス検出不能、gate.kind !== 'detected'）の場合は従来通り全ソース対象。
+   */
+  private resolveViaCwdMatch(
+    windowPanes: TmuxPaneInfo[],
+    allowedAgentTypes: Set<'claude' | 'codex'> | null,
+  ): { agentType: string; sessionId: string } | null {
     const windowCwds = new Set(windowPanes.map((p) => p.currentPath).filter((cwd) => cwd.length > 0));
     if (windowCwds.size === 0) return null;
 
     const candidates = this.sources
+      .filter((source) => allowedAgentTypes === null || allowedAgentTypes.has(source.agentType as 'claude' | 'codex'))
       .flatMap((source) => source.listSessions())
       .filter((session) => session.cwd !== null && windowCwds.has(session.cwd));
     if (candidates.length === 0) return null;

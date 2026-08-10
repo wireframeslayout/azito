@@ -58,6 +58,20 @@ export function argsContainAgentBinary(args: string): boolean {
   return args.split(/\s+/).some((token) => AGENT_BINARY_NAMES.has(path.basename(token)));
 }
 
+/**
+ * args の中から claude/codex 実行体を示すトークンを探し、どちらの種別かを返す（Issue #338フォロー:
+ * cwd 照合フォールバックの誤爆修正）。argsContainAgentBinary と同じトークン判定だが、真偽値ではなく
+ * 種別そのものを返す。両方のトークンが同時に含まれることは実質無い（1プロセス1実行体）ため、
+ * 最初に一致したものを返す。
+ */
+export function matchAgentBinaryName(args: string): 'claude' | 'codex' | null {
+  for (const token of args.split(/\s+/)) {
+    const base = path.basename(token);
+    if (base === 'claude' || base === 'codex') return base;
+  }
+  return null;
+}
+
 /** rootPid 自身と、entries 上で辿れる子孫すべての pid 集合を返す（BFS）。 */
 function collectDescendantPids(entries: PsEntry[], rootPid: number): Set<number> {
   const childrenByPpid = new Map<number, number[]>();
@@ -116,4 +130,25 @@ export function findAgentProcessStartMs(entries: PsEntry[], rootPid: number, now
     if (latestStartMs === null || startMs > latestStartMs) latestStartMs = startMs;
   }
   return latestStartMs;
+}
+
+/**
+ * rootPid 自身または子孫プロセスの中で実際に検出できた claude/codex 実行体の種別集合を返す
+ * （cwd 照合フォールバックの誤爆修正、Issue #338フォロー）。同一 pane で claude/codex どちらが
+ * 動いているかを判定するために使う — 複数の pane を持つウィンドウで両方が見つかることもあるため
+ * Set を返す。一致が無ければ空集合。
+ */
+export function findAgentProcessTypes(entries: PsEntry[], rootPid: number): Set<'claude' | 'codex'> {
+  const entryByPid = new Map(entries.map((entry) => [entry.pid, entry] as const));
+  const types = new Set<'claude' | 'codex'>();
+  if (!entryByPid.has(rootPid)) return types;
+
+  const descendantPids = collectDescendantPids(entries, rootPid);
+  for (const pid of descendantPids) {
+    const entry = entryByPid.get(pid);
+    if (!entry) continue;
+    const matched = matchAgentBinaryName(entry.args);
+    if (matched) types.add(matched);
+  }
+  return types;
 }
