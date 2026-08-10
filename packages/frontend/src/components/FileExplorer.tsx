@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { fetchBlob } from '../api/client';
 import { useToast } from '../hooks/useToast';
@@ -20,9 +20,10 @@ export interface FileExplorerProps {
   rootPath: string;
   projectId?: number;
   onFileSelect?: (serverName: string, filePath: string) => void;
+  onRefreshRef?: (fn: () => void) => void;
 }
 
-export default function FileExplorer({ serverName, rootPath, projectId, onFileSelect }: FileExplorerProps) {
+export default function FileExplorer({ serverName, rootPath, projectId, onFileSelect, onRefreshRef }: FileExplorerProps) {
   const { t } = useTranslation('files');
   const { showToast } = useToast();
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -93,53 +94,12 @@ export default function FileExplorer({ serverName, rootPath, projectId, onFileSe
     showContextMenuAt(x, y, buildMenuItems(node));
   }, [showContextMenuAt, buildMenuItems]);
 
+  useEffect(() => {
+    onRefreshRef?.(loadRoot);
+  }, [onRefreshRef, loadRoot]);
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      {/* Header */}
-      <div style={{
-        padding: '8px 12px',
-        fontSize: 'var(--font-xs)',
-        fontWeight: 600,
-        textTransform: 'uppercase',
-        letterSpacing: 0.5,
-        color: 'var(--text-dim)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        borderBottom: '1px solid var(--border)',
-        flexShrink: 0,
-      }}>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          Explorer
-        </span>
-        <button
-          onClick={loadRoot}
-          title={t('explorer.refresh')}
-          className="icon-btn"
-          style={{
-            border: 'none', color: 'var(--text-dim)',
-            cursor: 'pointer', fontSize: 'var(--font-base)', padding: '2px 6px',
-          }}
-        >
-          <Icon name="refresh" size={14} />
-        </button>
-      </div>
-
-      {/* Path breadcrumb */}
-      <div style={{
-        padding: '4px 12px',
-        fontSize: 'var(--font-xs)',
-        color: 'var(--text-dim)',
-        borderBottom: '1px solid var(--border)',
-        whiteSpace: 'nowrap',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        flexShrink: 0,
-      }}>
-        {rootPath}
-      </div>
-
-      {/* Tree */}
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
       <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
         {loading && <LoadingState />}
         {error && <div style={{ padding: 12, fontSize: 'var(--font-sm)', color: 'var(--danger)' }}>{error}</div>}
