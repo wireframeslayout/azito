@@ -25,18 +25,14 @@ interface MobileNavMenuProps {
   onSelectMode: (mode: SidebarMode) => void;
   onNavigateGlobal: (path: string) => void;
   /**
-   * 稼働ペイン一覧（暫定行）。旧 ≡ ドロワーには無かった導線だが、下部 MobileMenuBar の
-   * 「その他」シート（MobileGlobalMenuSheet）が T6 まで残る間、M1 メニューからも同機能へ
-   * 迷わず到達できるようにする一時的な追加。ServerHealthSheet（T6）実装後に見直す。
-   * connectPane/openTask が揃わない呼び出し元では行自体を出さない。
+   * 稼働ペイン一覧。旧 ≡ ドロワーには無かった導線で、既存 MobileActiveWindowsPanel を
+   * MobileNavSheet 側で直接開く（Issue #69 T1）。connectPane/openTask が揃わない
+   * 呼び出し元では行自体を出さない。
    */
   onOpenActiveWindows?: () => void;
   activeWindowsCount?: number;
   activeWindowsBlockedCount?: number;
-  /**
-   * サーバーヘルス（暫定行）。T6 で ServerHealthSheet に置き換わるまでの間、既存の
-   * ResourceDropdownContent ベースの簡易シートを MobileNavSheet 側で開く。
-   */
+  /** サーバーヘルス。MobileNavSheet 側で ServerHealthSheet（Issue #69 T6）を開く。 */
   onOpenServerHealth: () => void;
   serverHealth?: DotLevel;
 }

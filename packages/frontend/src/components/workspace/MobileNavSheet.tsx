@@ -2,10 +2,9 @@ import { type CSSProperties, type ReactNode, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { Icon } from '../ui/Icon';
-import { BottomSheet } from '../ui/BottomSheet';
 import { MobileNavMenu } from './MobileNavMenu';
 import { MobileActiveWindowsPanel } from './MobileActiveWindowsPanel';
-import { ResourceDropdownContent } from '../statusbar/ResourceDropdown';
+import { ServerHealthSheet } from './ServerHealthSheet';
 import { getHealthLevel, getWorstHealth, useServerResourcesContext } from '../../hooks/useServerResources';
 import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
 import { paths } from '../../paths';
@@ -104,8 +103,8 @@ export function MobileNavSheet({
     setStack(['menu']);
   };
 
-  // サーバーヘルス／稼働ペイン一覧は暫定行（T6 で ServerHealthSheet に置き換え）。開いたら
-  // ナビゲーションシート自体は閉じる（モック準拠の「実体オープンでシートを閉じる」に倣う）。
+  // サーバーヘルス／稼働ペイン一覧を開いたらナビゲーションシート自体は閉じる
+  // （モック準拠の「実体オープンでシートを閉じる」に倣う）。
   const handleOpenActiveWindows = connectPane && openTask
     ? () => { onClose(); setActiveWindowsOpen(true); }
     : undefined;
@@ -217,11 +216,7 @@ export function MobileNavSheet({
         />
       )}
 
-      <BottomSheet open={healthOpen} onClose={() => setHealthOpen(false)} title={t('workspace:mobile.serverHealth')}>
-        {servers.map((s) => (
-          <ResourceDropdownContent key={s.serverName} serverName={s.serverName} health={getHealthLevel(s.measurement)} meterWidth={90} />
-        ))}
-      </BottomSheet>
+      <ServerHealthSheet open={healthOpen} onClose={() => setHealthOpen(false)} />
     </>
   );
 }
