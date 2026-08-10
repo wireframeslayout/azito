@@ -49,6 +49,7 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
   const { t } = useTranslation('common');
   const [windowMissing, setWindowMissing] = useState(false);
   const [disconnected, setDisconnected] = useState(false);
+  const [connectFailed, setConnectFailed] = useState(false);
   const [xtermKey, setXtermKey] = useState(0);
 
   const prevReconnectKey = useRef(reconnectKey);
@@ -56,6 +57,7 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
     if (reconnectKey !== undefined && reconnectKey !== prevReconnectKey.current) {
       setWindowMissing(false);
       setDisconnected(false);
+      setConnectFailed(false);
       setRespawnError(null);
       setXtermKey((k) => k + 1);
     }
@@ -119,6 +121,7 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
       }
       setWindowMissing(false);
       setDisconnected(false);
+      setConnectFailed(false);
       setRespawnError(null);
       setXtermKey((k) => k + 1);
       onRetargetTab?.(serverName, res.tmuxTarget);
@@ -178,6 +181,7 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
     everSeen.current = true;
     setWindowMissing(false);
     setDisconnected(false);
+    setConnectFailed(false);
   }, [sessions, target]);
 
   const activePane = useMemo(
@@ -248,7 +252,54 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
         ) : (
           <>
         {!windowMissing && (
-          <XTermView key={xtermKey} serverName={serverName} target={target} onDisconnect={onDisconnect} onWindowNotFound={() => setWindowMissing(true)} onMaxRetriesReached={() => setDisconnected(true)} />
+          <XTermView
+            key={xtermKey}
+            serverName={serverName}
+            target={target}
+            onDisconnect={onDisconnect}
+            onWindowNotFound={() => setWindowMissing(true)}
+            onMaxRetriesReached={() => setDisconnected(true)}
+            onConnectTimeout={() => setConnectFailed(true)}
+          />
+        )}
+        {connectFailed && !windowMissing && !disconnected && (
+          <div
+            role="status"
+            aria-live="polite"
+            style={{
+              position: 'absolute',
+              inset: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: 'var(--bg)',
+              zIndex: 6,
+              gap: 16,
+            }}
+          >
+            <div style={{ color: 'var(--text-dim)', fontSize: 'var(--font-base)', marginBottom: 4 }}>
+              {t('terminal.connectFailed')}
+            </div>
+            {taskId !== undefined && (
+              <div style={{ color: 'var(--text-dim)', fontSize: 'var(--font-sm)', maxWidth: 320, textAlign: 'center' }}>
+                {t('terminal.connectFailedTaskHint')}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={() => { setConnectFailed(false); setXtermKey((k) => k + 1); }}
+              >
+                {t('terminal.reconnect')}
+              </button>
+              {onCloseTab && (
+                <button className="btn btn-sm" onClick={onCloseTab}>
+                  {t('terminal.closeTab')}
+                </button>
+              )}
+            </div>
+          </div>
         )}
         {disconnected && !windowMissing && (
           <div

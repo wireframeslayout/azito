@@ -37,6 +37,10 @@ function agentLaunchLabel(token: string | null, t: (key: string) => string): str
 const RECONNECT_MAX_ATTEMPTS = 8;
 const RECONNECT_BASE_DELAY_MS = 1000;
 const RECONNECT_MAX_DELAY_MS = 15000;
+// オフラインのペイン（tmux target は存在するが出力が一切流れてこない）に接続すると、WS の
+// open は成立してもデータが永久に来ず、useSupervisedLoadingOverlay の「接続中…」スピナーが
+// 無期限に回り続ける。初回接続に限りこのタイムアウトで打ち切り、明示的なエラー状態へ遷移させる。
+const CONNECT_DATA_TIMEOUT_MS = 10000;
 
 async function writeClipboard(
   text: string,
@@ -54,7 +58,7 @@ async function writeClipboard(
   }
 }
 
-function XTermView({ serverName, target, onDisconnect, onWindowNotFound, onMaxRetriesReached }: { serverName: string; target: string; onDisconnect?: () => void; onWindowNotFound?: () => void; onMaxRetriesReached?: () => void }) {
+function XTermView({ serverName, target, onDisconnect, onWindowNotFound, onMaxRetriesReached, onConnectTimeout }: { serverName: string; target: string; onDisconnect?: () => void; onWindowNotFound?: () => void; onMaxRetriesReached?: () => void; onConnectTimeout?: () => void }) {
   const { t } = useTranslation('common');
   const wrapperRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -64,6 +68,7 @@ function XTermView({ serverName, target, onDisconnect, onWindowNotFound, onMaxRe
   const roRef = useRef<ResizeObserver | null>(null);
   const ioRef = useRef<IntersectionObserver | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const connectDataTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const loadingOverlay = useSupervisedLoadingOverlay(serverName, target);
   const isMobile = useIsMobile();
   const keyboardVisible = useVirtualKeyboard();
@@ -304,9 +309,23 @@ function XTermView({ serverName, target, onDisconnect, onWindowNotFound, onMaxRe
             prev.onmessage = null;
             try { prev.close(); } catch { /* already closed */ }
           }
+          clearTimeout(connectDataTimerRef.current);
 
           const ws = new WebSocket(buildWsUrl({ server: serverName, target, cols: String(terminal.cols), rows: String(terminal.rows) }));
           wsRef.current = ws;
+          let firstMsg = true;
+          // 初回接続に限り、オフライン(＝出力が永久に来ない)ペインを検出する。WS の open 自体は
+          // 成立してしまうため onclose には頼れず、データ到達を独自タイムアウトで見張る。2回目
+          // 以降(バックオフ再接続)は既存の disconnected/reconnecting フローに任せる。
+          let connectTimedOut = false;
+          if (reconnectAttempts === 0) {
+            connectDataTimerRef.current = setTimeout(() => {
+              if (disposed || !firstMsg) return;
+              connectTimedOut = true;
+              onConnectTimeout?.();
+              try { ws.close(); } catch { /* already closed */ }
+            }, CONNECT_DATA_TIMEOUT_MS);
+          }
           ws.onopen = () => {
             reconnectAttempts = 0;
             firstDisconnect = true;
@@ -314,15 +333,16 @@ function XTermView({ serverName, target, onDisconnect, onWindowNotFound, onMaxRe
             fitAddon.fit();
             ws.send(JSON.stringify({ type: 'resize', cols: terminal.cols, rows: terminal.rows }));
           };
-          let firstMsg = true;
           ws.onmessage = (e: MessageEvent) => {
-            if (firstMsg) { firstMsg = false; loadingOverlay.markConnected(); }
+            if (firstMsg) { firstMsg = false; clearTimeout(connectDataTimerRef.current); loadingOverlay.markConnected(); }
             const data = typeof e.data === 'string' ? e.data : '';
             extractOsc52(data);
             terminal.write(e.data);
           };
           ws.onclose = (e) => {
+            clearTimeout(connectDataTimerRef.current);
             if (disposed) return;
+            if (connectTimedOut) return;
             if (e.code === 4404) { onWindowNotFound?.(); return; }
             if (firstDisconnect) {
               firstDisconnect = false;
@@ -368,6 +388,7 @@ function XTermView({ serverName, target, onDisconnect, onWindowNotFound, onMaxRe
       clearInterval(sizeCheckInterval);
       clearTimeout(sizeCheckTimeout);
       clearTimeout(reconnectTimerRef.current);
+      clearTimeout(connectDataTimerRef.current);
       onDataDisposable?.dispose();
       roRef.current?.disconnect();
       ioRef.current?.disconnect();
