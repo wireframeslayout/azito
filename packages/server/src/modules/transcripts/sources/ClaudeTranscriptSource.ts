@@ -313,6 +313,16 @@ export class ClaudeTranscriptSource implements TranscriptSource {
     return { cwd };
   }
 
+  getSessionMtimeMs(sessionId: string): number | null {
+    const file = this.findSessionFile(sessionId);
+    if (!file) return null;
+    try {
+      return fs.statSync(file).mtimeMs;
+    } catch {
+      return null;
+    }
+  }
+
   readSession(sessionId: string, offset?: number): ReadSessionResult | null {
     const file = this.findSessionFile(sessionId);
     if (!file) return null;

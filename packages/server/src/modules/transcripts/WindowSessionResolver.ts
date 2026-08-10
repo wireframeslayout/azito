@@ -5,6 +5,7 @@ import type { IServerRepository, ServerConfig } from '../servers/Server';
 import { windowSpecMatches } from '../tmux/TmuxClient';
 import { stripPaneSuffix } from '../windows/paneTarget';
 import type { TranscriptSource } from './sources/TranscriptSource';
+import { parsePsOutput, isAgentProcessRunning } from './agentProcessDetection';
 
 // ─── Types ───
 
@@ -29,6 +30,13 @@ const AGENT_COMMAND_PATTERN = /^(node|claude|codex)/i;
 const SUPPORTED_WORKER_TYPES = new Set(['claude', 'codex']);
 /** pane_current_command がこれと完全一致すれば最優先でエージェント pane とみなす。 */
 const AGENT_COMMAND_EXACT = new Set(['claude', 'codex']);
+/**
+ * agentDetected 判定レイヤー3（セッション活動シグナル）: 解決済みセッションの JSONL がこの時間
+ * 以内に更新されていれば、エージェントが実際に書き込み中＝生きているとみなす。
+ */
+const SESSION_ACTIVITY_WINDOW_MS = 120 * 1000;
+/** レイヤー2（プロセス実体検査）の `ps` 実行に使うコマンド。pid/ppid/args のみを取得する。 */
+const PS_COMMAND = 'ps -e -o pid=,ppid=,args=';
 
 // ─── Helpers ───
 
@@ -101,7 +109,9 @@ function selectPane(
  *    突合し、直近 30 分以内に更新された最新セッションを採用（claude/codex 横断）。
  * 4. pane 選定: 上記いずれかで解決したセッションに対し、window.paneLayout にそのセッション/workerType の
  *    メタがあれば最優先で採用し、無ければ pane_current_command が claude/codex に完全一致する pane、
- *    無ければアクティブ pane、それも無ければ node 系 pane、最後に先頭 pane を返す。
+ *    無ければアクティブ pane、それも無ければ node 系 pane、最後に先頭 pane を返す。選定した pane の
+ *    agentDetected は detectAgent() が別途多層判定する（コマンド完全一致 → プロセス実体検査 →
+ *    セッション活動シグナル）。
  *
  * セッション自動解決自体はローカルサーバーのみ対応（Phase E-1 時点。SSH/agent サーバーは
  * 'unsupported_server'）。ただし pane 解決（優先順位4のロジック）自体は tmux コマンドの
@@ -215,8 +225,7 @@ export class WindowSessionResolver {
    * あれば渡す。best-effort 呼び出し時（セッション未解決）は sessionId='' / agentType=window.workerType ?? ''
    * を渡す — paneLayout メタは sessionId 空文字ではマッチせず、workerType 一致のみで判定される。
    * pane 未取得ならアクティブ pane 判定のため list-sessions を追加で1回引く（遅延評価）。
-   * agentDetected は「paneLayout メタで明示的にこの pane がエージェント用と分かっている」または
-   * 「pane_current_command が claude/codex に完全一致」のいずれかで true。
+   * agentDetected の判定は detectAgent() に委譲する（多層判定、下記参照）。
    */
   private async resolvePaneWithDetection(
     server: ServerConfig,
@@ -230,7 +239,8 @@ export class WindowSessionResolver {
     // pane 選択には paneLayout メタを引き続き使う（Important #3 修正前と同じ優先順位）。ただし
     // agentDetected はここでは決定しない — メタは「作成時点でエージェント用と確定していた」ことしか
     // 示さず、その後エージェントが落ちて bash に戻った pane でも一致し続けるため、警告を誤って
-    // 抑制してしまう。agentDetected は選択後に live な currentCommand から判定し直す。
+    // 抑制してしまう。agentDetected は選択後に live な状態（コマンド／プロセス／セッション活動）から
+    // 判定し直す。
     const metaMatch = findPaneLayoutMatch(window.paneLayout, windowPanes, sessionId, agentType);
 
     let paneId: string | null;
@@ -245,8 +255,61 @@ export class WindowSessionResolver {
     if (!paneId) return null;
 
     const pane = windowPanes.find((p) => p.paneId === paneId);
-    const agentDetected = pane !== undefined && AGENT_COMMAND_EXACT.has(pane.currentCommand.toLowerCase());
+    const agentDetected = await this.detectAgent(server, pane, sessionId, agentType);
     return { paneId, agentDetected };
+  }
+
+  /**
+   * agentDetected の多層判定。上位が真ならそこで確定し、下位の検査は行わない（無駄な ps/statSync を
+   * 避ける）:
+   *
+   * 1. pane_current_command が claude/codex に完全一致（環境によってはこれで十分）。
+   * 2. プロセス実体検査（local サーバーのみ）: Claude Code は node スクリプトとして起動するため、
+   *    シェバン経由の exec では pane_current_command が "node" になり得る（実機確認済み）。pane_pid
+   *    の子孫プロセスの実引数（ps args）を辿り、claude/codex 実行体があるか調べる。
+   * 3. セッション活動シグナル: 解決済みセッション（sessionId 非空）の JSONL が直近
+   *    SESSION_ACTIVITY_WINDOW_MS 以内に更新されていれば、エージェントが書き込み中＝生きているとみなす。
+   * 4. いずれも偽なら false（警告表示は正当）。
+   *
+   * レイヤー2/3 は「検出できなかった」ことしか意味しない（tmux/ps 呼び出し失敗・非対応サーバー種別・
+   * セッション未解決を含む）ため、下位レイヤーに委ねるだけで、誤って agentDetected を確定させることはない。
+   */
+  private async detectAgent(
+    server: ServerConfig,
+    pane: TmuxPaneInfo | undefined,
+    sessionId: string,
+    agentType: string,
+  ): Promise<boolean> {
+    if (pane === undefined) return false;
+
+    if (AGENT_COMMAND_EXACT.has(pane.currentCommand.toLowerCase())) return true;
+
+    if (server.type === 'local' && (await this.detectAgentProcess(server, pane.paneId))) return true;
+
+    if (sessionId) {
+      const source = this.sources.find((s) => s.agentType === agentType);
+      const mtimeMs = source?.getSessionMtimeMs(sessionId) ?? null;
+      if (mtimeMs !== null && Date.now() - mtimeMs <= SESSION_ACTIVITY_WINDOW_MS) return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * レイヤー2の実処理。pane_pid を取得し、`ps -e -o pid=,ppid=,args=` を1回実行してその子孫に
+   * claude/codex 実行体が無いか調べる。tmux/ps 呼び出しの失敗はこのレイヤーの「検出できず」として
+   * false を返す（detectAgent 側のコメントの通り、これは誤って警告を消す方向には働かない）。
+   */
+  private async detectAgentProcess(server: ServerConfig, paneId: string): Promise<boolean> {
+    try {
+      const pid = await this.tmuxClient.getPanePid(server, paneId);
+      if (pid === null) return false;
+      const { stdout, code } = await this.tmuxClient.execCommand(server, PS_COMMAND);
+      if (code !== 0) return false;
+      return isAgentProcessRunning(parsePsOutput(stdout), pid);
+    } catch {
+      return false;
+    }
   }
 
   private async findActivePaneIndex(server: ServerConfig, window: Window): Promise<number | null> {

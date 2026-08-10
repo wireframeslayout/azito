@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { WindowSessionResolver } from './WindowSessionResolver';
 import type { ITaskRepository, Task } from '../tasks/Task';
 import type { TmuxClient, TmuxPaneInfo, TmuxSession } from '../tmux/TmuxClient';
@@ -91,10 +91,14 @@ function buildDeps(opts: {
   findById?: ITaskRepository['findById'];
   listAllPanes?: TmuxClient['listAllPanes'];
   listSessions?: TmuxClient['listSessions'];
+  getPanePid?: TmuxClient['getPanePid'];
+  execCommand?: TmuxClient['execCommand'];
   servers?: ServerConfig[];
   claudeGetSessionCwd?: TranscriptSource['getSessionCwd'];
   claudeListSessions?: TranscriptSource['listSessions'];
+  claudeGetSessionMtimeMs?: TranscriptSource['getSessionMtimeMs'];
   codexListSessions?: TranscriptSource['listSessions'];
+  codexGetSessionMtimeMs?: TranscriptSource['getSessionMtimeMs'];
 } = {}) {
   const taskRepo = {
     findById: opts.findById ?? (() => null),
@@ -103,6 +107,11 @@ function buildDeps(opts: {
   const tmuxClient = {
     listAllPanes: opts.listAllPanes ?? (async () => []),
     listSessions: opts.listSessions ?? (async () => []),
+    // getPanePid が未実装（デフォルトの undefined 呼び出し）のケースは、実際に tmuxClient に
+    // メソッドが無いのと同じ状況を再現する — WindowSessionResolver.detectAgentProcess の
+    // try/catch が例外を吸収し、レイヤー2「検出できず」として次のレイヤーへフォールバックする。
+    getPanePid: opts.getPanePid,
+    execCommand: opts.execCommand,
   } as unknown as TmuxClient;
 
   const serverRepo = {
@@ -113,12 +122,14 @@ function buildDeps(opts: {
     agentType: 'claude',
     getSessionCwd: opts.claudeGetSessionCwd ?? (() => null),
     listSessions: opts.claudeListSessions ?? (() => []),
+    getSessionMtimeMs: opts.claudeGetSessionMtimeMs ?? (() => null),
   } as unknown as TranscriptSource;
 
   const codexSource = {
     agentType: 'codex',
     getSessionCwd: () => null,
     listSessions: opts.codexListSessions ?? (() => []),
+    getSessionMtimeMs: opts.codexGetSessionMtimeMs ?? (() => null),
   } as unknown as TranscriptSource;
 
   return { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource };
@@ -442,5 +453,111 @@ describe('WindowSessionResolver', () => {
     const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource]);
     const result = await resolver.resolve(buildWindow({ taskId: null }));
     expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
+  });
+
+  describe('agentDetected multi-layer detection (real Claude Code panes report pane_current_command="node")', () => {
+    const PS_OUTPUT_WITH_CLAUDE_DESCENDANT = [
+      '  9000   1 node /path/to/azito-supervisor.cjs -- claude --dangerously-skip-permissions',
+      '  9001   9000 claude --dangerously-skip-permissions --model claude-opus-4-6[1m]',
+    ].join('\n');
+    const PS_OUTPUT_NO_AGENT = ['  9000   1 node /path/to/some-other-script.js'].join('\n');
+
+    it('layer 2: detects the agent via process inspection when pane_current_command is "node" (local server)', async () => {
+      const panes: TmuxPaneInfo[] = [
+        { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
+      ];
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource } = buildDeps({
+        listAllPanes: async () => panes,
+        getPanePid: async () => 9000,
+        execCommand: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
+      });
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource]);
+      const result = await resolver.resolve(buildWindow());
+      expect(result).toEqual({ resolved: false, reason: 'no_recent_session', paneId: '%1', agentType: 'claude', agentDetected: true });
+    });
+
+    it('layer 2 is skipped on non-local servers (agent/ssh) even when pane_current_command is "node"', async () => {
+      const panes: TmuxPaneInfo[] = [
+        { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
+      ];
+      const getPanePid = vi.fn(async () => 9000);
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource } = buildDeps({
+        servers: [AGENT_SERVER],
+        listAllPanes: async () => panes,
+        getPanePid,
+        execCommand: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
+      });
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource]);
+      const result = await resolver.resolve(buildWindow({ serverName: 'agent1', workerType: 'claude' }));
+      expect(getPanePid).not.toHaveBeenCalled();
+      expect(result).toEqual({ resolved: false, reason: 'unsupported_server', paneId: '%1', agentType: 'claude', agentDetected: false });
+    });
+
+    it('layer 3: falls back to the session activity signal when process inspection finds nothing', async () => {
+      const panes: TmuxPaneInfo[] = [
+        { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
+      ];
+      const recentMtime = Date.now() - 5 * 1000; // 5s ago, well within the 120s activity window
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource } = buildDeps({
+        findById: () => buildTask({ agentSessionId: SID_CLAUDE }),
+        listAllPanes: async () => panes,
+        claudeGetSessionCwd: (id) => (id === SID_CLAUDE ? { cwd: '/proj' } : null),
+        claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
+        getPanePid: async () => 9000,
+        execCommand: async () => ({ stdout: PS_OUTPUT_NO_AGENT, stderr: '', code: 0 }),
+      });
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource]);
+      const result = await resolver.resolve(buildWindow({ taskId: 7 }));
+      expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
+    });
+
+    it('layer 3 does not trigger when the session mtime is outside the 120s activity window', async () => {
+      const panes: TmuxPaneInfo[] = [
+        { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
+      ];
+      const staleMtime = Date.now() - 121 * 1000;
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource } = buildDeps({
+        findById: () => buildTask({ agentSessionId: SID_CLAUDE }),
+        listAllPanes: async () => panes,
+        claudeGetSessionCwd: (id) => (id === SID_CLAUDE ? { cwd: '/proj' } : null),
+        claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? staleMtime : null),
+        getPanePid: async () => 9000,
+        execCommand: async () => ({ stdout: PS_OUTPUT_NO_AGENT, stderr: '', code: 0 }),
+      });
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource]);
+      const result = await resolver.resolve(buildWindow({ taskId: 7 }));
+      expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: false });
+    });
+
+    it('all layers false: a plain bash pane with no matching process or recent session reports agentDetected:false', async () => {
+      const panes: TmuxPaneInfo[] = [
+        { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'bash' },
+      ];
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource } = buildDeps({
+        listAllPanes: async () => panes,
+        getPanePid: async () => 9000,
+        execCommand: async () => ({ stdout: PS_OUTPUT_NO_AGENT, stderr: '', code: 0 }),
+      });
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource]);
+      const result = await resolver.resolve(buildWindow());
+      expect(result).toEqual({ resolved: false, reason: 'no_recent_session', paneId: '%1', agentType: 'claude', agentDetected: false });
+    });
+
+    it('layer 2 failure (tmux/ps error) falls through to layer 3 instead of throwing', async () => {
+      const panes: TmuxPaneInfo[] = [
+        { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
+      ];
+      const recentMtime = Date.now() - 5 * 1000;
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource } = buildDeps({
+        findById: () => buildTask({ agentSessionId: SID_CLAUDE }),
+        listAllPanes: async () => panes,
+        claudeGetSessionCwd: (id) => (id === SID_CLAUDE ? { cwd: '/proj' } : null),
+        claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
+        getPanePid: async () => { throw new Error('tmux display-message failed'); },
+      });
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource]);
+      const result = await resolver.resolve(buildWindow({ taskId: 7 }));
+      expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
+    });
   });
 });

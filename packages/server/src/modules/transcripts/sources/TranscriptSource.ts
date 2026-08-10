@@ -59,4 +59,10 @@ export interface TranscriptSource {
   /** before（既知の行境界バイト位置）より前を後方ページングで読む。セッション未検出は null。 */
   readSessionBefore(sessionId: string, before: number): ReadSessionBeforeResult | null;
   getSessionCwd(sessionId: string): { cwd: string | null } | null;
+  /**
+   * セッション JSONL の最終更新時刻（epoch ms）。WindowSessionResolver の agentDetected 判定
+   * （セッション活動シグナル層）用 — 直近更新されていれば「エージェントが書き込み中」とみなせる。
+   * セッションが存在しない、または stat に失敗した場合は null。
+   */
+  getSessionMtimeMs(sessionId: string): number | null;
 }

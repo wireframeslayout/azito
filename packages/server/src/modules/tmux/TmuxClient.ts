@@ -285,6 +285,24 @@ export class TmuxClient {
     }
   }
 
+  /**
+   * Target pane の OS プロセスID（`#{pane_pid}`）。WindowSessionResolver のプロセス実体検査
+   * （agentDetected 判定レイヤー2）で、pane の子孫プロセスを辿る起点として使う。pane が存在しない/
+   * tmux エラー時は null。
+   */
+  async getPanePid(server: ServerConfig, target: string): Promise<number | null> {
+    try {
+      const { stdout, code } = await this.runTmuxCommand(server, [
+        'display-message', '-p', '-t', target, '#{pane_pid}',
+      ]);
+      if (code !== 0) return null;
+      const pid = parseInt(stdout.trim(), 10);
+      return Number.isNaN(pid) ? null : pid;
+    } catch {
+      return null;
+    }
+  }
+
   async resolvePaneId(server: ServerConfig, windowTarget: string): Promise<string> {
     const { stdout, code } = await this.runTmuxCommand(server, [
       'list-panes', '-t', windowTarget, '-F', '#{pane_id}',
