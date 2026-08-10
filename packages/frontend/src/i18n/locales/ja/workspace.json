@@ -170,7 +170,12 @@
     "tabSwitcherEmpty": "開いているタブはありません",
     "tabSwitcherUngrouped": "その他",
     "tabSwitcherNewTab": "新しいタブ",
-    "navMenu": "ナビゲーションメニュー"
+    "tabSwitcherPinnedSection": "ピン止め",
+    "navMenu": "ナビゲーションメニュー",
+    "pinTab": "ピン止め",
+    "unpinTab": "ピン止めを解除",
+    "pinToastPinned": "ピン止めしました",
+    "pinToastUnpinned": "ピン止めを解除しました"
   },
   "mobileNav": {
     "sectionProject": "プロジェクト",

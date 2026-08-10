@@ -1,12 +1,17 @@
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../ui/Icon';
+import { useLongPress, longPressStyle } from '../../hooks/useLongPress';
+import { useToast } from '../../hooks/useToast';
 import type { TabItem } from '../ui';
 
 interface MobileTabChipRowProps {
   activeTab: TabItem | null;
+  activeTabId: string | null;
+  activeTabPinned: boolean;
   tabCount: number;
   onOpenSwitcher: () => void;
   onOpenMenu: () => void;
+  onTogglePin: (tabId: string) => void;
 }
 
 /**
@@ -16,8 +21,24 @@ interface MobileTabChipRowProps {
  * 開閉・並べ替え自体は既存ストアの操作（selectTab/closeTab等）が引き続き担当する。
  * 左ボーダー/左エッジでの色分けは禁止のため、プロジェクト色は丸ドットのみで示す。
  */
-export function MobileTabChipRow({ activeTab, tabCount, onOpenSwitcher, onOpenMenu }: MobileTabChipRowProps) {
+export function MobileTabChipRow({
+  activeTab,
+  activeTabId,
+  activeTabPinned,
+  tabCount,
+  onOpenSwitcher,
+  onOpenMenu,
+  onTogglePin,
+}: MobileTabChipRowProps) {
   const { t } = useTranslation('workspace');
+  const { showToast } = useToast();
+  const bindLongPress = useLongPress(500);
+
+  const handleLongPress = () => {
+    if (!activeTabId) return;
+    onTogglePin(activeTabId);
+    showToast(activeTabPinned ? t('mobile.pinToastUnpinned') : t('mobile.pinToastPinned'));
+  };
 
   return (
     <div
@@ -73,7 +94,9 @@ export function MobileTabChipRow({ activeTab, tabCount, onOpenSwitcher, onOpenMe
           cursor: 'pointer',
           color: 'var(--text)',
           textAlign: 'left',
+          ...(activeTab ? longPressStyle : {}),
         }}
+        {...(activeTab ? bindLongPress(handleLongPress) : {})}
       >
         {activeTab ? (
           <>
@@ -87,6 +110,11 @@ export function MobileTabChipRow({ activeTab, tabCount, onOpenSwitcher, onOpenMe
                 flexShrink: 0,
               }}
             />
+            {activeTabPinned && (
+              <span aria-hidden="true" style={{ display: 'inline-flex', opacity: 0.6, flexShrink: 0 }}>
+                <Icon name="pin" size={14} />
+              </span>
+            )}
             {activeTab.icon != null && <span style={{ display: 'inline-flex', flexShrink: 0 }}>{activeTab.icon}</span>}
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 'var(--font-sm)' }}>
               {activeTab.label}

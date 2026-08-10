@@ -7,11 +7,43 @@ export interface TabGroupProjectItem {
   color?: string;
 }
 
+export interface TabGroupItem {
+  tab: PersistedTab;
+  item: TabItem;
+  color?: string;
+}
+
 export interface TabGroup {
   projectId: number | null;
   name: string;
   color?: string;
+  /** Cards to render for this group. Pinned tabs are excluded here — they are
+   * already surfaced in the pinned section (buildPinnedItems) above the group
+   * list, so re-listing them here would show every pinned tab twice. */
   items: Array<{ tab: PersistedTab; item: TabItem }>;
+  /** Total tab count for this project, including pinned tabs (unlike
+   * items.length), so the group header count matches "how many tabs does
+   * this project have" rather than "how many cards are rendered below". */
+  totalCount: number;
+}
+
+/**
+ * Cross-project list of pinned tabs (Issue #338 T4), in `tabs` array order —
+ * pinning doesn't reorder the underlying tabs array, so this preserves
+ * whatever order the tabs already have (new tabs are inserted after existing
+ * pinned ones; see useTabPersistence.openTab).
+ */
+export function buildPinnedItems(
+  tabs: PersistedTab[],
+  allProjects: TabGroupProjectItem[],
+  buildTabItem: (tab: PersistedTab) => TabItem,
+): TabGroupItem[] {
+  return tabs
+    .filter((tab) => tab.pinned)
+    .map((tab) => {
+      const project = tab.projectId != null ? allProjects.find((p) => p.id === tab.projectId) : undefined;
+      return { tab, item: buildTabItem(tab), color: project?.color };
+    });
 }
 
 /**
@@ -23,6 +55,8 @@ export interface TabGroup {
  * フォールバック（名前は ungroupedLabel、色はグレードット相当の undefined）として必ず末尾に表示する
  * — 既知プロジェクトのみで整列していた旧実装は、未知 projectId のグループを整列ループから漏らして
  * サイレントに消してしまい、該当タブを閉じる手段もなくなるバグがあった。
+ *
+ * ピン中のタブは items から除外する（buildPinnedItems の節に既出のため）が、totalCount には含める。
  */
 export function buildTabGroups(
   tabs: PersistedTab[],
@@ -41,10 +75,12 @@ export function buildTabGroups(
         name: project?.name ?? ungroupedLabel,
         color: project?.color,
         items: [],
+        totalCount: 0,
       };
       byProject.set(projectId, group);
     }
-    group.items.push({ tab, item: buildTabItem(tab) });
+    group.totalCount += 1;
+    if (!tab.pinned) group.items.push({ tab, item: buildTabItem(tab) });
   }
 
   // Order: groups matching a known project follow allProjects' order (stable,

@@ -170,7 +170,12 @@
     "tabSwitcherEmpty": "No tabs are open",
     "tabSwitcherUngrouped": "Other",
     "tabSwitcherNewTab": "New tab",
-    "navMenu": "Navigation menu"
+    "tabSwitcherPinnedSection": "Pinned",
+    "navMenu": "Navigation menu",
+    "pinTab": "Pin tab",
+    "unpinTab": "Unpin tab",
+    "pinToastPinned": "Pinned",
+    "pinToastUnpinned": "Unpinned"
   },
   "mobileNav": {
     "sectionProject": "Project",

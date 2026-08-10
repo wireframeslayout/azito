@@ -4,7 +4,7 @@ import { Icon } from '../ui/Icon';
 import { EmptyState } from '../ui/EmptyState';
 import type { TabItem } from '../ui';
 import type { PersistedTab } from '../../hooks/useTabPersistence';
-import { buildTabGroups, type TabGroupProjectItem } from './mobileTabGroups';
+import { buildTabGroups, buildPinnedItems, type TabGroupProjectItem, type TabGroupItem } from './mobileTabGroups';
 
 type ProjectItem = TabGroupProjectItem;
 
@@ -18,6 +18,33 @@ interface MobileTabSwitcherSheetProps {
   onSelectTab: (tabId: string) => void;
   onCloseTab: (tabId: string) => void;
   onOpenAddTab: () => void;
+  onTogglePin: (tabId: string) => void;
+}
+
+/** 44px tap target pin toggle, shared by the pinned section rows and the project-group cards. */
+function PinToggleButton({ pinned, onToggle, t }: { pinned: boolean; onToggle: () => void; t: (key: string) => string }) {
+  return (
+    <span
+      role="button"
+      aria-label={pinned ? t('mobile.unpinTab') : t('mobile.pinTab')}
+      aria-pressed={pinned}
+      onClick={(e) => { e.stopPropagation(); onToggle(); }}
+      className="icon-btn"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 44,
+        height: 44,
+        margin: '-10px -8px -10px 0',
+        color: pinned ? 'var(--accent)' : 'var(--text-dim)',
+        borderRadius: 'var(--radius-sm)',
+        flexShrink: 0,
+      }}
+    >
+      <Icon name="pin" size={16} />
+    </span>
+  );
 }
 
 /**
@@ -37,6 +64,7 @@ export function MobileTabSwitcherSheet({
   onSelectTab,
   onCloseTab,
   onOpenAddTab,
+  onTogglePin,
 }: MobileTabSwitcherSheetProps) {
   const { t } = useTranslation('workspace');
   const [shouldRender, setShouldRender] = useState(open);
@@ -70,8 +98,111 @@ export function MobileTabSwitcherSheet({
     () => buildTabGroups(tabs, allProjects, buildTabItem, t('mobile.tabSwitcherUngrouped')),
     [tabs, allProjects, buildTabItem, t],
   );
+  const pinnedItems = useMemo(
+    () => buildPinnedItems(tabs, allProjects, buildTabItem),
+    [tabs, allProjects, buildTabItem],
+  );
 
   if (!shouldRender) return null;
+
+  const renderCard = ({ tab, item }: TabGroupItem) => {
+    const isActive = tab.id === activeTabId;
+    return (
+      <button
+        key={tab.id}
+        type="button"
+        onClick={() => { onSelectTab(tab.id); onClose(); }}
+        className="row-hover"
+        style={{
+          position: 'relative',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'flex-start',
+          gap: 8,
+          padding: '10px 10px 8px',
+          minHeight: 76,
+          borderRadius: 'var(--radius-lg)',
+          border: `1px solid ${isActive ? 'var(--accent)' : 'var(--border)'}`,
+          background: isActive ? 'var(--accent-a08)' : 'var(--bg-card)',
+          color: 'var(--text)',
+          textAlign: 'left',
+          cursor: 'pointer',
+        }}
+      >
+        <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: 4 }}>
+          <span style={{ display: 'inline-flex', color: isActive ? 'var(--accent)' : 'var(--text-dim)', flex: 1 }}>{item.icon}</span>
+          <PinToggleButton pinned={!!tab.pinned} onToggle={() => onTogglePin(tab.id)} t={t} />
+          {item.closable !== false && (
+            <span
+              role="button"
+              aria-label={t('windows.closeTab')}
+              onClick={(e) => { e.stopPropagation(); onCloseTab(tab.id); }}
+              className="icon-btn"
+              style={{ display: 'inline-flex', color: 'var(--text-dim)', padding: 4, borderRadius: 'var(--radius-sm)' }}
+            >
+              <Icon name="close" size={14} />
+            </span>
+          )}
+        </span>
+        <span style={{
+          fontSize: 'var(--font-sm)', lineHeight: 1.3,
+          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+        }}>
+          {item.label}
+        </span>
+      </button>
+    );
+  };
+
+  const renderPinnedRow = ({ tab, item, color }: TabGroupItem) => {
+    const isActive = tab.id === activeTabId;
+    return (
+      <button
+        key={tab.id}
+        type="button"
+        onClick={() => { onSelectTab(tab.id); onClose(); }}
+        className="row-hover"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          width: '100%',
+          padding: '9px 8px',
+          marginBottom: 6,
+          borderRadius: 'var(--radius-md)',
+          border: `1px solid ${isActive ? 'var(--accent)' : 'transparent'}`,
+          background: isActive ? 'var(--accent-a08)' : 'var(--bg-card)',
+          color: 'var(--text)',
+          textAlign: 'left',
+          cursor: 'pointer',
+        }}
+      >
+        <span aria-hidden="true" style={{
+          width: 8, height: 8, borderRadius: 'var(--radius-full)',
+          background: color || 'var(--border)', flexShrink: 0,
+        }} />
+        <span style={{ display: 'inline-flex', color: isActive ? 'var(--accent)' : 'var(--text-dim)', flexShrink: 0 }}>{item.icon}</span>
+        <span style={{
+          flex: 1, minWidth: 0, fontSize: 'var(--font-sm)',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>
+          {item.label}
+        </span>
+        <PinToggleButton pinned onToggle={() => onTogglePin(tab.id)} t={t} />
+        {item.closable !== false && (
+          <span
+            role="button"
+            aria-label={t('windows.closeTab')}
+            onClick={(e) => { e.stopPropagation(); onCloseTab(tab.id); }}
+            className="icon-btn"
+            style={{ display: 'inline-flex', color: 'var(--text-dim)', padding: 4, borderRadius: 'var(--radius-sm)', flexShrink: 0 }}
+          >
+            <Icon name="close" size={14} />
+          </span>
+        )}
+      </button>
+    );
+  };
 
   return (
     <div
@@ -115,75 +246,49 @@ export function MobileTabSwitcherSheet({
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '4px 12px 16px' }}>
-        {groups.length === 0 ? (
+        {groups.length === 0 && pinnedItems.length === 0 ? (
           <EmptyState title={t('mobile.tabSwitcherEmpty')} />
         ) : (
-          groups.map((group) => (
-            <div key={group.projectId ?? 'ungrouped'} style={{ marginTop: 16 }}>
-              <div style={{
-                position: 'sticky', top: 0, zIndex: 1,
-                display: 'flex', alignItems: 'center', gap: 8,
-                padding: '8px 4px', background: 'var(--bg)',
-              }}>
-                <span aria-hidden="true" style={{
-                  width: 9, height: 9, borderRadius: 'var(--radius-full)',
-                  background: group.color || 'var(--border)', flexShrink: 0,
-                }} />
-                <span style={{ fontSize: 'var(--font-sm)', fontWeight: 600, color: 'var(--text)' }}>{group.name}</span>
-                <span style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>{group.items.length}</span>
+          <>
+            {pinnedItems.length > 0 && (
+              <div style={{ marginTop: 12 }}>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  padding: '4px 4px 8px',
+                }}>
+                  <Icon name="pin" size={14} />
+                  <span style={{ fontSize: 'var(--font-sm)', fontWeight: 600, color: 'var(--text)' }}>
+                    {t('mobile.tabSwitcherPinnedSection')}
+                  </span>
+                  <span style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>{pinnedItems.length}</span>
+                </div>
+                {pinnedItems.map(renderPinnedRow)}
               </div>
+            )}
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 8 }}>
-                {group.items.map(({ tab, item }) => {
-                  const isActive = tab.id === activeTabId;
-                  return (
-                    <button
-                      key={tab.id}
-                      type="button"
-                      onClick={() => { onSelectTab(tab.id); onClose(); }}
-                      className="row-hover"
-                      style={{
-                        position: 'relative',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'flex-start',
-                        gap: 8,
-                        padding: '10px 10px 8px',
-                        minHeight: 76,
-                        borderRadius: 'var(--radius-lg)',
-                        border: `1px solid ${isActive ? 'var(--accent)' : 'var(--border)'}`,
-                        background: isActive ? 'var(--accent-a08)' : 'var(--bg-card)',
-                        color: 'var(--text)',
-                        textAlign: 'left',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-                        <span style={{ display: 'inline-flex', color: isActive ? 'var(--accent)' : 'var(--text-dim)' }}>{item.icon}</span>
-                        {item.closable !== false && (
-                          <span
-                            role="button"
-                            aria-label={t('windows.closeTab')}
-                            onClick={(e) => { e.stopPropagation(); onCloseTab(tab.id); }}
-                            className="icon-btn"
-                            style={{ display: 'inline-flex', color: 'var(--text-dim)', padding: 4, borderRadius: 'var(--radius-sm)' }}
-                          >
-                            <Icon name="close" size={14} />
-                          </span>
-                        )}
-                      </span>
-                      <span style={{
-                        fontSize: 'var(--font-sm)', lineHeight: 1.3,
-                        display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
-                      }}>
-                        {item.label}
-                      </span>
-                    </button>
-                  );
-                })}
+            {groups.map((group) => (
+              <div key={group.projectId ?? 'ungrouped'} style={{ marginTop: 16 }}>
+                <div style={{
+                  position: 'sticky', top: 0, zIndex: 1,
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  padding: '8px 4px', background: 'var(--bg)',
+                }}>
+                  <span aria-hidden="true" style={{
+                    width: 9, height: 9, borderRadius: 'var(--radius-full)',
+                    background: group.color || 'var(--border)', flexShrink: 0,
+                  }} />
+                  <span style={{ fontSize: 'var(--font-sm)', fontWeight: 600, color: 'var(--text)' }}>{group.name}</span>
+                  <span style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>{group.totalCount}</span>
+                </div>
+
+                {group.items.length > 0 && (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 8 }}>
+                    {group.items.map(renderCard)}
+                  </div>
+                )}
               </div>
-            </div>
-          ))
+            ))}
+          </>
         )}
       </div>
 

@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { buildTabGroups } from './mobileTabGroups';
+import { buildTabGroups, buildPinnedItems } from './mobileTabGroups';
 import type { PersistedTab } from '../../hooks/useTabPersistence';
 import type { TabItem } from '../ui';
 
 const UNGROUPED = 'Ungrouped';
 
-function tab(id: string, projectId?: number): PersistedTab {
-  return { id, type: 'terminal', label: id, projectId };
+function tab(id: string, projectId?: number, pinned?: boolean): PersistedTab {
+  return { id, type: 'terminal', label: id, projectId, pinned };
 }
 
 function buildTabItem(t: PersistedTab): TabItem {
@@ -57,5 +57,30 @@ describe('buildTabGroups', () => {
   it('returns an empty list when there are no tabs', () => {
     const groups = buildTabGroups([], [{ id: 1, name: 'One' }], buildTabItem, UNGROUPED);
     expect(groups).toEqual([]);
+  });
+
+  it('excludes pinned tabs from group items but still counts them in totalCount', () => {
+    const tabs = [tab('a', 1, true), tab('b', 1)];
+    const allProjects = [{ id: 1, name: 'One' }];
+    const groups = buildTabGroups(tabs, allProjects, buildTabItem, UNGROUPED);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].totalCount).toBe(2);
+    expect(groups[0].items.map((i) => i.tab.id)).toEqual(['b']);
+  });
+});
+
+describe('buildPinnedItems', () => {
+  it('returns only pinned tabs, in tabs-array order, across projects', () => {
+    const tabs = [tab('a', 2), tab('b', 1, true), tab('c', 2, true), tab('d')];
+    const allProjects = [{ id: 1, name: 'One', color: '#111' }, { id: 2, name: 'Two', color: '#222' }];
+    const pinned = buildPinnedItems(tabs, allProjects, buildTabItem);
+    expect(pinned.map((p) => p.tab.id)).toEqual(['b', 'c']);
+    expect(pinned[0].color).toBe('#111');
+    expect(pinned[1].color).toBe('#222');
+  });
+
+  it('returns an empty list when no tabs are pinned', () => {
+    const pinned = buildPinnedItems([tab('a', 1)], [{ id: 1, name: 'One' }], buildTabItem);
+    expect(pinned).toEqual([]);
   });
 });

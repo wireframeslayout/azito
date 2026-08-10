@@ -1103,9 +1103,12 @@ function WorkspaceInner() {
                 const tab = tabs.find((t) => t.id === activeTabId);
                 return tab ? buildTabItem(tab) : null;
               })()}
+              activeTabId={activeTabId}
+              activeTabPinned={!!tabs.find((t) => t.id === activeTabId)?.pinned}
               tabCount={tabs.length}
               onOpenSwitcher={() => setMobileTabSwitcherOpen(true)}
               onOpenMenu={() => setSidebarOpen(true)}
+              onTogglePin={togglePin}
             />
             <MobileTabSwitcherSheet
               open={mobileTabSwitcherOpen}
@@ -1117,6 +1120,7 @@ function WorkspaceInner() {
               onSelectTab={handleSelectTab}
               onCloseTab={closeTabAndRefreshBrowser}
               onOpenAddTab={handleOpenAddTabFromSwitcher}
+              onTogglePin={togglePin}
             />
 
             <div style={{ flex: 1, position: 'relative', background: 'var(--ws-content)' }}>
