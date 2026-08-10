@@ -4,12 +4,9 @@ import { Icon } from '../ui/Icon';
 import { EmptyState } from '../ui/EmptyState';
 import type { TabItem } from '../ui';
 import type { PersistedTab } from '../../hooks/useTabPersistence';
+import { buildTabGroups, type TabGroupProjectItem } from './mobileTabGroups';
 
-interface ProjectItem {
-  id: number;
-  name: string;
-  color?: string;
-}
+type ProjectItem = TabGroupProjectItem;
 
 interface MobileTabSwitcherSheetProps {
   open: boolean;
@@ -21,13 +18,6 @@ interface MobileTabSwitcherSheetProps {
   onSelectTab: (tabId: string) => void;
   onCloseTab: (tabId: string) => void;
   onOpenAddTab: () => void;
-}
-
-interface TabGroup {
-  projectId: number | null;
-  name: string;
-  color?: string;
-  items: Array<{ tab: PersistedTab; item: TabItem }>;
 }
 
 /**
@@ -76,35 +66,10 @@ export function MobileTabSwitcherSheet({
     return () => { document.body.style.overflow = previousOverflow; };
   }, [open]);
 
-  const groups = useMemo<TabGroup[]>(() => {
-    const byProject = new Map<number | null, TabGroup>();
-    for (const tab of tabs) {
-      const projectId = tab.projectId ?? null;
-      let group = byProject.get(projectId);
-      if (!group) {
-        const project = projectId != null ? allProjects.find((p) => p.id === projectId) : undefined;
-        group = {
-          projectId,
-          name: project?.name ?? t('mobile.tabSwitcherUngrouped'),
-          color: project?.color,
-          items: [],
-        };
-        byProject.set(projectId, group);
-      }
-      group.items.push({ tab, item: buildTabItem(tab) });
-    }
-    // Order: groups matching a known project follow allProjects' order (stable,
-    // predictable position across renders); the ungrouped bucket (no projectId)
-    // always trails since it has no natural ordering key of its own.
-    const ordered: TabGroup[] = [];
-    for (const p of allProjects) {
-      const g = byProject.get(p.id);
-      if (g) ordered.push(g);
-    }
-    const ungrouped = byProject.get(null);
-    if (ungrouped) ordered.push(ungrouped);
-    return ordered;
-  }, [tabs, allProjects, buildTabItem, t]);
+  const groups = useMemo(
+    () => buildTabGroups(tabs, allProjects, buildTabItem, t('mobile.tabSwitcherUngrouped')),
+    [tabs, allProjects, buildTabItem, t],
+  );
 
   if (!shouldRender) return null;
 

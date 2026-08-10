@@ -274,6 +274,111 @@ describe('WindowSessionResolver', () => {
     expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%2' });
   });
 
+  it('priority 1: resolves a project-owned window (no taskId) via its own agent_session_id', async () => {
+    const findById = () => { throw new Error('should not be called'); };
+    const panes: TmuxPaneInfo[] = [
+      { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'claude' },
+    ];
+    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource } = buildDeps({
+      findById,
+      listAllPanes: async () => panes,
+      claudeGetSessionCwd: (id) => (id === SID_CLAUDE ? { cwd: '/proj' } : null),
+    });
+    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource]);
+    const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: SID_CLAUDE, workerType: 'claude' }));
+    expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1' });
+  });
+
+  it('priority 1: resolves a window\'s own session via the codex source when workerType is codex', async () => {
+    const panes: TmuxPaneInfo[] = [
+      { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'codex' },
+    ];
+    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource } = buildDeps({
+      listAllPanes: async () => panes,
+    });
+    const codexWithSession = {
+      ...codexSource,
+      getSessionCwd: (id: string) => (id === SID_CODEX ? { cwd: '/proj' } : null),
+    } as unknown as TranscriptSource;
+    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexWithSession]);
+    const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: SID_CODEX, workerType: 'codex' }));
+    expect(result).toEqual({ resolved: true, agentType: 'codex', sessionId: SID_CODEX, paneId: '%1' });
+  });
+
+  it('priority 1: falls back to trying all sources when the window workerType is unsupported (e.g. generic)', async () => {
+    const panes: TmuxPaneInfo[] = [
+      { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'codex' },
+    ];
+    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource } = buildDeps({
+      listAllPanes: async () => panes,
+    });
+    const codexWithSession = {
+      ...codexSource,
+      getSessionCwd: (id: string) => (id === SID_CODEX ? { cwd: '/proj' } : null),
+    } as unknown as TranscriptSource;
+    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexWithSession]);
+    const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: SID_CODEX, workerType: 'generic' }));
+    expect(result).toEqual({ resolved: true, agentType: 'codex', sessionId: SID_CODEX, paneId: '%1' });
+  });
+
+  it('priority 2: falls back to trying all sources for the task session when window workerType is unknown', async () => {
+    const panes: TmuxPaneInfo[] = [
+      { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'codex' },
+    ];
+    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource } = buildDeps({
+      findById: () => buildTask({ agentSessionId: SID_CODEX }),
+      listAllPanes: async () => panes,
+    });
+    const codexWithSession = {
+      ...codexSource,
+      getSessionCwd: (id: string) => (id === SID_CODEX ? { cwd: '/proj' } : null),
+    } as unknown as TranscriptSource;
+    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexWithSession]);
+    const result = await resolver.resolve(buildWindow({ taskId: 7, workerType: null }));
+    expect(result).toEqual({ resolved: true, agentType: 'codex', sessionId: SID_CODEX, paneId: '%1' });
+  });
+
+  it('pane selection: prefers a claude pane over an earlier node pane (exact command match)', async () => {
+    const panes: TmuxPaneInfo[] = [
+      { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
+      { paneId: '%2', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 1, currentPath: '/proj', currentCommand: 'claude' },
+    ];
+    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource } = buildDeps({
+      findById: () => buildTask({ agentSessionId: SID_CLAUDE }),
+      listAllPanes: async () => panes,
+      claudeGetSessionCwd: (id) => (id === SID_CLAUDE ? { cwd: '/proj' } : null),
+    });
+    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource]);
+    const result = await resolver.resolve(buildWindow({ taskId: 7 }));
+    expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%2' });
+  });
+
+  it('pane selection: paneLayout meta (agentSessionId) wins over an unrelated exact-command pane', async () => {
+    const panes: TmuxPaneInfo[] = [
+      { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'claude' },
+      { paneId: '%2', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 1, currentPath: '/proj', currentCommand: 'bash' },
+    ];
+    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource } = buildDeps({
+      findById: () => buildTask({ agentSessionId: SID_CLAUDE }),
+      listAllPanes: async () => panes,
+      claudeGetSessionCwd: (id) => (id === SID_CLAUDE ? { cwd: '/proj' } : null),
+    });
+    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource]);
+    const result = await resolver.resolve(
+      buildWindow({
+        taskId: 7,
+        paneLayout: {
+          layout: 'even-horizontal',
+          panes: [
+            { index: 0, command: null, workingDirectory: null, title: null },
+            { index: 1, command: null, workingDirectory: null, title: null, agentSessionId: SID_CLAUDE },
+          ],
+        },
+      }),
+    );
+    expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%2' });
+  });
+
   it('does not consult the task at all when the window has no taskId', async () => {
     const findById = () => { throw new Error('should not be called'); };
     const panes: TmuxPaneInfo[] = [
