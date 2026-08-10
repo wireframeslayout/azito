@@ -42,6 +42,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import ResourceWarningDialog, { type ResourceStatus } from '../components/ResourceWarningDialog';
 import TabContentRenderer from '../components/workspace/TabContentRenderer';
 import WorkspaceWelcome from '../components/workspace/WorkspaceWelcome';
+import HomeFeed from '../components/workspace/HomeFeed';
 import { SplitLayout, type PaneDrag } from '../components/workspace/SplitLayout';
 import { resolveDisplayedTaskTerminal, selectTaskTerminal } from '../components/workspace/TaskPanel';
 
@@ -803,9 +804,15 @@ function WorkspaceInner() {
     );
   }, [tabs, buildTabItem, handlePaneSelectTab, handlePaneCloseTab, buildPaneTabMenuItems, showContextMenu, showContextMenuAt, renderPaneTrailing]);
 
+  // タブ未選択時のホーム（Issue #69 Phase F-2）: ワークスペース全体にタブが1つも
+  // 無い唯一のペインの空状態だけをアクティビティフィードに置き換える。分割操作で
+  // 生まれた「他のタブは開いているが、このペインだけ空」というドロップターゲット
+  // としての空状態（既存の dragHint）はそのまま維持する。
   const renderPaneEmpty = useCallback(() => (
-    <EmptyState title={t('workspace:pane.dragHint')} />
-  ), []);
+    tabs.length === 0
+      ? <HomeFeed allTasks={allTasks} allProjects={allProjects} openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} />
+      : <EmptyState title={t('workspace:pane.dragHint')} />
+  ), [tabs.length, allTasks, allProjects, openTaskFromActiveWindow, connectPaneFromActiveWindow, t]);
 
   if (!project) {
     if (projectsLoaded && allProjects.length === 0) {
@@ -1024,9 +1031,7 @@ function WorkspaceInner() {
 
             <div style={{ flex: 1, position: 'relative', background: 'var(--ws-content)' }}>
               {tabs.length === 0 && (
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-dim)', fontSize: 'var(--font-base)', flexDirection: 'column', gap: 8, padding: 20, textAlign: 'center', background: 'var(--bg)' }}>
-                  <div>{t('workspace:pane.selectHint')}</div>
-                </div>
+                <HomeFeed allTasks={allTasks} allProjects={allProjects} openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} />
               )}
 
               {tabs.map((tab) => renderTabContent(tab, { position: 'absolute', inset: 0 }, tab.id === activeTabId, closeTabAndRefreshBrowser))}

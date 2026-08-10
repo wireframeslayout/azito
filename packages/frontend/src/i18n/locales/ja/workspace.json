@@ -26,6 +26,12 @@
     "planReview": "承認待ち",
     "noActive": "稼働中のウィンドウはありません"
   },
+  "home": {
+    "needsAttention": "要対応",
+    "active": "稼働中",
+    "windowsActive": "{{total}}ウィンドウ中 {{active}}稼働",
+    "moreWindows": "+{{count}}"
+  },
   "windows": {
     "title": "ウィンドウ",
     "addWindow": "ウィンドウを追加",

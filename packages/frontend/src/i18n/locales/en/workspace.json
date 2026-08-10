@@ -26,6 +26,12 @@
     "planReview": "Plan Review",
     "noActive": "No active windows"
   },
+  "home": {
+    "needsAttention": "Needs Attention",
+    "active": "Active",
+    "windowsActive": "{{active}} of {{total}} windows active",
+    "moreWindows": "+{{count}}"
+  },
   "windows": {
     "title": "Windows",
     "addWindow": "Add window",
