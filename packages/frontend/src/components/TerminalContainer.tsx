@@ -17,19 +17,6 @@ import { useIsMobile } from '../hooks/useIsMobile';
 import { useWorkspaceTargets } from '../hooks/useWorkspaceTargets';
 import type { Project, Task, Session } from '../pages/workspace/types';
 import { resolveActivePane, paneDisplayName } from '../lib/tmuxPane';
-import { setSpFooterHeight } from '../lib/spFooterHeight';
-
-// SP端末クイックキーフッター（Issue #69 T3）表示中のフッター高をCSS変数として公開する
-// （lib/spFooterHeight.ts 共有setter経由。T2のF2稼働ステータスピルがこの値を bottom
-// オフセットに使う。バー非表示時は 0 に戻す）。
-// TerminalQuickKeyBar のタップ領域(44px) + safe-area-inset-bottom。バー自体は
-// padding-bottom に env(safe-area-inset-bottom) を積んで自己伸縮するため、変数側も
-// 同じ計算式にしておく。
-const SP_FOOTER_HEIGHT_EXPR = 'calc(44px + env(safe-area-inset-bottom))';
-
-function setQuickKeyBarFooterHeight(active: boolean): void {
-  setSpFooterHeight(active ? SP_FOOTER_HEIGHT_EXPR : null);
-}
 
 export type WindowViewMode = 'terminal' | 'chat';
 
@@ -158,10 +145,9 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
     if (!showQuickKeyBar) setKeyboardOverlayOpen(false);
   }, [showQuickKeyBar, keyboardOverlayOpen]);
 
-  useEffect(() => {
-    setQuickKeyBarFooterHeight(showQuickKeyBar);
-    return () => setQuickKeyBarFooterHeight(false);
-  }, [showQuickKeyBar]);
+  // SP文脈フッター高（--sp-footer-h）の公開は TerminalQuickKeyBar 自身がマウント時に
+  // claim/release する（lib/spFooterHeight.ts、Issue #338 T1）。ここでは showQuickKeyBar の
+  // 真偽で TerminalQuickKeyBar の条件付きレンダリングを制御するのみで、フッター高には関与しない。
 
   const handleRespawn = useCallback(async function perform(force = false) {
     if (!dbWindow) return;

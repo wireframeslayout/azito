@@ -1,7 +1,15 @@
-import type { CSSProperties } from 'react';
+import { useEffect, useRef, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../ui/Icon';
 import { QuickActionButtons, type QuickActionButton } from '../ui/QuickActionButtons';
+import { claimFooterHeight, releaseFooterHeight } from '../../lib/spFooterHeight';
+
+// SP文脈フッター高の公開オーナー名（lib/spFooterHeight.ts）。このバー自身が実測高を
+// claim/release する（Issue #338 T1: 「フッターを実際に描画しているコンポーネント自身」
+// だけが claim/release する方針に統一 — 以前は親 TerminalContainer が表示状態から
+// 固定値を計算して代理で公開していたが、それだと PromptInputBar とのオーナーをまたいだ
+// レースの温床になっていた）。
+const FOOTER_HEIGHT_OWNER = 'quick-key-bar';
 
 export interface TerminalQuickKeyBarProps {
   /** SPECIAL_KEY_MAP (XTermView) 準拠のキー名で送出する。Issue #69 T3 — 送出経路は
@@ -56,9 +64,28 @@ const QUICK_KEYS: QuickActionButton[] = [
  */
 export function TerminalQuickKeyBar({ onSendKey, keyboardOpen, onToggleKeyboard, onOpenTabSwitcher }: TerminalQuickKeyBarProps) {
   const { t } = useTranslation('common');
+  const barRef = useRef<HTMLDivElement>(null);
+
+  // マウント中は実測高（safe-area 込みのボーダーボックス）を --sp-footer-h として公開し、
+  // アンマウント時は自分がオーナーの場合のみ解放する。このバーは isMobile かつ端末ビューの
+  // ときだけ TerminalContainer から条件付きマウントされるため、表示条件の判定はここでは行わない。
+  useEffect(() => {
+    const el = barRef.current;
+    if (!el) return undefined;
+    const observer = new ResizeObserver(() => {
+      claimFooterHeight(FOOTER_HEIGHT_OWNER, el.getBoundingClientRect().height);
+    });
+    observer.observe(el);
+    claimFooterHeight(FOOTER_HEIGHT_OWNER, el.getBoundingClientRect().height);
+    return () => {
+      observer.disconnect();
+      releaseFooterHeight(FOOTER_HEIGHT_OWNER);
+    };
+  }, []);
 
   return (
     <div
+      ref={barRef}
       role="toolbar"
       aria-label={t('terminal.quickKeyBar.ariaLabel')}
       style={{

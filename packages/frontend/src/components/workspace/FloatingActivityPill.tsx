@@ -6,12 +6,14 @@ import { useClickOutside } from '../../hooks/useClickOutside';
 import { BrailleSpinner, BlockedDot, FinishedIndicator } from '../ui/WindowActivityIndicator';
 import { formatRelativeTime } from '../../utils/time';
 import { openActivityTarget } from '../../lib/activityOpen';
+import { groupRunningRows, readKeyFor, pruneStaleReadKeys } from '../../lib/activityPillLogic';
 import type { Task } from '../../pages/workspace/types';
 
 // SP常設フローティングピル（Issue #69 T2 / モック S6-14, F2）。データは useAgentActivity
 // （useActiveWindowRows 経由）のみを参照し、新規ポーリングは持たない。ワークスペースのタブ有無に
 // 関わらず常設し、右下から文脈フッター（端末クイックキーバー/チャット入力バー、T3が公開する
-// --sp-footer-h）の上へ退避する。
+// --sp-footer-h）の上へ退避する。集計ロジック（グループ化・既読ID）は lib/activityPillLogic.ts
+// に切り出してユニットテストしている。
 
 const FINISHED_WINDOW_MS = 60 * 60 * 1000;
 
@@ -78,23 +80,20 @@ export function FloatingActivityPill({ allTasks, openTask, connectPane }: Floati
   const taskById = useMemo(() => new Map(allTasks.map((tk) => [tk.id, tk])), [allTasks]);
 
   const workingGroups = useMemo<WorkingGroup[]>(() => {
-    const map = new Map<string, WorkingGroup>();
-    for (const row of rows) {
-      if (row.status !== 'running') continue;
-      const groupKey = row.taskId != null ? `task:${row.taskId}` : `window:${row.key}`;
-      if (map.has(groupKey)) continue;
+    // グループ化・blocked集約（複数ウィンドウを持つグループは全行を見る）は lib/activityPillLogic
+    // の groupRunningRows に切り出し済み。ここではタイトル・メタ情報の算出のみ行う。
+    return groupRunningRows(rows).map(({ groupKey, isBlocked, representativeRow: row }) => {
       const task = row.taskId != null ? taskById.get(row.taskId) : undefined;
-      map.set(groupKey, {
+      return {
         key: groupKey,
         taskId: row.taskId,
         projectId: row.projectId,
         title: task?.title || row.paneName || row.label || row.target,
         meta: task ? t(`common:status.${task.status}`) : undefined,
-        isBlocked: row.activityStatus === 'blocked',
+        isBlocked,
         row,
-      });
-    }
-    return Array.from(map.values());
+      };
+    });
   }, [rows, taskById, t]);
 
   // 直近1時間の完了行（既読状態に関わらず、開いている間・再度開いた時も一覧には出続ける —
@@ -106,7 +105,7 @@ export function FloatingActivityPill({ allTasks, openTask, connectPane }: Floati
 
   // ピルのバッジに出す未読数（既読管理: ポップオーバーを開いたら既読にし、以後この数から除外する）。
   const unreadFinishedCount = useMemo(
-    () => finishedRows.filter((r) => !readKeys.has(r.key)).length,
+    () => finishedRows.filter((r) => !readKeys.has(readKeyFor(r))).length,
     [finishedRows, readKeys],
   );
 
@@ -121,8 +120,10 @@ export function FloatingActivityPill({ allTasks, openTask, connectPane }: Floati
       const next = !prev;
       if (next && finishedRows.length > 0) {
         setReadKeys((cur) => {
-          const merged = new Set(cur);
-          for (const r of finishedRows) merged.add(r.key);
+          const cutoff = Date.now() - FINISHED_WINDOW_MS;
+          // 時間窓から外れた既読IDは prune し、無期限に肥大化しないようにする。
+          const merged = pruneStaleReadKeys(cur, cutoff);
+          for (const r of finishedRows) merged.add(readKeyFor(r));
           return merged;
         });
       }
@@ -156,7 +157,12 @@ export function FloatingActivityPill({ allTasks, openTask, connectPane }: Floati
       style={{
         position: 'fixed',
         right: 'var(--space-3)',
-        bottom: 'calc(var(--space-3) + var(--sp-footer-h, 0px) + env(safe-area-inset-bottom))',
+        // フッター（クイックキーバー/チャット入力バー）の実測高（--sp-footer-h）は既に
+        // safe-area 分を含んでいる（各バーが padding-bottom へ env(safe-area-inset-bottom) を
+        // 積んだ上でボーダーボックスを測っている）。フッター非表示時（--sp-footer-h: 0px）は
+        // ピル自身が safe-area 分を確保する必要があるため、両者を加算せず max() で選ぶ
+        // （Issue #338 T5: 表示中は二重加算で必要以上に浮いてしまっていた）。
+        bottom: 'calc(var(--space-3) + max(var(--sp-footer-h, 0px), env(safe-area-inset-bottom)))',
         zIndex: 110,
       }}
     >
