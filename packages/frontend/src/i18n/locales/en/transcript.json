@@ -50,8 +50,8 @@
     "sendShortcutHint": "Press Ctrl/Cmd+Enter to send",
     "sendError": "Failed to send",
     "retry": "Retry",
-    "history": "Input history",
-    "historyEmpty": "No history yet",
+    "history": "Prompt history",
+    "historyEmpty": "No prompts yet",
     "draftRestored": "Draft restored",
     "agentNotDetectedWarning": "This window may not have an agent running yet. What you type will be sent to the shell as-is."
   },

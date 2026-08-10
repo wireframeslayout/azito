@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ComponentType } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import { useTranslation } from 'react-i18next';
 import { apiWithStatus } from '../../api/client';
 import { EmptyState, LoadingState } from '../ui';
 import { Icon } from '../ui/Icon';
 import { DateDivider } from './DateDivider';
 import { groupEntries, type EntryGroup } from './groupEntries';
+import { deriveContextHistory } from './inputHistory';
 import { LiveStatusRow } from './LiveStatusRow';
 import { deriveLiveStatus } from './liveStatus';
 import PromptInputBar from './PromptInputBar';
@@ -77,6 +78,10 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
 
   // ライブ状態インジケータ（C1）: kind/toolName の算出のみ行う。経過秒の1秒毎更新と90秒経過での
   // 非表示化は LiveStatusRow 側の責務（親の再レンダーを entries 更新時のみに抑えるため）。
+  // 履歴（Issue #69 仕様調整4）: ↑↓/🕘 履歴の主ソースは会話トランスクリプトの user 発話。
+  // entries が更新されるたびに再計算する（新しい発話をすぐ履歴に反映するため）。
+  const contextHistory = useMemo(() => deriveContextHistory(entries), [entries]);
+
   const liveStatus = deriveLiveStatus(entries, Date.now());
   const hasLiveStatus = liveStatus !== null;
   const lastEntryTimestamp = liveStatus && entries.length > 0 ? entries[entries.length - 1].timestamp : null;
@@ -410,6 +415,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
           paneId={paneId}
           draftKey={sessionId}
           agentDetected={agentDetected}
+          contextHistory={contextHistory}
           onSent={() => scrollToBottom('smooth')}
         />
       )}

@@ -25,6 +25,12 @@ interface PromptInputBarProps {
   /** false の場合、このウィンドウでエージェントが起動していないかもしれないという注記を出す
    * （フェイルセーフ。送信自体はブロックしない）。 */
   agentDetected: boolean;
+  /**
+   * ↑↓・🕘 履歴の主ソース（Issue #69 仕様調整4）: 会話トランスクリプトの user 発話（新しい順）。
+   * これが0件の場合（セッション未確立の pane-only モード等でトランスクリプトを取得できない場合）
+   * のみ、localStorage のローカル送信履歴（inputHistory.ts）にフォールバックする。
+   */
+  contextHistory: string[];
   /** 送信成功直後に呼ばれる(最下部へスクロールするため)。新着メッセージ自体はポーリングで反映される。 */
   onSent: () => void;
 }
@@ -35,7 +41,7 @@ interface PromptInputBarProps {
  * 送信内容自体は既存の JSONL ポーリングで会話に反映される（オプティミスティック表示はしない）。
  * textarea＋履歴🕘＋送信↑ の1行構成（SP実機の高さ節約のため）。
  */
-export default function PromptInputBar({ windowId, paneId, draftKey, agentDetected, onSent }: PromptInputBarProps) {
+export default function PromptInputBar({ windowId, paneId, draftKey, agentDetected, contextHistory, onSent }: PromptInputBarProps) {
   const { t } = useTranslation('transcript');
   const [historyOpen, setHistoryOpen] = useState(false);
   const [text, setText] = useState('');
@@ -115,6 +121,14 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
     }
   }, [text, sending, windowId, paneId, draftKey, onSent, t]);
 
+  // 履歴の優先順位（Issue #69 仕様調整4）: 会話トランスクリプトの user 発話（contextHistory）を
+  // 主ソースとし、それが0件のとき（セッション未確立の pane-only モード等）のみ localStorage の
+  // ローカル送信履歴にフォールバックする。
+  const activeHistory = useCallback(
+    () => (contextHistory.length > 0 ? contextHistory : loadHistory()),
+    [contextHistory],
+  );
+
   const insertFromHistory = useCallback((value: string) => {
     setText(value);
     setHistoryIndex(-1);
@@ -132,7 +146,7 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
     if (e.nativeEvent.isComposing) return;
 
     if (e.key === 'ArrowUp' && (text.length === 0 || historyIndex !== -1)) {
-      const history = loadHistory();
+      const history = activeHistory();
       if (history.length === 0) return;
       const nextIndex = Math.min(historyIndex + 1, history.length - 1);
       if (nextIndex === historyIndex) return;
@@ -149,7 +163,7 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
         setText('');
         return;
       }
-      const history = loadHistory();
+      const history = activeHistory();
       setHistoryIndex(nextIndex);
       setText(history[nextIndex] ?? '');
     }
@@ -273,7 +287,7 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
             <Icon name="history" size={16} />
           </button>
           {historyOpen && (
-            <HistoryPopover onSelect={insertFromHistory} onClose={() => setHistoryOpen(false)} />
+            <HistoryPopover entries={activeHistory()} onSelect={insertFromHistory} onClose={() => setHistoryOpen(false)} />
           )}
         </div>
 

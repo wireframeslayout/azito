@@ -50,8 +50,8 @@
     "sendShortcutHint": "Ctrl/Cmd+Enterで送信できます",
     "sendError": "送信に失敗しました",
     "retry": "再試行",
-    "history": "入力履歴",
-    "historyEmpty": "履歴はまだありません",
+    "history": "過去のプロンプト",
+    "historyEmpty": "過去のプロンプトはまだありません",
     "draftRestored": "下書きを復元しました",
     "agentNotDetectedWarning": "このウィンドウでエージェントが起動していない可能性があります。送信内容はシェルにそのまま入力されます。"
   },

@@ -1,23 +1,34 @@
 import { useTranslation } from 'react-i18next';
 import { useClickOutside } from '../../hooks/useClickOutside';
-import { loadHistory } from './inputHistory';
 
 const MAX_SHOWN = 10;
+const PREVIEW_MAX_CHARS = 120;
+
+/** 一覧表示用のプレビューを作る: 複数行は1行目のみ、さらに先頭120字でトリムする。選択時は元の全文を渡す。 */
+function previewOf(entry: string): string {
+  const firstLine = entry.split('\n', 1)[0];
+  return firstLine.length > PREVIEW_MAX_CHARS ? `${firstLine.slice(0, PREVIEW_MAX_CHARS)}…` : firstLine;
+}
 
 interface HistoryPopoverProps {
+  /**
+   * 表示候補の履歴（新しい順）。呼び出し側（PromptInputBar）が、会話トランスクリプトの
+   * user 発話を主ソース、localStorage のローカル送信履歴をフォールバックとして解決済みの値を渡す
+   * （Issue #69 仕様調整4）。
+   */
+  entries: string[];
   /** 履歴エントリをタップした時。送信はしない（テキスト挿入のみ）。 */
   onSelect: (text: string) => void;
   onClose: () => void;
 }
 
 /**
- * 入力バーの🕘ボタン直上に開く送信履歴ポップオーバー（F4）。開く時点の localStorage を
- * 都度読み直す（履歴は入力バー側で状態管理していないため）。最新10件のみ表示。
+ * 入力バーの🕘ボタン直上に開く送信履歴ポップオーバー（F4）。最新10件のみ表示。
  */
-export function HistoryPopover({ onSelect, onClose }: HistoryPopoverProps) {
+export function HistoryPopover({ entries: allEntries, onSelect, onClose }: HistoryPopoverProps) {
   const { t } = useTranslation('transcript');
   const ref = useClickOutside<HTMLDivElement>(onClose);
-  const entries = loadHistory().slice(0, MAX_SHOWN);
+  const entries = allEntries.slice(0, MAX_SHOWN);
 
   return (
     <div
@@ -70,7 +81,7 @@ export function HistoryPopover({ onSelect, onClose }: HistoryPopoverProps) {
               whiteSpace: 'nowrap',
             }}
           >
-            {entry}
+            {previewOf(entry)}
           </button>
         ))
       )}

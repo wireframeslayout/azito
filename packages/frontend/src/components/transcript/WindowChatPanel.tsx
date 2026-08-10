@@ -142,6 +142,7 @@ export default function WindowChatPanel({ windowId }: WindowChatPanelProps) {
           paneId={state.paneId}
           draftKey={`window-${windowId}`}
           agentDetected={state.agentDetected}
+          contextHistory={[]}
           onSent={pollForSession}
         />
       </div>
