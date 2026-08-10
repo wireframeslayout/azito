@@ -7,37 +7,43 @@
 // argv[0] は起動スクリプト名のまま保持されることが多い）を pane の子孫プロセスまで辿って調べれば、
 // いずれかの引数トークンが claude/codex 実行体を指しているかを判定できる。
 //
-// この判定ロジック（parsePsOutput/argsContainAgentBinary/isAgentProcessRunning）は ps の実行や
-// tmux 通信を一切含まない純粋関数として切り出してある — プロセス列挙は呼び出し側
-// （WindowSessionResolver）が `ps -e -o pid=,ppid=,args=` の1回実行で担い、ここではその出力の
-// パースと子孫探索・判定だけを行う。
+// この判定ロジック（parsePsOutput/argsContainAgentBinary/isAgentProcessRunning/
+// findAgentProcessStartMs）は ps の実行や tmux 通信を一切含まない純粋関数として切り出してある —
+// プロセス列挙は呼び出し側（WindowSessionResolver）が `ps -e -o pid=,ppid=,etimes=,args=` の
+// 1回実行で担い、ここではその出力のパースと子孫探索・判定・起動時刻算出だけを行う。
+// etimes（経過秒数）は、旧セッションの誤紐付けを防ぐプロセス起動時刻ゲート（Issue #338）用に
+// 追加された列: 現在動作中のエージェントプロセスの起動時刻を `now - etimes*1000` で算出し、
+// それより前に更新が止まっているセッションを「別の（古い）会話」として拒否する。
 
 import path from 'path';
 
 export interface PsEntry {
   pid: number;
   ppid: number;
+  /** プロセスの経過秒数（`ps -o etimes=`）。起動時刻ゲート（Issue #338）用: `now - etimes*1000` で起動時刻を得る。 */
+  etimes: number;
   args: string;
 }
 
 const AGENT_BINARY_NAMES = new Set(['claude', 'codex']);
 
 /**
- * `ps -e -o pid=,ppid=,args=` の出力（1行 = 1プロセス、先頭空白付き数値2列 + args）をパースする。
- * パース不能な行（空行・想定外フォーマット）はスキップする。
+ * `ps -e -o pid=,ppid=,etimes=,args=` の出力（1行 = 1プロセス、先頭空白付き数値3列 + args）を
+ * パースする。パース不能な行（空行・想定外フォーマット）はスキップする。
  */
 export function parsePsOutput(output: string): PsEntry[] {
   const entries: PsEntry[] = [];
   for (const rawLine of output.split('\n')) {
     const line = rawLine.trim();
     if (!line) continue;
-    const match = line.match(/^(\d+)\s+(\d+)\s+(.*)$/);
+    const match = line.match(/^(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/);
     if (!match) continue;
     const pid = parseInt(match[1], 10);
     const ppid = parseInt(match[2], 10);
-    const args = match[3];
-    if (Number.isNaN(pid) || Number.isNaN(ppid) || args.length === 0) continue;
-    entries.push({ pid, ppid, args });
+    const etimes = parseInt(match[3], 10);
+    const args = match[4];
+    if (Number.isNaN(pid) || Number.isNaN(ppid) || Number.isNaN(etimes) || args.length === 0) continue;
+    entries.push({ pid, ppid, etimes, args });
   }
   return entries;
 }
@@ -89,4 +95,25 @@ export function isAgentProcessRunning(entries: PsEntry[], rootPid: number): bool
     if (entry && argsContainAgentBinary(entry.args)) return true;
   }
   return false;
+}
+
+/**
+ * rootPid 自身または子孫プロセスの中で claude/codex を実行しているものを探し、その起動時刻
+ * （epoch ms; `nowMs - etimes*1000`）を返す（プロセス起動時刻ゲート、Issue #338）。探索ロジックは
+ * isAgentProcessRunning と同じだが、一致したプロセスの起動時刻も必要とする点が異なる。複数一致時は
+ * 最も新しく起動したものを採用する（同一ペインで再起動された等）。一致しなければ null。
+ */
+export function findAgentProcessStartMs(entries: PsEntry[], rootPid: number, nowMs: number): number | null {
+  const entryByPid = new Map(entries.map((entry) => [entry.pid, entry] as const));
+  if (!entryByPid.has(rootPid)) return null;
+
+  const descendantPids = collectDescendantPids(entries, rootPid);
+  let latestStartMs: number | null = null;
+  for (const pid of descendantPids) {
+    const entry = entryByPid.get(pid);
+    if (!entry || !argsContainAgentBinary(entry.args)) continue;
+    const startMs = nowMs - entry.etimes * 1000;
+    if (latestStartMs === null || startMs > latestStartMs) latestStartMs = startMs;
+  }
+  return latestStartMs;
 }

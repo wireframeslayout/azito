@@ -5,7 +5,8 @@ import type { IServerRepository, ServerConfig } from '../servers/Server';
 import { windowSpecMatches } from '../tmux/TmuxClient';
 import { stripPaneSuffix } from '../windows/paneTarget';
 import type { TranscriptSource } from './sources/TranscriptSource';
-import { parsePsOutput, isAgentProcessRunning } from './agentProcessDetection';
+import { parsePsOutput, isAgentProcessRunning, findAgentProcessStartMs } from './agentProcessDetection';
+import type { PsEntry } from './agentProcessDetection';
 
 // ─── Types ───
 
@@ -35,8 +36,36 @@ const AGENT_COMMAND_EXACT = new Set(['claude', 'codex']);
  * 以内に更新されていれば、エージェントが実際に書き込み中＝生きているとみなす。
  */
 const SESSION_ACTIVITY_WINDOW_MS = 120 * 1000;
-/** レイヤー2（プロセス実体検査）の `ps` 実行に使うコマンド。pid/ppid/args のみを取得する。 */
-const PS_COMMAND = 'ps -e -o pid=,ppid=,args=';
+/** レイヤー2（プロセス実体検査）／プロセス起動時刻ゲートの `ps` 実行に使うコマンド。pid/ppid/etimes/args を取得する。 */
+const PS_COMMAND = 'ps -e -o pid=,ppid=,etimes=,args=';
+/**
+ * プロセス起動時刻ゲート（Issue #338）: 候補セッションの mtime がこの猶予を差し引いた「現在の
+ * エージェントプロセスの起動時刻」以降でなければ受理しない。tmux/ps 呼び出しと `claude --resume`
+ * の初回ファイル書き込みの間に生じ得る時刻のブレを吸収するための猶予。
+ */
+const PROCESS_START_SKEW_MS = 15 * 1000;
+
+/**
+ * プロセス起動時刻ゲート（Issue #338）の状態。resolve() の先頭で一度だけ計算し、window/task/cwd
+ * 各解決層の候補セッション受理判定に使い回す:
+ * - 'unavailable': ゲート適用不可（非local サーバー、または tmux/ps 呼び出し失敗）。全層で従来
+ *   挙動（実在確認のみ／cwd 層は30分ルール）を維持する — ゲート不能を理由に unresolved に倒すと
+ *   非local 等でセッション解決が機能全損するため。
+ * - 'not_detected': ps 実行は成功したが、このウィンドウのどの pane にも claude/codex プロセスが
+ *   見つからなかった（=単なる bash pane 等）。window/task 直接リンク層（1/2）はウィンドウ自身の
+ *   明示的な紐付けなので実在確認のみで従来通り通す一方、cwd 照合フォールバック層（3）は無効化する
+ *   — bash pane が cwd 一致だけで無関係な古いセッションに紐付いてしまう、今回の報告と同型の誤爆を
+ *   防ぐため。
+ * - 'detected': claude/codex プロセスを検出できた。processStartMs 以降に更新されていない候補は
+ *   全層で拒否する。
+ */
+type ProcessGateState = { kind: 'unavailable' } | { kind: 'not_detected' } | { kind: 'detected'; processStartMs: number };
+
+function toGateState(detection: { entries: PsEntry[]; processStartMs: number | null } | null): ProcessGateState {
+  if (detection === null) return { kind: 'unavailable' };
+  if (detection.processStartMs === null) return { kind: 'not_detected' };
+  return { kind: 'detected', processStartMs: detection.processStartMs };
+}
 
 // ─── Helpers ───
 
@@ -120,6 +149,14 @@ function selectPane(
  * ウィンドウ直接入力 API がセッション JSONL 未作成でもチャットを開始できるようにするため）。
  * server 自体が見つからない場合（window.serverName が指す ServerConfig が存在しない）は
  * tmux コマンドを打つ先すら無いため best-effort もできない。
+ *
+ * プロセス起動時刻ゲート（Issue #338）: 優先順位1〜3で見つかった候補セッションは、採用前に
+ * 「mtime ≧ 現在のこのウィンドウで動作中のエージェントプロセスの起動時刻 − 猶予」を満たすか
+ * 検査される（`claude --resume` 等の再開は書き込みが継続するため mtime が更新され続け、正しく
+ * 通る）。ウィンドウを閉じて同じ cwd で新しい claude を開いた直後（旧セッションの mtime がプロセス
+ * 開始より前で止まっている）はこの検査で棄却され、unresolved（pane-only モード）へ倒れる —
+ * 新セッションの JSONL が実際に書かれ始めれば、次回の解決（既存のポーリング）で新セッションに
+ * 昇格する。詳細は ProcessGateState のコメントを参照。
  */
 export class WindowSessionResolver {
   constructor(
@@ -138,30 +175,97 @@ export class WindowSessionResolver {
     const windowPanes = await this.getWindowPanes(server, window);
     const isLocal = server.type === 'local';
 
+    let gate: ProcessGateState = { kind: 'unavailable' };
+    let psEntries: PsEntry[] | null = null;
+
     if (isLocal) {
+      const detection = await this.detectWindowAgentProcess(server, windowPanes);
+      gate = toGateState(detection);
+      psEntries = detection?.entries ?? null;
+
       const windowLinked = this.resolveViaWindow(window);
-      if (windowLinked) {
-        const pane = await this.resolvePaneWithDetection(server, window, windowPanes, windowLinked.sessionId, windowLinked.agentType);
+      if (windowLinked && this.passesSessionGate(gate, windowLinked.agentType, windowLinked.sessionId)) {
+        const pane = await this.resolvePaneWithDetection(server, window, windowPanes, windowLinked.sessionId, windowLinked.agentType, psEntries);
         if (pane) return { resolved: true, agentType: windowLinked.agentType, sessionId: windowLinked.sessionId, ...pane };
       }
 
       const taskLinked = this.resolveViaTask(window);
-      if (taskLinked) {
-        const pane = await this.resolvePaneWithDetection(server, window, windowPanes, taskLinked.sessionId, taskLinked.agentType);
+      if (taskLinked && this.passesSessionGate(gate, taskLinked.agentType, taskLinked.sessionId)) {
+        const pane = await this.resolvePaneWithDetection(server, window, windowPanes, taskLinked.sessionId, taskLinked.agentType, psEntries);
         if (pane) return { resolved: true, agentType: taskLinked.agentType, sessionId: taskLinked.sessionId, ...pane };
       }
 
-      const cwdMatched = this.resolveViaCwdMatch(windowPanes);
-      if (cwdMatched) {
-        const pane = await this.resolvePaneWithDetection(server, window, windowPanes, cwdMatched.sessionId, cwdMatched.agentType);
-        if (pane) return { resolved: true, agentType: cwdMatched.agentType, sessionId: cwdMatched.sessionId, ...pane };
+      // gate が 'not_detected'（このウィンドウのどの pane にも claude/codex が居ない）の場合、
+      // cwd 照合フォールバックは行わない。tier1/2 はウィンドウ/タスクがそのセッションと明示的に
+      // 紐付いている記録なので存置する一方、tier3 は cwd が一致するだけで他ウィンドウ由来の
+      // セッションを拾ってしまい得るため、エージェントが実際には動いていない pane（bash に戻った
+      // 等）に別セッションの会話を誤って紐付けるバグ（今回の実機報告と同型）を再発させないため。
+      if (gate.kind !== 'not_detected') {
+        const cwdMatched = this.resolveViaCwdMatch(windowPanes);
+        if (cwdMatched && this.passesSessionGate(gate, cwdMatched.agentType, cwdMatched.sessionId)) {
+          const pane = await this.resolvePaneWithDetection(server, window, windowPanes, cwdMatched.sessionId, cwdMatched.agentType, psEntries);
+          if (pane) return { resolved: true, agentType: cwdMatched.agentType, sessionId: cwdMatched.sessionId, ...pane };
+        }
       }
     }
 
     const reason: 'unsupported_server' | 'no_recent_session' = isLocal ? 'no_recent_session' : 'unsupported_server';
-    const fallback = await this.resolvePaneWithDetection(server, window, windowPanes, '', window.workerType ?? '');
+    const fallback = await this.resolvePaneWithDetection(server, window, windowPanes, '', window.workerType ?? '', psEntries);
     if (!fallback) return { resolved: false, reason, agentDetected: false };
     return { resolved: false, reason, paneId: fallback.paneId, agentType: window.workerType ?? undefined, agentDetected: fallback.agentDetected };
+  }
+
+  /**
+   * プロセス起動時刻ゲート（Issue #338）: 候補セッションが「現在動作中のエージェントプロセスの
+   * 起動より後に更新されているか」を検査する。gate.kind !== 'detected' の場合はゲート適用不能
+   * （非local／ps失敗／エージェント不検出）として常に true を返し、呼び出し元の従来挙動に委ねる
+   * （'not_detected' 時の tier3 無効化は resolve() 側で別途行う）。mtime が取得できない候補は
+   * 安全側で棄却する（resume で書き込み継続中のセッションなら mtime は必ず取得できるはずで、
+   * 取れない＝別のセッションとみなせる）。
+   */
+  private passesSessionGate(gate: ProcessGateState, agentType: string, sessionId: string): boolean {
+    if (gate.kind !== 'detected') return true;
+    const source = this.sources.find((s) => s.agentType === agentType);
+    const mtimeMs = source?.getSessionMtimeMs(sessionId) ?? null;
+    if (mtimeMs === null) return false;
+    return mtimeMs >= gate.processStartMs - PROCESS_START_SKEW_MS;
+  }
+
+  /**
+   * プロセス起動時刻ゲート用の検出。ウィンドウの pane 群の pid を辿り、`ps -e -o
+   * pid=,ppid=,etimes=,args=` を1回実行してその子孫に claude/codex 実行体が無いか調べる
+   * （detectAgent() のレイヤー2と同じ探索ロジック／同じ ps 結果を再利用し、ps を二重実行しない
+   * — 呼び出し元がここで得た entries を resolvePaneWithDetection 経由で detectAgent() にも渡す）。
+   * 検出できれば起動時刻（複数一致時は最新）を processStartMs として返す。
+   *
+   * 戻り値 null は「ゲート適用不能」（tmux/ps 呼び出し失敗）。processStartMs が null（entries は
+   * 取得できたがどの pane にも一致が無い）は「不検出」を意味し、resolve() 側でゲートの意味が
+   * 変わる（'not_detected' として tier3 を無効化する）。
+   */
+  private async detectWindowAgentProcess(
+    server: ServerConfig,
+    windowPanes: TmuxPaneInfo[],
+  ): Promise<{ entries: PsEntry[]; processStartMs: number | null } | null> {
+    if (windowPanes.length === 0) return null;
+    try {
+      const { stdout, code } = await this.tmuxClient.execCommand(server, PS_COMMAND);
+      if (code !== 0) return null;
+      const entries = parsePsOutput(stdout);
+      const now = Date.now();
+
+      let processStartMs: number | null = null;
+      for (const pane of windowPanes) {
+        const pid = await this.tmuxClient.getPanePid(server, pane.paneId);
+        if (pid === null) continue;
+        const startMs = findAgentProcessStartMs(entries, pid, now);
+        if (startMs !== null && (processStartMs === null || startMs > processStartMs)) {
+          processStartMs = startMs;
+        }
+      }
+      return { entries, processStartMs };
+    } catch {
+      return null;
+    }
   }
 
   /** 優先順位1: ウィンドウ自身のセッション。session が存在しなければ null（呼び出し元がフォールバックする）。 */
@@ -233,6 +337,7 @@ export class WindowSessionResolver {
     windowPanes: TmuxPaneInfo[],
     sessionId: string,
     agentType: string,
+    psEntries: PsEntry[] | null,
   ): Promise<{ paneId: string; agentDetected: boolean } | null> {
     if (windowPanes.length === 0) return null;
 
@@ -255,7 +360,7 @@ export class WindowSessionResolver {
     if (!paneId) return null;
 
     const pane = windowPanes.find((p) => p.paneId === paneId);
-    const agentDetected = await this.detectAgent(server, pane, sessionId, agentType);
+    const agentDetected = await this.detectAgent(server, pane, sessionId, agentType, psEntries);
     return { paneId, agentDetected };
   }
 
@@ -273,18 +378,22 @@ export class WindowSessionResolver {
    *
    * レイヤー2/3 は「検出できなかった」ことしか意味しない（tmux/ps 呼び出し失敗・非対応サーバー種別・
    * セッション未解決を含む）ため、下位レイヤーに委ねるだけで、誤って agentDetected を確定させることはない。
+   *
+   * レイヤー2が使う ps 結果（psEntries）は resolve() 側でプロセス起動時刻ゲート用に既に1回実行済みの
+   * ものをそのまま受け取る（detectWindowAgentProcess 参照）。ここで改めて ps を実行しない。
    */
   private async detectAgent(
     server: ServerConfig,
     pane: TmuxPaneInfo | undefined,
     sessionId: string,
     agentType: string,
+    psEntries: PsEntry[] | null,
   ): Promise<boolean> {
     if (pane === undefined) return false;
 
     if (AGENT_COMMAND_EXACT.has(pane.currentCommand.toLowerCase())) return true;
 
-    if (server.type === 'local' && (await this.detectAgentProcess(server, pane.paneId))) return true;
+    if (server.type === 'local' && (await this.detectAgentProcess(server, pane.paneId, psEntries))) return true;
 
     if (sessionId) {
       const source = this.sources.find((s) => s.agentType === agentType);
@@ -296,17 +405,17 @@ export class WindowSessionResolver {
   }
 
   /**
-   * レイヤー2の実処理。pane_pid を取得し、`ps -e -o pid=,ppid=,args=` を1回実行してその子孫に
-   * claude/codex 実行体が無いか調べる。tmux/ps 呼び出しの失敗はこのレイヤーの「検出できず」として
-   * false を返す（detectAgent 側のコメントの通り、これは誤って警告を消す方向には働かない）。
+   * レイヤー2の実処理。pane_pid を取得し、resolve() 側で1回実行済みの ps 結果（psEntries）から
+   * その子孫に claude/codex 実行体が無いか調べる。psEntries が null（ゲート側で ps 自体が失敗した）
+   * ならこのレイヤーの「検出できず」として false を返す（detectAgent 側のコメントの通り、これは
+   * 誤って警告を消す方向には働かない）。
    */
-  private async detectAgentProcess(server: ServerConfig, paneId: string): Promise<boolean> {
+  private async detectAgentProcess(server: ServerConfig, paneId: string, psEntries: PsEntry[] | null): Promise<boolean> {
+    if (psEntries === null) return false;
     try {
       const pid = await this.tmuxClient.getPanePid(server, paneId);
       if (pid === null) return false;
-      const { stdout, code } = await this.tmuxClient.execCommand(server, PS_COMMAND);
-      if (code !== 0) return false;
-      return isAgentProcessRunning(parsePsOutput(stdout), pid);
+      return isAgentProcessRunning(psEntries, pid);
     } catch {
       return false;
     }

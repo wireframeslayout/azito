@@ -457,10 +457,10 @@ describe('WindowSessionResolver', () => {
 
   describe('agentDetected multi-layer detection (real Claude Code panes report pane_current_command="node")', () => {
     const PS_OUTPUT_WITH_CLAUDE_DESCENDANT = [
-      '  9000   1 node /path/to/azito-supervisor.cjs -- claude --dangerously-skip-permissions',
-      '  9001   9000 claude --dangerously-skip-permissions --model claude-opus-4-6[1m]',
+      '  9000      1     90 node /path/to/azito-supervisor.cjs -- claude --dangerously-skip-permissions',
+      '  9001   9000     42 claude --dangerously-skip-permissions --model claude-opus-4-6[1m]',
     ].join('\n');
-    const PS_OUTPUT_NO_AGENT = ['  9000   1 node /path/to/some-other-script.js'].join('\n');
+    const PS_OUTPUT_NO_AGENT = ['  9000      1     90 node /path/to/some-other-script.js'].join('\n');
 
     it('layer 2: detects the agent via process inspection when pane_current_command is "node" (local server)', async () => {
       const panes: TmuxPaneInfo[] = [
@@ -558,6 +558,89 @@ describe('WindowSessionResolver', () => {
       const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource]);
       const result = await resolver.resolve(buildWindow({ taskId: 7 }));
       expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
+    });
+  });
+
+  describe('process start-time gate (Issue #338): prevents a stale session from a previous claude/codex in the same cwd from being shown', () => {
+    // A currently-running agent process launched ~10s ago (root pid 9000, node shebang wrapper,
+    // claude descendant at pid 9001, etimes=10).
+    const PS_OUTPUT_RECENT_AGENT = [
+      '  9000      1     50 node /path/to/azito-supervisor.cjs -- claude --dangerously-skip-permissions',
+      '  9001   9000     10 claude --dangerously-skip-permissions --model claude-opus-4-6[1m]',
+    ].join('\n');
+    const PS_OUTPUT_NO_AGENT = ['  9000      1     50 node /path/to/some-other-script.js'].join('\n');
+
+    it('tier1: rejects window.agentSessionId when its mtime predates the current agent process start, falling back to unresolved', async () => {
+      const panes: TmuxPaneInfo[] = [
+        { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
+      ];
+      const staleMtime = Date.now() - 60 * 1000; // 60s ago: older than (processStart(-10s) - 15s skew) = -25s
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource } = buildDeps({
+        listAllPanes: async () => panes,
+        claudeGetSessionCwd: (id) => (id === SID_CLAUDE ? { cwd: '/proj' } : null),
+        claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? staleMtime : null),
+        getPanePid: async () => 9000,
+        execCommand: async () => ({ stdout: PS_OUTPUT_RECENT_AGENT, stderr: '', code: 0 }),
+      });
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource]);
+      const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: SID_CLAUDE, workerType: 'claude' }));
+      // The stale session is rejected by the gate; no other candidate exists, so it falls through to
+      // the best-effort unresolved pane hint (the live process is still detected as agentDetected:true).
+      expect(result).toEqual({ resolved: false, reason: 'no_recent_session', paneId: '%1', agentType: 'claude', agentDetected: true });
+    });
+
+    it('tier1: accepts window.agentSessionId when its mtime has been updated at/after the process start (resume case)', async () => {
+      const panes: TmuxPaneInfo[] = [
+        { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
+      ];
+      const recentMtime = Date.now() - 5 * 1000; // 5s ago: within (processStart(-10s) - 15s skew) = -25s
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource } = buildDeps({
+        listAllPanes: async () => panes,
+        claudeGetSessionCwd: (id) => (id === SID_CLAUDE ? { cwd: '/proj' } : null),
+        claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
+        getPanePid: async () => 9000,
+        execCommand: async () => ({ stdout: PS_OUTPUT_RECENT_AGENT, stderr: '', code: 0 }),
+      });
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource]);
+      const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: SID_CLAUDE, workerType: 'claude' }));
+      expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
+    });
+
+    it('gate unavailable (ps call fails): keeps the old existence-only behavior, accepting a session regardless of mtime', async () => {
+      const panes: TmuxPaneInfo[] = [
+        { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'claude' },
+      ];
+      const veryStaleMtime = Date.now() - 60 * 60 * 1000; // 1 hour ago
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource } = buildDeps({
+        listAllPanes: async () => panes,
+        claudeGetSessionCwd: (id) => (id === SID_CLAUDE ? { cwd: '/proj' } : null),
+        claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? veryStaleMtime : null),
+        // execCommand is intentionally not mocked (undefined), simulating a tmux/ps failure.
+      });
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource]);
+      const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: SID_CLAUDE, workerType: 'claude' }));
+      expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
+    });
+
+    it('tier3 (cwd fallback) is disabled entirely when the agent process is not detected in this window (bash pane)', async () => {
+      const panes: TmuxPaneInfo[] = [
+        { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'bash' },
+      ];
+      const recentMtime = Date.now() - 5 * 1000; // would pass the old 30-minute cwd-match rule
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource } = buildDeps({
+        listAllPanes: async () => panes,
+        claudeListSessions: () => [
+          { sessionId: SID_CLAUDE, agentType: 'claude', projectDir: 'p', cwd: '/proj', mtimeMs: recentMtime, sizeBytes: 1, preview: '' },
+        ],
+        getPanePid: async () => 9000,
+        execCommand: async () => ({ stdout: PS_OUTPUT_NO_AGENT, stderr: '', code: 0 }),
+      });
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource]);
+      const result = await resolver.resolve(buildWindow({ workerType: 'claude' }));
+      // Without the process-detection gate, this would have matched the recent cwd session
+      // (reproducing the reported bug: a bash pane in the same cwd showing an unrelated old chat).
+      // With gate.kind === 'not_detected', tier3 is skipped entirely, leaving it unresolved.
+      expect(result).toEqual({ resolved: false, reason: 'no_recent_session', paneId: '%1', agentType: 'claude', agentDetected: false });
     });
   });
 });
