@@ -196,7 +196,8 @@
   },
   "ref": {
     "issue": "Issue #{{number}}",
-    "pr": "PR #{{number}}"
+    "pr": "PR #{{number}}",
+    "unit": "Unit: {{name}}"
   },
   "git": {
     "linkedIssue": "リンクされたIssue",

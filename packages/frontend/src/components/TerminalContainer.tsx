@@ -31,9 +31,9 @@ function setQuickKeyBarFooterHeight(active: boolean): void {
   setSpFooterHeight(active ? SP_FOOTER_HEIGHT_EXPR : null);
 }
 
-type WindowViewMode = 'terminal' | 'chat';
+export type WindowViewMode = 'terminal' | 'chat';
 
-function viewModeStorageKey(windowId: number): string {
+export function viewModeStorageKey(windowId: number): string {
   return `azito.windowView.${windowId}`;
 }
 
@@ -70,9 +70,19 @@ interface TerminalContainerProps {
    * 明示的に渡さない限り何も描画しない（デスクトップ/他の呼び出し元は無変更）。
    */
   leading?: React.ReactNode;
+  /**
+   * 端末/チャットの表示モードを外部（呼び出し元）が完全に制御する（Issue #69 T5）。
+   * SP タスク画面ではこの表示モード選択自体がセグメント行（概要｜コミット｜差分｜端末｜
+   * チャット）に第一級で昇格したため、TaskPanel 側が単一の真実源として azito.windowView.*
+   * を読み書きし、その結果をここへ渡す。渡された場合はツールバー内蔵の端末⇄チャット
+   * トグル（下記 SegmentedToggle）を描画しない — 選択操作の入口が外側のセグメント行のみに
+   * なるようにするため（二重の切替UIを防ぐ）。省略時（デスクトップ等、他の全呼び出し元）は
+   * 従来どおり内部状態＋localStorage（windowId 単位）で自律的に管理する。
+   */
+  viewMode?: WindowViewMode;
 }
 
-export function TerminalContainer({ serverName, target, projectId, taskId, project, allTasks, sessions, onSplitPane, onOpenTask, onDisconnect, onWindowChanged, onCloseTab, onRetargetTab, reconnectKey, leading }: TerminalContainerProps) {
+export function TerminalContainer({ serverName, target, projectId, taskId, project, allTasks, sessions, onSplitPane, onOpenTask, onDisconnect, onWindowChanged, onCloseTab, onRetargetTab, reconnectKey, leading, viewMode: viewModeProp }: TerminalContainerProps) {
   const { t } = useTranslation('common');
   const [windowMissing, setWindowMissing] = useState(false);
   const [disconnected, setDisconnected] = useState(false);
@@ -105,20 +115,23 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
 
   const [style, setStyle] = useTranscriptStyle();
 
-  const [viewMode, setViewModeState] = useState<WindowViewMode>('terminal');
+  const [internalViewMode, setInternalViewModeState] = useState<WindowViewMode>('terminal');
   useEffect(() => {
+    if (viewModeProp !== undefined) return; // caller owns the value — see viewMode prop doc
     if (windowId === null) {
-      setViewModeState('terminal');
+      setInternalViewModeState('terminal');
       return;
     }
     const stored = localStorage.getItem(viewModeStorageKey(windowId));
-    setViewModeState(stored === 'chat' ? 'chat' : 'terminal');
-  }, [windowId]);
+    setInternalViewModeState(stored === 'chat' ? 'chat' : 'terminal');
+  }, [windowId, viewModeProp]);
 
   const setViewMode = useCallback((mode: WindowViewMode) => {
-    setViewModeState(mode);
+    setInternalViewModeState(mode);
     if (windowId !== null) localStorage.setItem(viewModeStorageKey(windowId), mode);
   }, [windowId]);
+
+  const viewMode = viewModeProp ?? internalViewMode;
 
   const viewModeOptions: SegmentedToggleOption<WindowViewMode>[] = useMemo(() => [
     { value: 'terminal', label: t('terminal.viewMode.terminal'), icon: 'terminal' },
@@ -287,7 +300,7 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
             // 端末/チャット切替という「表示モードの制御」の並びに揃えるため、ツールバー側を採用。
             <StyleSwitcher value={style} onChange={setStyle} compact />
           )}
-          {windowId !== null && (
+          {windowId !== null && viewModeProp === undefined && (
             <SegmentedToggle
               options={viewModeOptions}
               value={viewMode}

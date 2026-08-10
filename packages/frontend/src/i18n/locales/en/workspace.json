@@ -71,6 +71,7 @@
     "loadingAgents": "Loading agent definitions…",
     "windowList": "Window list",
     "select": "Select",
+    "paneCount": "{{count}} panes",
     "detachFromProject": "Detach from project",
     "deleteWindow": "Delete window",
     "quickAddTitle": "Add {{label}} — {{serverName}}"
@@ -262,6 +263,7 @@
   },
   "viewLabels": {
     "description": "Description",
+    "overview": "Overview",
     "unit": "Unit",
     "git": "Git",
     "summary": "Summary",
