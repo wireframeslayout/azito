@@ -25,6 +25,7 @@ export class WindowInputService {
     private readonly windowRepo: IWindowRepository,
     private readonly tmuxClient: TmuxClient,
     private readonly serverRepo: IServerRepository,
+    private readonly wait: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   ) {}
 
   async sendInput(windowId: number, paneId: string, text: string): Promise<WindowInputResult> {
@@ -38,6 +39,8 @@ export class WindowInputService {
     if (!belongsToWindow) return 'pane_not_found';
 
     await this.tmuxClient.sendLiteralText(server, paneId, text);
+    const submitDelayMs = this.resolveSubmitDelay(window.workerType);
+    if (submitDelayMs > 0) await this.wait(submitDelayMs);
     await this.tmuxClient.sendKeys(server, paneId, ['Enter']);
     return 'ok';
   }
@@ -80,5 +83,15 @@ export class WindowInputService {
   private resolveInterruptKey(workerType: string | null): InterruptKey {
     if (workerType === null) return 'C-c';
     return getAgentTranscriptProfile(workerType)?.interruptKey ?? 'C-c';
+  }
+
+  /**
+   * workerType に対応する AgentTranscriptProfile の submitDelayMs を採用する。プロファイルが
+   * 無い workerType（generic、または未知の値）・ウィンドウは待ちなし（0）を既定にする —
+   * リテラル送信直後に Enter が届いても支障のない従来挙動を維持する。
+   */
+  private resolveSubmitDelay(workerType: string | null): number {
+    if (workerType === null) return 0;
+    return getAgentTranscriptProfile(workerType)?.submitDelayMs ?? 0;
   }
 }

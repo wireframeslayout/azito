@@ -12,11 +12,18 @@ export interface AgentTranscriptProfile {
   agentType: string;
   displayName: string;
   interruptKey: InterruptKey;
+  /**
+   * リテラルテキスト送信後、送信キー（Enter）を送るまでに空けるミリ秒。Ink 系 TUI（codex）は
+   * 貼り付けたテキストが入力欄に反映される前に Enter が届くと無視してしまう（実機・tmux 実証済み:
+   * 0ms は再現性100%で失敗、100ms で解消。余裕を持たせて200msを採用）。claude は待ちなしで
+   * 既存動作のまま送信される（実証で問題なし）。
+   */
+  submitDelayMs: number;
 }
 
 export const AGENT_TRANSCRIPT_PROFILES: AgentTranscriptProfile[] = [
-  { agentType: 'claude', displayName: 'Claude', interruptKey: 'Escape' },
-  { agentType: 'codex', displayName: 'Codex', interruptKey: 'Escape' },
+  { agentType: 'claude', displayName: 'Claude', interruptKey: 'Escape', submitDelayMs: 0 },
+  { agentType: 'codex', displayName: 'Codex', interruptKey: 'Escape', submitDelayMs: 200 },
 ];
 
 export function getAgentTranscriptProfile(agentType: string): AgentTranscriptProfile | undefined {

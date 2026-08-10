@@ -63,7 +63,7 @@ function buildDeps(opts: {
     findById: opts.findById ?? (() => buildWindow()),
   } as unknown as IWindowRepository;
 
-  const calls: { sendLiteralText: unknown[]; sendKeys: unknown[] } = { sendLiteralText: [], sendKeys: [] };
+  const calls: { sendLiteralText: unknown[]; sendKeys: unknown[]; wait: number[] } = { sendLiteralText: [], sendKeys: [], wait: [] };
 
   const tmuxClient = {
     listAllPanes: opts.listAllPanes ?? (async () => [buildPane()]),
@@ -75,7 +75,11 @@ function buildDeps(opts: {
     findByName: (name: string) => (opts.servers ?? [LOCAL_SERVER]).find((s) => s.name === name) ?? null,
   } as unknown as IServerRepository;
 
-  return { windowRepo, tmuxClient, serverRepo, calls };
+  // 実タイマーを使わず呼び出し記録だけ行う注入用 wait 関数。順序検証のため
+  // sendLiteralText/sendKeys と同じ calls オブジェクトに 'wait:<ms>' を積む。
+  const wait = async (ms: number) => { calls.wait.push(ms); };
+
+  return { windowRepo, tmuxClient, serverRepo, calls, wait };
 }
 
 describe('WindowInputService', () => {
@@ -112,12 +116,34 @@ describe('WindowInputService', () => {
     });
 
     it('sends literal text followed by Enter and returns ok', async () => {
-      const { windowRepo, tmuxClient, serverRepo, calls } = buildDeps();
-      const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
+      const { windowRepo, tmuxClient, serverRepo, calls, wait } = buildDeps();
+      const service = new WindowInputService(windowRepo, tmuxClient, serverRepo, wait);
       const result = await service.sendInput(42, '%1', 'echo hello');
       expect(result).toBe('ok');
       expect(calls.sendLiteralText).toEqual([[LOCAL_SERVER, '%1', 'echo hello']]);
       expect(calls.sendKeys).toEqual([[LOCAL_SERVER, '%1', ['Enter']]]);
+    });
+
+    it('does not wait before Enter for workerType "claude" (no submitDelayMs)', async () => {
+      const { windowRepo, tmuxClient, serverRepo, calls, wait } = buildDeps({ findById: () => buildWindow({ workerType: 'claude' }) });
+      const service = new WindowInputService(windowRepo, tmuxClient, serverRepo, wait);
+      await service.sendInput(42, '%1', 'echo hello');
+      expect(calls.wait).toEqual([]);
+    });
+
+    it('waits the codex submitDelayMs between literal text and Enter (Ink TUI drops Enter sent too early)', async () => {
+      const order: string[] = [];
+      const { windowRepo, serverRepo } = buildDeps({ findById: () => buildWindow({ workerType: 'codex' }) });
+      const tmuxClient = {
+        listAllPanes: async () => [buildPane()],
+        sendLiteralText: async () => { order.push('sendLiteralText'); },
+        sendKeys: async () => { order.push('sendKeys'); },
+      } as unknown as TmuxClient;
+      const wait = async (ms: number) => { order.push(`wait:${ms}`); };
+      const service = new WindowInputService(windowRepo, tmuxClient, serverRepo, wait);
+      const result = await service.sendInput(42, '%1', 'reply with OK only');
+      expect(result).toBe('ok');
+      expect(order).toEqual(['sendLiteralText', 'wait:200', 'sendKeys']);
     });
   });
 
