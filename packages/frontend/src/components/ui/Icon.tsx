@@ -63,6 +63,7 @@ import {
   ArrowDownToLine,
   History,
   Menu,
+  Home,
   type LucideIcon,
 } from 'lucide-react';
 import { SidekickBot, UnitsSquad } from './custom-icons';
@@ -136,6 +137,7 @@ const ICONS = {
   'scroll-to-bottom': ArrowDownToLine,
   history: History,
   menu: Menu,
+  home: Home,
 } satisfies Record<string, LucideIcon>;
 
 export type IconName = keyof typeof ICONS;

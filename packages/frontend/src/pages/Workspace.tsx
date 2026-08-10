@@ -1005,6 +1005,10 @@ function WorkspaceInner() {
       openTask={openTaskFromActiveWindow}
       taskWindows={taskWindows}
       hideMenuBar={mobile && !!activeTabId}
+      mobileTabCount={tabs.length}
+      onMobileGoHome={() => setActiveTabId(null)}
+      onMobileOpenTabSwitcher={() => setMobileTabSwitcherOpen(true)}
+      onMobileOpenAddTab={handleOpenAddTabFromSwitcher}
     >
         {mobile ? (
           <>

@@ -78,6 +78,11 @@ interface WorkspaceLayoutProps {
    * sidebarOpen による非表示条件とは OR で合成される。
    */
   hideMenuBar?: boolean;
+  /** SP下部バー（Issue #69 修正4 / S1提案）: ラベル付き5項目 [ホーム/タブ/追加/通知/その他] に必要な配線。 */
+  mobileTabCount?: number;
+  onMobileGoHome?: () => void;
+  onMobileOpenTabSwitcher?: () => void;
+  onMobileOpenAddTab?: () => void;
 }
 
 export default function WorkspaceLayout({
@@ -107,6 +112,10 @@ export default function WorkspaceLayout({
   openTask,
   taskWindows,
   hideMenuBar,
+  mobileTabCount,
+  onMobileGoHome,
+  onMobileOpenTabSwitcher,
+  onMobileOpenAddTab,
 }: WorkspaceLayoutProps) {
   const { t } = useTranslation(['workspace', 'common', 'projects']);
   const navigate = useNavigate();
@@ -122,10 +131,6 @@ export default function WorkspaceLayout({
     navigate(paths.workspace(id));
   };
 
-  const handleMobileMenuOpenMode = (mode: SidebarMode) => {
-    switchSidebarMode(mode);
-    setSidebarOpen(true);
-  };
 
   // Toggle behavior: while the menu is open, stop mousedown/touchstart from reaching
   // useClickOutside's document listeners (which would close it before click fires),
@@ -364,12 +369,10 @@ export default function WorkspaceLayout({
 
       {mobile && (
         <MobileMenuBar
-          project={currentProjectItem}
-          allProjects={allProjects}
-          onSelectProject={handleMobileProjectSelect}
-          onOpenAllProjects={() => navigate(paths.projects())}
-          sidebarMode={sidebarMode}
-          onSwitchMode={handleMobileMenuOpenMode}
+          tabCount={mobileTabCount ?? 0}
+          onGoHome={onMobileGoHome ?? (() => {})}
+          onOpenTabSwitcher={onMobileOpenTabSwitcher ?? (() => {})}
+          onOpenAddTab={onMobileOpenAddTab ?? (() => {})}
           onSendKey={onSendKey}
           hidden={sidebarOpen || hideMenuBar}
           connectPane={connectPane}

@@ -555,69 +555,37 @@ a:hover {
   outline-offset: 1px;
 }
 
-/* ---- Mobile floating menu (Issue #267) ---- */
+/* ---- Mobile bottom bar (Issue #267; ラベル付き構成へ刷新 — Issue #69 修正4) ----
+   タブ未選択時（ホーム状態）のみ表示するドック式の下部ナビゲーション。5項目を
+   等幅で並べ、各項目はアイコン+ラベルの縦積み（44px タッチターゲット）。左ボーダー
+   による色分けは禁止のため、状態は文字色・アクセントカラー・バッジのみで示す。 */
 .mobile-menu-bar {
-  gap: 10px;
-  padding: 0 12px;
   transition: opacity 0.2s ease, transform 0.2s ease;
 }
 .mobile-menu-bar.mobile-menu-bar-hidden {
   opacity: 0;
-  transform: translateY(24px);
+  transform: translateY(100%);
   pointer-events: none;
 }
-.mobile-menu-group {
-  pointer-events: auto;
-  display: flex;
-  gap: 6px;
-  padding: 7px;
-  border-radius: 12px;
-  background: rgba(22, 27, 34, 0.15);
-  border: 1px solid rgba(139, 148, 158, 0.22);
-  backdrop-filter: blur(3px);
-  -webkit-backdrop-filter: blur(3px);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(230, 237, 243, 0.06);
-}
-@supports not (backdrop-filter: blur(3px)) {
-  .mobile-menu-group {
-    background: rgba(22, 27, 34, 0.96);
-  }
-}
-.mi-btn {
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-  border: none;
-  background: transparent;
-  color: var(--text-dim);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  padding: 0;
-  position: relative;
+.mobile-menu-bar-item {
   transition: background 0.15s ease, color 0.15s ease;
 }
-.mi-btn:hover {
-  background: rgba(230, 237, 243, 0.07);
+.mobile-menu-bar-item:hover {
+  background: var(--bg-hover);
   color: var(--text);
 }
-.mi-btn.mi-btn-active {
-  background: rgba(88, 166, 255, 0.16);
-  color: var(--accent);
-}
-.mi-btn:focus-visible,
+.mobile-menu-bar-item:focus-visible,
 .glass-popover-item:focus-visible,
 .notification-bell-btn:focus-visible,
 .notification-row:focus-visible,
 .notification-panel-action:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline-offset: -2px;
 }
 .mi-btn-badge {
   position: absolute;
-  top: 2px;
-  right: 2px;
+  top: -4px;
+  right: -8px;
   min-width: 16px;
   height: 16px;
   border-radius: var(--radius-full);
@@ -629,27 +597,11 @@ a:hover {
   align-items: center;
   justify-content: center;
   padding: 0 3px;
-  box-shadow: 0 0 0 2px var(--bg-card);
+  box-shadow: 0 0 0 2px var(--bg-solid);
+  background: var(--accent);
 }
 .mi-btn-badge-alert {
   background: var(--danger);
-}
-/* 狭幅端末(<=360px)向けコンパクト化: 320px幅でも両グループが収まる構成にする。
-   計算(320px時): 左グループ 2(border)+10(padding)+4×32(btn)+3×4(gap)=152px、
-   右グループ 2+10+3×32+2×4=116px、中央gap 8px、navのpadding 16px → 合計292px <= 320px */
-@media (max-width: 360px) {
-  .mobile-menu-bar {
-    gap: 8px;
-    padding: 0 8px;
-  }
-  .mobile-menu-group {
-    gap: 4px;
-    padding: 5px;
-  }
-  .mi-btn {
-    width: 32px;
-    height: 32px;
-  }
 }
 .notification-bell-btn:hover {
   background: var(--selected-bg);
@@ -720,7 +672,7 @@ a:hover {
   .qa-bar-transition,
   .mobile-menu-bar,
   .glass-popover,
-  .mi-btn,
+  .mobile-menu-bar-item,
   .notification-toast,
   .notification-bell-btn,
   .notification-row,

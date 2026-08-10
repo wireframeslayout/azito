@@ -4,10 +4,24 @@ import { paths } from '../../paths';
 import { Icon, type IconName } from '../ui/Icon';
 import { BottomSheet } from '../ui/BottomSheet';
 import { useSystemUpdate } from '../../hooks/useSystemUpdate';
+import { HealthDot, type DotLevel } from '../statusbar/HealthDot';
 
 interface MobileGlobalMenuSheetProps {
   open: boolean;
   onClose: () => void;
+  /**
+   * 「その他」シートへ退避した機能（Issue #69 修正4）。下部バーが5項目のラベル付き
+   * 構成へ刷新されたことで、旧 keyboard/アクティブウィンドウ/サーバーヘルスの各
+   * アイコンボタンの置き場所を失った — 機能自体は削除せず、このシートの先頭セクションへ
+   * 移設する。全て任意（呼び出し元の条件が揃わない場合は行ごと非表示、機能を失わない範囲で
+   * 段階的に無効化できるようにする）。
+   */
+  onOpenKeyboard?: () => void;
+  onOpenActiveWindows?: () => void;
+  activeWindowsCount?: number;
+  activeWindowsBlockedCount?: number;
+  serverHealth?: DotLevel;
+  onOpenServerHealth?: () => void;
 }
 
 const GLOBAL_ITEMS: Array<{ labelKey: string; icon: IconName; path: string }> = [
@@ -32,14 +46,43 @@ const itemStyle: React.CSSProperties = {
   color: 'var(--text)',
 };
 
-export function MobileGlobalMenuSheet({ open, onClose }: MobileGlobalMenuSheetProps) {
+export function MobileGlobalMenuSheet({
+  open, onClose, onOpenKeyboard, onOpenActiveWindows, activeWindowsCount, activeWindowsBlockedCount,
+  serverHealth, onOpenServerHealth,
+}: MobileGlobalMenuSheetProps) {
   const { t } = useTranslation(['workspace', 'projects', 'common']);
   const location = useLocation();
   const navigate = useNavigate();
   const { status: updateStatus } = useSystemUpdate();
 
+  const hasStashedRow = !!onOpenKeyboard || !!onOpenActiveWindows || (!!onOpenServerHealth && !!serverHealth);
+
   return (
-    <BottomSheet open={open} onClose={onClose} title={t('mobile.menu')}>
+    <BottomSheet open={open} onClose={onClose} title={t('mobile.other')}>
+      {onOpenKeyboard && (
+        <button className="glass-popover-item" onClick={() => { onClose(); onOpenKeyboard(); }} style={itemStyle}>
+          <Icon name="keyboard" size={16} />
+          <span>{t('mobile.keyboardControls')}</span>
+        </button>
+      )}
+      {onOpenActiveWindows && (
+        <button className="glass-popover-item" onClick={() => { onClose(); onOpenActiveWindows(); }} style={itemStyle}>
+          <Icon name="windows" size={16} />
+          <span>{(activeWindowsCount ?? 0) > 0 ? t('activeWindows.titleWithCount', { count: activeWindowsCount }) : t('activeWindows.title')}</span>
+          {(activeWindowsBlockedCount ?? 0) > 0 && (
+            <span aria-hidden="true" style={{
+              marginLeft: 'auto', width: 8, height: 8, borderRadius: 'var(--radius-full)', background: 'var(--danger)', flexShrink: 0,
+            }} />
+          )}
+        </button>
+      )}
+      {onOpenServerHealth && serverHealth && (
+        <button className="glass-popover-item" onClick={() => { onClose(); onOpenServerHealth(); }} style={itemStyle}>
+          <HealthDot level={serverHealth} size={12} />
+          <span>{t('mobile.serverHealth')}</span>
+        </button>
+      )}
+      {hasStashedRow && <div style={{ height: 1, background: 'var(--border)', margin: '6px 4px' }} />}
       {GLOBAL_ITEMS.map((item) => (
         <button
           key={item.path}
