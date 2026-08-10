@@ -115,6 +115,15 @@ describe('deriveContextHistory', () => {
     expect(deriveContextHistory(entries)).toEqual(['real message']);
   });
 
+  it('does not exclude legitimate XML/JSX prompts that merely start with an angle bracket (Minor #5)', () => {
+    const entries: TranscriptEntry[] = [
+      userEntry('1', '<div>hello</div>'),
+      userEntry('2', '<Component prop="x" />'),
+      userEntry('3', '<system-reminder>ignore me</system-reminder>'),
+    ];
+    expect(deriveContextHistory(entries)).toEqual(['<Component prop="x" />', '<div>hello</div>']);
+  });
+
   it('uniques exact-duplicate entries, keeping only the newest occurrence, without reordering', () => {
     const entries: TranscriptEntry[] = [
       userEntry('1', 'repeat'),

@@ -39,16 +39,38 @@ export function pushHistory(text: string): void {
   }
 }
 
-/** 合成メッセージ（`<task-notification>`/`<system-reminder>`/`<command-message>` 等）の簡易判定。 */
+/**
+ * 既知の合成封筒タグ（Minor #5）。実際の JSONL で観測される、ユーザー発話に見えるが実体は
+ * ツール/フックが挿入した封筒であるタグに限定する。`<` 始まり全体を除外すると正当な XML/JSX を
+ * 貼り付けたプロンプト（例: `<div>...</div>`）まで履歴から消えてしまうため。
+ */
+const SYNTHETIC_ENVELOPE_TAGS = [
+  'task-notification',
+  'system-reminder',
+  'command-message',
+  'command-name',
+  'command-args',
+  'command-contents',
+  'local-command-stdout',
+  'local-command-stderr',
+  'local-command-caveat',
+  'bash-input',
+  'bash-stdout',
+  'bash-stderr',
+] as const;
+
+/** 既知の合成封筒タグ（`<task-notification>`/`<system-reminder>`/`<command-message>` 等）で始まるかの判定。 */
 function isSyntheticMessage(text: string): boolean {
-  return text.trimStart().startsWith('<');
+  const trimmed = text.trimStart();
+  return SYNTHETIC_ENVELOPE_TAGS.some((tag) => trimmed.startsWith(`<${tag}>`) || trimmed.startsWith(`<${tag} `));
 }
 
 /**
  * トランスクリプトの user 発話から入力履歴を導出する（Issue #69 仕様調整4）。
  * 各 user エントリの text ブロックを結合したものを新しい順で返す。以下は除外する。
  * - 結合後が空文字のエントリ
- * - `<...>` で始まる合成メッセージ（task-notification/system-reminder/command-message 等）
+ * - 既知の合成封筒タグで始まるメッセージ（task-notification/system-reminder/command-message 等。
+ *   `<div>` 等の正当な XML/JSX プロンプトは除外しない）
  * - 完全一致の重複（連続でなくても、新しい順に見て初出以外は捨てる単純な一意化。
  *   古い重複を新しい位置へ繰り上げることはしない）
  * 上限 MAX_HISTORY 件。

@@ -1,7 +1,10 @@
+import type { ServerConfig } from '../servers/Server';
 import type { TmuxClient } from '../tmux/TmuxClient';
+import { windowSpecMatches } from '../tmux/TmuxClient';
 import type { IServerRepository } from '../servers/Server';
-import type { IWindowRepository } from '../windows/Window';
+import type { IWindowRepository, Window } from '../windows/Window';
 import { getAgentTranscriptProfile, type InterruptKey } from './sources/profiles';
+import { splitWindowTarget } from './WindowSessionResolver';
 
 // ─── Types ───
 
@@ -31,8 +34,8 @@ export class WindowInputService {
     const server = this.serverRepo.findByName(window.serverName);
     if (!server) return 'window_not_found';
 
-    const exists = await this.tmuxClient.checkPaneExists(server, paneId);
-    if (!exists) return 'pane_not_found';
+    const belongsToWindow = await this.paneBelongsToWindow(server, window, paneId);
+    if (!belongsToWindow) return 'pane_not_found';
 
     await this.tmuxClient.sendLiteralText(server, paneId, text);
     await this.tmuxClient.sendKeys(server, paneId, ['Enter']);
@@ -46,12 +49,25 @@ export class WindowInputService {
     const server = this.serverRepo.findByName(window.serverName);
     if (!server) return 'window_not_found';
 
-    const exists = await this.tmuxClient.checkPaneExists(server, paneId);
-    if (!exists) return 'pane_not_found';
+    const belongsToWindow = await this.paneBelongsToWindow(server, window, paneId);
+    if (!belongsToWindow) return 'pane_not_found';
 
     const resolvedKey = action === 'interrupt' ? this.resolveInterruptKey(window.workerType) : (key as InterruptKey);
     await this.tmuxClient.sendKeys(server, paneId, [resolvedKey]);
     return 'ok';
+  }
+
+  /**
+   * paneId が実在するだけでなく、指定ウィンドウ（window.tmuxTarget）に属する pane であることを検証する
+   * （Important #1: 帰属未検証だと細工した paneId で別ウィンドウの任意ペインへ送信・割込ができてしまう）。
+   * ウィンドウ側の pane 集合は WindowSessionResolver.getWindowPanes と同じロジック（session 名 +
+   * windowSpecMatches によるウィンドウ特定）で解決する。
+   */
+  private async paneBelongsToWindow(server: ServerConfig, window: Window, paneId: string): Promise<boolean> {
+    const { sessionName, windowSpec } = splitWindowTarget(window.tmuxTarget);
+    const allPanes = await this.tmuxClient.listAllPanes(server);
+    const windowPanes = allPanes.filter((p) => p.sessionName === sessionName && windowSpecMatches(windowSpec, p.windowIndex, p.windowName));
+    return windowPanes.some((p) => p.paneId === paneId);
   }
 
   /**

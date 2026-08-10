@@ -41,7 +41,14 @@ export function useTranscriptStyle(): [TranscriptStyle, (style: TranscriptStyle)
   const [style, setStyleState] = useState<TranscriptStyle>(readStoredStyle);
 
   useEffect(() => {
-    const onChanged = () => setStyleState(readStoredStyle());
+    // Minor #4: detail に次の値を積んでおき、それがあれば localStorage を再読みせずそのまま採用する。
+    // localStorage.setItem が失敗した場合（プライベートブラウジング等）に他マウントが旧値を
+    // 再読み込みして切替が巻き戻るのを防ぐため。detail が無いイベント（将来 dispatchEvent(new
+    // Event(...)) で呼ばれた場合等）のみ localStorage 再読みへフォールバックする。
+    const onChanged = (event: Event) => {
+      const detail = (event as CustomEvent<TranscriptStyle | undefined>).detail;
+      setStyleState(isTranscriptStyle(detail ?? null) ? (detail as TranscriptStyle) : readStoredStyle());
+    };
     window.addEventListener(STYLE_CHANGED_EVENT, onChanged);
     return () => window.removeEventListener(STYLE_CHANGED_EVENT, onChanged);
   }, []);
@@ -53,7 +60,7 @@ export function useTranscriptStyle(): [TranscriptStyle, (style: TranscriptStyle)
     } catch {
       // 上記と同様、保存できなくても表示上のスタイル切替自体は継続する。
     }
-    window.dispatchEvent(new Event(STYLE_CHANGED_EVENT));
+    window.dispatchEvent(new CustomEvent<TranscriptStyle>(STYLE_CHANGED_EVENT, { detail: next }));
   }, []);
 
   return [style, setStyle];

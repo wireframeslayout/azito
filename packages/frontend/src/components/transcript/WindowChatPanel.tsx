@@ -41,6 +41,10 @@ export default function WindowChatPanel({ windowId }: WindowChatPanelProps) {
   const [retryTick, setRetryTick] = useState(0);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollAttemptsRef = useRef(0);
+  // 世代トークン（Important #2、ConversationView の generationRef パターンを踏襲）: windowId が
+  // 切り替わるたびに発行し直す。飛行中の resolve/poll 応答は、応答受信時にこの値が発行時と一致する
+  // 場合のみ state を更新する — 不一致なら別ウィンドウへ切替済みとして黙って破棄する。
+  const generationRef = useRef(0);
 
   const stopPolling = useCallback(() => {
     if (pollTimerRef.current !== null) {
@@ -51,11 +55,12 @@ export default function WindowChatPanel({ windowId }: WindowChatPanelProps) {
   }, []);
 
   const resolve = useCallback(() => {
-    let cancelled = false;
+    generationRef.current += 1;
+    const myGeneration = generationRef.current;
     setState({ kind: 'loading' });
     apiWithStatus<ResolveWindowResult | TranscriptErrorResponse>(`/transcripts/resolve-window?windowId=${windowId}`)
       .then(({ status, body }) => {
-        if (cancelled) return;
+        if (generationRef.current !== myGeneration) return; // 別ウィンドウへ切替済み: 破棄
         if (status !== 200 || 'error' in body) {
           setState({ kind: 'error' });
           return;
@@ -69,11 +74,8 @@ export default function WindowChatPanel({ windowId }: WindowChatPanelProps) {
         }
       })
       .catch(() => {
-        if (!cancelled) setState({ kind: 'error' });
+        if (generationRef.current === myGeneration) setState({ kind: 'error' });
       });
-    return () => {
-      cancelled = true;
-    };
   }, [windowId]);
 
   useEffect(() => stopPolling(), [windowId, stopPolling]);
@@ -85,10 +87,12 @@ export default function WindowChatPanel({ windowId }: WindowChatPanelProps) {
   // ままチャットは引き続き使える — セッション昇格は表示リッチ化の話であり、送信可否とは無関係）。
   const pollForSession = useCallback(() => {
     stopPolling();
+    const myGeneration = generationRef.current;
     const tick = () => {
       pollAttemptsRef.current += 1;
       apiWithStatus<ResolveWindowResult | TranscriptErrorResponse>(`/transcripts/resolve-window?windowId=${windowId}`)
         .then(({ status, body }) => {
+          if (generationRef.current !== myGeneration) return; // 別ウィンドウへ切替済み: 破棄
           if (status === 200 && !('error' in body) && body.resolved) {
             stopPolling();
             setState({ kind: 'session', sessionId: body.sessionId, agentType: body.agentType, paneId: body.paneId, agentDetected: body.agentDetected });
@@ -101,6 +105,7 @@ export default function WindowChatPanel({ windowId }: WindowChatPanelProps) {
           pollTimerRef.current = setTimeout(tick, POST_SEND_POLL_INTERVAL_MS);
         })
         .catch(() => {
+          if (generationRef.current !== myGeneration) return; // 別ウィンドウへ切替済み: 破棄
           if (pollAttemptsRef.current >= POST_SEND_POLL_MAX_ATTEMPTS) {
             stopPolling();
             return;

@@ -32,7 +32,7 @@ const AGENT_COMMAND_EXACT = new Set(['claude', 'codex']);
 
 // ─── Helpers ───
 
-function splitWindowTarget(tmuxTarget: string): { sessionName: string; windowSpec: string } {
+export function splitWindowTarget(tmuxTarget: string): { sessionName: string; windowSpec: string } {
   const stripped = stripPaneSuffix(tmuxTarget);
   const colonIndex = stripped.indexOf(':');
   if (colonIndex === -1) return { sessionName: stripped, windowSpec: '' };
@@ -227,11 +227,16 @@ export class WindowSessionResolver {
   ): Promise<{ paneId: string; agentDetected: boolean } | null> {
     if (windowPanes.length === 0) return null;
 
+    // pane 選択には paneLayout メタを引き続き使う（Important #3 修正前と同じ優先順位）。ただし
+    // agentDetected はここでは決定しない — メタは「作成時点でエージェント用と確定していた」ことしか
+    // 示さず、その後エージェントが落ちて bash に戻った pane でも一致し続けるため、警告を誤って
+    // 抑制してしまう。agentDetected は選択後に live な currentCommand から判定し直す。
     const metaMatch = findPaneLayoutMatch(window.paneLayout, windowPanes, sessionId, agentType);
-    if (metaMatch) return { paneId: metaMatch, agentDetected: true };
 
     let paneId: string | null;
-    if (windowPanes.some((p) => AGENT_COMMAND_EXACT.has(p.currentCommand.toLowerCase()))) {
+    if (metaMatch) {
+      paneId = metaMatch;
+    } else if (windowPanes.some((p) => AGENT_COMMAND_EXACT.has(p.currentCommand.toLowerCase()))) {
       paneId = selectPane(windowPanes, null, window.paneLayout, sessionId, agentType);
     } else {
       const activePaneIndex = await this.findActivePaneIndex(server, window);

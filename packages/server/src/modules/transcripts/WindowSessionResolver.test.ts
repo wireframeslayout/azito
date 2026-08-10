@@ -247,7 +247,10 @@ describe('WindowSessionResolver', () => {
     expect(result).toEqual({ resolved: false, reason: 'no_recent_session', agentDetected: false });
   });
 
-  it('best-effort: reports agentDetected true when a paneLayout meta entry matches the window workerType, even with no session', async () => {
+  it('best-effort: paneLayout meta still picks the pane, but agentDetected is false when the live command is not claude/codex (Important #3)', async () => {
+    // The pane's currentCommand is 'bash' — the agent that used to run here has died and dropped back
+    // to a shell. A stale paneLayout meta match must not report agentDetected:true in that case (it
+    // would hide the "agent not running" warning from the user).
     const panes: TmuxPaneInfo[] = [
       { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'bash' },
     ];
@@ -259,7 +262,7 @@ describe('WindowSessionResolver', () => {
         paneLayout: { layout: 'even-horizontal', panes: [{ index: 0, command: null, workingDirectory: null, title: null, workerType: 'claude' }] },
       }),
     );
-    expect(result).toEqual({ resolved: false, reason: 'no_recent_session', paneId: '%1', agentType: 'claude', agentDetected: true });
+    expect(result).toEqual({ resolved: false, reason: 'no_recent_session', paneId: '%1', agentType: 'claude', agentDetected: false });
   });
 
   it('priority 3: prefers a pane whose current command looks like an agent over the active pane', async () => {
@@ -396,7 +399,7 @@ describe('WindowSessionResolver', () => {
     expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%2', agentDetected: true });
   });
 
-  it('pane selection: paneLayout meta (agentSessionId) wins over an unrelated exact-command pane', async () => {
+  it('pane selection: paneLayout meta (agentSessionId) wins over an unrelated exact-command pane, but agentDetected reflects the live command (Important #3)', async () => {
     const panes: TmuxPaneInfo[] = [
       { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'claude' },
       { paneId: '%2', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 1, currentPath: '/proj', currentCommand: 'bash' },
@@ -419,7 +422,9 @@ describe('WindowSessionResolver', () => {
         },
       }),
     );
-    expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%2', agentDetected: true });
+    // Pane selection still honors the meta match (paneId '%2'), but that pane's live command is 'bash'
+    // (the agent died), so agentDetected must be false rather than trusting the stale meta.
+    expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%2', agentDetected: false });
   });
 
   it('does not consult the task at all when the window has no taskId', async () => {

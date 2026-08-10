@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { WindowInputService } from './WindowInputService';
 import type { IWindowRepository, Window } from '../windows/Window';
-import type { TmuxClient } from '../tmux/TmuxClient';
+import type { TmuxClient, TmuxPaneInfo } from '../tmux/TmuxClient';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 
 const LOCAL_SERVER: ServerConfig = {
@@ -39,9 +39,22 @@ function buildWindow(overrides: Partial<Window> = {}): Window {
   };
 }
 
+function buildPane(overrides: Partial<TmuxPaneInfo> = {}): TmuxPaneInfo {
+  return {
+    paneId: '%1',
+    sessionName: 'main',
+    windowIndex: 0,
+    windowName: 'agent',
+    paneIndex: 0,
+    currentPath: '/tmp',
+    currentCommand: 'claude',
+    ...overrides,
+  };
+}
+
 function buildDeps(opts: {
   findById?: IWindowRepository['findById'];
-  checkPaneExists?: TmuxClient['checkPaneExists'];
+  listAllPanes?: TmuxClient['listAllPanes'];
   sendLiteralText?: TmuxClient['sendLiteralText'];
   sendKeys?: TmuxClient['sendKeys'];
   servers?: ServerConfig[];
@@ -53,7 +66,7 @@ function buildDeps(opts: {
   const calls: { sendLiteralText: unknown[]; sendKeys: unknown[] } = { sendLiteralText: [], sendKeys: [] };
 
   const tmuxClient = {
-    checkPaneExists: opts.checkPaneExists ?? (async () => true),
+    listAllPanes: opts.listAllPanes ?? (async () => [buildPane()]),
     sendLiteralText: opts.sendLiteralText ?? (async (...args: unknown[]) => { calls.sendLiteralText.push(args); }),
     sendKeys: opts.sendKeys ?? (async (...args: unknown[]) => { calls.sendKeys.push(args); }),
   } as unknown as TmuxClient;
@@ -82,7 +95,17 @@ describe('WindowInputService', () => {
     });
 
     it('returns pane_not_found when the pane no longer exists', async () => {
-      const { windowRepo, tmuxClient, serverRepo } = buildDeps({ checkPaneExists: async () => false });
+      const { windowRepo, tmuxClient, serverRepo } = buildDeps({ listAllPanes: async () => [] });
+      const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
+      const result = await service.sendInput(42, '%1', 'hello');
+      expect(result).toBe('pane_not_found');
+    });
+
+    it('returns pane_not_found when the pane exists but belongs to a different window (cross-window attack)', async () => {
+      // paneId '%1' is real, but lives in session "other", window 0 — not the target window "main:0".
+      const { windowRepo, tmuxClient, serverRepo } = buildDeps({
+        listAllPanes: async () => [buildPane({ paneId: '%1', sessionName: 'other', windowIndex: 0 })],
+      });
       const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
       const result = await service.sendInput(42, '%1', 'hello');
       expect(result).toBe('pane_not_found');
@@ -107,7 +130,16 @@ describe('WindowInputService', () => {
     });
 
     it('returns pane_not_found when the pane no longer exists', async () => {
-      const { windowRepo, tmuxClient, serverRepo } = buildDeps({ checkPaneExists: async () => false });
+      const { windowRepo, tmuxClient, serverRepo } = buildDeps({ listAllPanes: async () => [] });
+      const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
+      const result = await service.sendSignal(42, '%1', 'interrupt');
+      expect(result).toBe('pane_not_found');
+    });
+
+    it('returns pane_not_found when the pane exists but belongs to a different window (cross-window attack)', async () => {
+      const { windowRepo, tmuxClient, serverRepo } = buildDeps({
+        listAllPanes: async () => [buildPane({ paneId: '%1', sessionName: 'other', windowIndex: 0 })],
+      });
       const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
       const result = await service.sendSignal(42, '%1', 'interrupt');
       expect(result).toBe('pane_not_found');
