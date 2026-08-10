@@ -36,7 +36,7 @@ const AGENT_COMMAND_EXACT = new Set(['claude', 'codex']);
  * agentDetected 判定レイヤー3（セッション活動シグナル）: 解決済みセッションの JSONL がこの時間
  * 以内に更新されていれば、エージェントが実際に書き込み中＝生きているとみなす。
  */
-const SESSION_ACTIVITY_WINDOW_MS = 120 * 1000;
+export const SESSION_ACTIVITY_WINDOW_MS = 120 * 1000;
 /** レイヤー2（プロセス実体検査）／プロセス起動時刻ゲートの `ps` 実行に使うコマンド。pid/ppid/etimes/args を取得する。 */
 const PS_COMMAND = 'ps -e -o pid=,ppid=,etimes=,args=';
 /**
@@ -254,6 +254,45 @@ export class WindowSessionResolver {
     const fallback = await this.resolvePaneWithDetection(server, window, windowPanes, '', fallbackAgentType ?? '', psEntries);
     if (!fallback) return { resolved: false, reason, agentDetected: false };
     return { resolved: false, reason, paneId: fallback.paneId, agentType: fallbackAgentType, agentDetected: fallback.agentDetected };
+  }
+
+  /**
+   * 軽量な三値の稼働判定（Issue #338 フォロー、AZITO監視強化: agent-activity が hook/supervisor
+   * 接続を前提とするのに対し、こちらは resolve() のレイヤー2（プロセス実体検査）・レイヤー3
+   * （セッション mtime 活動シグナル、SESSION_ACTIVITY_WINDOW_MS を共有）だけを使い、hook/supervisor
+   * の配線が無いウィンドウ（手動で立てた codex/claude ペイン等）でも「実際に動いているか」を
+   * 判定できるようにする。resolve() 自体（セッション*解決*のための優先順位付きロジック）とは別の
+   * 軽量パスとして独立させてある — 呼び出し元（WindowActivityStatusService）は「このウィンドウの
+   * どれかの pane に claude/codex プロセスが存在するか」「window/task に紐づくセッションが直近
+   * 書き込まれているか」だけを知りたく、cwd 照合フォールバック等の解決優先順位は不要なため。
+   *
+   * - 'offline': server が見つからない／非local／pane が無い／ps 呼び出し失敗／どの pane にも
+   *   claude/codex プロセスが見当たらない。
+   * - 'working': プロセスは見つかり、かつ window.agentSessionId（無ければ紐づく task の
+   *   agentSessionId）のセッションファイルが直近 SESSION_ACTIVITY_WINDOW_MS 以内に更新されている。
+   * - 'idle': プロセスは見つかったが、セッションが未設定、またはセッション mtime が古い
+   *   （エージェントプロセス自体は生きているがユーザー入力待ち等で書き込みが止まっている）。
+   */
+  async getActivityStatus(window: Window): Promise<'working' | 'idle' | 'offline'> {
+    const server = this.serverRepo.findByName(window.serverName);
+    if (!server || server.type !== 'local') return 'offline';
+
+    const windowPanes = await this.getWindowPanes(server, window);
+    const detection = await this.detectWindowAgentProcess(server, windowPanes);
+    if (!detection || detection.processStartMs === null) return 'offline';
+
+    const sessionId = window.agentSessionId
+      ?? (window.taskId !== null ? this.taskRepo.findById(window.taskId)?.agentSessionId ?? null : null);
+    if (!sessionId) return 'idle';
+
+    const agentType = window.workerType
+      ?? (detection.agentTypes.size === 1 ? [...detection.agentTypes][0] : null);
+    if (!agentType) return 'idle';
+
+    const source = this.sources.find((s) => s.agentType === agentType);
+    const mtimeMs = source?.getSessionMtimeMs(sessionId) ?? null;
+    if (mtimeMs !== null && Date.now() - mtimeMs <= SESSION_ACTIVITY_WINDOW_MS) return 'working';
+    return 'idle';
   }
 
   /**

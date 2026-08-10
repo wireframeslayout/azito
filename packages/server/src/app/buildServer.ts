@@ -44,6 +44,7 @@ import transcriptsRoutes from '../modules/transcripts/routes';
 import { TRANSCRIPT_SOURCES, claudeTranscriptSource } from '../modules/transcripts/sources/registry';
 import { TranscriptPaneService } from '../modules/transcripts/TranscriptPaneService';
 import { WindowSessionResolver } from '../modules/transcripts/WindowSessionResolver';
+import { WindowActivityStatusService } from '../modules/windows/WindowActivityStatusService';
 import { WindowInputService } from '../modules/transcripts/WindowInputService';
 
 import { createTokenVerifier } from '../modules/servers/auth/tokenAuth';
@@ -217,6 +218,12 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
 
   // ─── HTTP routes ───
 
+  // windowSessionResolver: shared between transcriptsRoutes (session resolution) and
+  // windowsRoutes (process-based activity-status supplement, Issue #338 フォロー) — a single
+  // instance avoids duplicating the ps/tmux lookups.
+  const windowSessionResolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, TRANSCRIPT_SOURCES, sessionCaptureService);
+  const windowActivityStatusService = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver);
+
   await app.register(serversRoutes, { serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix });
   await app.register(sessionsRoutes, { serverRepo, tmux: tmuxClient, windowRepo, notificationBus, resourceGuard });
   await app.register(fileBrowseRoutes, { serverRepo, tmux: tmuxClient });
@@ -225,7 +232,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   await app.register(unitsRoutes, { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, projectServerRepo, serverRepo, sidekickLoader: sidekickPackageLoader, unitTypeLoader });
   await app.register(operationsRoutes, { executeTaskUseCase, agentActivityMonitor });
   await app.register(tasksRoutes, { taskRepo, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux: tmuxClient, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService: windowRespawnService, taskRestoreService, unitTypeLoader, sidekickLoader: sidekickPackageLoader, projectSecretRepo });
-  await app.register(windowsRoutes, { windowRepo, projectRepo, taskRepo, tmux: tmuxClient, serverRepo, respawnService: windowRespawnService, sessionStrategyFactory, sessionCaptureService, supervisorRegistry, notificationBus, resourceGuard });
+  await app.register(windowsRoutes, { windowRepo, projectRepo, taskRepo, tmux: tmuxClient, serverRepo, respawnService: windowRespawnService, sessionStrategyFactory, sessionCaptureService, supervisorRegistry, windowActivityStatusService, notificationBus, resourceGuard });
   await app.register(providersRoutes, { providerRepo: wiring.providerRepo });
   const renderSkillPromptUseCase = new RenderSkillPromptUseCase(
     taskRepo,
@@ -267,7 +274,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   await app.register(transcriptsRoutes, {
     sources: TRANSCRIPT_SOURCES,
     transcriptPaneService: new TranscriptPaneService(claudeTranscriptSource, tmuxClient, serverRepo),
-    windowSessionResolver: new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, TRANSCRIPT_SOURCES, sessionCaptureService),
+    windowSessionResolver,
     windowInputService: new WindowInputService(windowRepo, tmuxClient, serverRepo),
     windowRepo,
   });

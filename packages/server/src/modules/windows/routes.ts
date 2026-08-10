@@ -14,6 +14,7 @@ import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLa
 import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
 import { isSameWindowTarget, stripPaneSuffix } from './paneTarget';
 import type { SessionCaptureService } from './SessionCaptureService';
+import type { WindowActivityStatusService } from './WindowActivityStatusService';
 
 export interface WindowsRouteOptions {
   windowRepo: IWindowRepository;
@@ -25,12 +26,13 @@ export interface WindowsRouteOptions {
   sessionStrategyFactory: ISessionStrategyFactory;
   sessionCaptureService: SessionCaptureService;
   supervisorRegistry: SupervisorRegistry;
+  windowActivityStatusService: WindowActivityStatusService;
   notificationBus?: NotificationBus;
   resourceGuard?: ResourceGuard;
 }
 
 const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts, done) => {
-  const { windowRepo, projectRepo, taskRepo, tmux, serverRepo, respawnService, sessionStrategyFactory, sessionCaptureService, supervisorRegistry } = opts;
+  const { windowRepo, projectRepo, taskRepo, tmux, serverRepo, respawnService, sessionStrategyFactory, sessionCaptureService, supervisorRegistry, windowActivityStatusService } = opts;
 
   function notifyWindowsChanged(serverName: string): void {
     opts.notificationBus?.emit({ type: 'sessions:updated', payload: { serverName } });
@@ -382,6 +384,13 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       return { supervised, ready: null, childCommand: win?.launchCommand ?? null };
     },
   );
+
+  // ── GET /api/windows/activity-status ──
+  // プロセス実体検査ベースの軽量な稼働判定（Issue #338 フォロー）。hook/tui-supervisor 接続の
+  // 有無に関わらず、全 local エージェントウィンドウの working/idle/offline を返す。既存の
+  // /api/agent-activity（AgentActivityMonitor、通知配信を伴う本監視）とは独立した補完 API で、
+  // その挙動には一切影響しない。60秒キャッシュ済み（WindowActivityStatusService 参照）。
+  fastify.get('/api/windows/activity-status', async () => windowActivityStatusService.list());
 
   done();
 };

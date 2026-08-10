@@ -10,6 +10,7 @@ import type { IProjectRepository } from '../projects/Project';
 import type { ITaskRepository } from '../tasks/Task';
 import type { SupervisorRegistry, SupervisorEntry } from '../supervisors/SupervisorRegistry';
 import type { SessionCaptureService } from './SessionCaptureService';
+import type { WindowActivityStatusService } from './WindowActivityStatusService';
 
 function makeSupervisorRegistry(
   entries: SupervisorEntry[] = [],
@@ -20,6 +21,10 @@ function makeSupervisorRegistry(
     hasRecentChildExit: (_serverName: string, target: string) => exitedTargets.includes(target),
     clearExitMarker: vi.fn(),
   } as unknown as SupervisorRegistry;
+}
+
+function makeWindowActivityStatusService(): WindowActivityStatusService {
+  return { list: async () => [] } as unknown as WindowActivityStatusService;
 }
 
 function makeWindow(overrides: Partial<Window> = {}): Window {
@@ -105,6 +110,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
       } as unknown as ISessionStrategyFactory,
       sessionCaptureService: { scheduleInitialScan: vi.fn() } as unknown as SessionCaptureService,
       supervisorRegistry: makeSupervisorRegistry(),
+      windowActivityStatusService: makeWindowActivityStatusService(),
     });
     await app.ready();
   });
@@ -241,6 +247,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
       } as unknown as ISessionStrategyFactory,
       sessionCaptureService: { scheduleInitialScan: vi.fn() } as unknown as SessionCaptureService,
       supervisorRegistry: makeSupervisorRegistry(),
+      windowActivityStatusService: makeWindowActivityStatusService(),
     });
     await codexApp.ready();
 
@@ -282,6 +289,7 @@ describe('GET /api/windows/pane-loading-state', () => {
       sessionStrategyFactory: {} as ISessionStrategyFactory,
       sessionCaptureService: { scheduleInitialScan: vi.fn() } as unknown as SessionCaptureService,
       supervisorRegistry: makeSupervisorRegistry(supervisorEntries, exitedTargets),
+      windowActivityStatusService: makeWindowActivityStatusService(),
     });
     await instance.ready();
     return instance;
@@ -393,6 +401,7 @@ describe('POST /api/windows/:id/respawn — execution gate (Issue #328 second-ro
       sessionStrategyFactory: {} as ISessionStrategyFactory,
       sessionCaptureService: { scheduleInitialScan: vi.fn() } as unknown as SessionCaptureService,
       supervisorRegistry: makeSupervisorRegistry(),
+      windowActivityStatusService: makeWindowActivityStatusService(),
     });
     await instance.ready();
     return instance;
@@ -438,5 +447,32 @@ describe('POST /api/windows/:id/respawn — execution gate (Issue #328 second-ro
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ ok: true, tmuxTarget: 'proj:win1' });
+  });
+});
+
+describe('GET /api/windows/activity-status (Issue #338 フォロー: process-based liveness supplement)', () => {
+  it('proxies the WindowActivityStatusService snapshot as-is', async () => {
+    const entries = [
+      { windowId: 20, serverName: 'local', target: 'test:win--39vh', status: 'working' as const, projectId: 6 },
+    ];
+    const app = Fastify();
+    await app.register(windowsRoutes, {
+      windowRepo: {} as IWindowRepository,
+      projectRepo: {} as IProjectRepository,
+      taskRepo: {} as ITaskRepository,
+      tmux: {} as TmuxClient,
+      serverRepo: {} as IServerRepository,
+      respawnService: {} as WindowRespawnService,
+      sessionStrategyFactory: {} as ISessionStrategyFactory,
+      sessionCaptureService: { scheduleInitialScan: vi.fn() } as unknown as SessionCaptureService,
+      supervisorRegistry: makeSupervisorRegistry(),
+      windowActivityStatusService: { list: async () => entries } as unknown as WindowActivityStatusService,
+    });
+    await app.ready();
+
+    const res = await app.inject({ method: 'GET', url: '/api/windows/activity-status' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual(entries);
   });
 });

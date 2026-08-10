@@ -826,4 +826,96 @@ describe('WindowSessionResolver', () => {
       expect(result).toEqual({ resolved: false, reason: 'no_recent_session', paneId: '%1', agentType: 'claude', agentDetected: true });
     });
   });
+
+  describe('getActivityStatus (Issue #338 フォロー: process-based working/idle/offline classification)', () => {
+    const PS_OUTPUT_WITH_CLAUDE_DESCENDANT = [
+      '  9000      1     90 node /path/to/azito-supervisor.cjs -- claude --dangerously-skip-permissions',
+      '  9001   9000     42 claude --dangerously-skip-permissions --model claude-opus-4-6[1m]',
+    ].join('\n');
+    const PS_OUTPUT_NO_AGENT = ['  9000      1     90 node /path/to/some-other-script.js'].join('\n');
+
+    it('returns offline when the server is not local', async () => {
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({ servers: [AGENT_SERVER] });
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const status = await resolver.getActivityStatus(buildWindow({ serverName: 'agent1' }));
+      expect(status).toBe('offline');
+    });
+
+    it('returns offline when no agent process is found in any pane', async () => {
+      const panes: TmuxPaneInfo[] = [
+        { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'bash' },
+      ];
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+        listAllPanes: async () => panes,
+        getPanePid: async () => 9000,
+        execCommand: async () => ({ stdout: PS_OUTPUT_NO_AGENT, stderr: '', code: 0 }),
+      });
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const status = await resolver.getActivityStatus(buildWindow());
+      expect(status).toBe('offline');
+    });
+
+    it('returns idle when a process is alive but the window has no linked session', async () => {
+      const panes: TmuxPaneInfo[] = [
+        { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
+      ];
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+        listAllPanes: async () => panes,
+        getPanePid: async () => 9000,
+        execCommand: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
+      });
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const status = await resolver.getActivityStatus(buildWindow({ agentSessionId: null, taskId: null }));
+      expect(status).toBe('idle');
+    });
+
+    it('returns idle when the linked session mtime is stale (>120s)', async () => {
+      const panes: TmuxPaneInfo[] = [
+        { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
+      ];
+      const staleMtime = Date.now() - 121 * 1000;
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+        listAllPanes: async () => panes,
+        getPanePid: async () => 9000,
+        execCommand: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
+        claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? staleMtime : null),
+      });
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const status = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
+      expect(status).toBe('idle');
+    });
+
+    it('returns working when a process is alive and its linked session was written within 120s', async () => {
+      const panes: TmuxPaneInfo[] = [
+        { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
+      ];
+      const recentMtime = Date.now() - 5 * 1000;
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+        listAllPanes: async () => panes,
+        getPanePid: async () => 9000,
+        execCommand: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
+        claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
+      });
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const status = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
+      expect(status).toBe('working');
+    });
+
+    it('falls back to the task-linked session when the window has no agentSessionId of its own', async () => {
+      const panes: TmuxPaneInfo[] = [
+        { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
+      ];
+      const recentMtime = Date.now() - 5 * 1000;
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+        listAllPanes: async () => panes,
+        getPanePid: async () => 9000,
+        execCommand: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
+        findById: () => buildTask({ agentSessionId: SID_CLAUDE }),
+        claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
+      });
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const status = await resolver.getActivityStatus(buildWindow({ agentSessionId: null, taskId: 7, workerType: 'claude' }));
+      expect(status).toBe('working');
+    });
+  });
 });

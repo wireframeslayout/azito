@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api/client';
 import type { AgentActivityPayload } from '../types/notification';
 import { stripPaneSuffix } from '../utils/tmuxTarget';
@@ -9,13 +9,33 @@ export interface AgentActivityInfo {
   serverName: string;
   target: string;
   running: boolean;
-  source: 'operation' | 'manual' | 'supervised';
+  /**
+   * 'process' はどのソースにもない補完エントリ（Issue #338 フォロー）: hook/tui-supervisor の
+   * 配線が無い手動起動ウィンドウでも、GET /api/windows/activity-status（プロセス実体検査ベース）が
+   * 'working' と判定したものを補う。既存3ソースの実エントリが既にあるキーには決して被せない
+   * （mergeProcessSupplement 参照）。
+   */
+  source: 'operation' | 'manual' | 'supervised' | 'process';
   taskId?: number;
   projectId?: number;
   label?: string;
   status: 'working' | 'blocked';
   paneName?: string;
 }
+
+/** GET /api/windows/activity-status の1件（WindowActivityStatusService、Issue #338 フォロー）。 */
+interface WindowActivityStatusEntry {
+  windowId: number;
+  serverName: string;
+  target: string;
+  status: 'working' | 'idle' | 'offline';
+  taskId?: number;
+  projectId?: number;
+  label?: string;
+}
+
+/** GET /api/windows/activity-status のポーリング間隔。サーバー側キャッシュ（60秒 TTL）に合わせる。 */
+const PROCESS_STATUS_POLL_MS = 60_000;
 
 interface AgentActivitySnapshotEntry {
   serverName: string;
@@ -143,7 +163,7 @@ function saveFinishedEntries(entries: FinishedEntry[]): void {
 }
 
 export function AgentActivityProvider({ children }: { children: React.ReactNode }) {
-  const [entries, setEntries] = useState<Map<string, AgentActivityInfo>>(new Map());
+  const [baseEntries, setEntries] = useState<Map<string, AgentActivityInfo>>(new Map());
   const { activeTabId, focusedTarget } = useWorkspaceTargets();
   const browserFocused = useBrowserFocused();
   const [finished, setFinished] = useState<FinishedEntry[]>(loadFinishedEntries);
@@ -159,6 +179,56 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
     fetchSnapshot();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // プロセス実体検査ベースの補完（Issue #338 フォロー）: hook/tui-supervisor が接続していない
+  // 手動起動ウィンドウでも「working」を拾えるよう、/api/windows/activity-status を並行してポーリング
+  // する。既存の AgentActivityMonitor（/api/agent-activity、通知配信を伴う）の挙動には一切触れず、
+  // baseEntries に無いキーだけを補う（下記 entries の useMemo 参照）。
+  const [processEntries, setProcessEntries] = useState<Map<string, AgentActivityInfo>>(new Map());
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchProcessStatus = () => {
+      api<WindowActivityStatusEntry[]>('/windows/activity-status')
+        .then((list) => {
+          if (cancelled) return;
+          const map = new Map<string, AgentActivityInfo>();
+          for (const e of list) {
+            if (e.status !== 'working') continue;
+            map.set(activityKey(e.serverName, e.target), {
+              serverName: e.serverName,
+              target: e.target,
+              running: true,
+              source: 'process',
+              taskId: e.taskId,
+              projectId: e.projectId,
+              label: e.label,
+              status: 'working',
+            });
+          }
+          setProcessEntries(map);
+        })
+        .catch(() => { /* best-effort supplement; base entries remain authoritative */ });
+    };
+    fetchProcessStatus();
+    const interval = setInterval(fetchProcessStatus, PROCESS_STATUS_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  // baseEntries（AgentActivityMonitor 由来、hook/notification で即時更新）を常に優先し、
+  // processEntries はそこに存在しないキーだけを補う純粋な追加専用マージ。baseEntries 側の
+  // 状態（blocked 等）を上書き・削除することは無い。
+  const entries = useMemo(() => {
+    if (processEntries.size === 0) return baseEntries;
+    const merged = new Map(baseEntries);
+    for (const [key, info] of processEntries) {
+      if (!merged.has(key)) merged.set(key, info);
+    }
+    return merged;
+  }, [baseEntries, processEntries]);
 
   useNotificationChannel({
     onAgentActivity: (payload: AgentActivityPayload) => {
