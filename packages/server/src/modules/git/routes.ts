@@ -3,9 +3,11 @@ import type { IServerRepository } from '../servers/Server';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { ITaskRepository } from '../tasks/Task';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
-import { GitDiffService, SAFE_PATH, SAFE_BRANCH, SAFE_HASH } from './GitDiffService';
+import { GitDiffService, SAFE_PATH, SAFE_BRANCH, SAFE_HASH, type DiffScope } from './GitDiffService';
 import type { WorktreeServiceFactory } from './WorktreeServiceFactory';
 import { shellQuote } from '../../shared/shellQuote';
+
+const VALID_SCOPES = new Set<string>(['uncommitted', 'base', 'commit']);
 
 export interface GitRouteOptions {
   serverRepo: IServerRepository;
@@ -42,7 +44,7 @@ const gitRoutes: FastifyPluginCallback<GitRouteOptions> = (fastify, opts, done) 
   );
 
   // ── GET /api/servers/:name/git/diff ──
-  fastify.get<{ Params: { name: string }; Querystring: { path?: string; base?: string; commit?: string } }>(
+  fastify.get<{ Params: { name: string }; Querystring: { path?: string; base?: string; commit?: string; scope?: string; includeUncommitted?: string } }>(
     '/api/servers/:name/git/diff',
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
@@ -58,8 +60,18 @@ const gitRoutes: FastifyPluginCallback<GitRouteOptions> = (fastify, opts, done) 
       const commit = (request.query.commit || '').trim();
       if (commit && !SAFE_HASH.test(commit)) return reply.status(400).send({ error: 'Invalid commit hash' });
 
+      const scopeRaw = (request.query.scope || '').trim();
+      if (scopeRaw && !VALID_SCOPES.has(scopeRaw)) return reply.status(400).send({ error: 'Invalid scope' });
+      const scope = scopeRaw as DiffScope | undefined;
+
+      const includeUncommittedRaw = (request.query.includeUncommitted || '').trim();
+      const includeUncommitted = includeUncommittedRaw === '' ? undefined : includeUncommittedRaw !== 'false';
+
       try {
-        return await gitDiffService.getDiff(srv, dirPath, base, commit || undefined);
+        return await gitDiffService.getDiff(srv, dirPath, base, commit || undefined, {
+          scope: scope || undefined,
+          includeUncommitted,
+        });
       } catch (e) {
         return reply.status(500).send({ error: e instanceof Error ? e.message : 'Failed to get diff' });
       }
