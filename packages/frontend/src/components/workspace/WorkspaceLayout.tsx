@@ -4,7 +4,6 @@ import { Icon } from '../ui/Icon';
 import { useNavigate } from 'react-router-dom';
 import type { SidebarMode } from '../../pages/workspace/types';
 import { paths } from '../../paths';
-import { MobileMenuBar } from './MobileMenuBar';
 import { MobileNavSheet } from './MobileNavSheet';
 import ContextMenu, { useContextMenu } from '../ContextMenu';
 import type { ContextMenuItem } from '../ContextMenu';
@@ -68,22 +67,9 @@ interface WorkspaceLayoutProps {
   contextMenu: React.ReactNode;
   confirmDialog: React.ReactNode;
   modals: React.ReactNode;
-  onSendKey?: (key: string) => void;
   connectPane?: (serverName: string, target: string, projectId?: number) => void;
   openTask?: (taskId: number, title: string, projectId?: number) => void;
   taskWindows?: Array<{ serverName: string; tmuxTarget: string; taskId: number }>;
-  /**
-   * SP タブチップ行導入（Issue #69 Phase E-3）: ターミナル/チャット表示中は
-   * 下部フローティングメニューバーを自動退避させる。バーの恒久非表示にはせず
-   * — タブ未選択時（sidebarOpen と同様に）は従来どおり表示する。既存の
-   * sidebarOpen による非表示条件とは OR で合成される。
-   */
-  hideMenuBar?: boolean;
-  /** SP下部バー（Issue #69 修正4 / S1提案）: ラベル付き5項目 [ホーム/タブ/追加/通知/その他] に必要な配線。 */
-  mobileTabCount?: number;
-  onMobileGoHome?: () => void;
-  onMobileOpenTabSwitcher?: () => void;
-  onMobileOpenAddTab?: () => void;
   /** SP の M1 メニュー「オブジェクト」行に表示する総件数（Issue #69 T1）。 */
   objectsCount?: number;
 }
@@ -110,15 +96,9 @@ export default function WorkspaceLayout({
   contextMenu,
   confirmDialog,
   modals,
-  onSendKey,
   connectPane,
   openTask,
   taskWindows,
-  hideMenuBar,
-  mobileTabCount,
-  onMobileGoHome,
-  onMobileOpenTabSwitcher,
-  onMobileOpenAddTab,
   objectsCount,
 }: WorkspaceLayoutProps) {
   const { t } = useTranslation(['workspace', 'common', 'projects']);
@@ -345,20 +325,6 @@ export default function WorkspaceLayout({
       >
         {children}
       </div>
-
-      {mobile && (
-        <MobileMenuBar
-          tabCount={mobileTabCount ?? 0}
-          onGoHome={onMobileGoHome ?? (() => {})}
-          onOpenTabSwitcher={onMobileOpenTabSwitcher ?? (() => {})}
-          onOpenAddTab={onMobileOpenAddTab ?? (() => {})}
-          onSendKey={onSendKey}
-          hidden={sidebarOpen || hideMenuBar}
-          connectPane={connectPane}
-          openTask={openTask}
-          taskWindows={taskWindows}
-        />
-      )}
 
       {modals}
 

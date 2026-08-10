@@ -18,9 +18,9 @@ export interface GlassPopoverProps {
 }
 
 /**
- * ガラス表現のポップオーバー。モバイルフローティングメニュー（MobileMenuBar）から
- * プロジェクト切替・その他・設定の各メニューとして利用する汎用コンポーネント。
- * 外側タップ / Esc で閉じる。prefers-reduced-motion 時はアニメーション無効（global.css）。
+ * ガラス表現のポップオーバー。プロジェクト切替・その他・設定の各メニューとして利用する
+ * 汎用コンポーネント。外側タップ / Esc で閉じる。prefers-reduced-motion 時はアニメーション
+ * 無効（global.css）。
  */
 export function GlassPopover({ open, onClose, label, items, align = 'left', ariaLabel }: GlassPopoverProps) {
   const ref = useRef<HTMLDivElement>(null);

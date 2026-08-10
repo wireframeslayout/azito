@@ -450,45 +450,6 @@ function WorkspaceInner() {
 
   const { focus, setFocus } = useGlobalFocus();
 
-  const resolveOverlayTarget = useCallback((): { serverName: string; tmuxTarget: string } | null => {
-    if (focus.serverName && focus.tmuxTarget) {
-      return { serverName: focus.serverName, tmuxTarget: focus.tmuxTarget };
-    }
-    if (focusedActiveTabId?.startsWith('terminal:')) {
-      const rest = focusedActiveTabId.slice('terminal:'.length);
-      const slashIdx = rest.indexOf('/');
-      if (slashIdx > 0) {
-        return { serverName: rest.slice(0, slashIdx), tmuxTarget: rest.slice(slashIdx + 1) };
-      }
-    }
-    const activeTab = tabs.find((t) => t.id === focusedActiveTabId);
-    if (activeTab?.type === 'task' && activeTab.entityId) {
-      const task = tasks.find((t) => t.id === activeTab.entityId) ?? allTasks.find((t) => t.id === activeTab.entityId);
-      const displayed = resolveDisplayedTaskTerminal(activeTab.entityId, task?.windows ?? []);
-      if (displayed) {
-        return { serverName: displayed.serverName, tmuxTarget: displayed.target };
-      }
-    }
-    return null;
-  }, [focus.serverName, focus.tmuxTarget, focusedActiveTabId, tabs, tasks, allTasks]);
-
-  const handleOverlaySendKey = useCallback(async (key: string) => {
-    const target = resolveOverlayTarget();
-    if (!target) {
-      showToast(t('workspace:toast.noTerminalSelected'));
-      return;
-    }
-    try {
-      const res = await api<{ ok?: boolean; error?: string }>(
-        `/servers/${target.serverName}/panes/${encodeURIComponent(target.tmuxTarget)}/send-keys`,
-        { method: 'POST', body: JSON.stringify({ keys: [key] }) },
-      );
-      if (res?.error) showToast(t('workspace:toast.sendKeysFailed', { error: res.error }));
-    } catch (e) {
-      showToast(t('workspace:toast.sendKeysFailed', { error: e instanceof Error ? e.message : String(e) }));
-    }
-  }, [resolveOverlayTarget, showToast]);
-
   // `projectId` is the caller's own tab.projectId (or, for callers with no owning tab yet — e.g. the
   // sidebar FileExplorer, which is always scoped to the routed project — currentProjectId), never
   // inferred from "whichever project is currently routed" here. A split-pane tab opening a file from
@@ -1085,16 +1046,10 @@ function WorkspaceInner() {
       contextMenu={contextMenu ? <ContextMenu menu={contextMenu} onClose={hideContextMenu} /> : null}
       confirmDialog={confirmDialogNode}
       modals={modals}
-      onSendKey={handleOverlaySendKey}
       connectPane={connectPaneFromActiveWindow}
       openTask={openTaskFromActiveWindow}
       taskWindows={taskWindows}
-      hideMenuBar={mobile && !!activeTabId}
       objectsCount={objectsCount}
-      mobileTabCount={tabs.length}
-      onMobileGoHome={() => setActiveTabId(null)}
-      onMobileOpenTabSwitcher={() => setMobileTabSwitcherOpen(true)}
-      onMobileOpenAddTab={handleOpenAddTabFromSwitcher}
     >
         {mobile ? (
           <>

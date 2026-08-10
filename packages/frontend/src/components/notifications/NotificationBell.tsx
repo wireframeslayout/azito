@@ -8,6 +8,12 @@ import { Icon } from '../ui/Icon';
  * ProjectSidebar のレール上に置く通知ベル。未読数バッジ付きボタン＋アンカー式ポップオーバー。
  * UsageDropdown と同様、自前で開閉状態とパネル位置を管理する（GlassPopover はモバイルの
  * フローティングメニュー専用のボトムシート的な配置のため、この用途では使わない）。
+ *
+ * TODO(Issue #69 T6): SP では導線なし。ProjectSidebar 自体が `.project-sidebar-desktop`
+ * （Layout.tsx、`@media (max-width: 768px)` で `display: none`）で非表示になるため、この
+ * コンポーネントは SP では描画されない。旧 SP 下部バー（MobileMenuBar）の通知ボタン経由の
+ * NotificationCenterPanel アクセスも T6 で削除済み。将来 SP に通知導線を復活させる場合は
+ * ここか M1 メニュー（MobileNavMenu）に行を追加する。
  */
 export default function NotificationBell() {
   const { t } = useTranslation('notifications');

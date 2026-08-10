@@ -560,53 +560,12 @@ button:focus-within .diff-open-btn {
   outline-offset: 1px;
 }
 
-/* ---- Mobile bottom bar (Issue #267; ラベル付き構成へ刷新 — Issue #69 修正4) ----
-   タブ未選択時（ホーム状態）のみ表示するドック式の下部ナビゲーション。5項目を
-   等幅で並べ、各項目はアイコン+ラベルの縦積み（44px タッチターゲット）。左ボーダー
-   による色分けは禁止のため、状態は文字色・アクセントカラー・バッジのみで示す。 */
-.mobile-menu-bar {
-  transition: opacity 0.2s ease, transform 0.2s ease;
-}
-.mobile-menu-bar.mobile-menu-bar-hidden {
-  opacity: 0;
-  transform: translateY(100%);
-  pointer-events: none;
-}
-.mobile-menu-bar-item {
-  transition: background 0.15s ease, color 0.15s ease;
-}
-.mobile-menu-bar-item:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-.mobile-menu-bar-item:focus-visible,
 .glass-popover-item:focus-visible,
 .notification-bell-btn:focus-visible,
 .notification-row:focus-visible,
 .notification-panel-action:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
-}
-.mi-btn-badge {
-  position: absolute;
-  top: -4px;
-  right: -8px;
-  min-width: 16px;
-  height: 16px;
-  border-radius: var(--radius-full);
-  color: #fff;
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 3px;
-  box-shadow: 0 0 0 2px var(--bg-solid);
-  background: var(--accent);
-}
-.mi-btn-badge-alert {
-  background: var(--danger);
 }
 .notification-bell-btn:hover {
   background: var(--selected-bg);
@@ -675,12 +634,11 @@ button:focus-within .diff-open-btn {
 
 @media (prefers-reduced-motion: reduce) {
   .qa-bar-transition,
-  .mobile-menu-bar,
   .glass-popover,
-  .mobile-menu-bar-item,
   .notification-toast,
   .notification-bell-btn,
   .notification-row,
+  .server-health-sheet,
   .terminal-loading-overlay {
     transition: none !important;
     animation: none !important;
