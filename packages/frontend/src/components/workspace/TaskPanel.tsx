@@ -1132,7 +1132,12 @@ export default function TaskPanel({
               セグメントへ集約 — 個々のウィンドウ/ペインドロップダウンはセグメント選択後の
               ウィンドウバーで行う）+ 常設の＋（ブラウザ追加/ウィンドウ追加） */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 var(--space-3) 8px', overflow: 'hidden' }}>
-            <div style={{ flex: 1, minWidth: 0, overflowX: 'auto' }} className="mobile-scroll-inset">
+            {/* mobile-scroll-inset は「フローティングメニューと重なりうる縦スクロール領域」向けの
+                下部余白クラス（global.css 参照）。ここは横一列のセグメント行で縦スクロールも
+                フローティングメニューとの重なりも起きないため、誤って付けると
+                --mobile-bottom-inset 分（約90px）の余白がそのままこの行の高さに乗ってしまい、
+                セグメント行とウィンドウバーの間に空白帯ができる（実機で確認された不具合）。 */}
+            <div style={{ flex: 1, minWidth: 0, overflowX: 'auto' }}>
               <SegmentedToggle
                 options={mobileSegments}
                 value={mobileActiveSegment}

@@ -56,6 +56,9 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
   const [newCount, setNewCount] = useState(0);
   const [style] = useTranscriptStyle();
   const EntryComponent = STYLE_ENTRY_COMPONENTS[style];
+  // assistant 見出しラベル: サーバー側 IAgentProvider の displayName と重複定義しないよう、
+  // フロント側では agentType.toUpperCase() のみで十分（claude→CLAUDE, codex→CODEX）。
+  const agentLabel = agentType.toUpperCase();
 
   const containerRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -362,7 +365,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
                     {day.dateLabel && <DateDivider label={day.dateLabel} />}
                     {day.items.map(({ group, prevTimestamp }) => (
                       <div key={group.entries[0].uuid} style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 200px' }}>
-                        <EntryComponent group={group} prevTimestamp={prevTimestamp} />
+                        <EntryComponent group={group} prevTimestamp={prevTimestamp} agentLabel={agentLabel} />
                       </div>
                     ))}
                   </div>

@@ -39,8 +39,7 @@
       "tui": "TUI"
     },
     "flow": {
-      "userLabel": "You",
-      "assistantLabel": "Claude"
+      "userLabel": "You"
     }
   },
   "promptBar": {

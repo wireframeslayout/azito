@@ -123,7 +123,7 @@ function GroupEntries({ entries, prevTimestamp, isUser }: {
  * ロールグルーピング（B1）: 連続する同一種別のエントリは1グループとして扱い、見出しと時刻は
  * グループにつき1回だけ描画する。
  */
-export default function BubbleEntry({ group, prevTimestamp }: StyleGroupProps) {
+export default function BubbleEntry({ group, prevTimestamp, agentLabel }: StyleGroupProps) {
   const { i18n } = useTranslation('transcript');
   const lastEntry = group.entries[group.entries.length - 1];
   const timeLabel = formatEntryTimestamp(lastEntry.timestamp, i18n.language);
@@ -164,7 +164,7 @@ export default function BubbleEntry({ group, prevTimestamp }: StyleGroupProps) {
           minWidth: 0,
         }}
       >
-        <GroupHeading isUser={isUser} timeLabel={timeLabel} />
+        <GroupHeading isUser={isUser} timeLabel={timeLabel} agentLabel={agentLabel} />
         <GroupEntries entries={group.entries} prevTimestamp={prevTimestamp} isUser={isUser} />
       </div>
     </div>
