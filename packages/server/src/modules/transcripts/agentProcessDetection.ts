@@ -115,21 +115,51 @@ export function isAgentProcessRunning(entries: PsEntry[], rootPid: number): bool
  * rootPid 自身または子孫プロセスの中で claude/codex を実行しているものを探し、その起動時刻
  * （epoch ms; `nowMs - etimes*1000`）を返す（プロセス起動時刻ゲート、Issue #338）。探索ロジックは
  * isAgentProcessRunning と同じだが、一致したプロセスの起動時刻も必要とする点が異なる。複数一致時は
- * 最も新しく起動したものを採用する（同一ペインで再起動された等）。一致しなければ null。
+ * 最古（etimes が最大 = 最も長く動いている）ものを採用する（Issue #338フォロー: 「最新」採用だと、
+ * エージェント本体プロセスが後から子ヘルパープロセス（claude/codex 実行体を含む短命プロセス等）を
+ * 生やすたびに基準の起動時刻が繰り上がり、ゲートが本来のプロセス開始より後ろへずれて誤って
+ * 正当なセッションを棄却しうる。ルートのエージェントプロセス自体が最も古いはずなので、最古を
+ * 基準にすることでこの繰り上がりを避ける）。一致しなければ null。
  */
 export function findAgentProcessStartMs(entries: PsEntry[], rootPid: number, nowMs: number): number | null {
   const entryByPid = new Map(entries.map((entry) => [entry.pid, entry] as const));
   if (!entryByPid.has(rootPid)) return null;
 
   const descendantPids = collectDescendantPids(entries, rootPid);
-  let latestStartMs: number | null = null;
+  let earliestStartMs: number | null = null;
   for (const pid of descendantPids) {
     const entry = entryByPid.get(pid);
     if (!entry || !argsContainAgentBinary(entry.args)) continue;
     const startMs = nowMs - entry.etimes * 1000;
-    if (latestStartMs === null || startMs > latestStartMs) latestStartMs = startMs;
+    if (earliestStartMs === null || startMs < earliestStartMs) earliestStartMs = startMs;
   }
-  return latestStartMs;
+  return earliestStartMs;
+}
+
+/**
+ * rootPids（このウィンドウの各 pane の pid）自身またはその子孫プロセスのいずれかが、args の中に
+ * candidate sessionId をトークンとして含んでいるか（プロセス引数によるセッションID照合、Issue #338
+ * フォロー: mtime ゲートより決定的な証拠）。AZITO の respawn/起動は `codex resume <id>` /
+ * `claude --resume <id>` のようにセッションIDをプロセス引数へ直接渡すため、これが一致すれば
+ * 「このプロセスが実際にこのセッションを再開して動いている」ことの直接証拠になり、mtime の前後関係
+ * （supervisor 経由の起動でファイル作成がプロセス起動に先行し得る）に左右されない。トークン単位の
+ * 完全一致で比較する（部分一致による誤検出を避けるため、argsContainAgentBinary と同じ方針）。
+ */
+export function argsContainSessionId(entries: PsEntry[], rootPids: number[], sessionId: string): boolean {
+  if (!sessionId) return false;
+  const entryByPid = new Map(entries.map((entry) => [entry.pid, entry] as const));
+
+  const descendantPids = new Set<number>();
+  for (const rootPid of rootPids) {
+    if (!entryByPid.has(rootPid)) continue;
+    for (const pid of collectDescendantPids(entries, rootPid)) descendantPids.add(pid);
+  }
+
+  for (const pid of descendantPids) {
+    const entry = entryByPid.get(pid);
+    if (entry && entry.args.split(/\s+/).includes(sessionId)) return true;
+  }
+  return false;
 }
 
 /**

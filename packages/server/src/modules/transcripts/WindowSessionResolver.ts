@@ -6,7 +6,7 @@ import { windowSpecMatches } from '../tmux/TmuxClient';
 import { stripPaneSuffix } from '../windows/paneTarget';
 import type { SessionCaptureService } from '../windows/SessionCaptureService';
 import type { TranscriptSource } from './sources/TranscriptSource';
-import { parsePsOutput, isAgentProcessRunning, findAgentProcessStartMs, findAgentProcessTypes } from './agentProcessDetection';
+import { parsePsOutput, isAgentProcessRunning, findAgentProcessStartMs, findAgentProcessTypes, argsContainSessionId } from './agentProcessDetection';
 import type { PsEntry } from './agentProcessDetection';
 
 // ─── Types ───
@@ -40,11 +40,21 @@ const SESSION_ACTIVITY_WINDOW_MS = 120 * 1000;
 /** レイヤー2（プロセス実体検査）／プロセス起動時刻ゲートの `ps` 実行に使うコマンド。pid/ppid/etimes/args を取得する。 */
 const PS_COMMAND = 'ps -e -o pid=,ppid=,etimes=,args=';
 /**
- * プロセス起動時刻ゲート（Issue #338）: 候補セッションの mtime がこの猶予を差し引いた「現在の
- * エージェントプロセスの起動時刻」以降でなければ受理しない。tmux/ps 呼び出しと `claude --resume`
- * の初回ファイル書き込みの間に生じ得る時刻のブレを吸収するための猶予。
+ * プロセス起動時刻ゲート（Issue #338 フォロー）: tier1（window 由来）/tier2（task 由来）の猶予。
+ * この2層はウィンドウ/タスクがそのセッションIDと明示的に紐付いている記録（誤紐付けの事前確率が
+ * 低い）なので、tier3（cwd 照合フォールバック、事前確率が高い＝厳格に絞るべき）より大きく取る。
+ * supervisor 経由の起動は「セッションファイル作成 → プロセス起動」の順になり得（実機確認: resume/
+ * 事前作成セッションでファイル mtime がプロセス起動より前で、その後書き込みが無い限りその前後関係が
+ * 維持される）、この逆転が正常系で数十秒規模で起き得るため、mtime 単独では tier1/2 を安全に絞れない
+ * （このゲートは主に「別の（無関係な）古いセッション」の誤紐付け防止が目的で、tier1/2 は既に
+ * 明示的な紐付け記録がある分、より広い猶予を許容できる）。
  */
-const PROCESS_START_SKEW_MS = 15 * 1000;
+const EXPLICIT_LINK_SKEW_MS = 180 * 1000;
+/**
+ * プロセス起動時刻ゲート（Issue #338）: tier3（cwd 照合フォールバック）の猶予。cwd が一致するだけの
+ * 推測的な紐付けなので、厳格な猶予を維持する。
+ */
+const CWD_MATCH_SKEW_MS = 15 * 1000;
 
 /**
  * プロセス起動時刻ゲート（Issue #338）の状態。resolve() の先頭で一度だけ計算し、window/task/cwd
@@ -188,20 +198,22 @@ export class WindowSessionResolver {
 
     let gate: ProcessGateState = { kind: 'unavailable' };
     let psEntries: PsEntry[] | null = null;
+    let rootPids: number[] = [];
 
     if (isLocal) {
       const detection = await this.detectWindowAgentProcess(server, windowPanes);
       gate = toGateState(detection);
       psEntries = detection?.entries ?? null;
+      rootPids = detection?.rootPids ?? [];
 
       const windowLinked = this.resolveViaWindow(window);
-      if (windowLinked && this.passesSessionGate(gate, windowLinked.agentType, windowLinked.sessionId)) {
+      if (windowLinked && this.passesSessionGate(gate, windowLinked.agentType, windowLinked.sessionId, EXPLICIT_LINK_SKEW_MS, psEntries, rootPids)) {
         const pane = await this.resolvePaneWithDetection(server, window, windowPanes, windowLinked.sessionId, windowLinked.agentType, psEntries);
         if (pane) return { resolved: true, agentType: windowLinked.agentType, sessionId: windowLinked.sessionId, ...pane };
       }
 
       const taskLinked = this.resolveViaTask(window);
-      if (taskLinked && this.passesSessionGate(gate, taskLinked.agentType, taskLinked.sessionId)) {
+      if (taskLinked && this.passesSessionGate(gate, taskLinked.agentType, taskLinked.sessionId, EXPLICIT_LINK_SKEW_MS, psEntries, rootPids)) {
         const pane = await this.resolvePaneWithDetection(server, window, windowPanes, taskLinked.sessionId, taskLinked.agentType, psEntries);
         if (pane) return { resolved: true, agentType: taskLinked.agentType, sessionId: taskLinked.sessionId, ...pane };
       }
@@ -218,7 +230,7 @@ export class WindowSessionResolver {
         // このウィンドウの実行体とは無関係なため拾わない。
         const allowedAgentTypes = gate.kind === 'detected' ? gate.agentTypes : null;
         const cwdMatched = this.resolveViaCwdMatch(windowPanes, allowedAgentTypes);
-        if (cwdMatched && this.passesSessionGate(gate, cwdMatched.agentType, cwdMatched.sessionId)) {
+        if (cwdMatched && this.passesSessionGate(gate, cwdMatched.agentType, cwdMatched.sessionId, CWD_MATCH_SKEW_MS, psEntries, rootPids)) {
           const pane = await this.resolvePaneWithDetection(server, window, windowPanes, cwdMatched.sessionId, cwdMatched.agentType, psEntries);
           if (pane) {
             // tier3（cwd 照合フォールバック）でのみ解決結果を windows テーブルへ書き戻す（Issue #338）。
@@ -248,16 +260,33 @@ export class WindowSessionResolver {
    * プロセス起動時刻ゲート（Issue #338）: 候補セッションが「現在動作中のエージェントプロセスの
    * 起動より後に更新されているか」を検査する。gate.kind !== 'detected' の場合はゲート適用不能
    * （非local／ps失敗／エージェント不検出）として常に true を返し、呼び出し元の従来挙動に委ねる
-   * （'not_detected' 時の tier3 無効化は resolve() 側で別途行う）。mtime が取得できない候補は
+   * （'not_detected' 時の tier3 無効化は resolve() 側で別途行う）。
+   *
+   * 最優先の証拠として、まずプロセス引数によるセッションID照合（argsContainSessionId、Issue #338
+   * フォロー）を試みる。ウィンドウの pane 群の子孫プロセスの実引数に candidate sessionId がそのまま
+   * 含まれていれば（`codex resume <id>` / `claude --resume <id>` 等）、mtime の前後関係に関わらず
+   * 「このプロセスが実際にこのセッションを再開して動いている」決定的な証拠として即座に受理する
+   * （supervisor 経由の起動でファイル作成がプロセス起動に先行するケースを正しく拾うため）。
+   *
+   * 引数照合で判定できなければ mtime ゲートにフォールバックする。mtime が取得できない候補は
    * 安全側で棄却する（resume で書き込み継続中のセッションなら mtime は必ず取得できるはずで、
-   * 取れない＝別のセッションとみなせる）。
+   * 取れない＝別のセッションとみなせる）。skewMs は呼び出し元の tier（tier1/2 か tier3 か）で
+   * 異なる猶予を渡す。
    */
-  private passesSessionGate(gate: ProcessGateState, agentType: string, sessionId: string): boolean {
+  private passesSessionGate(
+    gate: ProcessGateState,
+    agentType: string,
+    sessionId: string,
+    skewMs: number,
+    psEntries: PsEntry[] | null,
+    rootPids: number[],
+  ): boolean {
     if (gate.kind !== 'detected') return true;
+    if (psEntries && argsContainSessionId(psEntries, rootPids, sessionId)) return true;
     const source = this.sources.find((s) => s.agentType === agentType);
     const mtimeMs = source?.getSessionMtimeMs(sessionId) ?? null;
     if (mtimeMs === null) return false;
-    return mtimeMs >= gate.processStartMs - PROCESS_START_SKEW_MS;
+    return mtimeMs >= gate.processStartMs - skewMs;
   }
 
   /**
@@ -265,7 +294,10 @@ export class WindowSessionResolver {
    * pid=,ppid=,etimes=,args=` を1回実行してその子孫に claude/codex 実行体が無いか調べる
    * （detectAgent() のレイヤー2と同じ探索ロジック／同じ ps 結果を再利用し、ps を二重実行しない
    * — 呼び出し元がここで得た entries を resolvePaneWithDetection 経由で detectAgent() にも渡す）。
-   * 検出できれば起動時刻（複数一致時は最新）を processStartMs として返す。
+   * 検出できれば起動時刻（複数一致時は最古。findAgentProcessStartMs 参照）を processStartMs として
+   * 返す。pane ごとに解決できた pid（rootPids）も合わせて返す — 引数によるセッションID照合
+   * （argsContainSessionId、Issue #338フォロー）が、このウィンドウの pane 群の子孫プロセスに限定して
+   * 探索するために使う。
    *
    * 戻り値 null は「ゲート適用不能」（tmux/ps 呼び出し失敗）。processStartMs が null（entries は
    * 取得できたがどの pane にも一致が無い）は「不検出」を意味し、resolve() 側でゲートの意味が
@@ -274,7 +306,7 @@ export class WindowSessionResolver {
   private async detectWindowAgentProcess(
     server: ServerConfig,
     windowPanes: TmuxPaneInfo[],
-  ): Promise<{ entries: PsEntry[]; processStartMs: number | null; agentTypes: Set<'claude' | 'codex'> } | null> {
+  ): Promise<{ entries: PsEntry[]; processStartMs: number | null; agentTypes: Set<'claude' | 'codex'>; rootPids: number[] } | null> {
     if (windowPanes.length === 0) return null;
     try {
       const { stdout, code } = await this.tmuxClient.execCommand(server, PS_COMMAND);
@@ -284,16 +316,18 @@ export class WindowSessionResolver {
 
       let processStartMs: number | null = null;
       const agentTypes = new Set<'claude' | 'codex'>();
+      const rootPids: number[] = [];
       for (const pane of windowPanes) {
         const pid = await this.tmuxClient.getPanePid(server, pane.paneId);
         if (pid === null) continue;
+        rootPids.push(pid);
         const startMs = findAgentProcessStartMs(entries, pid, now);
-        if (startMs !== null && (processStartMs === null || startMs > processStartMs)) {
+        if (startMs !== null && (processStartMs === null || startMs < processStartMs)) {
           processStartMs = startMs;
         }
         for (const type of findAgentProcessTypes(entries, pid)) agentTypes.add(type);
       }
-      return { entries, processStartMs, agentTypes };
+      return { entries, processStartMs, agentTypes, rootPids };
     } catch {
       return null;
     }

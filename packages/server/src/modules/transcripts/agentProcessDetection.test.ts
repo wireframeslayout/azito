@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parsePsOutput, argsContainAgentBinary, isAgentProcessRunning, findAgentProcessStartMs } from './agentProcessDetection';
+import { parsePsOutput, argsContainAgentBinary, isAgentProcessRunning, findAgentProcessStartMs, argsContainSessionId } from './agentProcessDetection';
 import type { PsEntry } from './agentProcessDetection';
 
 describe('parsePsOutput', () => {
@@ -82,19 +82,19 @@ describe('findAgentProcessStartMs', () => {
 
   it('computes the start time of the matched descendant process from its etimes', () => {
     const entries: PsEntry[] = [
-      { pid: 100, ppid: 1, etimes: 90, args: 'node /path/to/azito-supervisor.cjs -- claude --dangerously-skip-permissions' },
+      { pid: 100, ppid: 1, etimes: 90, args: 'node /path/to/some-wrapper.js' },
       { pid: 300, ppid: 100, etimes: 42, args: 'claude --dangerously-skip-permissions --model claude-opus-4-6[1m]' },
     ];
     expect(findAgentProcessStartMs(entries, 100, NOW)).toBe(NOW - 42 * 1000);
   });
 
-  it('picks the most recently started match when multiple descendants reference an agent binary', () => {
+  it('picks the earliest-started (largest etimes = longest-running) match when multiple descendants reference an agent binary (Issue #338 follow-up: a later-spawned short-lived helper must not push the baseline forward)', () => {
     const entries: PsEntry[] = [
       { pid: 100, ppid: 1, etimes: 90, args: 'node /path/to/wrapper.js' },
       { pid: 200, ppid: 100, etimes: 80, args: 'claude --resume abc' },
       { pid: 201, ppid: 100, etimes: 5, args: 'claude --dangerously-skip-permissions' },
     ];
-    expect(findAgentProcessStartMs(entries, 100, NOW)).toBe(NOW - 5 * 1000);
+    expect(findAgentProcessStartMs(entries, 100, NOW)).toBe(NOW - 80 * 1000);
   });
 
   it('returns null when no descendant references claude/codex', () => {
@@ -107,5 +107,37 @@ describe('findAgentProcessStartMs', () => {
   it('returns null when the root pid is not present in the ps snapshot', () => {
     const entries: PsEntry[] = [{ pid: 1, ppid: 0, etimes: 999999, args: '/sbin/init' }];
     expect(findAgentProcessStartMs(entries, 999, NOW)).toBeNull();
+  });
+});
+
+describe('argsContainSessionId', () => {
+  const SESSION_ID = '019fea40-1234-7abc-8def-0123456789ab';
+
+  it('matches a session id passed as a `codex resume <id>` argument on a descendant process', () => {
+    const entries: PsEntry[] = [
+      { pid: 9000, ppid: 1, etimes: 50, args: 'node /path/to/azito-supervisor.cjs -- codex resume ' + SESSION_ID },
+      { pid: 9001, ppid: 9000, etimes: 9, args: '/opt/codex/bin/codex resume ' + SESSION_ID },
+    ];
+    expect(argsContainSessionId(entries, [9000], SESSION_ID)).toBe(true);
+  });
+
+  it('matches a session id passed as a `claude --resume <id>` argument', () => {
+    const entries: PsEntry[] = [{ pid: 300, ppid: 1, etimes: 10, args: 'claude --resume ' + SESSION_ID }];
+    expect(argsContainSessionId(entries, [300], SESSION_ID)).toBe(true);
+  });
+
+  it('does not match when the session id only appears as a substring of another token', () => {
+    const entries: PsEntry[] = [{ pid: 300, ppid: 1, etimes: 10, args: `claude --resume ${SESSION_ID}-not-the-same` }];
+    expect(argsContainSessionId(entries, [300], SESSION_ID)).toBe(false);
+  });
+
+  it('returns false when no rootPid is present in the ps snapshot', () => {
+    const entries: PsEntry[] = [{ pid: 1, ppid: 0, etimes: 999999, args: '/sbin/init' }];
+    expect(argsContainSessionId(entries, [999], SESSION_ID)).toBe(false);
+  });
+
+  it('returns false for an empty sessionId', () => {
+    const entries: PsEntry[] = [{ pid: 300, ppid: 1, etimes: 10, args: 'claude --resume ' + SESSION_ID }];
+    expect(argsContainSessionId(entries, [300], '')).toBe(false);
   });
 });

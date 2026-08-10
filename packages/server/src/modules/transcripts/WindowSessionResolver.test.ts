@@ -625,11 +625,11 @@ describe('WindowSessionResolver', () => {
     ].join('\n');
     const PS_OUTPUT_NO_AGENT = ['  9000      1     50 node /path/to/some-other-script.js'].join('\n');
 
-    it('tier1: rejects window.agentSessionId when its mtime predates the current agent process start, falling back to unresolved', async () => {
+    it('tier1: rejects window.agentSessionId when its mtime predates the current agent process start by more than the 180s explicit-link skew, falling back to unresolved', async () => {
       const panes: TmuxPaneInfo[] = [
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
       ];
-      const staleMtime = Date.now() - 60 * 1000; // 60s ago: older than (processStart(-10s) - 15s skew) = -25s
+      const staleMtime = Date.now() - 10 * 60 * 1000; // 10min ago: older than (processStart(-10s) - 180s skew) = -190s
       const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
         listAllPanes: async () => panes,
         claudeGetSessionCwd: (id) => (id === SID_CLAUDE ? { cwd: '/proj' } : null),
@@ -642,6 +642,66 @@ describe('WindowSessionResolver', () => {
       // The stale session is rejected by the gate; no other candidate exists, so it falls through to
       // the best-effort unresolved pane hint (the live process is still detected as agentDetected:true).
       expect(result).toEqual({ resolved: false, reason: 'no_recent_session', paneId: '%1', agentType: 'claude', agentDetected: true });
+    });
+
+    it('tier1: accepts window.agentSessionId when its mtime is stale by 60s but still within the 180s explicit-link skew (Issue #338 follow-up: supervisor-launched resume/pre-created sessions can lag the process start by tens of seconds)', async () => {
+      const panes: TmuxPaneInfo[] = [
+        { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
+      ];
+      const staleMtime = Date.now() - 60 * 1000; // 60s ago: within (processStart(-10s) - 180s skew) = -190s
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+        listAllPanes: async () => panes,
+        claudeGetSessionCwd: (id) => (id === SID_CLAUDE ? { cwd: '/proj' } : null),
+        claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? staleMtime : null),
+        getPanePid: async () => 9000,
+        execCommand: async () => ({ stdout: PS_OUTPUT_RECENT_AGENT, stderr: '', code: 0 }),
+      });
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: SID_CLAUDE, workerType: 'claude' }));
+      expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
+    });
+
+    it('tier3 (cwd fallback) still rejects a session stale by 60s — the 15s skew is unchanged for the cwd-guess tier, unlike the explicit-link tiers', async () => {
+      const panes: TmuxPaneInfo[] = [
+        { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
+      ];
+      const staleMtime = Date.now() - 60 * 1000; // 60s ago: older than (processStart(-10s) - 15s skew) = -25s
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+        listAllPanes: async () => panes,
+        claudeListSessions: () => [
+          { sessionId: SID_CLAUDE, agentType: 'claude', projectDir: 'p', cwd: '/proj', mtimeMs: staleMtime, sizeBytes: 1, preview: '' },
+        ],
+        getPanePid: async () => 9000,
+        execCommand: async () => ({ stdout: PS_OUTPUT_RECENT_AGENT, stderr: '', code: 0 }),
+      });
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      // No window/task link at all, so this exercises tier3 (cwd match) only.
+      const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: null, workerType: null }));
+      expect(result).toEqual({ resolved: false, reason: 'no_recent_session', paneId: '%1', agentType: 'claude', agentDetected: true });
+    });
+
+    it('tier1: accepts window.agentSessionId regardless of mtime when a descendant process\'s args contain the session id (deterministic evidence bypasses the mtime gate entirely, Issue #338 follow-up: the reported bug — session file mtime precedes the process start by seconds because the supervisor writes the file before launching the process)', async () => {
+      const panes: TmuxPaneInfo[] = [
+        { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
+      ];
+      const PS_OUTPUT_WITH_RESUME_ARG = [
+        '  9000      1     50 node /path/to/azito-supervisor.cjs -- codex resume ' + SID_CODEX,
+        '  9001   9000     10 /opt/codex/bin/codex resume ' + SID_CODEX,
+      ].join('\n');
+      const staleMtime = Date.now() - 18 * 1000; // mtime precedes processStart(-10s) by 18s: would be rejected by any mtime-based skew this small, but args evidence bypasses it entirely
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+        listAllPanes: async () => panes,
+        getPanePid: async () => 9000,
+        execCommand: async () => ({ stdout: PS_OUTPUT_WITH_RESUME_ARG, stderr: '', code: 0 }),
+      });
+      const codexWithSession = {
+        ...codexSource,
+        getSessionCwd: (id: string) => (id === SID_CODEX ? { cwd: '/proj' } : null),
+        getSessionMtimeMs: (id: string) => (id === SID_CODEX ? staleMtime : null),
+      } as unknown as TranscriptSource;
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexWithSession], sessionCaptureService);
+      const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: SID_CODEX, workerType: 'codex' }));
+      expect(result).toEqual({ resolved: true, agentType: 'codex', sessionId: SID_CODEX, paneId: '%1', agentDetected: true });
     });
 
     it('tier1: accepts window.agentSessionId when its mtime has been updated at/after the process start (resume case)', async () => {
