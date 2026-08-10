@@ -30,9 +30,11 @@ interface WindowPaneTreeProps {
   renderTaskBadge?: (w: WindowItem, taskId: number) => React.ReactNode;
   /** 行の副題（既定はペインのタイトル/コマンド）を差し替える。null/undefined を返すと既定表示のまま */
   renderSubtitle?: (w: WindowItem) => React.ReactNode | null | undefined;
+  /** 行の主題（既定は w.label || tmux ウィンドウ名）を差し替える。null/undefined を返すと既定表示のまま */
+  renderTitle?: (w: WindowItem) => React.ReactNode | null | undefined;
 }
 
-export function WindowPaneTree({ windows, sessionData, isActive, onPaneClick, onContextMenu, onLongPress, extra, activityClassName, respawningWindowIds, renderTaskBadge, renderSubtitle }: WindowPaneTreeProps) {
+export function WindowPaneTree({ windows, sessionData, isActive, onPaneClick, onContextMenu, onLongPress, extra, activityClassName, respawningWindowIds, renderTaskBadge, renderSubtitle, renderTitle }: WindowPaneTreeProps) {
   const { t } = useTranslation('common');
   const [expandedWindows, setExpandedWindows] = useState<Set<string>>(() => new Set());
 
@@ -79,6 +81,7 @@ export function WindowPaneTree({ windows, sessionData, isActive, onPaneClick, on
           isRespawning={respawningWindowIds?.has(w.id)}
           renderTaskBadge={renderTaskBadge}
           renderSubtitle={renderSubtitle}
+          renderTitle={renderTitle}
         />
       ))}
     </div>
@@ -100,6 +103,7 @@ interface WindowRowProps {
   isRespawning?: boolean;
   renderTaskBadge?: (w: WindowItem, taskId: number) => React.ReactNode;
   renderSubtitle?: (w: WindowItem) => React.ReactNode | null | undefined;
+  renderTitle?: (w: WindowItem) => React.ReactNode | null | undefined;
 }
 
 const SPINNER_KEYFRAMES_ID = 'window-pane-tree-spinner-keyframes';
@@ -144,7 +148,7 @@ function TaskIdBadge({ taskId }: { taskId: number }) {
   );
 }
 
-function OfflineRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra, isRespawning, renderTaskBadge, renderSubtitle }: {
+function OfflineRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra, isRespawning, renderTaskBadge, renderSubtitle, renderTitle }: {
   w: WindowItem;
   active?: boolean;
   // Present so an offline/unmatched window is still selectable — see WindowRow's call
@@ -158,11 +162,13 @@ function OfflineRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra,
   isRespawning?: boolean;
   renderTaskBadge?: (w: WindowItem, taskId: number) => React.ReactNode;
   renderSubtitle?: (w: WindowItem) => React.ReactNode | null | undefined;
+  renderTitle?: (w: WindowItem) => React.ReactNode | null | undefined;
 }) {
   const { t } = useTranslation('common');
   const bindLongPress = useLongPress();
   const clickable = !!onPaneClick;
   const subtitle = renderSubtitle?.(w);
+  const title = renderTitle?.(w) ?? (w.label || w.tmuxTarget);
   return (
     <div
       onClick={onPaneClick ? () => onPaneClick(w.serverName, w.tmuxTarget, w) : undefined}
@@ -182,7 +188,7 @@ function OfflineRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra,
       <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {w.label || w.tmuxTarget}
+            {title}
           </span>
           {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
         </div>
@@ -204,7 +210,7 @@ function OfflineRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra,
   );
 }
 
-function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzoom, onPaneClick, onContextMenu, onLongPress, extra, activityClassName, isRespawning, renderTaskBadge, renderSubtitle }: WindowRowProps) {
+function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzoom, onPaneClick, onContextMenu, onLongPress, extra, activityClassName, isRespawning, renderTaskBadge, renderSubtitle, renderTitle }: WindowRowProps) {
   const { t } = useTranslation('common');
   const { isFocusedWindow, isFocusedPane } = useGlobalFocus();
   const bindLongPress = useLongPress();
@@ -217,7 +223,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
   const offlineActive = isActive?.(w.serverName, w.tmuxTarget, 'window') ?? false;
 
   if (!session) {
-    return <OfflineRow w={w} active={offlineActive} onPaneClick={onPaneClick} onContextMenu={onContextMenu} onLongPress={onLongPress} extra={extra} isRespawning={isRespawning} renderTaskBadge={renderTaskBadge} renderSubtitle={renderSubtitle} />;
+    return <OfflineRow w={w} active={offlineActive} onPaneClick={onPaneClick} onContextMenu={onContextMenu} onLongPress={onLongPress} extra={extra} isRespawning={isRespawning} renderTaskBadge={renderTaskBadge} renderSubtitle={renderSubtitle} renderTitle={renderTitle} />;
   }
 
   let matchedWindows = winPart != null
@@ -236,7 +242,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
   }
 
   if (matchedWindows.length === 0) {
-    return <OfflineRow w={w} active={offlineActive} onPaneClick={onPaneClick} onContextMenu={onContextMenu} onLongPress={onLongPress} extra={extra} isRespawning={isRespawning} renderTaskBadge={renderTaskBadge} renderSubtitle={renderSubtitle} />;
+    return <OfflineRow w={w} active={offlineActive} onPaneClick={onPaneClick} onContextMenu={onContextMenu} onLongPress={onLongPress} extra={extra} isRespawning={isRespawning} renderTaskBadge={renderTaskBadge} renderSubtitle={renderSubtitle} renderTitle={renderTitle} />;
   }
 
   return (
@@ -277,7 +283,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
               <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {w.label || sw.name}
+                    {renderTitle?.(w) ?? (w.label || sw.name)}
                   </span>
                   {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
                 </div>
@@ -293,7 +299,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
           );
         }
 
-        const windowLabel = w.label || sw.name;
+        const windowLabel = renderTitle?.(w) ?? (w.label || sw.name);
         const windowHasActive = sw.panes.some((pane) => {
           const target = `${sessionName}:${windowId}.${pane.index}`;
           return isActive?.(w.serverName, target, 'window') ?? false;

@@ -9,6 +9,7 @@ import { useAgentActivity } from '../../hooks/useAgentActivity';
 import { WindowActivityIndicator } from '../ui';
 import { buildObjectSections, type BrowserObject } from '../../lib/workspaceObjects';
 import { resolveOperationClick } from '../../lib/operationWindowClick';
+import { resolveWindowContextExtra } from '../task/taskPaneLayout';
 import type { BrowserGroupInfo } from '../../hooks/useBrowserGroups';
 import type { PersistedTab } from '../../hooks/useTabPersistence';
 import type { Project, Session, Window, Task } from '../../pages/workspace/types';
@@ -18,22 +19,29 @@ import ObjectSection from './objects/ObjectSection';
 import BrowserSection from './objects/BrowserSection';
 import { RUNNING_STATUSES } from '../task/StatusDropdown';
 
-const COLLAPSE_STORAGE_KEY = 'workspace-objects-collapsed';
+const COLLAPSE_STORAGE_KEY = 'workspace-objects-collapsed-v2';
 
-type SectionId = 'windows' | 'operations' | 'browsers';
+type SectionId = 'active' | 'idle' | 'offline' | 'browsers';
 
 interface CollapseState {
-  windows: boolean;
-  operations: boolean;
+  active: boolean;
+  idle: boolean;
+  offline: boolean;
   browsers: boolean;
 }
+
+// オフラインは既定で折りたたむ（旧: windows/operations/browsers はすべて既定展開だった）。
+// ストレージキーをv2に変えているのは、旧 SectionId（windows/operations）のままだと
+// 「offline を既定折りたたみ」という新しい既定値を、旧キーに残っていた
+// `{ windows: false, operations: false }` の残骸で誤って上書きしてしまうため。
+const DEFAULT_COLLAPSE: CollapseState = { active: false, idle: false, offline: true, browsers: false };
 
 function loadCollapseState(): CollapseState {
   try {
     const raw = localStorage.getItem(COLLAPSE_STORAGE_KEY);
-    if (raw) return { windows: false, operations: false, browsers: false, ...JSON.parse(raw) };
+    if (raw) return { ...DEFAULT_COLLAPSE, ...JSON.parse(raw) };
   } catch { /* best-effort */ }
-  return { windows: false, operations: false, browsers: false };
+  return DEFAULT_COLLAPSE;
 }
 
 function saveCollapseState(state: CollapseState): void {
@@ -160,9 +168,82 @@ export default function ObjectsSidebar({
     [project.windows, taskWindows, taskOwnedWindows, browserGroups, browserCapableServerNames],
   );
 
+  const taskById = useMemo(() => new Map(tasks.map((task) => [task.id, task])), [tasks]);
+
+  // --- 検索（タイトル・ID・ブランチの部分一致、クライアントサイドフィルタ） ---
+  const [searchQuery, setSearchQuery] = useState('');
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+
+  const windowSearchText = useCallback((w: Window): string => {
+    const task = w.taskId != null ? taskById.get(w.taskId) : undefined;
+    return [
+      w.label, w.tmuxTarget, w.serverName,
+      w.taskId != null ? `#${w.taskId}` : undefined,
+      task?.title, task?.branch, task?.worktreeBranch,
+    ].filter(Boolean).join(' ').toLowerCase();
+  }, [taskById]);
+
+  const browserSearchText = useCallback((b: BrowserObject): string =>
+    [b.serverName, b.groupId, b.primaryUrl].filter(Boolean).join(' ').toLowerCase(),
+  []);
+
+  const filteredWindows = useMemo(
+    () => (normalizedQuery ? sections.windows.filter((w) => windowSearchText(w).includes(normalizedQuery)) : sections.windows),
+    [sections.windows, normalizedQuery, windowSearchText],
+  );
+  const filteredOperationWindows = useMemo(
+    () => (normalizedQuery ? sections.operationWindows.filter((w) => windowSearchText(w).includes(normalizedQuery)) : sections.operationWindows),
+    [sections.operationWindows, normalizedQuery, windowSearchText],
+  );
+  const filteredBrowsers = useMemo(
+    () => (normalizedQuery ? sections.browsers.filter((b) => browserSearchText(b).includes(normalizedQuery)) : sections.browsers),
+    [sections.browsers, normalizedQuery, browserSearchText],
+  );
+  const filteredTotalCount = filteredWindows.length + filteredOperationWindows.length + filteredBrowsers.length;
+
   // agentByType（ラベル解決）専用。押下可否の判定は agentDefsLoading/agentDefsError props（useAddWindowModal 側の取得）を使う。
   const { agents: agentDefs } = useAgentDefinitions('worker');
   const { windowIndicator, finishedEntries } = useAgentActivity();
+
+  // --- 状態セクション化: 稼働中（エージェント活動中）/ 待機中（オンラインだが非活動）/ オフライン（デタッチ・ペイン消失） ---
+  const classifyStatus = useCallback((w: Window): 'active' | 'idle' | 'offline' => {
+    if (!resolveWindowContextExtra(w, sessionData).online) return 'offline';
+    const indicator = windowIndicator(w.serverName, w.tmuxTarget);
+    return indicator === 'working' || indicator === 'blocked' ? 'active' : 'idle';
+  }, [sessionData, windowIndicator]);
+
+  const windowsByStatus = useMemo(() => {
+    const buckets: Record<'active' | 'idle' | 'offline', Window[]> = { active: [], idle: [], offline: [] };
+    for (const w of filteredWindows) buckets[classifyStatus(w)].push(w);
+    return buckets;
+  }, [filteredWindows, classifyStatus]);
+
+  const operationsByStatus = useMemo(() => {
+    const buckets: Record<'active' | 'idle' | 'offline', Window[]> = { active: [], idle: [], offline: [] };
+    for (const w of filteredOperationWindows) buckets[classifyStatus(w)].push(w);
+    return buckets;
+  }, [filteredOperationWindows, classifyStatus]);
+
+  const serverGroupsByStatus = useMemo(() => {
+    const build = (windows: Window[]) => {
+      const map = new Map<string, Window[]>();
+      for (const w of windows) {
+        const list = map.get(w.serverName) || [];
+        list.push(w);
+        map.set(w.serverName, list);
+      }
+      const psOrder = projectServers.map((ps) => ps.serverName);
+      const allNames = [...map.keys()];
+      const ordered = psOrder.filter((n) => allNames.includes(n));
+      const remaining = allNames.filter((n) => !ordered.includes(n));
+      return { map, names: [...ordered, ...remaining] };
+    };
+    return {
+      active: build(windowsByStatus.active),
+      idle: build(windowsByStatus.idle),
+      offline: build(windowsByStatus.offline),
+    };
+  }, [windowsByStatus, projectServers]);
 
   const renderActivityExtra = useCallback((w: WindowItem) => {
     const status = windowIndicator(w.serverName, w.tmuxTarget);
@@ -191,25 +272,6 @@ export default function ObjectsSidebar({
     label: type === 'terminal' ? t('common:labels.terminal') : (agentByType.get(type)?.label ?? type),
   })), [agentByType, t]);
 
-  // Window section: group by server
-  const serverGroups = useMemo(() => {
-    const map = new Map<string, Window[]>();
-    for (const w of sections.windows) {
-      const list = map.get(w.serverName) || [];
-      list.push(w);
-      map.set(w.serverName, list);
-    }
-    return map;
-  }, [sections.windows]);
-
-  const sortedServerNames = useMemo(() => {
-    const psOrder = projectServers.map((ps) => ps.serverName);
-    const allNames = [...serverGroups.keys()];
-    const ordered = psOrder.filter((n) => allNames.includes(n));
-    const remaining = allNames.filter((n) => !ordered.includes(n));
-    return [...ordered, ...remaining];
-  }, [projectServers, serverGroups]);
-
   const handlePaneClick = useCallback(async (serverName: string, target: string) => {
     if (mobile) {
       try {
@@ -229,8 +291,6 @@ export default function ObjectsSidebar({
     openTask(taskId, t('tasks:detail.taskRef', { id: taskId }));
     if (mobile) onCloseMobileSidebar();
   }, [openTask, mobile, onCloseMobileSidebar, t]);
-
-  const taskById = useMemo(() => new Map(tasks.map((task) => [task.id, task])), [tasks]);
 
   // クリックされた行の WindowItem 自体（w）から taskId を得る。物理ターゲット（serverName+target）で
   // Map を引き直すと、同じ物理 tmux ウィンドウを別々のタスクが持つ場合に取り違える
@@ -274,10 +334,17 @@ export default function ObjectsSidebar({
     </button>
   ), [handleOpenTask]);
 
-  // 副題: 「サーバー · フェーズ · ブランチ」。取得できない項目は省く（ダミー値で埋めない）
+  // 主題: タスク紐付きウィンドウはタスクタイトルを主表示にする（既定は w.label = 内部生成ID
+  // 例: task-231--x9oh のまま出てしまうため）。タスクが解決できない場合は既定表示（内部ID）のまま
+  const renderOperationTitle = useCallback((w: WindowItem) => taskById.get(w.taskId ?? -1)?.title || null, [taskById]);
+
+  // 副題: 「内部ID · サーバー · フェーズ · ブランチ」。取得できない項目は省く（ダミー値で埋めない）。
+  // 内部IDは、主題をタスクタイトルで上書きした行にだけ載せる（それ以外は主題＝内部IDなので二重表示になる）
   const renderOperationSubtitle = useCallback((w: WindowItem) => {
     const task = w.taskId != null ? taskById.get(w.taskId) : undefined;
-    const parts = [w.serverName];
+    const parts: string[] = [];
+    if (task?.title && w.label) parts.push(w.label);
+    parts.push(w.serverName);
     const phaseKey = task?.currentPhase;
     if (phaseKey) {
       const label = t(`common:status.${phaseKey}`, { defaultValue: '' });
@@ -512,86 +579,193 @@ export default function ObjectsSidebar({
           </div>
         ) : (
           <>
-            <ObjectSection
-              id="windows"
-              label={t('objects.sectionWindows')}
-              count={sections.windows.length}
-              collapsed={collapsed.windows}
-              onToggleCollapse={() => toggle('windows')}
-              action={
-                <button onClick={() => onOpenAddWindow()} title={t('windows.addWindow')} className="icon-btn" style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', padding: '3px 6px', display: 'flex', alignItems: 'center' }}><Icon name="plus" size={16} /></button>
-              }
-              empty={emptyMessage('windows.noWindows')}
-            >
-              {sortedServerNames.map((serverName) => {
-                const windows = serverGroups.get(serverName) || [];
-                return (
-                  <ServerGroup
-                    key={serverName}
-                    serverName={serverName}
-                    windows={windows}
-                    sessionData={sessionData}
-                    isActive={checkActive}
-                    quickAddButtons={quickAddButtons}
-                    quickAddIcons={quickAddIcons}
-                    agentDefsLoading={agentDefsLoading}
-                    agentDefsError={agentDefsError}
-                    onPaneClick={handlePaneClick}
-                    onContextMenu={showWindowContextMenu}
-                    onOpenQuickAdd={onOpenQuickAdd}
-                    extra={renderActivityExtra}
-                    activityClassName={renderActivityClassName}
-                    respawningWindowIds={respawningWindowIds}
-                  />
-                );
-              })}
-            </ObjectSection>
-
-            <ObjectSection
-              id="operations"
-              label={t('objects.sectionOperations')}
-              count={sections.operationWindows.length}
-              collapsed={collapsed.operations}
-              onToggleCollapse={() => toggle('operations')}
-              empty={emptyMessage('objects.noOperations')}
-            >
-              <WindowPaneTree
-                windows={sections.operationWindows}
-                sessionData={sessionData}
-                isActive={checkActive}
-                onPaneClick={handleOperationPaneClick}
-                onContextMenu={showOperationContextMenu}
-                onLongPress={showOperationLongPress}
-                extra={renderOperationExtra}
-                activityClassName={renderActivityClassName}
-                respawningWindowIds={respawningWindowIds}
-                renderTaskBadge={renderOperationTaskBadge}
-                renderSubtitle={renderOperationSubtitle}
+            <div style={{ padding: '0 12px 8px' }}>
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Escape') setSearchQuery(''); }}
+                placeholder={t('objects.searchPlaceholder')}
+                aria-label={t('objects.searchPlaceholder')}
+                style={{
+                  width: '100%',
+                  padding: '6px 10px',
+                  background: 'var(--bg)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius-sm)',
+                  color: 'var(--text)',
+                  fontSize: 'var(--font-md)',
+                  outline: 'none',
+                  boxSizing: 'border-box',
+                }}
               />
-            </ObjectSection>
+            </div>
 
-            {browserCapableServerNames.length > 0 && (
-              <ObjectSection
-                id="browsers"
-                label={t('objects.sectionBrowsers')}
-                count={sections.browsers.length + Object.keys(browserErrors).length}
-                collapsed={collapsed.browsers}
-                onToggleCollapse={() => toggle('browsers')}
-                action={browserSectionAction}
-                empty={browserEmptyInline}
-              >
-                <BrowserSection
-                  browsers={sections.browsers}
-                  errors={browserErrors}
-                  activeTabId={activeTabId}
-                  tabs={tabs}
-                  closeTab={closeTab}
-                  openBrowser={handleOpenBrowser}
-                  onRefresh={refreshBrowserGroups}
-                  onContextMenu={showBrowserContextMenu}
-                  onLongPress={showBrowserLongPress}
-                />
-              </ObjectSection>
+            {filteredTotalCount === 0 ? (
+              <div style={{ padding: '12px 20px 8px', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', textAlign: 'center' }}>
+                {t('objects.noSearchResults', { query: searchQuery.trim() })}
+              </div>
+            ) : (
+              <>
+                <ObjectSection
+                  id="active"
+                  label={t('objects.sectionActive')}
+                  count={windowsByStatus.active.length + operationsByStatus.active.length}
+                  collapsed={collapsed.active}
+                  onToggleCollapse={() => toggle('active')}
+                  empty={emptyMessage('objects.noActive')}
+                >
+                  {serverGroupsByStatus.active.names.map((serverName) => (
+                    <ServerGroup
+                      key={serverName}
+                      serverName={serverName}
+                      windows={serverGroupsByStatus.active.map.get(serverName) || []}
+                      sessionData={sessionData}
+                      isActive={checkActive}
+                      quickAddButtons={quickAddButtons}
+                      quickAddIcons={quickAddIcons}
+                      agentDefsLoading={agentDefsLoading}
+                      agentDefsError={agentDefsError}
+                      onPaneClick={handlePaneClick}
+                      onContextMenu={showWindowContextMenu}
+                      onOpenQuickAdd={onOpenQuickAdd}
+                      extra={renderActivityExtra}
+                      activityClassName={renderActivityClassName}
+                      respawningWindowIds={respawningWindowIds}
+                    />
+                  ))}
+                  {operationsByStatus.active.length > 0 && (
+                    <WindowPaneTree
+                      windows={operationsByStatus.active}
+                      sessionData={sessionData}
+                      isActive={checkActive}
+                      onPaneClick={handleOperationPaneClick}
+                      onContextMenu={showOperationContextMenu}
+                      onLongPress={showOperationLongPress}
+                      extra={renderOperationExtra}
+                      activityClassName={renderActivityClassName}
+                      respawningWindowIds={respawningWindowIds}
+                      renderTaskBadge={renderOperationTaskBadge}
+                      renderTitle={renderOperationTitle}
+                      renderSubtitle={renderOperationSubtitle}
+                    />
+                  )}
+                </ObjectSection>
+
+                <ObjectSection
+                  id="idle"
+                  label={t('objects.sectionIdle')}
+                  count={windowsByStatus.idle.length + operationsByStatus.idle.length}
+                  collapsed={collapsed.idle}
+                  onToggleCollapse={() => toggle('idle')}
+                  empty={emptyMessage('objects.noIdle')}
+                >
+                  {serverGroupsByStatus.idle.names.map((serverName) => (
+                    <ServerGroup
+                      key={serverName}
+                      serverName={serverName}
+                      windows={serverGroupsByStatus.idle.map.get(serverName) || []}
+                      sessionData={sessionData}
+                      isActive={checkActive}
+                      quickAddButtons={quickAddButtons}
+                      quickAddIcons={quickAddIcons}
+                      agentDefsLoading={agentDefsLoading}
+                      agentDefsError={agentDefsError}
+                      onPaneClick={handlePaneClick}
+                      onContextMenu={showWindowContextMenu}
+                      onOpenQuickAdd={onOpenQuickAdd}
+                      extra={renderActivityExtra}
+                      activityClassName={renderActivityClassName}
+                      respawningWindowIds={respawningWindowIds}
+                    />
+                  ))}
+                  {operationsByStatus.idle.length > 0 && (
+                    <WindowPaneTree
+                      windows={operationsByStatus.idle}
+                      sessionData={sessionData}
+                      isActive={checkActive}
+                      onPaneClick={handleOperationPaneClick}
+                      onContextMenu={showOperationContextMenu}
+                      onLongPress={showOperationLongPress}
+                      extra={renderOperationExtra}
+                      activityClassName={renderActivityClassName}
+                      respawningWindowIds={respawningWindowIds}
+                      renderTaskBadge={renderOperationTaskBadge}
+                      renderTitle={renderOperationTitle}
+                      renderSubtitle={renderOperationSubtitle}
+                    />
+                  )}
+                </ObjectSection>
+
+                <ObjectSection
+                  id="offline"
+                  label={t('objects.sectionOffline')}
+                  count={windowsByStatus.offline.length + operationsByStatus.offline.length}
+                  collapsed={collapsed.offline}
+                  onToggleCollapse={() => toggle('offline')}
+                  empty={emptyMessage('objects.noOffline')}
+                >
+                  {serverGroupsByStatus.offline.names.map((serverName) => (
+                    <ServerGroup
+                      key={serverName}
+                      serverName={serverName}
+                      windows={serverGroupsByStatus.offline.map.get(serverName) || []}
+                      sessionData={sessionData}
+                      isActive={checkActive}
+                      quickAddButtons={quickAddButtons}
+                      quickAddIcons={quickAddIcons}
+                      agentDefsLoading={agentDefsLoading}
+                      agentDefsError={agentDefsError}
+                      onPaneClick={handlePaneClick}
+                      onContextMenu={showWindowContextMenu}
+                      onOpenQuickAdd={onOpenQuickAdd}
+                      extra={renderActivityExtra}
+                      activityClassName={renderActivityClassName}
+                      respawningWindowIds={respawningWindowIds}
+                    />
+                  ))}
+                  {operationsByStatus.offline.length > 0 && (
+                    <WindowPaneTree
+                      windows={operationsByStatus.offline}
+                      sessionData={sessionData}
+                      isActive={checkActive}
+                      onPaneClick={handleOperationPaneClick}
+                      onContextMenu={showOperationContextMenu}
+                      onLongPress={showOperationLongPress}
+                      extra={renderOperationExtra}
+                      activityClassName={renderActivityClassName}
+                      respawningWindowIds={respawningWindowIds}
+                      renderTaskBadge={renderOperationTaskBadge}
+                      renderTitle={renderOperationTitle}
+                      renderSubtitle={renderOperationSubtitle}
+                    />
+                  )}
+                </ObjectSection>
+
+                {browserCapableServerNames.length > 0 && (
+                  <ObjectSection
+                    id="browsers"
+                    label={t('objects.sectionBrowsers')}
+                    count={filteredBrowsers.length + Object.keys(browserErrors).length}
+                    collapsed={collapsed.browsers}
+                    onToggleCollapse={() => toggle('browsers')}
+                    action={browserSectionAction}
+                    empty={browserEmptyInline}
+                  >
+                    <BrowserSection
+                      browsers={filteredBrowsers}
+                      errors={browserErrors}
+                      activeTabId={activeTabId}
+                      tabs={tabs}
+                      closeTab={closeTab}
+                      openBrowser={handleOpenBrowser}
+                      onRefresh={refreshBrowserGroups}
+                      onContextMenu={showBrowserContextMenu}
+                      onLongPress={showBrowserLongPress}
+                    />
+                  </ObjectSection>
+                )}
+              </>
             )}
           </>
         )}
