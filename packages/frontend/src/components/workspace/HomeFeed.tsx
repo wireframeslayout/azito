@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../ui/Icon';
-import { Chip, WindowActivityIndicator } from '../ui';
+import { Chip, WindowActivityIndicator, Button } from '../ui';
 import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
 import type { ActiveWindowRow } from '../../hooks/useActiveWindowRows';
 import { formatRelativeTime } from '../../utils/time';
@@ -46,13 +46,16 @@ interface HomeFeedProps {
   allProjects: ProjectSummary[];
   openTask: (taskId: number, title: string, projectId?: number) => void;
   connectPane: (serverName: string, target: string, projectId?: number) => void;
+  /** サイドバーの「ウィンドウ」セクションを開く導線（Workspace.tsx の handleOpenAddTabFromSwitcher 相当）。
+   *  「稼働中」節が空のときの「+ ウィンドウを追加」アクションから呼ぶ。 */
+  onAddWindow: () => void;
 }
 
 function statusLabelKey(status: string): string {
   return status === 'pending_approval' ? 'pendingApproval' : 'waitingInput';
 }
 
-export default function HomeFeed({ allTasks, allProjects, openTask, connectPane }: HomeFeedProps) {
+export default function HomeFeed({ allTasks, allProjects, openTask, connectPane, onAddWindow }: HomeFeedProps) {
   const { t } = useTranslation(['workspace', 'common']);
   const { rows } = useActiveWindowRows();
 
@@ -97,8 +100,6 @@ export default function HomeFeed({ allTasks, allProjects, openTask, connectPane 
     return Array.from(map.values());
   }, [rows, taskById]);
 
-  const isEmpty = attentionEntries.length === 0 && activeGroups.length === 0;
-
   const handleAttentionClick = (entry: AttentionEntry) => {
     openTask(entry.task.id, entry.task.title, entry.projectId);
   };
@@ -115,41 +116,45 @@ export default function HomeFeed({ allTasks, allProjects, openTask, connectPane 
   return (
     <div style={{ height: '100%', overflowY: 'auto', display: 'flex', justifyContent: 'center' }}>
       <div style={{ width: '100%', maxWidth: 720, padding: 'var(--space-4) var(--space-3)', display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-        {isEmpty ? (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh', color: 'var(--text-dim)', fontSize: 'var(--font-base)', textAlign: 'center' }}>
-            {t('workspace:pane.selectHint')}
-          </div>
-        ) : (
-          <>
-            {attentionEntries.length > 0 && (
-              <FeedSection title={t('workspace:home.needsAttention')} count={attentionEntries.length}>
-                {attentionEntries.map((entry) => (
-                  <AttentionCard
-                    key={entry.task.id}
-                    entry={entry}
-                    project={entry.projectId != null ? projectById.get(entry.projectId) : undefined}
-                    onClick={() => handleAttentionClick(entry)}
-                    t={t}
-                  />
-                ))}
-              </FeedSection>
-            )}
-
-            {activeGroups.length > 0 && (
-              <FeedSection title={t('workspace:home.active')} count={activeGroups.length}>
-                {activeGroups.map((group) => (
-                  <ActiveGroupCard
-                    key={group.key}
-                    group={group}
-                    project={group.projectId != null ? projectById.get(group.projectId) : undefined}
-                    onClick={() => handleActiveGroupClick(group)}
-                    t={t}
-                  />
-                ))}
-              </FeedSection>
-            )}
-          </>
+        {attentionEntries.length > 0 && (
+          <FeedSection title={t('workspace:home.needsAttention')} count={attentionEntries.length}>
+            {attentionEntries.map((entry) => (
+              <AttentionCard
+                key={entry.task.id}
+                entry={entry}
+                project={entry.projectId != null ? projectById.get(entry.projectId) : undefined}
+                onClick={() => handleAttentionClick(entry)}
+                t={t}
+              />
+            ))}
+          </FeedSection>
         )}
+
+        <FeedSection title={t('workspace:home.active')} count={activeGroups.length}>
+          {activeGroups.length > 0 ? (
+            activeGroups.map((group) => (
+              <ActiveGroupCard
+                key={group.key}
+                group={group}
+                project={group.projectId != null ? projectById.get(group.projectId) : undefined}
+                onClick={() => handleActiveGroupClick(group)}
+                t={t}
+              />
+            ))
+          ) : (
+            <div style={{
+              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'var(--space-3)',
+              padding: 'var(--space-5) var(--space-4)', background: 'var(--bg-card)', borderRadius: 'var(--radius-lg)',
+              textAlign: 'center',
+            }}>
+              <span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-md)' }}>{t('workspace:home.noActive')}</span>
+              <Button size="sm" onClick={onAddWindow}>
+                <Icon name="plus" size={14} />
+                {t('workspace:windows.addWindow')}
+              </Button>
+            </div>
+          )}
+        </FeedSection>
       </div>
 
       <style>{`

@@ -9,7 +9,6 @@
     "nextPane": "次のペインへ移動",
     "dragHint": "タブをここにドラッグ、またはサイドバーから開く",
     "dragHintShort": "タブをここにドラッグ",
-    "selectHint": "サイドバーからペイン、オペレーション、タスクを選択してください",
     "openTab": "タブを開く",
     "splitSuccessH": "ペインを水平分割しました",
     "splitSuccessV": "ペインを垂直分割しました",
@@ -30,7 +29,8 @@
     "needsAttention": "要対応",
     "active": "稼働中",
     "windowsActive": "{{total}}ウィンドウ中 {{active}}稼働",
-    "moreWindows": "+{{count}}"
+    "moreWindows": "+{{count}}",
+    "noActive": "稼働中のエージェントはいません"
   },
   "windows": {
     "title": "ウィンドウ",

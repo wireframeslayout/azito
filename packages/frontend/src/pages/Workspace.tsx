@@ -810,9 +810,9 @@ function WorkspaceInner() {
   // としての空状態（既存の dragHint）はそのまま維持する。
   const renderPaneEmpty = useCallback(() => (
     tabs.length === 0
-      ? <HomeFeed allTasks={allTasks} allProjects={allProjects} openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} />
+      ? <HomeFeed allTasks={allTasks} allProjects={allProjects} openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} onAddWindow={handleOpenAddTabFromSwitcher} />
       : <EmptyState title={t('workspace:pane.dragHint')} />
-  ), [tabs.length, allTasks, allProjects, openTaskFromActiveWindow, connectPaneFromActiveWindow, t]);
+  ), [tabs.length, allTasks, allProjects, openTaskFromActiveWindow, connectPaneFromActiveWindow, handleOpenAddTabFromSwitcher, t]);
 
   if (!project) {
     if (projectsLoaded && allProjects.length === 0) {
@@ -1031,7 +1031,7 @@ function WorkspaceInner() {
 
             <div style={{ flex: 1, position: 'relative', background: 'var(--ws-content)' }}>
               {tabs.length === 0 && (
-                <HomeFeed allTasks={allTasks} allProjects={allProjects} openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} />
+                <HomeFeed allTasks={allTasks} allProjects={allProjects} openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} onAddWindow={handleOpenAddTabFromSwitcher} />
               )}
 
               {tabs.map((tab) => renderTabContent(tab, { position: 'absolute', inset: 0 }, tab.id === activeTabId, closeTabAndRefreshBrowser))}

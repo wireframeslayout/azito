@@ -9,7 +9,6 @@
     "nextPane": "Move to next pane",
     "dragHint": "Drag tabs here, or open from the sidebar",
     "dragHintShort": "Drag tabs here",
-    "selectHint": "Select a pane, operation, or task from the sidebar",
     "openTab": "Open tab",
     "splitSuccessH": "Pane split horizontally",
     "splitSuccessV": "Pane split vertically",
@@ -30,7 +29,8 @@
     "needsAttention": "Needs Attention",
     "active": "Active",
     "windowsActive": "{{active}} of {{total}} windows active",
-    "moreWindows": "+{{count}}"
+    "moreWindows": "+{{count}}",
+    "noActive": "No agents running"
   },
   "windows": {
     "title": "Windows",
