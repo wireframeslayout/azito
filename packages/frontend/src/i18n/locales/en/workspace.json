@@ -171,7 +171,9 @@
     "sectionProject": "Project",
     "sectionGlobal": "Global",
     "sectionUtility": "Utility",
-    "projectSwitch": "Switch project"
+    "projectSwitch": "Switch project",
+    "activePanesRow": "Active panes",
+    "settingsRow": "AZITO Settings"
   },
   "sessionTree": {
     "installingAgent": "Installing agent...",

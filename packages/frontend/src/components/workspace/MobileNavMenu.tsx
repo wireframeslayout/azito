@@ -41,12 +41,15 @@ interface MobileNavMenuProps {
   serverHealth?: DotLevel;
 }
 
+// モック（S6/M1）は行高36〜40px・節間の余白も詰まっている。タップターゲットは本来44pxが
+// 望ましいが、行間に空き（margin/gap）を足す形では確保していない（=詰めても失われるものが
+// ないため）ので、モックの視覚密度に合わせて 40px を採用する。
 const rowStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 10,
   width: '100%',
-  minHeight: 44,
+  minHeight: 40,
   padding: '0 12px',
   border: 'none',
   background: 'none',
@@ -63,7 +66,7 @@ const rowIconStyle: CSSProperties = { color: 'var(--text-dim)' };
 const sectionLabelStyle: CSSProperties = {
   fontSize: 'var(--font-2xs)',
   color: 'var(--text-dim)',
-  padding: '14px 12px 4px',
+  padding: '10px 12px 2px',
   fontWeight: 600,
 };
 
@@ -116,13 +119,20 @@ export function MobileNavMenu({
       <>
           <div style={sectionLabelStyle}>{t('workspace:mobileNav.sectionUtility')}</div>
           {onOpenActiveWindows && (
-            <button type="button" onClick={onOpenActiveWindows} style={rowStyle} className="glass-popover-item">
-              <Icon name="windows" size={16} style={rowIconStyle} />
-              <span style={rowLabelStyle}>
-                {(activeWindowsCount ?? 0) > 0
-                  ? t('workspace:activeWindows.titleWithCount', { count: activeWindowsCount })
-                  : t('workspace:activeWindows.title')}
-              </span>
+            <button
+              type="button"
+              onClick={onOpenActiveWindows}
+              style={rowStyle}
+              className="glass-popover-item"
+              aria-label={(activeWindowsCount ?? 0) > 0
+                ? t('workspace:activeWindows.titleWithCount', { count: activeWindowsCount })
+                : t('workspace:mobileNav.activePanesRow')}
+            >
+              {/* 「オブジェクト」行（grid アイコン）と見分けがつくよう、稼働状況を示す
+                  activity（波形）系アイコンを使う。 */}
+              <Icon name="operations" size={16} style={rowIconStyle} />
+              <span style={rowLabelStyle}>{t('workspace:mobileNav.activePanesRow')}</span>
+              {(activeWindowsCount ?? 0) > 0 && <span style={rowMetaStyle}>{activeWindowsCount}</span>}
               {(activeWindowsBlockedCount ?? 0) > 0 && (
                 <span
                   aria-hidden="true"
@@ -132,8 +142,11 @@ export function MobileNavMenu({
             </button>
           )}
           <button type="button" onClick={onOpenServerHealth} style={rowStyle} className="glass-popover-item">
-            {serverHealth ? <HealthDot level={serverHealth} size={12} /> : <Icon name="operations" size={16} style={rowIconStyle} />}
+            {/* アイコン枠には常に同一の activity 系アイコンを置き、健康状態の色ドットは右端メタ
+                位置へ分離する（アイコン列にドットのみが混ざると他行と不揃いになるため）。 */}
+            <Icon name="chip" size={16} style={rowIconStyle} />
             <span style={rowLabelStyle}>{t('workspace:mobile.serverHealth')}</span>
+            {serverHealth && <HealthDot level={serverHealth} size={10} />}
           </button>
       </>
     </div>

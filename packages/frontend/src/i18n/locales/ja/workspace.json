@@ -171,7 +171,9 @@
     "sectionProject": "プロジェクト",
     "sectionGlobal": "グローバル",
     "sectionUtility": "ユーティリティ",
-    "projectSwitch": "プロジェクトを切替"
+    "projectSwitch": "プロジェクトを切替",
+    "activePanesRow": "稼働ペイン一覧",
+    "settingsRow": "AZITO設定"
   },
   "sessionTree": {
     "installingAgent": "エージェントをインストール中...",
