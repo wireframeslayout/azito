@@ -36,9 +36,8 @@ describe('FileSearchService', () => {
       const cmd = service.buildFindCommand({
         query: 'test',
         root: '/home/user/project',
-        matchName: true,
-        matchContent: false,
         caseSensitive: false,
+        wholeWord: false,
         regex: false,
       });
 
@@ -58,9 +57,8 @@ describe('FileSearchService', () => {
       const cmd = service.buildFindCommand({
         query: 'Test',
         root: '/project',
-        matchName: true,
-        matchContent: false,
         caseSensitive: true,
+        wholeWord: false,
         regex: false,
       });
 
@@ -75,9 +73,8 @@ describe('FileSearchService', () => {
       const cmd = service.buildFindCommand({
         query: '.*\\.test\\.ts$',
         root: '/project',
-        matchName: true,
-        matchContent: false,
         caseSensitive: false,
+        wholeWord: false,
         regex: true,
       });
 
@@ -93,9 +90,8 @@ describe('FileSearchService', () => {
       const cmd = service.buildRgCommand({
         query: 'hello world',
         root: '/project',
-        matchName: false,
-        matchContent: true,
         caseSensitive: false,
+        wholeWord: false,
         regex: false,
       });
 
@@ -114,9 +110,8 @@ describe('FileSearchService', () => {
       const cmd = service.buildRgCommand({
         query: 'foo.*bar',
         root: '/project',
-        matchName: false,
-        matchContent: true,
         caseSensitive: true,
+        wholeWord: false,
         regex: true,
       });
 
@@ -131,13 +126,38 @@ describe('FileSearchService', () => {
       const cmd = service.buildRgCommand({
         query: "it's a test",
         root: '/project',
-        matchName: false,
-        matchContent: true,
         caseSensitive: false,
+        wholeWord: false,
         regex: false,
       });
 
       expect(cmd).toContain("'it'\\''s a test'");
+    });
+    it('includes -w for whole-word search', () => {
+      const { factory } = createMockTransportFactory();
+      const service = new FileSearchService(factory);
+      const cmd = service.buildRgCommand({ query: 'test', root: '/project', caseSensitive: false, wholeWord: true, regex: false });
+
+      expect(cmd).toContain('-w');
+    });
+
+    it('adds an include glob for each pattern', () => {
+      const { factory } = createMockTransportFactory();
+      const service = new FileSearchService(factory);
+      const cmd = service.buildRgCommand({ query: 'test', root: '/project', caseSensitive: false, wholeWord: false, regex: false, include: '*.ts,*.tsx' });
+
+      expect(cmd).toContain("-g '*.ts'");
+      expect(cmd).toContain("-g '*.tsx'");
+    });
+
+    it('adds extra exclusions after default exclusions', () => {
+      const { factory } = createMockTransportFactory();
+      const service = new FileSearchService(factory);
+      const cmd = service.buildRgCommand({ query: 'test', root: '/project', caseSensitive: false, wholeWord: false, regex: false, excludeExtra: 'vendor,tmp' });
+
+      expect(cmd).toContain("-g '!vendor'");
+      expect(cmd).toContain("-g '!tmp'");
+      expect(cmd.indexOf("-g '!.worktrees'")).toBeLessThan(cmd.indexOf("-g '!vendor'"));
     });
   });
 
@@ -149,9 +169,8 @@ describe('FileSearchService', () => {
       const cmd = service.buildGrepCommand({
         query: 'hello',
         root: '/project',
-        matchName: false,
-        matchContent: true,
         caseSensitive: false,
+        wholeWord: false,
         regex: false,
       });
 
@@ -161,6 +180,31 @@ describe('FileSearchService', () => {
       expect(cmd).toContain('-H');
       expect(cmd).toContain("--exclude-dir='node_modules'");
       expect(cmd).toContain('head -200');
+    });
+
+    it('includes -w for whole-word search', () => {
+      const { factory } = createMockTransportFactory();
+      const service = new FileSearchService(factory);
+      const cmd = service.buildGrepCommand({ query: 'test', root: '/project', caseSensitive: false, wholeWord: true, regex: false });
+
+      expect(cmd).toContain('-w');
+    });
+
+    it('adds include globs', () => {
+      const { factory } = createMockTransportFactory();
+      const service = new FileSearchService(factory);
+      const cmd = service.buildGrepCommand({ query: 'test', root: '/project', caseSensitive: false, wholeWord: false, regex: false, include: '*.ts' });
+
+      expect(cmd).toContain("--include='*.ts'");
+    });
+
+    it('adds extra file and directory exclusions', () => {
+      const { factory } = createMockTransportFactory();
+      const service = new FileSearchService(factory);
+      const cmd = service.buildGrepCommand({ query: 'test', root: '/project', caseSensitive: false, wholeWord: false, regex: false, excludeExtra: 'vendor' });
+
+      expect(cmd).toContain("--exclude='vendor'");
+      expect(cmd).toContain("--exclude-dir='vendor'");
     });
   });
 
@@ -174,9 +218,8 @@ describe('FileSearchService', () => {
       const result = await service.search(baseServer, {
         query: 'test',
         root: '/project',
-        matchName: false,
-        matchContent: true,
         caseSensitive: false,
+        wholeWord: false,
         regex: false,
       });
 
@@ -187,9 +230,8 @@ describe('FileSearchService', () => {
       await service.search(baseServer, {
         query: 'test2',
         root: '/project',
-        matchName: false,
-        matchContent: true,
         caseSensitive: false,
+        wholeWord: false,
         regex: false,
       });
       const rgCheckCount2 = execFn.mock.calls.filter(c => c[0].includes('command -v rg')).length;
@@ -205,9 +247,8 @@ describe('FileSearchService', () => {
       const result = await service.search(baseServer, {
         query: 'test',
         root: '/project',
-        matchName: false,
-        matchContent: true,
         caseSensitive: false,
+        wholeWord: false,
         regex: false,
       });
 
@@ -224,9 +265,8 @@ describe('FileSearchService', () => {
       const result = await service.search(baseServer, {
         query: 'test',
         root: '/project/',
-        matchName: true,
-        matchContent: false,
         caseSensitive: false,
+        wholeWord: false,
         regex: false,
       });
 
@@ -244,9 +284,8 @@ describe('FileSearchService', () => {
       const result = await service.search(baseServer, {
         query: 'file',
         root: '/project/',
-        matchName: true,
-        matchContent: false,
         caseSensitive: false,
+        wholeWord: false,
         regex: false,
       });
 

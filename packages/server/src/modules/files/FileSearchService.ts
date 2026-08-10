@@ -17,10 +17,11 @@ function isTimeoutError(err: unknown): boolean {
 export interface SearchOptions {
   query: string;
   root: string;
-  matchName: boolean;
-  matchContent: boolean;
   caseSensitive: boolean;
+  wholeWord: boolean;
   regex: boolean;
+  include?: string;
+  excludeExtra?: string;
 }
 
 export interface SearchHit {
@@ -51,8 +52,8 @@ export class FileSearchService {
     const engine: 'rg' | 'grep' = hasRg ? 'rg' : 'grep';
 
     const tasks: [Promise<string[]>, Promise<SearchHit[]>] = [
-      opts.matchName ? this.searchByName(server, opts) : Promise.resolve([]),
-      opts.matchContent ? this.searchContent(server, opts, engine) : Promise.resolve([]),
+      this.searchByName(server, opts),
+      this.searchContent(server, opts, engine),
     ];
 
     const [nameMatches, contentHits] = await Promise.all(tasks);
@@ -142,9 +143,15 @@ export class FileSearchService {
     const sq = shellQuote;
     const root = sq(opts.root);
 
-    const pruneExprs = EXCLUDED_DIRS
+    const excludedDirs = [...EXCLUDED_DIRS, ...this.splitGlobPatterns(opts.excludeExtra)];
+    const pruneExprs = excludedDirs
       .map(d => `-name ${sq(d)}`)
       .join(' -o ');
+
+    const includePatterns = this.splitGlobPatterns(opts.include);
+    const includeExpr = includePatterns.length
+      ? ` \\( ${includePatterns.map(p => p.includes('/') ? `-path ${sq('*/' + p)}` : `-name ${sq(p)}`).join(' -o ')} \\)`
+      : '';
 
     const nameFlag = opts.regex
       ? (opts.caseSensitive ? '-regex' : '-iregex')
@@ -152,7 +159,7 @@ export class FileSearchService {
 
     const pattern = opts.regex ? opts.query : `*${opts.query}*`;
 
-    return `LC_ALL=C command find ${root} \\( ${pruneExprs} \\) -prune -o -type f ${nameFlag} ${sq(pattern)} -print | head -${MAX_RESULTS}`;
+    return `LC_ALL=C command find ${root} \\( ${pruneExprs} \\) -prune -o -type f${includeExpr} ${nameFlag} ${sq(pattern)} -print | head -${MAX_RESULTS}`;
   }
 
   buildRgCommand(opts: SearchOptions): string {
@@ -161,9 +168,18 @@ export class FileSearchService {
 
     if (!opts.regex) flags.push('-F');
     if (!opts.caseSensitive) flags.push('-i');
+    if (opts.wholeWord) flags.push('-w');
 
     for (const dir of EXCLUDED_DIRS) {
       flags.push('-g', sq('!' + dir));
+    }
+
+    for (const pattern of this.splitGlobPatterns(opts.include)) {
+      flags.push('-g', sq(pattern));
+    }
+
+    for (const pattern of this.splitGlobPatterns(opts.excludeExtra)) {
+      flags.push('-g', sq('!' + pattern));
     }
 
     return `rg ${flags.join(' ')} -- ${sq(opts.query)} ${sq(opts.root)}`;
@@ -175,12 +191,25 @@ export class FileSearchService {
 
     if (!opts.regex) flags.push('-F');
     if (!opts.caseSensitive) flags.push('-i');
+    if (opts.wholeWord) flags.push('-w');
 
     for (const dir of EXCLUDED_DIRS) {
       flags.push(`--exclude-dir=${sq(dir)}`);
     }
 
+    for (const pattern of this.splitGlobPatterns(opts.include)) {
+      flags.push(`--include=${sq(pattern)}`);
+    }
+
+    for (const pattern of this.splitGlobPatterns(opts.excludeExtra)) {
+      flags.push(`--exclude=${sq(pattern)}`, `--exclude-dir=${sq(pattern)}`);
+    }
+
     return `grep ${flags.join(' ')} -- ${sq(opts.query)} ${sq(opts.root)} | head -${MAX_RESULTS}`;
+  }
+
+  private splitGlobPatterns(patterns: string | undefined): string[] {
+    return patterns?.split(',').map(pattern => pattern.trim()).filter(Boolean) ?? [];
   }
 
   private parseGrepOutput(output: string, root: string, opts: SearchOptions): SearchHit[] {
@@ -203,19 +232,24 @@ export class FileSearchService {
 
       let matchStart = 0;
       let matchEnd = 0;
+      const wordBoundary = opts.wholeWord ? '\\b' : '';
       if (opts.regex) {
         try {
-          const re = new RegExp(opts.query, opts.caseSensitive ? '' : 'i');
+          const re = new RegExp(wordBoundary + opts.query + wordBoundary, opts.caseSensitive ? '' : 'i');
           const m = re.exec(text);
           if (m) { matchStart = m.index; matchEnd = m.index + m[0].length; }
         } catch { /* invalid regex */ }
       } else {
-        const searchText = opts.caseSensitive ? text : text.toLowerCase();
-        const searchQuery = opts.caseSensitive ? opts.query : opts.query.toLowerCase();
-        const idx = searchText.indexOf(searchQuery);
-        if (idx !== -1) {
-          matchStart = idx;
-          matchEnd = idx + opts.query.length;
+        try {
+          const escaped = opts.query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const re = new RegExp(wordBoundary + escaped + wordBoundary, opts.caseSensitive ? '' : 'i');
+          const m = re.exec(text);
+          if (m) { matchStart = m.index; matchEnd = m.index + m[0].length; }
+        } catch {
+          const searchText = opts.caseSensitive ? text : text.toLowerCase();
+          const searchQuery = opts.caseSensitive ? opts.query : opts.query.toLowerCase();
+          const idx = searchText.indexOf(searchQuery);
+          if (idx !== -1) { matchStart = idx; matchEnd = idx + opts.query.length; }
         }
       }
 
