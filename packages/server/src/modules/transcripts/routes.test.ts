@@ -4,6 +4,7 @@ import transcriptsRoutes from './routes';
 import type { TranscriptSource } from './sources/TranscriptSource';
 import type { TranscriptPaneService } from './TranscriptPaneService';
 import type { WindowSessionResolver } from './WindowSessionResolver';
+import type { WindowInputService } from './WindowInputService';
 import type { IWindowRepository, Window } from '../windows/Window';
 
 const SID = '11111111-1111-1111-1111-111111111111';
@@ -34,7 +35,11 @@ function buildCodexSource(overrides: Partial<TranscriptSource> = {}): Transcript
 function buildApp(
   sources: TranscriptSource[] = [buildClaudeSource()],
   paneOverrides: Partial<TranscriptPaneService> = {},
-  windowOverrides: { windowSessionResolver?: Partial<WindowSessionResolver>; windowRepo?: Partial<IWindowRepository> } = {},
+  windowOverrides: {
+    windowSessionResolver?: Partial<WindowSessionResolver>;
+    windowRepo?: Partial<IWindowRepository>;
+    windowInputService?: Partial<WindowInputService>;
+  } = {},
 ) {
   const transcriptPaneService = {
     listPaneCandidates: async () => ({ cwd: null, panes: [] }),
@@ -53,8 +58,14 @@ function buildApp(
     ...windowOverrides.windowRepo,
   } as unknown as IWindowRepository;
 
+  const windowInputService = {
+    sendInput: async () => 'ok' as const,
+    sendSignal: async () => 'ok' as const,
+    ...windowOverrides.windowInputService,
+  } as unknown as WindowInputService;
+
   const app = Fastify();
-  app.register(transcriptsRoutes, { sources, transcriptPaneService, windowSessionResolver, windowRepo });
+  app.register(transcriptsRoutes, { sources, transcriptPaneService, windowSessionResolver, windowInputService, windowRepo });
   return app;
 }
 
@@ -610,7 +621,7 @@ describe('GET /api/transcripts/resolve-window', () => {
   it('delegates to the resolver and returns its result for an existing window', async () => {
     const resolve = async (window: Window) => {
       expect(window.id).toBe(42);
-      return { resolved: true as const, agentType: 'claude', sessionId: SID, paneId: PANE_ID };
+      return { resolved: true as const, agentType: 'claude', sessionId: SID, paneId: PANE_ID, agentDetected: true };
     };
     const app = buildApp(
       [buildClaudeSource()],
@@ -619,7 +630,7 @@ describe('GET /api/transcripts/resolve-window', () => {
     );
     const res = await app.inject({ method: 'GET', url: '/api/transcripts/resolve-window?windowId=42' });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ resolved: true, agentType: 'claude', sessionId: SID, paneId: PANE_ID });
+    expect(res.json()).toEqual({ resolved: true, agentType: 'claude', sessionId: SID, paneId: PANE_ID, agentDetected: true });
     await app.close();
   });
 
@@ -627,11 +638,214 @@ describe('GET /api/transcripts/resolve-window', () => {
     const app = buildApp(
       [buildClaudeSource()],
       {},
-      { windowRepo: { findById: () => WINDOW }, windowSessionResolver: { resolve: async () => ({ resolved: false, reason: 'no_recent_session' }) } },
+      { windowRepo: { findById: () => WINDOW }, windowSessionResolver: { resolve: async () => ({ resolved: false, reason: 'no_recent_session', agentDetected: false }) } },
     );
     const res = await app.inject({ method: 'GET', url: '/api/transcripts/resolve-window?windowId=42' });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ resolved: false, reason: 'no_recent_session' });
+    expect(res.json()).toEqual({ resolved: false, reason: 'no_recent_session', agentDetected: false });
+    await app.close();
+  });
+});
+
+describe('POST /api/transcripts/window-input', () => {
+  const PANE_ID_WINDOW = '%5';
+
+  it('rejects a non-numeric windowId with 400', async () => {
+    const app = buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/transcripts/window-input',
+      payload: { windowId: 'abc', paneId: PANE_ID_WINDOW, text: 'hello' },
+    });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('rejects a malformed paneId with 400', async () => {
+    const app = buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/transcripts/window-input',
+      payload: { windowId: 42, paneId: 'not-a-pane', text: 'hello' },
+    });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('rejects empty text with 400', async () => {
+    const app = buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/transcripts/window-input',
+      payload: { windowId: 42, paneId: PANE_ID_WINDOW, text: '' },
+    });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('returns 404 when the window is not found', async () => {
+    const app = buildApp([buildClaudeSource()], {}, { windowInputService: { sendInput: async () => 'window_not_found' } });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/transcripts/window-input',
+      payload: { windowId: 42, paneId: PANE_ID_WINDOW, text: 'hello' },
+    });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('returns 404 when the pane no longer exists', async () => {
+    const app = buildApp([buildClaudeSource()], {}, { windowInputService: { sendInput: async () => 'pane_not_found' } });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/transcripts/window-input',
+      payload: { windowId: 42, paneId: PANE_ID_WINDOW, text: 'hello' },
+    });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('sends input and returns ok on success', async () => {
+    let received: { windowId: number; paneId: string; text: string } | null = null;
+    const app = buildApp(
+      [buildClaudeSource()],
+      {},
+      {
+        windowInputService: {
+          sendInput: async (windowId: number, paneId: string, text: string) => {
+            received = { windowId, paneId, text };
+            return 'ok';
+          },
+        },
+      },
+    );
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/transcripts/window-input',
+      payload: { windowId: 42, paneId: PANE_ID_WINDOW, text: 'echo hello' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(received).toEqual({ windowId: 42, paneId: PANE_ID_WINDOW, text: 'echo hello' });
+    await app.close();
+  });
+});
+
+describe('POST /api/transcripts/window-signal', () => {
+  const PANE_ID_WINDOW = '%5';
+
+  it('rejects a non-numeric windowId with 400', async () => {
+    const app = buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/transcripts/window-signal',
+      payload: { windowId: 'abc', paneId: PANE_ID_WINDOW, action: 'interrupt' },
+    });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('rejects a malformed paneId with 400', async () => {
+    const app = buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/transcripts/window-signal',
+      payload: { windowId: 42, paneId: 'not-a-pane', action: 'interrupt' },
+    });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('rejects an invalid action with 400', async () => {
+    const app = buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/transcripts/window-signal',
+      payload: { windowId: 42, paneId: PANE_ID_WINDOW, action: 'bogus' },
+    });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('rejects action:"key" with an invalid key value with 400', async () => {
+    const app = buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/transcripts/window-signal',
+      payload: { windowId: 42, paneId: PANE_ID_WINDOW, action: 'key', key: 'Enter' },
+    });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('returns 404 when the window is not found', async () => {
+    const app = buildApp([buildClaudeSource()], {}, { windowInputService: { sendSignal: async () => 'window_not_found' } });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/transcripts/window-signal',
+      payload: { windowId: 42, paneId: PANE_ID_WINDOW, action: 'interrupt' },
+    });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('returns 404 when the pane no longer exists', async () => {
+    const app = buildApp([buildClaudeSource()], {}, { windowInputService: { sendSignal: async () => 'pane_not_found' } });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/transcripts/window-signal',
+      payload: { windowId: 42, paneId: PANE_ID_WINDOW, action: 'interrupt' },
+    });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('sends action:"interrupt" without a key and returns ok (interruptKey resolved server-side)', async () => {
+    let received: { windowId: number; paneId: string; action: string; key: unknown } | null = null;
+    const app = buildApp(
+      [buildClaudeSource()],
+      {},
+      {
+        windowInputService: {
+          sendSignal: async (windowId: number, paneId: string, action: 'interrupt' | 'key', key?: unknown) => {
+            received = { windowId, paneId, action, key };
+            return 'ok';
+          },
+        },
+      },
+    );
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/transcripts/window-signal',
+      payload: { windowId: 42, paneId: PANE_ID_WINDOW, action: 'interrupt' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(received).toEqual({ windowId: 42, paneId: PANE_ID_WINDOW, action: 'interrupt', key: undefined });
+    await app.close();
+  });
+
+  it('sends the given key for action:"key" and returns ok', async () => {
+    let receivedKey: unknown = null;
+    const app = buildApp(
+      [buildClaudeSource()],
+      {},
+      {
+        windowInputService: {
+          sendSignal: async (_windowId: number, _paneId: string, _action: 'interrupt' | 'key', key?: unknown) => {
+            receivedKey = key;
+            return 'ok';
+          },
+        },
+      },
+    );
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/transcripts/window-signal',
+      payload: { windowId: 42, paneId: PANE_ID_WINDOW, action: 'key', key: 'C-c' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(receivedKey).toBe('C-c');
     await app.close();
   });
 });

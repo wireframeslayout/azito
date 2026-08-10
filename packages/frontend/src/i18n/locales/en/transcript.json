@@ -48,20 +48,12 @@
     "send": "Send",
     "sendWithShortcut": "Send (Ctrl/Cmd+Enter)",
     "sendShortcutHint": "Press Ctrl/Cmd+Enter to send",
-    "choosePane": "Choose pane",
-    "selectPane": "Select destination pane",
-    "selectPaneHint": "Select a destination pane",
-    "matchingCwd": "Matching this session's directory",
-    "otherPanes": "Other panes",
-    "noPanes": "No tmux panes found",
-    "noCommand": "(idle)",
     "sendError": "Failed to send",
-    "loadError": "Failed to load panes",
     "retry": "Retry",
     "history": "Input history",
     "historyEmpty": "No history yet",
     "draftRestored": "Draft restored",
-    "unsupportedAgent": "Sending input to this agent ({{agentType}}) is not supported yet."
+    "agentNotDetectedWarning": "This window may not have an agent running yet. What you type will be sent to the shell as-is."
   },
   "windowChat": {
     "loading": "Resolving session…",
@@ -70,6 +62,10 @@
       "no_recent_session": "No recent session found",
       "error": "Failed to resolve the session"
     },
-    "retry": "Retry"
+    "retry": "Retry",
+    "empty": {
+      "title": "No conversation yet",
+      "description": "You can start chatting from here."
+    }
   }
 }

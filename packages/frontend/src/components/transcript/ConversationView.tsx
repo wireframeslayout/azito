@@ -8,7 +8,6 @@ import { groupEntries, type EntryGroup } from './groupEntries';
 import { LiveStatusRow } from './LiveStatusRow';
 import { deriveLiveStatus } from './liveStatus';
 import PromptInputBar from './PromptInputBar';
-import { usePaneSelection, PANE_CAPABLE_AGENT_TYPE } from './usePaneSelection';
 import BubbleEntry from './styles/BubbleEntry';
 import FlowEntry from './styles/FlowEntry';
 import RailEntry from './styles/RailEntry';
@@ -34,17 +33,19 @@ const POLL_INTERVAL_MS = 2000;
 const NEAR_BOTTOM_THRESHOLD_PX = 80;
 
 interface ConversationViewProps {
+  windowId: number;
   sessionId: string;
   agentType: string;
   /**
-   * 埋め込み表示（ワークスペースのウィンドウにおける端末⇄チャット切替, Issue #69 Phase E-2）。
-   * スタンドアロンページ（/transcript、Issue #69 調整2で削除）が無くなったため embedded 専用。
-   * resolve-window が解決したペインを初期選択として usePaneSelection へ注入する（ユーザーは後から変更可）。
+   * 送信先ペイン。resolve-window が解決した固定値（Issue #69 仕様調整3でペイン選択 UI を撤去
+   * したため、ユーザーによる変更手段はない — 再解決したい場合はウィンドウ側で対応する）。
    */
-  embedded: { initialPaneId: string | null };
+  paneId: string;
+  /** false の場合、PromptInputBar にフェイルセーフ注記を表示する（送信自体はブロックしない）。 */
+  agentDetected: boolean;
 }
 
-export default function ConversationView({ sessionId, agentType, embedded }: ConversationViewProps) {
+export default function ConversationView({ windowId, sessionId, agentType, paneId, agentDetected }: ConversationViewProps) {
   const { t, i18n } = useTranslation('transcript');
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -54,11 +55,6 @@ export default function ConversationView({ sessionId, agentType, embedded }: Con
   const [newCount, setNewCount] = useState(0);
   const [style] = useTranscriptStyle();
   const EntryComponent = STYLE_ENTRY_COMPONENTS[style];
-  const canSendInput = agentType === PANE_CAPABLE_AGENT_TYPE;
-
-  // 送信先ペイン選択は入力バー（PromptInputBar）とライブ行の停止ボタン（LiveStatusRow 経由 StopButton）
-  // の双方が必要とするため、ここで1つのフックとして持ち、両方へ props で渡す（Issue #69 Phase D）。
-  const paneSelection = usePaneSelection(sessionId, canSendInput, embedded.initialPaneId);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -372,9 +368,7 @@ export default function ConversationView({ sessionId, agentType, embedded }: Con
                   status={liveStatus}
                   lastTimestamp={lastEntryTimestamp}
                   style={style}
-                  stopTarget={canSendInput && paneSelection.selectedPaneId
-                    ? { sessionId, agentType, paneId: paneSelection.selectedPaneId }
-                    : null}
+                  stopTarget={{ windowId, paneId }}
                 />
               )}
             </>
@@ -411,23 +405,13 @@ export default function ConversationView({ sessionId, agentType, embedded }: Con
       </div>
 
       {!loading && !notFound && !error && (
-        canSendInput ? (
-          <PromptInputBar sessionId={sessionId} paneSelection={paneSelection} onSent={() => scrollToBottom('smooth')} />
-        ) : (
-          <div
-            style={{
-              flexShrink: 0,
-              borderTop: '1px solid var(--border)',
-              background: 'var(--bg-card)',
-              padding: '10px 16px calc(10px + env(safe-area-inset-bottom))',
-              fontSize: 'var(--font-xs)',
-              color: 'var(--text-dim)',
-              textAlign: 'center',
-            }}
-          >
-            {t('promptBar.unsupportedAgent', { agentType })}
-          </div>
-        )
+        <PromptInputBar
+          windowId={windowId}
+          paneId={paneId}
+          draftKey={sessionId}
+          agentDetected={agentDetected}
+          onSent={() => scrollToBottom('smooth')}
+        />
       )}
     </div>
   );

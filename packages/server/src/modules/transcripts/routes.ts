@@ -2,6 +2,7 @@ import type { FastifyPluginCallback, FastifyReply } from 'fastify';
 import type { TranscriptSource } from './sources/TranscriptSource';
 import type { TranscriptPaneService } from './TranscriptPaneService';
 import type { WindowSessionResolver } from './WindowSessionResolver';
+import type { WindowInputService } from './WindowInputService';
 import type { IWindowRepository } from '../windows/Window';
 import { getAgentTranscriptProfile, type InterruptKey } from './sources/profiles';
 
@@ -9,6 +10,7 @@ export interface TranscriptsRouteOptions {
   sources: TranscriptSource[];
   transcriptPaneService: TranscriptPaneService;
   windowSessionResolver: WindowSessionResolver;
+  windowInputService: WindowInputService;
   windowRepo: IWindowRepository;
 }
 
@@ -57,7 +59,7 @@ async function handleReadSession(source: TranscriptSource, sessionId: string, qu
 }
 
 const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fastify, opts, done) => {
-  const { sources, transcriptPaneService, windowSessionResolver, windowRepo } = opts;
+  const { sources, transcriptPaneService, windowSessionResolver, windowInputService, windowRepo } = opts;
 
   // ── GET /api/transcripts/resolve-window ── ウィンドウからエージェント会話セッションを自動解決する
   // （Issue #69 Phase E-1）。windowId は数値検証、該当ウィンドウが存在しなければ 404。
@@ -73,6 +75,59 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
 
     return windowSessionResolver.resolve(window);
   });
+
+  // ── POST /api/transcripts/window-input ── ウィンドウの pane へ直接テキストを送信する
+  // （Issue #69 仕様調整3）。セッション JSONL の存在を前提としないため、resolve-window が
+  // resolved:false でも paneId さえ得られていれば呼べる。ウィンドウ・pane の実在のみ検証する。
+  fastify.post<{ Body: { windowId?: unknown; paneId?: unknown; text?: unknown } }>('/api/transcripts/window-input', async (request, reply) => {
+    const { windowId, paneId, text } = request.body ?? {};
+
+    if (typeof windowId !== 'number' || !Number.isSafeInteger(windowId) || windowId <= 0) {
+      return reply.status(400).send({ error: 'Invalid windowId' });
+    }
+    if (typeof paneId !== 'string' || !PANE_ID_PATTERN.test(paneId)) {
+      return reply.status(400).send({ error: 'Invalid paneId' });
+    }
+    if (typeof text !== 'string' || text.length < INPUT_TEXT_MIN_LENGTH || text.length > INPUT_TEXT_MAX_LENGTH) {
+      return reply.status(400).send({ error: 'Invalid text' });
+    }
+
+    const result = await windowInputService.sendInput(windowId, paneId, text);
+    if (result === 'window_not_found') return reply.status(404).send({ error: 'Window not found' });
+    if (result === 'pane_not_found') return reply.status(404).send({ error: 'Pane not found' });
+    return { ok: true };
+  });
+
+  // ── POST /api/transcripts/window-signal ── ウィンドウの pane へ制御キーを送出する
+  // （Issue #69 仕様調整3）。interruptKey の解決は WindowInputService 側（workerType プロファイル、
+  // 未対応時は 'C-c' 既定）。
+  fastify.post<{ Body: { windowId?: unknown; paneId?: unknown; action?: unknown; key?: unknown } }>(
+    '/api/transcripts/window-signal',
+    async (request, reply) => {
+      const { windowId, paneId, action, key } = request.body ?? {};
+
+      if (typeof windowId !== 'number' || !Number.isSafeInteger(windowId) || windowId <= 0) {
+        return reply.status(400).send({ error: 'Invalid windowId' });
+      }
+      if (typeof paneId !== 'string' || !PANE_ID_PATTERN.test(paneId)) {
+        return reply.status(400).send({ error: 'Invalid paneId' });
+      }
+      if (action !== 'interrupt' && action !== 'key') {
+        return reply.status(400).send({ error: 'Invalid action' });
+      }
+
+      let resolvedKey: InterruptKey | undefined;
+      if (action === 'key') {
+        if (!isInterruptKey(key)) return reply.status(400).send({ error: 'Invalid key' });
+        resolvedKey = key;
+      }
+
+      const result = await windowInputService.sendSignal(windowId, paneId, action, resolvedKey);
+      if (result === 'window_not_found') return reply.status(404).send({ error: 'Window not found' });
+      if (result === 'pane_not_found') return reply.status(404).send({ error: 'Pane not found' });
+      return { ok: true };
+    },
+  );
 
   // ── GET /api/transcripts ── 全ソース横断のセッション一覧（mtime 降順）。?agent= で絞り込み可。
   fastify.get<{ Querystring: { agent?: string } }>('/api/transcripts', async (request) => {

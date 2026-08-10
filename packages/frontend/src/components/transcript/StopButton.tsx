@@ -11,20 +11,20 @@ import type { TranscriptErrorResponse } from './transcriptTypes';
 type SignalKey = 'Escape' | 'C-c';
 
 interface StopButtonProps {
-  sessionId: string;
-  /** シグナル送出APIは agentType に対応する Sidekick プロファイル（sources/profiles.ts）があれば
-   * 動作するが、現状ペイン候補UI（/panes）が claude 固定のため、このボタン自体は claude セッション
-   * でのみ描画される（呼び出し元 ConversationView 側でゲート）。 */
-  agentType: string;
+  windowId: number;
   paneId: string;
 }
 
 /**
  * ライブ状態行（LiveStatusRow）右端の「停止」ボタン。タップで既定の割り込みキー
- * （sources/profiles.ts の interruptKey）を送出する。長押し／右クリックで Esc・Ctrl+C を
- * 個別に選べるメニューを開く（意味の違いを短い説明文つきで併記する）。
+ * （ウィンドウの workerType に対応するプロファイル。無い場合は 'C-c' 既定 — サーバー側
+ * WindowInputService.resolveInterruptKey が解決する）を送出する。長押し／右クリックで
+ * Esc・Ctrl+C を個別に選べるメニューを開く（意味の違いを短い説明文つきで併記する）。
+ * Issue #69 仕様調整3: セッションID起点の /transcripts/:agent/:id/signal からウィンドウ起点の
+ * /transcripts/window-signal に統一した（ConversationView が埋め込み専用になり、送信先ペインは
+ * resolve-window が返す paneId に固定されるため、agentType によるゲーティングは不要になった）。
  */
-export function StopButton({ sessionId, agentType, paneId }: StopButtonProps) {
+export function StopButton({ windowId, paneId }: StopButtonProps) {
   const { t } = useTranslation('transcript');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -36,8 +36,8 @@ export function StopButton({ sessionId, agentType, paneId }: StopButtonProps) {
     setError(null);
     try {
       const { status, body } = await apiWithStatus<{ ok: true } | TranscriptErrorResponse>(
-        `/transcripts/${encodeURIComponent(agentType)}/${encodeURIComponent(sessionId)}/signal`,
-        { method: 'POST', body: JSON.stringify({ paneId, action, key }) },
+        '/transcripts/window-signal',
+        { method: 'POST', body: JSON.stringify({ windowId, paneId, action, key }) },
       );
       if (status !== 200 || isErrorResponse(body)) {
         setError(isErrorResponse(body) ? body.error : t('liveStatus.stopError'));
@@ -47,7 +47,7 @@ export function StopButton({ sessionId, agentType, paneId }: StopButtonProps) {
     } finally {
       setSending(false);
     }
-  }, [agentType, sessionId, paneId, t]);
+  }, [windowId, paneId, t]);
 
   const openMenuAt = useCallback((x: number, y: number) => {
     if (sending) return;

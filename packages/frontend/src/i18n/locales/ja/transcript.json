@@ -48,20 +48,12 @@
     "send": "送信",
     "sendWithShortcut": "送信（Ctrl/Cmd+Enter）",
     "sendShortcutHint": "Ctrl/Cmd+Enterで送信できます",
-    "choosePane": "ペインを選択",
-    "selectPane": "送信先ペインを選択",
-    "selectPaneHint": "送信先ペインを選択してください",
-    "matchingCwd": "このセッションの作業ディレクトリと一致",
-    "otherPanes": "その他のペイン",
-    "noPanes": "tmuxペインが見つかりません",
-    "noCommand": "(アイドル)",
     "sendError": "送信に失敗しました",
-    "loadError": "ペインの取得に失敗しました",
     "retry": "再試行",
     "history": "入力履歴",
     "historyEmpty": "履歴はまだありません",
     "draftRestored": "下書きを復元しました",
-    "unsupportedAgent": "このエージェント（{{agentType}}）への送信は未対応です。"
+    "agentNotDetectedWarning": "このウィンドウでエージェントが起動していない可能性があります。送信内容はシェルにそのまま入力されます。"
   },
   "windowChat": {
     "loading": "セッションを解決中…",
@@ -70,6 +62,10 @@
       "no_recent_session": "最近のセッションが見つかりません",
       "error": "セッションの解決に失敗しました"
     },
-    "retry": "再試行"
+    "retry": "再試行",
+    "empty": {
+      "title": "まだ会話がありません",
+      "description": "ここから話しかけられます。"
+    }
   }
 }

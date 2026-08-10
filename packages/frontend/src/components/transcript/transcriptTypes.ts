@@ -50,27 +50,16 @@ export interface TranscriptErrorResponse {
   error: string;
 }
 
-// GET /api/transcripts/:agent/:id/panes のレスポンス型（claude のみ対応）。
-// サーバー側の型（packages/server/src/modules/transcripts/TranscriptPaneService.ts）とフィールドを一致させる。
-
-export interface PaneCandidate {
-  paneId: string;
-  sessionName: string;
-  windowIndex: number;
-  windowName: string;
-  paneIndex: number;
-  currentPath: string;
-  currentCommand: string;
-  cwdMatch: boolean;
-}
-
-export interface PaneCandidatesResult {
-  cwd: string | null;
-  panes: PaneCandidate[];
-}
-
-// GET /api/transcripts/resolve-window のレスポンス型（Issue #69 Phase E-1/E-2）。
-// サーバー側の型（packages/server/src/modules/transcripts/WindowSessionResolver.ts）とフィールドを一致させる。
+// GET /api/transcripts/resolve-window のレスポンス型（Issue #69 Phase E-1/E-2、仕様調整3で
+// best-effort フィールドを追加）。サーバー側の型
+// （packages/server/src/modules/transcripts/WindowSessionResolver.ts）とフィールドを一致させる。
 export type ResolveWindowResult =
-  | { resolved: true; agentType: string; sessionId: string; paneId: string }
-  | { resolved: false; reason: 'unsupported_server' | 'no_recent_session' };
+  | { resolved: true; agentType: string; sessionId: string; paneId: string; agentDetected: boolean }
+  | {
+      resolved: false;
+      reason: 'unsupported_server' | 'no_recent_session';
+      /** セッション未解決でもウィンドウ直接入力（/transcripts/window-input）のために提供される best-effort な pane 解決結果。 */
+      paneId?: string;
+      agentType?: string;
+      agentDetected: boolean;
+    };

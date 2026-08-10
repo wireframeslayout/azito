@@ -6,9 +6,7 @@ import { Spinner } from '../ui/Spinner';
 import { clearDraft, createDebouncedDraftSaver, loadDraft } from './transcriptDrafts';
 import { loadHistory, pushHistory } from './inputHistory';
 import { HistoryPopover } from './HistoryPopover';
-import { PaneChip } from './PaneChip';
 import { isErrorResponse } from './transcriptFormat';
-import { PANE_CAPABLE_AGENT_TYPE, type UsePaneSelectionResult } from './usePaneSelection';
 import type { TranscriptErrorResponse } from './transcriptTypes';
 
 const TEXTAREA_MIN_HEIGHT = 38;
@@ -17,21 +15,28 @@ const DRAFT_SAVE_DEBOUNCE_MS = 300;
 const RESTORED_HINT_MS = 1500;
 
 interface PromptInputBarProps {
-  sessionId: string;
-  /** 送信先ペイン選択の状態。停止ボタン(LiveStatusRow)と選択状態を共有するため ConversationView から渡す。 */
-  paneSelection: UsePaneSelectionResult;
+  windowId: number;
+  /** 送信先ペイン。resolve-window が固定で解決した値（ユーザー選択なし、Issue #69 仕様調整3で
+   * ペインセレクトを撤去した）。 */
+  paneId: string;
+  /** 下書き・入力履歴の永続化キー。セッション確立後は sessionId、未確立の会話開始前は
+   * `window-${windowId}` のような呼び出し側で用意した安定キーを渡す。 */
+  draftKey: string;
+  /** false の場合、このウィンドウでエージェントが起動していないかもしれないという注記を出す
+   * （フェイルセーフ。送信自体はブロックしない）。 */
+  agentDetected: boolean;
   /** 送信成功直後に呼ばれる(最下部へスクロールするため)。新着メッセージ自体はポーリングで反映される。 */
   onSent: () => void;
 }
 
 /**
- * 会話ビュー下部の固定入力バー。cwd が一致する tmux ペインへプロンプトを送信する。
+ * 会話ビュー下部の固定入力バー。resolve-window が固定したペインへプロンプトを送信する
+ * （Issue #69 仕様調整3: ペイン選択 UI を撤去し、常に window-input API 経由で送る）。
  * 送信内容自体は既存の JSONL ポーリングで会話に反映される（オプティミスティック表示はしない）。
- * ペインチップ＋textarea＋履歴🕘＋送信↑ の1行構成（SP実機の高さ節約のため）。
+ * textarea＋履歴🕘＋送信↑ の1行構成（SP実機の高さ節約のため）。
  */
-export default function PromptInputBar({ sessionId, paneSelection, onSent }: PromptInputBarProps) {
+export default function PromptInputBar({ windowId, paneId, draftKey, agentDetected, onSent }: PromptInputBarProps) {
   const { t } = useTranslation('transcript');
-  const { panes, panesLoaded, panesError, selectedPaneId, selectedPane, selectPane, retryLoadPanes } = paneSelection;
   const [historyOpen, setHistoryOpen] = useState(false);
   const [text, setText] = useState('');
   const [historyIndex, setHistoryIndex] = useState(-1); // -1 = 履歴を辿っていない
@@ -41,17 +46,16 @@ export default function PromptInputBar({ sessionId, paneSelection, onSent }: Pro
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const draftSaverRef = useRef(createDebouncedDraftSaver(DRAFT_SAVE_DEBOUNCE_MS));
 
-  // セッション切り替え時は前セッションの送信エラー表示を持ち越さない(ペイン候補の取得・自動/復元選択
-  // 自体は usePaneSelection 側が sessionId の変化に反応して行う)。
+  // セッション切り替え時は前セッションの送信エラー表示を持ち越さない。
   useEffect(() => {
     setSendError(null);
-  }, [sessionId]);
+  }, [draftKey]);
 
   // セッション切り替え時に下書きを復元する（F2）。復元があった場合のみ短時間ヒントを出す。
   // 直前のセッションでタイマーが残っていてもここで必ず setShowRestoredHint を再設定するため、
   // 「復元」表示が次のセッションに残留することはない（クリーンアップでタイマーは毎回破棄される）。
   useEffect(() => {
-    const draft = loadDraft(sessionId);
+    const draft = loadDraft(draftKey);
     setText(draft);
     setHistoryIndex(-1);
     setShowRestoredHint(draft !== '');
@@ -60,12 +64,12 @@ export default function PromptInputBar({ sessionId, paneSelection, onSent }: Pro
       return () => clearTimeout(timer);
     }
     return undefined;
-  }, [sessionId]);
+  }, [draftKey]);
 
   // 入力変更を300msデバウンスして下書き保存する（F2）。
   useEffect(() => {
-    draftSaverRef.current.schedule(sessionId, text);
-  }, [sessionId, text]);
+    draftSaverRef.current.schedule(draftKey, text);
+  }, [draftKey, text]);
 
   // アンマウント時・セッション切り替え時は、保留中の保存を cancel せず flush する
   // （300ms未満での離脱・切り替えによる最新下書きの取りこぼしを防ぐ）。
@@ -74,7 +78,7 @@ export default function PromptInputBar({ sessionId, paneSelection, onSent }: Pro
     return () => {
       saver.flush();
     };
-  }, [sessionId]);
+  }, [draftKey]);
 
   // テキスト内容に応じて textarea の高さを追従させる（ユーザー入力・履歴挿入・送信後クリアの全経路）。
   useEffect(() => {
@@ -86,14 +90,14 @@ export default function PromptInputBar({ sessionId, paneSelection, onSent }: Pro
 
   const handleSend = useCallback(async () => {
     const trimmed = text.trim();
-    if (!trimmed || !selectedPaneId || sending) return;
+    if (!trimmed || sending) return;
 
     setSending(true);
     setSendError(null);
     try {
       const { status, body } = await apiWithStatus<{ ok: true } | TranscriptErrorResponse>(
-        `/transcripts/${PANE_CAPABLE_AGENT_TYPE}/${encodeURIComponent(sessionId)}/input`,
-        { method: 'POST', body: JSON.stringify({ paneId: selectedPaneId, text: trimmed }) },
+        '/transcripts/window-input',
+        { method: 'POST', body: JSON.stringify({ windowId, paneId, text: trimmed }) },
       );
       if (status !== 200 || isErrorResponse(body)) {
         setSendError(isErrorResponse(body) ? body.error : t('promptBar.sendError'));
@@ -101,7 +105,7 @@ export default function PromptInputBar({ sessionId, paneSelection, onSent }: Pro
       }
       setText('');
       setHistoryIndex(-1);
-      clearDraft(sessionId);
+      clearDraft(draftKey);
       pushHistory(trimmed);
       onSent();
     } catch (err) {
@@ -109,7 +113,7 @@ export default function PromptInputBar({ sessionId, paneSelection, onSent }: Pro
     } finally {
       setSending(false);
     }
-  }, [text, selectedPaneId, sending, sessionId, onSent, t]);
+  }, [text, sending, windowId, paneId, draftKey, onSent, t]);
 
   const insertFromHistory = useCallback((value: string) => {
     setText(value);
@@ -151,7 +155,7 @@ export default function PromptInputBar({ sessionId, paneSelection, onSent }: Pro
     }
   };
 
-  const canSend = text.trim().length > 0 && selectedPaneId !== null && !sending;
+  const canSend = text.trim().length > 0 && !sending;
 
   return (
     <div
@@ -191,16 +195,31 @@ export default function PromptInputBar({ sessionId, paneSelection, onSent }: Pro
         </div>
       )}
 
-      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-        <PaneChip
-          panes={panes}
-          panesLoaded={panesLoaded}
-          panesError={panesError}
-          selectedPane={selectedPane}
-          onSelect={selectPane}
-          onRetry={retryLoadPanes}
-        />
+      {/* フェイルセーフ注記（Issue #69 仕様調整3）: pane は解決できているがエージェントらしき
+          コマンドが動いていない場合の注意書き。送信自体はブロックしない。 */}
+      {!agentDetected && (
+        <div
+          role="note"
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 6,
+            marginBottom: 6,
+            padding: '6px 10px',
+            borderRadius: 'var(--radius-md)',
+            background: 'var(--warning-a08)',
+            border: '1px solid var(--warning-a35)',
+            color: 'var(--warning)',
+            fontSize: 'var(--font-2xs)',
+            lineHeight: 1.4,
+          }}
+        >
+          <Icon name="warning" size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+          <span>{t('promptBar.agentNotDetectedWarning')}</span>
+        </div>
+      )}
 
+      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
         <textarea
           ref={textareaRef}
           value={text}

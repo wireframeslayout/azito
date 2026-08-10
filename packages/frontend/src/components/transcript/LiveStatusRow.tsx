@@ -9,11 +9,10 @@ const MONO_FONT = "'JetBrainsMono Nerd Font', 'JetBrains Mono', monospace";
 // TUI スタイルの ⏺ 列（22px グリッド）に揃えるためのインデント。
 const TUI_INDENT_PX = 22;
 
-/** 停止ボタンの送信先。ペイン未選択、または送信先ペイン解決に対応しないエージェント種別
- * （現状 claude 以外、Issue #69 Phase E で拡張予定）では null にし、ボタン自体を出さない。 */
+/** 停止ボタンの送信先。resolve-window で pane が解決できていない場合のみ null にし、
+ * ボタン自体を出さない（Issue #69 仕様調整3: ウィンドウ起点の window-signal に統一）。 */
 export interface StopTarget {
-  sessionId: string;
-  agentType: string;
+  windowId: number;
   paneId: string;
 }
 
@@ -76,7 +75,7 @@ export function LiveStatusRow({ status, lastTimestamp, style, stopTarget }: Live
       )}
       <span className="transcript-shimmer">{label}</span>
       {stopTarget && (
-        <StopButton sessionId={stopTarget.sessionId} agentType={stopTarget.agentType} paneId={stopTarget.paneId} />
+        <StopButton windowId={stopTarget.windowId} paneId={stopTarget.paneId} />
       )}
     </div>
   );

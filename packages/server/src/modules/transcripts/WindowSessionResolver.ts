@@ -9,8 +9,15 @@ import type { TranscriptSource } from './sources/TranscriptSource';
 // ─── Types ───
 
 export type WindowSessionResolution =
-  | { resolved: true; agentType: string; sessionId: string; paneId: string }
-  | { resolved: false; reason: 'unsupported_server' | 'no_recent_session' };
+  | { resolved: true; agentType: string; sessionId: string; paneId: string; agentDetected: boolean }
+  | {
+      resolved: false;
+      reason: 'unsupported_server' | 'no_recent_session';
+      /** best-effort な pane 解決結果（セッション未解決でもウィンドウ直接入力のために提供する。Issue #69 仕様調整3）。 */
+      paneId?: string;
+      agentType?: string;
+      agentDetected: boolean;
+    };
 
 // ─── Constants ───
 
@@ -96,7 +103,13 @@ function selectPane(
  *    メタがあれば最優先で採用し、無ければ pane_current_command が claude/codex に完全一致する pane、
  *    無ければアクティブ pane、それも無ければ node 系 pane、最後に先頭 pane を返す。
  *
- * ローカルサーバーのみ対応（Phase E-1 時点。SSH/agent サーバーは 'unsupported_server'）。
+ * セッション自動解決自体はローカルサーバーのみ対応（Phase E-1 時点。SSH/agent サーバーは
+ * 'unsupported_server'）。ただし pane 解決（優先順位4のロジック）自体は tmux コマンドの
+ * トランスポート抽象化により全サーバー種別で動作するため、セッションが解決できない場合でも
+ * best-effort で paneId・window.workerType 由来の agentType を返す（Issue #69 仕様調整3。
+ * ウィンドウ直接入力 API がセッション JSONL 未作成でもチャットを開始できるようにするため）。
+ * server 自体が見つからない場合（window.serverName が指す ServerConfig が存在しない）は
+ * tmux コマンドを打つ先すら無いため best-effort もできない。
  */
 export class WindowSessionResolver {
   constructor(
@@ -108,31 +121,37 @@ export class WindowSessionResolver {
 
   async resolve(window: Window): Promise<WindowSessionResolution> {
     const server = this.serverRepo.findByName(window.serverName);
-    if (!server || server.type !== 'local') {
-      return { resolved: false, reason: 'unsupported_server' };
+    if (!server) {
+      return { resolved: false, reason: 'unsupported_server', agentDetected: false };
     }
 
     const windowPanes = await this.getWindowPanes(server, window);
+    const isLocal = server.type === 'local';
 
-    const windowLinked = this.resolveViaWindow(window);
-    if (windowLinked) {
-      const paneId = await this.resolvePaneId(server, window, windowPanes, windowLinked);
-      if (paneId) return { resolved: true, agentType: windowLinked.agentType, sessionId: windowLinked.sessionId, paneId };
+    if (isLocal) {
+      const windowLinked = this.resolveViaWindow(window);
+      if (windowLinked) {
+        const pane = await this.resolvePaneWithDetection(server, window, windowPanes, windowLinked.sessionId, windowLinked.agentType);
+        if (pane) return { resolved: true, agentType: windowLinked.agentType, sessionId: windowLinked.sessionId, ...pane };
+      }
+
+      const taskLinked = this.resolveViaTask(window);
+      if (taskLinked) {
+        const pane = await this.resolvePaneWithDetection(server, window, windowPanes, taskLinked.sessionId, taskLinked.agentType);
+        if (pane) return { resolved: true, agentType: taskLinked.agentType, sessionId: taskLinked.sessionId, ...pane };
+      }
+
+      const cwdMatched = this.resolveViaCwdMatch(windowPanes);
+      if (cwdMatched) {
+        const pane = await this.resolvePaneWithDetection(server, window, windowPanes, cwdMatched.sessionId, cwdMatched.agentType);
+        if (pane) return { resolved: true, agentType: cwdMatched.agentType, sessionId: cwdMatched.sessionId, ...pane };
+      }
     }
 
-    const taskLinked = this.resolveViaTask(window);
-    if (taskLinked) {
-      const paneId = await this.resolvePaneId(server, window, windowPanes, taskLinked);
-      if (paneId) return { resolved: true, agentType: taskLinked.agentType, sessionId: taskLinked.sessionId, paneId };
-    }
-
-    const cwdMatched = this.resolveViaCwdMatch(windowPanes);
-    if (cwdMatched) {
-      const paneId = await this.resolvePaneId(server, window, windowPanes, cwdMatched);
-      if (paneId) return { resolved: true, agentType: cwdMatched.agentType, sessionId: cwdMatched.sessionId, paneId };
-    }
-
-    return { resolved: false, reason: 'no_recent_session' };
+    const reason: 'unsupported_server' | 'no_recent_session' = isLocal ? 'no_recent_session' : 'unsupported_server';
+    const fallback = await this.resolvePaneWithDetection(server, window, windowPanes, '', window.workerType ?? '');
+    if (!fallback) return { resolved: false, reason, agentDetected: false };
+    return { resolved: false, reason, paneId: fallback.paneId, agentType: window.workerType ?? undefined, agentDetected: fallback.agentDetected };
   }
 
   /** 優先順位1: ウィンドウ自身のセッション。session が存在しなければ null（呼び出し元がフォールバックする）。 */
@@ -191,23 +210,38 @@ export class WindowSessionResolver {
     return allPanes.filter((p) => p.sessionName === sessionName && windowSpecMatches(windowSpec, p.windowIndex, p.windowName));
   }
 
-  /** pane 未取得ならアクティブ pane 判定のため list-sessions を追加で1回引く（優先順位4、遅延評価）。 */
-  private async resolvePaneId(
+  /**
+   * pane 選定（優先順位4）＋ agentDetected 判定を一度に行う。sessionId/agentType は解決済みセッションが
+   * あれば渡す。best-effort 呼び出し時（セッション未解決）は sessionId='' / agentType=window.workerType ?? ''
+   * を渡す — paneLayout メタは sessionId 空文字ではマッチせず、workerType 一致のみで判定される。
+   * pane 未取得ならアクティブ pane 判定のため list-sessions を追加で1回引く（遅延評価）。
+   * agentDetected は「paneLayout メタで明示的にこの pane がエージェント用と分かっている」または
+   * 「pane_current_command が claude/codex に完全一致」のいずれかで true。
+   */
+  private async resolvePaneWithDetection(
     server: ServerConfig,
     window: Window,
     windowPanes: TmuxPaneInfo[],
-    resolved: { agentType: string; sessionId: string },
-  ): Promise<string | null> {
+    sessionId: string,
+    agentType: string,
+  ): Promise<{ paneId: string; agentDetected: boolean } | null> {
     if (windowPanes.length === 0) return null;
 
-    const metaMatch = findPaneLayoutMatch(window.paneLayout, windowPanes, resolved.sessionId, resolved.agentType);
-    if (metaMatch) return metaMatch;
+    const metaMatch = findPaneLayoutMatch(window.paneLayout, windowPanes, sessionId, agentType);
+    if (metaMatch) return { paneId: metaMatch, agentDetected: true };
 
+    let paneId: string | null;
     if (windowPanes.some((p) => AGENT_COMMAND_EXACT.has(p.currentCommand.toLowerCase()))) {
-      return selectPane(windowPanes, null, window.paneLayout, resolved.sessionId, resolved.agentType);
+      paneId = selectPane(windowPanes, null, window.paneLayout, sessionId, agentType);
+    } else {
+      const activePaneIndex = await this.findActivePaneIndex(server, window);
+      paneId = selectPane(windowPanes, activePaneIndex, window.paneLayout, sessionId, agentType);
     }
-    const activePaneIndex = await this.findActivePaneIndex(server, window);
-    return selectPane(windowPanes, activePaneIndex, window.paneLayout, resolved.sessionId, resolved.agentType);
+    if (!paneId) return null;
+
+    const pane = windowPanes.find((p) => p.paneId === paneId);
+    const agentDetected = pane !== undefined && AGENT_COMMAND_EXACT.has(pane.currentCommand.toLowerCase());
+    return { paneId, agentDetected };
   }
 
   private async findActivePaneIndex(server: ServerConfig, window: Window): Promise<number | null> {
