@@ -59,15 +59,23 @@
     "failed": "検索に失敗しました",
     "nameMatch": "ファイル名一致"
   },
+  "sidebar": {
+    "title": "ファイル"
+  },
   "worktrees": {
-    "title": "ワークツリー",
     "mainLabel": "本流",
     "orphaned": "孤立",
     "running": "実行中",
-    "empty": "ワークツリーはまだありません",
+    "changedFiles": "{{count}} ファイル変更",
     "loadError": "ワークツリーの読み込みに失敗しました",
-    "retry": "再試行",
-    "openTask": "タスクを開く",
-    "changedFiles": "{{count}} ファイル変更"
+    "retry": "再試行"
+  },
+  "rootSwitcher": {
+    "filter": "名前 / ブランチ / #タスクID で絞り込み…",
+    "footerCount": "{{count}} 件",
+    "footerHint": "↑↓ 移動  ↵ 選択  Esc 閉じる",
+    "orphanedNotice": "この worktree に対応するタスクが見つかりません",
+    "copyPath": "パスをコピー",
+    "pathCopied": "パスをコピーしました"
   }
 }

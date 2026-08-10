@@ -59,15 +59,23 @@
     "failed": "Search failed",
     "nameMatch": "Name match"
   },
+  "sidebar": {
+    "title": "Files"
+  },
   "worktrees": {
-    "title": "Worktrees",
     "mainLabel": "Main",
     "orphaned": "Orphaned",
     "running": "Running",
-    "empty": "No worktrees yet",
+    "changedFiles": "{{count}} files changed",
     "loadError": "Failed to load worktrees",
-    "retry": "Retry",
-    "openTask": "Open task",
-    "changedFiles": "{{count}} files changed"
+    "retry": "Retry"
+  },
+  "rootSwitcher": {
+    "filter": "Filter by name / branch / #task ID…",
+    "footerCount": "{{count}} items",
+    "footerHint": "↑↓ Navigate  ↵ Select  Esc Close",
+    "orphanedNotice": "No task found for this worktree",
+    "copyPath": "Copy path",
+    "pathCopied": "Path copied"
   }
 }

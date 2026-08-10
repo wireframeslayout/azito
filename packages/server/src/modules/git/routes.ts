@@ -5,6 +5,7 @@ import type { ITaskRepository } from '../tasks/Task';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
 import { GitDiffService, SAFE_PATH, SAFE_BRANCH, SAFE_HASH } from './GitDiffService';
 import type { WorktreeServiceFactory } from './WorktreeServiceFactory';
+import { shellQuote } from '../../shared/shellQuote';
 
 export interface GitRouteOptions {
   serverRepo: IServerRepository;
@@ -88,7 +89,20 @@ const gitRoutes: FastifyPluginCallback<GitRouteOptions> = (fastify, opts, done) 
         const transport = transportFactory.getTransport(srv);
         const worktreeService = wsf.create(srv.type, transport);
         const entries = await worktreeService.list(workingDir);
-        const worktrees = entries.map((entry) => {
+
+        const changedCounts = await Promise.all(
+          entries.map(async (entry) => {
+            try {
+              const r = await transport.exec(`git -C ${shellQuote(entry.path)} status --porcelain`, 10000);
+              const lines = r.stdout.trim();
+              return lines === '' ? 0 : lines.split('\n').length;
+            } catch {
+              return null;
+            }
+          }),
+        );
+
+        const worktrees = entries.map((entry, i) => {
           const match = entry.path.match(/\/\.worktrees\/task-(\d+)$/);
           const task = match ? taskRepo.findById(parseInt(match[1], 10)) : null;
           return {
@@ -101,6 +115,7 @@ const gitRoutes: FastifyPluginCallback<GitRouteOptions> = (fastify, opts, done) 
             taskTitle: task?.title ?? null,
             taskStatus: task?.status ?? null,
             orphaned: match != null && task == null,
+            changedCount: changedCounts[i],
           };
         });
 
