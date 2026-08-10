@@ -21,6 +21,7 @@ export interface FileDiff {
   deletions: number;
   hunks: DiffHunk[];
   isBinary: boolean;
+  group?: 'staged' | 'unstaged' | 'untracked';
 }
 
 const HUNK_HEADER_RE = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/;

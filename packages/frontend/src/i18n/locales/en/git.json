@@ -46,6 +46,19 @@
     "binary": "Binary",
     "largeFile": "Large file",
     "binaryNotShown": "Binary file not shown",
+    "scope": {
+      "uncommitted": "Uncommitted",
+      "base": "vs {{base}}",
+      "commit": "Commits"
+    },
+    "groups": {
+      "staged": "Staged",
+      "unstaged": "Unstaged",
+      "untracked": "Untracked"
+    },
+    "includeUncommitted": "Include uncommitted",
+    "untracked": "Untracked",
+    "changes": "Changes",
     "errors": {
       "invalidResponse": "Invalid diff response",
       "loadFailed": "Failed to load diff",

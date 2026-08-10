@@ -52,10 +52,13 @@ import {
   Eye,
   File,
   FileCode,
+  FilePlus2,
   FolderOpen,
+  FolderPlus,
   Upload,
   Download,
   Copy,
+  ClipboardCopy,
   Link,
   Activity,
   GitCommitHorizontal,
@@ -64,6 +67,8 @@ import {
   History,
   Menu,
   Home,
+  Info,
+  CircleCheck,
   type LucideIcon,
 } from 'lucide-react';
 import { SidekickBot, UnitsSquad } from './custom-icons';
@@ -124,7 +129,10 @@ const ICONS = {
   watch: Eye,
   file: File,
   'file-code': FileCode,
+  'file-plus': FilePlus2,
   'folder-open': FolderOpen,
+  'folder-plus': FolderPlus,
+  clipboard: ClipboardCopy,
   upload: Upload,
   download: Download,
   copy: Copy,
@@ -138,6 +146,8 @@ const ICONS = {
   history: History,
   menu: Menu,
   home: Home,
+  info: Info,
+  'circle-check': CircleCheck,
 } satisfies Record<string, LucideIcon>;
 
 export type IconName = keyof typeof ICONS;

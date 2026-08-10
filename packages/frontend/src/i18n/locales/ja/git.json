@@ -46,6 +46,19 @@
     "binary": "バイナリ",
     "largeFile": "大きなファイル",
     "binaryNotShown": "バイナリファイルは表示されません",
+    "scope": {
+      "uncommitted": "未コミット",
+      "base": "{{base}} と比較",
+      "commit": "コミット"
+    },
+    "groups": {
+      "staged": "ステージ済み",
+      "unstaged": "未ステージ",
+      "untracked": "未追跡"
+    },
+    "includeUncommitted": "未コミットを含める",
+    "untracked": "未追跡",
+    "changes": "変更",
     "errors": {
       "invalidResponse": "無効なdiffレスポンス",
       "loadFailed": "diffの読み込みに失敗しました",

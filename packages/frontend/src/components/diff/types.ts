@@ -21,7 +21,10 @@ export interface FileDiff {
   deletions: number;
   hunks: DiffHunk[];
   isBinary: boolean;
+  group?: 'staged' | 'unstaged' | 'untracked';
 }
+
+export type DiffScope = 'uncommitted' | 'base' | 'commit';
 
 export interface DiffResponse {
   baseBranch: string;
@@ -33,6 +36,7 @@ export interface DiffResponse {
 export const STATUS_COLOR: Record<string, string> = {
   A: 'var(--success, #3fb950)',
   D: 'var(--danger, #f85149)',
-  M: 'var(--accent, #58a6ff)',
+  M: 'var(--warning, #d29922)',
   R: 'var(--warning, #d29922)',
+  U: 'var(--purple, #bc8cff)',
 };
