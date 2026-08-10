@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { api } from '../api/client';
 import type { AgentActivityPayload } from '../types/notification';
+import { stripPaneSuffix } from '../utils/tmuxTarget';
 import { useNotificationChannel } from './useNotificationChannel';
 import { useWorkspaceTargets } from './useWorkspaceTargets';
 
@@ -47,6 +48,13 @@ interface AgentActivityContextValue {
   shouldShowTaskActivity: (taskId: number) => boolean;
   isWatched: (serverName: string, target: string, taskId?: number) => boolean;
   windowIndicator: (serverName: string, target: string) => ActivityIndicator;
+  /**
+   * Raw running/blocked status, with no "currently watched window" suppression and with
+   * pane-suffix-normalized target matching (`session:window` vs `session:window.1`).
+   * Use this for status classification (active/idle); use `windowIndicator` only for the
+   * per-row visual indicator, which intentionally suppresses the currently focused window.
+   */
+  activityStatus: (serverName: string, target: string) => 'working' | 'blocked' | null;
   finishedEntries: FinishedEntry[];
   dismissFinished: (serverName: string, target: string) => void;
 }
@@ -58,6 +66,7 @@ const AgentActivityContext = createContext<AgentActivityContextValue>({
   shouldShowTaskActivity: () => false,
   isWatched: () => false,
   windowIndicator: () => null,
+  activityStatus: () => null,
   finishedEntries: [],
   dismissFinished: () => {},
 });
@@ -241,8 +250,24 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
     setFinished((cur) => cur.filter((e) => activityKey(e.serverName, e.target) !== key));
   }, []);
 
+  // Raw entry lookup normalized against pane-suffix variance: `entries` keys targets exactly
+  // as reported by the activity source (pane suffix already stripped server-side), while
+  // callers (e.g. a window's `tmuxTarget`) may carry a `.<paneIndex>` suffix.
+  const findEntry = useCallback((serverName: string, target: string): AgentActivityInfo | undefined => {
+    const normalized = stripPaneSuffix(target);
+    for (const info of entries.values()) {
+      if (info.serverName === serverName && stripPaneSuffix(info.target) === normalized) return info;
+    }
+    return undefined;
+  }, [entries]);
+
   const isRunning = (serverName: string, target: string): boolean =>
-    entries.get(activityKey(serverName, target))?.running === true;
+    findEntry(serverName, target)?.running === true;
+
+  const activityStatus = (serverName: string, target: string): 'working' | 'blocked' | null => {
+    const info = findEntry(serverName, target);
+    return info?.running ? info.status : null;
+  };
 
   const shouldShowActivity = (serverName: string, target: string): boolean => {
     const info = entries.get(activityKey(serverName, target));
@@ -279,6 +304,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
         shouldShowTaskActivity,
         isWatched,
         windowIndicator,
+        activityStatus,
         finishedEntries: finished,
         dismissFinished,
       }}

@@ -203,14 +203,16 @@ export default function ObjectsSidebar({
 
   // agentByType（ラベル解決）専用。押下可否の判定は agentDefsLoading/agentDefsError props（useAddWindowModal 側の取得）を使う。
   const { agents: agentDefs } = useAgentDefinitions('worker');
-  const { windowIndicator, finishedEntries } = useAgentActivity();
+  const { windowIndicator, activityStatus, finishedEntries } = useAgentActivity();
 
   // --- 状態セクション化: 稼働中（エージェント活動中）/ 待機中（オンラインだが非活動）/ オフライン（デタッチ・ペイン消失） ---
+  // `activityStatus` は windowIndicator と異なり、視聴中ウィンドウの抑制をかけない生の状態を
+  // pane サフィックス正規化込みで返す（windowIndicator は行の視覚インジケータ表示専用）。
   const classifyStatus = useCallback((w: Window): 'active' | 'idle' | 'offline' => {
     if (!resolveWindowContextExtra(w, sessionData).online) return 'offline';
-    const indicator = windowIndicator(w.serverName, w.tmuxTarget);
-    return indicator === 'working' || indicator === 'blocked' ? 'active' : 'idle';
-  }, [sessionData, windowIndicator]);
+    const status = activityStatus(w.serverName, w.tmuxTarget);
+    return status === 'working' || status === 'blocked' ? 'active' : 'idle';
+  }, [sessionData, activityStatus]);
 
   const windowsByStatus = useMemo(() => {
     const buckets: Record<'active' | 'idle' | 'offline', Window[]> = { active: [], idle: [], offline: [] };
