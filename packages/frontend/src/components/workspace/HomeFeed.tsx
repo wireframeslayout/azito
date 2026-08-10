@@ -5,7 +5,7 @@ import { Chip, WindowActivityIndicator, Button } from '../ui';
 import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
 import type { ActiveWindowRow } from '../../hooks/useActiveWindowRows';
 import { formatRelativeTime } from '../../utils/time';
-import { selectTaskTerminal } from './TaskPanel';
+import { openActivityTarget } from '../../lib/activityOpen';
 import type { Task } from '../../pages/workspace/types';
 import { getProjectColorFallback } from '../../pages/workspace/types';
 
@@ -105,12 +105,12 @@ export default function HomeFeed({ allTasks, allProjects, openTask, connectPane,
   };
 
   const handleActiveGroupClick = (group: ActiveGroupEntry) => {
-    if (group.taskId != null) {
-      selectTaskTerminal(group.taskId, { serverName: group.primaryRow.serverName, target: group.primaryRow.target });
-      openTask(group.taskId, group.title, group.projectId);
-    } else {
-      connectPane(group.primaryRow.serverName, group.primaryRow.target, group.projectId);
-    }
+    openActivityTarget(
+      { taskId: group.taskId, serverName: group.primaryRow.serverName, target: group.primaryRow.target, projectId: group.projectId },
+      group.title,
+      openTask,
+      connectPane,
+    );
   };
 
   return (

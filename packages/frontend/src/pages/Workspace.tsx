@@ -43,6 +43,7 @@ import ResourceWarningDialog, { type ResourceStatus } from '../components/Resour
 import TabContentRenderer from '../components/workspace/TabContentRenderer';
 import WorkspaceWelcome from '../components/workspace/WorkspaceWelcome';
 import HomeFeed from '../components/workspace/HomeFeed';
+import { FloatingActivityPill } from '../components/workspace/FloatingActivityPill';
 import { SplitLayout, type PaneDrag } from '../components/workspace/SplitLayout';
 import { resolveDisplayedTaskTerminal, selectTaskTerminal } from '../components/workspace/TaskPanel';
 
@@ -1125,6 +1126,8 @@ function WorkspaceInner() {
 
               {tabs.map((tab) => renderTabContent(tab, { position: 'absolute', inset: 0 }, tab.id === activeTabId, closeTabAndRefreshBrowser))}
             </div>
+
+            <FloatingActivityPill allTasks={allTasks} openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} />
           </>
         ) : (
           // Multi-pane split layout (Issue #397). With a single pane (the

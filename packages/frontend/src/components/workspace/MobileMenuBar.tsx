@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { MobileKeyboardOverlay } from '../ui/MobileKeyboardOverlay';
 import { useVirtualKeyboard } from '../../hooks/useVirtualKeyboard';
@@ -11,6 +11,7 @@ import { MobileGlobalMenuSheet } from './MobileGlobalMenuSheet';
 import { getHealthLevel, getWorstHealth, useServerResourcesContext } from '../../hooks/useServerResources';
 import { ResourceDropdownContent } from '../statusbar/ResourceDropdown';
 import { BottomSheet } from '../ui/BottomSheet';
+import { setSpFooterHeight } from '../../lib/spFooterHeight';
 
 export interface MobileMenuBarProps {
   /** Total number of open tabs, shown as a badge on the "タブ" item. */
@@ -65,6 +66,31 @@ export function MobileMenuBar({
   const togglePopover = (name: OpenPopover) => setOpenPopover((prev) => (prev === name ? null : name));
   const closePopover = () => setOpenPopover(null);
 
+  // SP文脈フッター高の公開（Issue #69 T2）: このバーはタブ未選択のホーム状態のみ表示される
+  // 「その時点でSP下端を占めているチロム」なので、TerminalQuickKeyBar/PromptInputBarと同じ
+  // --sp-footer-h 機構（lib/spFooterHeight.ts）に自分の高さを乗せる。F2稼働ステータスピルが
+  // これを bottom オフセットとして参照し、常にこのバーの上へ退避する。3者は表示条件が
+  // 排他的（タブ有無・ビューモード）なので、調停ロジックは持たず最後に呼ばれた値をそのまま使う。
+  const navRef = useRef<HTMLElement>(null);
+  const barVisible = !keyboardVisible && !hidden;
+  useEffect(() => {
+    if (!barVisible) {
+      setSpFooterHeight(null);
+      return undefined;
+    }
+    const el = navRef.current;
+    if (!el) return undefined;
+    const observer = new ResizeObserver(() => {
+      setSpFooterHeight(`${el.getBoundingClientRect().height}px`);
+    });
+    observer.observe(el);
+    setSpFooterHeight(`${el.getBoundingClientRect().height}px`);
+    return () => {
+      observer.disconnect();
+      setSpFooterHeight(null);
+    };
+  }, [barVisible]);
+
   useEffect(() => {
     if (keyboardVisible || hidden) setOpenPopover(null);
   }, [keyboardVisible, hidden]);
@@ -98,6 +124,7 @@ export function MobileMenuBar({
   return (
     <>
       <nav
+        ref={navRef}
         aria-label={t('mobile.mobileMenu')}
         className={`mobile-menu-bar${keyboardVisible || hidden ? ' mobile-menu-bar-hidden' : ''}`}
         style={{

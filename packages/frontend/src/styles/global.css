@@ -706,6 +706,7 @@ button:focus-within .diff-open-btn {
   }
   .aw-row-working::before,
   .aw-icon-working::before,
+  .aw-sweep-overlay,
   .aw-braille-spinner,
   .aw-blocked-dot {
     animation: none !important;
@@ -739,8 +740,14 @@ button:focus-within .diff-open-btn {
   position: relative;
   overflow: hidden;
 }
-.aw-row-working::before {
-  content: '';
+/*
+ * 共通スイープ定義（Issue #69 T2）: working行(::before)・収納アイコン(::before)・
+ * フローティングピル(実要素オーバーレイ)の3箇所が同じネオンシマーを使う。プロパティ本体は
+ * ここでまとめて宣言し、疑似要素側は content だけ別ルールで足す（コピー禁止）。
+ */
+.aw-row-working::before,
+.aw-icon-working::before,
+.aw-sweep-overlay {
   position: absolute;
   inset: 0;
   pointer-events: none;
@@ -750,6 +757,10 @@ button:focus-within .diff-open-btn {
   background-size: 250% 100%;
   animation: aw-neon-sweep 9s linear infinite, aw-hue 9s linear infinite;
 }
+.aw-row-working::before,
+.aw-icon-working::before {
+  content: '';
+}
 .aw-braille-spinner {
   background: linear-gradient(135deg, #ff4fd8, #9a6fff, #58a6ff);
   -webkit-background-clip: text;
@@ -757,6 +768,13 @@ button:focus-within .diff-open-btn {
   color: transparent;
   font-weight: 700;
   animation: aw-hue 9s linear infinite;
+}
+
+/* ---- SP稼働ステータスピル（Issue #69 T2）: .aw-sweep-overlay を実要素として重ねるための
+   ホスト（自身の border-radius でオーバーレイをクリップする） ---- */
+.aw-pill-sweep-host {
+  position: relative;
+  overflow: hidden;
 }
 
 /* ---- Active Windows: blocked行の背景 ---- */
@@ -786,16 +804,7 @@ button:focus-within .diff-open-btn {
   border-radius: 8px;
 }
 .aw-icon-working::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
   border-radius: 8px;
-  background-image: linear-gradient(105deg,
-    transparent 26%, rgba(255, 79, 216, 0.16) 38%, rgba(154, 111, 255, 0.20) 50%,
-    rgba(88, 166, 255, 0.16) 62%, transparent 74%);
-  background-size: 250% 100%;
-  animation: aw-neon-sweep 9s linear infinite, aw-hue 9s linear infinite;
 }
 
 /* ---- Tab activity: neon comet bar (C2.B4) + braille spinner ---- */

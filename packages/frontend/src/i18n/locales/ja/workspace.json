@@ -31,6 +31,11 @@
     "planReview": "承認待ち",
     "noActive": "稼働中のウィンドウはありません"
   },
+  "activityPill": {
+    "ariaLabel": "稼働ステータス",
+    "workingSection": "稼働中 {{count}}",
+    "finishedSection": "最近完了 {{count}}"
+  },
   "home": {
     "needsAttention": "要対応",
     "active": "稼働中",

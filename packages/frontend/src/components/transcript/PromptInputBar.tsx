@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { apiWithStatus } from '../../api/client';
 import { Icon } from '../ui/Icon';
 import { Spinner } from '../ui/Spinner';
+import { useIsMobile } from '../../hooks/useIsMobile';
+import { setSpFooterHeight } from '../../lib/spFooterHeight';
 import { clearDraft, createDebouncedDraftSaver, loadDraft } from './transcriptDrafts';
 import { loadHistory, pushHistory } from './inputHistory';
 import { HistoryPopover } from './HistoryPopover';
@@ -13,6 +15,14 @@ const TEXTAREA_MIN_HEIGHT = 38;
 const TEXTAREA_MAX_HEIGHT = 120;
 const DRAFT_SAVE_DEBOUNCE_MS = 300;
 const RESTORED_HINT_MS = 1500;
+
+// SP文脈フッター高の公開（Issue #69 T2）: TerminalContainer の TerminalQuickKeyBar と同じ
+// --sp-footer-h 機構（lib/spFooterHeight.ts 共有setter）をチャット入力バー側にも配線する。
+// 入力バーは textarea の行数で高さが変わるため、固定値ではなく ResizeObserver で実測して
+// CSS変数へ反映する（F2ピルのbottomオフセットがこれを参照する）。
+function setPromptBarFooterHeightPx(px: number | null): void {
+  setSpFooterHeight(px !== null ? `${px}px` : null);
+}
 
 interface PromptInputBarProps {
   windowId: number;
@@ -51,6 +61,8 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
   const [showRestoredHint, setShowRestoredHint] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const draftSaverRef = useRef(createDebouncedDraftSaver(DRAFT_SAVE_DEBOUNCE_MS));
+  const barRef = useRef<HTMLDivElement>(null);
+  const isMobile = useIsMobile();
 
   // セッション切り替え時は前セッションの送信エラー表示を持ち越さない。
   useEffect(() => {
@@ -171,8 +183,32 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
 
   const canSend = text.trim().length > 0 && !sending;
 
+  // SP のみ: 実測高を --sp-footer-h として公開する。textarea の伸縮（複数行入力）でバー自体の
+  // 高さが変わるため、マウント時の1回きりではなく ResizeObserver で追従させる。アンマウント・
+  // デスクトップへの切り替えでは 0 に戻す（他画面のフローティングピルが誤って退避し続けないため）。
+  useEffect(() => {
+    if (!isMobile) {
+      setPromptBarFooterHeightPx(null);
+      return undefined;
+    }
+    const el = barRef.current;
+    if (!el) return undefined;
+    // contentRect（ResizeObserver）は padding/border を含まないため、実際に画面上で占める高さ
+    // （padding込みのボーダーボックス）は getBoundingClientRect で測り直す。
+    const observer = new ResizeObserver(() => {
+      setPromptBarFooterHeightPx(el.getBoundingClientRect().height);
+    });
+    observer.observe(el);
+    setPromptBarFooterHeightPx(el.getBoundingClientRect().height);
+    return () => {
+      observer.disconnect();
+      setPromptBarFooterHeightPx(null);
+    };
+  }, [isMobile]);
+
   return (
     <div
+      ref={barRef}
       style={{
         position: 'relative',
         flexShrink: 0,

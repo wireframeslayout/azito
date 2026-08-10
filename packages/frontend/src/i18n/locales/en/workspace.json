@@ -31,6 +31,11 @@
     "planReview": "Plan Review",
     "noActive": "No active windows"
   },
+  "activityPill": {
+    "ariaLabel": "Activity status",
+    "workingSection": "Working {{count}}",
+    "finishedSection": "Recently finished {{count}}"
+  },
   "home": {
     "needsAttention": "Needs Attention",
     "active": "Active",
