@@ -164,7 +164,14 @@
     "tabSwitcherClose": "Close tab switcher",
     "tabSwitcherEmpty": "No tabs are open",
     "tabSwitcherUngrouped": "Other",
-    "tabSwitcherNewTab": "New tab"
+    "tabSwitcherNewTab": "New tab",
+    "navMenu": "Navigation menu"
+  },
+  "mobileNav": {
+    "sectionProject": "Project",
+    "sectionGlobal": "Global",
+    "sectionUtility": "Utility",
+    "projectSwitch": "Switch project"
   },
   "sessionTree": {
     "installingAgent": "Installing agent...",

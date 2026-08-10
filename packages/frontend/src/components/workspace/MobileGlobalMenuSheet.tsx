@@ -1,10 +1,11 @@
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { paths } from '../../paths';
-import { Icon, type IconName } from '../ui/Icon';
+import { Icon } from '../ui/Icon';
 import { BottomSheet } from '../ui/BottomSheet';
 import { useSystemUpdate } from '../../hooks/useSystemUpdate';
 import { HealthDot, type DotLevel } from '../statusbar/HealthDot';
+import { GLOBAL_NAV_ITEMS, SETTINGS_NAV_ITEM } from './globalNavItems';
 
 interface MobileGlobalMenuSheetProps {
   open: boolean;
@@ -24,12 +25,7 @@ interface MobileGlobalMenuSheetProps {
   onOpenServerHealth?: () => void;
 }
 
-const GLOBAL_ITEMS: Array<{ labelKey: string; icon: IconName; path: string }> = [
-  { labelKey: 'projects:sidebar.servers', icon: 'servers', path: paths.servers() },
-  { labelKey: 'projects:sidebar.sidekicks', icon: 'sidekicks', path: paths.sidekicks() },
-  { labelKey: 'projects:sidebar.units', icon: 'units', path: paths.units() },
-  { labelKey: 'common:navigation.settings', icon: 'settings', path: paths.settings() },
-];
+const GLOBAL_ITEMS = [...GLOBAL_NAV_ITEMS, SETTINGS_NAV_ITEM];
 
 const itemStyle: React.CSSProperties = {
   display: 'flex',

@@ -46,8 +46,9 @@ import HomeFeed from '../components/workspace/HomeFeed';
 import { SplitLayout, type PaneDrag } from '../components/workspace/SplitLayout';
 import { resolveDisplayedTaskTerminal, selectTaskTerminal } from '../components/workspace/TaskPanel';
 
-import type { SidebarMode, Task, Project } from './workspace/types';
+import type { SidebarMode, Task, Project, Window } from './workspace/types';
 import { ACTIVE_PROJECT_KEY, getProjectColorFallback } from './workspace/types';
+import { buildObjectSections } from '../lib/workspaceObjects';
 import { GlobalFocusProvider, useGlobalFocus } from '../hooks/useGlobalFocus';
 
 export default function Workspace() {
@@ -134,6 +135,19 @@ function WorkspaceInner() {
     }
     return entries;
   }, [allTasks]);
+
+  // SP の M1 メニュー「オブジェクト」行に表示する総件数（Issue #69 T1）。ObjectsSidebar 本体と
+  // 同じ buildObjectSections を、同じ入力（プロジェクトスコープの windows/tasks）で呼び出す
+  // ことで、メニューの件数バッジと実際のオブジェクト一覧が食い違わないようにする。
+  const objectsCount = useMemo(() => {
+    if (!project) return 0;
+    const taskOwnedWindows: Window[] = [];
+    for (const task of tasks) {
+      if (!task.windows) continue;
+      for (const w of task.windows) taskOwnedWindows.push(w);
+    }
+    return buildObjectSections(project.windows, taskWindows, taskOwnedWindows, browserGroups, browserCapableServers).totalCount;
+  }, [project, tasks, taskWindows, browserGroups, browserCapableServers]);
 
   const projectSettings = useProjectSettings(parseInt(id || '0', 10), tabs, closeTab);
 
@@ -1067,6 +1081,7 @@ function WorkspaceInner() {
       openTask={openTaskFromActiveWindow}
       taskWindows={taskWindows}
       hideMenuBar={mobile && !!activeTabId}
+      objectsCount={objectsCount}
       mobileTabCount={tabs.length}
       onMobileGoHome={() => setActiveTabId(null)}
       onMobileOpenTabSwitcher={() => setMobileTabSwitcherOpen(true)}

@@ -164,7 +164,14 @@
     "tabSwitcherClose": "タブ一覧を閉じる",
     "tabSwitcherEmpty": "開いているタブはありません",
     "tabSwitcherUngrouped": "その他",
-    "tabSwitcherNewTab": "新しいタブ"
+    "tabSwitcherNewTab": "新しいタブ",
+    "navMenu": "ナビゲーションメニュー"
+  },
+  "mobileNav": {
+    "sectionProject": "プロジェクト",
+    "sectionGlobal": "グローバル",
+    "sectionUtility": "ユーティリティ",
+    "projectSwitch": "プロジェクトを切替"
   },
   "sessionTree": {
     "installingAgent": "エージェントをインストール中...",

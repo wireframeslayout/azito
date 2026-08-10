@@ -5,9 +5,10 @@ import { useNavigate } from 'react-router-dom';
 import type { SidebarMode } from '../../pages/workspace/types';
 import { paths } from '../../paths';
 import { MobileMenuBar } from './MobileMenuBar';
+import { MobileNavSheet } from './MobileNavSheet';
 import ContextMenu, { useContextMenu } from '../ContextMenu';
 import type { ContextMenuItem } from '../ContextMenu';
-import LocalMenu, { SIDEBAR_ICONS } from './LocalMenu';
+import LocalMenu from './LocalMenu';
 import LocalMenuPopover from './LocalMenuPopover';
 import { ProjectAvatar } from '../ui/ProjectAvatar';
 
@@ -83,6 +84,8 @@ interface WorkspaceLayoutProps {
   onMobileGoHome?: () => void;
   onMobileOpenTabSwitcher?: () => void;
   onMobileOpenAddTab?: () => void;
+  /** SP の M1 メニュー「オブジェクト」行に表示する総件数（Issue #69 T1）。 */
+  objectsCount?: number;
 }
 
 export default function WorkspaceLayout({
@@ -116,6 +119,7 @@ export default function WorkspaceLayout({
   onMobileGoHome,
   onMobileOpenTabSwitcher,
   onMobileOpenAddTab,
+  objectsCount,
 }: WorkspaceLayoutProps) {
   const { t } = useTranslation(['workspace', 'common', 'projects']);
   const navigate = useNavigate();
@@ -125,12 +129,6 @@ export default function WorkspaceLayout({
   const handleProjectSelect = (id: number) => {
     navigate(paths.workspace(id));
   };
-
-  const handleMobileProjectSelect = (id: number) => {
-    setSidebarOpen(false);
-    navigate(paths.workspace(id));
-  };
-
 
   // Toggle behavior: while the menu is open, stop mousedown/touchstart from reaching
   // useClickOutside's document listeners (which would close it before click fires),
@@ -309,40 +307,21 @@ export default function WorkspaceLayout({
         );
       })()}
 
-      {mobile && sidebarOpen && <div onClick={() => setSidebarOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 49 }} />}
       {mobile && (
-        <div style={{
-          position: 'fixed', top: 0, left: 0, bottom: 0, width: '85vw', maxWidth: 360,
-          transform: sidebarOpen ? 'translateX(0)' : 'translateX(-100%)', transition: 'transform 0.25s ease',
-          display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--bg)', zIndex: 50,
-        }}>
-          <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-            {(['windows', 'tasks', 'files', 'repos', 'storage', 'settings'] as const).map((mid) => (
-              <button key={mid} onClick={() => switchSidebarMode(mid)}
-                className="icon-btn"
-                style={{ flex: 1, padding: '10px 0', fontSize: 'var(--font-sm)', fontWeight: 500, cursor: 'pointer', background: sidebarMode === mid ? 'var(--accent-a15)' : 'transparent', border: 'none', borderBottom: sidebarMode === mid ? '2px solid var(--accent)' : '2px solid transparent', color: sidebarMode === mid ? 'var(--accent)' : 'var(--text-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <Icon name={mid} size={20} />
-              </button>
-            ))}
-          </div>
-          <div style={{ padding: '0 8px 0 12px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', minHeight: 48, flexShrink: 0, position: 'relative' }}>
-            <button
-              {...projectMenuTriggerProps(handleMobileProjectSelect, buildProjectActions(true))}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0,
-                background: 'none', border: 'none', cursor: 'pointer', padding: 0, margin: 0,
-                color: 'var(--text)', textAlign: 'left',
-              }}
-            >
-              <span style={{ fontSize: 'var(--font-base)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project?.name || ''}</span>
-              <span style={{ color: 'var(--text-dim)', flexShrink: 0, display: 'inline-flex' }}><Icon name="chevron-down" size={14} rotate={projectMenu.menu ? 180 : 0} /></span>
-            </button>
-            <button onClick={() => setSidebarOpen(false)} className="icon-btn" style={{ border: '1px solid var(--border)', color: 'var(--text-dim)', padding: '6px 10px', cursor: 'pointer', flexShrink: 0, display: 'flex', alignItems: 'center' }}><Icon name="close" size={16} /></button>
-          </div>
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-            {sidebarContent}
-          </div>
-        </div>
+        <MobileNavSheet
+          open={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
+          project={project}
+          allProjects={allProjects}
+          onSelectProject={handleProjectSelect}
+          sidebarMode={sidebarMode}
+          switchSidebarMode={switchSidebarMode}
+          sidebarContent={sidebarContent}
+          objectsCount={objectsCount ?? 0}
+          connectPane={connectPane}
+          openTask={openTask}
+          taskWindows={taskWindows}
+        />
       )}
 
       {!mobile && !sidebarCollapsedEffective && (
