@@ -1,13 +1,5 @@
 {
-  "list": {
-    "title": "Transcript",
-    "empty": "No sessions found",
-    "emptyDescription": "Claude Code and Codex conversation logs will appear here once a session exists.",
-    "noPreview": "(no preview)",
-    "loadError": "Failed to load sessions"
-  },
   "conversation": {
-    "backToList": "Back to sessions",
     "notFound": "Session not found",
     "loadError": "Failed to load transcript",
     "empty": "This session has no messages yet",
@@ -27,11 +19,7 @@
     "system": "System",
     "other": "Other",
     "liveThinking": "Thinking… {{seconds}}s",
-    "liveTool": "{{name}} running… {{seconds}}s",
-    "menu": {
-      "ariaLabel": "More",
-      "sessionId": "Session ID"
-    }
+    "liveTool": "{{name}} running… {{seconds}}s"
   },
   "liveStatus": {
     "stop": "Stop",

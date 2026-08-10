@@ -1,29 +1,24 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ComponentType } from 'react';
 import { useTranslation } from 'react-i18next';
 import { apiWithStatus } from '../../api/client';
-import { useApi } from '../../hooks/useApi';
-import { EmptyState, IconButton, LoadingState, PanelHeader } from '../ui';
+import { EmptyState, LoadingState } from '../ui';
 import { Icon } from '../ui/Icon';
-import { AgentBadge } from './AgentBadge';
-import { ConversationMenu } from './ConversationMenu';
 import { DateDivider } from './DateDivider';
 import { groupEntries, type EntryGroup } from './groupEntries';
 import { LiveStatusRow } from './LiveStatusRow';
 import { deriveLiveStatus } from './liveStatus';
 import PromptInputBar from './PromptInputBar';
-import { StyleSwitcher } from './StyleSwitcher';
 import { usePaneSelection, PANE_CAPABLE_AGENT_TYPE } from './usePaneSelection';
 import BubbleEntry from './styles/BubbleEntry';
 import FlowEntry from './styles/FlowEntry';
 import RailEntry from './styles/RailEntry';
 import TuiEntry from './styles/TuiEntry';
 import type { StyleGroupProps } from './styles/types';
-import { dateKeyOf, formatDateSeparator, isErrorResponse, pathBasename } from './transcriptFormat';
+import { dateKeyOf, formatDateSeparator, isErrorResponse } from './transcriptFormat';
 import { useTranscriptStyle, type TranscriptStyle } from './transcriptStyle';
 import type {
   ReadSessionBeforeResult,
   ReadSessionResult,
-  SessionSummary,
   TranscriptEntry,
   TranscriptErrorResponse,
 } from './transcriptTypes';
@@ -41,17 +36,15 @@ const NEAR_BOTTOM_THRESHOLD_PX = 80;
 interface ConversationViewProps {
   sessionId: string;
   agentType: string;
-  onBack: () => void;
   /**
    * 埋め込み表示（ワークスペースのウィンドウにおける端末⇄チャット切替, Issue #69 Phase E-2）。
-   * /transcript ページ専用だった自前ヘッダー（戻るボタン・タイトル解決・ConversationMenu）を非表示にし、
+   * スタンドアロンページ（/transcript、Issue #69 調整2で削除）が無くなったため embedded 専用。
    * resolve-window が解決したペインを初期選択として usePaneSelection へ注入する（ユーザーは後から変更可）。
-   * onBack は埋め込み時ヘッダーごと描画しないため呼ばれない。
    */
-  embedded?: { initialPaneId: string | null };
+  embedded: { initialPaneId: string | null };
 }
 
-export default function ConversationView({ sessionId, agentType, onBack, embedded }: ConversationViewProps) {
+export default function ConversationView({ sessionId, agentType, embedded }: ConversationViewProps) {
   const { t, i18n } = useTranslation('transcript');
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -59,20 +52,13 @@ export default function ConversationView({ sessionId, agentType, onBack, embedde
   const [error, setError] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [newCount, setNewCount] = useState(0);
-  const [style, setStyle] = useTranscriptStyle();
+  const [style] = useTranscriptStyle();
   const EntryComponent = STYLE_ENTRY_COMPONENTS[style];
   const canSendInput = agentType === PANE_CAPABLE_AGENT_TYPE;
 
   // 送信先ペイン選択は入力バー（PromptInputBar）とライブ行の停止ボタン（LiveStatusRow 経由 StopButton）
   // の双方が必要とするため、ここで1つのフックとして持ち、両方へ props で渡す（Issue #69 Phase D）。
-  const paneSelection = usePaneSelection(sessionId, canSendInput, embedded?.initialPaneId ?? null);
-
-  // ヘッダー1段化（Issue #69）: タイトルはセッションの cwd basename。一覧経由でない直リンク
-  // 表示時は一覧未取得のため sessionId 先頭8文字で代替し、一覧取得後に自動で補完する。
-  // 埋め込み表示ではヘッダー自体を描画しないため、タイトル解決用の一覧取得はスキップする。
-  const { data: sessionsData } = useApi<{ sessions: SessionSummary[] }>(embedded ? null : '/transcripts');
-  const matchedCwd = sessionsData?.sessions.find((s) => s.sessionId === sessionId && s.agentType === agentType)?.cwd ?? null;
-  const headerTitle = matchedCwd ? pathBasename(matchedCwd) : sessionId.slice(0, 8);
+  const paneSelection = usePaneSelection(sessionId, canSendInput, embedded.initialPaneId);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -314,30 +300,6 @@ export default function ConversationView({ sessionId, agentType, onBack, embedde
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      {!embedded && (
-        <PanelHeader
-          icon={
-            <IconButton title={t('conversation.backToList')} onClick={onBack} aria-label={t('conversation.backToList')}>
-              <Icon name="arrow-left" size={16} />
-            </IconButton>
-          }
-          title={
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-              <AgentBadge agentType={agentType} />
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={matchedCwd ?? sessionId}>
-                {headerTitle}
-              </span>
-            </span>
-          }
-          actions={
-            <>
-              <StyleSwitcher value={style} onChange={setStyle} compact />
-              <ConversationMenu sessionId={sessionId} />
-            </>
-          }
-        />
-      )}
-
       <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
         <div
           ref={containerRef}

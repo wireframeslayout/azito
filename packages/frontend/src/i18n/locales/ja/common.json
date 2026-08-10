@@ -196,7 +196,6 @@
   "globalPages": {
     "backToWorkspace": "ワークスペースに戻る",
     "workspace": "ワークスペース",
-    "serversList": "Servers 一覧",
-    "transcript": "Transcript"
+    "serversList": "Servers 一覧"
   }
 }

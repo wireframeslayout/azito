@@ -6,6 +6,8 @@ import { SegmentedToggle, type SegmentedToggleOption } from './ui/SegmentedToggl
 import { WindowStatusDropdown, findWindow } from './WindowStatusDropdown';
 import XTermView from './XTermView';
 import WindowChatPanel from './transcript/WindowChatPanel';
+import { StyleSwitcher } from './transcript/StyleSwitcher';
+import { useTranscriptStyle } from './transcript/transcriptStyle';
 import ResourceWarningDialog, { type ResourceStatus } from './ResourceWarningDialog';
 import { api } from '../api/client';
 import { isInsufficientResources } from '../hooks/useAddWindowModal';
@@ -75,6 +77,8 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
     [serverName, target, project, allTasks],
   );
   const windowId = dbWindow?.id ?? null;
+
+  const [style, setStyle] = useTranscriptStyle();
 
   const [viewMode, setViewModeState] = useState<WindowViewMode>('terminal');
   useEffect(() => {
@@ -224,6 +228,14 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
           </div>
         )}
         <div style={{ marginLeft: activePaneName ? undefined : 'auto', display: 'flex', alignItems: 'center', gap: 8, paddingRight: 4 }}>
+          {windowId !== null && viewMode === 'chat' && (
+            // チャット表示中のみ表示スタイル切替を出す（Issue #69 調整1）。端末⇄チャットトグルの隣に
+            // 置くのが自然と判断: ConversationView 埋め込み時はページ自前ヘッダーを描画しないため、
+            // このツールバーが唯一の置き場所になる。WindowChatPanel/ConversationView 内部へ置く案も
+            // あったが、分割ペインで同windowを複数開いた場合にも一貫してツールバーに出したいのと、
+            // 端末/チャット切替という「表示モードの制御」の並びに揃えるため、ツールバー側を採用。
+            <StyleSwitcher value={style} onChange={setStyle} compact />
+          )}
           {windowId !== null && (
             <SegmentedToggle
               options={viewModeOptions}

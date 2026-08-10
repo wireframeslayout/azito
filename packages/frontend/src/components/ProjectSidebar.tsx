@@ -25,7 +25,6 @@ const GLOBAL_ITEMS: Array<{ labelKey: string; icon: IconName; path: string }> = 
   { labelKey: 'sidebar.servers', icon: 'servers', path: paths.servers() },
   { labelKey: 'sidebar.sidekicks', icon: 'sidekicks', path: paths.sidekicks() },
   { labelKey: 'sidebar.units', icon: 'units', path: paths.units() },
-  { labelKey: 'sidebar.transcript', icon: 'transcript', path: paths.transcript() },
 ];
 
 export default function ProjectSidebar() {

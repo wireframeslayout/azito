@@ -18,7 +18,6 @@ export const paths = {
   sidekickNew: () => '/sidekicks/new',
   sidekickEdit: (name: string) => `/sidekicks/${name}/edit`,
   settings: (section = 'providers') => `/settings/${section}`,
-  transcript: (sessionId?: string) => (sessionId ? `/transcript?session=${encodeURIComponent(sessionId)}` : '/transcript'),
 };
 
 export function matchWorkspacePath(pathname: string): { id: string; mode?: string } | null {
@@ -65,8 +64,7 @@ export function isGlobalPagePath(pathname: string): boolean {
     pathname.startsWith('/units/') ||
     pathname === '/sidekicks' ||
     pathname.startsWith('/sidekicks/') ||
-    pathname.startsWith('/settings/') ||
-    pathname === '/transcript'
+    pathname.startsWith('/settings/')
   );
 }
 
@@ -88,5 +86,4 @@ export const ROUTE_PATHS = [
   '/sidekicks/new',
   '/sidekicks/:name/edit',
   '/settings/:section',
-  '/transcript',
 ] as const;

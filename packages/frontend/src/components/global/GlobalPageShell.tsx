@@ -13,7 +13,6 @@ const ProjectsPanel = lazy(() => import('../workspace/ProjectsPanel'));
 const ProjectFormView = lazy(() => import('../ProjectFormView'));
 const ServersListPage = lazy(() => import('../servers/ServersListPage'));
 const ServerDetailPage = lazy(() => import('../servers/ServerDetailPage'));
-const Transcript = lazy(() => import('../../pages/Transcript'));
 
 function LoadingFallback() {
   const { t } = useTranslation('common');
@@ -178,20 +177,6 @@ export default function GlobalPageShell() {
       <GlobalPageLayout title="Projects">
         <Suspense fallback={<LoadingFallback />}>
           <ProjectsPanel onCreateProject={() => navigate(paths.projectNew())} />
-        </Suspense>
-      </GlobalPageLayout>
-    );
-  }
-
-  if (pathname === '/transcript') {
-    // 会話ビュー表示中（?session=...）は Transcript 側の ConversationView が自前のヘッダー
-    // （戻る＋タイトル＋アクション）を描画するため、このレイアウトの共通ヘッダーは抑制する
-    // （二重ヘッダーで SP 実機の縦スペースを浪費しないため）。
-    const inConversation = Boolean(new URLSearchParams(location.search).get('session'));
-    return (
-      <GlobalPageLayout title={t('globalPages.transcript')} hideHeader={inConversation}>
-        <Suspense fallback={<LoadingFallback />}>
-          <Transcript />
         </Suspense>
       </GlobalPageLayout>
     );

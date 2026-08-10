@@ -5,15 +5,6 @@ export function isErrorResponse<T>(result: T | TranscriptErrorResponse): result 
   return typeof result === 'object' && result !== null && 'error' in result;
 }
 
-/** サイズをKB/MB表記に変換する（1000区切りではなく1024区切り）。 */
-export function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  const kb = bytes / 1024;
-  if (kb < 1024) return `${kb.toFixed(kb < 10 ? 1 : 0)} KB`;
-  const mb = kb / 1024;
-  return `${mb.toFixed(mb < 10 ? 1 : 0)} MB`;
-}
-
 /** 実パス（例: cwd）の末尾セグメントを取り出す。 */
 export function pathBasename(fullPath: string): string {
   const segments = fullPath.split('/').filter(Boolean);

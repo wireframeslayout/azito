@@ -1,13 +1,5 @@
 {
-  "list": {
-    "title": "Transcript",
-    "empty": "セッションがありません",
-    "emptyDescription": "Claude Code / Codex のセッションが作成されると、ここに会話ログが表示されます。",
-    "noPreview": "(プレビューなし)",
-    "loadError": "セッション一覧の取得に失敗しました"
-  },
   "conversation": {
-    "backToList": "セッション一覧に戻る",
     "notFound": "セッションが見つかりません",
     "loadError": "会話ログの取得に失敗しました",
     "empty": "このセッションにはまだメッセージがありません",
@@ -27,11 +19,7 @@
     "system": "システム",
     "other": "その他",
     "liveThinking": "思考中… {{seconds}}s",
-    "liveTool": "{{name}} 実行中… {{seconds}}s",
-    "menu": {
-      "ariaLabel": "その他",
-      "sessionId": "セッションID"
-    }
+    "liveTool": "{{name}} 実行中… {{seconds}}s"
   },
   "liveStatus": {
     "stop": "停止",

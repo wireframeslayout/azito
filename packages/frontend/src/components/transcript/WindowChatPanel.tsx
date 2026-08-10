@@ -71,7 +71,6 @@ export default function WindowChatPanel({ windowId }: WindowChatPanelProps) {
     <ConversationView
       sessionId={state.result.sessionId}
       agentType={state.result.agentType}
-      onBack={() => {}}
       embedded={{ initialPaneId: state.result.paneId }}
     />
   );
