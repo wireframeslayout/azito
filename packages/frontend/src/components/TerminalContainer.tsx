@@ -4,15 +4,31 @@ import { IconButton } from './ui/IconButton';
 import { Icon } from './ui/Icon';
 import { SegmentedToggle, type SegmentedToggleOption } from './ui/SegmentedToggle';
 import { WindowStatusDropdown, findWindow } from './WindowStatusDropdown';
-import XTermView from './XTermView';
+import XTermView, { type XTermViewHandle } from './XTermView';
 import WindowChatPanel from './transcript/WindowChatPanel';
 import { StyleSwitcher } from './transcript/StyleSwitcher';
 import { useTranscriptStyle } from './transcript/transcriptStyle';
 import ResourceWarningDialog, { type ResourceStatus } from './ResourceWarningDialog';
+import { TerminalQuickKeyBar } from './workspace/TerminalQuickKeyBar';
+import { MobileKeyboardOverlay } from './ui/MobileKeyboardOverlay';
 import { api } from '../api/client';
 import { isInsufficientResources } from '../hooks/useAddWindowModal';
+import { useIsMobile } from '../hooks/useIsMobile';
+import { useWorkspaceTargets } from '../hooks/useWorkspaceTargets';
 import type { Project, Task, Session } from '../pages/workspace/types';
 import { resolveActivePane, paneDisplayName } from '../lib/tmuxPane';
+
+// SP端末クイックキーフッター（Issue #69 T3）表示中のフッター高をCSS変数として公開する。
+// F2稼働ステータスピル（T2）がこの値を bottom オフセットに使う（バー非表示時は 0 に戻す）。
+const SP_FOOTER_HEIGHT_VAR = '--sp-footer-h';
+// TerminalQuickKeyBar のタップ領域(44px) + safe-area-inset-bottom。バー自体は
+// padding-bottom に env(safe-area-inset-bottom) を積んで自己伸縮するため、変数側も
+// 同じ計算式にしておく。
+const SP_FOOTER_HEIGHT_EXPR = 'calc(44px + env(safe-area-inset-bottom))';
+
+function setSpFooterHeight(active: boolean): void {
+  document.documentElement.style.setProperty(SP_FOOTER_HEIGHT_VAR, active ? SP_FOOTER_HEIGHT_EXPR : '0px');
+}
 
 type WindowViewMode = 'terminal' | 'chat';
 
@@ -107,6 +123,31 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
     { value: 'terminal', label: t('terminal.viewMode.terminal'), icon: 'terminal' },
     { value: 'chat', label: t('terminal.viewMode.chat'), icon: 'transcript' },
   ], [t]);
+
+  // SP端末クイックキーフッター＋⌨透過パッド（Issue #69 T3）。SP・端末ビュー表示中のみ
+  // マウントする。キー送出は XTermView が公開する sendKey ハンドル（既存の
+  // wsRef.send(SPECIAL_KEY_MAP[key]) 経路）をそのまま呼ぶだけで、ここでは新規の送出
+  // 実装を持たない。⌨トグルの MobileKeyboardOverlay も同じハンドル経由で送出する。
+  const isMobile = useIsMobile();
+  const xtermRef = useRef<XTermViewHandle>(null);
+  const [keyboardOverlayOpen, setKeyboardOverlayOpen] = useState(false);
+  const { onOpenTabSwitcher } = useWorkspaceTargets();
+  const showQuickKeyBar = isMobile && viewMode === 'terminal';
+
+  const sendQuickKey = useCallback((key: string) => {
+    xtermRef.current?.sendKey(key);
+  }, []);
+
+  useEffect(() => {
+    if (!keyboardOverlayOpen) return;
+    // 端末ビューを離れた／ウィンドウが切り替わったらパッドも閉じる
+    if (!showQuickKeyBar) setKeyboardOverlayOpen(false);
+  }, [showQuickKeyBar, keyboardOverlayOpen]);
+
+  useEffect(() => {
+    setSpFooterHeight(showQuickKeyBar);
+    return () => setSpFooterHeight(false);
+  }, [showQuickKeyBar]);
 
   const handleRespawn = useCallback(async function perform(force = false) {
     if (!dbWindow) return;
@@ -275,6 +316,7 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
         {!windowMissing && (
           <XTermView
             key={xtermKey}
+            ref={xtermRef}
             serverName={serverName}
             target={target}
             onDisconnect={onDisconnect}
@@ -421,6 +463,17 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
           </>
         )}
       </div>
+      {showQuickKeyBar && (
+        <TerminalQuickKeyBar
+          onSendKey={sendQuickKey}
+          keyboardOpen={keyboardOverlayOpen}
+          onToggleKeyboard={() => setKeyboardOverlayOpen((open) => !open)}
+          onOpenTabSwitcher={() => onOpenTabSwitcher?.()}
+        />
+      )}
+      {showQuickKeyBar && keyboardOverlayOpen && (
+        <MobileKeyboardOverlay onSendKey={sendQuickKey} onClose={() => setKeyboardOverlayOpen(false)} />
+      )}
       <ResourceWarningDialog
         open={resourceWarning !== null}
         title={t('resourceWarning.title')}

@@ -168,6 +168,11 @@
       "ariaLabel": "Display mode",
       "terminal": "Terminal",
       "chat": "Chat"
+    },
+    "quickKeyBar": {
+      "ariaLabel": "Quick keys",
+      "keyboardToggle": "Show keyboard controls",
+      "tabSwitcher": "Open tab switcher"
     }
   },
   "resourceWarning": {

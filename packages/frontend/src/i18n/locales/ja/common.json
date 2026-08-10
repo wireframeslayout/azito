@@ -168,6 +168,11 @@
       "ariaLabel": "表示モード",
       "terminal": "端末",
       "chat": "チャット"
+    },
+    "quickKeyBar": {
+      "ariaLabel": "クイックキー",
+      "keyboardToggle": "キーボード操作パッドを表示",
+      "tabSwitcher": "タブスイッチャーを開く"
     }
   },
   "resourceWarning": {

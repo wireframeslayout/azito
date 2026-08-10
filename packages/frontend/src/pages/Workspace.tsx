@@ -420,7 +420,7 @@ function WorkspaceInner() {
     if (mobile) setSidebarOpen(false);
   }, [connectPaneRaw, mobile, currentProjectId, setSidebarOpen]);
 
-  const { setOnOpenInTerminal, setOnOpenTask, setActiveTabId: setTargetsActiveTabId, setFocusedTarget } = useWorkspaceTargets();
+  const { setOnOpenInTerminal, setOnOpenTask, setActiveTabId: setTargetsActiveTabId, setFocusedTarget, setOnOpenTabSwitcher } = useWorkspaceTargets();
   const { shouldShowActivity, shouldShowTaskActivity } = useAgentActivity();
   useEffect(() => { setTargetsActiveTabId(activeTabId); }, [activeTabId, setTargetsActiveTabId]);
 
@@ -438,6 +438,14 @@ function WorkspaceInner() {
     setOnOpenInTerminal(connectPane);
     return () => setOnOpenInTerminal(null);
   }, [connectPane, setOnOpenInTerminal]);
+  // SP端末クイックキーフッター（Issue #69 T3）の右端▦がタブスイッチャーを開けるよう登録する
+  // （TerminalContainer は TabContentRenderer 配下の深い位置にあり、mobileTabSwitcherOpen の
+  // setter を prop drilling で届けるより WorkspaceTargetsContext 経由の方が既存の
+  // onOpenInTerminal 登録パターンと一貫する）。
+  useEffect(() => {
+    setOnOpenTabSwitcher(() => setMobileTabSwitcherOpen(true));
+    return () => setOnOpenTabSwitcher(null);
+  }, [setOnOpenTabSwitcher]);
 
   const { focus, setFocus } = useGlobalFocus();
 
