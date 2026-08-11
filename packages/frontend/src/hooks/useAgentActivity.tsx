@@ -4,6 +4,7 @@ import type { AgentActivityPayload } from '../types/notification';
 import { stripPaneSuffix } from '../utils/tmuxTarget';
 import { useNotificationChannel } from './useNotificationChannel';
 import { useWorkspaceTargets } from './useWorkspaceTargets';
+import { reconcileProcessStatus, type ProcessStatusEntry } from './agentActivityProcessSync';
 
 export interface AgentActivityInfo {
   serverName: string;
@@ -168,6 +169,14 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
   const browserFocused = useBrowserFocused();
   const [finished, setFinished] = useState<FinishedEntry[]>(loadFinishedEntries);
   const prevEntriesRef = useRef<Map<string, { serverName: string; target: string; label?: string; taskId?: number; projectId?: number; paneName?: string }>>(new Map());
+  // fetchProcessStatus (below) needs the *current* finished list to avoid double-counting a
+  // transition the hook already recorded, but it's set up once (empty deps, matching the
+  // pre-existing polling interval lifecycle) — a ref keeps it read-current without re-creating
+  // the interval on every `finished` change.
+  const finishedRef = useRef<FinishedEntry[]>(finished);
+  useEffect(() => {
+    finishedRef.current = finished;
+  }, [finished]);
 
   const fetchSnapshot = () => {
     api<AgentActivitySnapshotEntry[]>('/agent-activity')
@@ -185,6 +194,11 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
   // する。既存の AgentActivityMonitor（/api/agent-activity、通知配信を伴う）の挙動には一切触れず、
   // baseEntries に無いキーだけを補う（下記 entries の useMemo 参照）。
   const [processEntries, setProcessEntries] = useState<Map<string, AgentActivityInfo>>(new Map());
+  // Previous poll's reconciled "working" set (Issue #338 T12), owned by reconcileProcessStatus's
+  // caller per its contract — carries the process-liveness history across polls so a
+  // working -> idle/offline transition can be derived even for windows the hook never covers
+  // (see agentActivityProcessSync.ts for why this exists).
+  const prevProcessWorkingRef = useRef<Map<string, ProcessStatusEntry>>(new Map());
 
   useEffect(() => {
     let cancelled = false;
@@ -192,10 +206,17 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
       api<WindowActivityStatusEntry[]>('/windows/activity-status')
         .then((list) => {
           if (cancelled) return;
+          const existingFinishedKeys = new Set(finishedRef.current.map((e) => activityKey(e.serverName, e.target)));
+          const { workingByKey, newlyFinished } = reconcileProcessStatus(
+            list,
+            prevProcessWorkingRef.current,
+            existingFinishedKeys,
+          );
+          prevProcessWorkingRef.current = workingByKey;
+
           const map = new Map<string, AgentActivityInfo>();
-          for (const e of list) {
-            if (e.status !== 'working') continue;
-            map.set(activityKey(e.serverName, e.target), {
+          for (const [key, e] of workingByKey) {
+            map.set(key, {
               serverName: e.serverName,
               target: e.target,
               running: true,
@@ -207,6 +228,18 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
             });
           }
           setProcessEntries(map);
+
+          if (newlyFinished.length > 0) {
+            setFinished((cur) => {
+              const next = [...cur];
+              for (const f of newlyFinished) {
+                const key = activityKey(f.serverName, f.target);
+                if (next.some((e) => activityKey(e.serverName, e.target) === key)) continue;
+                next.push({ ...f, finishedAt: Date.now() });
+              }
+              return next;
+            });
+          }
         })
         .catch(() => { /* best-effort supplement; base entries remain authoritative */ });
     };
