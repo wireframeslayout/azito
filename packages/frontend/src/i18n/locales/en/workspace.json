@@ -260,5 +260,20 @@
     "summary": "Summary",
     "commits": "Commits",
     "diff": "Diff"
+  },
+  "taskDetailMenu": {
+    "title": "Task actions",
+    "status": "Status",
+    "tapToChange": "Tap to change",
+    "display": "View",
+    "showFull": "Show full text",
+    "unitAndExecution": "Unit & execution",
+    "unassigned": "Unassigned",
+    "commitCount": "{{count}} commits",
+    "tabActions": "Tab actions",
+    "pin": "Pin",
+    "pinOn": "On",
+    "pinOff": "Off",
+    "closeTab": "Close tab"
   }
 }

@@ -5,9 +5,15 @@ import { Button, EmptyState, LoadingState } from '../ui';
 import ConversationView from './ConversationView';
 import PromptInputBar from './PromptInputBar';
 import type { ResolveWindowResult, TranscriptErrorResponse } from './transcriptTypes';
+import type { WindowViewMode } from '../ui/TerminalChatToggle';
 
 interface WindowChatPanelProps {
   windowId: number;
+  /** SP 端末⇄チャットのミニトグル（PromptInputBar 左端、Issue #69 S8）へ渡す現在値。
+   * SP・TaskPanel 配下からのみ渡される（TerminalContainer 参照）。省略時はトグル自体を出さない
+   * （デスクトップ、または viewMode が呼び出し元で管理されていない経路）。 */
+  viewMode?: WindowViewMode;
+  onChangeViewMode?: (mode: WindowViewMode) => void;
 }
 
 type ResolveState =
@@ -35,7 +41,7 @@ const POST_SEND_POLL_MAX_ATTEMPTS = 10;
  * 設計確定: 手動セッション選択はサポートしない（選択中ウィンドウ単位の自動解決のみ）。windowId が
  * 切り替わるたびに解決をやり直す。
  */
-export default function WindowChatPanel({ windowId }: WindowChatPanelProps) {
+export default function WindowChatPanel({ windowId, viewMode, onChangeViewMode }: WindowChatPanelProps) {
   const { t } = useTranslation('transcript');
   const [state, setState] = useState<ResolveState>({ kind: 'loading' });
   const [retryTick, setRetryTick] = useState(0);
@@ -149,6 +155,8 @@ export default function WindowChatPanel({ windowId }: WindowChatPanelProps) {
           agentDetected={state.agentDetected}
           contextHistory={[]}
           onSent={pollForSession}
+          viewMode={viewMode}
+          onChangeViewMode={onChangeViewMode}
         />
       </div>
     );
@@ -161,6 +169,8 @@ export default function WindowChatPanel({ windowId }: WindowChatPanelProps) {
       agentType={state.agentType}
       paneId={state.paneId}
       agentDetected={state.agentDetected}
+      viewMode={viewMode}
+      onChangeViewMode={onChangeViewMode}
     />
   );
 }

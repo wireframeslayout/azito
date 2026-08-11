@@ -3,11 +3,14 @@ import { useTranslation } from 'react-i18next';
 import { apiWithStatus } from '../../api/client';
 import { Icon } from '../ui/Icon';
 import { Spinner } from '../ui/Spinner';
+import { TerminalChatToggle, type WindowViewMode } from '../ui/TerminalChatToggle';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { claimFooterHeight, releaseFooterHeight } from '../../lib/spFooterHeight';
 import { clearDraft, createDebouncedDraftSaver, loadDraft } from './transcriptDrafts';
 import { loadHistory, pushHistory } from './inputHistory';
 import { HistoryPopover } from './HistoryPopover';
+import { StyleSwitcher } from './StyleSwitcher';
+import { useTranscriptStyle } from './transcriptStyle';
 import { isErrorResponse } from './transcriptFormat';
 import type { TranscriptErrorResponse } from './transcriptTypes';
 
@@ -43,6 +46,11 @@ interface PromptInputBarProps {
   contextHistory: string[];
   /** 送信成功直後に呼ばれる(最下部へスクロールするため)。新着メッセージ自体はポーリングで反映される。 */
   onSent: () => void;
+  /** SP 端末⇄チャットのミニトグル（Issue #69 S8）。TerminalContainer/WindowChatPanel/
+   * ConversationView 経由で渡された場合のみバー左端に描画する（省略時はトグル自体を出さない
+   * — デスクトップ、あるいは呼び出し元が viewMode を管理していない経路）。 */
+  viewMode?: WindowViewMode;
+  onChangeViewMode?: (mode: WindowViewMode) => void;
 }
 
 /**
@@ -51,8 +59,9 @@ interface PromptInputBarProps {
  * 送信内容自体は既存の JSONL ポーリングで会話に反映される（オプティミスティック表示はしない）。
  * textarea＋履歴🕘＋送信↑ の1行構成（SP実機の高さ節約のため）。
  */
-export default function PromptInputBar({ windowId, paneId, draftKey, agentDetected, contextHistory, onSent }: PromptInputBarProps) {
+export default function PromptInputBar({ windowId, paneId, draftKey, agentDetected, contextHistory, onSent, viewMode, onChangeViewMode }: PromptInputBarProps) {
   const { t } = useTranslation('transcript');
+  const [style, setStyle] = useTranscriptStyle();
   const [historyOpen, setHistoryOpen] = useState(false);
   const [text, setText] = useState('');
   const [historyIndex, setHistoryIndex] = useState(-1); // -1 = 履歴を辿っていない
@@ -245,6 +254,14 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
         </div>
       )}
 
+      {/* SP 端末⇄チャットのミニトグル（Issue #69 S8）— バー左端の独立行。viewMode が渡された
+          場合のみ描画する（デスクトップ、あるいは呼び出し元が管理していない経路では出さない）。 */}
+      {viewMode !== undefined && onChangeViewMode && (
+        <div style={{ marginBottom: 6 }}>
+          <TerminalChatToggle value={viewMode} onChange={onChangeViewMode} />
+        </div>
+      )}
+
       {/* フェイルセーフ注記（Issue #69 仕様調整3）: pane は解決できているがエージェントらしき
           コマンドが動いていない場合の注意書き。送信自体はブロックしない。 */}
       {!agentDetected && (
@@ -298,6 +315,16 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
             maxHeight: TEXTAREA_MAX_HEIGHT,
           }}
         />
+
+        {/* 🎨 表示スタイル切替（Issue #69 S8）: SP コンテンツヘッダーから撤去し、🕘 履歴の隣へ
+            移設。viewMode が渡されている＝チャット表示中（TerminalContainer 経由）のときのみ
+            描画する — デスクトップの ConversationView 単体埋め込み等、viewMode 制御がない
+            経路では従来どおり TerminalContainer 側のツールバーが担う。 */}
+        {viewMode !== undefined && onChangeViewMode && (
+          <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}>
+            <StyleSwitcher value={style} onChange={setStyle} compact />
+          </div>
+        )}
 
         <div style={{ position: 'relative', flexShrink: 0 }}>
           <button

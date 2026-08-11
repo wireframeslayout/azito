@@ -1194,6 +1194,7 @@ function WorkspaceInner() {
           openFile={openFile}
           setTabDirty={setTabDirty}
           refreshBrowserGroups={refreshBrowserGroups}
+          togglePin={togglePin}
         />
       </div>
     );

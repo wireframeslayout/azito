@@ -260,5 +260,20 @@
     "summary": "サマリー",
     "commits": "コミット",
     "diff": "差分"
+  },
+  "taskDetailMenu": {
+    "title": "タスク操作",
+    "status": "ステータス",
+    "tapToChange": "タップで変更",
+    "display": "表示",
+    "showFull": "全文を表示",
+    "unitAndExecution": "Unit・実行情報",
+    "unassigned": "未割当",
+    "commitCount": "{{count}}件",
+    "tabActions": "タブ操作",
+    "pin": "ピン止め",
+    "pinOn": "オン",
+    "pinOff": "オフ",
+    "closeTab": "タブを閉じる"
   }
 }

@@ -64,6 +64,9 @@ interface TabContentRendererProps {
   openFile?: (serverName: string, filePath: string, projectId?: number) => void;
   setTabDirty?: (tabId: string, dirty: boolean) => void;
   refreshBrowserGroups?: () => void;
+  /** SP タスク詳細 ⋯ フルサイズメニューの「タブ操作 › ピン止め」（Issue #69 S8）— TaskPanel へ
+   * 素通しするだけ。 */
+  togglePin?: (tabId: string) => void;
 }
 
 export default function TabContentRenderer({
@@ -102,6 +105,7 @@ export default function TabContentRenderer({
   openFile,
   setTabDirty,
   refreshBrowserGroups,
+  togglePin,
 }: TabContentRendererProps) {
   const { t } = useTranslation(['tasks', 'workspace', 'units']);
   const navigate = useNavigate();
@@ -222,6 +226,7 @@ export default function TabContentRenderer({
           onOpenTask={openTask}
           tabs={tabs}
           closeTab={closeTab}
+          togglePin={togglePin}
           onBrowserPageReady={refreshBrowserGroups}
         />
       )}

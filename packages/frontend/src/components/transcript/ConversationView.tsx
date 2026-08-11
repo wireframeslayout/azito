@@ -9,6 +9,7 @@ import { deriveContextHistory } from './inputHistory';
 import { LiveStatusRow } from './LiveStatusRow';
 import { deriveLiveStatus } from './liveStatus';
 import PromptInputBar from './PromptInputBar';
+import type { WindowViewMode } from '../ui/TerminalChatToggle';
 import BubbleEntry from './styles/BubbleEntry';
 import FlowEntry from './styles/FlowEntry';
 import RailEntry from './styles/RailEntry';
@@ -44,9 +45,13 @@ interface ConversationViewProps {
   paneId: string;
   /** false の場合、PromptInputBar にフェイルセーフ注記を表示する（送信自体はブロックしない）。 */
   agentDetected: boolean;
+  /** SP 端末⇄チャットのミニトグル（PromptInputBar 左端、Issue #69 S8）へ渡す現在値。省略時は
+   * トグル自体を出さない（デスクトップ等、WindowChatPanel 経由で渡されない場合）。 */
+  viewMode?: WindowViewMode;
+  onChangeViewMode?: (mode: WindowViewMode) => void;
 }
 
-export default function ConversationView({ windowId, sessionId, agentType, paneId, agentDetected }: ConversationViewProps) {
+export default function ConversationView({ windowId, sessionId, agentType, paneId, agentDetected, viewMode, onChangeViewMode }: ConversationViewProps) {
   const { t, i18n } = useTranslation('transcript');
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -420,6 +425,8 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
           agentDetected={agentDetected}
           contextHistory={contextHistory}
           onSent={() => scrollToBottom('smooth')}
+          viewMode={viewMode}
+          onChangeViewMode={onChangeViewMode}
         />
       )}
     </div>

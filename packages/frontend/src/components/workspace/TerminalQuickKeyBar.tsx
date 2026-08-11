@@ -2,6 +2,7 @@ import { useEffect, useRef, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../ui/Icon';
 import { QuickActionButtons, type QuickActionButton } from '../ui/QuickActionButtons';
+import { TerminalChatToggle, type WindowViewMode } from '../ui/TerminalChatToggle';
 import { claimFooterHeight, releaseFooterHeight } from '../../lib/spFooterHeight';
 
 // SP文脈フッター高の公開オーナー名（lib/spFooterHeight.ts）。このバー自身が実測高を
@@ -21,6 +22,10 @@ export interface TerminalQuickKeyBarProps {
   onToggleKeyboard: () => void;
   /** 右端 ▦ ボタン: タブスイッチャーを開く。 */
   onOpenTabSwitcher: () => void;
+  /** SP 端末⇄チャットのミニトグル（Issue #69 S8）。バー左端、⌨ の前に描画する。渡された場合
+   * のみ描画する（省略時は出さない）。 */
+  viewMode?: WindowViewMode;
+  onChangeViewMode?: (mode: WindowViewMode) => void;
 }
 
 const KEY_STYLE: CSSProperties = {
@@ -62,7 +67,7 @@ const QUICK_KEYS: QuickActionButton[] = [
  * （横スクロール）｜右端 ▦（タブスイッチャー）。チャットビュー・概要/コミット/差分では
  * TerminalContainer 側がそもそもマウントしない。
  */
-export function TerminalQuickKeyBar({ onSendKey, keyboardOpen, onToggleKeyboard, onOpenTabSwitcher }: TerminalQuickKeyBarProps) {
+export function TerminalQuickKeyBar({ onSendKey, keyboardOpen, onToggleKeyboard, onOpenTabSwitcher, viewMode, onChangeViewMode }: TerminalQuickKeyBarProps) {
   const { t } = useTranslation('common');
   const barRef = useRef<HTMLDivElement>(null);
 
@@ -99,6 +104,10 @@ export function TerminalQuickKeyBar({ onSendKey, keyboardOpen, onToggleKeyboard,
         background: 'var(--bg-card)',
       }}
     >
+      {viewMode !== undefined && onChangeViewMode && (
+        <TerminalChatToggle value={viewMode} onChange={onChangeViewMode} />
+      )}
+
       <button
         type="button"
         onClick={onToggleKeyboard}

@@ -10,6 +10,7 @@ import { StyleSwitcher } from './transcript/StyleSwitcher';
 import { useTranscriptStyle } from './transcript/transcriptStyle';
 import ResourceWarningDialog, { type ResourceStatus } from './ResourceWarningDialog';
 import { TerminalQuickKeyBar } from './workspace/TerminalQuickKeyBar';
+import { TerminalChatToggle } from './ui/TerminalChatToggle';
 import { MobileKeyboardOverlay } from './ui/MobileKeyboardOverlay';
 import { api } from '../api/client';
 import { isInsufficientResources } from '../hooks/useAddWindowModal';
@@ -58,18 +59,28 @@ interface TerminalContainerProps {
    */
   leading?: React.ReactNode;
   /**
+   * SP コンテンツヘッダー右端（Issue #69 S8: 「∨ Nペイン」チップ等）に差し込む要素。leading と
+   * 対称の位置づけ — SP では WindowStatusDropdown（ワーカーバッジ）の後ろに並べる。デスクトップは
+   * 使わない（渡されない）。
+   */
+  trailing?: React.ReactNode;
+  /**
    * 端末/チャットの表示モードを外部（呼び出し元）が完全に制御する（Issue #69 T5）。
-   * SP タスク画面ではこの表示モード選択自体がセグメント行（概要｜コミット｜差分｜端末｜
-   * チャット）に第一級で昇格したため、TaskPanel 側が単一の真実源として azito.windowView.*
+   * SP タスク画面ではこの表示モード選択自体が下端ミニトグル（qbar/PromptInputBar 左端、
+   * Issue #69 S8）に一本化されたため、TaskPanel 側が単一の真実源として azito.windowView.*
    * を読み書きし、その結果をここへ渡す。渡された場合はツールバー内蔵の端末⇄チャット
-   * トグル（下記 SegmentedToggle）を描画しない — 選択操作の入口が外側のセグメント行のみに
-   * なるようにするため（二重の切替UIを防ぐ）。省略時（デスクトップ等、他の全呼び出し元）は
-   * 従来どおり内部状態＋localStorage（windowId 単位）で自律的に管理する。
+   * トグル（下記 SegmentedToggle、デスクトップのみ）を描画しない — 選択操作の入口が
+   * ミニトグルのみになるようにするため（二重の切替UIを防ぐ）。変更は `onViewModeChange`
+   * 経由で呼び出し元へ通知する（渡されない場合、ミニトグルは内部状態を直接更新する）。
+   * 省略時（デスクトップ・タスク外の単体ウィンドウタブ等）は従来どおり内部状態＋
+   * localStorage（windowId 単位）で自律的に管理する。
    */
   viewMode?: WindowViewMode;
+  /** viewMode が外部制御（controlled）のときのみ使う変更コールバック。 */
+  onViewModeChange?: (mode: WindowViewMode) => void;
 }
 
-export function TerminalContainer({ serverName, target, projectId, taskId, project, allTasks, sessions, onSplitPane, onOpenTask, onDisconnect, onWindowChanged, onCloseTab, onRetargetTab, reconnectKey, leading, viewMode: viewModeProp }: TerminalContainerProps) {
+export function TerminalContainer({ serverName, target, projectId, taskId, project, allTasks, sessions, onSplitPane, onOpenTask, onDisconnect, onWindowChanged, onCloseTab, onRetargetTab, reconnectKey, leading, trailing, viewMode: viewModeProp, onViewModeChange }: TerminalContainerProps) {
   const { t } = useTranslation('common');
   const [windowMissing, setWindowMissing] = useState(false);
   const [disconnected, setDisconnected] = useState(false);
@@ -119,6 +130,13 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
   }, [windowId]);
 
   const viewMode = viewModeProp ?? internalViewMode;
+
+  // 下端ミニトグル（TerminalChatToggle、qbar/PromptInputBar 左端）が呼ぶ実際の変更経路。
+  // 外部制御（viewModeProp が渡されている＝TaskPanel 配下）のときは呼び出し元通知のみ、
+  // それ以外（タスク外の単体ウィンドウタブ等）は内部状態＋localStorage を自律更新する。
+  const changeViewMode = viewModeProp !== undefined
+    ? (mode: WindowViewMode) => onViewModeChange?.(mode)
+    : setViewMode;
 
   const viewModeOptions: SegmentedToggleOption<WindowViewMode>[] = useMemo(() => [
     { value: 'terminal', label: t('terminal.viewMode.terminal'), icon: 'terminal' },
@@ -257,8 +275,12 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
           flexShrink: 0,
         }}
       >
-        {leading && <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', paddingLeft: 4 }}>{leading}</div>}
-        {activePaneName && (
+        {leading && <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', paddingLeft: 4, minWidth: 0 }}>{leading}</div>}
+        {/* SP: ウィンドウ名は leading（TaskPanel が「> ウィンドウ名」トリガーとして描画）が
+            既に担うため、ここでは pane 名の重複表示をしない（承認済み S8 コンテンツヘッダー:
+            「> ウィンドウ名」＋ワーカーバッジ▾＋右端「∨ Nペイン」の1行のみ）。デスクトップは
+            従来どおり activePaneName（pane 名）を表示する。 */}
+        {activePaneName && !isMobile && (
           <div
             title={activePaneName}
             aria-live="polite"
@@ -277,16 +299,18 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
             {activePaneName}
           </div>
         )}
-        <div style={{ marginLeft: activePaneName ? undefined : 'auto', display: 'flex', alignItems: 'center', gap: 8, paddingRight: 4 }}>
-          {windowId !== null && viewMode === 'chat' && (
+        <div style={{ marginLeft: (activePaneName && !isMobile) ? undefined : 'auto', display: 'flex', alignItems: 'center', gap: 8, paddingRight: 4, minWidth: 0 }}>
+          {!isMobile && windowId !== null && viewMode === 'chat' && (
             // チャット表示中のみ表示スタイル切替を出す（Issue #69 調整1）。端末⇄チャットトグルの隣に
             // 置くのが自然と判断: ConversationView 埋め込み時はページ自前ヘッダーを描画しないため、
             // このツールバーが唯一の置き場所になる。WindowChatPanel/ConversationView 内部へ置く案も
             // あったが、分割ペインで同windowを複数開いた場合にも一貫してツールバーに出したいのと、
             // 端末/チャット切替という「表示モードの制御」の並びに揃えるため、ツールバー側を採用。
+            // SP はこのツールバー自体がコンテンツヘッダーに置き換わり、🎨 は PromptInputBar の
+            // 🕘 隣へ移設済み（Issue #69 S8）— ここでは isMobile を除外する。
             <StyleSwitcher value={style} onChange={setStyle} compact />
           )}
-          {windowId !== null && viewModeProp === undefined && (
+          {!isMobile && windowId !== null && viewModeProp === undefined && (
             <SegmentedToggle
               options={viewModeOptions}
               value={viewMode}
@@ -304,13 +328,18 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
             onOpenTask={onOpenTask}
             onChanged={onWindowChanged}
           />
-          {onSplitPane && <IconButton title={t('terminal.splitHorizontal')} onClick={() => onSplitPane('h')} size="sm"><Icon name="split-h" size={14} /></IconButton>}
-          {onSplitPane && <IconButton title={t('terminal.splitVertical')} onClick={() => onSplitPane('v')} size="sm"><Icon name="split-v" size={14} /></IconButton>}
+          {!isMobile && onSplitPane && <IconButton title={t('terminal.splitHorizontal')} onClick={() => onSplitPane('h')} size="sm"><Icon name="split-h" size={14} /></IconButton>}
+          {!isMobile && onSplitPane && <IconButton title={t('terminal.splitVertical')} onClick={() => onSplitPane('v')} size="sm"><Icon name="split-v" size={14} /></IconButton>}
+          {isMobile && trailing}
         </div>
       </div>
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
         {viewMode === 'chat' && windowId !== null ? (
-          <WindowChatPanel windowId={windowId} />
+          <WindowChatPanel
+            windowId={windowId}
+            viewMode={isMobile ? viewMode : undefined}
+            onChangeViewMode={isMobile ? changeViewMode : undefined}
+          />
         ) : (
           <>
         {!windowMissing && (
@@ -469,6 +498,8 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
           keyboardOpen={keyboardOverlayOpen}
           onToggleKeyboard={() => setKeyboardOverlayOpen((open) => !open)}
           onOpenTabSwitcher={() => onOpenTabSwitcher?.()}
+          viewMode={viewMode}
+          onChangeViewMode={changeViewMode}
         />
       )}
       {showQuickKeyBar && keyboardOverlayOpen && (

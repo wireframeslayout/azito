@@ -18,10 +18,10 @@ import ContextMenu, { useContextMenu, type ContextMenuItem } from '../ContextMen
 import ResourceWarningDialog from '../ResourceWarningDialog';
 import PhaseProgressBar from './PhaseProgressBar';
 import StatusDropdown from '../task/StatusDropdown';
+import TaskDetailMenu from './TaskDetailMenu';
 import TaskGitTab from '../task/TaskGitTab';
 import { useUnitTypes, findUnitType } from '../../hooks/useUnitTypes';
-import { Icon, type IconName } from '../ui/Icon';
-import { SegmentedToggle, type SegmentedToggleOption } from '../ui/SegmentedToggle';
+import { Icon } from '../ui/Icon';
 import TaskSummaryTab from '../task/TaskSummaryTab';
 import TaskUnitSetupForm from '../task/TaskUnitSetupForm';
 import TaskWindowDropdown from '../task/TaskWindowDropdown';
@@ -49,6 +49,8 @@ import {
   type FixedView, type TerminalRef,
 } from '../task/taskPaneLayout';
 import { ApprovalRequestTracker, isApprovalDataForTask } from '../task/executionApprovalRequest';
+import { TerminalChatToggle, type WindowViewMode as TerminalChatViewMode } from '../ui/TerminalChatToggle';
+import { claimFooterHeight, releaseFooterHeight } from '../../lib/spFooterHeight';
 
 // Re-exported so existing external imports (`from './TaskPanel'`) keep working —
 // the actual implementation lives in taskPaneLayout.ts, alongside the rest of the
@@ -90,6 +92,10 @@ interface TaskPanelProps {
   onOpenTask?: (taskId: number, title: string) => void;
   tabs?: PersistedTab[];
   closeTab?: (tabId: string) => void;
+  /** SP ⋯ フルサイズメニュー（Issue #69 S8）の「タブ操作 › ピン止め」から呼ぶ。省略時はメニュー
+   * にピン止め行を出さない代わりにトグル自体を無効化する（呼び出し元が useTabPersistence 経由で
+   * 渡さない限り常に有効 — Workspace.tsx が TabContentRenderer を通じて配線する）。 */
+  togglePin?: (tabId: string) => void;
   /**
    * Servers of the *current* project (Workspace's `data.projectServers`), used only as the
    * last-resort fallback for resolving which server a brand-new ＋ menu "ブラウザ" tab should
@@ -126,10 +132,68 @@ function MobileOverviewSection({ title, children }: { title: string; children: R
   );
 }
 
+// SP コンテンツヘッダー（承認済み S8: チップ行→タイトル行→コンテンツヘッダー(36px)→コンテンツ→
+// 下部文脈バー）— 端末/チャット以外（説明・Unit・実行情報・コミット履歴・差分）のフルスクリーン
+// ビュー用。端末/チャットは TerminalContainer 自身のツールバー（leading/trailing、Issue #69 S8）
+// がこの役目を果たすため別実装 — ここでは「タイトルのみ」「タイトル＋右端アクション」の2形しか
+// 要らない軽量な内蔵ヘッダーとして持つ（他画面と共有する見込みが薄いため base component へは
+// 抽出しない）。
+function MobileContentHeader({ title, action }: { title: string; action?: React.ReactNode }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+      minHeight: 36, padding: '0 16px', background: 'var(--bg-card)',
+      borderBottom: '1px solid var(--border)', flexShrink: 0,
+    }}>
+      <span style={{ fontSize: 'var(--font-sm)', fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {title}
+      </span>
+      {action}
+    </div>
+  );
+}
+
+// SP 下部文脈バー（端末/チャット以外を表示中のとき、Issue #69 S8）: 端末/チャットビューでは
+// qbar（TerminalQuickKeyBar）/PromptInputBar 自身が端末⇄チャットのミニトグルを描く（下端固定
+// バーは既にそこにある）。それ以外のビュー（説明・Unit・実行情報・コミット履歴・差分）表示中は
+// 下端に何も無くなってしまうため、「情報ビュー表示中も下部トグル操作で端末/チャットに復帰できる」
+// 仕様を満たす最小限のバー（トグルのみ）をここで描く。qbar/PromptInputBar と同じ
+// --sp-footer-h claim/release オーナー方式に参加する（F2稼働ステータスピルのオフセット計算対象）。
+const CONTEXT_FOOTER_OWNER = 'task-panel-context-footer';
+
+function MobileContextFooter({ value, onChange, disabled }: { value: TerminalChatViewMode; onChange: (mode: TerminalChatViewMode) => void; disabled: boolean }) {
+  const barRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = barRef.current;
+    if (!el) return undefined;
+    const observer = new ResizeObserver(() => {
+      claimFooterHeight(CONTEXT_FOOTER_OWNER, el.getBoundingClientRect().height);
+    });
+    observer.observe(el);
+    claimFooterHeight(CONTEXT_FOOTER_OWNER, el.getBoundingClientRect().height);
+    return () => {
+      observer.disconnect();
+      releaseFooterHeight(CONTEXT_FOOTER_OWNER);
+    };
+  }, []);
+  return (
+    <div
+      ref={barRef}
+      style={{
+        display: 'flex', alignItems: 'center', flexShrink: 0,
+        padding: 'var(--space-2)', paddingBottom: 'calc(var(--space-2) + env(safe-area-inset-bottom))',
+        background: 'var(--bg-card)',
+      }}
+    >
+      <TerminalChatToggle value={value} onChange={onChange} disabled={disabled} />
+    </div>
+  );
+}
+
 export default function TaskPanel({
   taskId, isVisible = true, isPaneFocused = true, allUnits, tasks, allTasks, projects, currentProject, sessionData,
   executeTask, stopTask, onRefresh, onBack, onDelete, onEdit, onOpenAddWindow,
-  onSplitPane, onOpenTask, tabs, closeTab, projectServers, onOpenFile, onBrowserPageReady,
+  onSplitPane, onOpenTask, tabs, closeTab, togglePin, projectServers, onOpenFile, onBrowserPageReady,
 }: TaskPanelProps) {
   const { t } = useTranslation(['tasks', 'workspace', 'common']);
   // The list response omits the detail-only documents (description, plan, summary,
@@ -254,6 +318,12 @@ export default function TaskPanel({
   const { menu: ctxMenu, show: showCtxMenu, showAt: showCtxMenuAt, hide: hideCtxMenu } = useContextMenu();
   const moreMenu = useContextMenu();
   const isMobile = useIsMobile();
+  // SP ⋯ フルサイズメニュー（TaskDetailMenu、Issue #69 S8）— デスクトップの ⋯ は従来どおり
+  // moreMenu（ContextMenu）を使う。own タブ id は useTabPersistence.openTask と同じ形式
+  // （`task:${taskId}`）— ピン状態/タブを閉じる操作の対象を特定するために使う。
+  const [detailMenuOpen, setDetailMenuOpen] = useState(false);
+  const ownTabId = `task:${taskId}`;
+  const isPinned = !!tabs?.find((tb) => tb.id === ownTabId)?.pinned;
   // Restored window-list dropdown (the pre-#397 TaskWindowDropdown) — at most one open at a
   // time, keyed by the pane whose trailing trigger opened it, since opening a window from
   // it targets that specific pane.
@@ -802,24 +872,48 @@ export default function TaskPanel({
     showCtxMenu(e, items);
   }, [layout, windows, windowActions, showCtxMenu, sessionData, handlePaneCloseTab]);
 
-  // Restored window-list trigger (pre-#397 TaskWindowDropdown) — label + count + ▾, same
-  // as before. Selecting a row now opens/activates that window's tab in `pane` instead of
-  // setting a panel-wide terminalTarget. Shared between the desktop per-pane trailing area
-  // and the mobile trailing area (mobile has no per-pane concept of its own, so callers
-  // pass the pane a mobile "open window" action should target — mirrors how mobile's ➕
-  // already falls back to `mobileFocusedPane ?? listPanes(...)[0]`).
-  const renderWindowDropdownTrigger = useCallback((pane: PaneNode, variant: 'toolbar' | 'sp' = 'toolbar') => {
+  // Shared window-list dropdown body (pre-#397 TaskWindowDropdown) — selecting a row
+  // opens/activates that window's tab in `pane`. Factored out so both the desktop trigger
+  // and the two SP header pieces below (name trigger / pane-count chip, Issue #69 S8) can
+  // attach the exact same dropdown to whichever one the user actually tapped, instead of
+  // duplicating the onPaneClick relocation logic.
+  const renderWindowDropdownBody = useCallback((pane: PaneNode) => (
+    <TaskWindowDropdown
+      windows={windows}
+      sessionData={sessionData}
+      activeTarget={focusedWindowTarget}
+      onPaneClick={(serverName, target) => {
+        // `layout.open` (paneLayoutTree's openTab) activates an already-open tab in
+        // whichever pane it's *already* in, ignoring the preferred pane — so picking a
+        // window that's already open in another pane from *this* pane's dropdown would
+        // silently activate it over there instead of bringing it here. Move it
+        // explicitly when it's parked in a different pane; open() already does the
+        // right thing (activate in place, or place a brand-new tab here) otherwise.
+        const tabId = windowTabId(serverName, target);
+        const existingPane = findPaneByTab(layout.state.root, tabId);
+        if (existingPane && existingPane.id !== pane.id) {
+          layout.move(tabId, existingPane.id, pane.id);
+        } else {
+          layout.open(tabId, pane.id);
+        }
+      }}
+      onContextMenu={windowActions.showWindowContextMenu}
+      onLongPress={windowActions.showWindowContextMenuAt}
+      onOpenAddWindow={onOpenAddWindow ? () => onOpenAddWindow(true, task?.projectId, taskId) : undefined}
+      onClose={() => setWindowDropdownPaneId(null)}
+      respawningWindowIds={windowActions.respawningWindowIds}
+    />
+  ), [windows, sessionData, focusedWindowTarget, layout, windowActions, onOpenAddWindow, task, taskId]);
+
+  // Desktop per-pane trailing trigger (label + total window count badge + ▾) — unchanged
+  // from before Issue #69 S8.
+  const renderWindowDropdownTrigger = useCallback((pane: PaneNode) => {
     if (windows.length === 0) return null;
     const isOpen = windowDropdownPaneId === pane.id;
     const label = focusedWindowTarget
       ? (windows.find((w) => w.serverName === focusedWindowTarget.serverName && isSameWindowTarget(w.tmuxTarget, focusedWindowTarget.target))?.label
         || focusedWindowTarget.target)
       : '';
-    // SP のウィンドウバー（承認済みモック R2: 「▣ win名 ▾ Nペイン」、Issue #69 T5）は、
-    // デスクトップの各ペイン trailing 領域に出るトリガー（下記 'toolbar' 分岐、総ウィンドウ数
-    // バッジ）とは見た目が異なる — leading アイコンと「表示中ウィンドウの実ペイン数」を追加する。
-    // トリガー自体のクリック挙動・ドロップダウン中身（TaskWindowDropdown）は完全に共有する。
-    const isSp = variant === 'sp';
     return (
       <span style={{ position: 'relative' }}>
         <span
@@ -830,61 +924,94 @@ export default function TaskPanel({
           aria-expanded={isOpen}
           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setWindowDropdownPaneId(isOpen ? null : pane.id); } }}
           style={{
-            display: 'inline-flex', alignItems: 'center', gap: isSp ? 6 : 4,
+            display: 'inline-flex', alignItems: 'center', gap: 4,
             cursor: 'pointer', color: 'var(--text-dim)',
-            padding: isSp ? '5px 10px' : '2px 6px', borderRadius: isSp ? 'var(--radius-md)' : 'var(--radius-sm)',
-            background: isSp ? 'var(--bg-hover)' : (isOpen ? 'var(--bg-hover)' : 'transparent'),
-            fontSize: 'var(--font-xs)', maxWidth: isSp ? 220 : 140,
+            padding: '2px 6px', borderRadius: 'var(--radius-sm)',
+            background: isOpen ? 'var(--bg-hover)' : 'transparent',
+            fontSize: 'var(--font-xs)', maxWidth: 140,
           }}
         >
-          {isSp && <span style={{ display: 'inline-flex', flexShrink: 0, opacity: 0.75 }}><Icon name="windows" size={14} /></span>}
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {label || t('workspace:windows.select')}
           </span>
           <span style={{ display: 'inline-flex', flexShrink: 0 }}><Icon name="chevron-down" size={16} rotate={isOpen ? 180 : 0} /></span>
-          {isSp ? (
-            <span style={{ fontSize: 'var(--font-2xs)', color: 'var(--text-dim)', flexShrink: 0 }}>
-              {t('workspace:windows.paneCount', { count: displayedWindowPaneCount ?? 1 })}
-            </span>
-          ) : (
-            <span style={{
-              fontSize: 'var(--font-2xs)', background: 'var(--bg)', borderRadius: 'var(--radius-md)',
-              padding: '0 5px', flexShrink: 0, lineHeight: '16px',
-            }}>
-              {windows.length}
-            </span>
-          )}
+          <span style={{
+            fontSize: 'var(--font-2xs)', background: 'var(--bg)', borderRadius: 'var(--radius-md)',
+            padding: '0 5px', flexShrink: 0, lineHeight: '16px',
+          }}>
+            {windows.length}
+          </span>
         </span>
-        {isOpen && (
-          <TaskWindowDropdown
-            windows={windows}
-            sessionData={sessionData}
-            activeTarget={focusedWindowTarget}
-            onPaneClick={(serverName, target) => {
-              // `layout.open` (paneLayoutTree's openTab) activates an already-open tab in
-              // whichever pane it's *already* in, ignoring the preferred pane — so picking a
-              // window that's already open in another pane from *this* pane's dropdown would
-              // silently activate it over there instead of bringing it here. Move it
-              // explicitly when it's parked in a different pane; open() already does the
-              // right thing (activate in place, or place a brand-new tab here) otherwise.
-              const tabId = windowTabId(serverName, target);
-              const existingPane = findPaneByTab(layout.state.root, tabId);
-              if (existingPane && existingPane.id !== pane.id) {
-                layout.move(tabId, existingPane.id, pane.id);
-              } else {
-                layout.open(tabId, pane.id);
-              }
-            }}
-            onContextMenu={windowActions.showWindowContextMenu}
-            onLongPress={windowActions.showWindowContextMenuAt}
-            onOpenAddWindow={onOpenAddWindow ? () => onOpenAddWindow(true, task?.projectId, taskId) : undefined}
-            onClose={() => setWindowDropdownPaneId(null)}
-            respawningWindowIds={windowActions.respawningWindowIds}
-          />
-        )}
+        {isOpen && renderWindowDropdownBody(pane)}
       </span>
     );
-  }, [windows, sessionData, windowDropdownPaneId, focusedWindowTarget, layout, windowActions, onOpenAddWindow, task, displayedWindowPaneCount, t]);
+  }, [windows, windowDropdownPaneId, focusedWindowTarget, renderWindowDropdownBody, t]);
+
+  // SP コンテンツヘッダー（承認済み S8: 「> ウィンドウ名」＋ワーカーバッジ▾＋右端「∨ Nペイン」）
+  // — 旧実装は名前+件数+▾を1トリガーへ結合していたが、S8 は左（ウィンドウ名タップ＝ウィンドウ
+  // 切替）と右（ペイン数チップ＝既存ドロップダウンの移設先）に分離する。両者は同じ
+  // windowDropdownPaneId 開閉状態とドロップダウン本体（renderWindowDropdownBody）を共有し、
+  // ドロップダウン自体は常にチップ側（右）に アンカーする。
+  const renderSpWindowNameTrigger = useCallback((pane: PaneNode) => {
+    if (windows.length === 0) return null;
+    const isOpen = windowDropdownPaneId === pane.id;
+    const label = focusedWindowTarget
+      ? (windows.find((w) => w.serverName === focusedWindowTarget.serverName && isSameWindowTarget(w.tmuxTarget, focusedWindowTarget.target))?.label
+        || focusedWindowTarget.target)
+      : '';
+    const hasMultiple = windows.length > 1;
+    return (
+      <span
+        onClick={hasMultiple ? (e) => { e.stopPropagation(); setWindowDropdownPaneId(isOpen ? null : pane.id); } : undefined}
+        role={hasMultiple ? 'button' : undefined}
+        tabIndex={hasMultiple ? 0 : undefined}
+        aria-label={hasMultiple ? t('workspace:windows.windowList') : undefined}
+        aria-expanded={hasMultiple ? isOpen : undefined}
+        onKeyDown={hasMultiple ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setWindowDropdownPaneId(isOpen ? null : pane.id); } } : undefined}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 4, minWidth: 0,
+          cursor: hasMultiple ? 'pointer' : 'default', color: 'var(--text-dim)',
+          fontFamily: "'JetBrains Mono', ui-monospace, monospace", fontSize: 'var(--font-sm)',
+          padding: '4px 6px', borderRadius: 'var(--radius-sm)',
+        }}
+      >
+        <span aria-hidden="true" style={{ opacity: 0.6 }}>&gt;</span>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text)' }}>
+          {label || t('workspace:windows.select')}
+        </span>
+        {hasMultiple && <span style={{ display: 'inline-flex', flexShrink: 0 }}><Icon name="chevron-down" size={14} rotate={isOpen ? 180 : 0} /></span>}
+      </span>
+    );
+  }, [windows, windowDropdownPaneId, focusedWindowTarget, t]);
+
+  const renderSpPaneCountChip = useCallback((pane: PaneNode) => {
+    if (windows.length === 0) return null;
+    const isOpen = windowDropdownPaneId === pane.id;
+    return (
+      <span style={{ position: 'relative', flexShrink: 0 }}>
+        <span
+          onClick={(e) => { e.stopPropagation(); setWindowDropdownPaneId(isOpen ? null : pane.id); }}
+          role="button"
+          tabIndex={0}
+          aria-label={t('workspace:windows.windowList')}
+          aria-expanded={isOpen}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setWindowDropdownPaneId(isOpen ? null : pane.id); } }}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 4,
+            cursor: 'pointer', color: 'var(--text-dim)',
+            padding: '5px 10px', borderRadius: 'var(--radius-md)',
+            background: 'var(--bg-hover)', fontSize: 'var(--font-xs)',
+          }}
+        >
+          <span style={{ display: 'inline-flex', flexShrink: 0 }}><Icon name="chevron-down" size={14} rotate={isOpen ? 180 : 0} /></span>
+          <span style={{ fontSize: 'var(--font-2xs)', whiteSpace: 'nowrap' }}>
+            {t('workspace:windows.paneCount', { count: displayedWindowPaneCount ?? 1 })}
+          </span>
+        </span>
+        {isOpen && renderWindowDropdownBody(pane)}
+      </span>
+    );
+  }, [windows, windowDropdownPaneId, displayedWindowPaneCount, renderWindowDropdownBody, t]);
 
   const renderPaneTrailing = useCallback((pane: PaneNode) => {
     const panesCount = listPanes(layout.state.root).length;
@@ -928,7 +1055,10 @@ export default function TaskPanel({
     </div>
   ), []);
 
-  function renderTabBody(tabId: string, tabVisible: boolean, taskData: Task, windowLeading?: React.ReactNode): React.ReactNode {
+  function renderTabBody(
+    tabId: string, tabVisible: boolean, taskData: Task,
+    windowHeader?: { leading?: React.ReactNode; trailing?: React.ReactNode },
+  ): React.ReactNode {
     // Only the tab that's actually active in its own pane (and only while this whole task
     // panel is visible) mounts real content — matches the terminal tab's pre-existing
     // behavior, and stops background WS/polling (TaskLogView, TaskGitTab, CommitList,
@@ -948,11 +1078,12 @@ export default function TaskPanel({
       );
     }
     if (viewName === 'description') {
+      // SP はコンテンツヘッダーが「説明」タイトル＋編集を担う（Issue #69 S8）ため、ここでは
+      // 本文のみを描く。タスクID/Issue/PR バッジと Unit/Git/サマリーは 'unit' ビュー
+      // （Unit・実行情報、⋯メニューから遷移）へ移設済み — 下の 'unit' 分岐参照。
       return (
         <div className="mobile-scroll-inset" style={{ height: '100%', overflowY: 'auto', padding: '16px 24px' }}>
-          {/* PC はヘッダー行にバッジを表示するが、SP はヘッダーをタイトル1行に統合した
-              （Issue #69 修正3）ため、置き場を失ったバッジ（タスクID/Issue/PR）をここに表示する。 */}
-          {isMobile && (
+          {!isMobile && (
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 4, marginBottom: 12 }}>
               <TaskRefBadges taskId={taskData.id} sourceRef={taskData.sourceRef} source={taskData.source} prUrl={taskData.prUrl} />
               {hasUnit && unit && <Chip>{t('ref.unit', { name: unit.name })}</Chip>}
@@ -968,61 +1099,22 @@ export default function TaskPanel({
               {t('detail.noDescription')}
             </div>
           )}
-          {/* SP 概要セグメント（Issue #69 T5）: モック R2 の固定5セグメントには「Unit」「Git」
-              「サマリー」の置き場がないため、旧来それぞれ独立タブだったこの3つの内容を概要へ
-              セクションとして併合する（機能はそのまま、PC 側は従来どおり独立タブのまま — 下の
-              'unit'/'git'/'summary' 分岐は非モバイルからも参照されるため残す）。 */}
-          {isMobile && (
-            <div style={{ marginTop: 20, display: 'flex', flexDirection: 'column', gap: 20 }}>
-              {hasUnit ? (
-                <>
-                  <MobileOverviewSection title={t('workspace:viewLabels.unit')}>
-                    <PhaseProgressBar
-                      status={taskData.status}
-                      currentPhase={taskData.currentPhase}
-                      phases={findUnitType(unitTypes, unit?.unitType)?.phases.map((p) => ({ name: p.name, label: p.label })) ?? []}
-                      selfReviewCount={taskData.selfReviewCount}
-                      selfReviewMax={taskData.selfReviewMaxAttempts}
-                    />
-                    <div style={{ marginTop: 8 }}>
-                      <TaskLogView
-                        taskId={taskData.id}
-                        unitId={taskData.unitId ?? undefined}
-                        taskStatus={taskData.status}
-                        planMarkdown={taskData.planMarkdown}
-                      />
-                    </div>
-                  </MobileOverviewSection>
-                  <MobileOverviewSection title={t('workspace:viewLabels.git')}>
-                    <TaskGitTab
-                      task={taskData}
-                      projectId={taskData.projectId}
-                      onSwitchToDiff={diffPath && diffServerName ? handleSwitchToDiff : undefined}
-                      onRefresh={onRefresh}
-                    />
-                  </MobileOverviewSection>
-                  <MobileOverviewSection title={t('workspace:viewLabels.summary')}>
-                    <TaskSummaryTab summaryJson={taskData.summaryJson ?? null} />
-                  </MobileOverviewSection>
-                </>
-              ) : (
-                <MobileOverviewSection title={t('workspace:viewLabels.unit')}>
-                  <TaskUnitSetupForm
-                    task={taskData}
-                    allUnits={allUnits}
-                    defaultUnitId={projectDefaultUnitId}
-                    onAssignAndExecute={handleAssignAndExecute}
-                  />
-                </MobileOverviewSection>
-              )}
-            </div>
-          )}
         </div>
       );
     }
     if (viewName === 'unit') {
+      // SP: 「Unit・実行情報」フルスクリーンビュー（⋯メニュー経由、Issue #69 S8）。旧概要
+      // セグメントに併合していたタスクID/Issue/PR バッジ・Git・サマリーをここへ集約する
+      // （'git'/'summary' はもう独立の到達先を持たない — isLegacyMergedMobileView 参照）。
+      // PC はこれまでどおり Unit タブ本体（PhaseProgressBar+TaskLogView / 未割当フォーム）のみ。
       return hasUnit ? (
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+        <div className={isMobile ? 'mobile-scroll-inset' : undefined} style={{ display: 'flex', flexDirection: 'column', height: '100%', overflowY: isMobile ? 'auto' : undefined, padding: isMobile ? '16px 24px' : undefined }}>
+          {isMobile && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 4, marginBottom: 12 }}>
+              <TaskRefBadges taskId={taskData.id} sourceRef={taskData.sourceRef} source={taskData.source} prUrl={taskData.prUrl} />
+              {unit && <Chip>{t('ref.unit', { name: unit.name })}</Chip>}
+            </div>
+          )}
           <PhaseProgressBar
             status={taskData.status}
             currentPhase={taskData.currentPhase}
@@ -1035,16 +1127,38 @@ export default function TaskPanel({
             unitId={taskData.unitId ?? undefined}
             taskStatus={taskData.status}
             planMarkdown={taskData.planMarkdown}
-            fillHeight
+            fillHeight={!isMobile}
           />
+          {isMobile && (
+            <div style={{ marginTop: 20, display: 'flex', flexDirection: 'column', gap: 20 }}>
+              <MobileOverviewSection title={t('workspace:viewLabels.git')}>
+                <TaskGitTab
+                  task={taskData}
+                  projectId={taskData.projectId}
+                  onSwitchToDiff={diffPath && diffServerName ? handleSwitchToDiff : undefined}
+                  onRefresh={onRefresh}
+                />
+              </MobileOverviewSection>
+              <MobileOverviewSection title={t('workspace:viewLabels.summary')}>
+                <TaskSummaryTab summaryJson={taskData.summaryJson ?? null} />
+              </MobileOverviewSection>
+            </div>
+          )}
         </div>
       ) : (
-        <TaskUnitSetupForm
-          task={taskData}
-          allUnits={allUnits}
-          defaultUnitId={projectDefaultUnitId}
-          onAssignAndExecute={handleAssignAndExecute}
-        />
+        <div className={isMobile ? 'mobile-scroll-inset' : undefined} style={isMobile ? { height: '100%', overflowY: 'auto', padding: '16px 24px' } : undefined}>
+          {isMobile && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 4, marginBottom: 12 }}>
+              <TaskRefBadges taskId={taskData.id} sourceRef={taskData.sourceRef} source={taskData.source} prUrl={taskData.prUrl} />
+            </div>
+          )}
+          <TaskUnitSetupForm
+            task={taskData}
+            allUnits={allUnits}
+            defaultUnitId={projectDefaultUnitId}
+            onAssignAndExecute={handleAssignAndExecute}
+          />
+        </div>
       );
     }
     if (viewName === 'git') {
@@ -1121,11 +1235,14 @@ export default function TaskPanel({
           onSplitPane={onSplitPane ? (dir) => onSplitPane(serverName, target, dir) : undefined}
           onOpenTask={onOpenTask}
           reconnectKey={reconnectKeys[tabId]}
-          leading={windowLeading}
-          // SP: 端末/チャットはセグメント行で選択する第一級モードのため、TerminalContainer
-          // 内蔵の端末⇄チャットトグルは使わず TaskPanel が制御する（Issue #69 T5）。
+          leading={windowHeader?.leading}
+          trailing={windowHeader?.trailing}
+          // SP: 端末/チャットは下端ミニトグル（TerminalChatToggle、qbar/PromptInputBar）で
+          // 選択する第一級モードのため、TerminalContainer 内蔵の端末⇄チャットトグル（上部
+          // ツールバー）は使わず TaskPanel が単一の真実源として制御する（Issue #69 S8）。
           // デスクトップはこの prop を渡さず、従来どおり自律的に管理する（不変）。
           viewMode={isMobile ? mobileViewMode : undefined}
+          onViewModeChange={isMobile ? (mode) => setMobileViewMode(mode, focusedWindowId) : undefined}
         />
       );
     }
@@ -1163,11 +1280,12 @@ export default function TaskPanel({
     layout.open(tabId);
   }, [layout]);
 
-  // SP セグメント行のモック忠実化（Issue #69 T5）: 「端末」「チャット」は集約された1セグメント
-  // ではなく第一級セグメント（承認済みモック R2: 概要｜コミット｜差分｜端末｜チャット）。どちらを
-  // 選んでも対象は同じ「直近アクティブだったウィンドウタブ」— 表示モードだけが変わる。実際の
-  // ウィンドウ切替は選択後に出るウィンドウバー（renderWindowDropdownTrigger の 'sp' 版）が担う
-  // （未選択時/そのウィンドウが閉じられた時は先頭のウィンドウへフォールバック、旧実装から維持）。
+  // SP のコンテンツ選択は S8 で ⋯ メニュー／ウィンドウ名タップ／下部ミニトグルへ一本化された
+  // （旧セグメント行は撤去、Issue #69 S8）。「端末」「チャット」は独立ビューではなく同じ
+  // 「直近アクティブだったウィンドウタブ」に対する表示モード切替 — 実際のウィンドウ切替は
+  // コンテンツヘッダーのウィンドウ名タップ／ペイン数チップ（renderSpWindowNameTrigger /
+  // renderSpPaneCountChip）が担う（未選択時/そのウィンドウが閉じられた時は先頭のウィンドウへ
+  // フォールバック、旧実装から維持）。
   const MOBILE_TERMINAL_SEGMENT = '__terminal__';
   const MOBILE_CHAT_SEGMENT = '__chat__';
   const lastMobileWindowTabIdRef = useRef<string | null>(null);
@@ -1175,33 +1293,17 @@ export default function TaskPanel({
     if (parseWindowTabId(mobileActiveTabId)) lastMobileWindowTabIdRef.current = mobileActiveTabId;
   }, [mobileActiveTabId]);
 
-  // モック R2 の固定5セグメントに存在しない旧 'unit'/'git'/'summary' ビュー（既に概要へ
-  // 併合済み、上のrenderTabBody参照）が既存の永続レイアウトからアクティブタブとして
-  // 復元された場合、概要セグメントへフォールバックする。
+  // S8 の ⋯ メニューには 'git'/'summary' 単独の行はなく、両者は 'unit'（Unit・実行情報）
+  // フルスクリーンビューへ併合されている（下の renderTabBody 'unit' 分岐参照）。既存の
+  // 永続レイアウトからこれらが旧アクティブタブとして復元された場合、'unit' へフォールバック
+  // する。'unit' 自体は S8 で第一級の ⋯ メニュー遷移先になったため、もうフォールバック対象
+  // ではない。
   const mobileActiveViewName = parseViewTabId(mobileActiveTabId);
-  const isLegacyMergedMobileView = mobileActiveViewName === 'unit' || mobileActiveViewName === 'git' || mobileActiveViewName === 'summary';
-
-  const mobileSegments = useMemo((): SegmentedToggleOption<string>[] => [
-    { value: viewTabId('description'), label: t('workspace:viewLabels.overview') },
-    ...(hasUnit && diffPath && diffServerName ? [
-      { value: viewTabId('commits'), label: t('workspace:viewLabels.commits') },
-      { value: viewTabId('diff'), label: t('workspace:viewLabels.diff') },
-    ] : []),
-    ...(windows.length > 0 ? [
-      { value: MOBILE_TERMINAL_SEGMENT, label: t('common:terminal.viewMode.terminal'), icon: 'terminal' as IconName },
-      { value: MOBILE_CHAT_SEGMENT, label: t('common:terminal.viewMode.chat'), icon: 'transcript' as IconName },
-    ] : []),
-    ...browserTabIds.map((id, idx) => ({
-      value: id,
-      label: idx <= 0 ? t('common:labels.browser') : `${t('common:labels.browser')} ${idx + 1}`,
-      icon: 'browser' as IconName,
-    })),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  ], [hasUnit, diffPath, diffServerName, windows.length, browserTabIdsKey, t]);
+  const isLegacyMergedMobileView = mobileActiveViewName === 'git' || mobileActiveViewName === 'summary';
 
   const mobileActiveSegment = parseWindowTabId(mobileActiveTabId)
     ? (mobileViewMode === 'chat' ? MOBILE_CHAT_SEGMENT : MOBILE_TERMINAL_SEGMENT)
-    : (isLegacyMergedMobileView ? viewTabId('description') : mobileActiveTabId);
+    : (isLegacyMergedMobileView ? viewTabId('unit') : mobileActiveTabId);
 
   const handleMobileSegmentSelect = useCallback((key: string) => {
     if (key === MOBILE_TERMINAL_SEGMENT || key === MOBILE_CHAT_SEGMENT) {
@@ -1249,61 +1351,45 @@ export default function TaskPanel({
     justifyContent: 'center', flexShrink: 0,
   };
 
+  // SP ⋯ フルサイズメニュー（TaskDetailMenu）のタスク全体アクション — 旧 SP ⋯
+  // コンテキストメニュー（moreMenu）が持っていた項目をそのまま移設する（機能欠落防止）。
+  const taskDetailMenuActions = [
+    ...(hasUnit && unit && task.status === 'open'
+      ? [{ label: t('actions.execute'), icon: <Icon name="play" size={16} />, onClick: () => executeTask(task.id, unit.id) }]
+      : []),
+    ...(task.status === 'in_progress' && hasUnit && unit
+      ? [{ label: t('actions.stop'), icon: <Icon name="stop" size={16} />, danger: true, onClick: () => stopTask(unit.id) }]
+      : []),
+    { label: t('actions.edit'), icon: <Icon name="edit" size={16} />, onClick: () => onEdit?.(taskId) },
+    ...(task.status === 'archived'
+      ? [{ label: t('actions.restore'), icon: <Icon name="refresh" size={16} />, onClick: handleRestore }]
+      : [{ label: t('actions.archive'), icon: <Icon name="storage" size={16} />, onClick: handleArchive }]),
+    { label: t('common:actions.delete'), icon: <Icon name="trash" size={16} />, danger: true, onClick: handleDelete },
+  ];
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--ws-surface)' }}>
-      {/* Task header bar: SP = 2段構成（タイトル行 + セグメント行、承認済み S3 提案）, PC = single row */}
+      {/* Task header bar: SP = タイトル行のみ（承認済み S8: チップ行(既存タブバー)→タイトル行→
+          コンテンツヘッダー→コンテンツ→下部文脈バー）, PC = single row（不変） */}
       {isMobile ? (
         <div className="ws-surface" style={{ background: 'var(--ws-surface-card)', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-          {/* Row 1: back + title (1行) + status（タップでドロップダウン）+ more */}
+          {/* タイトル行: タスクタイトル（1行省略）＋右端 ⋯ のみ（◀/状態ピル/旧セグメント行は
+              いずれも撤去 — ステータスは ⋯ メニュー「ステータス」節へ、◀は既存タブ切替に委譲、
+              セグメント行の内容はコンテンツヘッダー＋⋯メニューへ再構成、Issue #69 S8）。 */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 44, padding: '0 var(--space-3)' }}>
-            {backButton}
             <span style={{
               flex: 1, minWidth: 0, fontSize: 'var(--font-base)', fontWeight: 600,
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             }}>
               {task.title}
             </span>
-            <StatusDropdown status={task.status} onChange={handleStatusChange} />
             <button
-              onClick={(e) => moreMenu.show(e, [
-                ...(hasUnit && unit && task.status === 'open'
-                  ? [{ label: t('actions.execute'), icon: <Icon name="play" size={16} />, onClick: () => executeTask(task.id, unit.id) }]
-                  : []),
-                ...(task.status === 'in_progress' && hasUnit && unit
-                  ? [{ label: t('actions.stop'), icon: <Icon name="stop" size={16} />, danger: true, onClick: () => stopTask(unit.id) }]
-                  : []),
-                { label: t('actions.edit'), icon: <Icon name="edit" size={16} />, onClick: () => onEdit?.(taskId) },
-                ...(task.status === 'archived'
-                  ? [{ label: t('actions.restore'), icon: <Icon name="refresh" size={16} />, onClick: handleRestore }]
-                  : [{ label: t('actions.archive'), icon: <Icon name="storage" size={16} />, onClick: handleArchive }]),
-                { label: t('common:actions.delete'), icon: <Icon name="trash" size={16} />, danger: true, onClick: handleDelete },
-              ])}
+              onClick={() => setDetailMenuOpen(true)}
               className="icon-btn"
               style={moreButtonStyle}
               title={t('common:navigation.moreActions')}
+              aria-label={t('common:navigation.moreActions')}
             ><Icon name="more" size={14} /></button>
-          </div>
-          {/* Row 2: 横スクロールセグメント行（旧サブタブ列の後継。ウィンドウ選択は「ウィンドウ」
-              セグメントへ集約 — 個々のウィンドウ/ペインドロップダウンはセグメント選択後の
-              ウィンドウバーで行う）+ 常設の＋（ブラウザ追加/ウィンドウ追加） */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 var(--space-3) 8px', overflow: 'hidden' }}>
-            {/* mobile-scroll-inset は「フローティングメニューと重なりうる縦スクロール領域」向けの
-                下部余白クラス（global.css 参照）。ここは横一列のセグメント行で縦スクロールも
-                フローティングメニューとの重なりも起きないため、誤って付けると
-                --mobile-bottom-inset 分（約90px）の余白がそのままこの行の高さに乗ってしまい、
-                セグメント行とウィンドウバーの間に空白帯ができる（実機で確認された不具合）。 */}
-            <div style={{ flex: 1, minWidth: 0, overflowX: 'auto' }}>
-              <SegmentedToggle
-                options={mobileSegments}
-                value={mobileActiveSegment}
-                onChange={handleMobileSegmentSelect}
-                size="md"
-                ariaLabel={t('workspace:pane.viewSegments')}
-              />
-            </div>
-            <span onClick={(e) => showAddMenu(e, mobileFocusedPane ?? listPanes(layout.state.root)[0])} style={{ flexShrink: 0 }}>
-              <IconButton size="sm" title={t('workspace:pane.openTab')}><Icon name="plus" size={14} /></IconButton>
-            </span>
           </div>
         </div>
       ) : (
@@ -1588,20 +1674,82 @@ export default function TaskPanel({
       )}
 
       {/* Main content area (full width, no sidebar) */}
-      {isMobile ? (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
-          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-            {(mobileActiveSegment === MOBILE_TERMINAL_SEGMENT || mobileActiveSegment === MOBILE_CHAT_SEGMENT) && mobileDisplayedWindowTabId
-              ? renderTabBody(
-                mobileDisplayedWindowTabId,
-                true,
-                task,
-                renderWindowDropdownTrigger(mobileFocusedPane ?? listPanes(layout.state.root)[0], 'sp'),
-              )
-              : renderTabBody(isLegacyMergedMobileView ? viewTabId('description') : mobileActiveTabId, true, task)}
+      {isMobile ? (() => {
+        const activePane = mobileFocusedPane ?? listPanes(layout.state.root)[0];
+        const isWindowContent = (mobileActiveSegment === MOBILE_TERMINAL_SEGMENT || mobileActiveSegment === MOBILE_CHAT_SEGMENT) && !!mobileDisplayedWindowTabId;
+        const resolvedViewTabId = isLegacyMergedMobileView ? viewTabId('unit') : mobileActiveTabId;
+        const resolvedViewName = isWindowContent ? null : parseViewTabId(resolvedViewTabId);
+        const isBrowserContent = !isWindowContent && !!parseBrowserTabId(resolvedViewTabId);
+        // コンテンツヘッダー（承認済み S8）: 端末/チャットは TerminalContainer 自身の
+        // leading/trailing（ウィンドウ名タップ＋ワーカーバッジ▾＋ペイン数チップ）が担う。
+        // ブラウザは BrowserView 自身のツールバー（アドレスバー/タブ）がページタイトルを
+        // 兼ねるため、ここでは重ねて描かない。それ以外の固定ビューはこの MobileContentHeader
+        // を使う（説明のみ「編集」アクション付き）。
+        const contentHeaderTitle = resolvedViewName === 'description' ? t('workspace:viewLabels.description')
+          : resolvedViewName === 'unit' ? t('workspace:taskDetailMenu.unitAndExecution')
+          : resolvedViewName === 'commits' ? t('workspace:viewLabels.commits')
+          : resolvedViewName === 'diff' ? t('workspace:viewLabels.diff')
+          : null;
+        return (
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
+            {contentHeaderTitle && (
+              <MobileContentHeader
+                title={contentHeaderTitle}
+                action={
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    {resolvedViewName === 'description' && onEdit && (
+                      <button
+                        type="button"
+                        onClick={() => onEdit(taskId)}
+                        style={{ border: 'none', background: 'none', color: 'var(--accent)', fontSize: 'var(--font-xs)', fontWeight: 600, cursor: 'pointer', padding: '4px 0' }}
+                      >
+                        {t('actions.edit')}
+                      </button>
+                    )}
+                    {/* ウィンドウ/ブラウザ追加（windows.length===0 でも到達できる唯一の入口、
+                        Issue #69 S8）。ウィンドウ/チャット表示中はコンテンツヘッダー右端の
+                        ペイン数チップ隣に別途置くため、ここには非ウィンドウ系ビューでのみ出す。 */}
+                    <span onClick={(e) => showAddMenu(e, activePane)}>
+                      <IconButton size="sm" title={t('workspace:pane.openTab')}><Icon name="plus" size={14} /></IconButton>
+                    </span>
+                  </div>
+                }
+              />
+            )}
+            <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+              {isWindowContent && mobileDisplayedWindowTabId
+                ? renderTabBody(
+                  mobileDisplayedWindowTabId,
+                  true,
+                  task,
+                  {
+                    leading: renderSpWindowNameTrigger(activePane),
+                    trailing: (
+                      <>
+                        {renderSpPaneCountChip(activePane)}
+                        {/* ウィンドウ/ブラウザ追加の唯一の入口（Issue #69 S8 で旧セグメント行の
+                            常設＋を撤去したため、機能欠落を避けるためここへ移設）。 */}
+                        <span onClick={(e) => showAddMenu(e, activePane)}>
+                          <IconButton size="sm" title={t('workspace:pane.openTab')}><Icon name="plus" size={14} /></IconButton>
+                        </span>
+                      </>
+                    ),
+                  },
+                )
+                : renderTabBody(resolvedViewTabId, true, task)}
+            </div>
+            {/* 下部文脈バー（端末/チャット以外）: 端末/チャットは qbar/PromptInputBar 自身が
+                ミニトグルを描くため、ここでは非端末/チャット表示中のみ描く（Issue #69 S8）。 */}
+            {!isWindowContent && !isBrowserContent && (
+              <MobileContextFooter
+                value={mobileViewMode}
+                onChange={(mode) => handleMobileSegmentSelect(mode === 'chat' ? MOBILE_CHAT_SEGMENT : MOBILE_TERMINAL_SEGMENT)}
+                disabled={windowTabIdsList.length === 0}
+              />
+            )}
           </div>
-        </div>
-      ) : (
+        );
+      })() : (
         <div ref={paneRects.containerRef} style={{ flex: 1, position: 'relative', minHeight: 0, overflow: 'hidden' }}>
           <SplitLayout
             root={layout.state.root}
@@ -1644,6 +1792,29 @@ export default function TaskPanel({
 
       {ctxMenu && <ContextMenu menu={ctxMenu} onClose={hideCtxMenu} />}
       {moreMenu.menu && <ContextMenu menu={moreMenu.menu} onClose={moreMenu.hide} />}
+
+      {isMobile && (
+        <TaskDetailMenu
+          open={detailMenuOpen}
+          onClose={() => setDetailMenuOpen(false)}
+          task={task}
+          unitName={unit?.name}
+          hasUnit={hasUnit}
+          actions={taskDetailMenuActions}
+          diffPath={diffPath}
+          diffServerName={diffServerName}
+          browserCount={browserTabIds.length}
+          onStatusChange={handleStatusChange}
+          onOpenDescription={() => handleMobileSelect(viewTabId('description'))}
+          onOpenUnit={() => handleMobileSelect(viewTabId('unit'))}
+          onOpenCommits={() => handleMobileSelect(viewTabId('commits'))}
+          onOpenDiff={() => handleMobileSelect(viewTabId('diff'))}
+          onOpenBrowser={() => { if (browserTabIds[0]) handleMobileSelect(browserTabIds[0]); }}
+          isPinned={isPinned}
+          onTogglePin={() => togglePin?.(ownTabId)}
+          onCloseTab={() => closeTab?.(ownTabId)}
+        />
+      )}
 
       {windowActions.confirmDialog && (
         <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300, padding: 16 }}>

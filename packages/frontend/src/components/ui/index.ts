@@ -7,6 +7,8 @@ export { EmptyState } from './EmptyState';
 export { IconButton } from './IconButton';
 export { SegmentedToggle } from './SegmentedToggle';
 export type { SegmentedToggleOption } from './SegmentedToggle';
+export { TerminalChatToggle } from './TerminalChatToggle';
+export type { WindowViewMode as TerminalChatViewMode } from './TerminalChatToggle';
 export { SectionHeader } from './SectionHeader';
 export { MiniTabBar } from './MiniTabBar';
 export type { MiniTab } from './MiniTabBar';
