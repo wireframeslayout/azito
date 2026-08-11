@@ -2,7 +2,7 @@ import { selectTaskTerminal } from '../components/workspace/TaskPanel';
 
 /**
  * 稼働中/最近完了ウィンドウの行を開く共通ロジック（Issue #69 T2）。
- * HomeFeed の稼働中カード・FloatingActivityPill のポップオーバー行が同じ判定を使う:
+ * HomeFeed の稼働中カード・MobileStatusBar のドロップアップ行が同じ判定を使う:
  * タスクに紐づく行は該当タスクのターミナルへ（selectTaskTerminal でウィンドウを固定してからタブを開く）、
  * タスクに紐づかない手動起動ペインはそのままペイン接続する。
  */

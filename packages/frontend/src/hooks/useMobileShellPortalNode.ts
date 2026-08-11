@@ -19,3 +19,21 @@ export function useMobileShellPortalNode(): HTMLElement | null {
 
   return node;
 }
+
+/**
+ * SP 常駐ステータスバー（Issue #338 T13）: `mobile-shell-slot` と同じ理由（`Workspace` は
+ * グローバルページ表示中も display:none で隠れるだけでマウントされ続ける）で、`Layout` の
+ * DOM ツリー上位・display:none の影響を受けない位置に常設したスロットの id。`MobileStatusBar`
+ * はここへ createPortal する。
+ */
+export const MOBILE_STATUS_SLOT_ID = 'mobile-status-slot';
+
+export function useMobileStatusPortalNode(): HTMLElement | null {
+  const [node, setNode] = useState<HTMLElement | null>(null);
+
+  useEffect(() => {
+    setNode(document.getElementById(MOBILE_STATUS_SLOT_ID));
+  }, []);
+
+  return node;
+}

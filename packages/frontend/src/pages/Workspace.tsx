@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useLocation, matchPath } from 'react-router-dom';
 import { paths, matchWorkspacePath, isGlobalPagePath } from '../paths';
-import { useMobileShellPortalNode } from '../hooks/useMobileShellPortalNode';
+import { useMobileShellPortalNode, useMobileStatusPortalNode } from '../hooks/useMobileShellPortalNode';
 import { api } from '../api/client';
 import ContextMenu, { useContextMenu, type ContextMenuItem } from '../components/ContextMenu';
 import { useProjectSettings, type SettingsSection } from '../components/ProjectSettings';
@@ -45,7 +45,7 @@ import ResourceWarningDialog, { type ResourceStatus } from '../components/Resour
 import TabContentRenderer from '../components/workspace/TabContentRenderer';
 import WorkspaceWelcome from '../components/workspace/WorkspaceWelcome';
 import HomeFeed from '../components/workspace/HomeFeed';
-import { FloatingActivityPill } from '../components/workspace/FloatingActivityPill';
+import { MobileStatusBar } from '../components/workspace/MobileStatusBar';
 import { SplitLayout, type PaneDrag } from '../components/workspace/SplitLayout';
 import { resolveDisplayedTaskTerminal, selectTaskTerminal } from '../components/workspace/TaskPanel';
 
@@ -158,6 +158,7 @@ function WorkspaceInner() {
   // SP チップ行の常設化（Issue #69 T8b）: Layout の常設スロットへポータルする。
   // 未取得（初回コミット前）はフォールバックとしてその場に描画する。
   const shellPortalNode = useMobileShellPortalNode();
+  const statusPortalNode = useMobileStatusPortalNode();
   const sidebarCollapsedEffective = sidebarCollapsed;
   const currentProjectId = parseInt(id || '0', 10);
 
@@ -1108,7 +1109,13 @@ function WorkspaceInner() {
               {tabs.map((tab) => renderTabContent(tab, { position: 'absolute', inset: 0 }, tab.id === activeTabId, closeTabAndRefreshBrowser))}
             </div>
 
-            <FloatingActivityPill allTasks={allTasks} openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} />
+            {(() => {
+              const bar = <MobileStatusBar allTasks={allTasks} openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} />;
+              // mobile-shell-slot と同じ理由（Layout がグローバルページ表示中にこのサブツリーを
+              // display:none で隠しても、ポータル先はその外側にあるため常駐し続ける）で
+              // mobile-status-slot（Layout.tsx）へ portal する。
+              return statusPortalNode ? createPortal(bar, statusPortalNode) : bar;
+            })()}
           </>
         ) : (
           // Multi-pane split layout (Issue #397). With a single pane (the

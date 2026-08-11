@@ -1,7 +1,7 @@
 import type { ActiveWindowRow } from '../hooks/useActiveWindowRows';
 
-// FloatingActivityPill（components/workspace/FloatingActivityPill.tsx）の集計ロジックを
-// 純粋関数として切り出したもの（Issue #338 T2/T3）。コンポーネント本体は React
+// MobileStatusBar（components/workspace/MobileStatusBar.tsx、旧 FloatingActivityPill）の集計
+// ロジックを純粋関数として切り出したもの（Issue #338 T2/T3）。コンポーネント本体は React
 // Testing Library を使わない現状のテスト構成（vitest environment: 'node', *.test.ts のみ）
 // のため、jsdom なしでユニットテストできるようここへ抽出している。
 

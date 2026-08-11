@@ -12,8 +12,7 @@ export const HEALTH_COLOR_VAR: Record<DotLevel, string> = {
 
 /**
  * ヘルスレベル別のチップ（背景/前景）トークン。デスクトップ由来はなく、SP の
- * `ServerHealthSheet`（Issue #69 T6）と `FloatingActivityPill` のヘルス節（Issue #338 T11 P1）が
- * 共有する（コピー禁止）。
+ * `ServerHealthSheet`（Issue #69 T6）が使う。
  */
 export const HEALTH_CHIP_TOKENS: Record<HealthLevel, { bg: string; fg: string }> = {
   healthy: { bg: 'var(--success-a15)', fg: 'var(--success)' },

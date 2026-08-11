@@ -8,24 +8,23 @@ import { formatRelativeTime } from '../../utils/time';
 import { openActivityTarget } from '../../lib/activityOpen';
 import { groupRunningRows, readKeyFor, pruneStaleReadKeys } from '../../lib/activityPillLogic';
 import type { Task } from '../../pages/workspace/types';
-import { HealthDot, HEALTH_CHIP_TOKENS } from '../statusbar/HealthDot';
+import { HealthDot } from '../statusbar/HealthDot';
 import { ResourceMeter } from '../statusbar/ResourceMeter';
 import { healthReasonText } from '../statusbar/ResourceDropdown';
 import { getHealthLevel, getWorstHealth, useServerResourcesContext } from '../../hooks/useServerResources';
 import { ServerHealthSheet } from './ServerHealthSheet';
 
-// SP常設フローティングピル（Issue #69 T2 / モック S6-14, F2）。データは useAgentActivity
-// （useActiveWindowRows 経由）のみを参照し、新規ポーリングは持たない。ワークスペースのタブ有無に
-// 関わらず常設し、右下から文脈フッター（端末クイックキーバー/チャット入力バー、T3が公開する
-// --sp-footer-h）の上へ退避する。集計ロジック（グループ化・既読ID）は lib/activityPillLogic.ts
-// に切り出してユニットテストしている。
-// Issue #338 T11 P1: サーバーヘルスをピルに同梱する。データは useServerResourcesContext
-// （Layout 側の既存ポーリングを共有・新規ポーリング禁止）、ヘルス判定は getHealthLevel/
-// getWorstHealth（ResourceDropdown/ServerHealthSheet と共有・コピー禁止）を再利用する。
+// SP常設ステータスバー（Issue #338 T13）。旧 FloatingActivityPill（右下フローティングピル）を
+// 廃止し、画面最下段の常駐バーへ置き換えたもの。データ・集計ロジック（グループ化・既読ID管理・
+// ヘルス判定）はそのまま移設している（コピー禁止 — groupRunningRows/readKeyFor/pruneStaleReadKeys
+// は lib/activityPillLogic.ts、getHealthLevel/getWorstHealth は hooks/useServerResources.tsx を
+// 引き続き共有する）。配置は Layout の mobile-shell-slot と対になる mobile-status-slot への
+// createPortal（Workspace.tsx）— グローバルページ表示中も常駐する。
 
 const FINISHED_WINDOW_MS = 60 * 60 * 1000;
+const BAR_HEIGHT = 26;
 
-interface FloatingActivityPillProps {
+interface MobileStatusBarProps {
   allTasks: Task[];
   openTask: (taskId: number, title: string, projectId?: number) => void;
   connectPane: (serverName: string, target: string, projectId?: number) => void;
@@ -75,29 +74,27 @@ const rowTitleStyle: CSSProperties = {
   whiteSpace: 'nowrap',
 };
 
-export function FloatingActivityPill({ allTasks, openTask, connectPane }: FloatingActivityPillProps) {
+export function MobileStatusBar({ allTasks, openTask, connectPane }: MobileStatusBarProps) {
   const { t } = useTranslation(['workspace', 'common']);
   const { rows } = useActiveWindowRows();
   const [open, setOpen] = useState(false);
-  // セッション内既読管理（spec: localStorage不要）。ポップオーバーを開いた時点の完了行キーを
-  // 既読にし、以後ピル/リストのカウントから外す。shared な dismissFinished（他画面の
-  // ActiveWindowsSection 等にも影響する）とは別系統に保つ。
+  // セッション内既読管理（spec: localStorage不要）。ドロップアップを開いた時点の完了行キーを
+  // 既読にし、以後バッジの未読数から外す。
   const [readKeys, setReadKeys] = useState<Set<string>>(() => new Set());
   const [healthOpen, setHealthOpen] = useState(false);
   const containerRef = useClickOutside<HTMLDivElement>(() => setOpen(false));
 
-  // サーバーヘルス（Issue #338 T11 P1）。複数サーバーは最悪値を代表として使う。
+  // サーバーヘルス。複数サーバーは最悪値を代表として使う。
   const servers = useServerResourcesContext();
   const worstHealth = getWorstHealth(servers.map((s) => getHealthLevel(s.measurement)));
   const worstServer = servers.find((s) => getHealthLevel(s.measurement) === worstHealth) ?? null;
   const worstMeasurement = worstServer?.measurement ?? null;
   const worstMemUsedPercent = worstMeasurement ? 100 - worstMeasurement.memAvailablePercent : null;
+  const memTextColor = worstHealth === 'critical' ? 'var(--danger)' : worstHealth === 'warning' ? 'var(--warning)' : 'var(--text-dim)';
 
   const taskById = useMemo(() => new Map(allTasks.map((tk) => [tk.id, tk])), [allTasks]);
 
   const workingGroups = useMemo<WorkingGroup[]>(() => {
-    // グループ化・blocked集約（複数ウィンドウを持つグループは全行を見る）は lib/activityPillLogic
-    // の groupRunningRows に切り出し済み。ここではタイトル・メタ情報の算出のみ行う。
     return groupRunningRows(rows).map(({ groupKey, isBlocked, representativeRow: row }) => {
       const task = row.taskId != null ? taskById.get(row.taskId) : undefined;
       return {
@@ -112,23 +109,19 @@ export function FloatingActivityPill({ allTasks, openTask, connectPane }: Floati
     });
   }, [rows, taskById, t]);
 
-  // 直近1時間の完了行（既読状態に関わらず、開いている間・再度開いた時も一覧には出続ける —
-  // 「既読」はバッジの未読数だけに作用し、一覧そのものを消さない）。
+  // 直近1時間の完了行（既読状態に関わらず一覧には出続ける — 「既読」はバッジの未読数だけに
+  // 作用し、一覧そのものを消さない）。
   const finishedRows = useMemo(() => {
     const cutoff = Date.now() - FINISHED_WINDOW_MS;
     return rows.filter((r) => r.status === 'finished' && (r.finishedAt ?? 0) >= cutoff);
   }, [rows]);
 
-  // ピルのバッジに出す未読数（既読管理: ポップオーバーを開いたら既読にし、以後この数から除外する）。
   const unreadFinishedCount = useMemo(
     () => finishedRows.filter((r) => !readKeys.has(readKeyFor(r))).length,
     [finishedRows, readKeys],
   );
 
   const workingCount = workingGroups.length;
-  // 完全アイドル（稼働0・未読完了0）— 静止グリフ表示に切り替える境界（Issue #338 T9 #5:
-  // 以前はこの状態でピル自体を非表示にしていたが、常設に変更）。
-  const isIdle = workingCount === 0 && unreadFinishedCount === 0;
 
   const handleToggle = () => {
     setOpen((prev) => {
@@ -136,7 +129,6 @@ export function FloatingActivityPill({ allTasks, openTask, connectPane }: Floati
       if (next && finishedRows.length > 0) {
         setReadKeys((cur) => {
           const cutoff = Date.now() - FINISHED_WINDOW_MS;
-          // 時間窓から外れた既読IDは prune し、無期限に肥大化しないようにする。
           const merged = pruneStaleReadKeys(cur, cutoff);
           for (const r of finishedRows) merged.add(readKeyFor(r));
           return merged;
@@ -167,34 +159,21 @@ export function FloatingActivityPill({ allTasks, openTask, connectPane }: Floati
   };
 
   return (
-    <div
-      ref={containerRef}
-      style={{
-        position: 'fixed',
-        right: 'var(--space-3)',
-        // フッター（クイックキーバー/チャット入力バー）の実測高（--sp-footer-h）は既に
-        // safe-area 分を含んでいる（各バーが padding-bottom へ env(safe-area-inset-bottom) を
-        // 積んだ上でボーダーボックスを測っている）。フッター非表示時（--sp-footer-h: 0px）は
-        // ピル自身が safe-area 分を確保する必要があるため、両者を加算せず max() で選ぶ
-        // （Issue #338 T5: 表示中は二重加算で必要以上に浮いてしまっていた）。
-        bottom: 'calc(var(--space-3) + max(var(--sp-footer-h, 0px), env(safe-area-inset-bottom)))',
-        zIndex: 110,
-      }}
-    >
+    <div ref={containerRef} style={{ position: 'relative' }}>
       {open && (
         <div
           role="dialog"
           aria-label={t('workspace:activityPill.ariaLabel')}
           style={{
-            position: 'absolute',
-            bottom: 'calc(100% + var(--space-2))',
+            position: 'fixed',
+            left: 0,
             right: 0,
-            minWidth: 220,
-            maxWidth: 280,
+            bottom: `calc(${BAR_HEIGHT}px + env(safe-area-inset-bottom))`,
+            zIndex: 100,
             maxHeight: '60vh',
             overflowY: 'auto',
             background: 'var(--bg-elevated)',
-            borderRadius: 'var(--radius-lg)',
+            borderRadius: 'var(--radius-lg) var(--radius-lg) 0 0',
             boxShadow: 'var(--shadow-3)',
             padding: 'var(--space-2)',
           }}
@@ -243,29 +222,18 @@ export function FloatingActivityPill({ allTasks, openTask, connectPane }: Floati
             </div>
           )}
 
-          {/* サーバーヘルス節（Issue #338 T11 P1）。アイドル時（稼働0・未読完了0）でも表示する。 */}
+          {/* サーバーヘルス節。アイドル時（稼働0・未読完了0）でも表示する。 */}
           <section style={{ borderTop: '1px solid var(--border)', marginTop: 4, paddingTop: 6 }}>
             <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'space-between', gap: 4, padding: '4px 8px 6px' }}>
               <span style={{ ...sectionHeaderStyle, padding: 0, whiteSpace: 'nowrap' }}>{t('workspace:mobile.serverHealth')}</span>
-              <span
-                style={{
-                  fontSize: 'var(--font-2xs)',
-                  fontWeight: 600,
-                  padding: '2px 8px',
-                  borderRadius: 'var(--radius-full)',
-                  background: HEALTH_CHIP_TOKENS[worstHealth].bg,
-                  color: HEALTH_CHIP_TOKENS[worstHealth].fg,
-                  flexShrink: 0,
-                  whiteSpace: 'nowrap',
-                }}
-              >
+              <span style={{ fontSize: 'var(--font-2xs)', fontWeight: 600, color: memTextColor, flexShrink: 0, whiteSpace: 'nowrap' }}>
                 {healthReasonText(worstHealth, worstMemUsedPercent, t)}
               </span>
             </div>
             {worstMeasurement && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '0 8px 8px' }}>
-                <PillHealthMiniRow label="MEM" value={worstMemUsedPercent ?? 0} warning={(worstMemUsedPercent ?? 0) >= 60} />
-                <PillHealthMiniRow
+                <MiniHealthRow label="MEM" value={worstMemUsedPercent ?? 0} warning={(worstMemUsedPercent ?? 0) >= 60} />
+                <MiniHealthRow
                   label="CPU"
                   value={Math.min(100, worstMeasurement.loadPerCore * 100)}
                   warning={worstMeasurement.loadPerCore > 1.5}
@@ -284,63 +252,64 @@ export function FloatingActivityPill({ allTasks, openTask, connectPane }: Floati
         </div>
       )}
 
-      <button
-        type="button"
-        onClick={handleToggle}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        aria-label={t('workspace:activityPill.ariaLabel')}
-        className={workingCount > 0 ? 'aw-pill-sweep-host' : undefined}
+      <div
         style={{
-          position: 'relative',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          height: 40,
-          padding: '0 var(--space-3)',
-          background: 'var(--bg-elevated)',
-          border: 'none',
-          borderRadius: 'var(--radius-full)',
-          boxShadow: 'var(--shadow-2)',
-          color: 'var(--text)',
-          fontSize: 'var(--font-sm)',
-          fontWeight: 600,
-          cursor: 'pointer',
+          background: 'var(--bg-card)',
+          boxShadow: 'inset 0 1px 0 var(--edge-hi)',
+          paddingBottom: 'env(safe-area-inset-bottom)',
         }}
       >
-        {workingCount > 0 && <span className="aw-sweep-overlay" aria-hidden="true" />}
-        {workingCount > 0 && (
-          <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-            <BrailleSpinner />
-            <span>{workingCount}</span>
+        <button
+          type="button"
+          onClick={handleToggle}
+          aria-expanded={open}
+          aria-haspopup="dialog"
+          aria-label={t('workspace:activityPill.ariaLabel')}
+          className={workingCount > 0 ? 'aw-pill-sweep-host' : undefined}
+          style={{
+            position: 'relative',
+            display: 'flex',
+            alignItems: 'center',
+            width: '100%',
+            height: BAR_HEIGHT,
+            padding: '0 var(--space-3)',
+            border: 'none',
+            background: 'transparent',
+            color: 'var(--text)',
+            fontFamily: 'var(--mono)',
+            fontSize: 'var(--font-2xs)',
+            cursor: 'pointer',
+          }}
+        >
+          {workingCount > 0 && <span className="aw-sweep-overlay" aria-hidden="true" />}
+
+          <span style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0, overflow: 'hidden' }}>
+            {workingCount > 0 ? <BrailleSpinner /> : <span aria-hidden="true" style={{ color: 'var(--text-dim)' }}>⠿</span>}
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {t('workspace:activityPill.statusBarWorking', { count: workingCount })}
+            </span>
+            {unreadFinishedCount > 0 && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                <span aria-hidden="true" style={{ color: 'var(--text-dim)' }}>&middot;</span>
+                <span aria-hidden="true" style={{ color: 'var(--success)' }}>&#10003;</span>
+                <span style={{ color: 'var(--success)' }}>{unreadFinishedCount}</span>
+              </span>
+            )}
           </span>
-        )}
-        {unreadFinishedCount > 0 && (
-          <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-            {workingCount > 0 && <span aria-hidden="true" style={{ color: 'var(--text-dim)' }}>·</span>}
-            <span aria-hidden="true" style={{ color: 'var(--success)' }}>&#10003;</span>
-            <span style={{ color: 'var(--success)' }}>{unreadFinishedCount}</span>
+
+          <span style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+            <HealthDot level={worstHealth} size={7} />
+            <span style={{ color: memTextColor }}>MEM {Math.round(worstMemUsedPercent ?? 0)}%</span>
           </span>
-        )}
-        {isIdle && (
-          <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--text-dim)' }}>
-            <span aria-hidden="true">⠿</span>
-            <span>0</span>
-          </span>
-        )}
-        {/* サーバーヘルスドット（Issue #338 T11 P1）。アイドル時でも常に表示する。 */}
-        <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-          <span aria-hidden="true" style={{ color: 'var(--text-dim)' }}>&middot;</span>
-          <HealthDot level={worstHealth} size={8} />
-        </span>
-      </button>
+        </button>
+      </div>
 
       <ServerHealthSheet open={healthOpen} onClose={() => setHealthOpen(false)} />
     </div>
   );
 }
 
-function PillHealthMiniRow({ label, value, warning }: { label: string; value: number; warning: boolean }) {
+function MiniHealthRow({ label, value, warning }: { label: string; value: number; warning: boolean }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
       <span style={{ minWidth: 30, color: 'var(--text)', fontWeight: 600 }}>{label}</span>

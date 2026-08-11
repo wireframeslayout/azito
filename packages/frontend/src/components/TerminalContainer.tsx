@@ -163,10 +163,6 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
     if (!showQuickKeyBar) setKeyboardOverlayOpen(false);
   }, [showQuickKeyBar, keyboardOverlayOpen]);
 
-  // SP文脈フッター高（--sp-footer-h）の公開は TerminalQuickKeyBar 自身がマウント時に
-  // claim/release する（lib/spFooterHeight.ts、Issue #338 T1）。ここでは showQuickKeyBar の
-  // 真偽で TerminalQuickKeyBar の条件付きレンダリングを制御するのみで、フッター高には関与しない。
-
   const handleRespawn = useCallback(async function perform(force = false) {
     if (!dbWindow) return;
     setRespawning(true);

@@ -15,7 +15,7 @@ import { ServerStatusProvider } from '../hooks/useServerStatuses';
 import { SystemUpdateProvider } from '../hooks/useSystemUpdate';
 import { UpdateOverlay } from './system/UpdateOverlay';
 import { LoadingState } from './ui';
-import { MOBILE_SHELL_SLOT_ID } from '../hooks/useMobileShellPortalNode';
+import { MOBILE_SHELL_SLOT_ID, MOBILE_STATUS_SLOT_ID } from '../hooks/useMobileShellPortalNode';
 
 const Workspace = lazy(() => import('../pages/Workspace'));
 const GlobalPageShell = lazy(() => import('./global/GlobalPageShell'));
@@ -70,6 +70,15 @@ export default function Layout() {
           </div>
         </div>
         <StatusBar servers={servers} />
+        {/* SP 常駐ステータスバーのスロット（Issue #338 T13）: mobile-shell-slot と対になる
+            下端版。flexShrink:0 で高さ分だけ上のコンテンツ行（project-sidebar-desktop +
+            workspace-panel）が自動的に縮むため、SP の文脈フッター（TerminalQuickKeyBar /
+            PromptInputBar、いずれも in-flow でコンテンツ列末尾に描画される）はこのスロットの
+            分だけ自然に上へ積まれる — --sp-footer-h のような bottom オフセット計算は不要
+            （Issue #263 で導入・Issue #338 T1 で拡張された機構は、唯一の消費者だった
+            FloatingActivityPill の廃止に伴い不要になったため削除した）。デスクトップでは
+            Workspace 側が MobileStatusBar 自体をレンダーしないため常に空のまま（高さ0）。 */}
+        <div id={MOBILE_STATUS_SLOT_ID} style={{ flexShrink: 0, position: 'relative' }} />
         <UpdateOverlay />
         <style>{`
           .project-sidebar-desktop { display: block; }

@@ -1,17 +1,9 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../ui/Icon';
 import { QuickActionButtons, type QuickActionButton } from '../ui/QuickActionButtons';
 import { TerminalChatToggle, type WindowViewMode } from '../ui/TerminalChatToggle';
-import { claimFooterHeight, releaseFooterHeight } from '../../lib/spFooterHeight';
 import { KEYBOARD_HEIGHT_THRESHOLD } from '../../hooks/useVirtualKeyboard';
-
-// SP文脈フッター高の公開オーナー名（lib/spFooterHeight.ts）。このバー自身が実測高を
-// claim/release する（Issue #338 T1: 「フッターを実際に描画しているコンポーネント自身」
-// だけが claim/release する方針に統一 — 以前は親 TerminalContainer が表示状態から
-// 固定値を計算して代理で公開していたが、それだと PromptInputBar とのオーナーをまたいだ
-// レースの温床になっていた）。
-const FOOTER_HEIGHT_OWNER = 'quick-key-bar';
 
 export interface TerminalQuickKeyBarProps {
   /** SPECIAL_KEY_MAP (XTermView) 準拠のキー名で送出する。Issue #69 T3 — 送出経路は
@@ -70,27 +62,6 @@ const QUICK_KEYS: QuickActionButton[] = [
  */
 export function TerminalQuickKeyBar({ onSendKey, keyboardOpen, onToggleKeyboard, onOpenTabSwitcher, viewMode, onChangeViewMode }: TerminalQuickKeyBarProps) {
   const { t } = useTranslation('common');
-  const barRef = useRef<HTMLDivElement>(null);
-
-  // マウント中は実測高（safe-area 込みのボーダーボックス）を --sp-footer-h として公開し、
-  // アンマウント時は自分がオーナーの場合のみ解放する。このバーは isMobile かつ端末ビューの
-  // ときだけ TerminalContainer から条件付きマウントされるため、表示条件の判定はここでは行わない。
-  // ソフトキーボード表示中にバーの位置（position: fixed / bottom オフセット）を切り替えても
-  // 実測高そのものは変わらないため、この claim/release はキーボード追従（下の
-  // keyboardBottom state）と独立して動作する。
-  useEffect(() => {
-    const el = barRef.current;
-    if (!el) return undefined;
-    const observer = new ResizeObserver(() => {
-      claimFooterHeight(FOOTER_HEIGHT_OWNER, el.getBoundingClientRect().height);
-    });
-    observer.observe(el);
-    claimFooterHeight(FOOTER_HEIGHT_OWNER, el.getBoundingClientRect().height);
-    return () => {
-      observer.disconnect();
-      releaseFooterHeight(FOOTER_HEIGHT_OWNER);
-    };
-  }, []);
 
   // ソフトキーボード追従（Issue #338 T9 #4）。このバーは通常、TerminalContainer の flex 末尾
   // に画面下端固定として置かれているだけ（position: fixed ではない）— ソフトキーボードが開くと
@@ -138,7 +109,6 @@ export function TerminalQuickKeyBar({ onSendKey, keyboardOpen, onToggleKeyboard,
 
   return (
     <div
-      ref={barRef}
       role="toolbar"
       aria-label={t('terminal.quickKeyBar.ariaLabel')}
       style={{

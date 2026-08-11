@@ -33,6 +33,7 @@
   },
   "activityPill": {
     "ariaLabel": "Activity status",
+    "statusBarWorking": "{{count}} working",
     "workingSection": "Working {{count}}",
     "finishedSection": "Recently finished {{count}}",
     "empty": "No agents running",

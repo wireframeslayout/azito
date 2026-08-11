@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../api/client';
 import { useNotificationChannel } from '../../hooks/useNotificationChannel';
@@ -51,7 +51,6 @@ import {
 } from '../task/taskPaneLayout';
 import { ApprovalRequestTracker, isApprovalDataForTask } from '../task/executionApprovalRequest';
 import { TerminalChatToggle, type WindowViewMode as TerminalChatViewMode } from '../ui/TerminalChatToggle';
-import { claimFooterHeight, releaseFooterHeight } from '../../lib/spFooterHeight';
 
 // Re-exported so existing external imports (`from './TaskPanel'`) keep working —
 // the actual implementation lives in taskPaneLayout.ts, alongside the rest of the
@@ -265,33 +264,10 @@ function MobileBrowserContentHeader({
 // qbar（TerminalQuickKeyBar）/PromptInputBar 自身が端末⇄チャットのミニトグルを描く（下端固定
 // バーは既にそこにある）。それ以外のビュー（説明・Unit・実行情報・コミット履歴・差分）表示中は
 // 下端に何も無くなってしまうため、「情報ビュー表示中も下部トグル操作で端末/チャットに復帰できる」
-// 仕様を満たす最小限のバー（トグルのみ）をここで描く。qbar/PromptInputBar と同じ
-// --sp-footer-h claim/release オーナー方式に参加する（F2稼働ステータスピルのオフセット計算対象）。
-// TaskPanel は非表示（他タブ）でもマウントされたままになりうる（Issue #397）ため、全インスタンス
-// が同一のオーナー文字列を共有すると、非表示タブのアンマウント／再マウントが表示中フッターの
-// claim を横取り・解放してしまう（Issue #338 T3）。オーナーを useId() でインスタンスごとに一意化
-// し、かつ「このフッターが実際に表示中（isVisible）」のときのみ claim/release に参加する。
-function MobileContextFooter({ value, onChange, disabled, isVisible }: { value: TerminalChatViewMode; onChange: (mode: TerminalChatViewMode) => void; disabled: boolean; isVisible: boolean }) {
-  const barRef = useRef<HTMLDivElement>(null);
-  const ownerId = useId();
-  const owner = `task-panel-context-footer:${ownerId}`;
-  useEffect(() => {
-    if (!isVisible) return undefined;
-    const el = barRef.current;
-    if (!el) return undefined;
-    const observer = new ResizeObserver(() => {
-      claimFooterHeight(owner, el.getBoundingClientRect().height);
-    });
-    observer.observe(el);
-    claimFooterHeight(owner, el.getBoundingClientRect().height);
-    return () => {
-      observer.disconnect();
-      releaseFooterHeight(owner);
-    };
-  }, [isVisible, owner]);
+// 仕様を満たす最小限のバー（トグルのみ）をここで描く。
+function MobileContextFooter({ value, onChange, disabled }: { value: TerminalChatViewMode; onChange: (mode: TerminalChatViewMode) => void; disabled: boolean }) {
   return (
     <div
-      ref={barRef}
       style={{
         display: 'flex', alignItems: 'center', flexShrink: 0,
         padding: 'var(--space-2)', paddingBottom: 'calc(var(--space-2) + env(safe-area-inset-bottom))',
@@ -1987,7 +1963,6 @@ export default function TaskPanel({
                 value={mobileViewMode}
                 onChange={(mode) => handleMobileSegmentSelect(mode === 'chat' ? MOBILE_CHAT_SEGMENT : MOBILE_TERMINAL_SEGMENT)}
                 disabled={windowTabIdsList.length === 0}
-                isVisible={isVisible}
               />
             )}
           </div>
