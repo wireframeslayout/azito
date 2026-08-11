@@ -15,6 +15,7 @@ import { ServerStatusProvider } from '../hooks/useServerStatuses';
 import { SystemUpdateProvider } from '../hooks/useSystemUpdate';
 import { UpdateOverlay } from './system/UpdateOverlay';
 import { LoadingState } from './ui';
+import { MOBILE_SHELL_SLOT_ID } from '../hooks/useMobileShellPortalNode';
 
 const Workspace = lazy(() => import('../pages/Workspace'));
 const GlobalPageShell = lazy(() => import('./global/GlobalPageShell'));
@@ -40,18 +41,26 @@ export default function Layout() {
           <div className="project-sidebar-desktop" style={{ height: '100%' }}>
             <ProjectSidebar />
           </div>
-          <div className="workspace-panel" style={{ flex: 1, minWidth: 0, overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
+          <div className="workspace-panel" style={{ flex: 1, minWidth: 0, overflow: 'hidden', position: 'relative', isolation: 'isolate', display: 'flex', flexDirection: 'column' }}>
             <TerminalBackdrop variant="app" />
-            <div style={{ display: isGlobal ? 'none' : 'contents' }}>
-              <Suspense fallback={<LoadingState />}>
-                <Workspace />
-              </Suspense>
+            {/* SP チップ行の常設スロット（Issue #69 T8b）: Workspace／WorkspaceLayout が
+                自身のチップ行・ナビシート・タブスイッチャーシートをここへ createPortal する。
+                グローバルページ表示中に Workspace 自身のサブツリーが display:none で隠れても、
+                このスロットは常設（flex column の最上段）のため隠れない。SP 以外は空のまま
+                （中身が mobile 限定のため高さゼロ、既存デスクトップ表示に影響しない）。 */}
+            <div id={MOBILE_SHELL_SLOT_ID} style={{ flexShrink: 0, position: 'relative', zIndex: 51 }} />
+            <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
+              <div style={{ display: isGlobal ? 'none' : 'contents' }}>
+                <Suspense fallback={<LoadingState />}>
+                  <Workspace />
+                </Suspense>
+              </div>
+              {isGlobal && (
+                <Suspense fallback={<LoadingState />}>
+                  <GlobalPageShell />
+                </Suspense>
+              )}
             </div>
-            {isGlobal && (
-              <Suspense fallback={<LoadingState />}>
-                <GlobalPageShell />
-              </Suspense>
-            )}
           </div>
         </div>
         <StatusBar servers={servers} />

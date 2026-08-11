@@ -1849,6 +1849,10 @@ export default function TaskPanel({
           isPinned={isPinned}
           onTogglePin={() => togglePin?.(ownTabId)}
           onCloseTab={() => closeTab?.(ownTabId)}
+          windows={windows}
+          focusedWindowTarget={focusedWindowTarget}
+          onSelectWindow={(serverName, target) => handleMobileSelect(windowTabId(serverName, target))}
+          onOpenAddWindow={onOpenAddWindow ? () => onOpenAddWindow(true, task?.projectId, taskId) : undefined}
         />
       )}
 

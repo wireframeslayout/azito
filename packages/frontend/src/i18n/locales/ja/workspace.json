@@ -274,6 +274,8 @@
     "pin": "ピン止め",
     "pinOn": "オン",
     "pinOff": "オフ",
-    "closeTab": "タブを閉じる"
+    "closeTab": "タブを閉じる",
+    "windows": "ウィンドウ",
+    "currentWindow": "現在表示中"
   }
 }

@@ -274,6 +274,8 @@
     "pin": "Pin",
     "pinOn": "On",
     "pinOff": "Off",
-    "closeTab": "Close tab"
+    "closeTab": "Close tab",
+    "windows": "Windows",
+    "currentWindow": "Currently viewing"
   }
 }

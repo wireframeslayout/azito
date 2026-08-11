@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useLocation, matchPath } from 'react-router-dom';
-import { paths, matchWorkspacePath } from '../paths';
+import { paths, matchWorkspacePath, isGlobalPagePath } from '../paths';
+import { useMobileShellPortalNode } from '../hooks/useMobileShellPortalNode';
 import { api } from '../api/client';
 import ContextMenu, { useContextMenu, type ContextMenuItem } from '../components/ContextMenu';
 import { useProjectSettings, type SettingsSection } from '../components/ProjectSettings';
@@ -153,6 +155,9 @@ function WorkspaceInner() {
   const projectSettings = useProjectSettings(parseInt(id || '0', 10), tabs, closeTab);
 
   const mobile = useIsMobile();
+  // SP チップ行の常設化（Issue #69 T8b）: Layout の常設スロットへポータルする。
+  // 未取得（初回コミット前）はフォールバックとしてその場に描画する。
+  const shellPortalNode = useMobileShellPortalNode();
   const sidebarCollapsedEffective = sidebarCollapsed;
   const currentProjectId = parseInt(id || '0', 10);
 
@@ -206,10 +211,19 @@ function WorkspaceInner() {
   const handleSelectTab = useCallback((tabId: string) => {
     const tab = tabs.find((t) => t.id === tabId);
     setActiveTabId(tabId);
+    // SP チップ行の常設化（Issue #69 T8b）: グローバルページ（/units, /servers 等）
+    // 表示中にタブを選択したときは、そのタブの内容を表示できるワークスペースルートへ
+    // navigate する（グローバルページ表示中は Workspace 自身のコンテンツ領域が
+    // display:none で隠れているため、setActiveTabId だけでは何も見えない）。
+    if (isGlobalPagePath(location.pathname)) {
+      const targetProjectId = tab?.projectId ?? (Number.isFinite(currentProjectId) && currentProjectId > 0 ? currentProjectId : undefined);
+      if (targetProjectId != null) navigate(paths.workspace(targetProjectId));
+      return;
+    }
     if (tab?.projectId && tab.projectId !== currentProjectId) {
       navigate(`/workspace/${tab.projectId}`);
     }
-  }, [tabs, currentProjectId, navigate, setActiveTabId]);
+  }, [tabs, currentProjectId, navigate, setActiveTabId, location.pathname]);
 
   // Multi-pane split layout (Issue #397). `allTabIds` must be a stable
   // reference across renders that don't actually add/remove tabs, or
@@ -1053,30 +1067,37 @@ function WorkspaceInner() {
     >
         {mobile ? (
           <>
-            <MobileTabChipRow
-              activeTab={(() => {
-                const tab = tabs.find((t) => t.id === activeTabId);
-                return tab ? buildTabItem(tab) : null;
-              })()}
-              activeTabId={activeTabId}
-              activeTabPinned={!!tabs.find((t) => t.id === activeTabId)?.pinned}
-              tabCount={tabs.length}
-              onOpenSwitcher={() => setMobileTabSwitcherOpen(true)}
-              onOpenMenu={() => setSidebarOpen(true)}
-              onTogglePin={togglePin}
-            />
-            <MobileTabSwitcherSheet
-              open={mobileTabSwitcherOpen}
-              onClose={() => setMobileTabSwitcherOpen(false)}
-              tabs={tabs}
-              activeTabId={activeTabId}
-              allProjects={allProjects}
-              buildTabItem={buildTabItem}
-              onSelectTab={handleSelectTab}
-              onCloseTab={closeTabAndRefreshBrowser}
-              onOpenAddTab={handleOpenAddTabFromSwitcher}
-              onTogglePin={togglePin}
-            />
+            {(() => {
+              const shell = (
+                <>
+                  <MobileTabChipRow
+                    activeTab={(() => {
+                      const tab = tabs.find((t) => t.id === activeTabId);
+                      return tab ? buildTabItem(tab) : null;
+                    })()}
+                    activeTabId={activeTabId}
+                    activeTabPinned={!!tabs.find((t) => t.id === activeTabId)?.pinned}
+                    tabCount={tabs.length}
+                    onOpenSwitcher={() => setMobileTabSwitcherOpen(true)}
+                    onOpenMenu={() => setSidebarOpen(true)}
+                    onTogglePin={togglePin}
+                  />
+                  <MobileTabSwitcherSheet
+                    open={mobileTabSwitcherOpen}
+                    onClose={() => setMobileTabSwitcherOpen(false)}
+                    tabs={tabs}
+                    activeTabId={activeTabId}
+                    allProjects={allProjects}
+                    buildTabItem={buildTabItem}
+                    onSelectTab={handleSelectTab}
+                    onCloseTab={closeTabAndRefreshBrowser}
+                    onOpenAddTab={handleOpenAddTabFromSwitcher}
+                    onTogglePin={togglePin}
+                  />
+                </>
+              );
+              return shellPortalNode ? createPortal(shell, shellPortalNode) : shell;
+            })()}
 
             <div style={{ flex: 1, position: 'relative', background: 'var(--ws-content)' }}>
               {tabs.length === 0 && (

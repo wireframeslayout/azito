@@ -1,10 +1,12 @@
 import React, { useCallback, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../ui/Icon';
 import { useNavigate } from 'react-router-dom';
 import type { SidebarMode } from '../../pages/workspace/types';
 import { paths } from '../../paths';
 import { MobileNavSheet } from './MobileNavSheet';
+import { useMobileShellPortalNode } from '../../hooks/useMobileShellPortalNode';
 import ContextMenu, { useContextMenu } from '../ContextMenu';
 import type { ContextMenuItem } from '../ContextMenu';
 import LocalMenu from './LocalMenu';
@@ -105,6 +107,12 @@ export default function WorkspaceLayout({
   const navigate = useNavigate();
   const currentProjectItem = allProjects.find((p) => p.id === project?.id) ?? null;
   const projectMenu = useContextMenu();
+  // SP ≡ ナビシートの常設化（Issue #69 T8b）: Layout の常設スロットへポータルすることで、
+  // グローバルページ表示中に Workspace 自身のサブツリーが display:none で隠れても
+  // 開閉できる（display:none は祖先で適用されるため、シート自身が position:fixed でも
+  // ポータルしない限り一緒に隠れてしまう）。スロット未取得（初回コミット前）はフォール
+  // バックとしてその場に描画する。
+  const shellPortalNode = useMobileShellPortalNode();
 
   const handleProjectSelect = (id: number) => {
     navigate(paths.workspace(id));
@@ -287,22 +295,25 @@ export default function WorkspaceLayout({
         );
       })()}
 
-      {mobile && (
-        <MobileNavSheet
-          open={sidebarOpen}
-          onClose={() => setSidebarOpen(false)}
-          project={project}
-          allProjects={allProjects}
-          onSelectProject={handleProjectSelect}
-          sidebarMode={sidebarMode}
-          switchSidebarMode={switchSidebarMode}
-          sidebarContent={sidebarContent}
-          objectsCount={objectsCount ?? 0}
-          connectPane={connectPane}
-          openTask={openTask}
-          taskWindows={taskWindows}
-        />
-      )}
+      {mobile && (() => {
+        const sheet = (
+          <MobileNavSheet
+            open={sidebarOpen}
+            onClose={() => setSidebarOpen(false)}
+            project={project}
+            allProjects={allProjects}
+            onSelectProject={handleProjectSelect}
+            sidebarMode={sidebarMode}
+            switchSidebarMode={switchSidebarMode}
+            sidebarContent={sidebarContent}
+            objectsCount={objectsCount ?? 0}
+            connectPane={connectPane}
+            openTask={openTask}
+            taskWindows={taskWindows}
+          />
+        );
+        return shellPortalNode ? createPortal(sheet, shellPortalNode) : sheet;
+      })()}
 
       {!mobile && !sidebarCollapsedEffective && (
         <div

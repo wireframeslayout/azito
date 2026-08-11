@@ -2,8 +2,12 @@ import { type CSSProperties, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../api/client';
 import { Icon } from '../ui/Icon';
+import { AgentIcon } from '../ui/AgentIcons';
+import { BrailleSpinner } from '../ui/WindowActivityIndicator';
+import { useAgentActivity } from '../../hooks/useAgentActivity';
+import { isSameWindowTarget } from '../../utils/tmuxTarget';
 import StatusDropdown from '../task/StatusDropdown';
-import type { Task } from '../../pages/workspace/types';
+import type { Task, Window } from '../../pages/workspace/types';
 
 export interface TaskDetailMenuAction {
   label: string;
@@ -35,6 +39,15 @@ interface TaskDetailMenuProps {
   isPinned: boolean;
   onTogglePin: () => void;
   onCloseTab: () => void;
+  /** タスクの全ウィンドウ（Issue #69 T8a）。「ウィンドウ」節が空なら描かない。 */
+  windows: Window[];
+  /** 現在コンテンツ表示中（または最終アクティブ）のウィンドウ — 該当行に ✓ を出す。 */
+  focusedWindowTarget: { serverName: string; target: string } | null;
+  /** 行タップ: メニューを閉じ、そのウィンドウのコンテンツ（端末/チャットは localStorage 記憶
+   * モード）を表示する。実際の表示切替は呼び出し元（TaskPanel の handleMobileSelect）が担う。 */
+  onSelectWindow: (serverName: string, target: string) => void;
+  /** ＋「ウィンドウを追加」行（既存 AddWindow 導線）。省略時は追加行を出さない。 */
+  onOpenAddWindow?: () => void;
 }
 
 const headerStyle: CSSProperties = {
@@ -85,6 +98,44 @@ function MenuRow({ label, value, onClick, danger }: { label: string; value?: Rea
   );
 }
 
+// 淡色ドット（非稼働ウィンドウの既定グリフ）。BlockedDot（琥珀=承認待ち）と紛れないよう
+// 別トークン（--text-dim）を使う — 稼働中は windowIndicator が 'blocked' を返せば呼び出し側で
+// BrailleSpinner に切り替える（承認待ちも「動いている」表現として尊重、Issue #69 T8a）。
+function IdleDot() {
+  return (
+    <span
+      aria-hidden="true"
+      style={{ width: 6, height: 6, borderRadius: 'var(--radius-full)', background: 'var(--text-dim)', flexShrink: 0, opacity: 0.6 }}
+    />
+  );
+}
+
+function WindowMenuRow({ w, isCurrent, onSelect }: { w: Window; isCurrent: boolean; onSelect: () => void }) {
+  const { t } = useTranslation('workspace');
+  const { windowIndicator } = useAgentActivity();
+  const status = windowIndicator(w.serverName, w.tmuxTarget);
+  const isWorking = status === 'working' || status === 'blocked';
+
+  return (
+    <button type="button" onClick={onSelect} className="row-hover" style={{ ...rowStyle, justifyContent: 'flex-start', gap: 10 }}>
+      <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 12, flexShrink: 0 }}>
+        {isWorking ? <BrailleSpinner /> : <IdleDot />}
+      </span>
+      <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', flexShrink: 0 }}>
+        <AgentIcon workerType={w.workerType} windowType={w.windowType} size={15} />
+      </span>
+      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {w.label || w.tmuxTarget}
+      </span>
+      {isCurrent && (
+        <span aria-label={t('taskDetailMenu.currentWindow')} style={{ display: 'inline-flex', color: 'var(--accent)', flexShrink: 0 }}>
+          <Icon name="check" size={16} />
+        </span>
+      )}
+    </button>
+  );
+}
+
 /**
  * SP タスク詳細 ⋯ フルサイズメニュー（Issue #69 S8）。MobileNavSheet と同文法の全画面シート
  * — 「ステータス」「表示」「タブ操作」の3節。表示節の各行はコンテンツ直置きを禁止し、すべて
@@ -95,7 +146,7 @@ function MenuRow({ label, value, onClick, danger }: { label: string; value?: Rea
 export default function TaskDetailMenu({
   open, onClose, task, unitName, hasUnit, actions, diffPath, diffServerName, browserCount,
   onStatusChange, onOpenDescription, onOpenUnit, onOpenCommits, onOpenDiff, onOpenBrowser,
-  isPinned, onTogglePin, onCloseTab,
+  isPinned, onTogglePin, onCloseTab, windows, focusedWindowTarget, onSelectWindow, onOpenAddWindow,
 }: TaskDetailMenuProps) {
   const { t } = useTranslation(['tasks', 'workspace', 'common']);
   const [commitCount, setCommitCount] = useState<number | null>(null);
@@ -226,6 +277,40 @@ export default function TaskDetailMenu({
               />
             )}
           </div>
+
+          {(windows.length > 0 || onOpenAddWindow) && (
+            <>
+              <div style={sectionLabelStyle}>{t('workspace:taskDetailMenu.windows')}</div>
+              <div style={{ paddingBottom: 4 }}>
+                {windows.map((w) => {
+                  const isCurrent = !!focusedWindowTarget
+                    && focusedWindowTarget.serverName === w.serverName
+                    && isSameWindowTarget(focusedWindowTarget.target, w.tmuxTarget);
+                  return (
+                    <WindowMenuRow
+                      key={w.id}
+                      w={w}
+                      isCurrent={isCurrent}
+                      onSelect={() => { onSelectWindow(w.serverName, w.tmuxTarget); onClose(); }}
+                    />
+                  );
+                })}
+                {onOpenAddWindow && (
+                  <button
+                    type="button"
+                    onClick={() => { onOpenAddWindow(); onClose(); }}
+                    className="row-hover"
+                    style={{ ...rowStyle, justifyContent: 'flex-start', gap: 10, color: 'var(--accent)' }}
+                  >
+                    <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 12, flexShrink: 0 }}>
+                      <Icon name="plus" size={14} />
+                    </span>
+                    <span>{t('workspace:windows.addWindow')}</span>
+                  </button>
+                )}
+              </div>
+            </>
+          )}
 
           <div style={sectionLabelStyle}>{t('workspace:taskDetailMenu.tabActions')}</div>
           <div style={{ paddingBottom: 8 }}>
