@@ -1,9 +1,10 @@
-import { useEffect, useRef, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../ui/Icon';
 import { QuickActionButtons, type QuickActionButton } from '../ui/QuickActionButtons';
 import { TerminalChatToggle, type WindowViewMode } from '../ui/TerminalChatToggle';
 import { claimFooterHeight, releaseFooterHeight } from '../../lib/spFooterHeight';
+import { KEYBOARD_HEIGHT_THRESHOLD } from '../../hooks/useVirtualKeyboard';
 
 // SP文脈フッター高の公開オーナー名（lib/spFooterHeight.ts）。このバー自身が実測高を
 // claim/release する（Issue #338 T1: 「フッターを実際に描画しているコンポーネント自身」
@@ -74,6 +75,9 @@ export function TerminalQuickKeyBar({ onSendKey, keyboardOpen, onToggleKeyboard,
   // マウント中は実測高（safe-area 込みのボーダーボックス）を --sp-footer-h として公開し、
   // アンマウント時は自分がオーナーの場合のみ解放する。このバーは isMobile かつ端末ビューの
   // ときだけ TerminalContainer から条件付きマウントされるため、表示条件の判定はここでは行わない。
+  // ソフトキーボード表示中にバーの位置（position: fixed / bottom オフセット）を切り替えても
+  // 実測高そのものは変わらないため、この claim/release はキーボード追従（下の
+  // keyboardBottom state）と独立して動作する。
   useEffect(() => {
     const el = barRef.current;
     if (!el) return undefined;
@@ -85,6 +89,50 @@ export function TerminalQuickKeyBar({ onSendKey, keyboardOpen, onToggleKeyboard,
     return () => {
       observer.disconnect();
       releaseFooterHeight(FOOTER_HEIGHT_OWNER);
+    };
+  }, []);
+
+  // ソフトキーボード追従（Issue #338 T9 #4）。このバーは通常、TerminalContainer の flex 末尾
+  // に画面下端固定として置かれているだけ（position: fixed ではない）— ソフトキーボードが開くと
+  // visualViewport は縮むがレイアウトビューポート（100dvh 等）は縮まないブラウザが多く、この
+  // バーはキーボードの裏に隠れてしまう。旧 XTermView（削除済み、Issue #69 T3 以前）が端末本体の
+  // 高さをこの同じ visualViewport resize/scroll 監視で追従させていたのと同じ手法を、今度は
+  // バー自身の位置に適用する: キーボード出現中（shrink >= KEYBOARD_HEIGHT_THRESHOLD）は
+  // position: fixed に切り替え、bottom を「レイアウトビューポート下端から visualViewport 下端
+  // までの距離」（≈ キーボード高）に設定してキーボード直上に浮かせる。閉じたら通常の
+  // 画面下端固定（in-flow）に戻す。resize/scroll はキーボード開閉アニメーション中に連続発火
+  // するため、XTermView と同じく最後のイベントから120ms後に1回だけ確定する。
+  const [keyboardBottom, setKeyboardBottom] = useState<number | null>(null);
+  useEffect(() => {
+    if (!window.visualViewport) return undefined;
+    const vp = window.visualViewport;
+    let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const applyViewport = () => {
+      const shrink = window.innerHeight - vp.height;
+      if (shrink >= KEYBOARD_HEIGHT_THRESHOLD) {
+        setKeyboardBottom(Math.max(window.innerHeight - (vp.offsetTop + vp.height), 0));
+      } else {
+        setKeyboardBottom(null);
+      }
+    };
+
+    const onResize = () => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(applyViewport, 120);
+    };
+
+    vp.addEventListener('resize', onResize);
+    vp.addEventListener('scroll', onResize);
+    // 一部ブラウザはキーボード収納時に visualViewport の resize を発火せず
+    // window の resize しか飛ばさないため、フォールバックとして window resize も監視する
+    window.addEventListener('resize', onResize);
+    return () => {
+      clearTimeout(debounceTimer);
+      vp.removeEventListener('resize', onResize);
+      vp.removeEventListener('scroll', onResize);
+      window.removeEventListener('resize', onResize);
+      setKeyboardBottom(null);
     };
   }, []);
 
@@ -100,8 +148,11 @@ export function TerminalQuickKeyBar({ onSendKey, keyboardOpen, onToggleKeyboard,
         minHeight: 44,
         flexShrink: 0,
         padding: 'var(--space-2)',
-        paddingBottom: 'calc(var(--space-2) + env(safe-area-inset-bottom))',
+        paddingBottom: keyboardBottom !== null ? 'var(--space-2)' : 'calc(var(--space-2) + env(safe-area-inset-bottom))',
         background: 'var(--bg-card)',
+        ...(keyboardBottom !== null
+          ? { position: 'fixed', left: 0, right: 0, bottom: keyboardBottom, zIndex: 60, boxShadow: 'var(--shadow-2)' }
+          : null),
       }}
     >
       {viewMode !== undefined && onChangeViewMode && (

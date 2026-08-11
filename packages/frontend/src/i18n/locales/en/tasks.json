@@ -78,6 +78,7 @@
   "contextMenu": {
     "showView": "Show {{view}}",
     "browser": "Browser",
+    "addBrowser": "Add browser",
     "cannotResolveServer": "Cannot resolve server",
     "addWindow": "Add Window",
     "closeTab": "Close tab"
