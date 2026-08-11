@@ -118,7 +118,9 @@ export function TerminalQuickKeyBar({ onSendKey, keyboardOpen, onToggleKeyboard,
         minHeight: 44,
         flexShrink: 0,
         padding: 'var(--space-2)',
-        paddingBottom: keyboardBottom !== null ? 'var(--space-2)' : 'calc(var(--space-2) + env(safe-area-inset-bottom))',
+        // safe-area は下段の MobileStatusBar が一括確保する（Issue #338 T13）。キーボード表示中は
+        // キーボード自体が safe-area を覆うため、この分岐はどちらも通常の padding のままでよい
+        paddingBottom: 'var(--space-2)',
         background: 'var(--bg-card)',
         ...(keyboardBottom !== null
           ? { position: 'fixed', left: 0, right: 0, bottom: keyboardBottom, zIndex: 60, boxShadow: 'var(--shadow-2)' }

@@ -187,7 +187,8 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
         flexShrink: 0,
         borderTop: '1px solid var(--border)',
         background: 'var(--bg-card)',
-        padding: '8px 16px calc(8px + env(safe-area-inset-bottom))',
+        // safe-area は下段の MobileStatusBar が一括確保する（Issue #338 T13）
+        padding: '8px 16px',
       }}
     >
       {/* 復元注記はレイアウト幅に影響させないよう、バー上に絶対配置の1.5秒オーバーレイとして表示する（F2/SP狭幅対策）。 */}

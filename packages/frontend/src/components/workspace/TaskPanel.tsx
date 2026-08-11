@@ -270,7 +270,8 @@ function MobileContextFooter({ value, onChange, disabled }: { value: TerminalCha
     <div
       style={{
         display: 'flex', alignItems: 'center', flexShrink: 0,
-        padding: 'var(--space-2)', paddingBottom: 'calc(var(--space-2) + env(safe-area-inset-bottom))',
+        // safe-area は下段の MobileStatusBar が一括確保する（Issue #338 T13）
+        padding: 'var(--space-2)',
         background: 'var(--bg-card)',
       }}
     >
