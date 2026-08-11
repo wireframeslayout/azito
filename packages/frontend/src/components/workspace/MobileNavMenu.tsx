@@ -128,7 +128,10 @@ const switchLabelStyle: CSSProperties = {
 };
 
 function selectionDotStyle(color?: string | null): CSSProperties {
-  return { width: 8, height: 8, borderRadius: 'var(--radius-full)', background: color || 'var(--border)', flexShrink: 0 };
+  // 既存のプロジェクト色解決（WorkspaceLayout のプロジェクトアバター等）と同じく project.color を
+  // そのまま使う。色未定義時は --border だと --input-bg 面でほぼ見えないため、視認できる
+  // --text-dim にフォールバックする（Issue #338 T11 オーケストレーター照合フィードバック）。
+  return { width: 8, height: 8, borderRadius: 'var(--radius-full)', background: color || 'var(--text-dim)', flexShrink: 0 };
 }
 
 /**
