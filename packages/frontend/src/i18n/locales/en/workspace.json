@@ -171,9 +171,8 @@
     "pinToastUnpinned": "Unpinned"
   },
   "mobileNav": {
-    "sectionProject": "Project",
-    "sectionGlobal": "Global",
-    "sectionUtility": "Utility",
+    "sectionGlobal": "AZITO",
+    "switchLabel": "Switch",
     "projectSwitch": "Switch project",
     "activePanesRow": "Active panes",
     "settingsRow": "AZITO Settings"

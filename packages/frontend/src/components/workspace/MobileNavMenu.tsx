@@ -1,7 +1,6 @@
 import type { CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon, type IconName } from '../ui/Icon';
-import { HealthDot, type DotLevel } from '../statusbar/HealthDot';
 import { GLOBAL_NAV_ITEMS, SETTINGS_NAV_ITEM } from './globalNavItems';
 import type { SidebarMode } from '../../pages/workspace/types';
 
@@ -19,7 +18,17 @@ const PROJECT_MODE_ROWS: ProjectModeRow[] = [
   { mode: 'storage', icon: 'storage', labelKey: 'workspace:menu.storage' },
 ];
 
+interface MobileNavMenuProject {
+  id: number;
+  name: string;
+  color?: string | null;
+}
+
 interface MobileNavMenuProps {
+  /** カード内 選択行に出す現在プロジェクト（色ドット・名前）。Issue #338 T11 G1: カード封筒化。 */
+  project: MobileNavMenuProject | null;
+  /** 選択行「切替 ⌄」タップ時。従来通り MobileNavSheet 側の projectSwitch スタックへ push する。 */
+  onOpenProjectSwitch: () => void;
   /** 「オブジェクト」行の右端メタ（総件数）。モック S6/M1 準拠。 */
   objectsCount: number;
   onSelectMode: (mode: SidebarMode) => void;
@@ -32,9 +41,6 @@ interface MobileNavMenuProps {
   onOpenActiveWindows?: () => void;
   activeWindowsCount?: number;
   activeWindowsBlockedCount?: number;
-  /** サーバーヘルス。MobileNavSheet 側で ServerHealthSheet（Issue #69 T6）を開く。 */
-  onOpenServerHealth: () => void;
-  serverHealth?: DotLevel;
 }
 
 // モック（S6/M1）は行高36〜40px・節間の余白も詰まっている。タップターゲットは本来44pxが
@@ -76,79 +82,138 @@ const rowLabelStyle: CSSProperties = {
 
 const rowMetaStyle: CSSProperties = { color: 'var(--text-dim)', fontSize: 'var(--font-xs)', flexShrink: 0 };
 
+// プロジェクトカード（Issue #338 T11 G1: mock-s910-00 準拠）。カード面は --bg-card、内側最上段の
+// 選択行は --input-bg で一段明るくして押下可能であることを示す。
+const projectCardStyle: CSSProperties = {
+  background: 'var(--bg-card)',
+  borderRadius: 'var(--radius-lg)',
+  padding: 'var(--space-2)',
+  marginBottom: 4,
+};
+
+const selectionRowStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  width: '100%',
+  minHeight: 40,
+  padding: '0 10px',
+  marginBottom: 4,
+  border: 'none',
+  background: 'var(--input-bg)',
+  borderRadius: 'var(--radius-md)',
+  cursor: 'pointer',
+  color: 'var(--text)',
+  textAlign: 'left',
+  fontFamily: 'inherit',
+  fontSize: 'var(--font-md)',
+};
+
+const selectionNameStyle: CSSProperties = {
+  fontWeight: 600,
+  flex: 1,
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+const switchLabelStyle: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 2,
+  flexShrink: 0,
+  color: 'var(--text-dim)',
+  fontSize: 'var(--font-xs)',
+};
+
+function selectionDotStyle(color?: string | null): CSSProperties {
+  return { width: 8, height: 8, borderRadius: 'var(--radius-full)', background: color || 'var(--border)', flexShrink: 0 };
+}
+
 /**
- * SP の ≡ メニュー本体（M1 リスト、Issue #69 T1）。プロジェクト／グローバル／ユーティリティの
- * 3節。行タップの遷移（モード内容へ push・プロジェクト切替へ push・実体ナビゲーション）は
- * 呼び出し元（MobileNavSheet）のスタック管理に委ねる — このコンポーネント自体は状態を持たない。
+ * SP の ≡ メニュー本体（Issue #338 T11 G1: プロジェクトカード封筒化）。カード（プロジェクト内の
+ * 選択行＋モード行）と AZITO 全体（サーバー/ユニット/サイドキック/稼働ペイン一覧/AZITO設定）の
+ * 2区画構成。サーバーヘルス行は削除済み（P1 でフローティングピルに同梱、ServerHealthSheet 自体は
+ * 起動元がピルに変わるだけで存置）。行タップの遷移（モード内容へ push・プロジェクト切替へ push・
+ * 実体ナビゲーション）は呼び出し元（MobileNavSheet）のスタック管理に委ねる — このコンポーネント
+ * 自体は状態を持たない。
  */
 export function MobileNavMenu({
+  project,
+  onOpenProjectSwitch,
   objectsCount,
   onSelectMode,
   onNavigateGlobal,
   onOpenActiveWindows,
   activeWindowsCount,
   activeWindowsBlockedCount,
-  onOpenServerHealth,
-  serverHealth,
 }: MobileNavMenuProps) {
   const { t } = useTranslation(['workspace', 'projects', 'common']);
 
   return (
     <div style={{ padding: '0 4px 16px' }}>
-      <div style={sectionLabelStyle}>{t('workspace:mobileNav.sectionProject')}</div>
-      {PROJECT_MODE_ROWS.map((row) => (
-        <button key={row.mode} type="button" onClick={() => onSelectMode(row.mode)} style={rowStyle} className="glass-popover-item">
-          <Icon name={row.icon} size={16} style={rowIconStyle} />
-          <span style={rowLabelStyle}>{t(row.labelKey)}</span>
-          {row.mode === 'windows' && <span style={rowMetaStyle}>{objectsCount}</span>}
+      <div style={projectCardStyle}>
+        <button type="button" onClick={onOpenProjectSwitch} style={selectionRowStyle} className="glass-popover-item">
+          <span aria-hidden="true" style={selectionDotStyle(project?.color)} />
+          <span style={selectionNameStyle}>{project?.name || ''}</span>
+          <span style={switchLabelStyle}>
+            {t('workspace:mobileNav.switchLabel')}
+            <Icon name="chevron-down" size={14} />
+          </span>
         </button>
-      ))}
-      <button type="button" onClick={() => onSelectMode('settings')} style={rowStyle} className="glass-popover-item">
-        <Icon name="settings" size={16} style={rowIconStyle} />
-        <span style={rowLabelStyle}>{t('workspace:sidebar.projectSettings')}</span>
-      </button>
+
+        {/* プロジェクト切替時、カード内容をフェードで差し替える（key で強制remountしてCSS
+            アニメーションを再生。prefers-reduced-motion では global.css 側で無効化）。 */}
+        <div key={project?.id ?? 'none'} className="mobile-nav-card-body">
+          {PROJECT_MODE_ROWS.map((row) => (
+            <button key={row.mode} type="button" onClick={() => onSelectMode(row.mode)} style={rowStyle} className="glass-popover-item">
+              <Icon name={row.icon} size={16} style={rowIconStyle} />
+              <span style={rowLabelStyle}>{t(row.labelKey)}</span>
+              {row.mode === 'windows' && <span style={rowMetaStyle}>{objectsCount}</span>}
+            </button>
+          ))}
+          <button type="button" onClick={() => onSelectMode('settings')} style={rowStyle} className="glass-popover-item">
+            <Icon name="settings" size={16} style={rowIconStyle} />
+            <span style={rowLabelStyle}>{t('workspace:sidebar.projectSettings')}</span>
+          </button>
+        </div>
+      </div>
 
       <div style={sectionLabelStyle}>{t('workspace:mobileNav.sectionGlobal')}</div>
-      {[...GLOBAL_NAV_ITEMS, SETTINGS_NAV_ITEM].map((item) => (
+      {GLOBAL_NAV_ITEMS.map((item) => (
         <button key={item.path} type="button" onClick={() => onNavigateGlobal(item.path)} style={rowStyle} className="glass-popover-item">
           <Icon name={item.icon} size={16} style={rowIconStyle} />
           <span style={rowLabelStyle}>{t(item.labelKey)}</span>
         </button>
       ))}
-
-      <>
-          <div style={sectionLabelStyle}>{t('workspace:mobileNav.sectionUtility')}</div>
-          {onOpenActiveWindows && (
-            <button
-              type="button"
-              onClick={onOpenActiveWindows}
-              style={rowStyle}
-              className="glass-popover-item"
-              aria-label={(activeWindowsCount ?? 0) > 0
-                ? t('workspace:activeWindows.titleWithCount', { count: activeWindowsCount })
-                : t('workspace:mobileNav.activePanesRow')}
-            >
-              {/* 「オブジェクト」行（grid アイコン）と見分けがつくよう、稼働状況を示す
-                  activity（波形）系アイコンを使う。 */}
-              <Icon name="operations" size={16} style={rowIconStyle} />
-              <span style={rowLabelStyle}>{t('workspace:mobileNav.activePanesRow')}</span>
-              {(activeWindowsCount ?? 0) > 0 && <span style={rowMetaStyle}>{activeWindowsCount}</span>}
-              {(activeWindowsBlockedCount ?? 0) > 0 && (
-                <span
-                  aria-hidden="true"
-                  style={{ width: 8, height: 8, borderRadius: 'var(--radius-full)', background: 'var(--danger)', flexShrink: 0 }}
-                />
-              )}
-            </button>
+      {onOpenActiveWindows && (
+        <button
+          type="button"
+          onClick={onOpenActiveWindows}
+          style={rowStyle}
+          className="glass-popover-item"
+          aria-label={(activeWindowsCount ?? 0) > 0
+            ? t('workspace:activeWindows.titleWithCount', { count: activeWindowsCount })
+            : t('workspace:mobileNav.activePanesRow')}
+        >
+          {/* 「オブジェクト」行（grid アイコン）と見分けがつくよう、稼働状況を示す
+              activity（波形）系アイコンを使う。 */}
+          <Icon name="operations" size={16} style={rowIconStyle} />
+          <span style={rowLabelStyle}>{t('workspace:mobileNav.activePanesRow')}</span>
+          {(activeWindowsCount ?? 0) > 0 && <span style={rowMetaStyle}>{activeWindowsCount}</span>}
+          {(activeWindowsBlockedCount ?? 0) > 0 && (
+            <span
+              aria-hidden="true"
+              style={{ width: 8, height: 8, borderRadius: 'var(--radius-full)', background: 'var(--danger)', flexShrink: 0 }}
+            />
           )}
-          <button type="button" onClick={onOpenServerHealth} style={rowStyle} className="glass-popover-item">
-            {/* アイコン枠には常に同一の activity 系アイコンを置き、健康状態の色ドットは右端メタ
-                位置へ分離する（アイコン列にドットのみが混ざると他行と不揃いになるため）。 */}
-            <Icon name="chip" size={16} style={rowIconStyle} />
-            <span style={rowLabelStyle}>{t('workspace:mobile.serverHealth')}</span>
-            {serverHealth && <HealthDot level={serverHealth} size={10} />}
-          </button>
-      </>
+        </button>
+      )}
+      <button key={SETTINGS_NAV_ITEM.path} type="button" onClick={() => onNavigateGlobal(SETTINGS_NAV_ITEM.path)} style={rowStyle} className="glass-popover-item">
+        <Icon name={SETTINGS_NAV_ITEM.icon} size={16} style={rowIconStyle} />
+        <span style={rowLabelStyle}>{t(SETTINGS_NAV_ITEM.labelKey)}</span>
+      </button>
     </div>
   );
 }

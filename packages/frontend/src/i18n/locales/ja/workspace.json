@@ -171,9 +171,8 @@
     "pinToastUnpinned": "ピン止めを解除しました"
   },
   "mobileNav": {
-    "sectionProject": "プロジェクト",
-    "sectionGlobal": "グローバル",
-    "sectionUtility": "ユーティリティ",
+    "sectionGlobal": "AZITO 全体",
+    "switchLabel": "切替",
     "projectSwitch": "プロジェクトを切替",
     "activePanesRow": "稼働ペイン一覧",
     "settingsRow": "AZITO設定"

@@ -4,8 +4,6 @@ import { useNavigate } from 'react-router-dom';
 import { Icon } from '../ui/Icon';
 import { MobileNavMenu } from './MobileNavMenu';
 import { MobileActiveWindowsPanel } from './MobileActiveWindowsPanel';
-import { ServerHealthSheet } from './ServerHealthSheet';
-import { getHealthLevel, getWorstHealth, useServerResourcesContext } from '../../hooks/useServerResources';
 import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
 import { paths } from '../../paths';
 import type { SidebarMode } from '../../pages/workspace/types';
@@ -79,11 +77,9 @@ export function MobileNavSheet({
   const navigate = useNavigate();
   const [stack, setStack] = useState<StackEntry[]>(['menu']);
   const [activeWindowsOpen, setActiveWindowsOpen] = useState(false);
-  const [healthOpen, setHealthOpen] = useState(false);
 
-  const servers = useServerResourcesContext();
-  const worstHealth = getWorstHealth(servers.map((s) => getHealthLevel(s.measurement)));
   const { totalCount: awCount, blockedCount: awBlockedCount } = useActiveWindowRows();
+  const currentProjectItem = allProjects.find((p) => p.id === project?.id) ?? null;
 
   // シートを開き直すたびにメニュー階層をリセットする（前回どこまで潜っていたかを持ち越さない）。
   useEffect(() => {
@@ -103,12 +99,12 @@ export function MobileNavSheet({
     setStack(['menu']);
   };
 
-  // サーバーヘルス／稼働ペイン一覧を開いたらナビゲーションシート自体は閉じる
-  // （モック準拠の「実体オープンでシートを閉じる」に倣う）。
+  // 稼働ペイン一覧を開いたらナビゲーションシート自体は閉じる
+  // （モック準拠の「実体オープンでシートを閉じる」に倣う）。サーバーヘルスは Issue #338 T11 P1
+  // でフローティングピル側に移設したため、ここでは開かない。
   const handleOpenActiveWindows = connectPane && openTask
     ? () => { onClose(); setActiveWindowsOpen(true); }
     : undefined;
-  const handleOpenServerHealth = () => { onClose(); setHealthOpen(true); };
 
   const top = stack[stack.length - 1];
   const depth = stack.length;
@@ -151,20 +147,11 @@ export function MobileNavSheet({
                   </span>
                 </button>
               ) : (
-                <button
-                  type="button"
-                  onClick={() => push('projectSwitch')}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0,
-                    background: 'none', border: 'none', cursor: 'pointer', padding: 0,
-                    color: 'var(--text)', textAlign: 'left',
-                  }}
-                >
-                  <span style={{ fontSize: 'var(--font-base)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {project?.name || ''}
-                  </span>
-                  <span style={{ color: 'var(--text-dim)', flexShrink: 0, display: 'inline-flex' }}><Icon name="chevron-down" size={14} /></span>
-                </button>
+                // Issue #338 T11 G1: プロジェクト切替の起点はカード内選択行に移設したため、
+                // トップレベルのヘッダーは静的な「メニュー」タイトルのみ（mock-s910-00 準拠）。
+                <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--font-base)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {t('workspace:mobile.menu')}
+                </span>
               )}
               <button
                 type="button"
@@ -183,14 +170,14 @@ export function MobileNavSheet({
             <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
               {top === 'menu' && (
                 <MobileNavMenu
+                  project={project ? { id: project.id, name: project.name, color: currentProjectItem?.color } : null}
+                  onOpenProjectSwitch={() => push('projectSwitch')}
                   objectsCount={objectsCount}
                   onSelectMode={handleSelectMode}
                   onNavigateGlobal={(path) => { navigate(path); onClose(); }}
                   onOpenActiveWindows={handleOpenActiveWindows}
                   activeWindowsCount={awCount}
                   activeWindowsBlockedCount={awBlockedCount}
-                  onOpenServerHealth={handleOpenServerHealth}
-                  serverHealth={worstHealth}
                 />
               )}
               {top === 'mode' && sidebarContent}
@@ -215,8 +202,6 @@ export function MobileNavSheet({
           taskWindows={taskWindows ?? []}
         />
       )}
-
-      <ServerHealthSheet open={healthOpen} onClose={() => setHealthOpen(false)} />
     </>
   );
 }

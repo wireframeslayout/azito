@@ -615,6 +615,15 @@ button:focus-within .diff-open-btn {
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
 }
 
+/* ---- SP ≡ メニュー: プロジェクトカード（Issue #338 T11 G1） ---- */
+@keyframes azito-nav-card-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.mobile-nav-card-body {
+  animation: azito-nav-card-fade 0.15s ease;
+}
+
 /* ---- Mobile keyboard control overlay ---- */
 .kbd-key {
   border: none;
@@ -639,7 +648,8 @@ button:focus-within .diff-open-btn {
   .notification-bell-btn,
   .notification-row,
   .server-health-sheet,
-  .terminal-loading-overlay {
+  .terminal-loading-overlay,
+  .mobile-nav-card-body {
     transition: none !important;
     animation: none !important;
   }
