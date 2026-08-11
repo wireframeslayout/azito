@@ -112,8 +112,12 @@ function IdleDot() {
 
 function WindowMenuRow({ w, isCurrent, onSelect }: { w: Window; isCurrent: boolean; onSelect: () => void }) {
   const { t } = useTranslation('workspace');
-  const { windowIndicator } = useAgentActivity();
-  const status = windowIndicator(w.serverName, w.tmuxTarget);
+  // windowIndicator は「現在フォーカス中のウィンドウの表示抑制」+ activityKey の完全一致照合の
+  // ため、表示中の稼働ウィンドウが待機ドットに誤判定される（Issue #338 レビュー指摘）。この節は
+  // 抑制不要な単純な稼働状態表示なので、抑制なし・pane サフィックス正規化済みの activityStatus
+  // を使う。
+  const { activityStatus } = useAgentActivity();
+  const status = activityStatus(w.serverName, w.tmuxTarget);
   const isWorking = status === 'working' || status === 'blocked';
 
   return (

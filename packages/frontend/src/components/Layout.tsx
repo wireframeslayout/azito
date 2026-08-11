@@ -47,8 +47,14 @@ export default function Layout() {
                 自身のチップ行・ナビシート・タブスイッチャーシートをここへ createPortal する。
                 グローバルページ表示中に Workspace 自身のサブツリーが display:none で隠れても、
                 このスロットは常設（flex column の最上段）のため隠れない。SP 以外は空のまま
-                （中身が mobile 限定のため高さゼロ、既存デスクトップ表示に影響しない）。 */}
-            <div id={MOBILE_SHELL_SLOT_ID} style={{ flexShrink: 0, position: 'relative', zIndex: 51 }} />
+                （中身が mobile 限定のため高さゼロ、既存デスクトップ表示に影響しない）。
+                zIndex は付けない: このスロット自体に z-index を持たせるとここが独自の
+                stacking context になり、下（コンテンツ側）で position:fixed の全画面シート
+                （TaskDetailMenu 等、このスロットの外＝タスクパネル側でレンダーされる）が
+                どれだけ高い z-index を積んでも、スロット全体の背後に埋もれてしまう
+                （Issue #338 レビュー指摘）。チップ行自体は position:fixed で全画面を覆わない
+                ため z-index 不要 — 各シート側が自身の z-index で正しく前面に出る。 */}
+            <div id={MOBILE_SHELL_SLOT_ID} style={{ flexShrink: 0, position: 'relative' }} />
             <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
               <div style={{ display: isGlobal ? 'none' : 'contents' }}>
                 <Suspense fallback={<LoadingState />}>

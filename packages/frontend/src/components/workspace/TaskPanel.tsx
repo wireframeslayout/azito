@@ -1363,6 +1363,13 @@ export default function TaskPanel({
       ? lastMobileWindowTabIdRef.current
       : windowTabIdsList[0]);
 
+  // ⋯ メニューの「現在のウィンドウ」✓ 行判定用フォールバック（Issue #338 レビュー指摘）:
+  // focusedWindowTarget は説明/Unit/コミット等の情報ビュー表示中は null になる（フォーカス
+  // ペインのアクティブタブがウィンドウタブでないため）。その間も直前まで表示していたウィンドウ
+  // （mobileDisplayedWindowTabId）を解決して渡し、✓ が消えないようにする。
+  const parsedMobileDisplayedWindow = mobileDisplayedWindowTabId ? parseWindowTabId(mobileDisplayedWindowTabId) : null;
+  const mobileDisplayedWindowTarget = parsedMobileDisplayedWindow ? resolveWindowTabTarget(parsedMobileDisplayedWindow) : null;
+
   if (!task) return <div style={{ padding: 24, color: 'var(--text-dim)', background: 'var(--ws-surface)', height: '100%' }}>{t('detail.notFound')}</div>;
 
   const backButton = onBack && (
@@ -1850,7 +1857,7 @@ export default function TaskPanel({
           onTogglePin={() => togglePin?.(ownTabId)}
           onCloseTab={() => closeTab?.(ownTabId)}
           windows={windows}
-          focusedWindowTarget={focusedWindowTarget}
+          focusedWindowTarget={focusedWindowTarget ?? mobileDisplayedWindowTarget}
           onSelectWindow={(serverName, target) => handleMobileSelect(windowTabId(serverName, target))}
           onOpenAddWindow={onOpenAddWindow ? () => onOpenAddWindow(true, task?.projectId, taskId) : undefined}
         />
