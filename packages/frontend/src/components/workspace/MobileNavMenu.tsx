@@ -103,6 +103,10 @@ export function MobileNavMenu({
           {row.mode === 'windows' && <span style={rowMetaStyle}>{objectsCount}</span>}
         </button>
       ))}
+      <button type="button" onClick={() => onSelectMode('settings')} style={rowStyle} className="glass-popover-item">
+        <Icon name="settings" size={16} style={rowIconStyle} />
+        <span style={rowLabelStyle}>{t('workspace:sidebar.projectSettings')}</span>
+      </button>
 
       <div style={sectionLabelStyle}>{t('workspace:mobileNav.sectionGlobal')}</div>
       {[...GLOBAL_NAV_ITEMS, SETTINGS_NAV_ITEM].map((item) => (
