@@ -40,6 +40,24 @@ const TAIL_ENTRY_LIMIT = 500;
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SESSION_FILE_PATTERN = /^rollout-.+-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
 /**
+ * ファイル名先頭の作成時刻部分（`rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl`）。実データ確認:
+ * この時刻はファイル作成時のローカル時刻（system timezone）で、UTC ではない
+ * （コロンがファイル名に使えないため `-` に置換されているのみで、タイムゾーン情報は無い）。
+ * そのため Date.UTC ではなく `new Date(y, m-1, d, h, mi, s)`（ローカル時刻として解釈）で
+ * epoch ms に変換する必要がある — プロセス起動時刻（同一マシンのローカル時刻基準）と比較するため。
+ */
+const SESSION_FILE_TIMESTAMP_PATTERN =
+  /^rollout-(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/i;
+
+/** ファイル名から作成時刻（epoch ms）を取り出す。パターン不一致・不正な日時なら null。 */
+function parseCreatedMsFromFilename(file: string): number | null {
+  const match = SESSION_FILE_TIMESTAMP_PATTERN.exec(path.basename(file));
+  if (!match) return null;
+  const [, year, month, day, hour, minute, second] = match;
+  const ms = new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second)).getTime();
+  return Number.isNaN(ms) ? null : ms;
+}
+/**
  * Codex CLI が role=user の message に自動注入する定型テキストのプレフィックス（実データで確認）。
  * `<environment_context>`（毎ターン注入のcwd/日時情報）、`<recommended_plugins>`（未インストールプラグイン一覧）、
  * `<turn_aborted>`（中断通知）、`# AGENTS.md instructions`（AGENTS.md の自動読み込み）。
@@ -437,6 +455,12 @@ export class CodexTranscriptSource implements TranscriptSource {
     } catch {
       return null;
     }
+  }
+
+  getSessionCreatedMs(sessionId: string): number | null {
+    const file = this.findSessionFile(sessionId);
+    if (!file) return null;
+    return parseCreatedMsFromFilename(file);
   }
 
   readSession(sessionId: string, offset?: number): ReadSessionResult | null {

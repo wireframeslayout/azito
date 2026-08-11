@@ -55,6 +55,14 @@ const EXPLICIT_LINK_SKEW_MS = 180 * 1000;
  * 推測的な紐付けなので、厳格な猶予を維持する。
  */
 const CWD_MATCH_SKEW_MS = 15 * 1000;
+/**
+ * tier3 作成時刻一致の猶予（Issue #338 フォロー）: 「このプロセスが作ったセッション」を mtime の
+ * 古さに関わらず正当な候補として拾うための判定に使う。セッションの作成時刻がプロセス起動時刻の
+ * この範囲内であれば、そのプロセスが作ったセッションとみなす（アイドルで長時間 mtime が更新されて
+ * いない既存会話でも正しく拾える）。CWD_MATCH_SKEW_MS（mtime 側、15秒）より広く取る — こちらは
+ * 作成時刻という決定的に近い証拠を使うため、通常の起動オーバーヘッドのブレを許容してよい。
+ */
+const SESSION_CREATION_SKEW_MS = 5 * 60 * 1000;
 
 /**
  * プロセス起動時刻ゲート（Issue #338）の状態。resolve() の先頭で一度だけ計算し、window/task/cwd
@@ -229,8 +237,13 @@ export class WindowSessionResolver {
         // 生きている別種エージェントのセッション」が存在しても、そちらは mtime が新しいだけで
         // このウィンドウの実行体とは無関係なため拾わない。
         const allowedAgentTypes = gate.kind === 'detected' ? gate.agentTypes : null;
-        const cwdMatched = this.resolveViaCwdMatch(windowPanes, allowedAgentTypes);
-        if (cwdMatched && this.passesSessionGate(gate, cwdMatched.agentType, cwdMatched.sessionId, CWD_MATCH_SKEW_MS, psEntries, rootPids)) {
+        const processStartMs = gate.kind === 'detected' ? gate.processStartMs : null;
+        const cwdMatched = this.resolveViaCwdMatch(windowPanes, allowedAgentTypes, processStartMs);
+        // 作成時刻一致で採用した候補（cwdMatched.viaCreationMatch）は、mtime が古くても
+        // 「このプロセスが作ったセッション」という決定的な証拠で既に採用可否を判定済みなので、
+        // 通常の mtime ベースの passesSessionGate は再適用しない（適用すると古い mtime で
+        // 棄却されてしまい、この tier3 拡張の意味がなくなる）。
+        if (cwdMatched && (cwdMatched.viaCreationMatch || this.passesSessionGate(gate, cwdMatched.agentType, cwdMatched.sessionId, CWD_MATCH_SKEW_MS, psEntries, rootPids))) {
           const pane = await this.resolvePaneWithDetection(server, window, windowPanes, cwdMatched.sessionId, cwdMatched.agentType, psEntries);
           if (pane) {
             // tier3（cwd 照合フォールバック）でのみ解決結果を windows テーブルへ書き戻す（Issue #338）。
@@ -407,30 +420,57 @@ export class WindowSessionResolver {
   }
 
   /**
-   * 優先順位3: cwd 照合フォールバック。複数一致時は mtime 最新を採用。
+   * 優先順位3: cwd 照合フォールバック。
    * allowedAgentTypes が渡された場合（プロセス検出でこのウィンドウの実行体種別が判明している
    * 場合）、候補をその種別のソースに限定する（Issue #338フォロー）。同 cwd で別ウィンドウの
    * 別種エージェントが活動中でも、そのセッションは対象外にする — mtime だけで選ぶと、そちらが
    * より新しいというだけで誤って採用してしまう（実機報告: codex ペインに claude セッションが
    * 紐付く）。null（プロセス検出不能、gate.kind !== 'detected'）の場合は従来通り全ソース対象。
+   *
+   * 採用順位（Issue #338 フォロー）:
+   * 1. 作成時刻一致: processStartMs が判明していれば、候補の作成時刻がその ±SESSION_CREATION_SKEW_MS
+   *    以内のものを最優先で採用する（複数あれば最も近いもの）。「このプロセスが作ったセッション」なら
+   *    mtime がどれだけ古くても（アイドルで長時間書き込みが無くても）正当な候補 — 30分ルール
+   *    （RECENT_SESSION_WINDOW_MS）より優先する。呼び出し元に viaCreationMatch:true を返し、
+   *    通常の mtime ベースの起動時刻ゲート（passesSessionGate）を再適用させない。
+   * 2. mtime 最新: 上記が無ければ従来通り、直近 RECENT_SESSION_WINDOW_MS 以内で mtime 最新のものを
+   *    採用する（呼び出し元が passesSessionGate で追加検査する）。
    */
   private resolveViaCwdMatch(
     windowPanes: TmuxPaneInfo[],
     allowedAgentTypes: Set<'claude' | 'codex'> | null,
-  ): { agentType: string; sessionId: string } | null {
+    processStartMs: number | null,
+  ): { agentType: string; sessionId: string; viaCreationMatch: boolean } | null {
     const windowCwds = new Set(windowPanes.map((p) => p.currentPath).filter((cwd) => cwd.length > 0));
     if (windowCwds.size === 0) return null;
 
-    const candidates = this.sources
-      .filter((source) => allowedAgentTypes === null || allowedAgentTypes.has(source.agentType as 'claude' | 'codex'))
+    const eligibleSources = this.sources.filter(
+      (source) => allowedAgentTypes === null || allowedAgentTypes.has(source.agentType as 'claude' | 'codex'),
+    );
+    const candidates = eligibleSources
       .flatMap((source) => source.listSessions())
       .filter((session) => session.cwd !== null && windowCwds.has(session.cwd));
     if (candidates.length === 0) return null;
 
+    if (processStartMs !== null) {
+      let best: { agentType: string; sessionId: string; diffMs: number } | null = null;
+      for (const candidate of candidates) {
+        const source = eligibleSources.find((s) => s.agentType === candidate.agentType);
+        const createdMs = source?.getSessionCreatedMs(candidate.sessionId) ?? null;
+        if (createdMs === null) continue;
+        const diffMs = Math.abs(createdMs - processStartMs);
+        if (diffMs > SESSION_CREATION_SKEW_MS) continue;
+        if (best === null || diffMs < best.diffMs) {
+          best = { agentType: candidate.agentType, sessionId: candidate.sessionId, diffMs };
+        }
+      }
+      if (best) return { agentType: best.agentType, sessionId: best.sessionId, viaCreationMatch: true };
+    }
+
     const latest = candidates.reduce((a, b) => (b.mtimeMs > a.mtimeMs ? b : a));
     if (Date.now() - latest.mtimeMs > RECENT_SESSION_WINDOW_MS) return null;
 
-    return { agentType: latest.agentType, sessionId: latest.sessionId };
+    return { agentType: latest.agentType, sessionId: latest.sessionId, viaCreationMatch: false };
   }
 
   private async getWindowPanes(server: ServerConfig, window: Window): Promise<TmuxPaneInfo[]> {

@@ -65,4 +65,13 @@ export interface TranscriptSource {
    * セッションが存在しない、または stat に失敗した場合は null。
    */
   getSessionMtimeMs(sessionId: string): number | null;
+  /**
+   * セッションの作成時刻（epoch ms）。WindowSessionResolver の tier3（cwd 照合フォールバック、
+   * Issue #338 フォロー）が「このプロセスが作ったセッション」を mtime の古さに関わらず正当に
+   * 採用するために使う — 作成時刻がプロセス起動時刻の近傍なら、そのプロセスが作ったセッションと
+   * 判断できる（アイドルで mtime が更新されなくなっていても誤爆ではない）。セッションが存在しない、
+   * または作成時刻を取得できない場合は null（このときフォールバック採用は行わず、従来の mtime
+   * ベースの判定に委ねる）。
+   */
+  getSessionCreatedMs(sessionId: string): number | null;
 }

@@ -98,8 +98,10 @@ function buildDeps(opts: {
   claudeGetSessionCwd?: TranscriptSource['getSessionCwd'];
   claudeListSessions?: TranscriptSource['listSessions'];
   claudeGetSessionMtimeMs?: TranscriptSource['getSessionMtimeMs'];
+  claudeGetSessionCreatedMs?: TranscriptSource['getSessionCreatedMs'];
   codexListSessions?: TranscriptSource['listSessions'];
   codexGetSessionMtimeMs?: TranscriptSource['getSessionMtimeMs'];
+  codexGetSessionCreatedMs?: TranscriptSource['getSessionCreatedMs'];
 } = {}) {
   const taskRepo = {
     findById: opts.findById ?? (() => null),
@@ -124,6 +126,7 @@ function buildDeps(opts: {
     getSessionCwd: opts.claudeGetSessionCwd ?? (() => null),
     listSessions: opts.claudeListSessions ?? (() => []),
     getSessionMtimeMs: opts.claudeGetSessionMtimeMs ?? (() => null),
+    getSessionCreatedMs: opts.claudeGetSessionCreatedMs ?? (() => null),
   } as unknown as TranscriptSource;
 
   const codexSource = {
@@ -131,6 +134,7 @@ function buildDeps(opts: {
     getSessionCwd: () => null,
     listSessions: opts.codexListSessions ?? (() => []),
     getSessionMtimeMs: opts.codexGetSessionMtimeMs ?? (() => null),
+    getSessionCreatedMs: opts.codexGetSessionCreatedMs ?? (() => null),
   } as unknown as TranscriptSource;
 
   const sessionCaptureService = {
@@ -676,6 +680,46 @@ describe('WindowSessionResolver', () => {
       });
       const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
       // No window/task link at all, so this exercises tier3 (cwd match) only.
+      const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: null, workerType: null }));
+      expect(result).toEqual({ resolved: false, reason: 'no_recent_session', paneId: '%1', agentType: 'claude', agentDetected: true });
+    });
+
+    it('tier3 (cwd fallback) adopts a session whose mtime is very stale but whose creation time is within 5 minutes of the process start (Issue #338 follow-up: an idle existing conversation is legitimately this process\'s own session even if it stopped writing long ago)', async () => {
+      const panes: TmuxPaneInfo[] = [
+        { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
+      ];
+      const staleMtime = Date.now() - 2 * 60 * 60 * 1000; // 2 hours ago: far outside RECENT_SESSION_WINDOW_MS (30min)
+      const createdNearProcessStart = Date.now() - 10 * 1000; // matches the mocked process start (~10s ago)
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+        listAllPanes: async () => panes,
+        claudeListSessions: () => [
+          { sessionId: SID_CLAUDE, agentType: 'claude', projectDir: 'p', cwd: '/proj', mtimeMs: staleMtime, sizeBytes: 1, preview: '' },
+        ],
+        claudeGetSessionCreatedMs: (id) => (id === SID_CLAUDE ? createdNearProcessStart : null),
+        getPanePid: async () => 9000,
+        execCommand: async () => ({ stdout: PS_OUTPUT_RECENT_AGENT, stderr: '', code: 0 }),
+      });
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: null, workerType: null }));
+      expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
+    });
+
+    it('tier3 (cwd fallback) does not bypass the mtime gate when the session creation time is outside the 5-minute skew (stale-mtime rejection still applies)', async () => {
+      const panes: TmuxPaneInfo[] = [
+        { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
+      ];
+      const staleMtime = Date.now() - 60 * 1000; // 60s ago: older than (processStart(-10s) - 15s skew) = -25s
+      const createdLongBefore = Date.now() - 60 * 60 * 1000; // 1 hour before process start: outside the 5-minute skew
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+        listAllPanes: async () => panes,
+        claudeListSessions: () => [
+          { sessionId: SID_CLAUDE, agentType: 'claude', projectDir: 'p', cwd: '/proj', mtimeMs: staleMtime, sizeBytes: 1, preview: '' },
+        ],
+        claudeGetSessionCreatedMs: (id) => (id === SID_CLAUDE ? createdLongBefore : null),
+        getPanePid: async () => 9000,
+        execCommand: async () => ({ stdout: PS_OUTPUT_RECENT_AGENT, stderr: '', code: 0 }),
+      });
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
       const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: null, workerType: null }));
       expect(result).toEqual({ resolved: false, reason: 'no_recent_session', paneId: '%1', agentType: 'claude', agentDetected: true });
     });

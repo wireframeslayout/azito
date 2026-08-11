@@ -135,6 +135,32 @@ function scanSessionMeta(file: string, previewScanBytes: number): SessionScanRes
   return { preview, cwd };
 }
 
+/** ファイル先頭行の record.timestamp（ISO文字列）を epoch ms に変換する。読めなければ null。 */
+function readFirstLineTimestampMs(file: string): number | null {
+  let content: string;
+  try {
+    const fd = fs.openSync(file, 'r');
+    try {
+      content = readChunk(fd, fs.fstatSync(fd).size, 0, 4096).toString('utf-8');
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+  const firstLine = content.split('\n')[0];
+  if (!firstLine) return null;
+  let record: unknown;
+  try {
+    record = JSON.parse(firstLine);
+  } catch {
+    return null;
+  }
+  if (!isRecord(record) || typeof record.timestamp !== 'string') return null;
+  const ms = Date.parse(record.timestamp);
+  return Number.isNaN(ms) ? null : ms;
+}
+
 /** tool_result の content（文字列 or ブロック配列）を表示用テキストに変換する。 */
 function stringifyToolResultContent(content: unknown): string {
   if (typeof content === 'string') return content;
@@ -321,6 +347,24 @@ export class ClaudeTranscriptSource implements TranscriptSource {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * 作成時刻はまず stat の birthtime を試す。一部のファイルシステム（非対応 fs 等）では
+   * birthtimeMs が 0 のまま返る（Node の既知挙動）ため、その場合は先頭行の timestamp
+   * フィールド（record.timestamp、readSession 等と同じ形式）にフォールバックする。
+   */
+  getSessionCreatedMs(sessionId: string): number | null {
+    const file = this.findSessionFile(sessionId);
+    if (!file) return null;
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(file);
+    } catch {
+      return null;
+    }
+    if (stat.birthtimeMs > 0) return stat.birthtimeMs;
+    return readFirstLineTimestampMs(file);
   }
 
   readSession(sessionId: string, offset?: number): ReadSessionResult | null {

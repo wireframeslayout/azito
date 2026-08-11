@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -140,6 +140,50 @@ describe('ClaudeTranscriptSource', () => {
     it('returns { cwd: null } when the session exists but no line carries cwd', () => {
       writeSession(dir, 'proj-a', SID_A, [{ type: 'user', uuid: 'u1', message: { content: 'Hello' } }]);
       expect(service.getSessionCwd(SID_A)).toEqual({ cwd: null });
+    });
+  });
+
+  describe('getSessionCreatedMs', () => {
+    it('returns null for a non-UUID or nonexistent session', () => {
+      expect(service.getSessionCreatedMs('not-a-uuid')).toBeNull();
+      expect(service.getSessionCreatedMs(SID_A)).toBeNull();
+    });
+
+    it('returns the file birthtime when the filesystem supports it', () => {
+      const file = writeSession(dir, 'proj-a', SID_A, [{ type: 'user', uuid: 'u1', timestamp: '2026-01-01T00:00:00Z', message: { content: 'Hello' } }]);
+      const birthtimeMs = fs.statSync(file).birthtimeMs;
+      if (birthtimeMs <= 0) return; // filesystem doesn't support birthtime — covered by the fallback test below
+      expect(service.getSessionCreatedMs(SID_A)).toBe(birthtimeMs);
+    });
+
+    it('falls back to the first line timestamp when birthtime is unavailable (e.g. unsupported filesystem)', () => {
+      const file = writeSession(dir, 'proj-a', SID_A, [{ type: 'user', uuid: 'u1', timestamp: '2026-01-05T10:20:30.000Z', message: { content: 'Hello' } }]);
+      const realStatSync = fs.statSync;
+      const statSpy = vi.spyOn(fs, 'statSync').mockImplementation((p, opts) => {
+        const stat = (realStatSync as (p: fs.PathLike, opts?: unknown) => fs.Stats)(p, opts);
+        if (p === file) Object.defineProperty(stat, 'birthtimeMs', { value: 0 });
+        return stat;
+      });
+      try {
+        expect(service.getSessionCreatedMs(SID_A)).toBe(Date.parse('2026-01-05T10:20:30.000Z'));
+      } finally {
+        statSpy.mockRestore();
+      }
+    });
+
+    it('returns null when birthtime is unavailable and no line carries a timestamp', () => {
+      const file = writeSession(dir, 'proj-a', SID_A, [{ type: 'user', uuid: 'u1', message: { content: 'Hello' } }]);
+      const realStatSync = fs.statSync;
+      const statSpy = vi.spyOn(fs, 'statSync').mockImplementation((p, opts) => {
+        const stat = (realStatSync as (p: fs.PathLike, opts?: unknown) => fs.Stats)(p, opts);
+        if (p === file) Object.defineProperty(stat, 'birthtimeMs', { value: 0 });
+        return stat;
+      });
+      try {
+        expect(service.getSessionCreatedMs(SID_A)).toBeNull();
+      } finally {
+        statSpy.mockRestore();
+      }
     });
   });
 

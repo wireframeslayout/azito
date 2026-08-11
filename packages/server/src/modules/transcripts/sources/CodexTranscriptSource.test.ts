@@ -160,6 +160,22 @@ describe('CodexTranscriptSource', () => {
     });
   });
 
+  describe('getSessionCreatedMs', () => {
+    it('returns null for an invalid or nonexistent session id', () => {
+      expect(source.getSessionCreatedMs('not-a-uuid')).toBeNull();
+      expect(source.getSessionCreatedMs(SID_A)).toBeNull();
+    });
+
+    it('parses the creation time from the filename timestamp (rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl) as local time', () => {
+      writeSession(dir, SID_A, [SESSION_META(SID_A, '/home/user/proj-a'), USER_MESSAGE('hi')]);
+      // The fixture filename encodes 2026-05-31T12-09-40 as local (system-timezone) time, matching
+      // the real Codex CLI behavior (see SESSION_FILE_TIMESTAMP_PATTERN comment): the colons are
+      // simply replaced with dashes for filesystem safety, with no timezone conversion applied.
+      const expected = new Date(2026, 4, 31, 12, 9, 40).getTime();
+      expect(source.getSessionCreatedMs(SID_A)).toBe(expected);
+    });
+  });
+
   describe('readSession', () => {
     it('returns null when the session file does not exist', () => {
       expect(source.readSession(SID_A)).toBeNull();
