@@ -44,7 +44,7 @@ import { useConfirm } from '../../hooks/useConfirm';
 import {
   SUB_TAB_KEY, viewTabId, parseViewTabId, windowTabId, parseWindowTabId,
   browserTabId, parseBrowserTabId, listPersistedBrowserTabIds,
-  makeTaskLayoutStorage, SELECT_BROWSER_EVENT, SELECT_TERMINAL_EVENT, resolveWindowContextExtra,
+  makeTaskLayoutStorage, hasPersistedTaskLayout, SELECT_BROWSER_EVENT, SELECT_TERMINAL_EVENT, resolveWindowContextExtra,
   resolveDisplayedTaskTerminal, selectTaskTerminal,
   type FixedView, type TerminalRef,
 } from '../task/taskPaneLayout';
@@ -307,6 +307,14 @@ export default function TaskPanel({
   // though load() itself only actually runs at mount/task-switch time.
   const defaultViewTabIds = useMemo(() => availableFixedViews.map(viewTabId), [availableFixedViewsKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const taskLayoutStorage = useMemo(() => makeTaskLayoutStorage(taskId, defaultViewTabIds), [taskId, defaultViewTabIds]);
+  // Snapshot of "did this task already have a persisted layout" taken during render, at the
+  // same moment `usePaneLayout` below first loads (mount / taskId change) — i.e. *before*
+  // usePaneLayout's own persist effect has a chance to write the just-loaded default state
+  // back to storage (that effect fires on every `keyed` change including the mount commit,
+  // so reading `hasPersistedTaskLayout` from inside a later passive effect would already see
+  // that write and always report "persisted", even for a task that was genuinely never opened
+  // before). `useMemo` runs synchronously during render, so it captures the pre-mount value.
+  const taskHadPersistedLayout = useMemo(() => hasPersistedTaskLayout(taskId), [taskId]);
   // Task-scoped allTabIds means "tabs available to open", not "tabs the user has
   // open" (unlike Workspace's workspace-layout) — appendMissing: false so a tab
   // the user explicitly closed via × stays closed instead of reappearing the next
@@ -332,6 +340,26 @@ export default function TaskPanel({
   // WindowsSidebar/the old TaskWindowDropdown/TaskWindowListView used, so a window tab
   // shows the same per-window activity state as every other window surface.
   const { windowIndicator, finishedEntries } = useAgentActivity();
+
+  // SP 差し戻し（オーケストレーター照合、Issue #69）: タスク詳細の初期表示は「説明」ではなく
+  // ウィンドウコンテンツ（端末/チャット）が既定。一度もレイアウトが永続化されていない
+  // 真に新規のタスク表示のときだけ、ウィンドウが1件以上あれば先頭のウィンドウタブへ
+  // 切り替える（保存済みレイアウトが既に持つ明示的なアクティブタブはそのまま尊重し、
+  // ここでは上書きしない）。ウィンドウ0件のタスクは「説明」フォールバックのまま。
+  // デスクトップの初期タブ挙動は不変（このガードは isMobile 限定）。taskId ごとに一度だけ
+  // 判定するので、以後ユーザーが「説明」へ手動で戻ってもここで巻き戻されない。
+  const appliedMobileDefaultTaskIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!isMobile || !windowsReady) return;
+    if (appliedMobileDefaultTaskIdRef.current === taskId) return;
+    appliedMobileDefaultTaskIdRef.current = taskId;
+    if (taskHadPersistedLayout) return;
+    if (windowTabIdsList.length === 0) return;
+    const pane = layout.state.focusedPaneId ? findPane(layout.state.root, layout.state.focusedPaneId) : null;
+    if (!pane || pane.activeTabId !== viewTabId('description')) return;
+    layout.open(windowTabIdsList[0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMobile, windowsReady, taskId, windowTabIdsList, taskHadPersistedLayout]);
 
   const findTaskByTarget = useCallback((target: string) =>
     allTasks.find((t) => t.windows?.some((w) => w.tmuxTarget === target)) ?? null,

@@ -231,6 +231,18 @@ function writeSubTabMap(map: Record<string, unknown>, keepKey?: string): void {
   } catch { /* ignore */ }
 }
 
+/**
+ * Whether `taskId` has ever had a layout persisted to the `SUB_TAB_KEY` map — i.e.
+ * `makeTaskLayoutStorage.load()` would return real saved data rather than falling back to
+ * `buildDefaultTaskLayout()`. Used by TaskPanel's SP initial-tab logic (Issue #69 差し戻し) to
+ * tell "a genuinely fresh task (never opened before)" apart from "a task whose saved layout
+ * happens to have description as its explicit active tab" — only the former should have its
+ * initial SP display steered from description to a window tab.
+ */
+export function hasPersistedTaskLayout(taskId: number): boolean {
+  return readSubTabMap()[String(taskId)] !== undefined;
+}
+
 /** Per-task storage adapter for `usePaneLayout`, backed by the shared `SUB_TAB_KEY` map. */
 /**
  * The state a brand-new task (nothing ever persisted for it) starts from:
