@@ -1,6 +1,7 @@
 import type { CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon, type IconName } from '../ui/Icon';
+import { ProjectAvatar } from '../ui/ProjectAvatar';
 import { GLOBAL_NAV_ITEMS, SETTINGS_NAV_ITEM } from './globalNavItems';
 import type { SidebarMode } from '../../pages/workspace/types';
 
@@ -21,6 +22,7 @@ const PROJECT_MODE_ROWS: ProjectModeRow[] = [
 interface MobileNavMenuProject {
   id: number;
   name: string;
+  icon?: string | null;
   color?: string | null;
 }
 
@@ -127,13 +129,6 @@ const switchLabelStyle: CSSProperties = {
   fontSize: 'var(--font-xs)',
 };
 
-function selectionDotStyle(color?: string | null): CSSProperties {
-  // 既存のプロジェクト色解決（WorkspaceLayout のプロジェクトアバター等）と同じく project.color を
-  // そのまま使う。色未定義時は --border だと --input-bg 面でほぼ見えないため、視認できる
-  // --text-dim にフォールバックする（Issue #338 T11 オーケストレーター照合フィードバック）。
-  return { width: 8, height: 8, borderRadius: 'var(--radius-full)', background: color || 'var(--text-dim)', flexShrink: 0 };
-}
-
 /**
  * SP の ≡ メニュー本体（Issue #338 T11 G1: プロジェクトカード封筒化）。カード（プロジェクト内の
  * 選択行＋モード行）と AZITO 全体（サーバー/ユニット/サイドキック/稼働ペイン一覧/AZITO設定）の
@@ -158,7 +153,7 @@ export function MobileNavMenu({
     <div style={{ padding: '0 4px 16px' }}>
       <div style={projectCardStyle}>
         <button type="button" onClick={onOpenProjectSwitch} style={selectionRowStyle} className="glass-popover-item">
-          <span aria-hidden="true" style={selectionDotStyle(project?.color)} />
+          <ProjectAvatar project={project} size={22} />
           <span style={selectionNameStyle}>{project?.name || ''}</span>
           <span style={switchLabelStyle}>
             {t('workspace:mobileNav.switchLabel')}

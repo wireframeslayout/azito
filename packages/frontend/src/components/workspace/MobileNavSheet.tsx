@@ -2,6 +2,7 @@ import { type CSSProperties, type ReactNode, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { Icon } from '../ui/Icon';
+import { ProjectAvatar } from '../ui/ProjectAvatar';
 import { MobileNavMenu } from './MobileNavMenu';
 import { MobileActiveWindowsPanel } from './MobileActiveWindowsPanel';
 import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
@@ -170,7 +171,7 @@ export function MobileNavSheet({
             <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
               {top === 'menu' && (
                 <MobileNavMenu
-                  project={project ? { id: project.id, name: project.name, color: currentProjectItem?.color } : null}
+                  project={project ? { id: project.id, name: project.name, icon: currentProjectItem?.icon, color: currentProjectItem?.color } : null}
                   onOpenProjectSwitch={() => push('projectSwitch')}
                   objectsCount={objectsCount}
                   onSelectMode={handleSelectMode}
@@ -237,10 +238,7 @@ function MobileProjectSwitchList({
               textAlign: 'left', fontFamily: 'inherit', fontSize: 'var(--font-md)',
             }}
           >
-            <span
-              aria-hidden="true"
-              style={{ width: 8, height: 8, borderRadius: 'var(--radius-full)', background: p.color || 'var(--border)', flexShrink: 0 }}
-            />
+            <ProjectAvatar project={p} size={24} />
             <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
             {isCurrent && <Icon name="check" size={16} style={{ color: 'var(--accent)' }} />}
           </button>
