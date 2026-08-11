@@ -199,13 +199,11 @@ export default function TaskDetailMenu({
               value={t('workspace:taskDetailMenu.showFull')}
               onClick={() => { onOpenDescription(); onClose(); }}
             />
-            {hasUnit && (
-              <MenuRow
-                label={t('workspace:taskDetailMenu.unitAndExecution')}
-                value={unitName ?? t('workspace:taskDetailMenu.unassigned')}
-                onClick={() => { onOpenUnit(); onClose(); }}
-              />
-            )}
+            <MenuRow
+              label={t('workspace:taskDetailMenu.unitAndExecution')}
+              value={hasUnit ? (unitName ?? t('workspace:taskDetailMenu.unassigned')) : t('workspace:taskDetailMenu.unassigned')}
+              onClick={() => { onOpenUnit(); onClose(); }}
+            />
             {canShowGit && (
               <>
                 <MenuRow

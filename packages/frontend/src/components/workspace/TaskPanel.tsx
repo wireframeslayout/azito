@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../api/client';
 import { useNotificationChannel } from '../../hooks/useNotificationChannel';
@@ -159,23 +159,28 @@ function MobileContentHeader({ title, action }: { title: string; action?: React.
 // 下端に何も無くなってしまうため、「情報ビュー表示中も下部トグル操作で端末/チャットに復帰できる」
 // 仕様を満たす最小限のバー（トグルのみ）をここで描く。qbar/PromptInputBar と同じ
 // --sp-footer-h claim/release オーナー方式に参加する（F2稼働ステータスピルのオフセット計算対象）。
-const CONTEXT_FOOTER_OWNER = 'task-panel-context-footer';
-
-function MobileContextFooter({ value, onChange, disabled }: { value: TerminalChatViewMode; onChange: (mode: TerminalChatViewMode) => void; disabled: boolean }) {
+// TaskPanel は非表示（他タブ）でもマウントされたままになりうる（Issue #397）ため、全インスタンス
+// が同一のオーナー文字列を共有すると、非表示タブのアンマウント／再マウントが表示中フッターの
+// claim を横取り・解放してしまう（Issue #338 T3）。オーナーを useId() でインスタンスごとに一意化
+// し、かつ「このフッターが実際に表示中（isVisible）」のときのみ claim/release に参加する。
+function MobileContextFooter({ value, onChange, disabled, isVisible }: { value: TerminalChatViewMode; onChange: (mode: TerminalChatViewMode) => void; disabled: boolean; isVisible: boolean }) {
   const barRef = useRef<HTMLDivElement>(null);
+  const ownerId = useId();
+  const owner = `task-panel-context-footer:${ownerId}`;
   useEffect(() => {
+    if (!isVisible) return undefined;
     const el = barRef.current;
     if (!el) return undefined;
     const observer = new ResizeObserver(() => {
-      claimFooterHeight(CONTEXT_FOOTER_OWNER, el.getBoundingClientRect().height);
+      claimFooterHeight(owner, el.getBoundingClientRect().height);
     });
     observer.observe(el);
-    claimFooterHeight(CONTEXT_FOOTER_OWNER, el.getBoundingClientRect().height);
+    claimFooterHeight(owner, el.getBoundingClientRect().height);
     return () => {
       observer.disconnect();
-      releaseFooterHeight(CONTEXT_FOOTER_OWNER);
+      releaseFooterHeight(owner);
     };
-  }, []);
+  }, [isVisible, owner]);
   return (
     <div
       ref={barRef}
@@ -1707,7 +1712,6 @@ export default function TaskPanel({
         const isWindowContent = (mobileActiveSegment === MOBILE_TERMINAL_SEGMENT || mobileActiveSegment === MOBILE_CHAT_SEGMENT) && !!mobileDisplayedWindowTabId;
         const resolvedViewTabId = isLegacyMergedMobileView ? viewTabId('unit') : mobileActiveTabId;
         const resolvedViewName = isWindowContent ? null : parseViewTabId(resolvedViewTabId);
-        const isBrowserContent = !isWindowContent && !!parseBrowserTabId(resolvedViewTabId);
         // コンテンツヘッダー（承認済み S8）: 端末/チャットは TerminalContainer 自身の
         // leading/trailing（ウィンドウ名タップ＋ワーカーバッジ▾＋ペイン数チップ）が担う。
         // ブラウザは BrowserView 自身のツールバー（アドレスバー/タブ）がページタイトルを
@@ -1767,12 +1771,16 @@ export default function TaskPanel({
                 : renderTabBody(resolvedViewTabId, true, task)}
             </div>
             {/* 下部文脈バー（端末/チャット以外）: 端末/チャットは qbar/PromptInputBar 自身が
-                ミニトグルを描くため、ここでは非端末/チャット表示中のみ描く（Issue #69 S8）。 */}
-            {!isWindowContent && !isBrowserContent && (
+                ミニトグルを描くため、ここでは非端末/チャット表示中のみ描く（Issue #69 S8）。
+                ブラウザ表示中も同じ扱いで表示する（Issue #338 T2: ブラウザ表示中に端末/チャットへ
+                戻る手段が無かった導線の欠落を解消）。BrowserView 自身の操作領域は上部ツールバー
+                側にあるため、下端固定のこのバーと競合しない。 */}
+            {!isWindowContent && (
               <MobileContextFooter
                 value={mobileViewMode}
                 onChange={(mode) => handleMobileSegmentSelect(mode === 'chat' ? MOBILE_CHAT_SEGMENT : MOBILE_TERMINAL_SEGMENT)}
                 disabled={windowTabIdsList.length === 0}
+                isVisible={isVisible}
               />
             )}
           </div>
