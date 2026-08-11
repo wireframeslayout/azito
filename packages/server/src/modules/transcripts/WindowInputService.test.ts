@@ -57,18 +57,24 @@ function buildDeps(opts: {
   listAllPanes?: TmuxClient['listAllPanes'];
   sendLiteralText?: TmuxClient['sendLiteralText'];
   sendKeys?: TmuxClient['sendKeys'];
+  isPaneInMode?: TmuxClient['isPaneInMode'];
   servers?: ServerConfig[];
 } = {}) {
   const windowRepo = {
     findById: opts.findById ?? (() => buildWindow()),
   } as unknown as IWindowRepository;
 
-  const calls: { sendLiteralText: unknown[]; sendKeys: unknown[]; wait: number[] } = { sendLiteralText: [], sendKeys: [], wait: [] };
+  const calls: { sendLiteralText: unknown[]; sendKeys: unknown[]; wait: number[]; cancelPaneMode: unknown[] } =
+    { sendLiteralText: [], sendKeys: [], wait: [], cancelPaneMode: [] };
 
   const tmuxClient = {
     listAllPanes: opts.listAllPanes ?? (async () => [buildPane()]),
     sendLiteralText: opts.sendLiteralText ?? (async (...args: unknown[]) => { calls.sendLiteralText.push(args); }),
     sendKeys: opts.sendKeys ?? (async (...args: unknown[]) => { calls.sendKeys.push(args); }),
+    // copy-mode 判定は既定で「モード外（=0）」— 既存の非 copy-mode 送信系テストが preparePaneForInput
+    // の追加呼び出しで壊れないようにする（Issue #69 T12）。
+    isPaneInMode: opts.isPaneInMode ?? (async () => false),
+    cancelPaneMode: async (...args: unknown[]) => { calls.cancelPaneMode.push(args); },
   } as unknown as TmuxClient;
 
   const serverRepo = {
@@ -138,12 +144,39 @@ describe('WindowInputService', () => {
         listAllPanes: async () => [buildPane()],
         sendLiteralText: async () => { order.push('sendLiteralText'); },
         sendKeys: async () => { order.push('sendKeys'); },
+        isPaneInMode: async () => false,
+        cancelPaneMode: async () => { order.push('cancelPaneMode'); },
       } as unknown as TmuxClient;
       const wait = async (ms: number) => { order.push(`wait:${ms}`); };
       const service = new WindowInputService(windowRepo, tmuxClient, serverRepo, wait);
       const result = await service.sendInput(42, '%1', 'reply with OK only');
       expect(result).toBe('ok');
       expect(order).toEqual(['sendLiteralText', 'wait:200', 'sendKeys']);
+    });
+
+    it('cancels copy-mode before sending when the pane is in_mode (Issue #69 T12)', async () => {
+      const order: string[] = [];
+      const { windowRepo, serverRepo } = buildDeps();
+      const tmuxClient = {
+        listAllPanes: async () => [buildPane()],
+        isPaneInMode: async () => true,
+        cancelPaneMode: async () => { order.push('cancelPaneMode'); },
+        sendLiteralText: async () => { order.push('sendLiteralText'); },
+        sendKeys: async () => { order.push('sendKeys'); },
+      } as unknown as TmuxClient;
+      const wait = async (ms: number) => { order.push(`wait:${ms}`); };
+      const service = new WindowInputService(windowRepo, tmuxClient, serverRepo, wait);
+      const result = await service.sendInput(42, '%1', 'echo hello');
+      expect(result).toBe('ok');
+      expect(order).toEqual(['cancelPaneMode', 'wait:100', 'sendLiteralText', 'sendKeys']);
+    });
+
+    it('does not cancel copy-mode when the pane is not in_mode', async () => {
+      const { windowRepo, tmuxClient, serverRepo, calls } = buildDeps({ isPaneInMode: async () => false });
+      const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
+      const result = await service.sendInput(42, '%1', 'echo hello');
+      expect(result).toBe('ok');
+      expect(calls.cancelPaneMode).toEqual([]);
     });
   });
 
@@ -201,6 +234,22 @@ describe('WindowInputService', () => {
       const result = await service.sendSignal(42, '%1', 'key', 'C-c');
       expect(result).toBe('ok');
       expect(calls.sendKeys).toEqual([[LOCAL_SERVER, '%1', ['C-c']]]);
+    });
+
+    it('cancels copy-mode before sending the signal when the pane is in_mode (Issue #69 T12)', async () => {
+      const { windowRepo, tmuxClient, serverRepo, calls } = buildDeps({ isPaneInMode: async () => true });
+      const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
+      const result = await service.sendSignal(42, '%1', 'interrupt');
+      expect(result).toBe('ok');
+      expect(calls.cancelPaneMode).toEqual([[LOCAL_SERVER, '%1']]);
+    });
+
+    it('does not cancel copy-mode when the pane is not in_mode', async () => {
+      const { windowRepo, tmuxClient, serverRepo, calls } = buildDeps({ isPaneInMode: async () => false });
+      const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
+      const result = await service.sendSignal(42, '%1', 'interrupt');
+      expect(result).toBe('ok');
+      expect(calls.cancelPaneMode).toEqual([]);
     });
   });
 });

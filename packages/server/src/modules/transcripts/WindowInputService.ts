@@ -38,6 +38,7 @@ export class WindowInputService {
     const belongsToWindow = await this.paneBelongsToWindow(server, window, paneId);
     if (!belongsToWindow) return 'pane_not_found';
 
+    await this.preparePaneForInput(server, paneId);
     await this.tmuxClient.sendLiteralText(server, paneId, text);
     const submitDelayMs = this.resolveSubmitDelay(window.workerType);
     if (submitDelayMs > 0) await this.wait(submitDelayMs);
@@ -55,9 +56,25 @@ export class WindowInputService {
     const belongsToWindow = await this.paneBelongsToWindow(server, window, paneId);
     if (!belongsToWindow) return 'pane_not_found';
 
+    await this.preparePaneForInput(server, paneId);
     const resolvedKey = action === 'interrupt' ? this.resolveInterruptKey(window.workerType) : (key as InterruptKey);
     await this.tmuxClient.sendKeys(server, paneId, [resolvedKey]);
     return 'ok';
+  }
+
+  /**
+   * 送信直前のペイン準備ステップ（Issue #69 T12）。将来 tmux 以外のマルチプレクサに差し替える計画
+   * があるため、意図（「入力できる状態にする」）をこのメソッド名で表し、tmux 固有の copy-mode
+   * 判定/解除ロジックは TmuxClient 側に隔離する — IMultiplexer のような抽象は現時点では過剰
+   * （実装は tmux の1系統のみ。「tmuxラッパーと割り切る」方針）なので新設せず、このメソッド境界
+   * だけを将来の抽出点として用意する。copy-mode 中（スクロールバック閲覧中）は send-keys のリテラル
+   * 入力がバッファ選択操作に吸収され対象アプリに届かないため、解除してから短い待機を挟む。
+   */
+  private async preparePaneForInput(server: ServerConfig, paneId: string): Promise<void> {
+    const inMode = await this.tmuxClient.isPaneInMode(server, paneId);
+    if (!inMode) return;
+    await this.tmuxClient.cancelPaneMode(server, paneId);
+    await this.wait(100);
   }
 
   /**

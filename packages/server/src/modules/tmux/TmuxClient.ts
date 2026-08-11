@@ -432,6 +432,34 @@ export class TmuxClient {
     }
   }
 
+  /**
+   * ペインが copy-mode（スクロールバック閲覧中）かどうかを判定する（Issue #69 T12）。copy-mode 中は
+   * `send-keys -l` のリテラル入力がバッファへの選択操作として吸収され、対象アプリケーションに届かない
+   * ため、送信前にこの判定を挟んで {@link cancelPaneMode} で解除する必要がある。tmux 側のエラー・
+   * 対象ペイン不在時は「モード不明」として false を返し、呼び出し元は通常の送信を続行する
+   * （in-mode 判定ができないことを理由に送信自体をブロックしない）。
+   */
+  async isPaneInMode(server: ServerConfig, target: string): Promise<boolean> {
+    try {
+      const { stdout, code } = await this.runTmuxCommand(server, [
+        'display-message', '-p', '-t', target, '#{pane_in_mode}',
+      ]);
+      if (code !== 0) return false;
+      return stdout.trim() === '1';
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * copy-mode を解除する（`send-keys -X cancel`）。`-X` は copy-mode 中のペインにのみ有効なコマンド
+   * ディスパッチのため、呼び出し元は必ず {@link isPaneInMode} で in-mode を確認してから呼ぶこと
+   * （in-mode でないペインに送っても tmux 側は無害だが、意図を明確にするため呼び出し側で条件分岐する）。
+   */
+  async cancelPaneMode(server: ServerConfig, target: string): Promise<void> {
+    await this.runTmuxCommand(server, ['send-keys', '-X', '-t', target, 'cancel']);
+  }
+
   private async sendLongText(server: ServerConfig, target: string, text: string): Promise<void> {
     if (server.type === 'local') {
       const fs = await import('fs');
