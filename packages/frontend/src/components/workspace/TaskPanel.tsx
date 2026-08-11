@@ -36,6 +36,7 @@ import { closeBrowserGroup } from '../../lib/browserGroup';
 import type { Task, Unit, Window, Session, Project, ExecutionApprovalData } from '../../pages/workspace/types';
 import type { PersistedTab } from '../../hooks/useTabPersistence';
 import { useIsMobile } from '../../hooks/useIsMobile';
+import { useClickOutside } from '../../hooks/useClickOutside';
 import { isSameWindowTarget } from '../../utils/tmuxTarget';
 import { activityKey, useWorkspaceTargets } from '../../hooks/useWorkspaceTargets';
 import { useGlobalFocus } from '../../hooks/useGlobalFocus';
@@ -149,6 +150,113 @@ function MobileContentHeader({ title, action }: { title: string; action?: React.
         {title}
       </span>
       {action}
+    </div>
+  );
+}
+
+// SP ブラウザ用コンテンツヘッダー（Issue #338 T9 #1）: タスクは複数ブラウザインスタンス
+// （browserTabIds）を持てるため、端末/チャットのウィンドウ名トリガーと同型の「タイトル▾」を
+// 左に、右端に「＋」（新規ブラウザ追加）を置く。ドロップダウンはこのコンポーネント自身が
+// 開閉状態を持つ（SP はシングルペインで、端末側の windowDropdownPaneId のようなペイン単位の
+// 状態を必要としないため）。
+function MobileBrowserContentHeader({
+  items, activeId, onSelect, onAdd, canAdd, addTitle, onDelete, deleteTitle,
+}: {
+  items: { id: string; label: string }[];
+  activeId: string | null;
+  onSelect: (id: string) => void;
+  onAdd: () => void;
+  canAdd: boolean;
+  addTitle: string;
+  /** ブラウザ削除（Issue #338 T10 #2）。呼び出し元が確認ダイアログ込みの削除フローを担う。 */
+  onDelete: (id: string) => void;
+  deleteTitle: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useClickOutside<HTMLDivElement>(() => setOpen(false));
+  const active = items.find((i) => i.id === activeId);
+  const hasMultiple = items.length > 1;
+  return (
+    <div ref={containerRef} style={{ position: 'relative', flexShrink: 0 }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+        minHeight: 36, padding: '0 8px 0 16px', background: 'var(--bg-card)',
+        borderBottom: '1px solid var(--border)',
+      }}>
+        <button
+          type="button"
+          onClick={() => hasMultiple && setOpen((o) => !o)}
+          disabled={!hasMultiple}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 4, minWidth: 0, flex: 1,
+            border: 'none', background: 'none', padding: 0, cursor: hasMultiple ? 'pointer' : 'default',
+            color: 'var(--text)', font: 'inherit', fontSize: 'var(--font-sm)', fontWeight: 600, textAlign: 'left',
+          }}
+        >
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {active?.label ?? ''}
+          </span>
+          {hasMultiple && (
+            <span style={{ display: 'inline-flex', flexShrink: 0, color: 'var(--text-dim)' }}>
+              <Icon name="chevron-down" size={14} rotate={open ? 180 : 0} />
+            </span>
+          )}
+        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
+          {activeId && (
+            <span onClick={() => onDelete(activeId)}>
+              <IconButton size="sm" title={deleteTitle} aria-label={deleteTitle} style={{ color: 'var(--danger)' }}>
+                <Icon name="trash" size={14} />
+              </IconButton>
+            </span>
+          )}
+          <span onClick={onAdd}>
+            <IconButton size="sm" title={addTitle} disabled={!canAdd}><Icon name="plus" size={14} /></IconButton>
+          </span>
+        </div>
+      </div>
+      {open && hasMultiple && (
+        <div role="listbox" style={{
+          position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 40,
+          background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border)',
+          boxShadow: 'var(--shadow-2)', maxHeight: '50vh', overflowY: 'auto',
+        }}>
+          {items.map((item) => (
+            <div
+              key={item.id}
+              role="option"
+              aria-selected={item.id === activeId}
+              tabIndex={0}
+              onClick={() => { onSelect(item.id); setOpen(false); }}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(item.id); setOpen(false); } }}
+              className="row-hover"
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%',
+                minHeight: 44, padding: '0 4px 0 16px', cursor: 'pointer',
+                color: 'var(--text)', textAlign: 'left', font: 'inherit', fontSize: 'var(--font-md)',
+              }}
+            >
+              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.label}</span>
+              {item.id === activeId && <span style={{ display: 'inline-flex', color: 'var(--accent)', flexShrink: 0, marginRight: 2 }}><Icon name="check" size={16} /></span>}
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); setOpen(false); onDelete(item.id); }}
+                aria-label={deleteTitle}
+                title={deleteTitle}
+                className="icon-btn"
+                style={{
+                  width: 44, height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  border: 'none', background: 'none', color: 'var(--danger)', cursor: 'pointer', flexShrink: 0,
+                }}
+              >
+                <Icon name="trash" size={16} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -271,6 +379,35 @@ export default function TaskPanel({
     setBrowserTabIds(listPersistedBrowserTabIds(taskId));
   }, [taskId]);
 
+  // Page title/URL per task-scoped browser instance (Issue #338 T9 #1), mirrored out of each
+  // BrowserView via its onActiveTabMeta callback — used to label the SP browser content
+  // header's "現在のタイトル▾" trigger and its instance-switch dropdown without this component
+  // re-deriving labels from raw WS frames itself.
+  const [browserMeta, setBrowserMeta] = useState<Record<string, { url: string | null; title: string | null }>>({});
+  const handleBrowserMetaChange = useCallback((tabId: string, meta: { url: string | null; title: string | null }) => {
+    setBrowserMeta((prev) => {
+      const cur = prev[tabId];
+      if (cur && cur.url === meta.url && cur.title === meta.title) return prev;
+      return { ...prev, [tabId]: meta };
+    });
+  }, []);
+  const browserLabel = useCallback((tabId: string): string => {
+    const idx = browserTabIds.indexOf(tabId);
+    const fallback = idx <= 0 ? t('common:labels.browser') : `${t('common:labels.browser')} ${idx + 1}`;
+    const meta = browserMeta[tabId];
+    if (meta?.title && meta.title.trim()) return meta.title;
+    if (meta?.url) {
+      try {
+        const parsed = new URL(meta.url);
+        const path = parsed.pathname !== '/' ? parsed.pathname : '';
+        return `${parsed.hostname}${path}` || fallback;
+      } catch {
+        return meta.url;
+      }
+    }
+    return fallback;
+  }, [browserTabIds, browserMeta, t]);
+
   // Views selectable for this task, and the task-scoped multi-pane layout tree over
   // them + the task's assigned windows (Issue #397 step 5). `allTabIds` must stay a
   // stable reference across renders that don't actually add/remove tabs, or
@@ -327,6 +464,18 @@ export default function TaskPanel({
   const layout = usePaneLayout(`${SUB_TAB_KEY}:${taskId}`, allTabIds, initialTabIds, taskLayoutStorage, { appendMissing: false, ready: windowsReady });
   const paneRects = usePaneRects();
   const [paneDrag, setPaneDrag] = useState<PaneDrag | null>(null);
+
+  // Creates a brand-new task-scoped browser instance and switches to it — shared by the
+  // desktop/mobile "+" add menus (showAddMenu), the SP browser content header's own "+"
+  // (Issue #338 T9 #1), and the ⋯ menu's "＋ ブラウザを追加" row (#3). `pane` is omitted on
+  // mobile (single-pane layout); layout.open() falls back to the focused pane in that case.
+  const handleAddBrowser = useCallback((pane?: PaneNode) => {
+    if (!browserServerName) return;
+    const pageId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const tabId = browserTabId(browserServerName, pageId);
+    setBrowserTabIds((prev) => [...prev, tabId]);
+    layout.open(tabId, pane?.id);
+  }, [browserServerName, layout]);
 
   const { menu: ctxMenu, show: showCtxMenu, showAt: showCtxMenuAt, hide: hideCtxMenu } = useContextMenu();
   const moreMenu = useContextMenu();
@@ -857,13 +1006,7 @@ export default function TaskPanel({
       icon: <Icon name="browser" size={16} />,
       disabled: !browserServerName,
       title: browserServerName ? undefined : t('contextMenu.cannotResolveServer'),
-      onClick: () => {
-        if (!browserServerName) return;
-        const pageId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-        const tabId = browserTabId(browserServerName, pageId);
-        setBrowserTabIds((prev) => [...prev, tabId]);
-        layout.open(tabId, pane.id);
-      },
+      onClick: () => handleAddBrowser(pane),
     });
     if (onOpenAddWindow) {
       items.push({
@@ -873,7 +1016,7 @@ export default function TaskPanel({
       });
     }
     showCtxMenu(e, items);
-  }, [availableFixedViews, openTabIds, layout, showCtxMenu, browserServerName, onOpenAddWindow, task, isMobile]);
+  }, [availableFixedViews, openTabIds, layout, showCtxMenu, browserServerName, handleAddBrowser, onOpenAddWindow, task, isMobile]);
 
   const showTabContextMenu = useCallback((e: React.MouseEvent, pane: PaneNode, tabId: string) => {
     const panesCount = listPanes(layout.state.root).length;
@@ -1291,6 +1434,7 @@ export default function TaskPanel({
           // default tab. Left as a real (no-op) callback rather than omitted, so this stays
           // a deliberate choice (documented here) instead of looking like a forgotten wire-up.
           onActiveTabChange={() => {}}
+          onActiveTabMeta={(meta) => handleBrowserMetaChange(tabId, meta)}
           onPageReady={onBrowserPageReady}
         />
       );
@@ -1369,6 +1513,45 @@ export default function TaskPanel({
   // （mobileDisplayedWindowTabId）を解決して渡し、✓ が消えないようにする。
   const parsedMobileDisplayedWindow = mobileDisplayedWindowTabId ? parseWindowTabId(mobileDisplayedWindowTabId) : null;
   const mobileDisplayedWindowTarget = parsedMobileDisplayedWindow ? resolveWindowTabTarget(parsedMobileDisplayedWindow) : null;
+
+  // ⋯ メニュー「ウィンドウ」節の行長押し（Issue #338 T10・最低限=削除だが、デスクトップと同じ
+  // getWindowMenuItems を流用して重複実装を避ける）。行のオンライン状態は sessionData から
+  // 都度解決する — showTabContextMenu と同じ resolveWindowContextExtra を使う。
+  const showWindowMenuRowLongPress = useCallback((x: number, y: number, w: Window) => {
+    const extra = resolveWindowContextExtra(w, sessionData);
+    windowActions.showWindowContextMenuAt(x, y, w, extra);
+  }, [windowActions, sessionData]);
+
+  // SP ブラウザ一覧ドロップダウンの行 ✕（Issue #338 T10 #2）。デスクトップのグループを閉じる
+  // 導線（closeBrowserGroup）と同じ後始末を、タブが開いているペイン経由の handlePaneCloseTab
+  // に委ねる（layout ツリーからの除去・browserTabIds の更新・keepalive 停止まで一括で行う既存
+  // 経路、二重実装を避ける）。削除対象が現在表示中で、他にブラウザが残っていなければウィンドウ
+  // コンテンツへ戻す。
+  const handleDeleteBrowserTab = useCallback(async (tabId: string) => {
+    const browser = parseBrowserTabId(tabId);
+    if (!browser) return;
+    const ok = await confirm({
+      title: t('workspace:objects.deleteBrowserTitle'),
+      message: t('workspace:objects.deleteBrowserMessage', { label: browserLabel(tabId) }),
+      danger: true,
+    });
+    if (!ok) return;
+    const wasActive = tabId === mobileActiveTabId;
+    const pane = findPaneByTab(layout.state.root, tabId);
+    if (pane) {
+      handlePaneCloseTab(pane.id, tabId);
+    } else {
+      setBrowserTabIds((prev) => prev.filter((id) => id !== tabId));
+      void closeBrowserGroup(browser.serverName, browser.pageId).then(() => onBrowserPageReady?.());
+    }
+    if (wasActive) {
+      const remaining = browserTabIds.filter((id) => id !== tabId);
+      if (remaining.length === 0) {
+        const fallback = mobileDisplayedWindowTabId ?? windowTabIdsList[0];
+        if (fallback) handleMobileSelect(fallback);
+      }
+    }
+  }, [confirm, t, browserLabel, mobileActiveTabId, layout, handlePaneCloseTab, onBrowserPageReady, browserTabIds, mobileDisplayedWindowTabId, windowTabIdsList, handleMobileSelect]);
 
   if (!task) return <div style={{ padding: 24, color: 'var(--text-dim)', background: 'var(--ws-surface)', height: '100%' }}>{t('detail.notFound')}</div>;
 
@@ -1721,9 +1904,10 @@ export default function TaskPanel({
         const resolvedViewName = isWindowContent ? null : parseViewTabId(resolvedViewTabId);
         // コンテンツヘッダー（承認済み S8）: 端末/チャットは TerminalContainer 自身の
         // leading/trailing（ウィンドウ名タップ＋ワーカーバッジ▾＋ペイン数チップ）が担う。
-        // ブラウザは BrowserView 自身のツールバー（アドレスバー/タブ）がページタイトルを
-        // 兼ねるため、ここでは重ねて描かない。それ以外の固定ビューはこの MobileContentHeader
-        // を使う（説明のみ「編集」アクション付き）。
+        // ブラウザは専用の MobileBrowserContentHeader（Issue #338 T9 #1 — タスクは複数
+        // ブラウザインスタンスを持てるため、タイトル▾で切替・右端＋で追加する）が担う。
+        // それ以外の固定ビューはこの MobileContentHeader を使う（説明のみ「編集」アクション付き）。
+        const browserTabIdActive = parseBrowserTabId(resolvedViewTabId) ? resolvedViewTabId : null;
         const contentHeaderTitle = resolvedViewName === 'description' ? t('workspace:viewLabels.description')
           : resolvedViewName === 'unit' ? t('workspace:taskDetailMenu.unitAndExecution')
           : resolvedViewName === 'commits' ? t('workspace:viewLabels.commits')
@@ -1755,6 +1939,18 @@ export default function TaskPanel({
                 }
               />
             )}
+            {browserTabIdActive && (
+              <MobileBrowserContentHeader
+                items={browserTabIds.map((id) => ({ id, label: browserLabel(id) }))}
+                activeId={browserTabIdActive}
+                onSelect={(id) => handleMobileSelect(id)}
+                onAdd={() => handleAddBrowser()}
+                canAdd={!!browserServerName}
+                addTitle={t('contextMenu.browser')}
+                onDelete={(id) => { void handleDeleteBrowserTab(id); }}
+                deleteTitle={t('workspace:objects.closeGroupAction')}
+              />
+            )}
             <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
               {isWindowContent && mobileDisplayedWindowTabId
                 ? renderTabBody(
@@ -1766,11 +1962,15 @@ export default function TaskPanel({
                     trailing: (
                       <>
                         {renderSpPaneCountChip(activePane)}
-                        {/* ウィンドウ/ブラウザ追加の唯一の入口（Issue #69 S8 で旧セグメント行の
-                            常設＋を撤去したため、機能欠落を避けるためここへ移設）。 */}
-                        <span onClick={(e) => showAddMenu(e, activePane)}>
-                          <IconButton size="sm" title={t('workspace:pane.openTab')}><Icon name="plus" size={14} /></IconButton>
-                        </span>
+                        {/* ウィンドウ追加専用（Issue #338 T9 #2）。旧実装はここが showAddMenu
+                            （ブラウザ追加も含むフルメニュー）だったが、ブラウザ追加はブラウザ
+                            表示中のコンテンツヘッダー（#1）と ⋯ メニュー（#3）に一本化したため、
+                            端末/チャットヘッダーの「＋」はウィンドウ追加のみへ簡素化する。 */}
+                        {onOpenAddWindow && (
+                          <span onClick={() => onOpenAddWindow(true, task?.projectId, taskId)}>
+                            <IconButton size="sm" title={t('workspace:windows.addWindow')}><Icon name="plus" size={14} /></IconButton>
+                          </span>
+                        )}
                       </>
                     ),
                   },
@@ -1853,13 +2053,17 @@ export default function TaskPanel({
           onOpenCommits={() => handleMobileSelect(viewTabId('commits'))}
           onOpenDiff={() => handleMobileSelect(viewTabId('diff'))}
           onOpenBrowser={() => { if (browserTabIds[0]) handleMobileSelect(browserTabIds[0]); }}
+          onDeleteBrowser={browserTabIds.length === 1 ? () => { void handleDeleteBrowserTab(browserTabIds[0]); } : undefined}
           isPinned={isPinned}
           onTogglePin={() => togglePin?.(ownTabId)}
           onCloseTab={() => closeTab?.(ownTabId)}
           windows={windows}
           focusedWindowTarget={focusedWindowTarget ?? mobileDisplayedWindowTarget}
           onSelectWindow={(serverName, target) => handleMobileSelect(windowTabId(serverName, target))}
+          onLongPressWindow={(x, y, w) => showWindowMenuRowLongPress(x, y, w)}
+          onDeleteWindow={(w) => windowActions.handleDeleteWindow(w.serverName, w.tmuxTarget, w.id)}
           onOpenAddWindow={onOpenAddWindow ? () => onOpenAddWindow(true, task?.projectId, taskId) : undefined}
+          onAddBrowser={browserServerName ? () => handleAddBrowser() : undefined}
         />
       )}
 

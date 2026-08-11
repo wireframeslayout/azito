@@ -39,6 +39,9 @@ interface WorkspaceSidebarContentProps {
   agentDefsLoading: boolean;
   agentDefsError: string | null;
   showWindowContextMenu: (e: React.MouseEvent, w: Window, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void;
+  /** 長押し（タッチ座標）版。SP のオブジェクト一覧・プレーンなプロジェクトウィンドウ行の
+   * 長押しコンテキストメニューに使う（Issue #338 T10）。 */
+  showWindowContextMenuAt?: (x: number, y: number, w: Window, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void;
   onSwitchSidebarMode: (mode: SidebarMode) => void;
   onFileSelect: (serverName: string, filePath: string, line?: number) => void;
   onRefresh: () => void;
@@ -90,6 +93,7 @@ export default function WorkspaceSidebarContent({
   agentDefsLoading,
   agentDefsError,
   showWindowContextMenu,
+  showWindowContextMenuAt,
   onSwitchSidebarMode,
   onFileSelect,
   onRefresh,
@@ -143,6 +147,7 @@ export default function WorkspaceSidebarContent({
           projectServers={projectServers}
           connectPane={connectPane}
           showWindowContextMenu={showWindowContextMenu}
+          showWindowContextMenuAt={showWindowContextMenuAt}
           onOpenAddWindow={onOpenAddWindow}
           onOpenQuickAdd={onOpenQuickAdd}
           agentDefsLoading={agentDefsLoading}

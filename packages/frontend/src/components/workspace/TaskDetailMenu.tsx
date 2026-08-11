@@ -5,6 +5,7 @@ import { Icon } from '../ui/Icon';
 import { AgentIcon } from '../ui/AgentIcons';
 import { BrailleSpinner } from '../ui/WindowActivityIndicator';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
+import { useLongPress, longPressStyle } from '../../hooks/useLongPress';
 import { isSameWindowTarget } from '../../utils/tmuxTarget';
 import StatusDropdown from '../task/StatusDropdown';
 import type { Task, Window } from '../../pages/workspace/types';
@@ -36,6 +37,11 @@ interface TaskDetailMenuProps {
   onOpenCommits: () => void;
   onOpenDiff: () => void;
   onOpenBrowser: () => void;
+  /** ブラウザ削除（Issue #338 T10 #2）。ブラウザが1つだけのときに行の右端へ削除アイコンを
+   * 出す「薄い」実装 — 複数ある場合はこの行から「ブラウザ」フルスクリーン表示へ遷移し、
+   * その中の一覧（MobileBrowserContentHeader、各行 ✕ 実装済み）から個別に削除させる。
+   * 省略時は count===1 でも削除アイコンを出さない。 */
+  onDeleteBrowser?: () => void;
   isPinned: boolean;
   onTogglePin: () => void;
   onCloseTab: () => void;
@@ -46,8 +52,19 @@ interface TaskDetailMenuProps {
   /** 行タップ: メニューを閉じ、そのウィンドウのコンテンツ（端末/チャットは localStorage 記憶
    * モード）を表示する。実際の表示切替は呼び出し元（TaskPanel の handleMobileSelect）が担う。 */
   onSelectWindow: (serverName: string, target: string) => void;
+  /** 行の長押し（500ms）: デスクトップと同じウィンドウ操作コンテキストメニューをタッチ座標に
+   * 表示する（Issue #338 T10）。省略時は長押しを効かせない。 */
+  onLongPressWindow?: (x: number, y: number, w: Window) => void;
+  /** 行右端の削除アイコン（44px タップ域・danger）: 長押しを知らないユーザーでも削除できる
+   * 明示的な導線（Issue #338 T10）。呼び出し元が確認ダイアログ込みの既存削除フローを担う。
+   * 省略時は削除アイコンを出さない。 */
+  onDeleteWindow?: (w: Window) => void;
   /** ＋「ウィンドウを追加」行（既存 AddWindow 導線）。省略時は追加行を出さない。 */
   onOpenAddWindow?: () => void;
+  /** ＋「ブラウザを追加」行（Issue #338 T9 #3）。タスク配下に新規ブラウザインスタンスを作成し、
+   * メニューを閉じてそのブラウザへ切り替える（実際の作成/切替は呼び出し元が担う）。省略時
+   * （サーバーを解決できない等）は追加行を出さない。 */
+  onAddBrowser?: () => void;
 }
 
 const headerStyle: CSSProperties = {
@@ -110,7 +127,15 @@ function IdleDot() {
   );
 }
 
-function WindowMenuRow({ w, isCurrent, onSelect }: { w: Window; isCurrent: boolean; onSelect: () => void }) {
+function WindowMenuRow({ w, isCurrent, onSelect, onLongPress, onDelete }: {
+  w: Window;
+  isCurrent: boolean;
+  onSelect: () => void;
+  /** 長押し（タッチ座標）: デスクトップと同じコンテキストメニューを開く。省略時は長押し無効。 */
+  onLongPress?: (x: number, y: number) => void;
+  /** 右端の削除アイコン。省略時はアイコン自体を出さない。 */
+  onDelete?: () => void;
+}) {
   const { t } = useTranslation('workspace');
   // windowIndicator は「現在フォーカス中のウィンドウの表示抑制」+ activityKey の完全一致照合の
   // ため、表示中の稼働ウィンドウが待機ドットに誤判定される（Issue #338 レビュー指摘）。この節は
@@ -119,9 +144,18 @@ function WindowMenuRow({ w, isCurrent, onSelect }: { w: Window; isCurrent: boole
   const { activityStatus } = useAgentActivity();
   const status = activityStatus(w.serverName, w.tmuxTarget);
   const isWorking = status === 'working' || status === 'blocked';
+  const bindLongPress = useLongPress();
 
   return (
-    <button type="button" onClick={onSelect} className="row-hover" style={{ ...rowStyle, justifyContent: 'flex-start', gap: 10 }}>
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onSelect}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(); } }}
+      className="row-hover"
+      style={{ ...rowStyle, justifyContent: 'flex-start', gap: 10, cursor: 'pointer', ...(onLongPress ? longPressStyle : {}) }}
+      {...(onLongPress ? bindLongPress((x, y) => onLongPress(x, y)) : {})}
+    >
       <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 12, flexShrink: 0 }}>
         {isWorking ? <BrailleSpinner /> : <IdleDot />}
       </span>
@@ -136,7 +170,22 @@ function WindowMenuRow({ w, isCurrent, onSelect }: { w: Window; isCurrent: boole
           <Icon name="check" size={16} />
         </span>
       )}
-    </button>
+      {onDelete && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
+          aria-label={t('windows.deleteWindow')}
+          title={t('windows.deleteWindow')}
+          className="icon-btn"
+          style={{
+            width: 44, height: 44, marginRight: -14, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            border: 'none', background: 'none', color: 'var(--danger)', cursor: 'pointer', flexShrink: 0,
+          }}
+        >
+          <Icon name="trash" size={16} />
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -149,8 +198,8 @@ function WindowMenuRow({ w, isCurrent, onSelect }: { w: Window; isCurrent: boole
  */
 export default function TaskDetailMenu({
   open, onClose, task, unitName, hasUnit, actions, diffPath, diffServerName, browserCount,
-  onStatusChange, onOpenDescription, onOpenUnit, onOpenCommits, onOpenDiff, onOpenBrowser,
-  isPinned, onTogglePin, onCloseTab, windows, focusedWindowTarget, onSelectWindow, onOpenAddWindow,
+  onStatusChange, onOpenDescription, onOpenUnit, onOpenCommits, onOpenDiff, onOpenBrowser, onDeleteBrowser,
+  isPinned, onTogglePin, onCloseTab, windows, focusedWindowTarget, onSelectWindow, onLongPressWindow, onDeleteWindow, onOpenAddWindow, onAddBrowser,
 }: TaskDetailMenuProps) {
   const { t } = useTranslation(['tasks', 'workspace', 'common']);
   const [commitCount, setCommitCount] = useState<number | null>(null);
@@ -274,11 +323,50 @@ export default function TaskDetailMenu({
               </>
             )}
             {browserCount > 0 && (
-              <MenuRow
-                label={t('common:labels.browser')}
-                value={browserCount}
+              <div
+                role="button"
+                tabIndex={0}
                 onClick={() => { onOpenBrowser(); onClose(); }}
-              />
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenBrowser(); onClose(); } }}
+                className="row-hover"
+                style={{ ...rowStyle, cursor: 'pointer' }}
+              >
+                <span>{t('common:labels.browser')}</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'var(--text-dim)', minWidth: 0 }}>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{browserCount}</span>
+                  {/* ブラウザが1つだけなら行から直接削除できる薄い導線（複数なら「ブラウザ」表示
+                      内の一覧・各行 ✕ に委ねる、Issue #338 T10 #2） */}
+                  {browserCount === 1 && onDeleteBrowser && (
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); onDeleteBrowser(); onClose(); }}
+                      aria-label={t('workspace:objects.closeGroupAction')}
+                      title={t('workspace:objects.closeGroupAction')}
+                      className="icon-btn"
+                      style={{
+                        width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        border: 'none', background: 'none', color: 'var(--danger)', cursor: 'pointer', flexShrink: 0,
+                      }}
+                    >
+                      <Icon name="trash" size={14} />
+                    </button>
+                  )}
+                  <Icon name="chevron-right" size={16} />
+                </span>
+              </div>
+            )}
+            {onAddBrowser && (
+              <button
+                type="button"
+                onClick={() => { onAddBrowser(); onClose(); }}
+                className="row-hover"
+                style={{ ...rowStyle, justifyContent: 'flex-start', gap: 10, color: 'var(--accent)' }}
+              >
+                <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 12, flexShrink: 0 }}>
+                  <Icon name="plus" size={14} />
+                </span>
+                <span>{t('tasks:contextMenu.addBrowser')}</span>
+              </button>
             )}
           </div>
 
@@ -296,6 +384,8 @@ export default function TaskDetailMenu({
                       w={w}
                       isCurrent={isCurrent}
                       onSelect={() => { onSelectWindow(w.serverName, w.tmuxTarget); onClose(); }}
+                      onLongPress={onLongPressWindow ? (x, y) => onLongPressWindow(x, y, w) : undefined}
+                      onDelete={onDeleteWindow ? () => onDeleteWindow(w) : undefined}
                     />
                   );
                 })}

@@ -910,6 +910,7 @@ function WorkspaceInner() {
       agentDefsLoading={addWindowModal.agentPresetsLoading}
       agentDefsError={addWindowModal.agentPresetsError}
       showWindowContextMenu={windowActions.showWindowContextMenu}
+      showWindowContextMenuAt={windowActions.showWindowContextMenuAt}
       onSwitchSidebarMode={handleSwitchSidebarMode}
       onFileSelect={handleFileSelect}
       onRefresh={refreshWorkspace}

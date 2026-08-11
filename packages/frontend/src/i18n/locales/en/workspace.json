@@ -34,7 +34,8 @@
   "activityPill": {
     "ariaLabel": "Activity status",
     "workingSection": "Working {{count}}",
-    "finishedSection": "Recently finished {{count}}"
+    "finishedSection": "Recently finished {{count}}",
+    "empty": "No agents running"
   },
   "home": {
     "needsAttention": "Needs Attention",
@@ -250,7 +251,9 @@
     "copyUrl": "Copy URL",
     "urlCopied": "URL copied",
     "closeGroupAction": "Close group",
-    "closeGroupFailed": "Failed to close the group"
+    "closeGroupFailed": "Failed to close the group",
+    "deleteBrowserTitle": "Delete browser",
+    "deleteBrowserMessage": "Close \"{{label}}\" and remove it from the task?"
   },
   "viewLabels": {
     "description": "Description",

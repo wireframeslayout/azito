@@ -34,7 +34,8 @@
   "activityPill": {
     "ariaLabel": "稼働ステータス",
     "workingSection": "稼働中 {{count}}",
-    "finishedSection": "最近完了 {{count}}"
+    "finishedSection": "最近完了 {{count}}",
+    "empty": "稼働中のエージェントはありません"
   },
   "home": {
     "needsAttention": "要対応",
@@ -250,7 +251,9 @@
     "copyUrl": "URL をコピー",
     "urlCopied": "URL をコピーしました",
     "closeGroupAction": "グループを閉じる",
-    "closeGroupFailed": "グループを閉じられませんでした"
+    "closeGroupFailed": "グループを閉じられませんでした",
+    "deleteBrowserTitle": "ブラウザを削除",
+    "deleteBrowserMessage": "「{{label}}」を閉じてタスクから削除しますか？"
   },
   "viewLabels": {
     "description": "説明",

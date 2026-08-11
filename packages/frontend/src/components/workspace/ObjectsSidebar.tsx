@@ -70,6 +70,10 @@ interface ObjectsSidebarProps {
   projectServers: { serverName: string; workingDirectory?: string }[];
   connectPane: (serverName: string, target: string) => void;
   showWindowContextMenu: (e: React.MouseEvent, w: Window, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void;
+  /** 長押し（タッチ座標）版の showWindowContextMenu。プレーンなプロジェクトウィンドウ行の
+   * 長押しで desktop と同一のコンテキストメニューを開く（Issue #338 T10）。省略時は長押しを
+   * 効かせない（デスクトップ専用ページ等）。 */
+  showWindowContextMenuAt?: (x: number, y: number, w: Window, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void;
   onOpenAddWindow: () => void;
   onOpenQuickAdd: (serverName: string, agentType: QuickAddAgent) => void;
   /** クイック追加ボタンの押下可否判定に使う。起動コマンドを実際に供給する useAddWindowModal 側の取得状態 */
@@ -120,6 +124,7 @@ export default function ObjectsSidebar({
   projectServers,
   connectPane,
   showWindowContextMenu,
+  showWindowContextMenuAt,
   onOpenAddWindow,
   onOpenQuickAdd,
   agentDefsLoading,
@@ -630,6 +635,7 @@ export default function ObjectsSidebar({
                       agentDefsError={agentDefsError}
                       onPaneClick={handlePaneClick}
                       onContextMenu={showWindowContextMenu}
+                      onLongPress={showWindowContextMenuAt}
                       onOpenQuickAdd={onOpenQuickAdd}
                       extra={renderActivityExtra}
                       activityClassName={renderActivityClassName}
@@ -675,6 +681,7 @@ export default function ObjectsSidebar({
                       agentDefsError={agentDefsError}
                       onPaneClick={handlePaneClick}
                       onContextMenu={showWindowContextMenu}
+                      onLongPress={showWindowContextMenuAt}
                       onOpenQuickAdd={onOpenQuickAdd}
                       extra={renderActivityExtra}
                       activityClassName={renderActivityClassName}
@@ -720,6 +727,7 @@ export default function ObjectsSidebar({
                       agentDefsError={agentDefsError}
                       onPaneClick={handlePaneClick}
                       onContextMenu={showWindowContextMenu}
+                      onLongPress={showWindowContextMenuAt}
                       onOpenQuickAdd={onOpenQuickAdd}
                       extra={renderActivityExtra}
                       activityClassName={renderActivityClassName}
@@ -820,6 +828,7 @@ interface ServerGroupProps {
   agentDefsError?: string | null;
   onPaneClick: (serverName: string, target: string) => void;
   onContextMenu: (e: React.MouseEvent, w: Window, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void;
+  onLongPress?: (x: number, y: number, w: Window, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void;
   onOpenQuickAdd: (serverName: string, agentType: QuickAddAgent) => void;
   extra?: (w: WindowItem) => React.ReactNode;
   activityClassName?: (w: WindowItem) => string | undefined;
@@ -829,7 +838,7 @@ interface ServerGroupProps {
 function ServerGroup({
   serverName, windows, sessionData, isActive,
   quickAddButtons, quickAddIcons, agentDefsLoading, agentDefsError,
-  onPaneClick, onContextMenu,
+  onPaneClick, onContextMenu, onLongPress,
   onOpenQuickAdd, extra, activityClassName,
   respawningWindowIds,
 }: ServerGroupProps) {
@@ -877,6 +886,7 @@ function ServerGroup({
         isActive={isActive}
         onPaneClick={onPaneClick}
         onContextMenu={onContextMenu as (e: React.MouseEvent, w: WindowItem, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void}
+        onLongPress={onLongPress as ((x: number, y: number, w: WindowItem, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void) | undefined}
         extra={extra}
         activityClassName={activityClassName}
         respawningWindowIds={respawningWindowIds}
