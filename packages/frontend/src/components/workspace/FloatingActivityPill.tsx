@@ -8,12 +8,20 @@ import { formatRelativeTime } from '../../utils/time';
 import { openActivityTarget } from '../../lib/activityOpen';
 import { groupRunningRows, readKeyFor, pruneStaleReadKeys } from '../../lib/activityPillLogic';
 import type { Task } from '../../pages/workspace/types';
+import { HealthDot, HEALTH_CHIP_TOKENS } from '../statusbar/HealthDot';
+import { ResourceMeter } from '../statusbar/ResourceMeter';
+import { healthReasonText } from '../statusbar/ResourceDropdown';
+import { getHealthLevel, getWorstHealth, useServerResourcesContext } from '../../hooks/useServerResources';
+import { ServerHealthSheet } from './ServerHealthSheet';
 
 // SP常設フローティングピル（Issue #69 T2 / モック S6-14, F2）。データは useAgentActivity
 // （useActiveWindowRows 経由）のみを参照し、新規ポーリングは持たない。ワークスペースのタブ有無に
 // 関わらず常設し、右下から文脈フッター（端末クイックキーバー/チャット入力バー、T3が公開する
 // --sp-footer-h）の上へ退避する。集計ロジック（グループ化・既読ID）は lib/activityPillLogic.ts
 // に切り出してユニットテストしている。
+// Issue #338 T11 P1: サーバーヘルスをピルに同梱する。データは useServerResourcesContext
+// （Layout 側の既存ポーリングを共有・新規ポーリング禁止）、ヘルス判定は getHealthLevel/
+// getWorstHealth（ResourceDropdown/ServerHealthSheet と共有・コピー禁止）を再利用する。
 
 const FINISHED_WINDOW_MS = 60 * 60 * 1000;
 
@@ -75,7 +83,15 @@ export function FloatingActivityPill({ allTasks, openTask, connectPane }: Floati
   // 既読にし、以後ピル/リストのカウントから外す。shared な dismissFinished（他画面の
   // ActiveWindowsSection 等にも影響する）とは別系統に保つ。
   const [readKeys, setReadKeys] = useState<Set<string>>(() => new Set());
+  const [healthOpen, setHealthOpen] = useState(false);
   const containerRef = useClickOutside<HTMLDivElement>(() => setOpen(false));
+
+  // サーバーヘルス（Issue #338 T11 P1）。複数サーバーは最悪値を代表として使う。
+  const servers = useServerResourcesContext();
+  const worstHealth = getWorstHealth(servers.map((s) => getHealthLevel(s.measurement)));
+  const worstServer = servers.find((s) => getHealthLevel(s.measurement) === worstHealth) ?? null;
+  const worstMeasurement = worstServer?.measurement ?? null;
+  const worstMemUsedPercent = worstMeasurement ? 100 - worstMeasurement.memAvailablePercent : null;
 
   const taskById = useMemo(() => new Map(allTasks.map((tk) => [tk.id, tk])), [allTasks]);
 
@@ -110,10 +126,9 @@ export function FloatingActivityPill({ allTasks, openTask, connectPane }: Floati
   );
 
   const workingCount = workingGroups.length;
-
-  // 非表示条件: 稼働も未読の完了もない場合は畳む。展開中（open）は対象外 —
-  // 開いた瞬間に既読化（unreadFinishedCount→0）してもポップオーバーごと消えないようにする。
-  if (!open && workingCount === 0 && unreadFinishedCount === 0) return null;
+  // 完全アイドル（稼働0・未読完了0）— 静止グリフ表示に切り替える境界（Issue #338 T9 #5:
+  // 以前はこの状態でピル自体を非表示にしていたが、常設に変更）。
+  const isIdle = workingCount === 0 && unreadFinishedCount === 0;
 
   const handleToggle = () => {
     setOpen((prev) => {
@@ -222,6 +237,50 @@ export function FloatingActivityPill({ allTasks, openTask, connectPane }: Floati
               ))}
             </section>
           )}
+          {workingCount === 0 && finishedRows.length === 0 && (
+            <div style={{ padding: '12px 8px', textAlign: 'center', color: 'var(--text-dim)', fontSize: 'var(--font-sm)' }}>
+              {t('workspace:activityPill.empty')}
+            </div>
+          )}
+
+          {/* サーバーヘルス節（Issue #338 T11 P1）。アイドル時（稼働0・未読完了0）でも表示する。 */}
+          <section style={{ borderTop: '1px solid var(--border)', marginTop: 4, paddingTop: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'space-between', gap: 4, padding: '4px 8px 6px' }}>
+              <span style={{ ...sectionHeaderStyle, padding: 0, whiteSpace: 'nowrap' }}>{t('workspace:mobile.serverHealth')}</span>
+              <span
+                style={{
+                  fontSize: 'var(--font-2xs)',
+                  fontWeight: 600,
+                  padding: '2px 8px',
+                  borderRadius: 'var(--radius-full)',
+                  background: HEALTH_CHIP_TOKENS[worstHealth].bg,
+                  color: HEALTH_CHIP_TOKENS[worstHealth].fg,
+                  flexShrink: 0,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {healthReasonText(worstHealth, worstMemUsedPercent, t)}
+              </span>
+            </div>
+            {worstMeasurement && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '0 8px 8px' }}>
+                <PillHealthMiniRow label="MEM" value={worstMemUsedPercent ?? 0} warning={(worstMemUsedPercent ?? 0) >= 60} />
+                <PillHealthMiniRow
+                  label="CPU"
+                  value={Math.min(100, worstMeasurement.loadPerCore * 100)}
+                  warning={worstMeasurement.loadPerCore > 1.5}
+                />
+              </div>
+            )}
+            <button
+              type="button"
+              className="row-hover"
+              onClick={() => { setOpen(false); setHealthOpen(true); }}
+              style={{ ...rowButtonStyle, justifyContent: 'space-between', color: 'var(--text-dim)' }}
+            >
+              <span>{t('workspace:activityPill.viewHealthDetails')}</span>
+            </button>
+          </section>
         </div>
       )}
 
@@ -263,7 +322,30 @@ export function FloatingActivityPill({ allTasks, openTask, connectPane }: Floati
             <span style={{ color: 'var(--success)' }}>{unreadFinishedCount}</span>
           </span>
         )}
+        {isIdle && (
+          <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--text-dim)' }}>
+            <span aria-hidden="true">⠿</span>
+            <span>0</span>
+          </span>
+        )}
+        {/* サーバーヘルスドット（Issue #338 T11 P1）。アイドル時でも常に表示する。 */}
+        <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <span aria-hidden="true" style={{ color: 'var(--text-dim)' }}>&middot;</span>
+          <HealthDot level={worstHealth} size={8} />
+        </span>
       </button>
+
+      <ServerHealthSheet open={healthOpen} onClose={() => setHealthOpen(false)} />
+    </div>
+  );
+}
+
+function PillHealthMiniRow({ label, value, warning }: { label: string; value: number; warning: boolean }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
+      <span style={{ minWidth: 30, color: 'var(--text)', fontWeight: 600 }}>{label}</span>
+      <ResourceMeter value={value} warning={warning} width={64} height={4} />
+      <span style={{ marginLeft: 'auto' }}>{Math.round(Math.max(0, Math.min(100, value)))}%</span>
     </div>
   );
 }

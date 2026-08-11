@@ -1,19 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ServerHealthDetailBody, healthReasonText } from '../statusbar/ResourceDropdown';
+import { HEALTH_CHIP_TOKENS } from '../statusbar/HealthDot';
 import {
   getHealthLevel,
   getWorstHealth,
   useServerResourceDetail,
   useServerResourcesContext,
 } from '../../hooks/useServerResources';
-import type { HealthLevel, ServerResourceEntry } from '../../hooks/useServerResources';
-
-const HEALTH_CHIP_TOKENS: Record<HealthLevel, { bg: string; fg: string }> = {
-  healthy: { bg: 'var(--success-a15)', fg: 'var(--success)' },
-  warning: { bg: 'var(--warning-a15)', fg: 'var(--warning)' },
-  critical: { bg: 'var(--danger-a15)', fg: 'var(--danger)' },
-};
+import type { ServerResourceEntry } from '../../hooks/useServerResources';
 
 // グラバーの下スワイプで閉じる際、指を離した時点でこれ以上ドラッグしていれば「閉じる」と
 // みなす距離（px）。モック（S6/M1）のボトムシート共通挙動。

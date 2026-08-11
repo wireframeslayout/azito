@@ -35,7 +35,8 @@
     "ariaLabel": "Activity status",
     "workingSection": "Working {{count}}",
     "finishedSection": "Recently finished {{count}}",
-    "empty": "No agents running"
+    "empty": "No agents running",
+    "viewHealthDetails": "View details ▸"
   },
   "home": {
     "needsAttention": "Needs Attention",

@@ -35,7 +35,8 @@
     "ariaLabel": "稼働ステータス",
     "workingSection": "稼働中 {{count}}",
     "finishedSection": "最近完了 {{count}}",
-    "empty": "稼働中のエージェントはありません"
+    "empty": "稼働中のエージェントはありません",
+    "viewHealthDetails": "詳細を表示 ▸"
   },
   "home": {
     "needsAttention": "要対応",
