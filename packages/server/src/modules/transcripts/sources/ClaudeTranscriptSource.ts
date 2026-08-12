@@ -36,16 +36,25 @@ const INTERRUPT_TEXT_PATTERN = /^\[Request interrupted by user( for tool use)?\]
 /**
  * Claude Code がローカルスラッシュコマンド実行時に role=user の文字列 content として書く3種の定型
  * レコード（実データで確認、Issue #338 followup）:
- *  1. `<local-command-caveat>Caveat: ...` — 破棄対象（isMeta: true が付くことが多いが、判定は本文
- *     のプレフィックスのみで行う）。
+ *  1. `<local-command-caveat>Caveat: ...` — 破棄対象。実レコードでは常に isMeta: true が付く
+ *     （レビュー指摘 Minor 2: 本文プレフィックスのみで判定すると、ユーザーが本文冒頭にたまたま
+ *     同じタグを書いた通常プロンプトまで黙って破棄してしまうため、isMeta === true を必須条件にする）。
  *  2. `<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>...` —
- *     'command' エントリへ変換する。
+ *     'command' エントリへ変換する。content 全体がこの構造（command-name + command-message +
+ *     command-args の3タグのみ）に完全一致する場合のみ command 化する（レビュー指摘 Minor 2:
+ *     command-name/command-args の間に任意の文字列を許すと、たまたま似た構造を書いた通常発言まで
+ *     command 扱いになり得るため、実レコードに必ず存在する command-message タグの完全一致を要求する）。
  *  3. `<local-command-stdout>...`/`<local-command-stderr>...`（ANSI エスケープ入り） — 直前の
- *     'command' エントリへマージする。隣接しない単独の stdout/stderr は commandName 無しの単独
- *     'command' エントリとして扱う。
+ *     'command' エントリへマージする。隣接しない単独の stdout/stderr は、content 全体がそのタグ
+ *     1つで完結する場合のみ commandName 無しの単独 'command' エントリとして扱う。
+ *
+ * これらの判定は完全一致（content 全体のアンカー一致）まで絞ってもなお、理論上はユーザーが厳密に
+ * 同じテキストを入力すれば偽装できてしまう。ただし影響は表示レベル（そのメッセージが command 行の
+ * 見た目で描画される・稼働判定が terminal に倒れる）に留まり、実行内容やデータには影響しない。
  */
 const LOCAL_COMMAND_CAVEAT_PREFIX = '<local-command-caveat>';
-const COMMAND_NAME_PATTERN = /^<command-name>([^<]*)<\/command-name>[\s\S]*?<command-args>([^<]*)<\/command-args>\s*$/;
+const COMMAND_NAME_PATTERN =
+  /^<command-name>([^<]*)<\/command-name>\s*<command-message>[^<]*<\/command-message>\s*<command-args>([^<]*)<\/command-args>\s*$/;
 const LOCAL_COMMAND_STDOUT_PATTERN = /^<local-command-stdout>([\s\S]*)<\/local-command-stdout>\s*$/;
 const LOCAL_COMMAND_STDERR_PATTERN = /^<local-command-stderr>([\s\S]*)<\/local-command-stderr>\s*$/;
 /** SGR エスケープ（例: `\x1b[1m...\x1b[22m`）を除去する。local-command-stdout/stderr の装飾用。 */
@@ -329,7 +338,9 @@ function tryHandleLocalCommandRecord(
   const content = message.content;
   const timestamp = typeof record.timestamp === 'string' ? record.timestamp : null;
 
-  if (content.startsWith(LOCAL_COMMAND_CAVEAT_PREFIX)) {
+  // isMeta === true を必須にする（レビュー指摘 Minor 2）: 本文プレフィックスだけで判定すると、
+  // ユーザーが本文冒頭にたまたま同じタグ文字列を書いた通常プロンプトまで黙って破棄してしまう。
+  if (record.isMeta === true && content.startsWith(LOCAL_COMMAND_CAVEAT_PREFIX)) {
     return { handled: true, entry: null, nextPending: null };
   }
 

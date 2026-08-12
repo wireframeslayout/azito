@@ -337,6 +337,13 @@ function normalizeEventMsg(record: Record<string, unknown>, fallbackUuid: string
   return { uuid: fallbackUuid, type: 'interrupted', timestamp, blocks: [] };
 }
 
+/** buildParseLine の戻り値。parseLine 本体に加え、この読み取りウィンドウ終了時点での最新モデル名を取得できる。 */
+interface ParseLineHandle {
+  parseLine: (line: string) => TranscriptEntry | null;
+  /** このウィンドウ内で観測した turn_context.payload.model の最新値（seedModel 由来も含む）。1件も無ければ undefined。 */
+  getCurrentModel: () => string | undefined;
+}
+
 /**
  * 1行 → TranscriptEntry のパーサを作る。call_id を持つ function_call/function_call_output・
  * custom_tool_call/custom_tool_call_output は、それを uuid のベースに使う（呼び出しと結果の
@@ -344,15 +351,20 @@ function normalizeEventMsg(record: Record<string, unknown>, fallbackUuid: string
  * 側で `:call`/`:output` サフィックスを付けて一意化する。id を持たない message/reasoning は、
  * この読み取りウィンドウ内の行インデックスから安定生成する（windowKey は offset 単位で一意なため、
  * ウィンドウをまたいだ衝突はない）。
+ *
+ * turn_context.payload.model（実データで確認、Issue #338 followup）: そのターン以降の assistant
+ * エントリ（message role=assistant・reasoning）へ付与するモデル名。turn_context 自体はエントリ化
+ * しない。この関数自身のクロージャ寿命は1回の読み取りウィンドウだが、seedModel（呼び出し側が
+ * CodexTranscriptSource.lastKnownModel キャッシュから渡す、直前の増分読みで観測した最新モデル）で
+ * 初期値を与えられる — ライブポーリングの増分読みで turn_context と assistant 応答が別ポーリングに
+ * 分かれても model が欠落しないようにするため（レビュー指摘: Issue #338 followup Important 1）。
+ * 後方ページング（readSessionBefore）は seedModel を渡さない — 直前の turn_context が本当に窓外の
+ * ケースは model 無しのままでよい（フォールバック合成はしない）。
  */
-function buildParseLine(windowKey: string): (line: string) => TranscriptEntry | null {
+function buildParseLine(windowKey: string, seedModel?: string): ParseLineHandle {
   let index = 0;
-  // turn_context.payload.model（実データで確認、Issue #338 followup）: そのターン以降の assistant
-  // エントリ（message role=assistant・reasoning）へ付与するモデル名。turn_context 自体はエントリ化
-  // しない。ウィンドウをまたいだ状態保持はしない（この関数のクロージャ寿命 = 1回の読み取りウィンドウ）
-  // — 直近の turn_context がウィンドウ外なら、そのウィンドウ内の assistant エントリに model は付かない。
-  let currentModel: string | undefined;
-  return (line: string): TranscriptEntry | null => {
+  let currentModel: string | undefined = seedModel;
+  const parseLine = (line: string): TranscriptEntry | null => {
     const currentIndex = index;
     index += 1;
     if (!line) return null;
@@ -380,6 +392,7 @@ function buildParseLine(windowKey: string): (line: string) => TranscriptEntry | 
     if (entry && entry.type === 'assistant' && currentModel !== undefined) entry.model = currentModel;
     return entry;
   };
+  return { parseLine, getCurrentModel: () => currentModel };
 }
 
 // ─── Source ───
@@ -407,6 +420,20 @@ export class CodexTranscriptSource implements TranscriptSource {
    * 新規セッション（キャッシュミス）の場合のみ scanSessionFiles() で再走査する。
    */
   private readonly sessionFileCache = new Map<string, string>();
+
+  /**
+   * sessionId → 直近の増分読み（readSession の offset 指定パス）で観測した turn_context のモデル名
+   * （インスタンス寿命内で保持、Issue #338 followup Important 1）。ライブポーリングは同一 sessionId に
+   * 対し offset を毎回進めながら readSession を呼ぶが、turn_context と対応する assistant 応答が
+   * 別ポーリングの読み取りウィンドウに分かれると、1回の buildParseLine 呼び出し（1ウィンドウ限りの
+   * クロージャ）だけでは model を見失う。次回の増分読みをこのキャッシュから seed することで、
+   * ポーリング境界をまたいでも直近のモデルを引き継ぐ。初回読み（offset 未指定）と後方ページング
+   * （readSessionBefore）はこのキャッシュを参照しない（前者は新規セッション表示、後者は過去分の
+   * 読み直しであり、直前の turn_context が窓外なら model 無し表示のままでよい — フォールバック禁止）。
+   * offset は「このモデルを観測した時点で読み終えた nextOffset」を持ち、更新は単調増加のときのみ行う
+   * （通常は単一の順序だったポーリングだが、念のための防御）。
+   */
+  private readonly lastKnownModel = new Map<string, { offset: number; model: string }>();
 
   private sessionsDir(): string {
     return resolveSessionsDir(this.sessionsDirOverride);
@@ -508,13 +535,25 @@ export class CodexTranscriptSource implements TranscriptSource {
     try {
       const size = fs.fstatSync(fd).size;
       const windowKey = offset === undefined ? 'i' : String(offset);
-      const parseLine = buildParseLine(windowKey);
-      return offset === undefined
+      // 増分読み（offset 指定）のみキャッシュから seed する。初回読みは新規表示扱いで seed しない。
+      const seedModel = offset !== undefined ? this.lastKnownModel.get(sessionId)?.model : undefined;
+      const { parseLine, getCurrentModel } = buildParseLine(windowKey, seedModel);
+      const result = offset === undefined
         ? readInitialWindow(fd, size, this.initialReadMaxBytes, parseLine, TAIL_ENTRY_LIMIT)
         : readIncrementalWindow(fd, size, offset, this.incrementalReadMaxBytes, parseLine);
+      this.rememberModel(sessionId, result.nextOffset, getCurrentModel());
+      return result;
     } finally {
       fs.closeSync(fd);
     }
+  }
+
+  /** lastKnownModel キャッシュを更新する。単調増加のときのみ上書きする（読み取り順序が乱れても古い値で巻き戻さない）。 */
+  private rememberModel(sessionId: string, nextOffset: number, model: string | undefined): void {
+    if (model === undefined) return;
+    const cached = this.lastKnownModel.get(sessionId);
+    if (cached && nextOffset < cached.offset) return;
+    this.lastKnownModel.set(sessionId, { offset: nextOffset, model });
   }
 
   readSessionBefore(sessionId: string, before: number): ReadSessionBeforeResult | null {
@@ -530,7 +569,9 @@ export class CodexTranscriptSource implements TranscriptSource {
 
     try {
       const size = fs.fstatSync(fd).size;
-      const parseLine = buildParseLine(`b${before}`);
+      // 後方ページングは lastKnownModel を seed も更新もしない（過去分の読み直しであり、直前の
+      // turn_context が窓外なら model 無し表示のままでよい。フォールバック合成はしない）。
+      const { parseLine } = buildParseLine(`b${before}`);
       return readBeforeWindow(fd, size, before, this.incrementalReadMaxBytes, parseLine);
     } finally {
       fs.closeSync(fd);
@@ -561,7 +602,7 @@ export class CodexTranscriptSource implements TranscriptSource {
       return 'unknown';
     }
 
-    const parseLine = buildParseLine('tail');
+    const { parseLine } = buildParseLine('tail');
     const lines = content.split('\n');
     for (let i = lines.length - 1; i >= 0; i--) {
       const entry = parseLine(lines[i]);

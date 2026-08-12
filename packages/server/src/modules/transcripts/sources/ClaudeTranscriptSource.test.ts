@@ -531,6 +531,63 @@ describe('ClaudeTranscriptSource', () => {
       expect(result!.entries[0].uuid).toBe('u1');
     });
 
+    it('does NOT discard a caveat-prefixed message when isMeta is not true (real user text, not the CLI-generated meta record)', () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        {
+          type: 'user',
+          uuid: 'u1',
+          message: {
+            content: '<local-command-caveat>this is something I typed myself, not a real caveat</local-command-caveat>',
+          },
+        },
+      ]);
+      const result = service.readSession(SID_A);
+      expect(result!.entries).toHaveLength(1);
+      expect(result!.entries[0]).toMatchObject({ uuid: 'u1', type: 'user' });
+    });
+
+    it('does not command-ify text that merely resembles a command-name record but lacks the required command-message tag', () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        {
+          type: 'user',
+          uuid: 'u1',
+          message: { content: '<command-name>/model</command-name>please explain what this does<command-args></command-args>' },
+        },
+      ]);
+      const result = service.readSession(SID_A);
+      expect(result!.entries).toHaveLength(1);
+      expect(result!.entries[0]).toMatchObject({ uuid: 'u1', type: 'user' });
+    });
+
+    it('does not command-ify a message that starts with the command-name structure but continues with unrelated trailing text', () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        {
+          type: 'user',
+          uuid: 'u1',
+          message: {
+            content:
+              '<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args></command-args> by the way, how are you?',
+          },
+        },
+      ]);
+      const result = service.readSession(SID_A);
+      expect(result!.entries).toHaveLength(1);
+      expect(result!.entries[0]).toMatchObject({ uuid: 'u1', type: 'user' });
+    });
+
+    it('does not command-ify a stdout-tagged message that has trailing text after the closing tag', () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        {
+          type: 'user',
+          uuid: 'u1',
+          message: { content: '<local-command-stdout>fake output</local-command-stdout> please ignore the tag above' },
+        },
+      ]);
+      const result = service.readSession(SID_A);
+      expect(result!.entries).toHaveLength(1);
+      expect(result!.entries[0]).toMatchObject({ uuid: 'u1', type: 'user' });
+    });
+
     it('merges a command-name record with the immediately following stdout record, stripping ANSI escapes', () => {
       writeSession(dir, 'proj-a', SID_A, [
         {
@@ -583,7 +640,11 @@ describe('ClaudeTranscriptSource', () => {
 
     it('does not merge a stdout record into a command-name entry that is not immediately adjacent', () => {
       writeSession(dir, 'proj-a', SID_A, [
-        { type: 'user', uuid: 'cmd1', message: { content: '<command-name>/model</command-name>\n<command-args></command-args>' } },
+        {
+          type: 'user',
+          uuid: 'cmd1',
+          message: { content: '<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args></command-args>' },
+        },
         { type: 'user', uuid: 'unrelated', message: { content: 'an unrelated message' } },
         { type: 'user', uuid: 'out1', message: { content: '<local-command-stdout>late output</local-command-stdout>' } },
       ]);
@@ -635,7 +696,7 @@ describe('ClaudeTranscriptSource', () => {
         {
           type: 'user',
           uuid: 'cmd1',
-          message: { content: '<command-name>/model</command-name>\n<command-args></command-args>' },
+          message: { content: '<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args></command-args>' },
         },
         { type: 'user', uuid: 'out1', message: { content: '<local-command-stdout>Set model to Opus 5</local-command-stdout>' } },
       ]);

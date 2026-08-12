@@ -419,6 +419,60 @@ describe('CodexTranscriptSource', () => {
       const result = source.readSession(SID_A);
       expect(result!.entries[0].model).toBeUndefined();
     });
+
+    it('carries the model across separate readSession calls when turn_context and the assistant reply land in different polling reads (Important 1 regression)', () => {
+      const file = writeSession(dir, SID_A, [SESSION_META(SID_A, '/home/user/proj-a'), USER_MESSAGE('hi'), TURN_CONTEXT('gpt-5.2-codex')]);
+      // First read: only session_meta/user/turn_context exist yet — turn_context is observed but no assistant entry to attach it to.
+      const first = source.readSession(SID_A);
+      expect(first!.entries.every((e) => e.model === undefined)).toBe(true);
+
+      // Simulate the assistant reply landing in a *separate* live-poll read (a fresh parseLine closure).
+      fs.appendFileSync(file, JSON.stringify(ASSISTANT_MESSAGE('hello there')) + '\n');
+      const second = source.readSession(SID_A, first!.nextOffset);
+      expect(second!.entries).toHaveLength(1);
+      expect(second!.entries[0].model).toBe('gpt-5.2-codex');
+    });
+
+    it('carries the model across two consecutive incremental reads (turn_context in one poll, assistant reply in the next)', () => {
+      const file = writeSession(dir, SID_A, [SESSION_META(SID_A, '/home/user/proj-a')]);
+      const initial = source.readSession(SID_A);
+
+      fs.appendFileSync(file, JSON.stringify(TURN_CONTEXT('gpt-5.6-terra')) + '\n');
+      const afterTurnContext = source.readSession(SID_A, initial!.nextOffset);
+      expect(afterTurnContext!.entries).toHaveLength(0); // turn_context itself is not an entry
+
+      fs.appendFileSync(file, JSON.stringify(ASSISTANT_MESSAGE('second poll reply')) + '\n');
+      const afterAssistant = source.readSession(SID_A, afterTurnContext!.nextOffset);
+      expect(afterAssistant!.entries).toHaveLength(1);
+      expect(afterAssistant!.entries[0].model).toBe('gpt-5.6-terra');
+    });
+
+    it('does not seed readSessionBefore (backward pagination) from the forward-read model cache', () => {
+      const file = writeSession(dir, SID_A, [SESSION_META(SID_A, '/home/user/proj-a'), TURN_CONTEXT('gpt-5.2-codex')]);
+      const assistantLine = JSON.stringify(ASSISTANT_MESSAGE('forward reply')) + '\n';
+
+      // A small incrementalReadMaxBytes keeps the later incremental/backward windows narrow enough to
+      // contain only the trailing assistant line, not the turn_context line before it — isolating
+      // whether the forward-read cache leaks into a backward page.
+      const narrowSource = new CodexTranscriptSource(dir, { incrementalReadMaxBytes: Buffer.byteLength(assistantLine) + 10 });
+
+      // Prime the forward cache: the initial read observes session_meta + turn_context (small file, one window).
+      const primed = narrowSource.readSession(SID_A);
+      expect(primed!.entries).toHaveLength(0);
+
+      // The assistant reply arrives afterwards, in a separate (narrow) incremental read that seeds from the cache.
+      fs.appendFileSync(file, assistantLine);
+      const forward = narrowSource.readSession(SID_A, primed!.nextOffset);
+      expect(forward!.entries).toHaveLength(1);
+      expect(forward!.entries[0].model).toBe('gpt-5.2-codex');
+
+      // A backward page ending right after that same assistant entry, narrow enough to exclude the
+      // turn_context line, must not pick up the (now-primed) cached model.
+      const before = narrowSource.readSessionBefore(SID_A, forward!.nextOffset);
+      const assistantEntries = before!.entries.filter((e) => e.type === 'assistant');
+      expect(assistantEntries.length).toBeGreaterThan(0);
+      for (const entry of assistantEntries) expect(entry.model).toBeUndefined();
+    });
   });
 
   describe('getSessionTailState', () => {
