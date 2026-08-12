@@ -169,17 +169,19 @@ function WindowMenuRow({ w, isCurrent, onSelect, onLongPress, onDelete }: {
       <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', flexShrink: 0 }}>
         <AgentIcon workerType={w.workerType} windowType={w.windowType} size={15} />
       </span>
-      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {w.label || w.tmuxTarget}
-      </span>
-      {w.workerType && (
-        <span style={{
-          fontSize: 'var(--font-2xs)', color: 'var(--text-dim)', background: 'var(--input-bg)',
-          padding: '2px 6px', borderRadius: 'var(--radius-sm)', flexShrink: 0,
-        }}>
-          {w.workerType}
+      <span style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}>
+        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {w.label || w.tmuxTarget}
         </span>
-      )}
+        {w.workerType && (
+          <span style={{
+            fontSize: 'var(--font-2xs)', color: 'var(--text-dim)', background: 'var(--input-bg)',
+            padding: '2px 6px', borderRadius: 'var(--radius-sm)', flexShrink: 0,
+          }}>
+            {w.workerType}
+          </span>
+        )}
+      </span>
       {isCurrent && (
         <span aria-label={t('taskDetailMenu.currentWindow')} style={{ display: 'inline-flex', color: 'var(--accent)', flexShrink: 0 }}>
           <Icon name="check" size={16} />
@@ -194,7 +196,7 @@ function WindowMenuRow({ w, isCurrent, onSelect, onLongPress, onDelete }: {
           className="icon-btn"
           style={{
             width: 44, height: 44, marginRight: -14, display: 'flex', alignItems: 'center', justifyContent: 'center',
-            border: 'none', background: 'none', color: 'var(--danger)', cursor: 'pointer', flexShrink: 0,
+            border: 'none', background: 'none', color: 'var(--text-dim)', cursor: 'pointer', flexShrink: 0,
           }}
         >
           <Icon name="trash" size={16} />
@@ -416,7 +418,7 @@ export default function TaskDetailMenu({
             <div style={{ display: 'flex', gap: 'var(--space-2)', padding: '8px 16px 4px' }}>
               <button
                 type="button"
-                onClick={onExecute}
+                onClick={() => { onClose(); onExecute(); }}
                 disabled={!canExecute}
                 style={{
                   flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
@@ -431,7 +433,7 @@ export default function TaskDetailMenu({
               </button>
               <button
                 type="button"
-                onClick={onStop}
+                onClick={() => { onClose(); onStop(); }}
                 disabled={!canStop}
                 style={{
                   flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
