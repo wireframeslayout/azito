@@ -169,6 +169,7 @@ MCP_ENTRY_KEY="azt-mcp"
 MCP_SERVER_PATH="$HARNESS_DIR/skills/azt-mcp/mcp-server/index.js"
 NOTIFY_HOOK_SCRIPT="$HARNESS_DIR/hooks/azito-notify.sh"
 ACTIVITY_HOOK_SCRIPT="$HARNESS_DIR/hooks/azito-activity.sh"
+INTERACTION_HOOK_SCRIPT="$HARNESS_DIR/hooks/azito-interaction.sh"
 if [ -z "${AZITO_URL:-}" ]; then
   echo "WARNING: --azito-url が未指定のため http://localhost:3001 を使用します。" >&2
   echo "リモートサーバーでは必ず --azito-url で hub の URL を指定してください。" >&2
@@ -184,12 +185,16 @@ ENV_PREFIX=""
 NOTIFY_HOOK_CMD="${ENV_PREFIX}bash $NOTIFY_HOOK_SCRIPT"
 ACTIVITY_START_CMD="${ENV_PREFIX}bash $ACTIVITY_HOOK_SCRIPT start"
 ACTIVITY_STOP_CMD="${ENV_PREFIX}bash $ACTIVITY_HOOK_SCRIPT stop"
+INTERACTION_CMD="${ENV_PREFIX}bash $INTERACTION_HOOK_SCRIPT"
 
 if [[ -f "$NOTIFY_HOOK_SCRIPT" ]]; then
   chmod +x "$NOTIFY_HOOK_SCRIPT"
 fi
 if [[ -f "$ACTIVITY_HOOK_SCRIPT" ]]; then
   chmod +x "$ACTIVITY_HOOK_SCRIPT"
+fi
+if [[ -f "$INTERACTION_HOOK_SCRIPT" ]]; then
+  chmod +x "$INTERACTION_HOOK_SCRIPT"
 fi
 
 # tar 展開等で実行権が落ちるケースに備え、azitoctl / azs の実行権を明示的に保証する
@@ -266,6 +271,9 @@ if command -v node >/dev/null 2>&1; then
     const notifyHookPath = process.argv[11];
     const activityHookPath = process.argv[12];
     const azitoUiToken = process.argv[13];
+    const interactionCmd = process.argv[14];
+    const interactionHookExists = process.argv[15] === 'true';
+    const interactionHookPath = process.argv[16];
 
     let settings = {};
     try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch {}
@@ -358,6 +366,15 @@ if command -v node >/dev/null 2>&1; then
       messages.push('  稼働検出フック: スキップ (hook スクリプトが見つかりません)');
     }
 
+    // Notification hook (Phase B リアルタイム未回答検出): AskUserQuestion 等で
+    // Claude Code が入力待ちになった瞬間に発火し、agent-interaction webhook 経由で
+    // チャットビューのバナー表示を駆動する。
+    if (interactionHookExists) {
+      upsertHook('Notification', interactionHookPath, interactionCmd, 'Notification hook (未回答検出)');
+    } else {
+      messages.push('  未回答検出フック: スキップ (hook スクリプトが見つかりません)');
+    }
+
     if (changed) {
       fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
     }
@@ -369,7 +386,10 @@ if command -v node >/dev/null 2>&1; then
     "$([[ -f "$ACTIVITY_HOOK_SCRIPT" ]] && echo true || echo false)" \
     "$NOTIFY_HOOK_SCRIPT" \
     "$ACTIVITY_HOOK_SCRIPT" \
-    "$AZITO_UI_TOKEN"
+    "$AZITO_UI_TOKEN" \
+    "$INTERACTION_CMD" \
+    "$([[ -f "$INTERACTION_HOOK_SCRIPT" ]] && echo true || echo false)" \
+    "$INTERACTION_HOOK_SCRIPT"
 
   if [[ -n "$AZITO_WEBHOOK_TOKEN" ]]; then
     echo "  AZITO_WEBHOOK_TOKEN: 設定済み（hook command に埋め込み）"
@@ -419,6 +439,12 @@ else
       echo "      { \"hooks\": [{ \"type\": \"command\", \"command\": \"$ACTIVITY_START_CMD\" }] }"
       echo '    ]'
     else
+      echo '    ]'
+    fi
+    if [[ -f "$INTERACTION_HOOK_SCRIPT" ]]; then
+      echo '    ,'
+      echo '    "Notification": ['
+      echo "      { \"hooks\": [{ \"type\": \"command\", \"command\": \"$INTERACTION_CMD\" }] }"
       echo '    ]'
     fi
     echo '  }'

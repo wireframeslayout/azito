@@ -27,11 +27,26 @@ export interface AgentTranscriptProfile {
    * 入力にターミナルモードでの実行を促す注記を出す（PromptInputBar 参照）。
    */
   slashCommandsVisibleInLog: boolean;
+  /**
+   * Whether this agent's CLI can emit a real-time "waiting for an answer" signal
+   * (Phase B, real-time pending-answer detection). 'hook' (claude) means a CLI
+   * hook (Notification, `harness/hooks/azito-interaction.sh`) fires
+   * `POST /api/webhooks/agent-interaction` while the agent is blocked on
+   * AskUserQuestion, driving `InteractionMonitor`'s pending state and the chat
+   * banner. 'none' (codex) means no such signal exists — `pendingInteraction` is
+   * never true for its windows, and nothing else about its transcript rendering
+   * changes.
+   *
+   * Adding a new agent type touches exactly three things: a TranscriptSource
+   * implementation (sources/registry.ts), this declaration, and an adapter if
+   * the CLI's hook payload shape differs from azito-interaction.sh's.
+   */
+  interactionSignal: 'hook' | 'none';
 }
 
 export const AGENT_TRANSCRIPT_PROFILES: AgentTranscriptProfile[] = [
-  { agentType: 'claude', displayName: 'Claude', interruptKey: 'Escape', submitDelayMs: 0, slashCommandsVisibleInLog: true },
-  { agentType: 'codex', displayName: 'Codex', interruptKey: 'Escape', submitDelayMs: 200, slashCommandsVisibleInLog: false },
+  { agentType: 'claude', displayName: 'Claude', interruptKey: 'Escape', submitDelayMs: 0, slashCommandsVisibleInLog: true, interactionSignal: 'hook' },
+  { agentType: 'codex', displayName: 'Codex', interruptKey: 'Escape', submitDelayMs: 200, slashCommandsVisibleInLog: false, interactionSignal: 'none' },
 ];
 
 export function getAgentTranscriptProfile(agentType: string): AgentTranscriptProfile | undefined {

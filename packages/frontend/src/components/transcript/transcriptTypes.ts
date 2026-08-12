@@ -82,6 +82,8 @@ export interface ReadSessionResult {
   startOffset: number;
   /** startOffset より前にまだ読んでいないデータがあるか（上方向ページング可能か）。 */
   hasOlder: boolean;
+  /** リクエストに windowId を付けた場合のみ設定。true の間、会話末尾に「回答待ち」バナーを表示する。 */
+  pendingInteraction?: boolean;
 }
 
 /** GET /api/transcripts/:agent/:id?before=<offset> のレスポンス型（上方向ページング）。 */

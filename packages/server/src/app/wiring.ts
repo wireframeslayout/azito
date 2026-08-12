@@ -58,6 +58,7 @@ import { AgentRegistry, createDefaultRegistry } from '../modules/agents/registry
 
 import { ExecuteTaskUseCase } from '../modules/tasks/execution/ExecuteTaskUseCase';
 import { AgentActivityMonitor } from '../modules/operations/AgentActivityMonitor';
+import { InteractionMonitor } from '../modules/notifications/InteractionMonitor';
 import { WindowRespawnService } from '../modules/windows/WindowRespawnService';
 import { SessionCaptureService } from '../modules/windows/SessionCaptureService';
 import { stripPaneSuffix } from '../modules/windows/paneTarget';
@@ -149,6 +150,7 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
   agentUpdater: AgentUpdater;
   executeTaskUseCase: ExecuteTaskUseCase;
   agentActivityMonitor: AgentActivityMonitor;
+  interactionMonitor: InteractionMonitor;
   resourceGuard: ResourceGuard;
 }
 
@@ -398,6 +400,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   const resourceGuard = new ResourceGuard(infra.transportFactory, repos.resourceGuardSettingsRepo);
   const executeTaskUseCase = buildExecuteTaskUseCase(infra, repos, appServices, resourceGuard);
   const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService);
+  const interactionMonitor = new InteractionMonitor(repos.windowRepo);
   const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos);
 
   return {
@@ -410,6 +413,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
     ...appServices,
     executeTaskUseCase,
     agentActivityMonitor,
+    interactionMonitor,
     resourceGuard,
     ...systemUpdateModule,
   };

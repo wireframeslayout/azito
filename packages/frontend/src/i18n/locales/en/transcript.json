@@ -24,7 +24,11 @@
     "taskNotification": "Background task: {{summary}}",
     "taskNotificationNoSummary": "Background task notification",
     "question": "Question",
-    "questionAnswerLabel": "Answer"
+    "questionAnswerLabel": "Answer",
+    "pendingInteraction": {
+      "message": "The agent is waiting for input — please answer in the terminal.",
+      "openTerminal": "Open terminal"
+    }
   },
   "liveStatus": {
     "stop": "Stop",

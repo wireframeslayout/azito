@@ -24,7 +24,11 @@
     "taskNotification": "バックグラウンドタスク: {{summary}}",
     "taskNotificationNoSummary": "バックグラウンドタスク通知",
     "question": "質問",
-    "questionAnswerLabel": "回答"
+    "questionAnswerLabel": "回答",
+    "pendingInteraction": {
+      "message": "エージェントが入力を待っています — ターミナルで回答してください",
+      "openTerminal": "端末を開く"
+    }
   },
   "liveStatus": {
     "stop": "停止",

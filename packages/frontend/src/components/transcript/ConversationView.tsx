@@ -6,6 +6,7 @@ import { Icon } from '../ui/Icon';
 import { DateDivider } from './DateDivider';
 import { groupEntries, type EntryGroup } from './groupEntries';
 import { deriveContextHistory } from './inputHistory';
+import { InteractionPendingBanner } from './InteractionPendingBanner';
 import { LiveStatusRow } from './LiveStatusRow';
 import { deriveLiveStatus } from './liveStatus';
 import PromptInputBar from './PromptInputBar';
@@ -61,6 +62,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
   const [error, setError] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [newCount, setNewCount] = useState(0);
+  const [pendingInteraction, setPendingInteraction] = useState(false);
   const [style] = useTranscriptStyle();
   const EntryComponent = STYLE_ENTRY_COMPONENTS[style];
   // assistant 見出しラベル: サーバー側 IAgentProvider の displayName と重複定義しないよう、
@@ -154,6 +156,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
     setError(null);
     setEntries([]);
     setNewCount(0);
+    setPendingInteraction(false);
     setLoadingOlder(false);
     nextOffsetRef.current = null;
     startOffsetRef.current = null;
@@ -163,7 +166,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
     nearBottomRef.current = true;
 
     apiWithStatus<ReadSessionResult | TranscriptErrorResponse>(
-      `/transcripts/${encodeURIComponent(agentType)}/${encodeURIComponent(sessionId)}`,
+      `/transcripts/${encodeURIComponent(agentType)}/${encodeURIComponent(sessionId)}?windowId=${windowId}`,
     )
       .then(({ status, body }) => {
         if (generationRef.current !== myGeneration) return;
@@ -181,6 +184,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
         nextOffsetRef.current = body.nextOffset;
         startOffsetRef.current = body.startOffset;
         hasOlderRef.current = body.hasOlder;
+        setPendingInteraction(body.pendingInteraction ?? false);
         setLoading(false);
         requestAnimationFrame(() => scrollToBottom('auto'));
       })
@@ -194,7 +198,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
       // アンマウント/次セッションへの切替直前にも世代を進め、直後にまだ飛行中の応答を確実に破棄する。
       generationRef.current += 1;
     };
-  }, [sessionId, agentType, scrollToBottom]);
+  }, [sessionId, agentType, windowId, scrollToBottom]);
 
   // ライブ追従: 2秒間隔でoffset以降を取得し追記する。タブが非表示の間は取得しない。
   useEffect(() => {
@@ -210,7 +214,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
       inFlight = true;
       try {
         const { status, body } = await apiWithStatus<ReadSessionResult | TranscriptErrorResponse>(
-          `/transcripts/${encodeURIComponent(agentType)}/${encodeURIComponent(sessionId)}?offset=${nextOffsetRef.current}`,
+          `/transcripts/${encodeURIComponent(agentType)}/${encodeURIComponent(sessionId)}?offset=${nextOffsetRef.current}&windowId=${windowId}`,
         );
         if (generationRef.current !== myGeneration) return;
         if (status === 404) {
@@ -222,6 +226,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
           return;
         }
         nextOffsetRef.current = body.nextOffset;
+        setPendingInteraction(body.pendingInteraction ?? false);
         if (body.entries.length > 0) {
           setEntries((prev) => [...prev, ...body.entries]);
           if (nearBottomRef.current) {
@@ -247,7 +252,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
       clearInterval(intervalId);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [sessionId, agentType, loading, notFound, error, scrollToBottom]);
+  }, [sessionId, agentType, windowId, loading, notFound, error, scrollToBottom]);
 
   // 上方向ページングのトリガー: センチネル（先頭に置いたダミー要素）がスクロールコンテナ内で
   // 可視になったら loadOlder を呼ぶ。hasOlder/inFlight の判定は loadOlder 内部で行う。
@@ -302,12 +307,12 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
     return () => cancelAnimationFrame(raf);
   }, [entries, loading, notFound, error, loadOlder]);
 
-  // ライブ状態行の出現は「新着」バッジのカウント対象にしない。最下部粘着中のみ追従スクロールする。
+  // ライブ状態行/回答待ちバナーの出現は「新着」バッジのカウント対象にしない。最下部粘着中のみ追従スクロールする。
   useEffect(() => {
-    if (hasLiveStatus && nearBottomRef.current) {
+    if ((hasLiveStatus || pendingInteraction) && nearBottomRef.current) {
       requestAnimationFrame(() => scrollToBottom('auto'));
     }
-  }, [hasLiveStatus, scrollToBottom]);
+  }, [hasLiveStatus, pendingInteraction, scrollToBottom]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
@@ -385,6 +390,9 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
                   style={style}
                   stopTarget={{ windowId, paneId }}
                 />
+              )}
+              {pendingInteraction && (
+                <InteractionPendingBanner onChangeViewMode={onChangeViewMode} />
               )}
             </>
           )}

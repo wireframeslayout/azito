@@ -4,6 +4,7 @@ import type { TranscriptPaneService } from './TranscriptPaneService';
 import type { WindowSessionResolver } from './WindowSessionResolver';
 import type { WindowInputService } from './WindowInputService';
 import type { IWindowRepository } from '../windows/Window';
+import type { InteractionMonitor } from '../notifications/InteractionMonitor';
 import { getAgentTranscriptProfile, type InterruptKey } from './sources/profiles';
 
 export interface TranscriptsRouteOptions {
@@ -12,6 +13,7 @@ export interface TranscriptsRouteOptions {
   windowSessionResolver: WindowSessionResolver;
   windowInputService: WindowInputService;
   windowRepo: IWindowRepository;
+  interactionMonitor: InteractionMonitor;
 }
 
 const PANE_ID_PATTERN = /^%\d+$/;
@@ -32,15 +34,38 @@ function parseNonNegativeInt(raw: string | undefined): number | undefined | 'inv
   return value;
 }
 
+/** windowId クエリを検証する。未指定は undefined、不正値（正整数でない）は 'invalid' を返す。 */
+function parsePositiveInt(raw: string | undefined): number | undefined | 'invalid' {
+  if (raw === undefined) return undefined;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value <= 0) return 'invalid';
+  return value;
+}
+
 /**
  * 単一セッション読み取りの GET ハンドラ本体。offset（差分読み・初回読み）と before（後方ページング）
  * は排他: 同時指定は 400。
+ *
+ * windowId（任意）が渡された場合のみ `pendingInteraction` を応答に含める（Phase B
+ * リアルタイム未回答検出）。offset 指定の差分読みで新着エントリを observe した場合はその windowId の
+ * pending を authoritative に clear する — 「トランスクリプトへの新着到達」が close 条件の一つ
+ * （InteractionMonitor のクラスコメント参照）。offset 省略の初回読み込み（全履歴）は「新着」の判定
+ * 基準にならないため clear しない。
  */
-async function handleReadSession(source: TranscriptSource, sessionId: string, query: { offset?: string; before?: string }, reply: FastifyReply) {
-  const { offset: offsetRaw, before: beforeRaw } = query;
+async function handleReadSession(
+  source: TranscriptSource,
+  sessionId: string,
+  query: { offset?: string; before?: string; windowId?: string },
+  reply: FastifyReply,
+  interactionMonitor: InteractionMonitor,
+) {
+  const { offset: offsetRaw, before: beforeRaw, windowId: windowIdRaw } = query;
   if (offsetRaw !== undefined && beforeRaw !== undefined) {
     return reply.status(400).send({ error: 'Cannot specify both offset and before' });
   }
+
+  const windowId = parsePositiveInt(windowIdRaw);
+  if (windowId === 'invalid') return reply.status(400).send({ error: 'Invalid windowId' });
 
   if (beforeRaw !== undefined) {
     const before = parseNonNegativeInt(beforeRaw);
@@ -55,11 +80,17 @@ async function handleReadSession(source: TranscriptSource, sessionId: string, qu
 
   const result = source.readSession(sessionId, offset);
   if (!result) return reply.status(404).send({ error: 'Session not found' });
-  return result;
+
+  if (windowId === undefined) return result;
+
+  if (offsetRaw !== undefined && result.entries.length > 0) {
+    interactionMonitor.clear(windowId);
+  }
+  return { ...result, pendingInteraction: interactionMonitor.isPending(windowId) };
 }
 
 const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fastify, opts, done) => {
-  const { sources, transcriptPaneService, windowSessionResolver, windowInputService, windowRepo } = opts;
+  const { sources, transcriptPaneService, windowSessionResolver, windowInputService, windowRepo, interactionMonitor } = opts;
 
   // ── GET /api/transcripts/resolve-window ── ウィンドウからエージェント会話セッションを自動解決する
   // （Issue #69 Phase E-1）。windowId は数値検証、該当ウィンドウが存在しなければ 404。
@@ -143,14 +174,15 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
     return { sessions };
   });
 
-  // ── GET /api/transcripts/:agent/:id ── 単一セッションの読み取り（offset で差分読み、before で後方ページング）
-  fastify.get<{ Params: { agent: string; id: string }; Querystring: { offset?: string; before?: string } }>(
+  // ── GET /api/transcripts/:agent/:id ── 単一セッションの読み取り（offset で差分読み、before で後方ページング）。
+  // windowId（任意）を渡すと応答に pendingInteraction が乗る（Phase B、ConversationView の2秒ポーリングが利用）。
+  fastify.get<{ Params: { agent: string; id: string }; Querystring: { offset?: string; before?: string; windowId?: string } }>(
     '/api/transcripts/:agent/:id',
     async (request, reply) => {
       const source = findSource(sources, request.params.agent);
       if (!source) return reply.status(404).send({ error: 'Unknown agent type' });
 
-      return handleReadSession(source, request.params.id, request.query, reply);
+      return handleReadSession(source, request.params.id, request.query, reply, interactionMonitor);
     },
   );
 
@@ -195,7 +227,7 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
       const source = findSource(sources, PANE_CAPABLE_AGENT_TYPE);
       if (!source) return reply.status(404).send({ error: 'Unknown agent type' });
 
-      return handleReadSession(source, request.params.sessionId, request.query, reply);
+      return handleReadSession(source, request.params.sessionId, request.query, reply, interactionMonitor);
     },
   );
 

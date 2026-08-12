@@ -76,7 +76,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     projectSecretRepo, storageSettingsRepo, pushSubRepo, agentWatchRepo, resourceGuardSettingsRepo, resourceGuard,
     tmuxClient, transportFactory, worktreeServiceFactory, gitProvider, storageClient,
     agentInstaller, agentBundler, harnessInstaller, tmuxInstaller,
-    executeTaskUseCase, agentActivityMonitor, windowRespawnService, taskRestoreService, sessionStrategyFactory, sessionCaptureService, usageService,
+    executeTaskUseCase, agentActivityMonitor, interactionMonitor, windowRespawnService, taskRestoreService, sessionStrategyFactory, sessionCaptureService, usageService,
     pushService, vapidKeys, notificationBus, sidekickPackageService, sidekickPackageLoader,
     sidekickSyncService, unitTypeLoader, agentSignalService, supervisorRegistry, agentTurnRepo, turnSignalHub,
     browserSessionManager, deployModeDetector, systemUpdateService, channelResolver,
@@ -257,6 +257,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     taskRepo,
     verifyToken: verifyWebhookToken,
     recordAgentActivity: (signal) => agentActivityMonitor.recordHookSignal(signal),
+    recordInteractionSignal: (signal) => interactionMonitor.recordSignal(signal),
   });
   await app.register(agentSignalRoutes, { agentSignalService, verifyToken: verifyWebhookToken });
   await app.register(hooksRoutes, { notificationBus, verifyToken: verifyWebhookToken });
@@ -279,6 +280,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     windowSessionResolver,
     windowInputService: new WindowInputService(windowRepo, tmuxClient, serverRepo),
     windowRepo,
+    interactionMonitor,
   });
   await app.register(systemRoutes, { systemUpdateService, channelResolver });
   await app.register(browserRoutes, {

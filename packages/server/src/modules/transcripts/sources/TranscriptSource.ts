@@ -94,6 +94,13 @@ export interface ReadSessionResult {
   startOffset: number;
   /** startOffset より前にまだ読んでいないデータがあるか（上方向ページング可能か）。 */
   hasOlder: boolean;
+  /**
+   * このセッションを保持するウィンドウが現在ユーザーの回答待ちか（Phase B リアルタイム未回答検出、
+   * InteractionMonitor 参照）。GET /api/transcripts/:agent/:id にクエリ windowId を渡した場合のみ
+   * ルート層（routes.ts の handleReadSession）が付与する — TranscriptSource 自体はこのフィールドを
+   * 計算しない（windowId を知らないため、型定義のみここに置く）。
+   */
+  pendingInteraction?: boolean;
 }
 
 export interface ReadSessionBeforeResult {

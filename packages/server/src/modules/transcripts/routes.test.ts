@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import Fastify from 'fastify';
 import transcriptsRoutes from './routes';
 import type { TranscriptSource } from './sources/TranscriptSource';
@@ -6,6 +6,7 @@ import type { TranscriptPaneService } from './TranscriptPaneService';
 import type { WindowSessionResolver } from './WindowSessionResolver';
 import type { WindowInputService } from './WindowInputService';
 import type { IWindowRepository, Window } from '../windows/Window';
+import type { InteractionMonitor } from '../notifications/InteractionMonitor';
 
 const SID = '11111111-1111-1111-1111-111111111111';
 const PANE_ID = '%3';
@@ -39,6 +40,7 @@ function buildApp(
     windowSessionResolver?: Partial<WindowSessionResolver>;
     windowRepo?: Partial<IWindowRepository>;
     windowInputService?: Partial<WindowInputService>;
+    interactionMonitor?: Partial<InteractionMonitor>;
   } = {},
 ) {
   const transcriptPaneService = {
@@ -64,8 +66,14 @@ function buildApp(
     ...windowOverrides.windowInputService,
   } as unknown as WindowInputService;
 
+  const interactionMonitor = {
+    isPending: () => false,
+    clear: () => {},
+    ...windowOverrides.interactionMonitor,
+  } as unknown as InteractionMonitor;
+
   const app = Fastify();
-  app.register(transcriptsRoutes, { sources, transcriptPaneService, windowSessionResolver, windowInputService, windowRepo });
+  app.register(transcriptsRoutes, { sources, transcriptPaneService, windowSessionResolver, windowInputService, windowRepo, interactionMonitor });
   return app;
 }
 
@@ -199,6 +207,55 @@ describe('GET /api/transcripts/:agent/:id', () => {
     const app = buildApp([buildClaudeSource({ readSessionBefore: () => null })]);
     const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?before=42` });
     expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('rejects a non-positive windowId with 400', async () => {
+    const app = buildApp();
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?windowId=0` });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('omits pendingInteraction when windowId is not given', async () => {
+    const app = buildApp();
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().pendingInteraction).toBeUndefined();
+    await app.close();
+  });
+
+  it('includes pendingInteraction from InteractionMonitor.isPending when windowId is given', async () => {
+    const isPending = () => true;
+    const app = buildApp([buildClaudeSource()], {}, { interactionMonitor: { isPending } });
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?windowId=7` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().pendingInteraction).toBe(true);
+    await app.close();
+  });
+
+  it('clears the interaction monitor when an offset-based poll observes new entries', async () => {
+    const clear = vi.fn();
+    const claude = buildClaudeSource({
+      readSession: () => ({ entries: [{ uuid: 'a', type: 'user', timestamp: null, blocks: [] }], nextOffset: 5, truncated: false, startOffset: 0, hasOlder: false }),
+    });
+    const app = buildApp([claude], {}, { interactionMonitor: { clear, isPending: () => false } });
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?offset=1&windowId=7` });
+    expect(res.statusCode).toBe(200);
+    expect(clear).toHaveBeenCalledWith(7);
+    await app.close();
+  });
+
+  it('does not clear the interaction monitor on the initial (offset-less) load even with entries', async () => {
+    const clear = vi.fn();
+    const claude = buildClaudeSource({
+      readSession: () => ({ entries: [{ uuid: 'a', type: 'user', timestamp: null, blocks: [] }], nextOffset: 5, truncated: false, startOffset: 0, hasOlder: false }),
+    });
+    const app = buildApp([claude], {}, { interactionMonitor: { clear, isPending: () => true } });
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?windowId=7` });
+    expect(res.statusCode).toBe(200);
+    expect(clear).not.toHaveBeenCalled();
+    expect(res.json().pendingInteraction).toBe(true);
     await app.close();
   });
 });

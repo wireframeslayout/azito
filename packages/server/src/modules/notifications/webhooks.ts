@@ -1,15 +1,18 @@
 import type { FastifyPluginCallback } from 'fastify';
 import type { SqliteTaskRepository } from '../tasks/SqliteTaskRepository';
 import type { AgentHookSignal } from '../operations/AgentActivityMonitor';
+import type { InteractionSignal } from './InteractionMonitor';
 
 export interface WebhookRouteOptions {
   taskRepo: SqliteTaskRepository;
   verifyToken: (authHeader: string | undefined) => boolean;
   recordAgentActivity: (signal: AgentHookSignal) => void;
+  /** v1 only ever receives event: 'open' — see InteractionMonitor's doc comment. */
+  recordInteractionSignal: (signal: InteractionSignal) => void;
 }
 
 const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts, done) => {
-  const { taskRepo, verifyToken, recordAgentActivity } = opts;
+  const { taskRepo, verifyToken, recordAgentActivity, recordInteractionSignal } = opts;
 
   fastify.post('/api/webhooks/agent-done', async (request, reply) => {
     if (!verifyToken(request.headers.authorization)) {
@@ -92,6 +95,62 @@ const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts
       windowName: body.windowName,
       paneIndex: body.paneIndex,
       event: body.event,
+    });
+
+    return { ok: true };
+  });
+
+  // ── POST /api/webhooks/agent-interaction ── Notification hook signal ("agent is waiting
+  // for an answer", Phase B real-time pending-answer detection). Same token/body-validation
+  // pattern as agent-activity. v1 only accepts event: 'open' — 'cancel' is reserved for a
+  // future phase (see InteractionMonitor's doc comment) and is rejected here as an unknown value.
+  fastify.post('/api/webhooks/agent-interaction', async (request, reply) => {
+    if (!verifyToken(request.headers.authorization)) {
+      return reply.status(401).send({ error: 'Unauthorized' });
+    }
+
+    const raw = request.body;
+    if (!raw || typeof raw !== 'object') {
+      return reply.status(400).send({ error: 'JSON body required' });
+    }
+    const body = raw as {
+      serverName?: unknown;
+      sessionName?: unknown;
+      windowIndex?: unknown;
+      windowName?: unknown;
+      paneIndex?: unknown;
+      event?: unknown;
+    };
+
+    if (typeof body.serverName !== 'string' || body.serverName === '') {
+      return reply.status(400).send({ error: 'serverName required' });
+    }
+    if (typeof body.sessionName !== 'string' || body.sessionName === '') {
+      return reply.status(400).send({ error: 'sessionName required' });
+    }
+    if (typeof body.windowName !== 'string' || body.windowName === '') {
+      return reply.status(400).send({ error: 'windowName required' });
+    }
+    if (typeof body.windowIndex !== 'number' || !Number.isFinite(body.windowIndex)) {
+      return reply.status(400).send({ error: 'windowIndex must be a finite number' });
+    }
+    if (typeof body.paneIndex !== 'number' || !Number.isFinite(body.paneIndex)) {
+      return reply.status(400).send({ error: 'paneIndex must be a finite number' });
+    }
+    if (body.event !== 'open') {
+      return reply.status(400).send({ error: 'event must be "open"' });
+    }
+
+    recordInteractionSignal({
+      serverName: body.serverName,
+      target: {
+        sessionName: body.sessionName,
+        windowIndex: body.windowIndex,
+        windowName: body.windowName,
+        paneIndex: body.paneIndex,
+      },
+      event: body.event,
+      timestamp: Date.now(),
     });
 
     return { ok: true };
