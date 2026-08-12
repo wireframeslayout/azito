@@ -92,6 +92,11 @@ describe('deriveLiveStatus', () => {
     expect(deriveLiveStatus([entry({ type: 'other' })], NOW)).toBeNull();
   });
 
+  it('returns thinking when the last entry is a task_notification system entry (background task resumes the agent turn)', () => {
+    const entries = [entry({ type: 'system', systemKind: 'task_notification', blocks: [{ kind: 'text', text: 'done' }] })];
+    expect(deriveLiveStatus(entries, NOW)).toEqual({ kind: 'thinking' });
+  });
+
   it('returns null when the last entry is interrupted (stops the counter immediately)', () => {
     expect(deriveLiveStatus([entry({ type: 'interrupted', blocks: [] })], NOW)).toBeNull();
   });

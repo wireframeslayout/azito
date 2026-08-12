@@ -76,6 +76,20 @@ const ANSI_ESCAPE_PATTERN = /\x1b\[[0-9;]*m/g;
  */
 const ASK_USER_QUESTION_TOOL_NAME = 'AskUserQuestion';
 
+/**
+ * セッション単位の askUserQuestionCache（tool_use id → questions）の上限件数（レビュー指摘 Minor 3c）。
+ * 拒否・放棄された質問や後方ページング中に見つかった質問が無期限に残り続けないよう、挿入順で最も
+ * 古いエントリを evict する（Map の挿入順イテレーションを利用した FIFO）。
+ */
+const ASK_USER_QUESTION_CACHE_MAX_ENTRIES = 32;
+
+/**
+ * 読み取り窓分断（初回窓の開始位置／サーバー再起動でのキャッシュ消失）で対応する tool_use がキャッシュに
+ * 無い場合の救済スキャン範囲（レビュー指摘 Minor 2）。この範囲だけ before から遡って対応する tool_use を
+ * 探す。見つからなければ従来どおり生 tool 行として表示する（それ以上は複雑化しない）。
+ */
+const ASK_USER_QUESTION_BACKWARD_SCAN_BYTES = 256 * 1024;
+
 interface AskUserQuestionItem {
   question: string;
   multiSelect: boolean;
@@ -114,14 +128,19 @@ function inferInteractionFieldInput(item: AskUserQuestionItem, answerValue: stri
   return item.options?.some((o) => o.label === answerValue) ? 'select' : 'text';
 }
 
-/** キャッシュ済みの質問群 + 回答マップから TranscriptInteraction を組み立てる。 */
-function buildInteraction(items: AskUserQuestionItem[], answersByQuestion: Record<string, string>): TranscriptInteraction {
+/**
+ * キャッシュ済みの質問群 + 回答マップから TranscriptInteraction を組み立てる。answersByQuestion は
+ * Map で受け取る（レビュー指摘 Minor 5: 質問文字列をキーにした素のオブジェクトのブラケットアクセスは
+ * `__proto__`/`constructor` 等のプロトタイプ継承プロパティを誤って拾い得るため、own-property の保証が
+ * ある Map を使う）。
+ */
+function buildInteraction(items: AskUserQuestionItem[], answersByQuestion: Map<string, string>): TranscriptInteraction {
   const fields: TranscriptInteraction['fields'] = [];
   const answers: NonNullable<TranscriptInteraction['answers']> = [];
 
   items.forEach((item, index) => {
     const id = `q${index}`;
-    const answerValue = answersByQuestion[item.question];
+    const answerValue = answersByQuestion.get(item.question);
     fields.push({
       id,
       label: item.question,
@@ -146,8 +165,13 @@ function buildInteraction(items: AskUserQuestionItem[], answersByQuestion: Recor
  * が空配列になり、呼び出し元の normalizeBlocks/normalizeEntry が blocks.length===0 で null を返す
  * （＝このレコード自体は表示されない。対応する tool_result の位置で interaction エントリとして emit
  * されるため、置換になる）。
+ *
+ * allowCacheWrite が false（readSessionBefore の後方ページング中）のときはキャッシュへ書き込まない
+ * （レビュー指摘 Minor 3a）— 後方ページングは既に解決済みの履歴を遡って表示するための読み取りであり、
+ * ここで見つかった tool_use を通常の chronological キャッシュへ混ぜると寿命管理が破綻するため。
+ * ブロック自体は allowCacheWrite に関わらず常に除去する（表示上、生の tool_use は出さない方針は不変）。
  */
-function extractAskUserQuestionToolUse(content: unknown, cache: Map<string, AskUserQuestionItem[]>): unknown {
+function extractAskUserQuestionToolUse(content: unknown, cache: Map<string, AskUserQuestionItem[]>, allowCacheWrite: boolean): unknown {
   if (!Array.isArray(content)) return content;
   let changed = false;
   const filtered: unknown[] = [];
@@ -155,7 +179,14 @@ function extractAskUserQuestionToolUse(content: unknown, cache: Map<string, AskU
     if (isRecord(block) && block.type === 'tool_use' && block.name === ASK_USER_QUESTION_TOOL_NAME && typeof block.id === 'string') {
       const items = parseAskUserQuestionInput(block.input);
       if (items) {
-        cache.set(block.id, items);
+        if (allowCacheWrite) {
+          cache.set(block.id, items);
+          // セッション単位の上限を超えたら挿入順で最も古いエントリを evict する（Minor 3c）。
+          if (cache.size > ASK_USER_QUESTION_CACHE_MAX_ENTRIES) {
+            const oldestKey = cache.keys().next().value;
+            if (oldestKey !== undefined) cache.delete(oldestKey);
+          }
+        }
         changed = true;
         continue;
       }
@@ -174,7 +205,43 @@ function extractAskUserQuestionToolUse(content: unknown, cache: Map<string, AskU
  * 形。他ブロックと混在するケースは実データで未確認のため対象外とし、通常の 'tool' エントリのまま
  * 表示する）。
  */
-function tryHandleAskUserQuestionResult(record: Record<string, unknown>, cache: Map<string, AskUserQuestionItem[]>): TranscriptEntry | null {
+/**
+ * cache に無い tool_use_id について、直前 ASK_USER_QUESTION_BACKWARD_SCAN_BYTES バイトだけ readBeforeWindow
+ * で後方スキャンし、対応する AskUserQuestion の tool_use を探す（レビュー指摘 Minor 2）。io が無い
+ * （getSessionTailState など fd を保持しない読み取り経路）場合はスキャンせず null を返す。見つかっても
+ * cache へは書き込まない — この探索は履歴を遡る一回限りの救済であり、通常の chronological キャッシュの
+ * 寿命管理（Minor 3a/3c）を乱さないため。
+ */
+function scanBackwardForAskUserQuestion(io: { fd: number; size: number }, before: number, toolUseId: string): AskUserQuestionItem[] | null {
+  const scanParseLine = (line: string): AskUserQuestionItem[] | null => {
+    if (!line) return null;
+    let record: unknown;
+    try {
+      record = JSON.parse(line);
+    } catch {
+      return null;
+    }
+    if (!isRecord(record) || record.type !== 'assistant') return null;
+    const message = record.message;
+    if (!isRecord(message) || !Array.isArray(message.content)) return null;
+    for (const block of message.content) {
+      if (isRecord(block) && block.type === 'tool_use' && block.id === toolUseId && block.name === ASK_USER_QUESTION_TOOL_NAME) {
+        return parseAskUserQuestionInput(block.input);
+      }
+    }
+    return null;
+  };
+
+  const result = readBeforeWindow(io.fd, io.size, before, ASK_USER_QUESTION_BACKWARD_SCAN_BYTES, scanParseLine);
+  return result.entries.length > 0 ? result.entries[0] : null;
+}
+
+function tryHandleAskUserQuestionResult(
+  record: Record<string, unknown>,
+  cache: Map<string, AskUserQuestionItem[]>,
+  lineStart: number,
+  io: { fd: number; size: number } | undefined,
+): TranscriptEntry | null {
   if (record.type !== 'user') return null;
   if (typeof record.uuid !== 'string') return null;
   const message = record.message;
@@ -182,17 +249,26 @@ function tryHandleAskUserQuestionResult(record: Record<string, unknown>, cache: 
   const block = message.content[0];
   if (!isRecord(block) || block.type !== 'tool_result' || typeof block.tool_use_id !== 'string') return null;
 
-  const items = cache.get(block.tool_use_id);
+  const toolUseId = block.tool_use_id;
+  const items = cache.get(toolUseId) ?? (io ? scanBackwardForAskUserQuestion(io, lineStart, toolUseId) : null);
   if (!items) return null;
 
   const toolUseResult = record.toolUseResult;
+
+  // 拒否された質問（Esc 等）には確定回答が無い。cache に残っていれば破棄し（Minor 3b）、通常の 'tool'
+  // エントリへフォールバックする。
+  if (toolUseResult === 'User rejected tool use') {
+    cache.delete(toolUseId);
+    return null;
+  }
+
   if (!isRecord(toolUseResult) || !isRecord(toolUseResult.answers)) return null;
 
-  cache.delete(block.tool_use_id);
+  cache.delete(toolUseId);
 
-  const answersByQuestion: Record<string, string> = {};
+  const answersByQuestion = new Map<string, string>();
   for (const [question, value] of Object.entries(toolUseResult.answers)) {
-    if (typeof value === 'string') answersByQuestion[question] = value;
+    if (typeof value === 'string') answersByQuestion.set(question, value);
   }
 
   const timestamp = typeof record.timestamp === 'string' ? record.timestamp : null;
@@ -218,6 +294,10 @@ const TASK_NOTIFICATION_SUMMARY_PATTERN = /<summary>([\s\S]*?)<\/summary>/;
 
 function tryHandleTaskNotificationRecord(record: Record<string, unknown>): TranscriptEntry | null {
   if (record.type !== 'user') return null;
+  // sidechain（サブエージェント内部の記録）は通常の除外ロジック（normalizeEntry/
+  // tryHandleLocalCommandRecord）と同様に破棄する（レビュー指摘 Minor 4: このハンドラは
+  // normalizeEntry より前に走るため、素通しすると sidechain の task-notification が可視化されてしまう）。
+  if (record.isSidechain === true) return null;
   if (typeof record.uuid !== 'string') return null;
   const message = record.message;
   if (!isRecord(message) || typeof message.content !== 'string') return null;
@@ -455,7 +535,11 @@ function isInterruptMarkerEntry(rawType: unknown, blocks: TranscriptBlock[]): bo
 }
 
 /** 生の JSONL 行1件を TranscriptEntry に正規化する。スキップ対象は null を返す。 */
-function normalizeEntry(record: unknown, askUserQuestionCache: Map<string, AskUserQuestionItem[]>): TranscriptEntry | null {
+function normalizeEntry(
+  record: unknown,
+  askUserQuestionCache: Map<string, AskUserQuestionItem[]>,
+  allowCacheWrite: boolean,
+): TranscriptEntry | null {
   if (!isRecord(record)) return null;
   if (record.isSidechain === true) return null;
   if (record.type === 'summary') return null;
@@ -464,7 +548,8 @@ function normalizeEntry(record: unknown, askUserQuestionCache: Map<string, AskUs
   if (!isRecord(message)) return null;
   if (typeof record.uuid !== 'string') return null;
 
-  const content = record.type === 'assistant' ? extractAskUserQuestionToolUse(message.content, askUserQuestionCache) : message.content;
+  const content =
+    record.type === 'assistant' ? extractAskUserQuestionToolUse(message.content, askUserQuestionCache, allowCacheWrite) : message.content;
 
   const blocks = normalizeBlocks(content);
   if (blocks.length === 0) return null;
@@ -560,10 +645,19 @@ function tryHandleLocalCommandRecord(
  * askUserQuestionCache（tool_use id → questions）はセッション単位でインスタンス寿命保持され
  * （呼び出し元 ClaudeTranscriptSource.getAskUserQuestionCache 参照）、tool_use と対応する
  * tool_result が別の読み取りウィンドウに分かれても質問群を失わない。
+ *
+ * options.io（fd/size）を渡すと、cache に無い AskUserQuestion tool_result 遭遇時に有界の後方スキャン
+ * （Minor 2）を行える。省略時（例: getSessionTailState、fd を早期に close する経路）はスキャンしない。
+ * options.allowCacheWrite（既定 true）を false にすると、この読み取りウィンドウでは
+ * askUserQuestionCache へ一切書き込まない（Minor 3a: readSessionBefore の後方ページング用）。
  */
-function buildParseLine(askUserQuestionCache: Map<string, AskUserQuestionItem[]>): (line: string) => TranscriptEntry | null {
+function buildParseLine(
+  askUserQuestionCache: Map<string, AskUserQuestionItem[]>,
+  options: { io?: { fd: number; size: number }; allowCacheWrite?: boolean } = {},
+): (line: string, lineStart: number) => TranscriptEntry | null {
+  const allowCacheWrite = options.allowCacheWrite ?? true;
   let pendingCommand: TranscriptEntry | null = null;
-  return (line: string): TranscriptEntry | null => {
+  return (line: string, lineStart: number): TranscriptEntry | null => {
     if (!line) return null;
     let record: unknown;
     try {
@@ -583,10 +677,10 @@ function buildParseLine(askUserQuestionCache: Map<string, AskUserQuestionItem[]>
     const taskNotificationEntry = tryHandleTaskNotificationRecord(record);
     if (taskNotificationEntry) return taskNotificationEntry;
 
-    const interactionEntry = tryHandleAskUserQuestionResult(record, askUserQuestionCache);
+    const interactionEntry = tryHandleAskUserQuestionResult(record, askUserQuestionCache, lineStart, options.io);
     if (interactionEntry) return interactionEntry;
 
-    return normalizeEntry(record, askUserQuestionCache);
+    return normalizeEntry(record, askUserQuestionCache, allowCacheWrite);
   };
 }
 
@@ -744,7 +838,7 @@ export class ClaudeTranscriptSource implements TranscriptSource {
 
     try {
       const size = fs.fstatSync(fd).size;
-      const parseLine = buildParseLine(this.getAskUserQuestionCache(sessionId));
+      const parseLine = buildParseLine(this.getAskUserQuestionCache(sessionId), { io: { fd, size } });
       return offset === undefined
         ? readInitialWindow(fd, size, this.initialReadMaxBytes, parseLine, TAIL_ENTRY_LIMIT)
         : readIncrementalWindow(fd, size, offset, this.incrementalReadMaxBytes, parseLine);
@@ -766,7 +860,8 @@ export class ClaudeTranscriptSource implements TranscriptSource {
 
     try {
       const size = fs.fstatSync(fd).size;
-      return readBeforeWindow(fd, size, before, this.incrementalReadMaxBytes, buildParseLine(this.getAskUserQuestionCache(sessionId)));
+      const parseLine = buildParseLine(this.getAskUserQuestionCache(sessionId), { io: { fd, size }, allowCacheWrite: false });
+      return readBeforeWindow(fd, size, before, this.incrementalReadMaxBytes, parseLine);
     } finally {
       fs.closeSync(fd);
     }
@@ -791,10 +886,13 @@ export class ClaudeTranscriptSource implements TranscriptSource {
       return 'unknown';
     }
 
+    // io を渡さない: fd は上の try ブロックで既に close 済みのため、後方スキャン（Minor 2）は行えない。
+    // 末尾窓のみを見るこの経路では未マッチのまま 'tool' 扱いにフォールバックしても、classifyTailEntry は
+    // 'tool' と 'interaction' を同じ in_progress に分類するため稼働判定への影響はない。
     const parseLine = buildParseLine(this.getAskUserQuestionCache(sessionId));
     const lines = content.split('\n');
     for (let i = lines.length - 1; i >= 0; i--) {
-      const entry = parseLine(lines[i]);
+      const entry = parseLine(lines[i], 0);
       if (entry) return classifyTailEntry(entry);
     }
     return 'unknown';

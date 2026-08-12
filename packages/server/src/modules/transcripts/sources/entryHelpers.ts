@@ -37,7 +37,10 @@ export function truncateText(text: string, limit: number): { text: string; trunc
  *   thinking で終わっていても「応答完了」とは言えない — terminal と誤判定すると、実際にはまだ
  *   考え中/実行中のエージェントをポーリングタイミング次第で idle に倒してしまう）
  * - system/other: 判定材料として弱いレコードのため、旧来の mtime のみの判定（working 扱い）を維持する
- *   意図で in_progress を返す（誤って「応答完了」と判定し working 表示を消してしまわないため）
+ *   意図で in_progress を返す（誤って「応答完了」と判定し working 表示を消してしまわないため）。
+ *   systemKind: 'task_notification'（バックグラウンドタスク完了通知）もこの規律に従い in_progress
+ *   （この通知はエージェントのターンを再開させるため、応答完了とはみなさない） — 明示的な分岐は
+ *   置かず、下の system/other フォールスルーに委ねる。
  */
 export function classifyTailEntry(entry: TranscriptEntry): 'in_progress' | 'terminal' {
   if (entry.type === 'interrupted') return 'terminal';

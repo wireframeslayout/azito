@@ -81,7 +81,7 @@ export function readInitialWindow<T>(
   fd: number,
   size: number,
   maxBytes: number,
-  parseLine: (line: string) => T | null,
+  parseLine: (line: string, lineStart: number) => T | null,
   tailLimit: number,
 ): WindowReadResult<T> {
   const windowStart = Math.max(size - maxBytes, 0);
@@ -103,7 +103,7 @@ export function readInitialWindow<T>(
   const entryOffsets: number[] = [];
   if (consumedLength > 0) {
     for (const { line, start } of splitCompleteLinesWithOffsets(buf, consumedLength, readStart)) {
-      const entry = parseLine(line);
+      const entry = parseLine(line, start);
       if (entry) {
         entries.push(entry);
         entryOffsets.push(start);
@@ -135,7 +135,7 @@ export function readIncrementalWindow<T>(
   size: number,
   offset: number,
   maxBytes: number,
-  parseLine: (line: string) => T | null,
+  parseLine: (line: string, lineStart: number) => T | null,
 ): WindowReadResult<T> {
   const start = Math.min(Math.max(offset, 0), size);
   const buf = readChunk(fd, size, start, maxBytes);
@@ -145,10 +145,9 @@ export function readIncrementalWindow<T>(
     return { entries: [], nextOffset: start, truncated: false, startOffset: start, hasOlder: start > 0 };
   }
 
-  const consumed = buf.subarray(0, lastNewline).toString('utf-8');
   const entries: T[] = [];
-  for (const line of consumed.split('\n')) {
-    const entry = parseLine(line);
+  for (const { line, start: lineStart } of splitCompleteLinesWithOffsets(buf, lastNewline, start)) {
+    const entry = parseLine(line, lineStart);
     if (entry) entries.push(entry);
   }
 
@@ -181,7 +180,7 @@ export function readBeforeWindow<T>(
   size: number,
   before: number,
   maxBytes: number,
-  parseLine: (line: string) => T | null,
+  parseLine: (line: string, lineStart: number) => T | null,
 ): BeforeWindowReadResult<T> {
   const beforeClamped = Math.min(Math.max(before, 0), size);
   const windowStart = Math.max(beforeClamped - maxBytes, 0);
@@ -218,8 +217,8 @@ export function readBeforeWindow<T>(
 
   const buf = readChunk(fd, size, readStart, beforeClamped - readStart);
   const entries: T[] = [];
-  for (const line of buf.toString('utf-8').split('\n')) {
-    const entry = parseLine(line);
+  for (const { line, start: lineStart } of splitCompleteLinesWithOffsets(buf, buf.length, readStart)) {
+    const entry = parseLine(line, lineStart);
     if (entry) entries.push(entry);
   }
 

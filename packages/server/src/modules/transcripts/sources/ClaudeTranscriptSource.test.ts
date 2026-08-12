@@ -812,6 +812,54 @@ describe('ClaudeTranscriptSource', () => {
       expect(second!.entries[0].interaction!.answers).toEqual([{ fieldId: 'q0', value: 'ラーメン' }]);
     });
 
+    it('reassembles the interaction via a bounded backward scan when the correlation cache is lost (e.g. server restart) but the tool_use is still within the scan window', () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        askUserQuestionToolUse('a1', TOOL_USE_ID, [
+          { question: 'お昼ごはんは何にしますか?', multiSelect: false, options: [{ label: 'ラーメン' }, { label: 'サラダ' }] },
+        ]),
+        askUserQuestionToolResult('r1', TOOL_USE_ID, { 'お昼ごはんは何にしますか?': 'ラーメン' }),
+      ]);
+      // A brand-new instance has an empty askUserQuestionCache, simulating a server restart between the
+      // tool_use being written and the tool_result being read (レビュー指摘 Minor 2).
+      const freshService = new ClaudeTranscriptSource(dir);
+      const result = freshService.readSession(SID_A);
+      expect(result!.entries).toHaveLength(1);
+      expect(result!.entries[0].type).toBe('interaction');
+      expect(result!.entries[0].interaction!.answers).toEqual([{ fieldId: 'q0', value: 'ラーメン' }]);
+    });
+
+    it('falls back to a raw tool entry (does not throw) when the correlation cache is lost and no matching tool_use is found within the scan window', () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        askUserQuestionToolResult('r1', TOOL_USE_ID, { 'お昼ごはんは何にしますか?': 'ラーメン' }),
+      ]);
+      const freshService = new ClaudeTranscriptSource(dir);
+      const result = freshService.readSession(SID_A);
+      expect(result!.entries).toHaveLength(1);
+      expect(result!.entries[0].type).toBe('tool');
+      expect(result!.entries[0].interaction).toBeUndefined();
+    });
+
+    it('does not resolve inherited Object.prototype properties (e.g. "constructor") when looking up an answer by question text', () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        askUserQuestionToolUse('a1', TOOL_USE_ID, [{ question: 'constructor', multiSelect: false, options: [{ label: 'A' }] }]),
+        askUserQuestionToolResult('r1', TOOL_USE_ID, { constructor: 'A' }),
+      ]);
+      const result = service.readSession(SID_A);
+      expect(result!.entries).toHaveLength(1);
+      expect(result!.entries[0].interaction!.fields[0].input).toBe('select');
+      expect(result!.entries[0].interaction!.answers).toEqual([{ fieldId: 'q0', value: 'A' }]);
+    });
+
+    it('does not misclassify as answered when the question key only exists as an inherited Object.prototype property, not an own answer', () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        askUserQuestionToolUse('a1', TOOL_USE_ID, [{ question: 'toString', multiSelect: false, options: [{ label: 'A' }] }]),
+        askUserQuestionToolResult('r1', TOOL_USE_ID, {}),
+      ]);
+      const result = service.readSession(SID_A);
+      expect(result!.entries[0].interaction!.fields[0].input).toBe('select');
+      expect(result!.entries[0].interaction!.answers).toBeUndefined();
+    });
+
     it('does not convert a rejected AskUserQuestion (toolUseResult is a plain string, not an answers object) into an interaction', () => {
       writeSession(dir, 'proj-a', SID_A, [
         askUserQuestionToolUse('a1', TOOL_USE_ID, [
@@ -880,6 +928,16 @@ describe('ClaudeTranscriptSource', () => {
       const result = service.readSession(SID_A);
       expect(result!.entries[0].type).toBe('user');
       expect(result!.entries[0].systemKind).toBeUndefined();
+    });
+
+    it('discards a sidechain (subagent-internal) task-notification record instead of surfacing it as a visible system entry', () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        { type: 'user', uuid: 'sc1', isSidechain: true, message: { content: taskNotificationContent('hidden sidechain notification') } },
+        { type: 'user', uuid: 'u1', message: { content: 'visible message' } },
+      ]);
+      const result = service.readSession(SID_A);
+      expect(result!.entries).toHaveLength(1);
+      expect(result!.entries[0].uuid).toBe('u1');
     });
   });
 
@@ -956,6 +1014,18 @@ describe('ClaudeTranscriptSource', () => {
           uuid: 'r1',
           message: { content: [{ type: 'tool_result', tool_use_id: toolUseId, content: 'answered' }] },
           toolUseResult: { questions: [], answers: { 'Lunch?': 'Ramen' }, annotations: {} },
+        },
+      ]);
+      expect(await service.getSessionTailState(SID_A)).toBe('in_progress');
+    });
+
+    it('returns in_progress when the last meaningful record is a task_notification (background task resumes the agent turn)', async () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        { type: 'user', uuid: 'u1', message: { content: 'do it' } },
+        {
+          type: 'user',
+          uuid: 'tn1',
+          message: { content: '<task-notification>\n<task-id>a1</task-id>\n<status>completed</status>\n<summary>done</summary>\n</task-notification>' },
         },
       ]);
       expect(await service.getSessionTailState(SID_A)).toBe('in_progress');

@@ -30,6 +30,9 @@ export type LiveStatus =
  *   開始しないため thinking を出さない）。
  * - 最後のエントリが interaction（AskUserQuestion 等の質問＋回答確定） → thinking（回答後も
  *   エージェントはターンを継続するため、tool と同じ扱いにする）。
+ * - 最後のエントリが system かつ systemKind: 'task_notification'（バックグラウンドタスク完了通知） →
+ *   thinking（この通知はエージェントのターンを再開させるため、通常の system 表示とは異なり
+ *   「応答完了」とはみなさない）。それ以外の system は従来通り null。
  */
 export function deriveLiveStatus(entries: TranscriptEntry[], now: number): LiveStatus | null {
   if (entries.length === 0) return null;
@@ -50,6 +53,8 @@ export function deriveLiveStatus(entries: TranscriptEntry[], now: number): LiveS
       return { kind: 'thinking' };
     case 'interaction':
       return { kind: 'thinking' };
+    case 'system':
+      return last.systemKind === 'task_notification' ? { kind: 'thinking' } : null;
     case 'assistant': {
       const lastBlock = last.blocks[last.blocks.length - 1];
       if (lastBlock?.kind === 'tool_use') return { kind: 'tool', toolName: lastBlock.name };
