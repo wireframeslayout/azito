@@ -463,6 +463,117 @@ describe('ClaudeTranscriptSource', () => {
       expect(result!.startOffset).toBe(0);
       expect(result!.hasOlder).toBe(false);
     });
+
+    it('converts a "[Request interrupted by user for tool use]" marker into an interrupted entry with empty blocks', () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        {
+          type: 'user',
+          uuid: 'u1',
+          timestamp: '2026-01-01T00:00:00Z',
+          message: { content: [{ type: 'text', text: '[Request interrupted by user for tool use]' }] },
+        },
+      ]);
+      const result = service.readSession(SID_A);
+      expect(result!.entries).toHaveLength(1);
+      expect(result!.entries[0]).toMatchObject({ uuid: 'u1', type: 'interrupted', timestamp: '2026-01-01T00:00:00Z', blocks: [] });
+    });
+
+    it('converts the "[Request interrupted by user]" marker variant into an interrupted entry', () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        { type: 'user', uuid: 'u1', message: { content: [{ type: 'text', text: '[Request interrupted by user]' }] } },
+      ]);
+      const result = service.readSession(SID_A);
+      expect(result!.entries[0].type).toBe('interrupted');
+    });
+
+    it('does not misclassify a real user message that starts with the marker text but continues in the same block', () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        { type: 'user', uuid: 'u1', message: { content: [{ type: 'text', text: '[Request interrupted by user] means what?' }] } },
+      ]);
+      const result = service.readSession(SID_A);
+      expect(result!.entries[0].type).toBe('user');
+    });
+
+    it('does not misclassify a real user message that merely mentions interruption alongside other text', () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        {
+          type: 'user',
+          uuid: 'u1',
+          message: {
+            content: [
+              { type: 'text', text: '[Request interrupted by user for tool use]' },
+              { type: 'text', text: 'please continue anyway' },
+            ],
+          },
+        },
+      ]);
+      const result = service.readSession(SID_A);
+      expect(result!.entries[0].type).toBe('user');
+    });
+  });
+
+  describe('getSessionTailState', () => {
+    it('returns unknown for a nonexistent session', async () => {
+      expect(await service.getSessionTailState('not-a-uuid')).toBe('unknown');
+      expect(await service.getSessionTailState(SID_A)).toBe('unknown');
+    });
+
+    it('returns terminal when the last meaningful record is an interrupt marker', async () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        { type: 'user', uuid: 'u1', message: { content: 'do the thing' } },
+        { type: 'assistant', uuid: 'a1', message: { content: [{ type: 'tool_use', name: 'Bash', input: {} }] } },
+        { type: 'user', uuid: 'u2', message: { content: [{ type: 'text', text: '[Request interrupted by user for tool use]' }] } },
+      ]);
+      expect(await service.getSessionTailState(SID_A)).toBe('terminal');
+    });
+
+    it('returns terminal when the last meaningful record is an assistant final text response', async () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        { type: 'user', uuid: 'u1', message: { content: 'hi' } },
+        { type: 'assistant', uuid: 'a1', message: { content: [{ type: 'text', text: 'done' }] } },
+      ]);
+      expect(await service.getSessionTailState(SID_A)).toBe('terminal');
+    });
+
+    it('returns in_progress when the last meaningful record is an assistant entry ending in a thinking block (mid-turn, not a final response)', async () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        { type: 'user', uuid: 'u1', message: { content: 'hi' } },
+        { type: 'assistant', uuid: 'a1', message: { content: [{ type: 'thinking', thinking: 'pondering...' }] } },
+      ]);
+      expect(await service.getSessionTailState(SID_A)).toBe('in_progress');
+    });
+
+    it('returns in_progress when the last meaningful record is a user message', async () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        { type: 'assistant', uuid: 'a1', message: { content: [{ type: 'text', text: 'done' }] } },
+        { type: 'user', uuid: 'u1', message: { content: 'another question' } },
+      ]);
+      expect(await service.getSessionTailState(SID_A)).toBe('in_progress');
+    });
+
+    it('returns in_progress when the last meaningful record is a tool_use', async () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        { type: 'user', uuid: 'u1', message: { content: 'do it' } },
+        { type: 'assistant', uuid: 'a1', message: { content: [{ type: 'tool_use', name: 'Bash', input: {} }] } },
+      ]);
+      expect(await service.getSessionTailState(SID_A)).toBe('in_progress');
+    });
+
+    it('returns in_progress when the last meaningful record is a tool_result', async () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        { type: 'assistant', uuid: 'a1', message: { content: [{ type: 'tool_use', name: 'Bash', input: {} }] } },
+        { type: 'user', uuid: 'u1', message: { content: [{ type: 'tool_result', content: 'ok' }] } },
+      ]);
+      expect(await service.getSessionTailState(SID_A)).toBe('in_progress');
+    });
+
+    it('skips malformed/unparseable trailing lines and classifies from the last valid record', async () => {
+      const file = writeSession(dir, 'proj-a', SID_A, [
+        { type: 'assistant', uuid: 'a1', message: { content: [{ type: 'text', text: 'done' }] } },
+      ]);
+      fs.appendFileSync(file, 'not json at all\n');
+      expect(await service.getSessionTailState(SID_A)).toBe('terminal');
+    });
   });
 
   describe('readSessionBefore', () => {

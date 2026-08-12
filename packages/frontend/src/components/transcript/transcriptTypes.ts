@@ -18,10 +18,14 @@ export type TranscriptBlock =
   | { kind: 'tool_use'; name: string; input: string; truncated: boolean }
   | { kind: 'tool_result'; text: string; truncated: boolean; isError?: boolean };
 
-export type TranscriptEntryType = 'user' | 'assistant' | 'system' | 'tool' | 'other';
+export type TranscriptEntryType = 'user' | 'assistant' | 'system' | 'tool' | 'other' | 'interrupted';
 
 export interface TranscriptEntry {
   uuid: string;
+  /**
+   * 'interrupted' はユーザーによる中断（停止ボタン等）を表す。blocks は空 — user/assistant 発話
+   * バブルではなく専用の控えめな終端行として描画する（styles/InterruptedRow.tsx）。
+   */
   type: TranscriptEntryType;
   timestamp: string | null;
   blocks: TranscriptBlock[];

@@ -18,6 +18,7 @@
     "toolResultChipError": "Error",
     "system": "System",
     "other": "Other",
+    "interrupted": "Interrupted",
     "liveThinking": "Thinking… {{seconds}}s",
     "liveTool": "{{name}} running… {{seconds}}s"
   },

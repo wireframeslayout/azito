@@ -282,9 +282,14 @@ export class WindowSessionResolver {
    * - 'offline': server が見つからない／非local／pane が無い／ps 呼び出し失敗／どの pane にも
    *   claude/codex プロセスが見当たらない。
    * - 'working': プロセスは見つかり、かつ window.agentSessionId（無ければ紐づく task の
-   *   agentSessionId）のセッションファイルが直近 SESSION_ACTIVITY_WINDOW_MS 以内に更新されている。
-   * - 'idle': プロセスは見つかったが、セッションが未設定、またはセッション mtime が古い
-   *   （エージェントプロセス自体は生きているがユーザー入力待ち等で書き込みが止まっている）。
+   *   agentSessionId）のセッションファイルが直近 SESSION_ACTIVITY_WINDOW_MS 以内に更新されており、
+   *   かつ末尾レコードが tailState 'terminal'（中断マーカー／最終応答完了）でない。
+   * - 'idle': プロセスは見つかったが、セッションが未設定、セッション mtime が古い
+   *   （エージェントプロセス自体は生きているがユーザー入力待ち等で書き込みが止まっている）、または
+   *   mtime は新しいが tailState が 'terminal'（Issue #338 followup: 中断直後は中断マーカー自体の
+   *   書き込みで mtime が更新されるため、mtime だけでは「稼働中」の偽陽性が生じる — 末尾レコードの
+   *   意味まで見て排除する）。tailState が 'unknown'（読み取り不能）の場合は従来通り mtime のみで
+   *   working 扱いにする。
    */
   async getActivityStatus(window: Window): Promise<'working' | 'idle' | 'offline'> {
     const server = this.serverRepo.findByName(window.serverName);
@@ -304,8 +309,11 @@ export class WindowSessionResolver {
 
     const source = this.sources.find((s) => s.agentType === agentType);
     const mtimeMs = source?.getSessionMtimeMs(sessionId) ?? null;
-    if (mtimeMs !== null && Date.now() - mtimeMs <= SESSION_ACTIVITY_WINDOW_MS) return 'working';
-    return 'idle';
+    if (mtimeMs === null || Date.now() - mtimeMs > SESSION_ACTIVITY_WINDOW_MS) return 'idle';
+
+    const tailState = source ? await source.getSessionTailState(sessionId) : 'unknown';
+    if (tailState === 'terminal') return 'idle';
+    return 'working';
   }
 
   /**

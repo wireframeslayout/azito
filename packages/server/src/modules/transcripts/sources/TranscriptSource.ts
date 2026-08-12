@@ -21,10 +21,15 @@ export type TranscriptBlock =
   | { kind: 'tool_use'; name: string; input: string; truncated: boolean }
   | { kind: 'tool_result'; text: string; truncated: boolean; isError?: boolean };
 
-export type TranscriptEntryType = 'user' | 'assistant' | 'system' | 'tool' | 'other';
+export type TranscriptEntryType = 'user' | 'assistant' | 'system' | 'tool' | 'other' | 'interrupted';
 
 export interface TranscriptEntry {
   uuid: string;
+  /**
+   * 'interrupted' はユーザーによる中断（停止ボタン等）を表す特別な種別。blocks は空（または理由
+   * テキスト1件）で、フロントは通常の user/assistant 発話バブルではなく専用の控えめな終端行として
+   * 描画する（liveStatus の判定でも「応答完了」と同様に扱い、カウントアップを止める）。
+   */
   type: TranscriptEntryType;
   timestamp: string | null;
   blocks: TranscriptBlock[];
@@ -74,4 +79,21 @@ export interface TranscriptSource {
    * ベースの判定に委ねる）。
    */
   getSessionCreatedMs(sessionId: string): number | null;
+  /**
+   * セッション JSONL の末尾（小さなバイト窓のみ、実装は各ソースの getSessionTailState 参照）を読み、
+   * 意味のある最後のレコードを稼働状態に分類する。`WindowSessionResolver.getActivityStatus()` の
+   * mtime ベース判定（直近更新されていれば working）に重ねて使う — 中断直後は中断マーカー自体が
+   * JSONL に書き込まれて mtime が更新されるため、mtime だけでは「稼働中」の偽陽性が生じる
+   * （Issue #338 followup）。
+   *
+   * - 'terminal': 最後の意味あるレコードが中断マーカー、またはエージェントの最終応答（最後のブロックが
+   *   text/thinking で終わるもの）。この場合はプロセスが応答待ち/実行中ではないとみなせる。
+   * - 'in_progress': 最後が user 発話・tool_use・tool_result 等（応答待ち、または実行中）。
+   * - 'unknown': ファイルが読めない、セッションが存在しない、または末尾窓に意味のあるレコードが
+   *   見つからない。呼び出し元は従来通り mtime のみで判定する（working 扱い）。
+   *
+   * 将来別のエージェント種別を追加する場合、この契約（terminal/in_progress/unknown の意味）に従って
+   * 実装するだけで、getActivityStatus 側のロジック変更なしに稼働判定へ反映される。
+   */
+  getSessionTailState(sessionId: string): Promise<'in_progress' | 'terminal' | 'unknown'>;
 }

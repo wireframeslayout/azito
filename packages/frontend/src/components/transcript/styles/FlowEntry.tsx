@@ -4,6 +4,7 @@ import { CollapsibleBlock } from '../CollapsibleBlock';
 import { computeThinkingGapSeconds, formatEntryTimestamp } from '../transcriptFormat';
 import type { TranscriptBlock, TranscriptEntry } from '../transcriptTypes';
 import { GroupHeading } from './GroupHeading';
+import { InterruptedRow } from './InterruptedRow';
 import { SystemOtherChip } from './SystemOtherChip';
 import { ThinkingChip } from './ThinkingChip';
 import type { StyleGroupProps } from './types';
@@ -121,6 +122,14 @@ export default function FlowEntry({ group, prevTimestamp, agentLabel }: StyleGro
       <div style={{ margin: '2px 0 14px' }}>
         <GroupEntries entries={group.entries} prevTimestamp={prevTimestamp} isUser={false} />
       </div>
+    );
+  }
+
+  if (group.type === 'interrupted') {
+    return (
+      <>
+        {group.entries.map((entry) => <InterruptedRow key={entry.uuid} />)}
+      </>
     );
   }
 

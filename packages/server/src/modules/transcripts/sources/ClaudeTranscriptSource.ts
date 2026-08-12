@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { isRecord, truncateText, TOOL_USE_INPUT_LIMIT, TOOL_RESULT_TEXT_LIMIT } from './entryHelpers';
+import { isRecord, truncateText, classifyTailEntry, TOOL_USE_INPUT_LIMIT, TOOL_RESULT_TEXT_LIMIT, TAIL_STATE_SCAN_BYTES } from './entryHelpers';
 import { readChunk, readInitialWindow, readIncrementalWindow, readBeforeWindow } from './jsonlWindowReader';
 import type {
   ReadSessionBeforeResult,
@@ -25,6 +25,13 @@ const DEFAULT_INITIAL_READ_MAX_BYTES = 5 * 1024 * 1024;
 const DEFAULT_INCREMENTAL_READ_MAX_BYTES = 5 * 1024 * 1024;
 /** 一覧 preview 生成のためにファイル先頭から読むバイト数。 */
 const DEFAULT_PREVIEW_SCAN_BYTES = 64 * 1024;
+/**
+ * Claude Code が中断時に role=user のメッセージへ自動注入するテキスト全体（実データで確認、
+ * バリアント: "[Request interrupted by user for tool use]" / "[Request interrupted by user]"）。
+ * 完全一致で判定する（前方一致だと `[Request interrupted by user] とはどういう意味？` のような
+ * このテキストで始まる実際のユーザー発言まで誤って中断扱いにしてしまうため）。
+ */
+const INTERRUPT_TEXT_PATTERN = /^\[Request interrupted by user( for tool use)?\]$/;
 
 export interface ClaudeTranscriptSourceOptions {
   /** 初回読みで末尾から遡って読む最大バイト数（テスト用に上書き可能）。既定値は DEFAULT_INITIAL_READ_MAX_BYTES。 */
@@ -234,6 +241,16 @@ function normalizeBlocks(content: unknown): TranscriptBlock[] {
   return blocks;
 }
 
+/**
+ * user エントリが中断マーカー（INTERRUPT_TEXT_PATTERN に完全一致するテキスト1ブロックのみ）かどうかを
+ * 判定する。該当する場合、呼び出し側は通常の 'user' 型ではなく 'interrupted' 型として扱う（フロントで
+ * ユーザー発話バブルとして誤表示させず、専用の終端行として描画するため）。
+ */
+function isInterruptMarkerEntry(rawType: unknown, blocks: TranscriptBlock[]): boolean {
+  if (rawType !== 'user') return false;
+  return blocks.length === 1 && blocks[0].kind === 'text' && INTERRUPT_TEXT_PATTERN.test(blocks[0].text);
+}
+
 /** 生の JSONL 行1件を TranscriptEntry に正規化する。スキップ対象は null を返す。 */
 function normalizeEntry(record: unknown): TranscriptEntry | null {
   if (!isRecord(record)) return null;
@@ -247,10 +264,16 @@ function normalizeEntry(record: unknown): TranscriptEntry | null {
   const blocks = normalizeBlocks(message.content);
   if (blocks.length === 0) return null;
 
+  const timestamp = typeof record.timestamp === 'string' ? record.timestamp : null;
+
+  if (isInterruptMarkerEntry(record.type, blocks)) {
+    return { uuid: record.uuid, type: 'interrupted', timestamp, blocks: [] };
+  }
+
   return {
     uuid: record.uuid,
     type: normalizeEntryType(record.type, blocks),
-    timestamp: typeof record.timestamp === 'string' ? record.timestamp : null,
+    timestamp,
     blocks,
   };
 }
@@ -284,12 +307,28 @@ export class ClaudeTranscriptSource implements TranscriptSource {
     this.previewScanBytes = options.previewScanBytes ?? DEFAULT_PREVIEW_SCAN_BYTES;
   }
 
+  /**
+   * sessionId → ファイルパスのキャッシュ（インスタンス寿命内で保持）。CodexTranscriptSource と同じ
+   * パターン: getActivityStatus 等が getSessionMtimeMs → getSessionTailState のように findSessionFile を
+   * 連続呼び出しするケースで、全プロジェクト配下の再帰走査を毎回繰り返さないようにする。キャッシュ
+   * ヒット時は fs.existsSync でファイルの生存だけ確認して使い回し、消えていた場合と新規セッション
+   * （キャッシュミス）の場合のみ listSessionFiles() で再走査する。
+   */
+  private readonly sessionFileCache = new Map<string, string>();
+
   private projectsDir(): string {
     return resolveProjectsDir(this.projectsDirOverride);
   }
 
+  private warmSessionFileCache(files: { file: string; projectDir: string }[]): void {
+    for (const { file } of files) {
+      this.sessionFileCache.set(path.basename(file, '.jsonl'), file);
+    }
+  }
+
   listSessions(limit = 50): SessionSummary[] {
     const files = listSessionFiles(this.projectsDir());
+    this.warmSessionFileCache(files);
 
     const stated: { file: string; projectDir: string; sessionId: string; stat: fs.Stats }[] = [];
     for (const { file, projectDir } of files) {
@@ -322,7 +361,15 @@ export class ClaudeTranscriptSource implements TranscriptSource {
 
   private findSessionFile(sessionId: string): string | null {
     if (!SESSION_ID_PATTERN.test(sessionId)) return null;
+
+    const cached = this.sessionFileCache.get(sessionId);
+    if (cached !== undefined) {
+      if (fs.existsSync(cached)) return cached;
+      this.sessionFileCache.delete(sessionId);
+    }
+
     const files = listSessionFiles(this.projectsDir());
+    this.warmSessionFileCache(files);
     const match = files.find(({ file }) => path.basename(file, '.jsonl') === sessionId);
     return match ? match.file : null;
   }
@@ -405,5 +452,32 @@ export class ClaudeTranscriptSource implements TranscriptSource {
     } finally {
       fs.closeSync(fd);
     }
+  }
+
+  /** 末尾 TAIL_STATE_SCAN_BYTES 分だけを読み、末尾から遡って最初にパース可能な行を分類する。 */
+  async getSessionTailState(sessionId: string): Promise<'in_progress' | 'terminal' | 'unknown'> {
+    const file = this.findSessionFile(sessionId);
+    if (!file) return 'unknown';
+
+    let content: string;
+    try {
+      const fd = fs.openSync(file, 'r');
+      try {
+        const size = fs.fstatSync(fd).size;
+        const start = Math.max(size - TAIL_STATE_SCAN_BYTES, 0);
+        content = readChunk(fd, size, start, size - start).toString('utf-8');
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch {
+      return 'unknown';
+    }
+
+    const lines = content.split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const entry = parseLine(lines[i]);
+      if (entry) return classifyTailEntry(entry);
+    }
+    return 'unknown';
   }
 }

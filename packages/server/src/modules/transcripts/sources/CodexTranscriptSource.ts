@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { isRecord, truncateText, TOOL_USE_INPUT_LIMIT, TOOL_RESULT_TEXT_LIMIT } from './entryHelpers';
+import { isRecord, truncateText, classifyTailEntry, TOOL_USE_INPUT_LIMIT, TOOL_RESULT_TEXT_LIMIT, TAIL_STATE_SCAN_BYTES } from './entryHelpers';
 import { readChunk, readInitialWindow, readIncrementalWindow, readBeforeWindow } from './jsonlWindowReader';
 import type {
   ReadSessionBeforeResult,
@@ -18,7 +18,10 @@ import type {
 // 1行1JSON `{timestamp, type, payload}`。実データで確認した type:
 //   session_meta（payload.id=セッションUUID, payload.cwd） / turn_context / event_msg
 //   （user_message/agent_message/task_started/task_complete/token_count 等、response_item と
-//   内容が重複するため無視） / response_item（payload.type: message/reasoning/function_call/
+//   内容が重複するため無視。ただし payload.type === 'turn_aborted'（ユーザーによる中断、
+//   payload.reason: 'interrupted'）のみ例外的に 'interrupted' エントリへ変換する — 対応する
+//   response_item が書かれないため、これを見逃すと中断後も最後の可視エントリがツール結果のままになり、
+//   フロントの liveStatus が誤って「応答待ち」を表示し続けてしまう） / response_item（payload.type: message/reasoning/function_call/
 //   function_call_output/custom_tool_call/custom_tool_call_output のみを変換。custom_tool_call は
 //   apply_patch/exec 等の freeform ツール呼び出しで、input は文字列（生パッチ/スクリプト本文）。
 //   対応する custom_tool_call_output.output は文字列・{type:'input_text',text}形の配列・null のいずれも
@@ -323,6 +326,18 @@ function normalizeResponseItem(record: Record<string, unknown>, callId: string |
 }
 
 /**
+ * event_msg 行のうち payload.type === 'turn_aborted'（ユーザーによる中断）のみを 'interrupted'
+ * エントリへ変換する。それ以外の event_msg は response_item と重複するため引き続き無視（null）。
+ * uuid は対応する call_id を持たないため、呼び出し側の行インデックス由来の fallbackUuid をそのまま使う。
+ */
+function normalizeEventMsg(record: Record<string, unknown>, fallbackUuid: string): TranscriptEntry | null {
+  const payload = record.payload;
+  if (!isRecord(payload) || payload.type !== 'turn_aborted') return null;
+  const timestamp = typeof record.timestamp === 'string' ? record.timestamp : null;
+  return { uuid: fallbackUuid, type: 'interrupted', timestamp, blocks: [] };
+}
+
+/**
  * 1行 → TranscriptEntry のパーサを作る。call_id を持つ function_call/function_call_output・
  * custom_tool_call/custom_tool_call_output は、それを uuid のベースに使う（呼び出しと結果の
  * 対応が視覚的にも安定する）。呼び出しと結果は同じ call_id を共有するため normalizeResponseItem
@@ -342,11 +357,14 @@ function buildParseLine(windowKey: string): (line: string) => TranscriptEntry | 
     } catch {
       return null;
     }
-    if (!isRecord(record) || record.type !== 'response_item') return null;
+    if (!isRecord(record)) return null;
+    const fallbackUuid = `${windowKey}-${currentIndex}`;
+
+    if (record.type === 'event_msg') return normalizeEventMsg(record, fallbackUuid);
+    if (record.type !== 'response_item') return null;
 
     const payload = record.payload;
     const callId = isRecord(payload) && typeof payload.call_id === 'string' ? payload.call_id : null;
-    const fallbackUuid = `${windowKey}-${currentIndex}`;
     return normalizeResponseItem(record, callId, fallbackUuid);
   };
 }
@@ -504,5 +522,38 @@ export class CodexTranscriptSource implements TranscriptSource {
     } finally {
       fs.closeSync(fd);
     }
+  }
+
+  /**
+   * 末尾 TAIL_STATE_SCAN_BYTES 分だけを読み、末尾から遡って最初にパース可能な行を分類する。
+   * buildParseLine と同じ変換（normalizeResponseItem/normalizeEventMsg）を使うため、'reasoning' は
+   * Claude の thinking ブロックと同じ type:'assistant' 形に正規化され、classifyTailEntry が
+   * エージェント非依存に扱える。
+   */
+  async getSessionTailState(sessionId: string): Promise<'in_progress' | 'terminal' | 'unknown'> {
+    const file = this.findSessionFile(sessionId);
+    if (!file) return 'unknown';
+
+    let content: string;
+    try {
+      const fd = fs.openSync(file, 'r');
+      try {
+        const size = fs.fstatSync(fd).size;
+        const start = Math.max(size - TAIL_STATE_SCAN_BYTES, 0);
+        content = readChunk(fd, size, start, size - start).toString('utf-8');
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch {
+      return 'unknown';
+    }
+
+    const parseLine = buildParseLine('tail');
+    const lines = content.split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const entry = parseLine(lines[i]);
+      if (entry) return classifyTailEntry(entry);
+    }
+    return 'unknown';
   }
 }

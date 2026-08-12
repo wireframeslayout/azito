@@ -86,6 +86,18 @@ const EVENT_MSG = {
   payload: { type: 'user_message', message: 'duplicate of response_item', images: [], local_images: [], text_elements: [] },
 };
 
+const TURN_ABORTED_EVENT = {
+  timestamp: '2026-05-31T03:09:46.000Z',
+  type: 'event_msg',
+  payload: { type: 'turn_aborted', reason: 'interrupted' },
+};
+
+const CUSTOM_TOOL_CALL_ABORTED_OUTPUT = (callId: string) => ({
+  timestamp: '2026-05-31T03:09:45.900Z',
+  type: 'response_item',
+  payload: { type: 'custom_tool_call_output', call_id: callId, output: 'aborted by user after 4s' },
+});
+
 describe('CodexTranscriptSource', () => {
   let dir: string;
   let source: CodexTranscriptSource;
@@ -323,6 +335,75 @@ describe('CodexTranscriptSource', () => {
         { kind: 'text', text: 'ok' },
         { kind: 'text', text: 'after' },
       ]);
+    });
+
+    it('converts an event_msg turn_aborted record into an interrupted entry', () => {
+      writeSession(dir, SID_A, [
+        SESSION_META(SID_A, '/home/user/proj-a'),
+        USER_MESSAGE('do the thing'),
+        FUNCTION_CALL('call_1'),
+        TURN_ABORTED_EVENT,
+      ]);
+      const result = source.readSession(SID_A);
+      expect(result!.entries).toHaveLength(3);
+      expect(result!.entries[2]).toMatchObject({ type: 'interrupted', timestamp: '2026-05-31T03:09:46.000Z', blocks: [] });
+    });
+
+    it('keeps ignoring other event_msg subtypes (only turn_aborted is converted)', () => {
+      writeSession(dir, SID_A, [SESSION_META(SID_A, '/home/user/proj-a'), EVENT_MSG, USER_MESSAGE('hi')]);
+      const result = source.readSession(SID_A);
+      expect(result!.entries).toHaveLength(1);
+      expect(result!.entries[0].type).toBe('user');
+    });
+
+    it('leaves custom_tool_call_output "aborted by user" text as a normal tool_result (not converted)', () => {
+      writeSession(dir, SID_A, [
+        SESSION_META(SID_A, '/home/user/proj-a'),
+        CUSTOM_TOOL_CALL('call_1', 'exec', 'ls'),
+        CUSTOM_TOOL_CALL_ABORTED_OUTPUT('call_1'),
+      ]);
+      const result = source.readSession(SID_A);
+      expect(result!.entries[1]).toMatchObject({ type: 'tool', blocks: [{ kind: 'tool_result', text: 'aborted by user after 4s', truncated: false }] });
+    });
+  });
+
+  describe('getSessionTailState', () => {
+    it('returns unknown for a nonexistent session', async () => {
+      expect(await source.getSessionTailState(SID_A)).toBe('unknown');
+    });
+
+    it('returns terminal when the last meaningful record is a turn_aborted event', async () => {
+      writeSession(dir, SID_A, [
+        SESSION_META(SID_A, '/home/user/proj-a'),
+        USER_MESSAGE('do it'),
+        FUNCTION_CALL('call_1'),
+        TURN_ABORTED_EVENT,
+      ]);
+      expect(await source.getSessionTailState(SID_A)).toBe('terminal');
+    });
+
+    it('returns terminal when the last meaningful record is the final assistant text', async () => {
+      writeSession(dir, SID_A, [SESSION_META(SID_A, '/home/user/proj-a'), USER_MESSAGE('hi'), ASSISTANT_MESSAGE('done')]);
+      expect(await source.getSessionTailState(SID_A)).toBe('terminal');
+    });
+
+    it('returns in_progress when the last meaningful record is a reasoning block (mid-turn thinking, not a final response)', async () => {
+      writeSession(dir, SID_A, [SESSION_META(SID_A, '/home/user/proj-a'), USER_MESSAGE('hi'), REASONING('thinking about it')]);
+      expect(await source.getSessionTailState(SID_A)).toBe('in_progress');
+    });
+
+    it('returns in_progress when the last meaningful record is a function_call (tool in flight)', async () => {
+      writeSession(dir, SID_A, [SESSION_META(SID_A, '/home/user/proj-a'), USER_MESSAGE('hi'), FUNCTION_CALL('call_1')]);
+      expect(await source.getSessionTailState(SID_A)).toBe('in_progress');
+    });
+
+    it('returns in_progress when the last meaningful record is a function_call_output (awaiting next turn)', async () => {
+      writeSession(dir, SID_A, [
+        SESSION_META(SID_A, '/home/user/proj-a'),
+        FUNCTION_CALL('call_1'),
+        FUNCTION_CALL_OUTPUT('call_1', 'result'),
+      ]);
+      expect(await source.getSessionTailState(SID_A)).toBe('in_progress');
     });
   });
 

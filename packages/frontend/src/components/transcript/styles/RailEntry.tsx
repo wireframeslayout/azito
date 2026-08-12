@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next';
 import MarkdownRenderer from '../../MarkdownRenderer';
 import { computeThinkingGapSeconds } from '../transcriptFormat';
 import type { TranscriptBlock, TranscriptEntry } from '../transcriptTypes';
+import { InterruptedRow } from './InterruptedRow';
 import { SystemOtherChip } from './SystemOtherChip';
 import { ThinkingChip } from './ThinkingChip';
 import type { StyleGroupProps } from './types';
@@ -153,6 +154,14 @@ function GroupBlocks({ entries, prevTimestamp }: { entries: TranscriptEntry[]; p
  * インデントのみで続ける。
  */
 export default function RailEntry({ group, prevTimestamp }: StyleGroupProps) {
+  if (group.type === 'interrupted') {
+    return (
+      <>
+        {group.entries.map((entry) => <InterruptedRow key={entry.uuid} />)}
+      </>
+    );
+  }
+
   if (group.type === 'system' || group.type === 'other') {
     return (
       <SystemOtherChip entryType={group.type}>

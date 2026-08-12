@@ -18,6 +18,7 @@
     "toolResultChipError": "エラー",
     "system": "システム",
     "other": "その他",
+    "interrupted": "中断しました",
     "liveThinking": "思考中… {{seconds}}s",
     "liveTool": "{{name}} 実行中… {{seconds}}s"
   },

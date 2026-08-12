@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { computeThinkingGapSeconds, splitCodeBlocks } from '../transcriptFormat';
 import type { TranscriptBlock } from '../transcriptTypes';
+import { InterruptedRow } from './InterruptedRow';
 import { SystemOtherChip } from './SystemOtherChip';
 import { ThinkingChip } from './ThinkingChip';
 import type { StyleGroupProps } from './types';
@@ -138,6 +139,14 @@ function EntryBlocks({ blocks, isUser, thinkingSeconds }: {
  */
 export default function TuiEntry({ group, prevTimestamp }: StyleGroupProps) {
   let prevTs = prevTimestamp;
+
+  if (group.type === 'interrupted') {
+    return (
+      <>
+        {group.entries.map((entry) => <InterruptedRow key={entry.uuid} />)}
+      </>
+    );
+  }
 
   if (group.type === 'system' || group.type === 'other') {
     return (

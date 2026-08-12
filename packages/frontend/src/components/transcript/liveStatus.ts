@@ -24,6 +24,8 @@ export type LiveStatus =
  * - 最後のエントリが assistant で最後のブロックが tool_use → tool（ツール名付き）。
  * - 最後のエントリが assistant で最後のブロックが text/thinking → null（応答完了とみなす）。
  * - system / other はこの機能の対象外として null を返す。
+ * - 最後のエントリが interrupted（ユーザーによる中断） → null（中断＝応答完了と同様に扱い、カウント
+ *   アップを即座に止める）。
  */
 export function deriveLiveStatus(entries: TranscriptEntry[], now: number): LiveStatus | null {
   if (entries.length === 0) return null;
@@ -47,6 +49,8 @@ export function deriveLiveStatus(entries: TranscriptEntry[], now: number): LiveS
       if (lastBlock?.kind === 'tool_use') return { kind: 'tool', toolName: lastBlock.name };
       return null;
     }
+    case 'interrupted':
+      return null;
     default:
       return null;
   }
