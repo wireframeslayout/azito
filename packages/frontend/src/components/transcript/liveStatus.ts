@@ -26,6 +26,8 @@ export type LiveStatus =
  * - system / other はこの機能の対象外として null を返す。
  * - 最後のエントリが interrupted（ユーザーによる中断） → null（中断＝応答完了と同様に扱い、カウント
  *   アップを即座に止める）。
+ * - 最後のエントリが command（ローカルスラッシュコマンド実行） → null（エージェントのターンを
+ *   開始しないため thinking を出さない）。
  */
 export function deriveLiveStatus(entries: TranscriptEntry[], now: number): LiveStatus | null {
   if (entries.length === 0) return null;
@@ -50,6 +52,8 @@ export function deriveLiveStatus(entries: TranscriptEntry[], now: number): LiveS
       return null;
     }
     case 'interrupted':
+      return null;
+    case 'command':
       return null;
     default:
       return null;

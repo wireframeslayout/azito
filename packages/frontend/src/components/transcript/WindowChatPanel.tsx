@@ -19,10 +19,10 @@ interface WindowChatPanelProps {
 type ResolveState =
   | { kind: 'loading' }
   | { kind: 'error' }
-  | { kind: 'session'; sessionId: string; agentType: string; paneId: string; agentDetected: boolean }
+  | { kind: 'session'; sessionId: string; agentType: string; paneId: string; agentDetected: boolean; slashCommandsVisibleInLog?: boolean }
   // セッション JSONL がまだ無い（会話履歴が発生する前）が、送信先ペインだけは best-effort で
   // 解決できているケース（Issue #69 仕様調整3）。チャットは開始できる。
-  | { kind: 'pane-only'; paneId: string; agentDetected: boolean }
+  | { kind: 'pane-only'; paneId: string; agentDetected: boolean; slashCommandsVisibleInLog?: boolean }
   | { kind: 'unresolved'; reason: 'unsupported_server' | 'no_recent_session' };
 
 const POST_SEND_POLL_INTERVAL_MS = 3000;
@@ -72,9 +72,16 @@ export default function WindowChatPanel({ windowId, viewMode, onChangeViewMode }
           return;
         }
         if (body.resolved) {
-          setState({ kind: 'session', sessionId: body.sessionId, agentType: body.agentType, paneId: body.paneId, agentDetected: body.agentDetected });
+          setState({
+            kind: 'session',
+            sessionId: body.sessionId,
+            agentType: body.agentType,
+            paneId: body.paneId,
+            agentDetected: body.agentDetected,
+            slashCommandsVisibleInLog: body.slashCommandsVisibleInLog,
+          });
         } else if (body.paneId) {
-          setState({ kind: 'pane-only', paneId: body.paneId, agentDetected: body.agentDetected });
+          setState({ kind: 'pane-only', paneId: body.paneId, agentDetected: body.agentDetected, slashCommandsVisibleInLog: body.slashCommandsVisibleInLog });
         } else {
           setState({ kind: 'unresolved', reason: body.reason });
         }
@@ -101,7 +108,14 @@ export default function WindowChatPanel({ windowId, viewMode, onChangeViewMode }
           if (generationRef.current !== myGeneration) return; // 別ウィンドウへ切替済み: 破棄
           if (status === 200 && !('error' in body) && body.resolved) {
             stopPolling();
-            setState({ kind: 'session', sessionId: body.sessionId, agentType: body.agentType, paneId: body.paneId, agentDetected: body.agentDetected });
+            setState({
+              kind: 'session',
+              sessionId: body.sessionId,
+              agentType: body.agentType,
+              paneId: body.paneId,
+              agentDetected: body.agentDetected,
+              slashCommandsVisibleInLog: body.slashCommandsVisibleInLog,
+            });
             return;
           }
           if (pollAttemptsRef.current >= POST_SEND_POLL_MAX_ATTEMPTS) {
@@ -153,6 +167,7 @@ export default function WindowChatPanel({ windowId, viewMode, onChangeViewMode }
           paneId={state.paneId}
           draftKey={`window-${windowId}`}
           agentDetected={state.agentDetected}
+          slashCommandsVisibleInLog={state.slashCommandsVisibleInLog}
           contextHistory={[]}
           onSent={pollForSession}
           viewMode={viewMode}
@@ -169,6 +184,7 @@ export default function WindowChatPanel({ windowId, viewMode, onChangeViewMode }
       agentType={state.agentType}
       paneId={state.paneId}
       agentDetected={state.agentDetected}
+      slashCommandsVisibleInLog={state.slashCommandsVisibleInLog}
       viewMode={viewMode}
       onChangeViewMode={onChangeViewMode}
     />

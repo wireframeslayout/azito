@@ -53,7 +53,8 @@
     "history": "過去のプロンプト",
     "historyEmpty": "過去のプロンプトはまだありません",
     "draftRestored": "下書きを復元しました",
-    "agentNotDetectedWarning": "このウィンドウでエージェントが起動していない可能性があります。送信内容はシェルにそのまま入力されます。"
+    "agentNotDetectedWarning": "このウィンドウでエージェントが起動していない可能性があります。送信内容はシェルにそのまま入力されます。",
+    "slashCommandHint": "スラッシュコマンドの結果はチャットに反映されません。ターミナルモードでの実行を推奨します"
   },
   "windowChat": {
     "loading": "セッションを解決中…",

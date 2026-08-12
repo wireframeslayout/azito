@@ -3,6 +3,7 @@ import MarkdownRenderer from '../../MarkdownRenderer';
 import { CollapsibleBlock } from '../CollapsibleBlock';
 import { computeThinkingGapSeconds, formatEntryTimestamp } from '../transcriptFormat';
 import type { TranscriptBlock, TranscriptEntry } from '../transcriptTypes';
+import { CommandRow } from './CommandRow';
 import { GroupHeading } from './GroupHeading';
 import { InterruptedRow } from './InterruptedRow';
 import { SystemOtherChip } from './SystemOtherChip';
@@ -133,6 +134,14 @@ export default function FlowEntry({ group, prevTimestamp, agentLabel }: StyleGro
     );
   }
 
+  if (group.type === 'command') {
+    return (
+      <>
+        {group.entries.map((entry) => <CommandRow key={entry.uuid} entry={entry} />)}
+      </>
+    );
+  }
+
   if (group.type === 'system' || group.type === 'other') {
     let prevTs = prevTimestamp;
     return (
@@ -147,10 +156,11 @@ export default function FlowEntry({ group, prevTimestamp, agentLabel }: StyleGro
   }
 
   const isUser = group.type === 'user';
+  const groupModel = !isUser ? [...group.entries].reverse().find((entry) => entry.model)?.model : undefined;
 
   return (
     <div style={{ margin: '14px 0' }}>
-      <GroupHeading isUser={isUser} timeLabel={timeLabel} agentLabel={agentLabel} />
+      <GroupHeading isUser={isUser} timeLabel={timeLabel} agentLabel={agentLabel} model={groupModel} />
       <GroupEntries entries={group.entries} prevTimestamp={prevTimestamp} isUser={isUser} />
     </div>
   );

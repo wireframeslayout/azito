@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { computeThinkingGapSeconds, splitCodeBlocks } from '../transcriptFormat';
 import type { TranscriptBlock } from '../transcriptTypes';
+import { CommandRow } from './CommandRow';
 import { InterruptedRow } from './InterruptedRow';
 import { SystemOtherChip } from './SystemOtherChip';
 import { ThinkingChip } from './ThinkingChip';
@@ -144,6 +145,14 @@ export default function TuiEntry({ group, prevTimestamp }: StyleGroupProps) {
     return (
       <>
         {group.entries.map((entry) => <InterruptedRow key={entry.uuid} />)}
+      </>
+    );
+  }
+
+  if (group.type === 'command') {
+    return (
+      <>
+        {group.entries.map((entry) => <CommandRow key={entry.uuid} entry={entry} />)}
       </>
     );
   }

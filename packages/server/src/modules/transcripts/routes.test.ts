@@ -630,11 +630,18 @@ describe('GET /api/transcripts/resolve-window', () => {
     );
     const res = await app.inject({ method: 'GET', url: '/api/transcripts/resolve-window?windowId=42' });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ resolved: true, agentType: 'claude', sessionId: SID, paneId: PANE_ID, agentDetected: true });
+    expect(res.json()).toEqual({
+      resolved: true,
+      agentType: 'claude',
+      sessionId: SID,
+      paneId: PANE_ID,
+      agentDetected: true,
+      slashCommandsVisibleInLog: true,
+    });
     await app.close();
   });
 
-  it('returns the resolver\'s unresolved result as-is', async () => {
+  it('returns the resolver\'s unresolved result as-is when agentType is unknown (no slashCommandsVisibleInLog)', async () => {
     const app = buildApp(
       [buildClaudeSource()],
       {},
@@ -643,6 +650,23 @@ describe('GET /api/transcripts/resolve-window', () => {
     const res = await app.inject({ method: 'GET', url: '/api/transcripts/resolve-window?windowId=42' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ resolved: false, reason: 'no_recent_session', agentDetected: false });
+    await app.close();
+  });
+
+  it('attaches slashCommandsVisibleInLog=false for codex even when unresolved (best-effort agentType)', async () => {
+    const app = buildApp(
+      [buildClaudeSource()],
+      {},
+      {
+        windowRepo: { findById: () => WINDOW },
+        windowSessionResolver: {
+          resolve: async () => ({ resolved: false, reason: 'no_recent_session', paneId: PANE_ID, agentType: 'codex', agentDetected: false }),
+        },
+      },
+    );
+    const res = await app.inject({ method: 'GET', url: '/api/transcripts/resolve-window?windowId=42' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ agentType: 'codex', slashCommandsVisibleInLog: false });
     await app.close();
   });
 });

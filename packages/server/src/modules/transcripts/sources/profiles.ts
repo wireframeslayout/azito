@@ -19,11 +19,19 @@ export interface AgentTranscriptProfile {
    * 既存動作のまま送信される（実証で問題なし）。
    */
   submitDelayMs: number;
+  /**
+   * このエージェントの CLI が、ローカルスラッシュコマンド実行（例: /model）をセッション JSONL に
+   * 'command' エントリとして記録するか（Issue #338 followup）。true（claude）ではチャットビューに
+   * コマンド行＋出力が反映されるため入力バーに注記は出さない。false（codex）では TUI ローカル
+   * コマンドがログに一切書かれず結果もチャットに反映されないため、フロントの入力バーが「/」始まりの
+   * 入力にターミナルモードでの実行を促す注記を出す（PromptInputBar 参照）。
+   */
+  slashCommandsVisibleInLog: boolean;
 }
 
 export const AGENT_TRANSCRIPT_PROFILES: AgentTranscriptProfile[] = [
-  { agentType: 'claude', displayName: 'Claude', interruptKey: 'Escape', submitDelayMs: 0 },
-  { agentType: 'codex', displayName: 'Codex', interruptKey: 'Escape', submitDelayMs: 200 },
+  { agentType: 'claude', displayName: 'Claude', interruptKey: 'Escape', submitDelayMs: 0, slashCommandsVisibleInLog: true },
+  { agentType: 'codex', displayName: 'Codex', interruptKey: 'Escape', submitDelayMs: 200, slashCommandsVisibleInLog: false },
 ];
 
 export function getAgentTranscriptProfile(agentType: string): AgentTranscriptProfile | undefined {

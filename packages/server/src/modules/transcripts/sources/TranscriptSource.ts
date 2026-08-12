@@ -21,7 +21,7 @@ export type TranscriptBlock =
   | { kind: 'tool_use'; name: string; input: string; truncated: boolean }
   | { kind: 'tool_result'; text: string; truncated: boolean; isError?: boolean };
 
-export type TranscriptEntryType = 'user' | 'assistant' | 'system' | 'tool' | 'other' | 'interrupted';
+export type TranscriptEntryType = 'user' | 'assistant' | 'system' | 'tool' | 'other' | 'interrupted' | 'command';
 
 export interface TranscriptEntry {
   uuid: string;
@@ -29,10 +29,21 @@ export interface TranscriptEntry {
    * 'interrupted' はユーザーによる中断（停止ボタン等）を表す特別な種別。blocks は空（または理由
    * テキスト1件）で、フロントは通常の user/assistant 発話バブルではなく専用の控えめな終端行として
    * 描画する（liveStatus の判定でも「応答完了」と同様に扱い、カウントアップを止める）。
+   * 'command' はエージェント CLI 自身のローカルスラッシュコマンド実行（例: /model）を表す。blocks には
+   * コマンド出力（stdout/stderr、ANSI エスケープ除去済み）を text ブロックとして持たせる（出力なしなら
+   * 空配列）。commandName が設定されていればコマンド行として、無ければ単独の出力のみとして描画する
+   * （フロントは通常の user/assistant 発話バブルではなく専用のコマンド行として描画する）。command
+   * エントリは、ローカルコマンド実行をセッション JSONL に記録するエージェント種別（現状 Claude Code）
+   * のみが生成する — CLI がそもそもログに書かないエージェント種別（例: Codex の TUI ローカルコマンド）
+   * では発生しない。
    */
   type: TranscriptEntryType;
   timestamp: string | null;
   blocks: TranscriptBlock[];
+  /** type === 'command' のときのみ設定。コマンド名（例: "/model"）。引数があれば "name args" の形。 */
+  commandName?: string;
+  /** type === 'assistant' のときのみ設定され得る。このターンで使われたモデル名（取得できない場合は省略）。 */
+  model?: string;
 }
 
 export interface ReadSessionResult {
@@ -56,6 +67,12 @@ export interface ReadSessionBeforeResult {
 /**
  * 1エージェント種別分のトランスクリプト読み取りを提供するアダプタ。
  * 実装はファイル走査・行パースの詳細を持つが、返す値は上記の正規化スキーマに従う。
+ *
+ * 'command' 型の TranscriptEntry（ローカルスラッシュコマンド実行）は、CLI 自身がその実行を
+ * セッション JSONL に記録するエージェント種別（現状 Claude Code のみ）の実装だけが生成する。
+ * ログに書かないエージェント種別（例: Codex の TUI ローカルコマンド）では発生しない —
+ * このケースはフロント側の入力バー注記（sources/profiles.ts の slashCommandsVisibleInLog）で
+ * 別途ユーザーへ誘導する。
  */
 export interface TranscriptSource {
   readonly agentType: string;

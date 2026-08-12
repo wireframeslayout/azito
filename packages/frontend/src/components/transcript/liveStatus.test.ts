@@ -96,6 +96,10 @@ describe('deriveLiveStatus', () => {
     expect(deriveLiveStatus([entry({ type: 'interrupted', blocks: [] })], NOW)).toBeNull();
   });
 
+  it('returns null when the last entry is a local command (does not start an agent turn)', () => {
+    expect(deriveLiveStatus([entry({ type: 'command', commandName: '/model', blocks: [] })], NOW)).toBeNull();
+  });
+
   it('only looks at the last entry, ignoring earlier ones', () => {
     const entries = [
       entry({ uuid: 'u1', type: 'assistant', blocks: [{ kind: 'tool_use', name: 'Bash', input: '{}', truncated: false }] }),

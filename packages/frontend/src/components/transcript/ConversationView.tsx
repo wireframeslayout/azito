@@ -45,13 +45,15 @@ interface ConversationViewProps {
   paneId: string;
   /** false の場合、PromptInputBar にフェイルセーフ注記を表示する（送信自体はブロックしない）。 */
   agentDetected: boolean;
+  /** PromptInputBar の「/」誘導ヒント（実装C）に渡す。resolve-window 応答由来、agentType 不明時は undefined。 */
+  slashCommandsVisibleInLog?: boolean;
   /** SP 端末⇄チャットのミニトグル（PromptInputBar 左端、Issue #69 S8）へ渡す現在値。省略時は
    * トグル自体を出さない（デスクトップ等、WindowChatPanel 経由で渡されない場合）。 */
   viewMode?: WindowViewMode;
   onChangeViewMode?: (mode: WindowViewMode) => void;
 }
 
-export default function ConversationView({ windowId, sessionId, agentType, paneId, agentDetected, viewMode, onChangeViewMode }: ConversationViewProps) {
+export default function ConversationView({ windowId, sessionId, agentType, paneId, agentDetected, slashCommandsVisibleInLog, viewMode, onChangeViewMode }: ConversationViewProps) {
   const { t, i18n } = useTranslation('transcript');
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -423,6 +425,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
           paneId={paneId}
           draftKey={sessionId}
           agentDetected={agentDetected}
+          slashCommandsVisibleInLog={slashCommandsVisibleInLog}
           contextHistory={contextHistory}
           onSent={() => scrollToBottom('smooth')}
           viewMode={viewMode}

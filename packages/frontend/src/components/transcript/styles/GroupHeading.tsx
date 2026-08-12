@@ -5,6 +5,12 @@ interface GroupHeadingProps {
   timeLabel: string;
   /** assistant 見出しに表示するラベル（agentType.toUpperCase() 済み）。isUser=true の場合は無視される。 */
   agentLabel: string;
+  /**
+   * このグループ（assistant のターン）で使われたモデル名（Issue #338 followup、実装B）。取得できた
+   * エントリがグループ内に無い場合は undefined — その場合は従来どおり agentLabel のみを表示する
+   * （'unknown' 等のフォールバック文字列は出さない）。isUser=true の場合は無視される。
+   */
+  model?: string;
 }
 
 /**
@@ -14,7 +20,7 @@ interface GroupHeadingProps {
  * サーバー側 IAgentProvider の displayName と重複定義しないよう、フロント側では
  * agentType.toUpperCase() のみを使う（呼び出し元 ConversationView で算出）。
  */
-export function GroupHeading({ isUser, timeLabel, agentLabel }: GroupHeadingProps) {
+export function GroupHeading({ isUser, timeLabel, agentLabel, model }: GroupHeadingProps) {
   const { t } = useTranslation('transcript');
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', marginBottom: 6 }}>
@@ -39,6 +45,9 @@ export function GroupHeading({ isUser, timeLabel, agentLabel }: GroupHeadingProp
       >
         {isUser ? t('styleSwitcher.flow.userLabel') : agentLabel}
       </span>
+      {!isUser && model && (
+        <span style={{ fontSize: 'var(--font-2xs)', color: 'var(--text-dim)' }}>· {model}</span>
+      )}
       <span style={{ flex: 1 }} />
       {timeLabel && (
         <span style={{ fontSize: 'var(--font-2xs)', color: 'var(--text-dim)' }}>{timeLabel}</span>

@@ -347,6 +347,11 @@ function normalizeEventMsg(record: Record<string, unknown>, fallbackUuid: string
  */
 function buildParseLine(windowKey: string): (line: string) => TranscriptEntry | null {
   let index = 0;
+  // turn_context.payload.model（実データで確認、Issue #338 followup）: そのターン以降の assistant
+  // エントリ（message role=assistant・reasoning）へ付与するモデル名。turn_context 自体はエントリ化
+  // しない。ウィンドウをまたいだ状態保持はしない（この関数のクロージャ寿命 = 1回の読み取りウィンドウ）
+  // — 直近の turn_context がウィンドウ外なら、そのウィンドウ内の assistant エントリに model は付かない。
+  let currentModel: string | undefined;
   return (line: string): TranscriptEntry | null => {
     const currentIndex = index;
     index += 1;
@@ -360,12 +365,20 @@ function buildParseLine(windowKey: string): (line: string) => TranscriptEntry | 
     if (!isRecord(record)) return null;
     const fallbackUuid = `${windowKey}-${currentIndex}`;
 
+    if (record.type === 'turn_context') {
+      const payload = record.payload;
+      if (isRecord(payload) && typeof payload.model === 'string') currentModel = payload.model;
+      return null;
+    }
+
     if (record.type === 'event_msg') return normalizeEventMsg(record, fallbackUuid);
     if (record.type !== 'response_item') return null;
 
     const payload = record.payload;
     const callId = isRecord(payload) && typeof payload.call_id === 'string' ? payload.call_id : null;
-    return normalizeResponseItem(record, callId, fallbackUuid);
+    const entry = normalizeResponseItem(record, callId, fallbackUuid);
+    if (entry && entry.type === 'assistant' && currentModel !== undefined) entry.model = currentModel;
+    return entry;
   };
 }
 

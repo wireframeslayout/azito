@@ -73,7 +73,12 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
     const window = windowRepo.findById(windowId);
     if (!window) return reply.status(404).send({ error: 'Window not found' });
 
-    return windowSessionResolver.resolve(window);
+    const result = await windowSessionResolver.resolve(window);
+    // slashCommandsVisibleInLog（Issue #338 followup、実装C）: フロントが agentType を知る唯一の
+    // 経路（resolve-window 応答）にこのフラグを載せる。agentType が best-effort でも未解決な場合は
+    // 判定材料が無いため付与しない（フロント側は undefined を「注記を出さない」として扱う）。
+    const slashCommandsVisibleInLog = result.agentType ? getAgentTranscriptProfile(result.agentType)?.slashCommandsVisibleInLog : undefined;
+    return { ...result, slashCommandsVisibleInLog };
   });
 
   // ── POST /api/transcripts/window-input ── ウィンドウの pane へ直接テキストを送信する

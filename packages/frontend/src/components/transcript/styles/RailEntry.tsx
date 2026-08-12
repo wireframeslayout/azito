@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next';
 import MarkdownRenderer from '../../MarkdownRenderer';
 import { computeThinkingGapSeconds } from '../transcriptFormat';
 import type { TranscriptBlock, TranscriptEntry } from '../transcriptTypes';
+import { CommandRow } from './CommandRow';
 import { InterruptedRow } from './InterruptedRow';
 import { SystemOtherChip } from './SystemOtherChip';
 import { ThinkingChip } from './ThinkingChip';
@@ -158,6 +159,14 @@ export default function RailEntry({ group, prevTimestamp }: StyleGroupProps) {
     return (
       <>
         {group.entries.map((entry) => <InterruptedRow key={entry.uuid} />)}
+      </>
+    );
+  }
+
+  if (group.type === 'command') {
+    return (
+      <>
+        {group.entries.map((entry) => <CommandRow key={entry.uuid} entry={entry} />)}
       </>
     );
   }

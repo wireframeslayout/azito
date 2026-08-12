@@ -3,6 +3,7 @@ import MarkdownRenderer from '../../MarkdownRenderer';
 import { CollapsibleBlock } from '../CollapsibleBlock';
 import { computeThinkingGapSeconds, formatEntryTimestamp } from '../transcriptFormat';
 import type { TranscriptBlock, TranscriptEntry } from '../transcriptTypes';
+import { CommandRow } from './CommandRow';
 import { GroupHeading } from './GroupHeading';
 import { InterruptedRow } from './InterruptedRow';
 import { SystemOtherChip } from './SystemOtherChip';
@@ -147,6 +148,14 @@ export default function BubbleEntry({ group, prevTimestamp, agentLabel }: StyleG
     );
   }
 
+  if (group.type === 'command') {
+    return (
+      <>
+        {group.entries.map((entry) => <CommandRow key={entry.uuid} entry={entry} />)}
+      </>
+    );
+  }
+
   if (group.type === 'system' || group.type === 'other') {
     let prevTs = prevTimestamp;
     return (
@@ -161,6 +170,7 @@ export default function BubbleEntry({ group, prevTimestamp, agentLabel }: StyleG
   }
 
   const isUser = group.type === 'user';
+  const groupModel = !isUser ? [...group.entries].reverse().find((entry) => entry.model)?.model : undefined;
 
   return (
     <div style={{ display: 'flex', justifyContent: isUser ? 'flex-end' : 'flex-start', margin: '10px 0 8px' }}>
@@ -173,7 +183,7 @@ export default function BubbleEntry({ group, prevTimestamp, agentLabel }: StyleG
           minWidth: 0,
         }}
       >
-        <GroupHeading isUser={isUser} timeLabel={timeLabel} agentLabel={agentLabel} />
+        <GroupHeading isUser={isUser} timeLabel={timeLabel} agentLabel={agentLabel} model={groupModel} />
         <GroupEntries entries={group.entries} prevTimestamp={prevTimestamp} isUser={isUser} />
       </div>
     </div>

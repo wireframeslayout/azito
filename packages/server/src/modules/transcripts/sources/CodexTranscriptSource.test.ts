@@ -367,6 +367,60 @@ describe('CodexTranscriptSource', () => {
     });
   });
 
+  describe('assistant model from turn_context (Issue #338 followup)', () => {
+    const TURN_CONTEXT = (model: string) => ({
+      timestamp: '2026-05-31T03:09:43.500Z',
+      type: 'turn_context',
+      payload: { turn_id: 't1', cwd: '/home/user/proj-a', model, approval_policy: 'on-request' },
+    });
+
+    it('attaches turn_context.payload.model to subsequent message/reasoning assistant entries', () => {
+      writeSession(dir, SID_A, [
+        SESSION_META(SID_A, '/home/user/proj-a'),
+        USER_MESSAGE('hi'),
+        TURN_CONTEXT('gpt-5.2-codex'),
+        REASONING('thinking...'),
+        ASSISTANT_MESSAGE('hello there'),
+      ]);
+      const result = source.readSession(SID_A);
+      expect(result!.entries).toHaveLength(3);
+      expect(result!.entries[0].model).toBeUndefined(); // user
+      expect(result!.entries[1].model).toBe('gpt-5.2-codex'); // reasoning → assistant
+      expect(result!.entries[2].model).toBe('gpt-5.2-codex'); // assistant message
+    });
+
+    it('does not attach model to non-assistant entries (function_call/tool)', () => {
+      writeSession(dir, SID_A, [
+        SESSION_META(SID_A, '/home/user/proj-a'),
+        TURN_CONTEXT('gpt-5.2-codex'),
+        FUNCTION_CALL('call_1'),
+        FUNCTION_CALL_OUTPUT('call_1', 'ok'),
+      ]);
+      const result = source.readSession(SID_A);
+      expect(result!.entries[0].model).toBeUndefined();
+      expect(result!.entries[1].model).toBeUndefined();
+    });
+
+    it('updates model when a later turn_context reports a different model', () => {
+      writeSession(dir, SID_A, [
+        SESSION_META(SID_A, '/home/user/proj-a'),
+        TURN_CONTEXT('gpt-5.2-codex'),
+        ASSISTANT_MESSAGE('first turn'),
+        TURN_CONTEXT('gpt-5.6-terra'),
+        ASSISTANT_MESSAGE('second turn'),
+      ]);
+      const result = source.readSession(SID_A);
+      expect(result!.entries[0].model).toBe('gpt-5.2-codex');
+      expect(result!.entries[1].model).toBe('gpt-5.6-terra');
+    });
+
+    it('leaves model undefined when no turn_context has been seen yet', () => {
+      writeSession(dir, SID_A, [SESSION_META(SID_A, '/home/user/proj-a'), ASSISTANT_MESSAGE('no context yet')]);
+      const result = source.readSession(SID_A);
+      expect(result!.entries[0].model).toBeUndefined();
+    });
+  });
+
   describe('getSessionTailState', () => {
     it('returns unknown for a nonexistent session', async () => {
       expect(await source.getSessionTailState(SID_A)).toBe('unknown');

@@ -29,6 +29,13 @@ interface PromptInputBarProps {
    * （フェイルセーフ。送信自体はブロックしない）。 */
   agentDetected: boolean;
   /**
+   * このウィンドウのエージェントがローカルスラッシュコマンドをセッションログへ記録するか
+   * （resolve-window 応答由来、Issue #338 followup 実装C）。false のとき、入力が「/」で始まる間
+   * ターミナルモードでの実行を促すヒント行を表示する（送信はブロックしない）。agentType が
+   * 未解決で判定できない場合は undefined — ヒントは出さない（true と同様に扱う）。
+   */
+  slashCommandsVisibleInLog?: boolean;
+  /**
    * ↑↓・🕘 履歴の主ソース（Issue #69 仕様調整4）: 会話トランスクリプトの user 発話（新しい順）。
    * これが0件の場合（セッション未確立の pane-only モード等でトランスクリプトを取得できない場合）
    * のみ、localStorage のローカル送信履歴（inputHistory.ts）にフォールバックする。
@@ -49,7 +56,7 @@ interface PromptInputBarProps {
  * 送信内容自体は既存の JSONL ポーリングで会話に反映される（オプティミスティック表示はしない）。
  * textarea＋履歴🕘＋送信↑ の1行構成（SP実機の高さ節約のため）。
  */
-export default function PromptInputBar({ windowId, paneId, draftKey, agentDetected, contextHistory, onSent, viewMode, onChangeViewMode }: PromptInputBarProps) {
+export default function PromptInputBar({ windowId, paneId, draftKey, agentDetected, slashCommandsVisibleInLog, contextHistory, onSent, viewMode, onChangeViewMode }: PromptInputBarProps) {
   const { t } = useTranslation('transcript');
   const [style, setStyle] = useTranscriptStyle();
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -179,6 +186,9 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
   };
 
   const canSend = text.trim().length > 0 && !sending;
+  // 「/」誘導ヒント（実装C、Issue #338 followup）: 送信はブロックしない非ブロッキング注記。
+  // slashCommandsVisibleInLog === false（例: codex）のときのみ、入力が「/」で始まる間だけ表示する。
+  const showSlashCommandHint = slashCommandsVisibleInLog === false && text.trimStart().startsWith('/');
 
   return (
     <div
@@ -248,6 +258,22 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
         >
           <Icon name="warning" size={14} style={{ flexShrink: 0, marginTop: 1 }} />
           <span>{t('promptBar.agentNotDetectedWarning')}</span>
+        </div>
+      )}
+
+      {/* 「/」誘導ヒント（実装C）: セッションログにローカルコマンドが反映されないエージェント
+          （現状 codex）向け。既存トークンのみ使用、警告色・左ボーダーは使わない（AI slop 回避）。 */}
+      {showSlashCommandHint && (
+        <div
+          role="note"
+          style={{
+            marginBottom: 6,
+            fontSize: 'var(--font-2xs)',
+            color: 'var(--text-dim)',
+            lineHeight: 1.4,
+          }}
+        >
+          {t('promptBar.slashCommandHint')}
         </div>
       )}
 

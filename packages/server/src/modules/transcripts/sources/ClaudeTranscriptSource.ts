@@ -33,6 +33,25 @@ const DEFAULT_PREVIEW_SCAN_BYTES = 64 * 1024;
  */
 const INTERRUPT_TEXT_PATTERN = /^\[Request interrupted by user( for tool use)?\]$/;
 
+/**
+ * Claude Code がローカルスラッシュコマンド実行時に role=user の文字列 content として書く3種の定型
+ * レコード（実データで確認、Issue #338 followup）:
+ *  1. `<local-command-caveat>Caveat: ...` — 破棄対象（isMeta: true が付くことが多いが、判定は本文
+ *     のプレフィックスのみで行う）。
+ *  2. `<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>...` —
+ *     'command' エントリへ変換する。
+ *  3. `<local-command-stdout>...`/`<local-command-stderr>...`（ANSI エスケープ入り） — 直前の
+ *     'command' エントリへマージする。隣接しない単独の stdout/stderr は commandName 無しの単独
+ *     'command' エントリとして扱う。
+ */
+const LOCAL_COMMAND_CAVEAT_PREFIX = '<local-command-caveat>';
+const COMMAND_NAME_PATTERN = /^<command-name>([^<]*)<\/command-name>[\s\S]*?<command-args>([^<]*)<\/command-args>\s*$/;
+const LOCAL_COMMAND_STDOUT_PATTERN = /^<local-command-stdout>([\s\S]*)<\/local-command-stdout>\s*$/;
+const LOCAL_COMMAND_STDERR_PATTERN = /^<local-command-stderr>([\s\S]*)<\/local-command-stderr>\s*$/;
+/** SGR エスケープ（例: `\x1b[1m...\x1b[22m`）を除去する。local-command-stdout/stderr の装飾用。 */
+// eslint-disable-next-line no-control-regex
+const ANSI_ESCAPE_PATTERN = /\x1b\[[0-9;]*m/g;
+
 export interface ClaudeTranscriptSourceOptions {
   /** 初回読みで末尾から遡って読む最大バイト数（テスト用に上書き可能）。既定値は DEFAULT_INITIAL_READ_MAX_BYTES。 */
   initialReadMaxBytes?: number;
@@ -270,23 +289,107 @@ function normalizeEntry(record: unknown): TranscriptEntry | null {
     return { uuid: record.uuid, type: 'interrupted', timestamp, blocks: [] };
   }
 
+  const entryType = normalizeEntryType(record.type, blocks);
+  const model = entryType === 'assistant' && typeof message.model === 'string' ? message.model : undefined;
+
   return {
     uuid: record.uuid,
-    type: normalizeEntryType(record.type, blocks),
+    type: entryType,
     timestamp,
     blocks,
+    ...(model !== undefined ? { model } : {}),
   };
 }
 
-function parseLine(line: string): TranscriptEntry | null {
-  if (!line) return null;
-  let record: unknown;
-  try {
-    record = JSON.parse(line);
-  } catch {
-    return null;
+function stripAnsiEscapes(text: string): string {
+  return text.replace(ANSI_ESCAPE_PATTERN, '');
+}
+
+/** args が空でなければ "name args"、空なら name のみを返す。 */
+function buildCommandName(name: string, args: string): string {
+  const trimmedArgs = args.trim();
+  return trimmedArgs.length > 0 ? `${name} ${trimmedArgs}` : name;
+}
+
+/**
+ * role=user の3種のローカルコマンド定型レコード（caveat/command-name/stdout・stderr）を判定・変換する。
+ * 該当しない（通常のユーザー発話・tool_result 等）場合は handled: false を返し、呼び出し側は既存の
+ * normalizeEntry にフォールバックする。pendingCommand は直前に返した commandName 付き 'command'
+ * エントリへの参照（直後の stdout/stderr をマージする対象）。
+ */
+function tryHandleLocalCommandRecord(
+  record: Record<string, unknown>,
+  pendingCommand: TranscriptEntry | null,
+): { handled: true; entry: TranscriptEntry | null; nextPending: TranscriptEntry | null } | { handled: false } {
+  if (record.type !== 'user') return { handled: false };
+  if (record.isSidechain === true) return { handled: false };
+  if (typeof record.uuid !== 'string') return { handled: false };
+  const message = record.message;
+  if (!isRecord(message) || typeof message.content !== 'string') return { handled: false };
+  const content = message.content;
+  const timestamp = typeof record.timestamp === 'string' ? record.timestamp : null;
+
+  if (content.startsWith(LOCAL_COMMAND_CAVEAT_PREFIX)) {
+    return { handled: true, entry: null, nextPending: null };
   }
-  return normalizeEntry(record);
+
+  const nameMatch = COMMAND_NAME_PATTERN.exec(content);
+  if (nameMatch) {
+    const entry: TranscriptEntry = {
+      uuid: record.uuid,
+      type: 'command',
+      timestamp,
+      commandName: buildCommandName(nameMatch[1], nameMatch[2]),
+      blocks: [],
+    };
+    return { handled: true, entry, nextPending: entry };
+  }
+
+  const outputMatch = LOCAL_COMMAND_STDOUT_PATTERN.exec(content) ?? LOCAL_COMMAND_STDERR_PATTERN.exec(content);
+  if (outputMatch) {
+    const text = stripAnsiEscapes(outputMatch[1]);
+    if (pendingCommand) {
+      if (text.length > 0) pendingCommand.blocks.push({ kind: 'text', text });
+      return { handled: true, entry: null, nextPending: null };
+    }
+    const entry: TranscriptEntry = {
+      uuid: record.uuid,
+      type: 'command',
+      timestamp,
+      blocks: text.length > 0 ? [{ kind: 'text', text }] : [],
+    };
+    return { handled: true, entry, nextPending: null };
+  }
+
+  return { handled: false };
+}
+
+/**
+ * 1回の読み取りウィンドウ（readSession/readSessionBefore/getSessionTailState の1呼び出し）専用の
+ * parseLine を作る。pendingCommand（直前の commandName 付き 'command' エントリ）をクロージャに
+ * 保持し、直後の stdout/stderr レコードをそこへマージする（ウィンドウをまたいだ状態保持はしない —
+ * ポーリング境界をまたぐ稀なケースは commandName 無しの単独エントリとして表示されるだけで安全）。
+ */
+function buildParseLine(): (line: string) => TranscriptEntry | null {
+  let pendingCommand: TranscriptEntry | null = null;
+  return (line: string): TranscriptEntry | null => {
+    if (!line) return null;
+    let record: unknown;
+    try {
+      record = JSON.parse(line);
+    } catch {
+      return null;
+    }
+    if (!isRecord(record)) return null;
+
+    const commandResult = tryHandleLocalCommandRecord(record, pendingCommand);
+    if (commandResult.handled) {
+      pendingCommand = commandResult.nextPending;
+      return commandResult.entry;
+    }
+    pendingCommand = null;
+    return normalizeEntry(record);
+  };
 }
 
 // ─── Source ───
@@ -427,6 +530,7 @@ export class ClaudeTranscriptSource implements TranscriptSource {
 
     try {
       const size = fs.fstatSync(fd).size;
+      const parseLine = buildParseLine();
       return offset === undefined
         ? readInitialWindow(fd, size, this.initialReadMaxBytes, parseLine, TAIL_ENTRY_LIMIT)
         : readIncrementalWindow(fd, size, offset, this.incrementalReadMaxBytes, parseLine);
@@ -448,7 +552,7 @@ export class ClaudeTranscriptSource implements TranscriptSource {
 
     try {
       const size = fs.fstatSync(fd).size;
-      return readBeforeWindow(fd, size, before, this.incrementalReadMaxBytes, parseLine);
+      return readBeforeWindow(fd, size, before, this.incrementalReadMaxBytes, buildParseLine());
     } finally {
       fs.closeSync(fd);
     }
@@ -473,6 +577,7 @@ export class ClaudeTranscriptSource implements TranscriptSource {
       return 'unknown';
     }
 
+    const parseLine = buildParseLine();
     const lines = content.split('\n');
     for (let i = lines.length - 1; i >= 0; i--) {
       const entry = parseLine(lines[i]);
