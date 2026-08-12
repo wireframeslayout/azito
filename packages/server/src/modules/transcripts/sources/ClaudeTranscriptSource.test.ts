@@ -675,6 +675,214 @@ describe('ClaudeTranscriptSource', () => {
     });
   });
 
+  describe('AskUserQuestion interaction (Issue #338 phase A)', () => {
+    // フィクスチャは一時 claude セッションで実採取した実データの形（tool_use.input / toolUseResult.answers）に基づく。
+    const TOOL_USE_ID = 'toolu_017G1yjmjPBsBGNyvwP6ktNR';
+
+    function askUserQuestionToolUse(uuid: string, toolUseId: string, questions: unknown[]) {
+      return {
+        type: 'assistant',
+        uuid,
+        message: { content: [{ type: 'tool_use', id: toolUseId, name: 'AskUserQuestion', input: { questions } }] },
+      };
+    }
+
+    function askUserQuestionToolResult(uuid: string, toolUseId: string, answers: Record<string, string>) {
+      return {
+        type: 'user',
+        uuid,
+        message: {
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: toolUseId,
+              content: 'Your questions have been answered.',
+            },
+          ],
+        },
+        toolUseResult: { questions: [], answers, annotations: {} },
+      };
+    }
+
+    it('emits a single interaction entry (select) at the tool_result position, replacing the raw tool_use/tool_result rows', () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        askUserQuestionToolUse('a1', TOOL_USE_ID, [
+          {
+            question: 'お昼ごはんは何にしますか?',
+            header: '昼食',
+            multiSelect: false,
+            options: [
+              { label: 'ラーメン', description: '温かい麺類でしっかり満足したい気分の日に' },
+              { label: 'サラダ', description: '軽めにヘルシーに済ませたい気分の日に' },
+            ],
+          },
+        ]),
+        askUserQuestionToolResult('r1', TOOL_USE_ID, { 'お昼ごはんは何にしますか?': 'ラーメン' }),
+      ]);
+
+      const result = service.readSession(SID_A);
+      expect(result!.entries).toHaveLength(1);
+      expect(result!.entries[0]).toMatchObject({
+        uuid: 'r1',
+        type: 'interaction',
+        blocks: [],
+        interaction: {
+          kind: 'question',
+          source: { origin: 'tool', name: 'AskUserQuestion' },
+          fields: [
+            {
+              id: 'q0',
+              label: 'お昼ごはんは何にしますか?',
+              input: 'select',
+              options: [
+                { value: 'ラーメン', label: 'ラーメン', description: '温かい麺類でしっかり満足したい気分の日に' },
+                { value: 'サラダ', label: 'サラダ', description: '軽めにヘルシーに済ませたい気分の日に' },
+              ],
+            },
+          ],
+          answers: [{ fieldId: 'q0', value: 'ラーメン' }],
+        },
+      });
+    });
+
+    it('infers input: multiselect and keeps the raw comma-joined answer value', () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        askUserQuestionToolUse('a1', TOOL_USE_ID, [
+          {
+            question: 'ラーメンのトッピングは何を追加しますか?',
+            header: 'トッピング',
+            multiSelect: true,
+            options: [
+              { label: '煮卵', description: '半熟の味付け卵' },
+              { label: 'チャーシュー', description: '厚切りの豚肉' },
+              { label: 'メンマ', description: 'コリコリした食感の発酵たけのこ' },
+            ],
+          },
+        ]),
+        askUserQuestionToolResult('r1', TOOL_USE_ID, { 'ラーメンのトッピングは何を追加しますか?': '煮卵, チャーシュー' }),
+      ]);
+
+      const result = service.readSession(SID_A);
+      const field = result!.entries[0].interaction!.fields[0];
+      expect(field.input).toBe('multiselect');
+      expect(result!.entries[0].interaction!.answers).toEqual([
+        { fieldId: 'q0', value: '煮卵, チャーシュー' },
+      ]);
+    });
+
+    it('infers input: text when the answer matches none of the offered option labels (CLI "Type something" free-text answer)', () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        askUserQuestionToolUse('a1', TOOL_USE_ID, [
+          {
+            question: 'その人気店の名前は何ですか?',
+            header: '店名',
+            multiSelect: false,
+            options: [
+              { label: '未定', description: 'まだ決めていない場合' },
+              { label: '定番の店', description: 'いつも行くお気に入りの店' },
+            ],
+          },
+        ]),
+        askUserQuestionToolResult('r1', TOOL_USE_ID, { 'その人気店の名前は何ですか?': '麺屋一鶴' }),
+      ]);
+
+      const result = service.readSession(SID_A);
+      const field = result!.entries[0].interaction!.fields[0];
+      expect(field.input).toBe('text');
+      expect(result!.entries[0].interaction!.answers).toEqual([{ fieldId: 'q0', value: '麺屋一鶴' }]);
+    });
+
+    it('reassembles the interaction when tool_use and tool_result fall in different read windows', () => {
+      const smallWindowService = new ClaudeTranscriptSource(dir, { initialReadMaxBytes: 10_000, incrementalReadMaxBytes: 10_000 });
+      writeSession(dir, 'proj-a', SID_A, [
+        askUserQuestionToolUse('a1', TOOL_USE_ID, [
+          { question: 'お昼ごはんは何にしますか?', multiSelect: false, options: [{ label: 'ラーメン' }, { label: 'サラダ' }] },
+        ]),
+      ]);
+      const first = smallWindowService.readSession(SID_A);
+      expect(first!.entries).toHaveLength(0); // tool_use のみのブロックは抑制される
+
+      fs.appendFileSync(
+        path.join(dir, 'proj-a', `${SID_A}.jsonl`),
+        JSON.stringify(askUserQuestionToolResult('r1', TOOL_USE_ID, { 'お昼ごはんは何にしますか?': 'ラーメン' })) + '\n',
+      );
+      const second = smallWindowService.readSession(SID_A, first!.nextOffset);
+      expect(second!.entries).toHaveLength(1);
+      expect(second!.entries[0].type).toBe('interaction');
+      expect(second!.entries[0].interaction!.answers).toEqual([{ fieldId: 'q0', value: 'ラーメン' }]);
+    });
+
+    it('does not convert a rejected AskUserQuestion (toolUseResult is a plain string, not an answers object) into an interaction', () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        askUserQuestionToolUse('a1', TOOL_USE_ID, [
+          { question: 'その人気店の名前は何ですか?', multiSelect: false, options: [{ label: '未定' }, { label: '定番の店' }] },
+        ]),
+        {
+          type: 'user',
+          uuid: 'r1',
+          message: {
+            content: [
+              { type: 'tool_result', tool_use_id: TOOL_USE_ID, is_error: true, content: 'The user doesn\'t want to proceed with this tool use.' },
+            ],
+          },
+          toolUseResult: 'User rejected tool use',
+        },
+      ]);
+
+      const result = service.readSession(SID_A);
+      expect(result!.entries).toHaveLength(1);
+      expect(result!.entries[0].type).toBe('tool');
+      expect(result!.entries[0].interaction).toBeUndefined();
+    });
+
+    it('leaves non-AskUserQuestion tool_use/tool_result rows untouched', () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        { type: 'assistant', uuid: 'a1', message: { content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }] } },
+        { type: 'user', uuid: 'r1', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] } },
+      ]);
+      const result = service.readSession(SID_A);
+      expect(result!.entries.map((e) => e.type)).toEqual(['assistant', 'tool']);
+    });
+  });
+
+  describe('task-notification formatting (Issue #338 phase A)', () => {
+    function taskNotificationContent(summary?: string): string {
+      const summaryTag = summary !== undefined ? `<summary>${summary}</summary>\n` : '';
+      return `<task-notification>\n<task-id>a1</task-id>\n<status>completed</status>\n${summaryTag}<result>full report</result>\n</task-notification>`;
+    }
+
+    it('formats a full-match <task-notification> record into a system entry carrying the extracted summary', () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        { type: 'user', uuid: 'u1', message: { content: taskNotificationContent('Agent "Backend exploration" finished') } },
+      ]);
+      const result = service.readSession(SID_A);
+      expect(result!.entries).toHaveLength(1);
+      expect(result!.entries[0]).toMatchObject({
+        uuid: 'u1',
+        type: 'system',
+        systemKind: 'task_notification',
+        blocks: [{ kind: 'text', text: 'Agent "Backend exploration" finished' }],
+      });
+    });
+
+    it('uses an empty-string summary block when the <summary> tag is absent', () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        { type: 'user', uuid: 'u1', message: { content: taskNotificationContent() } },
+      ]);
+      const result = service.readSession(SID_A);
+      expect(result!.entries[0].blocks).toEqual([{ kind: 'text', text: '' }]);
+    });
+
+    it('does not format a message that merely starts with the task-notification tag but has trailing text after the closing tag', () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        { type: 'user', uuid: 'u1', message: { content: `${taskNotificationContent('done')} by the way, thanks!` } },
+      ]);
+      const result = service.readSession(SID_A);
+      expect(result!.entries[0].type).toBe('user');
+      expect(result!.entries[0].systemKind).toBeUndefined();
+    });
+  });
+
   describe('getSessionTailState', () => {
     it('returns unknown for a nonexistent session', async () => {
       expect(await service.getSessionTailState('not-a-uuid')).toBe('unknown');
@@ -731,6 +939,24 @@ describe('ClaudeTranscriptSource', () => {
       writeSession(dir, 'proj-a', SID_A, [
         { type: 'user', uuid: 'u1', message: { content: 'do it' } },
         { type: 'assistant', uuid: 'a1', message: { content: [{ type: 'tool_use', name: 'Bash', input: {} }] } },
+      ]);
+      expect(await service.getSessionTailState(SID_A)).toBe('in_progress');
+    });
+
+    it('returns in_progress when the last meaningful record is an interaction (AskUserQuestion answered, agent turn continues)', async () => {
+      const toolUseId = 'toolu_017G1yjmjPBsBGNyvwP6ktNR';
+      writeSession(dir, 'proj-a', SID_A, [
+        {
+          type: 'assistant',
+          uuid: 'a1',
+          message: { content: [{ type: 'tool_use', id: toolUseId, name: 'AskUserQuestion', input: { questions: [{ question: 'Lunch?', options: [{ label: 'Ramen' }] }] } }] },
+        },
+        {
+          type: 'user',
+          uuid: 'r1',
+          message: { content: [{ type: 'tool_result', tool_use_id: toolUseId, content: 'answered' }] },
+          toolUseResult: { questions: [], answers: { 'Lunch?': 'Ramen' }, annotations: {} },
+        },
       ]);
       expect(await service.getSessionTailState(SID_A)).toBe('in_progress');
     });

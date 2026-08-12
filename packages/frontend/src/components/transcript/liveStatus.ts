@@ -28,6 +28,8 @@ export type LiveStatus =
  *   アップを即座に止める）。
  * - 最後のエントリが command（ローカルスラッシュコマンド実行） → null（エージェントのターンを
  *   開始しないため thinking を出さない）。
+ * - 最後のエントリが interaction（AskUserQuestion 等の質問＋回答確定） → thinking（回答後も
+ *   エージェントはターンを継続するため、tool と同じ扱いにする）。
  */
 export function deriveLiveStatus(entries: TranscriptEntry[], now: number): LiveStatus | null {
   if (entries.length === 0) return null;
@@ -45,6 +47,8 @@ export function deriveLiveStatus(entries: TranscriptEntry[], now: number): LiveS
     case 'user':
       return { kind: 'thinking' };
     case 'tool':
+      return { kind: 'thinking' };
+    case 'interaction':
       return { kind: 'thinking' };
     case 'assistant': {
       const lastBlock = last.blocks[last.blocks.length - 1];

@@ -1,11 +1,13 @@
 import { useTranslation } from 'react-i18next';
 import MarkdownRenderer from '../../MarkdownRenderer';
 import { CollapsibleBlock } from '../CollapsibleBlock';
-import { computeThinkingGapSeconds, formatEntryTimestamp } from '../transcriptFormat';
+import { computeThinkingGapSeconds, formatEntryTimestamp, taskNotificationSummary } from '../transcriptFormat';
 import type { TranscriptBlock, TranscriptEntry } from '../transcriptTypes';
 import { CommandRow } from './CommandRow';
 import { GroupHeading } from './GroupHeading';
+import { InteractionCard } from './InteractionCard';
 import { InterruptedRow } from './InterruptedRow';
+import { SystemEntryText } from './SystemEntryText';
 import { SystemOtherChip } from './SystemOtherChip';
 import { ThinkingChip } from './ThinkingChip';
 import type { StyleGroupProps } from './types';
@@ -142,6 +144,14 @@ export default function FlowEntry({ group, prevTimestamp, agentLabel }: StyleGro
     );
   }
 
+  if (group.type === 'interaction') {
+    return (
+      <>
+        {group.entries.map((entry) => <InteractionCard key={entry.uuid} entry={entry} />)}
+      </>
+    );
+  }
+
   if (group.type === 'system' || group.type === 'other') {
     let prevTs = prevTimestamp;
     return (
@@ -149,6 +159,8 @@ export default function FlowEntry({ group, prevTimestamp, agentLabel }: StyleGro
         {group.entries.map((entry) => {
           const thinkingSeconds = computeThinkingGapSeconds(prevTs, entry.timestamp);
           prevTs = entry.timestamp;
+          const notification = taskNotificationSummary(entry);
+          if (notification !== null) return <SystemEntryText key={entry.uuid} entry={entry} />;
           return <BlockList key={entry.uuid} blocks={entry.blocks} markdownText={false} thinkingSeconds={thinkingSeconds} />;
         })}
       </SystemOtherChip>

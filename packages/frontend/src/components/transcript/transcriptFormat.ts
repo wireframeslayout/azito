@@ -1,4 +1,4 @@
-import type { TranscriptErrorResponse } from './transcriptTypes';
+import type { TranscriptEntry, TranscriptErrorResponse } from './transcriptTypes';
 
 /** API レスポンスがエラー形状（{ error: string }）かどうかを判定する。 */
 export function isErrorResponse<T>(result: T | TranscriptErrorResponse): result is TranscriptErrorResponse {
@@ -53,6 +53,17 @@ export function computeThinkingGapSeconds(prevTimestamp: string | null, timestam
   const diffSec = Math.round((curMs - prevMs) / 1000);
   if (diffSec < 1 || diffSec > 300) return null;
   return diffSec;
+}
+
+/**
+ * systemKind === 'task_notification' のエントリから抽出済みの summary テキストを取り出す
+ * （サーバー側 ClaudeTranscriptSource が blocks[0] に載せる）。該当しないエントリは null を返す。
+ * 戻り値が空文字列の場合は summary が無かったケース（呼び出し側は専用の「summary無し」文言を使う）。
+ */
+export function taskNotificationSummary(entry: TranscriptEntry): string | null {
+  if (entry.systemKind !== 'task_notification') return null;
+  const textBlock = entry.blocks.find((block) => block.kind === 'text');
+  return textBlock && textBlock.kind === 'text' ? textBlock.text : '';
 }
 
 export interface TextSegment {

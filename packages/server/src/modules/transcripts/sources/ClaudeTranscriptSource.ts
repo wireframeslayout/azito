@@ -10,6 +10,7 @@ import type {
   TranscriptBlock,
   TranscriptEntry,
   TranscriptEntryType,
+  TranscriptInteraction,
   TranscriptSource,
 } from './TranscriptSource';
 
@@ -60,6 +61,180 @@ const LOCAL_COMMAND_STDERR_PATTERN = /^<local-command-stderr>([\s\S]*)<\/local-c
 /** SGR エスケープ（例: `\x1b[1m...\x1b[22m`）を除去する。local-command-stdout/stderr の装飾用。 */
 // eslint-disable-next-line no-control-regex
 const ANSI_ESCAPE_PATTERN = /\x1b\[[0-9;]*m/g;
+
+/**
+ * AskUserQuestion（Claude Code 標準ツール）正規化（Issue #338 フェーズA）。実データで確認した構造:
+ *  - tool_use（role=assistant）: `input: { questions: [{ question, header, multiSelect, options:
+ *    [{ label, description }] }] }`
+ *  - tool_result（role=user）: `message.content[0]` は要約文字列のみで、実際の回答値は同レコード
+ *    直下の `toolUseResult.answers`（質問文字列 → 回答文字列。multiSelect は "A, B" のカンマ区切り
+ *    文字列）に入る。ユーザーが選択肢を使わず自由記述（CLI の「Type something」）で答えた場合も
+ *    同じ `answers` 形に入り、options のどのラベルとも一致しない文字列になる（実データで確認）。
+ *    ユーザーが質問自体を拒否した場合（Esc 等）は `toolUseResult` がオブジェクトではなく文字列
+ *    "User rejected tool use" になる — この場合は確定回答が無いので interaction 化しない（通常の
+ *    'tool' エントリへフォールバックする）。
+ */
+const ASK_USER_QUESTION_TOOL_NAME = 'AskUserQuestion';
+
+interface AskUserQuestionItem {
+  question: string;
+  multiSelect: boolean;
+  options?: { label: string; description?: string }[];
+}
+
+/** tool_use の input を検証しつつ AskUserQuestionItem[] へ変換する。形が合わなければ null。 */
+function parseAskUserQuestionInput(raw: unknown): AskUserQuestionItem[] | null {
+  if (!isRecord(raw) || !Array.isArray(raw.questions)) return null;
+  const items: AskUserQuestionItem[] = [];
+  for (const q of raw.questions) {
+    if (!isRecord(q) || typeof q.question !== 'string') return null;
+    let options: { label: string; description?: string }[] | undefined;
+    if (Array.isArray(q.options)) {
+      options = [];
+      for (const o of q.options) {
+        if (isRecord(o) && typeof o.label === 'string') {
+          options.push({ label: o.label, description: typeof o.description === 'string' ? o.description : undefined });
+        }
+      }
+    }
+    items.push({ question: q.question, multiSelect: q.multiSelect === true, options });
+  }
+  return items.length > 0 ? items : null;
+}
+
+/**
+ * フィールドの input 種別を決める。multiSelect は常に 'multiselect'。単一選択は、回答値が options の
+ * いずれかのラベルと完全一致すれば 'select'、一致しなければ CLI の「Type something」自由記述回答と
+ * みなし 'text' とする（実データで確認: 自由記述の回答も options とは無関係な文字列として answers に
+ * 入るため、値の一致有無でしか判別できない）。
+ */
+function inferInteractionFieldInput(item: AskUserQuestionItem, answerValue: string | undefined): 'select' | 'multiselect' | 'text' {
+  if (item.multiSelect) return 'multiselect';
+  if (answerValue === undefined) return 'select';
+  return item.options?.some((o) => o.label === answerValue) ? 'select' : 'text';
+}
+
+/** キャッシュ済みの質問群 + 回答マップから TranscriptInteraction を組み立てる。 */
+function buildInteraction(items: AskUserQuestionItem[], answersByQuestion: Record<string, string>): TranscriptInteraction {
+  const fields: TranscriptInteraction['fields'] = [];
+  const answers: NonNullable<TranscriptInteraction['answers']> = [];
+
+  items.forEach((item, index) => {
+    const id = `q${index}`;
+    const answerValue = answersByQuestion[item.question];
+    fields.push({
+      id,
+      label: item.question,
+      input: inferInteractionFieldInput(item, answerValue),
+      ...(item.options ? { options: item.options.map((o) => ({ value: o.label, label: o.label, description: o.description })) } : {}),
+    });
+    if (answerValue !== undefined) answers.push({ fieldId: id, value: answerValue });
+  });
+
+  return {
+    kind: 'question',
+    source: { origin: 'tool', name: ASK_USER_QUESTION_TOOL_NAME },
+    fields,
+    ...(answers.length > 0 ? { answers } : {}),
+  };
+}
+
+/**
+ * assistant レコードの content から AskUserQuestion の tool_use ブロックを取り除き、その質問群を
+ * cache（tool_use id → questions）へ保存する。他の tool_use/text 等が同居していれば残りのブロックは
+ * 通常どおり描画対象として残す（fallthrough）。AskUserQuestion のみのブロック列だった場合は content
+ * が空配列になり、呼び出し元の normalizeBlocks/normalizeEntry が blocks.length===0 で null を返す
+ * （＝このレコード自体は表示されない。対応する tool_result の位置で interaction エントリとして emit
+ * されるため、置換になる）。
+ */
+function extractAskUserQuestionToolUse(content: unknown, cache: Map<string, AskUserQuestionItem[]>): unknown {
+  if (!Array.isArray(content)) return content;
+  let changed = false;
+  const filtered: unknown[] = [];
+  for (const block of content) {
+    if (isRecord(block) && block.type === 'tool_use' && block.name === ASK_USER_QUESTION_TOOL_NAME && typeof block.id === 'string') {
+      const items = parseAskUserQuestionInput(block.input);
+      if (items) {
+        cache.set(block.id, items);
+        changed = true;
+        continue;
+      }
+    }
+    filtered.push(block);
+  }
+  return changed ? filtered : content;
+}
+
+/**
+ * role=user の tool_result レコードが、cache 済みの AskUserQuestion への確定回答であれば
+ * 'interaction' エントリを組み立てて返す。該当しない（AskUserQuestion 以外の tool_result、対応する
+ * tool_use が見つからない＝読み取りウィンドウ外、質問が拒否され toolUseResult がオブジェクトでない
+ * 等）場合は null を返し、呼び出し側は通常の normalizeEntry にフォールバックする。
+ * content が単一の tool_result ブロックのみで構成されるレコードのみを対象とする（実データで確認した
+ * 形。他ブロックと混在するケースは実データで未確認のため対象外とし、通常の 'tool' エントリのまま
+ * 表示する）。
+ */
+function tryHandleAskUserQuestionResult(record: Record<string, unknown>, cache: Map<string, AskUserQuestionItem[]>): TranscriptEntry | null {
+  if (record.type !== 'user') return null;
+  if (typeof record.uuid !== 'string') return null;
+  const message = record.message;
+  if (!isRecord(message) || !Array.isArray(message.content) || message.content.length !== 1) return null;
+  const block = message.content[0];
+  if (!isRecord(block) || block.type !== 'tool_result' || typeof block.tool_use_id !== 'string') return null;
+
+  const items = cache.get(block.tool_use_id);
+  if (!items) return null;
+
+  const toolUseResult = record.toolUseResult;
+  if (!isRecord(toolUseResult) || !isRecord(toolUseResult.answers)) return null;
+
+  cache.delete(block.tool_use_id);
+
+  const answersByQuestion: Record<string, string> = {};
+  for (const [question, value] of Object.entries(toolUseResult.answers)) {
+    if (typeof value === 'string') answersByQuestion[question] = value;
+  }
+
+  const timestamp = typeof record.timestamp === 'string' ? record.timestamp : null;
+  return {
+    uuid: record.uuid,
+    type: 'interaction',
+    timestamp,
+    blocks: [],
+    interaction: buildInteraction(items, answersByQuestion),
+  };
+}
+
+/**
+ * `<task-notification>...</task-notification>`（バックグラウンド task tool の完了通知、role=user・
+ * content は文字列）の生XML整形（Issue #338 フェーズA）。判定はコマンド判定と同じ規律で content 全体の
+ * 完全構造一致のみ（前方一致は禁止 — たまたま本文冒頭に同タグを書いたユーザー発言まで誤って
+ * system 扱いにしないため）。該当する場合は type: 'system' + systemKind: 'task_notification' の
+ * エントリへ変換し、`<summary>` の中身（無ければ空文字列）を blocks[0] のテキストに載せる
+ * （フロントが「バックグラウンドタスク: {{summary}}」の専用文言を組み立てる）。
+ */
+const TASK_NOTIFICATION_PATTERN = /^<task-notification>[\s\S]*<\/task-notification>\s*$/;
+const TASK_NOTIFICATION_SUMMARY_PATTERN = /<summary>([\s\S]*?)<\/summary>/;
+
+function tryHandleTaskNotificationRecord(record: Record<string, unknown>): TranscriptEntry | null {
+  if (record.type !== 'user') return null;
+  if (typeof record.uuid !== 'string') return null;
+  const message = record.message;
+  if (!isRecord(message) || typeof message.content !== 'string') return null;
+  const content = message.content;
+  if (!TASK_NOTIFICATION_PATTERN.test(content)) return null;
+
+  const summaryMatch = TASK_NOTIFICATION_SUMMARY_PATTERN.exec(content);
+  const summary = summaryMatch ? summaryMatch[1].trim() : '';
+  const timestamp = typeof record.timestamp === 'string' ? record.timestamp : null;
+  return {
+    uuid: record.uuid,
+    type: 'system',
+    timestamp,
+    blocks: [{ kind: 'text', text: summary }],
+    systemKind: 'task_notification',
+  };
+}
 
 export interface ClaudeTranscriptSourceOptions {
   /** 初回読みで末尾から遡って読む最大バイト数（テスト用に上書き可能）。既定値は DEFAULT_INITIAL_READ_MAX_BYTES。 */
@@ -280,7 +455,7 @@ function isInterruptMarkerEntry(rawType: unknown, blocks: TranscriptBlock[]): bo
 }
 
 /** 生の JSONL 行1件を TranscriptEntry に正規化する。スキップ対象は null を返す。 */
-function normalizeEntry(record: unknown): TranscriptEntry | null {
+function normalizeEntry(record: unknown, askUserQuestionCache: Map<string, AskUserQuestionItem[]>): TranscriptEntry | null {
   if (!isRecord(record)) return null;
   if (record.isSidechain === true) return null;
   if (record.type === 'summary') return null;
@@ -289,7 +464,9 @@ function normalizeEntry(record: unknown): TranscriptEntry | null {
   if (!isRecord(message)) return null;
   if (typeof record.uuid !== 'string') return null;
 
-  const blocks = normalizeBlocks(message.content);
+  const content = record.type === 'assistant' ? extractAskUserQuestionToolUse(message.content, askUserQuestionCache) : message.content;
+
+  const blocks = normalizeBlocks(content);
   if (blocks.length === 0) return null;
 
   const timestamp = typeof record.timestamp === 'string' ? record.timestamp : null;
@@ -380,8 +557,11 @@ function tryHandleLocalCommandRecord(
  * parseLine を作る。pendingCommand（直前の commandName 付き 'command' エントリ）をクロージャに
  * 保持し、直後の stdout/stderr レコードをそこへマージする（ウィンドウをまたいだ状態保持はしない —
  * ポーリング境界をまたぐ稀なケースは commandName 無しの単独エントリとして表示されるだけで安全）。
+ * askUserQuestionCache（tool_use id → questions）はセッション単位でインスタンス寿命保持され
+ * （呼び出し元 ClaudeTranscriptSource.getAskUserQuestionCache 参照）、tool_use と対応する
+ * tool_result が別の読み取りウィンドウに分かれても質問群を失わない。
  */
-function buildParseLine(): (line: string) => TranscriptEntry | null {
+function buildParseLine(askUserQuestionCache: Map<string, AskUserQuestionItem[]>): (line: string) => TranscriptEntry | null {
   let pendingCommand: TranscriptEntry | null = null;
   return (line: string): TranscriptEntry | null => {
     if (!line) return null;
@@ -399,7 +579,14 @@ function buildParseLine(): (line: string) => TranscriptEntry | null {
       return commandResult.entry;
     }
     pendingCommand = null;
-    return normalizeEntry(record);
+
+    const taskNotificationEntry = tryHandleTaskNotificationRecord(record);
+    if (taskNotificationEntry) return taskNotificationEntry;
+
+    const interactionEntry = tryHandleAskUserQuestionResult(record, askUserQuestionCache);
+    if (interactionEntry) return interactionEntry;
+
+    return normalizeEntry(record, askUserQuestionCache);
   };
 }
 
@@ -429,6 +616,22 @@ export class ClaudeTranscriptSource implements TranscriptSource {
    * （キャッシュミス）の場合のみ listSessionFiles() で再走査する。
    */
   private readonly sessionFileCache = new Map<string, string>();
+
+  /**
+   * セッション単位（sessionId → tool_use id → questions）の AskUserQuestion キャッシュ。インスタンス
+   * 寿命内で保持し、tool_use と対応する tool_result が別の読み取りウィンドウに分かれても質問群を
+   * 引き継げるようにする（CodexTranscriptSource.lastKnownModel と同じ位置付け）。
+   */
+  private readonly askUserQuestionCache = new Map<string, Map<string, AskUserQuestionItem[]>>();
+
+  private getAskUserQuestionCache(sessionId: string): Map<string, AskUserQuestionItem[]> {
+    let cache = this.askUserQuestionCache.get(sessionId);
+    if (!cache) {
+      cache = new Map();
+      this.askUserQuestionCache.set(sessionId, cache);
+    }
+    return cache;
+  }
 
   private projectsDir(): string {
     return resolveProjectsDir(this.projectsDirOverride);
@@ -541,7 +744,7 @@ export class ClaudeTranscriptSource implements TranscriptSource {
 
     try {
       const size = fs.fstatSync(fd).size;
-      const parseLine = buildParseLine();
+      const parseLine = buildParseLine(this.getAskUserQuestionCache(sessionId));
       return offset === undefined
         ? readInitialWindow(fd, size, this.initialReadMaxBytes, parseLine, TAIL_ENTRY_LIMIT)
         : readIncrementalWindow(fd, size, offset, this.incrementalReadMaxBytes, parseLine);
@@ -563,7 +766,7 @@ export class ClaudeTranscriptSource implements TranscriptSource {
 
     try {
       const size = fs.fstatSync(fd).size;
-      return readBeforeWindow(fd, size, before, this.incrementalReadMaxBytes, buildParseLine());
+      return readBeforeWindow(fd, size, before, this.incrementalReadMaxBytes, buildParseLine(this.getAskUserQuestionCache(sessionId)));
     } finally {
       fs.closeSync(fd);
     }
@@ -588,7 +791,7 @@ export class ClaudeTranscriptSource implements TranscriptSource {
       return 'unknown';
     }
 
-    const parseLine = buildParseLine();
+    const parseLine = buildParseLine(this.getAskUserQuestionCache(sessionId));
     const lines = content.split('\n');
     for (let i = lines.length - 1; i >= 0; i--) {
       const entry = parseLine(lines[i]);

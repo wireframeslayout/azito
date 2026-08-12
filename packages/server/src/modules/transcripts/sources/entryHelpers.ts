@@ -26,6 +26,8 @@ export function truncateText(text: string, limit: number): { text: string; trunc
  * - interrupted: 中断マーカー → terminal（応答待ち/実行中ではない）
  * - command: ローカルコマンド実行（例: /model） → terminal（エージェントのターンを開始しないため、
  *   稼働判定を working に倒さない）
+ * - interaction: AskUserQuestion 等の質問＋回答確定イベント → in_progress（回答後もエージェントは
+ *   ターンを継続するため、tool_result と同様に応答待ち/実行中とみなす）
  * - user: ユーザー発話 → in_progress（エージェントの応答待ち）
  * - tool: tool_result（Claude は role=user の tool_result のみ、Codex は function_call/
  *   function_call_output 等） → in_progress（次のターン待ち、または実行中）
@@ -40,6 +42,7 @@ export function truncateText(text: string, limit: number): { text: string; trunc
 export function classifyTailEntry(entry: TranscriptEntry): 'in_progress' | 'terminal' {
   if (entry.type === 'interrupted') return 'terminal';
   if (entry.type === 'command') return 'terminal';
+  if (entry.type === 'interaction') return 'in_progress';
   if (entry.type === 'user') return 'in_progress';
   if (entry.type === 'tool') return 'in_progress';
   if (entry.type === 'assistant') {

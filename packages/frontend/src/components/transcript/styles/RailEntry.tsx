@@ -1,9 +1,11 @@
 import { useTranslation } from 'react-i18next';
 import MarkdownRenderer from '../../MarkdownRenderer';
-import { computeThinkingGapSeconds } from '../transcriptFormat';
+import { computeThinkingGapSeconds, taskNotificationSummary } from '../transcriptFormat';
 import type { TranscriptBlock, TranscriptEntry } from '../transcriptTypes';
 import { CommandRow } from './CommandRow';
+import { InteractionCard } from './InteractionCard';
 import { InterruptedRow } from './InterruptedRow';
+import { SystemEntryText } from './SystemEntryText';
 import { SystemOtherChip } from './SystemOtherChip';
 import { ThinkingChip } from './ThinkingChip';
 import type { StyleGroupProps } from './types';
@@ -134,7 +136,7 @@ function EntryBlocks({ blocks, markdownText, thinkingSeconds }: {
   );
 }
 
-/** system/other グループのブロックを連結して描画する。 */
+/** system/other グループのブロックを連結して描画する。task-notification 整形エントリは専用文言に差し替える。 */
 function GroupBlocks({ entries, prevTimestamp }: { entries: TranscriptEntry[]; prevTimestamp: string | null }) {
   let prevTs = prevTimestamp;
   return (
@@ -142,6 +144,8 @@ function GroupBlocks({ entries, prevTimestamp }: { entries: TranscriptEntry[]; p
       {entries.map((entry) => {
         const thinkingSeconds = computeThinkingGapSeconds(prevTs, entry.timestamp);
         prevTs = entry.timestamp;
+        const notification = taskNotificationSummary(entry);
+        if (notification !== null) return <SystemEntryText key={entry.uuid} entry={entry} />;
         return <EntryBlocks key={entry.uuid} blocks={entry.blocks} markdownText={false} thinkingSeconds={thinkingSeconds} />;
       })}
     </>
@@ -167,6 +171,14 @@ export default function RailEntry({ group, prevTimestamp }: StyleGroupProps) {
     return (
       <>
         {group.entries.map((entry) => <CommandRow key={entry.uuid} entry={entry} />)}
+      </>
+    );
+  }
+
+  if (group.type === 'interaction') {
+    return (
+      <>
+        {group.entries.map((entry) => <InteractionCard key={entry.uuid} entry={entry} />)}
       </>
     );
   }

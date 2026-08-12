@@ -20,7 +20,11 @@
     "other": "その他",
     "interrupted": "中断しました",
     "liveThinking": "思考中… {{seconds}}s",
-    "liveTool": "{{name}} 実行中… {{seconds}}s"
+    "liveTool": "{{name}} 実行中… {{seconds}}s",
+    "taskNotification": "バックグラウンドタスク: {{summary}}",
+    "taskNotificationNoSummary": "バックグラウンドタスク通知",
+    "question": "質問",
+    "questionAnswerLabel": "回答"
   },
   "liveStatus": {
     "stop": "停止",

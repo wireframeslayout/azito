@@ -100,6 +100,22 @@ describe('deriveLiveStatus', () => {
     expect(deriveLiveStatus([entry({ type: 'command', commandName: '/model', blocks: [] })], NOW)).toBeNull();
   });
 
+  it('returns thinking when the last entry is an interaction (AskUserQuestion answered, agent turn continues)', () => {
+    const entries = [
+      entry({
+        type: 'interaction',
+        blocks: [],
+        interaction: {
+          kind: 'question',
+          source: { origin: 'tool', name: 'AskUserQuestion' },
+          fields: [{ id: 'q0', label: 'Lunch?', input: 'select', options: [{ value: 'Ramen', label: 'Ramen' }] }],
+          answers: [{ fieldId: 'q0', value: 'Ramen' }],
+        },
+      }),
+    ];
+    expect(deriveLiveStatus(entries, NOW)).toEqual({ kind: 'thinking' });
+  });
+
   it('only looks at the last entry, ignoring earlier ones', () => {
     const entries = [
       entry({ uuid: 'u1', type: 'assistant', blocks: [{ kind: 'tool_use', name: 'Bash', input: '{}', truncated: false }] }),

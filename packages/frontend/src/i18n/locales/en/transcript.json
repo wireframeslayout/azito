@@ -20,7 +20,11 @@
     "other": "Other",
     "interrupted": "Interrupted",
     "liveThinking": "Thinking… {{seconds}}s",
-    "liveTool": "{{name}} running… {{seconds}}s"
+    "liveTool": "{{name}} running… {{seconds}}s",
+    "taskNotification": "Background task: {{summary}}",
+    "taskNotificationNoSummary": "Background task notification",
+    "question": "Question",
+    "questionAnswerLabel": "Answer"
   },
   "liveStatus": {
     "stop": "Stop",
