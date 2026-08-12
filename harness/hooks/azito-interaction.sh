@@ -24,6 +24,39 @@ if [[ -z "$AZITO_WEBHOOK_TOKEN" || -z "$AZITO_SERVER_NAME" ]]; then
   exit 0
 fi
 
+# Claude Code sends every Notification event through this hook (no matcher is
+# registered — see setup.sh), so this hook fires for far more than "waiting
+# for a user answer": `hook_event_name:"Notification"` payloads carry a
+# `notification_type` field whose values (found by inspecting the installed
+# Claude Code CLI's bundled source; see hook payload verified live below)
+# include at least: permission_prompt, idle_prompt, worker_permission_prompt,
+# agent_needs_input (all genuine "waiting for input" states — idle_prompt is
+# in particular how an open AskUserQuestion actually surfaces here, roughly
+# 60s after it opens, since there is no dedicated tool-call event for it) and
+# auth_success, agent_completed, elicitation_complete, elicitation_response
+# (none of which represent a fresh open-and-waiting state: auth_success is
+# unrelated to task interaction, agent_completed/elicitation_complete/
+# elicitation_response report something finishing/already-answered — sending
+# our hardcoded "open" event for those would be actively wrong, not just
+# noisy). Only the latter, clearly-off-topic set is blacklisted below;
+# idle_prompt (the primary signal) and every other/unknown/unparseable type
+# is allowed through unfiltered (fail open) so a future Claude Code release
+# adding new "waiting" types, or a payload we fail to parse, never suppresses
+# a real pending-answer notification.
+#
+# No jq dependency (matches azito-activity.sh's plain-bash approach): read
+# stdin once, then pull notification_type out with a defensive grep -o (no
+# `set -e`-fatal failure if the field or stdin body is absent/malformed —
+# STDIN_JSON simply stays empty and NOTIFICATION_TYPE resolves to "").
+STDIN_JSON="$(cat 2>/dev/null || true)"
+NOTIFICATION_TYPE="$(grep -o '"notification_type"[[:space:]]*:[[:space:]]*"[^"]*"' <<< "$STDIN_JSON" 2>/dev/null | head -1 | sed -E 's/.*:[[:space:]]*"([^"]*)"/\1/' || true)"
+
+case "$NOTIFICATION_TYPE" in
+  auth_success | agent_completed | elicitation_complete | elicitation_response)
+    exit 0
+    ;;
+esac
+
 if [[ -z "${TMUX_PANE:-}" ]] || ! command -v tmux >/dev/null 2>&1; then
   exit 0
 fi

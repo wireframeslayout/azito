@@ -28,6 +28,17 @@ const TIMEOUT_MS = 10 * 60 * 1000;
 
 interface PendingState {
   openedAt: number;
+  /**
+   * Every window ID resolved from the same signal (a project-owned window row
+   * and a task-owned window row can both point at the same tmux target — same
+   * serverName+session+windowIndex+pane — so one signal can match more than
+   * one `windows` row, mirroring `AgentActivityMonitor.recordHookSignal`,
+   * which also updates every matching row rather than just the first).
+   * Recorded once at signal time so `clear(windowId)` can look this array up
+   * and close every sibling symmetrically with how `recordSignal()` opened
+   * them all, without needing to re-resolve against the windows table.
+   */
+  siblingIds: number[];
 }
 
 /**
@@ -76,21 +87,26 @@ export class InteractionMonitor {
   ) {}
 
   /**
-   * Resolve the signal to a window (same matching approach as
+   * Resolve the signal to every matching window (same matching approach as
    * AgentActivityMonitor.recordHookSignal: serverName + sessionName +
-   * windowSpec, with an optional pane-suffix pin) and update pending state.
-   * A signal naming no known agent window is silently dropped.
+   * windowSpec, with an optional pane-suffix pin — looping over the full
+   * `windows` table rather than stopping at the first match, since a
+   * project-owned row and a task-owned row can both point at the same tmux
+   * target) and update pending state for all of them. A signal naming no
+   * known agent window is silently dropped.
    */
   recordSignal(signal: InteractionSignal): void {
-    const windowId = this.resolveWindowId(signal);
-    if (windowId === null) return;
+    const windowIds = this.resolveWindowIds(signal);
+    if (windowIds.length === 0) return;
 
     if (signal.event === 'cancel') {
-      this.pending.delete(windowId);
+      for (const windowId of windowIds) this.pending.delete(windowId);
       return;
     }
 
-    this.pending.set(windowId, { openedAt: signal.timestamp });
+    for (const windowId of windowIds) {
+      this.pending.set(windowId, { openedAt: signal.timestamp, siblingIds: windowIds });
+    }
   }
 
   /**
@@ -114,9 +130,18 @@ export class InteractionMonitor {
     return this.getValidState(windowId)?.openedAt;
   }
 
-  /** Authoritative close: called once the polling read path observes a newer transcript record. */
+  /**
+   * Authoritative close: called once the polling read path observes a newer
+   * transcript record. Symmetric with recordSignal(): also clears every
+   * sibling window ID recorded alongside `windowId` at signal time (same
+   * tmux target, different `windows` row), so clearing one clears all of
+   * them. Falls back to clearing just `windowId` when it has no live pending
+   * entry (siblingIds unknown) — a no-op in that case, same as before this
+   * fix.
+   */
   clear(windowId: number): void {
-    this.pending.delete(windowId);
+    const siblingIds = this.pending.get(windowId)?.siblingIds ?? [windowId];
+    for (const id of siblingIds) this.pending.delete(id);
   }
 
   /** Shared liveness check backing isPending()/getOpenedAt(): validates timeout + window existence, lazily clearing stale entries. */
@@ -137,7 +162,9 @@ export class InteractionMonitor {
     return state;
   }
 
-  private resolveWindowId(signal: InteractionSignal): number | null {
+  /** Resolve the signal to every matching window ID (see recordSignal's doc comment on why more than one row can match). */
+  private resolveWindowIds(signal: InteractionSignal): number[] {
+    const windowIds: number[] = [];
     for (const w of this.windowRepo.findAll()) {
       if (!isAgentWindow(w)) continue;
       if (w.serverName !== signal.serverName) continue;
@@ -149,8 +176,8 @@ export class InteractionMonitor {
       const paneIndex = extractPaneIndex(windowSpec, signal.target.windowIndex, signal.target.windowName);
       if (paneIndex !== null && paneIndex !== signal.target.paneIndex) continue;
 
-      return w.id;
+      windowIds.push(w.id);
     }
-    return null;
+    return windowIds;
   }
 }

@@ -76,6 +76,13 @@ function findLastEntryTimestampMs(entries: TranscriptEntry[]): number | undefine
  * できない。isPending が true の場合のみ（tailState 読み取りは小さくないコストがあるため無条件には
  * 読まない）`source.getSessionTailState()` を追加で確認し、'in_progress'（トランスクリプト末尾がまだ
  * 回答を含まない = 本当に質問オープン中）の場合だけ pendingInteraction を true にする。
+ *
+ * interactionSignal:'none' の早期スキップ（Minor 3 修正）: windowId が渡された場合でも、その
+ * ウィンドウの workerType が interactionSignal:'none'（例: codex）なプロファイルに解決される場合は
+ * InteractionMonitor への問い合わせ自体を行わない（pendingInteraction は false のまま）。'none' な
+ * エージェントは Notification hook 自体を持たず理論上シグナルが存在し得ないため、以降の openedAt
+ * 比較・clear・isPending 呼び出しはすべて意味を持たない。ウィンドウが見つからない場合は判定材料が
+ * ないため、この早期スキップは行わず既存の isPending 経由の判定（内部で存在チェック済み）に委ねる。
  */
 async function handleReadSession(
   source: TranscriptSource,
@@ -83,6 +90,7 @@ async function handleReadSession(
   query: { offset?: string; before?: string; windowId?: string },
   reply: FastifyReply,
   interactionMonitor: InteractionMonitor,
+  windowRepo: IWindowRepository,
 ) {
   const { offset: offsetRaw, before: beforeRaw, windowId: windowIdRaw } = query;
   if (offsetRaw !== undefined && beforeRaw !== undefined) {
@@ -107,6 +115,11 @@ async function handleReadSession(
   if (!result) return reply.status(404).send({ error: 'Session not found' });
 
   if (windowId === undefined) return result;
+
+  const window = windowRepo.findById(windowId);
+  if (window?.workerType && getAgentTranscriptProfile(window.workerType)?.interactionSignal === 'none') {
+    return { ...result, pendingInteraction: false };
+  }
 
   const openedAt = interactionMonitor.getOpenedAt(windowId);
   if (openedAt !== undefined) {
@@ -217,7 +230,7 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
       const source = findSource(sources, request.params.agent);
       if (!source) return reply.status(404).send({ error: 'Unknown agent type' });
 
-      return handleReadSession(source, request.params.id, request.query, reply, interactionMonitor);
+      return handleReadSession(source, request.params.id, request.query, reply, interactionMonitor, windowRepo);
     },
   );
 
@@ -262,7 +275,7 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
       const source = findSource(sources, PANE_CAPABLE_AGENT_TYPE);
       if (!source) return reply.status(404).send({ error: 'Unknown agent type' });
 
-      return handleReadSession(source, request.params.sessionId, request.query, reply, interactionMonitor);
+      return handleReadSession(source, request.params.sessionId, request.query, reply, interactionMonitor, windowRepo);
     },
   );
 

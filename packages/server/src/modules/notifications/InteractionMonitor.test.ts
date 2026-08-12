@@ -110,6 +110,53 @@ describe('InteractionMonitor', () => {
     expect(monitor.isPending(1)).toBe(false);
   });
 
+  describe('sibling windows sharing the same tmux target', () => {
+    // A project-owned window row and a task-owned window row can both point
+    // at the same tmux target (same serverName+session+windowIndex+pane) —
+    // the signal must mark both pending, and clearing either one must clear
+    // both (mirrors AgentActivityMonitor.recordHookSignal's "every matching
+    // row" behavior).
+    function makeSiblingWindows(): Window[] {
+      return [
+        makeWindow({ id: 1, ownerType: 'project', tmuxTarget: 'azito:agent-1.1' }),
+        makeWindow({ id: 2, ownerType: 'task', taskId: 5, tmuxTarget: 'azito:agent-1.1' }),
+      ];
+    }
+
+    it('recordSignal marks every matching window pending, not just the first', () => {
+      findAll.mockReturnValue(makeSiblingWindows());
+      findById.mockImplementation((id: number) => makeSiblingWindows().find((w) => w.id === id));
+
+      monitor.recordSignal(makeSignal({ timestamp: now() }));
+
+      expect(monitor.isPending(1)).toBe(true);
+      expect(monitor.isPending(2)).toBe(true);
+    });
+
+    it('clear(windowId) also clears sibling window IDs sharing the same tmux target', () => {
+      findAll.mockReturnValue(makeSiblingWindows());
+      findById.mockImplementation((id: number) => makeSiblingWindows().find((w) => w.id === id));
+
+      monitor.recordSignal(makeSignal({ timestamp: now() }));
+      expect(monitor.isPending(1)).toBe(true);
+      expect(monitor.isPending(2)).toBe(true);
+
+      monitor.clear(1);
+
+      expect(monitor.isPending(1)).toBe(false);
+      expect(monitor.isPending(2)).toBe(false);
+    });
+
+    it('clear(windowId) with no live pending entry is a no-op (falls back to clearing just that id)', () => {
+      findAll.mockReturnValue(makeSiblingWindows());
+      findById.mockImplementation((id: number) => makeSiblingWindows().find((w) => w.id === id));
+
+      expect(() => monitor.clear(1)).not.toThrow();
+      expect(monitor.isPending(1)).toBe(false);
+      expect(monitor.isPending(2)).toBe(false);
+    });
+  });
+
   describe('getOpenedAt', () => {
     it('is undefined before any signal', () => {
       expect(monitor.getOpenedAt(1)).toBeUndefined();

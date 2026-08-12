@@ -257,6 +257,45 @@ describe('GET /api/transcripts/:agent/:id', () => {
     await app.close();
   });
 
+  it('never reports pendingInteraction / never queries the monitor for a codex window (interactionSignal:"none")', async () => {
+    const isPending = vi.fn(() => true);
+    const getOpenedAt = vi.fn(() => Date.now());
+    const clear = vi.fn();
+    const getSessionTailState = vi.fn(async () => 'in_progress' as const);
+    const codex = buildCodexSource({ getSessionTailState });
+    const codexWindow: Window = {
+      id: 7,
+      ownerType: 'project',
+      projectId: 1,
+      taskId: null,
+      serverName: 'local',
+      tmuxTarget: 'azito:agent-1',
+      label: null,
+      isPrimary: true,
+      windowType: 'agent',
+      workerType: 'codex',
+      workerModel: null,
+      agentSessionId: null,
+      launchCommand: null,
+      workingDirectory: null,
+      paneLayout: null,
+      createdAt: '2026-01-01T00:00:00Z',
+    };
+    const app = buildApp(
+      [codex],
+      {},
+      { windowRepo: { findById: () => codexWindow }, interactionMonitor: { isPending, getOpenedAt, clear } },
+    );
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/codex/${SID}?windowId=7` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().pendingInteraction).toBe(false);
+    expect(isPending).not.toHaveBeenCalled();
+    expect(getOpenedAt).not.toHaveBeenCalled();
+    expect(clear).not.toHaveBeenCalled();
+    expect(getSessionTailState).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it('clears the interaction monitor on an initial (offset-less) load when the last timestamped entry is newer than openedAt', async () => {
     const clear = vi.fn();
     const claude = buildClaudeSource({
