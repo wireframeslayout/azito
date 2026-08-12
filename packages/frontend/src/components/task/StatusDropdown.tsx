@@ -49,9 +49,13 @@ interface StatusDropdownProps {
   status: string;
   onChange: (newStatus: string) => void;
   disabled?: boolean;
+  /** トリガー内、ラベルの前にステータスドット（--radius-full の小円）を描く。
+   * SP タスク詳細メニューのステータスチップ（Issue #338 T1）向け — 省略時は非表示（既存デスクトップ
+   * 表示は StatusDot を隣接配置しているため変更不要）。 */
+  showDot?: boolean;
 }
 
-export default function StatusDropdown({ status, onChange, disabled }: StatusDropdownProps) {
+export default function StatusDropdown({ status, onChange, disabled, showDot }: StatusDropdownProps) {
   const { t } = useTranslation('common');
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -110,6 +114,12 @@ export default function StatusDropdown({ status, onChange, disabled }: StatusDro
           transition: 'opacity 0.15s',
         }}
       >
+        {showDot && (
+          <span
+            aria-hidden="true"
+            style={{ width: 6, height: 6, borderRadius: 'var(--radius-full)', background: colors.color, flexShrink: 0 }}
+          />
+        )}
         {statusLabel(status, t)}
         {!isDisabled && (
           <span style={{ fontSize: 'var(--font-2xs)', marginLeft: 2 }}>&#9662;</span>

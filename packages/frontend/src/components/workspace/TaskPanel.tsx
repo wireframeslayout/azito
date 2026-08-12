@@ -1551,21 +1551,25 @@ export default function TaskPanel({
     justifyContent: 'center', flexShrink: 0,
   };
 
-  // SP ⋯ フルサイズメニュー（TaskDetailMenu）のタスク全体アクション — 旧 SP ⋯
-  // コンテキストメニュー（moreMenu）が持っていた項目をそのまま移設する（機能欠落防止）。
+  // SP ⋯ フルサイズメニュー（TaskDetailMenu）の「その他の操作」サブビュー用タスク全体アクション
+  // — 旧 SP ⋯ コンテキストメニュー（moreMenu）が持っていた項目をそのまま移設する（機能欠落防止）。
+  // 実行・停止はプライマリアクション行（canExecuteTask/canStopTask）へ分離済み（Issue #338 T1）。
+  // caution: true の2項目（アーカイブ/復元・削除）は「取り扱い注意」節に描かれる。
   const taskDetailMenuActions = [
-    ...(hasUnit && unit && task.status === 'open'
-      ? [{ label: t('actions.execute'), icon: <Icon name="play" size={16} />, onClick: () => executeTask(task.id, unit.id) }]
-      : []),
-    ...(task.status === 'in_progress' && hasUnit && unit
-      ? [{ label: t('actions.stop'), icon: <Icon name="stop" size={16} />, danger: true, onClick: () => stopTask(unit.id) }]
-      : []),
-    { label: t('actions.edit'), icon: <Icon name="edit" size={16} />, onClick: () => onEdit?.(taskId) },
+    { label: t('workspace:taskDetailMenu.editTask'), icon: <Icon name="edit" size={16} />, onClick: () => onEdit?.(taskId) },
     ...(task.status === 'archived'
-      ? [{ label: t('actions.restore'), icon: <Icon name="refresh" size={16} />, onClick: handleRestore }]
-      : [{ label: t('actions.archive'), icon: <Icon name="storage" size={16} />, onClick: handleArchive }]),
-    { label: t('common:actions.delete'), icon: <Icon name="trash" size={16} />, danger: true, onClick: handleDelete },
+      ? [{ label: t('actions.restore'), icon: <Icon name="refresh" size={16} />, onClick: handleRestore, caution: true }]
+      : [{ label: t('actions.archive'), icon: <Icon name="storage" size={16} />, onClick: handleArchive, caution: true }]),
+    { label: t('actions.deleteTask'), icon: <Icon name="trash" size={16} />, danger: true, caution: true, onClick: handleDelete },
   ];
+
+  // プライマリアクション行（実行/停止）: TaskDetailMenu 側は常に2ボタンを表示し、無効時は
+  // disabled 表現（opacity/cursor）にする。既存のインライン条件判定（デスクトップ側と同一）を
+  // enabled/disabled の真偽値へ切り出し、無効時は no-op にして誤クリックでも副作用を起こさない。
+  const canExecuteTask = !!(hasUnit && unit && task.status === 'open');
+  const canStopTask = !!(task.status === 'in_progress' && hasUnit && unit);
+  const handleExecuteTask = () => { if (canExecuteTask && unit) executeTask(task.id, unit.id); };
+  const handleStopTask = () => { if (canStopTask && unit) stopTask(unit.id); };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--ws-surface)' }}>
@@ -2020,9 +2024,14 @@ export default function TaskPanel({
           unitName={unit?.name}
           hasUnit={hasUnit}
           actions={taskDetailMenuActions}
+          onExecute={handleExecuteTask}
+          canExecute={canExecuteTask}
+          onStop={handleStopTask}
+          canStop={canStopTask}
           diffPath={diffPath}
           diffServerName={diffServerName}
           browserCount={browserTabIds.length}
+          browserTabLabel={browserTabIds[0] ? browserLabel(browserTabIds[0]) : null}
           onStatusChange={handleStatusChange}
           onOpenDescription={() => handleMobileSelect(viewTabId('description'))}
           onOpenUnit={() => handleMobileSelect(viewTabId('unit'))}

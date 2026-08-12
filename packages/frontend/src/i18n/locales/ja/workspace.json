@@ -267,19 +267,23 @@
   },
   "taskDetailMenu": {
     "title": "タスク操作",
-    "status": "ステータス",
-    "tapToChange": "タップで変更",
     "display": "表示",
     "showFull": "全文を表示",
     "unitAndExecution": "Unit・実行情報",
     "unassigned": "未割当",
     "commitCount": "{{count}}件",
-    "tabActions": "タブ操作",
-    "pin": "ピン止め",
     "pinOn": "オン",
     "pinOff": "オフ",
     "closeTab": "タブを閉じる",
-    "windows": "ウィンドウ",
-    "currentWindow": "現在表示中"
+    "currentWindow": "現在表示中",
+    "windowsAndBrowser": "ウィンドウとブラウザ",
+    "moreActions": "その他の操作",
+    "moreActionsHint": "編集・ピン・アーカイブ…",
+    "caution": "取り扱い注意",
+    "confirmRequired": "確認あり",
+    "editTask": "タスクを編集",
+    "pinTab": "タブをピン止め",
+    "addWindowChip": "ウィンドウ",
+    "addBrowserChip": "ブラウザ"
   }
 }

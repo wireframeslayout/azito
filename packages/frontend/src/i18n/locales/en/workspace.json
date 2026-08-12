@@ -267,19 +267,23 @@
   },
   "taskDetailMenu": {
     "title": "Task actions",
-    "status": "Status",
-    "tapToChange": "Tap to change",
     "display": "View",
     "showFull": "Show full text",
     "unitAndExecution": "Unit & execution",
     "unassigned": "Unassigned",
     "commitCount": "{{count}} commits",
-    "tabActions": "Tab actions",
-    "pin": "Pin",
     "pinOn": "On",
     "pinOff": "Off",
     "closeTab": "Close tab",
-    "windows": "Windows",
-    "currentWindow": "Currently viewing"
+    "currentWindow": "Currently viewing",
+    "windowsAndBrowser": "Windows & browser",
+    "moreActions": "More actions",
+    "moreActionsHint": "Edit, pin, archive…",
+    "caution": "Handle with care",
+    "confirmRequired": "Confirm required",
+    "editTask": "Edit task",
+    "pinTab": "Pin tab",
+    "addWindowChip": "Window",
+    "addBrowserChip": "Browser"
   }
 }
