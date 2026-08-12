@@ -18,6 +18,7 @@ function buildClaudeSource(overrides: Partial<TranscriptSource> = {}): Transcrip
     readSession: () => ({ entries: [], nextOffset: 0, truncated: false, startOffset: 0, hasOlder: false }),
     readSessionBefore: () => ({ entries: [], prevOffset: 0, hasOlder: false }),
     getSessionCwd: () => ({ cwd: null }),
+    getSessionTailState: async () => 'unknown' as const,
     ...overrides,
   } as unknown as TranscriptSource;
 }
@@ -29,6 +30,7 @@ function buildCodexSource(overrides: Partial<TranscriptSource> = {}): Transcript
     readSession: () => ({ entries: [], nextOffset: 0, truncated: false, startOffset: 0, hasOlder: false }),
     readSessionBefore: () => ({ entries: [], prevOffset: 0, hasOlder: false }),
     getSessionCwd: () => ({ cwd: null }),
+    getSessionTailState: async () => 'unknown' as const,
     ...overrides,
   } as unknown as TranscriptSource;
 }
@@ -68,6 +70,7 @@ function buildApp(
 
   const interactionMonitor = {
     isPending: () => false,
+    getOpenedAt: () => undefined,
     clear: () => {},
     ...windowOverrides.interactionMonitor,
   } as unknown as InteractionMonitor;
@@ -225,33 +228,120 @@ describe('GET /api/transcripts/:agent/:id', () => {
     await app.close();
   });
 
-  it('includes pendingInteraction from InteractionMonitor.isPending when windowId is given', async () => {
-    const isPending = () => true;
-    const app = buildApp([buildClaudeSource()], {}, { interactionMonitor: { isPending } });
+  it('includes pendingInteraction:true when the monitor is pending AND tailState is in_progress', async () => {
+    const claude = buildClaudeSource({ getSessionTailState: async () => 'in_progress' as const });
+    const app = buildApp([claude], {}, { interactionMonitor: { isPending: () => true } });
     const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?windowId=7` });
     expect(res.statusCode).toBe(200);
     expect(res.json().pendingInteraction).toBe(true);
     await app.close();
   });
 
-  it('clears the interaction monitor when an offset-based poll observes new entries', async () => {
+  it('reports pendingInteraction:false when the monitor is pending but tailState is terminal (idle-notification noise)', async () => {
+    const claude = buildClaudeSource({ getSessionTailState: async () => 'terminal' as const });
+    const app = buildApp([claude], {}, { interactionMonitor: { isPending: () => true } });
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?windowId=7` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().pendingInteraction).toBe(false);
+    await app.close();
+  });
+
+  it('does not read tailState when the monitor reports no pending signal (short-circuit)', async () => {
+    const getSessionTailState = vi.fn(async () => 'in_progress' as const);
+    const claude = buildClaudeSource({ getSessionTailState });
+    const app = buildApp([claude], {}, { interactionMonitor: { isPending: () => false } });
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?windowId=7` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().pendingInteraction).toBe(false);
+    expect(getSessionTailState).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('clears the interaction monitor on an initial (offset-less) load when the last timestamped entry is newer than openedAt', async () => {
     const clear = vi.fn();
     const claude = buildClaudeSource({
-      readSession: () => ({ entries: [{ uuid: 'a', type: 'user', timestamp: null, blocks: [] }], nextOffset: 5, truncated: false, startOffset: 0, hasOlder: false }),
+      readSession: () => ({
+        entries: [{ uuid: 'a', type: 'assistant', timestamp: '2026-01-01T00:00:10.000Z', blocks: [] }],
+        nextOffset: 5,
+        truncated: false,
+        startOffset: 0,
+        hasOlder: false,
+      }),
     });
-    const app = buildApp([claude], {}, { interactionMonitor: { clear, isPending: () => false } });
+    const app = buildApp(
+      [claude],
+      {},
+      { interactionMonitor: { clear, getOpenedAt: () => Date.parse('2026-01-01T00:00:00.000Z'), isPending: () => false } },
+    );
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?windowId=7` });
+    expect(res.statusCode).toBe(200);
+    expect(clear).toHaveBeenCalledWith(7);
+    await app.close();
+  });
+
+  it('clears the interaction monitor on an offset-based poll when the last timestamped entry is newer than openedAt', async () => {
+    const clear = vi.fn();
+    const claude = buildClaudeSource({
+      readSession: () => ({
+        entries: [{ uuid: 'a', type: 'assistant', timestamp: '2026-01-01T00:00:10.000Z', blocks: [] }],
+        nextOffset: 5,
+        truncated: false,
+        startOffset: 0,
+        hasOlder: false,
+      }),
+    });
+    const app = buildApp(
+      [claude],
+      {},
+      { interactionMonitor: { clear, getOpenedAt: () => Date.parse('2026-01-01T00:00:00.000Z'), isPending: () => false } },
+    );
     const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?offset=1&windowId=7` });
     expect(res.statusCode).toBe(200);
     expect(clear).toHaveBeenCalledWith(7);
     await app.close();
   });
 
-  it('does not clear the interaction monitor on the initial (offset-less) load even with entries', async () => {
+  it('does not clear the interaction monitor when only entries older than openedAt are present, and pending stays true', async () => {
     const clear = vi.fn();
     const claude = buildClaudeSource({
-      readSession: () => ({ entries: [{ uuid: 'a', type: 'user', timestamp: null, blocks: [] }], nextOffset: 5, truncated: false, startOffset: 0, hasOlder: false }),
+      readSession: () => ({
+        entries: [{ uuid: 'a', type: 'assistant', timestamp: '2025-12-31T23:59:00.000Z', blocks: [] }],
+        nextOffset: 5,
+        truncated: false,
+        startOffset: 0,
+        hasOlder: false,
+      }),
+      getSessionTailState: async () => 'in_progress' as const,
     });
-    const app = buildApp([claude], {}, { interactionMonitor: { clear, isPending: () => true } });
+    const app = buildApp(
+      [claude],
+      {},
+      { interactionMonitor: { clear, getOpenedAt: () => Date.parse('2026-01-01T00:00:00.000Z'), isPending: () => true } },
+    );
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?windowId=7` });
+    expect(res.statusCode).toBe(200);
+    expect(clear).not.toHaveBeenCalled();
+    expect(res.json().pendingInteraction).toBe(true);
+    await app.close();
+  });
+
+  it('ignores entries with a missing timestamp when deciding whether to clear (does not treat a missing timestamp as newness)', async () => {
+    const clear = vi.fn();
+    const claude = buildClaudeSource({
+      readSession: () => ({
+        entries: [{ uuid: 'a', type: 'user', timestamp: null, blocks: [] }],
+        nextOffset: 5,
+        truncated: false,
+        startOffset: 0,
+        hasOlder: false,
+      }),
+      getSessionTailState: async () => 'in_progress' as const,
+    });
+    const app = buildApp(
+      [claude],
+      {},
+      { interactionMonitor: { clear, getOpenedAt: () => Date.parse('2026-01-01T00:00:00.000Z'), isPending: () => true } },
+    );
     const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?windowId=7` });
     expect(res.statusCode).toBe(200);
     expect(clear).not.toHaveBeenCalled();

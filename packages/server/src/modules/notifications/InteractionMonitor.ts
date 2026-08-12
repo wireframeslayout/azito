@@ -100,25 +100,41 @@ export class InteractionMonitor {
    * this state is only ever read from the ~2s chat-polling response path).
    */
   isPending(windowId: number): boolean {
-    const state = this.pending.get(windowId);
-    if (!state) return false;
+    return this.getValidState(windowId) !== undefined;
+  }
 
-    if (this.now() - state.openedAt >= TIMEOUT_MS) {
-      this.pending.delete(windowId);
-      return false;
-    }
-
-    if (!this.windowRepo.findById(windowId)) {
-      this.pending.delete(windowId);
-      return false;
-    }
-
-    return true;
+  /**
+   * The `openedAt` (epoch ms) of `windowId`'s live pending-answer signal, or
+   * `undefined` if there isn't one — same liveness rules as `isPending()`
+   * (not cleared, not timed out, window still exists). Lets callers (routes.ts)
+   * compare a transcript entry's timestamp against the moment the signal opened,
+   * to decide whether that entry counts as "newer than the open signal".
+   */
+  getOpenedAt(windowId: number): number | undefined {
+    return this.getValidState(windowId)?.openedAt;
   }
 
   /** Authoritative close: called once the polling read path observes a newer transcript record. */
   clear(windowId: number): void {
     this.pending.delete(windowId);
+  }
+
+  /** Shared liveness check backing isPending()/getOpenedAt(): validates timeout + window existence, lazily clearing stale entries. */
+  private getValidState(windowId: number): PendingState | undefined {
+    const state = this.pending.get(windowId);
+    if (!state) return undefined;
+
+    if (this.now() - state.openedAt >= TIMEOUT_MS) {
+      this.pending.delete(windowId);
+      return undefined;
+    }
+
+    if (!this.windowRepo.findById(windowId)) {
+      this.pending.delete(windowId);
+      return undefined;
+    }
+
+    return state;
   }
 
   private resolveWindowId(signal: InteractionSignal): number | null {

@@ -109,4 +109,27 @@ describe('InteractionMonitor', () => {
     findById.mockReturnValue(undefined);
     expect(monitor.isPending(1)).toBe(false);
   });
+
+  describe('getOpenedAt', () => {
+    it('is undefined before any signal', () => {
+      expect(monitor.getOpenedAt(1)).toBeUndefined();
+    });
+
+    it('returns the signal timestamp while pending', () => {
+      monitor.recordSignal(makeSignal({ timestamp: 1_000_000 }));
+      expect(monitor.getOpenedAt(1)).toBe(1_000_000);
+    });
+
+    it('is undefined after clear()', () => {
+      monitor.recordSignal(makeSignal({ timestamp: now() }));
+      monitor.clear(1);
+      expect(monitor.getOpenedAt(1)).toBeUndefined();
+    });
+
+    it('is undefined after timeout, mirroring isPending', () => {
+      monitor.recordSignal(makeSignal({ timestamp: now() }));
+      now.mockReturnValue(1_000_000 + 10 * 60 * 1000);
+      expect(monitor.getOpenedAt(1)).toBeUndefined();
+    });
+  });
 });

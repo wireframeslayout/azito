@@ -5,6 +5,7 @@ import type { WindowSessionResolver } from './WindowSessionResolver';
 import type { WindowInputService } from './WindowInputService';
 import type { IWindowRepository } from '../windows/Window';
 import type { InteractionMonitor } from '../notifications/InteractionMonitor';
+import type { TranscriptEntry } from './sources/TranscriptSource';
 import { getAgentTranscriptProfile, type InterruptKey } from './sources/profiles';
 
 export interface TranscriptsRouteOptions {
@@ -43,14 +44,38 @@ function parsePositiveInt(raw: string | undefined): number | undefined | 'invali
 }
 
 /**
+ * `entries` を末尾から走査し、timestamp を持つ最初のエントリの epoch ms を返す。timestamp なしの
+ * エントリ（null）や不正な日時文字列は「新着の証拠なし」として無視し、次(=より古い方)を見る —
+ * 欠落を新着とみなさない。全件 timestamp なしなら undefined。
+ */
+function findLastEntryTimestampMs(entries: TranscriptEntry[]): number | undefined {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const raw = entries[i].timestamp;
+    if (!raw) continue;
+    const parsed = Date.parse(raw);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+/**
  * 単一セッション読み取りの GET ハンドラ本体。offset（差分読み・初回読み）と before（後方ページング）
  * は排他: 同時指定は 400。
  *
  * windowId（任意）が渡された場合のみ `pendingInteraction` を応答に含める（Phase B
- * リアルタイム未回答検出）。offset 指定の差分読みで新着エントリを observe した場合はその windowId の
- * pending を authoritative に clear する — 「トランスクリプトへの新着到達」が close 条件の一つ
- * （InteractionMonitor のクラスコメント参照）。offset 省略の初回読み込み（全履歴）は「新着」の判定
- * 基準にならないため clear しない。
+ * リアルタイム未回答検出）。
+ *
+ * clear 判定（Bug 2 修正）: offset 指定の有無に関わらず、応答に含まれる最後の timestamp 付きエントリが
+ * pending シグナルの openedAt より新しければ authoritative に clear する — 「トランスクリプトへの
+ * 新着到達」が close 条件の一つ（InteractionMonitor のクラスコメント参照）。offset 省略の初回読み込み
+ * （全履歴）でも、既に回答済みの古い pending シグナルが残っているケースを拾えるようにするため、offset
+ * の有無では判定を分岐しない。
+ *
+ * pendingInteraction 判定（Bug 1 修正）: Notification hook の 'open' シグナルは通常アイドル後にも
+ * 発火するノイズを含むため、`InteractionMonitor.isPending()` 単体では「本当に応答待ちか」を判別
+ * できない。isPending が true の場合のみ（tailState 読み取りは小さくないコストがあるため無条件には
+ * 読まない）`source.getSessionTailState()` を追加で確認し、'in_progress'（トランスクリプト末尾がまだ
+ * 回答を含まない = 本当に質問オープン中）の場合だけ pendingInteraction を true にする。
  */
 async function handleReadSession(
   source: TranscriptSource,
@@ -83,10 +108,20 @@ async function handleReadSession(
 
   if (windowId === undefined) return result;
 
-  if (offsetRaw !== undefined && result.entries.length > 0) {
-    interactionMonitor.clear(windowId);
+  const openedAt = interactionMonitor.getOpenedAt(windowId);
+  if (openedAt !== undefined) {
+    const lastEntryMs = findLastEntryTimestampMs(result.entries);
+    if (lastEntryMs !== undefined && lastEntryMs > openedAt) {
+      interactionMonitor.clear(windowId);
+    }
   }
-  return { ...result, pendingInteraction: interactionMonitor.isPending(windowId) };
+
+  let pendingInteraction = false;
+  if (interactionMonitor.isPending(windowId)) {
+    const tailState = await source.getSessionTailState(sessionId);
+    pendingInteraction = tailState === 'in_progress';
+  }
+  return { ...result, pendingInteraction };
 }
 
 const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fastify, opts, done) => {
