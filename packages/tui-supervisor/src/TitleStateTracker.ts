@@ -42,6 +42,10 @@ const MAX_PENDING_LEN = 4_096;
  * set just falls through to `idle`/`unknown` and the byte heuristic keeps
  * deciding, whereas a spinner misclassified as `idle` would actively suppress
  * a real working signal. So extend this set liberally as new glyphs surface.
+ *
+ * Kept in sync with `WORKING_SPINNER_TITLE_RE` in
+ * `packages/server/src/modules/operations/paneStateClassifier.ts` — the two
+ * packages cannot share a constant, so when the glyph set changes, update both.
  */
 const WORKING_SPINNER_RE = /^[⠀-⣿◐◑◒◓✻✶✽✢∗] /;
 
