@@ -210,6 +210,7 @@
     "lastFrame": "last frame {{time}}",
     "noFrames": "no frames received",
     "notDeciding": "a lower tier is deciding",
+    "refinedBlocked": "+ {{tier}} refined it to blocked",
     "transitionStarted": "Detected",
     "reason": {
       "completed": "Completed",

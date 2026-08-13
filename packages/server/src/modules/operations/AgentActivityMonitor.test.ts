@@ -886,6 +886,177 @@ describe('AgentActivityMonitor', () => {
       expect(entry.status).toBeUndefined();
     });
 
+    describe('idle → blocked refinement (claude keeps its idle title while a selection prompt is open)', () => {
+      const WORKING_TITLE = '◐ タスク要約';
+      const IDLE_TITLE = '✳ タスク要約';
+      const BLOCKED_SCREEN = '  1. Yes\n  2. No\n  Enter to select · Esc to cancel';
+      const PROMPT_SCREEN = '❯ ';
+
+      let capturePane: ReturnType<typeof vi.fn>;
+      let paneTitle: string;
+      let screen: string;
+
+      /**
+       * A claude candidate whose pane title and screen the test drives
+       * independently — the whole point being that the two disagree while an
+       * AskUserQuestion selection is open.
+       */
+      function arrangeCandidate(initialTitle: string, initialScreen: string): void {
+        paneTitle = initialTitle;
+        screen = initialScreen;
+        capturePane = vi.fn(async () => ({ stdout: screen, stderr: '', code: 0 }));
+        monitor = new AgentActivityMonitor(
+          { getRunning } as unknown as ExecuteTaskUseCase,
+          { findAll } as unknown as IWindowRepository,
+          { listSessions, capturePane } as unknown as TmuxClient,
+          { findByName } as unknown as IServerRepository,
+          { emit } as unknown as NotificationBus,
+        );
+        findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1', workerType: 'claude' })]);
+        listSessions.mockImplementation(async () => makeSessions(
+          'azito', 'agent-1', 3, Math.floor(Date.now() / 1000),
+          [makePane({ command: 'claude', title: paneTitle })],
+        ));
+      }
+
+      /** The selection prompt opens: claude drops back to its idle title, the screen does not. */
+      function openSelectionPrompt(): void {
+        paneTitle = IDLE_TITLE;
+        screen = BLOCKED_SCREEN;
+      }
+
+      describe('Tier 0 reported the key idle', () => {
+        it('keeps the key running as blocked and emits no completion', async () => {
+          arrangeCandidate(WORKING_TITLE, PROMPT_SCREEN);
+          monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'active', 7, 'agent-1', 'working');
+          await flush();
+          emit.mockClear();
+
+          openSelectionPrompt();
+          monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'idle', 7, 'agent-1');
+          await flush();
+
+          expect(monitor.snapshot()).toEqual([
+            expect.objectContaining({ target: 'azito:agent-1', running: true, source: 'supervised', status: 'blocked' }),
+          ]);
+          expect(emit).toHaveBeenCalledWith(expect.objectContaining({
+            payload: expect.objectContaining({ target: 'azito:agent-1', running: true, status: 'blocked' }),
+          }));
+          expect(emit).not.toHaveBeenCalledWith(expect.objectContaining({
+            payload: expect.objectContaining({ running: false }),
+          }));
+        });
+
+        it('emits the completion exactly once when the selection prompt clears', async () => {
+          arrangeCandidate(WORKING_TITLE, PROMPT_SCREEN);
+          monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'active', 7, 'agent-1', 'working');
+          await flush();
+          openSelectionPrompt();
+          monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'idle', 7, 'agent-1');
+          await flush();
+          expect(monitor.snapshot()).toHaveLength(1);
+          emit.mockClear();
+
+          // The user answered: the pane is back at its prompt box, so the
+          // screen no longer says blocked and Tier 0's idle stands.
+          screen = PROMPT_SCREEN;
+          await monitor.tick();
+
+          expect(monitor.snapshot()).toEqual([]);
+          const stops = emit.mock.calls.filter(([event]) => event.payload.running === false);
+          expect(stops).toHaveLength(1);
+          expect(stops[0][0].payload).toEqual(expect.objectContaining({ target: 'azito:agent-1', reason: 'completed' }));
+
+          emit.mockClear();
+          await monitor.tick();
+          expect(emit).not.toHaveBeenCalled();
+        });
+
+        it('leaves the idle standing when the screen is not blocked (completion announced as before)', async () => {
+          arrangeCandidate(WORKING_TITLE, PROMPT_SCREEN);
+          monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'active', 7, 'agent-1', 'working');
+          await flush();
+          emit.mockClear();
+
+          paneTitle = IDLE_TITLE;
+          monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'idle', 7, 'agent-1');
+          await flush();
+
+          expect(monitor.snapshot()).toEqual([]);
+          expect(emit).toHaveBeenCalledWith(expect.objectContaining({
+            payload: expect.objectContaining({ target: 'azito:agent-1', running: false, reason: 'completed' }),
+          }));
+        });
+
+        it('reports the refinement in the diagnostics row without taking the decision from Tier 0', async () => {
+          arrangeCandidate(WORKING_TITLE, PROMPT_SCREEN);
+          monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'active', 7, 'agent-1', 'working');
+          await flush();
+          openSelectionPrompt();
+          monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'idle', 7, 'agent-1');
+          await flush();
+
+          expect(monitor.diagnostics()).toEqual([
+            expect.objectContaining({
+              target: 'azito:agent-1',
+              decidedBy: 'tier0_supervisor',
+              state: 'blocked',
+              refinedBy: 'tier2_title',
+            }),
+          ]);
+        });
+
+        it('does not attribute a refinement while Tier 0 reports the key working', async () => {
+          // The screen is only ever consulted here by the pre-existing
+          // working-title check (claude keeps its spinner during a permission
+          // prompt); the idle refinement must not claim a working key.
+          arrangeCandidate(WORKING_TITLE, PROMPT_SCREEN);
+          monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'active', 7, 'agent-1', 'working');
+          await flush();
+
+          expect(monitor.snapshot()).toEqual([
+            expect.objectContaining({ target: 'azito:agent-1', running: true, status: 'working' }),
+          ]);
+          expect(monitor.diagnostics()).toEqual([
+            expect.objectContaining({ state: 'working', decidedBy: 'tier0_supervisor', refinedBy: undefined }),
+          ]);
+        });
+      });
+
+      describe('Tier 2 decided the key (no supervisor signal)', () => {
+        // A supervisor that has not sent a frame yet — after a hub restart, or
+        // right after it reconnected — leaves the key to Tier 2. Its title-only
+        // verdict must not report a selection prompt as idle either.
+
+        it('classifies an idle-titled claude pane showing a selection prompt as blocked', async () => {
+          arrangeCandidate(IDLE_TITLE, BLOCKED_SCREEN);
+
+          await monitor.tick();
+
+          expect(monitor.snapshot()).toEqual([
+            expect.objectContaining({ target: 'azito:agent-1', running: true, source: 'manual', status: 'blocked' }),
+          ]);
+          expect(monitor.diagnostics()).toEqual([
+            expect.objectContaining({ decidedBy: 'tier2_title', state: 'blocked' }),
+          ]);
+        });
+
+        it('announces the completion once the selection prompt clears', async () => {
+          arrangeCandidate(IDLE_TITLE, BLOCKED_SCREEN);
+          await monitor.tick();
+          emit.mockClear();
+
+          screen = PROMPT_SCREEN;
+          await monitor.tick();
+
+          expect(monitor.snapshot()).toEqual([]);
+          expect(emit).toHaveBeenCalledWith(expect.objectContaining({
+            payload: expect.objectContaining({ running: false, reason: 'completed' }),
+          }));
+        });
+      });
+    });
+
     describe('operation-covered keys', () => {
       it('overrides a running operation entry with source supervised on an active signal, keeping the operation taskId', async () => {
         getRunning.mockReturnValue({ 5: [{ taskId: 10, target: 'azito:task-10.1', serverName: 'local' }] });

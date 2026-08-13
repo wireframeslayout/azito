@@ -14,6 +14,9 @@ export type ActivityDecidedState = 'working' | 'blocked' | 'idle' | 'offline' | 
 
 export type ActivityStopReason = 'completed' | 'interrupted' | 'deleted' | 'offline' | 'unknown';
 
+/** 判定 Tier を奪わずに状態だけを精緻化した下位 Tier（現状は Tier 0 idle → blocked のみ）。 */
+export type ActivityRefinedBy = 'tier2_title';
+
 export interface ActivityDiagnosticRow {
   serverName: string;
   target: string;
@@ -22,6 +25,7 @@ export interface ActivityDiagnosticRow {
   state: ActivityDecidedState;
   decidedBy: ActivityDecidedBy;
   evidenceAt?: number;
+  refinedBy?: ActivityRefinedBy;
   supervisor?: {
     pid: number;
     ready: boolean;

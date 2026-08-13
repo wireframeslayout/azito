@@ -86,7 +86,11 @@ export function buildActivityDiagnostics(
     supervisors.delete(key);
     return {
       ...entry,
-      ...(isStaleTier0(entry, supervisor) ? { decidedBy: 'none' as const, state: 'none' as const } : {}),
+      // A stale Tier 0 row reports no decision at all, so any refinement of that
+      // decision (see ActivityDiagnosticEntry.refinedBy) must drop with it.
+      ...(isStaleTier0(entry, supervisor)
+        ? { decidedBy: 'none' as const, state: 'none' as const, refinedBy: undefined }
+        : {}),
       windowId: windowIds.get(key),
       supervisor: supervisor && {
         pid: supervisor.pid,

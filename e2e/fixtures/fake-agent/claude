@@ -8,8 +8,11 @@
 // pane_current_command が `node` になり（= bare shell ではない）本物と同じ経路を通る。
 //
 // モード:
-//   --titles <stateFile>  … stateFile の中身 (working | idle | exit) を追従して OSC 2 タイトルを出す。
-//                            Tier 0 (tui-supervisor の TitleStateTracker) / Tier 2 (ペイン分類) 用。
+//   --titles <stateFile>  … stateFile の中身 (working | blocked | idle | exit) を追従して OSC 2
+//                            タイトルを出す。Tier 0 (tui-supervisor の TitleStateTracker) / Tier 2
+//                            (ペイン分類) 用。`blocked` は実 Claude Code の AskUserQuestion 選択中と
+//                            同じ状態を再現する: タイトルは idle グリフ (`✳ `) のままで、画面だけが
+//                            選択プロンプトになる（= タイトルしか見ない supervisor は idle と報告する）。
 //   --silent <stateFile>  … タイトルも出力も一切出さない。Tier 2 を 'unknown' に倒し、
 //                            Tier 4 (プロセス実体 + transcript) を唯一の判定源にするため。
 //
@@ -43,15 +46,42 @@ function readState() {
   }
 }
 
+/** AskUserQuestion の選択画面。末尾行が Tier 2 の blocked 画面規則そのもの。 */
+const BLOCKED_SCREEN = 'Do you want to proceed?\r\n  1. Yes\r\n  2. No\r\n  Enter to select · Esc to cancel\r\n';
+/** 応答後に戻る入力枠（Tier 2 の idle 画面規則）。 */
+const PROMPT_SCREEN = '❯ \r\n';
+
+/**
+ * 画面とスクロールバックの両方を消す。稼働検知は `capture-pane -S -30`（履歴込み）で読むため、
+ * 画面消去 (2J) だけだと直前の選択画面が履歴に残り blocked 判定が解けない。
+ */
+function clearScreen() {
+  process.stdout.write('\x1b[H\x1b[2J\x1b[3J');
+}
+
 let lastTitle = null;
+let lastState = null;
 
 function tick() {
   const state = readState();
   if (state === 'exit') {
     process.exit(0);
   }
+  // 画面はタイトルより先に更新する。supervisor は blocked を idle として報告するので、
+  // 「タイトルは idle・画面はまだ選択画面でない」瞬間があるとハブが完了と判定してしまう。
+  if (mode === '--titles' && state !== lastState) {
+    if (state === 'blocked') {
+      clearScreen();
+      process.stdout.write(BLOCKED_SCREEN);
+    } else if (lastState === 'blocked') {
+      clearScreen();
+      process.stdout.write(PROMPT_SCREEN);
+    }
+    lastState = state;
+  }
   if (mode === '--titles') {
     // 実 Claude Code のタイトル規約に合わせる: working は先頭がスピナーグリフ、idle は `✳ `。
+    // blocked も `✳ ` のまま（実挙動: 選択中もタイトルは idle グリフ）。
     const title = state === 'working' ? '◐ e2e fake agent' : '✳ e2e fake agent';
     // 状態が変わったときだけ書く。毎周期書くと純粋なバイト量ヒューリスティック側を刺激してしまう。
     if (title !== lastTitle) {

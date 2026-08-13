@@ -267,6 +267,13 @@ export type ActivityDecidedBy =
 /** The state that decision produced. `'none'` = nothing decided this tick. */
 export type ActivityDecidedState = 'working' | 'blocked' | 'idle' | 'offline' | 'none';
 
+/**
+ * A lower rung that refined — never overruled — the deciding tier's state.
+ * Currently only `tier2_title`, which turns a Tier 0 `idle` into `blocked`
+ * (see refineTier0IdleKeys).
+ */
+export type ActivityRefinedBy = 'tier2_title';
+
 interface ActivityDecision {
   serverName: string;
   target: string;
@@ -275,6 +282,8 @@ interface ActivityDecision {
   state: ActivityDecidedState;
   /** See ActivityDiagnosticEntry.evidenceAt. */
   evidenceAt?: number;
+  /** See ActivityDiagnosticEntry.refinedBy. */
+  refinedBy?: ActivityRefinedBy;
 }
 
 /** One key's read-only diagnostic view — see AgentActivityMonitor.diagnostics(). */
@@ -294,6 +303,14 @@ export interface ActivityDiagnosticEntry {
    * sent no frames yet.
    */
   evidenceAt?: number;
+  /**
+   * Set when a lower rung refined the deciding tier's state without taking the
+   * decision from it: `'tier2_title'` on a row whose Tier 0 supervisor reported
+   * `idle` while the pane's screen showed a user prompt, i.e. read as
+   * "Tier 0 idle + Tier 2 blocked". `decidedBy` deliberately stays at the
+   * deciding tier — see refineTier0IdleKeys().
+   */
+  refinedBy?: ActivityRefinedBy;
   hook?: { lastSignalAt: number; lastEvent: 'start' | 'stop' };
   probe?: {
     status: 'working' | 'idle' | 'offline';
@@ -553,6 +570,7 @@ export class AgentActivityMonitor {
         state: decision.state,
         decidedBy: decision.decidedBy,
         evidenceAt: decision.evidenceAt,
+        refinedBy: decision.refinedBy,
         hook: hook ? { lastSignalAt: hook.at, lastEvent: hook.status === 'running' ? 'start' as const : 'stop' as const } : undefined,
         probe: probe
           ? {
@@ -750,6 +768,12 @@ export class AgentActivityMonitor {
     ): void => {
       decisions.set(key, { serverName, target: stripPaneSuffix(target), decidedBy, state, taskId, evidenceAt });
     };
+    // Candidate keys a Tier 0 supervisor reported idle on this tick, mapped to
+    // the `windows` row and the entry they would publish if the Tier 2 blocked
+    // refinement finds their pane waiting on the user — see
+    // refineTier0IdleKeys(), which runs after the candidate loop. Until then
+    // they stay idle exactly as the Tier 0 rung recorded them.
+    const tier0IdlePending = new Map<string, { window: AgentWindow; entry: AgentActivityEntry }>();
     // Candidate keys whose tmux window was actually found this tick; becomes
     // previousLiveKeys at the end, so a window disappearing is detectable as an
     // edge rather than as a level (see the `window === null` branch).
@@ -969,9 +993,25 @@ export class AgentActivityMonitor {
           });
         } else {
           // The supervisor explicitly reported its child idle — an authoritative
-          // completion (Tier 0), not a guess.
+          // completion (Tier 0), not a guess. One exception is queued below: the
+          // supervisor reads the pane *title*, which claude keeps at its idle
+          // glyph (`✳ `) while an AskUserQuestion selection is open, so this
+          // "idle" may in fact be "waiting on the user".
           reasons.set(key, 'completed');
           decide(key, w.serverName, w.tmuxTarget, 'tier0_supervisor', 'idle', w.taskId ?? undefined, supervisor.at);
+          tier0IdlePending.set(key, {
+            window: w,
+            entry: {
+              serverName: w.serverName,
+              target: stripPaneSuffix(w.tmuxTarget),
+              running: true,
+              source: 'supervised',
+              operation: false,
+              taskId: w.taskId ?? undefined,
+              label: w.label ?? undefined,
+              projectId: w.projectId ?? undefined,
+            },
+          });
         }
         continue;
       }
@@ -1191,6 +1231,9 @@ export class AgentActivityMonitor {
       next.set(key, entry);
     }
 
+    // Tier 0 idle → blocked refinement, for the keys queued above only.
+    await this.refineTier0IdleKeys(tier0IdlePending, servers, sessionsByServer, next, reasons, decisions);
+
     // Enrich all entries with paneName from live session data
     for (const [key, entry] of next) {
       if (entry.paneName) continue;
@@ -1230,12 +1273,14 @@ export class AgentActivityMonitor {
     const paneTitle = getRelevantPaneTitle(window.panes, paneIndex);
     const titleOnly = classifyPaneState({ paneTitle, agentType: w.workerType });
 
-    // Claude keeps a braille spinner title while showing a permission prompt,
-    // so a 'working' title must be confirmed against the screen content.
-    if (w.workerType === 'claude' && titleOnly === 'working') {
-      const screenTail = await this.captureScreenTail(server, w.tmuxTarget);
-      if (screenTail === null) return titleOnly;
-      return classifyPaneState({ paneTitle, agentType: w.workerType, screenTail });
+    // Claude's title means "not waiting on the user" in both directions while
+    // it *is* waiting: the working spinner stays up during a permission prompt,
+    // and the idle glyph (`✳ `) stays up during an AskUserQuestion selection.
+    // Only the screen tells those apart, so both verdicts are confirmed against
+    // it — a blocked screen turns either one into 'blocked', and nothing else
+    // about the title's verdict changes.
+    if (w.workerType === 'claude' && (titleOnly === 'working' || titleOnly === 'idle')) {
+      return (await this.isPaneBlockedOnScreen(server, w, window, paneIndex)) ? 'blocked' : titleOnly;
     }
 
     if (titleOnly !== 'unknown') return titleOnly;
@@ -1247,6 +1292,79 @@ export class AgentActivityMonitor {
     const screenTail = await this.captureScreenTail(server, w.tmuxTarget);
     if (screenTail === null) return 'unknown';
     return classifyPaneState({ paneTitle, agentType: w.workerType, screenTail });
+  }
+
+  /**
+   * Tier 0 idle refinement: a supervisor decides from the pane *title*, and
+   * claude keeps its idle glyph (`✳ `) in the title while an AskUserQuestion
+   * selection is open — so a Tier 0 `idle` can really mean "waiting on the
+   * user". For those keys only, Tier 2's pane classification is consulted as
+   * well, and a `blocked` verdict keeps the key running (as a blocked entry)
+   * instead of announcing a completion.
+   *
+   * Strictly one-directional: every other Tier 2 answer — idle, unknown, and
+   * *working* alike — leaves Tier 0's idle standing. Promoting idle → working
+   * here would break the ladder invariant that a lower rung can never overrule
+   * a higher one; only the blocked refinement is allowed, because it does not
+   * contradict "not working", it only says the agent has not finished.
+   *
+   * Scoped to `windows`-table candidates, the keys this misreading was
+   * observed on (a hand-launched supervised claude pane). Two neighbours are
+   * deliberately left alone: a pure-supervised key (no `windows` row, see
+   * collectPureSupervisedEntries) has no stored worker type to classify its
+   * pane against, and a registered execution run reports its own waiting state
+   * through the task itself — its agent is driven by markers, not by the
+   * interactive selection UI this refinement reads.
+   */
+  private async refineTier0IdleKeys(
+    pending: Map<string, { window: AgentWindow; entry: AgentActivityEntry }>,
+    servers: Map<string, ServerConfig | null>,
+    sessionsByServer: Map<string, TmuxSession[]>,
+    next: Map<string, AgentActivityEntry>,
+    reasons: Map<string, AgentActivityStopReason>,
+    decisions: Map<string, ActivityDecision>,
+  ): Promise<void> {
+    for (const [key, { window: w, entry }] of pending) {
+      const server = servers.get(w.serverName);
+      if (!server) continue;
+      const window = findLiveWindow(sessionsByServer.get(w.serverName) ?? [], w.tmuxTarget);
+      if (!window) continue;
+      const { windowSpec } = parseWindowTarget(w.tmuxTarget);
+      const paneIndex = extractPaneIndex(windowSpec, window.index, window.name);
+      if (!(await this.isPaneBlockedOnScreen(server, w, window, paneIndex))) continue;
+
+      next.set(key, { ...entry, status: 'blocked' });
+      // The key is running after all, so the completion recorded at the Tier 0
+      // rung must not fire. It is recorded again — and then read — on the tick
+      // where the pane stops being blocked.
+      reasons.delete(key);
+      // Attribution stays with Tier 0 (it decided "not working"); the refining
+      // rung is reported alongside it so the diagnostics panel can render this
+      // row as "Tier 0 idle + Tier 2 blocked".
+      const decision = decisions.get(key);
+      if (decision) decisions.set(key, { ...decision, state: 'blocked', refinedBy: 'tier2_title' });
+    }
+  }
+
+  /**
+   * Whether a pane whose *title* says it is not waiting is in fact waiting on
+   * the user. Always reads the screen tail: the title is precisely what is
+   * known to be misleading here, and classifyPaneState checks its blocked
+   * screen rules ahead of the title rules. Callers pay one `capture-pane` per
+   * consulted key per tick, and only for agent types the classifier has rules
+   * for.
+   */
+  private async isPaneBlockedOnScreen(
+    server: ServerConfig,
+    w: AgentWindow,
+    window: TmuxWindow,
+    paneIndex: number | null,
+  ): Promise<boolean> {
+    if (!(CLASSIFIABLE_AGENT_TYPES as readonly string[]).includes(w.workerType)) return false;
+    const screenTail = await this.captureScreenTail(server, w.tmuxTarget);
+    if (screenTail === null) return false;
+    const paneTitle = getRelevantPaneTitle(window.panes, paneIndex);
+    return classifyPaneState({ paneTitle, agentType: w.workerType, screenTail }) === 'blocked';
   }
 
   /** Tail of `capture-pane` (~30 lines) for the classifier's screen-content rules. Null on any tmux error. */

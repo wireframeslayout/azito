@@ -210,6 +210,7 @@
     "lastFrame": "最終フレーム {{time}}",
     "noFrames": "フレーム未受信",
     "notDeciding": "下位 Tier が判定中",
+    "refinedBlocked": "+ {{tier}} が確認待ちと判定",
     "transitionStarted": "検知開始",
     "reason": {
       "completed": "完了",

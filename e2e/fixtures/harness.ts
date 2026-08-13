@@ -38,7 +38,8 @@ const TSX_CLI = path.join(REPO_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
 const SERVER_READY_TIMEOUT_MS = 60_000;
 const SUPERVISOR_READY_TIMEOUT_MS = 30_000;
 
-export type FakeAgentState = 'idle' | 'working' | 'exit';
+/** `blocked` = タイトルは idle グリフのまま、画面だけが選択プロンプト（fake-agent/claude 参照）。 */
+export type FakeAgentState = 'idle' | 'working' | 'blocked' | 'exit';
 
 export interface FakeAgent {
   /** tmux ターゲット（`session:windowName`）。windows API の tmux_target と同じ形。 */

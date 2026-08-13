@@ -20,6 +20,12 @@ import type { Locator, Page } from '@playwright/test';
 /** Tier 0 の稼働化に許す最大遅延（supervisor の 1 秒ティック + ハブの即時 tick + WS 配信）。 */
 const REALTIME_BUDGET_MS = 3_000;
 
+/**
+ * blocked の出入りに許す最大遅延。Tier 0 の即時 tick に加えて、画面を読む Tier 2 の
+ * capture-pane が1周挟まるぶん REALTIME_BUDGET_MS より広く取る。
+ */
+const BLOCKED_BUDGET_MS = 10_000;
+
 const TMUX_SESSION = 'e2e';
 
 /** 「アクティブウィンドウ」パネル本体。ヘッダーボタンの親要素がパネルのコンテナ。 */
@@ -40,6 +46,11 @@ function workingRow(page: Page, label: string): Locator {
 /** 完了行（`完了 · <相対時刻>`）。 */
 function finishedRow(page: Page, label: string): Locator {
   return windowRow(page, label).filter({ hasText: '完了 ·' });
+}
+
+/** 応答待ち（blocked）として描画されている行（`aw-blocked-dot` は blocked 状態でのみ付く）。 */
+function blockedRow(page: Page, label: string): Locator {
+  return windowRow(page, label).filter({ has: page.locator('.aw-blocked-dot') });
 }
 
 async function openWorkspace(page: Page, harness: Harness): Promise<void> {
@@ -70,6 +81,36 @@ test.describe('稼働検知', () => {
     // 消灯（稼働行が消える）と完了行の生成は同じ `running:false, reason:'completed'` 遷移から起きる。
     await expect(workingRow(app, label)).toHaveCount(0, { timeout: REALTIME_BUDGET_MS });
     await expect(finishedRow(app, label)).toBeVisible({ timeout: REALTIME_BUDGET_MS });
+  });
+
+  test('AskUserQuestion 待機は blocked として稼働し続け、完了行を作らない', async ({ app, harness }) => {
+    const label = 'e2e-blocked';
+    const agent = await harness.startFakeAgent(TMUX_SESSION, 'blocked', { supervised: true });
+    await harness.registerAgentWindow(projectId, agent.target, { label });
+    await openWorkspace(app, harness);
+
+    agent.setState('working');
+    await expect(workingRow(app, label)).toBeVisible({ timeout: REALTIME_BUDGET_MS });
+
+    // 選択画面を開く: タイトルは idle グリフのままなので supervisor（Tier 0）は idle を報告する。
+    // 画面を読む Tier 2 が blocked と答えるため、行は消えずに応答待ち表現へ変わる。
+    agent.setState('blocked');
+    await expect(blockedRow(app, label)).toBeVisible({ timeout: BLOCKED_BUDGET_MS });
+    await expect(workingRow(app, label)).toHaveCount(0);
+
+    // 完了行を作らないことは「出ていない」ことの確認なので、監視が数周する余裕をとって
+    // 観測中も毎秒アサートする（一瞬だけ完了行が出て消える取りこぼしを防ぐ）。
+    const observeUntil = Date.now() + 8_000;
+    while (Date.now() < observeUntil) {
+      await sleep(1_000);
+      await expect(finishedRow(app, label)).toHaveCount(0);
+      await expect(blockedRow(app, label)).toBeVisible();
+    }
+
+    // 応答して入力枠に戻る = blocked 解消。ここで初めて完了行が出る。
+    agent.setState('idle');
+    await expect(blockedRow(app, label)).toHaveCount(0, { timeout: BLOCKED_BUDGET_MS });
+    await expect(finishedRow(app, label)).toBeVisible({ timeout: BLOCKED_BUDGET_MS });
   });
 
   test('上位 Tier の idle を下位 Tier が上書きしない（完了後に transcript を新鮮に保っても再点灯しない）', async ({ app, harness }) => {

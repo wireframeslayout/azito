@@ -190,9 +190,17 @@ export default function ActivityDiagnosticsPanel() {
                     </td>
                     <td><StateCell state={row.state} /></td>
                     <td>
-                      <Chip tone={row.decidedBy === 'tier0_supervisor' ? 'accent' : 'default'}>
-                        {t(TIER_LABEL_KEYS[row.decidedBy])}
-                      </Chip>
+                      <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 2, alignItems: 'flex-start' }}>
+                        <Chip tone={row.decidedBy === 'tier0_supervisor' ? 'accent' : 'default'}>
+                          {t(TIER_LABEL_KEYS[row.decidedBy])}
+                        </Chip>
+                        {/* 判定 Tier は奪わずに状態だけを精緻化した下位 Tier（Tier0 idle + Tier2 blocked）。 */}
+                        {row.refinedBy && (
+                          <span style={{ ...DIM, fontSize: 'var(--font-2xs)', whiteSpace: 'nowrap' }}>
+                            {t('activityDiagnostics.refinedBlocked', { tier: t(TIER_LABEL_KEYS[row.refinedBy]) })}
+                          </span>
+                        )}
+                      </span>
                     </td>
                     <td><SupervisorCell row={row} /></td>
                     <td><TransitionCell row={row} /></td>

@@ -65,6 +65,27 @@ describe('buildActivityDiagnostics', () => {
     })]);
   });
 
+  it('passes a blocked refinement through with the deciding tier intact', () => {
+    const rows = buildActivityDiagnostics(
+      makeMonitor([{ ...TIER0_ENTRY, evidenceAt: 1_500, state: 'blocked', refinedBy: 'tier2_title' }]),
+      makeRegistry([makeSupervisor({ connectedAt: 1_000, lastActivityFrameAt: 1_500 })]),
+      emptyWindows,
+    );
+    expect(rows).toEqual([expect.objectContaining({
+      decidedBy: 'tier0_supervisor', state: 'blocked', refinedBy: 'tier2_title',
+    })]);
+  });
+
+  it('drops the refinement together with a stale Tier 0 attribution', () => {
+    // 判定そのものが「無効」になる行に、その判定を精緻化した痕跡だけ残ってはならない。
+    const rows = buildActivityDiagnostics(
+      makeMonitor([{ ...TIER0_ENTRY, evidenceAt: 900, state: 'blocked', refinedBy: 'tier2_title' }]),
+      makeRegistry([makeSupervisor({ connectedAt: 1_000 })]),
+      emptyWindows,
+    );
+    expect(rows).toEqual([expect.objectContaining({ decidedBy: 'none', state: 'none', refinedBy: undefined })]);
+  });
+
   it('leaves a Tier 0 attribution alone when no supervisor connection is registered for the key', () => {
     const rows = buildActivityDiagnostics(makeMonitor([TIER0_ENTRY]), makeRegistry([]), emptyWindows);
     expect(rows).toEqual([expect.objectContaining({ decidedBy: 'tier0_supervisor', supervisor: undefined })]);

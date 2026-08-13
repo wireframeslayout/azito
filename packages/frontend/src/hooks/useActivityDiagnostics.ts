@@ -6,6 +6,7 @@ export type {
   ActivityDecidedBy,
   ActivityDecidedState,
   ActivityDiagnosticRow,
+  ActivityRefinedBy,
   ActivityStopReason,
 } from '../lib/activityDiagnostics';
 
