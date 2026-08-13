@@ -250,6 +250,61 @@ export interface ProcessActivityProbeEntry {
   lastEntryTimestampMs?: number | null;
 }
 
+/**
+ * Answer of a pane *screen* check (see readScreenVerdict). `'unknown'` is a
+ * genuine third answer, not a synonym for `'not_blocked'`: a failed
+ * `capture-pane` or an unavailable tmux snapshot means "could not look", and
+ * folding it into "not blocked" is what would announce a completion for a pane
+ * that is still sitting on a prompt.
+ */
+type ScreenVerdict = 'blocked' | 'not_blocked' | 'unknown';
+
+/** Cached outcome of a key's screen checks — see screenVerdict(). */
+interface ScreenCheckState {
+  /** Tick this key was last checked on, and what that check answered. */
+  tick: number;
+  verdict: ScreenVerdict;
+  /** `window_activity` observed by the last *successful* check. */
+  okActivityAt?: number;
+  /** Wall-clock second that successful check ran at (see screenVerdict's reuse rule). */
+  okCapturedAtSec?: number;
+  /** Start of the current run of 'unknown' answers; cleared by any success. */
+  unknownSince?: number;
+}
+
+/**
+ * How long a key may keep the status it already had while its screen check
+ * keeps failing. Long enough to ride out a transient tmux/capture error (the
+ * failure mode this hold exists for), short enough that a permanently
+ * unreadable pane cannot pin a stale running row forever — past it, the tier's
+ * own verdict stands again.
+ *
+ * NOT shortened by AZITO_E2E_FAST_INTERVALS: it is a judgment threshold, not an
+ * observation period (same reasoning as PROCESS_PROBE_MAX_AGE_MS).
+ */
+const UNKNOWN_HOLD_MS = 30_000;
+
+/**
+ * Maximum `capture-pane` calls in flight per server. The screen checks of
+ * different windows are independent, so running them one after another makes a
+ * tick cost the sum of every pane's round trip — on an ssh/agent server that is
+ * what pushes a tick past its interval and makes the `ticking` guard drop the
+ * next one. Bounded rather than unbounded so a server with many agent windows
+ * cannot open a burst of simultaneous tmux calls against one transport.
+ */
+const SCREEN_CHECK_CONCURRENCY = 4;
+
+/** Run `tasks` with at most `limit` in flight. Order of completion is irrelevant to callers. */
+async function runWithConcurrency(tasks: Array<() => Promise<void>>, limit: number): Promise<void> {
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, tasks.length) }, async () => {
+    while (next < tasks.length) {
+      await tasks[next++]();
+    }
+  });
+  await Promise.all(workers);
+}
+
 /** Which rung of the ladder decided a key's state on the last tick. */
 export type ActivityDecidedBy =
   | 'tier0_supervisor'
@@ -479,6 +534,11 @@ export class AgentActivityMonitor {
   // as every other tier. Refreshed in the background (see refreshProcessProbe)
   // so collect() never awaits the probe's ps/tmux walk.
   private processStates = new Map<string, ProcessActivityProbeEntry>();
+  // Screen-check cache, keyed the same as every other tier. Bounds the
+  // `capture-pane` cost of the title-confirmation path (see screenVerdict) and
+  // carries the failure bookkeeping the unknown-hold reads. Pruned alongside
+  // the other per-candidate maps in collect().
+  private screenChecks = new Map<string, ScreenCheckState>();
   // Completions already announced, keyed the same way: key → the `completedAt`
   // whose `completed` transition was emitted. Purely a dedupe memo (the probe
   // keeps reporting the same `completedAt` until the session moves on), not a
@@ -878,6 +938,9 @@ export class AgentActivityMonitor {
     for (const key of this.processDisarmedKeys) {
       if (!candidateKeys.has(key) && !operationKeys.has(key)) this.processDisarmedKeys.delete(key);
     }
+    for (const key of this.screenChecks.keys()) {
+      if (!candidateKeys.has(key) && !operationKeys.has(key)) this.screenChecks.delete(key);
+    }
     for (const [key, meta] of this.recentOperationMeta) {
       if (Date.now() - meta.at > OPERATION_ATTRIBUTION_TTL_MS) this.recentOperationMeta.delete(key);
     }
@@ -918,14 +981,23 @@ export class AgentActivityMonitor {
     // queried in parallel so one slow/offline server cannot stretch the tick past
     // the poll interval.
     const sessionsByServer = new Map<string, TmuxSession[]>();
+    // Servers whose listing *failed*, as opposed to legitimately returning no
+    // sessions. Only the Tier 0 idle refinement reads this, to tell "this pane
+    // is gone" apart from "this tick could not look" (see refinedStatusFor).
+    const sessionErrors = new Set<string>();
     await Promise.all([...servers.entries()].map(async ([serverName, server]) => {
       if (!server) { sessionsByServer.set(serverName, []); return; }
       try {
         sessionsByServer.set(serverName, await this.tmux.listSessions(server));
       } catch {
         sessionsByServer.set(serverName, []);
+        sessionErrors.add(serverName);
       }
     }));
+
+    // Warm the screen-verdict cache before the per-key ladder runs, so its
+    // capture-pane calls happen in bounded parallel instead of one at a time.
+    await this.prefetchScreenVerdicts(candidates, servers, sessionsByServer);
 
     // Post-check: operation-run entries whose supervisor didn't report blocked.
     // For claude workers, screen-check them now that sessions are available.
@@ -1232,7 +1304,7 @@ export class AgentActivityMonitor {
     }
 
     // Tier 0 idle → blocked refinement, for the keys queued above only.
-    await this.refineTier0IdleKeys(tier0IdlePending, servers, sessionsByServer, next, reasons, decisions);
+    await this.refineTier0IdleKeys(tier0IdlePending, servers, sessionsByServer, sessionErrors, next, reasons, decisions);
 
     // Enrich all entries with paneName from live session data
     for (const [key, entry] of next) {
@@ -1252,14 +1324,18 @@ export class AgentActivityMonitor {
   }
 
   /**
-   * Tier 2: classify a candidate's liveness from its pane title, falling back
-   * to a `capture-pane` screen tail only when the title alone is
-   * inconclusive AND this window's activity has advanced since the last tick
-   * (herdr-style cost containment — capture-pane is one extra remote call per
-   * window, so it is skipped for windows that are not producing fresh
-   * output at all). Returns 'unknown' when the classifier has no rule for
-   * this agentType/title/screen combination, telling the caller to fall back
-   * to the activity-advance heuristic (Tier 3).
+   * Tier 2: classify a candidate's liveness from its pane title, consulting a
+   * `capture-pane` screen tail in two cases — a claude title that cannot be
+   * trusted on its own (see below), and a title the classifier has no rule for
+   * at all, which is additionally gated on this window's activity having
+   * advanced since the last tick (herdr-style cost containment: a window
+   * producing no output has nothing new to read). Screen reads go through
+   * screenVerdict(), so a pane that is not redrawing costs no repeat
+   * `capture-pane` regardless of which case brought us here.
+   *
+   * Returns 'unknown' when the classifier has no rule for this
+   * agentType/title/screen combination, telling the caller to fall back to the
+   * activity-advance heuristic (Tier 3).
    */
   private async classifyCandidateState(
     server: ServerConfig,
@@ -1280,7 +1356,12 @@ export class AgentActivityMonitor {
     // it — a blocked screen turns either one into 'blocked', and nothing else
     // about the title's verdict changes.
     if (w.workerType === 'claude' && (titleOnly === 'working' || titleOnly === 'idle')) {
-      return (await this.isPaneBlockedOnScreen(server, w, window, paneIndex)) ? 'blocked' : titleOnly;
+      const verdict = await this.screenVerdict(server, w, window, paneIndex, key);
+      if (verdict === 'blocked') return 'blocked';
+      if (verdict === 'not_blocked') return titleOnly;
+      // Could not read the screen: the title alone is exactly what is untrustworthy
+      // here, so hold the previous tick's status rather than acting on it.
+      return this.heldStatusOnUnknown(key) ?? titleOnly;
     }
 
     if (titleOnly !== 'unknown') return titleOnly;
@@ -1302,11 +1383,17 @@ export class AgentActivityMonitor {
    * well, and a `blocked` verdict keeps the key running (as a blocked entry)
    * instead of announcing a completion.
    *
-   * Strictly one-directional: every other Tier 2 answer — idle, unknown, and
-   * *working* alike — leaves Tier 0's idle standing. Promoting idle → working
-   * here would break the ladder invariant that a lower rung can never overrule
-   * a higher one; only the blocked refinement is allowed, because it does not
-   * contradict "not working", it only says the agent has not finished.
+   * Strictly one-directional: a Tier 2 answer of idle or working alike leaves
+   * Tier 0's idle standing. Promoting idle → working here would break the
+   * ladder invariant that a lower rung can never overrule a higher one; only
+   * the blocked refinement is allowed, because it does not contradict "not
+   * working", it only says the agent has not finished.
+   *
+   * A screen check that could not answer at all (capture-pane failed, or this
+   * server's tmux snapshot is missing) is not "not blocked": it holds the
+   * previous tick's status instead, so a momentary tmux failure cannot announce
+   * a completion for a pane still sitting on its selection prompt. See
+   * heldStatusOnUnknown for the bound on that hold.
    *
    * Scoped to `windows`-table candidates, the keys this misreading was
    * observed on (a hand-launched supervised claude pane). Two neighbours are
@@ -1320,51 +1407,207 @@ export class AgentActivityMonitor {
     pending: Map<string, { window: AgentWindow; entry: AgentActivityEntry }>,
     servers: Map<string, ServerConfig | null>,
     sessionsByServer: Map<string, TmuxSession[]>,
+    sessionErrors: Set<string>,
     next: Map<string, AgentActivityEntry>,
     reasons: Map<string, AgentActivityStopReason>,
     decisions: Map<string, ActivityDecision>,
   ): Promise<void> {
     for (const [key, { window: w, entry }] of pending) {
+      const status = await this.refinedStatusFor(key, w, servers, sessionsByServer, sessionErrors);
+      if (!status) continue;
+
+      next.set(key, { ...entry, status });
+      // The key is running after all, so the completion recorded at the Tier 0
+      // rung must not fire. It is recorded again — and then read — on the tick
+      // where the pane stops being blocked (or where the hold expires).
+      reasons.delete(key);
+      // Attribution stays with Tier 0 (it decided "not working"); the refining
+      // rung is reported alongside it so the diagnostics panel can render this
+      // row as "Tier 0 idle + Tier 2 blocked".
+      const decision = decisions.get(key);
+      if (decision) decisions.set(key, { ...decision, state: status, refinedBy: 'tier2_title' });
+    }
+  }
+
+  /**
+   * The status a Tier 0 idle key should keep this tick, or null to let its idle
+   * (and the completion recorded with it) stand. Resolves the pane, reads the
+   * screen through the cache, and maps the tri-state answer: 'blocked' keeps
+   * the key running as blocked, 'not_blocked' releases it, and 'unknown' —
+   * including a server whose `listSessions` failed this tick — holds the
+   * previous tick's status.
+   */
+  private async refinedStatusFor(
+    key: string,
+    w: AgentWindow,
+    servers: Map<string, ServerConfig | null>,
+    sessionsByServer: Map<string, TmuxSession[]>,
+    sessionErrors: Set<string>,
+  ): Promise<'working' | 'blocked' | null> {
+    // Both of these are permanent facts rather than a failed look, so they
+    // release the key instead of holding it: an agent type the classifier has
+    // no rules for can never produce a blocked verdict, and a missing server
+    // config is not going to resolve on the next tick either.
+    if (!(CLASSIFIABLE_AGENT_TYPES as readonly string[]).includes(w.workerType)) return null;
+    const server = servers.get(w.serverName);
+    if (!server) return null;
+    // The snapshot this tick's window lookup would use is missing, so "window
+    // not found" below would be a lie — treat it as unreadable.
+    if (sessionErrors.has(w.serverName)) return this.heldStatusOnUnknown(key);
+    // A successful listing that does not contain the window means the pane is
+    // genuinely gone; nothing is waiting on the user there.
+    const window = findLiveWindow(sessionsByServer.get(w.serverName) ?? [], w.tmuxTarget);
+    if (!window) return null;
+
+    const { windowSpec } = parseWindowTarget(w.tmuxTarget);
+    const paneIndex = extractPaneIndex(windowSpec, window.index, window.name);
+    const verdict = await this.screenVerdict(server, w, window, paneIndex, key);
+    if (verdict === 'blocked') return 'blocked';
+    if (verdict === 'unknown') return this.heldStatusOnUnknown(key);
+    return null;
+  }
+
+  /**
+   * Whether a pane whose *title* says it is not waiting is in fact waiting on
+   * the user, answered from the cache whenever re-reading the pane cannot
+   * change the answer:
+   * - already checked on this tick (the prefetch pass below warms exactly the
+   *   keys this tick's ladder will ask about), or
+   * - the last successful check said 'not_blocked' AND the window has produced
+   *   no output since (`window_activity` unchanged) AND that check ran in a
+   *   later second than the activity it observed — so nothing can have been
+   *   drawn since without advancing activity. This is what keeps a permanently
+   *   idle registered pane from costing a `capture-pane` every 5 seconds.
+   *
+   * A cached 'blocked' is deliberately never reused: noticing the moment the
+   * prompt clears is the whole point, and a pane that only redraws its input
+   * box may not advance activity enough to invalidate the cache by itself.
+   */
+  private async screenVerdict(
+    server: ServerConfig,
+    w: AgentWindow,
+    window: TmuxWindow,
+    paneIndex: number | null,
+    key: string,
+  ): Promise<ScreenVerdict> {
+    const cached = this.screenChecks.get(key);
+    if (cached?.tick === this.tickCounter) return cached.verdict;
+    if (
+      cached?.verdict === 'not_blocked'
+      && cached.okActivityAt === window.activity
+      && (cached.okCapturedAtSec ?? 0) > cached.okActivityAt
+    ) {
+      this.screenChecks.set(key, { ...cached, tick: this.tickCounter });
+      return cached.verdict;
+    }
+
+    const verdict = await this.readScreenVerdict(server, w, window, paneIndex);
+    if (verdict === 'unknown') {
+      this.screenChecks.set(key, {
+        ...cached,
+        tick: this.tickCounter,
+        verdict,
+        // Keep the start of the run, so the hold below expires on the age of
+        // the *first* failure rather than being reset by every later one.
+        unknownSince: cached?.unknownSince ?? Date.now(),
+      });
+    } else {
+      this.screenChecks.set(key, {
+        tick: this.tickCounter,
+        verdict,
+        okActivityAt: window.activity,
+        okCapturedAtSec: Math.floor(Date.now() / 1000),
+      });
+    }
+    return verdict;
+  }
+
+  /**
+   * Read the pane's screen and classify it, without caching. 'unknown' when the
+   * screen could not be read at all (capture-pane failed or exited non-zero) or
+   * when the classifier has no rules for this agent type — both mean "could not
+   * look", which callers must not confuse with "looked, and it is not blocked".
+   */
+  private async readScreenVerdict(
+    server: ServerConfig,
+    w: AgentWindow,
+    window: TmuxWindow,
+    paneIndex: number | null,
+  ): Promise<ScreenVerdict> {
+    if (!(CLASSIFIABLE_AGENT_TYPES as readonly string[]).includes(w.workerType)) return 'unknown';
+    const screenTail = await this.captureScreenTail(server, w.tmuxTarget);
+    if (screenTail === null) return 'unknown';
+    const paneTitle = getRelevantPaneTitle(window.panes, paneIndex);
+    return classifyPaneState({ paneTitle, agentType: w.workerType, screenTail }) === 'blocked'
+      ? 'blocked'
+      : 'not_blocked';
+  }
+
+  /**
+   * What to publish for a key whose screen check could not answer: the status
+   * the previous tick published, so a transient capture/tmux failure neither
+   * invents a completion for a pane that is still waiting on the user, nor
+   * drops one that was already blocked.
+   *
+   * This is a *deferral*, not a promotion — the key keeps the status it already
+   * had, never a better one — and it is bounded: once the failures have lasted
+   * UNKNOWN_HOLD_MS the tier's own verdict stands again, so an unreadable pane
+   * cannot pin a stale running row forever. Returns null when there is nothing
+   * to hold (the key was not running) or the hold has expired.
+   */
+  private heldStatusOnUnknown(key: string): 'working' | 'blocked' | null {
+    const previous = this.state.get(key);
+    if (!previous) return null;
+    const unknownSince = this.screenChecks.get(key)?.unknownSince;
+    if (unknownSince !== undefined && Date.now() - unknownSince > UNKNOWN_HOLD_MS) return null;
+    return previous.status === 'blocked' ? 'blocked' : 'working';
+  }
+
+  /**
+   * Warm the screen-verdict cache for every candidate whose pane this tick's
+   * ladder is going to ask about, running the captures per server with bounded
+   * concurrency (SCREEN_CHECK_CONCURRENCY). The per-key ladder below then hits
+   * the same-tick cache instead of awaiting one tmux round trip after another —
+   * the difference between a tick costing the sum of every pane's latency and
+   * costing the slowest few.
+   */
+  private async prefetchScreenVerdicts(
+    candidates: AgentWindow[],
+    servers: Map<string, ServerConfig | null>,
+    sessionsByServer: Map<string, TmuxSession[]>,
+  ): Promise<void> {
+    const tasksByServer = new Map<string, Array<() => Promise<void>>>();
+    for (const w of candidates) {
       const server = servers.get(w.serverName);
       if (!server) continue;
       const window = findLiveWindow(sessionsByServer.get(w.serverName) ?? [], w.tmuxTarget);
       if (!window) continue;
       const { windowSpec } = parseWindowTarget(w.tmuxTarget);
       const paneIndex = extractPaneIndex(windowSpec, window.index, window.name);
-      if (!(await this.isPaneBlockedOnScreen(server, w, window, paneIndex))) continue;
-
-      next.set(key, { ...entry, status: 'blocked' });
-      // The key is running after all, so the completion recorded at the Tier 0
-      // rung must not fire. It is recorded again — and then read — on the tick
-      // where the pane stops being blocked.
-      reasons.delete(key);
-      // Attribution stays with Tier 0 (it decided "not working"); the refining
-      // rung is reported alongside it so the diagnostics panel can render this
-      // row as "Tier 0 idle + Tier 2 blocked".
-      const decision = decisions.get(key);
-      if (decision) decisions.set(key, { ...decision, state: 'blocked', refinedBy: 'tier2_title' });
+      const key = windowKey(w.serverName, w.tmuxTarget);
+      if (!this.willConsultScreen(w, window, paneIndex, key)) continue;
+      const tasks = tasksByServer.get(w.serverName) ?? [];
+      tasks.push(async () => { await this.screenVerdict(server, w, window, paneIndex, key); });
+      tasksByServer.set(w.serverName, tasks);
     }
+    await Promise.all([...tasksByServer.values()]
+      .map((tasks) => runWithConcurrency(tasks, SCREEN_CHECK_CONCURRENCY)));
   }
 
   /**
-   * Whether a pane whose *title* says it is not waiting is in fact waiting on
-   * the user. Always reads the screen tail: the title is precisely what is
-   * known to be misleading here, and classifyPaneState checks its blocked
-   * screen rules ahead of the title rules. Callers pay one `capture-pane` per
-   * consulted key per tick, and only for agent types the classifier has rules
-   * for.
+   * Whether this tick's ladder will consult the pane's screen for a candidate —
+   * kept in sync with the two places that call screenVerdict(): the Tier 0 idle
+   * refinement (any classifiable agent) and the claude title confirmation in
+   * classifyCandidateState. Reading it wrong only costs (or saves) a prefetch;
+   * the ladder itself still asks, and a missed prefetch simply captures inline.
    */
-  private async isPaneBlockedOnScreen(
-    server: ServerConfig,
-    w: AgentWindow,
-    window: TmuxWindow,
-    paneIndex: number | null,
-  ): Promise<boolean> {
+  private willConsultScreen(w: AgentWindow, window: TmuxWindow, paneIndex: number | null, key: string): boolean {
     if (!(CLASSIFIABLE_AGENT_TYPES as readonly string[]).includes(w.workerType)) return false;
-    const screenTail = await this.captureScreenTail(server, w.tmuxTarget);
-    if (screenTail === null) return false;
+    if (this.supervisorStates.get(key)?.status === 'idle') return true;
+    if (w.workerType !== 'claude') return false;
     const paneTitle = getRelevantPaneTitle(window.panes, paneIndex);
-    return classifyPaneState({ paneTitle, agentType: w.workerType, screenTail }) === 'blocked';
+    const titleOnly = classifyPaneState({ paneTitle, agentType: w.workerType });
+    return titleOnly === 'working' || titleOnly === 'idle';
   }
 
   /** Tail of `capture-pane` (~30 lines) for the classifier's screen-content rules. Null on any tmux error. */

@@ -64,19 +64,25 @@ describe('AgentActivityMonitor', () => {
   let listSessions: ReturnType<typeof vi.fn>;
   let findByName: ReturnType<typeof vi.fn>;
   let emit: ReturnType<typeof vi.fn>;
+  let capturePane: ReturnType<typeof vi.fn>;
   let monitor: AgentActivityMonitor;
 
   beforeEach(() => {
     getRunning = vi.fn<() => RunningMap>().mockReturnValue({});
     findAll = vi.fn<() => Window[]>().mockReturnValue([]);
     listSessions = vi.fn<() => Promise<TmuxSession[]>>().mockResolvedValue([]);
+    // A readable but featureless screen: the screen checks must be able to
+    // *succeed* by default, since "could not read the pane" is now a distinct
+    // answer that holds the previous state instead of resolving it. Tests that
+    // care about the screen build their own client with their own content.
+    capturePane = vi.fn().mockResolvedValue({ stdout: '', stderr: '', code: 0 });
     findByName = vi.fn().mockReturnValue({ name: 'local', type: 'local' } as ServerConfig);
     emit = vi.fn();
 
     monitor = new AgentActivityMonitor(
       { getRunning } as unknown as ExecuteTaskUseCase,
       { findAll } as unknown as IWindowRepository,
-      { listSessions } as unknown as TmuxClient,
+      { listSessions, capturePane } as unknown as TmuxClient,
       { findByName } as unknown as IServerRepository,
       { emit } as unknown as NotificationBus,
     );
@@ -892,9 +898,17 @@ describe('AgentActivityMonitor', () => {
       const BLOCKED_SCREEN = '  1. Yes\n  2. No\n  Enter to select · Esc to cancel';
       const PROMPT_SCREEN = '❯ ';
 
-      let capturePane: ReturnType<typeof vi.fn>;
+      let screenClient: ReturnType<typeof vi.fn>;
       let paneTitle: string;
       let screen: string;
+      /**
+       * `window_activity` of the fake pane. Held fixed unless a test redraws the
+       * screen (drawScreen), which is what a real pane does — the screen-check
+       * cache keys off exactly this, so a fixture that changed the screen
+       * without it would be modelling something tmux cannot produce.
+       */
+      let paneActivity: number;
+      let captureResult: { stdout: string; stderr: string; code: number } | Error;
 
       /**
        * A claude candidate whose pane title and screen the test drives
@@ -904,25 +918,49 @@ describe('AgentActivityMonitor', () => {
       function arrangeCandidate(initialTitle: string, initialScreen: string): void {
         paneTitle = initialTitle;
         screen = initialScreen;
-        capturePane = vi.fn(async () => ({ stdout: screen, stderr: '', code: 0 }));
+        paneActivity = Math.floor(Date.now() / 1000) - 5;
+        captureResult = { stdout: '', stderr: '', code: 0 };
+        screenClient = vi.fn(async () => {
+          if (captureResult instanceof Error) throw captureResult;
+          return captureResult.code === 0 ? { ...captureResult, stdout: screen } : captureResult;
+        });
         monitor = new AgentActivityMonitor(
           { getRunning } as unknown as ExecuteTaskUseCase,
           { findAll } as unknown as IWindowRepository,
-          { listSessions, capturePane } as unknown as TmuxClient,
+          { listSessions, capturePane: screenClient } as unknown as TmuxClient,
           { findByName } as unknown as IServerRepository,
           { emit } as unknown as NotificationBus,
         );
         findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1', workerType: 'claude' })]);
         listSessions.mockImplementation(async () => makeSessions(
-          'azito', 'agent-1', 3, Math.floor(Date.now() / 1000),
+          'azito', 'agent-1', 3, paneActivity,
           [makePane({ command: 'claude', title: paneTitle })],
         ));
+      }
+
+      /** Redraw the pane: new screen content, and the activity bump that always comes with it. */
+      function drawScreen(next: string): void {
+        screen = next;
+        paneActivity += 1;
       }
 
       /** The selection prompt opens: claude drops back to its idle title, the screen does not. */
       function openSelectionPrompt(): void {
         paneTitle = IDLE_TITLE;
-        screen = BLOCKED_SCREEN;
+        drawScreen(BLOCKED_SCREEN);
+      }
+
+      /** Make the next screen reads fail the way a dying/busy tmux does. */
+      function breakScreenReads(mode: 'exit-code' | 'throw'): void {
+        captureResult = mode === 'throw'
+          ? new Error('tmux: no server running')
+          : { stdout: '', stderr: 'no such pane', code: 1 };
+      }
+
+      function stopPayloads(): Array<Record<string, unknown>> {
+        return emit.mock.calls
+          .map(([event]) => event.payload)
+          .filter((p) => p.running === false);
       }
 
       describe('Tier 0 reported the key idle', () => {
@@ -942,9 +980,7 @@ describe('AgentActivityMonitor', () => {
           expect(emit).toHaveBeenCalledWith(expect.objectContaining({
             payload: expect.objectContaining({ target: 'azito:agent-1', running: true, status: 'blocked' }),
           }));
-          expect(emit).not.toHaveBeenCalledWith(expect.objectContaining({
-            payload: expect.objectContaining({ running: false }),
-          }));
+          expect(stopPayloads()).toEqual([]);
         });
 
         it('emits the completion exactly once when the selection prompt clears', async () => {
@@ -959,13 +995,13 @@ describe('AgentActivityMonitor', () => {
 
           // The user answered: the pane is back at its prompt box, so the
           // screen no longer says blocked and Tier 0's idle stands.
-          screen = PROMPT_SCREEN;
+          drawScreen(PROMPT_SCREEN);
           await monitor.tick();
 
           expect(monitor.snapshot()).toEqual([]);
-          const stops = emit.mock.calls.filter(([event]) => event.payload.running === false);
-          expect(stops).toHaveLength(1);
-          expect(stops[0][0].payload).toEqual(expect.objectContaining({ target: 'azito:agent-1', reason: 'completed' }));
+          expect(stopPayloads()).toEqual([
+            expect.objectContaining({ target: 'azito:agent-1', reason: 'completed' }),
+          ]);
 
           emit.mockClear();
           await monitor.tick();
@@ -1046,13 +1082,144 @@ describe('AgentActivityMonitor', () => {
           await monitor.tick();
           emit.mockClear();
 
-          screen = PROMPT_SCREEN;
+          drawScreen(PROMPT_SCREEN);
           await monitor.tick();
 
           expect(monitor.snapshot()).toEqual([]);
           expect(emit).toHaveBeenCalledWith(expect.objectContaining({
             payload: expect.objectContaining({ running: false, reason: 'completed' }),
           }));
+        });
+      });
+
+      describe('the screen could not be read', () => {
+        // 'could not look' must never be read as 'looked, not blocked': that is
+        // what would announce a completion for a pane still waiting on the user.
+
+        it.each([
+          ['capture-pane exits non-zero', 'exit-code' as const],
+          ['capture-pane throws', 'throw' as const],
+        ])('keeps a blocked key blocked while %s', async (_label, mode) => {
+          arrangeCandidate(WORKING_TITLE, PROMPT_SCREEN);
+          monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'active', 7, 'agent-1', 'working');
+          await flush();
+          openSelectionPrompt();
+          monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'idle', 7, 'agent-1');
+          await flush();
+          expect(monitor.snapshot()).toEqual([expect.objectContaining({ status: 'blocked' })]);
+          emit.mockClear();
+
+          breakScreenReads(mode);
+          await monitor.tick();
+
+          expect(monitor.snapshot()).toEqual([
+            expect.objectContaining({ target: 'azito:agent-1', running: true, status: 'blocked' }),
+          ]);
+          expect(stopPayloads()).toEqual([]);
+        });
+
+        it('keeps a blocked key blocked while the tmux snapshot for its server fails', async () => {
+          arrangeCandidate(WORKING_TITLE, PROMPT_SCREEN);
+          monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'active', 7, 'agent-1', 'working');
+          await flush();
+          openSelectionPrompt();
+          monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'idle', 7, 'agent-1');
+          await flush();
+          emit.mockClear();
+
+          listSessions.mockRejectedValue(new Error('tmux: connection lost'));
+          await monitor.tick();
+
+          expect(monitor.snapshot()).toEqual([
+            expect.objectContaining({ target: 'azito:agent-1', running: true, status: 'blocked' }),
+          ]);
+          expect(stopPayloads()).toEqual([]);
+        });
+
+        it('defers the completion when the read fails on the very tick the pane goes idle', async () => {
+          // The failure mode that matters most: the selection prompt opens and
+          // the check that would have seen it fails, so there is no blocked
+          // state to hold yet — only the previous working one.
+          arrangeCandidate(WORKING_TITLE, PROMPT_SCREEN);
+          monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'active', 7, 'agent-1', 'working');
+          await flush();
+          emit.mockClear();
+
+          openSelectionPrompt();
+          breakScreenReads('exit-code');
+          monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'idle', 7, 'agent-1');
+          await flush();
+
+          expect(monitor.snapshot()).toEqual([
+            expect.objectContaining({ target: 'azito:agent-1', running: true, status: 'working' }),
+          ]);
+          expect(stopPayloads()).toEqual([]);
+
+          // Reads recover and the pane really is blocked — no completion was lost.
+          captureResult = { stdout: '', stderr: '', code: 0 };
+          await monitor.tick();
+          expect(monitor.snapshot()).toEqual([expect.objectContaining({ status: 'blocked' })]);
+          expect(stopPayloads()).toEqual([]);
+        });
+
+        it('stops holding once the failures outlast the hold window', async () => {
+          arrangeCandidate(IDLE_TITLE, BLOCKED_SCREEN);
+          await monitor.tick();
+          expect(monitor.snapshot()).toEqual([expect.objectContaining({ status: 'blocked' })]);
+
+          breakScreenReads('throw');
+          await monitor.tick();
+          expect(monitor.snapshot()).toEqual([expect.objectContaining({ status: 'blocked' })]);
+
+          vi.useFakeTimers();
+          try {
+            // Past UNKNOWN_HOLD_MS (30s): an unreadable pane must not pin a
+            // running row forever, so the tier's own verdict stands again.
+            vi.setSystemTime(Date.now() + 31_000);
+            await monitor.tick();
+          } finally {
+            vi.useRealTimers();
+          }
+
+          expect(monitor.snapshot()).toEqual([]);
+        });
+      });
+
+      describe('screen-check cost', () => {
+        it('does not re-read a pane that has produced no output since the last check', async () => {
+          arrangeCandidate(IDLE_TITLE, PROMPT_SCREEN);
+
+          await monitor.tick();
+          expect(screenClient).toHaveBeenCalledTimes(1);
+
+          // Nothing was drawn (window_activity unchanged), so re-reading the
+          // pane cannot change the answer — this is the permanently-idle
+          // registered window that must not cost a capture every tick.
+          await monitor.tick();
+          await monitor.tick();
+          expect(screenClient).toHaveBeenCalledTimes(1);
+          expect(monitor.snapshot()).toEqual([]);
+        });
+
+        it('reads again as soon as the pane redraws', async () => {
+          arrangeCandidate(IDLE_TITLE, PROMPT_SCREEN);
+          await monitor.tick();
+          await monitor.tick();
+          expect(screenClient).toHaveBeenCalledTimes(1);
+
+          drawScreen(BLOCKED_SCREEN);
+          await monitor.tick();
+
+          expect(screenClient).toHaveBeenCalledTimes(2);
+          expect(monitor.snapshot()).toEqual([expect.objectContaining({ status: 'blocked' })]);
+        });
+
+        it('keeps re-reading a blocked pane, which may clear without redrawing much', async () => {
+          arrangeCandidate(IDLE_TITLE, BLOCKED_SCREEN);
+          await monitor.tick();
+          await monitor.tick();
+
+          expect(screenClient).toHaveBeenCalledTimes(2);
         });
       });
     });
@@ -1898,7 +2065,7 @@ describe('AgentActivityMonitor', () => {
       monitor = new AgentActivityMonitor(
         { getRunning } as unknown as ExecuteTaskUseCase,
         { findAll } as unknown as IWindowRepository,
-        { listSessions } as unknown as TmuxClient,
+        { listSessions, capturePane } as unknown as TmuxClient,
         { findByName } as unknown as IServerRepository,
         { emit } as unknown as NotificationBus,
         probe,

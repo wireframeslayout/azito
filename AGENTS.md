@@ -365,7 +365,10 @@ packages/
   （claude は AskUserQuestion 選択中もタイトルが idle グリフ `✳ ` のままで、タイトルしか見ない supervisor が
   idle を報告するため）。精緻化された行は稼働（blocked）のまま残り、完了遷移は発行されない。Tier 0 が沈黙して
   いるキー（supervisor 再接続直後など）では Tier 2 自身が同じ画面確認を行い、`decidedBy: 'tier2_title'` /
-  `state: 'blocked'` として同じ結論に達する（idle → blocked の一方向のみ。working への昇格はしない）
+  `state: 'blocked'` として同じ結論に達する（idle → blocked の一方向のみ。working への昇格はしない）。
+  画面確認は blocked / not_blocked / unknown の3値で、unknown（capture-pane 失敗・tmux スナップショット取得
+  失敗）は「blocked でない」ではなく直前 tick の状態を最大30秒保持する。コスト面では、再描画のない
+  （`window_activity` が進んでいない）ペインは再キャプチャせず、キャプチャはサーバー単位で最大4並列
 - Sidekick tags (Issue #263 Refine A): `tags: string[]` replaces the old single-value `phase:` frontmatter field. The five
   phase names are special-cased as "phase tags" (a Unit's `phaseConfig` can only assign a phase to a Sidekick carrying
   that tag; `isDefault` requires at least one phase tag); any other tag is free-form. `/azt-sidekick` accepts multiple
