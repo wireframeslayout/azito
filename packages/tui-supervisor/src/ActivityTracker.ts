@@ -36,16 +36,20 @@ const ACTIVE_RESEND_MS = 15_000;
  * periodic 'active' re-send while activity continues.
  *
  * Two information sources, in priority order:
- * 1. Title state (setTitleState, fed from TitleStateTracker): once ANY
- *    classifiable OSC title has been observed, it becomes the sole authority
+ * 1. Title state (setTitleState, fed from TitleStateTracker): once a title
+ *    carrying a RECOGNIZED marker (working spinner / idle `✳` / blocked
+ *    "Action Required") has been observed, it becomes the sole authority
  *    — working/blocked map to 'active' (with the corresponding status),
  *    idle maps to 'idle'. The byte-volume heuristic is disabled entirely in
  *    this mode, because it misreads keystroke echo as activity: Claude
  *    Code's TUI repaints its input box on every keypress, exceeding the
  *    byte threshold while the agent is actually idle.
- * 2. Byte-volume sliding window (record): the legacy heuristic, used only
- *    while no title has ever been observed — i.e. for generic agents that
- *    never set a pane title.
+ * 2. Byte-volume sliding window (record): the legacy heuristic, used while
+ *    TitleStateTracker still reports 'unknown' — i.e. for agents that never
+ *    set a pane title, and for those that only set titles this tracker cannot
+ *    interpret (a static app name). Gating mode entry on a recognized marker
+ *    (Issue #338) is what keeps such an agent from being reported permanently
+ *    idle: an unrecognized title alone no longer disables the heuristic.
  */
 export class ActivityTracker extends EventEmitter {
   private readonly windowMs: number;
@@ -83,8 +87,9 @@ export class ActivityTracker extends EventEmitter {
   /**
    * Feed the latest title-derived state (from TitleStateTracker). Anything
    * other than 'unknown' switches the tracker into title mode for good —
-   * an agent that sets titles keeps setting them, and TitleStateTracker
-   * itself never reverts to 'unknown' once a title has been classified.
+   * TitleStateTracker only leaves 'unknown' after observing a recognized
+   * marker (so the child provably drives its title with this protocol), and
+   * never reverts once it has.
    */
   setTitleState(state: TitleAgentState): void {
     if (state === 'unknown') return;

@@ -65,10 +65,41 @@ describe('TitleStateTracker', () => {
     expect(t.getState()).toBe('blocked');
   });
 
-  it('classifies any other non-empty title as idle (codex convention)', () => {
+  it('stays unknown for an unrecognized title while no marker has been seen (byte heuristic keeps deciding)', () => {
     const t = new TitleStateTracker();
     t.push(OSC2('codex'));
+    expect(t.getState()).toBe('unknown');
+  });
+
+  it('stays unknown across a static unrecognized title repeated many times', () => {
+    const t = new TitleStateTracker();
+    for (let i = 0; i < 20; i++) t.push(OSC2('my-tui v1.2'));
+    expect(t.getState()).toBe('unknown');
+  });
+
+  it('classifies any other non-empty title as idle once a recognized marker has been observed', () => {
+    const t = new TitleStateTracker();
+    t.push(OSC2('⠐ working'));
+    expect(t.getState()).toBe('working');
+    t.push(OSC2('codex'));
     expect(t.getState()).toBe('idle');
+  });
+
+  it('takes title authority from the first recognized marker even after unrecognized titles', () => {
+    const t = new TitleStateTracker();
+    t.push(OSC2('claude'));
+    expect(t.getState()).toBe('unknown');
+    t.push(OSC2('✳ waiting'));
+    expect(t.getState()).toBe('idle');
+    t.push(OSC2('◐ thinking'));
+    expect(t.getState()).toBe('working');
+  });
+
+  it('accepts a blocked marker as the first recognized marker', () => {
+    const t = new TitleStateTracker();
+    t.push(OSC2('some tui'));
+    t.push(OSC2('Action Required: approve command'));
+    expect(t.getState()).toBe('blocked');
   });
 
   it('recognizes OSC 0 sequences too', () => {
