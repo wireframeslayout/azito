@@ -71,11 +71,27 @@ const ANSI_ESCAPE_PATTERN = /\x1b\[[0-9;]*m/g;
  *    直下の `toolUseResult.answers`（質問文字列 → 回答文字列。multiSelect は "A, B" のカンマ区切り
  *    文字列）に入る。ユーザーが選択肢を使わず自由記述（CLI の「Type something」）で答えた場合も
  *    同じ `answers` 形に入り、options のどのラベルとも一致しない文字列になる（実データで確認）。
- *    ユーザーが質問自体を拒否した場合（Esc 等）は `toolUseResult` がオブジェクトではなく文字列
- *    "User rejected tool use" になる — この場合は確定回答が無いので interaction 化しない（通常の
- *    'tool' エントリへフォールバックする）。
+ *    ユーザーが選択肢を使わずに決着させた場合（CLI の「Chat about this」＝チャットで明確化、または
+ *    Esc キャンセル）は `toolUseResult` がオブジェクトではなく文字列になる（DECLINED_* 参照）。
+ *    この場合も「質問が提示され、選択肢以外で決着した」という確定事実なので、answers を持たない
+ *    outcome: 'declined' の interaction エントリとして表示する（生 tool 行にはしない）。
  */
 const ASK_USER_QUESTION_TOOL_NAME = 'AskUserQuestion';
+
+/**
+ * 選択肢以外で決着した AskUserQuestion の tool_result 判定（実データで確認した2バリアント）。
+ *  - Esc キャンセル: `toolUseResult === "User rejected tool use"`（完全一致）
+ *  - チャットでの明確化（CLI の「Chat about this」・自由入力）: `"Error: The user doesn't want to
+ *    proceed with this tool use. The tool use was rejected (...). To tell you how to proceed, the
+ *    user said:\n..."` — 後半はユーザー発言が可変長で続くため前方一致で判定する。
+ */
+const DECLINED_RESULT_EXACT = 'User rejected tool use';
+const DECLINED_RESULT_PREFIX = "Error: The user doesn't want to proceed with this tool use";
+
+function isDeclinedToolUseResult(toolUseResult: unknown): boolean {
+  if (typeof toolUseResult !== 'string') return false;
+  return toolUseResult === DECLINED_RESULT_EXACT || toolUseResult.startsWith(DECLINED_RESULT_PREFIX);
+}
 
 /**
  * セッション単位の askUserQuestionCache（tool_use id → questions）の上限件数（レビュー指摘 Minor 3c）。
@@ -135,7 +151,11 @@ function inferInteractionFieldInput(item: AskUserQuestionItem, answerValue: stri
  * `__proto__`/`constructor` 等のプロトタイプ継承プロパティを誤って拾い得るため、own-property の保証が
  * ある Map を使う）。
  */
-function buildInteraction(items: AskUserQuestionItem[], answersByQuestion: Map<string, string>): TranscriptInteraction {
+function buildInteraction(
+  items: AskUserQuestionItem[],
+  answersByQuestion: Map<string, string>,
+  outcome: 'answered' | 'declined',
+): TranscriptInteraction {
   const fields: TranscriptInteraction['fields'] = [];
   const answers: NonNullable<TranscriptInteraction['answers']> = [];
 
@@ -155,6 +175,7 @@ function buildInteraction(items: AskUserQuestionItem[], answersByQuestion: Map<s
     kind: 'question',
     source: { origin: 'tool', name: ASK_USER_QUESTION_TOOL_NAME },
     fields,
+    outcome,
     ...(answers.length > 0 ? { answers } : {}),
   };
 }
@@ -255,12 +276,21 @@ function tryHandleAskUserQuestionResult(
   if (!items) return null;
 
   const toolUseResult = record.toolUseResult;
+  const timestamp = typeof record.timestamp === 'string' ? record.timestamp : null;
 
-  // 拒否された質問（Esc 等）には確定回答が無い。cache に残っていれば破棄し（Minor 3b）、通常の 'tool'
-  // エントリへフォールバックする。
-  if (toolUseResult === 'User rejected tool use') {
+  // 選択肢以外で決着した質問（チャットでの明確化・Esc キャンセル）。確定回答は無いが「質問が提示され
+  // 選択肢では答えられなかった」ことは確定事実なので、answers を持たない declined の interaction として
+  // 表示する（生 tool 行に落とすと、質問そのものがチャットから消えてしまう）。質問・選択肢は tool_use の
+  // input から従来どおり構築する。
+  if (isDeclinedToolUseResult(toolUseResult)) {
     cache.delete(toolUseId);
-    return null;
+    return {
+      uuid: record.uuid,
+      type: 'interaction',
+      timestamp,
+      blocks: [],
+      interaction: buildInteraction(items, new Map(), 'declined'),
+    };
   }
 
   if (!isRecord(toolUseResult) || !isRecord(toolUseResult.answers)) return null;
@@ -272,13 +302,12 @@ function tryHandleAskUserQuestionResult(
     if (typeof value === 'string') answersByQuestion.set(question, value);
   }
 
-  const timestamp = typeof record.timestamp === 'string' ? record.timestamp : null;
   return {
     uuid: record.uuid,
     type: 'interaction',
     timestamp,
     blocks: [],
-    interaction: buildInteraction(items, answersByQuestion),
+    interaction: buildInteraction(items, answersByQuestion, 'answered'),
   };
 }
 

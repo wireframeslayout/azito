@@ -41,6 +41,12 @@ export interface TranscriptInteraction {
   kind: 'question';
   source: { origin: 'tool'; name: string };
   fields: TranscriptInteractionField[];
+  /**
+   * 決着の仕方。'answered' は選択肢または自由記述で回答が確定（answers を伴う）。'declined' は選択肢を
+   * 使わずに決着した状態（チャットで明確化を求めた・Esc でキャンセル）で answers を持たない。
+   * 省略時は 'answered' 相当として扱う（後方互換）。サーバー側 TranscriptInteraction と一致させる。
+   */
+  outcome?: 'answered' | 'declined';
   answers?: TranscriptInteractionAnswer[];
 }
 
@@ -54,7 +60,8 @@ export interface TranscriptEntry {
    * 現状 Claude のみが生成する（サーバー側 TranscriptSource のドキュメント参照）。
    * 'interaction' はエージェントとユーザーの構造化された対話イベント（現状は AskUserQuestion の
    * 質問＋回答）を表す。blocks は空、`interaction` フィールドに正規化データを持つ。専用のカードとして
-   * 描画する（styles/InteractionCard.tsx）。回答確定後にのみ生成される（質問オープン中は生成しない）。
+   * 描画する（styles/InteractionCard.tsx）。決着後にのみ生成される（質問オープン中は生成しない） —
+   * 選択肢以外で決着した場合は interaction.outcome === 'declined' となる。
    */
   type: TranscriptEntryType;
   timestamp: string | null;

@@ -45,6 +45,14 @@ export interface TranscriptInteraction {
   kind: 'question';
   source: { origin: 'tool'; name: string };
   fields: TranscriptInteractionField[];
+  /**
+   * この対話がどう決着したか。'answered' は選択肢または自由記述で回答が確定した状態（answers を伴う）。
+   * 'declined' は選択肢を使わずに決着した状態 — ユーザーが CLI の「Chat about this」等でチャット側へ
+   * 明確化を求めた、または Esc でキャンセルした場合（実データで確認、判定は
+   * ClaudeTranscriptSource.isDeclinedToolUseResult 参照）。'declined' では answers を持たない。
+   * 省略可（optional）なのは後方互換のため — この項目を持たない過去のレスポンスは answered とみなす。
+   */
+  outcome?: 'answered' | 'declined';
   answers?: TranscriptInteractionAnswer[];
 }
 
@@ -64,9 +72,10 @@ export interface TranscriptEntry {
    * 'interaction' はエージェントとユーザーの構造化された対話イベント（現状は AskUserQuestion の
    * 質問＋回答）を表す。blocks は空、`interaction` フィールドに正規化データを持つ。transcript 層は
    * 確定した事実のみを扱う方針のため、質問がオープン中（未回答）の状態は生成しない — Claude Code は
-   * 回答確定後にまとめて tool_use + tool_result を JSONL へ書き込む（質問オープン中は何も書かれない、
-   * 実データで確認）。生成元の tool_use/tool_result は汎用の 'tool' 種別としては表示せず、この
-   * 'interaction' エントリに置き換える。
+   * 決着後にまとめて tool_use + tool_result を JSONL へ書き込む（質問オープン中は何も書かれない、
+   * 実データで確認）。選択肢以外で決着した場合（チャットでの明確化・Esc キャンセル）も決着済みの
+   * 事実として `interaction.outcome === 'declined'` のエントリを生成する。生成元の
+   * tool_use/tool_result は汎用の 'tool' 種別としては表示せず、この 'interaction' エントリに置き換える。
    */
   type: TranscriptEntryType;
   timestamp: string | null;

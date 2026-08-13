@@ -860,27 +860,81 @@ describe('ClaudeTranscriptSource', () => {
       expect(result!.entries[0].interaction!.answers).toBeUndefined();
     });
 
-    it('does not convert a rejected AskUserQuestion (toolUseResult is a plain string, not an answers object) into an interaction', () => {
+    it('marks an answered interaction with outcome: answered', () => {
       writeSession(dir, 'proj-a', SID_A, [
         askUserQuestionToolUse('a1', TOOL_USE_ID, [
-          { question: 'その人気店の名前は何ですか?', multiSelect: false, options: [{ label: '未定' }, { label: '定番の店' }] },
+          { question: 'お昼ごはんは何にしますか?', multiSelect: false, options: [{ label: 'ラーメン' }, { label: 'サラダ' }] },
         ]),
-        {
-          type: 'user',
-          uuid: 'r1',
-          message: {
-            content: [
-              { type: 'tool_result', tool_use_id: TOOL_USE_ID, is_error: true, content: 'The user doesn\'t want to proceed with this tool use.' },
-            ],
-          },
-          toolUseResult: 'User rejected tool use',
+        askUserQuestionToolResult('r1', TOOL_USE_ID, { 'お昼ごはんは何にしますか?': 'ラーメン' }),
+      ]);
+      const result = service.readSession(SID_A);
+      expect(result!.entries[0].interaction!.outcome).toBe('answered');
+    });
+
+    // 実データ（セッション 90cdfa66-3b32-4b62-b66b-23078a82c251）で確認した2バリアント。
+    function declinedToolResult(uuid: string, toolUseId: string, toolUseResult: string) {
+      return {
+        type: 'user',
+        uuid,
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: toolUseId, is_error: true, content: toolUseResult }],
         },
+        toolUseResult,
+      };
+    }
+
+    const CHAT_CLARIFY_RESULT =
+      "Error: The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). To tell you how to proceed, the user said:\nThe user wants to clarify these questions.\n    This means they may have additional information, context or questions for you.\n\n    Questions asked:\n- \"テスト用の質問です。好きな飲み物はどれですか？\"\n  (No answer provided)";
+
+    it.each([
+      ['chat clarification ("Chat about this" / free-text)', CHAT_CLARIFY_RESULT],
+      ['Esc cancel', 'User rejected tool use'],
+    ])('emits a declined interaction (question kept, no answers) when the AskUserQuestion was settled outside the options — %s', (_label, toolUseResult) => {
+      writeSession(dir, 'proj-a', SID_A, [
+        askUserQuestionToolUse('a1', TOOL_USE_ID, [
+          {
+            question: 'テスト用の質問です。好きな飲み物はどれですか？',
+            header: '飲み物',
+            multiSelect: false,
+            options: [{ label: 'コーヒー', description: 'ホット' }, { label: 'お茶' }],
+          },
+        ]),
+        declinedToolResult('r1', TOOL_USE_ID, toolUseResult),
       ]);
 
       const result = service.readSession(SID_A);
       expect(result!.entries).toHaveLength(1);
-      expect(result!.entries[0].type).toBe('tool');
-      expect(result!.entries[0].interaction).toBeUndefined();
+      expect(result!.entries[0]).toMatchObject({
+        uuid: 'r1',
+        type: 'interaction',
+        blocks: [],
+        interaction: {
+          kind: 'question',
+          outcome: 'declined',
+          source: { origin: 'tool', name: 'AskUserQuestion' },
+          fields: [
+            {
+              id: 'q0',
+              label: 'テスト用の質問です。好きな飲み物はどれですか？',
+              input: 'select',
+              options: [
+                { value: 'コーヒー', label: 'コーヒー', description: 'ホット' },
+                { value: 'お茶', label: 'お茶', description: undefined },
+              ],
+            },
+          ],
+        },
+      });
+      expect(result!.entries[0].interaction!.answers).toBeUndefined();
+    });
+
+    it('leaves a non-AskUserQuestion rejected tool_result as a raw tool entry', () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        { type: 'assistant', uuid: 'a1', message: { content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }] } },
+        declinedToolResult('r1', 't1', 'User rejected tool use'),
+      ]);
+      const result = service.readSession(SID_A);
+      expect(result!.entries.map((e) => e.type)).toEqual(['assistant', 'tool']);
     });
 
     it('leaves non-AskUserQuestion tool_use/tool_result rows untouched', () => {

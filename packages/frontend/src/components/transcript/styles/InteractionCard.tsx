@@ -41,8 +41,10 @@ function InteractionField({ entry, field }: { entry: TranscriptEntry; field: Tra
 /**
  * AskUserQuestion 由来の質問＋回答カード（Issue #338 フェーズA）。InterruptedRow/CommandRow と同じ
  * 位置付けの全表示スタイル共通コンポーネント。質問（chip＋質問文）→ OptionList（選ばれた選択肢に
- * ✓ とアクセント）→ 自由記述回答があれば回答文、の順に描画する。transcript 層は確定した Q&A のみを
- * 扱う（回答確定後にのみ生成されるエントリ）ため、未回答状態の表現は持たない。
+ * ✓ とアクセント）→ 自由記述回答があれば回答文、の順に描画する。transcript 層は決着済みの対話のみを
+ * 扱う（決着後にのみ生成されるエントリ）ため、オープン中（回答待ち）の表現は持たない。
+ * outcome === 'declined'（チャットで明確化・Esc キャンセル）は answers を持たないため選択肢に ✓ は
+ * 付かず、カード末尾に控えめな注記を1行添える。
  */
 export function InteractionCard({ entry }: { entry: TranscriptEntry }) {
   const { t } = useTranslation('transcript');
@@ -84,6 +86,12 @@ export function InteractionCard({ entry }: { entry: TranscriptEntry }) {
         </span>
 
         {interaction.fields.map((field) => <InteractionField key={field.id} entry={entry} field={field} />)}
+
+        {interaction.outcome === 'declined' && (
+          <div style={{ fontSize: 'var(--font-xs)', lineHeight: 1.5, color: 'var(--text-dim)' }}>
+            {t('conversation.questionDeclinedNote')}
+          </div>
+        )}
       </div>
     </div>
   );

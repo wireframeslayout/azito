@@ -25,6 +25,7 @@
     "taskNotificationNoSummary": "Background task notification",
     "question": "Question",
     "questionAnswerLabel": "Answer",
+    "questionDeclinedNote": "Not answered from the options (answered in chat, or cancelled)",
     "pendingInteraction": {
       "message": "The agent is waiting for input — please answer in the terminal.",
       "openTerminal": "Open terminal"
