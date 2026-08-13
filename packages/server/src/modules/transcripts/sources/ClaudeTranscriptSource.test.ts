@@ -856,8 +856,19 @@ describe('ClaudeTranscriptSource', () => {
         askUserQuestionToolResult('r1', TOOL_USE_ID, {}),
       ]);
       const result = service.readSession(SID_A);
-      expect(result!.entries[0].interaction!.fields[0].input).toBe('select');
-      expect(result!.entries[0].interaction!.answers).toBeUndefined();
+      // 採用できた回答が0件なので answered を名乗らせない（declined でもない）— 生の tool 行に落とす。
+      expect(result!.entries[0].type).toBe('tool');
+      expect(result!.entries[0].interaction).toBeUndefined();
+    });
+
+    it('does not label an interaction as answered when the answers object carries no usable string value', () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        askUserQuestionToolUse('a1', TOOL_USE_ID, [{ question: '好きな飲み物は?', multiSelect: false, options: [{ label: 'コーヒー' }] }]),
+        askUserQuestionToolResult('r1', TOOL_USE_ID, { '好きな飲み物は?': 42 } as unknown as Record<string, string>),
+      ]);
+      const result = service.readSession(SID_A);
+      expect(result!.entries[0].type).toBe('tool');
+      expect(result!.entries[0].interaction).toBeUndefined();
     });
 
     it('marks an answered interaction with outcome: answered', () => {

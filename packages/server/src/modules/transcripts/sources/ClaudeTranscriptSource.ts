@@ -295,12 +295,18 @@ function tryHandleAskUserQuestionResult(
 
   if (!isRecord(toolUseResult) || !isRecord(toolUseResult.answers)) return null;
 
-  cache.delete(toolUseId);
-
   const answersByQuestion = new Map<string, string>();
   for (const [question, value] of Object.entries(toolUseResult.answers)) {
     if (typeof value === 'string') answersByQuestion.set(question, value);
   }
+
+  // 採用できた文字列回答が1件も無い（answers が空、または値がすべて非文字列）場合は "answered" と
+  // 名乗れない — UI は ✓ も declined 注記も出せず、何が起きたか分からないカードになる。決着の形が
+  // 判別できないので interaction 化せず、生の 'tool' 行として素材をそのまま見せる（拒否形の文字列
+  // ではないため declined でもない）。
+  if (answersByQuestion.size === 0) return null;
+
+  cache.delete(toolUseId);
 
   return {
     uuid: record.uuid,

@@ -15,6 +15,13 @@ AZITO_PREFIX="${AZITO_PREFIX:-}"
 # ── 引数パース ──
 usage_exit() {
   echo "Usage: $0 [--azito-url http://host:3001] [--webhook-token <token>] [--ui-token <token>] [--server-name <name>] [--prefix <prefix>]" >&2
+  echo "" >&2
+  echo "  --prefix <name>  この配線を独立したハブ用プロファイルとして扱う。設定は" >&2
+  echo "                   ~/.azito/azitoctl-<name>.env に書き出され、hook コマンドには" >&2
+  echo "                   AZITO_PREFIX=<name> が埋め込まれる。1台から複数のハブへ" >&2
+  echo "                   シグナルを送る場合は、ハブごとに --prefix を変えて実行する" >&2
+  echo "                   （URL・トークン・サーバー名はプロファイル単位でまとめて解決され、" >&2
+  echo "                   変数単位の部分上書きはできない）。" >&2
   exit 1
 }
 
@@ -183,9 +190,24 @@ ENV_PREFIX=""
 [[ -n "$AZITO_SERVER_NAME" ]] && ENV_PREFIX="${ENV_PREFIX}AZITO_SERVER_NAME=$(printf '%q' "$AZITO_SERVER_NAME") "
 
 NOTIFY_HOOK_CMD="${ENV_PREFIX}bash $NOTIFY_HOOK_SCRIPT"
-ACTIVITY_START_CMD="${ENV_PREFIX}bash $ACTIVITY_HOOK_SCRIPT start"
-ACTIVITY_STOP_CMD="${ENV_PREFIX}bash $ACTIVITY_HOOK_SCRIPT stop"
-INTERACTION_CMD="${ENV_PREFIX}bash $INTERACTION_HOOK_SCRIPT"
+
+# activity / interaction hook は宛先（URL・Webhook トークン・サーバー名）を必ず
+# 「単一のプロファイル」からまとめて解決する（変数単位の部分上書きは禁止 —
+# hooks/azito-activity.sh の "Destination profile resolution" 参照）。URL や
+# サーバー名だけを埋め込むとトークンだけが別プロファイル由来になり得るため、
+# ここで埋め込むのはプロファイルの選択子である AZITO_PREFIX だけにする。値一式は
+# azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env（下の "azitoctl.env" 節が
+# --azito-url / --webhook-token / --server-name から書き出すファイル）から読む。
+# 1台から複数ハブへ配線する場合は、ハブごとに
+#   setup.sh --prefix <name> --azito-url <url> --webhook-token <t> --server-name <n>
+# を実行してプロファイルを作り分ける（トークンは env ファイル側にのみ置かれ、
+# hook コマンドの argv には載らない）。
+PROFILE_PREFIX=""
+[[ -n "$AZITO_PREFIX" ]] && PROFILE_PREFIX="AZITO_PREFIX=$(printf '%q' "$AZITO_PREFIX") "
+
+ACTIVITY_START_CMD="${PROFILE_PREFIX}bash $ACTIVITY_HOOK_SCRIPT start"
+ACTIVITY_STOP_CMD="${PROFILE_PREFIX}bash $ACTIVITY_HOOK_SCRIPT stop"
+INTERACTION_CMD="${PROFILE_PREFIX}bash $INTERACTION_HOOK_SCRIPT"
 
 if [[ -f "$NOTIFY_HOOK_SCRIPT" ]]; then
   chmod +x "$NOTIFY_HOOK_SCRIPT"
