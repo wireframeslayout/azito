@@ -123,18 +123,35 @@ function useBrowserFocused(): boolean {
 
 const FINISHED_STORAGE_KEY = 'active-windows-finished';
 
+/**
+ * 完了行の寿命。Provider が唯一の適用箇所（読み込み時・定期・保存時）で、表示側は
+ * prune 済みのデータをそのまま出す。以前は SPバーの表示フィルタだけが1時間で切っており、
+ * 実体（localStorage）は無期限に積み上がっていた。
+ */
+export const FINISHED_TTL_MS = 60 * 60 * 1000;
+
+/** TTL の定期掃除間隔（タブを開きっぱなしでも完了行が寿命を超えて残らないようにする）。 */
+const FINISHED_PRUNE_INTERVAL_MS = 5 * 60 * 1000;
+
+/** TTL を過ぎた完了行を落とす。長さが変わらなければ同一参照を返す（再レンダリング抑止）。 */
+function pruneFinished(entries: FinishedEntry[], now: number): FinishedEntry[] {
+  const kept = entries.filter((e) => now - e.finishedAt < FINISHED_TTL_MS);
+  return kept.length === entries.length ? entries : kept;
+}
+
 function loadFinishedEntries(): FinishedEntry[] {
   try {
     const raw = localStorage.getItem(FINISHED_STORAGE_KEY);
     if (!raw) return [];
     const json = JSON.parse(raw);
     const parsed: unknown[] = Array.isArray(json) ? json : [];
-    return parsed.filter((e): e is FinishedEntry =>
+    const valid = parsed.filter((e): e is FinishedEntry =>
       typeof e === 'object' && e !== null &&
       typeof (e as FinishedEntry).serverName === 'string' &&
       typeof (e as FinishedEntry).target === 'string' &&
       typeof (e as FinishedEntry).finishedAt === 'number',
     );
+    return pruneFinished(valid, Date.now());
   } catch {
     return [];
   }
@@ -157,7 +174,9 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
   const { activeTabId, focusedTarget } = useWorkspaceTargets();
   const browserFocused = useBrowserFocused();
   const [finished, setFinished] = useState<FinishedEntry[]>(loadFinishedEntries);
-  const prevEntriesRef = useRef<Map<string, { serverName: string; target: string; label?: string; taskId?: number; projectId?: number; paneName?: string }>>(new Map());
+
+  // WS ハンドラは ref 経由で最新の isWatched を読む（ハンドラ自体は購読時に固定されるため）。
+  const isWatchedRef = useRef<(serverName: string, target: string, taskId: number | undefined) => boolean>(() => false);
 
   const fetchSnapshot = () => {
     api<AgentActivitySnapshotEntry[]>('/agent-activity')
@@ -172,9 +191,9 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
 
   useNotificationChannel({
     onAgentActivity: (payload: AgentActivityPayload) => {
+      const key = activityKey(payload.serverName, payload.target);
       setEntries((prev) => {
         const next = new Map(prev);
-        const key = activityKey(payload.serverName, payload.target);
         if (payload.running) {
           next.set(key, {
             serverName: payload.serverName,
@@ -192,6 +211,30 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
         }
         return next;
       });
+      if (payload.running) return;
+
+      // 完了行のライフサイクルは遷移の reason だけで決まる（P3）。
+      // - 'completed' のみが完了行を生む。中断・ウィンドウ削除・プロセス消滅・判定不能は生まない
+      //   （これらを一律「完了」にしていたのが、リスポーンやハブ再起動で偽の完了行が鋳造される原因だった）。
+      // - 'deleted' は該当キーの完了行を即時に取り除く（実体の無いウィンドウの幽霊行を残さない）。
+      if (payload.reason === 'deleted') {
+        setFinished((cur) => cur.filter((e) => activityKey(e.serverName, e.target) !== key));
+        return;
+      }
+      if (payload.reason !== 'completed') return;
+      if (isWatchedRef.current(payload.serverName, payload.target, payload.taskId)) return;
+      setFinished((cur) => {
+        if (cur.some((e) => activityKey(e.serverName, e.target) === key)) return cur;
+        return [...cur, {
+          serverName: payload.serverName,
+          target: payload.target,
+          label: payload.label,
+          taskId: payload.taskId,
+          projectId: payload.projectId,
+          finishedAt: Date.now(),
+          paneName: payload.paneName,
+        }];
+      });
     },
     onConnected: fetchSnapshot,
   });
@@ -203,43 +246,21 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
     if (focusedTarget === activityKey(serverName, target)) return true;
     return false;
   }, [browserFocused, activeTabId, focusedTarget]);
+  isWatchedRef.current = isWatched;
 
-  // Detect running→stopped transitions and create finished entries
+  // 再稼働したキーの完了行は落とす（同じウィンドウが「稼働中」と「完了」に二重表示されない）。
   useEffect(() => {
-    const prev = prevEntriesRef.current;
-    const stopped: FinishedEntry[] = [];
-    for (const [key, info] of prev) {
-      if (entries.has(key)) continue;
-      if (isWatched(info.serverName, info.target, info.taskId)) continue;
-      stopped.push({
-        serverName: info.serverName,
-        target: info.target,
-        label: info.label,
-        taskId: info.taskId,
-        projectId: info.projectId,
-        finishedAt: Date.now(),
-        paneName: info.paneName,
-      });
-    }
-    const resumedKeys = finished
-      .map((e) => activityKey(e.serverName, e.target))
-      .filter((key) => entries.has(key));
-    if (stopped.length > 0 || resumedKeys.length > 0) {
-      setFinished((cur) => {
-        const next = cur.filter((e) => !entries.has(activityKey(e.serverName, e.target)));
-        for (const s of stopped) {
-          const key = activityKey(s.serverName, s.target);
-          if (!next.some((e) => activityKey(e.serverName, e.target) === key)) next.push(s);
-        }
-        return next;
-      });
-    }
-    const snapshot = new Map<string, { serverName: string; target: string; label?: string; taskId?: number; projectId?: number; paneName?: string }>();
-    for (const [key, info] of entries) {
-      snapshot.set(key, { serverName: info.serverName, target: info.target, label: info.label, taskId: info.taskId, projectId: info.projectId, paneName: info.paneName });
-    }
-    prevEntriesRef.current = snapshot;
-  }, [entries, isWatched, finished]);
+    if (!finished.some((e) => entries.has(activityKey(e.serverName, e.target)))) return;
+    setFinished((cur) => cur.filter((e) => !entries.has(activityKey(e.serverName, e.target))));
+  }, [entries, finished]);
+
+  // TTL の定期適用。読み込み時（loadFinishedEntries）と保存時（下の effect）にも同じ規則が効く。
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setFinished((cur) => pruneFinished(cur, Date.now()));
+    }, FINISHED_PRUNE_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, []);
 
   // Auto-dismiss finished entries that become watched
   useEffect(() => {
@@ -252,7 +273,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
   }, [finished, isWatched]);
 
   useEffect(() => {
-    saveFinishedEntries(finished);
+    saveFinishedEntries(pruneFinished(finished, Date.now()));
   }, [finished]);
 
   const dismissFinished = useCallback((serverName: string, target: string) => {

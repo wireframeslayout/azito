@@ -23,14 +23,13 @@ export function truncateText(text: string, limit: number): { text: string; trunc
  * 'reasoning' response_item は normalizeResponseItem によって Claude の thinking ブロックと同じ
  * type:'assistant' 形へ正規化されるため、この分類ロジックはエージェント非依存で成立する。
  *
- * terminal を複数値に分けている理由（Issue #338 followup 退行修正）: 停止ボタンによる中断マーカー
- * 書き込み自体が mtime を更新してしまい、mtime だけでは「稼働中」の偽陽性が生じる（これが本来
- * terminal ゲートで潰したかったケース）。一方、正常完了直後（assistant の最終応答で終わる）は、
- * mtime 120秒窓の間 working のまま見せ続けたい（completed 行の合成に必要な観測窓のため） —
- * ここを一律 terminal 扱いにすると、短時間で完了したターンが working を一度も観測されず稼働
- * リストに現れなくなる（今回の退行）。そのため呼び出し元（WindowSessionResolver.getActivityStatus）
- * は terminal_interrupted / terminal_local のみを idle の根拠にし、terminal_final は working の
- * まま扱う。
+ * terminal を複数値に分けている理由: 呼び出し元（WindowSessionResolver.getActivityStatus）が
+ * 「終わり方」で扱いを変えるため。terminal_interrupted（停止ボタン等の中断）／terminal_local
+ * （/model 等のローカルコマンド完了）は idle にするだけだが、terminal_final（エージェントの最終応答
+ * で終わっている＝正常完了）はそのエントリの timestamp を「完了時刻」として上位へ渡し、
+ * AgentActivityMonitor が reason='completed' の遷移を発行する根拠にする（P3）。いずれの terminal も
+ * working としては扱わない — 以前は terminal_final を120秒間 working に偽装して
+ * 「working→非working 遷移」をフロントに観測させていたが、その観測窓ハックは廃止した。
  *
  * - interrupted: 中断マーカー（停止ボタン等） → terminal_interrupted（応答待ち/実行中ではない。
  *   mtime が新しくても idle に倒してよいケース）

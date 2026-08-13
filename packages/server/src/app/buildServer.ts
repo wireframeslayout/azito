@@ -131,6 +131,10 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // rationale).
   notificationBus.on((event) => {
     if (event.type !== 'agent:activity') return;
+    // A 'deleted' transition means the window itself is gone (it may not even
+    // have been running); that is window bookkeeping, not "the pane went idle",
+    // so it must not consume a watch. Every other stop reason still does.
+    if (event.payload.reason === 'deleted') return;
     notifyAgentWatchesOnIdle(event.payload, { agentWatchRepo, pushSubRepo, pushService }).catch(() => {});
   });
 
@@ -139,11 +143,16 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // Sends a push to every subscriber (not just one-shot watches) when an
   // agent transitions to idle (completed) or to a blocked (approval-required)
   // state, so users get notified without having to register a watch first.
+  //
+  // Only `reason: 'completed'` counts as "finished" (P3): a stop caused by a
+  // user interrupt, a deleted window, a vanished process or an unattributable
+  // heuristic timeout is not a completion, and pushing "agent finished" for
+  // those is exactly the false-completion class this reason field exists to end.
   notificationBus.on((event) => {
     if (event.type !== 'agent:activity') return;
-    const { serverName, target, label, taskId, running, status } = event.payload;
+    const { serverName, target, label, taskId, running, status, reason } = event.payload;
 
-    if (running === false) {
+    if (running === false && reason === 'completed') {
       const subs = pushSubRepo.findAll();
       pushService.sendToAll(subs, (sub) => ({
         ...getPushMessage(sub.lang, 'agent.finished', { label: label || target, serverName }),

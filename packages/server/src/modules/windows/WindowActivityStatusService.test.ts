@@ -48,7 +48,13 @@ function buildDeps(
 ) {
   const windowRepo = { findAll: () => windows } as unknown as IWindowRepository;
   const serverRepo = { findByName: (name: string) => servers.find((s) => s.name === name) ?? null } as unknown as IServerRepository;
-  const getActivityStatus = vi.fn(async (w: Window, _snapshot?: unknown) => statusByWindowId.get(w.id) ?? 'offline');
+  // The resolver now answers with the ending it observed alongside the coarse status
+  // (P3); these tests only exercise the status, so the outcome fields stay null.
+  const getActivityStatus = vi.fn(async (w: Window, _snapshot?: unknown) => ({
+    status: statusByWindowId.get(w.id) ?? 'offline',
+    completedAt: null,
+    interruptedAt: null,
+  }));
   // Shared per-server snapshot (list-panes -a + ps, taken once per server) —
   // its contents are opaque to this service, which only forwards it.
   const captureActivityProbeSnapshot = vi.fn(async () => ({ allPanes: [], psEntries: [] }));
@@ -63,7 +69,7 @@ describe('WindowActivityStatusService', () => {
     const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver);
     const result = await service.list();
     expect(result).toEqual([
-      { windowId: 1, serverName: 'local', target: 'main:0', status: 'working', taskId: undefined, projectId: 1, label: undefined },
+      { windowId: 1, serverName: 'local', target: 'main:0', status: 'working', completedAt: null, interruptedAt: null, taskId: undefined, projectId: 1, label: undefined },
     ]);
   });
 
@@ -94,7 +100,7 @@ describe('WindowActivityStatusService', () => {
     const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver);
     const result = await service.list();
     expect(result).toEqual([
-      { windowId: 2, serverName: 'local', target: 'main:0', status: 'idle', taskId: 9, projectId: undefined, label: undefined },
+      { windowId: 2, serverName: 'local', target: 'main:0', status: 'idle', completedAt: null, interruptedAt: null, taskId: 9, projectId: undefined, label: undefined },
     ]);
     expect(getActivityStatus).toHaveBeenCalledTimes(1);
   });
@@ -117,7 +123,7 @@ describe('WindowActivityStatusService', () => {
     const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver);
     const result = await service.list();
     expect(result).toEqual([
-      { windowId: 2, serverName: 'local', target: 'test:win--1m1u', status: 'offline', taskId: 9, projectId: undefined, label: undefined },
+      { windowId: 2, serverName: 'local', target: 'test:win--1m1u', status: 'offline', completedAt: null, interruptedAt: null, taskId: 9, projectId: undefined, label: undefined },
     ]);
     expect(getActivityStatus).toHaveBeenCalledTimes(1);
   });
@@ -143,7 +149,7 @@ describe('WindowActivityStatusService', () => {
     // preference ("only overwrite when the new row is task-owned and the existing
     // one isn't").
     expect(result).toEqual([
-      { windowId: 1, serverName: 'local', target: 'main:agent-1', status: 'idle', taskId: undefined, projectId: 5, label: undefined },
+      { windowId: 1, serverName: 'local', target: 'main:agent-1', status: 'idle', completedAt: null, interruptedAt: null, taskId: undefined, projectId: 5, label: undefined },
     ]);
     expect(getActivityStatus).toHaveBeenCalledTimes(1);
   });
@@ -219,7 +225,7 @@ describe('WindowActivityStatusService', () => {
       buildDeps(windows, [LOCAL_SERVER], new Map([[2, 'working']]));
     getActivityStatus.mockImplementation(async (w: Window) => {
       if (w.id === 1) throw new Error('ps exploded');
-      return 'working';
+      return { status: 'working', completedAt: null, interruptedAt: null };
     });
     const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver);
 

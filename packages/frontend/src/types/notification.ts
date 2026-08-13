@@ -15,6 +15,17 @@ export interface AgentActivityPayload {
   /** エージェントが承認待ち等でブロックされているか。省略時は 'working' 扱い（後方互換） */
   status?: 'working' | 'blocked';
   paneName?: string;
+  /**
+   * running:false の理由（P3）。'completed' だけが「エージェントが仕事を終えた」を意味する。
+   * - 'completed'    supervisor の active→idle / hook の Stop / ペイン分類の working→idle /
+   *                  transcript の最終応答（terminal_final）観測
+   * - 'interrupted'  ユーザー中断（停止ボタン・Esc）
+   * - 'deleted'      ウィンドウ（または windows 行）が消えた
+   * - 'offline'      エージェントプロセス消滅・サーバー到達不能
+   * - 'unknown'      どのソースも理由を特定できない（Tier 3 のヒューリスティックの時間切れ等）
+   * 完了表示・完了通知は必ず 'completed' でゲートすること。
+   */
+  reason?: 'completed' | 'interrupted' | 'deleted' | 'offline' | 'unknown';
 }
 
 export type AppNotificationKind =

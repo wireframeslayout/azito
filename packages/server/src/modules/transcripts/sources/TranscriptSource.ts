@@ -158,12 +158,16 @@ export interface TranscriptSource {
    *   （Issue #338 コードレビュー指摘: ローカルコマンド完了だけで mtime 更新→120秒 working になる
    *   偽 working を防ぐ）。
    * - 'terminal_final': 最後の意味あるレコードがエージェントの最終応答（最後のブロックが text で
-   *   終わる assistant エントリ）。プロセスは応答待ち/実行中ではないが、ユーザーによる中断ではない
-   *   正常な完了なので、lastEntryTimestampMs 120秒窓の間は working のまま扱ってよい（completed 行
-   *   合成の観測窓を守るため。'terminal_interrupted'/'terminal_local' とは異なり idle の根拠にしない）。
+   *   終わる assistant エントリ）。ユーザーによる中断ではない正常な完了。呼び出し元
+   *   （getActivityStatus）はこれを working とは扱わず（P3: 観測窓のための偽 working を廃止）、
+   *   lastEntryTimestampMs を「完了時刻」として上位（AgentActivityMonitor の reason='completed'
+   *   遷移）へ渡す。
    * - 'in_progress': 最後が user 発話・tool_use・tool_result 等（応答待ち、または実行中）。
-   * - 'unknown': ファイルが読めない、セッションが存在しない、または末尾窓に意味のあるレコードが
-   *   見つからない。呼び出し元は従来通り mtime のみで判定する（working 扱い）。
+   * - 'unknown': ファイルが読めない、セッションが存在しない、パースできない、または末尾窓に意味の
+   *   あるレコードが見つからない。いずれも「意味あるエントリを一度も観測できていない」ため、呼び出し元
+   *   は working の根拠にしてはならない（P3: mtime フォールバック禁止。`claude --resume` の
+   *   housekeeping レコードだけで mtime が更新されるため、mtime に倒すとリスポーン直後の
+   *   ウィンドウが偽 working になる）。
    *
    * 将来別のエージェント種別を追加する場合、この契約（terminal_interrupted/terminal_local/
    * terminal_final/in_progress/unknown の意味）に従って実装するだけで、getActivityStatus 側の

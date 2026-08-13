@@ -7,6 +7,7 @@ import { BrailleSpinner, BlockedDot, FinishedIndicator } from '../ui/WindowActiv
 import { formatRelativeTime } from '../../utils/time';
 import { openActivityTarget } from '../../lib/activityOpen';
 import { groupRunningRows, readKeyFor, pruneStaleReadKeys } from '../../lib/activityPillLogic';
+import { FINISHED_TTL_MS } from '../../hooks/useAgentActivity';
 import type { Task } from '../../pages/workspace/types';
 import { HealthDot } from '../statusbar/HealthDot';
 import { ResourceMeter } from '../statusbar/ResourceMeter';
@@ -21,7 +22,6 @@ import { ServerHealthSheet } from './ServerHealthSheet';
 // 引き続き共有する）。配置は Layout の mobile-shell-slot と対になる mobile-status-slot への
 // createPortal（Workspace.tsx）— グローバルページ表示中も常駐する。
 
-const FINISHED_WINDOW_MS = 60 * 60 * 1000;
 const BAR_HEIGHT = 26;
 
 interface MobileStatusBarProps {
@@ -109,12 +109,10 @@ export function MobileStatusBar({ allTasks, openTask, connectPane }: MobileStatu
     });
   }, [rows, taskById, t]);
 
-  // 直近1時間の完了行（既読状態に関わらず一覧には出続ける — 「既読」はバッジの未読数だけに
-  // 作用し、一覧そのものを消さない）。
-  const finishedRows = useMemo(() => {
-    const cutoff = Date.now() - FINISHED_WINDOW_MS;
-    return rows.filter((r) => r.status === 'finished' && (r.finishedAt ?? 0) >= cutoff);
-  }, [rows]);
+  // 完了行（既読状態に関わらず一覧には出続ける — 「既読」はバッジの未読数だけに作用し、
+  // 一覧そのものを消さない）。寿命の適用は AgentActivityProvider に一元化されているので、
+  // ここでは年齢フィルタを持たない。
+  const finishedRows = useMemo(() => rows.filter((r) => r.status === 'finished'), [rows]);
 
   const unreadFinishedCount = useMemo(
     () => finishedRows.filter((r) => !readKeys.has(readKeyFor(r))).length,
@@ -128,7 +126,7 @@ export function MobileStatusBar({ allTasks, openTask, connectPane }: MobileStatu
       const next = !prev;
       if (next && finishedRows.length > 0) {
         setReadKeys((cur) => {
-          const cutoff = Date.now() - FINISHED_WINDOW_MS;
+          const cutoff = Date.now() - FINISHED_TTL_MS;
           const merged = pruneStaleReadKeys(cur, cutoff);
           for (const r of finishedRows) merged.add(readKeyFor(r));
           return merged;

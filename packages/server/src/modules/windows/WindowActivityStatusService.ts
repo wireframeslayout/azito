@@ -1,6 +1,6 @@
 import type { IWindowRepository } from './Window';
 import { isAgentWindow } from './Window';
-import type { WindowSessionResolver } from '../transcripts/WindowSessionResolver';
+import type { WindowSessionResolver, WindowActivityProbeResult } from '../transcripts/WindowSessionResolver';
 import type { IServerRepository } from '../servers/Server';
 import { stripPaneSuffix } from './paneTarget';
 
@@ -9,6 +9,15 @@ export interface WindowActivityStatusEntry {
   serverName: string;
   target: string;
   status: 'working' | 'idle' | 'offline';
+  /**
+   * このウィンドウのセッションで最終応答（transcript の terminal_final）が書かれた時刻（epoch ms、
+   * 再新性の窓内のもののみ）。完了を観測できなければ null。AgentActivityMonitor の Tier 4 がこれを
+   * reason='completed' 遷移の根拠に使う（P3: 「terminal_final を120秒 working に偽装して
+   * working→非working 遷移を観測させる」ハックの置き換え）。
+   */
+  completedAt: number | null;
+  /** 中断（transcript の terminal_interrupted）を観測した時刻（epoch ms）。無ければ null。 */
+  interruptedAt: number | null;
   taskId?: number;
   projectId?: number;
   label?: string;
@@ -127,10 +136,10 @@ export class WindowActivityStatusService {
         // Per-window isolation: one window's failure must not fail the whole
         // snapshot (a rejected Promise.all would leave the monitor's Tier 4
         // cache stale for every window on this server).
-        let status: 'working' | 'idle' | 'offline' = 'offline';
+        let probe: WindowActivityProbeResult = { status: 'offline', completedAt: null, interruptedAt: null };
         if (snapshot) {
           try {
-            status = await this.windowSessionResolver.getActivityStatus(w, snapshot);
+            probe = await this.windowSessionResolver.getActivityStatus(w, snapshot);
           } catch (err) {
             console.error(`[activity-status] ${serverName}:${w.tmuxTarget} failed:`, err instanceof Error ? err.message : err);
           }
@@ -142,7 +151,9 @@ export class WindowActivityStatusService {
           // `target` (also stripped) so its Tier 4 lookup, keyed on
           // `serverName::stripPaneSuffix(target)`, resolves to the same window.
           target: stripPaneSuffix(w.tmuxTarget),
-          status,
+          status: probe.status,
+          completedAt: probe.completedAt,
+          interruptedAt: probe.interruptedAt,
           taskId: w.taskId ?? undefined,
           projectId: w.projectId ?? undefined,
           label: w.label ?? undefined,

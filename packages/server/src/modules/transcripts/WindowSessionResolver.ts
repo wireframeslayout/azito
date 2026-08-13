@@ -22,6 +22,26 @@ export type WindowSessionResolution =
       agentDetected: boolean;
     };
 
+/**
+ * `getActivityStatus()` の結果（P3）。status は従来通りの三値、completedAt は「このウィンドウの
+ * セッションで最終応答（terminal_final）が書かれた時刻（epoch ms、再新性の窓内のもののみ）」で、
+ * 完了を観測できなかった場合は null。AgentActivityMonitor の Tier 4 がこれを reason='completed'
+ * 遷移の根拠に使う。
+ */
+export interface WindowActivityProbeResult {
+  status: 'working' | 'idle' | 'offline';
+  completedAt: number | null;
+  /**
+   * 末尾の意味あるエントリが terminal_interrupted（停止ボタン等によるユーザー中断）だったときの
+   * その timestamp（epoch ms、再新性の窓内のもののみ）。中断は「完了」ではないため、上位は
+   * reason='interrupted' として完了行を作らない根拠に使う。
+   */
+  interruptedAt: number | null;
+}
+
+const OFFLINE_PROBE_RESULT: WindowActivityProbeResult = { status: 'offline', completedAt: null, interruptedAt: null };
+const IDLE_PROBE_RESULT: WindowActivityProbeResult = { status: 'idle', completedAt: null, interruptedAt: null };
+
 // ─── Constants ───
 
 /** 直近この時間以内に更新されたセッションのみ「動作中」とみなす（cwd 照合フォールバック、優先順位3）。 */
@@ -282,72 +302,82 @@ export class WindowSessionResolver {
   }
 
   /**
-   * 軽量な三値の稼働判定（Issue #338 フォロー、AZITO監視強化: agent-activity が hook/supervisor
+   * 軽量な稼働判定（Issue #338 フォロー、AZITO監視強化: agent-activity が hook/supervisor
    * 接続を前提とするのに対し、こちらは resolve() のレイヤー2（プロセス実体検査）・レイヤー3
-   * （セッション mtime 活動シグナル、SESSION_ACTIVITY_WINDOW_MS を共有）だけを使い、hook/supervisor
+   * （セッション活動シグナル、SESSION_ACTIVITY_WINDOW_MS を共有）だけを使い、hook/supervisor
    * の配線が無いウィンドウ（手動で立てた codex/claude ペイン等）でも「実際に動いているか」を
    * 判定できるようにする。resolve() 自体（セッション*解決*のための優先順位付きロジック）とは別の
    * 軽量パスとして独立させてある — 呼び出し元（WindowActivityStatusService）は「このウィンドウの
    * どれかの pane に claude/codex プロセスが存在するか」「window/task に紐づくセッションが直近
    * 書き込まれているか」だけを知りたく、cwd 照合フォールバック等の解決優先順位は不要なため。
    *
+   * status:
    * - 'offline': server が見つからない／非local／pane が無い／ps 呼び出し失敗／どの pane にも
    *   claude/codex プロセスが見当たらない。
-   * - 'working': プロセスは見つかり、かつ末尾レコードが tailState 'terminal_interrupted'（中断
-   *   マーカー）／'terminal_local'（ローカルコマンド完了）のいずれでもなく、かつ再新性の根拠
-   *   （lastEntryTimestampMs。無ければ mtime にフォールバック — 下記参照）が SESSION_ACTIVITY_WINDOW_MS
-   *   以内。tailState が 'terminal_final'（最終応答完了）または 'unknown' の場合も、再新性の窓内なら
-   *   working のままとする — 「直近まで動いていた」ことを見せ続け、working→idle 遷移での完了行合成の
-   *   観測窓を確保する（Issue #338 followup 退行修正: 20秒程度の短いターンが一度も working を観測
-   *   されず稼働リストに現れなくなっていた不具合の修正。詳細は entryHelpers.ts classifyTailEntry の
-   *   コメント参照）。
-   * - 'idle': プロセスは見つかったが、セッションが未設定、再新性の根拠が古い（エージェントプロセス
-   *   自体は生きているがユーザー入力待ち等で書き込みが止まっている）、または再新性は新しいが tailState
-   *   が 'terminal_interrupted'（停止ボタン等によるユーザー中断。中断マーカー自体の書き込みで mtime が
-   *   更新されるため、mtime だけでは「稼働中」の偽陽性が生じる — 末尾レコードの意味まで見て排除する）／
-   *   'terminal_local'（/model 等のローカルコマンド実行完了。エージェントのターンを開始していないため
-   *   working として見せ続ける理由がなく、同様に偽陽性が生じる — Issue #338 コードレビュー指摘）。
-   *   terminal_final はここに含めない。
+   * - 'working': プロセスが見つかり、かつ末尾の**意味あるエントリ**が in_progress（応答待ち／
+   *   実行中）で、そのエントリ自身の timestamp が SESSION_ACTIVITY_WINDOW_MS 以内。
+   * - 'idle': 上記以外。プロセスは生きているがターンが終わっている／中断された／ローカルコマンド
+   *   完了／セッション未紐付け／意味あるエントリの再新性が無い、のいずれか。
    *
-   * 再新性の根拠（Issue #338 リスポーン誤検知修正）: mtime は「粗い足切り」としてのみ使う（これが
-   * SESSION_ACTIVITY_WINDOW_MS より古ければ tail 読み自体を省略できる）。working 判定の一次根拠は
-   * tailState.lastEntryTimestampMs（末尾の意味あるエントリ自身の timestamp）にする — `claude --resume`
-   * が起動時に書き込む housekeeping レコード（ai-title/mode/permission-mode/file-history-snapshot 等）
-   * は mtime を更新するが意味あるエントリではないため、mtime だけを再新性の根拠にすると、リスポーン
-   * 直後で実作業ゼロのウィンドウが SESSION_ACTIVITY_WINDOW_MS の間ずっと working に誤判定される
-   * （実観測: 末尾3レコードすべて housekeeping、mtime=リスポーン時刻）。lastEntryTimestampMs が
-   * null（対象エントリに timestamp が無い、または tailState が 'unknown'）の場合のみ、従来通り mtime
-   * にフォールバックする。
+   * terminal_final を working 扱いしない理由（P3: 完了意味論の reason 駆動化）: 以前はここで
+   * terminal_final を「再新性の窓（120秒）の間 working を見せ続ける」ことで、短いターンでも
+   * フロントが working→非working 遷移を観測でき完了行を合成できるようにしていた。これは
+   * 「最下位 Tier が実際には終わっているものを working と偽装する」観測窓ハックであり、
+   * 上位 Tier の沈黙中に偽の稼働を注入する唯一の残存経路だった。完了の可視化は偽装ではなく
+   * `completedAt`（下記）→ AgentActivityMonitor の reason='completed' 遷移が担う。
+   *
+   * completedAt: 末尾の意味あるエントリが terminal_final（エージェントの最終応答で終わっている）で、
+   * その timestamp が SESSION_ACTIVITY_WINDOW_MS 以内なら、その timestamp（epoch ms）。それ以外は
+   * null。呼び出し元（AgentActivityMonitor の Tier 4）はこれを「このウィンドウで完了が起きた時刻」
+   * として使い、completed 遷移を発行する。
+   *
+   * 再新性の根拠は tailState.lastEntryTimestampMs（末尾の意味あるエントリ自身の timestamp）**のみ**
+   * とし、mtime へはフォールバックしない（P3、codex Important 5 の封鎖）。mtime は「粗い足切り」
+   * （これが古ければ tail 読み自体を省略できる）にしか使わない。`claude --resume` が起動時に書き込む
+   * housekeeping レコード（ai-title/mode/permission-mode/file-history-snapshot 等）は mtime を更新
+   * するが TranscriptEntry へ正規化されない＝意味あるエントリではないため、mtime を再新性の根拠に
+   * すると「意味あるエントリが一度も無い／古いだけ」のセッションがリスポーン直後に working へ
+   * 誤判定される（実観測）。lastEntryTimestampMs が無い（tail が 'unknown' = ファイルなし／読めない／
+   * parse 失敗／末尾窓に意味あるレコードなし、あるいはエントリに timestamp が無い）場合は
+   * **working の根拠なし** として idle に倒す。
    */
-  async getActivityStatus(window: Window, snapshot?: ActivityProbeSnapshot): Promise<'working' | 'idle' | 'offline'> {
+  async getActivityStatus(window: Window, snapshot?: ActivityProbeSnapshot): Promise<WindowActivityProbeResult> {
     const server = this.serverRepo.findByName(window.serverName);
-    if (!server || server.type !== 'local') return 'offline';
+    if (!server || server.type !== 'local') return OFFLINE_PROBE_RESULT;
 
     const windowPanes = await this.getWindowPanes(server, window, snapshot?.allPanes);
     const detection = await this.detectWindowAgentProcess(server, windowPanes, snapshot?.psEntries);
-    if (!detection || detection.processStartMs === null) return 'offline';
+    if (!detection || detection.processStartMs === null) return OFFLINE_PROBE_RESULT;
 
     const sessionId = window.agentSessionId
       ?? (window.taskId !== null ? this.taskRepo.findById(window.taskId)?.agentSessionId ?? null : null);
-    if (!sessionId) return 'idle';
+    if (!sessionId) return IDLE_PROBE_RESULT;
 
     const agentType = window.workerType
       ?? (detection.agentTypes.size === 1 ? [...detection.agentTypes][0] : null);
-    if (!agentType) return 'idle';
+    if (!agentType) return IDLE_PROBE_RESULT;
 
     const source = this.sources.find((s) => s.agentType === agentType);
-    const mtimeMs = source?.getSessionMtimeMs(sessionId) ?? null;
+    if (!source) return IDLE_PROBE_RESULT;
+    const mtimeMs = source.getSessionMtimeMs(sessionId);
     // 粗い足切り: mtime 自体が古ければ、意味あるエントリはそれよりさらに古いはずなので tail 読みは不要。
-    if (mtimeMs === null || Date.now() - mtimeMs > SESSION_ACTIVITY_WINDOW_MS) return 'idle';
+    if (mtimeMs === null || Date.now() - mtimeMs > SESSION_ACTIVITY_WINDOW_MS) return IDLE_PROBE_RESULT;
 
-    const tail = source ? await source.getSessionTailState(sessionId) : { state: 'unknown' as const, lastEntryTimestampMs: null };
-    if (tail.state === 'terminal_interrupted' || tail.state === 'terminal_local') return 'idle';
+    const tail = await source.getSessionTailState(sessionId);
+    // 意味あるエントリの timestamp が無い＝再新性の根拠が無い（mtime へは倒さない。上記コメント参照）。
+    if (tail.lastEntryTimestampMs === null) return IDLE_PROBE_RESULT;
+    if (Date.now() - tail.lastEntryTimestampMs > SESSION_ACTIVITY_WINDOW_MS) return IDLE_PROBE_RESULT;
 
-    // 再新性は lastEntryTimestampMs を一次根拠にする（null なら mtime にフォールバック。上記コメント参照）。
-    const freshnessMs = tail.lastEntryTimestampMs ?? mtimeMs;
-    if (Date.now() - freshnessMs > SESSION_ACTIVITY_WINDOW_MS) return 'idle';
-
-    return 'working';
+    if (tail.state === 'terminal_final') {
+      return { status: 'idle', completedAt: tail.lastEntryTimestampMs, interruptedAt: null };
+    }
+    if (tail.state === 'terminal_interrupted') {
+      return { status: 'idle', completedAt: null, interruptedAt: tail.lastEntryTimestampMs };
+    }
+    if (tail.state === 'in_progress') return { status: 'working', completedAt: null, interruptedAt: null };
+    // terminal_local（/model 等のローカルコマンド完了）／unknown: working の根拠にも
+    // 完了・中断の根拠にもしない。
+    return IDLE_PROBE_RESULT;
   }
 
   /**

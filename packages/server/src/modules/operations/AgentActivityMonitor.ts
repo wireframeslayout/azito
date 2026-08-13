@@ -6,6 +6,7 @@ import type { TmuxClient, TmuxSession, TmuxWindow } from '../tmux/TmuxClient';
 import { windowSpecMatches } from '../tmux/TmuxClient';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { NotificationBus } from '../notifications/NotificationBus';
+import type { AgentActivityStopReason } from '../notifications/NotificationEvent';
 import { classifyPaneState, CLASSIFIABLE_AGENT_TYPES, type PaneAgentState } from './paneStateClassifier';
 import { stripPaneSuffix } from '../windows/paneTarget';
 
@@ -218,8 +219,41 @@ interface ActivityHistory {
  * implementation.
  */
 export interface ProcessActivityProbe {
-  list(): Promise<{ serverName: string; target: string; status: 'working' | 'idle' | 'offline' }[]>;
+  list(): Promise<ProcessActivityProbeEntry[]>;
 }
+
+/**
+ * One window's Tier 4 answer. Besides the coarse status it carries the *ending*
+ * the probe observed in the session transcript — `completedAt` (the agent's
+ * final response, a genuine completion) and `interruptedAt` (a stop/interrupt
+ * marker). Those are what let the monitor label a `running: false` transition
+ * with a reason instead of guessing, and let it synthesize a `completed`
+ * transition for a turn so short that no tick ever saw it working (P3).
+ */
+export interface ProcessActivityProbeEntry {
+  serverName: string;
+  target: string;
+  status: 'working' | 'idle' | 'offline';
+  completedAt: number | null;
+  interruptedAt: number | null;
+  taskId?: number;
+  projectId?: number;
+  label?: string;
+}
+
+/**
+ * Why a key stopped being reported as running (re-exported from the
+ * notifications module, where the WS payload type lives, so consumers of the
+ * monitor do not have to reach across modules for it):
+ * - 'completed'    supervisor active→idle, hook Stop, Tier 2 working→idle, or
+ *                  Tier 4 observing a fresh `terminal_final`.
+ * - 'interrupted'  Tier 4 observed a fresh interrupt marker (stop button/Esc).
+ * - 'deleted'      the tmux window (or its `windows` row) is gone.
+ * - 'offline'      the agent process disappeared / the server is unreachable.
+ * - 'unknown'      no source could tell (e.g. the Tier 3 activity heuristic
+ *                  simply going stale).
+ */
+export type { AgentActivityStopReason };
 
 /**
  * How stale the Tier 4 snapshot may get before a refresh is kicked off. The
@@ -240,8 +274,31 @@ const PROCESS_PROBE_REFRESH_MS = 15_000;
  */
 const PROCESS_PROBE_MAX_AGE_MS = 60_000;
 
+/**
+ * How recent a probe-observed completion must be for the monitor to synthesize
+ * a `completed` transition for a key that was never seen running (the "turn too
+ * short for any tick to catch it" case). Bounded to a couple of probe cycles so
+ * that a completion which happened long before the hub started — or before this
+ * window was ever polled — does not manufacture a stale "finished" row.
+ */
+const COMPLETION_SYNTHESIS_MAX_AGE_MS = 2 * PROCESS_PROBE_REFRESH_MS;
+
 function windowKey(serverName: string, target: string): string {
   return `${serverName}::${stripPaneSuffix(target)}`;
+}
+
+interface CollectResult {
+  next: Map<string, AgentActivityEntry>;
+  /** Why each key that could have been running is not — see collect(). */
+  reasons: Map<string, AgentActivityStopReason>;
+  /** `windows` rows that vanished on this tick (one-shot; see emitTransitions). */
+  deletedKeys: Set<string>;
+}
+
+/** Inverse of windowKey() — server names never contain `::`, targets may not either. */
+function splitWindowKey(key: string): [serverName: string, target: string] {
+  const idx = key.indexOf('::');
+  return [key.slice(0, idx), key.slice(idx + 2)];
 }
 
 /**
@@ -310,7 +367,17 @@ export class AgentActivityMonitor {
   // Tier 4 cache: last snapshot of the process/transcript probe, keyed the same
   // as every other tier. Refreshed in the background (see refreshProcessProbe)
   // so collect() never awaits the probe's ps/tmux walk.
-  private processStates = new Map<string, 'working' | 'idle' | 'offline'>();
+  private processStates = new Map<string, ProcessActivityProbeEntry>();
+  // Completions already announced, keyed the same way: key → the `completedAt`
+  // whose `completed` transition was emitted. Purely a dedupe memo (the probe
+  // keeps reporting the same `completedAt` until the session moves on), not a
+  // state machine.
+  private emittedCompletions = new Map<string, number>();
+  // Windows-table candidate keys seen on the previous tick, used to tell
+  // "this key stopped running" apart from "this window no longer exists"
+  // (reason 'deleted') — including for keys that were already idle, whose
+  // disappearance emits no transition of its own.
+  private previousCandidateKeys = new Set<string>();
   // Last refresh *attempt* (rate-limits retries) and last *success* (the only
   // one Tier 4 freshness is judged on — see PROCESS_PROBE_MAX_AGE_MS).
   private processProbeAt = 0;
@@ -441,8 +508,8 @@ export class AgentActivityMonitor {
     if (this.ticking) return;
     this.ticking = true;
     try {
-      const next = await this.collect();
-      this.emitTransitions(next);
+      const { next, reasons, deletedKeys } = await this.collect();
+      this.emitTransitions(next, reasons, deletedKeys);
       this.state = next;
     } catch (err) {
       // Callers fire-and-forget tick(); swallow here so a failing tick can
@@ -471,14 +538,19 @@ export class AgentActivityMonitor {
     this.processProbeInflight = true;
     void this.processProbe.list()
       .then((entries) => {
-        const map = new Map<string, 'working' | 'idle' | 'offline'>();
-        for (const e of entries) map.set(windowKey(e.serverName, e.target), e.status);
+        const map = new Map<string, ProcessActivityProbeEntry>();
+        for (const e of entries) map.set(windowKey(e.serverName, e.target), e);
         this.processStates = map;
         this.processProbeOkAt = Date.now();
         // This snapshot was taken after the disarm, so a non-working answer in
         // it is proof the ex-operation key really stopped — re-arm Tier 4.
         for (const key of [...this.processDisarmedKeys]) {
-          if (map.get(key) !== 'working') this.processDisarmedKeys.delete(key);
+          if (map.get(key)?.status !== 'working') this.processDisarmedKeys.delete(key);
+        }
+        // Forget completion memos for keys the probe no longer covers, so the
+        // map cannot grow without bound.
+        for (const key of [...this.emittedCompletions.keys()]) {
+          if (!map.has(key)) this.emittedCompletions.delete(key);
         }
       })
       .catch((err) => {
@@ -503,10 +575,20 @@ export class AgentActivityMonitor {
     return !this.processDisarmedKeys.has(key);
   }
 
-  private async collect(): Promise<Map<string, AgentActivityEntry>> {
+  /**
+   * Build this tick's running set, together with the reason each key that could
+   * have been running is not. Reasons are recorded at the exact ladder rung that
+   * decided "not running" — that is the only place the material for the decision
+   * exists — and are consumed by emitTransitions(), which reads them only for
+   * keys that actually stopped (a reason recorded for a key some lower rung then
+   * lights is simply never read).
+   */
+  private async collect(): Promise<CollectResult> {
     this.tickCounter++;
     this.kickProcessProbeRefresh();
     const next = new Map<string, AgentActivityEntry>();
+    const reasons = new Map<string, AgentActivityStopReason>();
+    const deletedKeys = new Set<string>();
 
     // 1. Operation runs: being registered means running — unless a Tier 0
     // supervisor signal exists for the key, in which case the supervisor's
@@ -523,7 +605,12 @@ export class AgentActivityMonitor {
         const key = windowKey(e.serverName, e.target);
         operationKeys.add(key);
         const supervisor = this.supervisorStates.get(key);
-        if (supervisor?.status === 'idle') continue; // supervised-idle → not running
+        if (supervisor?.status === 'idle') {
+          // supervised-idle → not running. An explicit active→idle report from
+          // the supervisor is the strongest completion evidence there is.
+          reasons.set(key, 'completed');
+          continue;
+        }
         next.set(key, {
           serverName: e.serverName,
           target: stripPaneSuffix(e.target),
@@ -569,6 +656,19 @@ export class AgentActivityMonitor {
     // tick's candidates (window removed/retyped) so the Maps cannot grow
     // without bound.
     const candidateKeys = new Set(candidates.map((w) => windowKey(w.serverName, w.tmuxTarget)));
+    // Keys whose `windows` row vanished since the previous tick (window deleted
+    // in the UI, or its tmux window destroyed and the row cleaned up). These
+    // never reach the ladder below, so their reason has to be recorded here —
+    // and it is recorded even for keys that were already idle, because
+    // emitTransitions() announces those too (a finished row for a deleted
+    // window must disappear immediately, and that is the only signal that can
+    // carry it).
+    for (const key of this.previousCandidateKeys) {
+      if (candidateKeys.has(key) || operationKeys.has(key)) continue;
+      reasons.set(key, 'deleted');
+      deletedKeys.add(key);
+    }
+    this.previousCandidateKeys = candidateKeys;
     for (const key of this.activityHistory.keys()) {
       if (!candidateKeys.has(key)) this.activityHistory.delete(key);
     }
@@ -592,7 +692,7 @@ export class AgentActivityMonitor {
     // the only place such a key becomes an entry.
     this.collectPureSupervisedEntries(operationKeys, candidateKeys, next);
 
-    if (candidates.length === 0) return next;
+    if (candidates.length === 0) return { next, reasons, deletedKeys };
 
     // Resolve each server once per tick, not once per candidate window.
     // Also include servers for operation-run entries (needed for post-check above).
@@ -678,6 +778,10 @@ export class AgentActivityMonitor {
             projectId: w.projectId ?? undefined,
             status: effectiveStatus,
           });
+        } else {
+          // The supervisor explicitly reported its child idle — an authoritative
+          // completion (Tier 0), not a guess.
+          reasons.set(key, 'completed');
         }
         continue;
       }
@@ -690,6 +794,7 @@ export class AgentActivityMonitor {
       if (window === null) {
         this.activityHistory.delete(key);
         this.hookStates.delete(key);
+        reasons.set(key, 'deleted');
         continue;
       }
 
@@ -731,6 +836,9 @@ export class AgentActivityMonitor {
           //   and the Tier 2 heuristic path must become available again.
           this.hookStates.delete(key);
           this.activityHistory.delete(key);
+          // The hooked process is gone (crash failsafe, or it exited after its
+          // Stop hook) — that is a process disappearance, not a completion.
+          reasons.set(key, 'offline');
           continue;
         }
         if (hook.status === 'running') {
@@ -756,6 +864,8 @@ export class AgentActivityMonitor {
         // stays in the foreground: a new UserPromptSubmit hook flips it back
         // to running, and the bare-shell branch above releases the key back
         // to the heuristic once the process exits.
+        // The Stop hook firing is an explicit completion signal (Tier 1).
+        reasons.set(key, 'completed');
         continue;
       }
 
@@ -778,7 +888,13 @@ export class AgentActivityMonitor {
           // able to speak for this key again (e.g. a later tick reverting to
           // 'unknown' must re-earn the debounce from scratch).
           this.activityHistory.delete(key);
-          if (classified === 'idle') continue;
+          if (classified === 'idle') {
+            // Tier 2 read the agent's own UI (title/screen) and saw it back at
+            // rest — for a key it previously called working, that is a
+            // completion.
+            reasons.set(key, 'completed');
+            continue;
+          }
           next.set(key, { ...entry, status: classified });
           continue;
         }
@@ -799,10 +915,19 @@ export class AgentActivityMonitor {
       // session was never linked. Tier 4 is therefore purely additive over
       // Tier 3: it can light a window Tier 3 would miss, never darken one
       // Tier 3 would light.
-      if (this.isProcessProbeUsableFor(key) && this.processStates.get(key) === 'working') {
-        this.activityHistory.delete(key);
-        next.set(key, entry);
-        continue;
+      if (this.isProcessProbeUsableFor(key)) {
+        const probe = this.processStates.get(key);
+        if (probe?.status === 'working') {
+          this.activityHistory.delete(key);
+          next.set(key, entry);
+          continue;
+        }
+        // Not working, but the transcript says how this window's last turn
+        // ended. That ending is the reason material Tier 3 (a bare freshness
+        // heuristic) cannot produce — record it even though the tiers below may
+        // still light the key; reasons are only read for keys that stop.
+        if (probe && this.isFreshOutcome(probe.completedAt)) reasons.set(key, 'completed');
+        else if (probe && this.isFreshOutcome(probe.interruptedAt)) reasons.set(key, 'interrupted');
       }
 
       // No tier could decide — fall back to Tier 3, the original
@@ -811,10 +936,16 @@ export class AgentActivityMonitor {
       // resumption must re-earn START_CONFIRM_ADVANCES from scratch.
       if (nowSec - window.activity >= ACTIVITY_THRESHOLD_SEC) {
         this.activityHistory.delete(key);
+        // Tier 3 only knows "no fresh output" — it cannot tell a finished turn
+        // from an abandoned one, so it must not claim a completion. A reason
+        // already recorded by Tier 4 (which read the transcript) is better
+        // material and is kept.
+        if (!reasons.has(key)) reasons.set(key, 'unknown');
         continue;
       }
       if (!nonShellForeground) {
         this.activityHistory.delete(key);
+        if (!reasons.has(key)) reasons.set(key, 'offline');
         continue;
       }
 
@@ -843,7 +974,10 @@ export class AgentActivityMonitor {
       const advanceTicks = (prev?.advanceTicks ?? []).filter((t) => t > oldestValidTick);
       if (advanced) advanceTicks.push(this.tickCounter);
       this.activityHistory.set(key, { lastActivity: window.activity, advanceTicks });
-      if (advanceTicks.length < START_CONFIRM_ADVANCES) continue;
+      if (advanceTicks.length < START_CONFIRM_ADVANCES) {
+        if (!reasons.has(key)) reasons.set(key, 'unknown');
+        continue;
+      }
 
       next.set(key, entry);
     }
@@ -861,7 +995,7 @@ export class AgentActivityMonitor {
       if (name) next.set(key, { ...entry, paneName: name });
     }
 
-    return next;
+    return { next, reasons, deletedKeys };
   }
 
   /**
@@ -945,7 +1079,67 @@ export class AgentActivityMonitor {
     }
   }
 
-  private emitTransitions(next: Map<string, AgentActivityEntry>): void {
+  /** True when a probe-reported ending is recent enough to act on. */
+  private isFreshOutcome(at: number | null): boolean {
+    return at !== null && Date.now() - at <= COMPLETION_SYNTHESIS_MAX_AGE_MS;
+  }
+
+  /**
+   * Resolve why a key that was running is not anymore. The ladder recorded the
+   * reason at the rung that decided it; anything it could not attribute falls
+   * back to 'unknown' — except a supervised entry whose supervisor connection
+   * itself is gone (child_exit / WS disconnect), which is a process/connection
+   * disappearance rather than a completion.
+   */
+  private stopReason(
+    key: string,
+    previous: AgentActivityEntry,
+    reasons: Map<string, AgentActivityStopReason>,
+  ): AgentActivityStopReason {
+    const recorded = reasons.get(key);
+    if (recorded) return recorded;
+    if (previous.source === 'supervised' && !this.supervisorStates.has(key)) return 'offline';
+    return 'unknown';
+  }
+
+  /**
+   * Announce completions the tick loop cannot see because the turn was shorter
+   * than the polling interval: the key was never in `state` (no tick ever
+   * caught it working), yet the Tier 4 probe reports a `terminal_final` written
+   * moments ago. Deduped on the completion's own timestamp, so the same ending
+   * is announced exactly once. This is what replaces the old "keep terminal_final
+   * looking `working` for 120s so the client can observe a working→idle edge"
+   * hack (P3).
+   */
+  private emitSynthesizedCompletions(next: Map<string, AgentActivityEntry>): void {
+    for (const [key, probe] of this.processStates) {
+      if (next.has(key) || this.state.has(key)) continue;
+      const completedAt = probe.completedAt;
+      if (!this.isFreshOutcome(completedAt) || completedAt === null) continue;
+      if (this.emittedCompletions.get(key) === completedAt) continue;
+      this.emittedCompletions.set(key, completedAt);
+      this.notificationBus.emit({
+        type: 'agent:activity',
+        payload: {
+          serverName: probe.serverName,
+          target: probe.target,
+          running: false,
+          source: 'manual',
+          operation: false,
+          taskId: probe.taskId,
+          label: probe.label,
+          projectId: probe.projectId,
+          reason: 'completed',
+        },
+      });
+    }
+  }
+
+  private emitTransitions(
+    next: Map<string, AgentActivityEntry>,
+    reasons: Map<string, AgentActivityStopReason>,
+    deletedKeys: Set<string>,
+  ): void {
     for (const [key, entry] of next) {
       const previous = this.state.get(key);
       // Emit both on a brand-new key and on a status flip (e.g.
@@ -975,6 +1169,13 @@ export class AgentActivityMonitor {
     }
     for (const [key, entry] of this.state) {
       if (!next.has(key)) {
+        const reason = this.stopReason(key, entry, reasons);
+        // Remember an announced completion so the synthesis pass below cannot
+        // announce the same ending a second time.
+        if (reason === 'completed') {
+          const completedAt = this.processStates.get(key)?.completedAt;
+          if (completedAt != null) this.emittedCompletions.set(key, completedAt);
+        }
         this.notificationBus.emit({
           type: 'agent:activity',
           payload: {
@@ -988,9 +1189,25 @@ export class AgentActivityMonitor {
             label: entry.label,
             projectId: entry.projectId,
             paneName: entry.paneName,
+            reason,
           },
         });
       }
     }
+
+    // A window deleted while already idle emits no transition above (it was not
+    // in `state`), yet consumers must drop its finished row immediately. This is
+    // one-shot by construction: `deletedKeys` holds only rows that vanished from
+    // the candidate inventory on *this* tick.
+    for (const key of deletedKeys) {
+      if (this.state.has(key) || next.has(key)) continue;
+      const [serverName, target] = splitWindowKey(key);
+      this.notificationBus.emit({
+        type: 'agent:activity',
+        payload: { serverName, target, running: false, source: 'manual', operation: false, reason: 'deleted' },
+      });
+    }
+
+    this.emitSynthesizedCompletions(next);
   }
 }

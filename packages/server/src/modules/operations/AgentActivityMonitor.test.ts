@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AgentActivityMonitor, parseWindowTarget, findLiveWindow } from './AgentActivityMonitor';
+import type { ProcessActivityProbeEntry } from './AgentActivityMonitor';
 import type { ExecuteTaskUseCase } from '../tasks/execution/ExecuteTaskUseCase';
 import type { IWindowRepository, Window } from '../windows/Window';
 import type { TmuxClient, TmuxSession, TmuxPane } from '../tmux/TmuxClient';
@@ -1205,17 +1206,25 @@ describe('AgentActivityMonitor', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
 
+    /** Probe rows in tests only set what they exercise; the outcome fields default to "nothing observed". */
+    type PartialProbeEntry = Omit<ProcessActivityProbeEntry, 'completedAt' | 'interruptedAt'>
+      & Partial<Pick<ProcessActivityProbeEntry, 'completedAt' | 'interruptedAt'>>;
+
     function makeMonitorWithProbe(
-      list: () => Promise<Array<{ serverName: string; target: string; status: 'working' | 'idle' | 'offline' }>>,
+      list: () => Promise<PartialProbeEntry[]>,
       capturePane = vi.fn().mockResolvedValue({ stdout: '', stderr: '', code: 0 }),
     ): AgentActivityMonitor {
+      const probe = {
+        list: async (): Promise<ProcessActivityProbeEntry[]> =>
+          (await list()).map((e) => ({ completedAt: null, interruptedAt: null, ...e })),
+      };
       return new AgentActivityMonitor(
         { getRunning } as unknown as ExecuteTaskUseCase,
         { findAll } as unknown as IWindowRepository,
         { listSessions, capturePane } as unknown as TmuxClient,
         { findByName } as unknown as IServerRepository,
         { emit } as unknown as NotificationBus,
-        { list },
+        probe,
       );
     }
 
@@ -1402,6 +1411,185 @@ describe('AgentActivityMonitor', () => {
       await settleProbe();
       await expect(monitor.tick()).resolves.toBeUndefined();
       expect(monitor.snapshot()).toEqual([]);
+    });
+
+    describe('stop reason (P3: finished 意味論の reason 駆動化)', () => {
+      /** The `running: false` payload of the most recent emit for `target`, if any. */
+      function lastStopPayload(target: string): { running: boolean; reason?: string } | undefined {
+        const calls = emit.mock.calls
+          .map((c: unknown[]) => (c[0] as { payload: { target: string; running: boolean; reason?: string } }).payload)
+          .filter((p) => p.target === target && p.running === false);
+        return calls[calls.length - 1];
+      }
+
+      it("labels a Tier 2 working→idle stop as 'completed'", async () => {
+        monitor = makeMonitorWithProbe(async () => []);
+        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'claude' })]);
+        const now = Math.floor(Date.now() / 1000);
+        listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, now, [makePane({ command: 'claude', title: '⠐ working' })]));
+        await monitor.tick();
+        expect(monitor.snapshot()).toEqual([expect.objectContaining({ running: true })]);
+
+        emit.mockClear();
+        listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, now, [makePane({ command: 'claude', title: '✳ idle' })]));
+        await monitor.tick();
+        expect(lastStopPayload('azito:agent-1')?.reason).toBe('completed');
+      });
+
+      it("labels a hook Stop signal as 'completed'", async () => {
+        monitor = makeMonitorWithProbe(async () => []);
+        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'claude' })]);
+        listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000),
+          [makePane({ command: 'claude', title: '⠐ working' })]));
+        await monitor.tick();
+
+        emit.mockClear();
+        monitor.recordHookSignal({
+          serverName: 'local', sessionName: 'azito', windowIndex: 3,
+          windowName: 'agent-1', paneIndex: 1, event: 'stop',
+        });
+        await settleProbe(); // recordHookSignal ticks internally (fire-and-forget)
+        await monitor.tick();
+        expect(lastStopPayload('azito:agent-1')?.reason).toBe('completed');
+      });
+
+      it("labels a supervisor active→idle report as 'completed'", async () => {
+        monitor = makeMonitorWithProbe(async () => []);
+        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+        listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000)));
+        monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'active');
+        await settleProbe(); // recordSupervisorSignal ticks internally
+        await monitor.tick();
+        expect(monitor.snapshot()).toEqual([expect.objectContaining({ running: true, source: 'supervised' })]);
+
+        emit.mockClear();
+        monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'idle');
+        await settleProbe();
+        await monitor.tick();
+        expect(lastStopPayload('azito:agent-1')?.reason).toBe('completed');
+      });
+
+      it("labels a vanished window as 'deleted' and does not repeat the announcement", async () => {
+        monitor = makeMonitorWithProbe(async () => []);
+        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'claude' })]);
+        listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000),
+          [makePane({ command: 'claude', title: '⠐ working' })]));
+        await monitor.tick();
+
+        emit.mockClear();
+        findAll.mockReturnValue([]); // window row deleted
+        listSessions.mockResolvedValue([]);
+        await monitor.tick();
+        expect(lastStopPayload('azito:agent-1')?.reason).toBe('deleted');
+
+        emit.mockClear();
+        await monitor.tick();
+        expect(emit).not.toHaveBeenCalled();
+      });
+
+      it("announces 'deleted' once for a window that was already idle, so a finished row can be dropped", async () => {
+        monitor = makeMonitorWithProbe(async () => []);
+        // Idle from the start (bare shell foreground, stale activity): never running.
+        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'claude' })]);
+        listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 600));
+        await monitor.tick();
+        expect(monitor.snapshot()).toEqual([]);
+
+        emit.mockClear();
+        findAll.mockReturnValue([]);
+        await monitor.tick();
+        expect(lastStopPayload('azito:agent-1')).toEqual(expect.objectContaining({ reason: 'deleted' }));
+
+        emit.mockClear();
+        await monitor.tick();
+        expect(emit).not.toHaveBeenCalled();
+      });
+
+      it("labels a probe-observed interrupt as 'interrupted', never as a completion", async () => {
+        vi.useFakeTimers();
+        try {
+          const probe: { status: 'working' | 'idle'; interruptedAt: number | null } = { status: 'working', interruptedAt: null };
+          monitor = makeMonitorWithProbe(async () => [{
+            serverName: 'local', target: 'azito:agent-1', status: probe.status, interruptedAt: probe.interruptedAt,
+          }]);
+          findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+          listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 600));
+          await monitor.tick();
+          await vi.advanceTimersByTimeAsync(0);
+          await monitor.tick();
+          expect(monitor.snapshot()).toEqual([expect.objectContaining({ running: true })]);
+
+          // The user hits Esc: the transcript's last meaningful entry becomes an
+          // interrupt marker. The key stops, but this is not a completion.
+          probe.status = 'idle';
+          probe.interruptedAt = Date.now();
+          await vi.advanceTimersByTimeAsync(16_000);
+          emit.mockClear();
+          listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 600));
+          await monitor.tick();
+          expect(monitor.snapshot()).toEqual([]);
+          expect(lastStopPayload('azito:agent-1')?.reason).toBe('interrupted');
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("synthesizes a 'completed' transition for a turn too short to be seen working", async () => {
+        const completedAt = Date.now() - 1_000;
+        monitor = makeMonitorWithProbe(async () => [{
+          serverName: 'local', target: 'azito:agent-1', status: 'idle', completedAt, taskId: 42, label: 'agent-1',
+        }]);
+        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+        listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 600));
+
+        await monitor.tick();
+        await settleProbe();
+        await monitor.tick();
+        expect(monitor.snapshot()).toEqual([]);
+        expect(emit).toHaveBeenCalledWith(expect.objectContaining({
+          type: 'agent:activity',
+          payload: expect.objectContaining({
+            target: 'azito:agent-1', running: false, reason: 'completed', taskId: 42,
+          }),
+        }));
+
+        // The same completion must not be announced again on later ticks.
+        emit.mockClear();
+        await monitor.tick();
+        expect(emit).not.toHaveBeenCalled();
+      });
+
+      it('does not synthesize a completion the probe reports as long past', async () => {
+        monitor = makeMonitorWithProbe(async () => [{
+          serverName: 'local', target: 'azito:agent-1', status: 'idle', completedAt: Date.now() - 10 * 60 * 1000,
+        }]);
+        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+        listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 600));
+
+        await monitor.tick();
+        await settleProbe();
+        emit.mockClear();
+        await monitor.tick();
+        expect(emit).not.toHaveBeenCalled();
+      });
+
+      it("labels a stop the Tier 3 heuristic merely aged out as 'unknown', never a completion", async () => {
+        monitor = makeMonitorWithProbe(async () => []);
+        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+        const base = Math.floor(Date.now() / 1000);
+        listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, base, [makePane({ command: 'some-generic-tool' })]));
+        await monitor.tick();
+        listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, base + 1, [makePane({ command: 'some-generic-tool' })]));
+        await monitor.tick();
+        listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, base + 2, [makePane({ command: 'some-generic-tool' })]));
+        await monitor.tick();
+        expect(monitor.snapshot()).toEqual([expect.objectContaining({ running: true })]);
+
+        emit.mockClear();
+        listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, base - 600, [makePane({ command: 'some-generic-tool' })]));
+        await monitor.tick();
+        expect(lastStopPayload('azito:agent-1')?.reason).toBe('unknown');
+      });
     });
 
     it('refreshes the probe at most once per PROCESS_PROBE_REFRESH_MS, not on every tick', async () => {

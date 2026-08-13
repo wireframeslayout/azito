@@ -270,8 +270,11 @@ export function NotificationCenterProvider({ children }: { children: React.React
       // 実行終了後も task_id を保持するので、その window で手動起動した agent にも
       // taskId が載り、通知が丸ごと落ちる。
       // 注視中（フォーカスあり＋アクティブタブ/PiPで見ている）のターゲットは通知しない。
+      // 完了通知は reason='completed' のみ（P3）。中断・ウィンドウ削除・プロセス消滅・判定不能を
+      // 「完了」として通知しない — 稼働していなかったキーにも running:false は流れてくる。
       const isManualLaunch = !payload.operation;
-      if (!payload.running && isManualLaunch && !isWatched(payload.serverName, payload.target, payload.taskId)) {
+      if (!payload.running && payload.reason === 'completed' && isManualLaunch
+        && !isWatched(payload.serverName, payload.target, payload.taskId)) {
         pushNotification(buildAgentNotification('agent_finished', 'notifications:kinds.agentFinished', { label: agentLabelOf(payload) }, payload));
       }
     }, [pushNotification, isWatched]),
