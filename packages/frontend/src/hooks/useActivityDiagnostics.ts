@@ -1,44 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api } from '../api/client';
+import { apiWithStatus } from '../api/client';
+import { parseDiagnosticsResponse, type ActivityDiagnosticRow } from '../lib/activityDiagnostics';
 
-export type ActivityDecidedBy =
-  | 'tier0_supervisor'
-  | 'tier1_hook'
-  | 'tier2_title'
-  | 'tier3_heuristic'
-  | 'tier4_probe'
-  | 'none';
-
-export type ActivityDecidedState = 'working' | 'blocked' | 'idle' | 'offline' | 'none';
-
-export type ActivityStopReason = 'completed' | 'interrupted' | 'deleted' | 'offline' | 'unknown';
-
-export interface ActivityDiagnosticRow {
-  serverName: string;
-  target: string;
-  windowId?: number;
-  taskId?: number;
-  state: ActivityDecidedState;
-  decidedBy: ActivityDecidedBy;
-  supervisor?: {
-    pid: number;
-    ready: boolean;
-    connectedAt: number;
-    lastActivityFrameAt: number | null;
-    lastReportedState: 'active' | 'idle' | null;
-    lastReportedStatus: 'working' | 'blocked' | null;
-  };
-  hook?: { lastSignalAt: number; lastEvent: 'start' | 'stop' };
-  probe?: {
-    status: 'working' | 'idle' | 'offline';
-    tailState?: string;
-    lastEntryTimestampMs?: number | null;
-    completedAt: number | null;
-    interruptedAt: number | null;
-    snapshotAgeMs: number | null;
-  };
-  lastTransition?: { running: boolean; reason?: ActivityStopReason; at: number };
-}
+export type {
+  ActivityDecidedBy,
+  ActivityDecidedState,
+  ActivityDiagnosticRow,
+  ActivityStopReason,
+} from '../lib/activityDiagnostics';
 
 const POLL_INTERVAL_MS = 3000;
 
@@ -55,12 +24,13 @@ export function useActivityDiagnostics(enabled: boolean) {
     if (inflight.current) return;
     inflight.current = true;
     try {
-      const next = await api<ActivityDiagnosticRow[]>('/debug/activity');
-      setRows(next);
+      const { status, body } = await apiWithStatus<unknown>('/debug/activity');
+      setRows(parseDiagnosticsResponse(status, body));
       setError(null);
     } catch (err) {
       // 直前のスナップショットは残す（1回の取得失敗で表が消えると、まさに診断したい状況で
-      // 情報が失われる）。エラーは注記として併記する。
+      // 情報が失われる）。エラーは注記として併記する。初回失敗時は rows が null のままなので、
+      // 呼び出し元は「前回スナップショット表示中」ではなく初期エラーとして描画する。
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       inflight.current = false;

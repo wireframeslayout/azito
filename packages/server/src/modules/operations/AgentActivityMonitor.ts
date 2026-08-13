@@ -273,6 +273,8 @@ interface ActivityDecision {
   taskId?: number;
   decidedBy: ActivityDecidedBy;
   state: ActivityDecidedState;
+  /** See ActivityDiagnosticEntry.evidenceAt. */
+  evidenceAt?: number;
 }
 
 /** One key's read-only diagnostic view — see AgentActivityMonitor.diagnostics(). */
@@ -282,6 +284,16 @@ export interface ActivityDiagnosticEntry {
   taskId?: number;
   state: ActivityDecidedState;
   decidedBy: ActivityDecidedBy;
+  /**
+   * When the signal this decision rests on was received (currently recorded for
+   * Tier 0 only, where it is the supervisor signal's own timestamp). Lets a
+   * consumer tell a decision made from the *current* supervisor connection apart
+   * from one still carried over from a previous connection on the same key —
+   * a supervisor state survives until its next signal, so a reconnect would
+   * otherwise keep showing "decided by Tier 0" against a connection that has
+   * sent no frames yet.
+   */
+  evidenceAt?: number;
   hook?: { lastSignalAt: number; lastEvent: 'start' | 'stop' };
   probe?: {
     status: 'working' | 'idle' | 'offline';
@@ -540,6 +552,7 @@ export class AgentActivityMonitor {
         taskId: decision.taskId,
         state: decision.state,
         decidedBy: decision.decidedBy,
+        evidenceAt: decision.evidenceAt,
         hook: hook ? { lastSignalAt: hook.at, lastEvent: hook.status === 'running' ? 'start' as const : 'stop' as const } : undefined,
         probe: probe
           ? {
@@ -733,8 +746,9 @@ export class AgentActivityMonitor {
       decidedBy: ActivityDecidedBy,
       state: ActivityDecidedState,
       taskId?: number,
+      evidenceAt?: number,
     ): void => {
-      decisions.set(key, { serverName, target: stripPaneSuffix(target), decidedBy, state, taskId });
+      decisions.set(key, { serverName, target: stripPaneSuffix(target), decidedBy, state, taskId, evidenceAt });
     };
     // Candidate keys whose tmux window was actually found this tick; becomes
     // previousLiveKeys at the end, so a window disappearing is detectable as an
@@ -761,7 +775,7 @@ export class AgentActivityMonitor {
           // supervised-idle → not running. An explicit active→idle report from
           // the supervisor is the strongest completion evidence there is.
           reasons.set(key, 'completed');
-          decide(key, e.serverName, e.target, 'tier0_supervisor', 'idle', e.taskId);
+          decide(key, e.serverName, e.target, 'tier0_supervisor', 'idle', e.taskId, supervisor.at);
           continue;
         }
         decide(
@@ -771,6 +785,7 @@ export class AgentActivityMonitor {
           supervisor ? 'tier0_supervisor' : 'none',
           supervisor?.agentStatus === 'blocked' ? 'blocked' : 'working',
           e.taskId,
+          supervisor?.at,
         );
         next.set(key, {
           serverName: e.serverName,
@@ -940,7 +955,7 @@ export class AgentActivityMonitor {
               }
             }
           }
-          decide(key, w.serverName, w.tmuxTarget, 'tier0_supervisor', effectiveStatus ?? 'working', w.taskId ?? undefined);
+          decide(key, w.serverName, w.tmuxTarget, 'tier0_supervisor', effectiveStatus ?? 'working', w.taskId ?? undefined, supervisor.at);
           next.set(key, {
             serverName: w.serverName,
             target: stripPaneSuffix(w.tmuxTarget),
@@ -956,7 +971,7 @@ export class AgentActivityMonitor {
           // The supervisor explicitly reported its child idle — an authoritative
           // completion (Tier 0), not a guess.
           reasons.set(key, 'completed');
-          decide(key, w.serverName, w.tmuxTarget, 'tier0_supervisor', 'idle', w.taskId ?? undefined);
+          decide(key, w.serverName, w.tmuxTarget, 'tier0_supervisor', 'idle', w.taskId ?? undefined, supervisor.at);
         }
         continue;
       }
@@ -1267,6 +1282,7 @@ export class AgentActivityMonitor {
         taskId: sv.taskId ?? undefined,
         decidedBy: 'tier0_supervisor',
         state: sv.status !== 'running' ? 'idle' : sv.agentStatus === 'blocked' ? 'blocked' : 'working',
+        evidenceAt: sv.at,
       });
       if (sv.status !== 'running') continue;
       next.set(key, {

@@ -190,7 +190,7 @@
     "tier0Summary": "Decided by Tier 0: {{count}} / {{total}}",
     "loading": "Loading…",
     "empty": "No windows are being evaluated.",
-    "fetchFailed": "Could not fetch diagnostics. Showing the previous snapshot.",
+    "fetchFailed": "Could not fetch diagnostics.",
     "colWindow": "Window",
     "colState": "State",
     "colTier": "Decided by",
@@ -217,6 +217,7 @@
       "deleted": "Window removed",
       "offline": "Process gone",
       "unknown": "Unknown"
-    }
+    },
+    "fetchFailedStale": "Could not refresh diagnostics. Showing the previous snapshot."
   }
 }

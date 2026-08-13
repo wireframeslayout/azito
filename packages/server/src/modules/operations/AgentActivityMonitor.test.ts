@@ -1690,6 +1690,9 @@ describe('AgentActivityMonitor', () => {
           target: 'azito:agent-1',
           decidedBy: 'tier0_supervisor',
           state: 'working',
+          // Tier 0 の判定は「どの接続のシグナルに基づくか」を持つ（再接続後の古い判定を
+          // 集約側が undecided に落とせるようにするため）。
+          evidenceAt: expect.any(Number),
           lastTransition: expect.objectContaining({ running: true }),
         }),
       ]);

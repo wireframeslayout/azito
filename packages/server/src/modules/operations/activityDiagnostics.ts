@@ -26,6 +26,25 @@ function keyOf(serverName: string, target: string): string {
   return `${serverName}::${stripPaneSuffix(target)}`;
 }
 
+/**
+ * True when a Tier 0 attribution rests on evidence that predates the supervisor
+ * connection currently registered for the key. A supervisor state inside the
+ * monitor survives until its next signal, so after a reconnect (a supervisor
+ * process restart, or the hub restarting and every supervisor re-registering)
+ * the key would keep reading "decided by Tier 0" against a brand-new connection
+ * that has not sent a single activity frame — the exact false reassurance this
+ * panel exists to prevent. Such a row is reported as undecided instead, which
+ * the UI renders as "waiting for frames".
+ */
+function isStaleTier0(
+  entry: ActivityDiagnosticEntry,
+  supervisor: { connectedAt: number } | undefined,
+): boolean {
+  if (entry.decidedBy !== 'tier0_supervisor') return false;
+  if (!supervisor) return false;
+  return entry.evidenceAt === undefined || entry.evidenceAt < supervisor.connectedAt;
+}
+
 /** working/blocked first, then stable by server + target so the live table does not jump around. */
 const STATE_ORDER: Record<ActivityDiagnosticEntry['state'], number> = {
   working: 0, blocked: 1, idle: 2, offline: 3, none: 4,
@@ -67,6 +86,7 @@ export function buildActivityDiagnostics(
     supervisors.delete(key);
     return {
       ...entry,
+      ...(isStaleTier0(entry, supervisor) ? { decidedBy: 'none' as const, state: 'none' as const } : {}),
       windowId: windowIds.get(key),
       supervisor: supervisor && {
         pid: supervisor.pid,

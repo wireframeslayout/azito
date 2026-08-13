@@ -142,15 +142,21 @@ export default function ActivityDiagnosticsPanel() {
         background: 'var(--bg-card)', border: '1px solid var(--border)',
         borderRadius: 'var(--radius-md)', overflow: 'hidden',
       }}>
-        {error && (
+        {/* 取得済みスナップショットがある場合のみ「前回の表示を継続中」と言える。初回失敗は
+            下の専用状態で伝える（Loading と同時に出さない）。 */}
+        {error && rows !== null && (
           <div role="status" style={{
             padding: '8px 12px', background: 'var(--danger-a08)',
             color: 'var(--danger)', fontSize: 'var(--font-sm)',
           }}>
-            {t('activityDiagnostics.fetchFailed')}
+            {t('activityDiagnostics.fetchFailedStale')}
           </div>
         )}
-        {rows === null ? (
+        {rows === null && error !== null ? (
+          <div role="status" style={{ padding: 24, textAlign: 'center', color: 'var(--danger)', fontSize: 'var(--font-md)' }}>
+            {t('activityDiagnostics.fetchFailed')}
+          </div>
+        ) : rows === null ? (
           <div style={{ padding: 24, textAlign: 'center', ...DIM, fontSize: 'var(--font-md)' }}>
             {t('activityDiagnostics.loading')}
           </div>
