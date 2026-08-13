@@ -9,6 +9,7 @@ import type { NotificationBus } from '../notifications/NotificationBus';
 import type { AgentActivityStopReason } from '../notifications/NotificationEvent';
 import { classifyPaneState, CLASSIFIABLE_AGENT_TYPES, type PaneAgentState } from './paneStateClassifier';
 import { stripPaneSuffix } from '../windows/paneTarget';
+import { resolveInterval } from '../../shared/testIntervals';
 
 /** Split a stored `session:windowSpec[.pane]` target into its session and window parts. */
 export function parseWindowTarget(target: string): { sessionName: string; windowSpec: string } {
@@ -179,7 +180,7 @@ interface SupervisorState {
   agentStatus?: 'working' | 'blocked';
 }
 
-const POLL_INTERVAL_MS = 5_000;
+const POLL_INTERVAL_MS = resolveInterval(5_000, 1_500);
 
 /**
  * Number of activity advances (not necessarily consecutive) required, within
@@ -263,7 +264,7 @@ export type { AgentActivityStopReason };
  * interval plus one poll interval — well under the 60s poll × 60s cache phase
  * problem of the removed client-side polling path.
  */
-const PROCESS_PROBE_REFRESH_MS = 15_000;
+const PROCESS_PROBE_REFRESH_MS = resolveInterval(15_000, 3_000);
 
 /**
  * Maximum age of the last *successful* probe snapshot that Tier 4 will still
@@ -272,7 +273,7 @@ const PROCESS_PROBE_REFRESH_MS = 15_000;
  * stopped agent lit forever: past this age Tier 4 goes silent and the key
  * falls through to the Tier 3 heuristic, which reads live tmux state.
  */
-const PROCESS_PROBE_MAX_AGE_MS = 60_000;
+const PROCESS_PROBE_MAX_AGE_MS = resolveInterval(60_000, 12_000);
 
 /**
  * How recent a probe-observed completion must be for the monitor to synthesize

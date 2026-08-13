@@ -3,6 +3,7 @@ import { isAgentWindow } from './Window';
 import type { WindowSessionResolver, WindowActivityProbeResult } from '../transcripts/WindowSessionResolver';
 import type { IServerRepository } from '../servers/Server';
 import { stripPaneSuffix } from './paneTarget';
+import { resolveInterval } from '../../shared/testIntervals';
 
 export interface WindowActivityStatusEntry {
   windowId: number;
@@ -30,7 +31,7 @@ export interface WindowActivityStatusEntry {
  * phase problem the old 60s cache × 60s client poll had, where a state change
  * could take up to two full periods to become visible.
  */
-const CACHE_TTL_MS = 10_000;
+const CACHE_TTL_MS = resolveInterval(10_000, 2_000);
 
 /**
  * 未紐付けウィンドウ（agentSessionId 無し）のセッション軽量解決を1ウィンドウあたり最低この間隔で
