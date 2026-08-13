@@ -207,6 +207,7 @@ function assertStageContents(): void {
     'run.sh',
     'node',
     'public/index.html',
+    'harness/chat-commands.json',
     'dist-agent/azito-agent.tar.gz',
     'deploy/azito-release.service',
     'deploy/com.azito.hub.plist',
@@ -305,7 +306,10 @@ async function main(): Promise<void> {
       copyDir(src, path.join(STAGE, 'harness', sub));
     }
   }
-  for (const f of ['setup.sh', 'README.md']) {
+  // chat-commands.json: builtin definitions for the chat command palette
+  // (ChatCommandLoader reads it at DEFAULT_BUILTIN_CHAT_COMMANDS_PATH); without staging it, a
+  // release install silently ships an empty palette (loadFile treats a missing file as "no commands").
+  for (const f of ['setup.sh', 'README.md', 'chat-commands.json']) {
     const src = path.join(REPO_ROOT, 'harness', f);
     if (fs.existsSync(src)) {
       fs.copyFileSync(src, path.join(STAGE, 'harness', f));

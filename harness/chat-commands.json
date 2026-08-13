@@ -2,7 +2,7 @@
   "commands": [
     {
       "name": "model",
-      "description": "モデルを切り替える（このセッション限定）",
+      "description": "モデルを切り替える",
       "agentTypes": ["claude"],
       "type": "select",
       "options": [

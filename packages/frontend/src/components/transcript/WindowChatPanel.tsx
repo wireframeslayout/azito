@@ -21,8 +21,11 @@ type ResolveState =
   | { kind: 'error' }
   | { kind: 'session'; sessionId: string; agentType: string; paneId: string; agentDetected: boolean; slashCommandsVisibleInLog?: boolean }
   // セッション JSONL がまだ無い（会話履歴が発生する前）が、送信先ペインだけは best-effort で
-  // 解決できているケース（Issue #69 仕様調整3）。チャットは開始できる。
-  | { kind: 'pane-only'; paneId: string; agentDetected: boolean; slashCommandsVisibleInLog?: boolean }
+  // 解決できているケース（Issue #69 仕様調整3）。チャットは開始できる。agentType は resolver が
+  // best-effort で判定できていれば含まれる（コマンドパレット、Issue #338 フェーズC codex レビュー
+  // Important #2: 最初のプロンプト送信前でも /model 等を使いたいため、判明していれば伝搬する。
+  // 不明な場合は undefined のまま — フォールバック値は作らずパレット非表示に倒す）。
+  | { kind: 'pane-only'; paneId: string; agentType?: string; agentDetected: boolean; slashCommandsVisibleInLog?: boolean }
   | { kind: 'unresolved'; reason: 'unsupported_server' | 'no_recent_session' };
 
 const POST_SEND_POLL_INTERVAL_MS = 3000;
@@ -81,7 +84,7 @@ export default function WindowChatPanel({ windowId, viewMode, onChangeViewMode }
             slashCommandsVisibleInLog: body.slashCommandsVisibleInLog,
           });
         } else if (body.paneId) {
-          setState({ kind: 'pane-only', paneId: body.paneId, agentDetected: body.agentDetected, slashCommandsVisibleInLog: body.slashCommandsVisibleInLog });
+          setState({ kind: 'pane-only', paneId: body.paneId, agentType: body.agentType, agentDetected: body.agentDetected, slashCommandsVisibleInLog: body.slashCommandsVisibleInLog });
         } else {
           setState({ kind: 'unresolved', reason: body.reason });
         }
@@ -168,6 +171,7 @@ export default function WindowChatPanel({ windowId, viewMode, onChangeViewMode }
           draftKey={`window-${windowId}`}
           agentDetected={state.agentDetected}
           slashCommandsVisibleInLog={state.slashCommandsVisibleInLog}
+          agentType={state.agentType}
           contextHistory={[]}
           onSent={pollForSession}
           viewMode={viewMode}
