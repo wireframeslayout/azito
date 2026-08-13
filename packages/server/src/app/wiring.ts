@@ -5,6 +5,7 @@
 // main.ts; grouped into per-module factory functions for readability.
 
 import { EventEmitter } from 'events';
+import * as path from 'path';
 import type { SqliteDatabase } from '../shared/db/Database';
 import type { DataPaths } from '../shared/dataDir';
 
@@ -50,6 +51,7 @@ import { SidekickPackageLoader } from '../modules/sidekicks/SidekickPackageLoade
 import { SidekickPackageService } from '../modules/sidekicks/SidekickPackageService';
 import { SidekickSyncService } from '../modules/sidekicks/SidekickSyncService';
 import { UnitTypeLoader } from '../modules/sidekicks/UnitTypeLoader';
+import { ChatCommandLoader } from '../modules/chat-commands/ChatCommandLoader';
 import { SupervisorRegistry } from '../modules/supervisors/SupervisorRegistry';
 import { BrowserSessionManager } from '../modules/browser/BrowserSessionManager';
 import { SqliteBrowserSnapshotRepository } from '../modules/browser/SqliteBrowserSnapshotRepository';
@@ -92,6 +94,7 @@ export interface SharedInfra {
   sidekickPackageService: SidekickPackageService;
   sidekickSyncService: SidekickSyncService;
   unitTypeLoader: UnitTypeLoader;
+  chatCommandLoader: ChatCommandLoader;
   turnSignalHub: TurnSignalHub;
   supervisorRegistry: SupervisorRegistry;
   browserSessionManager: BrowserSessionManager;
@@ -176,6 +179,9 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
   const sidekickPackageService = new SidekickPackageService(sidekickPackageLoader, dataPaths.sidekicks);
   const sidekickSyncService = new SidekickSyncService();
   const unitTypeLoader = new UnitTypeLoader();
+  // ユーザー層は sidekicks と同じ起点（AZITO_DATA_DIR/data ディレクトリ直下）に置く単一 JSON ファイル
+  // （Issue #338 フェーズC、設定駆動コマンドパレット）。
+  const chatCommandLoader = new ChatCommandLoader(undefined, path.join(dataPaths.dir, 'chat-commands.json'));
   const turnSignalHub = new TurnSignalHub();
   const supervisorRegistry = new SupervisorRegistry();
   const browserSnapshotRepo = db ? new SqliteBrowserSnapshotRepository(db) : undefined;
@@ -204,6 +210,7 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
     sidekickPackageService,
     sidekickSyncService,
     unitTypeLoader,
+    chatCommandLoader,
     turnSignalHub,
     supervisorRegistry,
     browserSessionManager,

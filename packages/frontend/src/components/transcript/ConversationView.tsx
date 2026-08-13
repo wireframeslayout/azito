@@ -434,6 +434,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
           draftKey={sessionId}
           agentDetected={agentDetected}
           slashCommandsVisibleInLog={slashCommandsVisibleInLog}
+          agentType={agentType}
           contextHistory={contextHistory}
           onSent={() => scrollToBottom('smooth')}
           viewMode={viewMode}

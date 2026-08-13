@@ -38,6 +38,7 @@ import sessionsRoutes from '../modules/tmux/routes/sessions';
 import resourceGuardRoutes from '../modules/servers/resources/routes';
 import gitRoutes from '../modules/git/routes';
 import sidekicksRoutes from '../modules/sidekicks/routes';
+import chatCommandsRoutes from '../modules/chat-commands/routes';
 import supervisorsRoutes from '../modules/supervisors/routes';
 import healthRoutes from '../modules/health/routes';
 import systemRoutes from '../modules/system/routes';
@@ -78,7 +79,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     agentInstaller, agentBundler, harnessInstaller, tmuxInstaller,
     executeTaskUseCase, agentActivityMonitor, interactionMonitor, windowRespawnService, taskRestoreService, sessionStrategyFactory, sessionCaptureService, usageService,
     pushService, vapidKeys, notificationBus, sidekickPackageService, sidekickPackageLoader,
-    sidekickSyncService, unitTypeLoader, agentSignalService, supervisorRegistry, agentTurnRepo, turnSignalHub,
+    sidekickSyncService, unitTypeLoader, chatCommandLoader, agentSignalService, supervisorRegistry, agentTurnRepo, turnSignalHub,
     browserSessionManager, deployModeDetector, systemUpdateService, channelResolver,
   } = wiring;
 
@@ -272,6 +273,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     sidekickSyncService,
   );
   await app.register(sidekicksRoutes, { sidekickService: sidekickPackageService, taskPromptVarsResolver, unitTypeLoader });
+  await app.register(chatCommandsRoutes, { chatCommandLoader });
   await app.register(supervisorsRoutes, { supervisorRegistry });
   await app.register(healthRoutes, { deployModeDetector });
   await app.register(transcriptsRoutes, {

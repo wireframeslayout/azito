@@ -11,6 +11,9 @@ import { StyleSwitcher } from './StyleSwitcher';
 import { useTranscriptStyle } from './transcriptStyle';
 import { isErrorResponse } from './transcriptFormat';
 import type { TranscriptErrorResponse } from './transcriptTypes';
+import { CommandPalette, type CommandPaletteStage } from './CommandPalette';
+import { useChatCommands } from './useChatCommands';
+import { extractCommandQuery, filterChatCommands, expandCommandOutput, textCommandInsertion, type ChatCommand } from './chatCommands';
 
 const TEXTAREA_MIN_HEIGHT = 38;
 const TEXTAREA_MAX_HEIGHT = 120;
@@ -36,6 +39,12 @@ interface PromptInputBarProps {
    */
   slashCommandsVisibleInLog?: boolean;
   /**
+   * 設定駆動コマンドパレット（Issue #338 フェーズC）向けの workerType。判明している場合のみ
+   * GET /api/chat-commands を1回取得しパレット候補にする。未解決（pane-only 経路等）では
+   * undefined — パレットは出さないが送信機能自体は損なわれない。
+   */
+  agentType?: string;
+  /**
    * ↑↓・🕘 履歴の主ソース（Issue #69 仕様調整4）: 会話トランスクリプトの user 発話（新しい順）。
    * これが0件の場合（セッション未確立の pane-only モード等でトランスクリプトを取得できない場合）
    * のみ、localStorage のローカル送信履歴（inputHistory.ts）にフォールバックする。
@@ -56,7 +65,7 @@ interface PromptInputBarProps {
  * 送信内容自体は既存の JSONL ポーリングで会話に反映される（オプティミスティック表示はしない）。
  * textarea＋履歴🕘＋送信↑ の1行構成（SP実機の高さ節約のため）。
  */
-export default function PromptInputBar({ windowId, paneId, draftKey, agentDetected, slashCommandsVisibleInLog, contextHistory, onSent, viewMode, onChangeViewMode }: PromptInputBarProps) {
+export default function PromptInputBar({ windowId, paneId, draftKey, agentDetected, slashCommandsVisibleInLog, agentType, contextHistory, onSent, viewMode, onChangeViewMode }: PromptInputBarProps) {
   const { t } = useTranslation('transcript');
   const [style, setStyle] = useTranscriptStyle();
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -68,9 +77,47 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const draftSaverRef = useRef(createDebouncedDraftSaver(DRAFT_SAVE_DEBOUNCE_MS));
 
-  // セッション切り替え時は前セッションの送信エラー表示を持ち越さない。
+  // ─── 設定駆動コマンドパレット（Issue #338 フェーズC）───
+  const availableCommands = useChatCommands(agentType);
+  const [activeCommand, setActiveCommand] = useState<ChatCommand | null>(null); // select型: 第2段（options）へ進んだコマンド
+  const [paletteDismissed, setPaletteDismissed] = useState(false); // Esc/外側タップで閉じた状態（同じクエリの間は再表示しない）
+  const [highlightIndex, setHighlightIndex] = useState(0);
+
+  const commandQuery = extractCommandQuery(text);
+  const paletteCommands = commandQuery !== null ? filterChatCommands(availableCommands, commandQuery) : [];
+  const paletteStage: CommandPaletteStage | 'closed' =
+    commandQuery === null ? 'closed'
+    : activeCommand ? 'options'
+    : paletteDismissed || paletteCommands.length === 0 ? 'closed'
+    : 'commands';
+
+  const dismissPalette = useCallback(() => {
+    if (activeCommand) {
+      // options 段からは1段階戻る（コマンド一覧へ）。
+      setActiveCommand(null);
+      setHighlightIndex(0);
+    } else {
+      setPaletteDismissed(true);
+    }
+  }, [activeCommand]);
+
+  const selectCommand = useCallback((command: ChatCommand) => {
+    if (command.type === 'select') {
+      setActiveCommand(command);
+      setHighlightIndex(0);
+      return;
+    }
+    setText(textCommandInsertion(command));
+    setHistoryIndex(-1);
+    textareaRef.current?.focus();
+  }, []);
+
+  // セッション切り替え時は前セッションの送信エラー表示を持ち越さない。パレットの開閉状態も引き継がない。
   useEffect(() => {
     setSendError(null);
+    setActiveCommand(null);
+    setPaletteDismissed(false);
+    setHighlightIndex(0);
   }, [draftKey]);
 
   // セッション切り替え時に下書きを復元する（F2）。復元があった場合のみ短時間ヒントを出す。
@@ -110,8 +157,10 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
     el.style.height = Math.min(el.scrollHeight, TEXTAREA_MAX_HEIGHT) + 'px';
   }, [text]);
 
-  const handleSend = useCallback(async () => {
-    const trimmed = text.trim();
+  // value を明示指定できる送信本体（コマンドパレットの option 選択時は textarea の内容ではなく
+  // 展開済みの output テキストを直接送るため、text state 経由にしない）。
+  const sendText = useCallback(async (value: string) => {
+    const trimmed = value.trim();
     if (!trimmed || sending) return;
 
     setSending(true);
@@ -129,13 +178,23 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
       setHistoryIndex(-1);
       clearDraft(draftKey);
       pushHistory(trimmed);
+      setActiveCommand(null);
+      setPaletteDismissed(false);
+      setHighlightIndex(0);
       onSent();
     } catch (err) {
       setSendError(err instanceof Error ? err.message : t('promptBar.sendError'));
     } finally {
       setSending(false);
     }
-  }, [text, sending, windowId, paneId, draftKey, onSent, t]);
+  }, [sending, windowId, paneId, draftKey, onSent, t]);
+
+  const handleSend = useCallback(() => sendText(text), [sendText, text]);
+
+  const selectOption = useCallback((value: string) => {
+    if (!activeCommand) return;
+    sendText(expandCommandOutput(activeCommand, value));
+  }, [activeCommand, sendText]);
 
   // 履歴の優先順位（Issue #69 仕様調整4）: 会話トランスクリプトの user 発話（contextHistory）を
   // 主ソースとし、それが0件のとき（セッション未確立の pane-only モード等）のみ localStorage の
@@ -158,8 +217,41 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
       handleSend();
       return;
     }
-    // IME変換中の矢印キーは候補選択に使われるため履歴ナビゲーションの対象外とする。
+    // IME変換中の矢印キーは候補選択に使われるため履歴ナビゲーション/パレット操作の対象外とする。
     if (e.nativeEvent.isComposing) return;
+
+    // コマンドパレット表示中は ↑↓/Enter/Esc をパレット操作に割り当てる（既存の送信 Enter・履歴
+    // ナビゲーションと衝突しないよう、パレットが閉じているときのみ以降の既存ロジックに委譲する）。
+    if (paletteStage !== 'closed') {
+      const list = paletteStage === 'commands' ? paletteCommands : (activeCommand?.options ?? []);
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setHighlightIndex((i) => Math.min(i + 1, Math.max(list.length - 1, 0)));
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setHighlightIndex((i) => Math.max(i - 1, 0));
+        return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const boundedIndex = Math.min(highlightIndex, list.length - 1);
+        if (paletteStage === 'commands') {
+          const command = paletteCommands[boundedIndex];
+          if (command) selectCommand(command);
+        } else {
+          const option = activeCommand?.options?.[boundedIndex];
+          if (option) selectOption(option.value);
+        }
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        dismissPalette();
+        return;
+      }
+    }
 
     if (e.key === 'ArrowUp' && (text.length === 0 || historyIndex !== -1)) {
       const history = activeHistory();
@@ -188,7 +280,9 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
   const canSend = text.trim().length > 0 && !sending;
   // 「/」誘導ヒント（実装C、Issue #338 followup）: 送信はブロックしない非ブロッキング注記。
   // slashCommandsVisibleInLog === false（例: codex）のときのみ、入力が「/」で始まる間だけ表示する。
-  const showSlashCommandHint = slashCommandsVisibleInLog === false && text.trimStart().startsWith('/');
+  // 定義済みコマンドパレットが表示されている間はパレットを優先し、ヒントは出さない
+  // （フェーズC: 「定義に一致しない/入力の挙動は従来どおり」＝パレット非表示時のみヒントの出番）。
+  const showSlashCommandHint = slashCommandsVisibleInLog === false && text.trimStart().startsWith('/') && paletteStage === 'closed';
 
   return (
     <div
@@ -201,6 +295,24 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
         padding: '8px 16px',
       }}
     >
+      {/* 設定駆動コマンドパレット（Issue #338 フェーズC）。「/」入力かつ定義済みコマンドに前方一致
+          するとき、入力欄上部にポップオーバー表示する（浮遊UIのため --bg-elevated 必須）。 */}
+      {paletteStage !== 'closed' && (
+        <CommandPalette
+          stage={paletteStage}
+          commands={paletteCommands}
+          activeCommand={activeCommand ?? undefined}
+          activeValue={
+            paletteStage === 'commands'
+              ? paletteCommands[Math.min(highlightIndex, paletteCommands.length - 1)]?.name
+              : activeCommand?.options?.[Math.min(highlightIndex, (activeCommand.options?.length ?? 1) - 1)]?.value
+          }
+          onSelectCommand={selectCommand}
+          onSelectOption={selectOption}
+          onDismiss={dismissPalette}
+        />
+      )}
+
       {/* 復元注記はレイアウト幅に影響させないよう、バー上に絶対配置の1.5秒オーバーレイとして表示する（F2/SP狭幅対策）。 */}
       {showRestoredHint && (
         <div
@@ -284,6 +396,11 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
           onChange={(e) => {
             setText(e.target.value);
             setHistoryIndex(-1);
+            // 再入力したらパレットの明示的な閉じ状態・ハイライト位置をリセットする（フィルタ結果が
+            // 変わるたびに毎回追従させる。commands 段でのみ意味を持つ操作だが options 段では
+            // text をユーザーが編集すること自体が想定外なので副作用は無害）。
+            setPaletteDismissed(false);
+            setHighlightIndex(0);
           }}
           onKeyDown={handleKeyDown}
           rows={1}

@@ -1,0 +1,24 @@
+{
+  "commands": [
+    {
+      "name": "model",
+      "description": "モデルを切り替える（このセッション限定）",
+      "agentTypes": ["claude"],
+      "type": "select",
+      "options": [
+        { "value": "default", "label": "Default", "description": "Opus 5 (1M context)" },
+        { "value": "opus", "label": "Opus", "description": "Opus 5" },
+        { "value": "sonnet", "label": "Sonnet", "description": "Sonnet 5" },
+        { "value": "haiku", "label": "Haiku", "description": "Haiku 5" },
+        { "value": "fable", "label": "Fable", "description": "Fable 5" }
+      ],
+      "output": "/model ${value}"
+    },
+    {
+      "name": "compact",
+      "description": "コンテキストを要約して圧縮する。指示を続けて書ける",
+      "agentTypes": ["claude"],
+      "type": "text"
+    }
+  ]
+}

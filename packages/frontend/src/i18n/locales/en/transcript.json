@@ -62,7 +62,11 @@
     "historyEmpty": "No prompts yet",
     "draftRestored": "Draft restored",
     "agentNotDetectedWarning": "This window may not have an agent running yet. What you type will be sent to the shell as-is.",
-    "slashCommandHint": "Slash command results won't show up in this chat. We recommend running it in Terminal mode instead."
+    "slashCommandHint": "Slash command results won't show up in this chat. We recommend running it in Terminal mode instead.",
+    "commandPalette": {
+      "ariaLabel": "Command palette",
+      "empty": "No matching commands"
+    }
   },
   "windowChat": {
     "loading": "Resolving session…",
