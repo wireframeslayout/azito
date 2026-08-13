@@ -19,6 +19,9 @@ export interface WindowActivityStatusEntry {
   completedAt: number | null;
   /** 中断（transcript の terminal_interrupted）を観測した時刻（epoch ms）。無ければ null。 */
   interruptedAt: number | null;
+  /** 診断専用の素通し（GET /api/debug/activity）。判定には使わない。WindowActivityProbeResult 参照。 */
+  tailState?: WindowActivityProbeResult['tailState'];
+  lastEntryTimestampMs?: number | null;
   taskId?: number;
   projectId?: number;
   label?: string;
@@ -192,6 +195,8 @@ export class WindowActivityStatusService {
           status: probe.status,
           completedAt: probe.completedAt,
           interruptedAt: probe.interruptedAt,
+          tailState: probe.tailState,
+          lastEntryTimestampMs: probe.lastEntryTimestampMs,
           taskId: w.taskId ?? undefined,
           projectId: w.projectId ?? undefined,
           label: w.label ?? undefined,

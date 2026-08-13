@@ -72,6 +72,16 @@ interface SupervisorConnection {
   pendingAcks: Map<string, PendingAck>;
   /** Set once the child TUI has reported 'ready' on this connection. See handleMessage's 'ready' case. */
   ready: boolean;
+  /**
+   * Diagnostics only (GET /api/debug/activity): when the last `activity` frame
+   * arrived on this connection and what it said. Nothing in the judgment path
+   * reads these — the activity frame is forwarded to AgentActivityMonitor as it
+   * always was; this is the material that lets a human tell "Tier 0 is wired but
+   * silent" apart from "Tier 0 is reporting".
+   */
+  lastActivityFrameAt: number | null;
+  lastReportedState: ActivityState | null;
+  lastReportedStatus: AgentStatus | null;
 }
 
 export interface SupervisorEntry {
@@ -84,6 +94,10 @@ export interface SupervisorEntry {
   connectedAt: number;
   lastHeartbeatAt: number;
   ready: boolean;
+  /** See SupervisorConnection — diagnostics only. */
+  lastActivityFrameAt: number | null;
+  lastReportedState: ActivityState | null;
+  lastReportedStatus: AgentStatus | null;
 }
 
 export interface SupervisorActivityEvent {
@@ -210,6 +224,9 @@ export class SupervisorRegistry extends EventEmitter {
       // behavior) rather than leaving `ready: false` forever and forcing every frontend open of
       // that pane to sit out the full loading-overlay timeout.
       ready: info.reportsReady === true ? false : true,
+      lastActivityFrameAt: null,
+      lastReportedState: null,
+      lastReportedStatus: null,
     };
     this.connections.set(key, conn);
     this.socketKeys.set(socket, key);
@@ -235,6 +252,9 @@ export class SupervisorRegistry extends EventEmitter {
         break;
 
       case 'activity':
+        conn.lastActivityFrameAt = Date.now();
+        conn.lastReportedState = msg.state;
+        conn.lastReportedStatus = msg.status ?? null;
         this.emit('activity', {
           serverName: conn.serverName,
           target: conn.target,
@@ -358,6 +378,9 @@ export class SupervisorRegistry extends EventEmitter {
       connectedAt: conn.connectedAt,
       lastHeartbeatAt: conn.lastHeartbeatAt,
       ready: conn.ready,
+      lastActivityFrameAt: conn.lastActivityFrameAt,
+      lastReportedState: conn.lastReportedState,
+      lastReportedStatus: conn.lastReportedStatus,
     }));
   }
 

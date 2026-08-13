@@ -358,6 +358,9 @@ packages/
 - Branch search: `GET /api/servers/:name/branches?working_directory=` (optional working directory override for branch listing)
 - Units: `/api/units` CRUD + `execute`/`follow-up`/`stop`/`approve-plan`/`logs` (merged Operation+WorkerProfile — behavior + runtime; Issue #263 Refine B)
 - Operations: `GET /api/operations` (currently running execution runs — `{ unitId, taskId, target }[]`; no operations table anymore)
+- Activity diagnostics: `GET /api/debug/activity` (read-only Tier attribution per window — `decidedBy`
+  (`tier0_supervisor`/`tier1_hook`/`tier2_title`/`tier3_heuristic`/`tier4_probe`/`none`) plus the supervisor /
+  hook / probe material and the last announced transition; rendered in Settings → System「稼働検知診断」)
 - Sidekick tags (Issue #263 Refine A): `tags: string[]` replaces the old single-value `phase:` frontmatter field. The five
   phase names are special-cased as "phase tags" (a Unit's `phaseConfig` can only assign a phase to a Sidekick carrying
   that tag; `isDefault` requires at least one phase tag); any other tag is free-form. `/azt-sidekick` accepts multiple

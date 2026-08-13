@@ -948,7 +948,7 @@ describe('WindowSessionResolver', () => {
       });
       const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
       const result = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
-      expect(result).toEqual({ status: 'working', completedAt: null, interruptedAt: null });
+      expect(result).toEqual({ status: 'working', completedAt: null, interruptedAt: null, tailState: 'in_progress', lastEntryTimestampMs: recentMtime });
     });
 
     it('returns idle when mtime is recent but the tail record is terminal_interrupted (stop-button interrupt)', async () => {
@@ -966,7 +966,7 @@ describe('WindowSessionResolver', () => {
       const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
       const result = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
       // 中断は完了ではない: interruptedAt だけが立ち、completedAt は null。
-      expect(result).toEqual({ status: 'idle', completedAt: null, interruptedAt: recentMtime });
+      expect(result).toEqual({ status: 'idle', completedAt: null, interruptedAt: recentMtime, tailState: 'terminal_interrupted', lastEntryTimestampMs: recentMtime });
     });
 
     it('returns idle (never a fake working) when the tail record is terminal_final without a usable timestamp — P3', async () => {
@@ -984,7 +984,7 @@ describe('WindowSessionResolver', () => {
       const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
       const result = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
       // timestamp が無い＝再新性の根拠が無い。mtime へは倒さない（偽 working も偽完了も作らない）。
-      expect(result).toEqual({ status: 'idle', completedAt: null, interruptedAt: null });
+      expect(result).toEqual({ status: 'idle', completedAt: null, interruptedAt: null, tailState: 'terminal_final', lastEntryTimestampMs: null });
     });
 
     it('returns idle when mtime is recent but the tail record is terminal_local (local command completion, e.g. /model — codex review Important 1)', async () => {
@@ -1058,7 +1058,7 @@ describe('WindowSessionResolver', () => {
         });
         const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
         const result = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
-        expect(result).toEqual({ status: 'idle', completedAt: recentEntryTimestampMs, interruptedAt: null });
+        expect(result).toEqual({ status: 'idle', completedAt: recentEntryTimestampMs, interruptedAt: null, tailState: 'terminal_final', lastEntryTimestampMs: recentEntryTimestampMs });
       });
 
       it('returns working while the last meaningful entry is in_progress and fresh', async () => {
@@ -1092,7 +1092,7 @@ describe('WindowSessionResolver', () => {
         });
         const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
         const result = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
-        expect(result).toEqual({ status: 'idle', completedAt: null, interruptedAt: null });
+        expect(result).toEqual({ status: 'idle', completedAt: null, interruptedAt: null, tailState: 'unknown', lastEntryTimestampMs: null });
       });
     });
   });

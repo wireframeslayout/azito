@@ -235,7 +235,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   await app.register(gitRoutes, { serverRepo, transportFactory, taskRepo, projectServerRepo, worktreeServiceFactory });
   await app.register(projectsRoutes, { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux: tmuxClient, serverRepo, projectSecretRepo });
   await app.register(unitsRoutes, { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, projectServerRepo, serverRepo, sidekickLoader: sidekickPackageLoader, unitTypeLoader });
-  await app.register(operationsRoutes, { executeTaskUseCase, agentActivityMonitor });
+  await app.register(operationsRoutes, { executeTaskUseCase, agentActivityMonitor, supervisorRegistry, windowRepo });
   await app.register(tasksRoutes, { taskRepo, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux: tmuxClient, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService: windowRespawnService, taskRestoreService, unitTypeLoader, sidekickLoader: sidekickPackageLoader, projectSecretRepo });
   await app.register(windowsRoutes, { windowRepo, projectRepo, taskRepo, tmux: tmuxClient, serverRepo, respawnService: windowRespawnService, sessionStrategyFactory, sessionCaptureService, supervisorRegistry, windowActivityStatusService, notificationBus, resourceGuard });
   await app.register(providersRoutes, { providerRepo: wiring.providerRepo });

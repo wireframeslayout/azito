@@ -352,6 +352,9 @@ describe('GET /api/windows/pane-loading-state', () => {
       connectedAt: Date.now(),
       lastHeartbeatAt: Date.now(),
       ready: false,
+      lastActivityFrameAt: null,
+      lastReportedState: null,
+      lastReportedStatus: null,
     };
     app = await setup(win, [entry]);
     const res = await app.inject({

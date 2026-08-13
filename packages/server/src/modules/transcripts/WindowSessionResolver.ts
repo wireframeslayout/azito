@@ -5,7 +5,7 @@ import type { IServerRepository, ServerConfig } from '../servers/Server';
 import { windowSpecMatches } from '../tmux/TmuxClient';
 import { stripPaneSuffix } from '../windows/paneTarget';
 import type { SessionCaptureService } from '../windows/SessionCaptureService';
-import type { TranscriptSource } from './sources/TranscriptSource';
+import type { TailState, TranscriptSource } from './sources/TranscriptSource';
 import { parsePsOutput, isAgentProcessRunning, findAgentProcessStartMs, findAgentProcessTypes, argsContainSessionId } from './agentProcessDetection';
 import type { PsEntry } from './agentProcessDetection';
 
@@ -37,6 +37,13 @@ export interface WindowActivityProbeResult {
    * reason='interrupted' として完了行を作らない根拠に使う。
    */
   interruptedAt: number | null;
+  /**
+   * 診断専用（GET /api/debug/activity）: この判定の根拠になった transcript 末尾の分類と、その
+   * エントリ自身の timestamp。tail を読む前に return した経路（プロセス不在・セッション未紐付け等）
+   * では undefined になる。判定ロジックはこの2フィールドを一切参照しない。
+   */
+  tailState?: TailState;
+  lastEntryTimestampMs?: number | null;
 }
 
 const OFFLINE_PROBE_RESULT: WindowActivityProbeResult = { status: 'offline', completedAt: null, interruptedAt: null };
@@ -364,20 +371,22 @@ export class WindowSessionResolver {
     if (mtimeMs === null || Date.now() - mtimeMs > SESSION_ACTIVITY_WINDOW_MS) return IDLE_PROBE_RESULT;
 
     const tail = await source.getSessionTailState(sessionId);
+    // 診断用の付帯情報。判定には使わない（下の分岐は従来どおり tail.state / timestamp のみで決まる）。
+    const diag = { tailState: tail.state, lastEntryTimestampMs: tail.lastEntryTimestampMs };
     // 意味あるエントリの timestamp が無い＝再新性の根拠が無い（mtime へは倒さない。上記コメント参照）。
-    if (tail.lastEntryTimestampMs === null) return IDLE_PROBE_RESULT;
-    if (Date.now() - tail.lastEntryTimestampMs > SESSION_ACTIVITY_WINDOW_MS) return IDLE_PROBE_RESULT;
+    if (tail.lastEntryTimestampMs === null) return { ...IDLE_PROBE_RESULT, ...diag };
+    if (Date.now() - tail.lastEntryTimestampMs > SESSION_ACTIVITY_WINDOW_MS) return { ...IDLE_PROBE_RESULT, ...diag };
 
     if (tail.state === 'terminal_final') {
-      return { status: 'idle', completedAt: tail.lastEntryTimestampMs, interruptedAt: null };
+      return { status: 'idle', completedAt: tail.lastEntryTimestampMs, interruptedAt: null, ...diag };
     }
     if (tail.state === 'terminal_interrupted') {
-      return { status: 'idle', completedAt: null, interruptedAt: tail.lastEntryTimestampMs };
+      return { status: 'idle', completedAt: null, interruptedAt: tail.lastEntryTimestampMs, ...diag };
     }
-    if (tail.state === 'in_progress') return { status: 'working', completedAt: null, interruptedAt: null };
+    if (tail.state === 'in_progress') return { status: 'working', completedAt: null, interruptedAt: null, ...diag };
     // terminal_local（/model 等のローカルコマンド完了）／unknown: working の根拠にも
     // 完了・中断の根拠にもしない。
-    return IDLE_PROBE_RESULT;
+    return { ...IDLE_PROBE_RESULT, ...diag };
   }
 
   /**

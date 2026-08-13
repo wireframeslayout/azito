@@ -240,6 +240,59 @@ export interface ProcessActivityProbeEntry {
   taskId?: number;
   projectId?: number;
   label?: string;
+  /**
+   * Diagnostics-only passthrough (GET /api/debug/activity): how the probe
+   * classified the session transcript's tail and when that entry was written.
+   * Typed as a plain string here so this port stays independent of the
+   * transcripts module's own TailState union. Never read by the ladder.
+   */
+  tailState?: string;
+  lastEntryTimestampMs?: number | null;
+}
+
+/** Which rung of the ladder decided a key's state on the last tick. */
+export type ActivityDecidedBy =
+  | 'tier0_supervisor'
+  | 'tier1_hook'
+  | 'tier2_title'
+  | 'tier3_heuristic'
+  | 'tier4_probe'
+  /**
+   * No tier spoke for this key: either nothing observed it at all, or it is a
+   * registered execution run with no supervisor attached, whose "registered =
+   * running" assumption is the run registry's, not a detection tier's.
+   */
+  | 'none';
+
+/** The state that decision produced. `'none'` = nothing decided this tick. */
+export type ActivityDecidedState = 'working' | 'blocked' | 'idle' | 'offline' | 'none';
+
+interface ActivityDecision {
+  serverName: string;
+  target: string;
+  taskId?: number;
+  decidedBy: ActivityDecidedBy;
+  state: ActivityDecidedState;
+}
+
+/** One key's read-only diagnostic view — see AgentActivityMonitor.diagnostics(). */
+export interface ActivityDiagnosticEntry {
+  serverName: string;
+  target: string;
+  taskId?: number;
+  state: ActivityDecidedState;
+  decidedBy: ActivityDecidedBy;
+  hook?: { lastSignalAt: number; lastEvent: 'start' | 'stop' };
+  probe?: {
+    status: 'working' | 'idle' | 'offline';
+    tailState?: string;
+    lastEntryTimestampMs?: number | null;
+    completedAt: number | null;
+    interruptedAt: number | null;
+    /** Age of the last *successful* probe snapshot, not of this entry alone. */
+    snapshotAgeMs: number | null;
+  };
+  lastTransition?: { running: boolean; reason?: AgentActivityStopReason; at: number };
 }
 
 /**
@@ -301,6 +354,12 @@ const COMPLETION_SYNTHESIS_MAX_AGE_MS = 30_000;
  */
 const OPERATION_ATTRIBUTION_TTL_MS = 90_000;
 
+/**
+ * How long a key's last announced transition is kept for the diagnostics panel.
+ * Purely a display memo — nothing in the judgment path reads it.
+ */
+const LAST_TRANSITION_TTL_MS = 30 * 60_000;
+
 function windowKey(serverName: string, target: string): string {
   return `${serverName}::${stripPaneSuffix(target)}`;
 }
@@ -311,6 +370,11 @@ interface CollectResult {
   reasons: Map<string, AgentActivityStopReason>;
   /** `windows` rows that vanished on this tick (one-shot; see emitTransitions). */
   deletedKeys: Set<string>;
+  /**
+   * Which rung decided each key, for diagnostics only. Written at the same
+   * rungs that already record `reasons`, read by nothing in the judgment path.
+   */
+  decisions: Map<string, ActivityDecision>;
 }
 
 /** Inverse of windowKey() — server names never contain `::`, targets may not either. */
@@ -418,6 +482,10 @@ export class AgentActivityMonitor {
   // a source-only change emitTransitions() does not emit, swallowing the
   // run's `running: false` transition entirely.
   private processDisarmedKeys = new Set<string>();
+  // Diagnostics only (GET /api/debug/activity): last tick's per-key attribution
+  // and the last transition announced per key. Neither is read by collect().
+  private decisions = new Map<string, ActivityDecision>();
+  private lastTransitions = new Map<string, { running: boolean; reason?: AgentActivityStopReason; at: number }>();
   private tickCounter = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking = false;
@@ -448,6 +516,44 @@ export class AgentActivityMonitor {
 
   snapshot(): AgentActivityEntry[] {
     return [...this.state.values()];
+  }
+
+  /**
+   * Read-only diagnostic view of the last tick: one entry per key the ladder
+   * considered (operation runs, `windows` candidates and pure-supervised keys),
+   * carrying which rung decided it and the raw material each event-driven
+   * source last provided. Computed entirely from already-collected state — it
+   * neither ticks nor probes, so calling it has no effect on detection.
+   *
+   * Supervisor connection facts (pid/ready/frames) deliberately do NOT come
+   * from here: this class does not import SupervisorRegistry (see
+   * recordSupervisorSignal). The route-level aggregator joins them by key.
+   */
+  diagnostics(): ActivityDiagnosticEntry[] {
+    const probeAge = this.processProbeOkAt === 0 ? null : Date.now() - this.processProbeOkAt;
+    return [...this.decisions.entries()].map(([key, decision]) => {
+      const hook = this.hookStates.get(key);
+      const probe = this.processStates.get(key);
+      return {
+        serverName: decision.serverName,
+        target: decision.target,
+        taskId: decision.taskId,
+        state: decision.state,
+        decidedBy: decision.decidedBy,
+        hook: hook ? { lastSignalAt: hook.at, lastEvent: hook.status === 'running' ? 'start' as const : 'stop' as const } : undefined,
+        probe: probe
+          ? {
+            status: probe.status,
+            tailState: probe.tailState,
+            lastEntryTimestampMs: probe.lastEntryTimestampMs,
+            completedAt: probe.completedAt,
+            interruptedAt: probe.interruptedAt,
+            snapshotAgeMs: probeAge,
+          }
+          : undefined,
+        lastTransition: this.lastTransitions.get(key),
+      };
+    });
   }
 
   /**
@@ -536,9 +642,10 @@ export class AgentActivityMonitor {
     if (this.ticking) return;
     this.ticking = true;
     try {
-      const { next, reasons, deletedKeys } = await this.collect();
+      const { next, reasons, deletedKeys, decisions } = await this.collect();
       this.emitTransitions(next, reasons, deletedKeys);
       this.state = next;
+      this.decisions = decisions;
     } catch (err) {
       // Callers fire-and-forget tick(); swallow here so a failing tick can
       // never surface as an unhandled rejection and crash the process.
@@ -617,6 +724,18 @@ export class AgentActivityMonitor {
     const next = new Map<string, AgentActivityEntry>();
     const reasons = new Map<string, AgentActivityStopReason>();
     const deletedKeys = new Set<string>();
+    const decisions = new Map<string, ActivityDecision>();
+    /** Diagnostics bookkeeping — deliberately never read back by this method. */
+    const decide = (
+      key: string,
+      serverName: string,
+      target: string,
+      decidedBy: ActivityDecidedBy,
+      state: ActivityDecidedState,
+      taskId?: number,
+    ): void => {
+      decisions.set(key, { serverName, target: stripPaneSuffix(target), decidedBy, state, taskId });
+    };
     // Candidate keys whose tmux window was actually found this tick; becomes
     // previousLiveKeys at the end, so a window disappearing is detectable as an
     // edge rather than as a level (see the `window === null` branch).
@@ -642,8 +761,17 @@ export class AgentActivityMonitor {
           // supervised-idle → not running. An explicit active→idle report from
           // the supervisor is the strongest completion evidence there is.
           reasons.set(key, 'completed');
+          decide(key, e.serverName, e.target, 'tier0_supervisor', 'idle', e.taskId);
           continue;
         }
+        decide(
+          key,
+          e.serverName,
+          e.target,
+          supervisor ? 'tier0_supervisor' : 'none',
+          supervisor?.agentStatus === 'blocked' ? 'blocked' : 'working',
+          e.taskId,
+        );
         next.set(key, {
           serverName: e.serverName,
           target: stripPaneSuffix(e.target),
@@ -726,11 +854,11 @@ export class AgentActivityMonitor {
     // per-key Tier 0 refine happens inside the loop below) — a supervisor
     // connection is itself sufficient proof an agent is present, so this is
     // the only place such a key becomes an entry.
-    this.collectPureSupervisedEntries(operationKeys, candidateKeys, next);
+    this.collectPureSupervisedEntries(operationKeys, candidateKeys, next, decisions);
 
     if (candidates.length === 0) {
       this.previousLiveKeys = liveKeys;
-      return { next, reasons, deletedKeys };
+      return { next, reasons, deletedKeys, decisions };
     }
 
     // Resolve each server once per tick, not once per candidate window.
@@ -774,7 +902,13 @@ export class AgentActivityMonitor {
       const { windowSpec } = parseWindowTarget(w.tmuxTarget);
       const pi = extractPaneIndex(windowSpec, window.index, window.name);
       const classified = await this.classifyCandidateState(server, w, window, pi, key);
-      if (classified === 'blocked') next.set(key, { ...entry, status: 'blocked' });
+      if (classified === 'blocked') {
+        next.set(key, { ...entry, status: 'blocked' });
+        // The *running* verdict still belongs to the rung recorded above (Tier 0
+        // or the run registry); only the refined state changes here.
+        const decision = decisions.get(key);
+        if (decision) decisions.set(key, { ...decision, state: 'blocked' });
+      }
     }
 
     const nowSec = Math.floor(Date.now() / 1000);
@@ -806,6 +940,7 @@ export class AgentActivityMonitor {
               }
             }
           }
+          decide(key, w.serverName, w.tmuxTarget, 'tier0_supervisor', effectiveStatus ?? 'working', w.taskId ?? undefined);
           next.set(key, {
             serverName: w.serverName,
             target: stripPaneSuffix(w.tmuxTarget),
@@ -821,6 +956,7 @@ export class AgentActivityMonitor {
           // The supervisor explicitly reported its child idle — an authoritative
           // completion (Tier 0), not a guess.
           reasons.set(key, 'completed');
+          decide(key, w.serverName, w.tmuxTarget, 'tier0_supervisor', 'idle', w.taskId ?? undefined);
         }
         continue;
       }
@@ -834,6 +970,7 @@ export class AgentActivityMonitor {
         this.activityHistory.delete(key);
         this.hookStates.delete(key);
         reasons.set(key, 'deleted');
+        decide(key, w.serverName, w.tmuxTarget, 'none', 'offline', w.taskId ?? undefined);
         // The tmux window is gone while its `windows` row survives, so the
         // candidate-inventory diff above cannot see this. Announce it on the
         // live→gone edge only (previousLiveKeys), never on every later tick:
@@ -884,6 +1021,7 @@ export class AgentActivityMonitor {
           // The hooked process is gone (crash failsafe, or it exited after its
           // Stop hook) — that is a process disappearance, not a completion.
           reasons.set(key, 'offline');
+          decide(key, w.serverName, w.tmuxTarget, 'tier1_hook', 'offline', w.taskId ?? undefined);
           continue;
         }
         if (hook.status === 'running') {
@@ -894,11 +1032,13 @@ export class AgentActivityMonitor {
             if (server) {
               const classified = await this.classifyCandidateState(server, w, window, paneIndex, key);
               if (classified === 'blocked') {
+                decide(key, w.serverName, w.tmuxTarget, 'tier1_hook', 'blocked', w.taskId ?? undefined);
                 next.set(key, { ...entry, status: 'blocked' });
                 continue;
               }
             }
           }
+          decide(key, w.serverName, w.tmuxTarget, 'tier1_hook', 'working', w.taskId ?? undefined);
           next.set(key, entry);
           continue;
         }
@@ -911,6 +1051,7 @@ export class AgentActivityMonitor {
         // to the heuristic once the process exits.
         // The Stop hook firing is an explicit completion signal (Tier 1).
         reasons.set(key, 'completed');
+        decide(key, w.serverName, w.tmuxTarget, 'tier1_hook', 'idle', w.taskId ?? undefined);
         continue;
       }
 
@@ -938,8 +1079,10 @@ export class AgentActivityMonitor {
             // rest — for a key it previously called working, that is a
             // completion.
             reasons.set(key, 'completed');
+            decide(key, w.serverName, w.tmuxTarget, 'tier2_title', 'idle', w.taskId ?? undefined);
             continue;
           }
+          decide(key, w.serverName, w.tmuxTarget, 'tier2_title', classified, w.taskId ?? undefined);
           next.set(key, { ...entry, status: classified });
           continue;
         }
@@ -964,6 +1107,7 @@ export class AgentActivityMonitor {
         const probe = this.processStates.get(key);
         if (probe?.status === 'working') {
           this.activityHistory.delete(key);
+          decide(key, w.serverName, w.tmuxTarget, 'tier4_probe', 'working', w.taskId ?? undefined);
           next.set(key, entry);
           continue;
         }
@@ -986,11 +1130,13 @@ export class AgentActivityMonitor {
         // already recorded by Tier 4 (which read the transcript) is better
         // material and is kept.
         if (!reasons.has(key)) reasons.set(key, 'unknown');
+        decide(key, w.serverName, w.tmuxTarget, 'tier3_heuristic', 'idle', w.taskId ?? undefined);
         continue;
       }
       if (!nonShellForeground) {
         this.activityHistory.delete(key);
         if (!reasons.has(key)) reasons.set(key, 'offline');
+        decide(key, w.serverName, w.tmuxTarget, 'tier3_heuristic', 'offline', w.taskId ?? undefined);
         continue;
       }
 
@@ -1003,6 +1149,7 @@ export class AgentActivityMonitor {
       // task-done one. It must re-earn START_CONFIRM_ADVANCES like any new key.
       const previous = this.state.get(key);
       if (previous?.source === 'manual') {
+        decide(key, w.serverName, w.tmuxTarget, 'tier3_heuristic', 'working', w.taskId ?? undefined);
         next.set(key, entry);
         continue;
       }
@@ -1021,9 +1168,11 @@ export class AgentActivityMonitor {
       this.activityHistory.set(key, { lastActivity: window.activity, advanceTicks });
       if (advanceTicks.length < START_CONFIRM_ADVANCES) {
         if (!reasons.has(key)) reasons.set(key, 'unknown');
+        decide(key, w.serverName, w.tmuxTarget, 'tier3_heuristic', 'idle', w.taskId ?? undefined);
         continue;
       }
 
+      decide(key, w.serverName, w.tmuxTarget, 'tier3_heuristic', 'working', w.taskId ?? undefined);
       next.set(key, entry);
     }
 
@@ -1041,7 +1190,7 @@ export class AgentActivityMonitor {
     }
 
     this.previousLiveKeys = liveKeys;
-    return { next, reasons, deletedKeys };
+    return { next, reasons, deletedKeys, decisions };
   }
 
   /**
@@ -1108,9 +1257,17 @@ export class AgentActivityMonitor {
     operationKeys: Set<string>,
     candidateKeys: Set<string>,
     next: Map<string, AgentActivityEntry>,
+    decisions: Map<string, ActivityDecision>,
   ): void {
     for (const [key, sv] of this.supervisorStates) {
       if (operationKeys.has(key) || candidateKeys.has(key)) continue;
+      decisions.set(key, {
+        serverName: sv.serverName,
+        target: sv.target,
+        taskId: sv.taskId ?? undefined,
+        decidedBy: 'tier0_supervisor',
+        state: sv.status !== 'running' ? 'idle' : sv.agentStatus === 'blocked' ? 'blocked' : 'working',
+      });
       if (sv.status !== 'running') continue;
       next.set(key, {
         serverName: sv.serverName,
@@ -1208,6 +1365,7 @@ export class AgentActivityMonitor {
       // that only becomes blocked mid-run (after its initial "running" emit
       // already fired) would never surface the transition at all.
       if (previous === undefined || previous.status !== entry.status) {
+        this.lastTransitions.set(key, { running: true, at: Date.now() });
         this.notificationBus.emit({
           type: 'agent:activity',
           payload: {
@@ -1237,6 +1395,7 @@ export class AgentActivityMonitor {
           const completedAt = this.processStates.get(key)?.completedAt;
           if (completedAt != null) this.emittedCompletions.set(key, completedAt);
         }
+        this.lastTransitions.set(key, { running: false, reason, at: Date.now() });
         this.notificationBus.emit({
           type: 'agent:activity',
           payload: {
@@ -1263,6 +1422,7 @@ export class AgentActivityMonitor {
     for (const key of deletedKeys) {
       if (this.state.has(key) || next.has(key)) continue;
       const [serverName, target] = splitWindowKey(key);
+      this.lastTransitions.set(key, { running: false, reason: 'deleted', at: Date.now() });
       this.notificationBus.emit({
         type: 'agent:activity',
         payload: { serverName, target, running: false, source: 'manual', operation: false, reason: 'deleted' },
@@ -1270,5 +1430,12 @@ export class AgentActivityMonitor {
     }
 
     this.emitSynthesizedCompletions(next, deletedKeys);
+
+    // Diagnostics memo only — bound its growth by age (keys are never reused for
+    // task windows, whose targets carry a random suffix per run).
+    const transitionCutoff = Date.now() - LAST_TRANSITION_TTL_MS;
+    for (const [key, transition] of this.lastTransitions) {
+      if (transition.at < transitionCutoff) this.lastTransitions.delete(key);
+    }
   }
 }

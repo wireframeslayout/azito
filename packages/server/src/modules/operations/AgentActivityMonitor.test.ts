@@ -1675,4 +1675,75 @@ describe('AgentActivityMonitor', () => {
       expect(list).toHaveBeenCalledTimes(1);
     });
   });
+  describe('diagnostics() (read-only Tier attribution)', () => {
+    it('attributes a supervised window to Tier 0 and reports its last transition', async () => {
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+      listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000)));
+
+      monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'active');
+      // recordSupervisorSignal fires its own tick; flush it before asserting.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(monitor.diagnostics()).toEqual([
+        expect.objectContaining({
+          serverName: 'local',
+          target: 'azito:agent-1',
+          decidedBy: 'tier0_supervisor',
+          state: 'working',
+          lastTransition: expect.objectContaining({ running: true }),
+        }),
+      ]);
+    });
+
+    it('attributes a hook Stop to Tier 1 with the hook signal that produced it', async () => {
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+      listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000)));
+
+      monitor.recordHookSignal({
+        serverName: 'local', sessionName: 'azito', windowIndex: 3, windowName: 'agent-1', paneIndex: 1, event: 'stop',
+      });
+      // recordHookSignal fires its own tick; flush it before asserting.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(monitor.diagnostics()).toEqual([
+        expect.objectContaining({
+          decidedBy: 'tier1_hook',
+          state: 'idle',
+          hook: expect.objectContaining({ lastEvent: 'stop' }),
+        }),
+      ]);
+    });
+
+    it('attributes a probe-only window to Tier 4 and carries the probe material', async () => {
+      const probe = {
+        list: async () => [{
+          serverName: 'local', target: 'azito:agent-1', status: 'working' as const,
+          completedAt: null, interruptedAt: null, tailState: 'in_progress', lastEntryTimestampMs: 1234,
+        }],
+      };
+      monitor = new AgentActivityMonitor(
+        { getRunning } as unknown as ExecuteTaskUseCase,
+        { findAll } as unknown as IWindowRepository,
+        { listSessions } as unknown as TmuxClient,
+        { findByName } as unknown as IServerRepository,
+        { emit } as unknown as NotificationBus,
+        probe,
+      );
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+      // Stale activity: Tier 3 would call this idle, so a 'working' verdict can only be Tier 4's.
+      listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 600));
+
+      await monitor.tick();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await monitor.tick();
+
+      expect(monitor.diagnostics()).toEqual([
+        expect.objectContaining({
+          decidedBy: 'tier4_probe',
+          state: 'working',
+          probe: expect.objectContaining({ status: 'working', tailState: 'in_progress', lastEntryTimestampMs: 1234 }),
+        }),
+      ]);
+    });
+  });
 });

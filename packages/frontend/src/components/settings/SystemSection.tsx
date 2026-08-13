@@ -4,6 +4,7 @@ import { Chip } from '../ui/Chip';
 import { Spinner } from '../ui/Spinner';
 import { useSystemUpdate } from '../../hooks/useSystemUpdate';
 import { useConfirm } from '../../hooks/useConfirm';
+import ActivityDiagnosticsPanel from './sections/ActivityDiagnosticsPanel';
 import type { DeployMode, SystemUpdateStatus, VersionEntry } from '../../hooks/useSystemUpdate';
 
 const DEPLOY_MODE_LABEL: Record<DeployMode, string> = {
@@ -80,8 +81,15 @@ export default function SystemSection() {
     if (!res.started) setStartError(res.error ?? t('system.couldNotStart'));
   };
 
+  // 更新情報が取れない場合でも稼働検知診断は独立して表示する（診断したい状況ほど、他の
+  // API が落ちている可能性が高い）。
   if (loading && !status) {
-    return <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-dim)', fontSize: 'var(--font-md)' }}>Loading...</div>;
+    return (
+      <div>
+        <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-dim)', fontSize: 'var(--font-md)' }}>Loading...</div>
+        <ActivityDiagnosticsPanel />
+      </div>
+    );
   }
 
   if (!status) {
@@ -90,6 +98,7 @@ export default function SystemSection() {
         <p style={{ fontSize: 'var(--font-md)', color: 'var(--text-dim)', lineHeight: 1.5 }}>
           {t('system.fetchFailed')}
         </p>
+        <ActivityDiagnosticsPanel />
       </div>
     );
   }
@@ -245,6 +254,8 @@ export default function SystemSection() {
           </button>
         </div>
       </div>
+
+      <ActivityDiagnosticsPanel />
     </div>
   );
 }
