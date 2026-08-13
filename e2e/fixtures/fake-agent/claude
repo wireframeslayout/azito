@@ -1,0 +1,71 @@
+#!/usr/bin/env node
+// AZITO E2E 用の偽エージェント TUI。
+//
+// ファイル名が `claude` であること自体が仕様の一部: 稼働検知の Tier 4
+// (WindowSessionResolver.detectWindowAgentProcess) は `ps -o args=` の各トークンを basename 化して
+// `claude`/`codex` と突き合わせるため、このパスで起動されたプロセスは実 Claude Code と同じく
+// 「エージェント実体」として検出される。実行体を node にしてあるのも同じ理由で、tmux の
+// pane_current_command が `node` になり（= bare shell ではない）本物と同じ経路を通る。
+//
+// モード:
+//   --titles <stateFile>  … stateFile の中身 (working | idle | exit) を追従して OSC 2 タイトルを出す。
+//                            Tier 0 (tui-supervisor の TitleStateTracker) / Tier 2 (ペイン分類) 用。
+//   --silent <stateFile>  … タイトルも出力も一切出さない。Tier 2 を 'unknown' に倒し、
+//                            Tier 4 (プロセス実体 + transcript) を唯一の判定源にするため。
+//
+// どちらのモードでも stateFile が `exit` になるまで生き続ける（= ps から見え続ける）。
+
+const POLL_MS = 200;
+
+const [, , mode, stateFile] = process.argv;
+
+if (mode !== '--titles' && mode !== '--silent') {
+  process.stderr.write('usage: claude (--titles|--silent) <stateFile>\n');
+  process.exit(2);
+}
+if (!stateFile) {
+  process.stderr.write('usage: claude (--titles|--silent) <stateFile>\n');
+  process.exit(2);
+}
+
+const fs = require('node:fs');
+
+/** 実 Claude Code と同じ OSC 2 (ESC ] 2 ; title BEL) でペインタイトルを設定する。 */
+function setTitle(title) {
+  process.stdout.write(`\x1b]2;${title}\x07`);
+}
+
+function readState() {
+  try {
+    return fs.readFileSync(stateFile, 'utf-8').trim();
+  } catch {
+    return 'idle';
+  }
+}
+
+let lastTitle = null;
+
+function tick() {
+  const state = readState();
+  if (state === 'exit') {
+    process.exit(0);
+  }
+  if (mode === '--titles') {
+    // 実 Claude Code のタイトル規約に合わせる: working は先頭がスピナーグリフ、idle は `✳ `。
+    const title = state === 'working' ? '◐ e2e fake agent' : '✳ e2e fake agent';
+    // 状態が変わったときだけ書く。毎周期書くと純粋なバイト量ヒューリスティック側を刺激してしまう。
+    if (title !== lastTitle) {
+      setTitle(title);
+      lastTitle = title;
+    }
+  }
+  setTimeout(tick, POLL_MS);
+}
+
+if (mode === '--titles') {
+  // 起動直後に idle タイトルを出す（実エージェントの起動完了に相当）。
+  setTitle('✳ e2e fake agent');
+  lastTitle = '✳ e2e fake agent';
+}
+
+tick();

@@ -371,7 +371,15 @@ npx -w packages/server vitest run          # Unit tests (vitest 4.1.8)
 npx -w packages/server tsc --noEmit        # Server type check
 npx -w packages/frontend tsc --noEmit      # Frontend type check
 npm run depcruise                          # Module dependency direction / circular dependency check
+npm run e2e                                # Playwright E2E (activity detection suite; local only, not in CI)
 ```
+
+`npm run e2e` builds the frontend + tui-supervisor, then runs `e2e/` against a throwaway hub instance:
+temp `AZITO_DATA_DIR`, random free port, and an isolated tmux server via `TMUX_TMPDIR` (the host's tmux,
+:3001 and :5173 are never touched). Agents are scripted fakes — no LLM is launched. First run needs
+`npx playwright install chromium`. The server honours `AZITO_E2E_FAST_INTERVALS=1` to shorten the activity
+monitor's *observation* periods only (probe refresh / cache TTL); judgment thresholds are unchanged and the
+variable has no effect when unset.
 
 ### Adding a Migration
 1. Create `packages/server/src/shared/db/migrations/NNN_description.ts`

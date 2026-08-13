@@ -17,7 +17,8 @@
     "build:web": "npx -w packages/frontend vite build --outDir ../../public --emptyOutDir",
     "start": "PORT=3001 node packages/server/dist/main.js",
     "build:hub": "npx -w packages/server tsx scripts/build-hub.ts",
-    "depcruise": "depcruise packages/server/src --config .dependency-cruiser.cjs"
+    "depcruise": "depcruise packages/server/src --config .dependency-cruiser.cjs",
+    "e2e": "npm run build:web && npm run build --workspace=packages/tui-supervisor && playwright test --config e2e/playwright.config.ts"
   },
   "dependencies": {
     "better-sqlite3": "^12.10.0",
@@ -29,6 +30,7 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.0",
     "@types/dompurify": "^3.0.5",
     "dependency-cruiser": "^18.0.0"
   }
