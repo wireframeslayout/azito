@@ -49,6 +49,4 @@ test('ログイン → プロジェクト作成 → ウィンドウ登録 → �
     if (await header.getAttribute('aria-expanded') === 'false') await header.click();
   }
   await expect(page.getByText('e2e-smoke-window').first()).toBeVisible({ timeout: 20_000 });
-
-  await agent.kill();
 });

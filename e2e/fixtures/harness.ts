@@ -96,6 +96,15 @@ export class Harness {
     private readonly logPath: string,
   ) {}
 
+  /**
+   * このテストで作った後始末対象（偽エージェント／登録ウィンドウ行）。ハーネス自体は
+   * ワーカースコープで使い回されるため、テストが失敗して spec 側の破棄処理へ到達しなくても
+   * 残骸が次のテストへ漏れないよう、生成物をここで追跡して {@link cleanupTestResources} で
+   * まとめて破棄する。
+   */
+  private trackedAgents: FakeAgent[] = [];
+  private trackedWindowIds: number[] = [];
+
   static async start(): Promise<Harness> {
     assertPrerequisites();
 
@@ -145,11 +154,18 @@ export class Harness {
 
     const logPath = path.join(root, 'server.log');
     const logFd = fs.openSync(logPath, 'a');
-    const serverProcess = spawn(process.execPath, [TSX_CLI, SERVER_ENTRY], {
-      cwd: REPO_ROOT,
-      env: childEnv,
-      stdio: ['ignore', logFd, logFd],
-    });
+    let serverProcess: ChildProcess;
+    try {
+      serverProcess = spawn(process.execPath, [TSX_CLI, SERVER_ENTRY], {
+        cwd: REPO_ROOT,
+        env: childEnv,
+        stdio: ['ignore', logFd, logFd],
+      });
+    } finally {
+      // spawn() は fd を複製して子へ渡すので、親側の記述子はここで閉じてよい
+      // （閉じないとワーカーの寿命ぶんリークする）。
+      fs.closeSync(logFd);
+    }
 
     const harness = new Harness(
       baseUrl, uiToken, root, dataDir, claudeConfigDir, tmuxTmpDir, fakeAgentPath,
@@ -236,6 +252,7 @@ export class Harness {
         worker_type: 'claude',
       }),
     });
+    this.trackedWindowIds.push(id);
     if (options.agentSessionId) {
       await this.api(`/windows/${id}`, {
         method: 'PUT',
@@ -247,6 +264,24 @@ export class Harness {
 
   async deleteWindow(windowId: number): Promise<void> {
     await this.api(`/windows/${windowId}`, { method: 'DELETE' });
+    this.trackedWindowIds = this.trackedWindowIds.filter((id) => id !== windowId);
+  }
+
+  /**
+   * 1テスト分の生成物を破棄する（test.ts の auto fixture が各テスト後に必ず呼ぶ）。
+   * 破棄自体の失敗は握りつぶす — ここで投げると、本来の失敗原因を後始末のエラーが覆い隠す。
+   */
+  async cleanupTestResources(): Promise<void> {
+    const agents = this.trackedAgents;
+    const windowIds = this.trackedWindowIds;
+    this.trackedAgents = [];
+    this.trackedWindowIds = [];
+    for (const agent of agents) {
+      await agent.kill().catch(() => undefined);
+    }
+    for (const id of windowIds) {
+      await this.api(`/windows/${id}`, { method: 'DELETE' }).catch(() => undefined);
+    }
   }
 
   // ─── 隔離 tmux ───
@@ -285,7 +320,7 @@ export class Harness {
     // 定期再送（ACTIVE_RESEND_MS = 15秒）まで稼働が見えない。登録完了まで待って競合を消す。
     if (options.supervised) await this.waitForSupervisor(target);
 
-    return {
+    const agent: FakeAgent = {
       target,
       setState: (state) => fs.writeFileSync(stateFile, state),
       kill: async () => {
@@ -293,6 +328,8 @@ export class Harness {
         await this.tmux(['kill-window', '-t', target]).catch(() => undefined);
       },
     };
+    this.trackedAgents.push(agent);
+    return agent;
   }
 
   /** `GET /api/supervisors` に該当ターゲットの接続が現れるまで待つ。 */

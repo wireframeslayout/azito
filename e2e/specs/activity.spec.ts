@@ -70,8 +70,6 @@ test.describe('稼働検知', () => {
     // 消灯（稼働行が消える）と完了行の生成は同じ `running:false, reason:'completed'` 遷移から起きる。
     await expect(workingRow(app, label)).toHaveCount(0, { timeout: REALTIME_BUDGET_MS });
     await expect(finishedRow(app, label)).toBeVisible({ timeout: REALTIME_BUDGET_MS });
-
-    await agent.kill();
   });
 
   test('上位 Tier の idle を下位 Tier が上書きしない（完了後に transcript を新鮮に保っても再点灯しない）', async ({ app, harness }) => {
@@ -96,8 +94,6 @@ test.describe('稼働検知', () => {
     }
     // 完了行も消えていない（再稼働扱いされていれば完了行は落ちる）。
     await expect(finishedRow(app, label)).toBeVisible();
-
-    await agent.kill();
   });
 
   test('リスポーン直後: housekeeping のみのセッションでは稼働も完了も出ない', async ({ app, harness }) => {
@@ -117,8 +113,6 @@ test.describe('稼働検知', () => {
       await sleep(1_000);
       await expect(windowRow(app, label)).toHaveCount(0);
     }
-
-    await agent.kill();
   });
 
   test('中断で終わったセッションは完了行を作らない', async ({ app, harness }) => {
@@ -144,8 +138,6 @@ test.describe('稼働検知', () => {
     await sleep(8_000);
     await expect(finishedRow(app, label)).toHaveCount(0);
     await expect(windowRow(app, label)).toHaveCount(0);
-
-    await agent.kill();
   });
 
   test('ウィンドウ削除で完了行が消える', async ({ app, harness }) => {
@@ -161,7 +153,5 @@ test.describe('稼働検知', () => {
 
     await harness.deleteWindow(windowId);
     await expect(windowRow(app, label)).toHaveCount(0, { timeout: 20_000 });
-
-    await agent.kill();
   });
 });

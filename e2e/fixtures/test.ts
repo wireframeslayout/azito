@@ -17,6 +17,7 @@ interface WorkerFixtures {
 
 interface TestFixtures {
   app: Page;
+  cleanupHarness: void;
 }
 
 export const test = base.extend<TestFixtures, WorkerFixtures>({
@@ -30,6 +31,17 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
       }
     },
     { scope: 'worker', timeout: 120_000 },
+  ],
+
+  // 各テスト後に、そのテストが作った偽エージェント・tmux ウィンドウ・登録ウィンドウ行を必ず破棄する。
+  // `auto` なのは、テストが失敗して spec 本体の破棄処理へ到達しなかった場合こそ残骸が問題になるため
+  // （ハーネスはワーカースコープで共有されるので、残骸は次のテストの稼働判定に混ざり込む）。
+  cleanupHarness: [
+    async ({ harness }, use) => {
+      await use();
+      await harness.cleanupTestResources();
+    },
+    { auto: true },
   ],
 
   app: async ({ page, harness }, use) => {

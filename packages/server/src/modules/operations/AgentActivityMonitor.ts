@@ -272,17 +272,26 @@ const PROCESS_PROBE_REFRESH_MS = resolveInterval(15_000, 3_000);
  * answer", not "nothing is running"), but that snapshot must not keep a
  * stopped agent lit forever: past this age Tier 4 goes silent and the key
  * falls through to the Tier 3 heuristic, which reads live tmux state.
+ *
+ * NOT shortened by AZITO_E2E_FAST_INTERVALS: this is a judgment threshold
+ * ("how old an answer may be before it stops counting as evidence"), not an
+ * observation period, so shortening it would make E2E exercise different
+ * semantics from production.
  */
-const PROCESS_PROBE_MAX_AGE_MS = resolveInterval(60_000, 12_000);
+const PROCESS_PROBE_MAX_AGE_MS = 60_000;
 
 /**
  * How recent a probe-observed completion must be for the monitor to synthesize
  * a `completed` transition for a key that was never seen running (the "turn too
- * short for any tick to catch it" case). Bounded to a couple of probe cycles so
- * that a completion which happened long before the hub started — or before this
- * window was ever polled — does not manufacture a stale "finished" row.
+ * short for any tick to catch it" case). Bounded to a couple of production probe
+ * cycles so that a completion which happened long before the hub started — or
+ * before this window was ever polled — does not manufacture a stale "finished" row.
+ *
+ * Deliberately a standalone constant rather than `2 * PROCESS_PROBE_REFRESH_MS`:
+ * it is a judgment threshold, so it must keep its production value even when
+ * AZITO_E2E_FAST_INTERVALS shortens the refresh interval (see above).
  */
-const COMPLETION_SYNTHESIS_MAX_AGE_MS = 2 * PROCESS_PROBE_REFRESH_MS;
+const COMPLETION_SYNTHESIS_MAX_AGE_MS = 30_000;
 
 /**
  * How long after an execution run leaves `getRunning()` a synthesized
