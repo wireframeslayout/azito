@@ -30,7 +30,14 @@ if [[ -z "${TMUX_PANE:-}" ]] || ! command -v tmux >/dev/null 2>&1; then
   exit 0
 fi
 
-IDENT="$(tmux display-message -p -t "$TMUX_PANE" '#{session_name}|#{window_index}|#{window_name}|#{pane_index}' 2>/dev/null)" || exit 0
+# AZITO creates a per-tab tmux *linked session* (`tmux new-session -t <src> -s
+# _azito_<src>_<ts>`, sharing the same window group). For a pane reached via a
+# linked session, #{session_name} resolves to that throwaway `_azito_*` name,
+# not the canonical session the `windows` table keys on — so the lookup below
+# would silently miss and the Tier 1 signal gets dropped. #{session_group}
+# resolves to the *original* session name in both linked and unlinked cases,
+# so prefer it whenever the pane's session is grouped.
+IDENT="$(tmux display-message -p -t "$TMUX_PANE" '#{?session_grouped,#{session_group},#{session_name}}|#{window_index}|#{window_name}|#{pane_index}' 2>/dev/null)" || exit 0
 [[ -n "$IDENT" ]] || exit 0
 
 IFS='|' read -r SESSION_NAME WINDOW_INDEX WINDOW_NAME PANE_INDEX <<< "$IDENT"
