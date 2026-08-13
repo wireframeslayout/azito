@@ -153,17 +153,23 @@ export interface TranscriptSource {
    * - 'terminal_interrupted': 最後の意味あるレコードが中断マーカー（停止ボタン等によるユーザー中断）。
    *   中断マーカー自体の書き込みが mtime を更新するため、mtime だけでは「稼働中」の偽陽性が生じる —
    *   このケースのみ、mtime が新しくても idle とみなしてよい（Issue #338 followup 退行修正）。
+   * - 'terminal_local': 最後の意味あるレコードがローカルコマンド実行の完了（例: /model）。エージェント
+   *   のターンを開始せず制御をユーザーに返した状態のため、mtime が新しくても idle とみなしてよい
+   *   （Issue #338 コードレビュー指摘: ローカルコマンド完了だけで mtime 更新→120秒 working になる
+   *   偽 working を防ぐ）。
    * - 'terminal_final': 最後の意味あるレコードがエージェントの最終応答（最後のブロックが text で
-   *   終わる assistant エントリ）、またはローカルコマンド実行の完了。プロセスは応答待ち/実行中では
-   *   ないが、ユーザーによる中断ではない正常な完了なので、mtime 120秒窓の間は working のまま扱ってよい
-   *   （completed 行合成の観測窓を守るため。'terminal_interrupted' とは異なり idle の根拠にしない）。
+   *   終わる assistant エントリ）。プロセスは応答待ち/実行中ではないが、ユーザーによる中断ではない
+   *   正常な完了なので、mtime 120秒窓の間は working のまま扱ってよい（completed 行合成の観測窓を
+   *   守るため。'terminal_interrupted'/'terminal_local' とは異なり idle の根拠にしない）。
    * - 'in_progress': 最後が user 発話・tool_use・tool_result 等（応答待ち、または実行中）。
    * - 'unknown': ファイルが読めない、セッションが存在しない、または末尾窓に意味のあるレコードが
    *   見つからない。呼び出し元は従来通り mtime のみで判定する（working 扱い）。
    *
-   * 将来別のエージェント種別を追加する場合、この契約（terminal_interrupted/terminal_final/
-   * in_progress/unknown の意味）に従って実装するだけで、getActivityStatus 側のロジック変更なしに
-   * 稼働判定へ反映される。
+   * 将来別のエージェント種別を追加する場合、この契約（terminal_interrupted/terminal_local/
+   * terminal_final/in_progress/unknown の意味）に従って実装するだけで、getActivityStatus 側の
+   * ロジック変更なしに稼働判定へ反映される。
    */
-  getSessionTailState(sessionId: string): Promise<'in_progress' | 'terminal_interrupted' | 'terminal_final' | 'unknown'>;
+  getSessionTailState(
+    sessionId: string,
+  ): Promise<'in_progress' | 'terminal_interrupted' | 'terminal_local' | 'terminal_final' | 'unknown'>;
 }

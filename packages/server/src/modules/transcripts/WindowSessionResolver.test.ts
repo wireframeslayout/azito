@@ -983,6 +983,23 @@ describe('WindowSessionResolver', () => {
       expect(status).toBe('working');
     });
 
+    it('returns idle when mtime is recent but the tail record is terminal_local (local command completion, e.g. /model — codex review Important 1)', async () => {
+      const panes: TmuxPaneInfo[] = [
+        { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
+      ];
+      const recentMtime = Date.now() - 5 * 1000;
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+        listAllPanes: async () => panes,
+        getPanePid: async () => 9000,
+        execCommand: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
+        claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
+        claudeGetSessionTailState: async () => 'terminal_local' as const,
+      });
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const status = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
+      expect(status).toBe('idle');
+    });
+
     it('falls back to the task-linked session when the window has no agentSessionId of its own', async () => {
       const panes: TmuxPaneInfo[] = [
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },

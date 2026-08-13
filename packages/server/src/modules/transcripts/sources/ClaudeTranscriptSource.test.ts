@@ -956,7 +956,7 @@ describe('ClaudeTranscriptSource', () => {
       expect(await service.getSessionTailState(SID_A)).toBe('terminal_interrupted');
     });
 
-    it('returns terminal_final when the last meaningful record is a local command entry', async () => {
+    it('returns terminal_local when the last meaningful record is a local command entry (codex review Important 1: a local command never starts an agent turn, so it must not be treated as working)', async () => {
       writeSession(dir, 'proj-a', SID_A, [
         { type: 'user', uuid: 'u1', message: { content: 'hi' } },
         {
@@ -966,7 +966,7 @@ describe('ClaudeTranscriptSource', () => {
         },
         { type: 'user', uuid: 'out1', message: { content: '<local-command-stdout>Set model to Opus 5</local-command-stdout>' } },
       ]);
-      expect(await service.getSessionTailState(SID_A)).toBe('terminal_final');
+      expect(await service.getSessionTailState(SID_A)).toBe('terminal_local');
     });
 
     it('returns terminal_final when the last meaningful record is an assistant final text response', async () => {

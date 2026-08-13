@@ -18,23 +18,27 @@ export function truncateText(text: string, limit: number): { text: string; trunc
 }
 
 /**
- * 正規化済み TranscriptEntry 1件を稼働状態（in_progress/terminal_interrupted/terminal_final）に
- * 分類する。両ソースの getSessionTailState から共有される — Codex の 'reasoning' response_item は
- * normalizeResponseItem によって Claude の thinking ブロックと同じ type:'assistant' 形へ正規化される
- * ため、この分類ロジックはエージェント非依存で成立する。
+ * 正規化済み TranscriptEntry 1件を稼働状態（in_progress/terminal_interrupted/terminal_local/
+ * terminal_final）に分類する。両ソースの getSessionTailState から共有される — Codex の
+ * 'reasoning' response_item は normalizeResponseItem によって Claude の thinking ブロックと同じ
+ * type:'assistant' 形へ正規化されるため、この分類ロジックはエージェント非依存で成立する。
  *
- * terminal を2値に分けている理由（Issue #338 followup 退行修正）: 停止ボタンによる中断マーカー書き込み
- * 自体が mtime を更新してしまい、mtime だけでは「稼働中」の偽陽性が生じる（これが本来 terminal ゲートで
- * 潰したかったケース）。一方、正常完了直後（assistant の最終応答で終わる）は、mtime 120秒窓の間
- * working のまま見せ続けたい（completed 行の合成に必要な観測窓のため） — ここを一律 terminal 扱いにする
- * と、短時間で完了したターンが working を一度も観測されず稼働リストに現れなくなる（今回の退行）。
- * そのため呼び出し元（WindowSessionResolver.getActivityStatus）は terminal_interrupted のみを idle の
- * 根拠にし、terminal_final は working のまま扱う。
+ * terminal を複数値に分けている理由（Issue #338 followup 退行修正）: 停止ボタンによる中断マーカー
+ * 書き込み自体が mtime を更新してしまい、mtime だけでは「稼働中」の偽陽性が生じる（これが本来
+ * terminal ゲートで潰したかったケース）。一方、正常完了直後（assistant の最終応答で終わる）は、
+ * mtime 120秒窓の間 working のまま見せ続けたい（completed 行の合成に必要な観測窓のため） —
+ * ここを一律 terminal 扱いにすると、短時間で完了したターンが working を一度も観測されず稼働
+ * リストに現れなくなる（今回の退行）。そのため呼び出し元（WindowSessionResolver.getActivityStatus）
+ * は terminal_interrupted / terminal_local のみを idle の根拠にし、terminal_final は working の
+ * まま扱う。
  *
  * - interrupted: 中断マーカー（停止ボタン等） → terminal_interrupted（応答待ち/実行中ではない。
- *   mtime が新しくても idle に倒してよい唯一のケース）
- * - command: ローカルコマンド実行（例: /model） → terminal_final（エージェントのターンを開始せず
- *   制御をユーザーに返した状態。ユーザーによる中断ではないため terminal_interrupted には含めない）
+ *   mtime が新しくても idle に倒してよいケース）
+ * - command: ローカルコマンド実行（例: /model） → terminal_local（エージェントのターンを開始せず
+ *   制御をユーザーに返した状態。ユーザーによる中断ではないため terminal_interrupted には含めないが、
+ *   ターンが開始していない以上 working として見せ続ける理由もないため idle の根拠にする —
+ *   Issue #338 コードレビュー指摘: ローカルコマンド完了だけで mtime 更新→120秒 working になる
+ *   偽 working を防ぐ）
  * - interaction: AskUserQuestion 等の質問＋回答確定イベント → in_progress（回答後もエージェントは
  *   ターンを継続するため、tool_result と同様に応答待ち/実行中とみなす）
  * - user: ユーザー発話 → in_progress（エージェントの応答待ち）
@@ -51,9 +55,11 @@ export function truncateText(text: string, limit: number): { text: string; trunc
  *   （この通知はエージェントのターンを再開させるため、応答完了とはみなさない） — 明示的な分岐は
  *   置かず、下の system/other フォールスルーに委ねる。
  */
-export function classifyTailEntry(entry: TranscriptEntry): 'in_progress' | 'terminal_interrupted' | 'terminal_final' {
+export function classifyTailEntry(
+  entry: TranscriptEntry,
+): 'in_progress' | 'terminal_interrupted' | 'terminal_local' | 'terminal_final' {
   if (entry.type === 'interrupted') return 'terminal_interrupted';
-  if (entry.type === 'command') return 'terminal_final';
+  if (entry.type === 'command') return 'terminal_local';
   if (entry.type === 'interaction') return 'in_progress';
   if (entry.type === 'user') return 'in_progress';
   if (entry.type === 'tool') return 'in_progress';
