@@ -115,6 +115,49 @@ describe('WindowActivityStatusService', () => {
     expect(getActivityStatus).toHaveBeenCalledTimes(1);
   });
 
+  it('does not strip a standalone window whose name itself ends in `.N` (no sibling row)', async () => {
+    // `agent-1.1` here is the window's actual name, not a pane suffix on a
+    // window called `agent-1` — no row is registered under the stripped form,
+    // so it must survive as its own independent entry with its target intact.
+    const windows = [
+      buildWindow({ id: 1, ownerType: 'project', projectId: 5, taskId: null, tmuxTarget: 'main:agent-1.1' }),
+    ];
+    const { windowRepo, serverRepo, windowSessionResolver, getActivityStatus } = buildDeps(windows, [LOCAL_SERVER], new Map([[1, 'idle']]));
+    const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver);
+    const result = await service.list();
+    expect(result).toEqual([
+      { windowId: 1, serverName: 'local', target: 'main:agent-1.1', status: 'idle', taskId: undefined, projectId: 5, label: undefined },
+    ]);
+    expect(getActivityStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not merge two genuinely independent windows named `agent-1` and `agent-1.1` when their ownership is not complementary', async () => {
+    // Limitation of the conservative (DB-only, no live tmux query) heuristic:
+    // it approximates "same physical window" as "stripped form has a
+    // complementary-owned (one task-owned, one project-owned) sibling row",
+    // which is the one real production source of this duplication (a task
+    // run's window also getting a project-scoped row, or vice versa — see the
+    // dedup doc comment in WindowActivityStatusService). Two independently
+    // registered windows that happen to share this exact naming pattern are
+    // only mis-merged if they ALSO happen to have complementary ownership;
+    // this test fixes the chosen (safer) behavior for the case where they
+    // don't — both project-owned here, for two different projects — so both
+    // rows are kept rather than one being silently dropped.
+    const windows = [
+      buildWindow({ id: 1, ownerType: 'project', projectId: 5, taskId: null, tmuxTarget: 'main:agent-1' }),
+      buildWindow({ id: 2, ownerType: 'project', projectId: 6, taskId: null, tmuxTarget: 'main:agent-1.1' }),
+    ];
+    const { windowRepo, serverRepo, windowSessionResolver, getActivityStatus } = buildDeps(windows, [LOCAL_SERVER], new Map([[1, 'idle'], [2, 'working']]));
+    const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver);
+    const result = await service.list();
+    expect(result).toEqual(expect.arrayContaining([
+      { windowId: 1, serverName: 'local', target: 'main:agent-1', status: 'idle', taskId: undefined, projectId: 5, label: undefined },
+      { windowId: 2, serverName: 'local', target: 'main:agent-1.1', status: 'working', taskId: undefined, projectId: 6, label: undefined },
+    ]));
+    expect(result).toHaveLength(2);
+    expect(getActivityStatus).toHaveBeenCalledTimes(2);
+  });
+
   it('caches results for 60s and does not re-query the resolver within the TTL', async () => {
     vi.useFakeTimers();
     try {

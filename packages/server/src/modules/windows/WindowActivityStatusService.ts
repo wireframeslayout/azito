@@ -57,38 +57,86 @@ export class WindowActivityStatusService {
   private async compute(): Promise<WindowActivityStatusEntry[]> {
     const windows = this.windowRepo.findAll().filter(isAgentWindow);
 
-    // Dedup by server+target the same way AgentActivityMonitor does (multiple DB
-    // rows — project-owned and task-owned — can point at the same tmux window).
-    // The key MUST strip the pane suffix (`stripPaneSuffix`, mirroring
-    // AgentActivityMonitor's own `windowKey()`): a project-owned row is stored
-    // without a pane suffix (e.g. `main:0`) while its task-owned counterpart for
-    // the very same tmux window carries one (`main:0.1`, added at window-creation
-    // time — see ExecuteTaskUseCase). Keying on the raw `tmuxTarget` treats those
-    // as two different windows, so both survive the dedup and this service emits
-    // a duplicate `WindowActivityStatusEntry` for one physical window under two
-    // different `target` strings. The frontend's process-based supplement merges
-    // additively (never overrides a key `useAgentActivity` already has from the
-    // primary source), so the un-stripped duplicate's own key is invisible to
-    // that merge and can outlive the primary source's correctly-cleared entry —
-    // surfacing as a stuck "running" row even after the tmux window is long gone.
-    const byKey = new Map<string, typeof windows[number]>();
+    // Raw (un-stripped) `serverName::tmuxTarget` -> rows registered under that
+    // exact target. Used by `resolveDedupTarget` below to decide, per row,
+    // whether a trailing `.N` on its target is a pane suffix to strip or part
+    // of the window's own name.
+    const byRawTarget = new Map<string, typeof windows[number][]>();
     for (const w of windows) {
-      const key = `${w.serverName}::${stripPaneSuffix(w.tmuxTarget)}`;
-      const existing = byKey.get(key);
-      if (!existing || (w.taskId != null && existing.taskId == null)) byKey.set(key, w);
+      const rawKey = `${w.serverName}::${w.tmuxTarget}`;
+      const list = byRawTarget.get(rawKey);
+      if (list) list.push(w); else byRawTarget.set(rawKey, [w]);
     }
 
-    const localWindows = [...byKey.values()].filter((w) => this.serverRepo.findByName(w.serverName)?.type === 'local');
+    /**
+     * Dedup by server+target the same way AgentActivityMonitor does (multiple DB
+     * rows — project-owned and task-owned — can point at the same tmux window):
+     * a project-owned row is stored without a pane suffix (e.g. `main:0`) while
+     * its task-owned counterpart for the very same tmux window carries one
+     * (`main:0.1`, added at window-creation time — see ExecuteTaskUseCase).
+     * Left un-stripped, those key as two different windows, so both survive
+     * dedup and this service emits a duplicate `WindowActivityStatusEntry` for
+     * one physical window under two different `target` strings — the
+     * frontend's process-based supplement merges additively (never overrides a
+     * key `useAgentActivity` already has from the primary source), so the
+     * un-stripped duplicate's own key is invisible to that merge and can
+     * outlive the primary source's correctly-cleared entry, surfacing as a
+     * stuck "running" row even after the tmux window is long gone.
+     *
+     * Unconditionally stripping every trailing `.N` is wrong in the other
+     * direction, though: a tmux window can legitimately be *named* `agent-1.1`
+     * (no relation to a pane index), and stripping it down to `agent-1` would
+     * misidentify it as a duplicate of an unrelated window actually named
+     * `agent-1` — dropping one of two genuinely independent status rows and
+     * reporting the wrong `target` for the survivor. There is no live tmux
+     * query available here to disambiguate (this service is intentionally a
+     * pure DB-driven approximation — see class doc comment), so the suffix is
+     * treated as a pane suffix only when BOTH:
+     *   1. another row exists under the exact stripped form as its raw target
+     *      (i.e. a plausible "same window" sibling), AND
+     *   2. that sibling's ownership is complementary — one row is task-owned
+     *      (`taskId != null`) and the other is project-owned (`taskId ==
+     *      null`) — which is the one production shape this duplication
+     *      actually comes from (a task run's window also gets a project-scoped
+     *      row, or vice versa; migration 028's "deduplicate project windows"
+     *      and ExecuteTaskUseCase's window registration are the two writers).
+     * Two independently-registered rows that happen to share this naming
+     * pattern but are NOT complementary-owned (e.g. both project-owned, for
+     * two different projects) are left un-merged, even though they might
+     * occasionally still be the same physical window by coincidence — that
+     * false-negative (reporting one extra row) is preferred over the
+     * false-positive of silently dropping a genuinely independent window's
+     * status.
+     */
+    const resolveDedupTarget = (w: typeof windows[number]): string => {
+      const stripped = stripPaneSuffix(w.tmuxTarget);
+      if (stripped === w.tmuxTarget) return w.tmuxTarget; // no trailing `.N` at all
+      const siblings = byRawTarget.get(`${w.serverName}::${stripped}`);
+      if (!siblings) return w.tmuxTarget; // no row registered under the stripped form — likely just this window's own name
+      const hasComplementaryOwner = siblings.some((s) => (s.taskId != null) !== (w.taskId != null));
+      return hasComplementaryOwner ? stripped : w.tmuxTarget;
+    };
 
-    const entries = await Promise.all(localWindows.map(async (w): Promise<WindowActivityStatusEntry> => {
+    const byKey = new Map<string, { window: typeof windows[number]; target: string }>();
+    for (const w of windows) {
+      const target = resolveDedupTarget(w);
+      const key = `${w.serverName}::${target}`;
+      const existing = byKey.get(key);
+      if (!existing || (w.taskId != null && existing.window.taskId == null)) byKey.set(key, { window: w, target });
+    }
+
+    const localEntries = [...byKey.values()].filter(({ window: w }) => this.serverRepo.findByName(w.serverName)?.type === 'local');
+
+    const entries = await Promise.all(localEntries.map(async ({ window: w, target }): Promise<WindowActivityStatusEntry> => {
       const status = await this.windowSessionResolver.getActivityStatus(w);
       return {
         windowId: w.id,
         serverName: w.serverName,
-        // Stripped, not `w.tmuxTarget` — must match AgentActivityMonitor's emitted
-        // `target` (also stripped) so a client keying entries by `serverName::target`
-        // (see useAgentActivity's processStatusKey) treats them as the same window.
-        target: stripPaneSuffix(w.tmuxTarget),
+        // The dedup-resolved target, not raw `w.tmuxTarget`: stripped when a
+        // complementary-owned sibling justified treating it as a pane suffix
+        // (matches AgentActivityMonitor's own stripped `target`), left as-is
+        // otherwise (a standalone `.N`-named window keeps its real name).
+        target,
         status,
         taskId: w.taskId ?? undefined,
         projectId: w.projectId ?? undefined,
