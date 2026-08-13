@@ -173,8 +173,6 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // (C) ready bridge — forwards the child TUI's boot-complete signal to the
   //     frontend as a `supervisor:ready` notification (events WS).
   supervisorRegistry.on('activity', (event) => {
-    // TEMP-DEBUG(#338): remove before commit
-    console.log('[dbg-supervisor-activity]', JSON.stringify({ t: event.target, s: event.state, st: event.status }));
     bridgeSupervisorActivityToProgress(event, { agentTurnRepo, turnSignalHub });
     // Label a "pure supervised" entry (no windows-table row) from the child
     // command's first token (e.g. "claude --dangerously-skip-permissions" →
@@ -226,7 +224,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // windowsRoutes (process-based activity-status supplement, Issue #338 フォロー) — a single
   // instance avoids duplicating the ps/tmux lookups.
   const windowSessionResolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, TRANSCRIPT_SOURCES, sessionCaptureService);
-  const windowActivityStatusService = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver, tmuxClient);
+  const windowActivityStatusService = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver);
 
   await app.register(serversRoutes, { serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix });
   await app.register(sessionsRoutes, { serverRepo, tmux: tmuxClient, windowRepo, notificationBus, resourceGuard });

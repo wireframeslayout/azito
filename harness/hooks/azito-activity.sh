@@ -37,6 +37,8 @@ fi
 # would silently miss and the Tier 1 signal gets dropped. #{session_group}
 # resolves to the *original* session name in both linked and unlinked cases,
 # so prefer it whenever the pane's session is grouped.
+# The Tier 0 launcher (harness/bin/azs) resolves its supervisor target with the
+# same expression — keep both in sync, or the two tiers key differently.
 IDENT="$(tmux display-message -p -t "$TMUX_PANE" '#{?session_grouped,#{session_group},#{session_name}}|#{window_index}|#{window_name}|#{pane_index}' 2>/dev/null)" || exit 0
 [[ -n "$IDENT" ]] || exit 0
 

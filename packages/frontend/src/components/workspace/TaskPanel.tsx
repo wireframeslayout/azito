@@ -470,7 +470,7 @@ export default function TaskPanel({
   // Working/blocked/finished activity indicator for window tabs — the same source
   // WindowsSidebar/the old TaskWindowDropdown/TaskWindowListView used, so a window tab
   // shows the same per-window activity state as every other window surface.
-  const { windowIndicator, finishedEntries } = useAgentActivity();
+  const { windowIndicator, findFinished } = useAgentActivity();
 
   // SP 差し戻し（オーケストレーター照合、Issue #69）: タスク詳細の初期表示は「説明」ではなく
   // ウィンドウコンテンツ（端末/チャット）が既定。一度もレイアウトが永続化されていない
@@ -889,7 +889,7 @@ export default function TaskPanel({
       const isRespawning = w ? windowActions.respawningWindowIds.has(w.id) : false;
       const status = w && !isRespawning ? windowIndicator(w.serverName, w.tmuxTarget) : null;
       const finishedAt = status === 'finished' && w
-        ? finishedEntries.find((e) => e.serverName === w.serverName && e.target === w.tmuxTarget)?.finishedAt
+        ? findFinished(w.serverName, w.tmuxTarget)?.finishedAt
         : undefined;
       return {
         key: tabId,
@@ -915,7 +915,7 @@ export default function TaskPanel({
       };
     }
     return { key: tabId, label: tabId, closable: true };
-  }, [windows, windowActions.respawningWindowIds, windowIndicator, finishedEntries, browserTabIds]);
+  }, [windows, windowActions.respawningWindowIds, windowIndicator, findFinished, browserTabIds]);
 
   const handlePaneSelectTab = useCallback((paneId: string, tabId: string) => {
     layout.setActive(paneId, tabId);

@@ -3,7 +3,6 @@ import { WindowActivityStatusService } from './WindowActivityStatusService';
 import type { Window, IWindowRepository } from './Window';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { WindowSessionResolver } from '../transcripts/WindowSessionResolver';
-import type { TmuxClient, TmuxPaneInfo } from '../tmux/TmuxClient';
 
 const LOCAL_SERVER: ServerConfig = {
   name: 'local',
@@ -42,49 +41,23 @@ function buildWindow(overrides: Partial<Window> = {}): Window {
   };
 }
 
-/**
- * `tmuxPanesByServer` fakes `TmuxClient.listAllPanes()` per serverName. Omitted servers resolve
- * to `[]` (query succeeds but finds nothing — same as no window existing under either raw or
- * stripped form, which falls through to the ownership heuristic). Pass a serverName mapped to a
- * function that throws to simulate a failed tmux query (also falls back to the heuristic).
- */
 function buildDeps(
   windows: Window[],
   servers: ServerConfig[],
   statusByWindowId: Map<number, 'working' | 'idle' | 'offline'>,
-  tmuxPanesByServer: Record<string, TmuxPaneInfo[] | (() => TmuxPaneInfo[])> = {},
 ) {
   const windowRepo = { findAll: () => windows } as unknown as IWindowRepository;
   const serverRepo = { findByName: (name: string) => servers.find((s) => s.name === name) ?? null } as unknown as IServerRepository;
   const getActivityStatus = vi.fn(async (w: Window) => statusByWindowId.get(w.id) ?? 'offline');
   const windowSessionResolver = { getActivityStatus } as unknown as WindowSessionResolver;
-  const listAllPanes = vi.fn(async (server: ServerConfig) => {
-    const fixture = tmuxPanesByServer[server.name];
-    if (typeof fixture === 'function') return fixture();
-    return fixture ?? [];
-  });
-  const tmuxClient = { listAllPanes } as unknown as TmuxClient;
-  return { windowRepo, serverRepo, windowSessionResolver, getActivityStatus, tmuxClient, listAllPanes };
-}
-
-function buildPane(overrides: Partial<TmuxPaneInfo>): TmuxPaneInfo {
-  return {
-    paneId: '%1',
-    sessionName: 'main',
-    windowIndex: 0,
-    windowName: 'w0',
-    paneIndex: 0,
-    currentPath: '/proj',
-    currentCommand: 'node',
-    ...overrides,
-  };
+  return { windowRepo, serverRepo, windowSessionResolver, getActivityStatus };
 }
 
 describe('WindowActivityStatusService', () => {
   it('returns an entry per local agent window with its resolved status', async () => {
     const windows = [buildWindow({ id: 1, serverName: 'local', tmuxTarget: 'main:0' })];
-    const { windowRepo, serverRepo, windowSessionResolver, tmuxClient } = buildDeps(windows, [LOCAL_SERVER], new Map([[1, 'working']]));
-    const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver, tmuxClient);
+    const { windowRepo, serverRepo, windowSessionResolver } = buildDeps(windows, [LOCAL_SERVER], new Map([[1, 'working']]));
+    const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver);
     const result = await service.list();
     expect(result).toEqual([
       { windowId: 1, serverName: 'local', target: 'main:0', status: 'working', taskId: undefined, projectId: 1, label: undefined },
@@ -93,8 +66,8 @@ describe('WindowActivityStatusService', () => {
 
   it('excludes terminal (non-agent) windows', async () => {
     const windows = [buildWindow({ id: 1, windowType: 'terminal', workerType: null })];
-    const { windowRepo, serverRepo, windowSessionResolver, getActivityStatus, tmuxClient } = buildDeps(windows, [LOCAL_SERVER], new Map());
-    const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver, tmuxClient);
+    const { windowRepo, serverRepo, windowSessionResolver, getActivityStatus } = buildDeps(windows, [LOCAL_SERVER], new Map());
+    const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver);
     const result = await service.list();
     expect(result).toEqual([]);
     expect(getActivityStatus).not.toHaveBeenCalled();
@@ -102,8 +75,8 @@ describe('WindowActivityStatusService', () => {
 
   it('excludes windows on non-local servers', async () => {
     const windows = [buildWindow({ id: 1, serverName: 'remote' })];
-    const { windowRepo, serverRepo, windowSessionResolver, getActivityStatus, tmuxClient } = buildDeps(windows, [AGENT_SERVER], new Map());
-    const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver, tmuxClient);
+    const { windowRepo, serverRepo, windowSessionResolver, getActivityStatus } = buildDeps(windows, [AGENT_SERVER], new Map());
+    const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver);
     const result = await service.list();
     expect(result).toEqual([]);
     expect(getActivityStatus).not.toHaveBeenCalled();
@@ -114,8 +87,8 @@ describe('WindowActivityStatusService', () => {
       buildWindow({ id: 1, ownerType: 'project', projectId: 5, taskId: null, tmuxTarget: 'main:0' }),
       buildWindow({ id: 2, ownerType: 'task', projectId: null, taskId: 9, tmuxTarget: 'main:0' }),
     ];
-    const { windowRepo, serverRepo, windowSessionResolver, getActivityStatus, tmuxClient } = buildDeps(windows, [LOCAL_SERVER], new Map([[2, 'idle']]));
-    const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver, tmuxClient);
+    const { windowRepo, serverRepo, windowSessionResolver, getActivityStatus } = buildDeps(windows, [LOCAL_SERVER], new Map([[2, 'idle']]));
+    const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver);
     const result = await service.list();
     expect(result).toEqual([
       { windowId: 2, serverName: 'local', target: 'main:0', status: 'idle', taskId: 9, projectId: undefined, label: undefined },
@@ -137,8 +110,8 @@ describe('WindowActivityStatusService', () => {
       buildWindow({ id: 1, ownerType: 'project', projectId: 5, taskId: null, tmuxTarget: 'test:win--1m1u' }),
       buildWindow({ id: 2, ownerType: 'task', projectId: null, taskId: 9, tmuxTarget: 'test:win--1m1u.1' }),
     ];
-    const { windowRepo, serverRepo, windowSessionResolver, getActivityStatus, tmuxClient } = buildDeps(windows, [LOCAL_SERVER], new Map([[2, 'offline']]));
-    const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver, tmuxClient);
+    const { windowRepo, serverRepo, windowSessionResolver, getActivityStatus } = buildDeps(windows, [LOCAL_SERVER], new Map([[2, 'offline']]));
+    const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver);
     const result = await service.list();
     expect(result).toEqual([
       { windowId: 2, serverName: 'local', target: 'test:win--1m1u', status: 'offline', taskId: 9, projectId: undefined, label: undefined },
@@ -146,136 +119,38 @@ describe('WindowActivityStatusService', () => {
     expect(getActivityStatus).toHaveBeenCalledTimes(1);
   });
 
-  it('does not strip a standalone window whose name itself ends in `.N` (no sibling row)', async () => {
-    // `agent-1.1` here is the window's actual name, not a pane suffix on a
-    // window called `agent-1` — no row is registered under the stripped form,
-    // so it must survive as its own independent entry with its target intact.
-    const windows = [
-      buildWindow({ id: 1, ownerType: 'project', projectId: 5, taskId: null, tmuxTarget: 'main:agent-1.1' }),
-    ];
-    const { windowRepo, serverRepo, windowSessionResolver, getActivityStatus, tmuxClient } = buildDeps(windows, [LOCAL_SERVER], new Map([[1, 'idle']]));
-    const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver, tmuxClient);
-    const result = await service.list();
-    expect(result).toEqual([
-      { windowId: 1, serverName: 'local', target: 'main:agent-1.1', status: 'idle', taskId: undefined, projectId: 5, label: undefined },
-    ]);
-    expect(getActivityStatus).toHaveBeenCalledTimes(1);
-  });
-
-  it('does not merge two genuinely independent windows named `agent-1` and `agent-1.1` when their ownership is not complementary', async () => {
-    // Limitation of the conservative (DB-only, no live tmux query) heuristic:
-    // it approximates "same physical window" as "stripped form has a
-    // complementary-owned (one task-owned, one project-owned) sibling row",
-    // which is the one real production source of this duplication (a task
-    // run's window also getting a project-scoped row, or vice versa — see the
-    // dedup doc comment in WindowActivityStatusService). Two independently
-    // registered windows that happen to share this exact naming pattern are
-    // only mis-merged if they ALSO happen to have complementary ownership;
-    // this test fixes the chosen (safer) behavior for the case where they
-    // don't — both project-owned here, for two different projects — so both
-    // rows are kept rather than one being silently dropped.
+  it('strips a trailing `.N` unconditionally, merging rows regardless of their ownership shape', async () => {
+    // The strip is deliberately unconditional (see the dedup doc comment): both
+    // rows here are project-owned — for two *different* projects — and would be
+    // left un-merged by an ownership-based heuristic, but they still collapse to
+    // one entry keyed on the stripped target. The accepted cost of that choice is
+    // documented as a known limitation: a window whose real name ends in `.N`
+    // (only possible via an imported external tmux session) is indistinguishable
+    // here from a pane suffix. Preserving the raw form was tried and reverted —
+    // `WindowSessionResolver.splitWindowTarget()` strips unconditionally
+    // downstream, so it protected nothing.
     const windows = [
       buildWindow({ id: 1, ownerType: 'project', projectId: 5, taskId: null, tmuxTarget: 'main:agent-1' }),
       buildWindow({ id: 2, ownerType: 'project', projectId: 6, taskId: null, tmuxTarget: 'main:agent-1.1' }),
     ];
-    const { windowRepo, serverRepo, windowSessionResolver, getActivityStatus, tmuxClient } = buildDeps(windows, [LOCAL_SERVER], new Map([[1, 'idle'], [2, 'working']]));
-    const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver, tmuxClient);
+    const { windowRepo, serverRepo, windowSessionResolver, getActivityStatus } = buildDeps(windows, [LOCAL_SERVER], new Map([[1, 'idle'], [2, 'working']]));
+    const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver);
     const result = await service.list();
-    expect(result).toEqual(expect.arrayContaining([
+    // Neither row is task-owned, so the first-registered row (id 1) wins the dedup
+    // preference ("only overwrite when the new row is task-owned and the existing
+    // one isn't").
+    expect(result).toEqual([
       { windowId: 1, serverName: 'local', target: 'main:agent-1', status: 'idle', taskId: undefined, projectId: 5, label: undefined },
-      { windowId: 2, serverName: 'local', target: 'main:agent-1.1', status: 'working', taskId: undefined, projectId: 6, label: undefined },
-    ]));
-    expect(result).toHaveLength(2);
-    expect(getActivityStatus).toHaveBeenCalledTimes(2);
-  });
-
-  describe('tmux entity query for conditional pane-suffix merging (Issue #338 codex review Important 2)', () => {
-    it('does not merge when the raw target exists as a real tmux window name, even with complementary ownership (tmux entity check overrides the DB-only heuristic)', async () => {
-      // Without a live tmux query, the ownership heuristic alone would merge
-      // this pair (complementary owners sharing the stripped form `main:agent-1`
-      // as a plausible sibling — see the other heuristic tests above). Here tmux
-      // itself reports that a window literally named `agent-1.1` exists in
-      // session `main`, which is decisive proof the `.1` is NOT a pane suffix —
-      // it must survive as its own independent entry.
-      const windows = [
-        buildWindow({ id: 1, ownerType: 'project', projectId: 5, taskId: null, tmuxTarget: 'main:agent-1' }),
-        buildWindow({ id: 2, ownerType: 'task', projectId: null, taskId: 9, tmuxTarget: 'main:agent-1.1' }),
-      ];
-      const { windowRepo, serverRepo, windowSessionResolver, getActivityStatus, tmuxClient, listAllPanes } = buildDeps(
-        windows,
-        [LOCAL_SERVER],
-        new Map([[1, 'idle'], [2, 'working']]),
-        { local: [buildPane({ sessionName: 'main', windowName: 'agent-1' }), buildPane({ sessionName: 'main', windowName: 'agent-1.1' })] },
-      );
-      const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver, tmuxClient);
-      const result = await service.list();
-      expect(result).toEqual(expect.arrayContaining([
-        { windowId: 1, serverName: 'local', target: 'main:agent-1', status: 'idle', taskId: undefined, projectId: 5, label: undefined },
-        { windowId: 2, serverName: 'local', target: 'main:agent-1.1', status: 'working', taskId: 9, projectId: undefined, label: undefined },
-      ]));
-      expect(result).toHaveLength(2);
-      expect(listAllPanes).toHaveBeenCalledTimes(1);
-    });
-
-    it('merges when the raw target is absent from tmux but the stripped form exists as a real window name, even without complementary ownership', async () => {
-      // Both rows are project-owned here — the ownership heuristic alone would
-      // NOT merge this pair. tmux itself reports no window named
-      // `agent-2.1` exists in session `main`, only `agent-2` does, which is
-      // decisive proof the `.1` IS a pane suffix — the tmux entity check
-      // overrides the heuristic and merges.
-      const windows = [
-        buildWindow({ id: 1, ownerType: 'project', projectId: 5, taskId: null, tmuxTarget: 'main:agent-2' }),
-        buildWindow({ id: 2, ownerType: 'project', projectId: 6, taskId: null, tmuxTarget: 'main:agent-2.1' }),
-      ];
-      const { windowRepo, serverRepo, windowSessionResolver, getActivityStatus, tmuxClient, listAllPanes } = buildDeps(
-        windows,
-        [LOCAL_SERVER],
-        new Map([[1, 'idle'], [2, 'working']]),
-        { local: [buildPane({ sessionName: 'main', windowName: 'agent-2' })] },
-      );
-      const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver, tmuxClient);
-      const result = await service.list();
-      // Neither row is task-owned, so the first-registered row (id 1) wins the dedup
-      // preference (see byKey's "only overwrite when the new row is task-owned and the
-      // existing one isn't" rule) — merged under the stripped target either way.
-      expect(result).toEqual([
-        { windowId: 1, serverName: 'local', target: 'main:agent-2', status: 'idle', taskId: undefined, projectId: 5, label: undefined },
-      ]);
-      expect(getActivityStatus).toHaveBeenCalledTimes(1);
-      expect(listAllPanes).toHaveBeenCalledTimes(1);
-    });
-
-    it('falls back to the ownership heuristic when the tmux query fails for that server', async () => {
-      // listAllPanes throws (e.g. tmux command failure) — the service must not
-      // propagate the error, and must fall back to the same DB-only ownership
-      // heuristic used before this fix (complementary owners sharing the
-      // stripped form merge; matches the earlier heuristic-only test).
-      const windows = [
-        buildWindow({ id: 1, ownerType: 'project', projectId: 5, taskId: null, tmuxTarget: 'test:win--1m1u' }),
-        buildWindow({ id: 2, ownerType: 'task', projectId: null, taskId: 9, tmuxTarget: 'test:win--1m1u.1' }),
-      ];
-      const { windowRepo, serverRepo, windowSessionResolver, getActivityStatus, tmuxClient, listAllPanes } = buildDeps(
-        windows,
-        [LOCAL_SERVER],
-        new Map([[2, 'offline']]),
-        { local: () => { throw new Error('tmux command failed'); } },
-      );
-      const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver, tmuxClient);
-      const result = await service.list();
-      expect(result).toEqual([
-        { windowId: 2, serverName: 'local', target: 'test:win--1m1u', status: 'offline', taskId: 9, projectId: undefined, label: undefined },
-      ]);
-      expect(getActivityStatus).toHaveBeenCalledTimes(1);
-      expect(listAllPanes).toHaveBeenCalledTimes(1);
-    });
+    ]);
+    expect(getActivityStatus).toHaveBeenCalledTimes(1);
   });
 
   it('caches results for 60s and does not re-query the resolver within the TTL', async () => {
     vi.useFakeTimers();
     try {
       const windows = [buildWindow({ id: 1 })];
-      const { windowRepo, serverRepo, windowSessionResolver, getActivityStatus, tmuxClient } = buildDeps(windows, [LOCAL_SERVER], new Map([[1, 'working']]));
-      const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver, tmuxClient);
+      const { windowRepo, serverRepo, windowSessionResolver, getActivityStatus } = buildDeps(windows, [LOCAL_SERVER], new Map([[1, 'working']]));
+      const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver);
 
       await service.list();
       await service.list();

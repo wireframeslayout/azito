@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api/client';
 import type { AgentActivityPayload } from '../types/notification';
-import { stripPaneSuffix } from '../utils/tmuxTarget';
+import { findByWindowTarget } from '../utils/tmuxTarget';
 import { useNotificationChannel } from './useNotificationChannel';
 import { useWorkspaceTargets } from './useWorkspaceTargets';
 import { reconcileProcessStatus, type ProcessStatusEntry } from './agentActivityProcessSync';
@@ -77,6 +77,12 @@ interface AgentActivityContextValue {
    */
   activityStatus: (serverName: string, target: string) => 'working' | 'blocked' | null;
   finishedEntries: FinishedEntry[];
+  /**
+   * ペインサフィックス正規化込みで finished エントリを引く（`findByWindowTarget`）。
+   * `finishedEntries` を呼び出し側で生キー完全一致 find すると、ペインサフィックス付きの
+   * タスクウィンドウ（`session:win.1`）が引けないため、完了表示の照合は必ずこれを使う。
+   */
+  findFinished: (serverName: string, target: string) => FinishedEntry | undefined;
   dismissFinished: (serverName: string, target: string) => void;
 }
 
@@ -89,6 +95,7 @@ const AgentActivityContext = createContext<AgentActivityContextValue>({
   windowIndicator: () => null,
   activityStatus: () => null,
   finishedEntries: [],
+  findFinished: () => undefined,
   dismissFinished: () => {},
 });
 
@@ -356,13 +363,11 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
   // Raw entry lookup normalized against pane-suffix variance: `entries` keys targets exactly
   // as reported by the activity source (pane suffix already stripped server-side), while
   // callers (e.g. a window's `tmuxTarget`) may carry a `.<paneIndex>` suffix.
-  const findEntry = useCallback((serverName: string, target: string): AgentActivityInfo | undefined => {
-    const normalized = stripPaneSuffix(target);
-    for (const info of entries.values()) {
-      if (info.serverName === serverName && stripPaneSuffix(info.target) === normalized) return info;
-    }
-    return undefined;
-  }, [entries]);
+  const findEntry = useCallback((serverName: string, target: string): AgentActivityInfo | undefined =>
+    findByWindowTarget(entries.values(), serverName, target), [entries]);
+
+  const findFinished = useCallback((serverName: string, target: string): FinishedEntry | undefined =>
+    findByWindowTarget(finished, serverName, target), [finished]);
 
   const isRunning = (serverName: string, target: string): boolean =>
     findEntry(serverName, target)?.running === true;
@@ -373,7 +378,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
   };
 
   const shouldShowActivity = (serverName: string, target: string): boolean => {
-    const info = entries.get(activityKey(serverName, target));
+    const info = findEntry(serverName, target);
     if (!info?.running) return false;
     return !isWatched(serverName, target, info.taskId);
   };
@@ -387,16 +392,15 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
   };
 
   const windowIndicator = useCallback((serverName: string, target: string): ActivityIndicator => {
-    const key = activityKey(serverName, target);
-    const info = entries.get(key);
+    const info = findEntry(serverName, target);
     if (info?.running && !isWatched(serverName, target, info.taskId)) {
       return info.status;
     }
-    if (finished.some((e) => activityKey(e.serverName, e.target) === key)) {
+    if (findFinished(serverName, target)) {
       return 'finished';
     }
     return null;
-  }, [entries, finished, isWatched]);
+  }, [findEntry, findFinished, isWatched]);
 
   return (
     <AgentActivityContext.Provider
@@ -409,6 +413,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
         windowIndicator,
         activityStatus,
         finishedEntries: finished,
+        findFinished,
         dismissFinished,
       }}
     >

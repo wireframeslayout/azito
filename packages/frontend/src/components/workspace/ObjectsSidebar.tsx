@@ -208,7 +208,7 @@ export default function ObjectsSidebar({
 
   // agentByType（ラベル解決）専用。押下可否の判定は agentDefsLoading/agentDefsError props（useAddWindowModal 側の取得）を使う。
   const { agents: agentDefs } = useAgentDefinitions('worker');
-  const { windowIndicator, activityStatus, finishedEntries } = useAgentActivity();
+  const { windowIndicator, activityStatus, findFinished } = useAgentActivity();
 
   // --- 状態セクション化: 稼働中（エージェント活動中）/ 待機中（オンラインだが非活動）/ オフライン（デタッチ・ペイン消失） ---
   // `activityStatus` は windowIndicator と異なり、視聴中ウィンドウの抑制をかけない生の状態を
@@ -255,9 +255,9 @@ export default function ObjectsSidebar({
   const renderActivityExtra = useCallback((w: WindowItem) => {
     const status = windowIndicator(w.serverName, w.tmuxTarget);
     if (!status) return null;
-    const fe = status === 'finished' ? finishedEntries.find((e) => e.serverName === w.serverName && e.target === w.tmuxTarget) : undefined;
+    const fe = status === 'finished' ? findFinished(w.serverName, w.tmuxTarget) : undefined;
     return <WindowActivityIndicator status={status} finishedAt={fe?.finishedAt} />;
-  }, [windowIndicator, finishedEntries]);
+  }, [windowIndicator, findFinished]);
 
   const renderActivityClassName = useCallback((w: WindowItem) => {
     const status = windowIndicator(w.serverName, w.tmuxTarget);
@@ -315,9 +315,9 @@ export default function ObjectsSidebar({
   const renderOperationExtra = useCallback((w: WindowItem) => {
     const status = windowIndicator(w.serverName, w.tmuxTarget);
     if (!status) return null;
-    const fe = status === 'finished' ? finishedEntries.find((e) => e.serverName === w.serverName && e.target === w.tmuxTarget) : undefined;
+    const fe = status === 'finished' ? findFinished(w.serverName, w.tmuxTarget) : undefined;
     return <WindowActivityIndicator status={status} finishedAt={fe?.finishedAt} />;
-  }, [windowIndicator, finishedEntries]);
+  }, [windowIndicator, findFinished]);
 
   // タスク番号バッジ: 通常の #id バッジ（--text-dim/--bg）と区別するため --purple 系にし、クリックでタスクを開く
   const renderOperationTaskBadge = useCallback((_w: WindowItem, taskId: number) => (
