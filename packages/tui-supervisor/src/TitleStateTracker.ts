@@ -5,7 +5,7 @@
  * Rationale: the byte-volume heuristic (ActivityTracker) misreads keystroke
  * echo as activity — Claude Code's TUI repaints its whole input box on every
  * keypress, easily exceeding the active threshold while the agent is idle.
- * The pane title, by contrast, is set by the agent itself (braille spinner
+ * The pane title, by contrast, is set by the agent itself (a spinner glyph
  * while working, `✳` while idle) and flows through this very process, since
  * the supervisor relays the PTY stream verbatim. Parsing it inline gives an
  * authoritative signal with zero extra I/O.
@@ -27,10 +27,31 @@ export type TitleAgentState = 'working' | 'idle' | 'blocked' | 'unknown';
  */
 const MAX_PENDING_LEN = 4_096;
 
-/** Leading braille-pattern glyph (U+2800-U+28FF) — the spinner Claude/codex render while working. */
-const BRAILLE_SPINNER_RE = /^[⠀-⣿] /;
+/**
+ * Leading working-spinner glyph. Covers every spinner frame set observed
+ * across Claude Code versions plus codex's braille spinner:
+ * - U+2800-U+28FF: braille patterns (codex, and older Claude builds).
+ * - U+25D0-U+25D3 (◐◑◒◓): the half-circle spinner used by the current
+ *   Claude Code (real-world observed title: `◐ libghosttyのwasm版導入検討`).
+ * - U+273B/U+2736/U+273D (✻✶✽) and `✢`/`∗`: additional asterisk-family
+ *   spinner glyphs seen across other Claude Code releases.
+ *
+ * Bias rationale: when in doubt, prefer classifying a glyph as `working`
+ * rather than `idle`. This state only overrides ActivityTracker's byte-volume
+ * heuristic when it actually fires (see class doc); a glyph absent from this
+ * set just falls through to `idle`/`unknown` and the byte heuristic keeps
+ * deciding, whereas a spinner misclassified as `idle` would actively suppress
+ * a real working signal. So extend this set liberally as new glyphs surface.
+ */
+const WORKING_SPINNER_RE = /^[⠀-⣿◐◑◒◓✻✶✽✢∗] /;
 
-/** Claude Code's idle title marker. */
+/**
+ * Claude Code's idle title marker. `✳` is also a spinner frame in some
+ * older builds, so this rule is ambiguous in isolation — but a genuine
+ * working title cycles through other spinner frames within the same short
+ * burst, so a stray `✳` misread as idle is corrected by the very next
+ * WORKING_SPINNER_RE-matching title. Accepted trade-off, not a bug.
+ */
 const IDLE_MARKER_RE = /^✳ /;
 
 /** Matches a complete OSC 0/2 title sequence: ESC ] 0|2 ; <title> (BEL | ESC \). */
@@ -50,7 +71,7 @@ function classifyTitle(title: string): TitleAgentState {
   // non-empty title still proves an agent owns the pane and is not asking
   // for anything → idle (codex convention; matches the hub-side classifier).
   if (title.includes('Action Required')) return 'blocked';
-  if (BRAILLE_SPINNER_RE.test(title)) return 'working';
+  if (WORKING_SPINNER_RE.test(title)) return 'working';
   if (IDLE_MARKER_RE.test(title)) return 'idle';
   if (title.length > 0) return 'idle';
   return 'unknown';

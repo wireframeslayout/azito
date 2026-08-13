@@ -25,6 +25,40 @@ describe('TitleStateTracker', () => {
     expect(t.getState()).toBe('idle');
   });
 
+  it('classifies a half-circle-spinner title as working (real-world observed: current Claude Code)', () => {
+    const t = new TitleStateTracker();
+    t.push(OSC2('◐ libghosttyのwasm版導入検討'));
+    expect(t.getState()).toBe('working');
+  });
+
+  it('classifies a real-world observed idle title as idle (current Claude Code)', () => {
+    const t = new TitleStateTracker();
+    t.push(OSC2('✳ テスト投稿の実装'));
+    expect(t.getState()).toBe('idle');
+  });
+
+  it('classifies every half-circle spinner frame as working', () => {
+    for (const glyph of ['◐', '◑', '◒', '◓']) {
+      const t = new TitleStateTracker();
+      t.push(OSC2(`${glyph} spinning`));
+      expect(t.getState()).toBe('working');
+    }
+  });
+
+  it('classifies legacy asterisk-family spinner glyphs as working', () => {
+    for (const glyph of ['✻', '✶', '✽', '✢', '∗']) {
+      const t = new TitleStateTracker();
+      t.push(OSC2(`${glyph} spinning`));
+      expect(t.getState()).toBe('working');
+    }
+  });
+
+  it('still classifies a braille-spinner title as working (codex, unchanged)', () => {
+    const t = new TitleStateTracker();
+    t.push(OSC2('⠴ codex working'));
+    expect(t.getState()).toBe('working');
+  });
+
   it('classifies an "Action Required" title as blocked, beating the spinner rule', () => {
     const t = new TitleStateTracker();
     t.push(OSC2('⠐ Action Required: approve command'));
