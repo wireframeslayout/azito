@@ -5,13 +5,29 @@
 # the Tier 2 sliding-window heuristic (AgentActivityMonitor).
 set -euo pipefail
 
-# Source token from env file (mode 600) instead of command-line embedding
+# Source token from env file (mode 600) instead of command-line embedding.
+#
+# Precedence: values already present in the environment win over the env file.
+# The env file assigns unconditionally (`AZITO_URL=...`), so sourcing it would
+# otherwise clobber anything the caller set — including values prefixed inline
+# on the hook command in settings.json (`AZITO_URL=... azito-activity.sh start`).
+# That inline form is how a single machine wires different hook entries to
+# different hubs (e.g. a local hub while azitoctl.env points at a remote one),
+# so we save the pre-set values first and restore them after sourcing.
+SAVED_AZITO_URL="${AZITO_URL:-}"
+SAVED_AZITO_WEBHOOK_TOKEN="${AZITO_WEBHOOK_TOKEN:-}"
+SAVED_AZITO_SERVER_NAME="${AZITO_SERVER_NAME:-}"
+
 AZITOCTL_ENV="$HOME/.azito/azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env"
 if [[ -f "$AZITOCTL_ENV" ]]; then
   set +u
   . "$AZITOCTL_ENV"
   set -u
 fi
+
+if [[ -n "$SAVED_AZITO_URL" ]]; then AZITO_URL="$SAVED_AZITO_URL"; fi
+if [[ -n "$SAVED_AZITO_WEBHOOK_TOKEN" ]]; then AZITO_WEBHOOK_TOKEN="$SAVED_AZITO_WEBHOOK_TOKEN"; fi
+if [[ -n "$SAVED_AZITO_SERVER_NAME" ]]; then AZITO_SERVER_NAME="$SAVED_AZITO_SERVER_NAME"; fi
 
 EVENT="${1:-}"
 if [[ "$EVENT" != "start" && "$EVENT" != "stop" ]]; then
