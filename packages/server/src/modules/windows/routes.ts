@@ -387,9 +387,10 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
 
   // ── GET /api/windows/activity-status ──
   // プロセス実体検査ベースの軽量な稼働判定（Issue #338 フォロー）。hook/tui-supervisor 接続の
-  // 有無に関わらず、全 local エージェントウィンドウの working/idle/offline を返す。既存の
-  // /api/agent-activity（AgentActivityMonitor、通知配信を伴う本監視）とは独立した補完 API で、
-  // その挙動には一切影響しない。60秒キャッシュ済み（WindowActivityStatusService 参照）。
+  // 有無に関わらず、全 local エージェントウィンドウの working/idle/offline を返す。
+  // **診断専用**: 稼働表示の単一ソースは /api/agent-activity（AgentActivityMonitor）であり、
+  // この判定はそのラダーの Tier 4 として内部で consult 済み。UI はこの API を参照しない
+  // （フロントの並行ポーリング＋加算マージは、上位 Tier の idle を再点灯させるため撤去した）。
   fastify.get('/api/windows/activity-status', async () => windowActivityStatusService.list());
 
   done();

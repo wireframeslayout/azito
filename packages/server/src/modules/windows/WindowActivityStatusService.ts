@@ -14,19 +14,30 @@ export interface WindowActivityStatusEntry {
   label?: string;
 }
 
-const CACHE_TTL_MS = 60_000;
+/**
+ * TTL of the in-process snapshot cache. Kept below AgentActivityMonitor's own
+ * Tier 4 refresh interval (PROCESS_PROBE_REFRESH_MS = 15s) so that refresh
+ * always recomputes: a TTL at or above the refresh interval reintroduces the
+ * phase problem the old 60s cache × 60s client poll had, where a state change
+ * could take up to two full periods to become visible.
+ */
+const CACHE_TTL_MS = 10_000;
 
 /**
- * プロセス実体検査ベースの軽量な稼働判定 API（Issue #338 フォロー、AZITO監視強化）を提供する。
- * `AgentActivityMonitor`（hook/tui-supervisor 接続を前提に notification イベントを配信する既存の
- * 監視）とは完全に独立した並行パスとして追加した — 既存モニタの挙動（通知・ブロック検出等）は
- * 一切変更しない。hook/supervisor の配線が無い（手動起動の）エージェントウィンドウでも、実プロセスの
- * 存在とセッションファイルの活動シグナルから「稼働中/待機中/オフライン」を判定できるようにするため、
- * `WindowSessionResolver.getActivityStatus()`（resolve() のレイヤー2/3 判定を流用）を全 local
- * エージェントウィンドウに対して呼び出す。
+ * プロセス実体検査ベースの軽量な稼働判定。hook/supervisor の配線が無い（手動起動の）エージェント
+ * ウィンドウでも、実プロセスの存在とセッションファイルの活動シグナルから「稼働中/待機中/オフライン」
+ * を判定するため、`WindowSessionResolver.getActivityStatus()`（resolve() のレイヤー2/3 判定を流用）
+ * を全 local エージェントウィンドウに対して呼び出す。
  *
- * ps/tmux 呼び出しをリクエストのたびに行わないよう、60秒 TTL のプロセス内キャッシュを持つ
- * （複数クライアントが同時にポーリングしても実コストは 60秒に1回のみ）。
+ * このサービスは `AgentActivityMonitor` の **Tier 4**（最下位ソース、`ProcessActivityProbe` として
+ * 注入）である。以前はフロントが本 API を直接ポーリングして主系スナップショットへ加算マージする
+ * 並行経路だったが、それは「上位 Tier が idle と判定したキーを下位のプロセス判定が再点灯させる」
+ * 構造的欠陥を持っていたため撤去した。優先順位の調停はサーバー側の単一ラダー
+ * （AgentActivityMonitor.collect()）に一本化されており、本クラスは判定素材だけを返す。
+ *
+ * `GET /api/windows/activity-status` は同じスナップショットを診断用に公開したままにしてある
+ * （UI からは参照されない）。ps/tmux 呼び出しをリクエストのたびに行わないよう短い TTL の
+ * プロセス内キャッシュを持ち、モニタの定期リフレッシュと HTTP 診断アクセスが同じキャッシュに乗る。
  */
 export class WindowActivityStatusService {
   private cache: { at: number; entries: WindowActivityStatusEntry[] } | null = null;

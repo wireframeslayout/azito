@@ -1198,4 +1198,134 @@ describe('AgentActivityMonitor', () => {
       expect(finishedPayload?.payload.target).toBe(runningTarget);
     });
   });
+
+  describe('Tier 4 (process/transcript probe)', () => {
+    /** The probe refresh is fire-and-forget; let it settle before the next tick reads its cache. */
+    async function settleProbe(): Promise<void> {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    function makeMonitorWithProbe(
+      list: () => Promise<Array<{ serverName: string; target: string; status: 'working' | 'idle' | 'offline' }>>,
+      capturePane = vi.fn().mockResolvedValue({ stdout: '', stderr: '', code: 0 }),
+    ): AgentActivityMonitor {
+      return new AgentActivityMonitor(
+        { getRunning } as unknown as ExecuteTaskUseCase,
+        { findAll } as unknown as IWindowRepository,
+        { listSessions, capturePane } as unknown as TmuxClient,
+        { findByName } as unknown as IServerRepository,
+        { emit } as unknown as NotificationBus,
+        { list },
+      );
+    }
+
+    it('promotes a window no higher tier can speak for to running when the probe reports working', async () => {
+      const list = vi.fn().mockResolvedValue([{ serverName: 'local', target: 'azito:agent-1', status: 'working' as const }]);
+      monitor = makeMonitorWithProbe(list);
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+      // Activity stale enough that the Tier 3 heuristic would call this idle —
+      // Tier 4 must decide before it is ever reached.
+      listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 600,
+        [makePane({ command: 'claude', title: 'claude' })]));
+
+      await monitor.tick(); // kicks the probe refresh (fire-and-forget)
+      await settleProbe();
+
+      await monitor.tick();
+      expect(monitor.snapshot()).toEqual([
+        expect.objectContaining({ target: 'azito:agent-1', running: true, source: 'manual' }),
+      ]);
+    });
+
+    it('does not let a probe "idle" darken a window the Tier 3 heuristic would confirm', async () => {
+      // The probe answers 'idle' both for a genuinely quiet agent and for a
+      // window whose session it could not resolve at all, so it must not be
+      // able to suppress Tier 3 — Tier 4 is additive only.
+      monitor = makeMonitorWithProbe(async () => [{ serverName: 'local', target: 'azito:agent-1', status: 'idle' as const }]);
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+      const base = Math.floor(Date.now() / 1000);
+      listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, base, [makePane({ command: 'some-generic-tool' })]));
+
+      await monitor.tick();
+      await settleProbe();
+      listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, base + 1, [makePane({ command: 'some-generic-tool' })]));
+      await monitor.tick();
+      listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, base + 2, [makePane({ command: 'some-generic-tool' })]));
+      await monitor.tick();
+      expect(monitor.snapshot()).toEqual([
+        expect.objectContaining({ target: 'azito:agent-1', running: true, source: 'manual' }),
+      ]);
+    });
+
+    it('never re-lights a key the supervisor (Tier 0) reported idle', async () => {
+      monitor = makeMonitorWithProbe(async () => [{ serverName: 'local', target: 'azito:agent-1', status: 'working' as const }]);
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'claude' })]);
+      listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000),
+        [makePane({ command: 'claude', title: 'claude' })]));
+
+      await monitor.tick();
+      await settleProbe();
+      monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'idle');
+      await settleProbe();
+
+      await monitor.tick();
+      expect(monitor.snapshot()).toEqual([]);
+    });
+
+    it('never re-lights a key the hook (Tier 1) reported idle', async () => {
+      monitor = makeMonitorWithProbe(async () => [{ serverName: 'local', target: 'azito:agent-1', status: 'working' as const }]);
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'claude' })]);
+      listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000),
+        [makePane({ command: 'claude', title: 'claude' })]));
+
+      await monitor.tick();
+      await settleProbe();
+      monitor.recordHookSignal({
+        serverName: 'local', sessionName: 'azito', windowIndex: 3,
+        windowName: 'agent-1', paneIndex: 1, event: 'stop',
+      });
+      await settleProbe();
+
+      await monitor.tick();
+      expect(monitor.snapshot()).toEqual([]);
+    });
+
+    it('never re-lights a key the pane classifier (Tier 2) resolved as idle', async () => {
+      monitor = makeMonitorWithProbe(async () => [{ serverName: 'local', target: 'azito:agent-1', status: 'working' as const }]);
+      // A codex window whose title the classifier reads as idle.
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'codex' })]);
+      listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000),
+        [makePane({ command: 'codex', title: 'codex' })]));
+
+      await monitor.tick();
+      await settleProbe();
+      await monitor.tick();
+      expect(monitor.snapshot()).toEqual([]);
+    });
+
+    it('does not await the probe on the tick path and survives a failing probe', async () => {
+      const list = vi.fn().mockRejectedValue(new Error('ps failed'));
+      monitor = makeMonitorWithProbe(list);
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+      listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 600));
+
+      await expect(monitor.tick()).resolves.toBeUndefined();
+      await settleProbe();
+      await expect(monitor.tick()).resolves.toBeUndefined();
+      expect(monitor.snapshot()).toEqual([]);
+    });
+
+    it('refreshes the probe at most once per PROCESS_PROBE_REFRESH_MS, not on every tick', async () => {
+      const list = vi.fn().mockResolvedValue([]);
+      monitor = makeMonitorWithProbe(list);
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+      listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000)));
+
+      await monitor.tick();
+      await settleProbe();
+      await monitor.tick();
+      await monitor.tick();
+      expect(list).toHaveBeenCalledTimes(1);
+    });
+  });
 });

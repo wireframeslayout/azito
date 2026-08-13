@@ -63,6 +63,9 @@ import { AgentActivityMonitor } from '../modules/operations/AgentActivityMonitor
 import { InteractionMonitor } from '../modules/notifications/InteractionMonitor';
 import { WindowRespawnService } from '../modules/windows/WindowRespawnService';
 import { SessionCaptureService } from '../modules/windows/SessionCaptureService';
+import { WindowActivityStatusService } from '../modules/windows/WindowActivityStatusService';
+import { WindowSessionResolver } from '../modules/transcripts/WindowSessionResolver';
+import { TRANSCRIPT_SOURCES } from '../modules/transcripts/sources/registry';
 import { stripPaneSuffix } from '../modules/windows/paneTarget';
 import { TaskRestoreService } from '../modules/tasks/TaskRestoreService';
 import { SessionStrategyFactory } from '../modules/agents/SessionStrategyFactory';
@@ -125,6 +128,8 @@ export interface PushNotificationModule {
 export interface ApplicationServices {
   sessionStrategyFactory: SessionStrategyFactory;
   sessionCaptureService: SessionCaptureService;
+  windowSessionResolver: WindowSessionResolver;
+  windowActivityStatusService: WindowActivityStatusService;
   windowRespawnService: WindowRespawnService;
   taskRestoreService: TaskRestoreService;
   usageService: UsageService;
@@ -287,9 +292,15 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories): Appl
     projectSecretRepo: repos.projectSecretRepo,
     events: taskEvents,
   });
+  // windowSessionResolver / windowActivityStatusService: shared by transcriptsRoutes
+  // (session resolution), windowsRoutes (GET /api/windows/activity-status, diagnostics)
+  // and AgentActivityMonitor's Tier 4 probe — a single instance keeps the ps/tmux
+  // lookups (and their cache) to one per process.
+  const windowSessionResolver = new WindowSessionResolver(repos.taskRepo, infra.tmuxClient, repos.serverRepo, TRANSCRIPT_SOURCES, sessionCaptureService);
+  const windowActivityStatusService = new WindowActivityStatusService(repos.windowRepo, repos.serverRepo, windowSessionResolver);
   const usageService = new UsageService(infra.agentRegistry);
   const agentSignalService = new AgentSignalService(repos.agentTurnRepo, infra.turnSignalHub, repos.logRepo);
-  return { sessionStrategyFactory, sessionCaptureService, windowRespawnService, taskRestoreService, usageService, agentSignalService, taskEvents };
+  return { sessionStrategyFactory, sessionCaptureService, windowSessionResolver, windowActivityStatusService, windowRespawnService, taskRestoreService, usageService, agentSignalService, taskEvents };
 }
 
 function buildExecuteTaskUseCase(
@@ -339,6 +350,7 @@ function buildAgentActivityMonitor(
   repos: Repositories,
   executeTaskUseCase: ExecuteTaskUseCase,
   sessionCaptureService: SessionCaptureService,
+  processProbe: WindowActivityStatusService,
 ): AgentActivityMonitor {
   return new AgentActivityMonitor(
     executeTaskUseCase,
@@ -346,6 +358,7 @@ function buildAgentActivityMonitor(
     infra.tmuxClient,
     repos.serverRepo,
     infra.notificationBus,
+    processProbe,
     (serverName, target) => {
       const wins = repos.windowRepo.findAll().filter(
         (w) => w.serverName === serverName
@@ -406,7 +419,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   const appServices = buildApplicationServices(infra, repos);
   const resourceGuard = new ResourceGuard(infra.transportFactory, repos.resourceGuardSettingsRepo);
   const executeTaskUseCase = buildExecuteTaskUseCase(infra, repos, appServices, resourceGuard);
-  const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService);
+  const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService, appServices.windowActivityStatusService);
   const interactionMonitor = new InteractionMonitor(repos.windowRepo);
   const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos);
 

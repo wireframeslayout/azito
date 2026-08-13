@@ -209,6 +209,28 @@ interface ActivityHistory {
   advanceTicks: number[];
 }
 
+/**
+ * Tier 4 source: process/transcript-based liveness for windows that no
+ * event-driven source covers (a hand-launched `claude`/`codex` pane with
+ * neither a supervisor nor the Claude Code hooks wired). Structurally
+ * satisfied by `WindowActivityStatusService.list()`; declared here as a
+ * minimal port so this module does not depend on the windows/transcripts
+ * implementation.
+ */
+export interface ProcessActivityProbe {
+  list(): Promise<{ serverName: string; target: string; status: 'working' | 'idle' | 'offline' }[]>;
+}
+
+/**
+ * How stale the Tier 4 snapshot may get before a refresh is kicked off. The
+ * probe walks `ps`/tmux per window, so it must not run on every 5s tick; it is
+ * refreshed in the background (never awaited inside collect()) and read from
+ * cache, which bounds a Tier 4 state change's visible latency to roughly this
+ * interval plus one poll interval — well under the 60s poll × 60s cache phase
+ * problem of the removed client-side polling path.
+ */
+const PROCESS_PROBE_REFRESH_MS = 15_000;
+
 function windowKey(serverName: string, target: string): string {
   return `${serverName}::${stripPaneSuffix(target)}`;
 }
@@ -243,6 +265,16 @@ function windowKey(serverName: string, target: string): string {
  * itself the ground truth, a supervisorStates entry is never pruned by
  * candidate/operation membership — only an explicit 'exited' signal removes
  * it (see recordSupervisorSignal()).
+ *
+ * Below all of them sits Tier 4 (`ProcessActivityProbe`, backed by
+ * WindowActivityStatusService): process-existence + session-transcript
+ * evidence for windows no event-driven source covers — a hand-launched agent
+ * pane with neither a supervisor nor the Claude Code hooks wired. It is
+ * consulted from inside collect()'s per-key ladder, after Tier 0/1/2 have all
+ * declined to decide, which is what structurally guarantees that a Tier 4
+ * 'working' can never re-light a key a higher tier just called idle. Its
+ * snapshot is refreshed in the background (PROCESS_PROBE_REFRESH_MS) rather
+ * than awaited on the tick path.
  */
 export class AgentActivityMonitor {
   private state = new Map<string, AgentActivityEntry>();
@@ -266,6 +298,12 @@ export class AgentActivityMonitor {
   // inferring exit from a foreground-command fallback to a bare shell — so
   // Tier 0 needs no such fallback and bypasses Tier 1/2 entirely for its keys.
   private supervisorStates = new Map<string, SupervisorState>();
+  // Tier 4 cache: last snapshot of the process/transcript probe, keyed the same
+  // as every other tier. Refreshed in the background (see refreshProcessProbe)
+  // so collect() never awaits the probe's ps/tmux walk.
+  private processStates = new Map<string, 'working' | 'idle' | 'offline'>();
+  private processProbeAt = 0;
+  private processProbeInflight = false;
   private tickCounter = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking = false;
@@ -276,6 +314,7 @@ export class AgentActivityMonitor {
     private tmux: TmuxClient,
     private serverRepo: IServerRepository,
     private notificationBus: NotificationBus,
+    private processProbe?: ProcessActivityProbe,
     private onActivityDetected?: (serverName: string, target: string) => void,
   ) {}
 
@@ -395,8 +434,38 @@ export class AgentActivityMonitor {
     }
   }
 
+  /**
+   * Refresh the Tier 4 cache when it is older than PROCESS_PROBE_REFRESH_MS.
+   * Deliberately not awaited by collect(): the probe's ps/tmux walk is far too
+   * slow to sit on the 5s tick path, and Tier 4 is the lowest-priority source,
+   * so serving a ≤15s-old answer while the next one is computed is exactly the
+   * intended accuracy/cost tradeoff.
+   */
+  private kickProcessProbeRefresh(): void {
+    if (!this.processProbe) return;
+    if (this.processProbeInflight) return;
+    if (Date.now() - this.processProbeAt < PROCESS_PROBE_REFRESH_MS) return;
+    this.processProbeInflight = true;
+    void this.processProbe.list()
+      .then((entries) => {
+        const map = new Map<string, 'working' | 'idle' | 'offline'>();
+        for (const e of entries) map.set(windowKey(e.serverName, e.target), e.status);
+        this.processStates = map;
+      })
+      .catch((err) => {
+        // Keep the previous snapshot rather than blanking it: a failed probe is
+        // "no fresh answer", not "nothing is running".
+        console.error('[agent-activity] process probe failed:', err instanceof Error ? err.message : err);
+      })
+      .finally(() => {
+        this.processProbeAt = Date.now();
+        this.processProbeInflight = false;
+      });
+  }
+
   private async collect(): Promise<Map<string, AgentActivityEntry>> {
     this.tickCounter++;
+    this.kickProcessProbeRefresh();
     const next = new Map<string, AgentActivityEntry>();
 
     // 1. Operation runs: being registered means running — unless a Tier 0
@@ -663,8 +732,29 @@ export class AgentActivityMonitor {
         }
       }
 
-      // Classifier undecided (or window's foreground is a bare shell) — fall
-      // back to Tier 3, the original activity-advance heuristic.
+      // Tier 4: process/transcript evidence for keys no higher tier could
+      // speak for. Reaching this point already means Tier 0 (no supervisor
+      // state), Tier 1 (no hook state) and Tier 2 (classifier 'unknown', or
+      // skipped on a bare-shell foreground) all declined to decide, so a
+      // Tier 4 'working' can never overwrite a higher tier's idle — every
+      // higher-tier verdict `continue`s or `set`s before this line.
+      //
+      // Only 'working' is a verdict. The probe's 'idle'/'offline' answers
+      // conflate genuine inactivity with "could not tell" (no session linked
+      // to the window, unknown agent type, non-local server — see
+      // WindowSessionResolver.getActivityStatus), so treating them as a
+      // verdict would silence the Tier 3 heuristic for every window whose
+      // session was never linked. Tier 4 is therefore purely additive over
+      // Tier 3: it can light a window Tier 3 would miss, never darken one
+      // Tier 3 would light.
+      if (this.processStates.get(key) === 'working') {
+        this.activityHistory.delete(key);
+        next.set(key, entry);
+        continue;
+      }
+
+      // No tier could decide — fall back to Tier 3, the original
+      // activity-advance heuristic.
       // Stale activity → idle. Reset the debounce window too: a later
       // resumption must re-earn START_CONFIRM_ADVANCES from scratch.
       if (nowSec - window.activity >= ACTIVITY_THRESHOLD_SEC) {

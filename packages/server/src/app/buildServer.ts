@@ -45,8 +45,6 @@ import systemRoutes from '../modules/system/routes';
 import transcriptsRoutes from '../modules/transcripts/routes';
 import { TRANSCRIPT_SOURCES, claudeTranscriptSource } from '../modules/transcripts/sources/registry';
 import { TranscriptPaneService } from '../modules/transcripts/TranscriptPaneService';
-import { WindowSessionResolver } from '../modules/transcripts/WindowSessionResolver';
-import { WindowActivityStatusService } from '../modules/windows/WindowActivityStatusService';
 import { WindowInputService } from '../modules/transcripts/WindowInputService';
 
 import { createTokenVerifier } from '../modules/servers/auth/tokenAuth';
@@ -78,6 +76,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     tmuxClient, transportFactory, worktreeServiceFactory, gitProvider, storageClient,
     agentInstaller, agentBundler, harnessInstaller, tmuxInstaller,
     executeTaskUseCase, agentActivityMonitor, interactionMonitor, windowRespawnService, taskRestoreService, sessionStrategyFactory, sessionCaptureService, usageService,
+    windowSessionResolver, windowActivityStatusService,
     pushService, vapidKeys, notificationBus, sidekickPackageService, sidekickPackageLoader,
     sidekickSyncService, unitTypeLoader, chatCommandLoader, agentSignalService, supervisorRegistry, agentTurnRepo, turnSignalHub,
     browserSessionManager, deployModeDetector, systemUpdateService, channelResolver,
@@ -219,12 +218,6 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   });
 
   // ─── HTTP routes ───
-
-  // windowSessionResolver: shared between transcriptsRoutes (session resolution) and
-  // windowsRoutes (process-based activity-status supplement, Issue #338 フォロー) — a single
-  // instance avoids duplicating the ps/tmux lookups.
-  const windowSessionResolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, TRANSCRIPT_SOURCES, sessionCaptureService);
-  const windowActivityStatusService = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver);
 
   await app.register(serversRoutes, { serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix });
   await app.register(sessionsRoutes, { serverRepo, tmux: tmuxClient, windowRepo, notificationBus, resourceGuard });
