@@ -2,6 +2,7 @@ import type { IWindowRepository } from './Window';
 import { isAgentWindow } from './Window';
 import type { WindowSessionResolver } from '../transcripts/WindowSessionResolver';
 import type { IServerRepository } from '../servers/Server';
+import { stripPaneSuffix } from './paneTarget';
 
 export interface WindowActivityStatusEntry {
   windowId: number;
@@ -58,9 +59,21 @@ export class WindowActivityStatusService {
 
     // Dedup by server+target the same way AgentActivityMonitor does (multiple DB
     // rows — project-owned and task-owned — can point at the same tmux window).
+    // The key MUST strip the pane suffix (`stripPaneSuffix`, mirroring
+    // AgentActivityMonitor's own `windowKey()`): a project-owned row is stored
+    // without a pane suffix (e.g. `main:0`) while its task-owned counterpart for
+    // the very same tmux window carries one (`main:0.1`, added at window-creation
+    // time — see ExecuteTaskUseCase). Keying on the raw `tmuxTarget` treats those
+    // as two different windows, so both survive the dedup and this service emits
+    // a duplicate `WindowActivityStatusEntry` for one physical window under two
+    // different `target` strings. The frontend's process-based supplement merges
+    // additively (never overrides a key `useAgentActivity` already has from the
+    // primary source), so the un-stripped duplicate's own key is invisible to
+    // that merge and can outlive the primary source's correctly-cleared entry —
+    // surfacing as a stuck "running" row even after the tmux window is long gone.
     const byKey = new Map<string, typeof windows[number]>();
     for (const w of windows) {
-      const key = `${w.serverName}::${w.tmuxTarget}`;
+      const key = `${w.serverName}::${stripPaneSuffix(w.tmuxTarget)}`;
       const existing = byKey.get(key);
       if (!existing || (w.taskId != null && existing.taskId == null)) byKey.set(key, w);
     }
@@ -72,7 +85,10 @@ export class WindowActivityStatusService {
       return {
         windowId: w.id,
         serverName: w.serverName,
-        target: w.tmuxTarget,
+        // Stripped, not `w.tmuxTarget` — must match AgentActivityMonitor's emitted
+        // `target` (also stripped) so a client keying entries by `serverName::target`
+        // (see useAgentActivity's processStatusKey) treats them as the same window.
+        target: stripPaneSuffix(w.tmuxTarget),
         status,
         taskId: w.taskId ?? undefined,
         projectId: w.projectId ?? undefined,

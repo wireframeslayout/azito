@@ -92,6 +92,29 @@ describe('WindowActivityStatusService', () => {
     expect(getActivityStatus).toHaveBeenCalledTimes(1);
   });
 
+  it('dedups project/task-owned rows for the same window even when only the task-owned row carries a pane suffix', async () => {
+    // Reproduces the real-world shape (Issue #338): a project-owned window row is
+    // stored without a pane suffix (`test:win--1m1u`) while its task-owned
+    // counterpart for the exact same tmux window is stored with one
+    // (`test:win--1m1u.1`, added at window-creation time). Keying the dedup map on
+    // the raw tmuxTarget (pre-fix) treated these as two different windows, so both
+    // survived and the service emitted a duplicate entry under a second `target`
+    // string the frontend's process-based supplement could never reconcile away —
+    // even after the underlying tmux window was gone, that duplicate's own key
+    // stuck around independently of the primary (AgentActivityMonitor) source.
+    const windows = [
+      buildWindow({ id: 1, ownerType: 'project', projectId: 5, taskId: null, tmuxTarget: 'test:win--1m1u' }),
+      buildWindow({ id: 2, ownerType: 'task', projectId: null, taskId: 9, tmuxTarget: 'test:win--1m1u.1' }),
+    ];
+    const { windowRepo, serverRepo, windowSessionResolver, getActivityStatus } = buildDeps(windows, [LOCAL_SERVER], new Map([[2, 'offline']]));
+    const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver);
+    const result = await service.list();
+    expect(result).toEqual([
+      { windowId: 2, serverName: 'local', target: 'test:win--1m1u', status: 'offline', taskId: 9, projectId: undefined, label: undefined },
+    ]);
+    expect(getActivityStatus).toHaveBeenCalledTimes(1);
+  });
+
   it('caches results for 60s and does not re-query the resolver within the TTL', async () => {
     vi.useFakeTimers();
     try {
