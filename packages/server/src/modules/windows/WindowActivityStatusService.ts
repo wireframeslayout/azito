@@ -1,4 +1,4 @@
-import type { IWindowRepository } from './Window';
+import type { IWindowRepository, Window } from './Window';
 import { isAgentWindow } from './Window';
 import type { WindowSessionResolver, WindowActivityProbeResult } from '../transcripts/WindowSessionResolver';
 import type { IServerRepository } from '../servers/Server';
@@ -33,6 +33,30 @@ export interface WindowActivityStatusEntry {
 const CACHE_TTL_MS = 10_000;
 
 /**
+ * 未紐付けウィンドウ（agentSessionId 無し）のセッション軽量解決を1ウィンドウあたり最低この間隔で
+ * 起動する（P5）。Tier 4 のリフレッシュ（15秒）ごとに走らせると resolve() の tmux/ps 呼び出しと
+ * セッション一覧の走査が常時回るため、判定周期とは切り離した低頻度に落とす。
+ */
+const SESSION_SCAN_INTERVAL_MS = 60_000;
+/** バックオフの上限。解決できないウィンドウ（generic・セッション未作成等）を実質的に無視する速度まで落とす。 */
+const SESSION_SCAN_MAX_INTERVAL_MS = 10 * 60_000;
+/**
+ * この回数までの連続失敗はバックオフせず {@link SESSION_SCAN_INTERVAL_MS} 間隔を維持する。
+ * 「ウィンドウ登録がエージェント起動より先」という正常系（登録直後の数回は必ず失敗する）で
+ * いきなり間隔が伸びると、稼働判定に載るまでが数分に伸びてしまうため。
+ */
+const SESSION_SCAN_GRACE_FAILURES = 3;
+
+interface SessionScanState {
+  /** 連続失敗回数（成功したらエントリごと破棄する）。 */
+  failures: number;
+  /** 次に走査してよい時刻（epoch ms）。 */
+  nextAttemptAt: number;
+  /** 走査中フラグ。同一ウィンドウの二重起動を防ぐ。 */
+  inflight: boolean;
+}
+
+/**
  * プロセス実体検査ベースの軽量な稼働判定。hook/supervisor の配線が無い（手動起動の）エージェント
  * ウィンドウでも、実プロセスの存在とセッションファイルの活動シグナルから「稼働中/待機中/オフライン」
  * を判定するため、`WindowSessionResolver.getActivityStatus()`（resolve() のレイヤー2/3 判定を流用）
@@ -51,6 +75,8 @@ const CACHE_TTL_MS = 10_000;
 export class WindowActivityStatusService {
   private cache: { at: number; entries: WindowActivityStatusEntry[] } | null = null;
   private inflight: Promise<WindowActivityStatusEntry[]> | null = null;
+  /** 未紐付けウィンドウごとのセッション走査スケジュール（windowId → 状態）。 */
+  private readonly scanState = new Map<number, SessionScanState>();
 
   constructor(
     private readonly windowRepo: IWindowRepository,
@@ -129,6 +155,10 @@ export class WindowActivityStatusService {
       else byServer.set(w.serverName, [w]);
     }
 
+    // セッション未紐付けのまま「プロセスは生きている」と観測されたウィンドウ。ここに溜めて
+    // compute() の最後に軽量解決を仕掛ける（scheduleSessionScans 参照）。
+    const unresolvedWindows: { id: number; window: Window }[] = [];
+
     const perServer = await Promise.all([...byServer.entries()].map(async ([serverName, windowsOfServer]) => {
       const server = this.serverRepo.findByName(serverName);
       const snapshot = server ? await this.windowSessionResolver.captureActivityProbeSnapshot(server) : null;
@@ -143,6 +173,13 @@ export class WindowActivityStatusService {
           } catch (err) {
             console.error(`[activity-status] ${serverName}:${w.tmuxTarget} failed:`, err instanceof Error ? err.message : err);
           }
+        }
+        // 'offline' はプロセス自体が見つからなかったケース。セッションを探しても紐付ける相手が
+        // 居ないので走査しない。taskId 付きのウィンドウも除外する（タスク側 agentSessionId が
+        // getActivityStatus のフォールバック元になっており、ここで別セッションを拾うと
+        // 誤った紐付けを新設してしまう）。
+        if (w.agentSessionId == null && w.taskId == null && probe.status !== 'offline') {
+          unresolvedWindows.push({ id: w.id, window: w });
         }
         return {
           windowId: w.id,
@@ -160,6 +197,64 @@ export class WindowActivityStatusService {
         };
       }));
     }));
+    this.scheduleSessionScans(unresolvedWindows);
     return perServer.flat();
+  }
+
+  /**
+   * 未紐付けウィンドウのセッションを軽量解決する（P5）。`getActivityStatus()` は sessionId が
+   * 無いウィンドウを無条件に 'idle' とするため、hook/supervisor 配線なしで手動登録された
+   * ウィンドウは「他の書き戻し経路（登録時 initial scan・手動 launch・codex 稼働検知後の再 scan・
+   * respawn・チャット表示時の resolve()）が全て外れた場合」に稼働判定へ載らない。
+   *
+   * 解決には既存の `WindowSessionResolver.resolve()` をそのまま使う。cwd 照合（tier3）で解決できた
+   * ときだけ `SessionCaptureService.adoptResolvedSession()`（isAssigned ガード込み）が windows 行へ
+   * 書き戻す、という既存の経路をチャット表示以外からも起動するのが本修正で、紐付けロジック自体は
+   * 新設しない。`SessionCaptureService.tryScanForWindow()` ではなく resolve() を使うのは、前者が
+   * `needsPostLaunchScan`（codex のみ true）と「ウィンドウ登録時刻より後に作られたセッション」に
+   * 限定されており、claude ウィンドウや「エージェント起動後に登録されたウィンドウ」という
+   * まさにこの穴のケースでは常に null を返すため。
+   *
+   * fire-and-forget で走らせる: resolve() は list-panes / ps / セッション一覧を引くため、稼働判定
+   * スナップショットのレイテンシに載せない。書き戻しの結果は次回以降の compute() が windows 行から
+   * 拾う。
+   */
+  private scheduleSessionScans(windows: { id: number; window: Window }[]): void {
+    if (windows.length === 0) {
+      // 未解決ウィンドウが無ければ走査もスケジュール保持も不要。
+      this.scanState.clear();
+      return;
+    }
+
+    const alive = new Set(windows.map((w) => w.id));
+    for (const id of [...this.scanState.keys()]) {
+      if (!alive.has(id)) this.scanState.delete(id);
+    }
+
+    const now = Date.now();
+    for (const { id, window } of windows) {
+      const state = this.scanState.get(id) ?? { failures: 0, nextAttemptAt: 0, inflight: false };
+      this.scanState.set(id, state);
+      if (state.inflight || now < state.nextAttemptAt) continue;
+
+      state.inflight = true;
+      void this.windowSessionResolver.resolve(window)
+        .then((resolution) => {
+          // 成功したらこのウィンドウはもう未解決集合に現れない（＝状態も不要）。
+          if (resolution.resolved) this.scanState.delete(id);
+          else this.backOff(state);
+        })
+        .catch((err) => {
+          console.error(`[activity-status] session resolution for window ${id} failed:`, err instanceof Error ? err.message : err);
+          this.backOff(state);
+        });
+    }
+  }
+
+  private backOff(state: SessionScanState): void {
+    state.failures += 1;
+    const factor = 2 ** Math.max(0, state.failures - SESSION_SCAN_GRACE_FAILURES);
+    state.nextAttemptAt = Date.now() + Math.min(SESSION_SCAN_INTERVAL_MS * factor, SESSION_SCAN_MAX_INTERVAL_MS);
+    state.inflight = false;
   }
 }

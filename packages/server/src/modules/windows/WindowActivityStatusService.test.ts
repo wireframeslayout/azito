@@ -58,8 +58,12 @@ function buildDeps(
   // Shared per-server snapshot (list-panes -a + ps, taken once per server) —
   // its contents are opaque to this service, which only forwards it.
   const captureActivityProbeSnapshot = vi.fn(async () => ({ allPanes: [], psEntries: [] }));
-  const windowSessionResolver = { getActivityStatus, captureActivityProbeSnapshot } as unknown as WindowSessionResolver;
-  return { windowRepo, serverRepo, windowSessionResolver, getActivityStatus, captureActivityProbeSnapshot };
+  // P5: the service runs the existing resolve() (which writes a cwd-matched
+  // session back through SessionCaptureService.adoptResolvedSession) for windows
+  // with no agentSessionId. Defaults to "could not resolve".
+  const resolve = vi.fn(async (_w: Window) => ({ resolved: false, reason: 'no_recent_session', agentDetected: false } as never));
+  const windowSessionResolver = { getActivityStatus, captureActivityProbeSnapshot, resolve } as unknown as WindowSessionResolver;
+  return { windowRepo, serverRepo, windowSessionResolver, getActivityStatus, captureActivityProbeSnapshot, resolve };
 }
 
 describe('WindowActivityStatusService', () => {
@@ -217,6 +221,168 @@ describe('WindowActivityStatusService', () => {
 
     expect((await service.list())[0].status).toBe('offline');
     expect(getActivityStatus).not.toHaveBeenCalled();
+  });
+
+  describe('unlinked session resolution (P5)', () => {
+    const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+    it('resolves a window that has no agentSessionId but a live process', async () => {
+      const windows = [buildWindow({ id: 1, agentSessionId: null, taskId: null })];
+      const deps = buildDeps(windows, [LOCAL_SERVER], new Map([[1, 'idle']]));
+      const service = new WindowActivityStatusService(deps.windowRepo, deps.serverRepo, deps.windowSessionResolver);
+
+      await service.list();
+      await flush();
+      expect(deps.resolve).toHaveBeenCalledWith(expect.objectContaining({ id: 1 }));
+    });
+
+    it('does not resolve a window that already has an agentSessionId', async () => {
+      const windows = [buildWindow({ id: 1, agentSessionId: 'sess-1' })];
+      const deps = buildDeps(windows, [LOCAL_SERVER], new Map([[1, 'idle']]));
+      const service = new WindowActivityStatusService(deps.windowRepo, deps.serverRepo, deps.windowSessionResolver);
+
+      await service.list();
+      await flush();
+      expect(deps.resolve).not.toHaveBeenCalled();
+    });
+
+    it('does not resolve an offline window (no process to link a session to)', async () => {
+      const windows = [buildWindow({ id: 1 })];
+      const deps = buildDeps(windows, [LOCAL_SERVER], new Map([[1, 'offline']]));
+      const service = new WindowActivityStatusService(deps.windowRepo, deps.serverRepo, deps.windowSessionResolver);
+
+      await service.list();
+      await flush();
+      expect(deps.resolve).not.toHaveBeenCalled();
+    });
+
+    it('does not resolve a task-owned window (its session comes from the task row)', async () => {
+      const windows = [buildWindow({ id: 1, ownerType: 'task', projectId: null, taskId: 7 })];
+      const deps = buildDeps(windows, [LOCAL_SERVER], new Map([[1, 'idle']]));
+      const service = new WindowActivityStatusService(deps.windowRepo, deps.serverRepo, deps.windowSessionResolver);
+
+      await service.list();
+      await flush();
+      expect(deps.resolve).not.toHaveBeenCalled();
+    });
+
+    it('does nothing at all when every window is already resolved', async () => {
+      const windows = [buildWindow({ id: 1, agentSessionId: 'sess-1' }), buildWindow({ id: 2, tmuxTarget: 'main:1', agentSessionId: 'sess-2' })];
+      const deps = buildDeps(windows, [LOCAL_SERVER], new Map([[1, 'working'], [2, 'idle']]));
+      const service = new WindowActivityStatusService(deps.windowRepo, deps.serverRepo, deps.windowSessionResolver);
+
+      await service.list();
+      await flush();
+      expect(deps.resolve).not.toHaveBeenCalled();
+    });
+
+    it('throttles repeated resolutions of the same window to once per 60s', async () => {
+      vi.useFakeTimers();
+      try {
+        const windows = [buildWindow({ id: 1 })];
+        const deps = buildDeps(windows, [LOCAL_SERVER], new Map([[1, 'idle']]));
+        const service = new WindowActivityStatusService(deps.windowRepo, deps.serverRepo, deps.windowSessionResolver);
+
+        await service.list();
+        await vi.advanceTimersByTimeAsync(0); // let the fire-and-forget scan settle
+        expect(deps.resolve).toHaveBeenCalledTimes(1);
+
+        // Several probe refreshes inside the interval must not re-scan.
+        for (let i = 0; i < 4; i += 1) {
+          await vi.advanceTimersByTimeAsync(11_000);
+          await service.list();
+        }
+        expect(deps.resolve).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(20_000); // now past 60s since the failure
+        await service.list();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(deps.resolve).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('backs off exponentially after repeated failures', async () => {
+      vi.useFakeTimers();
+      try {
+        const windows = [buildWindow({ id: 1 })];
+        const deps = buildDeps(windows, [LOCAL_SERVER], new Map([[1, 'idle']]));
+        const service = new WindowActivityStatusService(deps.windowRepo, deps.serverRepo, deps.windowSessionResolver);
+
+        // The first 3 failures keep the 60s interval (a window registered before
+        // its agent started must not be pushed to a multi-minute interval).
+        for (let i = 0; i < 3; i += 1) {
+          await service.list();
+          await vi.advanceTimersByTimeAsync(61_000);
+        }
+        expect(deps.resolve).toHaveBeenCalledTimes(3);
+
+        // The 4th failure doubles it: 60s is no longer enough.
+        await service.list();
+        await vi.advanceTimersByTimeAsync(61_000);
+        expect(deps.resolve).toHaveBeenCalledTimes(4);
+        await service.list();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(deps.resolve).toHaveBeenCalledTimes(4);
+
+        await vi.advanceTimersByTimeAsync(61_000); // 120s total → due again
+        await service.list();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(deps.resolve).toHaveBeenCalledTimes(5);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('stops resolving a window once its session has been resolved', async () => {
+      vi.useFakeTimers();
+      try {
+        const windows = [buildWindow({ id: 1 })];
+        const deps = buildDeps(windows, [LOCAL_SERVER], new Map([[1, 'idle']]));
+        deps.resolve.mockImplementation(async (w: Window) => {
+          // Mirrors the real path: adoptResolvedSession writes the id back.
+          windows[0] = { ...windows[0], agentSessionId: `sess-${w.id}` };
+          return { resolved: true, agentType: 'claude', sessionId: `sess-${w.id}`, paneId: '%1', agentDetected: true } as never;
+        });
+        const service = new WindowActivityStatusService(deps.windowRepo, deps.serverRepo, deps.windowSessionResolver);
+
+        await service.list();
+        await vi.advanceTimersByTimeAsync(11_000);
+        await service.list();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(deps.resolve).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not start a second resolution while one is still in flight', async () => {
+      vi.useFakeTimers();
+      try {
+        const windows = [buildWindow({ id: 1 })];
+        const deps = buildDeps(windows, [LOCAL_SERVER], new Map([[1, 'idle']]));
+        let release: (() => void) | undefined;
+        deps.resolve.mockImplementation(() => new Promise((resolveP) => {
+          release = () => resolveP({ resolved: false, reason: 'no_recent_session', agentDetected: false } as never);
+        }));
+        const service = new WindowActivityStatusService(deps.windowRepo, deps.serverRepo, deps.windowSessionResolver);
+
+        await service.list();
+        await vi.advanceTimersByTimeAsync(120_000); // well past the interval
+        await service.list();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(deps.resolve).toHaveBeenCalledTimes(1);
+
+        release?.();
+        await vi.advanceTimersByTimeAsync(61_000);
+        await service.list();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(deps.resolve).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it('isolates a single window failure instead of failing the whole snapshot', async () => {
