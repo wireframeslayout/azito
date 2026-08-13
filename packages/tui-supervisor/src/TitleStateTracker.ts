@@ -109,19 +109,27 @@ export class TitleStateTracker {
 
   /**
    * Feed a raw PTY output chunk. Extracts every complete OSC 0/2 title in it
-   * (the last one wins) and updates the classified state. An unterminated
-   * sequence at the chunk's end is buffered for the next call.
+   * (the last one wins for the state; ANY of them can carry the recognized
+   * marker) and updates the classified state. An unterminated sequence at the
+   * chunk's end is buffered for the next call.
    */
   push(chunk: string): void {
     let data = this.pending + chunk;
     this.pending = '';
 
     let lastTitle: string | null = null;
+    let markerInChunk = false;
     OSC_TITLE_RE.lastIndex = 0;
     let match: RegExpExecArray | null;
     let scannedUpTo = 0;
     while ((match = OSC_TITLE_RE.exec(data)) !== null) {
       lastTitle = match[1];
+      // Accumulate across EVERY title in the chunk, not just the last one:
+      // chunk boundaries are a transport detail, so `◐ working` followed by a
+      // static unrecognized title inside one chunk must still count as proof
+      // that the child speaks this protocol (it would if the two titles had
+      // arrived in separate reads).
+      if (hasRecognizedMarker(lastTitle)) markerInChunk = true;
       scannedUpTo = OSC_TITLE_RE.lastIndex;
     }
 
@@ -148,7 +156,7 @@ export class TitleStateTracker {
       // proof, unrecognized titles resume meaning 'idle' as before — the agent
       // demonstrably drives its title, so a marker-less one is a real signal.
       if (!this.markerSeen) {
-        if (!hasRecognizedMarker(lastTitle)) return;
+        if (!markerInChunk) return;
         this.markerSeen = true;
       }
       this.state = classified;

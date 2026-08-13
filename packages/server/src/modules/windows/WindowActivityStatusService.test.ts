@@ -46,7 +46,12 @@ function buildDeps(
   servers: ServerConfig[],
   statusByWindowId: Map<number, 'working' | 'idle' | 'offline'>,
 ) {
-  const windowRepo = { findAll: () => windows } as unknown as IWindowRepository;
+  // findById reads the live array, so a write-back performed by a resolve() mock
+  // is visible to the service exactly as a repository write would be.
+  const windowRepo = {
+    findAll: () => windows,
+    findById: (id: number) => windows.find((w) => w.id === id) ?? null,
+  } as unknown as IWindowRepository;
   const serverRepo = { findByName: (name: string) => servers.find((s) => s.name === name) ?? null } as unknown as IServerRepository;
   // The resolver now answers with the ending it observed alongside the coarse status
   // (P3); these tests only exercise the status, so the outcome fields stay null.
@@ -352,6 +357,43 @@ describe('WindowActivityStatusService', () => {
         await service.list();
         await vi.advanceTimersByTimeAsync(0);
         expect(deps.resolve).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('keeps backing off when resolve() found a candidate but the write-back was rejected', async () => {
+      // Contention case: two unlinked windows share a cwd, so resolve() returns the
+      // same candidate session for both, and adoptResolvedSession's isAssigned guard
+      // refuses to write it to the second one. `resolved: true` alone must NOT clear
+      // the throttle state — otherwise a fresh state (nextAttemptAt: 0) is recreated
+      // on the next refresh and the expensive resolve() runs every single time.
+      vi.useFakeTimers();
+      try {
+        const windows = [buildWindow({ id: 1 })];
+        const deps = buildDeps(windows, [LOCAL_SERVER], new Map([[1, 'idle']]));
+        // Resolver finds a session, but nothing is written back to the row.
+        deps.resolve.mockImplementation(async () => ({
+          resolved: true, agentType: 'claude', sessionId: 'taken-by-another-window', paneId: '%1', agentDetected: true,
+        } as never));
+        const service = new WindowActivityStatusService(deps.windowRepo, deps.serverRepo, deps.windowSessionResolver);
+
+        await service.list();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(deps.resolve).toHaveBeenCalledTimes(1);
+
+        // Refreshes inside the 60s interval must not re-run it.
+        for (let i = 0; i < 4; i += 1) {
+          await vi.advanceTimersByTimeAsync(11_000);
+          await service.list();
+          await vi.advanceTimersByTimeAsync(0);
+        }
+        expect(deps.resolve).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(20_000); // past 60s
+        await service.list();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(deps.resolve).toHaveBeenCalledTimes(2);
       } finally {
         vi.useRealTimers();
       }

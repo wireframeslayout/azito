@@ -239,9 +239,14 @@ export class WindowActivityStatusService {
 
       state.inflight = true;
       void this.windowSessionResolver.resolve(window)
-        .then((resolution) => {
-          // 成功したらこのウィンドウはもう未解決集合に現れない（＝状態も不要）。
-          if (resolution.resolved) this.scanState.delete(id);
+        .then(() => {
+          // 判定の基準は resolve() の戻り値ではなく「windows 行に書き戻されたか」。
+          // resolution.resolved は「resolver が候補を見つけた」ことしか意味せず、
+          // adoptResolvedSession が isAssigned ガードで書き込みを拒否した場合（同じ cwd の
+          // 未紐付けウィンドウが同一候補セッションを取り合う場合など）も true になる。それを
+          // 成功扱いにすると状態が消え、次のリフレッシュで nextAttemptAt:0 の状態が再生成されて
+          // バックオフが効かず、毎リフレッシュ高コストな resolve() を回してしまう。
+          if (this.windowRepo.findById(id)?.agentSessionId) this.scanState.delete(id);
           else this.backOff(state);
         })
         .catch((err) => {

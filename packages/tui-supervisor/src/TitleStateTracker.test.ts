@@ -95,6 +95,31 @@ describe('TitleStateTracker', () => {
     expect(t.getState()).toBe('working');
   });
 
+  it('takes authority from a recognized marker that is not the last title in the chunk', () => {
+    // Chunk boundaries are a transport detail: `◐ working` followed by a static
+    // unrecognized title in ONE chunk must behave exactly as if the two titles
+    // had arrived in separate reads (marker seen → title authority, last title
+    // decides the state).
+    const t = new TitleStateTracker();
+    t.push(OSC2('◐ working') + 'output' + OSC2('my-static-tui'));
+    expect(t.getState()).toBe('idle');
+  });
+
+  it('behaves identically whether such a pair arrives in one chunk or two', () => {
+    const oneChunk = new TitleStateTracker();
+    oneChunk.push(OSC2('◐ working') + OSC2('my-static-tui'));
+    const twoChunks = new TitleStateTracker();
+    twoChunks.push(OSC2('◐ working'));
+    twoChunks.push(OSC2('my-static-tui'));
+    expect(oneChunk.getState()).toBe(twoChunks.getState());
+  });
+
+  it('still ignores a chunk whose titles are all unrecognized', () => {
+    const t = new TitleStateTracker();
+    t.push(OSC2('my-tui') + 'output' + OSC2('my-tui v2'));
+    expect(t.getState()).toBe('unknown');
+  });
+
   it('accepts a blocked marker as the first recognized marker', () => {
     const t = new TitleStateTracker();
     t.push(OSC2('some tui'));
