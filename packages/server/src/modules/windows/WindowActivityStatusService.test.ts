@@ -48,9 +48,12 @@ function buildDeps(
 ) {
   const windowRepo = { findAll: () => windows } as unknown as IWindowRepository;
   const serverRepo = { findByName: (name: string) => servers.find((s) => s.name === name) ?? null } as unknown as IServerRepository;
-  const getActivityStatus = vi.fn(async (w: Window) => statusByWindowId.get(w.id) ?? 'offline');
-  const windowSessionResolver = { getActivityStatus } as unknown as WindowSessionResolver;
-  return { windowRepo, serverRepo, windowSessionResolver, getActivityStatus };
+  const getActivityStatus = vi.fn(async (w: Window, _snapshot?: unknown) => statusByWindowId.get(w.id) ?? 'offline');
+  // Shared per-server snapshot (list-panes -a + ps, taken once per server) —
+  // its contents are opaque to this service, which only forwards it.
+  const captureActivityProbeSnapshot = vi.fn(async () => ({ allPanes: [], psEntries: [] }));
+  const windowSessionResolver = { getActivityStatus, captureActivityProbeSnapshot } as unknown as WindowSessionResolver;
+  return { windowRepo, serverRepo, windowSessionResolver, getActivityStatus, captureActivityProbeSnapshot };
 }
 
 describe('WindowActivityStatusService', () => {
@@ -145,7 +148,10 @@ describe('WindowActivityStatusService', () => {
     expect(getActivityStatus).toHaveBeenCalledTimes(1);
   });
 
-  it('caches results for 60s and does not re-query the resolver within the TTL', async () => {
+  it('caches results for the 10s TTL and recomputes once it expires', async () => {
+    // The TTL must stay below AgentActivityMonitor's Tier 4 refresh interval
+    // (15s) — a longer one would re-create the poll/cache phase problem where a
+    // state change takes two periods to surface.
     vi.useFakeTimers();
     try {
       const windows = [buildWindow({ id: 1 })];
@@ -156,11 +162,68 @@ describe('WindowActivityStatusService', () => {
       await service.list();
       expect(getActivityStatus).toHaveBeenCalledTimes(1);
 
-      vi.advanceTimersByTime(61_000);
+      vi.advanceTimersByTime(9_900);
+      await service.list();
+      expect(getActivityStatus).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(200);
       await service.list();
       expect(getActivityStatus).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('takes the expensive snapshot once per server, not once per window', async () => {
+    const windows = [
+      buildWindow({ id: 1, tmuxTarget: 'main:0' }),
+      buildWindow({ id: 2, tmuxTarget: 'main:1' }),
+      buildWindow({ id: 3, tmuxTarget: 'main:2' }),
+    ];
+    const { windowRepo, serverRepo, windowSessionResolver, getActivityStatus, captureActivityProbeSnapshot } =
+      buildDeps(windows, [LOCAL_SERVER], new Map([[1, 'working'], [2, 'idle'], [3, 'working']]));
+    const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver);
+
+    const result = await service.list();
+    expect(result.map((e) => e.status)).toEqual(['working', 'idle', 'working']);
+    expect(captureActivityProbeSnapshot).toHaveBeenCalledTimes(1);
+    expect(getActivityStatus).toHaveBeenCalledTimes(3);
+    // Every window classification is handed the shared snapshot.
+    for (const call of getActivityStatus.mock.calls) expect(call[1]).toEqual({ allPanes: [], psEntries: [] });
+  });
+
+  it('skips the probe entirely when no local agent window exists', async () => {
+    const windows = [buildWindow({ id: 1, serverName: 'remote' })];
+    const { windowRepo, serverRepo, windowSessionResolver, captureActivityProbeSnapshot } =
+      buildDeps(windows, [AGENT_SERVER], new Map());
+    const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver);
+
+    expect(await service.list()).toEqual([]);
+    expect(captureActivityProbeSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('reports offline for a server whose snapshot could not be taken', async () => {
+    const windows = [buildWindow({ id: 1 })];
+    const { windowRepo, serverRepo, windowSessionResolver, getActivityStatus, captureActivityProbeSnapshot } =
+      buildDeps(windows, [LOCAL_SERVER], new Map([[1, 'working']]));
+    (captureActivityProbeSnapshot as unknown as { mockResolvedValue: (v: null) => void }).mockResolvedValue(null);
+    const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver);
+
+    expect((await service.list())[0].status).toBe('offline');
+    expect(getActivityStatus).not.toHaveBeenCalled();
+  });
+
+  it('isolates a single window failure instead of failing the whole snapshot', async () => {
+    const windows = [buildWindow({ id: 1, tmuxTarget: 'main:0' }), buildWindow({ id: 2, tmuxTarget: 'main:1' })];
+    const { windowRepo, serverRepo, windowSessionResolver, getActivityStatus } =
+      buildDeps(windows, [LOCAL_SERVER], new Map([[2, 'working']]));
+    getActivityStatus.mockImplementation(async (w: Window) => {
+      if (w.id === 1) throw new Error('ps exploded');
+      return 'working';
+    });
+    const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver);
+
+    const result = await service.list();
+    expect(result.map((e) => [e.windowId, e.status])).toEqual([[1, 'offline'], [2, 'working']]);
   });
 });

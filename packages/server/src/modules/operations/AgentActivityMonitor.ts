@@ -231,6 +231,15 @@ export interface ProcessActivityProbe {
  */
 const PROCESS_PROBE_REFRESH_MS = 15_000;
 
+/**
+ * Maximum age of the last *successful* probe snapshot that Tier 4 will still
+ * act on. A failing probe keeps its previous snapshot (a failure is "no fresh
+ * answer", not "nothing is running"), but that snapshot must not keep a
+ * stopped agent lit forever: past this age Tier 4 goes silent and the key
+ * falls through to the Tier 3 heuristic, which reads live tmux state.
+ */
+const PROCESS_PROBE_MAX_AGE_MS = 60_000;
+
 function windowKey(serverName: string, target: string): string {
   return `${serverName}::${stripPaneSuffix(target)}`;
 }
@@ -302,8 +311,18 @@ export class AgentActivityMonitor {
   // as every other tier. Refreshed in the background (see refreshProcessProbe)
   // so collect() never awaits the probe's ps/tmux walk.
   private processStates = new Map<string, 'working' | 'idle' | 'offline'>();
+  // Last refresh *attempt* (rate-limits retries) and last *success* (the only
+  // one Tier 4 freshness is judged on — see PROCESS_PROBE_MAX_AGE_MS).
   private processProbeAt = 0;
+  private processProbeOkAt = 0;
   private processProbeInflight = false;
+  // Keys whose Tier 4 answer is disarmed until the probe observes them
+  // non-working at least once. Armed when a key stops being an operation run:
+  // the cached snapshot still shows that run's own `working`, and letting it
+  // through would silently convert the operation entry into a manual one —
+  // a source-only change emitTransitions() does not emit, swallowing the
+  // run's `running: false` transition entirely.
+  private processDisarmedKeys = new Set<string>();
   private tickCounter = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking = false;
@@ -435,7 +454,11 @@ export class AgentActivityMonitor {
   }
 
   /**
-   * Refresh the Tier 4 cache when it is older than PROCESS_PROBE_REFRESH_MS.
+   * Refresh the Tier 4 cache when the last *attempt* is older than
+   * PROCESS_PROBE_REFRESH_MS (the attempt clock advances on failure too, so a
+   * persistently failing probe is retried at the same rate rather than on
+   * every tick; its staleness is handled by PROCESS_PROBE_MAX_AGE_MS, which is
+   * measured from the last success).
    * Deliberately not awaited by collect(): the probe's ps/tmux walk is far too
    * slow to sit on the 5s tick path, and Tier 4 is the lowest-priority source,
    * so serving a ≤15s-old answer while the next one is computed is exactly the
@@ -451,6 +474,12 @@ export class AgentActivityMonitor {
         const map = new Map<string, 'working' | 'idle' | 'offline'>();
         for (const e of entries) map.set(windowKey(e.serverName, e.target), e.status);
         this.processStates = map;
+        this.processProbeOkAt = Date.now();
+        // This snapshot was taken after the disarm, so a non-working answer in
+        // it is proof the ex-operation key really stopped — re-arm Tier 4.
+        for (const key of [...this.processDisarmedKeys]) {
+          if (map.get(key) !== 'working') this.processDisarmedKeys.delete(key);
+        }
       })
       .catch((err) => {
         // Keep the previous snapshot rather than blanking it: a failed probe is
@@ -461,6 +490,17 @@ export class AgentActivityMonitor {
         this.processProbeAt = Date.now();
         this.processProbeInflight = false;
       });
+  }
+
+  /**
+   * Whether Tier 4 may speak for this key: the last successful probe must be
+   * recent enough (a stuck/failing probe must not keep a stopped agent lit),
+   * and the key must not be disarmed by a just-ended operation run.
+   */
+  private isProcessProbeUsableFor(key: string): boolean {
+    if (this.processProbeOkAt === 0) return false;
+    if (Date.now() - this.processProbeOkAt > PROCESS_PROBE_MAX_AGE_MS) return false;
+    return !this.processDisarmedKeys.has(key);
   }
 
   private async collect(): Promise<Map<string, AgentActivityEntry>> {
@@ -496,6 +536,15 @@ export class AgentActivityMonitor {
       }
     }
 
+    // Keys that were operation runs on the previous tick and are not anymore:
+    // disarm Tier 4 for them until the probe re-observes them (see
+    // processDisarmedKeys). Without this, a cached `working` from the run that
+    // just ended re-lights the key as a manual entry and the operation's
+    // `running: false` transition is never emitted.
+    for (const [key, entry] of this.state) {
+      if (entry.operation && !operationKeys.has(key)) this.processDisarmedKeys.add(key);
+    }
+
     // 2. Manual agent windows not already covered by an operation run.
     // Filtered on operationKeys (not `next`): a supervised-idle operation key
     // is absent from `next` but must still not fall through to the manual
@@ -525,6 +574,9 @@ export class AgentActivityMonitor {
     }
     for (const key of this.hookStates.keys()) {
       if (!candidateKeys.has(key)) this.hookStates.delete(key);
+    }
+    for (const key of this.processDisarmedKeys) {
+      if (!candidateKeys.has(key) && !operationKeys.has(key)) this.processDisarmedKeys.delete(key);
     }
     // Supervisor state is deliberately NOT pruned by candidate/operation
     // membership: a live supervisor connection with no `windows` row and no
@@ -747,7 +799,7 @@ export class AgentActivityMonitor {
       // session was never linked. Tier 4 is therefore purely additive over
       // Tier 3: it can light a window Tier 3 would miss, never darken one
       // Tier 3 would light.
-      if (this.processStates.get(key) === 'working') {
+      if (this.isProcessProbeUsableFor(key) && this.processStates.get(key) === 'working') {
         this.activityHistory.delete(key);
         next.set(key, entry);
         continue;

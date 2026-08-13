@@ -1303,6 +1303,95 @@ describe('AgentActivityMonitor', () => {
       expect(monitor.snapshot()).toEqual([]);
     });
 
+
+    it('stops trusting the cached snapshot once the probe keeps failing, instead of pinning a stale working', async () => {
+      vi.useFakeTimers();
+      try {
+        const list = vi.fn()
+          .mockResolvedValueOnce([{ serverName: 'local', target: 'azito:agent-1', status: 'working' as const }])
+          .mockRejectedValue(new Error('ps failed'));
+        monitor = makeMonitorWithProbe(list);
+        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+        // Stale tmux activity: without Tier 4 this key is idle.
+        listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 600));
+
+        await monitor.tick();
+        await vi.advanceTimersByTimeAsync(0);
+        await monitor.tick();
+        expect(monitor.snapshot()).toEqual([
+          expect.objectContaining({ target: 'azito:agent-1', running: true }),
+        ]);
+
+        // Probe now fails on every refresh; the last good snapshot may serve for
+        // a while, but must not keep the key lit past PROCESS_PROBE_MAX_AGE_MS.
+        await vi.advanceTimersByTimeAsync(61_000);
+        listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 600));
+        await monitor.tick();
+        expect(monitor.snapshot()).toEqual([]);
+        expect(list.mock.calls.length).toBeGreaterThan(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not let a cached "working" convert an ended operation run into a manual entry', async () => {
+      monitor = makeMonitorWithProbe(async () => [{ serverName: 'local', target: 'azito:agent-1', status: 'working' as const }]);
+      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+      listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 600));
+      getRunning.mockReturnValue({ 5: [{ taskId: 7, target: 'azito:agent-1.1', serverName: 'local' }] });
+
+      await monitor.tick();
+      await settleProbe();
+      await monitor.tick();
+      expect(monitor.snapshot()).toEqual([expect.objectContaining({ source: 'operation', operation: true })]);
+
+      // Run ends: the probe cache still says 'working' for this key, but the
+      // operation's running:false transition must still be emitted and the key
+      // must not silently reappear as a manual/Tier 4 entry.
+      emit.mockClear();
+      getRunning.mockReturnValue({});
+      await monitor.tick();
+      expect(monitor.snapshot()).toEqual([]);
+      expect(emit).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'agent:activity',
+        payload: expect.objectContaining({ target: 'azito:agent-1', running: false, operation: true }),
+      }));
+    });
+
+    it('re-arms Tier 4 for an ex-operation key once a fresh probe observes it non-working', async () => {
+      vi.useFakeTimers();
+      try {
+        const status: { value: 'working' | 'idle' } = { value: 'working' };
+        monitor = makeMonitorWithProbe(async () => [{ serverName: 'local', target: 'azito:agent-1', status: status.value }]);
+        findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+        listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 600));
+        getRunning.mockReturnValue({ 5: [{ taskId: 7, target: 'azito:agent-1.1', serverName: 'local' }] });
+        await monitor.tick();
+        await vi.advanceTimersByTimeAsync(0);
+
+        getRunning.mockReturnValue({});
+        await monitor.tick(); // disarmed — no manual entry despite the cached 'working'
+        expect(monitor.snapshot()).toEqual([]);
+
+        // A fresh probe observes it stopped → re-arm.
+        status.value = 'idle';
+        await vi.advanceTimersByTimeAsync(16_000);
+        await monitor.tick();
+        expect(monitor.snapshot()).toEqual([]);
+
+        // It starts working again as a hand-driven agent: Tier 4 may speak now.
+        status.value = 'working';
+        await vi.advanceTimersByTimeAsync(16_000);
+        listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 600));
+        await monitor.tick();
+        expect(monitor.snapshot()).toEqual([
+          expect.objectContaining({ target: 'azito:agent-1', running: true, source: 'manual' }),
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('does not await the probe on the tick path and survives a failing probe', async () => {
       const list = vi.fn().mockRejectedValue(new Error('ps failed'));
       monitor = makeMonitorWithProbe(list);

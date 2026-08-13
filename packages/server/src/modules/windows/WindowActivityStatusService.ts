@@ -105,22 +105,50 @@ export class WindowActivityStatusService {
     }
 
     const localWindows = [...byKey.values()].filter((w) => this.serverRepo.findByName(w.serverName)?.type === 'local');
+    if (localWindows.length === 0) return [];
 
-    const entries = await Promise.all(localWindows.map(async (w): Promise<WindowActivityStatusEntry> => {
-      const status = await this.windowSessionResolver.getActivityStatus(w);
-      return {
-        windowId: w.id,
-        serverName: w.serverName,
-        // Stripped, not `w.tmuxTarget` — must match AgentActivityMonitor's emitted
-        // `target` (also stripped) so a client keying entries by `serverName::target`
-        // (see useAgentActivity's processStatusKey) treats them as the same window.
-        target: stripPaneSuffix(w.tmuxTarget),
-        status,
-        taskId: w.taskId ?? undefined,
-        projectId: w.projectId ?? undefined,
-        label: w.label ?? undefined,
-      };
+    // Group by server so the expensive part (`list-panes -a` + `ps`) runs once
+    // per server instead of once per window: this snapshot is shared by every
+    // window's classification below (see captureActivityProbeSnapshot). A
+    // server whose snapshot cannot be taken (tmux/ps failure) yields 'offline'
+    // for its windows — process existence is exactly what could not be
+    // confirmed.
+    const byServer = new Map<string, typeof localWindows>();
+    for (const w of localWindows) {
+      const list = byServer.get(w.serverName);
+      if (list) list.push(w);
+      else byServer.set(w.serverName, [w]);
+    }
+
+    const perServer = await Promise.all([...byServer.entries()].map(async ([serverName, windowsOfServer]) => {
+      const server = this.serverRepo.findByName(serverName);
+      const snapshot = server ? await this.windowSessionResolver.captureActivityProbeSnapshot(server) : null;
+      return Promise.all(windowsOfServer.map(async (w): Promise<WindowActivityStatusEntry> => {
+        // Per-window isolation: one window's failure must not fail the whole
+        // snapshot (a rejected Promise.all would leave the monitor's Tier 4
+        // cache stale for every window on this server).
+        let status: 'working' | 'idle' | 'offline' = 'offline';
+        if (snapshot) {
+          try {
+            status = await this.windowSessionResolver.getActivityStatus(w, snapshot);
+          } catch (err) {
+            console.error(`[activity-status] ${serverName}:${w.tmuxTarget} failed:`, err instanceof Error ? err.message : err);
+          }
+        }
+        return {
+          windowId: w.id,
+          serverName: w.serverName,
+          // Stripped, not `w.tmuxTarget` — must match AgentActivityMonitor's emitted
+          // `target` (also stripped) so its Tier 4 lookup, keyed on
+          // `serverName::stripPaneSuffix(target)`, resolves to the same window.
+          target: stripPaneSuffix(w.tmuxTarget),
+          status,
+          taskId: w.taskId ?? undefined,
+          projectId: w.projectId ?? undefined,
+          label: w.label ?? undefined,
+        };
+      }));
     }));
-    return entries;
+    return perServer.flat();
   }
 }

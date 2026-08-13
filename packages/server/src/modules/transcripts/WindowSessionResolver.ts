@@ -39,6 +39,18 @@ const AGENT_COMMAND_EXACT = new Set(['claude', 'codex']);
 export const SESSION_ACTIVITY_WINDOW_MS = 120 * 1000;
 /** レイヤー2（プロセス実体検査）／プロセス起動時刻ゲートの `ps` 実行に使うコマンド。pid/ppid/etimes/args を取得する。 */
 const PS_COMMAND = 'ps -e -o pid=,ppid=,etimes=,args=';
+
+/**
+ * サーバー単位で一度だけ取得し、そのサーバーの全ウィンドウの `getActivityStatus()` で共有する
+ * スナップショット（`captureActivityProbeSnapshot()` が作る）。ウィンドウごとに `list-panes -a` と
+ * `ps` を引き直すと監視ポーリングのコストが O(ウィンドウ数) で効くため、呼び出し元
+ * （WindowActivityStatusService）がサーバー単位で1回だけ取得して渡す。
+ */
+export interface ActivityProbeSnapshot {
+  allPanes: TmuxPaneInfo[];
+  psEntries: PsEntry[];
+}
+
 /**
  * プロセス起動時刻ゲート（Issue #338 フォロー）: tier1（window 由来）/tier2（task 由来）の猶予。
  * この2層はウィンドウ/タスクがそのセッションIDと明示的に紐付いている記録（誤紐付けの事前確率が
@@ -307,12 +319,12 @@ export class WindowSessionResolver {
    * null（対象エントリに timestamp が無い、または tailState が 'unknown'）の場合のみ、従来通り mtime
    * にフォールバックする。
    */
-  async getActivityStatus(window: Window): Promise<'working' | 'idle' | 'offline'> {
+  async getActivityStatus(window: Window, snapshot?: ActivityProbeSnapshot): Promise<'working' | 'idle' | 'offline'> {
     const server = this.serverRepo.findByName(window.serverName);
     if (!server || server.type !== 'local') return 'offline';
 
-    const windowPanes = await this.getWindowPanes(server, window);
-    const detection = await this.detectWindowAgentProcess(server, windowPanes);
+    const windowPanes = await this.getWindowPanes(server, window, snapshot?.allPanes);
+    const detection = await this.detectWindowAgentProcess(server, windowPanes, snapshot?.psEntries);
     if (!detection || detection.processStartMs === null) return 'offline';
 
     const sessionId = window.agentSessionId
@@ -388,12 +400,18 @@ export class WindowSessionResolver {
   private async detectWindowAgentProcess(
     server: ServerConfig,
     windowPanes: TmuxPaneInfo[],
+    sharedPsEntries?: PsEntry[],
   ): Promise<{ entries: PsEntry[]; processStartMs: number | null; agentTypes: Set<'claude' | 'codex'>; rootPids: number[] } | null> {
     if (windowPanes.length === 0) return null;
     try {
-      const { stdout, code } = await this.tmuxClient.execCommand(server, PS_COMMAND);
-      if (code !== 0) return null;
-      const entries = parsePsOutput(stdout);
+      let entries: PsEntry[];
+      if (sharedPsEntries) {
+        entries = sharedPsEntries;
+      } else {
+        const { stdout, code } = await this.tmuxClient.execCommand(server, PS_COMMAND);
+        if (code !== 0) return null;
+        entries = parsePsOutput(stdout);
+      }
       const now = Date.now();
 
       let processStartMs: number | null = null;
@@ -503,10 +521,28 @@ export class WindowSessionResolver {
     return { agentType: latest.agentType, sessionId: latest.sessionId, viaCreationMatch: false };
   }
 
-  private async getWindowPanes(server: ServerConfig, window: Window): Promise<TmuxPaneInfo[]> {
+  private async getWindowPanes(server: ServerConfig, window: Window, allPanes?: TmuxPaneInfo[]): Promise<TmuxPaneInfo[]> {
     const { sessionName, windowSpec } = splitWindowTarget(window.tmuxTarget);
-    const allPanes = await this.tmuxClient.listAllPanes(server);
-    return allPanes.filter((p) => p.sessionName === sessionName && windowSpecMatches(windowSpec, p.windowIndex, p.windowName));
+    const panes = allPanes ?? await this.tmuxClient.listAllPanes(server);
+    return panes.filter((p) => p.sessionName === sessionName && windowSpecMatches(windowSpec, p.windowIndex, p.windowName));
+  }
+
+  /**
+   * サーバー単位の共有スナップショット（`list-panes -a` ＋ `ps` を各1回）を取得する。
+   * どちらかが失敗したら null を返し、呼び出し元はウィンドウ単位の従来経路にフォールバックする
+   * のではなく、そのサーバーを 'offline' として扱う（ps が引けない＝プロセス実体を確認できない）。
+   */
+  async captureActivityProbeSnapshot(server: ServerConfig): Promise<ActivityProbeSnapshot | null> {
+    try {
+      const [allPanes, ps] = await Promise.all([
+        this.tmuxClient.listAllPanes(server),
+        this.tmuxClient.execCommand(server, PS_COMMAND),
+      ]);
+      if (ps.code !== 0) return null;
+      return { allPanes, psEntries: parsePsOutput(ps.stdout) };
+    } catch {
+      return null;
+    }
   }
 
   /**
