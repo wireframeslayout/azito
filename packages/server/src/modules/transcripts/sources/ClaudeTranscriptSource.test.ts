@@ -943,8 +943,8 @@ describe('ClaudeTranscriptSource', () => {
 
   describe('getSessionTailState', () => {
     it('returns unknown for a nonexistent session', async () => {
-      expect(await service.getSessionTailState('not-a-uuid')).toBe('unknown');
-      expect(await service.getSessionTailState(SID_A)).toBe('unknown');
+      expect((await service.getSessionTailState('not-a-uuid')).state).toBe('unknown');
+      expect((await service.getSessionTailState(SID_A)).state).toBe('unknown');
     });
 
     it('returns terminal_interrupted when the last meaningful record is an interrupt marker', async () => {
@@ -953,7 +953,7 @@ describe('ClaudeTranscriptSource', () => {
         { type: 'assistant', uuid: 'a1', message: { content: [{ type: 'tool_use', name: 'Bash', input: {} }] } },
         { type: 'user', uuid: 'u2', message: { content: [{ type: 'text', text: '[Request interrupted by user for tool use]' }] } },
       ]);
-      expect(await service.getSessionTailState(SID_A)).toBe('terminal_interrupted');
+      expect((await service.getSessionTailState(SID_A)).state).toBe('terminal_interrupted');
     });
 
     it('returns terminal_local when the last meaningful record is a local command entry (codex review Important 1: a local command never starts an agent turn, so it must not be treated as working)', async () => {
@@ -966,7 +966,7 @@ describe('ClaudeTranscriptSource', () => {
         },
         { type: 'user', uuid: 'out1', message: { content: '<local-command-stdout>Set model to Opus 5</local-command-stdout>' } },
       ]);
-      expect(await service.getSessionTailState(SID_A)).toBe('terminal_local');
+      expect((await service.getSessionTailState(SID_A)).state).toBe('terminal_local');
     });
 
     it('returns terminal_final when the last meaningful record is an assistant final text response', async () => {
@@ -974,7 +974,41 @@ describe('ClaudeTranscriptSource', () => {
         { type: 'user', uuid: 'u1', message: { content: 'hi' } },
         { type: 'assistant', uuid: 'a1', message: { content: [{ type: 'text', text: 'done' }] } },
       ]);
-      expect(await service.getSessionTailState(SID_A)).toBe('terminal_final');
+      expect((await service.getSessionTailState(SID_A)).state).toBe('terminal_final');
+    });
+
+    it('reports lastEntryTimestampMs of the last meaningful record (Issue #338 respawn fix)', async () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        { type: 'user', uuid: 'u1', timestamp: '2026-05-31T03:00:00.000Z', message: { content: 'hi' } },
+        { type: 'assistant', uuid: 'a1', timestamp: '2026-05-31T03:00:05.000Z', message: { content: [{ type: 'text', text: 'done' }] } },
+      ]);
+      const result = await service.getSessionTailState(SID_A);
+      expect(result.lastEntryTimestampMs).toBe(Date.parse('2026-05-31T03:00:05.000Z'));
+    });
+
+    it('ignores trailing `claude --resume` housekeeping records for lastEntryTimestampMs — they update file mtime but do not normalize to a TranscriptEntry (Issue #338 respawn fix)', async () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        { type: 'user', uuid: 'u1', timestamp: '2026-05-31T03:00:00.000Z', message: { content: 'hi' } },
+        { type: 'assistant', uuid: 'a1', timestamp: '2026-05-31T03:00:05.000Z', message: { content: [{ type: 'text', text: 'done' }] } },
+        // housekeeping レコード群: message フィールドを持たず normalizeEntry で null になる（実データ準拠）。
+        { type: 'ai-title', timestamp: '2026-06-01T09:00:00.000Z', title: 'resumed session' },
+        { type: 'mode', timestamp: '2026-06-01T09:00:00.010Z', mode: 'default' },
+        { type: 'permission-mode', timestamp: '2026-06-01T09:00:00.020Z', permissionMode: 'default' },
+        { type: 'file-history-snapshot', timestamp: '2026-06-01T09:00:00.030Z', snapshot: {} },
+      ]);
+      const result = await service.getSessionTailState(SID_A);
+      expect(result.state).toBe('terminal_final');
+      // housekeeping の timestamp（リスポーン時刻）ではなく、最後の意味あるエントリ（assistant応答）の
+      // timestamp を返す — これが呼び出し元の再新性判定でリスポーン誤検知を防ぐ根拠になる。
+      expect(result.lastEntryTimestampMs).toBe(Date.parse('2026-05-31T03:00:05.000Z'));
+    });
+
+    it('reports null lastEntryTimestampMs when the last meaningful record has no timestamp', async () => {
+      writeSession(dir, 'proj-a', SID_A, [
+        { type: 'assistant', uuid: 'a1', message: { content: [{ type: 'text', text: 'done' }] } },
+      ]);
+      const result = await service.getSessionTailState(SID_A);
+      expect(result.lastEntryTimestampMs).toBeNull();
     });
 
     it('returns in_progress when the last meaningful record is an assistant entry ending in a thinking block (mid-turn, not a final response)', async () => {
@@ -982,7 +1016,7 @@ describe('ClaudeTranscriptSource', () => {
         { type: 'user', uuid: 'u1', message: { content: 'hi' } },
         { type: 'assistant', uuid: 'a1', message: { content: [{ type: 'thinking', thinking: 'pondering...' }] } },
       ]);
-      expect(await service.getSessionTailState(SID_A)).toBe('in_progress');
+      expect((await service.getSessionTailState(SID_A)).state).toBe('in_progress');
     });
 
     it('returns in_progress when the last meaningful record is a user message', async () => {
@@ -990,7 +1024,7 @@ describe('ClaudeTranscriptSource', () => {
         { type: 'assistant', uuid: 'a1', message: { content: [{ type: 'text', text: 'done' }] } },
         { type: 'user', uuid: 'u1', message: { content: 'another question' } },
       ]);
-      expect(await service.getSessionTailState(SID_A)).toBe('in_progress');
+      expect((await service.getSessionTailState(SID_A)).state).toBe('in_progress');
     });
 
     it('returns in_progress when the last meaningful record is a tool_use', async () => {
@@ -998,7 +1032,7 @@ describe('ClaudeTranscriptSource', () => {
         { type: 'user', uuid: 'u1', message: { content: 'do it' } },
         { type: 'assistant', uuid: 'a1', message: { content: [{ type: 'tool_use', name: 'Bash', input: {} }] } },
       ]);
-      expect(await service.getSessionTailState(SID_A)).toBe('in_progress');
+      expect((await service.getSessionTailState(SID_A)).state).toBe('in_progress');
     });
 
     it('returns in_progress when the last meaningful record is an interaction (AskUserQuestion answered, agent turn continues)', async () => {
@@ -1016,7 +1050,7 @@ describe('ClaudeTranscriptSource', () => {
           toolUseResult: { questions: [], answers: { 'Lunch?': 'Ramen' }, annotations: {} },
         },
       ]);
-      expect(await service.getSessionTailState(SID_A)).toBe('in_progress');
+      expect((await service.getSessionTailState(SID_A)).state).toBe('in_progress');
     });
 
     it('returns in_progress when the last meaningful record is a task_notification (background task resumes the agent turn)', async () => {
@@ -1028,7 +1062,7 @@ describe('ClaudeTranscriptSource', () => {
           message: { content: '<task-notification>\n<task-id>a1</task-id>\n<status>completed</status>\n<summary>done</summary>\n</task-notification>' },
         },
       ]);
-      expect(await service.getSessionTailState(SID_A)).toBe('in_progress');
+      expect((await service.getSessionTailState(SID_A)).state).toBe('in_progress');
     });
 
     it('returns in_progress when the last meaningful record is a tool_result', async () => {
@@ -1036,7 +1070,7 @@ describe('ClaudeTranscriptSource', () => {
         { type: 'assistant', uuid: 'a1', message: { content: [{ type: 'tool_use', name: 'Bash', input: {} }] } },
         { type: 'user', uuid: 'u1', message: { content: [{ type: 'tool_result', content: 'ok' }] } },
       ]);
-      expect(await service.getSessionTailState(SID_A)).toBe('in_progress');
+      expect((await service.getSessionTailState(SID_A)).state).toBe('in_progress');
     });
 
     it('skips malformed/unparseable trailing lines and classifies from the last valid record', async () => {
@@ -1044,7 +1078,7 @@ describe('ClaudeTranscriptSource', () => {
         { type: 'assistant', uuid: 'a1', message: { content: [{ type: 'text', text: 'done' }] } },
       ]);
       fs.appendFileSync(file, 'not json at all\n');
-      expect(await service.getSessionTailState(SID_A)).toBe('terminal_final');
+      expect((await service.getSessionTailState(SID_A)).state).toBe('terminal_final');
     });
   });
 

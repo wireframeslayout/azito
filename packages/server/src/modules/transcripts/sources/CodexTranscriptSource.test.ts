@@ -477,7 +477,7 @@ describe('CodexTranscriptSource', () => {
 
   describe('getSessionTailState', () => {
     it('returns unknown for a nonexistent session', async () => {
-      expect(await source.getSessionTailState(SID_A)).toBe('unknown');
+      expect((await source.getSessionTailState(SID_A)).state).toBe('unknown');
     });
 
     it('returns terminal_interrupted when the last meaningful record is a turn_aborted event', async () => {
@@ -487,22 +487,22 @@ describe('CodexTranscriptSource', () => {
         FUNCTION_CALL('call_1'),
         TURN_ABORTED_EVENT,
       ]);
-      expect(await source.getSessionTailState(SID_A)).toBe('terminal_interrupted');
+      expect((await source.getSessionTailState(SID_A)).state).toBe('terminal_interrupted');
     });
 
     it('returns terminal_final when the last meaningful record is the final assistant text', async () => {
       writeSession(dir, SID_A, [SESSION_META(SID_A, '/home/user/proj-a'), USER_MESSAGE('hi'), ASSISTANT_MESSAGE('done')]);
-      expect(await source.getSessionTailState(SID_A)).toBe('terminal_final');
+      expect((await source.getSessionTailState(SID_A)).state).toBe('terminal_final');
     });
 
     it('returns in_progress when the last meaningful record is a reasoning block (mid-turn thinking, not a final response)', async () => {
       writeSession(dir, SID_A, [SESSION_META(SID_A, '/home/user/proj-a'), USER_MESSAGE('hi'), REASONING('thinking about it')]);
-      expect(await source.getSessionTailState(SID_A)).toBe('in_progress');
+      expect((await source.getSessionTailState(SID_A)).state).toBe('in_progress');
     });
 
     it('returns in_progress when the last meaningful record is a function_call (tool in flight)', async () => {
       writeSession(dir, SID_A, [SESSION_META(SID_A, '/home/user/proj-a'), USER_MESSAGE('hi'), FUNCTION_CALL('call_1')]);
-      expect(await source.getSessionTailState(SID_A)).toBe('in_progress');
+      expect((await source.getSessionTailState(SID_A)).state).toBe('in_progress');
     });
 
     it('returns in_progress when the last meaningful record is a function_call_output (awaiting next turn)', async () => {
@@ -511,7 +511,18 @@ describe('CodexTranscriptSource', () => {
         FUNCTION_CALL('call_1'),
         FUNCTION_CALL_OUTPUT('call_1', 'result'),
       ]);
-      expect(await source.getSessionTailState(SID_A)).toBe('in_progress');
+      expect((await source.getSessionTailState(SID_A)).state).toBe('in_progress');
+    });
+
+    it('reports lastEntryTimestampMs of the last meaningful record (Issue #338 respawn fix)', async () => {
+      writeSession(dir, SID_A, [SESSION_META(SID_A, '/home/user/proj-a'), USER_MESSAGE('hi'), ASSISTANT_MESSAGE('done')]);
+      const result = await source.getSessionTailState(SID_A);
+      expect(result.lastEntryTimestampMs).toBe(Date.parse(ASSISTANT_MESSAGE('done').timestamp));
+    });
+
+    it('reports null lastEntryTimestampMs for an unknown session', async () => {
+      const result = await source.getSessionTailState(SID_A);
+      expect(result.lastEntryTimestampMs).toBeNull();
     });
   });
 

@@ -281,21 +281,31 @@ export class WindowSessionResolver {
    *
    * - 'offline': server が見つからない／非local／pane が無い／ps 呼び出し失敗／どの pane にも
    *   claude/codex プロセスが見当たらない。
-   * - 'working': プロセスは見つかり、かつ window.agentSessionId（無ければ紐づく task の
-   *   agentSessionId）のセッションファイルが直近 SESSION_ACTIVITY_WINDOW_MS 以内に更新されており、
-   *   かつ末尾レコードが tailState 'terminal_interrupted'（中断マーカー）／'terminal_local'（ローカル
-   *   コマンド完了）のいずれでもない。tailState が 'terminal_final'（最終応答完了）または 'unknown'
-   *   の場合は working のままとする — mtime 120秒窓の間は「直近まで動いていた」ことを見せ続け、
-   *   working→idle 遷移での完了行合成の観測窓を確保する（Issue #338 followup 退行修正: 20秒程度の
-   *   短いターンが一度も working を観測されず稼働リストに現れなくなっていた不具合の修正。詳細は
-   *   entryHelpers.ts classifyTailEntry のコメント参照）。
-   * - 'idle': プロセスは見つかったが、セッションが未設定、セッション mtime が古い
-   *   （エージェントプロセス自体は生きているがユーザー入力待ち等で書き込みが止まっている）、または
-   *   mtime は新しいが tailState が 'terminal_interrupted'（停止ボタン等によるユーザー中断。中断
-   *   マーカー自体の書き込みで mtime が更新されるため、mtime だけでは「稼働中」の偽陽性が生じる —
-   *   末尾レコードの意味まで見て排除する）／'terminal_local'（/model 等のローカルコマンド実行完了。
-   *   エージェントのターンを開始していないため working として見せ続ける理由がなく、同様に mtime
-   *   だけでは偽陽性が生じる — Issue #338 コードレビュー指摘）。terminal_final はここに含めない。
+   * - 'working': プロセスは見つかり、かつ末尾レコードが tailState 'terminal_interrupted'（中断
+   *   マーカー）／'terminal_local'（ローカルコマンド完了）のいずれでもなく、かつ再新性の根拠
+   *   （lastEntryTimestampMs。無ければ mtime にフォールバック — 下記参照）が SESSION_ACTIVITY_WINDOW_MS
+   *   以内。tailState が 'terminal_final'（最終応答完了）または 'unknown' の場合も、再新性の窓内なら
+   *   working のままとする — 「直近まで動いていた」ことを見せ続け、working→idle 遷移での完了行合成の
+   *   観測窓を確保する（Issue #338 followup 退行修正: 20秒程度の短いターンが一度も working を観測
+   *   されず稼働リストに現れなくなっていた不具合の修正。詳細は entryHelpers.ts classifyTailEntry の
+   *   コメント参照）。
+   * - 'idle': プロセスは見つかったが、セッションが未設定、再新性の根拠が古い（エージェントプロセス
+   *   自体は生きているがユーザー入力待ち等で書き込みが止まっている）、または再新性は新しいが tailState
+   *   が 'terminal_interrupted'（停止ボタン等によるユーザー中断。中断マーカー自体の書き込みで mtime が
+   *   更新されるため、mtime だけでは「稼働中」の偽陽性が生じる — 末尾レコードの意味まで見て排除する）／
+   *   'terminal_local'（/model 等のローカルコマンド実行完了。エージェントのターンを開始していないため
+   *   working として見せ続ける理由がなく、同様に偽陽性が生じる — Issue #338 コードレビュー指摘）。
+   *   terminal_final はここに含めない。
+   *
+   * 再新性の根拠（Issue #338 リスポーン誤検知修正）: mtime は「粗い足切り」としてのみ使う（これが
+   * SESSION_ACTIVITY_WINDOW_MS より古ければ tail 読み自体を省略できる）。working 判定の一次根拠は
+   * tailState.lastEntryTimestampMs（末尾の意味あるエントリ自身の timestamp）にする — `claude --resume`
+   * が起動時に書き込む housekeeping レコード（ai-title/mode/permission-mode/file-history-snapshot 等）
+   * は mtime を更新するが意味あるエントリではないため、mtime だけを再新性の根拠にすると、リスポーン
+   * 直後で実作業ゼロのウィンドウが SESSION_ACTIVITY_WINDOW_MS の間ずっと working に誤判定される
+   * （実観測: 末尾3レコードすべて housekeeping、mtime=リスポーン時刻）。lastEntryTimestampMs が
+   * null（対象エントリに timestamp が無い、または tailState が 'unknown'）の場合のみ、従来通り mtime
+   * にフォールバックする。
    */
   async getActivityStatus(window: Window): Promise<'working' | 'idle' | 'offline'> {
     const server = this.serverRepo.findByName(window.serverName);
@@ -315,10 +325,16 @@ export class WindowSessionResolver {
 
     const source = this.sources.find((s) => s.agentType === agentType);
     const mtimeMs = source?.getSessionMtimeMs(sessionId) ?? null;
+    // 粗い足切り: mtime 自体が古ければ、意味あるエントリはそれよりさらに古いはずなので tail 読みは不要。
     if (mtimeMs === null || Date.now() - mtimeMs > SESSION_ACTIVITY_WINDOW_MS) return 'idle';
 
-    const tailState = source ? await source.getSessionTailState(sessionId) : 'unknown';
-    if (tailState === 'terminal_interrupted' || tailState === 'terminal_local') return 'idle';
+    const tail = source ? await source.getSessionTailState(sessionId) : { state: 'unknown' as const, lastEntryTimestampMs: null };
+    if (tail.state === 'terminal_interrupted' || tail.state === 'terminal_local') return 'idle';
+
+    // 再新性は lastEntryTimestampMs を一次根拠にする（null なら mtime にフォールバック。上記コメント参照）。
+    const freshnessMs = tail.lastEntryTimestampMs ?? mtimeMs;
+    if (Date.now() - freshnessMs > SESSION_ACTIVITY_WINDOW_MS) return 'idle';
+
     return 'working';
   }
 

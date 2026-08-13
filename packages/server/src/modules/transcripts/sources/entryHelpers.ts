@@ -55,6 +55,13 @@ export function truncateText(text: string, limit: number): { text: string; trunc
  *   （この通知はエージェントのターンを再開させるため、応答完了とはみなさない） — 明示的な分岐は
  *   置かず、下の system/other フォールスルーに委ねる。
  */
+/** entry.timestamp（ISO 文字列 or null）を epoch ms に変換する。無い/不正な日時なら null。 */
+export function parseEntryTimestampMs(entry: TranscriptEntry): number | null {
+  if (!entry.timestamp) return null;
+  const ms = Date.parse(entry.timestamp);
+  return Number.isNaN(ms) ? null : ms;
+}
+
 export function classifyTailEntry(
   entry: TranscriptEntry,
 ): 'in_progress' | 'terminal_interrupted' | 'terminal_local' | 'terminal_final' {

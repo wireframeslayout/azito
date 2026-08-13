@@ -159,8 +159,8 @@ export interface TranscriptSource {
    *   偽 working を防ぐ）。
    * - 'terminal_final': 最後の意味あるレコードがエージェントの最終応答（最後のブロックが text で
    *   終わる assistant エントリ）。プロセスは応答待ち/実行中ではないが、ユーザーによる中断ではない
-   *   正常な完了なので、mtime 120秒窓の間は working のまま扱ってよい（completed 行合成の観測窓を
-   *   守るため。'terminal_interrupted'/'terminal_local' とは異なり idle の根拠にしない）。
+   *   正常な完了なので、lastEntryTimestampMs 120秒窓の間は working のまま扱ってよい（completed 行
+   *   合成の観測窓を守るため。'terminal_interrupted'/'terminal_local' とは異なり idle の根拠にしない）。
    * - 'in_progress': 最後が user 発話・tool_use・tool_result 等（応答待ち、または実行中）。
    * - 'unknown': ファイルが読めない、セッションが存在しない、または末尾窓に意味のあるレコードが
    *   見つからない。呼び出し元は従来通り mtime のみで判定する（working 扱い）。
@@ -168,8 +168,24 @@ export interface TranscriptSource {
    * 将来別のエージェント種別を追加する場合、この契約（terminal_interrupted/terminal_local/
    * terminal_final/in_progress/unknown の意味）に従って実装するだけで、getActivityStatus 側の
    * ロジック変更なしに稼働判定へ反映される。
+   *
+   * lastEntryTimestampMs（Issue #338 リスポーン誤検知修正）: state の分類元となった、その末尾の
+   * 意味あるエントリ自身の timestamp（epoch ms、エントリに timestamp が無ければ null）。`claude
+   * --resume` はセッション JSONL 起動時に housekeeping レコード（ai-title/mode/permission-mode/
+   * file-history-snapshot 等 — TranscriptEntry に正規化されない種別）を書き込み、ファイル mtime を
+   * 更新するが、これらは classifyTailEntry の対象にならない（末尾窓スキャンが自動的に読み飛ばす）
+   * ため state 自体は歪まない。しかし呼び出し元が「mtime が新しい」ことだけを根拠に再新性を判定すると、
+   * 意味のある最後のエントリ（例: 古い terminal_final の応答）から実際には何もしていないのに
+   * working と誤判定してしまう。呼び出し元は再新性の一次根拠として mtime ではなく
+   * lastEntryTimestampMs を使うこと（null の場合のみ mtime にフォールバックする）。
    */
-  getSessionTailState(
-    sessionId: string,
-  ): Promise<'in_progress' | 'terminal_interrupted' | 'terminal_local' | 'terminal_final' | 'unknown'>;
+  getSessionTailState(sessionId: string): Promise<SessionTailState>;
+}
+
+export type TailState = 'in_progress' | 'terminal_interrupted' | 'terminal_local' | 'terminal_final' | 'unknown';
+
+export interface SessionTailState {
+  state: TailState;
+  /** state の分類元となった末尾の意味あるエントリ自身の timestamp（epoch ms）。無ければ null。 */
+  lastEntryTimestampMs: number | null;
 }

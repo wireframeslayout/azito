@@ -18,7 +18,7 @@ function buildClaudeSource(overrides: Partial<TranscriptSource> = {}): Transcrip
     readSession: () => ({ entries: [], nextOffset: 0, truncated: false, startOffset: 0, hasOlder: false }),
     readSessionBefore: () => ({ entries: [], prevOffset: 0, hasOlder: false }),
     getSessionCwd: () => ({ cwd: null }),
-    getSessionTailState: async () => 'unknown' as const,
+    getSessionTailState: async () => ({ state: 'unknown' as const, lastEntryTimestampMs: null }),
     ...overrides,
   } as unknown as TranscriptSource;
 }
@@ -30,7 +30,7 @@ function buildCodexSource(overrides: Partial<TranscriptSource> = {}): Transcript
     readSession: () => ({ entries: [], nextOffset: 0, truncated: false, startOffset: 0, hasOlder: false }),
     readSessionBefore: () => ({ entries: [], prevOffset: 0, hasOlder: false }),
     getSessionCwd: () => ({ cwd: null }),
-    getSessionTailState: async () => 'unknown' as const,
+    getSessionTailState: async () => ({ state: 'unknown' as const, lastEntryTimestampMs: null }),
     ...overrides,
   } as unknown as TranscriptSource;
 }
@@ -229,7 +229,7 @@ describe('GET /api/transcripts/:agent/:id', () => {
   });
 
   it('includes pendingInteraction:true when the monitor is pending AND tailState is in_progress', async () => {
-    const claude = buildClaudeSource({ getSessionTailState: async () => 'in_progress' as const });
+    const claude = buildClaudeSource({ getSessionTailState: async () => ({ state: 'in_progress' as const, lastEntryTimestampMs: null }) });
     const app = buildApp([claude], {}, { interactionMonitor: { isPending: () => true } });
     const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?windowId=7` });
     expect(res.statusCode).toBe(200);
@@ -238,7 +238,7 @@ describe('GET /api/transcripts/:agent/:id', () => {
   });
 
   it('reports pendingInteraction:false when the monitor is pending but tailState is terminal_final (idle-notification noise)', async () => {
-    const claude = buildClaudeSource({ getSessionTailState: async () => 'terminal_final' as const });
+    const claude = buildClaudeSource({ getSessionTailState: async () => ({ state: 'terminal_final' as const, lastEntryTimestampMs: null }) });
     const app = buildApp([claude], {}, { interactionMonitor: { isPending: () => true } });
     const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?windowId=7` });
     expect(res.statusCode).toBe(200);
@@ -247,7 +247,7 @@ describe('GET /api/transcripts/:agent/:id', () => {
   });
 
   it('does not read tailState when the monitor reports no pending signal (short-circuit)', async () => {
-    const getSessionTailState = vi.fn(async () => 'in_progress' as const);
+    const getSessionTailState = vi.fn(async () => ({ state: 'in_progress' as const, lastEntryTimestampMs: null }));
     const claude = buildClaudeSource({ getSessionTailState });
     const app = buildApp([claude], {}, { interactionMonitor: { isPending: () => false } });
     const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?windowId=7` });
@@ -261,7 +261,7 @@ describe('GET /api/transcripts/:agent/:id', () => {
     const isPending = vi.fn(() => true);
     const getOpenedAt = vi.fn(() => Date.now());
     const clear = vi.fn();
-    const getSessionTailState = vi.fn(async () => 'in_progress' as const);
+    const getSessionTailState = vi.fn(async () => ({ state: 'in_progress' as const, lastEntryTimestampMs: null }));
     const codex = buildCodexSource({ getSessionTailState });
     const codexWindow: Window = {
       id: 7,
@@ -350,7 +350,7 @@ describe('GET /api/transcripts/:agent/:id', () => {
         startOffset: 0,
         hasOlder: false,
       }),
-      getSessionTailState: async () => 'in_progress' as const,
+      getSessionTailState: async () => ({ state: 'in_progress' as const, lastEntryTimestampMs: null }),
     });
     const app = buildApp(
       [claude],
@@ -374,7 +374,7 @@ describe('GET /api/transcripts/:agent/:id', () => {
         startOffset: 0,
         hasOlder: false,
       }),
-      getSessionTailState: async () => 'in_progress' as const,
+      getSessionTailState: async () => ({ state: 'in_progress' as const, lastEntryTimestampMs: null }),
     });
     const app = buildApp(
       [claude],

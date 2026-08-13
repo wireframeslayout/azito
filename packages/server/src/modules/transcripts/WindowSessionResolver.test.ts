@@ -128,8 +128,9 @@ function buildDeps(opts: {
     listSessions: opts.claudeListSessions ?? (() => []),
     getSessionMtimeMs: opts.claudeGetSessionMtimeMs ?? (() => null),
     getSessionCreatedMs: opts.claudeGetSessionCreatedMs ?? (() => null),
-    // 既定は 'unknown'（getActivityStatus 側が従来通り mtime のみで working 扱いにする）。
-    getSessionTailState: opts.claudeGetSessionTailState ?? (async () => 'unknown' as const),
+    // 既定は state:'unknown', lastEntryTimestampMs:null（getActivityStatus 側が従来通り mtime のみで
+    // working 扱いにする — lastEntryTimestampMs が null のときは mtime にフォールバックする契約）。
+    getSessionTailState: opts.claudeGetSessionTailState ?? (async () => ({ state: 'unknown' as const, lastEntryTimestampMs: null })),
   } as unknown as TranscriptSource;
 
   const codexSource = {
@@ -138,7 +139,7 @@ function buildDeps(opts: {
     listSessions: opts.codexListSessions ?? (() => []),
     getSessionMtimeMs: opts.codexGetSessionMtimeMs ?? (() => null),
     getSessionCreatedMs: opts.codexGetSessionCreatedMs ?? (() => null),
-    getSessionTailState: async () => 'unknown' as const,
+    getSessionTailState: async () => ({ state: 'unknown' as const, lastEntryTimestampMs: null }),
   } as unknown as TranscriptSource;
 
   const sessionCaptureService = {
@@ -959,7 +960,7 @@ describe('WindowSessionResolver', () => {
         getPanePid: async () => 9000,
         execCommand: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
         claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
-        claudeGetSessionTailState: async () => 'terminal_interrupted' as const,
+        claudeGetSessionTailState: async () => ({ state: 'terminal_interrupted' as const, lastEntryTimestampMs: null }),
       });
       const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
       const status = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
@@ -976,7 +977,7 @@ describe('WindowSessionResolver', () => {
         getPanePid: async () => 9000,
         execCommand: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
         claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
-        claudeGetSessionTailState: async () => 'terminal_final' as const,
+        claudeGetSessionTailState: async () => ({ state: 'terminal_final' as const, lastEntryTimestampMs: null }),
       });
       const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
       const status = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
@@ -993,7 +994,7 @@ describe('WindowSessionResolver', () => {
         getPanePid: async () => 9000,
         execCommand: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
         claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
-        claudeGetSessionTailState: async () => 'terminal_local' as const,
+        claudeGetSessionTailState: async () => ({ state: 'terminal_local' as const, lastEntryTimestampMs: null }),
       });
       const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
       const status = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
@@ -1015,6 +1016,63 @@ describe('WindowSessionResolver', () => {
       const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
       const status = await resolver.getActivityStatus(buildWindow({ agentSessionId: null, taskId: 7, workerType: 'claude' }));
       expect(status).toBe('working');
+    });
+
+    describe('respawn false-positive fix (Issue #338): freshness must come from the tail entry timestamp, not file mtime', () => {
+      it('returns idle right after `claude --resume` even though mtime is fresh, when the last meaningful entry is stale (housekeeping-only respawn)', async () => {
+        const panes: TmuxPaneInfo[] = [
+          { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
+        ];
+        // mtime はリスポーン直後の housekeeping 書き込みで新しいが、末尾の意味あるエントリ
+        // （terminal_final = 前回セッションの最終応答）は何分も前のまま、というリスポーン直後の実観測を再現する。
+        const recentMtime = Date.now() - 5 * 1000;
+        const staleEntryTimestampMs = Date.now() - 10 * 60 * 1000;
+        const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+          listAllPanes: async () => panes,
+          getPanePid: async () => 9000,
+          execCommand: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
+          claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
+          claudeGetSessionTailState: async () => ({ state: 'terminal_final' as const, lastEntryTimestampMs: staleEntryTimestampMs }),
+        });
+        const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+        const status = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
+        expect(status).toBe('idle');
+      });
+
+      it('returns working when the last meaningful entry timestamp itself is fresh', async () => {
+        const panes: TmuxPaneInfo[] = [
+          { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
+        ];
+        const recentMtime = Date.now() - 5 * 1000;
+        const recentEntryTimestampMs = Date.now() - 5 * 1000;
+        const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+          listAllPanes: async () => panes,
+          getPanePid: async () => 9000,
+          execCommand: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
+          claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
+          claudeGetSessionTailState: async () => ({ state: 'terminal_final' as const, lastEntryTimestampMs: recentEntryTimestampMs }),
+        });
+        const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+        const status = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
+        expect(status).toBe('working');
+      });
+
+      it('falls back to mtime when lastEntryTimestampMs is null (entry without a timestamp)', async () => {
+        const panes: TmuxPaneInfo[] = [
+          { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
+        ];
+        const recentMtime = Date.now() - 5 * 1000;
+        const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+          listAllPanes: async () => panes,
+          getPanePid: async () => 9000,
+          execCommand: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
+          claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
+          claudeGetSessionTailState: async () => ({ state: 'terminal_final' as const, lastEntryTimestampMs: null }),
+        });
+        const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+        const status = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
+        expect(status).toBe('working');
+      });
     });
   });
 });

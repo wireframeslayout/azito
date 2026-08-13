@@ -1,12 +1,13 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { isRecord, truncateText, classifyTailEntry, TOOL_USE_INPUT_LIMIT, TOOL_RESULT_TEXT_LIMIT, TAIL_STATE_SCAN_BYTES } from './entryHelpers';
+import { isRecord, truncateText, classifyTailEntry, parseEntryTimestampMs, TOOL_USE_INPUT_LIMIT, TOOL_RESULT_TEXT_LIMIT, TAIL_STATE_SCAN_BYTES } from './entryHelpers';
 import { readChunk, readInitialWindow, readIncrementalWindow, readBeforeWindow } from './jsonlWindowReader';
 import type {
   ReadSessionBeforeResult,
   ReadSessionResult,
   SessionSummary,
+  SessionTailState,
   TranscriptBlock,
   TranscriptEntry,
   TranscriptEntryType,
@@ -584,11 +585,9 @@ export class CodexTranscriptSource implements TranscriptSource {
    * Claude の thinking ブロックと同じ type:'assistant' 形に正規化され、classifyTailEntry が
    * エージェント非依存に扱える。
    */
-  async getSessionTailState(
-    sessionId: string,
-  ): Promise<'in_progress' | 'terminal_interrupted' | 'terminal_local' | 'terminal_final' | 'unknown'> {
+  async getSessionTailState(sessionId: string): Promise<SessionTailState> {
     const file = this.findSessionFile(sessionId);
-    if (!file) return 'unknown';
+    if (!file) return { state: 'unknown', lastEntryTimestampMs: null };
 
     let content: string;
     try {
@@ -601,15 +600,15 @@ export class CodexTranscriptSource implements TranscriptSource {
         fs.closeSync(fd);
       }
     } catch {
-      return 'unknown';
+      return { state: 'unknown', lastEntryTimestampMs: null };
     }
 
     const { parseLine } = buildParseLine('tail');
     const lines = content.split('\n');
     for (let i = lines.length - 1; i >= 0; i--) {
       const entry = parseLine(lines[i]);
-      if (entry) return classifyTailEntry(entry);
+      if (entry) return { state: classifyTailEntry(entry), lastEntryTimestampMs: parseEntryTimestampMs(entry) };
     }
-    return 'unknown';
+    return { state: 'unknown', lastEntryTimestampMs: null };
   }
 }

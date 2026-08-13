@@ -132,7 +132,7 @@ async function handleReadSession(
   let pendingInteraction = false;
   if (interactionMonitor.isPending(windowId)) {
     const tailState = await source.getSessionTailState(sessionId);
-    pendingInteraction = tailState === 'in_progress';
+    pendingInteraction = tailState.state === 'in_progress';
   }
   return { ...result, pendingInteraction };
 }

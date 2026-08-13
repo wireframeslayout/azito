@@ -1,12 +1,13 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { isRecord, truncateText, classifyTailEntry, TOOL_USE_INPUT_LIMIT, TOOL_RESULT_TEXT_LIMIT, TAIL_STATE_SCAN_BYTES } from './entryHelpers';
+import { isRecord, truncateText, classifyTailEntry, parseEntryTimestampMs, TOOL_USE_INPUT_LIMIT, TOOL_RESULT_TEXT_LIMIT, TAIL_STATE_SCAN_BYTES } from './entryHelpers';
 import { readChunk, readInitialWindow, readIncrementalWindow, readBeforeWindow } from './jsonlWindowReader';
 import type {
   ReadSessionBeforeResult,
   ReadSessionResult,
   SessionSummary,
+  SessionTailState,
   TranscriptBlock,
   TranscriptEntry,
   TranscriptEntryType,
@@ -868,11 +869,9 @@ export class ClaudeTranscriptSource implements TranscriptSource {
   }
 
   /** 末尾 TAIL_STATE_SCAN_BYTES 分だけを読み、末尾から遡って最初にパース可能な行を分類する。 */
-  async getSessionTailState(
-    sessionId: string,
-  ): Promise<'in_progress' | 'terminal_interrupted' | 'terminal_local' | 'terminal_final' | 'unknown'> {
+  async getSessionTailState(sessionId: string): Promise<SessionTailState> {
     const file = this.findSessionFile(sessionId);
-    if (!file) return 'unknown';
+    if (!file) return { state: 'unknown', lastEntryTimestampMs: null };
 
     let content: string;
     try {
@@ -885,7 +884,7 @@ export class ClaudeTranscriptSource implements TranscriptSource {
         fs.closeSync(fd);
       }
     } catch {
-      return 'unknown';
+      return { state: 'unknown', lastEntryTimestampMs: null };
     }
 
     // io を渡さない: fd は上の try ブロックで既に close 済みのため、後方スキャン（Minor 2）は行えない。
@@ -895,8 +894,8 @@ export class ClaudeTranscriptSource implements TranscriptSource {
     const lines = content.split('\n');
     for (let i = lines.length - 1; i >= 0; i--) {
       const entry = parseLine(lines[i], 0);
-      if (entry) return classifyTailEntry(entry);
+      if (entry) return { state: classifyTailEntry(entry), lastEntryTimestampMs: parseEntryTimestampMs(entry) };
     }
-    return 'unknown';
+    return { state: 'unknown', lastEntryTimestampMs: null };
   }
 }
