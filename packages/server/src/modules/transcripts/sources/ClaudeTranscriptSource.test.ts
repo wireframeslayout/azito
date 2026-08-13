@@ -947,16 +947,16 @@ describe('ClaudeTranscriptSource', () => {
       expect(await service.getSessionTailState(SID_A)).toBe('unknown');
     });
 
-    it('returns terminal when the last meaningful record is an interrupt marker', async () => {
+    it('returns terminal_interrupted when the last meaningful record is an interrupt marker', async () => {
       writeSession(dir, 'proj-a', SID_A, [
         { type: 'user', uuid: 'u1', message: { content: 'do the thing' } },
         { type: 'assistant', uuid: 'a1', message: { content: [{ type: 'tool_use', name: 'Bash', input: {} }] } },
         { type: 'user', uuid: 'u2', message: { content: [{ type: 'text', text: '[Request interrupted by user for tool use]' }] } },
       ]);
-      expect(await service.getSessionTailState(SID_A)).toBe('terminal');
+      expect(await service.getSessionTailState(SID_A)).toBe('terminal_interrupted');
     });
 
-    it('returns terminal when the last meaningful record is a local command entry', async () => {
+    it('returns terminal_final when the last meaningful record is a local command entry', async () => {
       writeSession(dir, 'proj-a', SID_A, [
         { type: 'user', uuid: 'u1', message: { content: 'hi' } },
         {
@@ -966,15 +966,15 @@ describe('ClaudeTranscriptSource', () => {
         },
         { type: 'user', uuid: 'out1', message: { content: '<local-command-stdout>Set model to Opus 5</local-command-stdout>' } },
       ]);
-      expect(await service.getSessionTailState(SID_A)).toBe('terminal');
+      expect(await service.getSessionTailState(SID_A)).toBe('terminal_final');
     });
 
-    it('returns terminal when the last meaningful record is an assistant final text response', async () => {
+    it('returns terminal_final when the last meaningful record is an assistant final text response', async () => {
       writeSession(dir, 'proj-a', SID_A, [
         { type: 'user', uuid: 'u1', message: { content: 'hi' } },
         { type: 'assistant', uuid: 'a1', message: { content: [{ type: 'text', text: 'done' }] } },
       ]);
-      expect(await service.getSessionTailState(SID_A)).toBe('terminal');
+      expect(await service.getSessionTailState(SID_A)).toBe('terminal_final');
     });
 
     it('returns in_progress when the last meaningful record is an assistant entry ending in a thinking block (mid-turn, not a final response)', async () => {
@@ -1044,7 +1044,7 @@ describe('ClaudeTranscriptSource', () => {
         { type: 'assistant', uuid: 'a1', message: { content: [{ type: 'text', text: 'done' }] } },
       ]);
       fs.appendFileSync(file, 'not json at all\n');
-      expect(await service.getSessionTailState(SID_A)).toBe('terminal');
+      expect(await service.getSessionTailState(SID_A)).toBe('terminal_final');
     });
   });
 

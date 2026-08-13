@@ -584,7 +584,7 @@ export class CodexTranscriptSource implements TranscriptSource {
    * Claude の thinking ブロックと同じ type:'assistant' 形に正規化され、classifyTailEntry が
    * エージェント非依存に扱える。
    */
-  async getSessionTailState(sessionId: string): Promise<'in_progress' | 'terminal' | 'unknown'> {
+  async getSessionTailState(sessionId: string): Promise<'in_progress' | 'terminal_interrupted' | 'terminal_final' | 'unknown'> {
     const file = this.findSessionFile(sessionId);
     if (!file) return 'unknown';
 

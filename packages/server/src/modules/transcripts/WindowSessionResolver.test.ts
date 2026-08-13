@@ -949,7 +949,7 @@ describe('WindowSessionResolver', () => {
       expect(status).toBe('working');
     });
 
-    it('returns idle when mtime is recent but the tail record is terminal (interrupted/final response)', async () => {
+    it('returns idle when mtime is recent but the tail record is terminal_interrupted (stop-button interrupt)', async () => {
       const panes: TmuxPaneInfo[] = [
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
       ];
@@ -959,11 +959,28 @@ describe('WindowSessionResolver', () => {
         getPanePid: async () => 9000,
         execCommand: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
         claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
-        claudeGetSessionTailState: async () => 'terminal' as const,
+        claudeGetSessionTailState: async () => 'terminal_interrupted' as const,
       });
       const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
       const status = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
       expect(status).toBe('idle');
+    });
+
+    it('returns working when mtime is recent and the tail record is terminal_final (agent just finished its response — regression guard, Issue #338 followup)', async () => {
+      const panes: TmuxPaneInfo[] = [
+        { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
+      ];
+      const recentMtime = Date.now() - 5 * 1000;
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+        listAllPanes: async () => panes,
+        getPanePid: async () => 9000,
+        execCommand: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
+        claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
+        claudeGetSessionTailState: async () => 'terminal_final' as const,
+      });
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const status = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
+      expect(status).toBe('working');
     });
 
     it('falls back to the task-linked session when the window has no agentSessionId of its own', async () => {

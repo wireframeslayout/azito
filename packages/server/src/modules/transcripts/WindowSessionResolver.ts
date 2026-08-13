@@ -283,13 +283,17 @@ export class WindowSessionResolver {
    *   claude/codex プロセスが見当たらない。
    * - 'working': プロセスは見つかり、かつ window.agentSessionId（無ければ紐づく task の
    *   agentSessionId）のセッションファイルが直近 SESSION_ACTIVITY_WINDOW_MS 以内に更新されており、
-   *   かつ末尾レコードが tailState 'terminal'（中断マーカー／最終応答完了）でない。
+   *   かつ末尾レコードが tailState 'terminal_interrupted'（中断マーカー）でない。tailState が
+   *   'terminal_final'（最終応答完了／ローカルコマンド完了）または 'unknown' の場合は working のまま
+   *   とする — mtime 120秒窓の間は「直近まで動いていた」ことを見せ続け、working→idle 遷移での
+   *   完了行合成の観測窓を確保する（Issue #338 followup 退行修正: 20秒程度の短いターンが一度も
+   *   working を観測されず稼働リストに現れなくなっていた不具合の修正。詳細は entryHelpers.ts
+   *   classifyTailEntry のコメント参照）。
    * - 'idle': プロセスは見つかったが、セッションが未設定、セッション mtime が古い
    *   （エージェントプロセス自体は生きているがユーザー入力待ち等で書き込みが止まっている）、または
-   *   mtime は新しいが tailState が 'terminal'（Issue #338 followup: 中断直後は中断マーカー自体の
-   *   書き込みで mtime が更新されるため、mtime だけでは「稼働中」の偽陽性が生じる — 末尾レコードの
-   *   意味まで見て排除する）。tailState が 'unknown'（読み取り不能）の場合は従来通り mtime のみで
-   *   working 扱いにする。
+   *   mtime は新しいが tailState が 'terminal_interrupted'（停止ボタン等によるユーザー中断。中断
+   *   マーカー自体の書き込みで mtime が更新されるため、mtime だけでは「稼働中」の偽陽性が生じる —
+   *   末尾レコードの意味まで見て排除する。terminal_final はここに含めない）。
    */
   async getActivityStatus(window: Window): Promise<'working' | 'idle' | 'offline'> {
     const server = this.serverRepo.findByName(window.serverName);
@@ -312,7 +316,7 @@ export class WindowSessionResolver {
     if (mtimeMs === null || Date.now() - mtimeMs > SESSION_ACTIVITY_WINDOW_MS) return 'idle';
 
     const tailState = source ? await source.getSessionTailState(sessionId) : 'unknown';
-    if (tailState === 'terminal') return 'idle';
+    if (tailState === 'terminal_interrupted') return 'idle';
     return 'working';
   }
 

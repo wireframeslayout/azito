@@ -237,8 +237,8 @@ describe('GET /api/transcripts/:agent/:id', () => {
     await app.close();
   });
 
-  it('reports pendingInteraction:false when the monitor is pending but tailState is terminal (idle-notification noise)', async () => {
-    const claude = buildClaudeSource({ getSessionTailState: async () => 'terminal' as const });
+  it('reports pendingInteraction:false when the monitor is pending but tailState is terminal_final (idle-notification noise)', async () => {
+    const claude = buildClaudeSource({ getSessionTailState: async () => 'terminal_final' as const });
     const app = buildApp([claude], {}, { interactionMonitor: { isPending: () => true } });
     const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?windowId=7` });
     expect(res.statusCode).toBe(200);

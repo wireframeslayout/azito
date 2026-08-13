@@ -868,7 +868,7 @@ export class ClaudeTranscriptSource implements TranscriptSource {
   }
 
   /** 末尾 TAIL_STATE_SCAN_BYTES 分だけを読み、末尾から遡って最初にパース可能な行を分類する。 */
-  async getSessionTailState(sessionId: string): Promise<'in_progress' | 'terminal' | 'unknown'> {
+  async getSessionTailState(sessionId: string): Promise<'in_progress' | 'terminal_interrupted' | 'terminal_final' | 'unknown'> {
     const file = this.findSessionFile(sessionId);
     if (!file) return 'unknown';
 

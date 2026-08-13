@@ -480,19 +480,19 @@ describe('CodexTranscriptSource', () => {
       expect(await source.getSessionTailState(SID_A)).toBe('unknown');
     });
 
-    it('returns terminal when the last meaningful record is a turn_aborted event', async () => {
+    it('returns terminal_interrupted when the last meaningful record is a turn_aborted event', async () => {
       writeSession(dir, SID_A, [
         SESSION_META(SID_A, '/home/user/proj-a'),
         USER_MESSAGE('do it'),
         FUNCTION_CALL('call_1'),
         TURN_ABORTED_EVENT,
       ]);
-      expect(await source.getSessionTailState(SID_A)).toBe('terminal');
+      expect(await source.getSessionTailState(SID_A)).toBe('terminal_interrupted');
     });
 
-    it('returns terminal when the last meaningful record is the final assistant text', async () => {
+    it('returns terminal_final when the last meaningful record is the final assistant text', async () => {
       writeSession(dir, SID_A, [SESSION_META(SID_A, '/home/user/proj-a'), USER_MESSAGE('hi'), ASSISTANT_MESSAGE('done')]);
-      expect(await source.getSessionTailState(SID_A)).toBe('terminal');
+      expect(await source.getSessionTailState(SID_A)).toBe('terminal_final');
     });
 
     it('returns in_progress when the last meaningful record is a reasoning block (mid-turn thinking, not a final response)', async () => {
