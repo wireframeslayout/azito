@@ -4,6 +4,19 @@ import type { AgentActivityPayload } from '../types/notification';
 import { findByWindowTarget } from '../utils/tmuxTarget';
 import { useNotificationChannel } from './useNotificationChannel';
 import { useWorkspaceTargets } from './useWorkspaceTargets';
+import {
+  activityKey,
+  FINISHED_TTL_MS,
+  pruneFinished,
+  removeFinished,
+  upsertFinished,
+  type FinishedEntry,
+} from '../lib/finishedWindows';
+
+// 完了行のキー規約・寿命・リスト操作は lib/finishedWindows.ts に集約してある（純関数としてテスト
+// されている）。ここからの re-export は既存の import 経路（useActiveWindowRows 等）を保つため。
+export { activityKey, FINISHED_TTL_MS };
+export type { FinishedEntry };
 
 export interface AgentActivityInfo {
   serverName: string;
@@ -26,16 +39,6 @@ interface AgentActivitySnapshotEntry {
   projectId?: number;
   label?: string;
   status?: 'working' | 'blocked';
-  paneName?: string;
-}
-
-export interface FinishedEntry {
-  serverName: string;
-  target: string;
-  label?: string;
-  taskId?: number;
-  projectId?: number;
-  finishedAt: number;
   paneName?: string;
 }
 
@@ -78,10 +81,6 @@ const AgentActivityContext = createContext<AgentActivityContextValue>({
   dismissFinished: () => {},
 });
 
-export function activityKey(serverName: string, target: string): string {
-  return `${serverName}::${target}`;
-}
-
 function snapshotToMap(snapshot: AgentActivitySnapshotEntry[]): Map<string, AgentActivityInfo> {
   const map = new Map<string, AgentActivityInfo>();
   for (const e of snapshot) {
@@ -123,21 +122,8 @@ function useBrowserFocused(): boolean {
 
 const FINISHED_STORAGE_KEY = 'active-windows-finished';
 
-/**
- * 完了行の寿命。Provider が唯一の適用箇所（読み込み時・定期・保存時）で、表示側は
- * prune 済みのデータをそのまま出す。以前は SPバーの表示フィルタだけが1時間で切っており、
- * 実体（localStorage）は無期限に積み上がっていた。
- */
-export const FINISHED_TTL_MS = 60 * 60 * 1000;
-
 /** TTL の定期掃除間隔（タブを開きっぱなしでも完了行が寿命を超えて残らないようにする）。 */
 const FINISHED_PRUNE_INTERVAL_MS = 5 * 60 * 1000;
-
-/** TTL を過ぎた完了行を落とす。長さが変わらなければ同一参照を返す（再レンダリング抑止）。 */
-function pruneFinished(entries: FinishedEntry[], now: number): FinishedEntry[] {
-  const kept = entries.filter((e) => now - e.finishedAt < FINISHED_TTL_MS);
-  return kept.length === entries.length ? entries : kept;
-}
 
 function loadFinishedEntries(): FinishedEntry[] {
   try {
@@ -218,23 +204,20 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
       //   （これらを一律「完了」にしていたのが、リスポーンやハブ再起動で偽の完了行が鋳造される原因だった）。
       // - 'deleted' は該当キーの完了行を即時に取り除く（実体の無いウィンドウの幽霊行を残さない）。
       if (payload.reason === 'deleted') {
-        setFinished((cur) => cur.filter((e) => activityKey(e.serverName, e.target) !== key));
+        setFinished((cur) => removeFinished(cur, key));
         return;
       }
       if (payload.reason !== 'completed') return;
       if (isWatchedRef.current(payload.serverName, payload.target, payload.taskId)) return;
-      setFinished((cur) => {
-        if (cur.some((e) => activityKey(e.serverName, e.target) === key)) return cur;
-        return [...cur, {
-          serverName: payload.serverName,
-          target: payload.target,
-          label: payload.label,
-          taskId: payload.taskId,
-          projectId: payload.projectId,
-          finishedAt: Date.now(),
-          paneName: payload.paneName,
-        }];
-      });
+      setFinished((cur) => upsertFinished(cur, {
+        serverName: payload.serverName,
+        target: payload.target,
+        label: payload.label,
+        taskId: payload.taskId,
+        projectId: payload.projectId,
+        finishedAt: Date.now(),
+        paneName: payload.paneName,
+      }));
     },
     onConnected: fetchSnapshot,
   });

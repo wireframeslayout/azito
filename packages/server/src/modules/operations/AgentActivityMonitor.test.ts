@@ -1573,6 +1573,76 @@ describe('AgentActivityMonitor', () => {
         expect(emit).not.toHaveBeenCalled();
       });
 
+      it("announces 'deleted' once when the tmux window disappears under a surviving windows row", async () => {
+        // 行は残ったままウィンドウだけ消えるケース（review Important 1）。稼働していなくても
+        // 完了行を落とせるよう一度は通知が要るが、毎ティック繰り返してはならない。
+        monitor = makeMonitorWithProbe(async () => []);
+        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+        listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 600));
+        await monitor.tick(); // window is live but idle — never running
+        expect(monitor.snapshot()).toEqual([]);
+
+        emit.mockClear();
+        listSessions.mockResolvedValue([]); // tmux window gone, windows row still there
+        await monitor.tick();
+        expect(lastStopPayload('azito:agent-1')?.reason).toBe('deleted');
+
+        emit.mockClear();
+        await monitor.tick();
+        expect(emit).not.toHaveBeenCalled();
+      });
+
+      it('does not let a cached completion resurrect a window that was just deleted', async () => {
+        // review Important 2: 削除直後に「新鮮な cached completedAt」で completed を合成すると、
+        // 削除で消したはずの完了行がクライアントで作り直される。
+        monitor = makeMonitorWithProbe(async () => [{
+          serverName: 'local', target: 'azito:agent-1', status: 'idle', completedAt: Date.now(),
+        }]);
+        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+        listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 600));
+        await monitor.tick();
+        await settleProbe();
+        await monitor.tick(); // the completion itself is announced here
+
+        emit.mockClear();
+        findAll.mockReturnValue([]); // window row deleted
+        listSessions.mockResolvedValue([]);
+        await monitor.tick();
+        const stops = emit.mock.calls
+          .map((c: unknown[]) => (c[0] as { payload: { target: string; running: boolean; reason?: string } }).payload)
+          .filter((pl) => pl.target === 'azito:agent-1' && pl.running === false);
+        expect(stops.map((pl) => pl.reason)).toEqual(['deleted']);
+
+        emit.mockClear();
+        await monitor.tick();
+        expect(emit).not.toHaveBeenCalled();
+      });
+
+      it('attributes a completion synthesized for a just-ended run to the operation, not to a manual agent', async () => {
+        // review Important 4: manual 扱いで合成するとフロントが task_done に加えて
+        // agent_finished 通知を二重に出す（判定は payload.operation で行われるため）。
+        monitor = makeMonitorWithProbe(async () => [{
+          serverName: 'local', target: 'azito:agent-1', status: 'idle', completedAt: Date.now(), taskId: 7,
+        }]);
+        findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+        listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 600));
+        getRunning.mockReturnValue({ 5: [{ taskId: 7, target: 'azito:agent-1.1', serverName: 'local' }] });
+        await monitor.tick();
+        await settleProbe();
+
+        // The run ends between ticks; the probe's cached snapshot is what carries
+        // its completion, so the stop is announced by the synthesis path.
+        getRunning.mockReturnValue({});
+        emit.mockClear();
+        await monitor.tick();
+        await monitor.tick();
+        const stops = emit.mock.calls
+          .map((c: unknown[]) => (c[0] as { payload: { target: string; running: boolean; reason?: string; operation: boolean; source: string; taskId?: number } }).payload)
+          .filter((pl) => pl.target === 'azito:agent-1' && pl.running === false && pl.reason === 'completed');
+        expect(stops).toHaveLength(1);
+        expect(stops[0]).toEqual(expect.objectContaining({ operation: true, source: 'operation', taskId: 7 }));
+      });
+
       it("labels a stop the Tier 3 heuristic merely aged out as 'unknown', never a completion", async () => {
         monitor = makeMonitorWithProbe(async () => []);
         findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);

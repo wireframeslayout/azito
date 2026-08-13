@@ -283,6 +283,14 @@ const PROCESS_PROBE_MAX_AGE_MS = 60_000;
  */
 const COMPLETION_SYNTHESIS_MAX_AGE_MS = 2 * PROCESS_PROBE_REFRESH_MS;
 
+/**
+ * How long after an execution run leaves `getRunning()` a synthesized
+ * completion for its key is still attributed to that run. Only needs to cover
+ * the gap between the run ending and the probe cycle that observes its final
+ * transcript entry, so it is kept just above one probe max-age.
+ */
+const OPERATION_ATTRIBUTION_TTL_MS = 90_000;
+
 function windowKey(serverName: string, target: string): string {
   return `${serverName}::${stripPaneSuffix(target)}`;
 }
@@ -378,6 +386,16 @@ export class AgentActivityMonitor {
   // (reason 'deleted') — including for keys that were already idle, whose
   // disappearance emits no transition of its own.
   private previousCandidateKeys = new Set<string>();
+  // Candidate keys whose tmux window was found alive on the previous tick. A
+  // key leaving this set while its `windows` row survives is a window
+  // disappearance, announced once (see collect()'s `window === null` branch).
+  private previousLiveKeys = new Set<string>();
+  // Recently-registered execution runs: key → the run's taskId, kept briefly
+  // after the run ends so a completion synthesized from the probe (a turn that
+  // started and finished between ticks) is still attributed to the operation
+  // instead of being announced as a hand-launched agent — which would make the
+  // frontend raise an "agent finished" notification on top of the task's own.
+  private recentOperationMeta = new Map<string, { taskId: number; at: number }>();
   // Last refresh *attempt* (rate-limits retries) and last *success* (the only
   // one Tier 4 freshness is judged on — see PROCESS_PROBE_MAX_AGE_MS).
   private processProbeAt = 0;
@@ -589,6 +607,10 @@ export class AgentActivityMonitor {
     const next = new Map<string, AgentActivityEntry>();
     const reasons = new Map<string, AgentActivityStopReason>();
     const deletedKeys = new Set<string>();
+    // Candidate keys whose tmux window was actually found this tick; becomes
+    // previousLiveKeys at the end, so a window disappearing is detectable as an
+    // edge rather than as a level (see the `window === null` branch).
+    const liveKeys = new Set<string>();
 
     // 1. Operation runs: being registered means running — unless a Tier 0
     // supervisor signal exists for the key, in which case the supervisor's
@@ -604,6 +626,7 @@ export class AgentActivityMonitor {
       for (const e of executions) {
         const key = windowKey(e.serverName, e.target);
         operationKeys.add(key);
+        this.recentOperationMeta.set(key, { taskId: e.taskId, at: Date.now() });
         const supervisor = this.supervisorStates.get(key);
         if (supervisor?.status === 'idle') {
           // supervised-idle → not running. An explicit active→idle report from
@@ -678,6 +701,9 @@ export class AgentActivityMonitor {
     for (const key of this.processDisarmedKeys) {
       if (!candidateKeys.has(key) && !operationKeys.has(key)) this.processDisarmedKeys.delete(key);
     }
+    for (const [key, meta] of this.recentOperationMeta) {
+      if (Date.now() - meta.at > OPERATION_ATTRIBUTION_TTL_MS) this.recentOperationMeta.delete(key);
+    }
     // Supervisor state is deliberately NOT pruned by candidate/operation
     // membership: a live supervisor connection with no `windows` row and no
     // operation run (e.g. a manually launched `azs claude` pane) is exactly
@@ -692,7 +718,10 @@ export class AgentActivityMonitor {
     // the only place such a key becomes an entry.
     this.collectPureSupervisedEntries(operationKeys, candidateKeys, next);
 
-    if (candidates.length === 0) return { next, reasons, deletedKeys };
+    if (candidates.length === 0) {
+      this.previousLiveKeys = liveKeys;
+      return { next, reasons, deletedKeys };
+    }
 
     // Resolve each server once per tick, not once per candidate window.
     // Also include servers for operation-run entries (needed for post-check above).
@@ -795,8 +824,14 @@ export class AgentActivityMonitor {
         this.activityHistory.delete(key);
         this.hookStates.delete(key);
         reasons.set(key, 'deleted');
+        // The tmux window is gone while its `windows` row survives, so the
+        // candidate-inventory diff above cannot see this. Announce it on the
+        // live→gone edge only (previousLiveKeys), never on every later tick:
+        // a stale row would otherwise re-announce its deletion every 5s.
+        if (this.previousLiveKeys.has(key)) deletedKeys.add(key);
         continue;
       }
+      liveKeys.add(key);
 
       // Foreground-command check is shared by both the hook path (crash
       // failsafe below) and the heuristic path: a focused shell pane that
@@ -995,6 +1030,7 @@ export class AgentActivityMonitor {
       if (name) next.set(key, { ...entry, paneName: name });
     }
 
+    this.previousLiveKeys = liveKeys;
     return { next, reasons, deletedKeys };
   }
 
@@ -1111,22 +1147,37 @@ export class AgentActivityMonitor {
    * looking `working` for 120s so the client can observe a working→idle edge"
    * hack (P3).
    */
-  private emitSynthesizedCompletions(next: Map<string, AgentActivityEntry>): void {
+  private emitSynthesizedCompletions(next: Map<string, AgentActivityEntry>, deletedKeys: Set<string>): void {
+    for (const key of deletedKeys) {
+      // The window is gone: its cached probe answer (taken while it still
+      // existed) must not resurrect it as a completion right after the
+      // deletion was announced — the client would rebuild the very finished
+      // row the deletion just removed. Drop the cached answer outright so no
+      // later tick can either, until the probe refreshes without it.
+      this.processStates.delete(key);
+      this.emittedCompletions.delete(key);
+    }
     for (const [key, probe] of this.processStates) {
       if (next.has(key) || this.state.has(key)) continue;
       const completedAt = probe.completedAt;
       if (!this.isFreshOutcome(completedAt) || completedAt === null) continue;
       if (this.emittedCompletions.get(key) === completedAt) continue;
       this.emittedCompletions.set(key, completedAt);
+      // Attribution: a run that started and finished between two ticks is
+      // still an operation, and announcing it as a hand-launched agent makes
+      // the client raise an "agent finished" notification on top of the task's
+      // own task_done. recentOperationMeta keeps that attribution alive for a
+      // short window after the run leaves getRunning().
+      const operationMeta = this.recentOperationMeta.get(key);
       this.notificationBus.emit({
         type: 'agent:activity',
         payload: {
           serverName: probe.serverName,
           target: probe.target,
           running: false,
-          source: 'manual',
-          operation: false,
-          taskId: probe.taskId,
+          source: operationMeta ? 'operation' : 'manual',
+          operation: operationMeta !== undefined,
+          taskId: operationMeta?.taskId ?? probe.taskId,
           label: probe.label,
           projectId: probe.projectId,
           reason: 'completed',
@@ -1208,6 +1259,6 @@ export class AgentActivityMonitor {
       });
     }
 
-    this.emitSynthesizedCompletions(next);
+    this.emitSynthesizedCompletions(next, deletedKeys);
   }
 }
