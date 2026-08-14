@@ -27,7 +27,7 @@ Right-clicking a node in the file tree (long-press on mobile) opens a context me
 | Download | Download the file (folders are not supported) |
 | Delete | Show a confirmation modal, then delete |
 
-Create and rename use an inline input field in the tree; only delete goes through a confirmation modal. The server always verifies that write targets stay inside the project's `workingDirectory` — paths outside that root, the `.git` directory, and the root directory itself are all rejected.
+Create and rename use an inline input field in the tree; only delete goes through a confirmation modal. The server always verifies that every write operation — create, save, rename, and delete — stays inside the project's `workingDirectory`; paths outside that root are rejected. Delete additionally rejects the `.git` directory and the root directory itself.
 
 ### Switching Worktree Roots
 
@@ -102,7 +102,7 @@ When selecting an image file in the file storage (MinIO) file list, a preview is
 
 ## In-Browser Editor
 
-For text files, the preview area itself is a CodeMirror 6-based editor — files are editable directly, with no separate "edit mode" to switch into.
+For text files other than Markdown, the preview area itself is a CodeMirror 6-based editor — files are editable directly, with no separate "edit mode" to switch into. Markdown files have three switchable view modes — Source / Preview / Split — defaulting to Preview. The default Preview mode is read-only; switch to Source or Split to edit.
 
 - **Vim mode**: a toggle at the top-right of the editor enables vim keybindings (the setting is persisted per device and off by default at mobile widths). In vim mode, `:w` also triggers a save
 - **Saving**: edits are sent to `PUT /api/servers/:name/files/content` on save
