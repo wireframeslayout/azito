@@ -29,6 +29,12 @@ export const TAIL_STATE_SCAN_BYTES = TAIL_STATE_SCAN_WINDOWS[0];
  * TAIL_STATE_SCAN_WINDOWS の各段階で readBeforeWindow（AskUserQuestion の有界後方スキャンと同じ
  * 読み取り器）により末尾ウィンドウをパースし、その中の最後のエントリから遡って分類する。
  * 最大窓（256KB）まで広げても意味あるエントリが無ければ 'unknown' を返す。
+ *
+ * 読み取り量の厳密なバジェット: `maxExpandWindows: 1` で readBeforeWindow のオーバーサイズ行拡張
+ * （既定では要求サイズの最大8倍まで遡る）を無効化する。これにより走査が遡る深さは末尾から
+ * 最大 TAIL_STATE_SCAN_WINDOWS の最終要素（256KB）に厳密に収まり、1段階あたりの読み取りも
+ * その窓（改行探索のプローブ＋本読みの2走査）に閉じる。窓を埋め尽くす 256KB 超の単一レコードは
+ * その段階で改行が見つからず（entries 空）、最終段階まで進んでも決着しないので 'unknown' になる。
  */
 export function scanSessionTailState(
   fd: number,
@@ -38,7 +44,7 @@ export function scanSessionTailState(
   for (const windowBytes of TAIL_STATE_SCAN_WINDOWS) {
     // readBeforeWindow は parseLine が null を返した行（housekeeping・壊れた行）を落とすため、
     // 返却された最後のエントリがそのまま「末尾の意味あるエントリ」になる。
-    const { entries, hasOlder } = readBeforeWindow(fd, size, size, windowBytes, parseLine);
+    const { entries, hasOlder } = readBeforeWindow(fd, size, size, windowBytes, parseLine, { maxExpandWindows: 1 });
     const entry = entries[entries.length - 1];
     if (entry) return { state: classifyTailEntry(entry), lastEntryTimestampMs: parseEntryTimestampMs(entry) };
     // ウィンドウがファイル先頭に到達していれば、これ以上広げても読むものは無い。

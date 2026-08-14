@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -84,6 +84,36 @@ describe('scanSessionTailState', () => {
     const result = withFile(dir, lines, (fd, size) => scanSessionTailState(fd, size, makeParseLine().parseLine));
     expect(result.state).toBe('unknown');
     expect(result.lastEntryTimestampMs).toBeNull();
+  });
+
+  it('keeps the read volume bounded when the tail is a single record larger than the 256KB cap', () => {
+    // オーバーサイズ行に対する readBeforeWindow の窓拡張（既定で要求サイズの最大8倍）を無効化して
+    // いるため、走査は各段階の窓ぶんしか読まない（拡張が効いていると 2MB 超の同期読みになり得る）。
+    const cap = TAIL_STATE_SCAN_WINDOWS[TAIL_STATE_SCAN_WINDOWS.length - 1];
+    const lines = [
+      JSON.stringify({ kind: 'user', timestamp: '2026-08-13T10:00:00.000Z' }),
+      housekeepingLine(cap * 2),
+    ];
+
+    const readSync = fs.readSync;
+    let bytesRead = 0;
+    const spy = vi
+      .spyOn(fs, 'readSync')
+      .mockImplementation(((fd: number, buffer: NodeJS.ArrayBufferView, ...rest: unknown[]) => {
+        bytesRead += buffer.byteLength;
+        return (readSync as (...args: unknown[]) => number)(fd, buffer, ...rest);
+      }) as typeof fs.readSync);
+
+    try {
+      const result = withFile(dir, lines, (fd, size) => scanSessionTailState(fd, size, makeParseLine().parseLine));
+      expect(result.state).toBe('unknown');
+    } finally {
+      spy.mockRestore();
+    }
+
+    // 各段階は「改行探索のプローブ」＋「本読み」の最大2走査に閉じる。
+    const budget = 2 * TAIL_STATE_SCAN_WINDOWS.reduce((sum, w) => sum + w, 0);
+    expect(bytesRead).toBeLessThanOrEqual(budget);
   });
 
   it('decides a small session within the first window (no escalation: every line is parsed exactly once)', () => {

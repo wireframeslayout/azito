@@ -181,7 +181,12 @@ export function readBeforeWindow<T>(
   before: number,
   maxBytes: number,
   parseLine: (line: string, lineStart: number) => T | null,
+  options: { maxExpandWindows?: number } = {},
 ): BeforeWindowReadResult<T> {
+  // 1 を渡すとオーバーサイズ行の窓拡張を無効化し、1回の呼び出しの読み取りを maxBytes の範囲
+  // （プローブ＋本読みで最大2回走査）に厳密に閉じ込める。読み取り量に上限を課したい呼び出し元
+  // （tail-state 走査）が使う。
+  const expandLimit = Math.max(options.maxExpandWindows ?? MAX_EXPAND_WINDOWS, 1);
   const beforeClamped = Math.min(Math.max(before, 0), size);
   const windowStart = Math.max(beforeClamped - maxBytes, 0);
   const byteCapped = windowStart > 0;
@@ -199,7 +204,7 @@ export function readBeforeWindow<T>(
     let newlineAbs =
       searchEnd > curWindowStart ? findFirstNewlineAbsolute(fd, size, curWindowStart, searchEnd - curWindowStart) : -1;
     let windows = 1;
-    while (newlineAbs === -1 && curWindowStart > 0 && windows < MAX_EXPAND_WINDOWS) {
+    while (newlineAbs === -1 && curWindowStart > 0 && windows < expandLimit) {
       const nextWindowStart = Math.max(curWindowStart - maxBytes, 0);
       newlineAbs = findFirstNewlineAbsolute(fd, size, nextWindowStart, curWindowStart - nextWindowStart);
       curWindowStart = nextWindowStart;

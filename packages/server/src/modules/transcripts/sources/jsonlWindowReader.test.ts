@@ -189,6 +189,25 @@ describe('jsonlWindowReader', () => {
       }
     });
 
+    it('does not expand past the requested window when maxExpandWindows is 1 (strict read budget)', () => {
+      const hugeLine = 'H'.repeat(500);
+      const lines = ['before-1', hugeLine];
+      file = tmpFile(lines);
+      const fd = fs.openSync(file, 'r');
+      try {
+        const size = fs.fstatSync(fd).size;
+        const maxBytes = 10;
+        // EOF の直前レコードは 500 バイトの巨大行。拡張なしでは窓内に改行が無いので、この呼び出しは
+        // 要求した maxBytes ぶんだけ遡って諦める（entries 空、cursor は厳密に減少）。
+        const page = readBeforeWindow(fd, size, size, maxBytes, parseLine, { maxExpandWindows: 1 });
+        expect(page.entries).toEqual([]);
+        expect(page.prevOffset).toBe(size - maxBytes);
+        expect(page.hasOlder).toBe(true);
+      } finally {
+        fs.closeSync(fd);
+      }
+    });
+
     it('marks hasOlder=false and startOffset=0 when nothing is clipped', () => {
       const lines = ['only-one'];
       file = tmpFile(lines);
