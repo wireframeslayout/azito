@@ -46,6 +46,11 @@ export interface FakeAgent {
   readonly target: string;
   /** 偽エージェントの状態を切り替える（--titles モードのみ意味を持つ）。 */
   setState(state: FakeAgentState): void;
+  /**
+   * ペインへ届いた入力（tmux send-keys のキーストローク）の記録。`recordInput: true` で
+   * 起動した場合のみ中身が溜まる（それ以外は常に空文字列）。
+   */
+  readInput(): string;
   /** tmux ウィンドウごと破棄する。 */
   kill(): Promise<void>;
 }
@@ -87,6 +92,7 @@ export class Harness {
   private constructor(
     readonly baseUrl: string,
     readonly uiToken: string,
+    readonly webhookToken: string,
     readonly rootDir: string,
     readonly dataDir: string,
     readonly claudeConfigDir: string,
@@ -169,7 +175,7 @@ export class Harness {
     }
 
     const harness = new Harness(
-      baseUrl, uiToken, root, dataDir, claudeConfigDir, tmuxTmpDir, fakeAgentPath,
+      baseUrl, uiToken, webhookToken, root, dataDir, claudeConfigDir, tmuxTmpDir, fakeAgentPath,
       serverProcess, childEnv, logPath,
     );
     try {
@@ -263,6 +269,32 @@ export class Harness {
     return id;
   }
 
+  /**
+   * hook 相当の「回答待ちシグナル」を webhook へ直接注入する（POST /api/webhooks/agent-interaction、
+   * UI トークンではなく webhook トークンで認証する）。実 hook（harness/hooks/azito-question.sh）は
+   * Claude Code の PermissionRequest イベントでしか発火せず E2E からは起こせないため、その HTTP
+   * 契約だけを再現する — 検証対象は「content 付きシグナル → チャットの回答カード → ペインへの
+   * 数字キー」の経路であって、hook スクリプト自身のペイン特定ロジックではない。
+   */
+  async sendInteractionSignal(target: string, content?: unknown): Promise<void> {
+    const [sessionName, windowName] = target.split(':');
+    const { stdout } = await this.tmux(['display-message', '-p', '-t', target, '#{window_index}']);
+    const res = await fetch(`${this.baseUrl}/api/webhooks/agent-interaction`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.webhookToken}` },
+      body: JSON.stringify({
+        serverName: 'local',
+        sessionName,
+        windowIndex: Number(stdout.trim()),
+        windowName,
+        paneIndex: 0,
+        event: 'open',
+        ...(content === undefined ? {} : { content }),
+      }),
+    });
+    if (!res.ok) throw new Error(`agent-interaction webhook -> ${res.status}: ${await res.text()}`);
+  }
+
   async deleteWindow(windowId: number): Promise<void> {
     await this.api(`/windows/${windowId}`, { method: 'DELETE' });
     this.trackedWindowIds = this.trackedWindowIds.filter((id) => id !== windowId);
@@ -302,14 +334,17 @@ export class Harness {
   async startFakeAgent(
     sessionName: string,
     windowName: string,
-    options: { supervised: boolean },
+    options: { supervised: boolean; recordInput?: boolean },
   ): Promise<FakeAgent> {
     const target = `${sessionName}:${windowName}`;
     const stateFile = path.join(this.dataDir, `fake-agent-${sessionName}-${windowName}.state`);
     fs.writeFileSync(stateFile, 'idle');
+    const inputFile = path.join(this.dataDir, `fake-agent-${sessionName}-${windowName}.input`);
+    if (options.recordInput) fs.writeFileSync(inputFile, '');
 
     const agentCmd = `${shellQuote(process.execPath)} ${shellQuote(this.fakeAgentPath)} ` +
-      `${options.supervised ? '--titles' : '--silent'} ${shellQuote(stateFile)}`;
+      `${options.supervised ? '--titles' : '--silent'} ${shellQuote(stateFile)}` +
+      `${options.recordInput ? ` ${shellQuote(inputFile)}` : ''}`;
     const command = options.supervised
       ? `${shellQuote(process.execPath)} ${shellQuote(SUPERVISOR_DIST)} ` +
         `--server local --target ${shellQuote(target)} -- ${shellQuote(agentCmd)}`
@@ -324,6 +359,14 @@ export class Harness {
     const agent: FakeAgent = {
       target,
       setState: (state) => fs.writeFileSync(stateFile, state),
+      readInput: () => {
+        if (!options.recordInput) return '';
+        try {
+          return fs.readFileSync(inputFile, 'utf-8');
+        } catch {
+          return '';
+        }
+      },
       kill: async () => {
         fs.writeFileSync(stateFile, 'exit');
         await this.tmux(['kill-window', '-t', target]).catch(() => undefined);

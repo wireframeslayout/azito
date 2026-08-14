@@ -15,6 +15,13 @@ interface OptionListProps {
   activeValue?: string;
   /** 指定時は各行をクリック/キーボードで選択可能にする（対話利用）。省略時は従来どおり表示専用。 */
   onSelect?: (value: string) => void;
+  /**
+   * 各行自体をフォーカス可能にし、Enter/Space でも選択できるようにする（onSelect 指定時のみ有効）。
+   * 既定は false: コマンドパレットのようにキー操作を入力欄側で受け止める呼び出し元では、行が
+   * タブ順に入ると逆にフォーカスが分散するため。行のタップが唯一の操作手段になる用途
+   * （回答カード）では true にして、キーボードだけでも操作できるようにする。
+   */
+  focusable?: boolean;
 }
 
 /**
@@ -23,7 +30,7 @@ interface OptionListProps {
  * コマンドパレット（Issue #338 フェーズC）でも再利用するため、onSelect/activeValue を渡した場合のみ
  * 対話可能なリストとして振る舞う（省略時は従来どおり表示専用、transcript 固有の状態は持たせない）。
  */
-export function OptionList({ options, selectedValues, activeValue, onSelect }: OptionListProps) {
+export function OptionList({ options, selectedValues, activeValue, onSelect, focusable = false }: OptionListProps) {
   const interactive = onSelect !== undefined;
   return (
     <div role={interactive ? 'listbox' : undefined} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -36,6 +43,12 @@ export function OptionList({ options, selectedValues, activeValue, onSelect }: O
             role={interactive ? 'option' : undefined}
             aria-selected={interactive ? isActive : undefined}
             onClick={interactive ? () => onSelect(option.value) : undefined}
+            tabIndex={interactive && focusable ? 0 : undefined}
+            onKeyDown={interactive && focusable ? (e) => {
+              if (e.key !== 'Enter' && e.key !== ' ') return;
+              e.preventDefault(); // Space によるスクロールを抑える
+              onSelect(option.value);
+            } : undefined}
             style={{
               display: 'flex',
               alignItems: 'flex-start',

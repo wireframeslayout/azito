@@ -91,6 +91,31 @@ export interface ReadSessionResult {
   hasOlder: boolean;
   /** リクエストに windowId を付けた場合のみ設定。true の間、会話末尾に「回答待ち」バナーを表示する。 */
   pendingInteraction?: boolean;
+  /**
+   * pendingInteraction が true で、かつシグナルが質問内容そのものを伴っていた場合のみ設定
+   * （PermissionRequest hook 由来）。バナーの代わりに回答可能な質問カードを出すための材料。
+   * 内容なし（Notification hook のみ）のときは undefined のまま＝従来どおりバナーに退化する。
+   */
+  pendingQuestion?: PendingQuestion;
+}
+
+/** オープン中の AskUserQuestion（サーバー側 InteractionMonitor の pending state 由来）。 */
+export interface PendingQuestion {
+  questions: PendingQuestionItem[];
+  /** シグナルを受け取った時刻（epoch ms）。質問が差し替わったことをフロントが検知する鍵に使う。 */
+  openedAt: number;
+}
+
+export interface PendingQuestionItem {
+  question: string;
+  header?: string;
+  multiSelect: boolean;
+  options: PendingQuestionOption[];
+}
+
+export interface PendingQuestionOption {
+  label: string;
+  description?: string;
 }
 
 /** GET /api/transcripts/:agent/:id?before=<offset> のレスポンス型（上方向ページング）。 */

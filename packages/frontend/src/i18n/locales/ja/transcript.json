@@ -29,6 +29,10 @@
     "pendingInteraction": {
       "message": "エージェントが入力を待っています — ターミナルで回答してください",
       "openTerminal": "端末を開く"
+    },
+    "pendingQuestion": {
+      "sent": "回答を送信しました…",
+      "otherAnswersNote": "自由入力・その他の回答はターミナルで"
     }
   },
   "liveStatus": {

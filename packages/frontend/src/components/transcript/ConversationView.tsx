@@ -6,9 +6,11 @@ import { Icon } from '../ui/Icon';
 import { DateDivider } from './DateDivider';
 import { groupEntries, type EntryGroup } from './groupEntries';
 import { deriveContextHistory } from './inputHistory';
+import { InteractionAnswerCard } from './InteractionAnswerCard';
 import { InteractionPendingBanner } from './InteractionPendingBanner';
 import { LiveStatusRow } from './LiveStatusRow';
 import { deriveLiveStatus } from './liveStatus';
+import { answerableQuestion } from './pendingQuestion';
 import PromptInputBar from './PromptInputBar';
 import type { WindowViewMode } from '../ui/TerminalChatToggle';
 import BubbleEntry from './styles/BubbleEntry';
@@ -19,6 +21,8 @@ import type { StyleGroupProps } from './styles/types';
 import { dateKeyOf, formatDateSeparator, isErrorResponse } from './transcriptFormat';
 import { useTranscriptStyle, type TranscriptStyle } from './transcriptStyle';
 import type {
+  PendingQuestion,
+  PendingQuestionItem,
   ReadSessionBeforeResult,
   ReadSessionResult,
   TranscriptEntry,
@@ -63,6 +67,15 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [newCount, setNewCount] = useState(0);
   const [pendingInteraction, setPendingInteraction] = useState(false);
+  const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null);
+  // 送信に失敗した質問の openedAt。同じ質問ではカードを出し直さずバナーへ倒し、次の質問
+  // （openedAt が変わる）では再びカードを出す。
+  const [failedQuestionOpenedAt, setFailedQuestionOpenedAt] = useState<number | null>(null);
+  // 回答送信後の余韻。サーバー側の pending は送信時点で消費されるので、次のポーリングで
+  // pendingQuestion は消える — そこでカードごと消すと、回答が届いてからログに反映されるまでの
+  // 数秒間「送ったのに何も起きていない」画面になる。送った質問と、その時点のエントリ件数を
+  // 覚えておき、新しいエントリが1件でも届くまでは送信済みの姿でカードを据え置く。
+  const [answeredQuestion, setAnsweredQuestion] = useState<{ question: PendingQuestionItem; openedAt: number; entryCount: number } | null>(null);
   const [style] = useTranscriptStyle();
   const EntryComponent = STYLE_ENTRY_COMPONENTS[style];
   // assistant 見出しラベル: サーバー側 IAgentProvider の displayName と重複定義しないよう、
@@ -93,6 +106,15 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
   // 履歴（Issue #69 仕様調整4）: ↑↓/🕘 履歴の主ソースは会話トランスクリプトの user 発話。
   // entries が更新されるたびに再計算する（新しい発話をすぐ履歴に反映するため）。
   const contextHistory = useMemo(() => deriveContextHistory(entries), [entries]);
+
+  // 回答カードに出す質問。オープン中の質問（v1 対応形かつ未失敗）を優先し、無ければ送信直後の
+  // 余韻ぶんを出す。どちらも無く pendingInteraction だけが立っている場合は従来のバナーへ倒す。
+  const answerable = answerableQuestion(pendingQuestion);
+  const liveCardQuestion = answerable !== null && pendingQuestion !== null && failedQuestionOpenedAt !== pendingQuestion.openedAt
+    ? { question: answerable, openedAt: pendingQuestion.openedAt }
+    : null;
+  const lingeringCardQuestion = answeredQuestion !== null && entries.length <= answeredQuestion.entryCount ? answeredQuestion : null;
+  const cardQuestion = liveCardQuestion ?? lingeringCardQuestion;
 
   const liveStatus = deriveLiveStatus(entries, Date.now());
   const hasLiveStatus = liveStatus !== null;
@@ -157,6 +179,9 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
     setEntries([]);
     setNewCount(0);
     setPendingInteraction(false);
+    setPendingQuestion(null);
+    setFailedQuestionOpenedAt(null);
+    setAnsweredQuestion(null);
     setLoadingOlder(false);
     nextOffsetRef.current = null;
     startOffsetRef.current = null;
@@ -185,6 +210,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
         startOffsetRef.current = body.startOffset;
         hasOlderRef.current = body.hasOlder;
         setPendingInteraction(body.pendingInteraction ?? false);
+        setPendingQuestion(body.pendingQuestion ?? null);
         setLoading(false);
         requestAnimationFrame(() => scrollToBottom('auto'));
       })
@@ -227,6 +253,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
         }
         nextOffsetRef.current = body.nextOffset;
         setPendingInteraction(body.pendingInteraction ?? false);
+        setPendingQuestion(body.pendingQuestion ?? null);
         if (body.entries.length > 0) {
           setEntries((prev) => [...prev, ...body.entries]);
           if (nearBottomRef.current) {
@@ -391,9 +418,22 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
                   stopTarget={{ windowId, paneId }}
                 />
               )}
-              {pendingInteraction && (
+              {/* 質問内容が届いていて（PermissionRequest hook 由来）v1 対応形なら回答カード、
+                  それ以外（内容なし・複数質問・複数選択・選択肢が多すぎる・送信失敗済み）は
+                  従来のバナー。key に openedAt を入れて、質問が差し替わったら送信済み表示を
+                  持ち越さずカードを作り直す（同じ質問の間は据え置き、内部の送信状態を保つ）。 */}
+              {cardQuestion !== null ? (
+                <InteractionAnswerCard
+                  key={cardQuestion.openedAt}
+                  windowId={windowId}
+                  paneId={paneId}
+                  question={cardQuestion.question}
+                  onAnswered={() => setAnsweredQuestion({ ...cardQuestion, entryCount: entries.length })}
+                  onAnswerFailed={() => setFailedQuestionOpenedAt(cardQuestion.openedAt)}
+                />
+              ) : pendingInteraction ? (
                 <InteractionPendingBanner onChangeViewMode={onChangeViewMode} />
-              )}
+              ) : null}
             </>
           )}
         </div>

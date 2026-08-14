@@ -28,6 +28,13 @@ export interface TranscriptFixture {
   readonly filePath: string;
   /** 末尾エントリを差し替え、timestamp を「いま」に更新する（= 鮮度を保つ）。 */
   write(ending: TranscriptEnding): void;
+  /**
+   * 決着済みの AskUserQuestion（質問の tool_use ＋ 回答の tool_result）を追記する。
+   * ClaudeTranscriptSource はこの2レコードの対から type: 'interaction' の回答済みエントリを
+   * 組み立てるため、チャットに「✓ 付きの回答済みカード」が現れる状態を再現できる。
+   * 既存内容は保持したまま追記する（差分読みの offset を壊さないため write() は使わない）。
+   */
+  appendAnsweredQuestion(question: string, optionLabels: string[], answerLabel: string): void;
 }
 
 function uuid(): string {
@@ -95,5 +102,37 @@ export function createTranscriptFixture(claudeConfigDir: string, projectName: st
     fs.writeFileSync(filePath, records.map((r) => JSON.stringify(r)).join('\n') + '\n');
   };
 
-  return { sessionId, filePath, write };
+  const appendAnsweredQuestion = (question: string, optionLabels: string[], answerLabel: string): void => {
+    const nowIso = new Date().toISOString();
+    const toolUseId = `toolu_${uuid().replace(/-/g, '').slice(0, 20)}`;
+    const records: unknown[] = [
+      {
+        uuid: uuid(),
+        type: 'assistant',
+        timestamp: nowIso,
+        message: {
+          role: 'assistant',
+          model: 'claude-e2e',
+          content: [
+            {
+              type: 'tool_use',
+              id: toolUseId,
+              name: 'AskUserQuestion',
+              input: { questions: [{ question, multiSelect: false, options: optionLabels.map((label) => ({ label })) }] },
+            },
+          ],
+        },
+      },
+      {
+        uuid: uuid(),
+        type: 'user',
+        timestamp: nowIso,
+        message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId }] },
+        toolUseResult: { answers: { [question]: answerLabel } },
+      },
+    ];
+    fs.appendFileSync(filePath, records.map((r) => JSON.stringify(r)).join('\n') + '\n');
+  };
+
+  return { sessionId, filePath, write, appendAnsweredQuestion };
 }

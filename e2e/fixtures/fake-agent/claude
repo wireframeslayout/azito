@@ -16,22 +16,36 @@
 //   --silent <stateFile>  … タイトルも出力も一切出さない。Tier 2 を 'unknown' に倒し、
 //                            Tier 4 (プロセス実体 + transcript) を唯一の判定源にするため。
 //
-// どちらのモードでも stateFile が `exit` になるまで生き続ける（= ps から見え続ける）。
+// 第3引数に <inputFile> を渡すと、ペインへ届いた入力（tmux send-keys のキーストローク）を
+// そのファイルへ追記する。チャットから送った AskUserQuestion の回答（選択肢番号の数字キー）が
+// 実際にエージェントのペインへ届いたことを、画面表示に頼らず検証するための口。
+//
+// どのモードでも stateFile が `exit` になるまで生き続ける（= ps から見え続ける）。
 
 const POLL_MS = 200;
 
-const [, , mode, stateFile] = process.argv;
+const [, , mode, stateFile, inputFile] = process.argv;
 
 if (mode !== '--titles' && mode !== '--silent') {
-  process.stderr.write('usage: claude (--titles|--silent) <stateFile>\n');
+  process.stderr.write('usage: claude (--titles|--silent) <stateFile> [inputFile]\n');
   process.exit(2);
 }
 if (!stateFile) {
-  process.stderr.write('usage: claude (--titles|--silent) <stateFile>\n');
+  process.stderr.write('usage: claude (--titles|--silent) <stateFile> [inputFile]\n');
   process.exit(2);
 }
 
 const fs = require('node:fs');
+
+// 入力記録モード。実 TUI と同じく raw モードで1キーずつ受け取る（行編集を挟むと、Enter を
+// 伴わない数字キー1発が届いたことを観測できない）。
+if (inputFile) {
+  if (process.stdin.isTTY) process.stdin.setRawMode(true);
+  process.stdin.on('data', (chunk) => {
+    fs.appendFileSync(inputFile, chunk);
+  });
+  process.stdin.resume();
+}
 
 /** 実 Claude Code と同じ OSC 2 (ESC ] 2 ; title BEL) でペインタイトルを設定する。 */
 function setTitle(title) {

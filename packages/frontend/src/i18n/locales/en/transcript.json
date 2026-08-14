@@ -29,6 +29,10 @@
     "pendingInteraction": {
       "message": "The agent is waiting for input — please answer in the terminal.",
       "openTerminal": "Open terminal"
+    },
+    "pendingQuestion": {
+      "sent": "Answer sent…",
+      "otherAnswersNote": "For free-form or other answers, use the terminal"
     }
   },
   "liveStatus": {
