@@ -1,3 +1,7 @@
+import { execFileSync } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { buildLoginShellCommand, PtyProxy, type PtyExitInfo } from './PtyProxy';
 
@@ -36,14 +40,10 @@ describe('buildLoginShellCommand', () => {
     );
   });
 
-  it('produces a string a shell evaluates back to the original value', async () => {
+  it('produces a string a shell evaluates back to the original value', () => {
     const value = `weird'"$( )value`;
     const cmd = buildLoginShellCommand('printf %s "$TMUX_PANE"', { TMUX_PANE: value });
-    const { execFile } = await import('node:child_process');
-    const stdout = await new Promise<string>((resolve, reject) => {
-      execFile('/bin/bash', ['-c', cmd], (err, out) => (err ? reject(err) : resolve(out)));
-    });
-    expect(stdout).toBe(value);
+    expect(execFileSync('/bin/bash', ['-c', cmd], { encoding: 'utf-8' })).toBe(value);
   });
 });
 
@@ -144,16 +144,36 @@ describe('PtyProxy (real processes)', () => {
     expect(output).toContain('日本語テスト');
   });
 
-  it('makes TMUX_PANE visible to the child even though -l runs the login profile', async () => {
-    const prev = process.env.TMUX_PANE;
+  // Regression guard for the hook blackout under a supervisor: `-lc` evaluates the
+  // login profile, and profiles commonly `unset TMUX TMUX_PANE` (they treat them as
+  // stale inheritance). The pane identity must survive that, or Claude Code's hooks
+  // can no longer resolve their pane. The profile is simulated with a throwaway HOME
+  // so the test fails on the pre-fix implementation regardless of the host's dotfiles
+  // (which may well keep the variables and make a naive assertion vacuous).
+  it('restores TMUX/TMUX_PANE even when the login profile unsets them', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'pty-proxy-home-'));
+    fs.writeFileSync(path.join(home, '.bash_profile'), 'unset TMUX TMUX_PANE\n');
+    const saved = { HOME: process.env.HOME, SHELL: process.env.SHELL, TMUX: process.env.TMUX, TMUX_PANE: process.env.TMUX_PANE };
+    process.env.HOME = home;
+    process.env.SHELL = '/bin/bash'; // bash reads ~/.bash_profile for a login shell
+    process.env.TMUX = '/tmp/tmux-test/default,4242,0';
     process.env.TMUX_PANE = '%4242';
     try {
-      const { exited } = startProxy('echo "seen=$TMUX_PANE"');
+      // Sanity: the simulated profile really does unset the variables, so a pass
+      // below can only come from the re-export (not from a no-op profile).
+      const bare = execFileSync('/bin/bash', ['-lc', 'echo "bare=[$TMUX_PANE]"'], { env: process.env, encoding: 'utf-8' });
+      expect(bare).toContain('bare=[]');
+
+      const { exited } = startProxy('echo "pane=[$TMUX_PANE] sock=[$TMUX]"');
       await waitFor(() => exited() !== undefined);
-      expect(output).toContain('seen=%4242');
+      expect(output).toContain('pane=[%4242]');
+      expect(output).toContain('sock=[/tmp/tmux-test/default,4242,0]');
     } finally {
-      if (prev === undefined) delete process.env.TMUX_PANE;
-      else process.env.TMUX_PANE = prev;
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      fs.rmSync(home, { recursive: true, force: true });
     }
   });
 
