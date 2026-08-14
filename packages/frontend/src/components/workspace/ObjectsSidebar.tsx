@@ -15,6 +15,7 @@ import type { PersistedTab } from '../../hooks/useTabPersistence';
 import type { Project, Session, Window, Task } from '../../pages/workspace/types';
 import { useToast } from '../../hooks/useToast';
 import type { ContextMenuItem } from '../ContextMenu';
+import { resolveWindowRowTitle } from './objects/windowRowTitle';
 import ObjectSection from './objects/ObjectSection';
 import BrowserSection from './objects/BrowserSection';
 import { RUNNING_STATUSES } from '../task/StatusDropdown';
@@ -341,16 +342,26 @@ export default function ObjectsSidebar({
     </button>
   ), [handleOpenTask]);
 
-  // 主題: タスク紐付きウィンドウはタスクタイトルを主表示にする（既定は w.label = 内部生成ID
-  // 例: task-231--x9oh のまま出てしまうため）。タスクが解決できない場合は既定表示（内部ID）のまま
-  const renderOperationTitle = useCallback((w: WindowItem) => taskById.get(w.taskId ?? -1)?.title || null, [taskById]);
+  // 主題: ペインタイトル（claude 等がペインに出す動的タイトル）。sessionData（既存のサーバー単位
+  // tmux スナップショット）から解決するので追加のポーリングは発生しない。取得できない場合
+  // （オフライン・タイトル未設定）は ウィンドウラベル → タスクタイトル → tmux ターゲット の順で代替。
+  const resolveOperationTitle = useCallback((w: WindowItem): string => {
+    const extra = resolveWindowContextExtra(w, sessionData);
+    return resolveWindowRowTitle({
+      paneTitle: extra.paneTitle,
+      paneCommand: extra.paneCommand,
+      label: w.label,
+      taskTitle: w.taskId != null ? taskById.get(w.taskId)?.title : undefined,
+      tmuxTarget: w.tmuxTarget,
+    });
+  }, [sessionData, taskById]);
 
-  // 副題: 「内部ID · サーバー · フェーズ · ブランチ」。取得できない項目は省く（ダミー値で埋めない）。
-  // 内部IDは、主題をタスクタイトルで上書きした行にだけ載せる（それ以外は主題＝内部IDなので二重表示になる）
+  // 副題: 「タスクタイトル · サーバー · フェーズ · ブランチ」。取得できない項目は省く（ダミー値で埋めない）。
+  // タスクタイトルは主題がペインタイトル等で埋まっている行にだけ載せる（主題と同じなら二重表示になる）
   const renderOperationSubtitle = useCallback((w: WindowItem) => {
     const task = w.taskId != null ? taskById.get(w.taskId) : undefined;
     const parts: string[] = [];
-    if (task?.title && w.label) parts.push(w.label);
+    if (task?.title && task.title !== resolveOperationTitle(w)) parts.push(task.title);
     parts.push(w.serverName);
     const phaseKey = task?.currentPhase;
     if (phaseKey) {
@@ -360,7 +371,7 @@ export default function ObjectsSidebar({
     const branch = task?.branch || task?.worktreeBranch;
     if (branch) parts.push(branch);
     return parts.join(' · ');
-  }, [taskById, t]);
+  }, [taskById, t, resolveOperationTitle]);
 
   const browserSectionAction = useMemo(() => {
     if (browserCapableServerNames.length === 0) return null;
@@ -654,7 +665,7 @@ export default function ObjectsSidebar({
                       activityClassName={renderActivityClassName}
                       respawningWindowIds={respawningWindowIds}
                       renderTaskBadge={renderOperationTaskBadge}
-                      renderTitle={renderOperationTitle}
+                      renderTitle={resolveOperationTitle}
                       renderSubtitle={renderOperationSubtitle}
                     />
                   )}
@@ -700,7 +711,7 @@ export default function ObjectsSidebar({
                       activityClassName={renderActivityClassName}
                       respawningWindowIds={respawningWindowIds}
                       renderTaskBadge={renderOperationTaskBadge}
-                      renderTitle={renderOperationTitle}
+                      renderTitle={resolveOperationTitle}
                       renderSubtitle={renderOperationSubtitle}
                     />
                   )}
@@ -746,7 +757,7 @@ export default function ObjectsSidebar({
                       activityClassName={renderActivityClassName}
                       respawningWindowIds={respawningWindowIds}
                       renderTaskBadge={renderOperationTaskBadge}
-                      renderTitle={renderOperationTitle}
+                      renderTitle={resolveOperationTitle}
                       renderSubtitle={renderOperationSubtitle}
                     />
                   )}

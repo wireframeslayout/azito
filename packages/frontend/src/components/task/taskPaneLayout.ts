@@ -411,17 +411,23 @@ export interface WindowContextExtra {
   online: boolean;
   windowName?: string;
   paneTarget?: string;
+  /** 表示用のペインラベル。ペインタイトルが未設定（＝コマンド名と同じ）なら command が入る */
   paneTitle?: string;
+  /** ペインの実行コマンド。`paneTitle` が実タイトルかコマンドの代替かを呼び出し側が判別するために返す */
+  paneCommand?: string;
 }
 
 /**
- * Resolves the `{ online, windowName, paneTarget, paneTitle }` metadata
+ * Resolves the `{ online, windowName, paneTarget, paneTitle, paneCommand }` metadata
  * `useWindowActions#getWindowMenuItems` needs to build a window's full
  * context menu (rename window/pane, capture panes, respawn, ...) — mirrors
  * `WindowPaneTree`'s own session/window/pane matching (single-pane branch),
  * since a task-scoped window tab always addresses one specific window.
  */
-export function resolveWindowContextExtra(w: Window, sessionData: Record<string, Session[]>): WindowContextExtra {
+export function resolveWindowContextExtra(
+  w: Pick<Window, 'serverName' | 'tmuxTarget' | 'label'>,
+  sessionData: Record<string, Session[]>,
+): WindowContextExtra {
   const sessions = sessionData[w.serverName] || [];
   const parts = w.tmuxTarget.split(':');
   const sessionName = parts[0];
@@ -452,5 +458,5 @@ export function resolveWindowContextExtra(w: Window, sessionData: Record<string,
 
   const paneTarget = `${sessionName}:${sw.name}.${pane.index}`;
   const paneTitle = pane.title && pane.title !== pane.command ? pane.title : pane.command;
-  return { online: true, windowName: sw.name, paneTarget, paneTitle };
+  return { online: true, windowName: sw.name, paneTarget, paneTitle, paneCommand: pane.command };
 }
