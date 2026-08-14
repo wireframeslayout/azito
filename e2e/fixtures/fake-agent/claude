@@ -1,0 +1,115 @@
+#!/usr/bin/env node
+// AZITO E2E 用の偽エージェント TUI。
+//
+// ファイル名が `claude` であること自体が仕様の一部: 稼働検知の Tier 4
+// (WindowSessionResolver.detectWindowAgentProcess) は `ps -o args=` の各トークンを basename 化して
+// `claude`/`codex` と突き合わせるため、このパスで起動されたプロセスは実 Claude Code と同じく
+// 「エージェント実体」として検出される。実行体を node にしてあるのも同じ理由で、tmux の
+// pane_current_command が `node` になり（= bare shell ではない）本物と同じ経路を通る。
+//
+// モード:
+//   --titles <stateFile>  … stateFile の中身 (working | blocked | idle | exit) を追従して OSC 2
+//                            タイトルを出す。Tier 0 (tui-supervisor の TitleStateTracker) / Tier 2
+//                            (ペイン分類) 用。`blocked` は実 Claude Code の AskUserQuestion 選択中と
+//                            同じ状態を再現する: タイトルは idle グリフ (`✳ `) のままで、画面だけが
+//                            選択プロンプトになる（= タイトルしか見ない supervisor は idle と報告する）。
+//   --silent <stateFile>  … タイトルも出力も一切出さない。Tier 2 を 'unknown' に倒し、
+//                            Tier 4 (プロセス実体 + transcript) を唯一の判定源にするため。
+//
+// 第3引数に <inputFile> を渡すと、ペインへ届いた入力（tmux send-keys のキーストローク）を
+// そのファイルへ追記する。チャットから送った AskUserQuestion の回答（選択肢番号の数字キー）が
+// 実際にエージェントのペインへ届いたことを、画面表示に頼らず検証するための口。
+//
+// どのモードでも stateFile が `exit` になるまで生き続ける（= ps から見え続ける）。
+
+const POLL_MS = 200;
+
+const [, , mode, stateFile, inputFile] = process.argv;
+
+if (mode !== '--titles' && mode !== '--silent') {
+  process.stderr.write('usage: claude (--titles|--silent) <stateFile> [inputFile]\n');
+  process.exit(2);
+}
+if (!stateFile) {
+  process.stderr.write('usage: claude (--titles|--silent) <stateFile> [inputFile]\n');
+  process.exit(2);
+}
+
+const fs = require('node:fs');
+
+// 入力記録モード。実 TUI と同じく raw モードで1キーずつ受け取る（行編集を挟むと、Enter を
+// 伴わない数字キー1発が届いたことを観測できない）。
+if (inputFile) {
+  if (process.stdin.isTTY) process.stdin.setRawMode(true);
+  process.stdin.on('data', (chunk) => {
+    fs.appendFileSync(inputFile, chunk);
+  });
+  process.stdin.resume();
+}
+
+/** 実 Claude Code と同じ OSC 2 (ESC ] 2 ; title BEL) でペインタイトルを設定する。 */
+function setTitle(title) {
+  process.stdout.write(`\x1b]2;${title}\x07`);
+}
+
+function readState() {
+  try {
+    return fs.readFileSync(stateFile, 'utf-8').trim();
+  } catch {
+    return 'idle';
+  }
+}
+
+/** AskUserQuestion の選択画面。末尾行が Tier 2 の blocked 画面規則そのもの。 */
+const BLOCKED_SCREEN = 'Do you want to proceed?\r\n  1. Yes\r\n  2. No\r\n  Enter to select · Esc to cancel\r\n';
+/** 応答後に戻る入力枠（Tier 2 の idle 画面規則）。 */
+const PROMPT_SCREEN = '❯ \r\n';
+
+/**
+ * 画面とスクロールバックの両方を消す。稼働検知は `capture-pane -S -30`（履歴込み）で読むため、
+ * 画面消去 (2J) だけだと直前の選択画面が履歴に残り blocked 判定が解けない。
+ */
+function clearScreen() {
+  process.stdout.write('\x1b[H\x1b[2J\x1b[3J');
+}
+
+let lastTitle = null;
+let lastState = null;
+
+function tick() {
+  const state = readState();
+  if (state === 'exit') {
+    process.exit(0);
+  }
+  // 画面はタイトルより先に更新する。supervisor は blocked を idle として報告するので、
+  // 「タイトルは idle・画面はまだ選択画面でない」瞬間があるとハブが完了と判定してしまう。
+  if (mode === '--titles' && state !== lastState) {
+    if (state === 'blocked') {
+      clearScreen();
+      process.stdout.write(BLOCKED_SCREEN);
+    } else if (lastState === 'blocked') {
+      clearScreen();
+      process.stdout.write(PROMPT_SCREEN);
+    }
+    lastState = state;
+  }
+  if (mode === '--titles') {
+    // 実 Claude Code のタイトル規約に合わせる: working は先頭がスピナーグリフ、idle は `✳ `。
+    // blocked も `✳ ` のまま（実挙動: 選択中もタイトルは idle グリフ）。
+    const title = state === 'working' ? '◐ e2e fake agent' : '✳ e2e fake agent';
+    // 状態が変わったときだけ書く。毎周期書くと純粋なバイト量ヒューリスティック側を刺激してしまう。
+    if (title !== lastTitle) {
+      setTitle(title);
+      lastTitle = title;
+    }
+  }
+  setTimeout(tick, POLL_MS);
+}
+
+if (mode === '--titles') {
+  // 起動直後に idle タイトルを出す（実エージェントの起動完了に相当）。
+  setTitle('✳ e2e fake agent');
+  lastTitle = '✳ e2e fake agent';
+}
+
+tick();

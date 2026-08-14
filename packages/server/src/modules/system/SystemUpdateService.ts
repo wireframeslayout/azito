@@ -9,6 +9,7 @@ import { UpdateChannelResolver } from './UpdateChannelResolver';
 import { UpdateStateManager, type UpdateState } from './UpdateStateManager';
 import { DeployModeDetector, type DeployMode } from './DeployModeDetector';
 import { compareVersions, isNewer } from './semver';
+import { isDiagnosticsEnabled } from './diagnosticsEligibility';
 
 const execFileAsync = promisify(execFile);
 
@@ -36,6 +37,8 @@ export interface UpdateStatusResponse {
   runningTasks: number;
   disabledReason: string | null;
   channel: 'stable' | 'rc';
+  /** 稼働検知診断の導線を UI に出してよいか（{@link isDiagnosticsEnabled}）。 */
+  diagnosticsEnabled: boolean;
 }
 
 export interface UpdateProgressResponse {
@@ -448,6 +451,7 @@ export class SystemUpdateService {
     disabledReason: string | null,
     repo: string | null,
   ): UpdateStatusResponse {
+    const channel = this.channelResolver.resolveChannel();
     return {
       status,
       currentVersion,
@@ -461,7 +465,8 @@ export class SystemUpdateService {
       deployMode,
       runningTasks,
       disabledReason,
-      channel: this.channelResolver.resolveChannel(),
+      channel,
+      diagnosticsEnabled: isDiagnosticsEnabled(deployMode, channel),
     };
   }
 }

@@ -23,8 +23,8 @@
   },
   "sidebar": {
     "servers": "サーバー",
-    "sidekicks": "Sidekick",
-    "units": "Unit",
+    "sidekicks": "サイドキック",
+    "units": "ユニット",
     "azitoMenu": "Azito メニュー",
     "systemUpdate": "システム更新あり",
     "projectMenu": "プロジェクトメニュー",

@@ -8,11 +8,12 @@ import UsageDropdown from './UsageDropdown';
 import NotificationBell from './notifications/NotificationBell';
 import { PROJECTS_CHANGED_EVENT } from '../lib/projectsChanged';
 import { paths, matchWorkspacePath } from '../paths';
-import { Icon, type IconName } from './ui/Icon';
+import { Icon } from './ui/Icon';
 import { useProjectRail } from '../hooks/useProjectRail';
 import ContextMenu, { useContextMenu } from './ContextMenu';
 import { ProjectSearchPopover } from './ProjectSearchPopover';
 import { useSystemUpdate } from '../hooks/useSystemUpdate';
+import { GLOBAL_NAV_ITEMS as GLOBAL_ITEMS } from './workspace/globalNavItems';
 
 interface ProjectItem {
   id: number;
@@ -20,12 +21,6 @@ interface ProjectItem {
   icon?: string | null;
   color?: string | null;
 }
-
-const GLOBAL_ITEMS: Array<{ labelKey: string; icon: IconName; path: string }> = [
-  { labelKey: 'sidebar.servers', icon: 'servers', path: paths.servers() },
-  { labelKey: 'sidebar.sidekicks', icon: 'sidekicks', path: paths.sidekicks() },
-  { labelKey: 'sidebar.units', icon: 'units', path: paths.units() },
-];
 
 export default function ProjectSidebar() {
   const { t } = useTranslation(['projects', 'common']);

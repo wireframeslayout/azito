@@ -114,3 +114,4 @@ Click a project name to open its Workspace. The workspace is the main working ar
 - [Task Management Guide](tasks.md) -- Task creation/execution flow, worktrees, stall detection, logs
 - [File Operations Guide](files.md) -- File explorer, preview, download, external editor integration
 - [tmux Configuration Guide](tmux.md) -- Required/recommended tmux settings for AZITO and how they apply per managed/system mode
+- [Activity Detection Tier Reference](activity-detection.md) -- The running/blocked/idle judgment ladder (Tiers 0-4), stop reasons, timing constants, the diagnostics panel, and the question lifecycle

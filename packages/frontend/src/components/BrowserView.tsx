@@ -118,6 +118,13 @@ interface BrowserViewProps {
   /** Called whenever the active Chromium tab changes, so the caller can persist it. */
   onActiveTabChange?: (tabId: string) => void;
   /**
+   * Called whenever the active Chromium tab's url/title changes (including on tab switch) —
+   * lets a caller mirror this group's "page title" outside this component (Issue #338 T9's
+   * SP browser content header, which needs to label a task's multiple browser instances
+   * without duplicating BrowserView's own tab-label logic).
+   */
+  onActiveTabMeta?: (meta: { url: string | null; title: string | null }) => void;
+  /**
    * Called once per WS connection, the first time this groupId's page is
    * confirmed live — i.e. on the first {type:'tabs'} message received after
    * a (re)connect. That message is sent unconditionally right after
@@ -155,7 +162,7 @@ function tabTooltip(url: string | null, newTabLabel: string): string {
   return url || newTabLabel;
 }
 
-export default function BrowserView({ serverName, groupId, initialTabId, onActiveTabChange, onPageReady }: BrowserViewProps) {
+export default function BrowserView({ serverName, groupId, initialTabId, onActiveTabChange, onActiveTabMeta, onPageReady }: BrowserViewProps) {
   const { t } = useTranslation('browser');
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const hiddenInputRef = useRef<HTMLInputElement>(null);
@@ -457,6 +464,17 @@ export default function BrowserView({ serverName, groupId, initialTabId, onActiv
   useEffect(() => {
     onActiveTabChange?.(activeTabId);
   }, [activeTabId, onActiveTabChange]);
+
+  // Mirror the active tab's url/title out to the caller (see onActiveTabMeta's
+  // doc). Fires on tab switch and on every {type:'tabs'} update (title/url
+  // changes) — matches tabLabel()'s own inputs so a caller building the same
+  // label stays in sync without re-deriving it from raw WS messages.
+  const onActiveTabMetaRef = useRef(onActiveTabMeta);
+  onActiveTabMetaRef.current = onActiveTabMeta;
+  useEffect(() => {
+    const activeTab = tabs.find((t) => t.tabId === activeTabId);
+    onActiveTabMetaRef.current?.({ url: activeTab?.url ?? null, title: activeTab?.title ?? null });
+  }, [tabs, activeTabId]);
 
   // Keep the remote viewport in sync with the canvas container size.
   useEffect(() => {

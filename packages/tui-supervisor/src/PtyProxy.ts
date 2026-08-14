@@ -19,6 +19,40 @@ export interface PtyExitInfo {
   code: number;
 }
 
+/** Quote a value for safe interpolation into a single-quoted shell word. */
+function shellSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Environment variables that identify the tmux pane the supervisor runs in.
+ * Claude Code's hooks (azito-activity/interaction/notify) resolve their pane
+ * through TMUX_PANE, so losing them silences every hook under a supervised
+ * window.
+ */
+const TMUX_PANE_VARS = ['TMUX', 'TMUX_PANE'] as const;
+
+/**
+ * Builds the command string handed to `<shell> -lc`.
+ *
+ * The login shell (`-l`) is kept deliberately: it is what resolves the user's
+ * PATH (nvm/nodenv/Homebrew) so the wrapped agent binary is found. But login
+ * profiles commonly unset TMUX/TMUX_PANE (they treat them as stale inheritance),
+ * which strips the pane identity from the child. Re-exporting the values at the
+ * start of the command string restores them *after* profile evaluation, without
+ * touching PATH resolution.
+ *
+ * Nothing is injected when the variables are absent (supervisor started outside
+ * tmux) — the command is passed through unchanged.
+ */
+export function buildLoginShellCommand(cmd: string, env: NodeJS.ProcessEnv): string {
+  const assignments = TMUX_PANE_VARS.filter((name) => env[name] !== undefined && env[name] !== '').map(
+    (name) => `${name}=${shellSingleQuote(env[name] as string)}`,
+  );
+  if (assignments.length === 0) return cmd;
+  return `export ${assignments.join(' ')}; ${cmd}`;
+}
+
 /**
  * Spawns a command inside a PTY and pipes stdin/stdout through it transparently,
  * so a wrapped TUI (e.g. Claude Code) renders identically to running it directly
@@ -39,7 +73,7 @@ export class PtyProxy extends EventEmitter {
 
   start(cmd: string): void {
     const shell = process.env.SHELL || '/bin/bash';
-    this.child = pty.spawn(shell, ['-lc', cmd], {
+    this.child = pty.spawn(shell, ['-lc', buildLoginShellCommand(cmd, process.env)], {
       name: process.env.TERM || 'xterm-256color',
       cols: process.stdout.columns || 80,
       rows: process.stdout.rows || 24,

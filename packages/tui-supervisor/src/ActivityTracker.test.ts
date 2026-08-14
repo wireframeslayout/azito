@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActivityTracker } from './ActivityTracker';
+import { TitleStateTracker } from './TitleStateTracker';
 
 describe('ActivityTracker', () => {
   let tracker: ActivityTracker;
@@ -182,6 +183,38 @@ describe('ActivityTracker', () => {
       vi.advanceTimersByTime(1_000);
       expect(tracker.getState()).toBe('active');
       expect(statusLog).toEqual([{ state: 'active', status: undefined }]);
+    });
+
+    // Issue #338: wired exactly as main.ts does (push the PTY chunk into the
+    // title tracker, then hand its state to the activity tracker).
+    describe('wired to TitleStateTracker', () => {
+      const feed = (titleTracker: TitleStateTracker, chunk: string, bytes = 0) => {
+        titleTracker.push(chunk);
+        if (bytes > 0) tracker.record(bytes);
+        tracker.setTitleState(titleTracker.getState());
+      };
+
+      it('keeps the byte heuristic alive for a TUI that only sets a static, unrecognized title', () => {
+        const titleTracker = new TitleStateTracker();
+        for (let i = 0; i < 3; i += 1) {
+          feed(titleTracker, '\x1b]2;my-tui\x07', 500);
+          vi.advanceTimersByTime(1_000);
+        }
+        expect(tracker.getState()).toBe('active');
+        expect(statusLog).toEqual([{ state: 'active', status: undefined }]);
+      });
+
+      it('hands authority to the title once a recognized marker appears', () => {
+        const titleTracker = new TitleStateTracker();
+        feed(titleTracker, '\x1b]2;my-tui\x07', 500);
+        vi.advanceTimersByTime(1_000);
+        expect(tracker.getState()).toBe('active'); // byte heuristic
+
+        feed(titleTracker, '\x1b]2;✳ done\x07', 500);
+        vi.advanceTimersByTime(1_000);
+        expect(tracker.getState()).toBe('idle'); // title authority, byte volume ignored
+        expect(statusLog.at(-1)).toEqual({ state: 'idle', status: undefined });
+      });
     });
 
     it('re-emits active with its status every 15s while the title stays working', () => {

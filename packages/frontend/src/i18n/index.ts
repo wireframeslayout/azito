@@ -15,6 +15,7 @@ import enFiles from './locales/en/files.json';
 import enGit from './locales/en/git.json';
 import enNotifications from './locales/en/notifications.json';
 import enBrowser from './locales/en/browser.json';
+import enTranscript from './locales/en/transcript.json';
 
 import jaCommon from './locales/ja/common.json';
 import jaNavigation from './locales/ja/navigation.json';
@@ -29,6 +30,7 @@ import jaFiles from './locales/ja/files.json';
 import jaGit from './locales/ja/git.json';
 import jaNotifications from './locales/ja/notifications.json';
 import jaBrowser from './locales/ja/browser.json';
+import jaTranscript from './locales/ja/transcript.json';
 
 const STORAGE_KEY = 'azito-language';
 
@@ -56,6 +58,7 @@ i18n.use(initReactI18next).init({
       git: enGit,
       notifications: enNotifications,
       browser: enBrowser,
+      transcript: enTranscript,
     },
     ja: {
       common: jaCommon,
@@ -71,6 +74,7 @@ i18n.use(initReactI18next).init({
       git: jaGit,
       notifications: jaNotifications,
       browser: jaBrowser,
+      transcript: jaTranscript,
     },
   },
   lng: resolveInitialLanguage(getStored(), navigator.languages),

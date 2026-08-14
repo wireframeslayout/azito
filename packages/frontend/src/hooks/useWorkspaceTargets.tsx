@@ -9,6 +9,10 @@ interface WorkspaceTargetsContextValue {
   setActiveTabId: (id: string | null) => void;
   focusedTarget: string | null;
   setFocusedTarget: (key: string | null) => void;
+  /** SP端末クイックキーフッター（Issue #69 T3）の右端▦から、TabContentRenderer 配下の
+   *  TerminalContainer までタブスイッチャー開閉を prop drilling せずに届けるための登録口。 */
+  onOpenTabSwitcher: (() => void) | null;
+  setOnOpenTabSwitcher: (cb: (() => void) | null) => void;
 }
 
 const defaultValue: WorkspaceTargetsContextValue = {
@@ -20,6 +24,8 @@ const defaultValue: WorkspaceTargetsContextValue = {
   setActiveTabId: () => {},
   focusedTarget: null,
   setFocusedTarget: () => {},
+  onOpenTabSwitcher: null,
+  setOnOpenTabSwitcher: () => {},
 };
 
 const WorkspaceTargetsContext = createContext<WorkspaceTargetsContextValue>(defaultValue);
@@ -35,6 +41,7 @@ export function WorkspaceTargetsProvider({ children }: { children: React.ReactNo
   const [onOpenTask, setOnOpenTask] = useState<((taskId: number) => void) | null>(null);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [focusedTarget, setFocusedTarget] = useState<string | null>(null);
+  const [onOpenTabSwitcher, setOnOpenTabSwitcher] = useState<(() => void) | null>(null);
 
   const setOnOpenInTerminalCb = useCallback((cb: ((serverName: string, target: string) => void) | null) => {
     setOnOpenInTerminal(() => cb);
@@ -44,8 +51,12 @@ export function WorkspaceTargetsProvider({ children }: { children: React.ReactNo
     setOnOpenTask(() => cb);
   }, []);
 
+  const setOnOpenTabSwitcherCb = useCallback((cb: (() => void) | null) => {
+    setOnOpenTabSwitcher(() => cb);
+  }, []);
+
   return (
-    <WorkspaceTargetsContext.Provider value={{ onOpenInTerminal, setOnOpenInTerminal: setOnOpenInTerminalCb, onOpenTask, setOnOpenTask: setOnOpenTaskCb, activeTabId, setActiveTabId, focusedTarget, setFocusedTarget }}>
+    <WorkspaceTargetsContext.Provider value={{ onOpenInTerminal, setOnOpenInTerminal: setOnOpenInTerminalCb, onOpenTask, setOnOpenTask: setOnOpenTaskCb, activeTabId, setActiveTabId, focusedTarget, setFocusedTarget, onOpenTabSwitcher, setOnOpenTabSwitcher: setOnOpenTabSwitcherCb }}>
       {children}
     </WorkspaceTargetsContext.Provider>
   );

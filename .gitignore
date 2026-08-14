@@ -19,3 +19,7 @@ data/sidekicks/
 **/data/browser-profile/
 data/master.key
 **/data/master.key
+
+# Playwright E2E
+test-results/
+playwright-report/

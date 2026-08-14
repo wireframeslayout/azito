@@ -151,6 +151,8 @@
     "closeTab": "タブを閉じる",
     "disconnected": "切断されました",
     "windowMissing": "ウィンドウが見つかりません",
+    "connectFailed": "接続に失敗しました",
+    "connectFailedTaskHint": "ペイン自体が失われている場合は、タスクパネルのウィンドウ操作から再起動できます。",
     "respawn": "再起動",
     "unregisteredWindow": "このウィンドウは AZITO に登録されていないため、再起動できません",
     "launchingClaude": "Claude Code を起動中…",
@@ -161,7 +163,17 @@
     "launchTimeout": "起動がタイムアウトしました",
     "supervisedMonitoring": "エージェントの起動を監視中…",
     "continueDisplay": "そのまま表示を続けます",
-    "respawning": "再起動中…"
+    "respawning": "再起動中…",
+    "viewMode": {
+      "ariaLabel": "表示モード",
+      "terminal": "端末",
+      "chat": "チャット"
+    },
+    "quickKeyBar": {
+      "ariaLabel": "クイックキー",
+      "keyboardToggle": "キーボード操作パッドを表示",
+      "tabSwitcher": "タブスイッチャーを開く"
+    }
   },
   "resourceWarning": {
     "title": "サーバーのリソースがひっ迫しています",
@@ -184,7 +196,11 @@
     "criticalMemory": "危険（メモリ {{percent}}%）",
     "warningMemory": "注意（メモリ {{percent}}%）",
     "fetchingResources": "リソース情報を取得中…",
-    "deleteFailed": "削除失敗: {{error}}"
+    "deleteFailed": "削除失敗: {{error}}",
+    "activityDiagnostics": "稼働検知",
+    "activityEventDriven": "イベント駆動で検知中",
+    "activityFallback": "フォールバック判定のみ",
+    "activityNone": "稼働なし"
   },
   "globalPages": {
     "backToWorkspace": "ワークスペースに戻る",

@@ -32,6 +32,16 @@ export interface TmuxSession {
   windows: TmuxWindow[];
 }
 
+export interface TmuxPaneInfo {
+  paneId: string;
+  sessionName: string;
+  windowIndex: number;
+  windowName: string;
+  paneIndex: number;
+  currentPath: string;
+  currentCommand: string;
+}
+
 // ─── Special keys for send-keys ───
 
 const SPECIAL_KEYS = new Set([
@@ -275,6 +285,24 @@ export class TmuxClient {
     }
   }
 
+  /**
+   * Target pane の OS プロセスID（`#{pane_pid}`）。WindowSessionResolver のプロセス実体検査
+   * （agentDetected 判定レイヤー2）で、pane の子孫プロセスを辿る起点として使う。pane が存在しない/
+   * tmux エラー時は null。
+   */
+  async getPanePid(server: ServerConfig, target: string): Promise<number | null> {
+    try {
+      const { stdout, code } = await this.runTmuxCommand(server, [
+        'display-message', '-p', '-t', target, '#{pane_pid}',
+      ]);
+      if (code !== 0) return null;
+      const pid = parseInt(stdout.trim(), 10);
+      return Number.isNaN(pid) ? null : pid;
+    } catch {
+      return null;
+    }
+  }
+
   async resolvePaneId(server: ServerConfig, windowTarget: string): Promise<string> {
     const { stdout, code } = await this.runTmuxCommand(server, [
       'list-panes', '-t', windowTarget, '-F', '#{pane_id}',
@@ -300,6 +328,41 @@ export class TmuxClient {
       const [idx, id] = line.split('|||');
       return { index: parseInt(idx, 10), paneId: id };
     });
+  }
+
+  /**
+   * 全セッション・全ウィンドウのペインを列挙する（pane_current_path 込み）。
+   * `_azito_` プレフィックスのリンクドセッション（ブラウザタブごとの一時セッション）は
+   * 実ペインの重複表示になるため除外する。
+   */
+  async listAllPanes(server: ServerConfig): Promise<TmuxPaneInfo[]> {
+    const format = [
+      '#{pane_id}', '#{session_name}', '#{window_index}', '#{window_name}', '#{pane_index}', '#{pane_current_path}', '#{pane_current_command}',
+    ].join('|||');
+
+    try {
+      const { stdout } = await this.runTmuxCommand(server, ['list-panes', '-a', '-F', format]);
+      return stdout.trim().split('\n').filter(Boolean)
+        .map((line) => {
+          const [paneId, sessionName, windowIndex, windowName, paneIndex, currentPath, currentCommand] = line.split('|||');
+          return {
+            paneId,
+            sessionName,
+            windowIndex: parseInt(windowIndex, 10),
+            windowName,
+            paneIndex: parseInt(paneIndex, 10),
+            currentPath,
+            currentCommand,
+          };
+        })
+        .filter((pane) => !pane.sessionName.startsWith('_azito_'));
+    } catch (err: unknown) {
+      const e = err as { message?: string; stderr?: string };
+      if (e.message?.includes('no server running') || e.stderr?.includes('no server running')) {
+        return [];
+      }
+      throw err;
+    }
   }
 
   async checkPaneExists(server: ServerConfig, target: string): Promise<boolean> {
@@ -354,6 +417,47 @@ export class TmuxClient {
         await this.runTmuxCommand(server, ['send-keys', '-t', target, '-l', key]);
       }
     }
+  }
+
+  /**
+   * `sendKeys` は "Enter"/"C-c"/"Escape" 等の完全一致文字列を特殊キーとして解釈するため、
+   * ユーザーが自由入力した本文（例: "C-c" という一行）をそのまま渡すと割り込み等の制御シーケンスに
+   * 誤解釈されうる。任意テキストを送る場合は必ずこちらを使い、特殊キー判定を一切通さない。
+   */
+  async sendLiteralText(server: ServerConfig, target: string, text: string): Promise<void> {
+    if (Buffer.byteLength(text, 'utf8') > 500) {
+      await this.sendLongText(server, target, text);
+    } else {
+      await this.runTmuxCommand(server, ['send-keys', '-t', target, '-l', text]);
+    }
+  }
+
+  /**
+   * ペインが copy-mode（スクロールバック閲覧中）かどうかを判定する（Issue #69 T12）。copy-mode 中は
+   * `send-keys -l` のリテラル入力がバッファへの選択操作として吸収され、対象アプリケーションに届かない
+   * ため、送信前にこの判定を挟んで {@link cancelPaneMode} で解除する必要がある。tmux 側のエラー・
+   * 対象ペイン不在時は「モード不明」として false を返し、呼び出し元は通常の送信を続行する
+   * （in-mode 判定ができないことを理由に送信自体をブロックしない）。
+   */
+  async isPaneInMode(server: ServerConfig, target: string): Promise<boolean> {
+    try {
+      const { stdout, code } = await this.runTmuxCommand(server, [
+        'display-message', '-p', '-t', target, '#{pane_in_mode}',
+      ]);
+      if (code !== 0) return false;
+      return stdout.trim() === '1';
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * copy-mode を解除する（`send-keys -X cancel`）。`-X` は copy-mode 中のペインにのみ有効なコマンド
+   * ディスパッチのため、呼び出し元は必ず {@link isPaneInMode} で in-mode を確認してから呼ぶこと
+   * （in-mode でないペインに送っても tmux 側は無害だが、意図を明確にするため呼び出し側で条件分岐する）。
+   */
+  async cancelPaneMode(server: ServerConfig, target: string): Promise<void> {
+    await this.runTmuxCommand(server, ['send-keys', '-X', '-t', target, 'cancel']);
   }
 
   private async sendLongText(server: ServerConfig, target: string, text: string): Promise<void> {

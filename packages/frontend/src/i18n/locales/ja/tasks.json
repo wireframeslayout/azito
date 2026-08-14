@@ -78,6 +78,7 @@
   "contextMenu": {
     "showView": "{{view}} を表示",
     "browser": "ブラウザ",
+    "addBrowser": "ブラウザを追加",
     "cannotResolveServer": "サーバーを解決できません",
     "addWindow": "ウィンドウを追加",
     "closeTab": "タブを閉じる"
@@ -196,7 +197,8 @@
   },
   "ref": {
     "issue": "Issue #{{number}}",
-    "pr": "PR #{{number}}"
+    "pr": "PR #{{number}}",
+    "unit": "Unit: {{name}}"
   },
   "git": {
     "linkedIssue": "リンクされたIssue",

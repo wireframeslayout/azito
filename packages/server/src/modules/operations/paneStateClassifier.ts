@@ -47,8 +47,20 @@ interface ScreenRule {
   state: PaneAgentState;
 }
 
-/** Leading braille-pattern glyph (U+2800-U+28FF) — the spinner Claude/codex render while working. */
-const BRAILLE_SPINNER_TITLE_RE = /^[⠀-⣿] /;
+/**
+ * Leading working-spinner glyph. Covers every spinner frame set observed
+ * across Claude Code versions plus codex's braille spinner:
+ * - U+2800-U+28FF: braille patterns (codex, and older Claude builds).
+ * - U+25D0-U+25D3 (◐◑◒◓): the half-circle spinner used by the current
+ *   Claude Code (real-world observed title: `◐ libghosttyのwasm版導入検討`).
+ * - U+273B/U+2736/U+273D (✻✶✽) and `✢`/`∗`: additional asterisk-family
+ *   spinner glyphs seen across other Claude Code releases.
+ *
+ * Kept in sync with `WORKING_SPINNER_RE` in
+ * `packages/tui-supervisor/src/TitleStateTracker.ts` — the two packages
+ * cannot share a constant, so when the glyph set changes, update both.
+ */
+const WORKING_SPINNER_TITLE_RE = /^[⠀-⣿◐◑◒◓✻✶✽✢∗] /;
 
 /** Claude Code's idle title marker. */
 const CLAUDE_IDLE_TITLE_RE = /^✳ /;
@@ -59,7 +71,7 @@ const CLAUDE_PROMPT_BOX_RE = /^\s*❯/m;
 // Order matters: first matching rule wins.
 
 const CLAUDE_TITLE_RULES: TitleRule[] = [
-  { test: (t) => BRAILLE_SPINNER_TITLE_RE.test(t), state: 'working' },
+  { test: (t) => WORKING_SPINNER_TITLE_RE.test(t), state: 'working' },
   { test: (t) => CLAUDE_IDLE_TITLE_RE.test(t), state: 'idle' },
 ];
 
@@ -71,7 +83,7 @@ const CLAUDE_SCREEN_RULES: ScreenRule[] = [
 
 const CODEX_TITLE_RULES: TitleRule[] = [
   { test: (t) => t.includes('Action Required'), state: 'blocked' },
-  { test: (t) => BRAILLE_SPINNER_TITLE_RE.test(t), state: 'working' },
+  { test: (t) => WORKING_SPINNER_TITLE_RE.test(t), state: 'working' },
 ];
 
 const CODEX_SCREEN_RULES: ScreenRule[] = [
@@ -84,7 +96,7 @@ const CODEX_SCREEN_RULES: ScreenRule[] = [
 ];
 
 function classifyClaude(paneTitle: string, screenTail: string | null): PaneAgentState {
-  // Screen blocked check runs before title: Claude keeps the braille spinner in the
+  // Screen blocked check runs before title: Claude keeps the working spinner in the
   // title while showing a permission prompt, so title-first would return 'working'.
   if (screenTail) {
     const screen = screenTail.toLowerCase();

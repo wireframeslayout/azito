@@ -1,4 +1,9 @@
 {
+  "tab": {
+    "closeDirtyTitle": "未保存の変更があるタブを閉じますか？",
+    "closeDirtyMessage": "「{{name}}」には未保存の変更があります。このタブを閉じると変更は破棄されます。",
+    "closeDirtyConfirm": "破棄して閉じる"
+  },
   "pane": {
     "splitRight": "右に分割",
     "splitBelow": "下に分割",
@@ -9,11 +14,11 @@
     "nextPane": "次のペインへ移動",
     "dragHint": "タブをここにドラッグ、またはサイドバーから開く",
     "dragHintShort": "タブをここにドラッグ",
-    "selectHint": "サイドバーからペイン、オペレーション、タスクを選択してください",
     "openTab": "タブを開く",
     "splitSuccessH": "ペインを水平分割しました",
     "splitSuccessV": "ペインを垂直分割しました",
-    "splitFailed": "分割に失敗しました: {{error}}"
+    "splitFailed": "分割に失敗しました: {{error}}",
+    "viewSegments": "表示切替"
   },
   "activeWindows": {
     "title": "アクティブウィンドウ",
@@ -25,6 +30,21 @@
     "done": "完了",
     "planReview": "承認待ち",
     "noActive": "稼働中のウィンドウはありません"
+  },
+  "activityPill": {
+    "ariaLabel": "稼働ステータス",
+    "statusBarWorking": "{{count}} 稼働中",
+    "workingSection": "稼働中 {{count}}",
+    "finishedSection": "最近完了 {{count}}",
+    "empty": "稼働中のエージェントはありません",
+    "viewHealthDetails": "詳細を表示 ▸"
+  },
+  "home": {
+    "needsAttention": "要対応",
+    "active": "稼働中",
+    "windowsActive": "{{total}}ウィンドウ中 {{active}}稼働",
+    "moreWindows": "+{{count}}",
+    "noActive": "稼働中のエージェントはいません"
   },
   "windows": {
     "title": "ウィンドウ",
@@ -54,6 +74,7 @@
     "loadingAgents": "エージェント定義を読み込み中です",
     "windowList": "ウィンドウ一覧",
     "select": "選択",
+    "paneCount": "{{count}}ペイン",
     "detachFromProject": "プロジェクトから切り離す",
     "deleteWindow": "ウィンドウを削除",
     "quickAddTitle": "{{label}} を追加 — {{serverName}}"
@@ -136,18 +157,27 @@
   },
   "mobile": {
     "menu": "メニュー",
-    "projectAndMode": "プロジェクトと表示モード",
-    "appMenu": "アプリケーションメニュー",
-    "mode": "モード",
-    "projects": "プロジェクト",
-    "projectSwitch": "プロジェクト切替",
-    "displayMode": "表示モード",
-    "keyboardControls": "キーボードコントロール",
-    "notifications": "通知",
-    "notificationsUnread": "通知（{{count}}件未読）",
     "serverHealth": "サーバーヘルス",
-    "updateAvailable": "更新あり",
-    "mobileMenu": "モバイルメニュー"
+    "noTabSelected": "タブが選択されていません",
+    "tabSwitcherOpen": "開いているタブ ({{count}}) — タブ一覧を開く",
+    "tabSwitcherTitle": "開いているタブ",
+    "tabSwitcherClose": "タブ一覧を閉じる",
+    "tabSwitcherEmpty": "開いているタブはありません",
+    "tabSwitcherUngrouped": "その他",
+    "tabSwitcherNewTab": "新しいタブ",
+    "tabSwitcherPinnedSection": "ピン止め",
+    "navMenu": "ナビゲーションメニュー",
+    "pinTab": "ピン止め",
+    "unpinTab": "ピン止めを解除",
+    "pinToastPinned": "ピン止めしました",
+    "pinToastUnpinned": "ピン止めを解除しました"
+  },
+  "mobileNav": {
+    "sectionGlobal": "AZITO 全体",
+    "switchLabel": "切替",
+    "projectSwitch": "プロジェクトを切替",
+    "activePanesRow": "稼働ペイン一覧",
+    "settingsRow": "AZITO設定"
   },
   "sessionTree": {
     "installingAgent": "エージェントをインストール中...",
@@ -160,7 +190,9 @@
     "noServerConfigured": "サーバー環境が設定されていません。",
     "noWorkingDir": "このサーバーの作業ディレクトリが未設定です。",
     "projectSettings": "プロジェクト設定",
-    "gitDiff": "Git 差分"
+    "gitDiff": "Git 差分",
+    "searchFiles": "ファイルを検索",
+    "fileTree": "ファイルツリー"
   },
   "welcome": {
     "createFirst": "最初のプロジェクトを作成して、エージェントの指揮を始めましょう。",
@@ -195,10 +227,18 @@
     "title": "オブジェクト",
     "sectionWindows": "ウィンドウ",
     "sectionOperations": "オペレーションウィンドウ",
+    "sectionActive": "稼働中",
+    "sectionIdle": "待機中",
+    "sectionOffline": "オフライン",
     "sectionBrowsers": "ブラウザ",
     "noObjects": "このプロジェクトにはまだオブジェクトがありません",
     "noOperations": "実行中のオペレーションはありません",
+    "noActive": "稼働中のオブジェクトはありません",
+    "noIdle": "待機中のオブジェクトはありません",
+    "noOffline": "オフラインのウィンドウはありません",
     "noBrowsers": "開いているブラウザはありません",
+    "searchPlaceholder": "タイトル・ID・ブランチで検索…",
+    "noSearchResults": "「{{query}}」に一致するオブジェクトはありません",
     "openBrowser": "新しく開く",
     "closeBrowserGroup": "このブラウザグループを閉じる",
     "browserPages": "{{count}} ページ",
@@ -212,14 +252,38 @@
     "copyUrl": "URL をコピー",
     "urlCopied": "URL をコピーしました",
     "closeGroupAction": "グループを閉じる",
-    "closeGroupFailed": "グループを閉じられませんでした"
+    "closeGroupFailed": "グループを閉じられませんでした",
+    "deleteBrowserTitle": "ブラウザを削除",
+    "deleteBrowserMessage": "「{{label}}」を閉じてタスクから削除しますか？"
   },
   "viewLabels": {
     "description": "説明",
+    "overview": "概要",
     "unit": "Unit",
     "git": "Git",
     "summary": "サマリー",
     "commits": "コミット",
     "diff": "差分"
+  },
+  "taskDetailMenu": {
+    "title": "タスク操作",
+    "display": "表示",
+    "showFull": "全文を表示",
+    "unitAndExecution": "Unit・実行情報",
+    "unassigned": "未割当",
+    "commitCount": "{{count}}件",
+    "pinOn": "オン",
+    "pinOff": "オフ",
+    "closeTab": "タブを閉じる",
+    "currentWindow": "現在表示中",
+    "windowsAndBrowser": "ウィンドウとブラウザ",
+    "moreActions": "その他の操作",
+    "moreActionsHint": "編集・ピン・アーカイブ…",
+    "caution": "取り扱い注意",
+    "confirmRequired": "確認あり",
+    "editTask": "タスクを編集",
+    "pinTab": "タブをピン止め",
+    "addWindowChip": "ウィンドウ",
+    "addBrowserChip": "ブラウザ"
   }
 }

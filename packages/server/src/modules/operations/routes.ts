@@ -1,12 +1,17 @@
 import type { FastifyPluginCallback } from 'fastify';
 import type { ExecuteTaskUseCase } from '../tasks/execution/ExecuteTaskUseCase';
+import type { IWindowRepository } from '../windows/Window';
+import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import type { AgentActivityMonitor } from './AgentActivityMonitor';
+import { buildActivityDiagnostics } from './activityDiagnostics';
 
 // ─── Types ───
 
 export interface OperationsRouteOptions {
   executeTaskUseCase: ExecuteTaskUseCase;
   agentActivityMonitor: AgentActivityMonitor;
+  supervisorRegistry: SupervisorRegistry;
+  windowRepo: IWindowRepository;
 }
 
 export interface RunningOperation {
@@ -24,7 +29,7 @@ export interface RunningOperation {
 // ExecuteTaskUseCase's in-memory runningExecutions map.
 
 const operationsRoutes: FastifyPluginCallback<OperationsRouteOptions> = (fastify, opts, done) => {
-  const { executeTaskUseCase, agentActivityMonitor } = opts;
+  const { executeTaskUseCase, agentActivityMonitor, supervisorRegistry, windowRepo } = opts;
 
   // ── GET /api/operations ── currently running executions (unitId + taskId + tmux target)
   fastify.get('/api/operations', async () => {
@@ -40,6 +45,13 @@ const operationsRoutes: FastifyPluginCallback<OperationsRouteOptions> = (fastify
 
   // ── GET /api/agent-activity ── snapshot of currently running agents (operation runs + manual agent windows)
   fastify.get('/api/agent-activity', async () => agentActivityMonitor.snapshot());
+
+  // ── GET /api/debug/activity ── read-only Tier attribution for the activity
+  // diagnostics panel (Settings → System). Answers "which tier actually decided
+  // this window's state, and is Tier 0 alive?" without reading logs. Reads
+  // already-collected state only; it never ticks the monitor or probes anything.
+  fastify.get('/api/debug/activity', async () =>
+    buildActivityDiagnostics(agentActivityMonitor, supervisorRegistry, windowRepo));
 
   done();
 };

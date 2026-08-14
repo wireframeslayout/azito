@@ -14,6 +14,7 @@ import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLa
 import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
 import { isSameWindowTarget, stripPaneSuffix } from './paneTarget';
 import type { SessionCaptureService } from './SessionCaptureService';
+import type { WindowActivityStatusService } from './WindowActivityStatusService';
 
 export interface WindowsRouteOptions {
   windowRepo: IWindowRepository;
@@ -25,12 +26,13 @@ export interface WindowsRouteOptions {
   sessionStrategyFactory: ISessionStrategyFactory;
   sessionCaptureService: SessionCaptureService;
   supervisorRegistry: SupervisorRegistry;
+  windowActivityStatusService: WindowActivityStatusService;
   notificationBus?: NotificationBus;
   resourceGuard?: ResourceGuard;
 }
 
 const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts, done) => {
-  const { windowRepo, projectRepo, taskRepo, tmux, serverRepo, respawnService, sessionStrategyFactory, sessionCaptureService, supervisorRegistry } = opts;
+  const { windowRepo, projectRepo, taskRepo, tmux, serverRepo, respawnService, sessionStrategyFactory, sessionCaptureService, supervisorRegistry, windowActivityStatusService } = opts;
 
   function notifyWindowsChanged(serverName: string): void {
     opts.notificationBus?.emit({ type: 'sessions:updated', payload: { serverName } });
@@ -382,6 +384,14 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       return { supervised, ready: null, childCommand: win?.launchCommand ?? null };
     },
   );
+
+  // ── GET /api/windows/activity-status ──
+  // プロセス実体検査ベースの軽量な稼働判定（Issue #338 フォロー）。hook/tui-supervisor 接続の
+  // 有無に関わらず、全 local エージェントウィンドウの working/idle/offline を返す。
+  // **診断専用**: 稼働表示の単一ソースは /api/agent-activity（AgentActivityMonitor）であり、
+  // この判定はそのラダーの Tier 4 として内部で consult 済み。UI はこの API を参照しない
+  // （フロントの並行ポーリング＋加算マージは、上位 Tier の idle を再点灯させるため撤去した）。
+  fastify.get('/api/windows/activity-status', async () => windowActivityStatusService.list());
 
   done();
 };

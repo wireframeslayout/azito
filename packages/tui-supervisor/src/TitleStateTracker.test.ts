@@ -25,16 +25,106 @@ describe('TitleStateTracker', () => {
     expect(t.getState()).toBe('idle');
   });
 
+  it('classifies a half-circle-spinner title as working (real-world observed: current Claude Code)', () => {
+    const t = new TitleStateTracker();
+    t.push(OSC2('◐ libghosttyのwasm版導入検討'));
+    expect(t.getState()).toBe('working');
+  });
+
+  it('classifies a real-world observed idle title as idle (current Claude Code)', () => {
+    const t = new TitleStateTracker();
+    t.push(OSC2('✳ テスト投稿の実装'));
+    expect(t.getState()).toBe('idle');
+  });
+
+  it('classifies every half-circle spinner frame as working', () => {
+    for (const glyph of ['◐', '◑', '◒', '◓']) {
+      const t = new TitleStateTracker();
+      t.push(OSC2(`${glyph} spinning`));
+      expect(t.getState()).toBe('working');
+    }
+  });
+
+  it('classifies legacy asterisk-family spinner glyphs as working', () => {
+    for (const glyph of ['✻', '✶', '✽', '✢', '∗']) {
+      const t = new TitleStateTracker();
+      t.push(OSC2(`${glyph} spinning`));
+      expect(t.getState()).toBe('working');
+    }
+  });
+
+  it('still classifies a braille-spinner title as working (codex, unchanged)', () => {
+    const t = new TitleStateTracker();
+    t.push(OSC2('⠴ codex working'));
+    expect(t.getState()).toBe('working');
+  });
+
   it('classifies an "Action Required" title as blocked, beating the spinner rule', () => {
     const t = new TitleStateTracker();
     t.push(OSC2('⠐ Action Required: approve command'));
     expect(t.getState()).toBe('blocked');
   });
 
-  it('classifies any other non-empty title as idle (codex convention)', () => {
+  it('stays unknown for an unrecognized title while no marker has been seen (byte heuristic keeps deciding)', () => {
     const t = new TitleStateTracker();
     t.push(OSC2('codex'));
+    expect(t.getState()).toBe('unknown');
+  });
+
+  it('stays unknown across a static unrecognized title repeated many times', () => {
+    const t = new TitleStateTracker();
+    for (let i = 0; i < 20; i++) t.push(OSC2('my-tui v1.2'));
+    expect(t.getState()).toBe('unknown');
+  });
+
+  it('classifies any other non-empty title as idle once a recognized marker has been observed', () => {
+    const t = new TitleStateTracker();
+    t.push(OSC2('⠐ working'));
+    expect(t.getState()).toBe('working');
+    t.push(OSC2('codex'));
     expect(t.getState()).toBe('idle');
+  });
+
+  it('takes title authority from the first recognized marker even after unrecognized titles', () => {
+    const t = new TitleStateTracker();
+    t.push(OSC2('claude'));
+    expect(t.getState()).toBe('unknown');
+    t.push(OSC2('✳ waiting'));
+    expect(t.getState()).toBe('idle');
+    t.push(OSC2('◐ thinking'));
+    expect(t.getState()).toBe('working');
+  });
+
+  it('takes authority from a recognized marker that is not the last title in the chunk', () => {
+    // Chunk boundaries are a transport detail: `◐ working` followed by a static
+    // unrecognized title in ONE chunk must behave exactly as if the two titles
+    // had arrived in separate reads (marker seen → title authority, last title
+    // decides the state).
+    const t = new TitleStateTracker();
+    t.push(OSC2('◐ working') + 'output' + OSC2('my-static-tui'));
+    expect(t.getState()).toBe('idle');
+  });
+
+  it('behaves identically whether such a pair arrives in one chunk or two', () => {
+    const oneChunk = new TitleStateTracker();
+    oneChunk.push(OSC2('◐ working') + OSC2('my-static-tui'));
+    const twoChunks = new TitleStateTracker();
+    twoChunks.push(OSC2('◐ working'));
+    twoChunks.push(OSC2('my-static-tui'));
+    expect(oneChunk.getState()).toBe(twoChunks.getState());
+  });
+
+  it('still ignores a chunk whose titles are all unrecognized', () => {
+    const t = new TitleStateTracker();
+    t.push(OSC2('my-tui') + 'output' + OSC2('my-tui v2'));
+    expect(t.getState()).toBe('unknown');
+  });
+
+  it('accepts a blocked marker as the first recognized marker', () => {
+    const t = new TitleStateTracker();
+    t.push(OSC2('some tui'));
+    t.push(OSC2('Action Required: approve command'));
+    expect(t.getState()).toBe('blocked');
   });
 
   it('recognizes OSC 0 sequences too', () => {

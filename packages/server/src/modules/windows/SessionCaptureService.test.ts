@@ -185,4 +185,57 @@ describe('SessionCaptureService', () => {
       );
     });
   });
+
+  describe('adoptResolvedSession', () => {
+    it('writes the session ID back onto the window when it has none yet and it is unassigned', () => {
+      const win = makeWindow({ agentSessionId: null });
+      windowRepo.findById.mockReturnValue(win);
+
+      const result = service.adoptResolvedSession(win.id, 'resolved-session');
+
+      expect(result).toBe(true);
+      expect(windowRepo.updateAgentSessionIdByWindow).toHaveBeenCalledWith(win.serverName, win.tmuxTarget, 'resolved-session');
+    });
+
+    it('does not overwrite a window that already carries an agentSessionId', () => {
+      const win = makeWindow({ agentSessionId: 'already-set' });
+      windowRepo.findById.mockReturnValue(win);
+
+      const result = service.adoptResolvedSession(win.id, 'resolved-session');
+
+      expect(result).toBe(false);
+      expect(windowRepo.updateAgentSessionIdByWindow).not.toHaveBeenCalled();
+    });
+
+    it('does not write when the session is already assigned to another window on the server', () => {
+      const win = makeWindow({ agentSessionId: null });
+      windowRepo.findById.mockReturnValue(win);
+      windowRepo.findAgentSessionIdsByServer.mockReturnValue(new Set(['resolved-session']));
+
+      const result = service.adoptResolvedSession(win.id, 'resolved-session');
+
+      expect(result).toBe(false);
+      expect(windowRepo.updateAgentSessionIdByWindow).not.toHaveBeenCalled();
+    });
+
+    it('does not write when the session is already assigned to a task on the server', () => {
+      const win = makeWindow({ agentSessionId: null });
+      windowRepo.findById.mockReturnValue(win);
+      taskRepo.findAgentSessionIdsByServer.mockReturnValue(new Set(['resolved-session']));
+
+      const result = service.adoptResolvedSession(win.id, 'resolved-session');
+
+      expect(result).toBe(false);
+      expect(windowRepo.updateAgentSessionIdByWindow).not.toHaveBeenCalled();
+    });
+
+    it('returns false when the window does not exist', () => {
+      windowRepo.findById.mockReturnValue(undefined);
+
+      const result = service.adoptResolvedSession(999, 'resolved-session');
+
+      expect(result).toBe(false);
+      expect(windowRepo.updateAgentSessionIdByWindow).not.toHaveBeenCalled();
+    });
+  });
 });

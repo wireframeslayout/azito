@@ -33,7 +33,16 @@ if [[ -z "${TMUX:-}" || -z "${TMUX_PANE:-}" ]]; then
 fi
 
 # ── target解決 ──
-TARGET="$(tmux display-message -p -t "$TMUX_PANE" '#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null)" || TARGET=""
+# AZITO はブラウザのタブごとに tmux の *linked session*
+# (`tmux new-session -t <src> -s _azito_<src>_<ts>`) を作る。そのリンクド
+# セッション越しに開いた pane では #{session_name} が使い捨ての `_azito_*`
+# 名を返し、windows テーブルがキーにしている正規セッション名と一致しない —
+# supervisor (Tier 0) を突合不能な target で登録してしまう。
+# #{session_group} はリンクド/非リンクドのどちらでも *元の* セッション名を
+# 返すので、pane のセッションが grouped なら常にそちらを優先する。
+# Tier 1 の hook (harness/hooks/azito-activity.sh) も同じ式を使っている —
+# 片方だけ変えるとキー規約がずれるので、変更時は両方を揃えること。
+TARGET="$(tmux display-message -p -t "$TMUX_PANE" '#{?session_grouped,#{session_group},#{session_name}}:#{window_index}.#{pane_index}' 2>/dev/null)" || TARGET=""
 if [[ -z "$TARGET" ]]; then
   echo "azs: failed to resolve tmux target; launching without supervisor" >&2
   exec "$@"

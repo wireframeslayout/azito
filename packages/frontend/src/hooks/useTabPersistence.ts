@@ -23,6 +23,7 @@ export interface PersistedTab {
   target?: string;
   // File-specific
   filePath?: string;
+  line?: number;
   // Unit/Task-specific
   entityId?: number;
   // Task navigation origin
@@ -55,6 +56,11 @@ export interface PersistedTab {
   // Browser-specific
   browserData?: { serverName: string; pageId: string; lastActiveTabId?: string };
   reconnectKey?: number;
+  // Editor dirty state. In-memory only — stripped before writing to
+  // localStorage (serialize effect below) and stripped again on hydration
+  // (stripDirty via normalizeLegacyTabs) so a stale flag from an older
+  // client build can't resurface as a false "unsaved changes" warning.
+  dirty?: boolean;
 }
 
 const STORAGE_KEY = 'workspace-tabs';
@@ -134,13 +140,30 @@ function normalizeLegacyTabId(id: string): string {
 }
 
 /**
+ * Strips the `dirty` flag from a hydrated tab. `dirty` is meant to be pure
+ * in-memory editor state (see its field comment), but earlier code persisted
+ * it verbatim (serializeTabsForStorage below now strips it going forward) —
+ * so localStorage entries written before that fix can still carry a stale
+ * `dirty: true` from whatever the editor's unsaved state happened to be at
+ * last write. Applied on every hydration path so a reload never resurrects a
+ * false "unsaved changes" warning for a tab whose actual editor was never
+ * reopened dirty this session.
+ */
+export function stripDirty(tab: PersistedTab): PersistedTab {
+  if (!('dirty' in tab)) return tab;
+  const { dirty: _dirty, ...rest } = tab;
+  return rest;
+}
+
+/**
  * Normalize tabs persisted under a previous schema version.
  * Drops removed global page tabs and legacy types, dedupes by id.
  */
-function normalizeLegacyTabs(tabs: PersistedTab[]): PersistedTab[] {
+export function normalizeLegacyTabs(tabs: PersistedTab[]): PersistedTab[] {
   const next: PersistedTab[] = [];
   const seenIds = new Set<string>();
-  for (const tab of tabs) {
+  for (const rawTab of tabs) {
+    const tab = stripDirty(rawTab);
     const rawType = tab.type as string;
     if (rawType === 'worker-profiles-list' || rawType === 'tasks-list' || rawType === 'operations-running') continue;
     if (rawType === 'projects-list' || rawType === 'units-list' || rawType === 'sidekicks-list' || rawType === 'global-settings' || rawType === 'project-form') continue;
@@ -212,7 +235,10 @@ export function useTabPersistence(storageKey?: string) {
 
   useEffect(() => {
     if (!initialized.current) return;
-    localStorage.setItem(effectiveKey, JSON.stringify(tabs.filter((t) => !(FORM_TAB_TYPES as readonly string[]).includes(t.type))));
+    const persistable = tabs
+      .filter((t) => !(FORM_TAB_TYPES as readonly string[]).includes(t.type))
+      .map(stripDirty);
+    localStorage.setItem(effectiveKey, JSON.stringify(persistable));
   }, [tabs, effectiveKey]);
 
   useEffect(() => {
@@ -230,13 +256,15 @@ export function useTabPersistence(storageKey?: string) {
         const fromChanged = tab.from !== undefined && existing.from !== tab.from;
         const settingsSectionChanged = tab.settingsSection !== undefined && existing.settingsSection !== tab.settingsSection;
         const projectIdChanged = tab.projectId !== undefined && existing.projectId !== tab.projectId;
-        if (fromChanged || settingsSectionChanged || projectIdChanged) {
+        const lineChanged = tab.line !== undefined && existing.line !== tab.line;
+        if (fromChanged || settingsSectionChanged || projectIdChanged || lineChanged) {
           return prev.map((t) => t.id === tab.id
             ? {
               ...t,
               ...(fromChanged ? { from: tab.from } : {}),
               ...(settingsSectionChanged ? { settingsSection: tab.settingsSection } : {}),
               ...(projectIdChanged ? { projectId: tab.projectId } : {}),
+              ...(lineChanged ? { line: tab.line } : {}),
             }
             : t);
         }
@@ -276,10 +304,10 @@ export function useTabPersistence(storageKey?: string) {
     });
   }, [openTab]);
 
-  const openFile = useCallback((serverName: string, filePath: string, projectId?: number) => {
+  const openFile = useCallback((serverName: string, filePath: string, projectId?: number, line?: number) => {
     const tabId = `file:${serverName}:${filePath}`;
     const fileName = filePath.split('/').pop() || filePath;
-    openTab({ id: tabId, type: 'file', label: fileName, serverName, filePath, projectId });
+    openTab({ id: tabId, type: 'file', label: fileName, serverName, filePath, projectId, line });
   }, [openTab]);
 
   const openUnit = useCallback((unitId: number, name: string, projectId?: number, openerTabId?: string) => {
@@ -493,5 +521,13 @@ export function useTabPersistence(storageKey?: string) {
     });
   }, []);
 
-  return { tabs, activeTabId, setActiveTabId, openTab, connectPane, openFile, openUnit, openTask, openTaskForm, openUnitForm, openSidekickForm, openIssue, openIssueList, openServer, openSettings, openStorageFile, openDiff, openBrowser, updateBrowserActiveTab, closeTab, retargetTab, reorderTab, openProjectTasks, togglePin, activateOpener, getTabDisplayName };
+  const setTabDirty = useCallback((tabId: string, dirty: boolean) => {
+    setTabs((prev) => {
+      const target = prev.find((t) => t.id === tabId);
+      if (!target || target.dirty === dirty) return prev;
+      return prev.map((t) => t.id === tabId ? { ...t, dirty } : t);
+    });
+  }, []);
+
+  return { tabs, activeTabId, setActiveTabId, openTab, connectPane, openFile, openUnit, openTask, openTaskForm, openUnitForm, openSidekickForm, openIssue, openIssueList, openServer, openSettings, openStorageFile, openDiff, openBrowser, updateBrowserActiveTab, closeTab, retargetTab, reorderTab, openProjectTasks, togglePin, activateOpener, getTabDisplayName, setTabDirty };
 }

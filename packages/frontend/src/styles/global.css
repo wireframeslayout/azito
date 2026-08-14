@@ -398,6 +398,11 @@ a:hover {
   opacity: 1;
 }
 
+button:hover .diff-open-btn,
+button:focus-within .diff-open-btn {
+  opacity: 1 !important;
+}
+
 .list-row:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
@@ -555,101 +560,12 @@ a:hover {
   outline-offset: 1px;
 }
 
-/* ---- Mobile floating menu (Issue #267) ---- */
-.mobile-menu-bar {
-  gap: 10px;
-  padding: 0 12px;
-  transition: opacity 0.2s ease, transform 0.2s ease;
-}
-.mobile-menu-bar.mobile-menu-bar-hidden {
-  opacity: 0;
-  transform: translateY(24px);
-  pointer-events: none;
-}
-.mobile-menu-group {
-  pointer-events: auto;
-  display: flex;
-  gap: 6px;
-  padding: 7px;
-  border-radius: 12px;
-  background: rgba(22, 27, 34, 0.15);
-  border: 1px solid rgba(139, 148, 158, 0.22);
-  backdrop-filter: blur(3px);
-  -webkit-backdrop-filter: blur(3px);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(230, 237, 243, 0.06);
-}
-@supports not (backdrop-filter: blur(3px)) {
-  .mobile-menu-group {
-    background: rgba(22, 27, 34, 0.96);
-  }
-}
-.mi-btn {
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-  border: none;
-  background: transparent;
-  color: var(--text-dim);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  padding: 0;
-  position: relative;
-  transition: background 0.15s ease, color 0.15s ease;
-}
-.mi-btn:hover {
-  background: rgba(230, 237, 243, 0.07);
-  color: var(--text);
-}
-.mi-btn.mi-btn-active {
-  background: rgba(88, 166, 255, 0.16);
-  color: var(--accent);
-}
-.mi-btn:focus-visible,
 .glass-popover-item:focus-visible,
 .notification-bell-btn:focus-visible,
 .notification-row:focus-visible,
 .notification-panel-action:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-.mi-btn-badge {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  min-width: 16px;
-  height: 16px;
-  border-radius: var(--radius-full);
-  color: #fff;
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 3px;
-  box-shadow: 0 0 0 2px var(--bg-card);
-}
-.mi-btn-badge-alert {
-  background: var(--danger);
-}
-/* 狭幅端末(<=360px)向けコンパクト化: 320px幅でも両グループが収まる構成にする。
-   計算(320px時): 左グループ 2(border)+10(padding)+4×32(btn)+3×4(gap)=152px、
-   右グループ 2+10+3×32+2×4=116px、中央gap 8px、navのpadding 16px → 合計292px <= 320px */
-@media (max-width: 360px) {
-  .mobile-menu-bar {
-    gap: 8px;
-    padding: 0 8px;
-  }
-  .mobile-menu-group {
-    gap: 4px;
-    padding: 5px;
-  }
-  .mi-btn {
-    width: 32px;
-    height: 32px;
-  }
+  outline-offset: -2px;
 }
 .notification-bell-btn:hover {
   background: var(--selected-bg);
@@ -699,6 +615,15 @@ a:hover {
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
 }
 
+/* ---- SP ≡ メニュー: プロジェクトカード（Issue #338 T11 G1） ---- */
+@keyframes azito-nav-card-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.mobile-nav-card-body {
+  animation: azito-nav-card-fade 0.15s ease;
+}
+
 /* ---- Mobile keyboard control overlay ---- */
 .kbd-key {
   border: none;
@@ -718,13 +643,13 @@ a:hover {
 
 @media (prefers-reduced-motion: reduce) {
   .qa-bar-transition,
-  .mobile-menu-bar,
   .glass-popover,
-  .mi-btn,
   .notification-toast,
   .notification-bell-btn,
   .notification-row,
-  .terminal-loading-overlay {
+  .server-health-sheet,
+  .terminal-loading-overlay,
+  .mobile-nav-card-body {
     transition: none !important;
     animation: none !important;
   }
@@ -749,12 +674,23 @@ a:hover {
   }
   .aw-row-working::before,
   .aw-icon-working::before,
+  .aw-sweep-overlay,
   .aw-braille-spinner,
   .aw-blocked-dot {
     animation: none !important;
   }
   .tab-active-comet::after,
   .tab-braille-spinner {
+    animation: none !important;
+  }
+  .transcript-shimmer {
+    animation: none !important;
+    background-image: none !important;
+    -webkit-background-clip: initial !important;
+    background-clip: initial !important;
+    color: var(--text-dim) !important;
+  }
+  .transcript-live-icon-thinking {
     animation: none !important;
   }
 }
@@ -772,8 +708,14 @@ a:hover {
   position: relative;
   overflow: hidden;
 }
-.aw-row-working::before {
-  content: '';
+/*
+ * 共通スイープ定義（Issue #69 T2）: working行(::before)・収納アイコン(::before)・
+ * フローティングピル(実要素オーバーレイ)の3箇所が同じネオンシマーを使う。プロパティ本体は
+ * ここでまとめて宣言し、疑似要素側は content だけ別ルールで足す（コピー禁止）。
+ */
+.aw-row-working::before,
+.aw-icon-working::before,
+.aw-sweep-overlay {
   position: absolute;
   inset: 0;
   pointer-events: none;
@@ -783,6 +725,10 @@ a:hover {
   background-size: 250% 100%;
   animation: aw-neon-sweep 9s linear infinite, aw-hue 9s linear infinite;
 }
+.aw-row-working::before,
+.aw-icon-working::before {
+  content: '';
+}
 .aw-braille-spinner {
   background: linear-gradient(135deg, #ff4fd8, #9a6fff, #58a6ff);
   -webkit-background-clip: text;
@@ -790,6 +736,13 @@ a:hover {
   color: transparent;
   font-weight: 700;
   animation: aw-hue 9s linear infinite;
+}
+
+/* ---- SP稼働ステータスピル（Issue #69 T2）: .aw-sweep-overlay を実要素として重ねるための
+   ホスト（自身の border-radius でオーバーレイをクリップする） ---- */
+.aw-pill-sweep-host {
+  position: relative;
+  overflow: hidden;
 }
 
 /* ---- Active Windows: blocked行の背景 ---- */
@@ -819,16 +772,7 @@ a:hover {
   border-radius: 8px;
 }
 .aw-icon-working::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
   border-radius: 8px;
-  background-image: linear-gradient(105deg,
-    transparent 26%, rgba(255, 79, 216, 0.16) 38%, rgba(154, 111, 255, 0.20) 50%,
-    rgba(88, 166, 255, 0.16) 62%, transparent 74%);
-  background-size: 250% 100%;
-  animation: aw-neon-sweep 9s linear infinite, aw-hue 9s linear infinite;
 }
 
 /* ---- Tab activity: neon comet bar (C2.B4) + braille spinner ---- */
@@ -859,6 +803,27 @@ a:hover {
   color: transparent;
   font-weight: 700;
   animation: aw-hue 9s linear infinite;
+}
+
+/* ---- Transcript: live status indicator (C1) ---- */
+@keyframes transcript-shimmer-sweep {
+  from { background-position: 0% 0; }
+  to { background-position: -200% 0; }
+}
+.transcript-shimmer {
+  background-image: linear-gradient(90deg, var(--text-dim) 20%, var(--text) 40%, var(--text-dim) 60%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: transcript-shimmer-sweep 2.2s linear infinite;
+}
+@keyframes transcript-live-spin {
+  to { transform: rotate(360deg); }
+}
+.transcript-live-icon-thinking {
+  display: inline-block;
+  animation: transcript-live-spin 1.6s linear infinite;
 }
 
 /* ---- Toggle switch ---- */
