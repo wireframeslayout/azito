@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Chip } from '../../ui/Chip';
+import { Notice } from '../../ui/Notice';
 import { formatRelativeTime } from '../../../utils/time';
 import {
   DIM,
@@ -100,12 +101,9 @@ export default function ActivityDiagnosticsPanel() {
         {/* 取得済みスナップショットがある場合のみ「前回の表示を継続中」と言える。初回失敗は
             下の専用状態で伝える（Loading と同時に出さない）。 */}
         {error && rows !== null && (
-          <div role="status" style={{
-            padding: '8px 12px', background: 'var(--danger-a08)',
-            color: 'var(--danger)', fontSize: 'var(--font-sm)',
-          }}>
+          <Notice tone="danger" style={{ padding: '8px 12px', borderRadius: 0, fontSize: 'var(--font-sm)' }}>
             {t('activityDiagnostics.fetchFailedStale')}
-          </div>
+          </Notice>
         )}
         {rows === null && error !== null ? (
           <div role="status" style={{ padding: 24, textAlign: 'center', color: 'var(--danger)', fontSize: 'var(--font-md)' }}>

@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { Chip } from '../ui/Chip';
+import { Notice } from '../ui/Notice';
 import { paths } from '../../paths';
 import { ACTIVITY_DIAGNOSTICS_ANCHOR } from '../settings/sections/ActivityDiagnosticsPanel';
 import { openActivityTarget } from '../../lib/activityOpen';
@@ -113,12 +114,9 @@ export function ActivityDiagnosticsDropdown({ rows, error, onClose }: ActivityDi
       </div>
 
       {error !== null && activeRows !== null && (
-        <div role="status" style={{
-          padding: '6px 14px', background: 'var(--danger-a08)',
-          color: 'var(--danger)', fontSize: 'var(--font-xs)',
-        }}>
+        <Notice tone="danger" style={{ padding: '6px 14px', borderRadius: 0, fontSize: 'var(--font-xs)' }}>
           {t('settings:activityDiagnostics.fetchFailedStale')}
-        </div>
+        </Notice>
       )}
 
       {activeRows === null && error !== null ? (
