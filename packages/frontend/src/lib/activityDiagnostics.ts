@@ -22,6 +22,8 @@ export interface ActivityDiagnosticRow {
   target: string;
   windowId?: number;
   taskId?: number;
+  /** 行から該当ウィンドウのタブへ遷移するためのプロジェクト（windows.project_id）。 */
+  projectId?: number;
   state: ActivityDecidedState;
   decidedBy: ActivityDecidedBy;
   evidenceAt?: number;

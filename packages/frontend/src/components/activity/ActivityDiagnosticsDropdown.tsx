@@ -4,7 +4,7 @@ import { Chip } from '../ui/Chip';
 import { paths } from '../../paths';
 import { ACTIVITY_DIAGNOSTICS_ANCHOR } from '../settings/sections/ActivityDiagnosticsPanel';
 import { openActivityTarget } from '../../lib/activityOpen';
-import { useWorkspaceTargets } from '../../hooks/useWorkspaceTargets';
+import { useNotificationCenter } from '../../hooks/useNotificationCenter';
 import type { ActivityDiagnosticRow } from '../../hooks/useActivityDiagnostics';
 import {
   DIM, MONO, StateCell, StateDot, TierCell, TransitionCell,
@@ -44,7 +44,10 @@ function CompactSupervisorCell({ row }: { row: ActivityDiagnosticRow }) {
 export function ActivityDiagnosticsDropdown({ rows, error, onClose }: ActivityDiagnosticsDropdownProps) {
   const { t } = useTranslation(['settings', 'common']);
   const navigate = useNavigate();
-  const { onOpenTask, onOpenInTerminal } = useWorkspaceTargets();
+  // 行クリックの遷移は通知センターの navigation-aware な opener を共有する。ステータスバーは
+  // Workspace の外（Layout 直下）にあり、Settings 等のグローバルページ表示中はタブを作っても
+  // 画面が切り替わらないため、プロジェクト解決＋ワークスペースへの遷移まで面倒を見る経路が要る。
+  const { openTask: openTaskAnywhere, openTerminal } = useNotificationCenter();
 
   // オフラインは「稼働していない」ことの確認にしか使わず、件数が多くパネルを埋めてしまうので
   // 全件表（Settings）に任せ、ここでは件数だけをフッターで知らせる。
@@ -56,8 +59,8 @@ export function ActivityDiagnosticsDropdown({ rows, error, onClose }: ActivityDi
     openActivityTarget(
       { taskId: row.taskId, serverName: row.serverName, target: row.target },
       row.target,
-      (taskId) => onOpenTask?.(taskId),
-      (serverName, target) => onOpenInTerminal?.(serverName, target),
+      (taskId) => openTaskAnywhere(taskId),
+      (serverName, target) => openTerminal(serverName, target, row.projectId),
     );
     onClose();
   };

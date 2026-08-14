@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Chip } from '../../ui/Chip';
 import { formatRelativeTime } from '../../../utils/time';
@@ -59,12 +60,14 @@ export default function ActivityDiagnosticsPanel() {
   const { rows, error } = useActivityDiagnostics(true);
   const tier0Count = rows?.filter((r) => r.decidedBy === 'tier0_supervisor').length ?? 0;
   const sectionRef = useRef<HTMLElement>(null);
+  // 既に /settings/system を開いている状態でも「全件表示」でスクロールできるよう、mount 時では
+  // なく location.hash の変化を見る（同一ページ内では hash だけが変わる）。
+  const { hash } = useLocation();
 
-  // ステータスバーのパネルから「全件表示」で遷移してきたときだけ、この節まで送る。
   useEffect(() => {
-    if (window.location.hash !== `#${ACTIVITY_DIAGNOSTICS_ANCHOR}`) return;
+    if (hash !== `#${ACTIVITY_DIAGNOSTICS_ANCHOR}`) return;
     sectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, []);
+  }, [hash]);
 
   return (
     <section

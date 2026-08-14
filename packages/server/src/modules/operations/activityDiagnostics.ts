@@ -12,6 +12,8 @@ import type { ActivityDiagnosticEntry, AgentActivityMonitor } from './AgentActiv
  */
 export interface ActivityDiagnosticRow extends ActivityDiagnosticEntry {
   windowId?: number;
+  /** 行から該当ウィンドウのタブへ遷移するために UI が使う（`windows.project_id`）。 */
+  projectId?: number;
   supervisor?: {
     pid: number;
     ready: boolean;
@@ -70,12 +72,14 @@ export function buildActivityDiagnostics(
   // Same dedup rule as AgentActivityMonitor.collect(): several `windows` rows
   // can point at one tmux window; the task-owned one wins.
   const windowIds = new Map<string, number>();
+  const windowProjectIds = new Map<string, number | null>();
   const windowTaskIds = new Map<string, number | null>();
   for (const w of windowRepo.findAll()) {
     if (!isAgentWindow(w)) continue;
     const key = keyOf(w.serverName, w.tmuxTarget);
     if (!windowIds.has(key) || (w.taskId != null && windowTaskIds.get(key) == null)) {
       windowIds.set(key, w.id);
+      windowProjectIds.set(key, w.projectId);
       windowTaskIds.set(key, w.taskId);
     }
   }
@@ -92,6 +96,7 @@ export function buildActivityDiagnostics(
         ? { decidedBy: 'none' as const, state: 'none' as const, refinedBy: undefined }
         : {}),
       windowId: windowIds.get(key),
+      projectId: windowProjectIds.get(key) ?? undefined,
       supervisor: supervisor && {
         pid: supervisor.pid,
         ready: supervisor.ready,
@@ -111,6 +116,7 @@ export function buildActivityDiagnostics(
       state: 'none',
       decidedBy: 'none',
       windowId: windowIds.get(key),
+      projectId: windowProjectIds.get(key) ?? undefined,
       supervisor: {
         pid: supervisor.pid,
         ready: supervisor.ready,
