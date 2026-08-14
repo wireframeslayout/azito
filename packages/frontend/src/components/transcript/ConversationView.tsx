@@ -428,6 +428,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
                   windowId={windowId}
                   paneId={paneId}
                   question={cardQuestion.question}
+                  openedAt={cardQuestion.openedAt}
                   onAnswered={() => setAnsweredQuestion({ ...cardQuestion, entryCount: entries.length })}
                   onAnswerFailed={() => setFailedQuestionOpenedAt(cardQuestion.openedAt)}
                 />

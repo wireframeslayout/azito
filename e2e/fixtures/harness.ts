@@ -278,16 +278,20 @@ export class Harness {
    */
   async sendInteractionSignal(target: string, content?: unknown): Promise<void> {
     const [sessionName, windowName] = target.split(':');
-    const { stdout } = await this.tmux(['display-message', '-p', '-t', target, '#{window_index}']);
+    // window/pane index はどちらも tmux に聞く。特に pane index を 0 と決め打ちしてはいけない —
+    // `pane-base-index 1` を設定した ~/.tmux.conf の下では実際の index が 1 になり、回答送出の
+    // 「シグナル元ペインと送出先ペインの同一性」検証が（本物の hook では起きない理由で）落ちる。
+    const { stdout } = await this.tmux(['display-message', '-p', '-t', target, '#{window_index}|#{pane_index}']);
+    const [windowIndex, paneIndex] = stdout.trim().split('|').map(Number);
     const res = await fetch(`${this.baseUrl}/api/webhooks/agent-interaction`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.webhookToken}` },
       body: JSON.stringify({
         serverName: 'local',
         sessionName,
-        windowIndex: Number(stdout.trim()),
+        windowIndex,
         windowName,
-        paneIndex: 0,
+        paneIndex,
         event: 'open',
         ...(content === undefined ? {} : { content }),
       }),

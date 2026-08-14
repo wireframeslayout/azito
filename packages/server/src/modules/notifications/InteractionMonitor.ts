@@ -58,6 +58,9 @@ export interface InteractionContent {
 
 const TIMEOUT_MS = 10 * 60 * 1000;
 
+/** チャットから数字キー1発で回答できるのは、この tool の質問だけ（ピッカーの操作規約が既知なため）。 */
+const ASK_USER_QUESTION_TOOL_NAME = 'AskUserQuestion';
+
 interface PendingState {
   openedAt: number;
   /**
@@ -72,11 +75,28 @@ interface PendingState {
    */
   siblingIds: number[];
   /**
+   * The tmux pane index the signal fired from. A window can hold several panes, and only the
+   * one the agent is blocked in has a picker open — a digit delivered to any other pane lands
+   * in whatever is running there (a shell, a second agent's prompt). Recorded so an answer can
+   * be pinned to the pane that actually asked, instead of trusting the pane the client names.
+   */
+  paneIndex: number;
+  /**
    * The question, when a content-bearing signal has been seen for this window. Absent when
    * only contentless signals (Notification hook) have arrived — the chat view then shows the
    * banner rather than an answerable card.
    */
   content?: InteractionContent;
+}
+
+/** `consumePendingAnswer` の判定材料（呼び出し側が渡す「いま回答しようとしている対象」）。 */
+export interface PendingAnswerClaim {
+  /** 表示していた質問の世代識別子（pendingQuestion.openedAt）。 */
+  openedAt: number;
+  /** 選択肢の番号（1 始まり、= 送出する数字キー）。 */
+  optionNumber: number;
+  /** 送出先として解決済みのペイン index。シグナル元と一致しなければ回答は成立しない。 */
+  paneIndex: number;
 }
 
 /**
@@ -154,6 +174,7 @@ export class InteractionMonitor {
       this.pending.set(windowId, {
         openedAt: signal.timestamp,
         siblingIds: windowIds,
+        paneIndex: signal.target.paneIndex,
         content: signal.content ?? previousContent,
       });
     }
@@ -191,19 +212,44 @@ export class InteractionMonitor {
   }
 
   /**
-   * Claim `windowId`'s pending question for answering: returns true exactly once per open
-   * question, clearing the pending state (and every sibling, like `clear()`) as it does.
-   * Returns false when there is no live pending state or it carries no content — the caller
-   * (the `answer` window-signal route) turns that into a 409 rather than sending a digit.
+   * Claim `windowId`'s pending question for answering. Returns true exactly once per open
+   * question, clearing the pending state (and every sibling, like `clear()`) as it does; false
+   * leaves the state untouched and the caller (the `answer` window-signal route) turns it into
+   * a 409 without sending anything.
    *
-   * Consuming *before* the key is sent, rather than after, is deliberate: the digit answers a
-   * modal picker, and a second digit arriving after the picker closed would be typed straight
-   * into the agent's prompt. Losing the pending state when the send then fails is the cheaper
-   * failure — that only costs the banner, and a pane that cannot be written to cannot be
-   * answered from chat anyway.
+   * Every condition an answer depends on is checked *here*, in the same synchronous step that
+   * clears the state, because each one is a race the caller cannot close on its own:
+   * - `openedAt` must name the question the client was looking at. Between the poll that
+   *   rendered the card and the tap, the agent can answer that question and open a different
+   *   one; a bare digit would then silently answer the *new* question with a number chosen for
+   *   the old one's options.
+   * - `paneIndex` must be the pane the signal fired from. The client names its own send target,
+   *   and in a multi-pane window that need not be the pane holding the picker — a digit
+   *   delivered elsewhere is typed into whatever is running there.
+   * - the question must still be the shape a single digit can answer (AskUserQuestion, exactly
+   *   one question, single-select) and `optionNumber` must index an option that exists. The
+   *   frontend applies the same rule before showing the card, but a client is free not to.
+   *
+   * Consuming before the key is sent, rather than after, is deliberate: the digit answers a
+   * modal picker, and a second digit arriving once the picker closed would go straight into the
+   * agent's prompt. Everything that can reject the answer is checked before the state is
+   * cleared, so a rejected claim never costs the pending question.
    */
-  consumePendingQuestion(windowId: number): boolean {
-    if (this.getValidState(windowId)?.content === undefined) return false;
+  consumePendingAnswer(windowId: number, claim: PendingAnswerClaim): boolean {
+    const state = this.getValidState(windowId);
+    if (!state) return false;
+    if (state.openedAt !== claim.openedAt) return false;
+    if (state.paneIndex !== claim.paneIndex) return false;
+
+    const content = state.content;
+    if (!content || content.toolName !== ASK_USER_QUESTION_TOOL_NAME) return false;
+    if (content.questions.length !== 1) return false;
+
+    const question = content.questions[0];
+    if (question.multiSelect) return false;
+    if (!Number.isInteger(claim.optionNumber)) return false;
+    if (claim.optionNumber < 1 || claim.optionNumber > question.options.length) return false;
+
     this.clear(windowId);
     return true;
   }

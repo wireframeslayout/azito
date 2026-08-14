@@ -12,6 +12,12 @@ interface InteractionAnswerCardProps {
   /** v1 対応形と判定済みの質問1件（判定は answerableQuestion() が行う）。 */
   question: PendingQuestionItem;
   /**
+   * いま表示している質問の世代識別子（pendingQuestion.openedAt）。回答リクエストに添えて、
+   * サーバー側が「この質問に対する回答か」を検証できるようにする — ポーリング間隔の間に
+   * 質問が別のものへ入れ替わっていた場合、数字だけでは無関係な質問を回答してしまうため。
+   */
+  openedAt: number;
+  /**
    * 送信に失敗したことを親へ伝える。親はこのカードを畳んで従来のバナーへ切り替える —
    * 失敗の主因は「質問が既に決着していた」(409) で、その場合カードを出し続けると存在しない
    * 質問に回答できるように見えてしまう。
@@ -35,7 +41,7 @@ interface InteractionAnswerCardProps {
  * 決着した対話の正典はトランスクリプト側の interaction エントリ（✓ 付きの answered カード）で、
  * ポーリングがそれを拾った時点でこのカードごと消える（サーバー側の pending も消費済み）。
  */
-export function InteractionAnswerCard({ windowId, paneId, question, onAnswerFailed, onAnswered }: InteractionAnswerCardProps) {
+export function InteractionAnswerCard({ windowId, paneId, question, openedAt, onAnswerFailed, onAnswered }: InteractionAnswerCardProps) {
   const { t } = useTranslation('transcript');
   const [sentValue, setSentValue] = useState<string | null>(null);
 
@@ -45,14 +51,14 @@ export function InteractionAnswerCard({ windowId, paneId, question, onAnswerFail
     try {
       const { status, body } = await apiWithStatus<{ ok: true } | TranscriptErrorResponse>(
         '/transcripts/window-signal',
-        { method: 'POST', body: JSON.stringify({ windowId, paneId, action: 'answer', key: value }) },
+        { method: 'POST', body: JSON.stringify({ windowId, paneId, action: 'answer', key: value, openedAt }) },
       );
       if (status !== 200 || isErrorResponse(body)) onAnswerFailed();
       else onAnswered();
     } catch {
       onAnswerFailed();
     }
-  }, [sentValue, windowId, paneId, onAnswerFailed, onAnswered]);
+  }, [sentValue, windowId, paneId, openedAt, onAnswerFailed, onAnswered]);
 
   const options = question.options.map((option, index) => ({
     // value = 送出する数字キー。ピッカーの並び順がそのまま 1..N の番号になる。

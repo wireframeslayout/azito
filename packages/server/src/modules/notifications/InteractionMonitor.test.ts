@@ -216,34 +216,94 @@ describe('InteractionMonitor', () => {
     });
   });
 
-  describe('consumePendingQuestion', () => {
+  describe('consumePendingAnswer', () => {
     const content = {
       toolName: 'AskUserQuestion',
-      questions: [{ question: 'どれ?', multiSelect: false, options: [{ label: 'はい' }] }],
+      questions: [{ question: 'どれ?', multiSelect: false, options: [{ label: 'はい' }, { label: 'いいえ' }] }],
     };
+    /** makeSignal の既定ターゲット（paneIndex: 1）に対する、成立する claim。 */
+    const claimFor = (openedAt: number, optionNumber = 1) => ({ openedAt, optionNumber, paneIndex: 1 });
 
     it('content 付き pending を1回だけ消費できる', () => {
       monitor.recordSignal(makeSignal({ timestamp: now(), content }));
-      expect(monitor.consumePendingQuestion(1)).toBe(true);
-      expect(monitor.consumePendingQuestion(1)).toBe(false);
+      expect(monitor.consumePendingAnswer(1, claimFor(now()))).toBe(true);
+      expect(monitor.consumePendingAnswer(1, claimFor(now()))).toBe(false);
       expect(monitor.isPending(1)).toBe(false);
     });
 
     it('content なしの pending は消費できない（数字キーを送る根拠が無い）', () => {
       monitor.recordSignal(makeSignal({ timestamp: now() }));
-      expect(monitor.consumePendingQuestion(1)).toBe(false);
+      expect(monitor.consumePendingAnswer(1, claimFor(now()))).toBe(false);
       expect(monitor.isPending(1)).toBe(true);
     });
 
     it('pending が無ければ false', () => {
-      expect(monitor.consumePendingQuestion(1)).toBe(false);
+      expect(monitor.consumePendingAnswer(1, claimFor(now()))).toBe(false);
+    });
+
+    it('世代（openedAt）が一致しない claim は消費できず、pending も消さない', () => {
+      monitor.recordSignal(makeSignal({ timestamp: now(), content }));
+      expect(monitor.consumePendingAnswer(1, claimFor(now() - 1))).toBe(false);
+      expect(monitor.isPending(1)).toBe(true);
+      expect(monitor.getPendingContent(1)).toEqual(content);
+    });
+
+    it('質問が差し替わった後に、古い世代の claim が新しい質問を消費してしまわない', () => {
+      const firstOpenedAt = now();
+      monitor.recordSignal(makeSignal({ timestamp: firstOpenedAt, content }));
+      const secondContent = {
+        toolName: 'AskUserQuestion',
+        questions: [{ question: '次は?', multiSelect: false, options: [{ label: 'A' }, { label: 'B' }] }],
+      };
+      monitor.recordSignal(makeSignal({ timestamp: firstOpenedAt + 5_000, content: secondContent }));
+
+      expect(monitor.consumePendingAnswer(1, claimFor(firstOpenedAt))).toBe(false);
+      expect(monitor.getPendingContent(1)).toEqual(secondContent);
+      expect(monitor.consumePendingAnswer(1, claimFor(firstOpenedAt + 5_000))).toBe(true);
+    });
+
+    it('シグナル元と違うペインへの送出は消費できず、pending も消さない', () => {
+      monitor.recordSignal(makeSignal({ timestamp: now(), content }));
+      expect(monitor.consumePendingAnswer(1, { openedAt: now(), optionNumber: 1, paneIndex: 2 })).toBe(false);
+      expect(monitor.isPending(1)).toBe(true);
+    });
+
+    it.each([[0], [3], [1.5]])('選択肢の範囲外・非整数の番号 %p は消費できない', (optionNumber) => {
+      monitor.recordSignal(makeSignal({ timestamp: now(), content }));
+      expect(monitor.consumePendingAnswer(1, claimFor(now(), optionNumber))).toBe(false);
+      expect(monitor.isPending(1)).toBe(true);
+    });
+
+    it('multiSelect の質問は消費できない（数字キー1発では確定しない）', () => {
+      monitor.recordSignal(makeSignal({
+        timestamp: now(),
+        content: { toolName: 'AskUserQuestion', questions: [{ ...content.questions[0], multiSelect: true }] },
+      }));
+      expect(monitor.consumePendingAnswer(1, claimFor(now()))).toBe(false);
+      expect(monitor.isPending(1)).toBe(true);
+    });
+
+    it('質問が複数ある content は消費できない', () => {
+      monitor.recordSignal(makeSignal({
+        timestamp: now(),
+        content: { toolName: 'AskUserQuestion', questions: [content.questions[0], content.questions[0]] },
+      }));
+      expect(monitor.consumePendingAnswer(1, claimFor(now()))).toBe(false);
+    });
+
+    it('AskUserQuestion 以外の tool の content は消費できない', () => {
+      monitor.recordSignal(makeSignal({
+        timestamp: now(),
+        content: { ...content, toolName: 'SomeOtherTool' },
+      }));
+      expect(monitor.consumePendingAnswer(1, claimFor(now()))).toBe(false);
     });
 
     it('同じ tmux ターゲットを指す兄弟ウィンドウ行もまとめて消費する', () => {
       findAll.mockReturnValue([makeWindow(), makeWindow({ id: 2, ownerType: 'task', taskId: 5 })]);
       findById.mockImplementation((id) => makeWindow({ id }));
       monitor.recordSignal(makeSignal({ timestamp: now(), content }));
-      expect(monitor.consumePendingQuestion(1)).toBe(true);
+      expect(monitor.consumePendingAnswer(1, claimFor(now()))).toBe(true);
       expect(monitor.isPending(2)).toBe(false);
     });
   });

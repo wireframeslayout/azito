@@ -197,15 +197,20 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
   //
   // action: 'answer' はチャットからの AskUserQuestion 回答（Issue #338 選択肢タップ）。選択肢の
   // 並び順そのままの数字キー1発でピッカーが確定するため、送出するのは '1'〜'9' の1文字に限る。
-  // 'key' との違いは「送るキーの集合」ではなく前後の責務: 送出前に InteractionMonitor の pending を
-  // 消費し（＝質問が生きていることの検証と、二重タップの排除を1手で行う）、消費できなければ 409 で
-  // 送らない。質問が既に決着した後に数字が届くと、ピッカーではなくプロンプト入力欄へ文字が
-  // 混入するため、この検証は送出の前提条件であって付加的なチェックではない。サービス側は
-  // 「キーを送る」だけの責務に留め、回答としての意味づけはこのルートに閉じる。
-  fastify.post<{ Body: { windowId?: unknown; paneId?: unknown; action?: unknown; key?: unknown } }>(
+  // 'key' との違いは「送るキーの集合」ではなく前後の責務: 数字キーは「いま開いているその質問」に
+  // 対してしか意味を持たないので、送出前に openedAt（表示していた質問の世代）と送出先ペインを
+  // 添えて InteractionMonitor の pending を消費し、成立しなければ 409 で何も送らない。
+  //
+  // 送出先ペインはクライアント指定の paneId をそのまま信用せず、一度 tmux のペイン index へ解決して
+  // から（resolvePaneIndex）シグナル発火元ペインと突合する — 複数ペインのウィンドウでは、
+  // クライアントが名指しするペインがピッカーを開いているペインとは限らず、別ペインへ digit が
+  // 飛べばそこで動いているプロンプトへ文字が混入する。世代・ペイン・質問の形の検証はすべて
+  // 消費と同じ1ステップ（consumePendingAnswer）で行い、成立しなかった場合は pending を消さない。
+  // サービス側は「キーを送る」だけの責務に留め、回答としての意味づけはこのルートに閉じる。
+  fastify.post<{ Body: { windowId?: unknown; paneId?: unknown; action?: unknown; key?: unknown; openedAt?: unknown } }>(
     '/api/transcripts/window-signal',
     async (request, reply) => {
-      const { windowId, paneId, action, key } = request.body ?? {};
+      const { windowId, paneId, action, key, openedAt } = request.body ?? {};
 
       if (typeof windowId !== 'number' || !Number.isSafeInteger(windowId) || windowId <= 0) {
         return reply.status(400).send({ error: 'Invalid windowId' });
@@ -224,9 +229,20 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
       }
       if (action === 'answer') {
         if (!isAnswerKey(key)) return reply.status(400).send({ error: 'Invalid key' });
-        if (!interactionMonitor.consumePendingQuestion(windowId)) {
-          return reply.status(409).send({ error: 'No pending question' });
+        if (typeof openedAt !== 'number' || !Number.isSafeInteger(openedAt) || openedAt <= 0) {
+          return reply.status(400).send({ error: 'Invalid openedAt' });
         }
+
+        const paneIndex = await windowInputService.resolvePaneIndex(windowId, paneId);
+        if (paneIndex === 'window_not_found') return reply.status(404).send({ error: 'Window not found' });
+        if (paneIndex === 'pane_not_found') return reply.status(404).send({ error: 'Pane not found' });
+
+        const claimed = interactionMonitor.consumePendingAnswer(windowId, {
+          openedAt,
+          optionNumber: Number(key),
+          paneIndex,
+        });
+        if (!claimed) return reply.status(409).send({ error: 'No pending question for this request' });
         resolvedKey = key;
       }
 

@@ -252,4 +252,27 @@ describe('WindowInputService', () => {
       expect(calls.cancelPaneMode).toEqual([]);
     });
   });
+  describe('resolvePaneIndex', () => {
+    it('paneId に対応する tmux ペイン index を返す', async () => {
+      const { windowRepo, tmuxClient, serverRepo } = buildDeps({
+        listAllPanes: async () => [buildPane({ paneId: '%1', paneIndex: 0 }), buildPane({ paneId: '%2', paneIndex: 3 })],
+      });
+      const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
+      expect(await service.resolvePaneIndex(42, '%2')).toBe(3);
+    });
+
+    it('ウィンドウが無ければ window_not_found', async () => {
+      const { windowRepo, tmuxClient, serverRepo } = buildDeps({ findById: () => undefined });
+      const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
+      expect(await service.resolvePaneIndex(42, '%1')).toBe('window_not_found');
+    });
+
+    it('別ウィンドウのペインは pane_not_found（帰属していない paneId を index へ解決しない）', async () => {
+      const { windowRepo, tmuxClient, serverRepo } = buildDeps({
+        listAllPanes: async () => [buildPane({ paneId: '%9', sessionName: 'other', windowIndex: 7 })],
+      });
+      const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
+      expect(await service.resolvePaneIndex(42, '%9')).toBe('pane_not_found');
+    });
+  });
 });

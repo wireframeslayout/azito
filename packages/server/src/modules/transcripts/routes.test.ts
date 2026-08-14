@@ -65,6 +65,7 @@ function buildApp(
   const windowInputService = {
     sendInput: async () => 'ok' as const,
     sendSignal: async () => 'ok' as const,
+    resolvePaneIndex: async () => 0,
     ...windowOverrides.windowInputService,
   } as unknown as WindowInputService;
 
@@ -72,7 +73,7 @@ function buildApp(
     isPending: () => false,
     getOpenedAt: () => undefined,
     getPendingContent: () => undefined,
-    consumePendingQuestion: () => false,
+    consumePendingAnswer: () => false,
     clear: () => {},
     ...windowOverrides.interactionMonitor,
   } as unknown as InteractionMonitor;
@@ -1041,48 +1042,97 @@ describe('POST /api/transcripts/window-signal', () => {
     await app.close();
   });
 
+  const OPENED_AT = 1_700_000_000_000;
+
   it.each([['0'], ['10'], ['Enter'], [1], [undefined]])('rejects action:"answer" with key %p with 400, without consuming the pending question', async (key) => {
-    const consumePendingQuestion = vi.fn(() => true);
+    const consumePendingAnswer = vi.fn(() => true);
     const sendSignal = vi.fn(async () => 'ok' as const);
-    const app = buildApp([buildClaudeSource()], {}, { windowInputService: { sendSignal }, interactionMonitor: { consumePendingQuestion } });
+    const app = buildApp([buildClaudeSource()], {}, { windowInputService: { sendSignal }, interactionMonitor: { consumePendingAnswer } });
     const res = await app.inject({
       method: 'POST',
       url: '/api/transcripts/window-signal',
-      payload: { windowId: 42, paneId: PANE_ID_WINDOW, action: 'answer', key },
+      payload: { windowId: 42, paneId: PANE_ID_WINDOW, action: 'answer', key, openedAt: OPENED_AT },
     });
     expect(res.statusCode).toBe(400);
-    expect(consumePendingQuestion).not.toHaveBeenCalled();
+    expect(consumePendingAnswer).not.toHaveBeenCalled();
     expect(sendSignal).not.toHaveBeenCalled();
     await app.close();
   });
 
-  it('sends the digit as a key signal and consumes the pending question on action:"answer"', async () => {
-    const consumePendingQuestion = vi.fn(() => true);
+  it.each([['missing', undefined], ['non-numeric', 'now'], ['non-integer', 1.5], ['non-positive', 0]])(
+    'rejects action:"answer" with a %s openedAt with 400, without consuming the pending question',
+    async (_label, openedAt) => {
+      const consumePendingAnswer = vi.fn(() => true);
+      const sendSignal = vi.fn(async () => 'ok' as const);
+      const app = buildApp([buildClaudeSource()], {}, { windowInputService: { sendSignal }, interactionMonitor: { consumePendingAnswer } });
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/transcripts/window-signal',
+        payload: { windowId: 42, paneId: PANE_ID_WINDOW, action: 'answer', key: '1', openedAt },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(consumePendingAnswer).not.toHaveBeenCalled();
+      expect(sendSignal).not.toHaveBeenCalled();
+      await app.close();
+    },
+  );
+
+  it('claims the pending answer with the generation and the resolved origin pane, then sends the digit', async () => {
+    const consumePendingAnswer = vi.fn(() => true);
     const sendSignal = vi.fn(async () => 'ok' as const);
-    const app = buildApp([buildClaudeSource()], {}, { windowInputService: { sendSignal }, interactionMonitor: { consumePendingQuestion } });
+    const resolvePaneIndex = vi.fn(async () => 2);
+    const app = buildApp([buildClaudeSource()], {}, {
+      windowInputService: { sendSignal, resolvePaneIndex },
+      interactionMonitor: { consumePendingAnswer },
+    });
     const res = await app.inject({
       method: 'POST',
       url: '/api/transcripts/window-signal',
-      payload: { windowId: 42, paneId: PANE_ID_WINDOW, action: 'answer', key: '3' },
+      payload: { windowId: 42, paneId: PANE_ID_WINDOW, action: 'answer', key: '3', openedAt: OPENED_AT },
     });
     expect(res.statusCode).toBe(200);
-    expect(consumePendingQuestion).toHaveBeenCalledWith(42);
+    expect(resolvePaneIndex).toHaveBeenCalledWith(42, PANE_ID_WINDOW);
+    expect(consumePendingAnswer).toHaveBeenCalledWith(42, { openedAt: OPENED_AT, optionNumber: 3, paneIndex: 2 });
     expect(sendSignal).toHaveBeenCalledWith(42, PANE_ID_WINDOW, 'key', '3');
     await app.close();
   });
 
-  it('returns 409 without sending anything when no pending question is left to answer', async () => {
+  it('returns 409 without sending anything when the claim is rejected (stale generation, wrong pane, out-of-range digit)', async () => {
     const sendSignal = vi.fn(async () => 'ok' as const);
-    const app = buildApp([buildClaudeSource()], {}, { windowInputService: { sendSignal }, interactionMonitor: { consumePendingQuestion: () => false } });
+    const app = buildApp([buildClaudeSource()], {}, {
+      windowInputService: { sendSignal },
+      interactionMonitor: { consumePendingAnswer: () => false },
+    });
     const res = await app.inject({
       method: 'POST',
       url: '/api/transcripts/window-signal',
-      payload: { windowId: 42, paneId: PANE_ID_WINDOW, action: 'answer', key: '1' },
+      payload: { windowId: 42, paneId: PANE_ID_WINDOW, action: 'answer', key: '1', openedAt: OPENED_AT },
     });
     expect(res.statusCode).toBe(409);
     expect(sendSignal).not.toHaveBeenCalled();
     await app.close();
   });
+
+  it.each([['window_not_found' as const], ['pane_not_found' as const]])(
+    'returns 404 without claiming when the send target pane cannot be resolved (%s)',
+    async (reason) => {
+      const consumePendingAnswer = vi.fn(() => true);
+      const sendSignal = vi.fn(async () => 'ok' as const);
+      const app = buildApp([buildClaudeSource()], {}, {
+        windowInputService: { sendSignal, resolvePaneIndex: async () => reason },
+        interactionMonitor: { consumePendingAnswer },
+      });
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/transcripts/window-signal',
+        payload: { windowId: 42, paneId: PANE_ID_WINDOW, action: 'answer', key: '1', openedAt: OPENED_AT },
+      });
+      expect(res.statusCode).toBe(404);
+      expect(consumePendingAnswer).not.toHaveBeenCalled();
+      expect(sendSignal).not.toHaveBeenCalled();
+      await app.close();
+    },
+  );
 
   it('returns 404 when the pane no longer exists', async () => {
     const app = buildApp([buildClaudeSource()], {}, { windowInputService: { sendSignal: async () => 'pane_not_found' } });

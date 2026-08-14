@@ -148,16 +148,25 @@ if [[ -n "$CONTENT_JSON" ]]; then
   fi
 fi
 
-# Fire-and-forget in the background so this never blocks Claude's turn. The Authorization
-# header is fed via `--config -` (stdin) so the token never appears in the process argv
-# (readable by any local user through ps).
-( curl -sf --config - -X POST "${AZITO_URL}/api/webhooks/agent-interaction" \
+# Fire-and-forget in the background so this never blocks Claude's turn.
+#
+# Neither the token nor the question text may appear in curl's argv (`ps` exposes it to every
+# local user), and the payload here is not a fixed shape like the sibling hooks' — it carries
+# whatever the agent asked about, which can be as sensitive as the conversation itself. Both
+# therefore reach curl out of band, and since only one of them can use stdin:
+#   - payload → stdin, via `--data-binary @-` (a pipe, so no size limit and no shell quoting)
+#   - token   → `--config <(...)`, i.e. a process substitution curl reads as a file. The
+#               substitution runs bash's *builtin* printf in a subshell, so the token is never
+#               a separate process's argument either, and no file is left behind on disk
+#               (contrast a temp file, which would need mode 600 and cleanup on every exit path).
+# This keeps the same "token never in argv" guarantee as azito-activity.sh's `--config -`.
+( printf '%s' "$PAYLOAD" | curl -sf \
+    --config <(printf 'header = "Authorization: Bearer %s"\n' "$AZITO_WEBHOOK_TOKEN") \
+    -X POST "${AZITO_URL}/api/webhooks/agent-interaction" \
     -H "Content-Type: application/json" \
-    -d "$PAYLOAD" \
+    --data-binary @- \
     --max-time 3 \
-    >/dev/null 2>&1 <<CURLCFG || true
-header = "Authorization: Bearer ${AZITO_WEBHOOK_TOKEN}"
-CURLCFG
+    >/dev/null 2>&1 || true
 ) &
 
 exit 0

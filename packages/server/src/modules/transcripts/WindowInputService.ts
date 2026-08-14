@@ -10,6 +10,8 @@ import { splitWindowTarget } from './WindowSessionResolver';
 
 export type WindowInputResult = 'ok' | 'window_not_found' | 'pane_not_found';
 export type WindowSignalResult = 'ok' | 'window_not_found' | 'pane_not_found';
+/** `resolvePaneIndex` の結果。解決できた場合はそのペインの tmux ペイン index。 */
+export type PaneIndexResult = number | 'window_not_found' | 'pane_not_found';
 
 /**
  * AskUserQuestion ピッカーの選択肢番号キー（Issue #338 チャット内回答）。ピッカーは数字キー1発で
@@ -70,6 +72,25 @@ export class WindowInputService {
   }
 
   /**
+   * paneId が指すペインの tmux ペイン index を返す（Issue #338 チャット内回答）。ウィンドウに
+   * 属さない paneId は 'pane_not_found'。回答送出では「クライアントが名指ししたペイン」と
+   * 「hook シグナルが発火したペイン」の同一性を確かめる必要があり、両者は表現が違う
+   * （%ID と index）ため、突合できる形へ揃えるのがこのメソッドの役割。判定そのもの
+   * （一致しなければ回答を成立させない）は InteractionMonitor.consumePendingAnswer 側で、
+   * 消費と同じ1ステップとして行う。
+   */
+  async resolvePaneIndex(windowId: number, paneId: string): Promise<PaneIndexResult> {
+    const window = this.windowRepo.findById(windowId);
+    if (!window) return 'window_not_found';
+
+    const server = this.serverRepo.findByName(window.serverName);
+    if (!server) return 'window_not_found';
+
+    const pane = (await this.listWindowPanes(server, window)).find((p) => p.paneId === paneId);
+    return pane ? pane.paneIndex : 'pane_not_found';
+  }
+
+  /**
    * 送信直前のペイン準備ステップ（Issue #69 T12）。将来 tmux 以外のマルチプレクサに差し替える計画
    * があるため、意図（「入力できる状態にする」）をこのメソッド名で表し、tmux 固有の copy-mode
    * 判定/解除ロジックは TmuxClient 側に隔離する — IMultiplexer のような抽象は現時点では過剰
@@ -91,10 +112,15 @@ export class WindowInputService {
    * windowSpecMatches によるウィンドウ特定）で解決する。
    */
   private async paneBelongsToWindow(server: ServerConfig, window: Window, paneId: string): Promise<boolean> {
+    const windowPanes = await this.listWindowPanes(server, window);
+    return windowPanes.some((p) => p.paneId === paneId);
+  }
+
+  /** ウィンドウ（window.tmuxTarget）に属する pane 集合。WindowSessionResolver.getWindowPanes と同じ解決ロジック。 */
+  private async listWindowPanes(server: ServerConfig, window: Window) {
     const { sessionName, windowSpec } = splitWindowTarget(window.tmuxTarget);
     const allPanes = await this.tmuxClient.listAllPanes(server);
-    const windowPanes = allPanes.filter((p) => p.sessionName === sessionName && windowSpecMatches(windowSpec, p.windowIndex, p.windowName));
-    return windowPanes.some((p) => p.paneId === paneId);
+    return allPanes.filter((p) => p.sessionName === sessionName && windowSpecMatches(windowSpec, p.windowIndex, p.windowName));
   }
 
   /**
