@@ -15,7 +15,7 @@ import type { PersistedTab } from '../../hooks/useTabPersistence';
 import type { Project, Session, Window, Task } from '../../pages/workspace/types';
 import { useToast } from '../../hooks/useToast';
 import type { ContextMenuItem } from '../ContextMenu';
-import { resolveWindowRowTitle } from './objects/windowRowTitle';
+import { resolveWindowRowTitle, buildWindowSearchText } from './objects/windowRowTitle';
 import ObjectSection from './objects/ObjectSection';
 import BrowserSection from './objects/BrowserSection';
 import { RUNNING_STATUSES } from '../task/StatusDropdown';
@@ -180,14 +180,22 @@ export default function ObjectsSidebar({
   const [searchQuery, setSearchQuery] = useState('');
   const normalizedQuery = searchQuery.trim().toLowerCase();
 
+  // 検索対象には主表示に使うペインタイトルも含める（既存の sessionData から解決するので追加取得は無い）
   const windowSearchText = useCallback((w: Window): string => {
     const task = w.taskId != null ? taskById.get(w.taskId) : undefined;
-    return [
-      w.label, w.tmuxTarget, w.serverName,
-      w.taskId != null ? `#${w.taskId}` : undefined,
-      task?.title, task?.branch, task?.worktreeBranch,
-    ].filter(Boolean).join(' ').toLowerCase();
-  }, [taskById]);
+    const extra = resolveWindowContextExtra(w, sessionData);
+    return buildWindowSearchText({
+      paneTitle: extra.paneTitle,
+      paneCommand: extra.paneCommand,
+      label: w.label,
+      tmuxTarget: w.tmuxTarget,
+      serverName: w.serverName,
+      taskId: w.taskId ?? undefined,
+      taskTitle: task?.title,
+      branch: task?.branch,
+      worktreeBranch: task?.worktreeBranch,
+    });
+  }, [taskById, sessionData]);
 
   const browserSearchText = useCallback((b: BrowserObject): string =>
     [b.serverName, b.groupId, b.primaryUrl].filter(Boolean).join(' ').toLowerCase(),
