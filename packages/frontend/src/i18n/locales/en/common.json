@@ -196,7 +196,11 @@
     "criticalMemory": "Critical (Memory {{percent}}%)",
     "warningMemory": "Warning (Memory {{percent}}%)",
     "fetchingResources": "Fetching resource information…",
-    "deleteFailed": "Delete failed: {{error}}"
+    "deleteFailed": "Delete failed: {{error}}",
+    "activityDiagnostics": "Activity",
+    "activityEventDriven": "Event-driven detection active",
+    "activityFallback": "Fallback detection only",
+    "activityNone": "No activity"
   },
   "globalPages": {
     "backToWorkspace": "Back to workspace",

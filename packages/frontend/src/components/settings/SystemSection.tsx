@@ -81,25 +81,22 @@ export default function SystemSection() {
     if (!res.started) setStartError(res.error ?? t('system.couldNotStart'));
   };
 
-  // 更新情報が取れない場合でも稼働検知診断は独立して表示する（診断したい状況ほど、他の
-  // API が落ちている可能性が高い）。
+  // 稼働検知診断の表示資格はサーバーが判定する（ソースコード版、またはインストール版で
+  // 開発中バージョンチャンネル）。判定結果はこの更新情報応答に載るため、応答が取れていない
+  // 間は節ごと出さない（一般利用者の画面に診断を出さない側に倒す）。
+  const showDiagnostics = status?.diagnosticsEnabled === true;
+
   if (loading && !status) {
     return (
-      <div>
-        <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-dim)', fontSize: 'var(--font-md)' }}>Loading...</div>
-        <ActivityDiagnosticsPanel />
-      </div>
+      <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-dim)', fontSize: 'var(--font-md)' }}>Loading...</div>
     );
   }
 
   if (!status) {
     return (
-      <div>
-        <p style={{ fontSize: 'var(--font-md)', color: 'var(--text-dim)', lineHeight: 1.5 }}>
-          {t('system.fetchFailed')}
-        </p>
-        <ActivityDiagnosticsPanel />
-      </div>
+      <p style={{ fontSize: 'var(--font-md)', color: 'var(--text-dim)', lineHeight: 1.5 }}>
+        {t('system.fetchFailed')}
+      </p>
     );
   }
 
@@ -255,7 +252,7 @@ export default function SystemSection() {
         </div>
       </div>
 
-      <ActivityDiagnosticsPanel />
+      {showDiagnostics && <ActivityDiagnosticsPanel />}
     </div>
   );
 }

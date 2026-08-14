@@ -219,6 +219,11 @@
       "offline": "Process gone",
       "unknown": "Unknown"
     },
-    "fetchFailedStale": "Could not refresh diagnostics. Showing the previous snapshot."
+    "fetchFailedStale": "Could not refresh diagnostics. Showing the previous snapshot.",
+    "tier01Summary": "Decided by Tier 0/1: {{count}} / {{total}}",
+    "openInSettings": "See all in Settings →",
+    "emptyActive": "No active windows.",
+    "offlineHidden": "Offline windows ({{count}}) are hidden — see them all in Settings → System",
+    "supervisorConnected": "connected"
   }
 }

@@ -46,6 +46,25 @@ export interface ActivityDiagnosticRow {
   lastTransition?: { running: boolean; reason?: ActivityStopReason; at: number };
 }
 
+/** イベント駆動（supervisor / hook）で判定されている Tier。フォールバック Tier と対になる。 */
+export function isEventDrivenTier(decidedBy: ActivityDecidedBy): boolean {
+  return decidedBy === 'tier0_supervisor' || decidedBy === 'tier1_hook';
+}
+
+/** ステータスバー「稼働検知」アイテムのドット状態。 */
+export type ActivityDotState = 'active' | 'inactive' | 'off';
+
+/**
+ * 稼働検知ドットの状態。稼働（オフライン以外）が1件も無ければ消灯、イベント駆動（supervisor /
+ * hook）で判定している行が1件以上あれば accent、フォールバック Tier だけなら dim。
+ * 行がまだ取れていない間（null）は消灯扱いにする — 未取得を「稼働あり」と見せない。
+ */
+export function activityDotState(rows: ActivityDiagnosticRow[] | null): ActivityDotState {
+  const active = rows?.filter((r) => r.state !== 'offline') ?? [];
+  if (active.length === 0) return 'off';
+  return active.some((r) => isEventDrivenTier(r.decidedBy)) ? 'active' : 'inactive';
+}
+
 /**
  * HTTP ステータスとボディを診断行の配列として受け入れる。api() は 401 以外の非2xx を reject
  * しないため、500 のエラーオブジェクトがそのまま行配列として流れて描画時に落ちる。ここで

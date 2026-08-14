@@ -49,4 +49,14 @@ test('ログイン → プロジェクト作成 → ウィンドウ登録 → �
     if (await header.getAttribute('aria-expanded') === 'false') await header.click();
   }
   await expect(page.getByText('e2e-smoke-window').first()).toBeVisible({ timeout: 20_000 });
+
+  // ── ステータスバーの稼働検知パネル ──
+  // 表示資格（diagnosticsEnabled）はサーバー判定で、E2E ハブはソースコード版なので有効。
+  // supervisor 付きで起動して Tier 0 の稼働行を作り、パネルにその行が出ることまで見る。
+  const supervised = await harness.startFakeAgent('smoke-diag', 'agent', { supervised: true });
+  supervised.setState('working');
+  await harness.registerAgentWindow(project!.id, supervised.target, { label: 'e2e-diag-window' });
+
+  await page.getByRole('button', { name: '稼働検知' }).click();
+  await expect(page.getByRole('button', { name: supervised.target })).toBeVisible({ timeout: 20_000 });
 });

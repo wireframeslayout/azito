@@ -219,6 +219,11 @@
       "offline": "プロセス消失",
       "unknown": "不明"
     },
-    "fetchFailedStale": "診断情報を更新できませんでした。直前のスナップショットを表示しています。"
+    "fetchFailedStale": "診断情報を更新できませんでした。直前のスナップショットを表示しています。",
+    "tier01Summary": "Tier 0/1 判定: {{count}} / {{total}} 件",
+    "openInSettings": "Settings で全件表示 →",
+    "emptyActive": "稼働中のウィンドウはありません。",
+    "offlineHidden": "オフラインのウィンドウ（{{count}}件）は表示していません — Settings → System の全件表示へ",
+    "supervisorConnected": "接続中"
   }
 }

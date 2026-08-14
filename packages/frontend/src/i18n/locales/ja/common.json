@@ -196,7 +196,11 @@
     "criticalMemory": "危険（メモリ {{percent}}%）",
     "warningMemory": "注意（メモリ {{percent}}%）",
     "fetchingResources": "リソース情報を取得中…",
-    "deleteFailed": "削除失敗: {{error}}"
+    "deleteFailed": "削除失敗: {{error}}",
+    "activityDiagnostics": "稼働検知",
+    "activityEventDriven": "イベント駆動で検知中",
+    "activityFallback": "フォールバック判定のみ",
+    "activityNone": "稼働なし"
   },
   "globalPages": {
     "backToWorkspace": "ワークスペースに戻る",

@@ -26,6 +26,8 @@ export interface UpdateStatusResponse {
   runningTasks: number;
   disabledReason: string | null;
   channel: 'stable' | 'rc';
+  /** 稼働検知診断の導線（Settings の診断節・ステータスバーのアイテム）を出してよいか。 */
+  diagnosticsEnabled: boolean;
 }
 
 export interface VersionEntry {

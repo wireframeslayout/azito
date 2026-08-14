@@ -10,13 +10,16 @@ export type {
   ActivityStopReason,
 } from '../lib/activityDiagnostics';
 
-const POLL_INTERVAL_MS = 3000;
+export const DIAGNOSTICS_POLL_INTERVAL_MS = 3000;
 
 /**
  * 稼働検知診断（GET /api/debug/activity）のライブ取得。読み取り専用の診断エンドポイントなので
  * 単純なポーリングで足りる。タブが非表示の間はポーリングを止め、復帰時に即時再取得する。
+ *
+ * `intervalMs` は「表として読んでいる間は既定の3秒、ステータスバーのドット表示だけに使う間は
+ * もっと粗く」を呼び出し元が選ぶための口（既定値は表示中の3秒）。
  */
-export function useActivityDiagnostics(enabled: boolean) {
+export function useActivityDiagnostics(enabled: boolean, intervalMs: number = DIAGNOSTICS_POLL_INTERVAL_MS) {
   const [rows, setRows] = useState<ActivityDiagnosticRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const inflight = useRef(false);
@@ -45,7 +48,7 @@ export function useActivityDiagnostics(enabled: boolean) {
     const start = () => {
       if (timer !== null) return;
       void refresh();
-      timer = setInterval(() => { void refresh(); }, POLL_INTERVAL_MS);
+      timer = setInterval(() => { void refresh(); }, intervalMs);
     };
     const stop = () => {
       if (timer === null) return;
@@ -60,7 +63,7 @@ export function useActivityDiagnostics(enabled: boolean) {
       stop();
       document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [enabled, refresh]);
+  }, [enabled, intervalMs, refresh]);
 
   return { rows, error, refresh };
 }
