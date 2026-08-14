@@ -225,6 +225,10 @@ packages/
   `AZITO_WEBHOOK_TOKEN`. `AgentActivityMonitor.recordHookSignal()` resolves the signal against the `windows` table and, when matched,
   flips that key's state immediately (Tier 1), bypassing the sliding-window heuristic (Tier 2) until either a crash-failsafe
   (foreground pane reverts to a bare shell without a Stop signal) or the window disappears clears the hook state
+- `POST /api/webhooks/agent-interaction` receives pending-answer signals (`azito-interaction.sh` = Notification hook, no question
+  text; `azito-question.sh` = PermissionRequest hook, with the AskUserQuestion `tool_input`), which drive `InteractionMonitor`
+  and the chat question card. Full spec of the activity tiers, hook profile resolution (`AZITO_PREFIX`) and the question
+  lifecycle: `docs/ja/activity-detection.md` (canonical) / `docs/en/activity-detection.md`
 
 ### Worker
 - Runs in tmux pane via `send-keys`
@@ -368,7 +372,9 @@ packages/
   `state: 'blocked'` として同じ結論に達する（idle → blocked の一方向のみ。working への昇格はしない）。
   画面確認は blocked / not_blocked / unknown の3値で、unknown（capture-pane 失敗・tmux スナップショット取得
   失敗）は「blocked でない」ではなく直前 tick の状態を最大30秒保持する。コスト面では、再描画のない
-  （`window_activity` が進んでいない）ペインは再キャプチャせず、キャプチャはサーバー単位で最大4並列
+  （`window_activity` が進んでいない）ペインは再キャプチャせず、キャプチャはサーバー単位で最大4並列。
+  Tier 判定・タイミング定数・reason・サーバータイプ別対応範囲の全仕様は `docs/ja/activity-detection.md`
+  （正本）/ `docs/en/activity-detection.md` を参照
 - Sidekick tags (Issue #263 Refine A): `tags: string[]` replaces the old single-value `phase:` frontmatter field. The five
   phase names are special-cased as "phase tags" (a Unit's `phaseConfig` can only assign a phase to a Sidekick carrying
   that tag; `isDefault` requires at least one phase tag); any other tag is free-form. `/azt-sidekick` accepts multiple
