@@ -524,6 +524,39 @@ describe('CodexTranscriptSource', () => {
       const result = await source.getSessionTailState(SID_A);
       expect(result.lastEntryTimestampMs).toBeNull();
     });
+
+    it('escalates the scan window past a >16KB run of trailing non-entry records', async () => {
+      // token_count 等の event_msg は TranscriptEntry へ変換されない（末尾を埋めても分類材料にならない）。
+      const tokenCount = (bytes: number) => ({
+        timestamp: '2026-05-31T03:10:00.000Z',
+        type: 'event_msg',
+        payload: { type: 'token_count', info: { note: 'x'.repeat(bytes) } },
+      });
+      writeSession(dir, SID_A, [
+        SESSION_META(SID_A, '/home/user/proj-a'),
+        USER_MESSAGE('do it'),
+        tokenCount(8 * 1024),
+        tokenCount(8 * 1024),
+        tokenCount(8 * 1024),
+      ]);
+      const result = await source.getSessionTailState(SID_A);
+      expect(result.state).toBe('in_progress');
+      expect(result.lastEntryTimestampMs).toBe(Date.parse(USER_MESSAGE('do it').timestamp));
+    });
+
+    it('returns unknown when no meaningful record exists within the 256KB scan cap', async () => {
+      const tokenCount = (bytes: number) => ({
+        timestamp: '2026-05-31T03:10:00.000Z',
+        type: 'event_msg',
+        payload: { type: 'token_count', info: { note: 'x'.repeat(bytes) } },
+      });
+      const lines: unknown[] = [SESSION_META(SID_A, '/home/user/proj-a'), USER_MESSAGE('do it')];
+      for (let i = 0; i < 20; i++) lines.push(tokenCount(16 * 1024));
+      writeSession(dir, SID_A, lines);
+      const result = await source.getSessionTailState(SID_A);
+      expect(result.state).toBe('unknown');
+      expect(result.lastEntryTimestampMs).toBeNull();
+    });
   });
 
   describe('readSessionBefore', () => {

@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { isRecord, truncateText, classifyTailEntry, parseEntryTimestampMs, TOOL_USE_INPUT_LIMIT, TOOL_RESULT_TEXT_LIMIT, TAIL_STATE_SCAN_BYTES } from './entryHelpers';
+import { isRecord, truncateText, scanSessionTailState, TOOL_USE_INPUT_LIMIT, TOOL_RESULT_TEXT_LIMIT } from './entryHelpers';
 import { readChunk, readInitialWindow, readIncrementalWindow, readBeforeWindow } from './jsonlWindowReader';
 import type {
   ReadSessionBeforeResult,
@@ -903,34 +903,29 @@ export class ClaudeTranscriptSource implements TranscriptSource {
     }
   }
 
-  /** 末尾 TAIL_STATE_SCAN_BYTES 分だけを読み、末尾から遡って最初にパース可能な行を分類する。 */
+  /**
+   * 末尾からエスカレーション後方スキャン（16KB → 64KB → 256KB）で最初の意味あるエントリを分類する。
+   * 実セッションの末尾は attachment 等の大型 housekeeping レコードで埋まることが常態のため、
+   * 単発の 16KB 窓では 'unknown' に落ちる（詳細は scanSessionTailState のコメント参照）。
+   */
   async getSessionTailState(sessionId: string): Promise<SessionTailState> {
     const file = this.findSessionFile(sessionId);
     if (!file) return { state: 'unknown', lastEntryTimestampMs: null };
 
-    let content: string;
     try {
       const fd = fs.openSync(file, 'r');
       try {
         const size = fs.fstatSync(fd).size;
-        const start = Math.max(size - TAIL_STATE_SCAN_BYTES, 0);
-        content = readChunk(fd, size, start, size - start).toString('utf-8');
+        // io を渡さない: AskUserQuestion の tool_use を別途後方スキャンしなくても、未マッチのまま
+        // 'tool' 扱いにフォールバックした場合の分類は 'interaction' と同じ in_progress であり、
+        // 稼働判定への影響はない（余分な読みを避ける）。allowCacheWrite も既定のまま。
+        const parseLine = buildParseLine(this.getAskUserQuestionCache(sessionId));
+        return scanSessionTailState(fd, size, parseLine);
       } finally {
         fs.closeSync(fd);
       }
     } catch {
       return { state: 'unknown', lastEntryTimestampMs: null };
     }
-
-    // io を渡さない: fd は上の try ブロックで既に close 済みのため、後方スキャン（Minor 2）は行えない。
-    // 末尾窓のみを見るこの経路では未マッチのまま 'tool' 扱いにフォールバックしても、classifyTailEntry は
-    // 'tool' と 'interaction' を同じ in_progress に分類するため稼働判定への影響はない。
-    const parseLine = buildParseLine(this.getAskUserQuestionCache(sessionId));
-    const lines = content.split('\n');
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const entry = parseLine(lines[i], 0);
-      if (entry) return { state: classifyTailEntry(entry), lastEntryTimestampMs: parseEntryTimestampMs(entry) };
-    }
-    return { state: 'unknown', lastEntryTimestampMs: null };
   }
 }

@@ -1138,6 +1138,40 @@ describe('ClaudeTranscriptSource', () => {
       expect((await service.getSessionTailState(SID_A)).state).toBe('in_progress');
     });
 
+    it('escalates the scan window past a >16KB run of trailing attachment records (real sessions always carry them)', async () => {
+      // 実測構造の再現: 小さな user 発話の後ろに attachment レコード群（計 16KB 超）と ai-title が続く。
+      // attachment は message フィールドを持たないため normalizeEntry で null になる（実データ準拠）。
+      const attachment = (bytes: number) => ({
+        parentUuid: 'p1',
+        isSidechain: false,
+        attachment: { type: 'skill_listing', content: 'x'.repeat(bytes) },
+      });
+      writeSession(dir, 'proj-a', SID_A, [
+        { type: 'user', uuid: 'u1', timestamp: '2026-08-13T10:00:00.000Z', message: { content: 'do the thing' } },
+        attachment(8 * 1024),
+        attachment(8 * 1024),
+        attachment(8 * 1024),
+        { type: 'ai-title', timestamp: '2026-08-13T10:00:01.000Z', title: 'resumed session' },
+      ]);
+      const result = await service.getSessionTailState(SID_A);
+      expect(result.state).toBe('in_progress');
+      expect(result.lastEntryTimestampMs).toBe(Date.parse('2026-08-13T10:00:00.000Z'));
+    });
+
+    it('returns unknown when no meaningful record exists within the 256KB scan cap', async () => {
+      const attachment = (bytes: number) => ({
+        parentUuid: 'p1',
+        isSidechain: false,
+        attachment: { type: 'skill_listing', content: 'x'.repeat(bytes) },
+      });
+      const lines: unknown[] = [{ type: 'user', uuid: 'u1', timestamp: '2026-08-13T10:00:00.000Z', message: { content: 'hi' } }];
+      for (let i = 0; i < 20; i++) lines.push(attachment(16 * 1024));
+      writeSession(dir, 'proj-a', SID_A, lines);
+      const result = await service.getSessionTailState(SID_A);
+      expect(result.state).toBe('unknown');
+      expect(result.lastEntryTimestampMs).toBeNull();
+    });
+
     it('skips malformed/unparseable trailing lines and classifies from the last valid record', async () => {
       const file = writeSession(dir, 'proj-a', SID_A, [
         { type: 'assistant', uuid: 'a1', message: { content: [{ type: 'text', text: 'done' }] } },

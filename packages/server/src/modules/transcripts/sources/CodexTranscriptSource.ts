@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { isRecord, truncateText, classifyTailEntry, parseEntryTimestampMs, TOOL_USE_INPUT_LIMIT, TOOL_RESULT_TEXT_LIMIT, TAIL_STATE_SCAN_BYTES } from './entryHelpers';
+import { isRecord, truncateText, scanSessionTailState, TOOL_USE_INPUT_LIMIT, TOOL_RESULT_TEXT_LIMIT } from './entryHelpers';
 import { readChunk, readInitialWindow, readIncrementalWindow, readBeforeWindow } from './jsonlWindowReader';
 import type {
   ReadSessionBeforeResult,
@@ -580,35 +580,27 @@ export class CodexTranscriptSource implements TranscriptSource {
   }
 
   /**
-   * 末尾 TAIL_STATE_SCAN_BYTES 分だけを読み、末尾から遡って最初にパース可能な行を分類する。
+   * 末尾からエスカレーション後方スキャン（16KB → 64KB → 256KB）で最初の意味あるエントリを分類する。
    * buildParseLine と同じ変換（normalizeResponseItem/normalizeEventMsg）を使うため、'reasoning' は
    * Claude の thinking ブロックと同じ type:'assistant' 形に正規化され、classifyTailEntry が
-   * エージェント非依存に扱える。
+   * エージェント非依存に扱える。単発窓では末尾の大型レコードで意味あるエントリに届かないことが
+   * あるためウィンドウを段階的に広げる（詳細は scanSessionTailState のコメント参照）。
    */
   async getSessionTailState(sessionId: string): Promise<SessionTailState> {
     const file = this.findSessionFile(sessionId);
     if (!file) return { state: 'unknown', lastEntryTimestampMs: null };
 
-    let content: string;
     try {
       const fd = fs.openSync(file, 'r');
       try {
         const size = fs.fstatSync(fd).size;
-        const start = Math.max(size - TAIL_STATE_SCAN_BYTES, 0);
-        content = readChunk(fd, size, start, size - start).toString('utf-8');
+        const { parseLine } = buildParseLine('tail');
+        return scanSessionTailState(fd, size, parseLine);
       } finally {
         fs.closeSync(fd);
       }
     } catch {
       return { state: 'unknown', lastEntryTimestampMs: null };
     }
-
-    const { parseLine } = buildParseLine('tail');
-    const lines = content.split('\n');
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const entry = parseLine(lines[i]);
-      if (entry) return { state: classifyTailEntry(entry), lastEntryTimestampMs: parseEntryTimestampMs(entry) };
-    }
-    return { state: 'unknown', lastEntryTimestampMs: null };
   }
 }

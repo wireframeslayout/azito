@@ -1,12 +1,51 @@
 // Claude / Codex 両ソースで共有する正規化ヘルパー（トリム制限・型ガード）。
 
-import type { TranscriptEntry } from './TranscriptSource';
+import type { SessionTailState, TranscriptEntry } from './TranscriptSource';
+import { readBeforeWindow } from './jsonlWindowReader';
 
 export const TOOL_USE_INPUT_LIMIT = 2000;
 export const TOOL_RESULT_TEXT_LIMIT = 4000;
 
-/** getSessionTailState の末尾窓読み取りバイト数（両ソース共通）。読み取り窓を小さく保つための上限。 */
-export const TAIL_STATE_SCAN_BYTES = 16 * 1024;
+/**
+ * getSessionTailState の末尾走査ウィンドウ段階（両ソース共通）。
+ *
+ * 実セッションの末尾は attachment（1件で数KB〜）や ai-title/file-history-snapshot といった
+ * housekeeping レコードで埋まることが常態で、16KB の単発窓では意味のあるエントリに届かず
+ * 'unknown' を返してしまう（実測: 25KB のセッションで user 発話 627B の後ろに attachment 5件
+ * 約24KB が続き、回答待ちバナーの in_progress ゲートも Tier 4 の working 判定も沈黙した）。
+ * そのため 16KB で決着しなければ 64KB → 256KB と窓を広げて再走査する。
+ *
+ * 走査コストの注記: エスカレーションは「16KB で決まらなかった場合のみ」発生する。稼働ポーリングは
+ * WindowActivityStatusService の60秒キャッシュ配下、チャットの回答待ちゲートは pending シグナルが
+ * 立っているときだけ読む構造なので、この追加読みの頻度は許容範囲にとどまる。
+ */
+export const TAIL_STATE_SCAN_WINDOWS = [16 * 1024, 64 * 1024, 256 * 1024] as const;
+
+/** 後方互換の別名: 最初の（最小の）走査窓サイズ。 */
+export const TAIL_STATE_SCAN_BYTES = TAIL_STATE_SCAN_WINDOWS[0];
+
+/**
+ * ファイル末尾からエスカレーション後方スキャンで最初の意味あるエントリを探し、稼働状態に分類する。
+ * TAIL_STATE_SCAN_WINDOWS の各段階で readBeforeWindow（AskUserQuestion の有界後方スキャンと同じ
+ * 読み取り器）により末尾ウィンドウをパースし、その中の最後のエントリから遡って分類する。
+ * 最大窓（256KB）まで広げても意味あるエントリが無ければ 'unknown' を返す。
+ */
+export function scanSessionTailState(
+  fd: number,
+  size: number,
+  parseLine: (line: string, lineStart: number) => TranscriptEntry | null,
+): SessionTailState {
+  for (const windowBytes of TAIL_STATE_SCAN_WINDOWS) {
+    // readBeforeWindow は parseLine が null を返した行（housekeeping・壊れた行）を落とすため、
+    // 返却された最後のエントリがそのまま「末尾の意味あるエントリ」になる。
+    const { entries, hasOlder } = readBeforeWindow(fd, size, size, windowBytes, parseLine);
+    const entry = entries[entries.length - 1];
+    if (entry) return { state: classifyTailEntry(entry), lastEntryTimestampMs: parseEntryTimestampMs(entry) };
+    // ウィンドウがファイル先頭に到達していれば、これ以上広げても読むものは無い。
+    if (!hasOlder) break;
+  }
+  return { state: 'unknown', lastEntryTimestampMs: null };
+}
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
