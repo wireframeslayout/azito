@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { PtyProxy, type PtyExitInfo } from './PtyProxy';
+import { buildLoginShellCommand, PtyProxy, type PtyExitInfo } from './PtyProxy';
 
 async function waitFor(cond: () => boolean, timeoutMs = 5_000): Promise<void> {
   const start = Date.now();
@@ -8,6 +8,44 @@ async function waitFor(cond: () => boolean, timeoutMs = 5_000): Promise<void> {
     await new Promise((r) => setTimeout(r, 20));
   }
 }
+
+describe('buildLoginShellCommand', () => {
+  it('re-exports TMUX and TMUX_PANE ahead of the command', () => {
+    const cmd = buildLoginShellCommand('claude --resume', {
+      TMUX: '/tmp/tmux-1000/default,1234,0',
+      TMUX_PANE: '%273',
+    });
+    expect(cmd).toBe(`export TMUX='/tmp/tmux-1000/default,1234,0' TMUX_PANE='%273'; claude --resume`);
+  });
+
+  it('injects nothing when the variables are absent (outside tmux)', () => {
+    expect(buildLoginShellCommand('claude', {})).toBe('claude');
+  });
+
+  it('injects nothing when the variables are empty strings', () => {
+    expect(buildLoginShellCommand('claude', { TMUX: '', TMUX_PANE: '' })).toBe('claude');
+  });
+
+  it('injects only the variables that are present', () => {
+    expect(buildLoginShellCommand('claude', { TMUX_PANE: '%1' })).toBe(`export TMUX_PANE='%1'; claude`);
+  });
+
+  it('escapes single quotes in values', () => {
+    expect(buildLoginShellCommand('claude', { TMUX_PANE: `%1'; rm -rf /; echo '` })).toBe(
+      `export TMUX_PANE='%1'\\''; rm -rf /; echo '\\'''; claude`,
+    );
+  });
+
+  it('produces a string a shell evaluates back to the original value', async () => {
+    const value = `weird'"$( )value`;
+    const cmd = buildLoginShellCommand('printf %s "$TMUX_PANE"', { TMUX_PANE: value });
+    const { execFile } = await import('node:child_process');
+    const stdout = await new Promise<string>((resolve, reject) => {
+      execFile('/bin/bash', ['-c', cmd], (err, out) => (err ? reject(err) : resolve(out)));
+    });
+    expect(stdout).toBe(value);
+  });
+});
 
 describe('PtyProxy (real processes)', () => {
   let stdoutSpy: MockInstance;
@@ -104,6 +142,19 @@ describe('PtyProxy (real processes)', () => {
     proxy.write('\x04');
     await waitFor(() => exited() !== undefined);
     expect(output).toContain('日本語テスト');
+  });
+
+  it('makes TMUX_PANE visible to the child even though -l runs the login profile', async () => {
+    const prev = process.env.TMUX_PANE;
+    process.env.TMUX_PANE = '%4242';
+    try {
+      const { exited } = startProxy('echo "seen=$TMUX_PANE"');
+      await waitFor(() => exited() !== undefined);
+      expect(output).toContain('seen=%4242');
+    } finally {
+      if (prev === undefined) delete process.env.TMUX_PANE;
+      else process.env.TMUX_PANE = prev;
+    }
   });
 
   it('emits data events with byte counts', async () => {
