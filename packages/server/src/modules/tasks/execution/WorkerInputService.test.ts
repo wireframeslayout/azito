@@ -28,6 +28,7 @@ function makeHarness(sendCommandImpl?: () => Promise<void>) {
   };
   const registry = {
     isConnected: vi.fn(() => true),
+    isBoundConnected: vi.fn(() => true),
     sendCommand: vi.fn(sendCommandImpl ?? (async () => {})),
   };
   const appendLog = vi.fn();
@@ -37,6 +38,49 @@ function makeHarness(sendCommandImpl?: () => Promise<void>) {
 
 const server = makeServer();
 const target = 'azito:1.1';
+
+// Issue #28 third-party review, Important finding (fix 2): task input
+// (prompt injection / key sends) must gate on isBoundConnected, not
+// isConnected — an unbound (unverified) connection must never receive it.
+describe('WorkerInputService — bound gate (Issue #28 third-party review, Important)', () => {
+  it('sendPrompt falls back to tmux.sendKeys when the connection is live but unbound, without calling sendCommand', async () => {
+    const { service, tmux, registry, appendLog } = makeHarness();
+    registry.isConnected.mockReturnValue(true);
+    registry.isBoundConnected.mockReturnValue(false);
+
+    await service.sendPrompt(server, target, 'hello worker', { taskId: 1, unitId: 2 });
+
+    expect(registry.sendCommand).not.toHaveBeenCalled();
+    expect(tmux.sendKeys).toHaveBeenCalledWith(server, target, ['hello worker', 'Enter']);
+    expect(appendLog).not.toHaveBeenCalled();
+  });
+
+  it('sendKeys falls back to tmux.sendKeys when the connection is live but unbound, without calling sendCommand', async () => {
+    const { service, tmux, registry } = makeHarness();
+    registry.isConnected.mockReturnValue(true);
+    registry.isBoundConnected.mockReturnValue(false);
+
+    await service.sendKeys(server, target, ['y', 'Enter'], { taskId: 1, unitId: 2 });
+
+    expect(registry.sendCommand).not.toHaveBeenCalled();
+    expect(tmux.sendKeys).toHaveBeenCalledWith(server, target, ['y', 'Enter']);
+  });
+
+  it('sendPrompt routes to registry.sendCommand when bound', async () => {
+    const { service, tmux, registry } = makeHarness();
+    registry.isConnected.mockReturnValue(true);
+    registry.isBoundConnected.mockReturnValue(true);
+
+    await service.sendPrompt(server, target, 'hello worker', { taskId: 1, unitId: 2 });
+
+    expect(registry.sendCommand).toHaveBeenCalledWith('local-server', target, {
+      type: 'inject_prompt',
+      text: 'hello worker',
+      submit: true,
+    });
+    expect(tmux.sendKeys).not.toHaveBeenCalled();
+  });
+});
 
 describe('WorkerInputService.sendPrompt', () => {
   it('routes to registry.sendCommand (inject_prompt) when supervisor is connected', async () => {
@@ -55,7 +99,7 @@ describe('WorkerInputService.sendPrompt', () => {
 
   it('falls back to tmux.sendKeys (with a fallback log) when supervisor is not connected', async () => {
     const { service, tmux, registry, appendLog } = makeHarness();
-    registry.isConnected.mockReturnValue(false);
+    registry.isBoundConnected.mockReturnValue(false);
 
     await service.sendPrompt(server, target, 'hello worker', { taskId: 1, unitId: 2 });
 
@@ -106,7 +150,7 @@ describe('WorkerInputService.sendPrompt', () => {
 
   it('goes straight to tmux.sendKeys when supervisor is not connected', async () => {
     const { service, tmux, registry, appendLog } = makeHarness();
-    registry.isConnected.mockReturnValue(false);
+    registry.isBoundConnected.mockReturnValue(false);
 
     await service.sendPrompt(server, target, 'hello worker', { taskId: 1, unitId: 2 });
 
@@ -117,7 +161,7 @@ describe('WorkerInputService.sendPrompt', () => {
 
   it('omits the fallback log when no ctx is supplied', async () => {
     const { service, appendLog, registry } = makeHarness();
-    registry.isConnected.mockReturnValue(false);
+    registry.isBoundConnected.mockReturnValue(false);
 
     await service.sendPrompt(server, target, 'hello worker');
 
@@ -182,7 +226,7 @@ describe('WorkerInputService.sendPrompt', () => {
 
     it('when supervisor is not connected, goes straight to tmux without checking foreground command', async () => {
       const { service, tmux, registry } = makeHarness();
-      registry.isConnected.mockReturnValue(false);
+      registry.isBoundConnected.mockReturnValue(false);
       tmux.getPaneCurrentCommand.mockResolvedValue('bash');
 
       await service.sendPrompt(server, target, 'hello worker', { taskId: 1, unitId: 2 });
@@ -193,7 +237,7 @@ describe('WorkerInputService.sendPrompt', () => {
 
     it('does not run the guard on sendKeys (y/Enter is harmless in a shell) — autoConfirm keeps its exact previous behavior', async () => {
       const { service, tmux, registry } = makeHarness();
-      registry.isConnected.mockReturnValue(false);
+      registry.isBoundConnected.mockReturnValue(false);
       tmux.getPaneCurrentCommand.mockResolvedValue('bash');
 
       await service.sendKeys(server, target, ['y', 'Enter'], { taskId: 1, unitId: 2 });
@@ -216,7 +260,7 @@ describe('WorkerInputService.sendKeys', () => {
 
   it('falls back to tmux.sendKeys when not connected, matching the pre-existing autoConfirm call shape', async () => {
     const { service, tmux, registry } = makeHarness();
-    registry.isConnected.mockReturnValue(false);
+    registry.isBoundConnected.mockReturnValue(false);
 
     await service.sendKeys(server, target, ['y', 'Enter'], { taskId: 1, unitId: 2 });
 
@@ -247,7 +291,7 @@ describe('WorkerInputService.sendKeys', () => {
 
   it('goes straight to tmux.sendKeys when supervisor is not connected (regardless of server type)', async () => {
     const { service, tmux, registry, appendLog } = makeHarness();
-    registry.isConnected.mockReturnValue(false);
+    registry.isBoundConnected.mockReturnValue(false);
     const agentServer = makeServer({ name: 'agent-server', type: 'agent' });
 
     await service.sendKeys(agentServer, target, ['y', 'Enter'], { taskId: 1, unitId: 2 });

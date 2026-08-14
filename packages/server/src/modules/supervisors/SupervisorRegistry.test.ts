@@ -76,6 +76,21 @@ describe('SupervisorRegistry', () => {
     expect(registry.isConnected('local', 'test:0.1')).toBe(true);
   });
 
+  // Issue #28 third-party review, Important finding (fix 2): compat mode
+  // (no launchRepo / scopedAuthEnabled=false, the default in this describe
+  // block's `beforeEach`) marks every connection bound — isBoundConnected
+  // must degrade to isConnected exactly then.
+  it('isBoundConnected matches isConnected in compat mode (every connection is bound)', () => {
+    const socket = new MockSocket();
+    registry.register(asSocket(socket), registerMessage());
+
+    expect(registry.isBoundConnected('local', 'test:0.1')).toBe(true);
+  });
+
+  it('isBoundConnected is false for a key with no connection at all', () => {
+    expect(registry.isBoundConnected('local', 'nope:0')).toBe(false);
+  });
+
   it('rejects registration on protocol version mismatch and closes with code 4000', () => {
     const socket = new MockSocket();
     registry.register(asSocket(socket), registerMessage({ protocolVersion: 999 }));
@@ -423,6 +438,19 @@ describe('SupervisorRegistry — launch binding (Issue #28 Phase C, design v3 §
     expect(socket.closed).toBeNull();
     expect(registry.snapshot()[0].bound).toBe(false);
     expect(auditRecord).toHaveBeenCalledWith(expect.objectContaining({ event: 'supervisor_launch.unbound' }));
+  });
+
+  // Issue #28 third-party review, Important finding (fix 2): isConnected
+  // stays true for an unbound connection (it IS live, just unverified) —
+  // isBoundConnected is what WorkerInputService must gate task-input
+  // delivery on instead, so it must report false here.
+  it('isBoundConnected is false for a live-but-unbound connection, unlike isConnected', () => {
+    const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
+    const socket = new MockSocket();
+    registry.register(asSocket(socket), registerWith({}));
+
+    expect(registry.isConnected('local', 'test:0.1')).toBe(true);
+    expect(registry.isBoundConnected('local', 'test:0.1')).toBe(false);
   });
 
   it('accepts a bootstrapToken matching an issued launch, marks bound, and returns a sessionToken', () => {
@@ -855,6 +883,49 @@ describe('SupervisorRegistry — launch binding (Issue #28 Phase C, design v3 §
       expect(() => registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })).not.toThrow();
       expect(registry.snapshot()).toHaveLength(0);
       expect(auditRecord).not.toHaveBeenCalledWith(expect.objectContaining({ event: 'supervisor_launch.superseded_downgrade' }));
+    });
+
+    // Issue #28 third-party review, Important finding (2nd round): the
+    // in-memory `bound` flip alone left AgentActivityMonitor's Tier 0 state
+    // for this connection stale — nothing told it authority had been
+    // revoked. `authority_revoked` is the signal buildServer.ts consumes to
+    // clear that state immediately (see SupervisorAuthorityRevokedEvent's
+    // doc comment).
+    it('emits authority_revoked with the key when downgrading a still-connected bound connection', () => {
+      const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
+      const issuedA = registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 })!;
+      const socket = new MockSocket();
+      registry.register(asSocket(socket), registerWith({ launchId: issuedA.launchId, bootstrapToken: issuedA.bootstrapToken }));
+
+      const onAuthorityRevoked = vi.fn();
+      registry.on('authority_revoked', onAuthorityRevoked);
+
+      registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 });
+
+      expect(onAuthorityRevoked).toHaveBeenCalledTimes(1);
+      expect(onAuthorityRevoked).toHaveBeenCalledWith({ serverName: 'local', target: 'test:0.1' });
+    });
+
+    it('does not emit authority_revoked when there is nothing to downgrade (no-op path)', () => {
+      const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
+      const onAuthorityRevoked = vi.fn();
+      registry.on('authority_revoked', onAuthorityRevoked);
+
+      registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 });
+
+      expect(onAuthorityRevoked).not.toHaveBeenCalled();
+    });
+
+    it('does not re-emit authority_revoked for a connection that is already unbound', () => {
+      const registry = new SupervisorRegistry(launchRepo, auditLogService, true);
+      const socket = new MockSocket();
+      registry.register(asSocket(socket), registerWith({})); // launchId-less register under scoped auth starts unbound
+      const onAuthorityRevoked = vi.fn();
+      registry.on('authority_revoked', onAuthorityRevoked);
+
+      registry.issueLaunch({ serverName: 'local', target: 'test:0.1', taskId: 42, unitId: 7 });
+
+      expect(onAuthorityRevoked).not.toHaveBeenCalled();
     });
 
     it('does not re-audit a downgrade for a connection that is already unbound', () => {

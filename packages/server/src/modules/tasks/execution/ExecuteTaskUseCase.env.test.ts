@@ -327,7 +327,7 @@ function buildUseCase(opts: {
     appendEvent: vi.fn(),
   };
   const turnSignalHub = { emitSignal: vi.fn(), subscribe: vi.fn(() => () => {}) };
-  const supervisorRegistry = { isConnected: vi.fn(() => false), sendCommand: vi.fn(async () => {}), clearExitMarker: vi.fn(), issueLaunch: vi.fn(() => undefined) };
+  const supervisorRegistry = { isConnected: vi.fn(() => false), isBoundConnected: vi.fn(() => false), sendCommand: vi.fn(async () => {}), clearExitMarker: vi.fn(), issueLaunch: vi.fn(() => undefined) };
   const projectSecretRepo = { findByProjectWithValues: vi.fn(() => []), findByProject: vi.fn(() => []) };
   // Only `get` matters for resolveExecutionManifest()'s `sidekick` field
   // resolution (Issue #328 sixth-round review); returning a UnitType with no
@@ -1090,7 +1090,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITOç›
     const sidekickSyncService = { sync: vi.fn(async () => {}) };
     const turnRepo = new FakeAgentTurnRepo();
     const turnSignalHub = new TurnSignalHub();
-    const supervisorRegistry = { isConnected: vi.fn(() => false), sendCommand: vi.fn(async () => {}), clearExitMarker: vi.fn(), issueLaunch: vi.fn(() => undefined) };
+    const supervisorRegistry = { isConnected: vi.fn(() => false), isBoundConnected: vi.fn(() => false), sendCommand: vi.fn(async () => {}), clearExitMarker: vi.fn(), issueLaunch: vi.fn(() => undefined) };
     const projectSecretRepo = { findByProjectWithValues: vi.fn(() => []), findByProject: vi.fn(() => []) };
 
     const useCase = new ExecuteTaskUseCase(
@@ -1921,7 +1921,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
     const sidekickSyncService = { sync: vi.fn(async () => {}) };
     const turnRepo = { supersedeRunning: vi.fn(), create: vi.fn(), findById: vi.fn(() => null), findLatestEventByType: vi.fn(() => null), markEnded: vi.fn(), appendEvent: vi.fn() };
     const turnSignalHub = { emitSignal: vi.fn(), subscribe: vi.fn(() => () => {}) };
-    const supervisorRegistry = { isConnected: vi.fn(() => false), sendCommand: vi.fn(async () => {}), clearExitMarker: vi.fn(), issueLaunch: vi.fn(() => undefined) };
+    const supervisorRegistry = { isConnected: vi.fn(() => false), isBoundConnected: vi.fn(() => false), sendCommand: vi.fn(async () => {}), clearExitMarker: vi.fn(), issueLaunch: vi.fn(() => undefined) };
 
     const useCase = new ExecuteTaskUseCase(
       taskRepo as any,

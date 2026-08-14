@@ -203,12 +203,36 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     const label = event.childCommand.trim().split(/\s+/)[0] || null;
     agentActivityMonitor.recordSupervisorSignal(event.serverName, event.target, event.state, event.taskId, label, event.status);
   });
+  // Issue #28 third-party review (Important): promotion vs. deletion are
+  // asymmetric here on purpose. `activity` above only fires for `bound`
+  // connections — an unbound connection's claimed taskId/unitId is
+  // unverified, so it must never be allowed to CREATE/refresh Tier 0 state
+  // (the "isBoundConnected"-style rule that keeps applying above). `exited`
+  // (child_exit/disconnected), by contrast, only DELETES whatever Tier 0
+  // state is currently recorded for the key (see
+  // AgentActivityMonitor.recordSupervisorSignal's doc comment) — relaying it
+  // regardless of `bound` is what actually closes the bug this fixes: after
+  // `downgradeToUnbound()` flips a connection's authority off (see
+  // SupervisorRegistry's `authority_revoked` handler below), that SAME
+  // connection's own eventual child_exit/disconnect must still be able to
+  // clear a stale Tier 0 entry it can no longer refresh — deleting stale
+  // state is always safe, unlike asserting new state from an unverified
+  // source.
   supervisorRegistry.on('child_exit', (event) => {
-    if (!event.bound) return;
     agentActivityMonitor.recordSupervisorSignal(event.serverName, event.target, 'exited');
   });
   supervisorRegistry.on('disconnected', (event) => {
-    if (!event.bound) return;
+    agentActivityMonitor.recordSupervisorSignal(event.serverName, event.target, 'exited');
+  });
+  // Issue #28 third-party review (Important): a downgrade to unbound
+  // (superseded-launch case — see downgradeToUnbound's doc comment) leaves
+  // the connection itself alive, so neither child_exit nor disconnected
+  // fires to trigger the cleanup above. Without this, a stale Tier 0
+  // verdict recorded from this connection's earlier (bound) activity frames
+  // would linger — and, worse, downstream consumers would stop receiving
+  // even the deletion-only child_exit/disconnected events for it, because
+  // (pre-fix) both were gated on `event.bound`. Clear it immediately here.
+  supervisorRegistry.on('authority_revoked', (event) => {
     agentActivityMonitor.recordSupervisorSignal(event.serverName, event.target, 'exited');
   });
   supervisorRegistry.on('ready', (event) => {

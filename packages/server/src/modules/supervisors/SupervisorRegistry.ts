@@ -157,6 +157,22 @@ export interface SupervisorDisconnectedEvent {
   bound: boolean;
 }
 
+/**
+ * Emitted by {@link SupervisorRegistry.downgradeToUnbound} the moment a
+ * previously-bound connection loses its authority (see that method's doc
+ * comment) — WITHOUT the connection itself closing/reconnecting, so neither
+ * `child_exit` nor `disconnected` fires on its own to prompt cleanup.
+ * Issue #28 third-party review (Important): consumed by buildServer.ts to
+ * immediately clear any Tier 0 state AgentActivityMonitor recorded for this
+ * key (`recordSupervisorSignal(..., 'exited')`) — otherwise a stale Tier 0
+ * verdict from the now-unauthoritative connection lingers until some later,
+ * unrelated event happens to overwrite it.
+ */
+export interface SupervisorAuthorityRevokedEvent {
+  serverName: string;
+  target: string;
+}
+
 function keyFor(serverName: string, target: string): string {
   return `${serverName}::${target}`;
 }
@@ -266,6 +282,18 @@ export class SupervisorRegistry extends EventEmitter {
    * does NOT close/replace the socket. See {@link issueLaunch}'s doc comment
    * for why this exists. No-op if there is no connection for the key, or it
    * is already unbound.
+   *
+   * Issue #28 third-party review (Important): downgrading in-memory `bound`
+   * here is not enough on its own — AgentActivityMonitor's Tier 0 state for
+   * this key was set by this connection's earlier (bound) `activity` events
+   * and has no other trigger to re-evaluate itself. Without an explicit
+   * signal, that stale Tier 0 verdict keeps overriding Tier 1/2 detection
+   * for as long as nothing else happens to fire `child_exit`/`disconnected`
+   * on this now-unauthoritative connection (which, per `issueLaunch`'s doc
+   * comment, is exactly the "new supervisor never starts" case this exists
+   * to handle). Emitting `authority_revoked` lets buildServer.ts clear that
+   * stale state immediately via `recordSupervisorSignal(..., 'exited')` —
+   * the same removal a genuine child_exit/disconnect would have caused.
    */
   private downgradeToUnbound(key: string): void {
     const existing = this.connections.get(key);
@@ -276,6 +304,10 @@ export class SupervisorRegistry extends EventEmitter {
       serverName: existing.serverName,
       target: existing.target,
     });
+    this.emit('authority_revoked', {
+      serverName: existing.serverName,
+      target: existing.target,
+    } satisfies SupervisorAuthorityRevokedEvent);
   }
 
   /**
@@ -654,6 +686,22 @@ export class SupervisorRegistry extends EventEmitter {
 
   isConnected(serverName: string, target: string): boolean {
     return this.connections.has(keyFor(serverName, target));
+  }
+
+  /**
+   * True iff a connection is live for `(serverName, target)` AND it is
+   * `bound` (verified against a persisted launch — see
+   * `SupervisorConnection.bound`'s doc comment). Issue #28 third-party
+   * review (Important): callers that use the supervisor connection to
+   * CARRY something (task input, in this codebase — WorkerInputService) must
+   * gate on this, not on {@link isConnected}, under the same "unbound is
+   * display-only" contract Tier 0/turn-idle-refresh already follow. Compat
+   * mode (`AZITO_SCOPED_AUTH` off) makes every connection `bound: true`, so
+   * this degrades to `isConnected` exactly then — no behavior change outside
+   * scoped auth.
+   */
+  isBoundConnected(serverName: string, target: string): boolean {
+    return this.connections.get(keyFor(serverName, target))?.bound === true;
   }
 
   /** True if this key's supervisor child exited (within EXITED_KEY_TTL_MS) and no new connection
