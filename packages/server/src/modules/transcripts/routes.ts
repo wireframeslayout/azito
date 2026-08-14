@@ -2,9 +2,9 @@ import type { FastifyPluginCallback, FastifyReply } from 'fastify';
 import type { TranscriptSource } from './sources/TranscriptSource';
 import type { TranscriptPaneService } from './TranscriptPaneService';
 import type { WindowSessionResolver } from './WindowSessionResolver';
-import type { WindowInputService } from './WindowInputService';
+import type { AnswerKey, WindowInputService } from './WindowInputService';
 import type { IWindowRepository } from '../windows/Window';
-import type { InteractionMonitor } from '../notifications/InteractionMonitor';
+import type { InteractionMonitor, InteractionQuestion } from '../notifications/InteractionMonitor';
 import type { TranscriptEntry } from './sources/TranscriptSource';
 import { getAgentTranscriptProfile, type InterruptKey } from './sources/profiles';
 
@@ -130,11 +130,20 @@ async function handleReadSession(
   }
 
   let pendingInteraction = false;
+  let pendingQuestion: { questions: InteractionQuestion[]; openedAt: number } | undefined;
   if (interactionMonitor.isPending(windowId)) {
     const tailState = await source.getSessionTailState(sessionId);
     pendingInteraction = tailState.state === 'in_progress';
+    if (pendingInteraction) {
+      // 同じゲート（tailState === 'in_progress'）の内側でのみ質問内容を出す。pendingQuestion は
+      // pendingInteraction の「内容付き」版であって、別の判定ではない — バナーが出ない状況で
+      // 回答カードだけが出る余地を作らないため、判定を分岐させず入れ子にする。
+      const content = interactionMonitor.getPendingContent(windowId);
+      const openedAt = interactionMonitor.getOpenedAt(windowId);
+      if (content && openedAt !== undefined) pendingQuestion = { questions: content.questions, openedAt };
+    }
   }
-  return { ...result, pendingInteraction };
+  return { ...result, pendingInteraction, ...(pendingQuestion === undefined ? {} : { pendingQuestion }) };
 }
 
 const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fastify, opts, done) => {
@@ -185,6 +194,14 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
   // ── POST /api/transcripts/window-signal ── ウィンドウの pane へ制御キーを送出する
   // （Issue #69 仕様調整3）。interruptKey の解決は WindowInputService 側（workerType プロファイル、
   // 未対応時は 'C-c' 既定）。
+  //
+  // action: 'answer' はチャットからの AskUserQuestion 回答（Issue #338 選択肢タップ）。選択肢の
+  // 並び順そのままの数字キー1発でピッカーが確定するため、送出するのは '1'〜'9' の1文字に限る。
+  // 'key' との違いは「送るキーの集合」ではなく前後の責務: 送出前に InteractionMonitor の pending を
+  // 消費し（＝質問が生きていることの検証と、二重タップの排除を1手で行う）、消費できなければ 409 で
+  // 送らない。質問が既に決着した後に数字が届くと、ピッカーではなくプロンプト入力欄へ文字が
+  // 混入するため、この検証は送出の前提条件であって付加的なチェックではない。サービス側は
+  // 「キーを送る」だけの責務に留め、回答としての意味づけはこのルートに閉じる。
   fastify.post<{ Body: { windowId?: unknown; paneId?: unknown; action?: unknown; key?: unknown } }>(
     '/api/transcripts/window-signal',
     async (request, reply) => {
@@ -196,17 +213,24 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
       if (typeof paneId !== 'string' || !PANE_ID_PATTERN.test(paneId)) {
         return reply.status(400).send({ error: 'Invalid paneId' });
       }
-      if (action !== 'interrupt' && action !== 'key') {
+      if (action !== 'interrupt' && action !== 'key' && action !== 'answer') {
         return reply.status(400).send({ error: 'Invalid action' });
       }
 
-      let resolvedKey: InterruptKey | undefined;
+      let resolvedKey: InterruptKey | AnswerKey | undefined;
       if (action === 'key') {
         if (!isInterruptKey(key)) return reply.status(400).send({ error: 'Invalid key' });
         resolvedKey = key;
       }
+      if (action === 'answer') {
+        if (!isAnswerKey(key)) return reply.status(400).send({ error: 'Invalid key' });
+        if (!interactionMonitor.consumePendingQuestion(windowId)) {
+          return reply.status(409).send({ error: 'No pending question' });
+        }
+        resolvedKey = key;
+      }
 
-      const result = await windowInputService.sendSignal(windowId, paneId, action, resolvedKey);
+      const result = await windowInputService.sendSignal(windowId, paneId, action === 'answer' ? 'key' : action, resolvedKey);
       if (result === 'window_not_found') return reply.status(404).send({ error: 'Window not found' });
       if (result === 'pane_not_found') return reply.status(404).send({ error: 'Pane not found' });
       return { ok: true };
@@ -316,6 +340,15 @@ async function handleSendInput(
 
 function isInterruptKey(value: unknown): value is InterruptKey {
   return value === 'Escape' || value === 'C-c';
+}
+
+/**
+ * AskUserQuestion ピッカーの選択肢番号キー（'1'〜'9'）。ピッカーは数字キー1発で該当選択肢を
+ * 確定するため、回答として送出してよいのはこの9キーだけ — それ以外（Enter・矢印・文字）は
+ * ピッカーの状態遷移が選択肢の並びから決まらなくなるので受け付けない。
+ */
+function isAnswerKey(value: unknown): value is AnswerKey {
+  return typeof value === 'string' && /^[1-9]$/.test(value);
 }
 
 async function handleSendSignal(

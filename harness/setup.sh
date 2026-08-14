@@ -177,6 +177,7 @@ MCP_SERVER_PATH="$HARNESS_DIR/skills/azt-mcp/mcp-server/index.js"
 NOTIFY_HOOK_SCRIPT="$HARNESS_DIR/hooks/azito-notify.sh"
 ACTIVITY_HOOK_SCRIPT="$HARNESS_DIR/hooks/azito-activity.sh"
 INTERACTION_HOOK_SCRIPT="$HARNESS_DIR/hooks/azito-interaction.sh"
+QUESTION_HOOK_SCRIPT="$HARNESS_DIR/hooks/azito-question.sh"
 if [ -z "${AZITO_URL:-}" ]; then
   echo "WARNING: --azito-url が未指定のため http://localhost:3001 を使用します。" >&2
   echo "リモートサーバーでは必ず --azito-url で hub の URL を指定してください。" >&2
@@ -208,6 +209,7 @@ PROFILE_PREFIX=""
 ACTIVITY_START_CMD="${PROFILE_PREFIX}bash $ACTIVITY_HOOK_SCRIPT start"
 ACTIVITY_STOP_CMD="${PROFILE_PREFIX}bash $ACTIVITY_HOOK_SCRIPT stop"
 INTERACTION_CMD="${PROFILE_PREFIX}bash $INTERACTION_HOOK_SCRIPT"
+QUESTION_CMD="${PROFILE_PREFIX}bash $QUESTION_HOOK_SCRIPT"
 
 if [[ -f "$NOTIFY_HOOK_SCRIPT" ]]; then
   chmod +x "$NOTIFY_HOOK_SCRIPT"
@@ -217,6 +219,9 @@ if [[ -f "$ACTIVITY_HOOK_SCRIPT" ]]; then
 fi
 if [[ -f "$INTERACTION_HOOK_SCRIPT" ]]; then
   chmod +x "$INTERACTION_HOOK_SCRIPT"
+fi
+if [[ -f "$QUESTION_HOOK_SCRIPT" ]]; then
+  chmod +x "$QUESTION_HOOK_SCRIPT"
 fi
 
 # tar 展開等で実行権が落ちるケースに備え、azitoctl / azs の実行権を明示的に保証する
@@ -296,6 +301,9 @@ if command -v node >/dev/null 2>&1; then
     const interactionCmd = process.argv[14];
     const interactionHookExists = process.argv[15] === 'true';
     const interactionHookPath = process.argv[16];
+    const questionCmd = process.argv[17];
+    const questionHookExists = process.argv[18] === 'true';
+    const questionHookPath = process.argv[19];
 
     let settings = {};
     try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch {}
@@ -397,6 +405,17 @@ if command -v node >/dev/null 2>&1; then
       messages.push('  未回答検出フック: スキップ (hook スクリプトが見つかりません)');
     }
 
+    // PermissionRequest hook (Issue #338 チャット内回答): AskUserQuestion がピッカーを
+    // 開いた瞬間に発火し、質問文と選択肢そのものを agent-interaction webhook へ送る。
+    // これによりチャットビューがバナーではなく回答可能な質問カードを出せる。
+    // AskUserQuestion 以外の PermissionRequest には一切干渉しない（hook スクリプト冒頭の
+    // 注記を参照 — 許可判断に影響し得る stdout を出さず即 exit 0 する）。
+    if (questionHookExists) {
+      upsertHook('PermissionRequest', questionHookPath, questionCmd, 'PermissionRequest hook (質問内容取得)');
+    } else {
+      messages.push('  質問内容取得フック: スキップ (hook スクリプトが見つかりません)');
+    }
+
     if (changed) {
       fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
     }
@@ -411,7 +430,10 @@ if command -v node >/dev/null 2>&1; then
     "$AZITO_UI_TOKEN" \
     "$INTERACTION_CMD" \
     "$([[ -f "$INTERACTION_HOOK_SCRIPT" ]] && echo true || echo false)" \
-    "$INTERACTION_HOOK_SCRIPT"
+    "$INTERACTION_HOOK_SCRIPT" \
+    "$QUESTION_CMD" \
+    "$([[ -f "$QUESTION_HOOK_SCRIPT" ]] && echo true || echo false)" \
+    "$QUESTION_HOOK_SCRIPT"
 
   if [[ -n "$AZITO_WEBHOOK_TOKEN" ]]; then
     echo "  AZITO_WEBHOOK_TOKEN: 設定済み（hook command に埋め込み）"
@@ -467,6 +489,12 @@ else
       echo '    ,'
       echo '    "Notification": ['
       echo "      { \"hooks\": [{ \"type\": \"command\", \"command\": \"$INTERACTION_CMD\" }] }"
+      echo '    ]'
+    fi
+    if [[ -f "$QUESTION_HOOK_SCRIPT" ]]; then
+      echo '    ,'
+      echo '    "PermissionRequest": ['
+      echo "      { \"hooks\": [{ \"type\": \"command\", \"command\": \"$QUESTION_CMD\" }] }"
       echo '    ]'
     fi
     echo '  }'

@@ -243,6 +243,80 @@ describe('POST /api/webhooks/agent-interaction', () => {
       }),
     );
   });
+
+  it('forwards a well-formed content payload (PermissionRequest hook) as the signal content', async () => {
+    const options = buildOptions();
+    app = await buildApp(options);
+
+    const content = {
+      toolName: 'AskUserQuestion',
+      questions: [
+        {
+          question: 'どれにしますか?',
+          header: '選択',
+          multiSelect: false,
+          options: [{ label: 'はい', description: '進める' }, { label: 'いいえ' }],
+        },
+      ],
+    };
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/webhooks/agent-interaction',
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { ...validInteractionBody, content },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(options.recordInteractionSignal).toHaveBeenCalledWith(expect.objectContaining({ content }));
+  });
+
+  it('defaults an omitted multiSelect to false (the CLI omits it for single-select questions)', async () => {
+    const options = buildOptions();
+    app = await buildApp(options);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/webhooks/agent-interaction',
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: {
+        ...validInteractionBody,
+        content: { toolName: 'AskUserQuestion', questions: [{ question: 'q', options: [{ label: 'a' }] }] },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(options.recordInteractionSignal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: { toolName: 'AskUserQuestion', questions: [{ question: 'q', multiSelect: false, options: [{ label: 'a' }] }] },
+      }),
+    );
+  });
+
+  it.each([
+    ['not an object', 'nope'],
+    ['missing toolName', { questions: [{ question: 'q', options: [{ label: 'a' }] }] }],
+    ['empty questions', { toolName: 'AskUserQuestion', questions: [] }],
+    ['questions not an array', { toolName: 'AskUserQuestion', questions: { question: 'q' } }],
+    ['question without text', { toolName: 'AskUserQuestion', questions: [{ options: [{ label: 'a' }] }] }],
+    ['question without options', { toolName: 'AskUserQuestion', questions: [{ question: 'q' }] }],
+    ['option without a label', { toolName: 'AskUserQuestion', questions: [{ question: 'q', options: [{ description: 'd' }] }] }],
+    ['non-string header', { toolName: 'AskUserQuestion', questions: [{ question: 'q', header: 3, options: [{ label: 'a' }] }] }],
+  ])('accepts the signal but drops the content on malformed content (%s)', async (_label, content) => {
+    const options = buildOptions();
+    app = await buildApp(options);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/webhooks/agent-interaction',
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { ...validInteractionBody, content },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(options.recordInteractionSignal).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(options.recordInteractionSignal).mock.calls[0][0].content).toBeUndefined();
+  });
 });
 
 describe('POST /api/webhooks/agent-done (unchanged behavior)', () => {

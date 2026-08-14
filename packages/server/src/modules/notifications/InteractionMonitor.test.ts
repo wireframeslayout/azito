@@ -179,4 +179,72 @@ describe('InteractionMonitor', () => {
       expect(monitor.getOpenedAt(1)).toBeUndefined();
     });
   });
+  describe('質問内容（content）', () => {
+    const content = {
+      toolName: 'AskUserQuestion',
+      questions: [{ question: 'どれ?', multiSelect: false, options: [{ label: 'はい' }, { label: 'いいえ' }] }],
+    };
+
+    it('content 付きシグナルの内容を保持する', () => {
+      monitor.recordSignal(makeSignal({ timestamp: now(), content }));
+      expect(monitor.getPendingContent(1)).toEqual(content);
+    });
+
+    it('content なしシグナルでは内容を持たない（バナーへ退化）', () => {
+      monitor.recordSignal(makeSignal({ timestamp: now() }));
+      expect(monitor.getPendingContent(1)).toBeUndefined();
+    });
+
+    it('後から来た content なしシグナルは保持済み content を消さない', () => {
+      monitor.recordSignal(makeSignal({ timestamp: now(), content }));
+      monitor.recordSignal(makeSignal({ timestamp: now() + 60_000 }));
+      expect(monitor.getPendingContent(1)).toEqual(content);
+      expect(monitor.getOpenedAt(1)).toBe(now() + 60_000);
+    });
+
+    it('content なしの後に content 付きが来たら内容で更新する', () => {
+      monitor.recordSignal(makeSignal({ timestamp: now() }));
+      monitor.recordSignal(makeSignal({ timestamp: now(), content }));
+      expect(monitor.getPendingContent(1)).toEqual(content);
+    });
+
+    it('期限切れの content は引き継がない', () => {
+      monitor.recordSignal(makeSignal({ timestamp: now(), content }));
+      now.mockReturnValue(1_000_000 + 10 * 60 * 1000);
+      monitor.recordSignal(makeSignal({ timestamp: now() }));
+      expect(monitor.getPendingContent(1)).toBeUndefined();
+    });
+  });
+
+  describe('consumePendingQuestion', () => {
+    const content = {
+      toolName: 'AskUserQuestion',
+      questions: [{ question: 'どれ?', multiSelect: false, options: [{ label: 'はい' }] }],
+    };
+
+    it('content 付き pending を1回だけ消費できる', () => {
+      monitor.recordSignal(makeSignal({ timestamp: now(), content }));
+      expect(monitor.consumePendingQuestion(1)).toBe(true);
+      expect(monitor.consumePendingQuestion(1)).toBe(false);
+      expect(monitor.isPending(1)).toBe(false);
+    });
+
+    it('content なしの pending は消費できない（数字キーを送る根拠が無い）', () => {
+      monitor.recordSignal(makeSignal({ timestamp: now() }));
+      expect(monitor.consumePendingQuestion(1)).toBe(false);
+      expect(monitor.isPending(1)).toBe(true);
+    });
+
+    it('pending が無ければ false', () => {
+      expect(monitor.consumePendingQuestion(1)).toBe(false);
+    });
+
+    it('同じ tmux ターゲットを指す兄弟ウィンドウ行もまとめて消費する', () => {
+      findAll.mockReturnValue([makeWindow(), makeWindow({ id: 2, ownerType: 'task', taskId: 5 })]);
+      findById.mockImplementation((id) => makeWindow({ id }));
+      monitor.recordSignal(makeSignal({ timestamp: now(), content }));
+      expect(monitor.consumePendingQuestion(1)).toBe(true);
+      expect(monitor.isPending(2)).toBe(false);
+    });
+  });
 });

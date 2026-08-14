@@ -71,6 +71,8 @@ function buildApp(
   const interactionMonitor = {
     isPending: () => false,
     getOpenedAt: () => undefined,
+    getPendingContent: () => undefined,
+    consumePendingQuestion: () => false,
     clear: () => {},
     ...windowOverrides.interactionMonitor,
   } as unknown as InteractionMonitor;
@@ -234,6 +236,46 @@ describe('GET /api/transcripts/:agent/:id', () => {
     const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?windowId=7` });
     expect(res.statusCode).toBe(200);
     expect(res.json().pendingInteraction).toBe(true);
+    await app.close();
+  });
+
+  it('includes pendingQuestion alongside pendingInteraction when the pending signal carried content', async () => {
+    const claude = buildClaudeSource({ getSessionTailState: async () => ({ state: 'in_progress' as const, lastEntryTimestampMs: null }) });
+    const openedAt = Date.parse('2026-01-01T00:00:00.000Z');
+    const questions = [{ question: 'どれ?', header: '選択', multiSelect: false, options: [{ label: 'はい' }, { label: 'いいえ', description: 'やめる' }] }];
+    const app = buildApp([claude], {}, {
+      interactionMonitor: {
+        isPending: () => true,
+        getOpenedAt: () => openedAt,
+        getPendingContent: () => ({ toolName: 'AskUserQuestion', questions }),
+      },
+    });
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?windowId=7` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().pendingInteraction).toBe(true);
+    expect(res.json().pendingQuestion).toEqual({ questions, openedAt });
+    await app.close();
+  });
+
+  it('omits pendingQuestion when the pending signal carried no content (banner fallback)', async () => {
+    const claude = buildClaudeSource({ getSessionTailState: async () => ({ state: 'in_progress' as const, lastEntryTimestampMs: null }) });
+    const app = buildApp([claude], {}, { interactionMonitor: { isPending: () => true, getOpenedAt: () => Date.now() } });
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?windowId=7` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().pendingInteraction).toBe(true);
+    expect(res.json().pendingQuestion).toBeUndefined();
+    await app.close();
+  });
+
+  it('omits pendingQuestion when tailState is terminal (same gate as pendingInteraction)', async () => {
+    const claude = buildClaudeSource({ getSessionTailState: async () => ({ state: 'terminal_final' as const, lastEntryTimestampMs: null }) });
+    const getPendingContent = vi.fn(() => ({ toolName: 'AskUserQuestion', questions: [{ question: 'q', multiSelect: false, options: [{ label: 'a' }] }] }));
+    const app = buildApp([claude], {}, { interactionMonitor: { isPending: () => true, getOpenedAt: () => Date.now(), getPendingContent } });
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?windowId=7` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().pendingInteraction).toBe(false);
+    expect(res.json().pendingQuestion).toBeUndefined();
+    expect(getPendingContent).not.toHaveBeenCalled();
     await app.close();
   });
 
@@ -996,6 +1038,49 @@ describe('POST /api/transcripts/window-signal', () => {
       payload: { windowId: 42, paneId: PANE_ID_WINDOW, action: 'interrupt' },
     });
     expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it.each([['0'], ['10'], ['Enter'], [1], [undefined]])('rejects action:"answer" with key %p with 400, without consuming the pending question', async (key) => {
+    const consumePendingQuestion = vi.fn(() => true);
+    const sendSignal = vi.fn(async () => 'ok' as const);
+    const app = buildApp([buildClaudeSource()], {}, { windowInputService: { sendSignal }, interactionMonitor: { consumePendingQuestion } });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/transcripts/window-signal',
+      payload: { windowId: 42, paneId: PANE_ID_WINDOW, action: 'answer', key },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(consumePendingQuestion).not.toHaveBeenCalled();
+    expect(sendSignal).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('sends the digit as a key signal and consumes the pending question on action:"answer"', async () => {
+    const consumePendingQuestion = vi.fn(() => true);
+    const sendSignal = vi.fn(async () => 'ok' as const);
+    const app = buildApp([buildClaudeSource()], {}, { windowInputService: { sendSignal }, interactionMonitor: { consumePendingQuestion } });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/transcripts/window-signal',
+      payload: { windowId: 42, paneId: PANE_ID_WINDOW, action: 'answer', key: '3' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(consumePendingQuestion).toHaveBeenCalledWith(42);
+    expect(sendSignal).toHaveBeenCalledWith(42, PANE_ID_WINDOW, 'key', '3');
+    await app.close();
+  });
+
+  it('returns 409 without sending anything when no pending question is left to answer', async () => {
+    const sendSignal = vi.fn(async () => 'ok' as const);
+    const app = buildApp([buildClaudeSource()], {}, { windowInputService: { sendSignal }, interactionMonitor: { consumePendingQuestion: () => false } });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/transcripts/window-signal',
+      payload: { windowId: 42, paneId: PANE_ID_WINDOW, action: 'answer', key: '1' },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(sendSignal).not.toHaveBeenCalled();
     await app.close();
   });
 

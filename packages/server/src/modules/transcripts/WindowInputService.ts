@@ -11,6 +11,13 @@ import { splitWindowTarget } from './WindowSessionResolver';
 export type WindowInputResult = 'ok' | 'window_not_found' | 'pane_not_found';
 export type WindowSignalResult = 'ok' | 'window_not_found' | 'pane_not_found';
 
+/**
+ * AskUserQuestion ピッカーの選択肢番号キー（Issue #338 チャット内回答）。ピッカーは数字キー1発で
+ * 該当選択肢を確定するため、選択肢の並び順に対応する '1'〜'9' だけを扱う。回答としての妥当性検証
+ * （質問が生きているか・二重送出でないか）は routes.ts 側の責務で、ここは送出可能なキーの型のみ。
+ */
+export type AnswerKey = '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9';
+
 // ─── Service ───
 
 /**
@@ -46,7 +53,7 @@ export class WindowInputService {
     return 'ok';
   }
 
-  async sendSignal(windowId: number, paneId: string, action: 'interrupt' | 'key', key?: InterruptKey): Promise<WindowSignalResult> {
+  async sendSignal(windowId: number, paneId: string, action: 'interrupt' | 'key', key?: InterruptKey | AnswerKey): Promise<WindowSignalResult> {
     const window = this.windowRepo.findById(windowId);
     if (!window) return 'window_not_found';
 
@@ -57,7 +64,7 @@ export class WindowInputService {
     if (!belongsToWindow) return 'pane_not_found';
 
     await this.preparePaneForInput(server, paneId);
-    const resolvedKey = action === 'interrupt' ? this.resolveInterruptKey(window.workerType) : (key as InterruptKey);
+    const resolvedKey = action === 'interrupt' ? this.resolveInterruptKey(window.workerType) : (key as InterruptKey | AnswerKey);
     await this.tmuxClient.sendKeys(server, paneId, [resolvedKey]);
     return 'ok';
   }

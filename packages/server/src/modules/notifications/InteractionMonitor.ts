@@ -22,6 +22,38 @@ export interface InteractionSignal {
   };
   event: 'open' | 'cancel';
   timestamp: number;
+  /**
+   * The question itself, when the signal source could supply it (PermissionRequest hook,
+   * `harness/hooks/azito-question.sh`). Optional because the other signal source — the
+   * Notification hook — has no access to the tool input and can only report *that* an
+   * answer is being waited on. A signal without content still opens the pending state; it
+   * just degrades the chat view to the banner instead of an answerable question card.
+   */
+  content?: InteractionContent;
+}
+
+/** One selectable option of an AskUserQuestion question (mirrors the CLI's tool_input shape). */
+export interface InteractionQuestionOption {
+  label: string;
+  description?: string;
+}
+
+/** One AskUserQuestion question (mirrors the CLI's tool_input shape). */
+export interface InteractionQuestion {
+  question: string;
+  header?: string;
+  multiSelect: boolean;
+  options: InteractionQuestionOption[];
+}
+
+/**
+ * The tool input carried by a PermissionRequest hook signal. `toolName` is retained (rather
+ * than assumed to be `AskUserQuestion`) so the pending state stays honest about what produced
+ * it; the hook only ever forwards AskUserQuestion, and consumers key off the question shape.
+ */
+export interface InteractionContent {
+  toolName: string;
+  questions: InteractionQuestion[];
 }
 
 const TIMEOUT_MS = 10 * 60 * 1000;
@@ -39,6 +71,12 @@ interface PendingState {
    * them all, without needing to re-resolve against the windows table.
    */
   siblingIds: number[];
+  /**
+   * The question, when a content-bearing signal has been seen for this window. Absent when
+   * only contentless signals (Notification hook) have arrived — the chat view then shows the
+   * banner rather than an answerable card.
+   */
+  content?: InteractionContent;
 }
 
 /**
@@ -105,7 +143,19 @@ export class InteractionMonitor {
     }
 
     for (const windowId of windowIds) {
-      this.pending.set(windowId, { openedAt: signal.timestamp, siblingIds: windowIds });
+      // Content beats no content, regardless of arrival order. The two hooks that can open the
+      // same pending state fire at very different times — PermissionRequest (with content) the
+      // instant the picker opens, Notification (contentless) roughly 60s later — so the common
+      // case is a contentless signal arriving *after* the real question. Overwriting would
+      // silently downgrade an answerable card back to a bare banner mid-question. A later
+      // content-bearing signal does overwrite (it names a newer question). Only a still-live
+      // state carries over: an expired one is treated as absent, same as everywhere else.
+      const previousContent = this.getValidState(windowId)?.content;
+      this.pending.set(windowId, {
+        openedAt: signal.timestamp,
+        siblingIds: windowIds,
+        content: signal.content ?? previousContent,
+      });
     }
   }
 
@@ -128,6 +178,34 @@ export class InteractionMonitor {
    */
   getOpenedAt(windowId: number): number | undefined {
     return this.getValidState(windowId)?.openedAt;
+  }
+
+  /**
+   * The question carried by `windowId`'s live pending-answer signal, or `undefined` when there
+   * is no live signal or the signal never carried content. Same liveness rules as
+   * `isPending()`. Lets the chat read path offer an answerable question card instead of the
+   * "waiting for an answer" banner.
+   */
+  getPendingContent(windowId: number): InteractionContent | undefined {
+    return this.getValidState(windowId)?.content;
+  }
+
+  /**
+   * Claim `windowId`'s pending question for answering: returns true exactly once per open
+   * question, clearing the pending state (and every sibling, like `clear()`) as it does.
+   * Returns false when there is no live pending state or it carries no content — the caller
+   * (the `answer` window-signal route) turns that into a 409 rather than sending a digit.
+   *
+   * Consuming *before* the key is sent, rather than after, is deliberate: the digit answers a
+   * modal picker, and a second digit arriving after the picker closed would be typed straight
+   * into the agent's prompt. Losing the pending state when the send then fails is the cheaper
+   * failure — that only costs the banner, and a pane that cannot be written to cannot be
+   * answered from chat anyway.
+   */
+  consumePendingQuestion(windowId: number): boolean {
+    if (this.getValidState(windowId)?.content === undefined) return false;
+    this.clear(windowId);
+    return true;
   }
 
   /**
