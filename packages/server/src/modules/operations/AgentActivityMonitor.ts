@@ -6,8 +6,10 @@ import type { TmuxClient, TmuxSession, TmuxWindow } from '../tmux/TmuxClient';
 import { windowSpecMatches } from '../tmux/TmuxClient';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { NotificationBus } from '../notifications/NotificationBus';
+import type { AgentActivityStopReason } from '../notifications/NotificationEvent';
 import { classifyPaneState, CLASSIFIABLE_AGENT_TYPES, type PaneAgentState } from './paneStateClassifier';
 import { stripPaneSuffix } from '../windows/paneTarget';
+import { resolveInterval } from '../../shared/testIntervals';
 
 /** Split a stored `session:windowSpec[.pane]` target into its session and window parts. */
 export function parseWindowTarget(target: string): { sessionName: string; windowSpec: string } {
@@ -178,7 +180,7 @@ interface SupervisorState {
   agentStatus?: 'working' | 'blocked';
 }
 
-const POLL_INTERVAL_MS = 5_000;
+const POLL_INTERVAL_MS = resolveInterval(5_000, 1_500);
 
 /**
  * Number of activity advances (not necessarily consecutive) required, within
@@ -209,8 +211,260 @@ interface ActivityHistory {
   advanceTicks: number[];
 }
 
+/**
+ * Tier 4 source: process/transcript-based liveness for windows that no
+ * event-driven source covers (a hand-launched `claude`/`codex` pane with
+ * neither a supervisor nor the Claude Code hooks wired). Structurally
+ * satisfied by `WindowActivityStatusService.list()`; declared here as a
+ * minimal port so this module does not depend on the windows/transcripts
+ * implementation.
+ */
+export interface ProcessActivityProbe {
+  list(): Promise<ProcessActivityProbeEntry[]>;
+}
+
+/**
+ * One window's Tier 4 answer. Besides the coarse status it carries the *ending*
+ * the probe observed in the session transcript — `completedAt` (the agent's
+ * final response, a genuine completion) and `interruptedAt` (a stop/interrupt
+ * marker). Those are what let the monitor label a `running: false` transition
+ * with a reason instead of guessing, and let it synthesize a `completed`
+ * transition for a turn so short that no tick ever saw it working (P3).
+ */
+export interface ProcessActivityProbeEntry {
+  serverName: string;
+  target: string;
+  status: 'working' | 'idle' | 'offline';
+  completedAt: number | null;
+  interruptedAt: number | null;
+  taskId?: number;
+  projectId?: number;
+  label?: string;
+  /**
+   * Diagnostics-only passthrough (GET /api/debug/activity): how the probe
+   * classified the session transcript's tail and when that entry was written.
+   * Typed as a plain string here so this port stays independent of the
+   * transcripts module's own TailState union. Never read by the ladder.
+   */
+  tailState?: string;
+  lastEntryTimestampMs?: number | null;
+}
+
+/**
+ * Answer of a pane *screen* check (see readScreenVerdict). `'unknown'` is a
+ * genuine third answer, not a synonym for `'not_blocked'`: a failed
+ * `capture-pane` or an unavailable tmux snapshot means "could not look", and
+ * folding it into "not blocked" is what would announce a completion for a pane
+ * that is still sitting on a prompt.
+ */
+type ScreenVerdict = 'blocked' | 'not_blocked' | 'unknown';
+
+/** Cached outcome of a key's screen checks — see screenVerdict(). */
+interface ScreenCheckState {
+  /** Tick this key was last checked on, and what that check answered. */
+  tick: number;
+  verdict: ScreenVerdict;
+  /** `window_activity` observed by the last *successful* check. */
+  okActivityAt?: number;
+  /** Wall-clock second that successful check ran at (see screenVerdict's reuse rule). */
+  okCapturedAtSec?: number;
+  /** Start of the current run of 'unknown' answers; cleared by any success. */
+  unknownSince?: number;
+}
+
+/**
+ * How long a key may keep the status it already had while its screen check
+ * keeps failing. Long enough to ride out a transient tmux/capture error (the
+ * failure mode this hold exists for), short enough that a permanently
+ * unreadable pane cannot pin a stale running row forever — past it, the tier's
+ * own verdict stands again.
+ *
+ * NOT shortened by AZITO_E2E_FAST_INTERVALS: it is a judgment threshold, not an
+ * observation period (same reasoning as PROCESS_PROBE_MAX_AGE_MS).
+ */
+const UNKNOWN_HOLD_MS = 30_000;
+
+/**
+ * Maximum `capture-pane` calls in flight per server. The screen checks of
+ * different windows are independent, so running them one after another makes a
+ * tick cost the sum of every pane's round trip — on an ssh/agent server that is
+ * what pushes a tick past its interval and makes the `ticking` guard drop the
+ * next one. Bounded rather than unbounded so a server with many agent windows
+ * cannot open a burst of simultaneous tmux calls against one transport.
+ */
+const SCREEN_CHECK_CONCURRENCY = 4;
+
+/** Run `tasks` with at most `limit` in flight. Order of completion is irrelevant to callers. */
+async function runWithConcurrency(tasks: Array<() => Promise<void>>, limit: number): Promise<void> {
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, tasks.length) }, async () => {
+    while (next < tasks.length) {
+      await tasks[next++]();
+    }
+  });
+  await Promise.all(workers);
+}
+
+/** Which rung of the ladder decided a key's state on the last tick. */
+export type ActivityDecidedBy =
+  | 'tier0_supervisor'
+  | 'tier1_hook'
+  | 'tier2_title'
+  | 'tier3_heuristic'
+  | 'tier4_probe'
+  /**
+   * No tier spoke for this key: either nothing observed it at all, or it is a
+   * registered execution run with no supervisor attached, whose "registered =
+   * running" assumption is the run registry's, not a detection tier's.
+   */
+  | 'none';
+
+/** The state that decision produced. `'none'` = nothing decided this tick. */
+export type ActivityDecidedState = 'working' | 'blocked' | 'idle' | 'offline' | 'none';
+
+/**
+ * A lower rung that refined — never overruled — the deciding tier's state.
+ * Currently only `tier2_title`, which turns a Tier 0 `idle` into `blocked`
+ * (see refineTier0IdleKeys).
+ */
+export type ActivityRefinedBy = 'tier2_title';
+
+interface ActivityDecision {
+  serverName: string;
+  target: string;
+  taskId?: number;
+  decidedBy: ActivityDecidedBy;
+  state: ActivityDecidedState;
+  /** See ActivityDiagnosticEntry.evidenceAt. */
+  evidenceAt?: number;
+  /** See ActivityDiagnosticEntry.refinedBy. */
+  refinedBy?: ActivityRefinedBy;
+}
+
+/** One key's read-only diagnostic view — see AgentActivityMonitor.diagnostics(). */
+export interface ActivityDiagnosticEntry {
+  serverName: string;
+  target: string;
+  taskId?: number;
+  state: ActivityDecidedState;
+  decidedBy: ActivityDecidedBy;
+  /**
+   * When the signal this decision rests on was received (currently recorded for
+   * Tier 0 only, where it is the supervisor signal's own timestamp). Lets a
+   * consumer tell a decision made from the *current* supervisor connection apart
+   * from one still carried over from a previous connection on the same key —
+   * a supervisor state survives until its next signal, so a reconnect would
+   * otherwise keep showing "decided by Tier 0" against a connection that has
+   * sent no frames yet.
+   */
+  evidenceAt?: number;
+  /**
+   * Set when a lower rung refined the deciding tier's state without taking the
+   * decision from it: `'tier2_title'` on a row whose Tier 0 supervisor reported
+   * `idle` while the pane's screen showed a user prompt, i.e. read as
+   * "Tier 0 idle + Tier 2 blocked". `decidedBy` deliberately stays at the
+   * deciding tier — see refineTier0IdleKeys().
+   */
+  refinedBy?: ActivityRefinedBy;
+  hook?: { lastSignalAt: number; lastEvent: 'start' | 'stop' };
+  probe?: {
+    status: 'working' | 'idle' | 'offline';
+    tailState?: string;
+    lastEntryTimestampMs?: number | null;
+    completedAt: number | null;
+    interruptedAt: number | null;
+    /** Age of the last *successful* probe snapshot, not of this entry alone. */
+    snapshotAgeMs: number | null;
+  };
+  lastTransition?: { running: boolean; reason?: AgentActivityStopReason; at: number };
+}
+
+/**
+ * Why a key stopped being reported as running (re-exported from the
+ * notifications module, where the WS payload type lives, so consumers of the
+ * monitor do not have to reach across modules for it):
+ * - 'completed'    supervisor active→idle, hook Stop, Tier 2 working→idle, or
+ *                  Tier 4 observing a fresh `terminal_final`.
+ * - 'interrupted'  Tier 4 observed a fresh interrupt marker (stop button/Esc).
+ * - 'deleted'      the tmux window (or its `windows` row) is gone.
+ * - 'offline'      the agent process disappeared / the server is unreachable.
+ * - 'unknown'      no source could tell (e.g. the Tier 3 activity heuristic
+ *                  simply going stale).
+ */
+export type { AgentActivityStopReason };
+
+/**
+ * How stale the Tier 4 snapshot may get before a refresh is kicked off. The
+ * probe walks `ps`/tmux per window, so it must not run on every 5s tick; it is
+ * refreshed in the background (never awaited inside collect()) and read from
+ * cache, which bounds a Tier 4 state change's visible latency to roughly this
+ * interval plus one poll interval — well under the 60s poll × 60s cache phase
+ * problem of the removed client-side polling path.
+ */
+const PROCESS_PROBE_REFRESH_MS = resolveInterval(15_000, 3_000);
+
+/**
+ * Maximum age of the last *successful* probe snapshot that Tier 4 will still
+ * act on. A failing probe keeps its previous snapshot (a failure is "no fresh
+ * answer", not "nothing is running"), but that snapshot must not keep a
+ * stopped agent lit forever: past this age Tier 4 goes silent and the key
+ * falls through to the Tier 3 heuristic, which reads live tmux state.
+ *
+ * NOT shortened by AZITO_E2E_FAST_INTERVALS: this is a judgment threshold
+ * ("how old an answer may be before it stops counting as evidence"), not an
+ * observation period, so shortening it would make E2E exercise different
+ * semantics from production.
+ */
+const PROCESS_PROBE_MAX_AGE_MS = 60_000;
+
+/**
+ * How recent a probe-observed completion must be for the monitor to synthesize
+ * a `completed` transition for a key that was never seen running (the "turn too
+ * short for any tick to catch it" case). Bounded to a couple of production probe
+ * cycles so that a completion which happened long before the hub started — or
+ * before this window was ever polled — does not manufacture a stale "finished" row.
+ *
+ * Deliberately a standalone constant rather than `2 * PROCESS_PROBE_REFRESH_MS`:
+ * it is a judgment threshold, so it must keep its production value even when
+ * AZITO_E2E_FAST_INTERVALS shortens the refresh interval (see above).
+ */
+const COMPLETION_SYNTHESIS_MAX_AGE_MS = 30_000;
+
+/**
+ * How long after an execution run leaves `getRunning()` a synthesized
+ * completion for its key is still attributed to that run. Only needs to cover
+ * the gap between the run ending and the probe cycle that observes its final
+ * transcript entry, so it is kept just above one probe max-age.
+ */
+const OPERATION_ATTRIBUTION_TTL_MS = 90_000;
+
+/**
+ * How long a key's last announced transition is kept for the diagnostics panel.
+ * Purely a display memo — nothing in the judgment path reads it.
+ */
+const LAST_TRANSITION_TTL_MS = 30 * 60_000;
+
 function windowKey(serverName: string, target: string): string {
   return `${serverName}::${stripPaneSuffix(target)}`;
+}
+
+interface CollectResult {
+  next: Map<string, AgentActivityEntry>;
+  /** Why each key that could have been running is not — see collect(). */
+  reasons: Map<string, AgentActivityStopReason>;
+  /** `windows` rows that vanished on this tick (one-shot; see emitTransitions). */
+  deletedKeys: Set<string>;
+  /**
+   * Which rung decided each key, for diagnostics only. Written at the same
+   * rungs that already record `reasons`, read by nothing in the judgment path.
+   */
+  decisions: Map<string, ActivityDecision>;
+}
+
+/** Inverse of windowKey() — server names never contain `::`, targets may not either. */
+function splitWindowKey(key: string): [serverName: string, target: string] {
+  const idx = key.indexOf('::');
+  return [key.slice(0, idx), key.slice(idx + 2)];
 }
 
 /**
@@ -243,6 +497,16 @@ function windowKey(serverName: string, target: string): string {
  * itself the ground truth, a supervisorStates entry is never pruned by
  * candidate/operation membership — only an explicit 'exited' signal removes
  * it (see recordSupervisorSignal()).
+ *
+ * Below all of them sits Tier 4 (`ProcessActivityProbe`, backed by
+ * WindowActivityStatusService): process-existence + session-transcript
+ * evidence for windows no event-driven source covers — a hand-launched agent
+ * pane with neither a supervisor nor the Claude Code hooks wired. It is
+ * consulted from inside collect()'s per-key ladder, after Tier 0/1/2 have all
+ * declined to decide, which is what structurally guarantees that a Tier 4
+ * 'working' can never re-light a key a higher tier just called idle. Its
+ * snapshot is refreshed in the background (PROCESS_PROBE_REFRESH_MS) rather
+ * than awaited on the tick path.
  */
 export class AgentActivityMonitor {
   private state = new Map<string, AgentActivityEntry>();
@@ -266,6 +530,51 @@ export class AgentActivityMonitor {
   // inferring exit from a foreground-command fallback to a bare shell — so
   // Tier 0 needs no such fallback and bypasses Tier 1/2 entirely for its keys.
   private supervisorStates = new Map<string, SupervisorState>();
+  // Tier 4 cache: last snapshot of the process/transcript probe, keyed the same
+  // as every other tier. Refreshed in the background (see refreshProcessProbe)
+  // so collect() never awaits the probe's ps/tmux walk.
+  private processStates = new Map<string, ProcessActivityProbeEntry>();
+  // Screen-check cache, keyed the same as every other tier. Bounds the
+  // `capture-pane` cost of the title-confirmation path (see screenVerdict) and
+  // carries the failure bookkeeping the unknown-hold reads. Pruned alongside
+  // the other per-candidate maps in collect().
+  private screenChecks = new Map<string, ScreenCheckState>();
+  // Completions already announced, keyed the same way: key → the `completedAt`
+  // whose `completed` transition was emitted. Purely a dedupe memo (the probe
+  // keeps reporting the same `completedAt` until the session moves on), not a
+  // state machine.
+  private emittedCompletions = new Map<string, number>();
+  // Windows-table candidate keys seen on the previous tick, used to tell
+  // "this key stopped running" apart from "this window no longer exists"
+  // (reason 'deleted') — including for keys that were already idle, whose
+  // disappearance emits no transition of its own.
+  private previousCandidateKeys = new Set<string>();
+  // Candidate keys whose tmux window was found alive on the previous tick. A
+  // key leaving this set while its `windows` row survives is a window
+  // disappearance, announced once (see collect()'s `window === null` branch).
+  private previousLiveKeys = new Set<string>();
+  // Recently-registered execution runs: key → the run's taskId, kept briefly
+  // after the run ends so a completion synthesized from the probe (a turn that
+  // started and finished between ticks) is still attributed to the operation
+  // instead of being announced as a hand-launched agent — which would make the
+  // frontend raise an "agent finished" notification on top of the task's own.
+  private recentOperationMeta = new Map<string, { taskId: number; at: number }>();
+  // Last refresh *attempt* (rate-limits retries) and last *success* (the only
+  // one Tier 4 freshness is judged on — see PROCESS_PROBE_MAX_AGE_MS).
+  private processProbeAt = 0;
+  private processProbeOkAt = 0;
+  private processProbeInflight = false;
+  // Keys whose Tier 4 answer is disarmed until the probe observes them
+  // non-working at least once. Armed when a key stops being an operation run:
+  // the cached snapshot still shows that run's own `working`, and letting it
+  // through would silently convert the operation entry into a manual one —
+  // a source-only change emitTransitions() does not emit, swallowing the
+  // run's `running: false` transition entirely.
+  private processDisarmedKeys = new Set<string>();
+  // Diagnostics only (GET /api/debug/activity): last tick's per-key attribution
+  // and the last transition announced per key. Neither is read by collect().
+  private decisions = new Map<string, ActivityDecision>();
+  private lastTransitions = new Map<string, { running: boolean; reason?: AgentActivityStopReason; at: number }>();
   private tickCounter = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking = false;
@@ -276,6 +585,7 @@ export class AgentActivityMonitor {
     private tmux: TmuxClient,
     private serverRepo: IServerRepository,
     private notificationBus: NotificationBus,
+    private processProbe?: ProcessActivityProbe,
     private onActivityDetected?: (serverName: string, target: string) => void,
   ) {}
 
@@ -295,6 +605,46 @@ export class AgentActivityMonitor {
 
   snapshot(): AgentActivityEntry[] {
     return [...this.state.values()];
+  }
+
+  /**
+   * Read-only diagnostic view of the last tick: one entry per key the ladder
+   * considered (operation runs, `windows` candidates and pure-supervised keys),
+   * carrying which rung decided it and the raw material each event-driven
+   * source last provided. Computed entirely from already-collected state — it
+   * neither ticks nor probes, so calling it has no effect on detection.
+   *
+   * Supervisor connection facts (pid/ready/frames) deliberately do NOT come
+   * from here: this class does not import SupervisorRegistry (see
+   * recordSupervisorSignal). The route-level aggregator joins them by key.
+   */
+  diagnostics(): ActivityDiagnosticEntry[] {
+    const probeAge = this.processProbeOkAt === 0 ? null : Date.now() - this.processProbeOkAt;
+    return [...this.decisions.entries()].map(([key, decision]) => {
+      const hook = this.hookStates.get(key);
+      const probe = this.processStates.get(key);
+      return {
+        serverName: decision.serverName,
+        target: decision.target,
+        taskId: decision.taskId,
+        state: decision.state,
+        decidedBy: decision.decidedBy,
+        evidenceAt: decision.evidenceAt,
+        refinedBy: decision.refinedBy,
+        hook: hook ? { lastSignalAt: hook.at, lastEvent: hook.status === 'running' ? 'start' as const : 'stop' as const } : undefined,
+        probe: probe
+          ? {
+            status: probe.status,
+            tailState: probe.tailState,
+            lastEntryTimestampMs: probe.lastEntryTimestampMs,
+            completedAt: probe.completedAt,
+            interruptedAt: probe.interruptedAt,
+            snapshotAgeMs: probeAge,
+          }
+          : undefined,
+        lastTransition: this.lastTransitions.get(key),
+      };
+    });
   }
 
   /**
@@ -383,9 +733,10 @@ export class AgentActivityMonitor {
     if (this.ticking) return;
     this.ticking = true;
     try {
-      const next = await this.collect();
-      this.emitTransitions(next);
+      const { next, reasons, deletedKeys, decisions } = await this.collect();
+      this.emitTransitions(next, reasons, deletedKeys);
       this.state = next;
+      this.decisions = decisions;
     } catch (err) {
       // Callers fire-and-forget tick(); swallow here so a failing tick can
       // never surface as an unhandled rejection and crash the process.
@@ -395,9 +746,98 @@ export class AgentActivityMonitor {
     }
   }
 
-  private async collect(): Promise<Map<string, AgentActivityEntry>> {
+  /**
+   * Refresh the Tier 4 cache when the last *attempt* is older than
+   * PROCESS_PROBE_REFRESH_MS (the attempt clock advances on failure too, so a
+   * persistently failing probe is retried at the same rate rather than on
+   * every tick; its staleness is handled by PROCESS_PROBE_MAX_AGE_MS, which is
+   * measured from the last success).
+   * Deliberately not awaited by collect(): the probe's ps/tmux walk is far too
+   * slow to sit on the 5s tick path, and Tier 4 is the lowest-priority source,
+   * so serving a ≤15s-old answer while the next one is computed is exactly the
+   * intended accuracy/cost tradeoff.
+   */
+  private kickProcessProbeRefresh(): void {
+    if (!this.processProbe) return;
+    if (this.processProbeInflight) return;
+    if (Date.now() - this.processProbeAt < PROCESS_PROBE_REFRESH_MS) return;
+    this.processProbeInflight = true;
+    void this.processProbe.list()
+      .then((entries) => {
+        const map = new Map<string, ProcessActivityProbeEntry>();
+        for (const e of entries) map.set(windowKey(e.serverName, e.target), e);
+        this.processStates = map;
+        this.processProbeOkAt = Date.now();
+        // This snapshot was taken after the disarm, so a non-working answer in
+        // it is proof the ex-operation key really stopped — re-arm Tier 4.
+        for (const key of [...this.processDisarmedKeys]) {
+          if (map.get(key)?.status !== 'working') this.processDisarmedKeys.delete(key);
+        }
+        // Forget completion memos for keys the probe no longer covers, so the
+        // map cannot grow without bound.
+        for (const key of [...this.emittedCompletions.keys()]) {
+          if (!map.has(key)) this.emittedCompletions.delete(key);
+        }
+      })
+      .catch((err) => {
+        // Keep the previous snapshot rather than blanking it: a failed probe is
+        // "no fresh answer", not "nothing is running".
+        console.error('[agent-activity] process probe failed:', err instanceof Error ? err.message : err);
+      })
+      .finally(() => {
+        this.processProbeAt = Date.now();
+        this.processProbeInflight = false;
+      });
+  }
+
+  /**
+   * Whether Tier 4 may speak for this key: the last successful probe must be
+   * recent enough (a stuck/failing probe must not keep a stopped agent lit),
+   * and the key must not be disarmed by a just-ended operation run.
+   */
+  private isProcessProbeUsableFor(key: string): boolean {
+    if (this.processProbeOkAt === 0) return false;
+    if (Date.now() - this.processProbeOkAt > PROCESS_PROBE_MAX_AGE_MS) return false;
+    return !this.processDisarmedKeys.has(key);
+  }
+
+  /**
+   * Build this tick's running set, together with the reason each key that could
+   * have been running is not. Reasons are recorded at the exact ladder rung that
+   * decided "not running" — that is the only place the material for the decision
+   * exists — and are consumed by emitTransitions(), which reads them only for
+   * keys that actually stopped (a reason recorded for a key some lower rung then
+   * lights is simply never read).
+   */
+  private async collect(): Promise<CollectResult> {
     this.tickCounter++;
+    this.kickProcessProbeRefresh();
     const next = new Map<string, AgentActivityEntry>();
+    const reasons = new Map<string, AgentActivityStopReason>();
+    const deletedKeys = new Set<string>();
+    const decisions = new Map<string, ActivityDecision>();
+    /** Diagnostics bookkeeping — deliberately never read back by this method. */
+    const decide = (
+      key: string,
+      serverName: string,
+      target: string,
+      decidedBy: ActivityDecidedBy,
+      state: ActivityDecidedState,
+      taskId?: number,
+      evidenceAt?: number,
+    ): void => {
+      decisions.set(key, { serverName, target: stripPaneSuffix(target), decidedBy, state, taskId, evidenceAt });
+    };
+    // Candidate keys a Tier 0 supervisor reported idle on this tick, mapped to
+    // the `windows` row and the entry they would publish if the Tier 2 blocked
+    // refinement finds their pane waiting on the user — see
+    // refineTier0IdleKeys(), which runs after the candidate loop. Until then
+    // they stay idle exactly as the Tier 0 rung recorded them.
+    const tier0IdlePending = new Map<string, { window: AgentWindow; entry: AgentActivityEntry }>();
+    // Candidate keys whose tmux window was actually found this tick; becomes
+    // previousLiveKeys at the end, so a window disappearing is detectable as an
+    // edge rather than as a level (see the `window === null` branch).
+    const liveKeys = new Set<string>();
 
     // 1. Operation runs: being registered means running — unless a Tier 0
     // supervisor signal exists for the key, in which case the supervisor's
@@ -413,8 +853,24 @@ export class AgentActivityMonitor {
       for (const e of executions) {
         const key = windowKey(e.serverName, e.target);
         operationKeys.add(key);
+        this.recentOperationMeta.set(key, { taskId: e.taskId, at: Date.now() });
         const supervisor = this.supervisorStates.get(key);
-        if (supervisor?.status === 'idle') continue; // supervised-idle → not running
+        if (supervisor?.status === 'idle') {
+          // supervised-idle → not running. An explicit active→idle report from
+          // the supervisor is the strongest completion evidence there is.
+          reasons.set(key, 'completed');
+          decide(key, e.serverName, e.target, 'tier0_supervisor', 'idle', e.taskId, supervisor.at);
+          continue;
+        }
+        decide(
+          key,
+          e.serverName,
+          e.target,
+          supervisor ? 'tier0_supervisor' : 'none',
+          supervisor?.agentStatus === 'blocked' ? 'blocked' : 'working',
+          e.taskId,
+          supervisor?.at,
+        );
         next.set(key, {
           serverName: e.serverName,
           target: stripPaneSuffix(e.target),
@@ -425,6 +881,15 @@ export class AgentActivityMonitor {
           status: supervisor?.agentStatus,
         });
       }
+    }
+
+    // Keys that were operation runs on the previous tick and are not anymore:
+    // disarm Tier 4 for them until the probe re-observes them (see
+    // processDisarmedKeys). Without this, a cached `working` from the run that
+    // just ended re-lights the key as a manual entry and the operation's
+    // `running: false` transition is never emitted.
+    for (const [key, entry] of this.state) {
+      if (entry.operation && !operationKeys.has(key)) this.processDisarmedKeys.add(key);
     }
 
     // 2. Manual agent windows not already covered by an operation run.
@@ -451,11 +916,33 @@ export class AgentActivityMonitor {
     // tick's candidates (window removed/retyped) so the Maps cannot grow
     // without bound.
     const candidateKeys = new Set(candidates.map((w) => windowKey(w.serverName, w.tmuxTarget)));
+    // Keys whose `windows` row vanished since the previous tick (window deleted
+    // in the UI, or its tmux window destroyed and the row cleaned up). These
+    // never reach the ladder below, so their reason has to be recorded here —
+    // and it is recorded even for keys that were already idle, because
+    // emitTransitions() announces those too (a finished row for a deleted
+    // window must disappear immediately, and that is the only signal that can
+    // carry it).
+    for (const key of this.previousCandidateKeys) {
+      if (candidateKeys.has(key) || operationKeys.has(key)) continue;
+      reasons.set(key, 'deleted');
+      deletedKeys.add(key);
+    }
+    this.previousCandidateKeys = candidateKeys;
     for (const key of this.activityHistory.keys()) {
       if (!candidateKeys.has(key)) this.activityHistory.delete(key);
     }
     for (const key of this.hookStates.keys()) {
       if (!candidateKeys.has(key)) this.hookStates.delete(key);
+    }
+    for (const key of this.processDisarmedKeys) {
+      if (!candidateKeys.has(key) && !operationKeys.has(key)) this.processDisarmedKeys.delete(key);
+    }
+    for (const key of this.screenChecks.keys()) {
+      if (!candidateKeys.has(key) && !operationKeys.has(key)) this.screenChecks.delete(key);
+    }
+    for (const [key, meta] of this.recentOperationMeta) {
+      if (Date.now() - meta.at > OPERATION_ATTRIBUTION_TTL_MS) this.recentOperationMeta.delete(key);
     }
     // Supervisor state is deliberately NOT pruned by candidate/operation
     // membership: a live supervisor connection with no `windows` row and no
@@ -469,9 +956,12 @@ export class AgentActivityMonitor {
     // per-key Tier 0 refine happens inside the loop below) — a supervisor
     // connection is itself sufficient proof an agent is present, so this is
     // the only place such a key becomes an entry.
-    this.collectPureSupervisedEntries(operationKeys, candidateKeys, next);
+    this.collectPureSupervisedEntries(operationKeys, candidateKeys, next, decisions);
 
-    if (candidates.length === 0) return next;
+    if (candidates.length === 0) {
+      this.previousLiveKeys = liveKeys;
+      return { next, reasons, deletedKeys, decisions };
+    }
 
     // Resolve each server once per tick, not once per candidate window.
     // Also include servers for operation-run entries (needed for post-check above).
@@ -491,14 +981,23 @@ export class AgentActivityMonitor {
     // queried in parallel so one slow/offline server cannot stretch the tick past
     // the poll interval.
     const sessionsByServer = new Map<string, TmuxSession[]>();
+    // Servers whose listing *failed*, as opposed to legitimately returning no
+    // sessions. Only the Tier 0 idle refinement reads this, to tell "this pane
+    // is gone" apart from "this tick could not look" (see refinedStatusFor).
+    const sessionErrors = new Set<string>();
     await Promise.all([...servers.entries()].map(async ([serverName, server]) => {
       if (!server) { sessionsByServer.set(serverName, []); return; }
       try {
         sessionsByServer.set(serverName, await this.tmux.listSessions(server));
       } catch {
         sessionsByServer.set(serverName, []);
+        sessionErrors.add(serverName);
       }
     }));
+
+    // Warm the screen-verdict cache before the per-key ladder runs, so its
+    // capture-pane calls happen in bounded parallel instead of one at a time.
+    await this.prefetchScreenVerdicts(candidates, servers, sessionsByServer);
 
     // Post-check: operation-run entries whose supervisor didn't report blocked.
     // For claude workers, screen-check them now that sessions are available.
@@ -514,7 +1013,13 @@ export class AgentActivityMonitor {
       const { windowSpec } = parseWindowTarget(w.tmuxTarget);
       const pi = extractPaneIndex(windowSpec, window.index, window.name);
       const classified = await this.classifyCandidateState(server, w, window, pi, key);
-      if (classified === 'blocked') next.set(key, { ...entry, status: 'blocked' });
+      if (classified === 'blocked') {
+        next.set(key, { ...entry, status: 'blocked' });
+        // The *running* verdict still belongs to the rung recorded above (Tier 0
+        // or the run registry); only the refined state changes here.
+        const decision = decisions.get(key);
+        if (decision) decisions.set(key, { ...decision, state: 'blocked' });
+      }
     }
 
     const nowSec = Math.floor(Date.now() / 1000);
@@ -546,6 +1051,7 @@ export class AgentActivityMonitor {
               }
             }
           }
+          decide(key, w.serverName, w.tmuxTarget, 'tier0_supervisor', effectiveStatus ?? 'working', w.taskId ?? undefined, supervisor.at);
           next.set(key, {
             serverName: w.serverName,
             target: stripPaneSuffix(w.tmuxTarget),
@@ -556,6 +1062,27 @@ export class AgentActivityMonitor {
             label: w.label ?? undefined,
             projectId: w.projectId ?? undefined,
             status: effectiveStatus,
+          });
+        } else {
+          // The supervisor explicitly reported its child idle — an authoritative
+          // completion (Tier 0), not a guess. One exception is queued below: the
+          // supervisor reads the pane *title*, which claude keeps at its idle
+          // glyph (`✳ `) while an AskUserQuestion selection is open, so this
+          // "idle" may in fact be "waiting on the user".
+          reasons.set(key, 'completed');
+          decide(key, w.serverName, w.tmuxTarget, 'tier0_supervisor', 'idle', w.taskId ?? undefined, supervisor.at);
+          tier0IdlePending.set(key, {
+            window: w,
+            entry: {
+              serverName: w.serverName,
+              target: stripPaneSuffix(w.tmuxTarget),
+              running: true,
+              source: 'supervised',
+              operation: false,
+              taskId: w.taskId ?? undefined,
+              label: w.label ?? undefined,
+              projectId: w.projectId ?? undefined,
+            },
           });
         }
         continue;
@@ -569,8 +1096,16 @@ export class AgentActivityMonitor {
       if (window === null) {
         this.activityHistory.delete(key);
         this.hookStates.delete(key);
+        reasons.set(key, 'deleted');
+        decide(key, w.serverName, w.tmuxTarget, 'none', 'offline', w.taskId ?? undefined);
+        // The tmux window is gone while its `windows` row survives, so the
+        // candidate-inventory diff above cannot see this. Announce it on the
+        // live→gone edge only (previousLiveKeys), never on every later tick:
+        // a stale row would otherwise re-announce its deletion every 5s.
+        if (this.previousLiveKeys.has(key)) deletedKeys.add(key);
         continue;
       }
+      liveKeys.add(key);
 
       // Foreground-command check is shared by both the hook path (crash
       // failsafe below) and the heuristic path: a focused shell pane that
@@ -610,6 +1145,10 @@ export class AgentActivityMonitor {
           //   and the Tier 2 heuristic path must become available again.
           this.hookStates.delete(key);
           this.activityHistory.delete(key);
+          // The hooked process is gone (crash failsafe, or it exited after its
+          // Stop hook) — that is a process disappearance, not a completion.
+          reasons.set(key, 'offline');
+          decide(key, w.serverName, w.tmuxTarget, 'tier1_hook', 'offline', w.taskId ?? undefined);
           continue;
         }
         if (hook.status === 'running') {
@@ -620,11 +1159,13 @@ export class AgentActivityMonitor {
             if (server) {
               const classified = await this.classifyCandidateState(server, w, window, paneIndex, key);
               if (classified === 'blocked') {
+                decide(key, w.serverName, w.tmuxTarget, 'tier1_hook', 'blocked', w.taskId ?? undefined);
                 next.set(key, { ...entry, status: 'blocked' });
                 continue;
               }
             }
           }
+          decide(key, w.serverName, w.tmuxTarget, 'tier1_hook', 'working', w.taskId ?? undefined);
           next.set(key, entry);
           continue;
         }
@@ -635,6 +1176,9 @@ export class AgentActivityMonitor {
         // stays in the foreground: a new UserPromptSubmit hook flips it back
         // to running, and the bare-shell branch above releases the key back
         // to the heuristic once the process exits.
+        // The Stop hook firing is an explicit completion signal (Tier 1).
+        reasons.set(key, 'completed');
+        decide(key, w.serverName, w.tmuxTarget, 'tier1_hook', 'idle', w.taskId ?? undefined);
         continue;
       }
 
@@ -657,22 +1201,69 @@ export class AgentActivityMonitor {
           // able to speak for this key again (e.g. a later tick reverting to
           // 'unknown' must re-earn the debounce from scratch).
           this.activityHistory.delete(key);
-          if (classified === 'idle') continue;
+          if (classified === 'idle') {
+            // Tier 2 read the agent's own UI (title/screen) and saw it back at
+            // rest — for a key it previously called working, that is a
+            // completion.
+            reasons.set(key, 'completed');
+            decide(key, w.serverName, w.tmuxTarget, 'tier2_title', 'idle', w.taskId ?? undefined);
+            continue;
+          }
+          decide(key, w.serverName, w.tmuxTarget, 'tier2_title', classified, w.taskId ?? undefined);
           next.set(key, { ...entry, status: classified });
           continue;
         }
       }
 
-      // Classifier undecided (or window's foreground is a bare shell) — fall
-      // back to Tier 3, the original activity-advance heuristic.
+      // Tier 4: process/transcript evidence for keys no higher tier could
+      // speak for. Reaching this point already means Tier 0 (no supervisor
+      // state), Tier 1 (no hook state) and Tier 2 (classifier 'unknown', or
+      // skipped on a bare-shell foreground) all declined to decide, so a
+      // Tier 4 'working' can never overwrite a higher tier's idle — every
+      // higher-tier verdict `continue`s or `set`s before this line.
+      //
+      // Only 'working' is a verdict. The probe's 'idle'/'offline' answers
+      // conflate genuine inactivity with "could not tell" (no session linked
+      // to the window, unknown agent type, non-local server — see
+      // WindowSessionResolver.getActivityStatus), so treating them as a
+      // verdict would silence the Tier 3 heuristic for every window whose
+      // session was never linked. Tier 4 is therefore purely additive over
+      // Tier 3: it can light a window Tier 3 would miss, never darken one
+      // Tier 3 would light.
+      if (this.isProcessProbeUsableFor(key)) {
+        const probe = this.processStates.get(key);
+        if (probe?.status === 'working') {
+          this.activityHistory.delete(key);
+          decide(key, w.serverName, w.tmuxTarget, 'tier4_probe', 'working', w.taskId ?? undefined);
+          next.set(key, entry);
+          continue;
+        }
+        // Not working, but the transcript says how this window's last turn
+        // ended. That ending is the reason material Tier 3 (a bare freshness
+        // heuristic) cannot produce — record it even though the tiers below may
+        // still light the key; reasons are only read for keys that stop.
+        if (probe && this.isFreshOutcome(probe.completedAt)) reasons.set(key, 'completed');
+        else if (probe && this.isFreshOutcome(probe.interruptedAt)) reasons.set(key, 'interrupted');
+      }
+
+      // No tier could decide — fall back to Tier 3, the original
+      // activity-advance heuristic.
       // Stale activity → idle. Reset the debounce window too: a later
       // resumption must re-earn START_CONFIRM_ADVANCES from scratch.
       if (nowSec - window.activity >= ACTIVITY_THRESHOLD_SEC) {
         this.activityHistory.delete(key);
+        // Tier 3 only knows "no fresh output" — it cannot tell a finished turn
+        // from an abandoned one, so it must not claim a completion. A reason
+        // already recorded by Tier 4 (which read the transcript) is better
+        // material and is kept.
+        if (!reasons.has(key)) reasons.set(key, 'unknown');
+        decide(key, w.serverName, w.tmuxTarget, 'tier3_heuristic', 'idle', w.taskId ?? undefined);
         continue;
       }
       if (!nonShellForeground) {
         this.activityHistory.delete(key);
+        if (!reasons.has(key)) reasons.set(key, 'offline');
+        decide(key, w.serverName, w.tmuxTarget, 'tier3_heuristic', 'offline', w.taskId ?? undefined);
         continue;
       }
 
@@ -685,6 +1276,7 @@ export class AgentActivityMonitor {
       // task-done one. It must re-earn START_CONFIRM_ADVANCES like any new key.
       const previous = this.state.get(key);
       if (previous?.source === 'manual') {
+        decide(key, w.serverName, w.tmuxTarget, 'tier3_heuristic', 'working', w.taskId ?? undefined);
         next.set(key, entry);
         continue;
       }
@@ -701,10 +1293,18 @@ export class AgentActivityMonitor {
       const advanceTicks = (prev?.advanceTicks ?? []).filter((t) => t > oldestValidTick);
       if (advanced) advanceTicks.push(this.tickCounter);
       this.activityHistory.set(key, { lastActivity: window.activity, advanceTicks });
-      if (advanceTicks.length < START_CONFIRM_ADVANCES) continue;
+      if (advanceTicks.length < START_CONFIRM_ADVANCES) {
+        if (!reasons.has(key)) reasons.set(key, 'unknown');
+        decide(key, w.serverName, w.tmuxTarget, 'tier3_heuristic', 'idle', w.taskId ?? undefined);
+        continue;
+      }
 
+      decide(key, w.serverName, w.tmuxTarget, 'tier3_heuristic', 'working', w.taskId ?? undefined);
       next.set(key, entry);
     }
+
+    // Tier 0 idle → blocked refinement, for the keys queued above only.
+    await this.refineTier0IdleKeys(tier0IdlePending, servers, sessionsByServer, sessionErrors, next, reasons, decisions);
 
     // Enrich all entries with paneName from live session data
     for (const [key, entry] of next) {
@@ -719,18 +1319,23 @@ export class AgentActivityMonitor {
       if (name) next.set(key, { ...entry, paneName: name });
     }
 
-    return next;
+    this.previousLiveKeys = liveKeys;
+    return { next, reasons, deletedKeys, decisions };
   }
 
   /**
-   * Tier 2: classify a candidate's liveness from its pane title, falling back
-   * to a `capture-pane` screen tail only when the title alone is
-   * inconclusive AND this window's activity has advanced since the last tick
-   * (herdr-style cost containment — capture-pane is one extra remote call per
-   * window, so it is skipped for windows that are not producing fresh
-   * output at all). Returns 'unknown' when the classifier has no rule for
-   * this agentType/title/screen combination, telling the caller to fall back
-   * to the activity-advance heuristic (Tier 3).
+   * Tier 2: classify a candidate's liveness from its pane title, consulting a
+   * `capture-pane` screen tail in two cases — a claude title that cannot be
+   * trusted on its own (see below), and a title the classifier has no rule for
+   * at all, which is additionally gated on this window's activity having
+   * advanced since the last tick (herdr-style cost containment: a window
+   * producing no output has nothing new to read). Screen reads go through
+   * screenVerdict(), so a pane that is not redrawing costs no repeat
+   * `capture-pane` regardless of which case brought us here.
+   *
+   * Returns 'unknown' when the classifier has no rule for this
+   * agentType/title/screen combination, telling the caller to fall back to the
+   * activity-advance heuristic (Tier 3).
    */
   private async classifyCandidateState(
     server: ServerConfig,
@@ -744,12 +1349,19 @@ export class AgentActivityMonitor {
     const paneTitle = getRelevantPaneTitle(window.panes, paneIndex);
     const titleOnly = classifyPaneState({ paneTitle, agentType: w.workerType });
 
-    // Claude keeps a braille spinner title while showing a permission prompt,
-    // so a 'working' title must be confirmed against the screen content.
-    if (w.workerType === 'claude' && titleOnly === 'working') {
-      const screenTail = await this.captureScreenTail(server, w.tmuxTarget);
-      if (screenTail === null) return titleOnly;
-      return classifyPaneState({ paneTitle, agentType: w.workerType, screenTail });
+    // Claude's title means "not waiting on the user" in both directions while
+    // it *is* waiting: the working spinner stays up during a permission prompt,
+    // and the idle glyph (`✳ `) stays up during an AskUserQuestion selection.
+    // Only the screen tells those apart, so both verdicts are confirmed against
+    // it — a blocked screen turns either one into 'blocked', and nothing else
+    // about the title's verdict changes.
+    if (w.workerType === 'claude' && (titleOnly === 'working' || titleOnly === 'idle')) {
+      const verdict = await this.screenVerdict(server, w, window, paneIndex, key);
+      if (verdict === 'blocked') return 'blocked';
+      if (verdict === 'not_blocked') return titleOnly;
+      // Could not read the screen: the title alone is exactly what is untrustworthy
+      // here, so hold the previous tick's status rather than acting on it.
+      return this.heldStatusOnUnknown(key) ?? titleOnly;
     }
 
     if (titleOnly !== 'unknown') return titleOnly;
@@ -761,6 +1373,241 @@ export class AgentActivityMonitor {
     const screenTail = await this.captureScreenTail(server, w.tmuxTarget);
     if (screenTail === null) return 'unknown';
     return classifyPaneState({ paneTitle, agentType: w.workerType, screenTail });
+  }
+
+  /**
+   * Tier 0 idle refinement: a supervisor decides from the pane *title*, and
+   * claude keeps its idle glyph (`✳ `) in the title while an AskUserQuestion
+   * selection is open — so a Tier 0 `idle` can really mean "waiting on the
+   * user". For those keys only, Tier 2's pane classification is consulted as
+   * well, and a `blocked` verdict keeps the key running (as a blocked entry)
+   * instead of announcing a completion.
+   *
+   * Strictly one-directional: a Tier 2 answer of idle or working alike leaves
+   * Tier 0's idle standing. Promoting idle → working here would break the
+   * ladder invariant that a lower rung can never overrule a higher one; only
+   * the blocked refinement is allowed, because it does not contradict "not
+   * working", it only says the agent has not finished.
+   *
+   * A screen check that could not answer at all (capture-pane failed, or this
+   * server's tmux snapshot is missing) is not "not blocked": it holds the
+   * previous tick's status instead, so a momentary tmux failure cannot announce
+   * a completion for a pane still sitting on its selection prompt. See
+   * heldStatusOnUnknown for the bound on that hold.
+   *
+   * Scoped to `windows`-table candidates, the keys this misreading was
+   * observed on (a hand-launched supervised claude pane). Two neighbours are
+   * deliberately left alone: a pure-supervised key (no `windows` row, see
+   * collectPureSupervisedEntries) has no stored worker type to classify its
+   * pane against, and a registered execution run reports its own waiting state
+   * through the task itself — its agent is driven by markers, not by the
+   * interactive selection UI this refinement reads.
+   */
+  private async refineTier0IdleKeys(
+    pending: Map<string, { window: AgentWindow; entry: AgentActivityEntry }>,
+    servers: Map<string, ServerConfig | null>,
+    sessionsByServer: Map<string, TmuxSession[]>,
+    sessionErrors: Set<string>,
+    next: Map<string, AgentActivityEntry>,
+    reasons: Map<string, AgentActivityStopReason>,
+    decisions: Map<string, ActivityDecision>,
+  ): Promise<void> {
+    for (const [key, { window: w, entry }] of pending) {
+      const status = await this.refinedStatusFor(key, w, servers, sessionsByServer, sessionErrors);
+      if (!status) continue;
+
+      next.set(key, { ...entry, status });
+      // The key is running after all, so the completion recorded at the Tier 0
+      // rung must not fire. It is recorded again — and then read — on the tick
+      // where the pane stops being blocked (or where the hold expires).
+      reasons.delete(key);
+      // Attribution stays with Tier 0 (it decided "not working"); the refining
+      // rung is reported alongside it so the diagnostics panel can render this
+      // row as "Tier 0 idle + Tier 2 blocked".
+      const decision = decisions.get(key);
+      if (decision) decisions.set(key, { ...decision, state: status, refinedBy: 'tier2_title' });
+    }
+  }
+
+  /**
+   * The status a Tier 0 idle key should keep this tick, or null to let its idle
+   * (and the completion recorded with it) stand. Resolves the pane, reads the
+   * screen through the cache, and maps the tri-state answer: 'blocked' keeps
+   * the key running as blocked, 'not_blocked' releases it, and 'unknown' —
+   * including a server whose `listSessions` failed this tick — holds the
+   * previous tick's status.
+   */
+  private async refinedStatusFor(
+    key: string,
+    w: AgentWindow,
+    servers: Map<string, ServerConfig | null>,
+    sessionsByServer: Map<string, TmuxSession[]>,
+    sessionErrors: Set<string>,
+  ): Promise<'working' | 'blocked' | null> {
+    // Both of these are permanent facts rather than a failed look, so they
+    // release the key instead of holding it: an agent type the classifier has
+    // no rules for can never produce a blocked verdict, and a missing server
+    // config is not going to resolve on the next tick either.
+    if (!(CLASSIFIABLE_AGENT_TYPES as readonly string[]).includes(w.workerType)) return null;
+    const server = servers.get(w.serverName);
+    if (!server) return null;
+    // The snapshot this tick's window lookup would use is missing, so "window
+    // not found" below would be a lie — treat it as unreadable.
+    if (sessionErrors.has(w.serverName)) return this.heldStatusOnUnknown(key);
+    // A successful listing that does not contain the window means the pane is
+    // genuinely gone; nothing is waiting on the user there.
+    const window = findLiveWindow(sessionsByServer.get(w.serverName) ?? [], w.tmuxTarget);
+    if (!window) return null;
+
+    const { windowSpec } = parseWindowTarget(w.tmuxTarget);
+    const paneIndex = extractPaneIndex(windowSpec, window.index, window.name);
+    const verdict = await this.screenVerdict(server, w, window, paneIndex, key);
+    if (verdict === 'blocked') return 'blocked';
+    if (verdict === 'unknown') return this.heldStatusOnUnknown(key);
+    return null;
+  }
+
+  /**
+   * Whether a pane whose *title* says it is not waiting is in fact waiting on
+   * the user, answered from the cache whenever re-reading the pane cannot
+   * change the answer:
+   * - already checked on this tick (the prefetch pass below warms exactly the
+   *   keys this tick's ladder will ask about), or
+   * - the last successful check said 'not_blocked' AND the window has produced
+   *   no output since (`window_activity` unchanged) AND that check ran in a
+   *   later second than the activity it observed — so nothing can have been
+   *   drawn since without advancing activity. This is what keeps a permanently
+   *   idle registered pane from costing a `capture-pane` every 5 seconds.
+   *
+   * A cached 'blocked' is deliberately never reused: noticing the moment the
+   * prompt clears is the whole point, and a pane that only redraws its input
+   * box may not advance activity enough to invalidate the cache by itself.
+   */
+  private async screenVerdict(
+    server: ServerConfig,
+    w: AgentWindow,
+    window: TmuxWindow,
+    paneIndex: number | null,
+    key: string,
+  ): Promise<ScreenVerdict> {
+    const cached = this.screenChecks.get(key);
+    if (cached?.tick === this.tickCounter) return cached.verdict;
+    if (
+      cached?.verdict === 'not_blocked'
+      && cached.okActivityAt === window.activity
+      && (cached.okCapturedAtSec ?? 0) > cached.okActivityAt
+    ) {
+      this.screenChecks.set(key, { ...cached, tick: this.tickCounter });
+      return cached.verdict;
+    }
+
+    const verdict = await this.readScreenVerdict(server, w, window, paneIndex);
+    if (verdict === 'unknown') {
+      this.screenChecks.set(key, {
+        ...cached,
+        tick: this.tickCounter,
+        verdict,
+        // Keep the start of the run, so the hold below expires on the age of
+        // the *first* failure rather than being reset by every later one.
+        unknownSince: cached?.unknownSince ?? Date.now(),
+      });
+    } else {
+      this.screenChecks.set(key, {
+        tick: this.tickCounter,
+        verdict,
+        okActivityAt: window.activity,
+        okCapturedAtSec: Math.floor(Date.now() / 1000),
+      });
+    }
+    return verdict;
+  }
+
+  /**
+   * Read the pane's screen and classify it, without caching. 'unknown' when the
+   * screen could not be read at all (capture-pane failed or exited non-zero) or
+   * when the classifier has no rules for this agent type — both mean "could not
+   * look", which callers must not confuse with "looked, and it is not blocked".
+   */
+  private async readScreenVerdict(
+    server: ServerConfig,
+    w: AgentWindow,
+    window: TmuxWindow,
+    paneIndex: number | null,
+  ): Promise<ScreenVerdict> {
+    if (!(CLASSIFIABLE_AGENT_TYPES as readonly string[]).includes(w.workerType)) return 'unknown';
+    const screenTail = await this.captureScreenTail(server, w.tmuxTarget);
+    if (screenTail === null) return 'unknown';
+    const paneTitle = getRelevantPaneTitle(window.panes, paneIndex);
+    return classifyPaneState({ paneTitle, agentType: w.workerType, screenTail }) === 'blocked'
+      ? 'blocked'
+      : 'not_blocked';
+  }
+
+  /**
+   * What to publish for a key whose screen check could not answer: the status
+   * the previous tick published, so a transient capture/tmux failure neither
+   * invents a completion for a pane that is still waiting on the user, nor
+   * drops one that was already blocked.
+   *
+   * This is a *deferral*, not a promotion — the key keeps the status it already
+   * had, never a better one — and it is bounded: once the failures have lasted
+   * UNKNOWN_HOLD_MS the tier's own verdict stands again, so an unreadable pane
+   * cannot pin a stale running row forever. Returns null when there is nothing
+   * to hold (the key was not running) or the hold has expired.
+   */
+  private heldStatusOnUnknown(key: string): 'working' | 'blocked' | null {
+    const previous = this.state.get(key);
+    if (!previous) return null;
+    const unknownSince = this.screenChecks.get(key)?.unknownSince;
+    if (unknownSince !== undefined && Date.now() - unknownSince > UNKNOWN_HOLD_MS) return null;
+    return previous.status === 'blocked' ? 'blocked' : 'working';
+  }
+
+  /**
+   * Warm the screen-verdict cache for every candidate whose pane this tick's
+   * ladder is going to ask about, running the captures per server with bounded
+   * concurrency (SCREEN_CHECK_CONCURRENCY). The per-key ladder below then hits
+   * the same-tick cache instead of awaiting one tmux round trip after another —
+   * the difference between a tick costing the sum of every pane's latency and
+   * costing the slowest few.
+   */
+  private async prefetchScreenVerdicts(
+    candidates: AgentWindow[],
+    servers: Map<string, ServerConfig | null>,
+    sessionsByServer: Map<string, TmuxSession[]>,
+  ): Promise<void> {
+    const tasksByServer = new Map<string, Array<() => Promise<void>>>();
+    for (const w of candidates) {
+      const server = servers.get(w.serverName);
+      if (!server) continue;
+      const window = findLiveWindow(sessionsByServer.get(w.serverName) ?? [], w.tmuxTarget);
+      if (!window) continue;
+      const { windowSpec } = parseWindowTarget(w.tmuxTarget);
+      const paneIndex = extractPaneIndex(windowSpec, window.index, window.name);
+      const key = windowKey(w.serverName, w.tmuxTarget);
+      if (!this.willConsultScreen(w, window, paneIndex, key)) continue;
+      const tasks = tasksByServer.get(w.serverName) ?? [];
+      tasks.push(async () => { await this.screenVerdict(server, w, window, paneIndex, key); });
+      tasksByServer.set(w.serverName, tasks);
+    }
+    await Promise.all([...tasksByServer.values()]
+      .map((tasks) => runWithConcurrency(tasks, SCREEN_CHECK_CONCURRENCY)));
+  }
+
+  /**
+   * Whether this tick's ladder will consult the pane's screen for a candidate —
+   * kept in sync with the two places that call screenVerdict(): the Tier 0 idle
+   * refinement (any classifiable agent) and the claude title confirmation in
+   * classifyCandidateState. Reading it wrong only costs (or saves) a prefetch;
+   * the ladder itself still asks, and a missed prefetch simply captures inline.
+   */
+  private willConsultScreen(w: AgentWindow, window: TmuxWindow, paneIndex: number | null, key: string): boolean {
+    if (!(CLASSIFIABLE_AGENT_TYPES as readonly string[]).includes(w.workerType)) return false;
+    if (this.supervisorStates.get(key)?.status === 'idle') return true;
+    if (w.workerType !== 'claude') return false;
+    const paneTitle = getRelevantPaneTitle(window.panes, paneIndex);
+    const titleOnly = classifyPaneState({ paneTitle, agentType: w.workerType });
+    return titleOnly === 'working' || titleOnly === 'idle';
   }
 
   /** Tail of `capture-pane` (~30 lines) for the classifier's screen-content rules. Null on any tmux error. */
@@ -786,9 +1633,18 @@ export class AgentActivityMonitor {
     operationKeys: Set<string>,
     candidateKeys: Set<string>,
     next: Map<string, AgentActivityEntry>,
+    decisions: Map<string, ActivityDecision>,
   ): void {
     for (const [key, sv] of this.supervisorStates) {
       if (operationKeys.has(key) || candidateKeys.has(key)) continue;
+      decisions.set(key, {
+        serverName: sv.serverName,
+        target: sv.target,
+        taskId: sv.taskId ?? undefined,
+        decidedBy: 'tier0_supervisor',
+        state: sv.status !== 'running' ? 'idle' : sv.agentStatus === 'blocked' ? 'blocked' : 'working',
+        evidenceAt: sv.at,
+      });
       if (sv.status !== 'running') continue;
       next.set(key, {
         serverName: sv.serverName,
@@ -803,7 +1659,82 @@ export class AgentActivityMonitor {
     }
   }
 
-  private emitTransitions(next: Map<string, AgentActivityEntry>): void {
+  /** True when a probe-reported ending is recent enough to act on. */
+  private isFreshOutcome(at: number | null): boolean {
+    return at !== null && Date.now() - at <= COMPLETION_SYNTHESIS_MAX_AGE_MS;
+  }
+
+  /**
+   * Resolve why a key that was running is not anymore. The ladder recorded the
+   * reason at the rung that decided it; anything it could not attribute falls
+   * back to 'unknown' — except a supervised entry whose supervisor connection
+   * itself is gone (child_exit / WS disconnect), which is a process/connection
+   * disappearance rather than a completion.
+   */
+  private stopReason(
+    key: string,
+    previous: AgentActivityEntry,
+    reasons: Map<string, AgentActivityStopReason>,
+  ): AgentActivityStopReason {
+    const recorded = reasons.get(key);
+    if (recorded) return recorded;
+    if (previous.source === 'supervised' && !this.supervisorStates.has(key)) return 'offline';
+    return 'unknown';
+  }
+
+  /**
+   * Announce completions the tick loop cannot see because the turn was shorter
+   * than the polling interval: the key was never in `state` (no tick ever
+   * caught it working), yet the Tier 4 probe reports a `terminal_final` written
+   * moments ago. Deduped on the completion's own timestamp, so the same ending
+   * is announced exactly once. This is what replaces the old "keep terminal_final
+   * looking `working` for 120s so the client can observe a working→idle edge"
+   * hack (P3).
+   */
+  private emitSynthesizedCompletions(next: Map<string, AgentActivityEntry>, deletedKeys: Set<string>): void {
+    for (const key of deletedKeys) {
+      // The window is gone: its cached probe answer (taken while it still
+      // existed) must not resurrect it as a completion right after the
+      // deletion was announced — the client would rebuild the very finished
+      // row the deletion just removed. Drop the cached answer outright so no
+      // later tick can either, until the probe refreshes without it.
+      this.processStates.delete(key);
+      this.emittedCompletions.delete(key);
+    }
+    for (const [key, probe] of this.processStates) {
+      if (next.has(key) || this.state.has(key)) continue;
+      const completedAt = probe.completedAt;
+      if (!this.isFreshOutcome(completedAt) || completedAt === null) continue;
+      if (this.emittedCompletions.get(key) === completedAt) continue;
+      this.emittedCompletions.set(key, completedAt);
+      // Attribution: a run that started and finished between two ticks is
+      // still an operation, and announcing it as a hand-launched agent makes
+      // the client raise an "agent finished" notification on top of the task's
+      // own task_done. recentOperationMeta keeps that attribution alive for a
+      // short window after the run leaves getRunning().
+      const operationMeta = this.recentOperationMeta.get(key);
+      this.notificationBus.emit({
+        type: 'agent:activity',
+        payload: {
+          serverName: probe.serverName,
+          target: probe.target,
+          running: false,
+          source: operationMeta ? 'operation' : 'manual',
+          operation: operationMeta !== undefined,
+          taskId: operationMeta?.taskId ?? probe.taskId,
+          label: probe.label,
+          projectId: probe.projectId,
+          reason: 'completed',
+        },
+      });
+    }
+  }
+
+  private emitTransitions(
+    next: Map<string, AgentActivityEntry>,
+    reasons: Map<string, AgentActivityStopReason>,
+    deletedKeys: Set<string>,
+  ): void {
     for (const [key, entry] of next) {
       const previous = this.state.get(key);
       // Emit both on a brand-new key and on a status flip (e.g.
@@ -811,6 +1742,7 @@ export class AgentActivityMonitor {
       // that only becomes blocked mid-run (after its initial "running" emit
       // already fired) would never surface the transition at all.
       if (previous === undefined || previous.status !== entry.status) {
+        this.lastTransitions.set(key, { running: true, at: Date.now() });
         this.notificationBus.emit({
           type: 'agent:activity',
           payload: {
@@ -833,6 +1765,14 @@ export class AgentActivityMonitor {
     }
     for (const [key, entry] of this.state) {
       if (!next.has(key)) {
+        const reason = this.stopReason(key, entry, reasons);
+        // Remember an announced completion so the synthesis pass below cannot
+        // announce the same ending a second time.
+        if (reason === 'completed') {
+          const completedAt = this.processStates.get(key)?.completedAt;
+          if (completedAt != null) this.emittedCompletions.set(key, completedAt);
+        }
+        this.lastTransitions.set(key, { running: false, reason, at: Date.now() });
         this.notificationBus.emit({
           type: 'agent:activity',
           payload: {
@@ -846,9 +1786,33 @@ export class AgentActivityMonitor {
             label: entry.label,
             projectId: entry.projectId,
             paneName: entry.paneName,
+            reason,
           },
         });
       }
+    }
+
+    // A window deleted while already idle emits no transition above (it was not
+    // in `state`), yet consumers must drop its finished row immediately. This is
+    // one-shot by construction: `deletedKeys` holds only rows that vanished from
+    // the candidate inventory on *this* tick.
+    for (const key of deletedKeys) {
+      if (this.state.has(key) || next.has(key)) continue;
+      const [serverName, target] = splitWindowKey(key);
+      this.lastTransitions.set(key, { running: false, reason: 'deleted', at: Date.now() });
+      this.notificationBus.emit({
+        type: 'agent:activity',
+        payload: { serverName, target, running: false, source: 'manual', operation: false, reason: 'deleted' },
+      });
+    }
+
+    this.emitSynthesizedCompletions(next, deletedKeys);
+
+    // Diagnostics memo only — bound its growth by age (keys are never reused for
+    // task windows, whose targets carry a random suffix per run).
+    const transitionCutoff = Date.now() - LAST_TRANSITION_TTL_MS;
+    for (const [key, transition] of this.lastTransitions) {
+      if (transition.at < transitionCutoff) this.lastTransitions.delete(key);
     }
   }
 }

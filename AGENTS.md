@@ -228,6 +228,10 @@ packages/
   `AZITO_WEBHOOK_TOKEN`. `AgentActivityMonitor.recordHookSignal()` resolves the signal against the `windows` table and, when matched,
   flips that key's state immediately (Tier 1), bypassing the sliding-window heuristic (Tier 2) until either a crash-failsafe
   (foreground pane reverts to a bare shell without a Stop signal) or the window disappears clears the hook state
+- `POST /api/webhooks/agent-interaction` receives pending-answer signals (`azito-interaction.sh` = Notification hook, no question
+  text; `azito-question.sh` = PermissionRequest hook, with the AskUserQuestion `tool_input`), which drive `InteractionMonitor`
+  and the chat question card. Full spec of the activity tiers, hook profile resolution (`AZITO_PREFIX`) and the question
+  lifecycle: `docs/ja/activity-detection.md` (canonical) / `docs/en/activity-detection.md`
 
 ### Worker
 - Runs in tmux pane via `send-keys`
@@ -361,6 +365,19 @@ packages/
 - Branch search: `GET /api/servers/:name/branches?working_directory=` (optional working directory override for branch listing)
 - Units: `/api/units` CRUD + `execute`/`follow-up`/`stop`/`approve-plan`/`logs` (merged Operation+WorkerProfile — behavior + runtime; Issue #263 Refine B)
 - Operations: `GET /api/operations` (currently running execution runs — `{ unitId, taskId, target }[]`; no operations table anymore)
+- Activity diagnostics: `GET /api/debug/activity` (read-only Tier attribution per window — `decidedBy`
+  (`tier0_supervisor`/`tier1_hook`/`tier2_title`/`tier3_heuristic`/`tier4_probe`/`none`) plus the supervisor /
+  hook / probe material and the last announced transition; rendered in Settings → System「稼働検知診断」).
+  `refinedBy: 'tier2_title'` は「Tier 0 が idle と判定した行を Tier 2 の画面分類が blocked へ精緻化した」印
+  （claude は AskUserQuestion 選択中もタイトルが idle グリフ `✳ ` のままで、タイトルしか見ない supervisor が
+  idle を報告するため）。精緻化された行は稼働（blocked）のまま残り、完了遷移は発行されない。Tier 0 が沈黙して
+  いるキー（supervisor 再接続直後など）では Tier 2 自身が同じ画面確認を行い、`decidedBy: 'tier2_title'` /
+  `state: 'blocked'` として同じ結論に達する（idle → blocked の一方向のみ。working への昇格はしない）。
+  画面確認は blocked / not_blocked / unknown の3値で、unknown（capture-pane 失敗・tmux スナップショット取得
+  失敗）は「blocked でない」ではなく直前 tick の状態を最大30秒保持する。コスト面では、再描画のない
+  （`window_activity` が進んでいない）ペインは再キャプチャせず、キャプチャはサーバー単位で最大4並列。
+  Tier 判定・タイミング定数・reason・サーバータイプ別対応範囲の全仕様は `docs/ja/activity-detection.md`
+  （正本）/ `docs/en/activity-detection.md` を参照
 - Sidekick tags (Issue #263 Refine A): `tags: string[]` replaces the old single-value `phase:` frontmatter field. The five
   phase names are special-cased as "phase tags" (a Unit's `phaseConfig` can only assign a phase to a Sidekick carrying
   that tag; `isDefault` requires at least one phase tag); any other tag is free-form. `/azt-sidekick` accepts multiple
@@ -374,7 +391,15 @@ npx -w packages/server vitest run          # Unit tests (vitest 4.1.8)
 npx -w packages/server tsc --noEmit        # Server type check
 npx -w packages/frontend tsc --noEmit      # Frontend type check
 npm run depcruise                          # Module dependency direction / circular dependency check
+npm run e2e                                # Playwright E2E (activity detection suite; local only, not in CI)
 ```
+
+`npm run e2e` builds the frontend + tui-supervisor, then runs `e2e/` against a throwaway hub instance:
+temp `AZITO_DATA_DIR`, random free port, and an isolated tmux server via `TMUX_TMPDIR` (the host's tmux,
+:3001 and :5173 are never touched). Agents are scripted fakes — no LLM is launched. First run needs
+`npx playwright install chromium`. The server honours `AZITO_E2E_FAST_INTERVALS=1` to shorten the activity
+monitor's *observation* periods only (probe refresh / cache TTL); judgment thresholds are unchanged and the
+variable has no effect when unset.
 
 ### Adding a Migration
 1. Create `packages/server/src/shared/db/migrations/NNN_description.ts`

@@ -8,7 +8,25 @@
     "openInZed": "Open in Zed",
     "sourceView": "Source",
     "previewView": "Preview",
-    "splitView": "Split"
+    "splitView": "Split",
+    "newFile": "New File",
+    "newFolder": "New Folder",
+    "rename": "Rename",
+    "copyPath": "Copy Path",
+    "pathCopied": "Path copied",
+    "delete": "Delete",
+    "deleteFileTitle": "Delete File",
+    "deleteFolderTitle": "Delete Folder",
+    "deleteConfirmFile": "Are you sure you want to delete this file? This action cannot be undone.",
+    "deleteConfirmFolder": "Are you sure you want to delete this folder and all its contents? This action cannot be undone.",
+    "downloadNotSupported": "Folder download is not supported",
+    "nameEmpty": "Name is required",
+    "nameInvalidChars": "Name cannot contain / \\ or control characters",
+    "nameStartsDotDot": "Name cannot start with ..",
+    "nameDuplicate": "A file or folder with this name already exists",
+    "createFailed": "Failed to create",
+    "deleteFailed": "Failed to delete",
+    "renameFailed": "Failed to rename"
   },
   "preview": {
     "downloadFile": "Download file",
@@ -25,5 +43,42 @@
     "deleteFile": "Delete",
     "copiedUrl": "API URL copied (for agents — requires an auth token)",
     "dropToUpload": "Drop to upload"
+  },
+  "search": {
+    "placeholder": "Search file names and content…",
+    "wholeWordTitle": "Match Whole Word",
+    "caseSensitiveTitle": "Match Case",
+    "regexTitle": "Use Regular Expression",
+    "toggleDetails": "Toggle search details",
+    "include": "Files to Include",
+    "exclude": "Files to Exclude",
+    "includePlaceholder": "e.g. *.ts, src/**",
+    "excludePlaceholder": "node_modules, .git, dist, .worktrees",
+    "summary": "{{files}} files · {{hits}} hits ({{engine}}, {{time}}ms)",
+    "truncated": "Showing top 200 results — refine your query",
+    "noMatch": "No matches found",
+    "noMatchHint": "Check excluded patterns",
+    "timedOut": "Search timed out (10s)",
+    "failed": "Search failed",
+    "nameMatch": "Name match"
+  },
+  "sidebar": {
+    "title": "Files"
+  },
+  "worktrees": {
+    "mainLabel": "Main",
+    "orphaned": "Orphaned",
+    "running": "Running",
+    "changedFiles": "{{count}} files changed",
+    "loadError": "Failed to load worktrees",
+    "retry": "Retry"
+  },
+  "rootSwitcher": {
+    "filter": "Filter by name / branch / #task ID…",
+    "footerCount": "{{count}} items",
+    "footerHint": "↑↓ Navigate  ↵ Select  Esc Close",
+    "orphanedNotice": "No task found for this worktree",
+    "copyPath": "Copy path",
+    "pathCopied": "Path copied"
   }
 }

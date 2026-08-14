@@ -98,6 +98,26 @@ describe('resolveActivePane', () => {
     expect(pane).toEqual(dotName[0].windows[0].panes[0]);
   });
 
+  it('does not reinterpret ".N" as a pane suffix when the raw target matches a dotted window name', () => {
+    // Regression: "foo.1" is a real window name here, resolved via the raw-target match. A
+    // pane happening to have index 1 must not be selected just because the raw target ends
+    // in ".1" — the trailing ".N" pane-suffix reinterpretation only applies to the
+    // stripped-fallback resolution path.
+    const dotName: Session[] = [{
+      name: 's',
+      windows: [{
+        index: 0,
+        name: 'foo.1',
+        panes: [
+          { index: 0, title: 'first', command: 'bash', width: 80, height: 24, active: false },
+          { index: 1, title: 'second', command: 'bash', width: 80, height: 24, active: false },
+        ],
+      }],
+    }];
+    const pane = resolveActivePane(dotName, 's:foo.1');
+    expect(pane).toEqual(dotName[0].windows[0].panes[0]);
+  });
+
   it('falls back to first pane when no active and no pane index', () => {
     const noActive: Session[] = [{
       name: 's',

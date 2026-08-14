@@ -44,6 +44,11 @@ interface NotificationCenterContextValue {
   dismissToast: (id: string) => void;
   openNotification: (notification: AppNotification) => void;
   openTask: (taskId: number) => void;
+  /**
+   * ターミナルタブを開く。プロジェクトが現在のワークスペースと異なる場合（グローバルページ
+   * 表示中を含む）は、そのプロジェクトのワークスペースへ遷移してからタブを開く。
+   */
+  openTerminal: (serverName: string, target: string, projectId?: number) => void;
 }
 
 const defaultValue: NotificationCenterContextValue = {
@@ -56,6 +61,7 @@ const defaultValue: NotificationCenterContextValue = {
   dismissToast: () => {},
   openNotification: () => {},
   openTask: () => {},
+  openTerminal: () => {},
 };
 
 const NotificationCenterContext = createContext<NotificationCenterContextValue>(defaultValue);
@@ -270,8 +276,11 @@ export function NotificationCenterProvider({ children }: { children: React.React
       // 実行終了後も task_id を保持するので、その window で手動起動した agent にも
       // taskId が載り、通知が丸ごと落ちる。
       // 注視中（フォーカスあり＋アクティブタブ/PiPで見ている）のターゲットは通知しない。
+      // 完了通知は reason='completed' のみ（P3）。中断・ウィンドウ削除・プロセス消滅・判定不能を
+      // 「完了」として通知しない — 稼働していなかったキーにも running:false は流れてくる。
       const isManualLaunch = !payload.operation;
-      if (!payload.running && isManualLaunch && !isWatched(payload.serverName, payload.target, payload.taskId)) {
+      if (!payload.running && payload.reason === 'completed' && isManualLaunch
+        && !isWatched(payload.serverName, payload.target, payload.taskId)) {
         pushNotification(buildAgentNotification('agent_finished', 'notifications:kinds.agentFinished', { label: agentLabelOf(payload) }, payload));
       }
     }, [pushNotification, isWatched]),
@@ -391,7 +400,7 @@ export function NotificationCenterProvider({ children }: { children: React.React
   const unreadCount = notifications.reduce((acc, n) => acc + (n.read ? 0 : 1), 0);
 
   return (
-    <NotificationCenterContext.Provider value={{ notifications, unreadCount, markRead, markAllRead, clear, toasts, dismissToast, openNotification, openTask }}>
+    <NotificationCenterContext.Provider value={{ notifications, unreadCount, markRead, markAllRead, clear, toasts, dismissToast, openNotification, openTask, openTerminal: openTerminalInProject }}>
       {children}
       <NotificationToastStack />
     </NotificationCenterContext.Provider>

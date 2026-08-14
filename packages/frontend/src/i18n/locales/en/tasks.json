@@ -78,6 +78,7 @@
   "contextMenu": {
     "showView": "Show {{view}}",
     "browser": "Browser",
+    "addBrowser": "Add browser",
     "cannotResolveServer": "Cannot resolve server",
     "addWindow": "Add Window",
     "closeTab": "Close tab"
@@ -196,7 +197,8 @@
   },
   "ref": {
     "issue": "Issue #{{number}}",
-    "pr": "PR #{{number}}"
+    "pr": "PR #{{number}}",
+    "unit": "Unit: {{name}}"
   },
   "git": {
     "linkedIssue": "Linked Issue",

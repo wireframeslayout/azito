@@ -23,6 +23,13 @@ AZITO_PREFIX="${AZITO_PREFIX:-}"
 # ── 引数パース ──
 usage_exit() {
   echo "Usage: $0 [--azito-url http://host:3001] [--webhook-token <token>] [--ui-token <token>] [--server-name <name>] [--prefix <prefix>]" >&2
+  echo "" >&2
+  echo "  --prefix <name>  この配線を独立したハブ用プロファイルとして扱う。設定は" >&2
+  echo "                   ~/.azito/azitoctl-<name>.env に書き出され、hook コマンドには" >&2
+  echo "                   AZITO_PREFIX=<name> が埋め込まれる。1台から複数のハブへ" >&2
+  echo "                   シグナルを送る場合は、ハブごとに --prefix を変えて実行する" >&2
+  echo "                   （URL・トークン・サーバー名はプロファイル単位でまとめて解決され、" >&2
+  echo "                   変数単位の部分上書きはできない）。" >&2
   exit 1
 }
 
@@ -177,6 +184,8 @@ MCP_ENTRY_KEY="azt-mcp"
 MCP_SERVER_PATH="$HARNESS_DIR/skills/azt-mcp/mcp-server/index.js"
 NOTIFY_HOOK_SCRIPT="$HARNESS_DIR/hooks/azito-notify.sh"
 ACTIVITY_HOOK_SCRIPT="$HARNESS_DIR/hooks/azito-activity.sh"
+INTERACTION_HOOK_SCRIPT="$HARNESS_DIR/hooks/azito-interaction.sh"
+QUESTION_HOOK_SCRIPT="$HARNESS_DIR/hooks/azito-question.sh"
 if [ -z "${AZITO_URL:-}" ]; then
   echo "WARNING: --azito-url が未指定のため http://localhost:3001 を使用します。" >&2
   echo "リモートサーバーでは必ず --azito-url で hub の URL を指定してください。" >&2
@@ -190,14 +199,37 @@ ENV_PREFIX=""
 [[ -n "$AZITO_SERVER_NAME" ]] && ENV_PREFIX="${ENV_PREFIX}AZITO_SERVER_NAME=$(printf '%q' "$AZITO_SERVER_NAME") "
 
 NOTIFY_HOOK_CMD="${ENV_PREFIX}bash $NOTIFY_HOOK_SCRIPT"
-ACTIVITY_START_CMD="${ENV_PREFIX}bash $ACTIVITY_HOOK_SCRIPT start"
-ACTIVITY_STOP_CMD="${ENV_PREFIX}bash $ACTIVITY_HOOK_SCRIPT stop"
+
+# activity / interaction hook は宛先（URL・Webhook トークン・サーバー名）を必ず
+# 「単一のプロファイル」からまとめて解決する（変数単位の部分上書きは禁止 —
+# hooks/azito-activity.sh の "Destination profile resolution" 参照）。URL や
+# サーバー名だけを埋め込むとトークンだけが別プロファイル由来になり得るため、
+# ここで埋め込むのはプロファイルの選択子である AZITO_PREFIX だけにする。値一式は
+# azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env（下の "azitoctl.env" 節が
+# --azito-url / --webhook-token / --server-name から書き出すファイル）から読む。
+# 1台から複数ハブへ配線する場合は、ハブごとに
+#   setup.sh --prefix <name> --azito-url <url> --webhook-token <t> --server-name <n>
+# を実行してプロファイルを作り分ける（トークンは env ファイル側にのみ置かれ、
+# hook コマンドの argv には載らない）。
+PROFILE_PREFIX=""
+[[ -n "$AZITO_PREFIX" ]] && PROFILE_PREFIX="AZITO_PREFIX=$(printf '%q' "$AZITO_PREFIX") "
+
+ACTIVITY_START_CMD="${PROFILE_PREFIX}bash $ACTIVITY_HOOK_SCRIPT start"
+ACTIVITY_STOP_CMD="${PROFILE_PREFIX}bash $ACTIVITY_HOOK_SCRIPT stop"
+INTERACTION_CMD="${PROFILE_PREFIX}bash $INTERACTION_HOOK_SCRIPT"
+QUESTION_CMD="${PROFILE_PREFIX}bash $QUESTION_HOOK_SCRIPT"
 
 if [[ -f "$NOTIFY_HOOK_SCRIPT" ]]; then
   chmod +x "$NOTIFY_HOOK_SCRIPT"
 fi
 if [[ -f "$ACTIVITY_HOOK_SCRIPT" ]]; then
   chmod +x "$ACTIVITY_HOOK_SCRIPT"
+fi
+if [[ -f "$INTERACTION_HOOK_SCRIPT" ]]; then
+  chmod +x "$INTERACTION_HOOK_SCRIPT"
+fi
+if [[ -f "$QUESTION_HOOK_SCRIPT" ]]; then
+  chmod +x "$QUESTION_HOOK_SCRIPT"
 fi
 
 # tar 展開等で実行権が落ちるケースに備え、azitoctl / azs の実行権を明示的に保証する
@@ -346,6 +378,12 @@ if command -v node >/dev/null 2>&1; then
     const notifyHookPath = process.argv[11];
     const activityHookPath = process.argv[12];
     const azitoUiToken = process.argv[13];
+    const interactionCmd = process.argv[14];
+    const interactionHookExists = process.argv[15] === 'true';
+    const interactionHookPath = process.argv[16];
+    const questionCmd = process.argv[17];
+    const questionHookExists = process.argv[18] === 'true';
+    const questionHookPath = process.argv[19];
 
     let settings = {};
     try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch {}
@@ -438,6 +476,26 @@ if command -v node >/dev/null 2>&1; then
       messages.push('  稼働検出フック: スキップ (hook スクリプトが見つかりません)');
     }
 
+    // Notification hook (Phase B リアルタイム未回答検出): AskUserQuestion 等で
+    // Claude Code が入力待ちになった瞬間に発火し、agent-interaction webhook 経由で
+    // チャットビューのバナー表示を駆動する。
+    if (interactionHookExists) {
+      upsertHook('Notification', interactionHookPath, interactionCmd, 'Notification hook (未回答検出)');
+    } else {
+      messages.push('  未回答検出フック: スキップ (hook スクリプトが見つかりません)');
+    }
+
+    // PermissionRequest hook (Issue #338 チャット内回答): AskUserQuestion がピッカーを
+    // 開いた瞬間に発火し、質問文と選択肢そのものを agent-interaction webhook へ送る。
+    // これによりチャットビューがバナーではなく回答可能な質問カードを出せる。
+    // AskUserQuestion 以外の PermissionRequest には一切干渉しない（hook スクリプト冒頭の
+    // 注記を参照 — 許可判断に影響し得る stdout を出さず即 exit 0 する）。
+    if (questionHookExists) {
+      upsertHook('PermissionRequest', questionHookPath, questionCmd, 'PermissionRequest hook (質問内容取得)');
+    } else {
+      messages.push('  質問内容取得フック: スキップ (hook スクリプトが見つかりません)');
+    }
+
     if (changed) {
       fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
     }
@@ -449,7 +507,13 @@ if command -v node >/dev/null 2>&1; then
     "$([[ -f "$ACTIVITY_HOOK_SCRIPT" ]] && echo true || echo false)" \
     "$NOTIFY_HOOK_SCRIPT" \
     "$ACTIVITY_HOOK_SCRIPT" \
-    "$AZITO_UI_TOKEN"
+    "$AZITO_UI_TOKEN" \
+    "$INTERACTION_CMD" \
+    "$([[ -f "$INTERACTION_HOOK_SCRIPT" ]] && echo true || echo false)" \
+    "$INTERACTION_HOOK_SCRIPT" \
+    "$QUESTION_CMD" \
+    "$([[ -f "$QUESTION_HOOK_SCRIPT" ]] && echo true || echo false)" \
+    "$QUESTION_HOOK_SCRIPT"
 
   if [[ -n "$AZITO_WEBHOOK_TOKEN" ]]; then
     echo "  AZITO_WEBHOOK_TOKEN: 設定済み（hook command に埋め込み）"
@@ -499,6 +563,18 @@ else
       echo "      { \"hooks\": [{ \"type\": \"command\", \"command\": \"$ACTIVITY_START_CMD\" }] }"
       echo '    ]'
     else
+      echo '    ]'
+    fi
+    if [[ -f "$INTERACTION_HOOK_SCRIPT" ]]; then
+      echo '    ,'
+      echo '    "Notification": ['
+      echo "      { \"hooks\": [{ \"type\": \"command\", \"command\": \"$INTERACTION_CMD\" }] }"
+      echo '    ]'
+    fi
+    if [[ -f "$QUESTION_HOOK_SCRIPT" ]]; then
+      echo '    ,'
+      echo '    "PermissionRequest": ['
+      echo "      { \"hooks\": [{ \"type\": \"command\", \"command\": \"$QUESTION_CMD\" }] }"
       echo '    ]'
     fi
     echo '  }'

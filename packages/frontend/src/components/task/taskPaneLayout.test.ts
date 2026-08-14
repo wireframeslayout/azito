@@ -355,7 +355,7 @@ describe('resolveWindowContextExtra', () => {
   it('resolves online window/pane metadata for a matching single-pane window', () => {
     const w = makeWindow({ serverName: 'local', tmuxTarget: 'sess:1.0' });
     expect(resolveWindowContextExtra(w, sessionData)).toEqual({
-      online: true, windowName: 'main', paneTarget: 'sess:main.0', paneTitle: 'my-title',
+      online: true, windowName: 'main', paneTarget: 'sess:main.0', paneTitle: 'my-title', paneCommand: 'bash',
     });
   });
 

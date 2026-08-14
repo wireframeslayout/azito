@@ -4,6 +4,7 @@ import { Chip } from '../ui/Chip';
 import { Spinner } from '../ui/Spinner';
 import { useSystemUpdate } from '../../hooks/useSystemUpdate';
 import { useConfirm } from '../../hooks/useConfirm';
+import ActivityDiagnosticsPanel from './sections/ActivityDiagnosticsPanel';
 import type { DeployMode, SystemUpdateStatus, VersionEntry } from '../../hooks/useSystemUpdate';
 
 const DEPLOY_MODE_LABEL: Record<DeployMode, string> = {
@@ -80,17 +81,22 @@ export default function SystemSection() {
     if (!res.started) setStartError(res.error ?? t('system.couldNotStart'));
   };
 
+  // 稼働検知診断の表示資格はサーバーが判定する（ソースコード版、またはインストール版で
+  // 開発中バージョンチャンネル）。判定結果はこの更新情報応答に載るため、応答が取れていない
+  // 間は節ごと出さない（一般利用者の画面に診断を出さない側に倒す）。
+  const showDiagnostics = status?.diagnosticsEnabled === true;
+
   if (loading && !status) {
-    return <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-dim)', fontSize: 'var(--font-md)' }}>Loading...</div>;
+    return (
+      <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-dim)', fontSize: 'var(--font-md)' }}>Loading...</div>
+    );
   }
 
   if (!status) {
     return (
-      <div>
-        <p style={{ fontSize: 'var(--font-md)', color: 'var(--text-dim)', lineHeight: 1.5 }}>
-          {t('system.fetchFailed')}
-        </p>
-      </div>
+      <p style={{ fontSize: 'var(--font-md)', color: 'var(--text-dim)', lineHeight: 1.5 }}>
+        {t('system.fetchFailed')}
+      </p>
     );
   }
 
@@ -245,6 +251,8 @@ export default function SystemSection() {
           </button>
         </div>
       </div>
+
+      {showDiagnostics && <ActivityDiagnosticsPanel />}
     </div>
   );
 }

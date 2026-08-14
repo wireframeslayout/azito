@@ -151,6 +151,8 @@
     "closeTab": "Close tab",
     "disconnected": "Disconnected",
     "windowMissing": "Window not found",
+    "connectFailed": "Connection failed",
+    "connectFailedTaskHint": "If the pane itself is gone, you can respawn the window from the task panel.",
     "respawn": "Respawn",
     "unregisteredWindow": "This window is not registered in AZITO and cannot be respawned",
     "launchingClaude": "Launching Claude Code…",
@@ -165,7 +167,17 @@
     "taskOwnedPaneBadge": "Task execution (restricted privileges)",
     "taskOwnedPaneTooltip": "Input into this pane does not elevate privileges. Perform operator actions from the browser or a session that has sourced operator.env.",
     "taskOwnedPaneBadgeCompat": "Task execution (compat mode — restrictions not enforced)",
-    "taskOwnedPaneTooltipCompat": "Scoped authorization is not yet enabled on this hub, so input into this pane currently carries operator-equivalent privileges, same as any other pane. Enable AZITO_SCOPED_AUTH to enforce the restriction this badge otherwise describes."
+    "taskOwnedPaneTooltipCompat": "Scoped authorization is not yet enabled on this hub, so input into this pane currently carries operator-equivalent privileges, same as any other pane. Enable AZITO_SCOPED_AUTH to enforce the restriction this badge otherwise describes.",
+    "viewMode": {
+      "ariaLabel": "Display mode",
+      "terminal": "Terminal",
+      "chat": "Chat"
+    },
+    "quickKeyBar": {
+      "ariaLabel": "Quick keys",
+      "keyboardToggle": "Show keyboard controls",
+      "tabSwitcher": "Open tab switcher"
+    }
   },
   "resourceWarning": {
     "title": "Server resources are constrained",
@@ -188,7 +200,11 @@
     "criticalMemory": "Critical (Memory {{percent}}%)",
     "warningMemory": "Warning (Memory {{percent}}%)",
     "fetchingResources": "Fetching resource information…",
-    "deleteFailed": "Delete failed: {{error}}"
+    "deleteFailed": "Delete failed: {{error}}",
+    "activityDiagnostics": "Activity",
+    "activityEventDriven": "Event-driven detection active",
+    "activityFallback": "Fallback detection only",
+    "activityNone": "No activity"
   },
   "globalPages": {
     "backToWorkspace": "Back to workspace",

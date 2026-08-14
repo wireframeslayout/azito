@@ -1,7 +1,7 @@
 import React, { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../ui/Icon';
-import { Spinner } from '../../ui';
+import { Spinner, Notice } from '../../ui';
 import { api } from '../../../api/client';
 import { useLongPress, longPressStyle } from '../../../hooks/useLongPress';
 import type { BrowserObject } from '../../../lib/workspaceObjects';
@@ -178,41 +178,32 @@ export default function BrowserSection({
       })}
 
       {errorServers.map(([serverName, message]) => (
-        <div
+        <Notice
           key={`error-${serverName}`}
-          role="status"
-          style={{
-            margin: '2px 4px 6px',
-            padding: '8px 10px',
-            borderRadius: 'var(--radius-sm)',
-            background: 'color-mix(in srgb, var(--danger) 10%, transparent)',
-            boxShadow: 'inset 2px 0 0 var(--danger)',
-            fontSize: 'var(--font-xs)',
-            color: 'var(--text)',
-          }}
+          tone="danger"
+          sub={`${serverName}: ${message}`}
+          action={
+            <button
+              type="button"
+              onClick={onRefresh}
+              style={{
+                background: 'var(--bg-hover)',
+                border: 'none',
+                color: 'var(--text)',
+                font: 'inherit',
+                fontSize: 'var(--font-xs)',
+                padding: '3px 9px',
+                borderRadius: 'var(--radius-sm)',
+                cursor: 'pointer',
+              }}
+            >
+              {t('objects.retry')}
+            </button>
+          }
+          style={{ margin: '2px 4px 6px' }}
         >
           {t('objects.browserError')}
-          {/* 実際のエラー内容（サーバー名 + 生のメッセージ）をそのまま出す。友好的な言い換えで隠さない */}
-          <span style={{ display: 'block', color: 'var(--text-dim)', marginTop: 2 }}>{serverName}: {message}</span>
-          <button
-            type="button"
-            onClick={onRefresh}
-            style={{
-              display: 'block',
-              marginTop: 7,
-              background: 'var(--bg-hover)',
-              border: 'none',
-              color: 'var(--text)',
-              font: 'inherit',
-              fontSize: 'var(--font-xs)',
-              padding: '3px 9px',
-              borderRadius: 'var(--radius-sm)',
-              cursor: 'pointer',
-            }}
-          >
-            {t('objects.retry')}
-          </button>
-        </div>
+        </Notice>
       ))}
     </div>
   );

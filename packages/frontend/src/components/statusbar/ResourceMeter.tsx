@@ -1,10 +1,12 @@
 interface ResourceMeterProps {
   value: number;
   width?: number | string;
+  /** バーの太さ(px)。デフォルト6。SP フローティングピルのミニメーター（Issue #338 T11 P1）は4を使う。 */
+  height?: number;
   warning?: boolean;
 }
 
-export function ResourceMeter({ value, width = 110, warning }: ResourceMeterProps) {
+export function ResourceMeter({ value, width = 110, height = 6, warning }: ResourceMeterProps) {
   const clamped = Math.max(0, Math.min(100, value));
   return (
     <span
@@ -15,7 +17,7 @@ export function ResourceMeter({ value, width = 110, warning }: ResourceMeterProp
       style={{
         display: 'inline-block',
         width,
-        height: 6,
+        height,
         borderRadius: 'var(--radius-sm)',
         background: 'color-mix(in srgb, var(--border) 60%, transparent)',
         overflow: 'hidden',

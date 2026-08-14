@@ -1,4 +1,9 @@
 {
+  "tab": {
+    "closeDirtyTitle": "Close tab with unsaved changes?",
+    "closeDirtyMessage": "\"{{name}}\" has unsaved changes. Closing this tab will discard them.",
+    "closeDirtyConfirm": "Discard and close"
+  },
   "pane": {
     "splitRight": "Split right",
     "splitBelow": "Split below",
@@ -9,11 +14,11 @@
     "nextPane": "Move to next pane",
     "dragHint": "Drag tabs here, or open from the sidebar",
     "dragHintShort": "Drag tabs here",
-    "selectHint": "Select a pane, operation, or task from the sidebar",
     "openTab": "Open tab",
     "splitSuccessH": "Pane split horizontally",
     "splitSuccessV": "Pane split vertically",
-    "splitFailed": "Split failed: {{error}}"
+    "splitFailed": "Split failed: {{error}}",
+    "viewSegments": "Task view switcher"
   },
   "activeWindows": {
     "title": "Active Windows",
@@ -25,6 +30,21 @@
     "done": "Done",
     "planReview": "Plan Review",
     "noActive": "No active windows"
+  },
+  "activityPill": {
+    "ariaLabel": "Activity status",
+    "statusBarWorking": "{{count}} working",
+    "workingSection": "Working {{count}}",
+    "finishedSection": "Recently finished {{count}}",
+    "empty": "No agents running",
+    "viewHealthDetails": "View details ▸"
+  },
+  "home": {
+    "needsAttention": "Needs Attention",
+    "active": "Active",
+    "windowsActive": "{{active}} of {{total}} windows active",
+    "moreWindows": "+{{count}}",
+    "noActive": "No agents running"
   },
   "windows": {
     "title": "Windows",
@@ -54,6 +74,7 @@
     "loadingAgents": "Loading agent definitions…",
     "windowList": "Window list",
     "select": "Select",
+    "paneCount": "{{count}} panes",
     "detachFromProject": "Detach from project",
     "deleteWindow": "Delete window",
     "quickAddTitle": "Add {{label}} — {{serverName}}"
@@ -136,18 +157,27 @@
   },
   "mobile": {
     "menu": "Menu",
-    "projectAndMode": "Project and display mode",
-    "appMenu": "Application menu",
-    "mode": "Mode",
-    "projects": "Projects",
-    "projectSwitch": "Switch project",
-    "displayMode": "Display mode",
-    "keyboardControls": "Keyboard controls",
-    "notifications": "Notifications",
-    "notificationsUnread": "Notifications ({{count}} unread)",
     "serverHealth": "Server Health",
-    "updateAvailable": "Update available",
-    "mobileMenu": "Mobile menu"
+    "noTabSelected": "No tab selected",
+    "tabSwitcherOpen": "Open tabs ({{count}}) — open tab switcher",
+    "tabSwitcherTitle": "Open tabs",
+    "tabSwitcherClose": "Close tab switcher",
+    "tabSwitcherEmpty": "No tabs are open",
+    "tabSwitcherUngrouped": "Other",
+    "tabSwitcherNewTab": "New tab",
+    "tabSwitcherPinnedSection": "Pinned",
+    "navMenu": "Navigation menu",
+    "pinTab": "Pin tab",
+    "unpinTab": "Unpin tab",
+    "pinToastPinned": "Pinned",
+    "pinToastUnpinned": "Unpinned"
+  },
+  "mobileNav": {
+    "sectionGlobal": "AZITO",
+    "switchLabel": "Switch",
+    "projectSwitch": "Switch project",
+    "activePanesRow": "Active panes",
+    "settingsRow": "AZITO Settings"
   },
   "sessionTree": {
     "installingAgent": "Installing agent...",
@@ -160,7 +190,9 @@
     "noServerConfigured": "No server environments configured.",
     "noWorkingDir": "No working directory set for this server.",
     "projectSettings": "Project Settings",
-    "gitDiff": "Git Diff"
+    "gitDiff": "Git Diff",
+    "searchFiles": "Search files",
+    "fileTree": "File tree"
   },
   "welcome": {
     "createFirst": "Create your first project to start commanding agents.",
@@ -195,10 +227,18 @@
     "title": "Objects",
     "sectionWindows": "Windows",
     "sectionOperations": "Operation Windows",
+    "sectionActive": "Active",
+    "sectionIdle": "Idle",
+    "sectionOffline": "Offline",
     "sectionBrowsers": "Browsers",
     "noObjects": "No objects in this project yet",
     "noOperations": "No running operations",
+    "noActive": "Nothing active right now",
+    "noIdle": "Nothing idle right now",
+    "noOffline": "No offline windows",
     "noBrowsers": "No browsers open",
+    "searchPlaceholder": "Search title, ID, branch…",
+    "noSearchResults": "No matches for \"{{query}}\"",
     "openBrowser": "Open new",
     "closeBrowserGroup": "Close this browser group",
     "browserPages": "{{count}} pages",
@@ -212,14 +252,38 @@
     "copyUrl": "Copy URL",
     "urlCopied": "URL copied",
     "closeGroupAction": "Close group",
-    "closeGroupFailed": "Failed to close the group"
+    "closeGroupFailed": "Failed to close the group",
+    "deleteBrowserTitle": "Delete browser",
+    "deleteBrowserMessage": "Close \"{{label}}\" and remove it from the task?"
   },
   "viewLabels": {
     "description": "Description",
+    "overview": "Overview",
     "unit": "Unit",
     "git": "Git",
     "summary": "Summary",
     "commits": "Commits",
     "diff": "Diff"
+  },
+  "taskDetailMenu": {
+    "title": "Task actions",
+    "display": "View",
+    "showFull": "Show full text",
+    "unitAndExecution": "Unit & execution",
+    "unassigned": "Unassigned",
+    "commitCount": "{{count}} commits",
+    "pinOn": "On",
+    "pinOff": "Off",
+    "closeTab": "Close tab",
+    "currentWindow": "Currently viewing",
+    "windowsAndBrowser": "Windows & browser",
+    "moreActions": "More actions",
+    "moreActionsHint": "Edit, pin, archive…",
+    "caution": "Handle with care",
+    "confirmRequired": "Confirm required",
+    "editTask": "Edit task",
+    "pinTab": "Pin tab",
+    "addWindowChip": "Window",
+    "addBrowserChip": "Browser"
   }
 }

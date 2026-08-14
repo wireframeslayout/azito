@@ -25,7 +25,7 @@ export default function TaskWindowDropdown({
 }: TaskWindowDropdownProps) {
   const { t } = useTranslation('tasks');
   const ref = useClickOutside<HTMLDivElement>(onClose);
-  const { windowIndicator, finishedEntries } = useAgentActivity();
+  const { windowIndicator, findFinished } = useAgentActivity();
 
   const checkActive = (serverName: string, target: string, level: 'window' | 'pane') =>
     !!activeTarget && activeTarget.serverName === serverName
@@ -34,9 +34,9 @@ export default function TaskWindowDropdown({
   const renderExtra = useCallback((w: WindowItem) => {
     const status = windowIndicator(w.serverName, w.tmuxTarget);
     if (!status) return null;
-    const fe = status === 'finished' ? finishedEntries.find((e) => e.serverName === w.serverName && e.target === w.tmuxTarget) : undefined;
+    const fe = status === 'finished' ? findFinished(w.serverName, w.tmuxTarget) : undefined;
     return <WindowActivityIndicator status={status} finishedAt={fe?.finishedAt} />;
-  }, [windowIndicator, finishedEntries]);
+  }, [windowIndicator, findFinished]);
 
   return (
     <div

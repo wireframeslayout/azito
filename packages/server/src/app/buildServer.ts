@@ -28,6 +28,7 @@ import tasksRoutes from '../modules/tasks/routes';
 import providersRoutes from '../modules/agents/routes';
 import phasePromptsRoutes from '../modules/prompt/routes';
 import storageRoutes, { fileBrowseRoutes } from '../modules/files/routes';
+import { FileSearchService } from '../modules/files/FileSearchService';
 import notificationRoutes from '../modules/notifications/routes';
 import usageRoutes from '../modules/usage/routes';
 import webhookRoutes from '../modules/notifications/webhooks';
@@ -38,9 +39,14 @@ import sessionsRoutes from '../modules/tmux/routes/sessions';
 import resourceGuardRoutes from '../modules/servers/resources/routes';
 import gitRoutes from '../modules/git/routes';
 import sidekicksRoutes from '../modules/sidekicks/routes';
+import chatCommandsRoutes from '../modules/chat-commands/routes';
 import supervisorsRoutes from '../modules/supervisors/routes';
 import healthRoutes from '../modules/health/routes';
 import systemRoutes from '../modules/system/routes';
+import transcriptsRoutes from '../modules/transcripts/routes';
+import { TRANSCRIPT_SOURCES, claudeTranscriptSource } from '../modules/transcripts/sources/registry';
+import { TranscriptPaneService } from '../modules/transcripts/TranscriptPaneService';
+import { WindowInputService } from '../modules/transcripts/WindowInputService';
 
 import { createTokenVerifier } from '../modules/servers/auth/tokenAuth';
 import { resolvePrincipal } from '../shared/auth/resolvePrincipal';
@@ -77,9 +83,10 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     projectSecretRepo, storageSettingsRepo, pushSubRepo, agentWatchRepo, resourceGuardSettingsRepo, resourceGuard,
     tmuxClient, transportFactory, worktreeServiceFactory, gitProvider, storageClient,
     agentInstaller, agentBundler, harnessInstaller, tmuxInstaller,
-    executeTaskUseCase, agentActivityMonitor, windowRespawnService, taskRestoreService, sessionStrategyFactory, sessionCaptureService, usageService,
+    executeTaskUseCase, agentActivityMonitor, interactionMonitor, windowRespawnService, taskRestoreService, sessionStrategyFactory, sessionCaptureService, usageService,
+    windowSessionResolver, windowActivityStatusService,
     pushService, vapidKeys, notificationBus, sidekickPackageService, sidekickPackageLoader,
-    sidekickSyncService, unitTypeLoader, agentSignalService, supervisorRegistry, agentTurnRepo, turnSignalHub,
+    sidekickSyncService, unitTypeLoader, chatCommandLoader, agentSignalService, supervisorRegistry, agentTurnRepo, turnSignalHub,
     browserSessionManager, browserGroupRepo, deployModeDetector, systemUpdateService, channelResolver, auditLogService,
     originationService, scopedAuthEnabled, taskPaneEnvironmentService,
   } = wiring;
@@ -133,6 +140,10 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // rationale).
   notificationBus.on((event) => {
     if (event.type !== 'agent:activity') return;
+    // A 'deleted' transition means the window itself is gone (it may not even
+    // have been running); that is window bookkeeping, not "the pane went idle",
+    // so it must not consume a watch. Every other stop reason still does.
+    if (event.payload.reason === 'deleted') return;
     notifyAgentWatchesOnIdle(event.payload, { agentWatchRepo, pushSubRepo, pushService }).catch(() => {});
   });
 
@@ -141,11 +152,16 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // Sends a push to every subscriber (not just one-shot watches) when an
   // agent transitions to idle (completed) or to a blocked (approval-required)
   // state, so users get notified without having to register a watch first.
+  //
+  // Only `reason: 'completed'` counts as "finished" (P3): a stop caused by a
+  // user interrupt, a deleted window, a vanished process or an unattributable
+  // heuristic timeout is not a completion, and pushing "agent finished" for
+  // those is exactly the false-completion class this reason field exists to end.
   notificationBus.on((event) => {
     if (event.type !== 'agent:activity') return;
-    const { serverName, target, label, taskId, running, status } = event.payload;
+    const { serverName, target, label, taskId, running, status, reason } = event.payload;
 
-    if (running === false) {
+    if (running === false && reason === 'completed') {
       const subs = pushSubRepo.findAll();
       pushService.sendToAll(subs, (sub) => ({
         ...getPushMessage(sub.lang, 'agent.finished', { label: label || target, serverName }),
@@ -416,11 +432,12 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       return taskPaneEnvironmentService.buildEnvForSecondaryWindow(task, server);
     },
   });
-  await app.register(fileBrowseRoutes, { serverRepo, tmux: tmuxClient });
-  await app.register(gitRoutes, { serverRepo, transportFactory });
+  const fileSearchService = new FileSearchService(transportFactory);
+  await app.register(fileBrowseRoutes, { serverRepo, tmux: tmuxClient, projectServerRepo, transportFactory, searchService: fileSearchService });
+  await app.register(gitRoutes, { serverRepo, transportFactory, taskRepo, projectServerRepo, worktreeServiceFactory });
   await app.register(projectsRoutes, { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux: tmuxClient, serverRepo, projectSecretRepo, originationService });
   await app.register(unitsRoutes, { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, projectServerRepo, serverRepo, sidekickLoader: sidekickPackageLoader, unitTypeLoader });
-  await app.register(operationsRoutes, { executeTaskUseCase, agentActivityMonitor });
+  await app.register(operationsRoutes, { executeTaskUseCase, agentActivityMonitor, supervisorRegistry, windowRepo });
   await app.register(auditLogRoutes, { auditLogService });
   await app.register(tasksRoutes, {
     taskRepo, auditLogService, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux: tmuxClient, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService: windowRespawnService, taskRestoreService, unitTypeLoader, sidekickLoader: sidekickPackageLoader, projectSecretRepo, originationService, taskTokenRepo,
@@ -434,7 +451,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       });
     },
   });
-  await app.register(windowsRoutes, { windowRepo, projectRepo, taskRepo, tmux: tmuxClient, serverRepo, respawnService: windowRespawnService, sessionStrategyFactory, sessionCaptureService, supervisorRegistry, notificationBus, resourceGuard });
+  await app.register(windowsRoutes, { windowRepo, projectRepo, taskRepo, tmux: tmuxClient, serverRepo, respawnService: windowRespawnService, sessionStrategyFactory, sessionCaptureService, supervisorRegistry, windowActivityStatusService, notificationBus, resourceGuard });
   await app.register(providersRoutes, { providerRepo: wiring.providerRepo });
   const renderSkillPromptUseCase = new RenderSkillPromptUseCase(
     taskRepo,
@@ -457,6 +474,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     taskRepo,
     verifyToken: verifyWebhookToken,
     recordAgentActivity: (signal) => agentActivityMonitor.recordHookSignal(signal),
+    recordInteractionSignal: (signal) => interactionMonitor.recordSignal(signal),
   });
   await app.register(agentSignalRoutes, { agentSignalService, verifyToken: verifyWebhookToken, auditLogService });
   await app.register(hooksRoutes, { notificationBus, verifyToken: verifyWebhookToken });
@@ -479,8 +497,17 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     resolveAssignedSidekickNames: resolveAssignedSidekickNamesForTask,
     scopedAuthEnabled,
   });
+  await app.register(chatCommandsRoutes, { chatCommandLoader });
   await app.register(supervisorsRoutes, { supervisorRegistry });
   await app.register(healthRoutes, { deployModeDetector, scopedAuthEnabled });
+  await app.register(transcriptsRoutes, {
+    sources: TRANSCRIPT_SOURCES,
+    transcriptPaneService: new TranscriptPaneService(claudeTranscriptSource, tmuxClient, serverRepo),
+    windowSessionResolver,
+    windowInputService: new WindowInputService(windowRepo, tmuxClient, serverRepo),
+    windowRepo,
+    interactionMonitor,
+  });
   await app.register(systemRoutes, { systemUpdateService, channelResolver });
   await app.register(browserRoutes, {
     browserSessionManager,

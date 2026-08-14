@@ -1,5 +1,9 @@
+import { execFileSync } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { PtyProxy, type PtyExitInfo } from './PtyProxy';
+import { buildLoginShellCommand, PtyProxy, type PtyExitInfo } from './PtyProxy';
 
 async function waitFor(cond: () => boolean, timeoutMs = 5_000): Promise<void> {
   const start = Date.now();
@@ -8,6 +12,40 @@ async function waitFor(cond: () => boolean, timeoutMs = 5_000): Promise<void> {
     await new Promise((r) => setTimeout(r, 20));
   }
 }
+
+describe('buildLoginShellCommand', () => {
+  it('re-exports TMUX and TMUX_PANE ahead of the command', () => {
+    const cmd = buildLoginShellCommand('claude --resume', {
+      TMUX: '/tmp/tmux-1000/default,1234,0',
+      TMUX_PANE: '%273',
+    });
+    expect(cmd).toBe(`export TMUX='/tmp/tmux-1000/default,1234,0' TMUX_PANE='%273'; claude --resume`);
+  });
+
+  it('injects nothing when the variables are absent (outside tmux)', () => {
+    expect(buildLoginShellCommand('claude', {})).toBe('claude');
+  });
+
+  it('injects nothing when the variables are empty strings', () => {
+    expect(buildLoginShellCommand('claude', { TMUX: '', TMUX_PANE: '' })).toBe('claude');
+  });
+
+  it('injects only the variables that are present', () => {
+    expect(buildLoginShellCommand('claude', { TMUX_PANE: '%1' })).toBe(`export TMUX_PANE='%1'; claude`);
+  });
+
+  it('escapes single quotes in values', () => {
+    expect(buildLoginShellCommand('claude', { TMUX_PANE: `%1'; rm -rf /; echo '` })).toBe(
+      `export TMUX_PANE='%1'\\''; rm -rf /; echo '\\'''; claude`,
+    );
+  });
+
+  it('produces a string a shell evaluates back to the original value', () => {
+    const value = `weird'"$( )value`;
+    const cmd = buildLoginShellCommand('printf %s "$TMUX_PANE"', { TMUX_PANE: value });
+    expect(execFileSync('/bin/bash', ['-c', cmd], { encoding: 'utf-8' })).toBe(value);
+  });
+});
 
 describe('PtyProxy (real processes)', () => {
   let stdoutSpy: MockInstance;
@@ -104,6 +142,39 @@ describe('PtyProxy (real processes)', () => {
     proxy.write('\x04');
     await waitFor(() => exited() !== undefined);
     expect(output).toContain('日本語テスト');
+  });
+
+  // Regression guard for the hook blackout under a supervisor: `-lc` evaluates the
+  // login profile, and profiles commonly `unset TMUX TMUX_PANE` (they treat them as
+  // stale inheritance). The pane identity must survive that, or Claude Code's hooks
+  // can no longer resolve their pane. The profile is simulated with a throwaway HOME
+  // so the test fails on the pre-fix implementation regardless of the host's dotfiles
+  // (which may well keep the variables and make a naive assertion vacuous).
+  it('restores TMUX/TMUX_PANE even when the login profile unsets them', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'pty-proxy-home-'));
+    fs.writeFileSync(path.join(home, '.bash_profile'), 'unset TMUX TMUX_PANE\n');
+    const saved = { HOME: process.env.HOME, SHELL: process.env.SHELL, TMUX: process.env.TMUX, TMUX_PANE: process.env.TMUX_PANE };
+    process.env.HOME = home;
+    process.env.SHELL = '/bin/bash'; // bash reads ~/.bash_profile for a login shell
+    process.env.TMUX = '/tmp/tmux-test/default,4242,0';
+    process.env.TMUX_PANE = '%4242';
+    try {
+      // Sanity: the simulated profile really does unset the variables, so a pass
+      // below can only come from the re-export (not from a no-op profile).
+      const bare = execFileSync('/bin/bash', ['-lc', 'echo "bare=[$TMUX_PANE]"'], { env: process.env, encoding: 'utf-8' });
+      expect(bare).toContain('bare=[]');
+
+      const { exited } = startProxy('echo "pane=[$TMUX_PANE] sock=[$TMUX]"');
+      await waitFor(() => exited() !== undefined);
+      expect(output).toContain('pane=[%4242]');
+      expect(output).toContain('sock=[/tmp/tmux-test/default,4242,0]');
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it('emits data events with byte counts', async () => {

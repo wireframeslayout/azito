@@ -10,6 +10,15 @@ import { getHealthLevel } from '../hooks/useServerResources';
 import type { ServerResourceEntry } from '../hooks/useServerResources';
 import { useSystemUpdate } from '../hooks/useSystemUpdate';
 import { useToast } from '../hooks/useToast';
+import { useActivityDiagnostics, DIAGNOSTICS_POLL_INTERVAL_MS } from '../hooks/useActivityDiagnostics';
+import { activityDotState } from '../lib/activityDiagnostics';
+import { ActivityDiagnosticsDropdown } from './activity/ActivityDiagnosticsDropdown';
+
+const ACTIVITY_ITEM_ID = 'activity-diagnostics';
+const DEFAULT_DROPDOWN_WIDTH = 360;
+const ACTIVITY_DROPDOWN_WIDTH = 640;
+/** 閉じている間はドット（稼働の有無・判定 Tier の別）にしか使わないので、粗く回す。 */
+const DIAGNOSTICS_IDLE_POLL_INTERVAL_MS = 30_000;
 
 interface StatusBarProps {
   servers: ServerResourceEntry[];
@@ -19,6 +28,8 @@ interface RegistryItem {
   id: string;
   label: string;
   dot: DotLevel;
+  /** ドロップダウンの幅（既定 360px）。稼働検知は表を出すため広い器を使う。 */
+  width?: number;
   renderDropdown: () => React.ReactNode;
 }
 
@@ -32,6 +43,15 @@ export function StatusBar({ servers }: StatusBarProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<Map<string, StatusBarItemRef>>(new Map());
+
+  // 稼働検知診断は「ソースコード版」または「開発中バージョン」チャンネルでのみ出す（サーバー側
+  // 判定 = UpdateStatusResponse.diagnosticsEnabled）。取得前は出さない（フェイルクローズ）。
+  const diagnosticsEnabled = updateStatus?.diagnosticsEnabled === true;
+  const diagnosticsOpen = openItemId === ACTIVITY_ITEM_ID;
+  const { rows: diagnosticRows, error: diagnosticsError } = useActivityDiagnostics(
+    diagnosticsEnabled,
+    diagnosticsOpen ? DIAGNOSTICS_POLL_INTERVAL_MS : DIAGNOSTICS_IDLE_POLL_INTERVAL_MS,
+  );
 
   const focusedServer = useMemo(() => {
     if (!focusedTarget) return null;
@@ -75,6 +95,23 @@ export function StatusBar({ servers }: StatusBarProps) {
       seen.add(hubServer.serverName);
     }
 
+    // 位置は Hub と「フォーカス中サーバー」の間（モック §2）。
+    if (diagnosticsEnabled) {
+      items.push({
+        id: ACTIVITY_ITEM_ID,
+        label: t('statusbar.activityDiagnostics'),
+        dot: activityDotState(diagnosticRows),
+        width: ACTIVITY_DROPDOWN_WIDTH,
+        renderDropdown: () => (
+          <ActivityDiagnosticsDropdown
+            rows={diagnosticRows}
+            error={diagnosticsError}
+            onClose={() => setOpenItemId(null)}
+          />
+        ),
+      });
+    }
+
     if (focusedServer && !seen.has(focusedServer)) {
       const entry = servers.find((s) => s.serverName === focusedServer);
       if (entry) {
@@ -89,9 +126,9 @@ export function StatusBar({ servers }: StatusBarProps) {
     }
 
     return items;
-  }, [servers, focusedServer, updateStatus, handleStartUpdate, checkNow]);
+  }, [servers, focusedServer, updateStatus, handleStartUpdate, checkNow, diagnosticsEnabled, diagnosticRows, diagnosticsError, t]);
 
-  const handleItemClick = useCallback((itemId: string) => {
+  const handleItemClick = useCallback((itemId: string, width: number) => {
     if (openItemId === itemId) {
       setOpenItemId(null);
       return;
@@ -102,7 +139,7 @@ export function StatusBar({ servers }: StatusBarProps) {
       const right = Math.max(8, window.innerWidth - rect.right);
       setDropdownStyle({
         bottom: window.innerHeight - rect.top + 4,
-        right: Math.max(8, Math.min(right, window.innerWidth - 360 - 8)),
+        right: Math.max(8, Math.min(right, window.innerWidth - width - 8)),
       });
     }
     setOpenItemId(itemId);
@@ -167,7 +204,7 @@ export function StatusBar({ servers }: StatusBarProps) {
             label={item.label}
             dot={item.dot}
             active={openItemId === item.id}
-            onClick={() => handleItemClick(item.id)}
+            onClick={() => handleItemClick(item.id, item.width ?? DEFAULT_DROPDOWN_WIDTH)}
           />
         ))}
       </div>
@@ -178,7 +215,7 @@ export function StatusBar({ servers }: StatusBarProps) {
           style={{
             position: 'fixed',
             zIndex: 300,
-            width: 360,
+            width: openItem.width ?? DEFAULT_DROPDOWN_WIDTH,
             maxWidth: 'calc(100vw - 16px)',
             borderRadius: 'var(--radius-md)',
             background: 'var(--bg-elevated)',

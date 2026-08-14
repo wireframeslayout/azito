@@ -1,0 +1,89 @@
+{
+  "conversation": {
+    "notFound": "セッションが見つかりません",
+    "loadError": "会話ログの取得に失敗しました",
+    "empty": "このセッションにはまだメッセージがありません",
+    "jumpToLatest": "最新へ",
+    "jumpToLatestWithCount": "新着 {{count}} 件",
+    "loadingOlder": "以前のメッセージを読み込み中…",
+    "blockTruncated": "…省略",
+    "thinking": "思考",
+    "thinkingWithSeconds": "思考 {{seconds}}秒",
+    "moreLines": "… +{{count}} 行（タップで展開）",
+    "toolUse": "ツール呼び出し: {{name}}",
+    "toolResult": "ツール結果",
+    "toolResultError": "ツールエラー",
+    "toolChip": "{{name}}",
+    "toolResultChip": "結果",
+    "toolResultChipError": "エラー",
+    "system": "システム",
+    "other": "その他",
+    "interrupted": "中断しました",
+    "liveThinking": "思考中… {{seconds}}s",
+    "liveTool": "{{name}} 実行中… {{seconds}}s",
+    "taskNotification": "バックグラウンドタスク: {{summary}}",
+    "taskNotificationNoSummary": "バックグラウンドタスク通知",
+    "question": "質問",
+    "questionAnswerLabel": "回答",
+    "questionDeclinedNote": "選択肢からは未回答（チャットで回答またはキャンセル）",
+    "pendingInteraction": {
+      "message": "エージェントが入力を待っています — ターミナルで回答してください",
+      "openTerminal": "端末を開く"
+    },
+    "pendingQuestion": {
+      "sent": "回答を送信しました…",
+      "otherAnswersNote": "自由入力・その他の回答はターミナルで"
+    }
+  },
+  "liveStatus": {
+    "stop": "停止",
+    "stopHint": "実行中のエージェントを中断します（タップ: 既定の割り込みキー、長押し/右クリック: Esc・Ctrl+C を選択）",
+    "stopError": "送信に失敗しました",
+    "sendEscape": "Esc を送信",
+    "sendEscapeHint": "生成のみ中断します（エージェントのプロセスは終了しません）",
+    "sendCtrlC": "Ctrl+C を送信",
+    "sendCtrlCHint": "エージェントのプロセスが終了する可能性があります"
+  },
+  "styleSwitcher": {
+    "ariaLabel": "トランスクリプトの表示スタイル",
+    "option": {
+      "bubble": "バブル",
+      "flow": "フロー",
+      "rail": "ログ",
+      "tui": "TUI"
+    },
+    "flow": {
+      "userLabel": "あなた"
+    }
+  },
+  "promptBar": {
+    "placeholder": "プロンプトを入力…",
+    "send": "送信",
+    "sendWithShortcut": "送信（Ctrl/Cmd+Enter）",
+    "sendShortcutHint": "Ctrl/Cmd+Enterで送信できます",
+    "sendError": "送信に失敗しました",
+    "retry": "再試行",
+    "history": "過去のプロンプト",
+    "historyEmpty": "過去のプロンプトはまだありません",
+    "draftRestored": "下書きを復元しました",
+    "agentNotDetectedWarning": "このウィンドウでエージェントが起動していない可能性があります。送信内容はシェルにそのまま入力されます。",
+    "slashCommandHint": "スラッシュコマンドの結果はチャットに反映されません。ターミナルモードでの実行を推奨します",
+    "commandPalette": {
+      "ariaLabel": "コマンドパレット",
+      "empty": "一致するコマンドがありません"
+    }
+  },
+  "windowChat": {
+    "loading": "セッションを解決中…",
+    "notFound": {
+      "unsupported_server": "このサーバーではチャット表示に対応していません",
+      "no_recent_session": "最近のセッションが見つかりません",
+      "error": "セッションの解決に失敗しました"
+    },
+    "retry": "再試行",
+    "empty": {
+      "title": "まだ会話がありません",
+      "description": "ここから話しかけられます。"
+    }
+  }
+}

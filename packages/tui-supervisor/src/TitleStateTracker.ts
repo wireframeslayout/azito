@@ -5,7 +5,7 @@
  * Rationale: the byte-volume heuristic (ActivityTracker) misreads keystroke
  * echo as activity — Claude Code's TUI repaints its whole input box on every
  * keypress, easily exceeding the active threshold while the agent is idle.
- * The pane title, by contrast, is set by the agent itself (braille spinner
+ * The pane title, by contrast, is set by the agent itself (a spinner glyph
  * while working, `✳` while idle) and flows through this very process, since
  * the supervisor relays the PTY stream verbatim. Parsing it inline gives an
  * authoritative signal with zero extra I/O.
@@ -27,10 +27,35 @@ export type TitleAgentState = 'working' | 'idle' | 'blocked' | 'unknown';
  */
 const MAX_PENDING_LEN = 4_096;
 
-/** Leading braille-pattern glyph (U+2800-U+28FF) — the spinner Claude/codex render while working. */
-const BRAILLE_SPINNER_RE = /^[⠀-⣿] /;
+/**
+ * Leading working-spinner glyph. Covers every spinner frame set observed
+ * across Claude Code versions plus codex's braille spinner:
+ * - U+2800-U+28FF: braille patterns (codex, and older Claude builds).
+ * - U+25D0-U+25D3 (◐◑◒◓): the half-circle spinner used by the current
+ *   Claude Code (real-world observed title: `◐ libghosttyのwasm版導入検討`).
+ * - U+273B/U+2736/U+273D (✻✶✽) and `✢`/`∗`: additional asterisk-family
+ *   spinner glyphs seen across other Claude Code releases.
+ *
+ * Bias rationale: when in doubt, prefer classifying a glyph as `working`
+ * rather than `idle`. This state only overrides ActivityTracker's byte-volume
+ * heuristic when it actually fires (see class doc); a glyph absent from this
+ * set just falls through to `idle`/`unknown` and the byte heuristic keeps
+ * deciding, whereas a spinner misclassified as `idle` would actively suppress
+ * a real working signal. So extend this set liberally as new glyphs surface.
+ *
+ * Kept in sync with `WORKING_SPINNER_TITLE_RE` in
+ * `packages/server/src/modules/operations/paneStateClassifier.ts` — the two
+ * packages cannot share a constant, so when the glyph set changes, update both.
+ */
+const WORKING_SPINNER_RE = /^[⠀-⣿◐◑◒◓✻✶✽✢∗] /;
 
-/** Claude Code's idle title marker. */
+/**
+ * Claude Code's idle title marker. `✳` is also a spinner frame in some
+ * older builds, so this rule is ambiguous in isolation — but a genuine
+ * working title cycles through other spinner frames within the same short
+ * burst, so a stray `✳` misread as idle is corrected by the very next
+ * WORKING_SPINNER_RE-matching title. Accepted trade-off, not a bug.
+ */
 const IDLE_MARKER_RE = /^✳ /;
 
 /** Matches a complete OSC 0/2 title sequence: ESC ] 0|2 ; <title> (BEL | ESC \). */
@@ -44,13 +69,27 @@ const OSC_TITLE_RE = /\x1b\][02];([^\x07\x1b]*)(?:\x07|\x1b\\)/g;
  */
 const OSC_PARTIAL_TAIL_RE = /\x1b(?:\](?:[02](?:;[^\x07\x1b]*\x1b?)?)?)?$/;
 
+/** Blocked marker (codex's permission prompt). */
+const BLOCKED_MARKER = 'Action Required';
+
+/**
+ * True when the title carries a marker this tracker actually understands —
+ * the working spinner, the idle marker, or the blocked marker. Any other
+ * non-empty title is a title we cannot interpret (a static app name, a shell's
+ * `user@host: ~`, …), and is only meaningful once we know the agent speaks
+ * this title protocol at all (see `push`).
+ */
+function hasRecognizedMarker(title: string): boolean {
+  return title.includes(BLOCKED_MARKER) || WORKING_SPINNER_RE.test(title) || IDLE_MARKER_RE.test(title);
+}
+
 function classifyTitle(title: string): TitleAgentState {
   // Order matters: blocked (codex's "Action Required") wins over everything,
   // then the working spinner, then the explicit idle marker. Any other
   // non-empty title still proves an agent owns the pane and is not asking
   // for anything → idle (codex convention; matches the hub-side classifier).
-  if (title.includes('Action Required')) return 'blocked';
-  if (BRAILLE_SPINNER_RE.test(title)) return 'working';
+  if (title.includes(BLOCKED_MARKER)) return 'blocked';
+  if (WORKING_SPINNER_RE.test(title)) return 'working';
   if (IDLE_MARKER_RE.test(title)) return 'idle';
   if (title.length > 0) return 'idle';
   return 'unknown';
@@ -60,22 +99,37 @@ export class TitleStateTracker {
   /** Unterminated OSC-sequence tail carried over from the previous chunk. */
   private pending = '';
   private state: TitleAgentState = 'unknown';
+  /**
+   * Whether a title carrying a marker this tracker understands has ever been
+   * observed — i.e. whether the child actually speaks the spinner/idle/blocked
+   * title protocol. Until then, the state stays 'unknown' so the caller keeps
+   * using its own heuristic (see `push`).
+   */
+  private markerSeen = false;
 
   /**
    * Feed a raw PTY output chunk. Extracts every complete OSC 0/2 title in it
-   * (the last one wins) and updates the classified state. An unterminated
-   * sequence at the chunk's end is buffered for the next call.
+   * (the last one wins for the state; ANY of them can carry the recognized
+   * marker) and updates the classified state. An unterminated sequence at the
+   * chunk's end is buffered for the next call.
    */
   push(chunk: string): void {
     let data = this.pending + chunk;
     this.pending = '';
 
     let lastTitle: string | null = null;
+    let markerInChunk = false;
     OSC_TITLE_RE.lastIndex = 0;
     let match: RegExpExecArray | null;
     let scannedUpTo = 0;
     while ((match = OSC_TITLE_RE.exec(data)) !== null) {
       lastTitle = match[1];
+      // Accumulate across EVERY title in the chunk, not just the last one:
+      // chunk boundaries are a transport detail, so `◐ working` followed by a
+      // static unrecognized title inside one chunk must still count as proof
+      // that the child speaks this protocol (it would if the two titles had
+      // arrived in separate reads).
+      if (hasRecognizedMarker(lastTitle)) markerInChunk = true;
       scannedUpTo = OSC_TITLE_RE.lastIndex;
     }
 
@@ -91,13 +145,28 @@ export class TitleStateTracker {
       const classified = classifyTitle(lastTitle);
       // An empty title (classifyTitle → 'unknown') does not erase a previous
       // observation: some TUIs blank the title transiently while redrawing.
-      if (classified !== 'unknown') this.state = classified;
+      if (classified === 'unknown') return;
+      // Gate on a recognized marker (Issue #338): a title we cannot interpret
+      // classifies as 'idle' (codex convention), and a single such title used
+      // to be enough to hand this tracker permanent authority over the
+      // caller's byte heuristic — so a codex build or a generic TUI that sets
+      // one static, unrecognized title would be reported idle forever. Until a
+      // spinner/idle/blocked marker proves the child speaks this protocol, stay
+      // 'unknown' and let the byte heuristic keep deciding. After that first
+      // proof, unrecognized titles resume meaning 'idle' as before — the agent
+      // demonstrably drives its title, so a marker-less one is a real signal.
+      if (!this.markerSeen) {
+        if (!markerInChunk) return;
+        this.markerSeen = true;
+      }
+      this.state = classified;
     }
   }
 
   /**
-   * Latest classified title state. 'unknown' means no classifiable title has
-   * been observed yet (e.g. a generic agent that never sets one) — callers
+   * Latest classified title state. 'unknown' means no title carrying a
+   * recognized marker has been observed yet (a generic agent that never sets a
+   * title, or one that only sets static titles we cannot interpret) — callers
    * should fall back to their own heuristic in that case.
    */
   getState(): TitleAgentState {

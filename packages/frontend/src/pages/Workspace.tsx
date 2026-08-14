@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useLocation, matchPath } from 'react-router-dom';
-import { paths, matchWorkspacePath } from '../paths';
+import { paths, matchWorkspacePath, isGlobalPagePath } from '../paths';
+import { useMobileShellPortalNode, useMobileStatusPortalNode } from '../hooks/useMobileShellPortalNode';
 import { api } from '../api/client';
 import ContextMenu, { useContextMenu, type ContextMenuItem } from '../components/ContextMenu';
 import { useProjectSettings, type SettingsSection } from '../components/ProjectSettings';
@@ -32,6 +34,8 @@ import { findPane, findPaneByTab, listPanes, closeTab as closeTabInLayoutTree, t
 import { addBrowserToTaskLayout } from '../components/task/taskPaneLayout';
 import type { BrowserOpenedPayload } from '../types/notification';
 import WorkspaceSidebarContent from '../components/workspace/WorkspaceSidebarContent';
+import { MobileTabChipRow } from '../components/workspace/MobileTabChipRow';
+import { MobileTabSwitcherSheet } from '../components/workspace/MobileTabSwitcherSheet';
 import ActiveWindowsSection from '../components/workspace/ActiveWindowsSection';
 import WorkspaceLayout from '../components/workspace/WorkspaceLayout';
 import AddWindowModal from '../components/workspace/AddWindowModal';
@@ -40,11 +44,14 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import ResourceWarningDialog, { type ResourceStatus } from '../components/ResourceWarningDialog';
 import TabContentRenderer from '../components/workspace/TabContentRenderer';
 import WorkspaceWelcome from '../components/workspace/WorkspaceWelcome';
+import HomeFeed from '../components/workspace/HomeFeed';
+import { MobileStatusBar } from '../components/workspace/MobileStatusBar';
 import { SplitLayout, type PaneDrag } from '../components/workspace/SplitLayout';
 import { resolveDisplayedTaskTerminal, selectTaskTerminal } from '../components/workspace/TaskPanel';
 
-import type { SidebarMode, Task, Project } from './workspace/types';
+import type { SidebarMode, Task, Project, Window } from './workspace/types';
 import { ACTIVE_PROJECT_KEY, getProjectColorFallback } from './workspace/types';
+import { buildObjectSections } from '../lib/workspaceObjects';
 import { GlobalFocusProvider, useGlobalFocus } from '../hooks/useGlobalFocus';
 
 export default function Workspace() {
@@ -86,7 +93,7 @@ function WorkspaceInner() {
     setThemeProjectId(activeProjectId || null);
   }, [activeProjectId, setThemeProjectId]);
 
-  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, closeTab, retargetTab, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, reorderTab, openProjectTasks, openSettings: openSettingsRaw, togglePin } = useTabPersistence();
+  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, closeTab, retargetTab, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence();
 
   const openServer = useCallback((serverName: string) => {
     navigate(paths.server(serverName, 'overview'));
@@ -132,11 +139,37 @@ function WorkspaceInner() {
     return entries;
   }, [allTasks]);
 
+  // SP の M1 メニュー「オブジェクト」行に表示する総件数（Issue #69 T1）。ObjectsSidebar 本体と
+  // 同じ buildObjectSections を、同じ入力（プロジェクトスコープの windows/tasks）で呼び出す
+  // ことで、メニューの件数バッジと実際のオブジェクト一覧が食い違わないようにする。
+  const objectsCount = useMemo(() => {
+    if (!project) return 0;
+    const taskOwnedWindows: Window[] = [];
+    for (const task of tasks) {
+      if (!task.windows) continue;
+      for (const w of task.windows) taskOwnedWindows.push(w);
+    }
+    return buildObjectSections(project.windows, taskWindows, taskOwnedWindows, browserGroups, browserCapableServers).totalCount;
+  }, [project, tasks, taskWindows, browserGroups, browserCapableServers]);
+
   const projectSettings = useProjectSettings(parseInt(id || '0', 10), tabs, closeTab);
 
   const mobile = useIsMobile();
+  // SP チップ行の常設化（Issue #69 T8b）: Layout の常設スロットへポータルする。
+  // 未取得（初回コミット前）はフォールバックとしてその場に描画する。
+  const shellPortalNode = useMobileShellPortalNode();
+  const statusPortalNode = useMobileStatusPortalNode();
   const sidebarCollapsedEffective = sidebarCollapsed;
   const currentProjectId = parseInt(id || '0', 10);
+
+  // SP タブスイッチャー（Issue #69 Phase E-3）: 開閉状態のみここで持つ。タブ本体の
+  // 開閉・選択は既存の useTabPersistence ストア（tabs/activeTabId/closeTab/
+  // setActiveTabId）をそのまま共有し、新しいタブ状態体系は作らない。
+  const [mobileTabSwitcherOpen, setMobileTabSwitcherOpen] = useState(false);
+  const handleOpenAddTabFromSwitcher = useCallback(() => {
+    switchSidebarMode('windows');
+    setSidebarOpen(true);
+  }, [switchSidebarMode, setSidebarOpen]);
 
   // Sidebar section clicks must both update the sidebar highlight (projectSettings.setSection)
   // and update the settings tab's persisted settingsSection so SettingsTabContent's effect
@@ -179,10 +212,19 @@ function WorkspaceInner() {
   const handleSelectTab = useCallback((tabId: string) => {
     const tab = tabs.find((t) => t.id === tabId);
     setActiveTabId(tabId);
+    // SP チップ行の常設化（Issue #69 T8b）: グローバルページ（/units, /servers 等）
+    // 表示中にタブを選択したときは、そのタブの内容を表示できるワークスペースルートへ
+    // navigate する（グローバルページ表示中は Workspace 自身のコンテンツ領域が
+    // display:none で隠れているため、setActiveTabId だけでは何も見えない）。
+    if (isGlobalPagePath(location.pathname)) {
+      const targetProjectId = tab?.projectId ?? (Number.isFinite(currentProjectId) && currentProjectId > 0 ? currentProjectId : undefined);
+      if (targetProjectId != null) navigate(paths.workspace(targetProjectId));
+      return;
+    }
     if (tab?.projectId && tab.projectId !== currentProjectId) {
       navigate(`/workspace/${tab.projectId}`);
     }
-  }, [tabs, currentProjectId, navigate, setActiveTabId]);
+  }, [tabs, currentProjectId, navigate, setActiveTabId, location.pathname]);
 
   // Multi-pane split layout (Issue #397). `allTabIds` must be a stable
   // reference across renders that don't actually add/remove tabs, or
@@ -281,6 +323,21 @@ function WorkspaceInner() {
     setPaneDrag(null);
   }, [paneDrag, layout, activeTabId, setActiveTabId]);
 
+  // Confirms before closing a dirty (unsaved-edits) tab. Every close
+  // affordance below awaits this first, so an editor tab with unsaved
+  // changes never disappears silently (Issue #27 review Important 4).
+  // Resolves `true` immediately (no dialog) for a clean or unknown tab.
+  const confirmTabClose = useCallback((tabId: string): Promise<boolean> => {
+    const tab = tabs.find((t) => t.id === tabId);
+    if (!tab?.dirty) return Promise.resolve(true);
+    return confirm({
+      title: t('workspace:tab.closeDirtyTitle'),
+      message: t('workspace:tab.closeDirtyMessage', { name: tab.label }),
+      confirmLabel: t('workspace:tab.closeDirtyConfirm'),
+      danger: true,
+    });
+  }, [tabs, confirm, t]);
+
   // Pane-aware tab close: closing a pane's tab must hand focus to that
   // pane's own successor tab (or the pane usePaneLayout's close() falls back
   // to), not whatever the global flat-tab-list closeTab() would pick — that
@@ -295,7 +352,12 @@ function WorkspaceInner() {
   // path that can close a tab (desktop pane-aware close, mobile TabBar close,
   // mobile in-panel close) routes through this so the sidebar list drops the
   // row immediately instead of waiting for the next 30s poll.
-  const closeTabAndRefreshBrowser = useCallback((tabId: string) => {
+  // Unconfirmed core: assumes the dirty-tab confirmation (if any) already
+  // happened. Only `closeTabAndRefreshBrowser` (below) and
+  // `handlePaneCloseTab` call this directly, each after its own
+  // `confirmTabClose` — never call this one from a new call site without
+  // confirming first, or an unsaved editor tab can close silently.
+  const closeTabAndRefreshBrowserUnconfirmed = useCallback((tabId: string) => {
     const wasBrowser = tabs.some((t) => t.id === tabId && t.type === 'browser');
     const closed = closeTab(tabId);
     // Wait for the server-side group teardown (closeTab's own closeBrowserGroup
@@ -304,19 +366,54 @@ function WorkspaceInner() {
     if (wasBrowser) void closed.then(refreshBrowserGroups);
   }, [tabs, closeTab, refreshBrowserGroups]);
 
-  const handlePaneCloseTab = useCallback((paneId: string, tabId: string) => {
-    const newRoot = closeTabInLayoutTree(layout.state.root, paneId, tabId);
-    const newFocusedPaneId = layout.state.focusedPaneId && findPane(newRoot, layout.state.focusedPaneId)
-      ? layout.state.focusedPaneId
-      : listPanes(newRoot)[0].id;
-    const nextActiveTabId = findPane(newRoot, newFocusedPaneId)?.activeTabId ?? null;
+  const closeTabAndRefreshBrowser = useCallback((tabId: string) => {
+    void confirmTabClose(tabId).then((ok) => {
+      if (ok) closeTabAndRefreshBrowserUnconfirmed(tabId);
+    });
+  }, [confirmTabClose, closeTabAndRefreshBrowserUnconfirmed]);
 
-    layout.close(paneId, tabId);
-    closeTabAndRefreshBrowser(tabId);
-    if (nextActiveTabId && activeTabId !== nextActiveTabId) {
-      setActiveTabId(nextActiveTabId);
-    }
-  }, [layout, closeTabAndRefreshBrowser, activeTabId, setActiveTabId]);
+  const handlePaneCloseTab = useCallback((paneId: string, tabId: string) => {
+    void confirmTabClose(tabId).then((ok) => {
+      if (!ok) return;
+      const newRoot = closeTabInLayoutTree(layout.state.root, paneId, tabId);
+      const newFocusedPaneId = layout.state.focusedPaneId && findPane(newRoot, layout.state.focusedPaneId)
+        ? layout.state.focusedPaneId
+        : listPanes(newRoot)[0].id;
+      const nextActiveTabId = findPane(newRoot, newFocusedPaneId)?.activeTabId ?? null;
+
+      layout.close(paneId, tabId);
+      closeTabAndRefreshBrowserUnconfirmed(tabId);
+      if (nextActiveTabId && activeTabId !== nextActiveTabId) {
+        setActiveTabId(nextActiveTabId);
+      }
+    });
+  }, [layout, closeTabAndRefreshBrowserUnconfirmed, activeTabId, setActiveTabId, confirmTabClose]);
+
+  // beforeunload guard: as long as any tab has unsaved edits, warn before the
+  // browser tab/window itself is closed or reloaded (Issue #27 review
+  // Important 4). Per-tab close confirmation above only covers in-app tab
+  // closes; this covers leaving the page entirely. Most browsers ignore the
+  // custom message and show their own generic prompt — `returnValue` is set
+  // for the older API surface some engines still require.
+  const hasDirtyTabs = useMemo(() => tabs.some((t) => t.dirty), [tabs]);
+  useEffect(() => {
+    if (!hasDirtyTabs) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [hasDirtyTabs]);
+
+  // No in-app router-transition guard here: Workspace stays mounted for the app's entire lifetime
+  // (Layout.tsx keeps it in the DOM, just `display: none`, even while a global page is showing —
+  // every route in router.tsx renders the same Layout element), so an in-app navigation never
+  // actually discards tab state; only leaving the page for real (reload/close/external navigation)
+  // does, and the `beforeunload` guard above already covers that. A `useBlocker` on pathname change
+  // was added previously but warned on transitions that lose nothing, and its confirm/cancel timing
+  // raced with `activeTabId`/pane-focus updates that already happen before the blocker had a chance
+  // to intervene — removed rather than reconciled, since there is nothing here for it to guard.
 
   // Single entry point for "close this tab by id" that every close affordance
   // (pane TabBar's ✕, the shared tab context menu's "Close tab" item, and
@@ -339,7 +436,7 @@ function WorkspaceInner() {
     if (mobile) setSidebarOpen(false);
   }, [connectPaneRaw, mobile, currentProjectId, setSidebarOpen]);
 
-  const { setOnOpenInTerminal, setOnOpenTask, setActiveTabId: setTargetsActiveTabId, setFocusedTarget } = useWorkspaceTargets();
+  const { setOnOpenInTerminal, setOnOpenTask, setActiveTabId: setTargetsActiveTabId, setFocusedTarget, setOnOpenTabSwitcher } = useWorkspaceTargets();
   const { shouldShowActivity, shouldShowTaskActivity } = useAgentActivity();
   useEffect(() => { setTargetsActiveTabId(activeTabId); }, [activeTabId, setTargetsActiveTabId]);
 
@@ -357,50 +454,25 @@ function WorkspaceInner() {
     setOnOpenInTerminal(connectPane);
     return () => setOnOpenInTerminal(null);
   }, [connectPane, setOnOpenInTerminal]);
+  // SP端末クイックキーフッター（Issue #69 T3）の右端▦がタブスイッチャーを開けるよう登録する
+  // （TerminalContainer は TabContentRenderer 配下の深い位置にあり、mobileTabSwitcherOpen の
+  // setter を prop drilling で届けるより WorkspaceTargetsContext 経由の方が既存の
+  // onOpenInTerminal 登録パターンと一貫する）。
+  useEffect(() => {
+    setOnOpenTabSwitcher(() => setMobileTabSwitcherOpen(true));
+    return () => setOnOpenTabSwitcher(null);
+  }, [setOnOpenTabSwitcher]);
 
   const { focus, setFocus } = useGlobalFocus();
 
-  const resolveOverlayTarget = useCallback((): { serverName: string; tmuxTarget: string } | null => {
-    if (focus.serverName && focus.tmuxTarget) {
-      return { serverName: focus.serverName, tmuxTarget: focus.tmuxTarget };
-    }
-    if (focusedActiveTabId?.startsWith('terminal:')) {
-      const rest = focusedActiveTabId.slice('terminal:'.length);
-      const slashIdx = rest.indexOf('/');
-      if (slashIdx > 0) {
-        return { serverName: rest.slice(0, slashIdx), tmuxTarget: rest.slice(slashIdx + 1) };
-      }
-    }
-    const activeTab = tabs.find((t) => t.id === focusedActiveTabId);
-    if (activeTab?.type === 'task' && activeTab.entityId) {
-      const task = tasks.find((t) => t.id === activeTab.entityId) ?? allTasks.find((t) => t.id === activeTab.entityId);
-      const displayed = resolveDisplayedTaskTerminal(activeTab.entityId, task?.windows ?? []);
-      if (displayed) {
-        return { serverName: displayed.serverName, tmuxTarget: displayed.target };
-      }
-    }
-    return null;
-  }, [focus.serverName, focus.tmuxTarget, focusedActiveTabId, tabs, tasks, allTasks]);
-
-  const handleOverlaySendKey = useCallback(async (key: string) => {
-    const target = resolveOverlayTarget();
-    if (!target) {
-      showToast(t('workspace:toast.noTerminalSelected'));
-      return;
-    }
-    try {
-      const res = await api<{ ok?: boolean; error?: string }>(
-        `/servers/${target.serverName}/panes/${encodeURIComponent(target.tmuxTarget)}/send-keys`,
-        { method: 'POST', body: JSON.stringify({ keys: [key] }) },
-      );
-      if (res?.error) showToast(t('workspace:toast.sendKeysFailed', { error: res.error }));
-    } catch (e) {
-      showToast(t('workspace:toast.sendKeysFailed', { error: e instanceof Error ? e.message : String(e) }));
-    }
-  }, [resolveOverlayTarget, showToast]);
-
-  const openFile = useCallback((serverName: string, filePath: string) => {
-    openFileRaw(serverName, filePath, currentProjectId);
+  // `projectId` is the caller's own tab.projectId (or, for callers with no owning tab yet — e.g. the
+  // sidebar FileExplorer, which is always scoped to the routed project — currentProjectId), never
+  // inferred from "whichever project is currently routed" here. A split-pane tab opening a file from
+  // a different project's diff/task view must attribute the new file tab to *its own* project, or the
+  // save-path containment check runs against the wrong project's workingDirectory (Issue #27 review
+  // Important 2).
+  const openFile = useCallback((serverName: string, filePath: string, projectId?: number, line?: number) => {
+    openFileRaw(serverName, filePath, projectId ?? currentProjectId, line);
   }, [openFileRaw, currentProjectId]);
 
   const openDiff = useCallback((serverName: string, path: string, baseBranch?: string) => {
@@ -555,10 +627,10 @@ function WorkspaceInner() {
     navigate(location.pathname, { replace: true });
   }, [location.search]);
 
-  const handleFileSelect = useCallback((serverName: string, filePath: string) => {
-    openFile(serverName, filePath);
+  const handleFileSelect = useCallback((serverName: string, filePath: string, line?: number) => {
+    openFile(serverName, filePath, currentProjectId, line);
     if (mobile) setSidebarOpen(false);
-  }, [openFile, mobile, setSidebarOpen]);
+  }, [openFile, currentProjectId, mobile, setSidebarOpen]);
 
   const [executeResourceWarning, setExecuteResourceWarning] = useState<{ resources: ResourceStatus; retry: () => void } | null>(null);
 
@@ -727,6 +799,7 @@ function WorkspaceInner() {
         ? (allProjects.find(p => p.id === tab.projectId)?.color || getProjectColorFallback(tab.projectId))
         : undefined,
       extra: running ? <span className="tab-braille-spinner" style={{ fontSize: 'var(--font-xs)', lineHeight: 1 }}>{brailleFrame}</span> : undefined,
+      dirty: tab.dirty,
     };
   }, [getTerminalTabLabel, shouldShowActivity, shouldShowTaskActivity, allProjects, brailleFrame]);
 
@@ -792,9 +865,15 @@ function WorkspaceInner() {
     );
   }, [tabs, buildTabItem, handlePaneSelectTab, handlePaneCloseTab, buildPaneTabMenuItems, showContextMenu, showContextMenuAt, renderPaneTrailing]);
 
+  // タブ未選択時のホーム（Issue #69 Phase F-2）: ワークスペース全体にタブが1つも
+  // 無い唯一のペインの空状態だけをアクティビティフィードに置き換える。分割操作で
+  // 生まれた「他のタブは開いているが、このペインだけ空」というドロップターゲット
+  // としての空状態（既存の dragHint）はそのまま維持する。
   const renderPaneEmpty = useCallback(() => (
-    <EmptyState title={t('workspace:pane.dragHint')} />
-  ), []);
+    tabs.length === 0
+      ? <HomeFeed allTasks={allTasks} allProjects={allProjects} openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} onAddWindow={handleOpenAddTabFromSwitcher} />
+      : <EmptyState title={t('workspace:pane.dragHint')} />
+  ), [tabs.length, allTasks, allProjects, openTaskFromActiveWindow, connectPaneFromActiveWindow, handleOpenAddTabFromSwitcher, t]);
 
   if (!project) {
     if (projectsLoaded && allProjects.length === 0) {
@@ -832,6 +911,7 @@ function WorkspaceInner() {
       agentDefsLoading={addWindowModal.agentPresetsLoading}
       agentDefsError={addWindowModal.agentPresetsError}
       showWindowContextMenu={windowActions.showWindowContextMenu}
+      showWindowContextMenuAt={windowActions.showWindowContextMenuAt}
       onSwitchSidebarMode={handleSwitchSidebarMode}
       onFileSelect={handleFileSelect}
       onRefresh={refreshWorkspace}
@@ -982,33 +1062,60 @@ function WorkspaceInner() {
       contextMenu={contextMenu ? <ContextMenu menu={contextMenu} onClose={hideContextMenu} /> : null}
       confirmDialog={confirmDialogNode}
       modals={modals}
-      onSendKey={handleOverlaySendKey}
       connectPane={connectPaneFromActiveWindow}
       openTask={openTaskFromActiveWindow}
       taskWindows={taskWindows}
+      objectsCount={objectsCount}
     >
         {mobile ? (
           <>
-            <TabBar
-              tabs={tabs.map(buildTabItem)}
-              activeId={activeTabId}
-              onSelect={handleSelectTab}
-              onClose={closeTabAndRefreshBrowser}
-              onReorder={reorderTab}
-              draggable
-              onTabContextMenu={windowActions.handleTabContextMenu}
-              onTabLongPress={windowActions.handleTabLongPress}
-            />
+            {(() => {
+              const shell = (
+                <>
+                  <MobileTabChipRow
+                    activeTab={(() => {
+                      const tab = tabs.find((t) => t.id === activeTabId);
+                      return tab ? buildTabItem(tab) : null;
+                    })()}
+                    activeTabId={activeTabId}
+                    activeTabPinned={!!tabs.find((t) => t.id === activeTabId)?.pinned}
+                    tabCount={tabs.length}
+                    onOpenSwitcher={() => setMobileTabSwitcherOpen(true)}
+                    onOpenMenu={() => setSidebarOpen(true)}
+                    onTogglePin={togglePin}
+                  />
+                  <MobileTabSwitcherSheet
+                    open={mobileTabSwitcherOpen}
+                    onClose={() => setMobileTabSwitcherOpen(false)}
+                    tabs={tabs}
+                    activeTabId={activeTabId}
+                    allProjects={allProjects}
+                    buildTabItem={buildTabItem}
+                    onSelectTab={handleSelectTab}
+                    onCloseTab={closeTabAndRefreshBrowser}
+                    onOpenAddTab={handleOpenAddTabFromSwitcher}
+                    onTogglePin={togglePin}
+                  />
+                </>
+              );
+              return shellPortalNode ? createPortal(shell, shellPortalNode) : shell;
+            })()}
 
             <div style={{ flex: 1, position: 'relative', background: 'var(--ws-content)' }}>
               {tabs.length === 0 && (
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-dim)', fontSize: 'var(--font-base)', flexDirection: 'column', gap: 8, padding: 20, textAlign: 'center', background: 'var(--bg)' }}>
-                  <div>{t('workspace:pane.selectHint')}</div>
-                </div>
+                <HomeFeed allTasks={allTasks} allProjects={allProjects} openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} onAddWindow={handleOpenAddTabFromSwitcher} />
               )}
 
               {tabs.map((tab) => renderTabContent(tab, { position: 'absolute', inset: 0 }, tab.id === activeTabId, closeTabAndRefreshBrowser))}
             </div>
+
+            {(() => {
+              const bar = <MobileStatusBar allTasks={allTasks} openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} />;
+              // mobile-shell-slot と同じ理由（Layout がグローバルページ表示中にこのサブツリーを
+              // display:none で隠しても、ポータル先はその外側にあるため常駐し続ける）で
+              // mobile-status-slot（Layout.tsx）へ portal する。
+              return statusPortalNode ? createPortal(bar, statusPortalNode) : bar;
+            })()}
           </>
         ) : (
           // Multi-pane split layout (Issue #397). With a single pane (the
@@ -1113,7 +1220,10 @@ function WorkspaceInner() {
           openIssue={openIssue}
           openProjectTasks={openProjectTasks}
           updateBrowserActiveTab={updateBrowserActiveTab}
+          openFile={openFile}
+          setTabDirty={setTabDirty}
           refreshBrowserGroups={refreshBrowserGroups}
+          togglePin={togglePin}
         />
       </div>
     );

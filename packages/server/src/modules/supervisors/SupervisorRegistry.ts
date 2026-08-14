@@ -89,6 +89,16 @@ interface SupervisorConnection {
    */
   bound: boolean;
   launchId: string | null;
+  /**
+   * Diagnostics only (GET /api/debug/activity): when the last `activity` frame
+   * arrived on this connection and what it said. Nothing in the judgment path
+   * reads these — the activity frame is forwarded to AgentActivityMonitor as it
+   * always was; this is the material that lets a human tell "Tier 0 is wired but
+   * silent" apart from "Tier 0 is reporting".
+   */
+  lastActivityFrameAt: number | null;
+  lastReportedState: ActivityState | null;
+  lastReportedStatus: AgentStatus | null;
 }
 
 export interface SupervisorEntry {
@@ -102,6 +112,10 @@ export interface SupervisorEntry {
   lastHeartbeatAt: number;
   ready: boolean;
   bound: boolean;
+  /** See SupervisorConnection — diagnostics only. */
+  lastActivityFrameAt: number | null;
+  lastReportedState: ActivityState | null;
+  lastReportedStatus: AgentStatus | null;
 }
 
 export interface SupervisorActivityEvent {
@@ -498,6 +512,9 @@ export class SupervisorRegistry extends EventEmitter {
       ready: info.reportsReady === true ? false : true,
       bound: authResult.bound,
       launchId: authResult.launchId,
+      lastActivityFrameAt: null,
+      lastReportedState: null,
+      lastReportedStatus: null,
     };
     this.connections.set(key, conn);
     this.socketKeys.set(socket, key);
@@ -523,6 +540,9 @@ export class SupervisorRegistry extends EventEmitter {
         break;
 
       case 'activity':
+        conn.lastActivityFrameAt = Date.now();
+        conn.lastReportedState = msg.state;
+        conn.lastReportedStatus = msg.status ?? null;
         this.emit('activity', {
           serverName: conn.serverName,
           target: conn.target,
@@ -677,6 +697,9 @@ export class SupervisorRegistry extends EventEmitter {
       lastHeartbeatAt: conn.lastHeartbeatAt,
       ready: conn.ready,
       bound: conn.bound,
+      lastActivityFrameAt: conn.lastActivityFrameAt,
+      lastReportedState: conn.lastReportedState,
+      lastReportedStatus: conn.lastReportedStatus,
     }));
   }
 

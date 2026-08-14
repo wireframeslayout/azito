@@ -11,6 +11,7 @@ function buildOptions(overrides: Partial<WebhookRouteOptions> = {}): WebhookRout
     taskRepo: { findById: vi.fn().mockReturnValue(undefined) } as unknown as SqliteTaskRepository,
     verifyToken: createTokenVerifier(TOKEN),
     recordAgentActivity: vi.fn(),
+    recordInteractionSignal: vi.fn(),
     ...overrides,
   };
 }
@@ -138,6 +139,183 @@ describe('POST /api/webhooks/agent-activity', () => {
 
     expect(res.statusCode).toBe(200);
     expect(options.recordAgentActivity).toHaveBeenCalledWith(expect.objectContaining({ event: 'stop' }));
+  });
+});
+
+const validInteractionBody = {
+  serverName: 'local',
+  sessionName: 'azito',
+  windowIndex: 3,
+  windowName: 'agent-1',
+  paneIndex: 1,
+  event: 'open',
+};
+
+describe('POST /api/webhooks/agent-interaction', () => {
+  let app: FastifyInstance;
+
+  afterEach(async () => {
+    await app.close();
+  });
+
+  it('rejects with 401 when the Authorization header is missing', async () => {
+    const options = buildOptions();
+    app = await buildApp(options);
+
+    const res = await app.inject({ method: 'POST', url: '/api/webhooks/agent-interaction', payload: validInteractionBody });
+
+    expect(res.statusCode).toBe(401);
+    expect(options.recordInteractionSignal).not.toHaveBeenCalled();
+  });
+
+  it('rejects with 401 when the token is incorrect', async () => {
+    const options = buildOptions();
+    app = await buildApp(options);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/webhooks/agent-interaction',
+      headers: { authorization: 'Bearer wrong-token' },
+      payload: validInteractionBody,
+    });
+
+    expect(res.statusCode).toBe(401);
+    expect(options.recordInteractionSignal).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['missing serverName', { ...validInteractionBody, serverName: undefined }],
+    ['empty serverName', { ...validInteractionBody, serverName: '' }],
+    ['missing sessionName', { ...validInteractionBody, sessionName: undefined }],
+    ['missing windowName', { ...validInteractionBody, windowName: undefined }],
+    ['non-numeric windowIndex', { ...validInteractionBody, windowIndex: 'three' }],
+    ['non-finite windowIndex', { ...validInteractionBody, windowIndex: Infinity }],
+    ['non-numeric paneIndex', { ...validInteractionBody, paneIndex: 'one' }],
+    ['event "cancel" (deferred to a future phase, not yet accepted)', { ...validInteractionBody, event: 'cancel' }],
+    ['missing event', { ...validInteractionBody, event: undefined }],
+  ])('rejects with 400 on %s', async (_label, payload) => {
+    const options = buildOptions();
+    app = await buildApp(options);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/webhooks/agent-interaction',
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload,
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(options.recordInteractionSignal).not.toHaveBeenCalled();
+  });
+
+  it('rejects with 400 when the body is not a JSON object', async () => {
+    const options = buildOptions();
+    app = await buildApp(options);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/webhooks/agent-interaction',
+      headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+      payload: 'null',
+    });
+
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('calls recordInteractionSignal with the parsed payload and returns 200 on success', async () => {
+    const options = buildOptions();
+    app = await buildApp(options);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/webhooks/agent-interaction',
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: validInteractionBody,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(options.recordInteractionSignal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        serverName: 'local',
+        target: { sessionName: 'azito', windowIndex: 3, windowName: 'agent-1', paneIndex: 1 },
+        event: 'open',
+      }),
+    );
+  });
+
+  it('forwards a well-formed content payload (PermissionRequest hook) as the signal content', async () => {
+    const options = buildOptions();
+    app = await buildApp(options);
+
+    const content = {
+      toolName: 'AskUserQuestion',
+      questions: [
+        {
+          question: 'どれにしますか?',
+          header: '選択',
+          multiSelect: false,
+          options: [{ label: 'はい', description: '進める' }, { label: 'いいえ' }],
+        },
+      ],
+    };
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/webhooks/agent-interaction',
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { ...validInteractionBody, content },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(options.recordInteractionSignal).toHaveBeenCalledWith(expect.objectContaining({ content }));
+  });
+
+  it('defaults an omitted multiSelect to false (the CLI omits it for single-select questions)', async () => {
+    const options = buildOptions();
+    app = await buildApp(options);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/webhooks/agent-interaction',
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: {
+        ...validInteractionBody,
+        content: { toolName: 'AskUserQuestion', questions: [{ question: 'q', options: [{ label: 'a' }] }] },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(options.recordInteractionSignal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: { toolName: 'AskUserQuestion', questions: [{ question: 'q', multiSelect: false, options: [{ label: 'a' }] }] },
+      }),
+    );
+  });
+
+  it.each([
+    ['not an object', 'nope'],
+    ['missing toolName', { questions: [{ question: 'q', options: [{ label: 'a' }] }] }],
+    ['empty questions', { toolName: 'AskUserQuestion', questions: [] }],
+    ['questions not an array', { toolName: 'AskUserQuestion', questions: { question: 'q' } }],
+    ['question without text', { toolName: 'AskUserQuestion', questions: [{ options: [{ label: 'a' }] }] }],
+    ['question without options', { toolName: 'AskUserQuestion', questions: [{ question: 'q' }] }],
+    ['option without a label', { toolName: 'AskUserQuestion', questions: [{ question: 'q', options: [{ description: 'd' }] }] }],
+    ['non-string header', { toolName: 'AskUserQuestion', questions: [{ question: 'q', header: 3, options: [{ label: 'a' }] }] }],
+  ])('accepts the signal but drops the content on malformed content (%s)', async (_label, content) => {
+    const options = buildOptions();
+    app = await buildApp(options);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/webhooks/agent-interaction',
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { ...validInteractionBody, content },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(options.recordInteractionSignal).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(options.recordInteractionSignal).mock.calls[0][0].content).toBeUndefined();
   });
 });
 

@@ -1,31 +1,24 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useImperativeHandle, useRef, forwardRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useTmuxTouchScroll } from '../hooks/useTmuxTouchScroll';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useVirtualKeyboard, KEYBOARD_HEIGHT_THRESHOLD } from '../hooks/useVirtualKeyboard';
 import { useSupervisedLoadingOverlay } from '../hooks/useSupervisedLoadingOverlay';
 import { useToast } from '../hooks/useToast';
-import { QuickActionButtons, type QuickActionButton } from './ui/QuickActionButtons';
 import { Spinner } from './ui/Spinner';
 import { useTerminalTheme } from '../hooks/useTerminalTheme';
 import { createOsc52Extractor } from '../utils/osc52';
 import { buildWsUrl } from '../api/wsUrl';
 import TerminalBackdrop from './TerminalBackdrop';
-import { Icon } from './ui/Icon';
 
-const XTERM_QUICK_BUTTONS: QuickActionButton[] = [
-  { label: 'Enter', key: 'Enter', style: { background: 'rgba(88, 166, 255, 0.18)', borderColor: 'rgba(88, 166, 255, 0.4)', color: 'var(--accent)' } },
-  { label: 'Tab', key: 'Tab' },
-  { label: 'Esc', key: 'Escape', style: { color: 'var(--warning)', borderColor: 'rgba(210, 153, 34, 0.4)' } },
-  { label: 'Ctrl+C', key: 'C-c', style: { color: 'var(--danger)', borderColor: 'rgba(248, 81, 73, 0.4)' } },
-  { label: <Icon name="arrow-up" size={14} />, key: 'Up' },
-  { label: <Icon name="arrow-down" size={14} />, key: 'Down' },
-];
-
+// SP端末クイックキーフッター（TerminalQuickKeyBar）と⌨透過パッド（MobileKeyboardOverlay）が
+// 送出しうるキー全種を網羅する。両者ともこのマップ経由でアクティブなWS接続へ直接キーを流す
+// （Issue #69 T3 — 新規のsend実装を作らず、この既存経路をXTermViewRefで外部公開して再利用する）。
 const SPECIAL_KEY_MAP: Record<string, string> = {
   'Enter': '\r', 'Escape': '\x1b', 'Tab': '\t',
-  'Up': '\x1b[A', 'Down': '\x1b[B',
+  'Up': '\x1b[A', 'Down': '\x1b[B', 'Left': '\x1b[D', 'Right': '\x1b[C',
   'C-c': '\x03', 'C-d': '\x04',
+  'y': 'y', 'n': 'n',
 };
 
 function agentLaunchLabel(token: string | null, t: (key: string) => string): string {
@@ -37,6 +30,10 @@ function agentLaunchLabel(token: string | null, t: (key: string) => string): str
 const RECONNECT_MAX_ATTEMPTS = 8;
 const RECONNECT_BASE_DELAY_MS = 1000;
 const RECONNECT_MAX_DELAY_MS = 15000;
+// オフラインのペイン（tmux target は存在するが出力が一切流れてこない）に接続すると、WS の
+// open は成立してもデータが永久に来ず、useSupervisedLoadingOverlay の「接続中…」スピナーが
+// 無期限に回り続ける。初回接続に限りこのタイムアウトで打ち切り、明示的なエラー状態へ遷移させる。
+const CONNECT_DATA_TIMEOUT_MS = 10000;
 
 async function writeClipboard(
   text: string,
@@ -54,7 +51,25 @@ async function writeClipboard(
   }
 }
 
-function XTermView({ serverName, target, onDisconnect, onWindowNotFound, onMaxRetriesReached }: { serverName: string; target: string; onDisconnect?: () => void; onWindowNotFound?: () => void; onMaxRetriesReached?: () => void }) {
+export interface XTermViewHandle {
+  /**
+   * TerminalQuickKeyBar / MobileKeyboardOverlay がこの端末表示に直接キーを送出するための
+   * ハンドル（Issue #69 T3）。SPECIAL_KEY_MAP に載っているキー名のみ有効。既存の内部
+   * sendSpecialKey をそのまま公開するだけで、送出経路（アクティブなWS接続）は増やさない。
+   */
+  sendKey: (key: string) => void;
+}
+
+interface XTermViewProps {
+  serverName: string;
+  target: string;
+  onDisconnect?: () => void;
+  onWindowNotFound?: () => void;
+  onMaxRetriesReached?: () => void;
+  onConnectTimeout?: () => void;
+}
+
+const XTermView = forwardRef<XTermViewHandle, XTermViewProps>(function XTermView({ serverName, target, onDisconnect, onWindowNotFound, onMaxRetriesReached, onConnectTimeout }, ref) {
   const { t } = useTranslation('common');
   const wrapperRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -64,6 +79,7 @@ function XTermView({ serverName, target, onDisconnect, onWindowNotFound, onMaxRe
   const roRef = useRef<ResizeObserver | null>(null);
   const ioRef = useRef<IntersectionObserver | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const connectDataTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const loadingOverlay = useSupervisedLoadingOverlay(serverName, target);
   const isMobile = useIsMobile();
   const keyboardVisible = useVirtualKeyboard();
@@ -82,6 +98,8 @@ function XTermView({ serverName, target, onDisconnect, onWindowNotFound, onMaxRe
       if (seq) wsRef.current.send(seq);
     }
   }, []);
+
+  useImperativeHandle(ref, () => ({ sendKey: sendSpecialKey }), [sendSpecialKey]);
 
   const fontSize = isMobile ? 12 : 14;
 
@@ -304,9 +322,23 @@ function XTermView({ serverName, target, onDisconnect, onWindowNotFound, onMaxRe
             prev.onmessage = null;
             try { prev.close(); } catch { /* already closed */ }
           }
+          clearTimeout(connectDataTimerRef.current);
 
           const ws = new WebSocket(buildWsUrl({ server: serverName, target, cols: String(terminal.cols), rows: String(terminal.rows) }));
           wsRef.current = ws;
+          let firstMsg = true;
+          // 初回接続に限り、オフライン(＝出力が永久に来ない)ペインを検出する。WS の open 自体は
+          // 成立してしまうため onclose には頼れず、データ到達を独自タイムアウトで見張る。2回目
+          // 以降(バックオフ再接続)は既存の disconnected/reconnecting フローに任せる。
+          let connectTimedOut = false;
+          if (reconnectAttempts === 0) {
+            connectDataTimerRef.current = setTimeout(() => {
+              if (disposed || !firstMsg) return;
+              connectTimedOut = true;
+              onConnectTimeout?.();
+              try { ws.close(); } catch { /* already closed */ }
+            }, CONNECT_DATA_TIMEOUT_MS);
+          }
           ws.onopen = () => {
             reconnectAttempts = 0;
             firstDisconnect = true;
@@ -314,15 +346,16 @@ function XTermView({ serverName, target, onDisconnect, onWindowNotFound, onMaxRe
             fitAddon.fit();
             ws.send(JSON.stringify({ type: 'resize', cols: terminal.cols, rows: terminal.rows }));
           };
-          let firstMsg = true;
           ws.onmessage = (e: MessageEvent) => {
-            if (firstMsg) { firstMsg = false; loadingOverlay.markConnected(); }
+            if (firstMsg) { firstMsg = false; clearTimeout(connectDataTimerRef.current); loadingOverlay.markConnected(); }
             const data = typeof e.data === 'string' ? e.data : '';
             extractOsc52(data);
             terminal.write(e.data);
           };
           ws.onclose = (e) => {
+            clearTimeout(connectDataTimerRef.current);
             if (disposed) return;
+            if (connectTimedOut) return;
             if (e.code === 4404) { onWindowNotFound?.(); return; }
             if (firstDisconnect) {
               firstDisconnect = false;
@@ -368,6 +401,7 @@ function XTermView({ serverName, target, onDisconnect, onWindowNotFound, onMaxRe
       clearInterval(sizeCheckInterval);
       clearTimeout(sizeCheckTimeout);
       clearTimeout(reconnectTimerRef.current);
+      clearTimeout(connectDataTimerRef.current);
       onDataDisposable?.dispose();
       roRef.current?.disconnect();
       ioRef.current?.disconnect();
@@ -443,33 +477,8 @@ function XTermView({ serverName, target, onDisconnect, onWindowNotFound, onMaxRe
           )}
         </div>
       )}
-      {isMobile && (
-        <div
-          className="qa-bar-transition"
-          inert={!keyboardVisible}
-          style={{
-            maxHeight: keyboardVisible ? 44 : 0,
-            opacity: keyboardVisible ? 1 : 0,
-            padding: keyboardVisible ? '6px 10px' : '0 10px',
-            background: 'rgba(22, 27, 34, 0.15)',
-            backdropFilter: 'blur(3px)',
-            WebkitBackdropFilter: 'blur(3px)',
-            borderTop: keyboardVisible ? '1px solid rgba(139, 148, 158, 0.22)' : '1px solid transparent',
-            display: 'flex',
-            justifyContent: 'center',
-            gap: 5,
-            overflow: keyboardVisible ? 'auto' : 'hidden',
-            scrollbarWidth: 'none',
-            flexShrink: 0,
-            zIndex: 10,
-            transition: 'max-height 0.22s ease, opacity 0.22s ease, padding 0.22s ease',
-          }}
-        >
-          <QuickActionButtons buttons={XTERM_QUICK_BUTTONS} onAction={sendSpecialKey} />
-        </div>
-      )}
     </div>
   );
-}
+});
 
 export default XTermView;

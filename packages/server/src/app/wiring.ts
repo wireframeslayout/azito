@@ -5,6 +5,7 @@
 // main.ts; grouped into per-module factory functions for readability.
 
 import { EventEmitter } from 'events';
+import * as path from 'path';
 import type { SqliteDatabase } from '../shared/db/Database';
 import type { DataPaths } from '../shared/dataDir';
 
@@ -56,6 +57,7 @@ import { SidekickPackageLoader } from '../modules/sidekicks/SidekickPackageLoade
 import { SidekickPackageService } from '../modules/sidekicks/SidekickPackageService';
 import { SidekickSyncService } from '../modules/sidekicks/SidekickSyncService';
 import { UnitTypeLoader } from '../modules/sidekicks/UnitTypeLoader';
+import { ChatCommandLoader } from '../modules/chat-commands/ChatCommandLoader';
 import { SupervisorRegistry } from '../modules/supervisors/SupervisorRegistry';
 import { SqliteSupervisorLaunchRepository } from '../modules/supervisors/SupervisorLaunchRepository';
 import { BrowserSessionManager } from '../modules/browser/BrowserSessionManager';
@@ -66,8 +68,12 @@ import { AgentRegistry, createDefaultRegistry } from '../modules/agents/registry
 
 import { ExecuteTaskUseCase } from '../modules/tasks/execution/ExecuteTaskUseCase';
 import { AgentActivityMonitor } from '../modules/operations/AgentActivityMonitor';
+import { InteractionMonitor } from '../modules/notifications/InteractionMonitor';
 import { WindowRespawnService } from '../modules/windows/WindowRespawnService';
 import { SessionCaptureService } from '../modules/windows/SessionCaptureService';
+import { WindowActivityStatusService } from '../modules/windows/WindowActivityStatusService';
+import { WindowSessionResolver } from '../modules/transcripts/WindowSessionResolver';
+import { TRANSCRIPT_SOURCES } from '../modules/transcripts/sources/registry';
 import { stripPaneSuffix } from '../modules/windows/paneTarget';
 import { TaskRestoreService } from '../modules/tasks/TaskRestoreService';
 import { SessionStrategyFactory } from '../modules/agents/SessionStrategyFactory';
@@ -99,6 +105,7 @@ export interface SharedInfra {
   sidekickPackageService: SidekickPackageService;
   sidekickSyncService: SidekickSyncService;
   unitTypeLoader: UnitTypeLoader;
+  chatCommandLoader: ChatCommandLoader;
   turnSignalHub: TurnSignalHub;
   supervisorRegistry: SupervisorRegistry;
   browserSessionManager: BrowserSessionManager;
@@ -133,6 +140,8 @@ export interface PushNotificationModule {
 export interface ApplicationServices {
   sessionStrategyFactory: SessionStrategyFactory;
   sessionCaptureService: SessionCaptureService;
+  windowSessionResolver: WindowSessionResolver;
+  windowActivityStatusService: WindowActivityStatusService;
   windowRespawnService: WindowRespawnService;
   taskRestoreService: TaskRestoreService;
   usageService: UsageService;
@@ -165,6 +174,7 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
   agentUpdater: AgentUpdater;
   executeTaskUseCase: ExecuteTaskUseCase;
   agentActivityMonitor: AgentActivityMonitor;
+  interactionMonitor: InteractionMonitor;
   resourceGuard: ResourceGuard;
   /** Issue #28 Phase A: resolved once here (the composition root boundary) via shared/auth/scopedAuthFlag.ts, then threaded through — see that file's doc comment for why buildServer.ts reads this instead of process.env directly. */
   scopedAuthEnabled: boolean;
@@ -192,6 +202,9 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
   const sidekickPackageService = new SidekickPackageService(sidekickPackageLoader, dataPaths.sidekicks);
   const sidekickSyncService = new SidekickSyncService();
   const unitTypeLoader = new UnitTypeLoader();
+  // ユーザー層は sidekicks と同じ起点（AZITO_DATA_DIR/data ディレクトリ直下）に置く単一 JSON ファイル
+  // （Issue #338 フェーズC、設定駆動コマンドパレット）。
+  const chatCommandLoader = new ChatCommandLoader(undefined, path.join(dataPaths.dir, 'chat-commands.json'));
   const turnSignalHub = new TurnSignalHub();
   const supervisorLaunchRepo = db ? new SqliteSupervisorLaunchRepository(db) : undefined;
   const supervisorRegistry = new SupervisorRegistry(supervisorLaunchRepo, auditLogService, scopedAuthEnabled);
@@ -232,6 +245,7 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
     sidekickPackageService,
     sidekickSyncService,
     unitTypeLoader,
+    chatCommandLoader,
     turnSignalHub,
     supervisorRegistry,
     browserSessionManager,
@@ -319,9 +333,19 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
     events: taskEvents,
     paneEnvService: taskPaneEnvironmentService,
   });
+  // windowSessionResolver / windowActivityStatusService: shared by transcriptsRoutes
+  // (session resolution), windowsRoutes (GET /api/windows/activity-status, diagnostics)
+  // and AgentActivityMonitor's Tier 4 probe — a single instance keeps the ps/tmux
+  // lookups (and their cache) to one per process.
+  const windowSessionResolver = new WindowSessionResolver(repos.taskRepo, infra.tmuxClient, repos.serverRepo, TRANSCRIPT_SOURCES, sessionCaptureService);
+  const windowActivityStatusService = new WindowActivityStatusService(repos.windowRepo, repos.serverRepo, windowSessionResolver);
   const usageService = new UsageService(infra.agentRegistry);
   const agentSignalService = new AgentSignalService(repos.agentTurnRepo, infra.turnSignalHub, repos.logRepo, repos.auditLogService);
-  return { sessionStrategyFactory, sessionCaptureService, windowRespawnService, taskRestoreService, usageService, agentSignalService, taskEvents, originationService, taskPaneEnvironmentService };
+  return {
+    sessionStrategyFactory, sessionCaptureService, windowSessionResolver, windowActivityStatusService,
+    windowRespawnService, taskRestoreService, usageService, agentSignalService, taskEvents,
+    originationService, taskPaneEnvironmentService,
+  };
 }
 
 function buildExecuteTaskUseCase(
@@ -372,6 +396,7 @@ function buildAgentActivityMonitor(
   repos: Repositories,
   executeTaskUseCase: ExecuteTaskUseCase,
   sessionCaptureService: SessionCaptureService,
+  processProbe: WindowActivityStatusService,
 ): AgentActivityMonitor {
   return new AgentActivityMonitor(
     executeTaskUseCase,
@@ -379,6 +404,7 @@ function buildAgentActivityMonitor(
     infra.tmuxClient,
     repos.serverRepo,
     infra.notificationBus,
+    processProbe,
     (serverName, target) => {
       const wins = repos.windowRepo.findAll().filter(
         (w) => w.serverName === serverName
@@ -446,7 +472,8 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   const appServices = buildApplicationServices(infra, repos, uiToken, scopedAuthEnabled);
   const resourceGuard = new ResourceGuard(infra.transportFactory, repos.resourceGuardSettingsRepo);
   const executeTaskUseCase = buildExecuteTaskUseCase(infra, repos, appServices, resourceGuard);
-  const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService);
+  const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService, appServices.windowActivityStatusService);
+  const interactionMonitor = new InteractionMonitor(repos.windowRepo);
   const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos);
 
   return {
@@ -459,6 +486,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
     ...appServices,
     executeTaskUseCase,
     agentActivityMonitor,
+    interactionMonitor,
     resourceGuard,
     scopedAuthEnabled,
     ...systemUpdateModule,

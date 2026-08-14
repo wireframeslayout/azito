@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import DiffHunkView from './DiffHunkView';
 import type { FileDiff } from './types';
@@ -20,6 +20,7 @@ function getLanguage(filename: string): string {
   return EXT_LANG[ext] || '';
 }
 
+const INITIAL_EXPAND_COUNT = 5;
 const LARGE_FILE_THRESHOLD = 1000;
 
 interface DiffContentProps {
@@ -28,33 +29,66 @@ interface DiffContentProps {
   fileRefs: React.MutableRefObject<Map<string, HTMLDivElement>>;
 }
 
+function computeInitialCollapsed(files: FileDiff[]): Set<string> {
+  const s = new Set<string>();
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    const totalLines = f.hunks.reduce((sum, h) => sum + h.lines.length, 0);
+    if (i >= INITIAL_EXPAND_COUNT || totalLines > LARGE_FILE_THRESHOLD) {
+      s.add(f.file);
+    }
+  }
+  return s;
+}
+
+function computeInitialExpanded(files: FileDiff[]): Set<string> {
+  const s = new Set<string>();
+  for (let i = 0; i < Math.min(files.length, INITIAL_EXPAND_COUNT); i++) {
+    const f = files[i];
+    const totalLines = f.hunks.reduce((sum, h) => sum + h.lines.length, 0);
+    if (totalLines <= LARGE_FILE_THRESHOLD) {
+      s.add(f.file);
+    }
+  }
+  return s;
+}
+
 export default function DiffContent({ files, activeFile, fileRefs }: DiffContentProps) {
   const { t } = useTranslation('git');
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => {
-    const initial = new Set<string>();
-    for (const f of files) {
-      const totalLines = f.hunks.reduce((sum, h) => sum + h.lines.length, 0);
-      if (totalLines > LARGE_FILE_THRESHOLD) initial.add(f.file);
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => computeInitialCollapsed(files));
+  const [expanded, setExpanded] = useState<Set<string>>(() => computeInitialExpanded(files));
+  const prevFilesRef = useRef(files);
+
+  useEffect(() => {
+    if (prevFilesRef.current !== files) {
+      prevFilesRef.current = files;
+      setCollapsed(computeInitialCollapsed(files));
+      setExpanded(computeInitialExpanded(files));
     }
-    return initial;
-  });
+  }, [files]);
 
   const toggleCollapse = (file: string) => {
     setCollapsed((prev) => {
       const next = new Set(prev);
-      if (next.has(file)) next.delete(file);
-      else next.add(file);
+      if (next.has(file)) {
+        next.delete(file);
+        setExpanded((prev2) => new Set(prev2).add(file));
+      } else {
+        next.add(file);
+      }
       return next;
     });
   };
 
   return (
-    <div style={{ overflowY: 'auto', height: '100%' }}>
+    <div style={{ overflowY: 'auto', height: '100%', padding: '10px 12px' }}>
       {files.map((f) => {
         const isCollapsed = collapsed.has(f.file);
+        const hasBeenExpanded = expanded.has(f.file);
         const language = getLanguage(f.file);
         const isActive = activeFile === f.file;
-        const totalLines = f.hunks.reduce((sum, h) => sum + h.lines.length, 0);
+        const statusLetter = f.group === 'untracked' ? 'U' : f.status;
+        const statusColor = f.group === 'untracked' ? STATUS_COLOR.U : (STATUS_COLOR[f.status] || 'var(--text)');
 
         return (
           <div
@@ -63,7 +97,11 @@ export default function DiffContent({ files, activeFile, fileRefs }: DiffContent
               if (el) fileRefs.current.set(f.file, el);
             }}
             style={{
-              borderBottom: '1px solid var(--border)',
+              borderRadius: 'var(--radius-md)',
+              background: 'var(--bg-card)',
+              boxShadow: 'inset 0 1px 0 var(--edge-hi)',
+              marginBottom: 10,
+              overflow: 'hidden',
               outline: isActive ? '1px solid var(--accent)' : 'none',
               outlineOffset: -1,
             }}
@@ -75,14 +113,14 @@ export default function DiffContent({ files, activeFile, fileRefs }: DiffContent
                 alignItems: 'center',
                 gap: 8,
                 width: '100%',
-                padding: '8px 12px',
-                background: 'var(--bg-card)',
+                padding: '7px 12px',
+                background: 'transparent',
                 border: 'none',
-                borderBottom: isCollapsed ? 'none' : '1px solid var(--border)',
                 cursor: 'pointer',
                 textAlign: 'left',
                 color: 'var(--text)',
-                fontSize: 'var(--font-md)',
+                fontSize: 'var(--font-sm)',
+                fontFamily: 'ui-monospace, Menlo, monospace',
               }}
             >
               <span
@@ -97,20 +135,18 @@ export default function DiffContent({ files, activeFile, fileRefs }: DiffContent
               </span>
               <span
                 style={{
-                  fontWeight: 600,
+                  fontWeight: 700,
                   fontSize: 'var(--font-xs)',
-                  width: 14,
+                  width: 13,
                   textAlign: 'center',
-                  color: STATUS_COLOR[f.status] || 'var(--text)',
+                  color: statusColor,
                   flexShrink: 0,
                 }}
               >
-                {f.status}
+                {statusLetter}
               </span>
               <span
                 style={{
-                  fontFamily: 'monospace',
-                  fontSize: 'var(--font-sm)',
                   flex: 1,
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
@@ -119,25 +155,46 @@ export default function DiffContent({ files, activeFile, fileRefs }: DiffContent
               >
                 {f.file}
               </span>
+              {f.group === 'untracked' && (
+                <span
+                  style={{
+                    fontSize: 'var(--font-2xs)',
+                    borderRadius: 'var(--radius-sm)',
+                    padding: '1px 5px',
+                    color: 'var(--accent)',
+                    background: 'var(--accent-a08)',
+                    boxShadow: 'inset 0 0 0 1px var(--accent-a35)',
+                    marginLeft: 2,
+                    flexShrink: 0,
+                  }}
+                >
+                  {t('diff.untracked')}
+                </span>
+              )}
               {f.isBinary ? (
                 <span style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', flexShrink: 0 }}>{t('diff.binary')}</span>
               ) : (
-                <span style={{ fontSize: 'var(--font-xs)', flexShrink: 0, display: 'flex', gap: 6 }}>
+                <span
+                  style={{
+                    fontSize: 'var(--font-2xs)',
+                    flexShrink: 0,
+                    display: 'flex',
+                    gap: 6,
+                    fontVariantNumeric: 'tabular-nums',
+                    color: 'var(--text-dim)',
+                    marginLeft: 'auto',
+                  }}
+                >
                   {f.additions > 0 && (
                     <span style={{ color: 'var(--success)' }}>+{f.additions}</span>
                   )}
                   {f.deletions > 0 && (
-                    <span style={{ color: 'var(--danger)' }}>-{f.deletions}</span>
+                    <span style={{ color: 'var(--danger)' }}>−{f.deletions}</span>
                   )}
                 </span>
               )}
-              {totalLines > LARGE_FILE_THRESHOLD && (
-                <span style={{ fontSize: 'var(--font-2xs)', color: 'var(--warning)', flexShrink: 0 }}>
-                  {t('diff.largeFile')}
-                </span>
-              )}
             </button>
-            {!isCollapsed && !f.isBinary && f.hunks.map((hunk, hi) => (
+            {!isCollapsed && hasBeenExpanded && !f.isBinary && f.hunks.map((hunk, hi) => (
               <DiffHunkView key={hi} hunk={hunk} language={language} />
             ))}
             {!isCollapsed && f.isBinary && (

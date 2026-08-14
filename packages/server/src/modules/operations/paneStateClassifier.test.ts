@@ -70,6 +70,22 @@ describe('classifyPaneState', () => {
         agentType: 'claude',
       })).toBe('working');
     });
+
+    it('classifies a real-world observed half-circle spinner title as working', () => {
+      expect(classifyPaneState({ paneTitle: '◐ libghosttyのwasm版導入検討', agentType: 'claude' })).toBe('working');
+    });
+
+    it('classifies a real-world observed idle title as idle', () => {
+      expect(classifyPaneState({ paneTitle: '✳ テスト投稿の実装', agentType: 'claude' })).toBe('idle');
+    });
+
+    it.each(['◐', '◑', '◒', '◓'])('classifies half-circle spinner glyph %s as working', (glyph) => {
+      expect(classifyPaneState({ paneTitle: `${glyph} 作業中`, agentType: 'claude' })).toBe('working');
+    });
+
+    it.each(['✻', '✶', '✽', '✢', '∗'])('classifies legacy asterisk-family spinner glyph %s as working', (glyph) => {
+      expect(classifyPaneState({ paneTitle: `${glyph} 作業中`, agentType: 'claude' })).toBe('working');
+    });
   });
 
   describe('codex', () => {

@@ -1,10 +1,15 @@
-import React from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { SidebarMode, Project, Session, Window, Task } from '../../pages/workspace/types';
 import type { PersistedTab } from '../../hooks/useTabPersistence';
 import type { BrowserGroupInfo } from '../../hooks/useBrowserGroups';
 import type { ContextMenuItem } from '../ContextMenu';
 import FileExplorer from '../FileExplorer';
+import { FileSearchPanel } from '../files/FileSearchPanel';
+import { RootSwitcher, type WorktreeItem } from '../files/RootSwitcher';
+import { FileSidebarHeader } from '../files/FileSidebarHeader';
+import { PathBreadcrumb } from '../files/PathBreadcrumb';
+import { Notice } from '../ui/Notice';
 import RepoSidebar from '../RepoSidebar';
 import StoragePanel from '../StoragePanel';
 import { SettingsSidebar, type SettingsSection } from '../ProjectSettings';
@@ -34,8 +39,11 @@ interface WorkspaceSidebarContentProps {
   agentDefsLoading: boolean;
   agentDefsError: string | null;
   showWindowContextMenu: (e: React.MouseEvent, w: Window, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void;
+  /** 長押し（タッチ座標）版。SP のオブジェクト一覧・プレーンなプロジェクトウィンドウ行の
+   * 長押しコンテキストメニューに使う（Issue #338 T10）。 */
+  showWindowContextMenuAt?: (x: number, y: number, w: Window, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void;
   onSwitchSidebarMode: (mode: SidebarMode) => void;
-  onFileSelect: (serverName: string, filePath: string) => void;
+  onFileSelect: (serverName: string, filePath: string, line?: number) => void;
   onRefresh: () => void;
   mobile: boolean;
   onCloseMobileSidebar: () => void;
@@ -85,6 +93,7 @@ export default function WorkspaceSidebarContent({
   agentDefsLoading,
   agentDefsError,
   showWindowContextMenu,
+  showWindowContextMenuAt,
   onSwitchSidebarMode,
   onFileSelect,
   onRefresh,
@@ -109,6 +118,24 @@ export default function WorkspaceSidebarContent({
   taskWindows,
 }: WorkspaceSidebarContentProps) {
   const { t } = useTranslation('workspace');
+  const { t: tf } = useTranslation('files');
+  const [selectedWorktreePath, setSelectedWorktreePath] = useState<string | null>(null);
+  const [filesView, setFilesView] = useState<'tree' | 'search'>('tree');
+  const [currentWorktree, setCurrentWorktree] = useState<WorktreeItem | null>(null);
+  const fileRefreshRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    setSelectedWorktreePath(null);
+  }, [project?.id, selectedFileServer]);
+
+  const handleRefresh = useCallback(() => {
+    fileRefreshRef.current?.();
+  }, []);
+
+  const handleRefreshRef = useCallback((fn: () => void) => {
+    fileRefreshRef.current = fn;
+  }, []);
+
   return (
     <>
       {sidebarMode === 'windows' && project && (
@@ -120,6 +147,7 @@ export default function WorkspaceSidebarContent({
           projectServers={projectServers}
           connectPane={connectPane}
           showWindowContextMenu={showWindowContextMenu}
+          showWindowContextMenuAt={showWindowContextMenuAt}
           onOpenAddWindow={onOpenAddWindow}
           onOpenQuickAdd={onOpenQuickAdd}
           agentDefsLoading={agentDefsLoading}
@@ -171,18 +199,6 @@ export default function WorkspaceSidebarContent({
       )}
       {sidebarMode === 'files' && (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          {projectServers.length > 1 && (
-            <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-              <select value={selectedFileServer} onChange={(e) => onSelectFileServer(e.target.value)}
-                style={{ width: '100%', padding: '6px 8px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', color: 'var(--text)', fontSize: 'var(--font-md)', outline: 'none' }}>
-                {projectServers.map((ps) => (
-                  <option key={ps.serverName} value={ps.serverName}>
-                    {ps.serverName}{ps.workingDirectory ? ` (${ps.workingDirectory})` : ''}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
           {(() => {
             const ps = projectServers.find((s) => s.serverName === selectedFileServer);
             const rootPath = ps?.workingDirectory;
@@ -196,27 +212,54 @@ export default function WorkspaceSidebarContent({
                 </div>
               );
             }
+            const effectiveRoot = selectedWorktreePath ?? rootPath;
             return (
               <>
-                <div style={{ padding: '6px 12px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-                  <button
-                    onClick={() => { onOpenDiff(selectedFileServer, rootPath); if (mobile) onCloseMobileSidebar(); }}
-                    style={{
-                      width: '100%',
-                      padding: '5px 10px',
-                      fontSize: 'var(--font-sm)',
-                      color: 'var(--accent)',
-                      background: 'var(--accent-a08)',
-                      border: '1px solid var(--accent-a15)',
-                      borderRadius: 'var(--radius-sm)',
-                      cursor: 'pointer',
-                      fontWeight: 500,
+                <FileSidebarHeader
+                  onSearch={() => setFilesView(filesView === 'search' ? 'tree' : 'search')}
+                  onDiff={() => { onOpenDiff(selectedFileServer, effectiveRoot); if (mobile) onCloseMobileSidebar(); }}
+                  onRefresh={handleRefresh}
+                  searchActive={filesView === 'search'}
+                  serverName={projectServers.length > 1 ? selectedFileServer : undefined}
+                  serverCount={projectServers.length}
+                  allServerNames={projectServers.map((s) => s.serverName)}
+                  onSelectServer={onSelectFileServer}
+                />
+                {project && (
+                  <RootSwitcher
+                    serverName={selectedFileServer}
+                    projectId={project.id}
+                    selectedPath={selectedWorktreePath}
+                    onSelect={setSelectedWorktreePath}
+                    onWorktreeChange={setCurrentWorktree}
+                  />
+                )}
+                <PathBreadcrumb path={effectiveRoot} />
+                {currentWorktree?.orphaned && (
+                  <div style={{ padding: '0 12px 4px', flexShrink: 0 }}>
+                    <Notice tone="warning">{tf('rootSwitcher.orphanedNotice')}</Notice>
+                  </div>
+                )}
+                {filesView === 'search' && project ? (
+                  <FileSearchPanel
+                    serverName={selectedFileServer}
+                    projectId={project.id}
+                    root={effectiveRoot}
+                    onOpenHit={(path, line) => {
+                      onFileSelect(selectedFileServer, path, line);
+                      if (mobile) onCloseMobileSidebar();
                     }}
-                  >
-                    {t('sidebar.gitDiff')}
-                  </button>
-                </div>
-                <FileExplorer serverName={selectedFileServer} rootPath={rootPath} onFileSelect={onFileSelect} />
+                    onClose={() => setFilesView('tree')}
+                  />
+                ) : (
+                  <FileExplorer
+                    serverName={selectedFileServer}
+                    rootPath={effectiveRoot}
+                    projectId={project?.id}
+                    onFileSelect={onFileSelect}
+                    onRefreshRef={handleRefreshRef}
+                  />
+                )}
               </>
             );
           })()}
