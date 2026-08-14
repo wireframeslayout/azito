@@ -31,7 +31,7 @@ Create and rename use an inline input field in the tree; only delete goes throug
 
 ### Switching Worktree Roots
 
-The root switcher row at the top of the sidebar lets you switch which worktree (branch) is currently displayed. Clicking it opens a picker with a filterable list of worktrees on the project server, showing each branch name, the status of any task tied to it, and its changed-line count. Worktrees created for a running task show that task's status; a worktree with no matching task is marked as orphaned.
+The root switcher row at the top of the sidebar lets you switch which worktree (branch) is currently displayed. That row shows the currently selected worktree's changed-file count as a badge. Clicking it opens a picker with a filterable list of worktrees on the project server, showing each branch name and the status of any task tied to it. Worktrees created for a running task show that task's status; among worktrees whose path matches `.worktrees/task-<taskId>`, one with no matching task is marked as orphaned.
 
 ## File Search
 
