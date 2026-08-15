@@ -562,17 +562,49 @@ describe('isolation_intent false->true window-presence gate (Issue #29 review, C
     expect(opts.serverRepo.updateIsolationIntent).toHaveBeenCalledWith('srv', true);
   });
 
-  it('does not gate a true->true no-op PUT (no new transition)', async () => {
+  // Issue #29 review, Important finding 1 (this pass): a true->true PUT
+  // whose cleanup report never settled at 'done' (default makeServer() has
+  // isolationReport: null) is NOT a full no-op — it retries
+  // attemptIsolationCleanup (see the "true->true retries" describe block
+  // below) — and that retry must go through the exact same risky-window
+  // gate a false->true transition does. This test previously asserted 200
+  // here, which encoded the bug this fix closes: the retry silently skipped
+  // the gate entirely.
+  it('rejects with 409 when a true->true retry (cleanup not yet done) finds a risky window', async () => {
     const findByServer = vi.fn(() => [
       { id: 1, windowType: 'agent', taskId: null } as unknown as ReturnType<NonNullable<ServersRouteOptions['windowRepo']>['findByServer']>[number],
     ]);
     const opts = makeOpts({ windowRepo: { findByServer } as unknown as ServersRouteOptions['windowRepo'] });
-    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'agent', isolationIntent: true }));
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: true, isolationReport: null }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('isolation_intent_blocked_by_windows');
+    expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
+  });
+
+  // A true->true PUT whose cleanup report is already settled at 'done'
+  // needs no retry at all (isolationCleanupNeedsRetry short-circuits), so
+  // the gate must never even run — a stale/unrelated window row must not
+  // block a genuine complete no-op.
+  it('does not gate a true->true PUT when the cleanup report is already settled at "done"', async () => {
+    const findByServer = vi.fn(() => [
+      { id: 1, windowType: 'agent', taskId: null } as unknown as ReturnType<NonNullable<ServersRouteOptions['windowRepo']>['findByServer']>[number],
+    ]);
+    const opts = makeOpts({ windowRepo: { findByServer } as unknown as ServersRouteOptions['windowRepo'] });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: true, isolationReport: JSON.stringify({ kind: 'cleanup', cleanup: 'done' }) }),
+    );
     const app = await buildApp(opts);
 
     const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
 
     expect(res.statusCode).toBe(200);
+    expect(findByServer).not.toHaveBeenCalled();
     expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
   });
 
@@ -639,16 +671,64 @@ describe('isolation_intent false->true live-tmux-session gate (Issue #29 review,
     expect(opts.serverRepo.updateIsolationIntent).toHaveBeenCalledWith('srv', true);
   });
 
-  it('does not check live sessions on a true->true no-op PUT', async () => {
+  // Issue #29 review, Important finding 1 (this pass): the retry path must
+  // check live sessions too — a stale/failed cleanup report (default
+  // makeServer() isolationReport: null) means this true->true PUT is a
+  // retry, not a no-op, and must be gated exactly like a false->true
+  // transition. This test previously asserted the check was skipped, which
+  // encoded the bug.
+  it('rejects with 409 when a true->true retry (cleanup not yet done) finds a live tmux session', async () => {
+    const listSessionsForSecurityGate = vi.fn(async () => [{ name: 'manual-session', windowCount: 1, attached: false, created: 0, windows: [] }]);
+    const opts = makeOpts({ tmux: { listSessionsForSecurityGate } as unknown as ServersRouteOptions['tmux'] });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: true, isolationReport: null }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('isolation_intent_blocked_by_live_sessions');
+    expect(listSessionsForSecurityGate).toHaveBeenCalledTimes(1);
+    expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
+  });
+
+  it('does not check live sessions on a true->true PUT when the cleanup report is already settled at "done"', async () => {
     const listSessionsForSecurityGate = vi.fn(async () => []);
     const opts = makeOpts({ tmux: { listSessionsForSecurityGate } as unknown as ServersRouteOptions['tmux'] });
-    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'agent', isolationIntent: true }));
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: true, isolationReport: JSON.stringify({ kind: 'cleanup', cleanup: 'done' }) }),
+    );
     const app = await buildApp(opts);
 
     const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
 
     expect(res.statusCode).toBe(200);
     expect(listSessionsForSecurityGate).not.toHaveBeenCalled();
+  });
+
+  // Issue #29 review, Important finding 1 (this pass): once the risky-window
+  // and live-session gate is clean, a not-yet-done cleanup report still
+  // retries attemptIsolationCleanup exactly as before this fix — the gate
+  // only blocks a dirty server, it does not disable the retry feature.
+  it('runs the cleanup retry when the true->true gate finds no risky windows and no live sessions', async () => {
+    const install = vi.fn(async () => ({ success: true, steps: [] }));
+    const harnessInstaller = { install, installLocal: vi.fn() } as unknown as ServersRouteOptions['harnessInstaller'];
+    const opts = makeOpts({
+      harnessInstaller,
+      tmux: { listSessionsForSecurityGate: vi.fn(async () => []) } as unknown as ServersRouteOptions['tmux'],
+      windowRepo: { findByServer: vi.fn(() => []) } as unknown as ServersRouteOptions['windowRepo'],
+    });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationReport: null }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+    expect(res.statusCode).toBe(200);
+    expect(install).toHaveBeenCalledTimes(1);
+    expect(res.json().isolationCleanup).toBe('done');
   });
 });
 
@@ -984,6 +1064,86 @@ describe('POST /api/servers/:name/harness/install — serialized via serverIsola
     const installPromise = app.inject({ method: 'POST', url: '/api/servers/srv/harness/install', payload: {} });
     // Give the install request a turn of the event loop to enter the lock
     // and start awaiting installGate before firing the PUT.
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
+
+    const putPromise = app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+    await new Promise((resolve) => setImmediate(resolve));
+    // The PUT is queued behind the same key and must not have run yet.
+    expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
+
+    releaseInstall();
+    const [installRes, putRes] = await Promise.all([installPromise, putPromise]);
+
+    expect(installRes.statusCode).toBe(200);
+    expect(putRes.statusCode).toBe(200);
+    expect(opts.serverRepo.updateIsolationIntent).toHaveBeenCalledWith('srv', true);
+  });
+});
+
+// Issue #29 review, Important finding 2 (this pass): POST agent/install
+// reads the row, runs a (potentially slow) remote install, and then writes
+// a fresh host/agentPort/agentToken connection snapshot back onto it — the
+// exact same "fresh read -> remote work -> write back connection info"
+// shape harness/install above was already fixed (Important finding 1,
+// earlier pass) to run inside serverIsolationMutex. This route was the one
+// remaining place that pattern existed unwrapped.
+describe('POST /api/servers/:name/agent/install — serialized via serverIsolationMutex (Issue #29 review, Important finding 2, this pass)', () => {
+  function makeAgentInstaller(installImpl: ReturnType<typeof vi.fn>) {
+    return { install: installImpl } as unknown as ServersRouteOptions['agentInstaller'];
+  }
+
+  it('acquires serverIsolationMutex.withLock keyed by the server name before reading the row', async () => {
+    const install = vi.fn(async () => ({ success: true, host: '1.2.3.4', port: 4000, token: 'newtok', version: '1.0.1', startMethod: 'nohup' }));
+    const withLock = vi.fn((key: string, fn: () => Promise<unknown>) => fn());
+    const opts = makeOpts({
+      agentInstaller: makeAgentInstaller(install),
+      serverIsolationMutex: { withLock } as unknown as ServersRouteOptions['serverIsolationMutex'],
+    });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', sshHost: 'user@host' }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv/agent/install', payload: {} });
+
+    expect(res.statusCode).toBe(200);
+    expect(withLock).toHaveBeenCalledWith('srv', expect.any(Function));
+    expect(opts.serverRepo.findByName).toHaveBeenCalledTimes(1);
+  });
+
+  it('writes the fresh connection snapshot only from a row read inside the lock', async () => {
+    const install = vi.fn(async () => ({ success: true, host: '5.6.7.8', port: 5000, token: 'newtok', version: '1.0.1', startMethod: 'nohup' }));
+    const opts = makeOpts({ agentInstaller: makeAgentInstaller(install) });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', sshHost: 'user@host', muxRuntime: 'managed' }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv/agent/install', payload: {} });
+
+    expect(res.statusCode).toBe(200);
+    expect(install).toHaveBeenCalledWith('user@host', expect.any(Function), 'managed');
+    expect(opts.serverRepo.update).toHaveBeenCalledWith('srv', 'agent', '5.6.7.8', 5000, 'newtok', 'user@host', 'managed');
+  });
+
+  it('serializes against a concurrent isolation-intent PUT on the same server (real KeyedMutex)', async () => {
+    let releaseInstall!: () => void;
+    const installGate = new Promise<void>((resolve) => { releaseInstall = resolve; });
+    const install = vi.fn(async () => {
+      await installGate;
+      return { success: true, host: '1.2.3.4', port: 4000, token: 'newtok', version: '1.0.1', startMethod: 'nohup' };
+    });
+    const opts = makeOpts({
+      agentInstaller: makeAgentInstaller(install),
+      serverIsolationMutex: new KeyedMutex(),
+    });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: false, sshHost: 'user@host' }),
+    );
+    const app = await buildApp(opts);
+
+    const installPromise = app.inject({ method: 'POST', url: '/api/servers/srv/agent/install', payload: {} });
     await new Promise((resolve) => setImmediate(resolve));
     expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
 

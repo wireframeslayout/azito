@@ -1,7 +1,7 @@
 import type { FastifyPluginCallback } from 'fastify';
 import { execSync } from 'child_process';
 import os from 'os';
-import type { IServerRepository, MuxRuntime } from './Server';
+import type { IServerRepository, MuxRuntime, ServerConfig } from './Server';
 import type { TmuxClient, TmuxSession } from '../tmux/TmuxClient';
 import type { AgentInstaller, InstallProgress } from './agent-deploy/AgentInstaller';
 import type { AgentBundler } from './agent-deploy/AgentBundler';
@@ -184,6 +184,64 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
     } catch {
       return true;
     }
+  }
+
+  // Issue #29 review, Important finding 1 (this pass): the risky-window /
+  // live-tmux-session checks that guard a false->true isolation_intent
+  // transition (originally inline in the PUT handler below) must ALSO guard
+  // a true->true cleanup RETRY (isolationCleanupNeedsRetry() above returning
+  // true) — a failed/interrupted cleanup being retried is, from the "is it
+  // safe to declare this server clean" standpoint, exactly the same
+  // operation as the original false->true attempt: it still calls
+  // attemptIsolationCleanup(), which still purges the remote operator token
+  // and still results in `isolation_report` recording an outcome the UI
+  // treats as a completed check. A window/session that appeared AFTER the
+  // original (failed) attempt — possibly one that sourced the very
+  // credentials the original cleanup was trying to purge — must block the
+  // retry exactly as it would block a fresh false->true transition. Both
+  // call sites now share this single implementation instead of the gate
+  // living inline in only one of them, which is what let the retry path
+  // silently skip it in the first place.
+  async function checkIsolationBlockers(
+    serverName: string,
+    srv: ServerConfig,
+  ): Promise<{ status: number; body: Record<string, unknown> } | null> {
+    const riskyWindows = windowRepo
+      .findByServer(serverName)
+      .filter((w) => w.windowType === 'agent' || w.taskId !== null);
+    if (riskyWindows.length > 0) {
+      return {
+        status: 409,
+        body: {
+          error: 'isolation_intent_blocked_by_windows',
+          message: `${riskyWindows.length} 件のウィンドウがこのサーバー上に登録されているため隔離を有効化できません。対象ウィンドウを閉じてから再度有効化してください。`,
+          windowCount: riskyWindows.length,
+        },
+      };
+    }
+    let liveSessions: TmuxSession[];
+    try {
+      liveSessions = await tmux.listSessionsForSecurityGate(srv);
+    } catch (err: unknown) {
+      return {
+        status: 409,
+        body: {
+          error: 'isolation_intent_blocked_by_session_check_failure',
+          message: `隔離対象サーバーの tmux セッション一覧取得に失敗したため、安全側に倒して隔離を有効化できません（${(err as Error).message}）。サーバーの疎通を確認してから再度お試しください。`,
+        },
+      };
+    }
+    if (liveSessions.length > 0) {
+      return {
+        status: 409,
+        body: {
+          error: 'isolation_intent_blocked_by_live_sessions',
+          message: `${liveSessions.length} 件の稼働中 tmux セッションがこのサーバー上に存在するため隔離を有効化できません。セッションを終了してから再度有効化してください。`,
+          sessionCount: liveSessions.length,
+        },
+      };
+    }
+    return null;
   }
 
   // ── GET /api/servers ──
@@ -411,45 +469,24 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
           message: '隔離が有効なサーバーの接続先情報は変更できません。先に隔離を無効化（isolationIntent: false のみを指定した PUT）を単独で送信して反映させてから、接続先の変更を別の PUT で送信してください。',
         });
       }
+      // Issue #29 review (4th pass), Critical finding 1: the DB `windows`
+      // table only covers windows AZITO itself created and is still
+      // tracking — it says nothing about a session a human (or another
+      // process) created directly on this server via the generic tmux
+      // session/window/pane routes (`modules/tmux/routes/sessions.ts`),
+      // which — before this same review round's fix to those routes —
+      // could have injected AZITO_UI_TOKEN into a live pane with no
+      // corresponding `windows` row at all. A live tmux session is
+      // therefore an independent signal from the DB check above, checked
+      // in addition to it, not instead of it. Listing failure is treated
+      // the same conservative way as the DB check: unable to prove the
+      // server is clean means fail closed (409), not fail open. (Extracted
+      // into checkIsolationBlockers() above so the true->true retry branch
+      // below can share the exact same gate — see that function's doc
+      // comment.)
       if (effectiveType === 'agent' && isolationIntent === true && isolationIntent !== srv.isolationIntent) {
-        const riskyWindows = windowRepo
-          .findByServer(request.params.name)
-          .filter((w) => w.windowType === 'agent' || w.taskId !== null);
-        if (riskyWindows.length > 0) {
-          return reply.status(409).send({
-            error: 'isolation_intent_blocked_by_windows',
-            message: `${riskyWindows.length} 件のウィンドウがこのサーバー上に登録されているため隔離を有効化できません。対象ウィンドウを閉じてから再度有効化してください。`,
-            windowCount: riskyWindows.length,
-          });
-        }
-        // Issue #29 review (4th pass), Critical finding 1: the DB `windows`
-        // table only covers windows AZITO itself created and is still
-        // tracking — it says nothing about a session a human (or another
-        // process) created directly on this server via the generic tmux
-        // session/window/pane routes (`modules/tmux/routes/sessions.ts`),
-        // which — before this same review round's fix to those routes —
-        // could have injected AZITO_UI_TOKEN into a live pane with no
-        // corresponding `windows` row at all. A live tmux session is
-        // therefore an independent signal from the DB check above, checked
-        // in addition to it, not instead of it. Listing failure is treated
-        // the same conservative way as the DB check: unable to prove the
-        // server is clean means fail closed (409), not fail open.
-        let liveSessions: TmuxSession[];
-        try {
-          liveSessions = await tmux.listSessionsForSecurityGate(srv);
-        } catch (err: unknown) {
-          return reply.status(409).send({
-            error: 'isolation_intent_blocked_by_session_check_failure',
-            message: `隔離対象サーバーの tmux セッション一覧取得に失敗したため、安全側に倒して隔離を有効化できません（${(err as Error).message}）。サーバーの疎通を確認してから再度お試しください。`,
-          });
-        }
-        if (liveSessions.length > 0) {
-          return reply.status(409).send({
-            error: 'isolation_intent_blocked_by_live_sessions',
-            message: `${liveSessions.length} 件の稼働中 tmux セッションがこのサーバー上に存在するため隔離を有効化できません。セッションを終了してから再度有効化してください。`,
-            sessionCount: liveSessions.length,
-          });
-        }
+        const blocked = await checkIsolationBlockers(request.params.name, srv);
+        if (blocked) return reply.status(blocked.status).send(blocked.body);
       }
       // Issue #29 review, Important finding 2: set only when
       // attemptIsolationCleanup actually runs in this request (see below) —
@@ -532,7 +569,22 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
           // retry, not silently no-op forever. A `report: 'done'` (the only
           // fully-settled outcome) stays untouched, matching the pre-existing
           // true->true no-op for that case.
+          // Issue #29 review, Important finding 2 (this pass): a retry is a
+          // fresh attempt to declare the server clean, not a continuation of
+          // whatever the original false->true request already checked — a
+          // window or live session appearing on the server AFTER that
+          // original (failed/interrupted) attempt must block the retry
+          // exactly as it would block a brand-new false->true transition,
+          // via the same checkIsolationBlockers() gate used above. Without
+          // this, a stuck cleanup report gave an operator a "just resubmit
+          // the same PUT" retry path that skipped the very safety check the
+          // false->true transition itself cannot bypass, and could purge the
+          // remote token / record a "done" cleanup report while a
+          // credential-bearing pane (possibly sourcing the token this
+          // cleanup is trying to purge) was sitting right there.
           if (isolationCleanupNeedsRetry(srv.isolationReport)) {
+            const blocked = await checkIsolationBlockers(request.params.name, srv);
+            if (blocked) return reply.status(blocked.status).send(blocked.body);
             isolationCleanup = await attemptIsolationCleanup(request.params.name, request.principal ?? OPERATOR_PRINCIPAL);
           }
         }
@@ -552,7 +604,24 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
   // ── POST /api/servers/:name/agent/install ──
   fastify.post<{ Params: { name: string } }>(
     '/api/servers/:name/agent/install',
-    async (request, reply) => {
+    // Issue #29 review, Important finding 2 (this pass): this route reads
+    // `srv` (for `sshHost`/`muxRuntime`) and, on success, writes the fresh
+    // `host`/`agentPort`/`agentToken` connection snapshot straight back to
+    // the row — the exact same "fresh read -> remote work -> write back
+    // connection info" shape the harness/install route above was already
+    // fixed to run inside serverIsolationMutex (see that route's doc
+    // comment). Left unwrapped, this route could race a concurrent
+    // isolation PUT the same way harness/install could: read a
+    // pre-isolation-flip row, run a slow remote (re)install, and then write
+    // a NEW host/port/token snapshot back onto a row the isolation PUT
+    // already committed and audited as isolated/cleaned — the isolation
+    // gate's window/session check and attemptIsolationCleanup's purge would
+    // both have inspected/acted on the OLD endpoint, while this install
+    // silently overwrites it with connection info the isolation flow never
+    // saw. Wrapping the fresh read through the write-back in the same
+    // per-server-name mutex closes that window the same way it was closed
+    // for harness/install.
+    async (request, reply) => serverIsolationMutex.withLock(request.params.name, async () => {
       if (!agentInstaller) return reply.status(501).send({ error: 'Agent installer not available' });
 
       const srv = serverRepo.findByName(request.params.name);
@@ -572,7 +641,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       }
 
       return reply.status(500).send({ error: result.error, steps });
-    },
+    }),
   );
 
   // ── POST /api/servers/:name/harness/install ──
