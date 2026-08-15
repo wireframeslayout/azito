@@ -508,13 +508,17 @@ export class ExecuteTaskUseCase {
     // doesn't exist yet) is immediately abandoned in favor of the real task
     // window created below — it deliberately gets no task token (issuing/
     // rotating one for a window nobody uses would be pointless). It IS still
-    // routed through `uiTokenEnvForServer`, not a bare `{}` (Issue #29
-    // review, Critical finding 1): a bare `{}` injects nothing itself, but
-    // does nothing to mask a credential the pane inherits anyway — either
-    // from the tmux SESSION's own leftover env, or from the tmux SERVER
-    // process's own env (the remote agent process's env, for an
-    // `agent`-type server) — so an isolated server still needs the explicit
-    // mask here exactly like every other window-creation call site does.
+    // routed through `ensureSessionWithLock`'s `isolationMaskForServer`
+    // (Issue #29 review, 11th pass, Critical finding 1 — not a bare `{}`,
+    // and NOT `uiTokenEnvForServer` either, since this is a TASK session and
+    // must never inject the live operator UI token the way
+    // `uiTokenEnvForServer` does for a non-isolated server): a bare `{}`
+    // injects nothing itself, but does nothing to mask a credential the
+    // pane inherits anyway — either from the tmux SESSION's own leftover
+    // env, or from the tmux SERVER process's own env (the remote agent
+    // process's env, for an `agent`-type server) — so an isolated server
+    // still needs the explicit mask here exactly like every other
+    // window-creation call site does.
     //
     // Routed through ensureSessionWithLock (Issue #29 review, 10th pass,
     // Critical finding 1): the existence check AND the createSession call
@@ -981,9 +985,11 @@ export class ExecuteTaskUseCase {
     this.taskRepo.updateStatus(taskId, 'in_progress');
 
     // Ensure tmux session exists. Same throwaway-bootstrap-window reasoning
-    // as execute() above — including the same `uiTokenEnvForServer` masking,
-    // not a bare `{}` — since the real task window (created just below, if
-    // it doesn't already exist) is what actually gets AZITO_TASK_TOKEN.
+    // as execute() above — including the same `isolationMaskForServer`
+    // masking (via `ensureSessionWithLock`), not a bare `{}` and not
+    // `uiTokenEnvForServer` — since the real task window (created just
+    // below, if it doesn't already exist) is what actually gets
+    // AZITO_TASK_TOKEN.
     //
     // Routed through ensureSessionWithLock (Issue #29 review, 10th pass,
     // Critical finding 1) — same fix as execute() above: the existence

@@ -242,6 +242,12 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         const freshSrv = serverRepo.findByName(request.params.name);
         if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
         try {
+          // Manual, human-facing terminal session — intentionally uses
+          // `uiTokenEnvForServer` (injects the operator UI token for a
+          // non-isolated server), unlike task-owned session bootstrap in
+          // `WindowRotation.ensureSessionWithLock`, which uses the
+          // mask-only `isolationMaskForServer` (Issue #29 review, 11th
+          // pass, Critical finding 1).
           const { result, windowName } = await tmux.createSession(freshSrv, name, { command, windowName: reqWindowName, extraEnv: tmux.uiTokenEnvForServer(freshSrv) });
           // Agent/SSH transports resolve with a non-zero code instead of throwing — surface it.
           if (result.code !== 0)
@@ -273,6 +279,8 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         const freshSrv = serverRepo.findByName(request.params.name);
         if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
         try {
+          // Manual, human-facing window creation — see the `uiTokenEnvForServer`
+          // vs. `isolationMaskForServer` note on POST /api/servers/:name/sessions above.
           const { result, windowName } = await tmux.createWindow(freshSrv, request.params.session, reqName || undefined, { extraEnv: tmux.uiTokenEnvForServer(freshSrv) });
           if (result.code !== 0)
             return reply.status(500).send({ error: `new-window failed: ${result.stderr || result.stdout}` });
@@ -349,7 +357,10 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
             ? (opts.buildSecondaryWindowEnv?.(windowRow.taskId, freshSrv) ?? {})
             // Non-task window (manual/project/etc.) — legacy default,
             // server-aware (Issue #29 review, Critical finding 1): withholds
-            // the token when this server is declared isolated.
+            // the token when this server is declared isolated. Manual/
+            // human-facing pane, so `uiTokenEnvForServer` (inject-capable)
+            // is correct here, unlike task session bootstrap's mask-only
+            // `isolationMaskForServer` (Issue #29 review, 11th pass).
             : tmux.uiTokenEnvForServer(freshSrv);
 
           await tmux.splitPane(freshSrv, target, direction as 'h' | 'v', extraEnv);

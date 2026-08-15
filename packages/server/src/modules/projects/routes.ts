@@ -263,8 +263,11 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
           // generated-name placeholder nobody uses directly (same as
           // ExecuteTaskUseCase's own throwaway-session bootstrap window),
           // so it has no legitimate need for the token either. Routed
-          // through `uiTokenEnvForServer`, not a bare `{}` (Issue #29
-          // review, Critical finding 1): an isolated server's pane
+          // through `ensureSessionWithLock`'s `isolationMaskForServer`,
+          // not a bare `{}` and not `uiTokenEnvForServer` (Issue #29
+          // review, 11th pass, Critical finding 1 — this is a task-owned
+          // session, so it must never inject the operator UI token the
+          // way `uiTokenEnvForServer` does): an isolated server's pane
           // inherits whatever process env the tmux SERVER itself runs
           // under regardless of what this call's own `extraEnv` passes,
           // so the explicit mask is still required here.

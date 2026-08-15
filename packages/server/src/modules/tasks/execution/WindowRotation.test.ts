@@ -158,16 +158,20 @@ function makeGate<T>(): { promise: Promise<T>; release: (value: T) => void; fail
 // every other window-(re)creation helper in this file uses, against a
 // server row re-read only once the lock is held.
 describe('ensureSessionWithLock', () => {
-  type MockTmux = Pick<TmuxClient, 'listSessions' | 'createSession' | 'uiTokenEnvForServer'>;
+  type MockTmux = Pick<TmuxClient, 'listSessions' | 'createSession'>;
   function makeTmux(overrides: { listSessions?: MockTmux['listSessions'] } = {}): MockTmux {
     return {
       listSessions: overrides.listSessions ?? vi.fn(async (_server: ServerConfig): Promise<TmuxSession[]> => []),
       createSession: vi.fn(async (_server: ServerConfig, _name: string, _opts?: unknown) => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'azito' })),
-      uiTokenEnvForServer: vi.fn((s: ServerConfig) => (s.isolationIntent ? {} : { AZITO_UI_TOKEN: 'ui-token-fixture' })),
     } as unknown as MockTmux;
   }
 
-  it('creates the session (with the masked env) when no session of that name exists yet, and returns created: true', async () => {
+  // Issue #29 review (11th pass), Critical finding 1: `ensureSessionWithLock`
+  // must build extraEnv via the mask-only `isolationMaskForServer`, never
+  // `uiTokenEnvForServer` (which INJECTS the live operator UI token for a
+  // non-isolated server) — this is a task session, and injecting the
+  // operator token here regressed the exact leak Issue #28 closed.
+  it('creates a non-isolated server session with NO extraEnv (never injects the operator UI token), and returns created: true', async () => {
     const server = makeServer();
     const tmux = makeTmux();
     const lock: ServerIsolationLock = { serverIsolationMutex: new KeyedMutex(), serverRepo: { findByName: () => server } };
@@ -176,7 +180,18 @@ describe('ensureSessionWithLock', () => {
 
     expect(result.created).toBe(true);
     expect(result.server).toBe(server);
-    expect(tmux.createSession).toHaveBeenCalledWith(server, 'azito', { extraEnv: { AZITO_UI_TOKEN: 'ui-token-fixture' } });
+    expect(tmux.createSession).toHaveBeenCalledWith(server, 'azito', { extraEnv: {} });
+  });
+
+  it('creates an isolated server session with the shared ISOLATION_MASKED_ENV mask', async () => {
+    const server = makeServer({ isolationIntent: true });
+    const tmux = makeTmux();
+    const lock: ServerIsolationLock = { serverIsolationMutex: new KeyedMutex(), serverRepo: { findByName: () => server } };
+
+    const result = await ensureSessionWithLock(tmux, lock, server, 'azito');
+
+    expect(result.created).toBe(true);
+    expect(tmux.createSession).toHaveBeenCalledWith(server, 'azito', { extraEnv: { AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' } });
   });
 
   it('does not create a session when one of that name already exists, and returns created: false', async () => {

@@ -3,8 +3,39 @@ import type { ExecResult } from '../../servers/transport/ServerTransport';
 import type { TmuxClient } from '../../tmux/TmuxClient';
 import { resolveKillOutcome, type KillOutcome } from '../../tmux/killOutcome';
 import { KeyedMutex } from '../../../shared/keyedMutex';
+import { ISOLATION_MASKED_ENV } from '../../../shared/auth/isolationMaskedEnv';
 import type { Task } from '../Task';
 import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
+
+/**
+ * Mask-only counterpart to `TmuxClient.uiTokenEnvForServer` (Issue #29
+ * review, 11th pass, Critical finding 1). `uiTokenEnvForServer` INJECTS the
+ * hub's live UI token for non-isolated servers — the right behavior for the
+ * manual-terminal callers it exists for (`sessions.ts`'s 3 manual
+ * create-session/window/pane routes, `createPlainWindow` above), which are
+ * deliberately handing an operator credential to a human-facing shell.
+ *
+ * `ensureSessionWithLock`'s TASK session-bootstrap window is not one of
+ * those callers: task-owned windows get their env exclusively from
+ * `TaskPaneEnvironmentService` (per-window task tokens), and Issue #28's
+ * design explicitly keeps the hub's operator `AZITO_UI_TOKEN` out of a task
+ * tmux SESSION's env — round 11 of this review switched
+ * `ensureSessionWithLock` to call `uiTokenEnvForServer(freshServer)`
+ * directly, which regressed exactly that: a non-isolated server's bootstrap
+ * session (and therefore every window `new-window` adds to it afterwards,
+ * via tmux session-env inheritance) was created with the full operator
+ * token injected.
+ *
+ * This helper only ever MASKS, never injects: isolated servers get the
+ * shared {@link ISOLATION_MASKED_ENV} (explicit empty values are required to
+ * override a token an existing session's env may already carry — see
+ * `TaskPaneEnvironmentService`'s doc comment), non-isolated servers get `{}`
+ * (no keys touched at all — the task-scoped env layered on afterwards is the
+ * only source of a token task windows ever see).
+ */
+export function isolationMaskForServer(server: Pick<ServerConfig, 'isolationIntent'>): Record<string, string> {
+  return server.isolationIntent ? { ...ISOLATION_MASKED_ENV } : {};
+}
 
 /**
  * Bundles the two things {@link createRotatedWindow} and
@@ -367,14 +398,21 @@ export async function createPlainWindow(
  * "listSessions -> (maybe) createSession" span runs inside
  * `lock.serverIsolationMutex.withLock(server.name, ...)`, `server` is
  * re-read from `lock.serverRepo` only once the lock is actually held, and
- * the fresh row is both what `uiTokenEnvForServer`/`createSession` are
- * called with AND what is returned — callers must use the returned
- * `server`, not their own pre-lock argument, for anything they do
- * afterwards (starting with the real task-window creation this bootstrap
- * precedes).
+ * the fresh row is both what `createSession` is called with AND what is
+ * returned — callers must use the returned `server`, not their own pre-lock
+ * argument, for anything they do afterwards (starting with the real
+ * task-window creation this bootstrap precedes).
+ *
+ * Issue #29 review, 11th pass, Critical finding 1: this bootstrap session is
+ * a TASK session, not a manual-terminal one — it must never inject the live
+ * operator UI token the way `uiTokenEnvForServer` does for non-isolated
+ * servers (round 11 switched this function to call
+ * `uiTokenEnvForServer(freshServer)` directly, which regressed exactly
+ * that). Uses {@link isolationMaskForServer} instead, which only ever masks
+ * (isolated -> the shared mask, non-isolated -> `{}`), never injects.
  */
 export async function ensureSessionWithLock(
-  tmux: Pick<TmuxClient, 'listSessions' | 'createSession' | 'uiTokenEnvForServer'>,
+  tmux: Pick<TmuxClient, 'listSessions' | 'createSession'>,
   lock: ServerIsolationLock,
   server: ServerConfig,
   sessionName: string,
@@ -384,7 +422,7 @@ export async function ensureSessionWithLock(
     const existingSessions = await tmux.listSessions(freshServer);
     const exists = existingSessions.some((s) => s.name === sessionName);
     if (!exists) {
-      await tmux.createSession(freshServer, sessionName, { extraEnv: tmux.uiTokenEnvForServer(freshServer) });
+      await tmux.createSession(freshServer, sessionName, { extraEnv: isolationMaskForServer(freshServer) });
       return { created: true, server: freshServer };
     }
     return { created: false, server: freshServer };

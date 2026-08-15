@@ -1024,11 +1024,36 @@ strip_codex_ui_token() {
       process.exit(0);
     }
 
+    // Issue #29 review (11th pass), Important finding 2: the previous
+    // version checked `finalText.includes("AZITO_UI_TOKEN")` — a bare
+    // substring match over the WHOLE file text. Any unrelated occurrence of
+    // that string (a comment left behind by a human, a value like
+    // `description = "uses AZITO_UI_TOKEN internally"`, ...) tripped this,
+    // and since "unverified" means "refuse to write, fail closed" (see
+    // below), the candidate output — which DID correctly remove the real
+    // key — was discarded and the ACTUAL token was left sitting in the
+    // untouched original file. A residual check whose false positives make
+    // the file LESS safe defeats its own purpose.
+    //
+    // This re-scans line by line for the string appearing specifically as a
+    // KEY — reusing the exact same `isTokenKeyLine`/`hasInlineTokenKey`
+    // helpers the removal/detection logic above already applies (so the
+    // notion of "is this a key" can never drift between removing/detecting
+    // and verifying), plus an explicit whole-line-comment (`#...`) skip so a
+    // commented-out assignment never counts. Still fails closed on anything
+    // it cannot positively rule out: a key-assignment match on ANY line —
+    // not just inside the azt-mcp env table — still trips it.
     const finalText = out.join("\n");
-    const stillPresent = finalText.includes("AZITO_UI_TOKEN");
+    function isFullLineComment(line) {
+      return line.trim().startsWith("#");
+    }
+    const stillPresent = out.some((line) => {
+      if (isFullLineComment(line)) return false;
+      return isTokenKeyLine(line.trim()) || hasInlineTokenKey(line);
+    });
     if (stillPresent) {
-      // Removal logic believes it handled every AZITO_UI_TOKEN occurrence it
-      // recognized, but the raw text still contains the string somewhere —
+      // Removal logic believes it handled every AZITO_UI_TOKEN key
+      // occurrence it recognized, but a line still carries the key —
       // an unrecognized TOML shape. Refuse to write; caller fails closed.
       process.stdout.write("unverified");
       process.exit(0);
