@@ -82,6 +82,8 @@
     "isolationDoctorCheckUnknown": "Unknown",
     "isolationReportUnavailableTitle": "Isolation status could not be confirmed",
     "isolationReportUnavailableSub": "This server declares isolated execution, but its status could not be fetched or was in an unexpected format. It may still hold a previously-distributed operator token. Retry, or check the server connection.",
+    "isolationCleanupReportUnavailableTitle": "Cleanup outcome could not be confirmed",
+    "isolationCleanupReportUnavailableSub": "This server declares isolated execution, but the operator-token cleanup outcome could not be fetched or was in an unexpected format. It may still hold a previously-distributed operator token. Retry, or check the server connection.",
     "muxRuntimeLabel": "mux runtime",
     "muxManaged": "AZITO managed tmux",
     "muxSystem": "system tmux",

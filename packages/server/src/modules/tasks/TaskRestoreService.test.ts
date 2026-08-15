@@ -85,7 +85,7 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
     },
     serverRepo: {
       findAll: vi.fn(() => []),
-      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, createdAt: '2026-01-01' })),
+      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
       create: vi.fn(),
       update: vi.fn(),
       updateAgentVersion: vi.fn(),
@@ -632,7 +632,7 @@ describe('TaskRestoreService', () => {
         // tell exactly which generation a given tmux/transport call saw.
         agentVersion: `gen-${generation}`,
         sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const,
-        isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, createdAt: '2026-01-01',
+        isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01',
       };
     });
     deps = makeDeps({

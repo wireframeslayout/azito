@@ -3,7 +3,7 @@ import { seal, open } from '../../shared/crypto/SecretBox';
 import type { ServerConfig, IServerRepository, MuxRuntime } from './Server';
 import { ISOLATION_CLEANUP_PENDING_REPORT } from './Server';
 
-const COLUMNS = 'name, type, host, agent_port, agent_token, agent_version, ssh_host, mux_runtime, ssh_host_fingerprint, isolation_intent, isolation_verified_at, isolation_report, created_at';
+const COLUMNS = 'name, type, host, agent_port, agent_token, agent_version, ssh_host, mux_runtime, ssh_host_fingerprint, isolation_intent, isolation_verified_at, isolation_report, isolation_cleanup_report, created_at';
 
 export class SqliteServerRepository implements IServerRepository {
   private listStmt;
@@ -16,6 +16,7 @@ export class SqliteServerRepository implements IServerRepository {
   private clearFingerprintStmt;
   private updateIsolationIntentStmt;
   private updateIsolationReportStmt;
+  private updateIsolationCleanupReportStmt;
   private updateIsolationVerificationStmt;
 
   constructor(private db: SqliteDatabase) {
@@ -28,24 +29,38 @@ export class SqliteServerRepository implements IServerRepository {
     this.updateFingerprintStmt = db.prepare('UPDATE servers SET ssh_host_fingerprint = ? WHERE name = ?');
     this.clearFingerprintStmt = db.prepare('UPDATE servers SET ssh_host_fingerprint = NULL WHERE name = ?');
     // Issue #29 review, Important finding 3: clears isolation_verified_at
-    // and isolation_report in the SAME UPDATE as the intent flip — an intent
-    // switch (true<->false, or auto-cleared on type -> local) must not leave
-    // a PRE-transition doctor/cleanup report looking like it describes the
-    // NEW state. Atomic (single statement) rather than a separate clear call
-    // so no reader can observe an intermediate row with a stale report next
-    // to the new intent.
+    // and isolation_report (the DOCTOR's verification column) in the SAME
+    // UPDATE as the intent flip — an intent switch (true<->false, or
+    // auto-cleared on type -> local) must not leave a PRE-transition doctor
+    // report looking like it describes the NEW state. Atomic (single
+    // statement) rather than a separate clear call so no reader can observe
+    // an intermediate row with a stale report next to the new intent.
     //
-    // Issue #29 review (final pass), Important finding 2: the report column
-    // is now a bound parameter, not a hardcoded NULL — `updateIsolationIntent`
-    // below passes ISOLATION_CLEANUP_PENDING_REPORT for a false->true flip
-    // (so the pending marker lands in the SAME statement as the flip, not a
-    // later one `attemptIsolationCleanup` might never reach if the process
-    // crashes in between) and NULL for every other direction, matching the
-    // previous unconditional-clear behavior.
+    // Issue #29 review (final pass), Important finding 2: the
+    // isolation_cleanup_report column is now a bound parameter, not a
+    // hardcoded NULL — `updateIsolationIntent` below passes
+    // ISOLATION_CLEANUP_PENDING_REPORT for a false->true flip (so the
+    // pending marker lands in the SAME statement as the flip, not a later
+    // one `attemptIsolationCleanup` might never reach if the process crashes
+    // in between) and NULL for every other direction, matching the previous
+    // unconditional-clear behavior.
+    //
+    // Review round (Important finding 4): isolation_report
+    // (verification-only, after the column split — see Server.ts's doc
+    // comments) is unconditionally cleared to NULL here too, same as
+    // isolation_verified_at — a stale pre-transition DOCTOR result must not
+    // survive an intent flip either, independent of the cleanup column this
+    // statement's own parameter targets.
     this.updateIsolationIntentStmt = db.prepare(
-      'UPDATE servers SET isolation_intent = ?, isolation_verified_at = NULL, isolation_report = ? WHERE name = ?',
+      'UPDATE servers SET isolation_intent = ?, isolation_verified_at = NULL, isolation_report = NULL, isolation_cleanup_report = ? WHERE name = ?',
     );
     this.updateIsolationReportStmt = db.prepare('UPDATE servers SET isolation_report = ? WHERE name = ?');
+    // Review round (Important finding 4): the cleanup-only counterpart to
+    // updateIsolationReportStmt above, writing to the separate
+    // isolation_cleanup_report column so a doctor run (updateIsolationReport
+    // / updateIsolationVerification, both verification-column-only) can
+    // never clobber a settled cleanup outcome, or vice versa.
+    this.updateIsolationCleanupReportStmt = db.prepare('UPDATE servers SET isolation_cleanup_report = ? WHERE name = ?');
     // Issue #29 Step 2 B: the isolation doctor's passing-run writer — sets
     // isolation_report AND isolation_verified_at atomically, so a reader
     // never observes one updated without the other (see
@@ -118,6 +133,10 @@ export class SqliteServerRepository implements IServerRepository {
     this.updateIsolationReportStmt.run(report, name);
   }
 
+  updateIsolationCleanupReport(name: string, report: string | null): void {
+    this.updateIsolationCleanupReportStmt.run(report, name);
+  }
+
   updateIsolationVerification(name: string, report: string, verifiedAt: string): void {
     this.updateIsolationVerificationStmt.run(report, verifiedAt, name);
   }
@@ -140,6 +159,7 @@ export class SqliteServerRepository implements IServerRepository {
       isolationIntent: (row.isolation_intent as number) === 1,
       isolationVerifiedAt: (row.isolation_verified_at as string) ?? null,
       isolationReport: (row.isolation_report as string) ?? null,
+      isolationCleanupReport: (row.isolation_cleanup_report as string) ?? null,
       createdAt: row.created_at as string,
     };
   }

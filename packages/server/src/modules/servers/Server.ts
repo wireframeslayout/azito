@@ -45,19 +45,36 @@ export interface ServerConfig {
    */
   isolationVerifiedAt: string | null;
   /**
-   * JSON blob of the isolation doctor's last check result, or null.
-   * Detail-only — not returned by the servers-list API, only by the
-   * per-server detail route. Issue #29 review, Important finding 3: the
-   * JSON always carries a `kind: 'cleanup' | 'verification'` field so a
-   * reader (frontend, future doctor implementation) can tell which of the
-   * two distinct writers produced it — `'cleanup'` for the synchronous
-   * remote-token-purge outcome PUT /api/servers/:name's false->true
-   * transition records (`attemptIsolationCleanup` in routes.ts), reserving
-   * `'verification'` for the isolation doctor (a later task) that this
-   * field's own name describes. Cleared together with isolationVerifiedAt
-   * on every isolation_intent change (see updateIsolationIntent).
+   * JSON blob of the isolation DOCTOR's last verification result
+   * (`kind: 'verification'`), or null. Detail-only — not returned by the
+   * servers-list API, only by the per-server detail route.
+   *
+   * Review round (isolation doctor review, Important finding 4): before this
+   * split, this single column was shared by two independent writers —
+   * `attemptIsolationCleanup` (routes.ts, `kind: 'cleanup'`) and
+   * `runIsolationDoctor`'s persistence (`kind: 'verification'`) — so
+   * whichever ran LAST clobbered the other's outcome, and
+   * `isolationCleanupNeedsRetry` (which needs to read the cleanup outcome
+   * specifically) could be defeated by a doctor run overwriting a settled
+   * `'done'` cleanup report. This column is now VERIFICATION-ONLY; the
+   * cleanup outcome lives in the separate `isolationCleanupReport` field
+   * below. Cleared together with `isolationVerifiedAt` on every
+   * isolation_intent change (see `updateIsolationIntent`).
    */
   isolationReport: string | null;
+  /**
+   * JSON blob of the last synchronous remote-token-purge (`kind: 'cleanup'`)
+   * outcome PUT /api/servers/:name's false->true transition records
+   * (`attemptIsolationCleanup` in routes.ts), or the
+   * `ISOLATION_CLEANUP_PENDING_REPORT` placeholder written atomically with
+   * that same transition before the purge attempt has run — or null. This
+   * is the field `isolationCleanupNeedsRetry` (routes.ts) reads to decide
+   * whether a true->true PUT should re-enter cleanup; it is never touched by
+   * the isolation doctor (see `isolationReport`'s doc comment above for why
+   * the two are split). Cleared together with `isolationReport`/
+   * `isolationVerifiedAt` on every isolation_intent change.
+   */
+  isolationCleanupReport: string | null;
   createdAt: string;
 }
 
@@ -92,35 +109,53 @@ export interface IServerRepository {
    * is needed or possible to skip.
    *
    * Issue #29 review (final pass), Important finding 2: a false->true
-   * transition initializes `isolation_report` to
+   * transition initializes `isolation_cleanup_report` to
    * `{"kind":"cleanup","cleanup":"pending"}` ATOMICALLY in this same
    * statement, not to NULL — a process crash between this commit and
-   * `attemptIsolationCleanup`'s own `updateIsolationReport()` write
-   * previously left `isolation_intent=1` with `isolation_report=NULL`, a
+   * `attemptIsolationCleanup`'s own `updateIsolationCleanupReport()` write
+   * previously left `isolation_intent=1` with the cleanup report NULL, a
    * state indistinguishable from "declared isolated, cleanup not yet
    * attempted OR quietly skipped" that routes.ts's own true->true no-op
    * guard then preserved forever (nothing ever retried it). A false->true
    * transition (`isolationIntent: true`) writes the pending marker; a
    * true->false transition (`isolationIntent: false`) still clears to NULL
    * as before — only the true direction needs a placeholder, since only
-   * that direction has a cleanup attempt to track.
+   * that direction has a cleanup attempt to track. `isolation_report`
+   * (verification, the OTHER column — see review round, Important finding
+   * 4 / Server.ts's doc comments) is unconditionally cleared to NULL on
+   * every intent change, same as `isolation_verified_at` — a stale
+   * pre-transition doctor result must never survive an intent flip either.
    */
   updateIsolationIntent(name: string, isolationIntent: boolean): void;
   /**
-   * Persists a JSON blob to `isolation_report` (or clears it with `null`).
-   * Issue #29 review, Important finding 1: used by the false->true
-   * isolation_intent transition in servers routes to record the *outcome*
-   * of the synchronous remote-cleanup attempt it triggers
-   * (`{"kind":"cleanup","cleanup":"done"|"failed"|"skipped",...}`) — a
-   * distinct, narrower use than the full isolation-doctor result this
-   * field's own doc comment describes (that writer doesn't exist yet, and
-   * will use `"kind":"verification"` to stay distinguishable — Issue #29
-   * review, Important finding 3). Optional: implemented by
+   * Persists a JSON blob to `isolation_report` (the DOCTOR's verification
+   * column — see Server.ts's `isolationReport` doc comment), or clears it
+   * with `null`. Issue #29 Step 2 B: used as the doctor's fallback writer
+   * for a failing/unverifiable run (report only, `isolationVerifiedAt` left
+   * untouched — see `updateIsolationVerification` below for the passing-run
+   * case). Review round (Important finding 4): this method no longer writes
+   * the cleanup outcome — that moved to `updateIsolationCleanupReport`
+   * below, its own separate column. Optional: implemented by
    * `SqliteServerRepository`; the many existing `IServerRepository` mocks
    * across the test suite predate this method and are not required to stub
    * it (routes.ts calls it via `?.()`).
    */
   updateIsolationReport?(name: string, report: string | null): void;
+  /**
+   * Persists a JSON blob to `isolation_cleanup_report` (the CLEANUP-only
+   * column split out of the doctor's verification column — see Server.ts's
+   * `isolationCleanupReport` doc comment and the review round's Important
+   * finding 4), or clears it with `null`. Used by the false->true
+   * isolation_intent transition in servers routes to record the *outcome*
+   * of the synchronous remote-cleanup attempt it triggers
+   * (`{"kind":"cleanup","cleanup":"done"|"failed"|"skipped",...}`), and by
+   * the true->true retry path / startup interruption recovery that read the
+   * same outcome back via `isolationCleanupNeedsRetry`. Optional, matching
+   * every other isolation writer on this interface: implemented by
+   * `SqliteServerRepository`; existing `IServerRepository` mocks predate
+   * this method.
+   */
+  updateIsolationCleanupReport?(name: string, report: string | null): void;
   /**
    * Issue #29 Step 2 B: the isolation doctor's own writer, distinct from
    * `updateIsolationReport` above — a PASSING doctor run (every check

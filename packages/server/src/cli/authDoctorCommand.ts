@@ -447,7 +447,7 @@ async function checkTaskOwnedWindowsBeforeScopedAuth(): Promise<CheckResult> {
         sshHostFingerprint: (row.ssh_host_fingerprint as string) ?? null,
         isolationIntent: false,
         isolationVerifiedAt: null,
-        isolationReport: null,
+        isolationReport: null, isolationCleanupReport: null,
         createdAt: row.created_at as string,
       };
       serverConfigCache.set(serverName, config);

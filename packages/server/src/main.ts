@@ -12,6 +12,7 @@ import { buildServer } from './app/buildServer';
 import { resolvePublicUrl } from './app/resolvePublicUrl';
 import { RecoverStuckTasksUseCase } from './modules/tasks/recovery/RecoverStuckTasksUseCase';
 import { recoverInterruptedIsolationCleanup } from './modules/servers/recoverInterruptedIsolationCleanup';
+import { writeHubCanary } from './modules/servers/hubCanary';
 import { AgentEventStream } from './modules/servers/transport/AgentEventStream';
 import { invalidateSessionCache } from './modules/tmux/routes/sessions';
 import { tokenCommand } from './cli/tokenCommand';
@@ -73,6 +74,13 @@ async function main(): Promise<void> {
 
   initSecretBox(paths.masterKey);
   initVapidKeyManager(paths.vapidKeys);
+
+  // Isolation doctor FS-boundary canary (Issue #29 review, Critical finding
+  // 1): best-effort, write failure only warns — never blocks startup. See
+  // hubCanary.ts's own doc comment.
+  if (writeHubCanary(paths.dir) === null) {
+    console.warn('[azito] Failed to write isolation-doctor FS-boundary canary — the FS-boundary check will report "unknown" for every agent server until the hub restarts with a writable data directory');
+  }
 
   const db = openDatabase(paths.db);
   const uiToken = resolveUiToken(paths.uiToken);

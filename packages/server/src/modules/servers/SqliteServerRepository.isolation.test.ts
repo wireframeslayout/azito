@@ -68,6 +68,7 @@ import * as m058 from '../../shared/db/migrations/058_disable_ssh_servers';
 import * as m059 from '../../shared/db/migrations/059_input_trust_and_exec_gate';
 import * as m060 from '../../shared/db/migrations/060_authz_foundation';
 import * as m061 from '../../shared/db/migrations/061_isolation_profile';
+import * as m062 from '../../shared/db/migrations/062_isolation_report_split';
 
 import { SqliteServerRepository } from './SqliteServerRepository';
 
@@ -82,7 +83,7 @@ const ALL_MIGRATIONS: Migration[] = [
   m021, m022, m023, m024, m025, m026, m027, m028, m029, m030,
   m031, m032, m033, m034, m035, m036, m037, m038, m039, m040,
   m041, m042, m043, m044, m045, m046, m047, m048, m049, m050,
-  m051, m052, m053, m054, m055, m056, m057, m058, m059, m060, m061,
+  m051, m052, m053, m054, m055, m056, m057, m058, m059, m060, m061, m062,
 ];
 
 // Same table-rebuild toggle as the real migration runner in Database.ts.
@@ -107,57 +108,79 @@ function buildSeededDb(): Database.Database {
 }
 
 describe('SqliteServerRepository — isolation_intent transitions (Issue #29 review, Important finding 3)', () => {
-  it('clears isolation_verified_at and isolation_report atomically when intent flips true -> false', () => {
+  it('clears isolation_verified_at, isolation_report AND isolation_cleanup_report atomically when intent flips true -> false', () => {
     const db = buildSeededDb();
     db.prepare(`INSERT INTO servers (name, type) VALUES ('srv', 'agent')`).run();
-    db.prepare('UPDATE servers SET isolation_intent = 1, isolation_verified_at = ?, isolation_report = ? WHERE name = ?')
-      .run('2026-08-01T00:00:00Z', JSON.stringify({ kind: 'cleanup', cleanup: 'done' }), 'srv');
+    db.prepare('UPDATE servers SET isolation_intent = 1, isolation_verified_at = ?, isolation_report = ?, isolation_cleanup_report = ? WHERE name = ?')
+      .run('2026-08-01T00:00:00Z', JSON.stringify({ kind: 'verification', verified: true, checks: [] }), JSON.stringify({ kind: 'cleanup', cleanup: 'done' }), 'srv');
 
     const repo = new SqliteServerRepository(db);
     repo.updateIsolationIntent('srv', false);
 
-    const row = db.prepare('SELECT isolation_intent, isolation_verified_at, isolation_report FROM servers WHERE name = ?').get('srv') as Record<string, unknown>;
+    const row = db.prepare('SELECT isolation_intent, isolation_verified_at, isolation_report, isolation_cleanup_report FROM servers WHERE name = ?').get('srv') as Record<string, unknown>;
     expect(row.isolation_intent).toBe(0);
     expect(row.isolation_verified_at).toBeNull();
     expect(row.isolation_report).toBeNull();
+    expect(row.isolation_cleanup_report).toBeNull();
   });
 
   // Issue #29 review (final pass), Important finding 2: a false->true flip
-  // no longer clears the report to NULL — it atomically initializes it to
-  // the pending marker instead, in the SAME statement as the intent flip,
-  // so a crash between this commit and attemptIsolationCleanup's own write
-  // never leaves `isolation_intent=1` with a report indistinguishable from
-  // "cleanup not yet attempted" vs "cleanup silently never ran" (see
-  // Server.ts's ISOLATION_CLEANUP_PENDING_REPORT doc comment). A stale PRE-
-  // transition report is still cleared away (verified below), just replaced
-  // with the pending marker rather than NULL.
-  it('replaces a pre-existing report/verifiedAt with the pending cleanup marker when intent flips false -> true', () => {
+  // no longer clears the cleanup report to NULL — it atomically initializes
+  // it to the pending marker instead, in the SAME statement as the intent
+  // flip, so a crash between this commit and attemptIsolationCleanup's own
+  // write never leaves `isolation_intent=1` with a report indistinguishable
+  // from "cleanup not yet attempted" vs "cleanup silently never ran" (see
+  // Server.ts's ISOLATION_CLEANUP_PENDING_REPORT doc comment).
+  //
+  // Review round (Important finding 4): the pending marker now lands in
+  // isolation_cleanup_report specifically — isolation_report (the DOCTOR's
+  // verification column, split out this round) is unconditionally cleared to
+  // NULL on every intent flip instead, same as isolation_verified_at.
+  it('initializes isolation_cleanup_report to the pending marker and clears isolation_report/verified_at when intent flips false -> true', () => {
     const db = buildSeededDb();
     db.prepare(`INSERT INTO servers (name, type) VALUES ('srv', 'agent')`).run();
     db.prepare('UPDATE servers SET isolation_intent = 0, isolation_verified_at = ?, isolation_report = ? WHERE name = ?')
-      .run('2026-07-01T00:00:00Z', JSON.stringify({ kind: 'verification', findings: ['stale'] }), 'srv');
+      .run('2026-07-01T00:00:00Z', JSON.stringify({ kind: 'verification', verified: false, checks: [] }), 'srv');
 
     const repo = new SqliteServerRepository(db);
     repo.updateIsolationIntent('srv', true);
 
-    const row = db.prepare('SELECT isolation_intent, isolation_verified_at, isolation_report FROM servers WHERE name = ?').get('srv') as Record<string, unknown>;
+    const row = db.prepare('SELECT isolation_intent, isolation_verified_at, isolation_report, isolation_cleanup_report FROM servers WHERE name = ?').get('srv') as Record<string, unknown>;
     expect(row.isolation_intent).toBe(1);
     expect(row.isolation_verified_at).toBeNull();
-    expect(JSON.parse(row.isolation_report as string)).toEqual({ kind: 'cleanup', cleanup: 'pending' });
+    expect(row.isolation_report).toBeNull();
+    expect(JSON.parse(row.isolation_cleanup_report as string)).toEqual({ kind: 'cleanup', cleanup: 'pending' });
   });
 
-  it('a subsequent updateIsolationReport() write after the intent flip is not clobbered by the clear', () => {
+  it('a subsequent updateIsolationCleanupReport() write after the intent flip is not clobbered by the clear', () => {
     const db = buildSeededDb();
     db.prepare(`INSERT INTO servers (name, type) VALUES ('srv', 'agent')`).run();
 
     const repo = new SqliteServerRepository(db);
     repo.updateIsolationIntent('srv', true);
-    repo.updateIsolationReport('srv', JSON.stringify({ kind: 'cleanup', cleanup: 'done', at: '2026-08-15T00:00:00Z' }));
+    repo.updateIsolationCleanupReport('srv', JSON.stringify({ kind: 'cleanup', cleanup: 'done', at: '2026-08-15T00:00:00Z' }));
 
-    const row = db.prepare('SELECT isolation_report FROM servers WHERE name = ?').get('srv') as Record<string, unknown>;
-    const report = JSON.parse(row.isolation_report as string);
+    const row = db.prepare('SELECT isolation_cleanup_report FROM servers WHERE name = ?').get('srv') as Record<string, unknown>;
+    const report = JSON.parse(row.isolation_cleanup_report as string);
     expect(report.kind).toBe('cleanup');
     expect(report.cleanup).toBe('done');
+  });
+
+  // Review round (Important finding 4): updateIsolationReport (verification
+  // column) and updateIsolationCleanupReport (cleanup column) must never
+  // write to each other's column — a doctor run must not be able to clobber
+  // a settled cleanup outcome, or vice versa.
+  it('updateIsolationReport and updateIsolationCleanupReport write independent columns', () => {
+    const db = buildSeededDb();
+    db.prepare(`INSERT INTO servers (name, type) VALUES ('srv', 'agent')`).run();
+
+    const repo = new SqliteServerRepository(db);
+    repo.updateIsolationReport('srv', JSON.stringify({ kind: 'verification', verified: true, checks: [] }));
+    repo.updateIsolationCleanupReport('srv', JSON.stringify({ kind: 'cleanup', cleanup: 'done' }));
+
+    const row = db.prepare('SELECT isolation_report, isolation_cleanup_report FROM servers WHERE name = ?').get('srv') as Record<string, unknown>;
+    expect(JSON.parse(row.isolation_report as string).kind).toBe('verification');
+    expect(JSON.parse(row.isolation_cleanup_report as string).kind).toBe('cleanup');
   });
 
   // Issue #29 review, Important finding 1: PUT /api/servers/:name's
@@ -168,27 +191,28 @@ describe('SqliteServerRepository — isolation_intent transitions (Issue #29 rev
   // must commit both in one transaction, and roll back both if either half
   // fails.
   describe('updateWithIsolationClear()', () => {
-    it('commits the connection-info update and the isolation-intent clear together', () => {
+    it('commits the connection-info update and the isolation-intent clear (both report columns) together', () => {
       const db = buildSeededDb();
       db.prepare(`INSERT INTO servers (name, type) VALUES ('srv', 'agent')`).run();
-      db.prepare('UPDATE servers SET isolation_intent = 1, isolation_verified_at = ?, isolation_report = ? WHERE name = ?')
-        .run('2026-08-01T00:00:00Z', JSON.stringify({ kind: 'cleanup', cleanup: 'done' }), 'srv');
+      db.prepare('UPDATE servers SET isolation_intent = 1, isolation_verified_at = ?, isolation_report = ?, isolation_cleanup_report = ? WHERE name = ?')
+        .run('2026-08-01T00:00:00Z', JSON.stringify({ kind: 'verification', verified: true, checks: [] }), JSON.stringify({ kind: 'cleanup', cleanup: 'done' }), 'srv');
 
       const repo = new SqliteServerRepository(db);
       repo.updateWithIsolationClear('srv', 'local', undefined, undefined, undefined, undefined, 'system');
 
-      const row = db.prepare('SELECT type, isolation_intent, isolation_verified_at, isolation_report FROM servers WHERE name = ?').get('srv') as Record<string, unknown>;
+      const row = db.prepare('SELECT type, isolation_intent, isolation_verified_at, isolation_report, isolation_cleanup_report FROM servers WHERE name = ?').get('srv') as Record<string, unknown>;
       expect(row.type).toBe('local');
       expect(row.isolation_intent).toBe(0);
       expect(row.isolation_verified_at).toBeNull();
       expect(row.isolation_report).toBeNull();
+      expect(row.isolation_cleanup_report).toBeNull();
     });
 
     it('rolls back the connection-info update if the isolation-intent clear fails', () => {
       const db = buildSeededDb();
       db.prepare(`INSERT INTO servers (name, type) VALUES ('srv', 'agent')`).run();
-      db.prepare('UPDATE servers SET isolation_intent = 1, isolation_verified_at = ?, isolation_report = ? WHERE name = ?')
-        .run('2026-08-01T00:00:00Z', JSON.stringify({ kind: 'cleanup', cleanup: 'done' }), 'srv');
+      db.prepare('UPDATE servers SET isolation_intent = 1, isolation_verified_at = ?, isolation_report = ?, isolation_cleanup_report = ? WHERE name = ?')
+        .run('2026-08-01T00:00:00Z', JSON.stringify({ kind: 'verification', verified: true, checks: [] }), JSON.stringify({ kind: 'cleanup', cleanup: 'done' }), 'srv');
 
       const repo = new SqliteServerRepository(db);
       // Force the second statement in the transaction to fail after the
@@ -201,15 +225,16 @@ describe('SqliteServerRepository — isolation_intent transitions (Issue #29 rev
       expect(() => repo.updateWithIsolationClear('srv', 'local', undefined, undefined, undefined, undefined, 'system')).toThrow('simulated failure');
 
       isolationStmt.run = originalRun;
-      const row = db.prepare('SELECT type, isolation_intent, isolation_verified_at, isolation_report FROM servers WHERE name = ?').get('srv') as Record<string, unknown>;
+      const row = db.prepare('SELECT type, isolation_intent, isolation_verified_at, isolation_report, isolation_cleanup_report FROM servers WHERE name = ?').get('srv') as Record<string, unknown>;
       // Both halves rolled back: type is still 'agent' (not 'local'), and
-      // isolation_intent/verified_at/report are untouched — proving the two
-      // statements share a single transaction rather than committing
-      // independently.
+      // isolation_intent/verified_at/report/cleanup_report are untouched —
+      // proving the two statements share a single transaction rather than
+      // committing independently.
       expect(row.type).toBe('agent');
       expect(row.isolation_intent).toBe(1);
       expect(row.isolation_verified_at).toBe('2026-08-01T00:00:00Z');
-      expect(JSON.parse(row.isolation_report as string)).toEqual({ kind: 'cleanup', cleanup: 'done' });
+      expect(JSON.parse(row.isolation_report as string)).toEqual({ kind: 'verification', verified: true, checks: [] });
+      expect(JSON.parse(row.isolation_cleanup_report as string)).toEqual({ kind: 'cleanup', cleanup: 'done' });
     });
   });
 

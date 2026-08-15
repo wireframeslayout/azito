@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isValidIsolationReport, hasIsolationReportField } from './useServerDetail';
+import { isValidIsolationReport, hasIsolationReportField, hasIsolationCleanupReportField } from './useServerDetail';
 
 // Issue #29 review, Important finding 3: isolationReportUnavailable hinges
 // on this shape check to tell "a report this hook understands" apart from
@@ -137,5 +137,25 @@ describe('hasIsolationReportField', () => {
 
   it('rejects an object that does not own isolationReport', () => {
     expect(hasIsolationReportField({ name: 'srv1' })).toBe(false);
+  });
+});
+
+// Review round (Important finding 4): the cleanup-field counterpart to
+// hasIsolationReportField above — same predicate, different field name,
+// since the server now splits the two outcomes into separate columns.
+describe('hasIsolationCleanupReportField', () => {
+  it('accepts a plain object owning isolationCleanupReport (even when null)', () => {
+    expect(hasIsolationCleanupReportField({ isolationCleanupReport: null })).toBe(true);
+    expect(hasIsolationCleanupReportField({ isolationCleanupReport: '{"kind":"cleanup","cleanup":"done"}' })).toBe(true);
+  });
+
+  it('rejects a body that only owns isolationReport, not isolationCleanupReport', () => {
+    expect(hasIsolationCleanupReportField({ isolationReport: null })).toBe(false);
+  });
+
+  it('rejects a null/array/scalar body', () => {
+    expect(hasIsolationCleanupReportField(null)).toBe(false);
+    expect(hasIsolationCleanupReportField([{ isolationCleanupReport: null }])).toBe(false);
+    expect(hasIsolationCleanupReportField('not-an-object')).toBe(false);
   });
 });

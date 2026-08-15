@@ -16,6 +16,7 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     isolationIntent: true,
     isolationVerifiedAt: null,
     isolationReport: null,
+    isolationCleanupReport: null,
     muxRuntime: 'system',
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -29,58 +30,63 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
 // WITHOUT re-running the remote cleanup itself (see the function's doc
 // comment for why re-attempting a remote side effect purely because the hub
 // restarted is out of scope for this narrow pass).
+//
+// Review round (Important finding 4): the pending marker (and this
+// recovery pass's own write) now live in isolationCleanupReport /
+// updateIsolationCleanupReport — the cleanup-only column split out of
+// isolationReport (now verification-only) — see Server.ts's doc comments.
 describe('recoverInterruptedIsolationCleanup', () => {
   it('converts a row stuck at the pending marker to a failed/interrupted report', () => {
-    const srv = makeServer({ isolationReport: ISOLATION_CLEANUP_PENDING_REPORT });
-    const updateIsolationReport = vi.fn();
+    const srv = makeServer({ isolationCleanupReport: ISOLATION_CLEANUP_PENDING_REPORT });
+    const updateIsolationCleanupReport = vi.fn();
     const serverRepo = {
       findAll: vi.fn(() => [srv]),
-      updateIsolationReport,
+      updateIsolationCleanupReport,
     } as unknown as IServerRepository;
 
     const recoveredCount = recoverInterruptedIsolationCleanup(serverRepo);
 
     expect(recoveredCount).toBe(1);
-    expect(updateIsolationReport).toHaveBeenCalledWith(
+    expect(updateIsolationCleanupReport).toHaveBeenCalledWith(
       'srv',
       JSON.stringify({ kind: 'cleanup', cleanup: 'failed', reason: 'interrupted' }),
     );
   });
 
   it('does not touch a row whose report already settled at "done"', () => {
-    const srv = makeServer({ isolationReport: JSON.stringify({ kind: 'cleanup', cleanup: 'done' }) });
-    const updateIsolationReport = vi.fn();
+    const srv = makeServer({ isolationCleanupReport: JSON.stringify({ kind: 'cleanup', cleanup: 'done' }) });
+    const updateIsolationCleanupReport = vi.fn();
     const serverRepo = {
       findAll: vi.fn(() => [srv]),
-      updateIsolationReport,
+      updateIsolationCleanupReport,
     } as unknown as IServerRepository;
 
     const recoveredCount = recoverInterruptedIsolationCleanup(serverRepo);
 
     expect(recoveredCount).toBe(0);
-    expect(updateIsolationReport).not.toHaveBeenCalled();
+    expect(updateIsolationCleanupReport).not.toHaveBeenCalled();
   });
 
-  it('does not touch a row with no report at all (isolationReport === null)', () => {
-    const srv = makeServer({ isolationReport: null });
-    const updateIsolationReport = vi.fn();
+  it('does not touch a row with no report at all (isolationCleanupReport === null)', () => {
+    const srv = makeServer({ isolationCleanupReport: null });
+    const updateIsolationCleanupReport = vi.fn();
     const serverRepo = {
       findAll: vi.fn(() => [srv]),
-      updateIsolationReport,
+      updateIsolationCleanupReport,
     } as unknown as IServerRepository;
 
     const recoveredCount = recoverInterruptedIsolationCleanup(serverRepo);
 
     expect(recoveredCount).toBe(0);
-    expect(updateIsolationReport).not.toHaveBeenCalled();
+    expect(updateIsolationCleanupReport).not.toHaveBeenCalled();
   });
 
-  it('does not re-run the remote cleanup itself — only rewrites the report column', () => {
-    const srv = makeServer({ isolationReport: ISOLATION_CLEANUP_PENDING_REPORT });
-    const updateIsolationReport = vi.fn();
+  it('does not re-run the remote cleanup itself — only rewrites the cleanup report column', () => {
+    const srv = makeServer({ isolationCleanupReport: ISOLATION_CLEANUP_PENDING_REPORT });
+    const updateIsolationCleanupReport = vi.fn();
     const serverRepo = {
       findAll: vi.fn(() => [srv]),
-      updateIsolationReport,
+      updateIsolationCleanupReport,
     } as unknown as IServerRepository;
 
     recoverInterruptedIsolationCleanup(serverRepo);
@@ -88,24 +94,24 @@ describe('recoverInterruptedIsolationCleanup', () => {
     // No other repository method (e.g. updateIsolationIntent, which would
     // imply a re-triggered transition) is ever called by this pass.
     expect(Object.keys(serverRepo)).not.toContain('updateIsolationIntent');
-    expect(updateIsolationReport).toHaveBeenCalledTimes(1);
+    expect(updateIsolationCleanupReport).toHaveBeenCalledTimes(1);
   });
 
   it('recovers multiple stranded rows in one pass and leaves non-pending rows alone', () => {
-    const stuck1 = makeServer({ name: 'a', isolationReport: ISOLATION_CLEANUP_PENDING_REPORT });
-    const stuck2 = makeServer({ name: 'b', isolationReport: ISOLATION_CLEANUP_PENDING_REPORT });
-    const fine = makeServer({ name: 'c', isolationReport: JSON.stringify({ kind: 'cleanup', cleanup: 'done' }) });
-    const updateIsolationReport = vi.fn();
+    const stuck1 = makeServer({ name: 'a', isolationCleanupReport: ISOLATION_CLEANUP_PENDING_REPORT });
+    const stuck2 = makeServer({ name: 'b', isolationCleanupReport: ISOLATION_CLEANUP_PENDING_REPORT });
+    const fine = makeServer({ name: 'c', isolationCleanupReport: JSON.stringify({ kind: 'cleanup', cleanup: 'done' }) });
+    const updateIsolationCleanupReport = vi.fn();
     const serverRepo = {
       findAll: vi.fn(() => [stuck1, fine, stuck2]),
-      updateIsolationReport,
+      updateIsolationCleanupReport,
     } as unknown as IServerRepository;
 
     const recoveredCount = recoverInterruptedIsolationCleanup(serverRepo);
 
     expect(recoveredCount).toBe(2);
-    expect(updateIsolationReport).toHaveBeenCalledWith('a', expect.stringContaining('interrupted'));
-    expect(updateIsolationReport).toHaveBeenCalledWith('b', expect.stringContaining('interrupted'));
-    expect(updateIsolationReport).not.toHaveBeenCalledWith('c', expect.anything());
+    expect(updateIsolationCleanupReport).toHaveBeenCalledWith('a', expect.stringContaining('interrupted'));
+    expect(updateIsolationCleanupReport).toHaveBeenCalledWith('b', expect.stringContaining('interrupted'));
+    expect(updateIsolationCleanupReport).not.toHaveBeenCalledWith('c', expect.anything());
   });
 });

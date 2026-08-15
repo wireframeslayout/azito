@@ -82,6 +82,8 @@
     "isolationDoctorCheckUnknown": "確認不能",
     "isolationReportUnavailableTitle": "隔離状態を確認できません",
     "isolationReportUnavailableSub": "このサーバーは隔離実行を宣言していますが、状態の取得に失敗したか、想定外の形式でした。以前配布された操作トークンが残っている可能性があります。再試行するか、サーバーへの接続状況を確認してください。",
+    "isolationCleanupReportUnavailableTitle": "掃除結果を確認できません",
+    "isolationCleanupReportUnavailableSub": "このサーバーは隔離実行を宣言していますが、操作トークンの掃除結果の取得に失敗したか、想定外の形式でした。以前配布された操作トークンが残っている可能性があります。再試行するか、サーバーへの接続状況を確認してください。",
     "muxRuntimeLabel": "mux runtime",
     "muxManaged": "AZITO managed tmux",
     "muxSystem": "system tmux",

@@ -2,6 +2,7 @@ import type { IServerTransport } from './transport/ServerTransport';
 import { shellQuote } from '../../shared/shellQuote';
 import { isAzitoctlEnvFilename } from '../../shared/azitoctlEnv';
 import { extractClaudeMcpUiToken, hasCodexConfigUiToken } from '../../shared/mcpTokenStores';
+import type { HubCanary } from './hubCanary';
 
 // ─── Isolation doctor (Issue #29 Step 2 B) ───
 //
@@ -49,68 +50,200 @@ export interface IsolationDoctorResult {
 export interface HubIdentity {
   hostname: string;
   uid: number | null;
+  /**
+   * Review round (isolation doctor, Critical finding 1): the hub's own
+   * FS-boundary canary (see hubCanary.ts) — a small non-secret marker file
+   * written into the hub's data directory at startup. `null` when the write
+   * failed (or the hub restarted with a read-only data dir); the FS-boundary
+   * check degrades to 'unknown' rather than silently skipping the
+   * measurement in that case. Resolved once by routes.ts (via
+   * `getHubCanary()`) and passed in, matching this interface's own
+   * "resolved at the boundary" contract.
+   */
+  canary: HubCanary | null;
 }
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+// ─── Framed file probing (review round, Critical finding 2) ───
+//
+// The previous implementation searched raw shell stdout for bare marker
+// strings like `AZT_FILE_BEGIN` and treated a hit/miss as the file's
+// presence/absence, then sliced "content" out from between two such
+// markers found via `indexOf`. Any probed file that happened to CONTAIN one
+// of those literal marker strings (a settings.json/config.toml with a
+// comment or string value quoting them, however unlikely) would corrupt the
+// parse silently — content search offset by an in-band collision, or a
+// begin/end pair matched against the wrong occurrence. This reimplementation
+// never searches file CONTENT for markers: presence/absence and the content
+// itself travel on separate, clearly delimited lines (`AZT_STATUS:<key>:...`),
+// the content itself is base64-encoded so it cannot contain a literal
+// newline (or anything else) that could be mistaken for a status line.
+export type FileProbeOutcome =
+  | { kind: 'absent' }
+  | { kind: 'content'; content: string }
+  | { kind: 'unrecognized' };
+
 /**
- * 1. Same-host detection: an `agent` server whose hostname AND uid both
- * match the hub process's own is, for credential-storage purposes,
- * indistinguishable from the hub itself — any "isolation" declared for it
- * would be a label with no actual separation behind it. Fails only when
- * BOTH match (that combination is the same process-identity signal the hub
- * would see if this "remote" server were actually itself).
- *
- * Review finding (Step 2 review, Important #3): hostname alone is NOT an FS
- * isolation boundary — two containers sharing a Docker host's utsname can
- * still differ, and a uid-matching container bind-mounting the hub's own
- * data directory would pass a "both differ" test while sharing real
- * filesystem access. Neither a hostname match nor a uid match ALONE proves
- * anything about shared credential storage either way (a shared hostname
- * alone doesn't prove a shared FS; two independent hosts both defaulting to
- * uid 1000 doesn't either) — this check cannot independently verify FS
- * separation, so EITHER one matching alone is now `'unknown'` (inconclusive),
- * not `'pass'`. Only "neither matches" is treated as positive evidence of
- * separation; only "both match" is treated as positive evidence AGAINST it.
+ * Probes one or more files in a single round-trip. `entries[].pathExpr` must
+ * already be valid, safely-quoted shell syntax as it will be embedded
+ * VERBATIM into the command line — callers pass either a literal
+ * double-quoted string containing only hub-controlled shell variables (e.g.
+ * `"$HOME/.claude/settings.json"`, no injection surface since nothing
+ * attacker-influenced reaches it) or `shellQuote(...)` of a fully-resolved
+ * path when any component (e.g. a filename discovered via a prior `ls`) is
+ * remote/attacker-influenced. `entries[].key` must be a fixed, code-controlled
+ * identifier (never remote data) — it is embedded directly into the framing
+ * markers this function parses back out.
  */
-async function checkSameHost(transport: IServerTransport, hub: HubIdentity): Promise<IsolationCheck> {
-  const id = 'same_host';
+export async function probeFilesFramed(
+  transport: IServerTransport,
+  entries: { key: string; pathExpr: string }[],
+): Promise<{ ok: true; results: Map<string, FileProbeOutcome> } | { ok: false; detail: string }> {
+  if (entries.length === 0) return { ok: true, results: new Map() };
+  const cmd = entries
+    .map(({ key, pathExpr }) =>
+      `if [ -f ${pathExpr} ]; then echo "AZT_STATUS:${key}:present"; base64 < ${pathExpr} 2>/dev/null; echo "AZT_STATUS_END:${key}"; else echo "AZT_STATUS:${key}:absent"; fi`)
+    .join('; ');
   let result;
   try {
-    result = await transport.exec('hostname; id -u');
+    result = await transport.exec(cmd);
+  } catch (err) {
+    return { ok: false, detail: `ファイルの取得に失敗しました（到達不能）: ${errMsg(err)}` };
+  }
+  if (result.code !== 0) {
+    return { ok: false, detail: `ファイルの取得に失敗しました (code ${result.code}): ${result.stderr || result.stdout || '(no output)'}` };
+  }
+  const lines = result.stdout.split('\n');
+  const results = new Map<string, FileProbeOutcome>();
+  for (const { key } of entries) {
+    const presentIdx = lines.findIndex((l) => l.trim() === `AZT_STATUS:${key}:present`);
+    const absentIdx = lines.findIndex((l) => l.trim() === `AZT_STATUS:${key}:absent`);
+    if (presentIdx === -1) {
+      results.set(key, absentIdx !== -1 ? { kind: 'absent' } : { kind: 'unrecognized' });
+      continue;
+    }
+    const endIdx = lines.findIndex((l, i) => i > presentIdx && l.trim() === `AZT_STATUS_END:${key}`);
+    if (endIdx === -1) {
+      results.set(key, { kind: 'unrecognized' });
+      continue;
+    }
+    const b64 = lines.slice(presentIdx + 1, endIdx).join('').trim();
+    if (b64 === '') {
+      results.set(key, { kind: 'content', content: '' });
+      continue;
+    }
+    try {
+      results.set(key, { kind: 'content', content: Buffer.from(b64, 'base64').toString('utf-8') });
+    } catch {
+      results.set(key, { kind: 'unrecognized' });
+    }
+  }
+  return { ok: true, results };
+}
+
+/** Single-file convenience wrapper over probeFilesFramed. */
+async function probeFile(transport: IServerTransport, pathExpr: string): Promise<{ ok: true; probe: FileProbeOutcome } | { ok: false; detail: string }> {
+  const batch = await probeFilesFramed(transport, [{ key: 'f', pathExpr }]);
+  if (!batch.ok) return batch;
+  return { ok: true, probe: batch.results.get('f') ?? { kind: 'unrecognized' } };
+}
+
+/**
+ * 1. Same-host / FS-boundary detection (review round, Critical finding 1):
+ * an `agent` server that is, for credential-storage purposes,
+ * indistinguishable from the hub itself is not actually isolated no matter
+ * what `isolationIntent` claims. Three independent signals feed a single
+ * fail-closed decision:
+ *
+ *  - hostname match
+ *  - uid match
+ *  - the target can actually READ the hub's own FS-boundary canary file
+ *    (hubCanary.ts) — the one signal that is a real, measured test of
+ *    filesystem reachability rather than an identity heuristic. hostname
+ *    can differ across two containers sharing a Docker host's utsname; two
+ *    independent hosts can both default to uid 1000. Neither alone (nor
+ *    both together) proves or disproves a SHARED filesystem — only actually
+ *    trying to read a marker the hub itself just wrote does that.
+ *
+ * `fail` if the canary was read back with matching content, OR both
+ * hostname and uid match. `pass` only when the canary is confirmed
+ * unreadable/absent AND both hostname and uid differ — every other
+ * combination (one of hostname/uid matching without a canary result either
+ * way, or the canary probe itself being inconclusive/unreachable) is
+ * `unknown`, never `pass` — this module's fail-closed contract (a check
+ * that cannot prove separation must not report separation).
+ */
+async function checkFsAndHostBoundary(transport: IServerTransport, hub: HubIdentity): Promise<IsolationCheck> {
+  const id = 'same_host';
+  let hostResult;
+  try {
+    hostResult = await transport.exec('hostname; id -u');
   } catch (err) {
     return { id, status: 'unknown', detail: `hostname/uid の取得に失敗しました（到達不能）: ${errMsg(err)}` };
   }
-  if (result.code !== 0) {
-    return { id, status: 'unknown', detail: `hostname/uid の取得に失敗しました (code ${result.code}): ${result.stderr || result.stdout || '(no output)'}` };
+  if (hostResult.code !== 0) {
+    return { id, status: 'unknown', detail: `hostname/uid の取得に失敗しました (code ${hostResult.code}): ${hostResult.stderr || hostResult.stdout || '(no output)'}` };
   }
-  const lines = result.stdout.split('\n').map((l) => l.trim());
+  const lines = hostResult.stdout.split('\n').map((l) => l.trim());
   const remoteHostname = lines[0] ?? '';
   const remoteUidStr = lines[1] ?? '';
   const remoteUid = /^\d+$/.test(remoteUidStr) ? Number(remoteUidStr) : null;
   if (!remoteHostname || remoteUid === null) {
-    return { id, status: 'unknown', detail: `hostname/uid の出力が想定外の形式でした: ${JSON.stringify(result.stdout)}` };
+    return { id, status: 'unknown', detail: `hostname/uid の出力が想定外の形式でした: ${JSON.stringify(hostResult.stdout)}` };
   }
   if (hub.uid === null) {
     return { id, status: 'unknown', detail: 'ハブ側の uid を取得できなかったため、同一ホスト判定ができません（process.getuid が利用不可）' };
   }
   const sameHostname = remoteHostname === hub.hostname;
   const sameUid = remoteUid === hub.uid;
-  if (sameHostname && sameUid) {
-    return { id, status: 'fail', detail: `agent サーバーの hostname/uid（${remoteHostname}/${remoteUid}）がハブ自身（${hub.hostname}/${hub.uid}）と同一です` };
+  const identity = `agent: ${remoteHostname}/${remoteUid}、hub: ${hub.hostname}/${hub.uid}`;
+
+  // Actual FS-reachability measurement — null means "could not be measured
+  // this round" (no canary to test, transport unreachable, or an
+  // unrecognized probe result), which must never be folded into a pass.
+  let canaryReadable: boolean | null = null;
+  if (hub.canary) {
+    const probed = await probeFilesFramed(transport, [{ key: 'canary', pathExpr: shellQuote(hub.canary.path) }]);
+    if (probed.ok) {
+      const outcome = probed.results.get('canary');
+      if (outcome?.kind === 'content' && outcome.content === hub.canary.content) canaryReadable = true;
+      else if (outcome?.kind === 'absent') canaryReadable = false;
+      // 'unrecognized', or 'content' with unexpected bytes (should never
+      // happen for a hub-generated random filename, but is not trusted as
+      // proof of absence either): canaryReadable stays null.
+    }
   }
-  if (sameHostname || sameUid) {
+
+  if (canaryReadable === true) {
+    return {
+      id,
+      status: 'fail',
+      detail: `agent サーバーからハブのデータディレクトリ内のカナリアファイルが読み取れました（同一ファイルシステムを共有しています）: ${hub.canary!.path}`,
+    };
+  }
+  if (sameHostname && sameUid) {
+    return { id, status: 'fail', detail: `${identity}（hostname/uid が両方とも一致）` };
+  }
+  if (canaryReadable === false && !sameHostname && !sameUid) {
+    return { id, status: 'pass', detail: `${identity}（一致せず、カナリアファイルも読み取れませんでした — 実測によるファイルシステム分離を確認）` };
+  }
+  if (canaryReadable === null) {
     return {
       id,
       status: 'unknown',
-      detail:
-        `agent: ${remoteHostname}/${remoteUid}、hub: ${hub.hostname}/${hub.uid}（hostname/uid の一方のみ一致 — ` +
-        'ファイルシステム分離を独立に確認できないため判定不能です）',
+      detail: hub.canary
+        ? `ファイルシステム分離を実測できませんでした（カナリアファイルの読み取り結果が不明でした）。${identity}`
+        : `ハブ側にカナリアファイルが存在しないため、ファイルシステム分離を実測できませんでした（ハブ起動時の書き込みに失敗した可能性があります）。${identity}`,
     };
   }
-  return { id, status: 'pass', detail: `agent: ${remoteHostname}/${remoteUid}、hub: ${hub.hostname}/${hub.uid}（一致しません）` };
+  return {
+    id,
+    status: 'unknown',
+    detail: `${identity}（hostname/uid の一方のみ一致 — カナリアは読み取れませんでしたが、識別子の不一致が確認できないため判定不能です）`,
+  };
 }
 
 /**
@@ -246,17 +379,9 @@ function classifyGitCredentialHelper(helper: string): string {
  * 再利用するのは検査の"定義"であって、この関数自体は独立した実行器: あちらは
  * ローカル fs、こちらは agent サーバーへの transport 経由）。
  *
- * 6. ハブの data ディレクトリ・DB ファイルへの実アクセス不能 — 現状は
- * checkSameHost の hostname/uid シグナルに委ねている（Step 2 review,
- * Important #3 で "hostname/uid が違えば FS 到達不能" という過大な主張は
- * checkSameHost 側から削除済み: 一方のみ一致は今や unknown 判定になり、
- * 両方一致のみ fail）。ハブの data ディレクトリ/DB ファイルへの実アクセスを
- * 非機密カナリアで直接検証する独立チェック（例: ハブが書いた既知の無害
- * マーカーファイルの有無を transport 経由で確認）は本ラウンドでは未実装 —
- * 採用しない理由: そのカナリアファイルの配置・命名・ライフサイクル管理には
- * ハブ起動時の書き込み経路が新たに必要で、layer 2 の検証範囲を超える設計
- * 変更になるため、hostname/uid シグナルの保守的な扱い（一方一致は unknown）
- * で当面代替する。
+ * Review round (Critical finding 2): file contents are now fetched via the
+ * framed base64 batch (`probeFilesFramed`) instead of raw marker search —
+ * see that function's own doc comment for why.
  */
 async function checkNoOperatorToken(transport: IServerTransport): Promise<IsolationCheck> {
   const id = 'no_operator_token';
@@ -294,37 +419,29 @@ async function checkNoOperatorToken(transport: IServerTransport): Promise<Isolat
 
   // Each candidate name is validated (regex / exact literal) above, but is
   // still attacker-influenced data from a remote `ls` — never interpolated
-  // into the shell command directly. Read via numeric markers instead of
-  // embedding the filename in the echoed marker text, and quote every path
-  // through shellQuote (single-quote escaping handles arbitrary content).
-  const catCmd = targets
-    .map((name, i) => `echo AZT_FILE_BEGIN:${i}; cat ${shellQuote(`${azitoDir}/${name}`)} 2>/dev/null; echo AZT_FILE_END:${i}`)
-    .join('; ');
-  let catResult;
-  try {
-    catResult = await transport.exec(catCmd);
-  } catch (err) {
-    return { id, status: 'unknown', detail: `azitoctl*.env / operator.env の内容取得に失敗しました（到達不能）: ${errMsg(err)}` };
-  }
-  if (catResult.code !== 0) {
-    return { id, status: 'unknown', detail: `azitoctl*.env / operator.env の内容取得に失敗しました (code ${catResult.code}): ${catResult.stderr || '(no output)'}` };
+  // into the shell command unquoted. `probeFilesFramed`'s `key` is our own
+  // numeric index (never remote data); `shellQuote` handles arbitrary
+  // filename content in `pathExpr`.
+  const probed = await probeFilesFramed(
+    transport,
+    targets.map((name, i) => ({ key: String(i), pathExpr: shellQuote(`${azitoDir}/${name}`) })),
+  );
+  if (!probed.ok) {
+    return { id, status: 'unknown', detail: `azitoctl*.env / operator.env の内容取得に失敗しました: ${probed.detail}` };
   }
 
   const offenders: string[] = [];
   for (let i = 0; i < targets.length; i++) {
-    const beginMarker = `AZT_FILE_BEGIN:${i}`;
-    const endMarker = `AZT_FILE_END:${i}`;
-    const beginIdx = catResult.stdout.indexOf(beginMarker);
-    const endIdx = catResult.stdout.indexOf(endMarker);
-    if (beginIdx === -1 || endIdx === -1 || endIdx < beginIdx) {
+    const outcome = probed.results.get(String(i));
+    if (!outcome || outcome.kind === 'unrecognized') {
       return { id, status: 'unknown', detail: `${targets[i]} の内容取得結果が想定外の形式でした` };
     }
-    const content = catResult.stdout.slice(beginIdx + beginMarker.length, endIdx);
+    if (outcome.kind === 'absent') continue; // listed by `ls` but gone by the time we read it — nothing to flag
     // operator.env carries AZITO_UI_TOKEN=... on the same line grammar
     // azitoctl*.env would if it were ever misconfigured — the same
     // predicate this doctor is already borrowing (see the doc comment
     // above) applies verbatim to both file kinds.
-    if (/^AZITO_UI_TOKEN=/m.test(content)) {
+    if (/^AZITO_UI_TOKEN=/m.test(outcome.content)) {
       offenders.push(targets[i]);
     }
   }
@@ -334,55 +451,17 @@ async function checkNoOperatorToken(transport: IServerTransport): Promise<Isolat
   return { id, status: 'pass', detail: `確認済み: ${targets.join(', ')}` };
 }
 
-// Shared marker-fetch helper for the two checks below (7, 8): "read one
-// file's content if it exists, or report its absence", via begin/end
-// markers so multi-line file content (JSON, TOML) can be extracted without
-// relying on splitting the whole output into lines (a technique already
-// used by checkNoOperatorToken above). `$HOME`/`$CODEX_HOME` are expanded
-// SHELL-SIDE (not interpolated by this TypeScript code), so there is no
-// injection surface here — unlike the ls-derived filenames
-// checkNoOperatorToken quotes, nothing attacker-influenced ever reaches the
-// command string.
-type FileProbeResult =
-  | { kind: 'absent' }
-  | { kind: 'content'; content: string }
-  | { kind: 'unrecognized' };
-
-async function probeFile(transport: IServerTransport, pathExpr: string): Promise<{ ok: true; probe: FileProbeResult } | { ok: false; detail: string }> {
-  const cmd = `F="${pathExpr}"; if [ -f "$F" ]; then echo AZT_FILE_BEGIN; cat "$F"; echo AZT_FILE_END; else echo AZT_FILE_ABSENT; fi`;
-  let result;
-  try {
-    result = await transport.exec(cmd);
-  } catch (err) {
-    return { ok: false, detail: `ファイルの取得に失敗しました（到達不能）: ${errMsg(err)}` };
-  }
-  if (result.code !== 0) {
-    return { ok: false, detail: `ファイルの取得に失敗しました (code ${result.code}): ${result.stderr || result.stdout || '(no output)'}` };
-  }
-  if (result.stdout.includes('AZT_FILE_ABSENT')) {
-    return { ok: true, probe: { kind: 'absent' } };
-  }
-  const beginIdx = result.stdout.indexOf('AZT_FILE_BEGIN');
-  const endIdx = result.stdout.indexOf('AZT_FILE_END');
-  if (beginIdx === -1 || endIdx === -1 || endIdx < beginIdx) {
-    return { ok: true, probe: { kind: 'unrecognized' } };
-  }
-  const content = result.stdout.slice(beginIdx + 'AZT_FILE_BEGIN'.length, endIdx);
-  return { ok: true, probe: { kind: 'content', content } };
-}
-
 /**
- * 7. Claude の `~/.claude/settings.json` の MCP env に AZITO_UI_TOKEN が
+ * 6. Claude の `~/.claude/settings.json` の MCP env に AZITO_UI_TOKEN が
  * 残っていない — `harness/setup.sh --purge-operator-token` が掃除する対象の
  * ひとつ（checkNoOperatorToken の doc comment、および
- * `shared/mcpTokenStores.ts` の doc comment を参照）。cleanup が対象とする
- * 全ストアを doctor が検査していなかった Step 2 review の Critical 指摘を
- * 埋める2チェックのうちの1つ。判定ロジック（`extractClaudeMcpUiToken`）は
- * `azito auth doctor`（authDoctorCommand.ts の readMcpUiToken）と共有。
+ * `shared/mcpTokenStores.ts` の doc comment を参照）。判定ロジック
+ * （`extractClaudeMcpUiToken`）は `azito auth doctor`
+ * （authDoctorCommand.ts の readMcpUiToken）と共有。
  */
 async function checkNoClaudeMcpToken(transport: IServerTransport): Promise<IsolationCheck> {
   const id = 'no_claude_mcp_token';
-  const probed = await probeFile(transport, '$HOME/.claude/settings.json');
+  const probed = await probeFile(transport, '"$HOME/.claude/settings.json"');
   if (!probed.ok) return { id, status: 'unknown', detail: `Claude settings.json の${probed.detail}` };
   const { probe } = probed;
   if (probe.kind === 'absent') {
@@ -402,8 +481,8 @@ async function checkNoClaudeMcpToken(transport: IServerTransport): Promise<Isola
 }
 
 /**
- * 8. Codex の `config.toml`（`$CODEX_HOME` または `~/.codex`）の
- * `mcp_servers.azt-mcp` env に AZITO_UI_TOKEN が残っていない — 7 と同じ
+ * 7. Codex の `config.toml`（`$CODEX_HOME` または `~/.codex`）の
+ * `mcp_servers.azt-mcp` env に AZITO_UI_TOKEN が残っていない — 6 と同じ
  * cleanup 対象漏れを埋めるチェック。判定は `hasCodexConfigUiToken`
  * （`shared/mcpTokenStores.ts`）— `harness/setup.sh`
  * `strip_codex_ui_token()` 自身が最終防衛線として使っている保守的な
@@ -411,7 +490,7 @@ async function checkNoClaudeMcpToken(transport: IServerTransport): Promise<Isola
  */
 async function checkNoCodexMcpToken(transport: IServerTransport): Promise<IsolationCheck> {
   const id = 'no_codex_mcp_token';
-  const probed = await probeFile(transport, '${CODEX_HOME:-$HOME/.codex}/config.toml');
+  const probed = await probeFile(transport, '"${CODEX_HOME:-$HOME/.codex}/config.toml"');
   if (!probed.ok) return { id, status: 'unknown', detail: `Codex config.toml の${probed.detail}` };
   const { probe } = probed;
   if (probe.kind === 'absent') {
@@ -426,15 +505,60 @@ async function checkNoCodexMcpToken(transport: IServerTransport): Promise<Isolat
   return { id, status: 'pass', detail: 'config.toml に AZITO_UI_TOKEN はありません' };
 }
 
+/**
+ * 8. 実行環境そのものに operator 相当のトークンが存在しない（review round,
+ * Critical finding 3）: `/api/exec` は agent プロセスが継承した環境で
+ * `/bin/sh` を起動するため、`AZITO_UI_TOKEN` 付きで起動された agent は
+ * ディスク上に何も残っていなくてもそのトークンをコマンド実行環境から露出
+ * する。ファイルベースの検査（5〜7）が全て pass でもこの経路は塞がれない
+ * ため独立チェックとして追加。
+ *
+ * 値そのものは絶対に detail/report に含めない — `${VAR+x}` という POSIX
+ * パラメータ展開（「設定されているか」だけを問う、値には触れない）で存在
+ * 有無のみを問い合わせ、変数名のリストだけを報告する。
+ */
+async function checkNoOperatorEnvironment(transport: IServerTransport): Promise<IsolationCheck> {
+  const id = 'no_operator_environment';
+  const varsToCheck = ['AZITO_UI_TOKEN', 'AZITO_AGENT_TOKEN', 'AZITO_WEBHOOK_TOKEN', 'AZITO_MASTER_KEY'];
+  const cmd = varsToCheck
+    .map((v) => `if [ -n "\${${v}+x}" ]; then echo "AZT_ENV_PRESENT:${v}"; fi`)
+    .join('; ') + '; echo AZT_ENV_DONE';
+  let result;
+  try {
+    result = await transport.exec(cmd);
+  } catch (err) {
+    return { id, status: 'unknown', detail: `実行環境の変数確認に失敗しました（到達不能）: ${errMsg(err)}` };
+  }
+  if (result.code !== 0) {
+    return { id, status: 'unknown', detail: `実行環境の変数確認に失敗しました (code ${result.code}): ${result.stderr || result.stdout || '(no output)'}` };
+  }
+  const lines = result.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+  if (!lines.includes('AZT_ENV_DONE')) {
+    return { id, status: 'unknown', detail: `実行環境の変数確認結果が想定外の形式でした: ${JSON.stringify(result.stdout)}` };
+  }
+  const present = lines
+    .filter((l) => l.startsWith('AZT_ENV_PRESENT:'))
+    .map((l) => l.slice('AZT_ENV_PRESENT:'.length));
+  if (present.length > 0) {
+    return {
+      id,
+      status: 'fail',
+      detail: `/api/exec が起動する実行環境（プロセス継承環境）に operator 相当の環境変数が存在します。値は表示しません: ${present.join(', ')}`,
+    };
+  }
+  return { id, status: 'pass', detail: '/api/exec が起動する実行環境に operator 相当の環境変数は見つかりませんでした' };
+}
+
 export async function runIsolationDoctor(transport: IServerTransport, hub: HubIdentity): Promise<IsolationDoctorResult> {
   const checks = await Promise.all([
-    checkSameHost(transport, hub),
+    checkFsAndHostBoundary(transport, hub),
     checkNoPrivateKeys(transport),
     checkGhUnauthenticated(transport),
     checkNoGitCredentials(transport),
     checkNoOperatorToken(transport),
     checkNoClaudeMcpToken(transport),
     checkNoCodexMcpToken(transport),
+    checkNoOperatorEnvironment(transport),
   ]);
   const verified = checks.every((c) => c.status === 'pass');
   return { verified, checks };

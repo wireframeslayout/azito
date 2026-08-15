@@ -8,8 +8,16 @@ import type { InstallStatusResponse } from '../components/servers/serverSections
 // outcome JSON) is a detail-only field the servers-list API deliberately
 // excludes — see GET /api/servers/:name on the server side. `kind`
 // distinguishes the synchronous remote-token-purge outcome PUT
-// isolationIntent:true records (`'cleanup'`) from the future isolation
-// doctor's own writes (`'verification'`, not implemented yet).
+// isolationIntent:true records (`'cleanup'`) from the isolation doctor's own
+// writes (`'verification'`).
+//
+// Review round (Important finding 4): the server now persists these two
+// kinds in SEPARATE columns/fields — `isolationReport` (verification-only)
+// and `isolationCleanupReport` (cleanup-only) — so a doctor run can never
+// clobber a settled cleanup outcome or vice versa. This union type is kept
+// as the shape for EITHER field's parsed value (a given field only ever
+// actually carries one `kind` in practice now), so `isValidIsolationReport`
+// below stays a single shared validator for both.
 export interface IsolationReport {
   kind: 'cleanup' | 'verification';
   // Issue #29 review (final pass), Important finding 2: 'pending' is the
@@ -104,6 +112,13 @@ export function hasIsolationReportField(body: unknown): body is { isolationRepor
   return !!body && typeof body === 'object' && !Array.isArray(body) && Object.prototype.hasOwnProperty.call(body, 'isolationReport');
 }
 
+// Review round (Important finding 4): the cleanup-report counterpart to
+// hasIsolationReportField above, split into its own field on the same GET
+// /:name response — see IsolationReport's doc comment.
+export function hasIsolationCleanupReportField(body: unknown): body is { isolationCleanupReport: unknown } {
+  return !!body && typeof body === 'object' && !Array.isArray(body) && Object.prototype.hasOwnProperty.call(body, 'isolationCleanupReport');
+}
+
 interface UseServerDetailResult {
   server: Server | null;
   servers: Server[];
@@ -111,6 +126,11 @@ interface UseServerDetailResult {
   installStatus: InstallStatusResponse | null;
   sessions: Session[];
   isolationReport: IsolationReport | null;
+  // Review round (Important finding 4): the cleanup-outcome counterpart to
+  // isolationReport above — parsed independently from its own
+  // isolationCleanupReport response field, since the server now persists it
+  // in a separate column (see IsolationReport's doc comment).
+  isolationCleanupReport: IsolationReport | null;
   // Issue #29 review, Important finding 3: true when this server declares
   // isolationIntent but the detail fetch that would carry isolationReport
   // failed outright or came back in a shape this hook doesn't recognize —
@@ -118,6 +138,12 @@ interface UseServerDetailResult {
   // succeeded" (isolationReport === null), which a bare `.catch(() => null)`
   // could not: both looked identical to the UI before this field existed.
   isolationReportUnavailable: boolean;
+  // Review round (Important finding 4): same "fetch failed / unrecognized
+  // shape" distinction as isolationReportUnavailable above, but for the
+  // isolationCleanupReport field specifically — a malformed cleanup field
+  // must not be silently read as "no cleanup report", independent of
+  // whether the verification field parsed fine.
+  isolationCleanupReportUnavailable: boolean;
   loading: boolean;
   error: string | null;
   refresh: () => void;
@@ -131,6 +157,8 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
   const [sessions, setSessions] = useState<Session[]>([]);
   const [isolationReport, setIsolationReport] = useState<IsolationReport | null>(null);
   const [isolationReportUnavailable, setIsolationReportUnavailable] = useState(false);
+  const [isolationCleanupReport, setIsolationCleanupReport] = useState<IsolationReport | null>(null);
+  const [isolationCleanupReportUnavailable, setIsolationCleanupReportUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Issue #29 review (8th pass), Important finding 3: fetchAll's four
@@ -161,6 +189,8 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
     setSessions([]);
     setIsolationReport(null);
     setIsolationReportUnavailable(false);
+    setIsolationCleanupReport(null);
+    setIsolationCleanupReportUnavailable(false);
     setLoading(true);
     setError(null);
     try {
@@ -189,40 +219,54 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
       setInstallStatus(installRes);
       setSessions(Array.isArray(sessionsRes) ? sessionsRes : []);
 
-      let parsedReport: IsolationReport | null = null;
-      let reportUnavailable = false;
-      if (detailResult === null || detailResult.status < 200 || detailResult.status >= 300) {
-        reportUnavailable = true;
-      } else if (!hasIsolationReportField(detailResult.body)) {
-        // Issue #29 review (5th pass), Important finding 3: a 2xx body that
-        // isn't a non-array object owning `isolationReport` at all (null,
-        // an array, a scalar, or an object missing the field) is not a
-        // shape this hook understands — treated as unavailable rather than
-        // risking a `.isolationReport` access on a non-object body.
-        reportUnavailable = true;
-      } else if (typeof detailResult.body.isolationReport === 'string' && detailResult.body.isolationReport) {
-        try {
-          const parsed = JSON.parse(detailResult.body.isolationReport) as unknown;
-          if (isValidIsolationReport(parsed)) {
-            parsedReport = parsed;
-          } else {
-            reportUnavailable = true;
-          }
-        } catch {
-          reportUnavailable = true;
+      // Review round (Important finding 4): the server now returns the
+      // verification report and the cleanup report as two independent
+      // fields on the same body — parsed here with the exact same
+      // "unrecognized shape -> unavailable" contract, once per field, so a
+      // malformed one never masks the other.
+      function parseReportField(
+        fieldName: 'isolationReport' | 'isolationCleanupReport',
+      ): { report: IsolationReport | null; unavailable: boolean } {
+        if (detailResult === null || detailResult.status < 200 || detailResult.status >= 300) {
+          return { report: null, unavailable: true };
         }
-      } else if (detailResult.body.isolationReport != null) {
-        // Present but neither a string nor null/undefined (e.g. a stray
-        // number/object from a malformed response) — not a shape this hook
-        // can parse as a report.
-        reportUnavailable = true;
+        const body = detailResult.body;
+        if (!body || typeof body !== 'object' || Array.isArray(body) || !Object.prototype.hasOwnProperty.call(body, fieldName)) {
+          // Issue #29 review (5th pass), Important finding 3: a 2xx body
+          // that isn't a non-array object owning the field at all (null, an
+          // array, a scalar, or an object missing the field) is not a shape
+          // this hook understands — treated as unavailable rather than
+          // risking a property access on a non-object body.
+          return { report: null, unavailable: true };
+        }
+        const raw = (body as Record<string, unknown>)[fieldName];
+        if (typeof raw === 'string' && raw) {
+          try {
+            const parsed = JSON.parse(raw) as unknown;
+            return isValidIsolationReport(parsed) ? { report: parsed, unavailable: false } : { report: null, unavailable: true };
+          } catch {
+            return { report: null, unavailable: true };
+          }
+        }
+        if (raw != null) {
+          // Present but neither a string nor null/undefined (e.g. a stray
+          // number/object from a malformed response) — not a shape this
+          // hook can parse as a report.
+          return { report: null, unavailable: true };
+        }
+        return { report: null, unavailable: false };
       }
-      // reportUnavailable only matters (as UI-visible uncertainty) for a
-      // server that actually declared isolation — a server that never
-      // opted in has no promise to fail to verify.
+
+      const verification = parseReportField('isolationReport');
+      const cleanup = parseReportField('isolationCleanupReport');
+      // Unavailability only matters (as UI-visible uncertainty) for a server
+      // that actually declared isolation — a server that never opted in has
+      // no promise to fail to verify.
       const declaredIsolated = srvList.find((s) => s.name === serverName)?.isolationIntent ?? false;
-      setIsolationReport(parsedReport);
-      setIsolationReportUnavailable(declaredIsolated && reportUnavailable);
+      setIsolationReport(verification.report);
+      setIsolationReportUnavailable(declaredIsolated && verification.unavailable);
+      setIsolationCleanupReport(cleanup.report);
+      setIsolationCleanupReportUnavailable(declaredIsolated && cleanup.unavailable);
     } catch (err: unknown) {
       if (fetchGenRef.current === gen) setError((err as Error).message);
     } finally {
@@ -238,6 +282,7 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
   return {
     server, servers, status, installStatus, sessions,
     isolationReport, isolationReportUnavailable,
+    isolationCleanupReport, isolationCleanupReportUnavailable,
     loading, error, refresh: fetchAll,
   };
 }

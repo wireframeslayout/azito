@@ -215,7 +215,7 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
             name: 'test-server', type: 'local' as const, host: null, agentPort: null, agentToken: null,
             agentVersion: `gen-${generation}`,
             sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const,
-            isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, createdAt: '2026-01-01',
+            isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01',
           };
         }),
         create: vi.fn(),

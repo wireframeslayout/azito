@@ -77,7 +77,7 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     sshHostFingerprint: null,
     isolationIntent: false,
     isolationVerifiedAt: null,
-    isolationReport: null,
+    isolationReport: null, isolationCleanupReport: null,
     muxRuntime: 'system',
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,

@@ -19,6 +19,7 @@ import { recordAuditBestEffort } from '../../shared/audit/recordAuditBestEffort'
 import { OPERATOR_PRINCIPAL, type Principal } from '../../shared/auth/Principal';
 import type { KeyedMutex } from '../../shared/keyedMutex';
 import { runIsolationDoctor } from './isolationDoctor';
+import { getHubCanary } from './hubCanary';
 
 // ─── Tailscale / network helpers ───
 
@@ -176,7 +177,12 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       }
     }
 
-    serverRepo.updateIsolationReport?.(serverName, JSON.stringify(report));
+    // Review round (Important finding 4): writes to isolation_cleanup_report
+    // — a column dedicated to cleanup outcomes, split from isolation_report
+    // (now verification-only) so a doctor run can never clobber a settled
+    // cleanup result or vice versa. See Server.ts's isolationCleanupReport /
+    // isolationReport doc comments.
+    serverRepo.updateIsolationCleanupReport?.(serverName, JSON.stringify(report));
     recordAuditBestEffort(auditLogService, {
       actorClass: principal.class,
       actorId: principal.id,
@@ -279,10 +285,11 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
     // Bundle content hash (what deployed agents report at /health) — not the hub git
     // SHA. Read-only accessor: never triggers a build; null until the bundle exists.
     const hubBundleHash = agentBundler ? agentBundler.getBundleHashIfBuilt() : null;
-    // isolationReport is a detail-only field (full JSON doctor result) — the
-    // list endpoint exposes only the intent flag and last-check timestamp,
-    // matching ServerConfig.isolationReport's own doc comment.
-    return serverRepo.findAll().map(({ agentToken, isolationReport, ...rest }) => ({
+    // isolationReport / isolationCleanupReport are detail-only fields (full
+    // JSON verification/cleanup outcome — see Server.ts's doc comments on
+    // both, split per review round Important finding 4) — the list endpoint
+    // exposes only the intent flag and last-check timestamp.
+    return serverRepo.findAll().map(({ agentToken, isolationReport, isolationCleanupReport, ...rest }) => ({
       ...rest,
       hasAgentToken: agentToken != null,
       hubVersion: hubBundleHash,
@@ -518,7 +525,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       // relies on.
       if (effectiveType === 'agent' && isolationIntent === true) {
         const isNewDeclaration = isolationIntent !== srv.isolationIntent;
-        const isRetryEntry = !isNewDeclaration && srv.isolationIntent === true && isolationCleanupNeedsRetry(srv.isolationReport);
+        const isRetryEntry = !isNewDeclaration && srv.isolationIntent === true && isolationCleanupNeedsRetry(srv.isolationCleanupReport);
         if ((isNewDeclaration || isRetryEntry) && !scopedAuthEnabled) {
           return reply.status(409).send({
             error: 'isolation_intent_requires_scoped_auth',
@@ -671,7 +678,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
           // remote token / record a "done" cleanup report while a
           // credential-bearing pane (possibly sourcing the token this
           // cleanup is trying to purge) was sitting right there.
-          if (isolationCleanupNeedsRetry(srv.isolationReport)) {
+          if (isolationCleanupNeedsRetry(srv.isolationCleanupReport)) {
             const blocked = await checkIsolationBlockers(request.params.name, srv);
             if (blocked) return reply.status(blocked.status).send(blocked.body);
             isolationCleanup = await attemptIsolationCleanup(request.params.name, request.principal ?? OPERATOR_PRINCIPAL);
@@ -847,7 +854,11 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       }
 
       const transport = transportFactory.getTransport(srv);
-      const hub = { hostname: os.hostname(), uid: typeof process.getuid === 'function' ? process.getuid() : null };
+      // Issue #29 isolation doctor review, Critical finding 1: `canary` is
+      // the hub's own FS-boundary marker file (see hubCanary.ts) — resolved
+      // once at startup (main.ts) and read here at the route boundary, never
+      // re-written per request.
+      const hub = { hostname: os.hostname(), uid: typeof process.getuid === 'function' ? process.getuid() : null, canary: getHubCanary() };
       const { verified, checks } = await runIsolationDoctor(transport, hub);
       const probedAt = new Date().toISOString();
       // Issue #29 Step 2 B: `kind: 'verification'` distinguishes this report

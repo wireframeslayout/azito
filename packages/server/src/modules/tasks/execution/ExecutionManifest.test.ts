@@ -136,7 +136,7 @@ function makeServerConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
     sshHostFingerprint: null,
     isolationIntent: false,
     isolationVerifiedAt: null,
-    isolationReport: null,
+    isolationReport: null, isolationCleanupReport: null,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };

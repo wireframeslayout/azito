@@ -29,8 +29,12 @@ import { ISOLATION_CLEANUP_PENDING_REPORT } from './Server';
 export function recoverInterruptedIsolationCleanup(serverRepo: IServerRepository): number {
   let recoveredCount = 0;
   for (const srv of serverRepo.findAll()) {
-    if (srv.isolationReport !== ISOLATION_CLEANUP_PENDING_REPORT) continue;
-    serverRepo.updateIsolationReport?.(
+    // Review round (Important finding 4): the pending marker now lives in
+    // isolation_cleanup_report (split out of isolation_report, which is
+    // verification-only from here on — see Server.ts's doc comments), and
+    // this recovery pass writes back to that same cleanup-only column.
+    if (srv.isolationCleanupReport !== ISOLATION_CLEANUP_PENDING_REPORT) continue;
+    serverRepo.updateIsolationCleanupReport?.(
       srv.name,
       JSON.stringify({ kind: 'cleanup', cleanup: 'failed', reason: 'interrupted' }),
     );

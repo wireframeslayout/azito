@@ -5,6 +5,16 @@ import type { ServersRouteOptions } from './routes';
 import type { IServerRepository, ServerConfig } from './Server';
 import { KeyedMutex } from '../../shared/keyedMutex';
 
+// Review round (isolation doctor, Critical finding 1): the FS-boundary
+// check reads a canary via getHubCanary() (hubCanary.ts) — a real hub
+// process writes this at startup, but this test process never does. Mocked
+// with a fixed, known canary so the doctor tests below can control whether
+// it reads back as present/absent, exactly like every other fake `exec`
+// response in this file.
+vi.mock('./hubCanary', () => ({
+  getHubCanary: () => ({ path: '/hub/data/.azito-hub-canary-test', content: 'test-canary-content' }),
+}));
+
 // Issue #29 Step 1: isolation_intent is only settable for agent servers — a
 // local server always shares the hub process's own credential store, so
 // declaring it "isolated" would be a lie the credential-distribution gates
@@ -23,6 +33,7 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     isolationIntent: false,
     isolationVerifiedAt: null,
     isolationReport: null,
+    isolationCleanupReport: null,
     muxRuntime: 'system',
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -40,6 +51,7 @@ function makeOpts(overrides: Partial<ServersRouteOptions> = {}): ServersRouteOpt
     clearFingerprint: vi.fn(),
     updateIsolationIntent: vi.fn(),
     updateIsolationReport: vi.fn(),
+    updateIsolationCleanupReport: vi.fn(),
     updateIsolationVerification: vi.fn(),
     delete: vi.fn(),
   };
@@ -226,7 +238,7 @@ describe('PUT /api/servers/:name — isolation cleanup on false->true (Issue #29
       'user@host',
       expect.objectContaining({ isolationIntent: true }),
     );
-    expect(opts.serverRepo.updateIsolationReport).toHaveBeenCalledWith(
+    expect(opts.serverRepo.updateIsolationCleanupReport).toHaveBeenCalledWith(
       'srv',
       expect.stringContaining('"cleanup":"done"'),
     );
@@ -243,11 +255,11 @@ describe('PUT /api/servers/:name — isolation cleanup on false->true (Issue #29
     const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
 
     expect(res.statusCode).toBe(200);
-    expect(opts.serverRepo.updateIsolationReport).toHaveBeenCalledWith(
+    expect(opts.serverRepo.updateIsolationCleanupReport).toHaveBeenCalledWith(
       'srv',
       expect.stringContaining('"cleanup":"failed"'),
     );
-    const [, reportJson] = (opts.serverRepo.updateIsolationReport as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [, reportJson] = (opts.serverRepo.updateIsolationCleanupReport as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(JSON.parse(reportJson).error).toBe('ssh unreachable');
   });
 
@@ -262,7 +274,7 @@ describe('PUT /api/servers/:name — isolation cleanup on false->true (Issue #29
     const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
 
     expect(res.statusCode).toBe(200);
-    const [, reportJson] = (opts.serverRepo.updateIsolationReport as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [, reportJson] = (opts.serverRepo.updateIsolationCleanupReport as ReturnType<typeof vi.fn>).mock.calls[0];
     const report = JSON.parse(reportJson);
     expect(report.cleanup).toBe('failed');
     expect(report.error).toBe('boom');
@@ -290,7 +302,7 @@ describe('PUT /api/servers/:name — isolation cleanup on false->true (Issue #29
     const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
 
     expect(res.statusCode).toBe(200);
-    const [, reportJson] = (opts.serverRepo.updateIsolationReport as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [, reportJson] = (opts.serverRepo.updateIsolationCleanupReport as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(reportJson).not.toContain('abcdef0123456789abcdef0123456789');
     expect(reportJson).not.toContain('deadbeefdeadbeefdeadbeefdeadbeef');
     const report = JSON.parse(reportJson);
@@ -310,7 +322,7 @@ describe('PUT /api/servers/:name — isolation cleanup on false->true (Issue #29
 
     expect(res.statusCode).toBe(200);
     expect(install).not.toHaveBeenCalled();
-    const [, reportJson] = (opts.serverRepo.updateIsolationReport as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [, reportJson] = (opts.serverRepo.updateIsolationCleanupReport as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(JSON.parse(reportJson).cleanup).toBe('skipped');
   });
 
@@ -325,7 +337,7 @@ describe('PUT /api/servers/:name — isolation cleanup on false->true (Issue #29
       const install = vi.fn(async () => ({ success: true, steps: [] }));
       const opts = makeOpts({ harnessInstaller: makeHarnessInstaller(install) });
       (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
-        makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationReport: null }),
+        makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationCleanupReport: null }),
       );
       const app = await buildApp(opts);
 
@@ -335,7 +347,7 @@ describe('PUT /api/servers/:name — isolation cleanup on false->true (Issue #29
       expect(install).toHaveBeenCalledTimes(1);
       expect(res.json().isolationCleanup).toBe('done');
       // Retrying must not re-flip isolation_intent (it was already true) —
-      // only attemptIsolationCleanup's own updateIsolationReport() write runs.
+      // only attemptIsolationCleanup's own updateIsolationCleanupReport() write runs.
       expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
     });
 
@@ -343,7 +355,7 @@ describe('PUT /api/servers/:name — isolation cleanup on false->true (Issue #29
       const install = vi.fn(async () => ({ success: true, steps: [] }));
       const opts = makeOpts({ harnessInstaller: makeHarnessInstaller(install) });
       (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
-        makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationReport: JSON.stringify({ kind: 'cleanup', cleanup: 'pending' }) }),
+        makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationCleanupReport: JSON.stringify({ kind: 'cleanup', cleanup: 'pending' }) }),
       );
       const app = await buildApp(opts);
 
@@ -357,7 +369,7 @@ describe('PUT /api/servers/:name — isolation cleanup on false->true (Issue #29
       const install = vi.fn(async () => ({ success: true, steps: [] }));
       const opts = makeOpts({ harnessInstaller: makeHarnessInstaller(install) });
       (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
-        makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationReport: JSON.stringify({ kind: 'cleanup', cleanup: 'failed', error: 'boom' }) }),
+        makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationCleanupReport: JSON.stringify({ kind: 'cleanup', cleanup: 'failed', error: 'boom' }) }),
       );
       const app = await buildApp(opts);
 
@@ -371,7 +383,7 @@ describe('PUT /api/servers/:name — isolation cleanup on false->true (Issue #29
       const install = vi.fn(async () => ({ success: true, steps: [] }));
       const opts = makeOpts({ harnessInstaller: makeHarnessInstaller(install) });
       (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
-        makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationReport: JSON.stringify({ kind: 'cleanup', cleanup: 'done' }) }),
+        makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationCleanupReport: JSON.stringify({ kind: 'cleanup', cleanup: 'done' }) }),
       );
       const app = await buildApp(opts);
 
@@ -379,7 +391,7 @@ describe('PUT /api/servers/:name — isolation cleanup on false->true (Issue #29
 
       expect(res.statusCode).toBe(200);
       expect(install).not.toHaveBeenCalled();
-      expect(opts.serverRepo.updateIsolationReport).not.toHaveBeenCalled();
+      expect(opts.serverRepo.updateIsolationCleanupReport).not.toHaveBeenCalled();
       expect(res.json().isolationCleanup).toBeUndefined();
     });
 
@@ -395,7 +407,7 @@ describe('PUT /api/servers/:name — isolation cleanup on false->true (Issue #29
       const install = vi.fn(async () => ({ success: true, steps: [] }));
       const opts = makeOpts({ harnessInstaller: makeHarnessInstaller(install) });
       (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
-        makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationReport: JSON.stringify({ cleanup: 'done' }) }),
+        makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationCleanupReport: JSON.stringify({ cleanup: 'done' }) }),
       );
       const app = await buildApp(opts);
 
@@ -409,7 +421,7 @@ describe('PUT /api/servers/:name — isolation cleanup on false->true (Issue #29
       const install = vi.fn(async () => ({ success: true, steps: [] }));
       const opts = makeOpts({ harnessInstaller: makeHarnessInstaller(install) });
       (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
-        makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationReport: JSON.stringify({ kind: 'verification', cleanup: 'done' }) }),
+        makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationCleanupReport: JSON.stringify({ kind: 'verification', cleanup: 'done' }) }),
       );
       const app = await buildApp(opts);
 
@@ -429,7 +441,7 @@ describe('PUT /api/servers/:name — isolation cleanup on false->true (Issue #29
     const install = vi.fn(async () => ({ success: true, steps: [] }));
     const opts = makeOpts({ harnessInstaller: makeHarnessInstaller(install) });
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
-      makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationReport: '{"kind":"cleanup","cleanup":"done"}' }),
+      makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationCleanupReport: '{"kind":"cleanup","cleanup":"done"}' }),
     );
     const app = await buildApp(opts);
 
@@ -457,7 +469,12 @@ describe('GET /api/servers — isolationReport exclusion', () => {
   it('exposes isolationIntent/isolationVerifiedAt but not isolationReport', async () => {
     const opts = makeOpts();
     (opts.serverRepo.findAll as ReturnType<typeof vi.fn>).mockReturnValue([
-      makeServer({ isolationIntent: true, isolationVerifiedAt: '2026-08-15T00:00:00Z', isolationReport: '{"findings":[]}' }),
+      makeServer({
+        isolationIntent: true,
+        isolationVerifiedAt: '2026-08-15T00:00:00Z',
+        isolationReport: '{"findings":[]}',
+        isolationCleanupReport: '{"kind":"cleanup","cleanup":"done"}',
+      }),
     ]);
     const app = await buildApp(opts);
 
@@ -466,6 +483,7 @@ describe('GET /api/servers — isolationReport exclusion', () => {
 
     expect(body[0].isolationIntent).toBe(true);
     expect(body[0].isolationVerifiedAt).toBe('2026-08-15T00:00:00Z');
+    expect(body[0].isolationCleanupReport).toBeUndefined();
     expect(body[0].isolationReport).toBeUndefined();
   });
 });
@@ -477,7 +495,7 @@ describe('GET /api/servers/:name — isolationReport detail route (Issue #29 Imp
   it('returns the full server config including isolationReport', async () => {
     const opts = makeOpts();
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
-      makeServer({ isolationIntent: true, isolationVerifiedAt: null, isolationReport: '{"kind":"cleanup","cleanup":"failed","error":"ssh unreachable"}' }),
+      makeServer({ isolationIntent: true, isolationVerifiedAt: null, isolationReport: '{"kind":"verification","verified":false,"checks":[]}' }),
     );
     const app = await buildApp(opts);
 
@@ -486,9 +504,34 @@ describe('GET /api/servers/:name — isolationReport detail route (Issue #29 Imp
 
     expect(res.statusCode).toBe(200);
     expect(body.isolationIntent).toBe(true);
-    expect(JSON.parse(body.isolationReport).cleanup).toBe('failed');
+    expect(JSON.parse(body.isolationReport).verified).toBe(false);
     expect(body.agentToken).toBeUndefined();
     expect(body.hasAgentToken).toBe(true);
+  });
+
+  // Review round (Important finding 4): isolationReport (verification) and
+  // isolationCleanupReport (cleanup) are separate columns/fields now — the
+  // detail route must surface both independently, not just whichever one
+  // happened to be written most recently.
+  it('returns isolationCleanupReport independently of isolationReport (column split, Important finding 4)', async () => {
+    const opts = makeOpts();
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({
+        isolationIntent: true,
+        isolationVerifiedAt: null,
+        isolationReport: '{"kind":"verification","verified":false,"checks":[]}',
+        isolationCleanupReport: '{"kind":"cleanup","cleanup":"failed","error":"ssh unreachable"}',
+      }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'GET', url: '/api/servers/srv' });
+    const body = res.json();
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(body.isolationReport).kind).toBe('verification');
+    expect(JSON.parse(body.isolationCleanupReport).kind).toBe('cleanup');
+    expect(JSON.parse(body.isolationCleanupReport).cleanup).toBe('failed');
   });
 
   it('404s for an unknown server', async () => {
@@ -601,7 +644,7 @@ describe('isolation_intent false->true window-presence gate (Issue #29 review, C
 
   // Issue #29 review, Important finding 1 (this pass): a true->true PUT
   // whose cleanup report never settled at 'done' (default makeServer() has
-  // isolationReport: null) is NOT a full no-op — it retries
+  // isolationCleanupReport: null) is NOT a full no-op — it retries
   // attemptIsolationCleanup (see the "true->true retries" describe block
   // below) — and that retry must go through the exact same risky-window
   // gate a false->true transition does. This test previously asserted 200
@@ -613,7 +656,7 @@ describe('isolation_intent false->true window-presence gate (Issue #29 review, C
     ]);
     const opts = makeOpts({ windowRepo: { findByServer } as unknown as ServersRouteOptions['windowRepo'] });
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
-      makeServer({ type: 'agent', isolationIntent: true, isolationReport: null }),
+      makeServer({ type: 'agent', isolationIntent: true, isolationCleanupReport: null }),
     );
     const app = await buildApp(opts);
 
@@ -634,7 +677,7 @@ describe('isolation_intent false->true window-presence gate (Issue #29 review, C
     ]);
     const opts = makeOpts({ windowRepo: { findByServer } as unknown as ServersRouteOptions['windowRepo'] });
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
-      makeServer({ type: 'agent', isolationIntent: true, isolationReport: JSON.stringify({ kind: 'cleanup', cleanup: 'done' }) }),
+      makeServer({ type: 'agent', isolationIntent: true, isolationCleanupReport: JSON.stringify({ kind: 'cleanup', cleanup: 'done' }) }),
     );
     const app = await buildApp(opts);
 
@@ -710,7 +753,7 @@ describe('isolation_intent false->true live-tmux-session gate (Issue #29 review,
 
   // Issue #29 review, Important finding 1 (this pass): the retry path must
   // check live sessions too — a stale/failed cleanup report (default
-  // makeServer() isolationReport: null) means this true->true PUT is a
+  // makeServer() isolationCleanupReport: null) means this true->true PUT is a
   // retry, not a no-op, and must be gated exactly like a false->true
   // transition. This test previously asserted the check was skipped, which
   // encoded the bug.
@@ -718,7 +761,7 @@ describe('isolation_intent false->true live-tmux-session gate (Issue #29 review,
     const listSessionsForSecurityGate = vi.fn(async () => [{ name: 'manual-session', windowCount: 1, attached: false, created: 0, windows: [] }]);
     const opts = makeOpts({ tmux: { listSessionsForSecurityGate } as unknown as ServersRouteOptions['tmux'] });
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
-      makeServer({ type: 'agent', isolationIntent: true, isolationReport: null }),
+      makeServer({ type: 'agent', isolationIntent: true, isolationCleanupReport: null }),
     );
     const app = await buildApp(opts);
 
@@ -734,7 +777,7 @@ describe('isolation_intent false->true live-tmux-session gate (Issue #29 review,
     const listSessionsForSecurityGate = vi.fn(async () => []);
     const opts = makeOpts({ tmux: { listSessionsForSecurityGate } as unknown as ServersRouteOptions['tmux'] });
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
-      makeServer({ type: 'agent', isolationIntent: true, isolationReport: JSON.stringify({ kind: 'cleanup', cleanup: 'done' }) }),
+      makeServer({ type: 'agent', isolationIntent: true, isolationCleanupReport: JSON.stringify({ kind: 'cleanup', cleanup: 'done' }) }),
     );
     const app = await buildApp(opts);
 
@@ -757,7 +800,7 @@ describe('isolation_intent false->true live-tmux-session gate (Issue #29 review,
       windowRepo: { findByServer: vi.fn(() => []) } as unknown as ServersRouteOptions['windowRepo'],
     });
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
-      makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationReport: null }),
+      makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationCleanupReport: null }),
     );
     const app = await buildApp(opts);
 
@@ -1274,7 +1317,7 @@ describe('PUT /api/servers/:name — isolation_intent requires scoped auth (Issu
     const install = vi.fn(async () => ({ success: true, steps: [] }));
     const opts = makeOpts({ scopedAuthEnabled: false, harnessInstaller: makeHarnessInstaller(install) });
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
-      makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationReport: null }),
+      makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationCleanupReport: null }),
     );
     const app = await buildApp(opts);
 
@@ -1289,7 +1332,7 @@ describe('PUT /api/servers/:name — isolation_intent requires scoped auth (Issu
     const install = vi.fn(async () => ({ success: true, steps: [] }));
     const opts = makeOpts({ scopedAuthEnabled: false, harnessInstaller: makeHarnessInstaller(install) });
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
-      makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationReport: JSON.stringify({ kind: 'cleanup', cleanup: 'done' }) }),
+      makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationCleanupReport: JSON.stringify({ kind: 'cleanup', cleanup: 'done' }) }),
     );
     const app = await buildApp(opts);
 
@@ -1359,13 +1402,26 @@ describe('POST /api/servers/:name/isolation/doctor (Issue #29 Step 2 B)', () => 
   it('runs the probe for an isolated agent server and persists a verification report via transportFactory.getTransport', async () => {
     const exec = vi.fn(async (cmd: string) => {
       if (cmd.includes('hostname')) return { stdout: 'remote-host\n9999\n', stderr: '', code: 0 };
+      // Review round (Critical finding 1): the FS-boundary canary probe —
+      // a different command than the plain hostname/uid one above, matched
+      // by the mocked hub canary's path (see the vi.mock('./hubCanary')
+      // block at the top of this file). Reports absent, so the check falls
+      // through to the (differing) hostname/uid signal and passes.
+      if (cmd.includes('.azito-hub-canary-test')) return { stdout: 'AZT_STATUS:canary:absent\n', stderr: '', code: 0 };
       if (cmd.includes('.ssh')) return { stdout: 'AZT_SSH_NO_DIR\n', stderr: '', code: 0 };
       if (cmd.includes('gh auth')) return { stdout: 'AZT_GH_ABSENT\n', stderr: '', code: 0 };
       if (cmd.includes('credential.helper')) return { stdout: 'AZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
       if (cmd.includes('$HOME"')) return { stdout: '/home/remote\n', stderr: '', code: 0 };
       if (cmd.includes('ls -1')) return { stdout: 'AZT_LS_DONE\n', stderr: '', code: 0 };
-      if (cmd.includes('.claude/settings.json')) return { stdout: 'AZT_FILE_ABSENT\n', stderr: '', code: 0 };
-      if (cmd.includes('config.toml')) return { stdout: 'AZT_FILE_ABSENT\n', stderr: '', code: 0 };
+      // Review round (Critical finding 2): file probes now report
+      // presence/absence via a framed `AZT_STATUS:<key>:...` line instead of
+      // the old bare `AZT_FILE_ABSENT` marker — see probeFilesFramed's doc
+      // comment in isolationDoctor.ts.
+      if (cmd.includes('.claude/settings.json')) return { stdout: 'AZT_STATUS:f:absent\n', stderr: '', code: 0 };
+      if (cmd.includes('config.toml')) return { stdout: 'AZT_STATUS:f:absent\n', stderr: '', code: 0 };
+      // Review round (Critical finding 3): the new operator-environment
+      // check — no operator variables set, so only the terminator line.
+      if (cmd.includes('AZT_ENV_PRESENT')) return { stdout: 'AZT_ENV_DONE\n', stderr: '', code: 0 };
       return { stdout: '', stderr: '', code: 0 };
     });
     const opts = makeOpts({
@@ -1392,13 +1448,15 @@ describe('POST /api/servers/:name/isolation/doctor (Issue #29 Step 2 B)', () => 
   it('does not advance isolation_verified_at when a check fails', async () => {
     const exec = vi.fn(async (cmd: string) => {
       if (cmd.includes('hostname')) return { stdout: 'remote-host\n9999\n', stderr: '', code: 0 };
+      if (cmd.includes('.azito-hub-canary-test')) return { stdout: 'AZT_STATUS:canary:absent\n', stderr: '', code: 0 };
       if (cmd.includes('.ssh')) return { stdout: '/home/remote/.ssh/id_rsa\nAZT_SSH_DIR_EXISTS\n', stderr: '', code: 0 };
       if (cmd.includes('gh auth')) return { stdout: 'AZT_GH_ABSENT\n', stderr: '', code: 0 };
       if (cmd.includes('credential.helper')) return { stdout: 'AZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
       if (cmd.includes('$HOME"')) return { stdout: '/home/remote\n', stderr: '', code: 0 };
       if (cmd.includes('ls -1')) return { stdout: 'AZT_LS_DONE\n', stderr: '', code: 0 };
-      if (cmd.includes('.claude/settings.json')) return { stdout: 'AZT_FILE_ABSENT\n', stderr: '', code: 0 };
-      if (cmd.includes('config.toml')) return { stdout: 'AZT_FILE_ABSENT\n', stderr: '', code: 0 };
+      if (cmd.includes('.claude/settings.json')) return { stdout: 'AZT_STATUS:f:absent\n', stderr: '', code: 0 };
+      if (cmd.includes('config.toml')) return { stdout: 'AZT_STATUS:f:absent\n', stderr: '', code: 0 };
+      if (cmd.includes('AZT_ENV_PRESENT')) return { stdout: 'AZT_ENV_DONE\n', stderr: '', code: 0 };
       return { stdout: '', stderr: '', code: 0 };
     });
     const opts = makeOpts({

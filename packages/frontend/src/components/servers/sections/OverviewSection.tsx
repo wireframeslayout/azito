@@ -29,43 +29,63 @@ interface OverviewSectionProps {
   // not be treated the same as "no report" (isolationReport === null),
   // which silently reads as "nothing to warn about".
   isolationReportUnavailable: boolean;
+  // Review round (Important finding 4): the cleanup-only counterpart to
+  // isolationReport/isolationReportUnavailable above — the server now
+  // persists the cleanup outcome and the doctor's verification outcome in
+  // separate columns/fields (see useServerDetail's IsolationReport doc
+  // comment), so both notices below can be computed and shown independently
+  // instead of one clobbering the other.
+  isolationCleanupReport: IsolationReport | null;
+  isolationCleanupReportUnavailable: boolean;
   refresh: () => void;
   onEdit: () => void;
 }
 
-export default function OverviewSection({ server, status, installStatus, sessions, isolationReport, isolationReportUnavailable, refresh, onEdit }: OverviewSectionProps) {
+export default function OverviewSection({
+  server, status, installStatus, sessions,
+  isolationReport, isolationReportUnavailable,
+  isolationCleanupReport, isolationCleanupReportUnavailable,
+  refresh, onEdit,
+}: OverviewSectionProps) {
   const { t } = useTranslation('servers');
   // Issue #29 review, Important finding 2: a 'cleanup' report that did not
   // land on 'done' means a previously-distributed operator token may still
   // be sitting on this server despite it now being labeled isolated — the
   // approval UI elsewhere in the app already promises operators "no token is
   // injected", so this has to be surfaced somewhere an operator will
-  // actually see it before trusting that promise. 'verification' reports
-  // (the future isolation doctor) are intentionally not handled here yet.
+  // actually see it before trusting that promise.
   //
   // Issue #29 review (final pass), Important finding 2: also fires for
-  // `isolationReport === null` on a server that DOES declare isolation —
-  // previously read as "nothing to warn about" (indistinguishable from "no
-  // report ever needed"), but a declared-isolated server with no report at
-  // all is exactly as unconfirmed as an explicit 'pending'/'failed' one
-  // (either this is a pre-fix row from before `updateIsolationIntent`
-  // started writing the pending marker atomically, or something cleared the
-  // report without settling it). This is independent of, and can show
-  // alongside, `isolationReportUnavailable` below (a fetch failure also
-  // leaves `isolationReport` at `null`) — both represent real uncertainty
-  // about whether the isolation promise actually holds.
+  // `isolationCleanupReport === null` on a server that DOES declare
+  // isolation — previously read as "nothing to warn about"
+  // (indistinguishable from "no report ever needed"), but a
+  // declared-isolated server with no report at all is exactly as unconfirmed
+  // as an explicit 'pending'/'failed' one (either this is a pre-fix row from
+  // before `updateIsolationIntent` started writing the pending marker
+  // atomically, or something cleared the report without settling it). This
+  // is independent of, and can show alongside, `isolationCleanupReportUnavailable`
+  // below (a fetch failure also leaves `isolationCleanupReport` at `null`) —
+  // both represent real uncertainty about whether the isolation promise
+  // actually holds.
+  //
+  // Review round (Important finding 4): reads the dedicated
+  // isolationCleanupReport field directly — no `kind` filter needed anymore,
+  // since the column split means this field only ever carries a cleanup
+  // outcome (a verification report can never land here).
   const isolationCleanupWarning = server.isolationIntent && (
-    isolationReport === null ||
-    (isolationReport.kind === 'cleanup' && isolationReport.cleanup !== 'done')
+    isolationCleanupReport === null ||
+    isolationCleanupReport.cleanup !== 'done'
   );
 
-  // Issue #29 Step 2 C: the doctor's `kind: 'verification'` report is a
-  // DISTINCT signal from the cleanup outcome above — a server can show
+  // Issue #29 Step 2 C: the doctor's verification report is a DISTINCT
+  // signal from the cleanup outcome above — a server can show
   // isolationCleanupWarning === false (cleanup reported "done") while never
   // having been verified at all, or vice versa (cleanup failed, but an
   // earlier doctor run once passed). Both can be shown together; neither
-  // suppresses the other.
-  const verificationReport = isolationReport?.kind === 'verification' ? isolationReport : null;
+  // suppresses the other. Review round (Important finding 4): reads
+  // isolationReport directly (verification-only field after the split), no
+  // `kind` filter needed.
+  const verificationReport = isolationReport;
   const isolationDoctorState: 'verified' | 'verifiedStale' | 'unverified' | 'needsAttention' | null =
     !server.isolationIntent
       ? null
@@ -203,6 +223,19 @@ export default function OverviewSection({ server, status, installStatus, session
         <div style={{ marginBottom: 'var(--space-4)' }}>
           <Notice tone="warning" sub={t('overview.isolationReportUnavailableSub')}>
             {t('overview.isolationReportUnavailableTitle')}
+          </Notice>
+        </div>
+      )}
+
+      {/* Review round (Important finding 4): the cleanup-field counterpart
+          to isolationReportUnavailable above — independently unavailable
+          since the two outcomes now live in separate response fields (see
+          useServerDetail's IsolationReport doc comment). Can show alongside
+          isolationReportUnavailable, isolationCleanupWarning, or neither. */}
+      {isolationCleanupReportUnavailable && (
+        <div style={{ marginBottom: 'var(--space-4)' }}>
+          <Notice tone="warning" sub={t('overview.isolationCleanupReportUnavailableSub')}>
+            {t('overview.isolationCleanupReportUnavailableTitle')}
           </Notice>
         </div>
       )}
