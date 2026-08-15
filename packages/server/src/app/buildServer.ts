@@ -418,7 +418,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // serializes against this exact mutex as well. `wiring.serverIsolationMutex`
   // is that one shared instance; reused below, never re-constructed.
   const { serverIsolationMutex } = wiring;
-  await app.register(serversRoutes, { serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, auditLogService, serverIsolationMutex });
+  await app.register(serversRoutes, { serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled });
   await app.register(sessionsRoutes, {
     serverRepo, tmux: tmuxClient, windowRepo, notificationBus, resourceGuard, serverIsolationMutex,
     destroyPrimaryTaskWindow: (taskId, windowName, serverName, target, reason, kill, onDestroyed) => {

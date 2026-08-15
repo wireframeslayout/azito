@@ -40,6 +40,7 @@ function makeOpts(overrides: Partial<ServersRouteOptions> = {}): ServersRouteOpt
     clearFingerprint: vi.fn(),
     updateIsolationIntent: vi.fn(),
     updateIsolationReport: vi.fn(),
+    updateIsolationVerification: vi.fn(),
     delete: vi.fn(),
   };
   return {
@@ -63,6 +64,12 @@ function makeOpts(overrides: Partial<ServersRouteOptions> = {}): ServersRouteOpt
     // against sessions.ts — that's covered by sessions.test.ts's own
     // instance plus the shared-wiring assertion in buildServer.ts).
     serverIsolationMutex: new KeyedMutex(),
+    // Issue #29 Step 2 C-1: defaults to true (scoped auth already enabled)
+    // so every pre-existing test in this file — none of which are about the
+    // C-1 gate itself — keeps exercising the false->true/true->true
+    // isolation flow unchanged. The dedicated C-1 describe block below
+    // overrides this to false per-test.
+    scopedAuthEnabled: true,
     ...overrides,
   };
 }
@@ -1224,5 +1231,185 @@ describe('POST /api/servers/:name/agent/install — blocked while isolated (Issu
 
     expect(res.statusCode).toBe(200);
     expect(install).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Issue #29 Step 2, C-1 裁定: isolation_intent の有効化には scoped auth が
+// 必須。互換モード（scopedAuthEnabled === false）では層3の API 認可が
+// would_deny（監査ログのみ、実際には通す）でしかないため、隔離を宣言できて
+// しまうと実態より安全に見える。
+describe('PUT /api/servers/:name — isolation_intent requires scoped auth (Issue #29 Step 2, C-1)', () => {
+  function makeHarnessInstaller(installImpl: ReturnType<typeof vi.fn>) {
+    return { install: installImpl, installLocal: vi.fn() } as unknown as ServersRouteOptions['harnessInstaller'];
+  }
+
+  it('rejects a false->true declaration with 409 when scopedAuthEnabled is false', async () => {
+    const opts = makeOpts({ scopedAuthEnabled: false });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: false }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('isolation_intent_requires_scoped_auth');
+    expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
+  });
+
+  it('allows a false->true declaration when scopedAuthEnabled is true', async () => {
+    const opts = makeOpts({ scopedAuthEnabled: true });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: false }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.serverRepo.updateIsolationIntent).toHaveBeenCalledWith('srv', true);
+  });
+
+  it('rejects a true->true retry (cleanup not yet done) with 409 when scopedAuthEnabled is false', async () => {
+    const install = vi.fn(async () => ({ success: true, steps: [] }));
+    const opts = makeOpts({ scopedAuthEnabled: false, harnessInstaller: makeHarnessInstaller(install) });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationReport: null }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('isolation_intent_requires_scoped_auth');
+    expect(install).not.toHaveBeenCalled();
+  });
+
+  it('does not gate a true->true PUT already settled at "done", even with scopedAuthEnabled false', async () => {
+    const install = vi.fn(async () => ({ success: true, steps: [] }));
+    const opts = makeOpts({ scopedAuthEnabled: false, harnessInstaller: makeHarnessInstaller(install) });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationReport: JSON.stringify({ kind: 'cleanup', cleanup: 'done' }) }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+    expect(res.statusCode).toBe(200);
+    expect(install).not.toHaveBeenCalled();
+  });
+
+  it('always allows disabling isolation (isolationIntent: false) regardless of scopedAuthEnabled', async () => {
+    const opts = makeOpts({ scopedAuthEnabled: false });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: true }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: false } });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.serverRepo.updateIsolationIntent).toHaveBeenCalledWith('srv', false);
+  });
+
+  it('does not block a plain PUT that never mentions isolationIntent, even with scopedAuthEnabled false', async () => {
+    const opts = makeOpts({ scopedAuthEnabled: false });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'agent', isolationIntent: false }));
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { host: '5.6.7.8' } });
+
+    expect(res.statusCode).toBe(200);
+  });
+});
+
+// Issue #29 Step 2 B: POST /api/servers/:name/isolation/doctor.
+describe('POST /api/servers/:name/isolation/doctor (Issue #29 Step 2 B)', () => {
+  it('400s when the server is not agent-type', async () => {
+    const opts = makeOpts();
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'local' }));
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv/isolation/doctor' });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('isolation_doctor_requires_isolated_agent_server');
+  });
+
+  it('400s when the server has not declared isolationIntent', async () => {
+    const opts = makeOpts();
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'agent', isolationIntent: false }));
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv/isolation/doctor' });
+
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('404s for an unknown server', async () => {
+    const opts = makeOpts();
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'POST', url: '/api/servers/missing/isolation/doctor' });
+
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('runs the probe for an isolated agent server and persists a verification report via transportFactory.getTransport', async () => {
+    const exec = vi.fn(async (cmd: string) => {
+      if (cmd.includes('hostname')) return { stdout: 'remote-host\n9999\n', stderr: '', code: 0 };
+      if (cmd.includes('.ssh')) return { stdout: 'AZT_SSH_NO_DIR\n', stderr: '', code: 0 };
+      if (cmd.includes('gh auth')) return { stdout: 'AZT_GH_ABSENT\n', stderr: '', code: 0 };
+      if (cmd.includes('credential.helper')) return { stdout: 'AZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
+      if (cmd.includes('$HOME"')) return { stdout: '/home/remote\n', stderr: '', code: 0 };
+      if (cmd.includes('ls -1')) return { stdout: 'AZT_LS_DONE\n', stderr: '', code: 0 };
+      return { stdout: '', stderr: '', code: 0 };
+    });
+    const opts = makeOpts({
+      transportFactory: { getTransport: vi.fn(() => ({ exec })), invalidate: vi.fn() } as unknown as ServersRouteOptions['transportFactory'],
+    });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: true, host: '1.2.3.4' }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv/isolation/doctor' });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.verified).toBe(true);
+    expect(Array.isArray(body.checks)).toBe(true);
+    expect(opts.serverRepo.updateIsolationVerification).toHaveBeenCalledWith(
+      'srv',
+      expect.stringContaining('"kind":"verification"'),
+      expect.any(String),
+    );
+  });
+
+  it('does not advance isolation_verified_at when a check fails', async () => {
+    const exec = vi.fn(async (cmd: string) => {
+      if (cmd.includes('hostname')) return { stdout: 'remote-host\n9999\n', stderr: '', code: 0 };
+      if (cmd.includes('.ssh')) return { stdout: '/home/remote/.ssh/id_rsa\nAZT_SSH_DIR_EXISTS\n', stderr: '', code: 0 };
+      if (cmd.includes('gh auth')) return { stdout: 'AZT_GH_ABSENT\n', stderr: '', code: 0 };
+      if (cmd.includes('credential.helper')) return { stdout: 'AZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
+      if (cmd.includes('$HOME"')) return { stdout: '/home/remote\n', stderr: '', code: 0 };
+      if (cmd.includes('ls -1')) return { stdout: 'AZT_LS_DONE\n', stderr: '', code: 0 };
+      return { stdout: '', stderr: '', code: 0 };
+    });
+    const opts = makeOpts({
+      transportFactory: { getTransport: vi.fn(() => ({ exec })), invalidate: vi.fn() } as unknown as ServersRouteOptions['transportFactory'],
+    });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: true, host: '1.2.3.4' }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv/isolation/doctor' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().verified).toBe(false);
+    expect(opts.serverRepo.updateIsolationVerification).not.toHaveBeenCalled();
+    expect(opts.serverRepo.updateIsolationReport).toHaveBeenCalledWith('srv', expect.stringContaining('"verified":false'));
   });
 });

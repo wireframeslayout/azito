@@ -18,6 +18,7 @@ import type { AuditLogService } from '../../shared/audit/AuditLogService';
 import { recordAuditBestEffort } from '../../shared/audit/recordAuditBestEffort';
 import { OPERATOR_PRINCIPAL, type Principal } from '../../shared/auth/Principal';
 import type { KeyedMutex } from '../../shared/keyedMutex';
+import { runIsolationDoctor } from './isolationDoctor';
 
 // ─── Tailscale / network helpers ───
 
@@ -104,12 +105,26 @@ export interface ServersRouteOptions {
   // other recordAuditBestEffort() call site in this codebase (see that
   // function's own doc comment).
   auditLogService?: AuditLogService;
+  // Issue #29 Step 2 C-1: false->true isolation_intent declarations (and a
+  // true->true retry that re-enters the cleanup attempt) are rejected
+  // outright while the hub is still in scoped-auth compat mode — in compat
+  // mode, layer 3's API authorization gate (buildServer.ts's onRequest hook)
+  // only AUDIT-LOGS what it would have denied (`route_auth.would_deny`)
+  // instead of actually enforcing it, so a task principal remains
+  // operator-equivalent for every route. Declaring a server "isolated"
+  // under those conditions would describe a stronger guarantee than the
+  // system actually provides — see the PUT handler's own comment at the
+  // gate. Required (not optional), matching windowRepo/serverIsolationMutex
+  // above: this is a security gate, and an unwired dependency here must fail
+  // to compile/start rather than silently accept every isolation
+  // declaration as if scoped auth were already on.
+  scopedAuthEnabled: boolean;
 }
 
 // ─── Plugin ───
 
 const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts, done) => {
-  const { serverRepo, tmux, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken, harnessPrefix, auditLogService, serverIsolationMutex } = opts;
+  const { serverRepo, tmux, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled } = opts;
 
   // Issue #29 review, Important finding 1: a false->true isolation_intent
   // transition must actually purge a previously-distributed operator token
@@ -484,6 +499,37 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
           message: '隔離が有効なサーバーの接続先情報は変更できません。先に隔離を無効化（isolationIntent: false のみを指定した PUT）を単独で送信して反映させてから、接続先の変更を別の PUT で送信してください。',
         });
       }
+      // Issue #29 Step 2 C-1: a false->true isolation_intent transition
+      // (`isNewDeclaration` below), and a true->true PUT that would re-enter
+      // the cleanup attempt because the last recorded outcome never settled
+      // at 'done' (`isRetryEntry` — same criterion as
+      // isolationCleanupNeedsRetry's own callers further below), must both
+      // be rejected outright while the hub is still in scoped-auth compat
+      // mode. In compat mode the API authorization gate in buildServer.ts's
+      // onRequest hook only records `route_auth.would_deny` and lets the
+      // request through — a task principal is operator-equivalent for every
+      // route — so a server labeled "isolated" here would describe a
+      // stronger guarantee (layer 3 fails closed on credential
+      // distribution, but layer 3 alone) than what the system as a whole
+      // actually enforces. Explicitly setting `isolationIntent: false`
+      // (disabling isolation) is never blocked by this — undoing a
+      // declaration is always safe regardless of scoped-auth state, matching
+      // the identical asymmetry the type-change auto-clear above already
+      // relies on.
+      if (effectiveType === 'agent' && isolationIntent === true) {
+        const isNewDeclaration = isolationIntent !== srv.isolationIntent;
+        const isRetryEntry = !isNewDeclaration && srv.isolationIntent === true && isolationCleanupNeedsRetry(srv.isolationReport);
+        if ((isNewDeclaration || isRetryEntry) && !scopedAuthEnabled) {
+          return reply.status(409).send({
+            error: 'isolation_intent_requires_scoped_auth',
+            message:
+              '隔離実行を宣言するには scoped auth（AZITO_SCOPED_AUTH）の有効化が必要です。互換モードのままでは、' +
+              'この隔離宣言が実態より安全であるかのように見えてしまいます。手順: 1) `azito auth doctor` を実行しすべての検査が ' +
+              'green になることを確認する → 2) `AZITO_SCOPED_AUTH=1` を設定してハブを再起動する → 3) `azito token rotate` を実行する。' +
+              'この手順を終えてから、改めて隔離を宣言してください。',
+          });
+        }
+      }
       // Issue #29 review (4th pass), Critical finding 1: the DB `windows`
       // table only covers windows AZITO itself created and is still
       // tracking — it says nothing about a session a human (or another
@@ -763,6 +809,57 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
 
       return { ok: true, steps: result.steps };
     }),
+  );
+
+  // ── POST /api/servers/:name/isolation/doctor ──
+  // Issue #29 Step 2 B: layer 2 ("検証") of the isolation profile — probes a
+  // declared-isolated agent server for actual evidence that no
+  // operator-equivalent credential is reachable there (see
+  // isolationDoctor.ts's own module doc comment for the fail-closed
+  // contract and the TOCTOU/snapshot caveat). No `auth` config is declared
+  // on this route, so it defaults to operator-only (routeAuth.ts's
+  // default-deny — see RouteAuthRequirement's doc comment): only an
+  // operator principal can ever reach it, exactly like every other route in
+  // this file.
+  fastify.post<{ Params: { name: string } }>(
+    '/api/servers/:name/isolation/doctor',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      if (srv.type !== 'agent' || srv.isolationIntent !== true) {
+        return reply.status(400).send({
+          error: 'isolation_doctor_requires_isolated_agent_server',
+          message: 'isolation doctor は隔離実行（isolationIntent: true）を宣言済みの agent 型サーバーに対してのみ実行できます。',
+        });
+      }
+
+      const transport = transportFactory.getTransport(srv);
+      const hub = { hostname: os.hostname(), uid: typeof process.getuid === 'function' ? process.getuid() : null };
+      const { verified, checks } = await runIsolationDoctor(transport, hub);
+      const probedAt = new Date().toISOString();
+      // Issue #29 Step 2 B: `kind: 'verification'` distinguishes this report
+      // from the `kind: 'cleanup'` writer above (attemptIsolationCleanup) —
+      // see Server.ts's isolationReport doc comment. Only a fully-passing
+      // run advances `isolation_verified_at`; a failing/unverifiable run
+      // still records what it found (so the UI can show which checks
+      // failed) but leaves the previous verifiedAt untouched — fail-closed:
+      // a stale "verified" timestamp must never be extended by a run that
+      // didn't actually confirm isolation.
+      const report = JSON.stringify({ kind: 'verification', verified, checks, probedAt });
+      if (verified && serverRepo.updateIsolationVerification) {
+        serverRepo.updateIsolationVerification(request.params.name, report, probedAt);
+      } else {
+        serverRepo.updateIsolationReport?.(request.params.name, report);
+      }
+      recordAuditBestEffort(auditLogService, {
+        actorClass: (request.principal ?? OPERATOR_PRINCIPAL).class,
+        actorId: (request.principal ?? OPERATOR_PRINCIPAL).id,
+        event: 'server.isolation_intent.doctor_run',
+        detail: { serverName: request.params.name, verified, checks },
+      });
+
+      return { verified, checks, probedAt };
+    },
   );
 
   // ── DELETE /api/servers/:name ──
