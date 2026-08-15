@@ -212,4 +212,36 @@ describe('SqliteServerRepository — isolation_intent transitions (Issue #29 rev
       expect(JSON.parse(row.isolation_report as string)).toEqual({ kind: 'cleanup', cleanup: 'done' });
     });
   });
+
+  // Issue #29 Step 2 B: updateIsolationVerification() is the isolation
+  // doctor's own writer — must set isolation_report AND isolation_verified_at
+  // atomically in the same statement (see IServerRepository's doc comment on
+  // why: a reader must never observe one field updated without the other).
+  describe('updateIsolationVerification (Issue #29 Step 2 B)', () => {
+    it('sets isolation_report and isolation_verified_at together', () => {
+      const db = buildSeededDb();
+      db.prepare(`INSERT INTO servers (name, type) VALUES ('srv', 'agent')`).run();
+      db.prepare('UPDATE servers SET isolation_intent = 1 WHERE name = ?').run('srv');
+
+      const repo = new SqliteServerRepository(db);
+      const report = JSON.stringify({ kind: 'verification', verified: true, checks: [] });
+      repo.updateIsolationVerification('srv', report, '2026-08-16T00:00:00Z');
+
+      const row = db.prepare('SELECT isolation_report, isolation_verified_at FROM servers WHERE name = ?').get('srv') as Record<string, unknown>;
+      expect(row.isolation_report).toBe(report);
+      expect(row.isolation_verified_at).toBe('2026-08-16T00:00:00Z');
+    });
+
+    it('does not touch isolation_intent itself', () => {
+      const db = buildSeededDb();
+      db.prepare(`INSERT INTO servers (name, type) VALUES ('srv', 'agent')`).run();
+      db.prepare('UPDATE servers SET isolation_intent = 1 WHERE name = ?').run('srv');
+
+      const repo = new SqliteServerRepository(db);
+      repo.updateIsolationVerification('srv', JSON.stringify({ kind: 'verification', verified: true, checks: [] }), '2026-08-16T00:00:00Z');
+
+      const row = db.prepare('SELECT isolation_intent FROM servers WHERE name = ?').get('srv') as Record<string, unknown>;
+      expect(row.isolation_intent).toBe(1);
+    });
+  });
 });

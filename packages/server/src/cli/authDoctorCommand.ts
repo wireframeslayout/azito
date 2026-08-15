@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { execFileSync } from 'child_process';
-import { findAzitoctlEnvFiles } from '../shared/azitoctlEnv';
+import { findAzitoctlEnvFiles, hasUiTokenLine } from '../shared/azitoctlEnv';
 import { resolveCurrentUiToken } from '../shared/currentUiToken';
 import { resolveScopedAuthEnabled } from '../shared/auth/scopedAuthFlag';
 import { resolveDataDir } from '../shared/dataDir';
@@ -88,7 +88,7 @@ function checkAzitoctlEnvNoUiToken(): CheckResult {
       unreadable.push(`${file}（${err instanceof Error ? err.message : String(err)}）`);
       continue;
     }
-    if (/^AZITO_UI_TOKEN=/m.test(content)) offenders.push(file);
+    if (hasUiTokenLine(content)) offenders.push(file);
   }
 
   if (offenders.length === 0 && unreadable.length === 0) {

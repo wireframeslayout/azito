@@ -16,6 +16,7 @@ export class SqliteServerRepository implements IServerRepository {
   private clearFingerprintStmt;
   private updateIsolationIntentStmt;
   private updateIsolationReportStmt;
+  private updateIsolationVerificationStmt;
 
   constructor(private db: SqliteDatabase) {
     this.listStmt = db.prepare(`SELECT ${COLUMNS} FROM servers WHERE type IN ('local', 'agent') ORDER BY created_at`);
@@ -45,6 +46,11 @@ export class SqliteServerRepository implements IServerRepository {
       'UPDATE servers SET isolation_intent = ?, isolation_verified_at = NULL, isolation_report = ? WHERE name = ?',
     );
     this.updateIsolationReportStmt = db.prepare('UPDATE servers SET isolation_report = ? WHERE name = ?');
+    // Issue #29 Step 2 B: the isolation doctor's passing-run writer — sets
+    // isolation_report AND isolation_verified_at atomically, so a reader
+    // never observes one updated without the other (see
+    // IServerRepository.updateIsolationVerification's doc comment).
+    this.updateIsolationVerificationStmt = db.prepare('UPDATE servers SET isolation_report = ?, isolation_verified_at = ? WHERE name = ?');
   }
 
   findAll(): ServerConfig[] {
@@ -110,6 +116,10 @@ export class SqliteServerRepository implements IServerRepository {
 
   updateIsolationReport(name: string, report: string | null): void {
     this.updateIsolationReportStmt.run(report, name);
+  }
+
+  updateIsolationVerification(name: string, report: string, verifiedAt: string): void {
+    this.updateIsolationVerificationStmt.run(report, verifiedAt, name);
   }
 
   delete(name: string): void {

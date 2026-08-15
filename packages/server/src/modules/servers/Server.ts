@@ -121,5 +121,20 @@ export interface IServerRepository {
    * it (routes.ts calls it via `?.()`).
    */
   updateIsolationReport?(name: string, report: string | null): void;
+  /**
+   * Issue #29 Step 2 B: the isolation doctor's own writer, distinct from
+   * `updateIsolationReport` above — a PASSING doctor run (every check
+   * `pass`) must update `isolation_verified_at` in the SAME statement as
+   * `isolation_report` (`{"kind":"verification","verified":true,...}`), not
+   * as a separate call, so no reader can observe a `verified:true` report
+   * next to a stale/absent `isolationVerifiedAt`. A failing/unverifiable
+   * doctor run does NOT call this — it calls `updateIsolationReport` alone
+   * (report only, `isolationVerifiedAt` left untouched) per the doctor's own
+   * fail-closed contract: only a fully-passing run may ever advance
+   * `isolationVerifiedAt`. Optional for the same reason the other isolation
+   * writers on this interface are: implemented by `SqliteServerRepository`;
+   * existing `IServerRepository` mocks predate this method.
+   */
+  updateIsolationVerification?(name: string, report: string, verifiedAt: string): void;
   delete(name: string): void;
 }
