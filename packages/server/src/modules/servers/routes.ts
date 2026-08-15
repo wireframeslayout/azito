@@ -72,7 +72,10 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
     // Bundle content hash (what deployed agents report at /health) — not the hub git
     // SHA. Read-only accessor: never triggers a build; null until the bundle exists.
     const hubBundleHash = agentBundler ? agentBundler.getBundleHashIfBuilt() : null;
-    return serverRepo.findAll().map(({ agentToken, ...rest }) => ({
+    // isolationReport is a detail-only field (full JSON doctor result) — the
+    // list endpoint exposes only the intent flag and last-check timestamp,
+    // matching ServerConfig.isolationReport's own doc comment.
+    return serverRepo.findAll().map(({ agentToken, isolationReport, ...rest }) => ({
       ...rest,
       hasAgentToken: agentToken != null,
       hubVersion: hubBundleHash,
@@ -135,10 +138,23 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const { type, host, agentPort, agentToken, sshHost, muxRuntime: putMux } = request.body as { type?: string; host?: string; agentPort?: number; agentToken?: string; sshHost?: string; muxRuntime?: string };
+      const { type, host, agentPort, agentToken, sshHost, muxRuntime: putMux, isolationIntent } = request.body as {
+        type?: string; host?: string; agentPort?: number; agentToken?: string; sshHost?: string; muxRuntime?: string; isolationIntent?: boolean;
+      };
       const validPutMux = putMux || undefined;
       if (validPutMux && validPutMux !== 'system' && validPutMux !== 'managed')
         return reply.status(400).send({ error: 'muxRuntime must be "system" or "managed"' });
+      // isolation_intent is only meaningful for agent servers (Issue #29
+      // design v2): a "local" server always shares the hub process's own
+      // credential store, so declaring it "isolated" would be a lie the
+      // credential-distribution gates (TaskPaneEnvironmentService,
+      // HarnessInstaller) could never actually honor. Reject at the API
+      // boundary rather than silently accepting and ignoring it.
+      if (isolationIntent !== undefined) {
+        const effectiveType = (type || srv.type) as 'local' | 'agent';
+        if (effectiveType !== 'agent')
+          return reply.status(400).send({ error: 'isolationIntent is only settable for agent servers' });
+      }
       try {
         serverRepo.update(
           request.params.name,
@@ -149,6 +165,9 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
           sshHost ?? srv.sshHost ?? undefined,
           (validPutMux as MuxRuntime | undefined) ?? srv.muxRuntime,
         );
+        if (isolationIntent !== undefined) {
+          serverRepo.updateIsolationIntent(request.params.name, isolationIntent);
+        }
         transportFactory.invalidate(request.params.name);
         return { ok: true };
       } catch (err: unknown) {
@@ -200,7 +219,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
 
       const steps: HarnessInstallProgress[] = [];
       let result: HarnessInstallResult;
-      const installOptions = { azitoUrl: azito_url, webhookToken, uiToken, serverName: srv.name, prefix: harnessPrefix };
+      const installOptions = { azitoUrl: azito_url, webhookToken, uiToken, serverName: srv.name, prefix: harnessPrefix, isolationIntent: srv.isolationIntent };
 
       if (srv.type === 'local') {
         result = await harnessInstaller.installLocal(installOptions);

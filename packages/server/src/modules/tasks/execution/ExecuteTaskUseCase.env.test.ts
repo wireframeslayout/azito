@@ -70,6 +70,9 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     sshHost: null,
     sshHostFingerprint: null,
   muxRuntime: 'system',
+    isolationIntent: false,
+    isolationVerifiedAt: null,
+    isolationReport: null,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
@@ -246,6 +249,7 @@ function buildUseCase(opts: {
     updateAgentVersion: vi.fn(),
     updateFingerprint: vi.fn(),
     clearFingerprint: vi.fn(),
+    updateIsolationIntent: vi.fn(),
     delete: vi.fn(),
   };
 
@@ -1021,6 +1025,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITOç›
       updateAgentVersion: vi.fn(),
       updateFingerprint: vi.fn(),
       clearFingerprint: vi.fn(),
+      updateIsolationIntent: vi.fn(),
       delete: vi.fn(),
     };
     const project = makeProject({ defaultUnitId: null });
@@ -1822,6 +1827,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       updateAgentVersion: vi.fn(),
       updateFingerprint: vi.fn(),
       clearFingerprint: vi.fn(),
+      updateIsolationIntent: vi.fn(),
       delete: vi.fn(),
     };
     const projectSecretRepo = { findByProjectWithValues: vi.fn(() => []), findByProject: vi.fn(() => []) };

@@ -116,6 +116,9 @@ const makeServer = (overrides: Partial<ServerConfig> = {}): ServerConfig => ({
   sshHost: null,
   sshHostFingerprint: null,
   muxRuntime: 'system',
+  isolationIntent: false,
+  isolationVerifiedAt: null,
+  isolationReport: null,
   createdAt: '2024-01-01',
   ...overrides,
 });
@@ -209,6 +212,7 @@ function makeRepos(overrides: {
     updateAgentVersion: vi.fn(),
     updateFingerprint: vi.fn(),
     clearFingerprint: vi.fn(),
+    updateIsolationIntent: vi.fn(),
     delete: vi.fn(),
     ...overrides.serverRepo,
   };

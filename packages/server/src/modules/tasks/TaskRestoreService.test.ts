@@ -84,12 +84,12 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
     },
     serverRepo: {
       findAll: vi.fn(() => []),
-      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, createdAt: '2026-01-01' })),
+      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, createdAt: '2026-01-01' })),
       create: vi.fn(),
       update: vi.fn(),
       updateAgentVersion: vi.fn(),
       updateFingerprint: vi.fn(),
-      clearFingerprint: vi.fn(),
+      clearFingerprint: vi.fn(), updateIsolationIntent: vi.fn(),
       delete: vi.fn(),
     },
     projectRepo: {

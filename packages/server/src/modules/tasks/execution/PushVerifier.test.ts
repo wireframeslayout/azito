@@ -15,6 +15,9 @@ function makeAgentServer(): ServerConfig {
     sshHost: null,
     muxRuntime: 'system',
     sshHostFingerprint: null,
+    isolationIntent: false,
+    isolationVerifiedAt: null,
+    isolationReport: null,
     createdAt: '2026-01-01T00:00:00.000Z',
   };
 }

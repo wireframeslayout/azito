@@ -38,7 +38,7 @@ function makeCoordinator(overrides: { turnRepo?: Record<string, unknown> } = {})
   return { coordinator, turnRepo, turnSignalHub, turn };
 }
 
-const server = { name: 'local', type: 'local' as const, host: null, agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, createdAt: '2026-01-01T00:00:00Z' };
+const server = { name: 'local', type: 'local' as const, host: null, agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, createdAt: '2026-01-01T00:00:00Z' };
 
 describe('HttpSignalTurnCoordinator.start', () => {
   it('supersedes running turns, creates a new one, starts its signal stream, and wraps the prompt', () => {

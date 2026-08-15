@@ -97,6 +97,9 @@ const server: ServerConfig = {
   agentVersion: '1.0.0',
   sshHost: null,
   sshHostFingerprint: null,
+  isolationIntent: false,
+  isolationVerifiedAt: null,
+  isolationReport: null,
   muxRuntime: 'system',
   createdAt: '2026-01-01T00:00:00.000Z',
 };

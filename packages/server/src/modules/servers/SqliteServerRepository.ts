@@ -2,7 +2,7 @@ import type { SqliteDatabase } from '../../shared/db/Database';
 import { seal, open } from '../../shared/crypto/SecretBox';
 import type { ServerConfig, IServerRepository, MuxRuntime } from './Server';
 
-const COLUMNS = 'name, type, host, agent_port, agent_token, agent_version, ssh_host, mux_runtime, ssh_host_fingerprint, created_at';
+const COLUMNS = 'name, type, host, agent_port, agent_token, agent_version, ssh_host, mux_runtime, ssh_host_fingerprint, isolation_intent, isolation_verified_at, isolation_report, created_at';
 
 export class SqliteServerRepository implements IServerRepository {
   private listStmt;
@@ -13,6 +13,7 @@ export class SqliteServerRepository implements IServerRepository {
   private updateAgentVersionStmt;
   private updateFingerprintStmt;
   private clearFingerprintStmt;
+  private updateIsolationIntentStmt;
 
   constructor(private db: SqliteDatabase) {
     this.listStmt = db.prepare(`SELECT ${COLUMNS} FROM servers WHERE type IN ('local', 'agent') ORDER BY created_at`);
@@ -23,6 +24,7 @@ export class SqliteServerRepository implements IServerRepository {
     this.updateAgentVersionStmt = db.prepare('UPDATE servers SET agent_version = ? WHERE name = ?');
     this.updateFingerprintStmt = db.prepare('UPDATE servers SET ssh_host_fingerprint = ? WHERE name = ?');
     this.clearFingerprintStmt = db.prepare('UPDATE servers SET ssh_host_fingerprint = NULL WHERE name = ?');
+    this.updateIsolationIntentStmt = db.prepare('UPDATE servers SET isolation_intent = ? WHERE name = ?');
   }
 
   findAll(): ServerConfig[] {
@@ -55,6 +57,10 @@ export class SqliteServerRepository implements IServerRepository {
     this.clearFingerprintStmt.run(name);
   }
 
+  updateIsolationIntent(name: string, isolationIntent: boolean): void {
+    this.updateIsolationIntentStmt.run(isolationIntent ? 1 : 0, name);
+  }
+
   delete(name: string): void {
     this.removeStmt.run(name);
   }
@@ -70,6 +76,9 @@ export class SqliteServerRepository implements IServerRepository {
       sshHost: (row.ssh_host as string) ?? null,
       muxRuntime: (row.mux_runtime as MuxRuntime) ?? 'system',
       sshHostFingerprint: (row.ssh_host_fingerprint as string) ?? null,
+      isolationIntent: (row.isolation_intent as number) === 1,
+      isolationVerifiedAt: (row.isolation_verified_at as string) ?? null,
+      isolationReport: (row.isolation_report as string) ?? null,
       createdAt: row.created_at as string,
     };
   }
