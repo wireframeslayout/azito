@@ -159,4 +159,57 @@ describe('SqliteServerRepository — isolation_intent transitions (Issue #29 rev
     expect(report.kind).toBe('cleanup');
     expect(report.cleanup).toBe('done');
   });
+
+  // Issue #29 review, Important finding 1: PUT /api/servers/:name's
+  // "effective type no longer agent -> auto-clear isolation" path used to
+  // run the connection-info UPDATE and the isolation-intent clear as two
+  // separate statements — a crash (or any error) between them left the row
+  // with the new type but isolation_intent still 1. updateWithIsolationClear
+  // must commit both in one transaction, and roll back both if either half
+  // fails.
+  describe('updateWithIsolationClear()', () => {
+    it('commits the connection-info update and the isolation-intent clear together', () => {
+      const db = buildSeededDb();
+      db.prepare(`INSERT INTO servers (name, type) VALUES ('srv', 'agent')`).run();
+      db.prepare('UPDATE servers SET isolation_intent = 1, isolation_verified_at = ?, isolation_report = ? WHERE name = ?')
+        .run('2026-08-01T00:00:00Z', JSON.stringify({ kind: 'cleanup', cleanup: 'done' }), 'srv');
+
+      const repo = new SqliteServerRepository(db);
+      repo.updateWithIsolationClear('srv', 'local', undefined, undefined, undefined, undefined, 'system');
+
+      const row = db.prepare('SELECT type, isolation_intent, isolation_verified_at, isolation_report FROM servers WHERE name = ?').get('srv') as Record<string, unknown>;
+      expect(row.type).toBe('local');
+      expect(row.isolation_intent).toBe(0);
+      expect(row.isolation_verified_at).toBeNull();
+      expect(row.isolation_report).toBeNull();
+    });
+
+    it('rolls back the connection-info update if the isolation-intent clear fails', () => {
+      const db = buildSeededDb();
+      db.prepare(`INSERT INTO servers (name, type) VALUES ('srv', 'agent')`).run();
+      db.prepare('UPDATE servers SET isolation_intent = 1, isolation_verified_at = ?, isolation_report = ? WHERE name = ?')
+        .run('2026-08-01T00:00:00Z', JSON.stringify({ kind: 'cleanup', cleanup: 'done' }), 'srv');
+
+      const repo = new SqliteServerRepository(db);
+      // Force the second statement in the transaction to fail after the
+      // first (the connection-info UPDATE) has already run, simulating a
+      // crash/error between the two writes.
+      const isolationStmt = (repo as unknown as { updateIsolationIntentStmt: { run: (...args: unknown[]) => unknown } }).updateIsolationIntentStmt;
+      const originalRun = isolationStmt.run.bind(isolationStmt);
+      isolationStmt.run = () => { throw new Error('simulated failure'); };
+
+      expect(() => repo.updateWithIsolationClear('srv', 'local', undefined, undefined, undefined, undefined, 'system')).toThrow('simulated failure');
+
+      isolationStmt.run = originalRun;
+      const row = db.prepare('SELECT type, isolation_intent, isolation_verified_at, isolation_report FROM servers WHERE name = ?').get('srv') as Record<string, unknown>;
+      // Both halves rolled back: type is still 'agent' (not 'local'), and
+      // isolation_intent/verified_at/report are untouched — proving the two
+      // statements share a single transaction rather than committing
+      // independently.
+      expect(row.type).toBe('agent');
+      expect(row.isolation_intent).toBe(1);
+      expect(row.isolation_verified_at).toBe('2026-08-01T00:00:00Z');
+      expect(JSON.parse(row.isolation_report as string)).toEqual({ kind: 'cleanup', cleanup: 'done' });
+    });
+  });
 });

@@ -200,7 +200,7 @@ export class HarnessInstaller {
       throw new Error(`setup.sh not found: ${setupScript}`);
     }
 
-    const { azitoUrl, webhookToken, uiToken, serverName, prefix } = options;
+    const { azitoUrl, webhookToken, uiToken, serverName, prefix, isolationIntent } = options;
     const { execFile } = await import('child_process');
     const { promisify } = await import('util');
     const execFileAsync = promisify(execFile);
@@ -208,9 +208,23 @@ export class HarnessInstaller {
     const args: string[] = [setupScript];
     if (azitoUrl) args.push('--azito-url', azitoUrl);
     if (webhookToken) args.push('--webhook-token', webhookToken);
-    if (uiToken) args.push('--ui-token', uiToken);
+    // Issue #29 review, Important finding 2: mirrors runSetup()'s handling
+    // above — withhold --ui-token and force --purge-operator-token when the
+    // caller declared isolationIntent. `local`-type servers can never
+    // actually reach isolationIntent: true today (PUT /api/servers/:name
+    // rejects isolationIntent for any effective type other than 'agent', and
+    // installLocal() is only ever invoked for a local-type server's own
+    // harness), so this branch is currently unreachable in production — but
+    // runSetupLocal previously ignored isolationIntent entirely, silently
+    // violating HarnessInstallOptions.isolationIntent's contract for local
+    // installs. Kept in sync defensively so the interface's guarantee holds
+    // regardless of caller, and so a future caller that DOES construct an
+    // isolated local install doesn't quietly leak --ui-token the way the
+    // remote path once could have.
+    if (uiToken && !isolationIntent) args.push('--ui-token', uiToken);
     if (serverName) args.push('--server-name', serverName);
     if (prefix) args.push('--prefix', prefix);
+    if (isolationIntent) args.push('--purge-operator-token');
 
     // Local install: execFile takes an argv array, so no shell-quoting is
     // needed (each arg is passed to the child process verbatim); the CLI

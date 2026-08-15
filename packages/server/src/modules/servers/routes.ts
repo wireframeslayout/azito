@@ -493,15 +493,38 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       // stays undefined, and therefore omitted from the response, otherwise.
       let isolationCleanup: 'done' | 'failed' | 'skipped' | undefined;
       try {
-        serverRepo.update(
-          request.params.name,
-          type || srv.type,
-          host ?? srv.host ?? undefined,
-          agentPort ?? srv.agentPort ?? undefined,
-          agentToken ?? srv.agentToken ?? undefined,
-          sshHost ?? srv.sshHost ?? undefined,
-          (validPutMux as MuxRuntime | undefined) ?? srv.muxRuntime,
-        );
+        // Issue #29 review, Important finding 1: when the effective type is
+        // no longer 'agent' AND the row was previously isolated, the
+        // connection-info write and the isolation-intent auto-clear below
+        // must land in the SAME SQLite transaction — two separate statements
+        // left a crash-between-them window where the row could end up with
+        // the NEW type but the OLD isolation_intent=1 still set. Routed
+        // through `updateWithIsolationClear` (falls back to the previous
+        // two-call sequence only for `IServerRepository` test doubles that
+        // don't implement it — production always uses
+        // `SqliteServerRepository`, which does).
+        const needsIsolationAutoClear = effectiveType !== 'agent' && srv.isolationIntent;
+        if (needsIsolationAutoClear && serverRepo.updateWithIsolationClear) {
+          serverRepo.updateWithIsolationClear(
+            request.params.name,
+            type || srv.type,
+            host ?? srv.host ?? undefined,
+            agentPort ?? srv.agentPort ?? undefined,
+            agentToken ?? srv.agentToken ?? undefined,
+            sshHost ?? srv.sshHost ?? undefined,
+            (validPutMux as MuxRuntime | undefined) ?? srv.muxRuntime,
+          );
+        } else {
+          serverRepo.update(
+            request.params.name,
+            type || srv.type,
+            host ?? srv.host ?? undefined,
+            agentPort ?? srv.agentPort ?? undefined,
+            agentToken ?? srv.agentToken ?? undefined,
+            sshHost ?? srv.sshHost ?? undefined,
+            (validPutMux as MuxRuntime | undefined) ?? srv.muxRuntime,
+          );
+        }
         if (effectiveType !== 'agent') {
           // Issue #29 review, Important finding 1: an isolation-invariant
           // auto-clear, not a mirror of the request body — a server whose
@@ -518,7 +541,12 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
           // "agent-type or not", so the previously-isolated intent becomes
           // meaningless dead state, not a preserved decision).
           if (srv.isolationIntent) {
-            serverRepo.updateIsolationIntent(request.params.name, false);
+            // Already committed atomically above via updateWithIsolationClear
+            // when that method is available; the explicit call here is only
+            // reached for the fallback (non-atomic) branch's test doubles.
+            if (!serverRepo.updateWithIsolationClear) {
+              serverRepo.updateIsolationIntent(request.params.name, false);
+            }
             recordAuditBestEffort(auditLogService, {
               actorClass: (request.principal ?? OPERATOR_PRINCIPAL).class,
               actorId: (request.principal ?? OPERATOR_PRINCIPAL).id,

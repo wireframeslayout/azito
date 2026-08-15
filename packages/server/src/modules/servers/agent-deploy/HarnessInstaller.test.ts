@@ -1,6 +1,23 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import * as fs from 'fs';
+import * as child_process from 'child_process';
 import { HarnessInstaller } from './HarnessInstaller';
 import type { SshClient } from '../ssh/SshClient';
+
+// fs/child_process are ESM named exports here — vitest can't spyOn() a
+// non-configurable module namespace export directly (see
+// RecoverStuckTasksUseCase.test.ts for the same pattern), so both are
+// mocked at the module level and stubbed per-test via vi.mocked(...).
+// child_process.execFile keeps the rest of the real module intact (only
+// execFile itself is replaced) — a full vi.mock('child_process') automock
+// strips the `util.promisify.custom` symbol the real implementation carries,
+// which left util.promisify(execFile) resolving to `undefined` instead of a
+// callable promisified function.
+vi.mock('fs');
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof child_process>();
+  return { ...actual, execFile: vi.fn() };
+});
 
 // HarnessInstaller.runSetup/runSetupLocal are private, but they're the only
 // thing distinguishing an isolation_intent server from a normal one (Issue
@@ -92,5 +109,77 @@ describe('HarnessInstaller.install — --ui-token withholding for isolation_inte
 
     const [, cmd] = (sshClient.execIsolated as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(cmd).not.toContain('--purge-operator-token');
+  });
+});
+
+// Issue #29 review, Important finding 2: runSetupLocal (the local-server
+// counterpart to runSetup, exercised only through installLocal()) previously
+// ignored isolationIntent entirely — it always passed --ui-token and never
+// --purge-operator-token, regardless of the option. local-type servers can
+// never actually reach isolationIntent: true today (PUT /api/servers/:name
+// rejects it for any effective type other than 'agent'), so this was
+// unreachable in production, but it violated HarnessInstallOptions'
+// documented contract and left the local path inconsistent with runSetup's
+// remote behavior (defense in depth). Verifies the fix mirrors runSetup's
+// --ui-token withholding / --purge-operator-token forcing for both values of
+// isolationIntent.
+describe('HarnessInstaller.installLocal — isolationIntent handling (local setup.sh invocation)', () => {
+  afterEach(() => {
+    vi.mocked(fs.existsSync).mockReset();
+    vi.mocked(child_process.execFile).mockReset();
+  });
+
+  function stubLocalSetup() {
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    const execFileSpy = vi.mocked(child_process.execFile).mockImplementation(
+      // Node's execFile has multiple overloads; the promisify path used by
+      // HarnessInstaller calls it with (file, args, options, callback).
+      ((..._args: unknown[]) => {
+        const callback = _args[_args.length - 1] as (err: Error | null, result: { stdout: string; stderr: string }) => void;
+        callback(null, { stdout: '', stderr: '' });
+        return {} as ReturnType<typeof child_process.execFile>;
+      }) as unknown as typeof child_process.execFile,
+    );
+    return execFileSpy;
+  }
+
+  it('passes --ui-token and omits --purge-operator-token for a normal (non-isolated) local install', async () => {
+    const execFileSpy = stubLocalSetup();
+    const installer = new HarnessInstaller({} as SshClient);
+
+    const result = await installer.installLocal({
+      webhookToken: 'wh-token',
+      uiToken: 'ui-token-secret',
+      serverName: 'srv-local',
+      isolationIntent: false,
+    });
+
+    expect(result.success).toBe(true);
+    expect(execFileSpy).toHaveBeenCalledTimes(1);
+    const [, args] = execFileSpy.mock.calls[0] as unknown as [string, string[]];
+    expect(args).toContain('--ui-token');
+    expect(args).toContain('ui-token-secret');
+    expect(args).not.toContain('--purge-operator-token');
+  });
+
+  it('withholds --ui-token and passes --purge-operator-token for an isolationIntent=true local install', async () => {
+    const execFileSpy = stubLocalSetup();
+    const installer = new HarnessInstaller({} as SshClient);
+
+    const result = await installer.installLocal({
+      webhookToken: 'wh-token',
+      uiToken: 'ui-token-secret',
+      serverName: 'srv-local',
+      isolationIntent: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(execFileSpy).toHaveBeenCalledTimes(1);
+    const [, args] = execFileSpy.mock.calls[0] as unknown as [string, string[]];
+    expect(args).not.toContain('--ui-token');
+    expect(args).not.toContain('ui-token-secret');
+    expect(args).toContain('--purge-operator-token');
+    expect(args).toContain('--webhook-token');
+    expect(args).toContain('wh-token');
   });
 });

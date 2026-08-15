@@ -66,6 +66,21 @@ export interface IServerRepository {
   findByName(name: string): ServerConfig | null;
   create(name: string, type: string, host?: string, agentPort?: number, agentToken?: string, agentVersion?: string, sshHost?: string, muxRuntime?: MuxRuntime): void;
   update(name: string, type: string, host?: string, agentPort?: number, agentToken?: string, sshHost?: string, muxRuntime?: MuxRuntime): void;
+  /**
+   * Issue #29 review, Important finding 1: atomically combines `update()`
+   * (connection info) and the isolation-intent auto-clear (`isolationIntent
+   * false`, `isolationVerifiedAt`/`isolationReport` cleared to NULL — same
+   * semantics as `updateIsolationIntent(name, false)`) in a single SQLite
+   * transaction. Used by PUT /api/servers/:name when the server's effective
+   * type is no longer 'agent' and it was previously isolated — a crash
+   * between two separate statements must never leave an isolated row with a
+   * non-agent type. Optional: implemented by `SqliteServerRepository`;
+   * existing `IServerRepository` mocks predate this method and are not
+   * required to stub it (routes.ts calls it via `?.()` with a same-effect
+   * two-call fallback for callers that only implement `update` +
+   * `updateIsolationIntent`).
+   */
+  updateWithIsolationClear?(name: string, type: string, host?: string, agentPort?: number, agentToken?: string, sshHost?: string, muxRuntime?: MuxRuntime): void;
   updateAgentVersion(name: string, version: string): void;
   updateFingerprint(name: string, fingerprint: string): void;
   clearFingerprint(name: string): void;

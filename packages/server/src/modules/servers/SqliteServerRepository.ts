@@ -65,6 +65,23 @@ export class SqliteServerRepository implements IServerRepository {
     this.updateStmt.run(type, host ?? null, agentPort ?? null, seal(agentToken ?? null), sshHost ?? null, muxRuntime ?? 'system', name);
   }
 
+  // Issue #29 review, Important finding 1: routes.ts's "type no longer
+  // agent -> auto-clear isolation_intent" path used to run this same
+  // connection-info UPDATE and the isolation-intent clear as two separate
+  // SQLite statements. A crash (or any error) between the two left the row
+  // with the NEW type but the OLD isolation_intent=1 still set — exactly the
+  // "isolated non-agent server" state the auto-clear exists to make
+  // unreachable. Wrapped in `db.transaction()` (matches the pattern used by
+  // SqliteTaskRepository.update / consumePendingApproval) so both writes
+  // commit or neither does.
+  updateWithIsolationClear(name: string, type: string, host?: string, agentPort?: number, agentToken?: string, sshHost?: string, muxRuntime?: MuxRuntime): void {
+    const run = this.db.transaction(() => {
+      this.update(name, type, host, agentPort, agentToken, sshHost, muxRuntime);
+      this.updateIsolationIntentStmt.run(0, null, name);
+    });
+    run();
+  }
+
   updateAgentVersion(name: string, version: string): void {
     this.updateAgentVersionStmt.run(version, name);
   }
