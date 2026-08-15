@@ -612,6 +612,64 @@ describe('TaskRestoreService', () => {
     );
   });
 
+  // Issue #29 review (10th pass): Critical finding 1 (session bootstrap must
+  // run inside the isolation lock, against a freshly re-read server) and
+  // Important finding 3 (the fresh `server` createRotatedWindow returns must
+  // be used for everything downstream, not the `server` argument it was
+  // called with) — this test gives serverRepo.findByName a distinct
+  // ServerConfig object on every call (tagged via `agentVersion`, an
+  // otherwise-unused field here) to prove every server-carrying call this
+  // function makes AFTER a given lock-and-refetch actually received THAT
+  // refetch's object, not an earlier one.
+  it('uses the server row re-read inside each isolation-lock span for every subsequent tmux/transport call, not the server resolved before restore() started', async () => {
+    const task = makeTask({ serverName: 'test-server' });
+    let generation = 0;
+    const findByName = vi.fn(() => {
+      generation += 1;
+      return {
+        name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null,
+        // Tag each returned row with the call count so assertions below can
+        // tell exactly which generation a given tmux/transport call saw.
+        agentVersion: `gen-${generation}`,
+        sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const,
+        isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, createdAt: '2026-01-01',
+      };
+    });
+    deps = makeDeps({
+      ...deps,
+      serverRepo: { ...deps.serverRepo, findByName },
+      tmux: {
+        ...deps.tmux,
+        listSessions: vi.fn(async () => []),
+        createSession: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'azito' })),
+        createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' })),
+      } as unknown as TaskRestoreDeps['tmux'],
+    });
+    service = new TaskRestoreService(deps);
+
+    await service.restore(task, log);
+
+    // findByName is called once at the top of restore() (serverAtStart),
+    // once inside resolveExecutionManifest() for the execution-gate
+    // manifest, then once per lock-and-refetch span below — so
+    // createSession/resolvePaneId/getTransport must each see whichever
+    // generation its OWN span produced, never an earlier one.
+    const createSessionServer = (deps.tmux.createSession as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const resolvePaneIdServer = (deps.tmux.resolvePaneId as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const getTransportServer = (deps.transportFactory.getTransport as ReturnType<typeof vi.fn>).mock.calls[0][0];
+
+    // ensureSessionWithLock's own lock span re-read the server for the
+    // session bootstrap — createSession must see that row, not the one
+    // resolved at the very top of restore() or inside resolveExecutionManifest().
+    expect(createSessionServer.agentVersion).not.toBe('gen-1');
+    // createRotatedWindow's own, LATER lock span re-read the server again
+    // for the real task window — resolvePaneId/getTransport (called after,
+    // with the reassigned `server`) must see that STRICTLY NEWER row, not
+    // the one ensureSessionWithLock's span produced.
+    expect(resolvePaneIdServer.agentVersion).not.toBe(createSessionServer.agentVersion);
+    expect(getTransportServer.agentVersion).toBe(resolvePaneIdServer.agentVersion);
+  });
+
   describe('execution gate (Issue #328)', () => {
     it('blocks an untrusted, unapproved task before touching tmux — status becomes pending_approval, pendingOperation records "restore"', async () => {
       // Third-round review finding 1 (Issue #328): before pendingOperation

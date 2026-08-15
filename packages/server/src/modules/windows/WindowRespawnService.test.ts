@@ -1231,6 +1231,27 @@ describe('WindowRespawnService.resumeLegacySession (Issue #328 fourth-round revi
     expect(result.windowName).toBe('task-7-new');
   });
 
+  // Issue #29 review (10th pass), Important finding 3: resumeLegacySession's
+  // own `resolvePaneId`/`sendKeys` calls (and its rollback's `killWindow`,
+  // covered by the sibling describe block below) previously kept using the
+  // `server` this method was CALLED with — never the fresher row
+  // createRotatedWindow's own lock span re-read via `serverRepo.findByName`
+  // — even though every other respawn() branch already did this correctly.
+  // Tags each server object via `agentVersion` so the assertion below can
+  // tell exactly which one a given tmux call actually received.
+  it('uses the server row createRotatedWindow re-read, not the server argument it was called with, for resolvePaneId/sendKeys', async () => {
+    const task = makeTask({ id: 7, unitId: 10, agentSessionId: 'sess-abc', inputTrust: 'trusted' });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 7 });
+    const { service, tmux, serverRepo } = buildService({ window: win, task, unit });
+    (serverRepo.findByName as ReturnType<typeof vi.fn>).mockImplementation((name: string) => makeServer({ name, agentVersion: 'fresh-from-lock' }));
+
+    await service.resumeLegacySession(7, makeServer({ agentVersion: 'stale-caller-arg' }));
+
+    expect((tmux.resolvePaneId as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({ agentVersion: 'fresh-from-lock' });
+    expect((tmux.sendKeys as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({ agentVersion: 'fresh-from-lock' });
+  });
+
   it('throws when the task has no agent session ID', async () => {
     const task = makeTask({ id: 8, agentSessionId: null });
     const win = makeWindow({ taskId: 8 });

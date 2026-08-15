@@ -1,6 +1,6 @@
 import type { ITaskRepository, Task } from './Task';
 import type { TaskStatus } from './TaskStatus';
-import type { IServerRepository } from '../servers/Server';
+import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { IProjectRepository } from '../projects/Project';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
 import { resolveInputPolicy } from '../projects/ProjectServer';
@@ -8,7 +8,7 @@ import type { IUnitRepository } from '../units/Unit';
 import type { IWindowRepository } from '../windows/Window';
 import type { SqliteProjectSecretRepository } from '../projects/SqliteProjectSecretRepository';
 import type { TmuxClient } from '../tmux/TmuxClient';
-import { createRotatedWindow, rollbackWindowReference, runExclusiveForTask, type ServerIsolationLock } from './execution/WindowRotation';
+import { createRotatedWindow, ensureSessionWithLock, rollbackWindowReference, runExclusiveForTask, type ServerIsolationLock } from './execution/WindowRotation';
 import type { KeyedMutex } from '../../shared/keyedMutex';
 import type { WorktreeServiceFactory } from '../git/WorktreeServiceFactory';
 import { PathResolverFactory, assertDirectoryContained } from '../git/PathContainment';
@@ -89,10 +89,16 @@ export class TaskRestoreService {
       throw new Error('Cannot resolve server: task has no serverName and its project does not have exactly one project_servers entry');
     }
 
-    const server = serverRepo.findByName(serverName);
-    if (!server) {
+    const serverAtStart = serverRepo.findByName(serverName);
+    if (!serverAtStart) {
       throw new Error(`Server '${serverName}' not found`);
     }
+    // `let`, not `const`: reassigned below (ensureSessionWithLock,
+    // createRotatedWindow) to whatever fresher row the isolation lock
+    // re-read — explicitly typed `ServerConfig` (not inferred from
+    // `findByName`'s nullable return) so TS control-flow narrowing isn't
+    // lost the moment this variable is captured by a nested closure below.
+    let server: ServerConfig = serverAtStart;
 
     const tmuxSession = resolveTmuxSession(task.projectId, serverName, projectServerRepo);
 
@@ -170,21 +176,30 @@ export class TaskRestoreService {
       throw new ExecutionGateDeniedError(task.id);
     }
 
-    const existingSessions = await tmux.listSessions(server);
-    const sessionExists = existingSessions.some((s) => s.name === tmuxSession);
-    if (!sessionExists) {
-      // Throwaway bootstrap window — the real task window is created just
-      // below via createWindow, which is what actually gets AZITO_TASK_TOKEN
-      // (see the comment there and TaskPaneEnvironmentService's own doc
-      // comment). Still routed through `uiTokenEnvForServer` (not a bare
-      // `{}`), same as the manual session/window routes (Issue #29 review,
-      // Critical finding 1): an isolated server's tmux SESSION-level env can
-      // already carry a leftover AZITO_UI_TOKEN/AZITO_AGENT_TOKEN from a
-      // prior non-isolated life, and this window's own pane always inherits
-      // whatever process env the tmux SERVER itself runs under (the remote
-      // agent process's env, for an `agent`-type server) regardless of what
-      // `extraEnv` this call passes — an empty object masks nothing.
-      await tmux.createSession(server, tmuxSession, { extraEnv: tmux.uiTokenEnvForServer(server) });
+    // Throwaway bootstrap window — the real task window is created just
+    // below via createWindow, which is what actually gets AZITO_TASK_TOKEN
+    // (see the comment there and TaskPaneEnvironmentService's own doc
+    // comment). Still routed through `uiTokenEnvForServer` (not a bare
+    // `{}`), same as the manual session/window routes (Issue #29 review,
+    // Critical finding 1): an isolated server's tmux SESSION-level env can
+    // already carry a leftover AZITO_UI_TOKEN/AZITO_AGENT_TOKEN from a
+    // prior non-isolated life, and this window's own pane always inherits
+    // whatever process env the tmux SERVER itself runs under (the remote
+    // agent process's env, for an `agent`-type server) regardless of what
+    // `extraEnv` this call passes — an empty object masks nothing.
+    //
+    // Routed through ensureSessionWithLock (Issue #29 review, 10th pass,
+    // Critical finding 1): the existence check AND the createSession call
+    // both now run inside the isolation lock against a `server` row re-read
+    // only once the lock is held — never against the `server` resolved at
+    // the top of restore(), which a concurrent isolation PUT may have
+    // already superseded. `server` is reassigned to the fresh row so
+    // everything this function does afterwards (resolvePaneId, the
+    // transport used for containment checks, worktree creation, sendKeys,
+    // the rollback's killWindow, ...) sees it too.
+    const sessionResult = await ensureSessionWithLock(tmux, this.serverIsolationLock, server, tmuxSession);
+    server = sessionResult.server;
+    if (sessionResult.created) {
       await sleep(500);
     }
 
@@ -225,6 +240,13 @@ export class TaskRestoreService {
       );
       windowName = created.windowName;
       tokenId = created.tokenId;
+      // Issue #29 review (10th pass), Important finding 3: use the fresh
+      // `server` row createRotatedWindow re-read and actually created the
+      // window with — not the (possibly now-stale) argument passed into it
+      // — for every subsequent tmux/transport call this function makes
+      // (resolvePaneId, the containment-check transport, the worktree
+      // transport, sendKeys, and the rollback's killWindow below).
+      server = created.server;
 
       const windowTarget = `${tmuxSession}:${windowName}`;
       const paneId = await tmux.resolvePaneId(server, windowTarget);

@@ -344,6 +344,54 @@ export async function createPlainWindow(
 }
 
 /**
+ * Session-bootstrap counterpart of {@link createRotatedWindow}/{@link
+ * createSecondaryWindow}/{@link createPlainWindow} (Issue #29 review, 10th
+ * pass, Critical finding 1). Every task-window creation path (`execute()`,
+ * `TaskRestoreService.restore()`, and the project-server "ensure session"
+ * bootstrap in `projects/routes.ts`) first checks whether the task's tmux
+ * SESSION exists and, if not, creates a throwaway bootstrap window via
+ * `createSession` — before that, each call site did this session-existence
+ * check AND the `createSession` call itself OUTSIDE
+ * `serverIsolationMutex.withLock`, against whatever `ServerConfig` it had
+ * resolved earlier in the request, exactly the gap `createRotatedWindow` et
+ * al. already close for the REAL task window created moments later. A
+ * false->true isolation PUT committing in the window between "caller
+ * resolved `server`" and "this session-bootstrap runs" meant the very first
+ * window of a session — which sets the tmux SESSION's own environment,
+ * inherited by every window `new-window` adds afterwards (see the callers'
+ * own doc comments) — could still be built from the pre-transition,
+ * non-isolated `uiTokenEnvForServer(server)` and leak the UI token into the
+ * session env for every later window to inherit.
+ *
+ * Mirrors the other three helpers exactly: the whole
+ * "listSessions -> (maybe) createSession" span runs inside
+ * `lock.serverIsolationMutex.withLock(server.name, ...)`, `server` is
+ * re-read from `lock.serverRepo` only once the lock is actually held, and
+ * the fresh row is both what `uiTokenEnvForServer`/`createSession` are
+ * called with AND what is returned — callers must use the returned
+ * `server`, not their own pre-lock argument, for anything they do
+ * afterwards (starting with the real task-window creation this bootstrap
+ * precedes).
+ */
+export async function ensureSessionWithLock(
+  tmux: Pick<TmuxClient, 'listSessions' | 'createSession' | 'uiTokenEnvForServer'>,
+  lock: ServerIsolationLock,
+  server: ServerConfig,
+  sessionName: string,
+): Promise<{ created: boolean; server: ServerConfig }> {
+  return lock.serverIsolationMutex.withLock(server.name, async () => {
+    const freshServer = refetchServer(lock, server.name);
+    const existingSessions = await tmux.listSessions(freshServer);
+    const exists = existingSessions.some((s) => s.name === sessionName);
+    if (!exists) {
+      await tmux.createSession(freshServer, sessionName, { extraEnv: tmux.uiTokenEnvForServer(freshServer) });
+      return { created: true, server: freshServer };
+    }
+    return { created: false, server: freshServer };
+  });
+}
+
+/**
  * Shared "rollback kill → reference bookkeeping" operation (Issue #28
  * third-party review, second round: 3 rollback sites each independently
  * cleared their reference to the about-to-be-killed window BEFORE — or

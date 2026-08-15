@@ -1,9 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createRotatedWindow, rollbackWindowReference, runExclusiveForTask, type ServerIsolationLock } from './WindowRotation';
+import { createRotatedWindow, ensureSessionWithLock, rollbackWindowReference, runExclusiveForTask, type ServerIsolationLock } from './WindowRotation';
 import { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
 import type { ITaskTokenRepository, IssuedTaskToken } from '../tokens/TaskToken';
 import type { Task } from '../Task';
 import type { ServerConfig } from '../../servers/Server';
+import type { TmuxClient, TmuxSession } from '../../tmux/TmuxClient';
 import { KeyedMutex } from '../../../shared/keyedMutex';
 
 // Issue #29 review (7th pass), Important finding 1: createRotatedWindow now
@@ -151,6 +152,112 @@ function makeGate<T>(): { promise: Promise<T>; release: (value: T) => void; fail
   });
   return { promise, release, fail };
 }
+
+// Issue #29 review (10th pass), Critical finding 1: session bootstrap
+// (existence check + createSession) must run INSIDE the same isolation lock
+// every other window-(re)creation helper in this file uses, against a
+// server row re-read only once the lock is held.
+describe('ensureSessionWithLock', () => {
+  type MockTmux = Pick<TmuxClient, 'listSessions' | 'createSession' | 'uiTokenEnvForServer'>;
+  function makeTmux(overrides: { listSessions?: MockTmux['listSessions'] } = {}): MockTmux {
+    return {
+      listSessions: overrides.listSessions ?? vi.fn(async (_server: ServerConfig): Promise<TmuxSession[]> => []),
+      createSession: vi.fn(async (_server: ServerConfig, _name: string, _opts?: unknown) => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'azito' })),
+      uiTokenEnvForServer: vi.fn((s: ServerConfig) => (s.isolationIntent ? {} : { AZITO_UI_TOKEN: 'ui-token-fixture' })),
+    } as unknown as MockTmux;
+  }
+
+  it('creates the session (with the masked env) when no session of that name exists yet, and returns created: true', async () => {
+    const server = makeServer();
+    const tmux = makeTmux();
+    const lock: ServerIsolationLock = { serverIsolationMutex: new KeyedMutex(), serverRepo: { findByName: () => server } };
+
+    const result = await ensureSessionWithLock(tmux, lock, server, 'azito');
+
+    expect(result.created).toBe(true);
+    expect(result.server).toBe(server);
+    expect(tmux.createSession).toHaveBeenCalledWith(server, 'azito', { extraEnv: { AZITO_UI_TOKEN: 'ui-token-fixture' } });
+  });
+
+  it('does not create a session when one of that name already exists, and returns created: false', async () => {
+    const server = makeServer();
+    const tmux = makeTmux({ listSessions: vi.fn(async () => [{ name: 'azito', windows: [] }]) as unknown as MockTmux['listSessions'] });
+    const lock: ServerIsolationLock = { serverIsolationMutex: new KeyedMutex(), serverRepo: { findByName: () => server } };
+
+    const result = await ensureSessionWithLock(tmux, lock, server, 'azito');
+
+    expect(result.created).toBe(false);
+    expect(tmux.createSession).not.toHaveBeenCalled();
+  });
+
+  it('re-reads the server from serverRepo INSIDE the lock and uses that row for both listSessions and createSession, never the caller-supplied argument', async () => {
+    const staleServer = makeServer({ agentVersion: 'stale' });
+    const freshServer = makeServer({ agentVersion: 'fresh' });
+    const tmux = makeTmux();
+    const lock: ServerIsolationLock = { serverIsolationMutex: new KeyedMutex(), serverRepo: { findByName: () => freshServer } };
+
+    const result = await ensureSessionWithLock(tmux, lock, staleServer, 'azito');
+
+    expect(result.server).toBe(freshServer);
+    expect(tmux.listSessions).toHaveBeenCalledWith(freshServer);
+    expect(tmux.createSession).toHaveBeenCalledWith(freshServer, 'azito', expect.anything());
+    expect(tmux.listSessions).not.toHaveBeenCalledWith(staleServer);
+    expect(tmux.createSession).not.toHaveBeenCalledWith(staleServer, expect.anything(), expect.anything());
+  });
+
+  it('throws (never falls back to the stale argument) when the server was deleted between resolution and lock acquisition', async () => {
+    const server = makeServer();
+    const tmux = makeTmux();
+    const lock: ServerIsolationLock = { serverIsolationMutex: new KeyedMutex(), serverRepo: { findByName: () => null } };
+
+    await expect(ensureSessionWithLock(tmux, lock, server, 'azito')).rejects.toThrow(/was not found/);
+    expect(tmux.createSession).not.toHaveBeenCalled();
+  });
+
+  it('serializes against a concurrent createRotatedWindow call for the same server name via the shared mutex', async () => {
+    const server = makeServer();
+    const order: string[] = [];
+    const gate = (() => {
+      let release!: () => void;
+      const promise = new Promise<void>((resolve) => { release = resolve; });
+      return { promise, release };
+    })();
+    const tmux = makeTmux({
+      listSessions: vi.fn(async () => {
+        order.push('ensureSession-listSessions');
+        await gate.promise;
+        return [];
+      }),
+    });
+    const paneEnvService = {
+      buildEnvForNewWindow: vi.fn(() => ({ env: {}, tokenId: 1 })),
+      revokeGeneration: vi.fn(),
+    } as unknown as TaskPaneEnvironmentService;
+    const lock: ServerIsolationLock = { serverIsolationMutex: new KeyedMutex(), serverRepo: { findByName: () => server } };
+
+    const sessionPromise = ensureSessionWithLock(tmux, lock, server, 'azito');
+    // Give ensureSessionWithLock a turn to acquire the lock and reach its
+    // (gated) listSessions call before queuing the second lock acquisition.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const rotatedPromise = createRotatedWindow(paneEnvService, lock, server, makeTask(), 'test_failed', async () => {
+      order.push('createRotatedWindow-create');
+      return { result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' };
+    });
+
+    // createRotatedWindow must not have started its own span yet — it's
+    // queued behind ensureSessionWithLock's still-gated listSessions call.
+    await Promise.resolve();
+    expect(order).toEqual(['ensureSession-listSessions']);
+
+    gate.release();
+    await sessionPromise;
+    await rotatedPromise;
+
+    expect(order).toEqual(['ensureSession-listSessions', 'createRotatedWindow-create']);
+  });
+});
 
 describe('runExclusiveForTask', () => {
   it('serializes concurrent operations for the same taskId (second only starts once the first settles)', async () => {

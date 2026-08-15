@@ -66,6 +66,11 @@ usage_exit() {
   echo "                   既定動作（既存トークンを温存する）を上書きする。" >&2
   echo "                   サーバーを isolation_intent=1 に切り替えた後の" >&2
   echo "                   資格情報掃除に使う。--ui-token と同時指定はエラー。" >&2
+  echo "                   スタンドアロン動作: このフラグを付けた実行はトークン" >&2
+  echo "                   除去のみを行う。Skills/Rules のリンク、MCP" >&2
+  echo "                   サーバー登録・URL 更新、hooks 登録は一切行わない" >&2
+  echo "                   （AZITO_UI_TOKEN を含まない azitoctl.env の書き出しは" >&2
+  echo "                   隔離サーバーの稼働検出に必要なため対象外）。" >&2
   exit 1
 }
 
@@ -205,7 +210,13 @@ link_skills() {
 
 # ── Skills (Claude Code) ──
 echo "=== Skills ==="
-if [[ -z "$AZITO_PREFIX" ]]; then
+# Issue #29 review (10th pass), Important finding 2: --purge-operator-token
+# is documented as a standalone token-removal-only mode (see usage_exit) —
+# skills linking touches no credential and is unrelated to the purge, so it
+# must not run as a side effect of a purge invocation.
+if [[ "$AZITO_PURGE_OPERATOR_TOKEN" == "1" ]]; then
+  echo "  スキップ (--purge-operator-token)"
+elif [[ -z "$AZITO_PREFIX" ]]; then
   link_skills "$HOME/.claude/skills"
 else
   echo "  スキップ (--prefix モード)"
@@ -214,7 +225,9 @@ fi
 # ── Rules (prompt-modules → ~/.claude/rules/) ──
 echo ""
 echo "=== Rules (prompt-modules) ==="
-if [[ -z "$AZITO_PREFIX" ]]; then
+if [[ "$AZITO_PURGE_OPERATOR_TOKEN" == "1" ]]; then
+  echo "  スキップ (--purge-operator-token)"
+elif [[ -z "$AZITO_PREFIX" ]]; then
   mkdir -p ~/.claude/rules
 
   for module_file in "$HARNESS_DIR"/prompt-modules/*.md; do
@@ -475,23 +488,33 @@ if command -v node >/dev/null 2>&1; then
     const messages = [];
 
     // MCP Server
-    if (mcpServerExists) {
+    // Issue #29 review (10th pass), Important finding 2: purge mode is
+    // standalone token-removal only — it must never fall through into the
+    // normal upsert branch below, which unconditionally writes AZITO_URL
+    // (and would create a brand-new mcpServers entry stamped with
+    // whatever azitoUrl this particular invocation happened to resolve,
+    // e.g. its http://localhost:3001 default when --azito-url was
+    // omitted — see setup.sh's matching Codex-side fix for the identical
+    // shape of this bug). The ONLY thing this branch is allowed to do is
+    // delete AZITO_UI_TOKEN, and it does so regardless of mcpServerExists/
+    // --prefix (token removal must reach an already-registered azt-mcp
+    // entry no matter which run originally created it — see the comment
+    // this replaced).
+    if (purgeOperatorToken) {
+      if (settings.mcpServers && settings.mcpServers[mcpKey] && settings.mcpServers[mcpKey].env && ('AZITO_UI_TOKEN' in settings.mcpServers[mcpKey].env)) {
+        delete settings.mcpServers[mcpKey].env.AZITO_UI_TOKEN;
+        changed = true;
+        messages.push('  azt-mcp: --purge-operator-token により AZITO_UI_TOKEN を除去しました（登録/更新はスキップ）');
+      } else {
+        messages.push('  azt-mcp: 除去対象の AZITO_UI_TOKEN はありません');
+      }
+    } else if (mcpServerExists) {
       if (!settings.mcpServers) settings.mcpServers = {};
       if (settings.mcpServers[mcpKey]) {
         if (!settings.mcpServers[mcpKey].env) settings.mcpServers[mcpKey].env = {};
         let mcpChanged = false;
         if (settings.mcpServers[mcpKey].env.AZITO_URL !== azitoUrl) {
           settings.mcpServers[mcpKey].env.AZITO_URL = azitoUrl;
-          changed = true;
-          mcpChanged = true;
-        }
-        // Issue #29 review, Critical finding 3: --purge-operator-token
-        // overrides the 「azitoUiToken が空のときは既存値を触らない」default
-        // below — it exists specifically to remove a token that default
-        // would otherwise preserve indefinitely (e.g. after a server is
-        // switched to isolation_intent=1 post-setup).
-        if (purgeOperatorToken && 'AZITO_UI_TOKEN' in settings.mcpServers[mcpKey].env) {
-          delete settings.mcpServers[mcpKey].env.AZITO_UI_TOKEN;
           changed = true;
           mcpChanged = true;
         }
@@ -521,19 +544,6 @@ if command -v node >/dev/null 2>&1; then
       }
     } else {
       messages.push('  azt-mcp: スキップ (MCP サーバーが見つかりません、または --prefix モード)');
-      // Issue #29 review, Important finding 3: mcpServerExists is forced
-      // false in --prefix mode (this run intentionally skips (re)registering
-      // azt-mcp there — a prefix profile shares the single non-prefixed
-      // azt-mcp entry with the primary hub, so re-registering it here would
-      // clobber that hub's own config). But token REMOVAL must not share
-      // that gate: a --purge-operator-token run has to reach a leftover
-      // AZITO_UI_TOKEN on an already-registered azt-mcp entry regardless of
-      // which run originally created it.
-      if (purgeOperatorToken && settings.mcpServers && settings.mcpServers[mcpKey] && settings.mcpServers[mcpKey].env && ('AZITO_UI_TOKEN' in settings.mcpServers[mcpKey].env)) {
-        delete settings.mcpServers[mcpKey].env.AZITO_UI_TOKEN;
-        changed = true;
-        messages.push('  azt-mcp: --purge-operator-token により AZITO_UI_TOKEN を除去しました（登録/更新はスキップ）');
-      }
     }
 
     // Upsert a single hook entry within settings.hooks[eventName], matched by
@@ -567,39 +577,47 @@ if command -v node >/dev/null 2>&1; then
       messages.push('  ' + label + ': 追加しました');
     }
 
-    // Stop hook (agent-done notification)
-    if (notifyHookExists) {
-      upsertHook('Stop', notifyHookPath, notifyHookCmd, 'Stop hook (通知)');
-    } else {
-      messages.push('  Stop hook (通知): スキップ (hook スクリプトが見つかりません)');
-    }
+    // Issue #29 review (10th pass), Important finding 2: hook upsert is
+    // part of the same normal-registration-flow purge mode must not run
+    // — skip all four hook upserts wholesale when purging, same reasoning
+    // as the MCP Server branch above (standalone token-removal only).
+    if (!purgeOperatorToken) {
+      // Stop hook (agent-done notification)
+      if (notifyHookExists) {
+        upsertHook('Stop', notifyHookPath, notifyHookCmd, 'Stop hook (通知)');
+      } else {
+        messages.push('  Stop hook (通知): スキップ (hook スクリプトが見つかりません)');
+      }
 
-    // Activity hooks (Tier 1 event-driven detection)
-    if (activityHookExists) {
-      upsertHook('UserPromptSubmit', activityHookPath, activityStartCmd, 'UserPromptSubmit hook (稼働検出開始)');
-      upsertHook('Stop', activityHookPath, activityStopCmd, 'Stop hook (稼働検出終了)');
-    } else {
-      messages.push('  稼働検出フック: スキップ (hook スクリプトが見つかりません)');
-    }
+      // Activity hooks (Tier 1 event-driven detection)
+      if (activityHookExists) {
+        upsertHook('UserPromptSubmit', activityHookPath, activityStartCmd, 'UserPromptSubmit hook (稼働検出開始)');
+        upsertHook('Stop', activityHookPath, activityStopCmd, 'Stop hook (稼働検出終了)');
+      } else {
+        messages.push('  稼働検出フック: スキップ (hook スクリプトが見つかりません)');
+      }
 
-    // Notification hook (Phase B リアルタイム未回答検出): AskUserQuestion 等で
-    // Claude Code が入力待ちになった瞬間に発火し、agent-interaction webhook 経由で
-    // チャットビューのバナー表示を駆動する。
-    if (interactionHookExists) {
-      upsertHook('Notification', interactionHookPath, interactionCmd, 'Notification hook (未回答検出)');
-    } else {
-      messages.push('  未回答検出フック: スキップ (hook スクリプトが見つかりません)');
-    }
+      // Notification hook (Phase B リアルタイム未回答検出): AskUserQuestion 等で
+      // Claude Code が入力待ちになった瞬間に発火し、agent-interaction webhook 経由で
+      // チャットビューのバナー表示を駆動する。
+      if (interactionHookExists) {
+        upsertHook('Notification', interactionHookPath, interactionCmd, 'Notification hook (未回答検出)');
+      } else {
+        messages.push('  未回答検出フック: スキップ (hook スクリプトが見つかりません)');
+      }
 
-    // PermissionRequest hook (Issue #338 チャット内回答): AskUserQuestion がピッカーを
-    // 開いた瞬間に発火し、質問文と選択肢そのものを agent-interaction webhook へ送る。
-    // これによりチャットビューがバナーではなく回答可能な質問カードを出せる。
-    // AskUserQuestion 以外の PermissionRequest には一切干渉しない（hook スクリプト冒頭の
-    // 注記を参照 — 許可判断に影響し得る stdout を出さず即 exit 0 する）。
-    if (questionHookExists) {
-      upsertHook('PermissionRequest', questionHookPath, questionCmd, 'PermissionRequest hook (質問内容取得)');
+      // PermissionRequest hook (Issue #338 チャット内回答): AskUserQuestion がピッカーを
+      // 開いた瞬間に発火し、質問文と選択肢そのものを agent-interaction webhook へ送る。
+      // これによりチャットビューがバナーではなく回答可能な質問カードを出せる。
+      // AskUserQuestion 以外の PermissionRequest には一切干渉しない（hook スクリプト冒頭の
+      // 注記を参照 — 許可判断に影響し得る stdout を出さず即 exit 0 する）。
+      if (questionHookExists) {
+        upsertHook('PermissionRequest', questionHookPath, questionCmd, 'PermissionRequest hook (質問内容取得)');
+      } else {
+        messages.push('  質問内容取得フック: スキップ (hook スクリプトが見つかりません)');
+      }
     } else {
-      messages.push('  質問内容取得フック: スキップ (hook スクリプトが見つかりません)');
+      messages.push('  hooks: スキップ (--purge-operator-token)');
     }
 
     if (changed) {
@@ -1071,6 +1089,22 @@ if [[ "$AZITO_PURGE_OPERATOR_TOKEN" == "1" ]]; then
 fi
 if [[ -n "$AZITO_PREFIX" ]]; then
   echo "  スキップ (--prefix モード)"
+elif [[ "$AZITO_PURGE_OPERATOR_TOKEN" == "1" ]]; then
+  # Issue #29 review (10th pass), Important finding 2: purge mode is
+  # standalone token-removal only — strip_codex_ui_token above already did
+  # the ONLY thing this run is supposed to do to Codex's config. Falling
+  # through into the normal remove/add flow below (codex_mcp_replace)
+  # would rebuild the whole azt-mcp entry from CODEX_MCP_ADD_ARGS
+  # (`AZITO_URL=$AZITO_URL_VALUE`, which defaults to
+  # http://localhost:3001 when --azito-url is omitted — see the matching
+  # Claude-side fix above for the identical shape of this bug), silently
+  # overwriting the URL and dropping any other properties
+  # (cwd/startup_timeout_ms/...) the existing entry had. Also skips the
+  # Codex skills symlinks/AGENTS.md write below — neither touches a
+  # token, but both are part of the same "normal registration flow"
+  # purge mode is documented (see usage_exit's --purge-operator-token
+  # help text) to run standalone from.
+  echo "  スキップ (--purge-operator-token — トークン除去のみ実施済み)"
 elif command -v codex >/dev/null 2>&1 || [[ -d "$HOME/.codex" ]]; then
   # Skills
   link_skills "$HOME/.codex/skills"

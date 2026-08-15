@@ -390,7 +390,7 @@ function buildUseCase(opts: {
     new KeyedMutex(),
   );
 
-  return { useCase, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, paneEnvService };
+  return { useCase, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, transportFactory, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, paneEnvService };
 }
 
 describe('ExecuteTaskUseCase execution-env resolution', () => {
@@ -410,6 +410,93 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
     await useCase.execute(42, 1);
 
     expect(windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({ workerType: 'claude', workerModel: 'opus' }));
+  });
+
+  // Issue #29 review (10th pass): Critical finding 1 (execute()'s session
+  // bootstrap must run inside the isolation lock, against a freshly re-read
+  // server) and Important finding 3 (the fresh `server` createRotatedWindow
+  // returns must be used for everything downstream, not the `server`
+  // resolved at the top of execute()). serverRepo.findByName is stubbed to
+  // hand back a distinct ServerConfig (tagged via `agentVersion`) on every
+  // call, so each server-carrying call this run makes can be checked against
+  // exactly which lock-and-refetch span actually produced the object it saw.
+  it('uses the server row re-read inside each isolation-lock span for every subsequent tmux/transport call, not the server resolved before execute() started', async () => {
+    const unit = makeUnit({ id: 60, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 60, serverName: 'local-server', unitId: 60, workingDirectory: '/some/work/dir' });
+    const { useCase, serverRepo, tmux, transportFactory, worktreeServiceFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      // No projectServer configured -> allowedRoot is null -> containment is
+      // skipped and workingDir resolves straight from task.workingDirectory,
+      // keeping this test focused on server freshness rather than PathContainment.
+      projectServer: null,
+    });
+    let generation = 0;
+    (serverRepo.findByName as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      generation += 1;
+      return makeServer({ agentVersion: `gen-${generation}` });
+    });
+    worktreeServiceFactory.create.mockReturnValue({
+      create: vi.fn(async () => ({ path: '/some/work/dir/.worktrees/task-60', branch: 'task/60' })),
+    });
+
+    await useCase.execute(60, 60);
+
+    const createSessionServer = (tmux.createSession as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const createWindowServer = (tmux.createWindow as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const resolvePaneIdServer = (tmux.resolvePaneId as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const getTransportServer = (transportFactory.getTransport as ReturnType<typeof vi.fn>).mock.calls[0][0];
+
+    // ensureSessionWithLock's lock span re-read the server for the session
+    // bootstrap — createSession must see that row.
+    expect(createSessionServer.agentVersion).toBeDefined();
+    // createRotatedWindow's own, LATER lock span re-read the server again
+    // for the real task window — createWindow must see a STRICTLY NEWER row
+    // than ensureSessionWithLock's, never the same or an earlier one.
+    expect(createWindowServer.agentVersion).not.toBe(createSessionServer.agentVersion);
+    // Everything execute() does after createRotatedWindow returns
+    // (resolvePaneId, the worktree transport) must keep using THAT exact
+    // fresh row, not fall back to the `server` resolved before either lock
+    // span ran.
+    expect(resolvePaneIdServer.agentVersion).toBe(createWindowServer.agentVersion);
+    expect(getTransportServer.agentVersion).toBe(createWindowServer.agentVersion);
+  });
+
+  // Same Issue #29 review (10th pass) fix as execute()'s own test above,
+  // exercised through followUp()'s "no window yet" branch instead (the
+  // branch that actually calls createRotatedWindow — the common "resume onto
+  // an existing window" case never rotates, per design v3 §2, and so has no
+  // fresh server to lose track of in the first place).
+  it('followUp(): uses the server row re-read inside each isolation-lock span for resolvePaneId, not the server resolved before followUp() started', async () => {
+    const unit = makeUnit({ id: 61, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 61, serverName: 'local-server', unitId: 61, tmuxWindow: null });
+    const { useCase, serverRepo, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: null,
+    });
+    let generation = 0;
+    (serverRepo.findByName as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      generation += 1;
+      return makeServer({ agentVersion: `gen-${generation}` });
+    });
+
+    await useCase.followUp(61, 61, 'please continue');
+
+    const createSessionServer = (tmux.createSession as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const createWindowServer = (tmux.createWindow as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const resolvePaneIdServer = (tmux.resolvePaneId as ReturnType<typeof vi.fn>).mock.calls[0][0];
+
+    expect(createSessionServer.agentVersion).toBeDefined();
+    // createRotatedWindow's lock span re-read the server again for the real
+    // task window — createWindow must see a STRICTLY NEWER row than
+    // ensureSessionWithLock's.
+    expect(createWindowServer.agentVersion).not.toBe(createSessionServer.agentVersion);
+    // resolvePaneId (called right after createRotatedWindow returns) must
+    // keep using that exact fresh row.
+    expect(resolvePaneIdServer.agentVersion).toBe(createWindowServer.agentVersion);
   });
 
   it('clears the exit marker before runtime.resume() for a supervised follow-up on a local server', async () => {

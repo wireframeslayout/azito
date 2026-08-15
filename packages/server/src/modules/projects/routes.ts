@@ -14,6 +14,8 @@ import type { GitProviderService } from '../git/providers/GitProviderService';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { IServerRepository } from '../servers/Server';
 import type { SqliteProjectSecretRepository } from './SqliteProjectSecretRepository';
+import { ensureSessionWithLock, type ServerIsolationLock } from '../tasks/execution/WindowRotation';
+import type { KeyedMutex } from '../../shared/keyedMutex';
 
 // ─── Types ───
 
@@ -27,12 +29,22 @@ export interface ProjectsRouteOptions {
   projectSecretRepo: SqliteProjectSecretRepository;
   /** Issue #28 Phase A後半: import-issue is a task-origination path too — see TaskOriginationService's own doc comment. */
   originationService: TaskOriginationService;
+  // Issue #29 review (10th pass), Critical finding 1: the SAME per-server-name
+  // mutex `modules/servers/routes.ts`'s PUT handler, `modules/tmux/routes/
+  // sessions.ts`'s manual session/window/pane routes, and task-window
+  // (re)creation already serialize the isolation false->true transition
+  // against (see that mutex's own doc comment) — required here too, so this
+  // route's project-session bootstrap can never build env from a `server`
+  // row a concurrent transition has already superseded. See
+  // ServerIsolationLock's doc comment in tasks/execution/WindowRotation.ts.
+  serverIsolationMutex: KeyedMutex;
 }
 
 // ─── Plugin ───
 
 const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, opts, done) => {
-  const { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux, serverRepo, projectSecretRepo, originationService } = opts;
+  const { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux, serverRepo, projectSecretRepo, originationService, serverIsolationMutex } = opts;
+  const serverIsolationLock: ServerIsolationLock = { serverIsolationMutex, serverRepo };
   const SECRET_NAME_PATTERN = /^[A-Z0-9_]{1,64}$/;
 
   // ── GET /api/projects ──
@@ -236,32 +248,35 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       const srv = serverRepo.findByName(serverName);
       if (srv) {
         try {
-          const sessions = await tmux.listSessions(srv);
-          const exists = sessions.some((s) => s.name === project.slug);
-          if (!exists) {
-            // No token in extraEnv (Issue #28 third-party review finding,
-            // Critical): `tmux new-session -e` sets the SESSION's own
-            // environment, not just this call's window — every window
-            // created later in this session (including a task's, via
-            // ExecuteTaskUseCase/TaskRestoreService's `createWindow` into
-            // this exact `project.slug` session) would inherit
-            // AZITO_UI_TOKEN from here and bypass scoped task-token auth
-            // entirely, with no reference anywhere to this createSession
-            // call to explain why (verified empirically against tmux 3.4:
-            // a session-level var set via `-e` on `new-session` propagates
-            // to windows added afterwards with `new-window`, even with no
-            // `-e` of their own). This first window is an unmanaged
-            // generated-name placeholder nobody uses directly (same as
-            // ExecuteTaskUseCase's own throwaway-session bootstrap window),
-            // so it has no legitimate need for the token either. Routed
-            // through `uiTokenEnvForServer`, not a bare `{}` (Issue #29
-            // review, Critical finding 1): an isolated server's pane
-            // inherits whatever process env the tmux SERVER itself runs
-            // under regardless of what this call's own `extraEnv` passes,
-            // so the explicit mask is still required here.
-            await tmux.createSession(srv, project.slug, { extraEnv: tmux.uiTokenEnvForServer(srv) });
-            sessionCreated = true;
-          }
+          // No token in extraEnv (Issue #28 third-party review finding,
+          // Critical): `tmux new-session -e` sets the SESSION's own
+          // environment, not just this call's window — every window
+          // created later in this session (including a task's, via
+          // ExecuteTaskUseCase/TaskRestoreService's `createWindow` into
+          // this exact `project.slug` session) would inherit
+          // AZITO_UI_TOKEN from here and bypass scoped task-token auth
+          // entirely, with no reference anywhere to this createSession
+          // call to explain why (verified empirically against tmux 3.4:
+          // a session-level var set via `-e` on `new-session` propagates
+          // to windows added afterwards with `new-window`, even with no
+          // `-e` of their own). This first window is an unmanaged
+          // generated-name placeholder nobody uses directly (same as
+          // ExecuteTaskUseCase's own throwaway-session bootstrap window),
+          // so it has no legitimate need for the token either. Routed
+          // through `uiTokenEnvForServer`, not a bare `{}` (Issue #29
+          // review, Critical finding 1): an isolated server's pane
+          // inherits whatever process env the tmux SERVER itself runs
+          // under regardless of what this call's own `extraEnv` passes,
+          // so the explicit mask is still required here.
+          //
+          // Routed through ensureSessionWithLock (Issue #29 review, 10th
+          // pass, Critical finding 1): the existence check AND the
+          // createSession call both now run inside serverIsolationLock,
+          // against a server row re-read only once the lock is held —
+          // never against `srv`, resolved just above with no lock at all,
+          // which a concurrent isolation PUT may have already superseded.
+          const sessionResult = await ensureSessionWithLock(tmux, serverIsolationLock, srv, project.slug);
+          sessionCreated = sessionResult.created;
         } catch {
           // tmux session creation is best-effort
         }

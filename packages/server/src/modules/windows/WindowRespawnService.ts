@@ -595,6 +595,12 @@ export class WindowRespawnService {
       const created = await createRotatedWindow(this.paneEnvService, this.serverIsolationLock, server, task, 'resume_legacy_create_failed', (freshServer, env) =>
         this.tmux.createWindow(freshServer, tmuxSession, `task-${task.id}`, { extraEnv: env }),
       );
+      // Issue #29 review (10th pass), Important finding 3: use the fresh
+      // `server` row createRotatedWindow re-read and actually created the
+      // window with — not the (possibly now-stale) `server` argument this
+      // method was called with — for resolvePaneId/sendKeys/killWindow
+      // below, same as respawn()'s other two branches already do.
+      server = created.server;
       const windowTarget = `${tmuxSession}:${created.windowName}`;
       try {
         const paneId = await this.tmux.resolvePaneId(server, windowTarget);

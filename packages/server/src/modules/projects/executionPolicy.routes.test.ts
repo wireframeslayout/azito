@@ -4,6 +4,7 @@ import projectsRoutes from './routes';
 import type { ProjectsRouteOptions } from './routes';
 import { TaskOriginationService } from '../tasks/origination/TaskOriginationService';
 import type { AuditLogService } from '../../shared/audit/AuditLogService';
+import { KeyedMutex } from '../../shared/keyedMutex';
 
 // Covers Issue #328's project-server-policy surface: 'allow' must be
 // rejected at the API boundary (no isolated execution profile exists yet to
@@ -78,6 +79,7 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
     projectSecretRepo: {
       findByProject: vi.fn(() => []),
     } as unknown as ProjectsRouteOptions['projectSecretRepo'],
+    serverIsolationMutex: new KeyedMutex(),
     ...overrides,
   };
 }
@@ -192,6 +194,62 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
       workingDirectory: null,
       branch: null,
     }));
+  });
+
+  // Issue #29 review (10th pass), Critical finding 1: the project-session
+  // bootstrap (createSession into `project.slug`, when the session doesn't
+  // exist yet) previously ran with no isolation lock at all, against
+  // whatever `srv` this handler happened to resolve at the top — now routed
+  // through ensureSessionWithLock, so createSession must see the row
+  // re-read INSIDE the lock (serverRepo.findByName, called a second time),
+  // not that earlier one. Tags each returned server via `agentVersion` so
+  // the assertion can tell the two apart.
+  it('creates the project tmux session using the server row re-read inside the isolation lock, not the one resolved before the lock', async () => {
+    let generation = 0;
+    const opts = makeOpts({
+      serverRepo: {
+        findAll: vi.fn(() => []),
+        findByName: vi.fn(() => {
+          generation += 1;
+          return {
+            name: 'test-server', type: 'local' as const, host: null, agentPort: null, agentToken: null,
+            agentVersion: `gen-${generation}`,
+            sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const,
+            isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, createdAt: '2026-01-01',
+          };
+        }),
+        create: vi.fn(),
+        update: vi.fn(),
+        updateAgentVersion: vi.fn(),
+        updateFingerprint: vi.fn(),
+        clearFingerprint: vi.fn(),
+        updateIsolationIntent: vi.fn(),
+        delete: vi.fn(),
+      },
+      tmux: {
+        listSessions: vi.fn(async () => []),
+        createSession: vi.fn(async () => {}),
+        uiTokenEnvForServer: vi.fn(() => ({})),
+      } as unknown as ProjectsRouteOptions['tmux'],
+    });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10/servers/test-server',
+      payload: { working_directory: '/srv/repo' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    // The FIRST findByName call (top of the handler, `srv`) produced
+    // `gen-1` — createSession must NOT have seen that row.
+    expect(opts.tmux.createSession).toHaveBeenCalledWith(
+      expect.not.objectContaining({ agentVersion: 'gen-1' }),
+      'p',
+      expect.anything(),
+    );
   });
 });
 
