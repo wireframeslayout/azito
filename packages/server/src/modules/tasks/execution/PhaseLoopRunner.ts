@@ -8,6 +8,7 @@ import type { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
 import type { IWorkerRuntime, WorkerContext } from './runtime/IWorkerRuntime';
 import type { IProjectRepository } from '../../projects/Project';
 import type { IProjectServerRepository } from '../../projects/ProjectServer';
+import { resolveInputPolicy } from '../../projects/ProjectServer';
 import type { IServerRepository } from '../../servers/Server';
 import type { SqliteProjectSecretRepository } from '../../projects/SqliteProjectSecretRepository';
 import type { PhaseConfig } from '../../sidekicks/PhaseConfig';
@@ -158,7 +159,7 @@ export class PhaseLoopRunner {
       sidekickLoader: this.sidekickLoader,
     });
     const manifestHash = hashExecutionManifest(manifest);
-    const gate = checkExecutionGate(currentTask, projectServer, manifestHash);
+    const gate = checkExecutionGate(currentTask, resolveInputPolicy(projectServer), manifestHash);
     if (gate.allowed) return true;
 
     // Resolve a Unit id to attach log entries to WITHOUT ever falling back to

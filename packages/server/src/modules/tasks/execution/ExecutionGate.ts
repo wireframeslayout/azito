@@ -35,19 +35,24 @@ export type ExecutionGateResult =
   | { allowed: false; reason: 'denied' }
   | { allowed: false; reason: 'pending_approval' };
 
-/** Default applied when no project_servers row exists for (task.projectId, serverName) yet. */
-const FALLBACK_INPUT_POLICY: ProjectServer['inputPolicy'] = 'manual-approval';
-
 /**
- * `projectServer` is the project_servers row for the task's resolved server,
- * or null when none exists yet (e.g. server never explicitly configured for
- * this project). A missing row is treated the same as an explicit
- * 'manual-approval' row (see FALLBACK_INPUT_POLICY) — the column's own DB
- * default — rather than as "no restriction": unlike other containment checks
- * in this codebase that fail open when nothing is configured (there is
- * nothing to be strict *about* yet), silently auto-running untrusted input
- * because a server was never configured would be a materially worse default
- * than asking a human once.
+ * `policy` is the ALREADY-RESOLVED effective input policy for the task's
+ * resolved server — every call site computes it via
+ * `resolveInputPolicy(projectServer)` (projects/ProjectServer.ts) before
+ * calling in here. This function never reads a project_servers row itself
+ * (Issue #328 design constraint: `checkExecutionGate` stays a pure
+ * comparator with no repository access — Issue #29 Step 0 moved the
+ * "missing row -> manual-approval" fallback out of this file and into
+ * `resolveInputPolicy`, the single place that now applies it, replacing a
+ * second, independently-hardcoded copy of the same default that used to
+ * live in projects/routes.ts's PUT handler).
+ *
+ * A missing project_servers row resolves (via `resolveInputPolicy`) to
+ * 'manual-approval' — the column's own DB default — rather than to "no
+ * restriction": unlike other containment checks in this codebase that fail
+ * open when nothing is configured (there is nothing to be strict *about*
+ * yet), silently auto-running untrusted input because a server was never
+ * configured would be a materially worse default than asking a human once.
  *
  * `manifestHash` is the caller's already-computed
  * `hashExecutionManifest(resolveExecutionManifest(task, ...).manifest)`
@@ -78,12 +83,11 @@ const FALLBACK_INPUT_POLICY: ProjectServer['inputPolicy'] = 'manual-approval';
  */
 export function checkExecutionGate(
   task: Pick<Task, 'inputTrust' | 'executionApprovedFingerprintHash' | 'pendingOperation'>,
-  projectServer: ProjectServer | null,
+  policy: ProjectServer['inputPolicy'],
   manifestHash: string,
 ): ExecutionGateResult {
   if (task.inputTrust !== 'untrusted') return { allowed: true };
 
-  const policy = projectServer?.inputPolicy ?? FALLBACK_INPUT_POLICY;
   if (policy === 'deny') return { allowed: false, reason: 'denied' };
   // 'allow' is reserved for a future isolated execution profile and is not
   // reachable today — PUT /api/projects/:id/servers/:serverName rejects

@@ -1,6 +1,7 @@
 import type { FastifyPluginCallback } from 'fastify';
 import type { IProjectRepository, RepositoryProvider } from './Project';
 import type { IProjectServerRepository } from './ProjectServer';
+import { resolveInputPolicy } from './ProjectServer';
 import type { ITaskRepository } from '../tasks/Task';
 import type { TaskOriginationService } from '../tasks/origination/TaskOriginationService';
 import { originFromPrincipal } from '../tasks/origination/TaskOriginationService';
@@ -217,7 +218,11 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       if (body.input_policy !== undefined && body.input_policy !== 'deny' && body.input_policy !== 'manual-approval') {
         return reply.status(400).send({ error: "input_policy must be 'deny' or 'manual-approval'" });
       }
-      const inputPolicy = (body.input_policy as 'deny' | 'manual-approval' | undefined) ?? existingRow?.inputPolicy ?? 'manual-approval';
+      // resolveInputPolicy (projects/ProjectServer.ts) is the single place
+      // that applies the "unset -> manual-approval" default (Issue #29 Step
+      // 0 — this used to be a second, independently-hardcoded copy of the
+      // same literal).
+      const inputPolicy = (body.input_policy as 'deny' | 'manual-approval' | undefined) ?? resolveInputPolicy(existingRow);
       projectServerRepo.upsert({
         projectId,
         serverName,

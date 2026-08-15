@@ -3,6 +3,7 @@ import type { TaskStatus } from './TaskStatus';
 import type { IServerRepository } from '../servers/Server';
 import type { IProjectRepository } from '../projects/Project';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
+import { resolveInputPolicy } from '../projects/ProjectServer';
 import type { IUnitRepository } from '../units/Unit';
 import type { IWindowRepository } from '../windows/Window';
 import type { SqliteProjectSecretRepository } from '../projects/SqliteProjectSecretRepository';
@@ -92,7 +93,7 @@ export class TaskRestoreService {
     const { manifest, project, unit, projectServer } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader });
     const unitId = unit?.id ?? null;
     const manifestHash = hashExecutionManifest(manifest);
-    const gate = checkExecutionGate(task, projectServer, manifestHash);
+    const gate = checkExecutionGate(task, resolveInputPolicy(projectServer), manifestHash);
     if (!gate.allowed) {
       if (unitId !== null) {
         appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });

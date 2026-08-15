@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { checkExecutionGate } from './ExecutionGate';
 import type { Task } from '../Task';
 import type { ProjectServer } from '../../projects/ProjectServer';
+import { resolveInputPolicy } from '../../projects/ProjectServer';
 
 // checkExecutionGate() is a pure comparator (Issue #328 fifth-round review):
 // it takes an already-resolved manifest hash and never resolves or hashes
@@ -71,37 +72,37 @@ const allowServer: ProjectServer = { ...manualApprovalServer, inputPolicy: 'allo
 describe('checkExecutionGate', () => {
   it('a trusted task is always allowed, regardless of policy or hash', () => {
     const task = makeTask({ inputTrust: 'trusted', executionApprovedFingerprintHash: null });
-    expect(checkExecutionGate(task, denyServer, 'any-hash')).toEqual({ allowed: true });
+    expect(checkExecutionGate(task, resolveInputPolicy(denyServer), 'any-hash')).toEqual({ allowed: true });
   });
 
   it('an untrusted task under "deny" policy is denied even with a matching hash', () => {
     const task = makeTask({ inputTrust: 'untrusted', executionApprovedFingerprintHash: 'abc' });
-    expect(checkExecutionGate(task, denyServer, 'abc')).toEqual({ allowed: false, reason: 'denied' });
+    expect(checkExecutionGate(task, resolveInputPolicy(denyServer), 'abc')).toEqual({ allowed: false, reason: 'denied' });
   });
 
   it('an untrusted task under "allow" policy is allowed without a stored hash', () => {
     const task = makeTask({ inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
-    expect(checkExecutionGate(task, allowServer, 'anything')).toEqual({ allowed: true });
+    expect(checkExecutionGate(task, resolveInputPolicy(allowServer), 'anything')).toEqual({ allowed: true });
   });
 
   it('an untrusted task under "manual-approval" is allowed when the stored hash matches the current one', () => {
     const task = makeTask({ inputTrust: 'untrusted', executionApprovedFingerprintHash: 'matching-hash' });
-    expect(checkExecutionGate(task, manualApprovalServer, 'matching-hash')).toEqual({ allowed: true });
+    expect(checkExecutionGate(task, resolveInputPolicy(manualApprovalServer), 'matching-hash')).toEqual({ allowed: true });
   });
 
   it('an untrusted task under "manual-approval" requires approval when the hash differs (edit invalidated it)', () => {
     const task = makeTask({ inputTrust: 'untrusted', executionApprovedFingerprintHash: 'stale-hash' });
-    expect(checkExecutionGate(task, manualApprovalServer, 'fresh-hash')).toEqual({ allowed: false, reason: 'pending_approval' });
+    expect(checkExecutionGate(task, resolveInputPolicy(manualApprovalServer), 'fresh-hash')).toEqual({ allowed: false, reason: 'pending_approval' });
   });
 
   it('an untrusted task under "manual-approval" with no stored hash requires approval', () => {
     const task = makeTask({ inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
-    expect(checkExecutionGate(task, manualApprovalServer, 'any-hash')).toEqual({ allowed: false, reason: 'pending_approval' });
+    expect(checkExecutionGate(task, resolveInputPolicy(manualApprovalServer), 'any-hash')).toEqual({ allowed: false, reason: 'pending_approval' });
   });
 
   it('a missing project_servers row defaults to manual-approval (fail-safe, not fail-open)', () => {
     const task = makeTask({ inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
-    expect(checkExecutionGate(task, null, 'any-hash')).toEqual({ allowed: false, reason: 'pending_approval' });
+    expect(checkExecutionGate(task, resolveInputPolicy(null), 'any-hash')).toEqual({ allowed: false, reason: 'pending_approval' });
   });
 
   // Third-party review round: an outstanding pendingOperation must win over a
@@ -120,7 +121,7 @@ describe('checkExecutionGate', () => {
     });
     // Manifest has since been edited back to H — a naive hash-only compare
     // would read this as "already approved".
-    expect(checkExecutionGate(task, manualApprovalServer, 'H')).toEqual({ allowed: false, reason: 'pending_approval' });
+    expect(checkExecutionGate(task, resolveInputPolicy(manualApprovalServer), 'H')).toEqual({ allowed: false, reason: 'pending_approval' });
   });
 
   it('a cleared pendingOperation with a matching hash is allowed (the normal post-approval state)', () => {
@@ -129,6 +130,6 @@ describe('checkExecutionGate', () => {
       executionApprovedFingerprintHash: 'H',
       pendingOperation: null,
     });
-    expect(checkExecutionGate(task, manualApprovalServer, 'H')).toEqual({ allowed: true });
+    expect(checkExecutionGate(task, resolveInputPolicy(manualApprovalServer), 'H')).toEqual({ allowed: true });
   });
 });

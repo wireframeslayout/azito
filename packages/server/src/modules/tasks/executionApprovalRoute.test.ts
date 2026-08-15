@@ -5,6 +5,7 @@ import type { TasksRouteOptions } from './routes';
 import type { Task } from './Task';
 import { resolveExecutionManifest, hashExecutionManifest } from './execution/ExecutionManifest';
 import { checkExecutionGate } from './execution/ExecutionGate';
+import { resolveInputPolicy } from '../projects/ProjectServer';
 import { buildRespawnManifestInput } from '../windows/WindowRespawnService';
 
 // GET /api/tasks/:id/execution-approval (Issue #51) — the browser-facing
@@ -126,12 +127,13 @@ function makeOpts(existingTask: Task | null): TasksRouteOptions {
     } as unknown as TasksRouteOptions['tmux'],
     serverRepo: {
       findAll: vi.fn(() => []),
-      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, createdAt: '' })),
+      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, createdAt: '' })),
       create: vi.fn(),
       update: vi.fn(),
       updateAgentVersion: vi.fn(),
       updateFingerprint: vi.fn(),
       clearFingerprint: vi.fn(),
+      updateIsolationIntent: vi.fn(),
       delete: vi.fn(),
     },
     worktreeServiceFactory: { create: vi.fn() } as unknown as TasksRouteOptions['worktreeServiceFactory'],
@@ -1133,7 +1135,7 @@ describe('Creation-time pre-approval (task/328 follow-up)', () => {
     await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
 
     const approvedTask = getTask();
-    const gate = checkExecutionGate(approvedTask, { projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' }, fingerprint);
+    const gate = checkExecutionGate(approvedTask, resolveInputPolicy({ inputPolicy: 'manual-approval' }), fingerprint);
     expect(gate).toEqual({ allowed: true });
   });
 

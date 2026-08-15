@@ -5,6 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { resolveExecutionManifest, hashExecutionManifest, hashSidekickPackageTree } from './ExecutionManifest';
 import { checkExecutionGate } from './ExecutionGate';
+import { resolveInputPolicy } from '../../projects/ProjectServer';
 import type { Task } from '../Task';
 import type { IUnitRepository, Unit } from '../../units/Unit';
 import type { IProjectRepository, ProjectDetail, ProjectRepository } from '../../projects/Project';
@@ -133,6 +134,9 @@ function makeServerConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
     sshHost: null,
     muxRuntime: 'system',
     sshHostFingerprint: null,
+    isolationIntent: false,
+    isolationVerifiedAt: null,
+    isolationReport: null,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
@@ -264,7 +268,7 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     // the cached `manifest` from above) — nothing changed in between, so
     // this must still be allowed, not fall back into pending_approval.
     const { manifest: manifestAtRunTime } = resolveExecutionManifest(approvedTask, deps);
-    const gate = checkExecutionGate(approvedTask, projectServer, hashExecutionManifest(manifestAtRunTime));
+    const gate = checkExecutionGate(approvedTask, resolveInputPolicy(projectServer), hashExecutionManifest(manifestAtRunTime));
     expect(gate).toEqual({ allowed: true });
   });
 
@@ -739,7 +743,7 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     // very next gate check (e.g. approve-plan's resumeStateMachine() call).
     const atImplementing = { ...atPlanning, currentPhase: 'implementing', executionApprovedFingerprintHash: approvedHash };
     const { manifest: manifestAtImplementing, projectServer } = resolveExecutionManifest(atImplementing, makeDeps(fixture));
-    const gate = checkExecutionGate(atImplementing, projectServer, hashExecutionManifest(manifestAtImplementing));
+    const gate = checkExecutionGate(atImplementing, resolveInputPolicy(projectServer), hashExecutionManifest(manifestAtImplementing));
 
     expect(hashExecutionManifest(manifestAtImplementing)).toBe(approvedHash);
     expect(gate).toEqual({ allowed: true });
@@ -769,7 +773,7 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     // 'testing' by the time the gate is re-checked.
     const atTesting = { ...atImplementing, currentPhase: 'testing', executionApprovedFingerprintHash: approvedHash };
     const { manifest: manifestAtTesting, projectServer } = resolveExecutionManifest(atTesting, makeDeps(fixture));
-    const gate = checkExecutionGate(atTesting, projectServer, hashExecutionManifest(manifestAtTesting));
+    const gate = checkExecutionGate(atTesting, resolveInputPolicy(projectServer), hashExecutionManifest(manifestAtTesting));
 
     expect(hashExecutionManifest(manifestAtTesting)).toBe(approvedHash);
     expect(gate).toEqual({ allowed: true });
@@ -1142,7 +1146,7 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
 
       const atPushing = { ...atPlanning, currentPhase: 'pushing', executionApprovedFingerprintHash: approvedHash };
       const { manifest: manifestAtPushing, projectServer } = resolveExecutionManifest(atPushing, makeDeps(fixture));
-      const gate = checkExecutionGate(atPushing, projectServer, hashExecutionManifest(manifestAtPushing));
+      const gate = checkExecutionGate(atPushing, resolveInputPolicy(projectServer), hashExecutionManifest(manifestAtPushing));
 
       expect(hashExecutionManifest(manifestAtPushing)).toBe(approvedHash);
       expect(gate).toEqual({ allowed: true });

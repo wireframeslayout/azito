@@ -6,6 +6,7 @@ import type { ITaskRepository, Task } from '../tasks/Task';
 import type { IUnitRepository } from '../units/Unit';
 import type { IProjectRepository } from '../projects/Project';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
+import { resolveInputPolicy } from '../projects/ProjectServer';
 import type { IServerRepository } from '../servers/Server';
 import type { SqliteProjectSecretRepository } from '../projects/SqliteProjectSecretRepository';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
@@ -441,7 +442,7 @@ export class WindowRespawnService {
     }, respawnInput, server.name);
     const unitId = unit?.id ?? null;
     const manifestHash = hashExecutionManifest(manifest);
-    const gate = checkExecutionGate(task, projectServer, manifestHash);
+    const gate = checkExecutionGate(task, resolveInputPolicy(projectServer), manifestHash);
     if (gate.allowed) return unitId;
 
     if (unitId !== null) {

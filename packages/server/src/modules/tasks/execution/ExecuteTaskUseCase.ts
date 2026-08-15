@@ -7,6 +7,7 @@ import { usesHttpSignalPath } from '../../units/Unit';
 import type { IServerRepository } from '../../servers/Server';
 import type { IProjectRepository } from '../../projects/Project';
 import type { IProjectServerRepository } from '../../projects/ProjectServer';
+import { resolveInputPolicy } from '../../projects/ProjectServer';
 import type { SqliteProjectSecretRepository } from '../../projects/SqliteProjectSecretRepository';
 import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoader';
 import type { SidekickSyncService } from '../../sidekicks/SidekickSyncService';
@@ -286,7 +287,7 @@ export class ExecuteTaskUseCase {
       sidekickLoader: this.sidekickLoader,
     });
     const manifestHash = hashExecutionManifest(manifest);
-    const gate = checkExecutionGate(task, projectServer, manifestHash);
+    const gate = checkExecutionGate(task, resolveInputPolicy(projectServer), manifestHash);
     if (gate.allowed) return { project, projectServer };
 
     this.appendLog(task.id, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });

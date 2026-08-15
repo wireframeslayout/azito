@@ -72,6 +72,7 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
       updateAgentVersion: vi.fn(),
       updateFingerprint: vi.fn(),
       clearFingerprint: vi.fn(),
+      updateIsolationIntent: vi.fn(),
       delete: vi.fn(),
     },
     projectSecretRepo: {
