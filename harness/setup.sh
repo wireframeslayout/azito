@@ -747,79 +747,76 @@ else
   fi
 fi
 
-# Issue #29 review, Important finding 1 (2nd pass): reconstructs the
-# `codex mcp add` args that would recreate the CURRENT azt-mcp registration
-# exactly as it stood before a remove — used to restore it when a
-# remove→add replacement fails partway through (see codex_mcp_replace()
-# below). Takes the raw `codex mcp get azt-mcp --json` output as $1, writes
-# NUL-separated args to stdout (empty output on parse failure / no
-# registration, so callers must check for that).
-codex_mcp_reconstruct_add_args() {
-  printf '%s' "$1" | node -e '
-    let data = "";
-    process.stdin.on("data", (c) => { data += c; });
-    process.stdin.on("end", () => {
-      try {
-        const j = JSON.parse(data);
-        const t = j && j.transport ? j.transport : {};
-        const env = t.env || {};
-        const out = [];
-        for (const [k, v] of Object.entries(env)) {
-          out.push("--env", k + "=" + v);
-        }
-        out.push("--");
-        out.push(t.command || "node");
-        for (const a of (t.args || [])) out.push(a);
-        process.stdout.write(out.join("\u0000") + "\u0000");
-      } catch { /* leave stdout empty on parse failure */ }
-    });
-  '
-}
-
 # Issue #29 review, Important finding 1 (2nd pass): replaces the azt-mcp
 # Codex MCP registration atomically from the caller's perspective — a bare
 # `codex mcp remove` + `codex mcp add` left a "removed but never re-added"
 # window on add failure that was previously only warned about (exit 0, entry
-# gone). This restores the pre-remove registration (reconstructed from $1,
-# the raw `codex mcp get --json` captured BEFORE remove) when add fails, and
-# sets SETUP_HAD_ERRORS=1 in every failure path (add failed, whether or not
-# restore succeeded) so the script's final exit code reflects that the
-# intended replacement did not happen — restoring the old registration keeps
-# azt-mcp usable, but it is still not the outcome the caller asked for.
-#   $1        = raw `codex mcp get azt-mcp --json` output, captured before remove
-#   $2.. = new `codex mcp add azt-mcp` args to attempt
+# gone).
+#
+# Issue #29 review (14th pass), Important finding 3: restore used to
+# reconstruct a `codex mcp add` call from `codex mcp get azt-mcp --json`
+# (command/args/env only, via a now-removed `codex_mcp_reconstruct_add_args`
+# helper) — but `codex mcp add --help` (checked directly against the
+# installed codex-cli, not assumed from docs) exposes no flags for
+# `cwd`/`enabled`/`enabled_tools`/`disabled_tools`/`startup_timeout_sec`/
+# `tool_timeout_sec`, so a reconstruct-add restore silently dropped every one
+# of those properties even on a "restore succeeded" outcome. This now backs
+# up `config.toml` in full BEFORE `codex mcp remove` runs, and restores that
+# exact file byte-for-byte if the re-add fails — every property survives,
+# because nothing about the file other than the remove/add pair ever
+# changes. `enabled_tools`/`disabled_tools`/... — the same fields
+# strip_codex_ui_token's own doc comment above it names — round-trip
+# correctly under this approach precisely because it never depends on `codex
+# mcp add` being able to re-express them.
+#   $1.. = new `codex mcp add azt-mcp` args to attempt
 # Returns 0 on a clean replacement, 1 otherwise (registration may be the new
 # one, the restored old one, or entirely gone — see the echoed messages).
+# On every failure path, config.toml ends up either fully restored or
+# untouched — never partially edited — and the backup file is always removed
+# before returning, except when the restore copy itself fails (kept then so
+# the caller has something to recover from).
 codex_mcp_replace() {
-  local raw="$1"; shift
   local new_args=("$@")
+  local codex_home="${CODEX_HOME:-$HOME/.codex}"
+  local codex_config="$codex_home/config.toml"
+
+  local backup=""
+  if [[ -f "$codex_config" ]]; then
+    backup="$(mktemp "$codex_config.bak.XXXXXX")"
+    if ! cp -p "$codex_config" "$backup"; then
+      echo "  azt-mcp (Codex): config.toml のバックアップに失敗しました。登録の置き換えを中止します" >&2
+      rm -f "$backup"
+      SETUP_HAD_ERRORS=1
+      return 1
+    fi
+  fi
 
   codex mcp remove azt-mcp >/dev/null 2>&1 || true
   if codex mcp add azt-mcp "${new_args[@]}" >/dev/null 2>&1; then
+    rm -f "$backup"
     return 0
   fi
 
   SETUP_HAD_ERRORS=1
 
-  if [[ -z "$raw" ]]; then
-    # No prior registration existed (fresh install) — nothing to restore,
-    # just surface that the add failed.
+  if [[ -z "$backup" ]]; then
+    # No config.toml existed before remove (azt-mcp was never registered on
+    # this host) — nothing to restore, just surface that the add failed.
     echo "  azt-mcp (Codex): 登録に失敗しました（元々登録は存在しませんでした。'codex mcp add azt-mcp ...' を手動で再設定してください）" >&2
     return 1
   fi
 
-  echo "  azt-mcp (Codex): 再登録に失敗しました。元の登録の復元を試みます..." >&2
-  local restore_args=()
-  while IFS= read -r -d '' tok; do
-    restore_args+=("$tok")
-  done < <(codex_mcp_reconstruct_add_args "$raw")
-
-  if [[ "${#restore_args[@]}" -gt 0 ]] && codex mcp add azt-mcp "${restore_args[@]}" >/dev/null 2>&1; then
-    echo "  azt-mcp (Codex): 元の登録を復元しました（意図した変更は未適用です。手動確認してください）" >&2
+  echo "  azt-mcp (Codex): 再登録に失敗しました。config.toml をバックアップから復元します..." >&2
+  if cp -p "$backup" "$codex_config"; then
+    rm -f "$backup"
+    # Restoring the file is still a FAILURE outcome for this call — the
+    # intended replacement (new_args) never took effect, only reverted.
+    # SETUP_HAD_ERRORS is already set above; this always returns 1.
+    echo "  azt-mcp (Codex): 元の config.toml を復元しました（意図した変更は未適用です。手動確認してください）" >&2
     return 1
   fi
 
-  echo "  azt-mcp (Codex): 登録の復元にも失敗しました。'codex mcp add azt-mcp ...' を手動で再設定してください" >&2
+  echo "  azt-mcp (Codex): config.toml の復元にも失敗しました。バックアップ: $backup を手動で $codex_config に上書きしてください" >&2
   return 1
 }
 
@@ -834,8 +831,10 @@ codex_mcp_replace() {
 #
 # Issue #29 review (3rd pass), Important finding 3: this used to strip the
 # token via `codex mcp remove azt-mcp` + `codex mcp add azt-mcp ...`,
-# reconstructed only from `command`/`args`/`env` (see
-# codex_mcp_reconstruct_add_args() above) — silently dropping every other
+# reconstructed only from `command`/`args`/`env` (a `codex mcp get --json`
+# reconstruction, the same shape codex_mcp_replace() above used to restore
+# a failed re-add with before Issue #29 review 14th pass replaced it with a
+# whole-file config.toml backup/restore) — silently dropping every other
 # property `codex mcp get --json` can report (`cwd`, `enabled`,
 # `enabled_tools`/`disabled_tools`, `startup_timeout_sec`, `tool_timeout_sec`).
 # Extending that reconstruction to cover those fields is not actually
@@ -1001,6 +1000,51 @@ strip_codex_ui_token() {
       return /(^|,)AZITO_UI_TOKEN=/.test(stripQuotesAndSpace(m[1]));
     }
 
+    // Issue #29 review (14th pass), Important finding 1: TOML also allows a
+    // DOTTED key assignment — `env.AZITO_UI_TOKEN = "..."` (table-relative,
+    // legal anywhere inside `[mcp_servers.azt-mcp]` itself) and
+    // `mcp_servers.azt-mcp.env.AZITO_UI_TOKEN = "..."` (fully qualified,
+    // legal regardless of the current table context, most naturally written
+    // at the top level before any `[...]` header) — that `codex mcp add` has
+    // never been observed to emit but a hand edit or a future codex-cli
+    // version plausibly could. Neither shape matched isTokenKeyLine (which
+    // only recognizes a bare, undotted `AZITO_UI_TOKEN` key) nor
+    // hasInlineTokenKey (which only recognizes the `env = { ... }`
+    // inline-table form) — both slipped through every check and the
+    // residual re-scan below undetected, so the purge reported success
+    // while a live AZITO_UI_TOKEN sat in the file untouched.
+    //
+    // This splits the assignment key on "." and strips quotes/whitespace
+    // from each segment (reusing stripQuotesAndSpace, same as every other
+    // key comparison in this script), so `env . AZITO_UI_TOKEN`,
+    // `"env".AZITO_UI_TOKEN`, `env."AZITO_UI_TOKEN"`, etc. are all
+    // recognized identically. It is detection-only, exactly like
+    // hasInlineTokenKey: dropping a dotted-key line correctly (vs. an
+    // adjacent dotted key on the same table that happens to share a prefix)
+    // would need real TOML parsing, which this script deliberately does not
+    // depend on (see the doc comment on hasInlineTokenKey above) — so any match fails
+    // the whole purge closed (manual-removal) rather than risk an incorrect
+    // edit.
+    function isDottedEnvTokenKey(line, currentlyInOwnTable) {
+      const eq = line.indexOf("=");
+      if (eq === -1) return false;
+      const keyText = line.slice(0, eq);
+      if (!keyText.includes(".")) return false; // undotted keys are handled elsewhere
+      const segs = keyText.split(".").map(stripQuotesAndSpace).filter((s) => s.length > 0);
+      if (segs.length < 2) return false;
+      const tail = segs.slice(-2);
+      if (tail[0] !== "env" || tail[1] !== "AZITO_UI_TOKEN") return false;
+      if (segs.length === 2) {
+        // Table-relative form: resolves against whatever table is
+        // currently open, so it only means the azt-mcp env table when we
+        // are actually inside [mcp_servers.azt-mcp] right now.
+        return currentlyInOwnTable;
+      }
+      // Fully-qualified form: valid from anywhere, so the current table
+      // context does not matter — only the exact segment sequence does.
+      return segs.length === 4 && segs[0] === "mcp_servers" && segs[1] === "azt-mcp";
+    }
+
     let inEnvSection = false;
     let inOwnTable = false;
     let sawSection = false;
@@ -1029,6 +1073,13 @@ strip_codex_ui_token() {
         // (irrelevant either way, since a manual-removal result is never
         // written to disk) and keep scanning so every offending line can
         // be reported at once.
+        manualRemovalNeeded = true;
+        manualRemovalLines.push(`${i + 1}: ${line}`);
+        out.push(line);
+        continue;
+      }
+      if (isDottedEnvTokenKey(line, inOwnTable)) {
+        // Fail closed — see the doc comment on isDottedEnvTokenKey above.
         manualRemovalNeeded = true;
         manualRemovalLines.push(`${i + 1}: ${line}`);
         out.push(line);
@@ -1065,9 +1116,18 @@ strip_codex_ui_token() {
     function isFullLineComment(line) {
       return line.trim().startsWith("#");
     }
+    // Issue #29 review (14th pass), Important finding 1: also re-checks the
+    // dotted-key forms via isDottedEnvTokenKey — as a defense-in-depth
+    // safety net (the main loop above already fails every such line closed
+    // as soon as it is found, so this should never actually fire in
+    // practice), passing `true` unconditionally for the table-relative
+    // branch since this scan has no per-line table-context tracking of its
+    // own: being overly cautious here (a false positive just fails closed)
+    // is safe, unlike in the main loop where table context has to be exact
+    // to decide what a relative dotted key even means.
     const stillPresent = out.some((line) => {
       if (isFullLineComment(line)) return false;
-      return isTokenKeyLine(line.trim()) || hasInlineTokenKey(line);
+      return isTokenKeyLine(line.trim()) || hasInlineTokenKey(line) || isDottedEnvTokenKey(line, true);
     });
     if (stillPresent) {
       // Removal logic believes it handled every AZITO_UI_TOKEN key
@@ -1119,7 +1179,7 @@ strip_codex_ui_token() {
       ;;
     manual-removal)
       rm -f "$tmp"
-      echo "  エラー: azt-mcp (Codex): $codex_config のインラインテーブル (env = { ... }) 内に AZITO_UI_TOKEN が見つかりましたが、他の値がカンマを含んでいる可能性があるため自動編集は行いません。以下の行を手動で除去してください:" >&2
+      echo "  エラー: azt-mcp (Codex): $codex_config のインラインテーブル (env = { ... }) またはドット区切りキー (env.AZITO_UI_TOKEN = ... 等) の形式で AZITO_UI_TOKEN が見つかりましたが、標準のサブテーブル形式ではないため自動編集は行いません。以下の行を手動で除去してください:" >&2
       echo "$result_detail" >&2
       SETUP_HAD_ERRORS=1
       return 1
@@ -1204,15 +1264,12 @@ elif command -v codex >/dev/null 2>&1 || [[ -d "$HOME/.codex" ]]; then
       ' 2>/dev/null || true)"
     fi
 
-    # Issue #29 review, Important finding 1 (2nd pass): captured BEFORE
-    # remove so codex_mcp_replace() can restore this exact registration if
-    # the re-add below fails (previously the remove ran unconditionally via
-    # `|| true` with no way back — a failed re-add just left azt-mcp gone,
-    # and the script still exited 0).
-    EXISTING_AZT_MCP_RAW=""
-    if codex mcp get azt-mcp >/dev/null 2>&1; then
-      EXISTING_AZT_MCP_RAW="$(codex mcp get azt-mcp --json 2>/dev/null || true)"
-    fi
+    # Issue #29 review, Important finding 1 (2nd pass): a failed re-add is
+    # now recovered via codex_mcp_replace()'s own whole-file config.toml
+    # backup/restore (Issue #29 review, 14th pass, Important finding 3) —
+    # taken from INSIDE that function, immediately before `codex mcp
+    # remove` runs, so no separate `codex mcp get --json` snapshot needs to
+    # be captured here beforehand.
     CODEX_MCP_ADD_ARGS=(--env "AZITO_URL=$AZITO_URL_VALUE")
     EFFECTIVE_AZT_MCP_UI_TOKEN="${AZITO_UI_TOKEN:-$EXISTING_AZT_MCP_UI_TOKEN}"
     if [[ -n "$EFFECTIVE_AZT_MCP_UI_TOKEN" ]]; then
@@ -1222,7 +1279,7 @@ elif command -v codex >/dev/null 2>&1 || [[ -d "$HOME/.codex" ]]; then
     else
       echo "  警告: AZITO_UI_TOKEN が設定されていません。--ui-token を付けて再実行してください"
     fi
-    if codex_mcp_replace "$EXISTING_AZT_MCP_RAW" "${CODEX_MCP_ADD_ARGS[@]}" -- node "$MCP_SERVER_PATH"; then
+    if codex_mcp_replace "${CODEX_MCP_ADD_ARGS[@]}" -- node "$MCP_SERVER_PATH"; then
       echo "  azt-mcp: 登録しました"
     else
       echo "  azt-mcp: 登録に失敗しました（codex mcp add エラー）"

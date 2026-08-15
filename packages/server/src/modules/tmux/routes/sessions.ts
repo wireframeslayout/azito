@@ -222,25 +222,26 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   fastify.post<{ Params: { name: string } }>(
     '/api/servers/:name/sessions',
     async (request, reply) => {
-      const srv = serverRepo.findByName(request.params.name);
-      if (!srv) return reply.status(404).send({ error: 'Server not found' });
       const { name, command, windowName: reqWindowName, force } = request.body as { name?: string; command?: string; windowName?: string; force?: boolean };
       if (!name) return reply.status(400).send({ error: 'Session name required' });
-      if (opts.resourceGuard && force !== true) {
-        const status = await opts.resourceGuard.check(srv);
-        if (!status.ok)
-          return reply.status(409).send({ error: 'insufficient_resources', resources: status });
-      }
-      // Issue #29 review (6th pass), Important finding 3: re-fetch the
-      // server row INSIDE the same per-server-name lock the isolation
-      // false->true transition holds while it checks + commits, immediately
-      // before evaluating uiTokenEnvForServer — never reuse the `srv` fetched
-      // above, which can already be stale by the time this runs (e.g. after
-      // the resourceGuard check's await). See serverIsolationMutex's doc
-      // comment on SessionsRouteOptions.
+      // Issue #29 review, Important finding 2: server fetch, the resource
+      // check, and the tmux mutation now run in ONE span inside the
+      // per-server-name lock, against a single freshly re-fetched server row
+      // — not a `srv` resolved BEFORE queuing for the lock. A pre-lock
+      // resourceGuard check let an in-flight isolation/connection transition
+      // (host, agent token, ...) commit in the gap between that check and
+      // the lock actually being acquired, so the check ran against a host
+      // that was no longer the one the tmux call (inside the lock) actually
+      // targeted. See serverIsolationMutex's doc comment on
+      // SessionsRouteOptions.
       return serverIsolationMutex.withLock(request.params.name, async () => {
         const freshSrv = serverRepo.findByName(request.params.name);
         if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
+        if (opts.resourceGuard && force !== true) {
+          const status = await opts.resourceGuard.check(freshSrv);
+          if (!status.ok)
+            return reply.status(409).send({ error: 'insufficient_resources', resources: status });
+        }
         try {
           // Manual, human-facing terminal session — intentionally uses
           // `uiTokenEnvForServer` (injects the operator UI token for a
@@ -265,19 +266,19 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   fastify.post<{ Params: { name: string; session: string } }>(
     '/api/servers/:name/sessions/:session/windows',
     async (request, reply) => {
-      const srv = serverRepo.findByName(request.params.name);
-      if (!srv) return reply.status(404).send({ error: 'Server not found' });
       const { name: reqName, force } = (request.body as { name?: string; force?: boolean } | null) || {};
-      if (opts.resourceGuard && force !== true) {
-        const status = await opts.resourceGuard.check(srv);
-        if (!status.ok)
-          return reply.status(409).send({ error: 'insufficient_resources', resources: status });
-      }
-      // Issue #29 review (6th pass), Important finding 3: see the identical
-      // comment on POST /api/servers/:name/sessions above.
+      // Issue #29 review, Important finding 2: see the identical comment on
+      // POST /api/servers/:name/sessions above — the server fetch, the
+      // resource check, and the tmux mutation all now run in ONE span
+      // inside the lock.
       return serverIsolationMutex.withLock(request.params.name, async () => {
         const freshSrv = serverRepo.findByName(request.params.name);
         if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
+        if (opts.resourceGuard && force !== true) {
+          const status = await opts.resourceGuard.check(freshSrv);
+          if (!status.ok)
+            return reply.status(409).send({ error: 'insufficient_resources', resources: status });
+        }
         try {
           // Manual, human-facing window creation — see the `uiTokenEnvForServer`
           // vs. `isolationMaskForServer` note on POST /api/servers/:name/sessions above.
@@ -297,60 +298,62 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   fastify.post<{ Params: { name: string; session: string; window: string } }>(
     '/api/servers/:name/sessions/:session/windows/:window/panes',
     async (request, reply) => {
-      const srv = serverRepo.findByName(request.params.name);
-      if (!srv) return reply.status(404).send({ error: 'Server not found' });
       const direction = ((request.body as Record<string, unknown>)?.direction as string) || 'v';
       const target = `${request.params.session}:${request.params.window}`;
       try {
-        // Resolve whether the target window belongs to a task BEFORE
-        // splitting (Issue #28 third-party review finding: this generic
-        // "add pane" route previously always split with no extraEnv at all,
-        // so the new pane silently inherited whatever the tmux SESSION's own
-        // environment happened to carry — a lingering AZITO_UI_TOKEN on an
-        // older session grants the new pane operator-level credentials it
-        // was never issued, and a task-owned window's new pane never got
-        // AZITO_TASK_TOKEN). Mirrors the identity-fallback lookup the
-        // kill-window route above uses, since this route's `target` is
-        // likewise constructed from URL params rather than resolved via
-        // tmux first.
-        const identity = await tmux.getWindowIdentity(srv, target);
-        const windowRow = opts.windowRepo?.findByServerAndTarget(request.params.name, target)
-          ?? (identity ? opts.windowRepo?.findByServerAndTarget(request.params.name, `${identity.sessionName}:${identity.windowName}`) : undefined)
-          ?? (identity ? opts.windowRepo?.findByServerAndTarget(request.params.name, `${identity.sessionName}:${identity.windowIndex}`) : undefined);
-
-        if (windowRow && windowRow.taskId !== null && isPrimaryTaskWindow(windowRow)) {
-          // The task's PRIMARY worker window. Its already-running first pane
-          // holds the currently-active AZITO_TASK_TOKEN generation in its
-          // process env, and that plaintext is never persisted anywhere
-          // (design v3 §2 — TaskPaneEnvironmentService issues but never
-          // stores a token's plaintext). There is therefore no value this
-          // route could hand the new pane that is simultaneously (a) the
-          // SAME generation the first pane already holds — required, since
-          // every pane in one tmux window must carry an identical env per
-          // TmuxClient.splitPane's doc comment — and (b) obtained without
-          // rotating, which would revoke that still-in-use generation out
-          // from under the running worker pane. Reject rather than either
-          // silently omitting the token (this finding's original bug) or
-          // minting a fresh, unrelated generation only the new pane would
-          // hold. Respawning the window (which rotates once and applies the
-          // new generation to every pane it recreates) is the supported way
-          // to add a pane here.
-          return reply.status(409).send({
-            error: 'primary_task_window_pane_add_unsupported',
-            message: "Cannot add a pane to a task's primary window directly — respawn the window first, then add panes.",
-          });
-        }
-
-        // Issue #29 review (6th pass), Important finding 3: extraEnv
-        // resolution (uiTokenEnvForServer / buildSecondaryWindowEnv) and the
-        // actual splitPane call run INSIDE the per-server-name lock, against
-        // a freshly re-fetched server row — see the identical comment on
-        // POST /api/servers/:name/sessions above. Identity/windowRow
-        // resolution above is not isolation-sensitive and stays outside the
-        // lock.
-        return serverIsolationMutex.withLock(request.params.name, async () => {
+        // Issue #29 review, Important finding 2: identity resolution, the
+        // primary-task-window classification (which decides the 409 below),
+        // extraEnv resolution, and the actual splitPane call now ALL run in
+        // ONE span inside the per-server-name lock, against a single freshly
+        // re-fetched server row — never a `srv` resolved BEFORE queuing for
+        // the lock. A pre-lock classification let an in-flight isolation/
+        // connection transition commit in the gap before the lock was
+        // actually acquired, so the classification/env decision ran against
+        // a server row the tmux call (inside the lock) no longer targeted.
+        // See serverIsolationMutex's doc comment on SessionsRouteOptions.
+        return await serverIsolationMutex.withLock(request.params.name, async () => {
           const freshSrv = serverRepo.findByName(request.params.name);
           if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
+
+          // Resolve whether the target window belongs to a task BEFORE
+          // splitting (Issue #28 third-party review finding: this generic
+          // "add pane" route previously always split with no extraEnv at
+          // all, so the new pane silently inherited whatever the tmux
+          // SESSION's own environment happened to carry — a lingering
+          // AZITO_UI_TOKEN on an older session grants the new pane
+          // operator-level credentials it was never issued, and a
+          // task-owned window's new pane never got AZITO_TASK_TOKEN).
+          // Mirrors the identity-fallback lookup the kill-window route above
+          // uses, since this route's `target` is likewise constructed from
+          // URL params rather than resolved via tmux first.
+          const identity = await tmux.getWindowIdentity(freshSrv, target);
+          const windowRow = opts.windowRepo?.findByServerAndTarget(request.params.name, target)
+            ?? (identity ? opts.windowRepo?.findByServerAndTarget(request.params.name, `${identity.sessionName}:${identity.windowName}`) : undefined)
+            ?? (identity ? opts.windowRepo?.findByServerAndTarget(request.params.name, `${identity.sessionName}:${identity.windowIndex}`) : undefined);
+
+          if (windowRow && windowRow.taskId !== null && isPrimaryTaskWindow(windowRow)) {
+            // The task's PRIMARY worker window. Its already-running first pane
+            // holds the currently-active AZITO_TASK_TOKEN generation in its
+            // process env, and that plaintext is never persisted anywhere
+            // (design v3 §2 — TaskPaneEnvironmentService issues but never
+            // stores a token's plaintext). There is therefore no value this
+            // route could hand the new pane that is simultaneously (a) the
+            // SAME generation the first pane already holds — required, since
+            // every pane in one tmux window must carry an identical env per
+            // TmuxClient.splitPane's doc comment — and (b) obtained without
+            // rotating, which would revoke that still-in-use generation out
+            // from under the running worker pane. Reject rather than either
+            // silently omitting the token (this finding's original bug) or
+            // minting a fresh, unrelated generation only the new pane would
+            // hold. Respawning the window (which rotates once and applies the
+            // new generation to every pane it recreates) is the supported way
+            // to add a pane here.
+            return reply.status(409).send({
+              error: 'primary_task_window_pane_add_unsupported',
+              message: "Cannot add a pane to a task's primary window directly — respawn the window first, then add panes.",
+            });
+          }
+
           const extraEnv: Record<string, string> = windowRow && windowRow.taskId !== null
             // Secondary task-owned window: masked-only env (no task token),
             // same as its own (re)creation env.
