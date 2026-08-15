@@ -993,6 +993,56 @@ strip_codex_ui_token() {
       return out;
     }
 
+    // Issue #29 review, 14th pass, Important finding 3: stripQuotesAndSpace
+    // strips quote characters but never DECODES a basic (double-quoted)
+    // TOML strings backslash escapes (\", \\, \uXXXX, \t, ...) — it just
+    // leaves the backslash and whatever follows it in the output as-is. A
+    // key legally written with such an escape (e.g. a double-quoted
+    // AZITO_UI_TOKEN containing a backslash escape, which TOML decodes to
+    // the literal key AZITO_UI_TOKEN) therefore normalizes to something
+    // other than the bare string AZITO_UI_TOKEN here — never equal to what
+    // every matcher below compares against — so the key silently fails to
+    // match ANY of them: not isTokenKeyLine, not hasInlineTokenKey, not
+    // isDottedEnvTokenKey, and not the residual re-scan that reuses the
+    // same three matchers. The purge reports clean/no-section/removed as if
+    // the file were token-free while a live, semantically-identical
+    // AZITO_UI_TOKEN key sits in it untouched — exactly the false-negative
+    // class of bug the residual re-scan exists to catch, just reached
+    // through a decoding gap instead of an unrecognized TOML shape.
+    //
+    // Correctly decoding every basic-string escape sequence needs a real
+    // TOML/JSON-string-literal parser, which this script deliberately does
+    // not depend on (see the doc comment on the purge routine above). So
+    // instead: a QUOTED key segment containing so much as one backslash is
+    // treated as un-decodable, full stop, and fails the whole purge closed
+    // (manual-removal) rather than risk comparing an undecoded string and
+    // silently missing (or, in principle, wrongly matching) the real key.
+    // A single-quoted (literal) TOML string never supports escapes at all —
+    // a literal backslash inside a literal string is just a literal
+    // backslash, not the start of an escape sequence — so only a
+    // double-quoted segment is ever in scope here, matching the actual
+    // ambiguity TOML defines.
+    //
+    // Implemented as a single whole-line scan for a double-quoted,
+    // backslash-containing segment sitting directly in KEY position —
+    // immediately followed (after only whitespace) by "=" — rather than as
+    // a per-matcher helper, because one pattern already covers every shape
+    // the matchers below need to worry about on a single line: the standard
+    // sub-table form (a double-quoted AZITO_UI_TOKEN key), the inline-table
+    // form (env = { ... } — the match fires on the segment INSIDE the
+    // braces, not just the outer env key), and the last segment of the
+    // dotted form (env."AZITO_UI_TOKEN..." = ... or
+    // mcp_servers.azt-mcp.env."AZITO_UI_TOKEN..." = ..., where the escaped
+    // segment is always the one immediately preceding "="). It does not
+    // catch an escape on a NON-final dotted segment (an escaped env segment
+    // rather than an escaped AZITO_UI_TOKEN segment) — an intentionally
+    // accepted gap for a shape codex mcp add has never been observed to
+    // emit and a hand-editor has essentially no reason to produce, versus
+    // the realistic one this exists for.
+    function hasEscapedQuotedKeyAssignment(line) {
+      return /"[^"]*\\[^"]*"\s*=/.test(line);
+    }
+
     // Issue #29 review, Important finding 2: every matcher below
     // (section-header detection, isTokenKeyLine, hasInlineTokenKey,
     // isDottedEnvTokenKey) is line-oriented — it has no concept of a TOML
@@ -1024,6 +1074,28 @@ strip_codex_ui_token() {
     }
     if (multilineMarkerLines.length > 0) {
       process.stdout.write("manual-removal\n" + multilineMarkerLines.join("\n"));
+      process.exit(0);
+    }
+
+    // Issue #29 review, 14th pass, Important finding 3: same fail-closed
+    // treatment as the multiline-marker scan just above, for the same
+    // reason — this has to run BEFORE any line is inspected by the
+    // key-matching functions below (isTokenKeyLine / hasInlineTokenKey /
+    // isDottedEnvTokenKey), all of which compare against stripQuotesAndSpace
+    // output that never decodes a quoted keys backslash escapes (see the
+    // hasEscapedQuotedKeyAssignment doc comment above). A false "clean"/
+    // "no-section"/"removed" verdict reached by silently failing to
+    // recognize an escaped AZITO_UI_TOKEN key is worse than the alternative
+    // here (an occasional unnecessary manual check on an escape sequence
+    // that turns out to belong to some other, unrelated key).
+    const escapedKeyLines = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (hasEscapedQuotedKeyAssignment(lines[i])) {
+        escapedKeyLines.push((i + 1) + ": " + lines[i]);
+      }
+    }
+    if (escapedKeyLines.length > 0) {
+      process.stdout.write("manual-removal\n" + escapedKeyLines.join("\n"));
       process.exit(0);
     }
 
@@ -1196,7 +1268,12 @@ strip_codex_ui_token() {
     // to decide what a relative dotted key even means.
     const stillPresent = out.some((line) => {
       if (isFullLineComment(line)) return false;
-      return isTokenKeyLine(line.trim()) || hasInlineTokenKey(line) || isDottedEnvTokenKey(line, true);
+      // Issue #29 review, 14th pass, Important finding 3: also re-checks
+      // hasEscapedQuotedKeyAssignment — defense-in-depth, same reasoning as
+      // the dotted-key re-check above (the pre-loop scan already fails
+      // every such line closed before `out` is even built, so this should
+      // never actually fire in practice).
+      return isTokenKeyLine(line.trim()) || hasInlineTokenKey(line) || isDottedEnvTokenKey(line, true) || hasEscapedQuotedKeyAssignment(line);
     });
     if (stillPresent) {
       // Removal logic believes it handled every AZITO_UI_TOKEN key

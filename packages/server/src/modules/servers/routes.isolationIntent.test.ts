@@ -1160,3 +1160,39 @@ describe('POST /api/servers/:name/agent/install — serialized via serverIsolati
     expect(opts.serverRepo.updateIsolationIntent).toHaveBeenCalledWith('srv', true);
   });
 });
+
+describe('POST /api/servers/:name/agent/install — blocked while isolated (Issue #29 review, 14th pass, Important finding 2)', () => {
+  function makeAgentInstaller(installImpl: ReturnType<typeof vi.fn>) {
+    return { install: installImpl } as unknown as ServersRouteOptions['agentInstaller'];
+  }
+
+  it('rejects with 409 and never calls the installer when the server is isolated', async () => {
+    const install = vi.fn(async () => ({ success: true, host: '1.2.3.4', port: 4000, token: 'newtok', version: '1.0.1', startMethod: 'nohup' }));
+    const opts = makeOpts({ agentInstaller: makeAgentInstaller(install) });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', sshHost: 'user@host', isolationIntent: true }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv/agent/install', payload: {} });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'isolation_intent_blocks_agent_install' });
+    expect(install).not.toHaveBeenCalled();
+    expect(opts.serverRepo.update).not.toHaveBeenCalled();
+  });
+
+  it('proceeds normally when the server is not isolated', async () => {
+    const install = vi.fn(async () => ({ success: true, host: '1.2.3.4', port: 4000, token: 'newtok', version: '1.0.1', startMethod: 'nohup' }));
+    const opts = makeOpts({ agentInstaller: makeAgentInstaller(install) });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', sshHost: 'user@host', isolationIntent: false }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv/agent/install', payload: {} });
+
+    expect(res.statusCode).toBe(200);
+    expect(install).toHaveBeenCalledTimes(1);
+  });
+});

@@ -13,7 +13,7 @@ import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoade
 import type { SidekickSyncService } from '../../sidekicks/SidekickSyncService';
 import type { IExecutionLogRepository, LogType } from '../ExecutionLog';
 import type { TmuxClient } from '../../tmux/TmuxClient';
-import { confirmOldWindowGone, createRotatedWindow, ensureSessionWithLock, rollbackWindowReference, runExclusiveForTask, ServerSnapshotMismatchError, type ServerIsolationLock } from './WindowRotation';
+import { confirmOldWindowGone, createRotatedWindow, createRotatedWindowInLock, ensureSessionWithLock, rollbackWindowReference, runExclusiveForTask, ServerSnapshotMismatchError, withServerLock, type ServerIsolationLock } from './WindowRotation';
 import type { KeyedMutex } from '../../../shared/keyedMutex';
 import type { IWorktreeService, WorktreeInfo } from '../../git/IWorktreeService';
 import type { WorktreeServiceFactory } from '../../git/WorktreeServiceFactory';
@@ -607,39 +607,55 @@ export class ExecuteTaskUseCase {
         // actually persisted.
         const currentTask = this.taskRepo.findById(taskId);
         if (!currentTask) throw new Error(`Task ${taskId} not found`);
-        if (currentTask.tmuxWindow) {
-          const preCheck = await this.tmux.listSessions(server);
-          const preSession = preCheck.find((s) => s.name === tmuxSession);
-          const oldWin = preSession?.windows.find((w) => w.name === currentTask.tmuxWindow);
-          await confirmOldWindowGone(
-            this.tmux,
-            server,
-            oldWin ? { target: `${tmuxSession}:${oldWin.index}`, kind: 'window' } : null,
-            task.id,
+
+        // Issue #29 review, 14th pass, Important finding 1: the per-server
+        // isolation lock is now acquired — and `server`'s snapshot verified
+        // against the freshly re-read row — BEFORE the old window is
+        // killed, not after. This used to kill the old window using the
+        // (possibly stale) `server` argument from before either lock was
+        // even queued for, and only reached the snapshot check afterwards
+        // inside `createRotatedWindow` — so a mismatch aborted AFTER the
+        // kill had already run, leaving `tmuxWindow` pointing at a
+        // now-dead window with no replacement ever created. `withServerLock`
+        // performs the lock+refetch+snapshot-check first; the kill and the
+        // window creation both run inside its callback, against the same
+        // `freshServer` row, so a mismatch now aborts before anything is
+        // killed.
+        const { windowName: newWindowName, tokenId: newTokenId, server: newServer } = await withServerLock(this.serverIsolationLock, server, true, async (freshServer) => {
+          if (currentTask.tmuxWindow) {
+            const preCheck = await this.tmux.listSessions(freshServer);
+            const preSession = preCheck.find((s) => s.name === tmuxSession);
+            const oldWin = preSession?.windows.find((w) => w.name === currentTask.tmuxWindow);
+            await confirmOldWindowGone(
+              this.tmux,
+              freshServer,
+              oldWin ? { target: `${tmuxSession}:${oldWin.index}`, kind: 'window' } : null,
+              task.id,
+            );
+            if (oldWin) await sleep(300);
+          }
+
+          // Create a new tmux window for the task — this call is the actual
+          // window-generation point, so it's the one that rotates the task
+          // token (TaskPaneEnvironmentService.buildEnvForNewWindow; design v3
+          // §2). createRotatedWindowInLock revokes the freshly-issued
+          // generation if creation fails, whether by throwing (local
+          // transport) or resolving with a non-zero exit code (agent
+          // transport — see WindowRotation.ts's doc comment; Issue #28
+          // third-party review finding).
+          return createRotatedWindowInLock(this.paneEnvService, freshServer, currentTask, 'execute_create_failed', (fs, env) =>
+            this.tmux.createWindow(fs, tmuxSession, `task-${task.id}`, { extraEnv: env }),
           );
-          if (oldWin) await sleep(300);
-        }
+        });
 
-        // Create a new tmux window for the task — this call is the actual
-        // window-generation point, so it's the one that rotates the task
-        // token (TaskPaneEnvironmentService.buildEnvForNewWindow; design v3
-        // §2). createRotatedWindow revokes the freshly-issued generation if
-        // creation fails, whether by throwing (local transport) or
-        // resolving with a non-zero exit code (agent transport — see
-        // WindowRotation.ts's doc comment; Issue #28 third-party review
-        // finding).
-        const created = await createRotatedWindow(this.paneEnvService, this.serverIsolationLock, server, currentTask, 'execute_create_failed', (freshServer, env) =>
-          this.tmux.createWindow(freshServer, tmuxSession, `task-${task.id}`, { extraEnv: env }),
-        );
-
-        this.taskRepo.update(taskId, { status: 'in_progress' as TaskStatus, tmuxWindow: created.windowName });
+        this.taskRepo.update(taskId, { status: 'in_progress' as TaskStatus, tmuxWindow: newWindowName });
         // `server` is returned too (Issue #29 review, 10th pass, Important
-        // finding 3) — createRotatedWindow re-read and actually created the
-        // window with this row; everything execute() does past this point
+        // finding 3) — the lock re-read and actually created the window
+        // with this row; everything execute() does past this point
         // (resolvePaneId, the worktree transport, the rollback's killWindow)
         // must keep using it, not the (possibly now-stale) `server` this
         // closure captured from its own outer scope.
-        return { windowName: created.windowName, tokenId: created.tokenId, server: created.server };
+        return { windowName: newWindowName, tokenId: newTokenId, server: newServer };
       }));
     } catch (err) {
       if (this.failOnServerSnapshotMismatch(err, taskId, unitId)) throw err;

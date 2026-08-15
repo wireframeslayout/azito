@@ -1554,6 +1554,50 @@ describe('ExecuteTaskUseCase window-rotation rollback safety (Issue #28 third-pa
 
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'followup_create_failed');
   });
+
+  // Issue #29 review, 14th pass, Important finding 1: the per-server
+  // isolation lock + snapshot check now wraps confirmOldWindowGone (the old
+  // window kill) as well as createRotatedWindow, not just the latter. Before
+  // this fix, execute() killed the leftover window using whatever `server`
+  // row it had resolved before ever queuing for the lock, and only reached
+  // the lock+snapshot-check afterwards inside createRotatedWindow — so a
+  // mismatch (e.g. a concurrent isolation PUT committing mid-flight) was
+  // discovered only AFTER the old window was already dead, leaving
+  // task.tmuxWindow pointing at a killed window with no replacement ever
+  // created. This test asserts the corrected ordering: the mismatch aborts
+  // BEFORE killWindow is ever called.
+  it('execute(): aborts BEFORE killing the leftover window when the row read inside the lock disagrees with the session-bootstrap row on a security field', async () => {
+    const unit = makeUnit({ id: 36, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 46, serverName: 'local-server', unitId: 36, tmuxWindow: 'old-window' });
+    const { useCase, tmux, paneEnvService, windowRepo, serverRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: null,
+    });
+    tmux.listSessions.mockResolvedValue([
+      { name: 'azito', windows: [{ name: 'old-window', index: 5 }] },
+    ]);
+    // First findByName call (ensureSessionWithLock's session-bootstrap span)
+    // returns a non-isolated row — execute() reassigns its own `server`
+    // variable to this row and carries it into the kill+create lock span.
+    // Second call (the kill+create span itself) returns a row that
+    // disagrees on isolationIntent, simulating a `PUT /api/servers/:name`
+    // isolation transition committing in the gap between the two lock
+    // spans.
+    let call = 0;
+    (serverRepo.findByName as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      call += 1;
+      return makeServer({ isolationIntent: call >= 2 });
+    });
+
+    await expect(useCase.execute(36, 46)).rejects.toThrow(/設定が実行準備中に変更された/);
+
+    expect(tmux.killWindow).not.toHaveBeenCalled();
+    expect(paneEnvService.buildEnvForNewWindow).not.toHaveBeenCalled();
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(windowRepo.add).not.toHaveBeenCalled();
+  });
 });
 
 // Issue #28 third-party review, second round: all 3 rollback sites used to

@@ -124,6 +124,62 @@ function refetchServer(lock: ServerIsolationLock, expected: ServerConfig, enforc
 }
 
 /**
+ * Standalone "acquire the per-server isolation lock, refetch, snapshot-check"
+ * primitive (Issue #29 review, 14th pass, Important finding 1). Every
+ * `create*` helper below already runs this exact sequence internally, but
+ * only around its OWN `create()` call — a caller that needs to run something
+ * else (most notably: killing the window a rotation is about to replace)
+ * BEFORE the window-creation span, and have that "something else" also
+ * benefit from the lock+snapshot-check, had no way to get at the fresh,
+ * snapshot-verified `ServerConfig` without either duplicating
+ * `refetchServer`'s logic or acquiring the lock twice (once for the kill,
+ * once for `create*` — reentrant on `KeyedMutex`, but leaves a window between
+ * the two acquisitions where a `PUT /api/servers/:name` could commit and the
+ * kill's own server row goes stale again).
+ *
+ * `ExecuteTaskUseCase.execute()` and `WindowRespawnService`'s per-window
+ * `run()` both used to call {@link confirmOldWindowGone} — which kills the
+ * OLD window generation — using whatever `server` row they had resolved
+ * before ever queuing for `serverIsolationMutex`, and only reached the
+ * lock+refetch+snapshot-check afterwards, inside `createRotatedWindow`. If
+ * that later check found the row had changed (isolation flipped, connection
+ * info swapped) it threw `ServerSnapshotMismatchError` — but by then the old
+ * window was ALREADY DEAD. The task was left aborted with `tmuxWindow` still
+ * pointing at a now-killed window and no replacement ever created — an
+ * orphaned reference the snapshot check exists specifically to prevent, not
+ * merely relocate to a slightly later point in the call.
+ *
+ * Both call sites now open one `withServerLock` span that covers
+ * kill-through-create: the lock is acquired and the snapshot verified FIRST,
+ * and only once that succeeds does the callback proceed to kill the old
+ * window and create the replacement — using the SAME `freshServer` row for
+ * both, via the `*InLock` counterparts of `createRotatedWindow`/
+ * `createSecondaryWindow`/`createPlainWindow` (which assume the lock is
+ * already held and skip re-acquiring it). A snapshot mismatch now aborts
+ * before anything is killed, exactly like every other pre-mutation check in
+ * these call sites.
+ *
+ * Not reentrant: callers already holding this same per-server lock (e.g.
+ * from inside another `withServerLock`/`create*` call) must not call this
+ * again for the same server — `KeyedMutex.withLock` would deadlock on a
+ * naive reentrant call from the same async chain since it is not designed as
+ * a reentrant primitive. None of the call sites in this codebase nest calls
+ * this way (each `run()`/`execute()`/`followUp()` opens exactly one span per
+ * rotation).
+ */
+export async function withServerLock<T>(
+  lock: ServerIsolationLock,
+  server: ServerConfig,
+  enforceSnapshot: boolean,
+  fn: (freshServer: ServerConfig) => Promise<T>,
+): Promise<T> {
+  return lock.serverIsolationMutex.withLock(server.name, async () => {
+    const freshServer = refetchServer(lock, server, enforceSnapshot);
+    return fn(freshServer);
+  });
+}
+
+/**
  * Shared "kill-then-rotate" operation (Issue #28 third-party review,
  * execute()/followUp() rollback-safety fix): the same order and rollback
  * WindowRespawnService.respawn() already established —
@@ -326,43 +382,59 @@ export async function createRotatedWindow(
   // `applyTokenMaskingOrCompat`'s isolation check exists to close, just with
   // the race moved one layer up from "which branch runs" to "which server
   // row the check itself runs against".
-  return lock.serverIsolationMutex.withLock(server.name, async () => {
-    const freshServer = refetchServer(lock, server, enforceSnapshot);
-    const { env, tokenId } = paneEnvService.buildEnvForNewWindow(task, freshServer);
-    let created: { result: ExecResult; windowName: string };
-    try {
-      created = await create(freshServer, env);
-    } catch (err) {
-      // Revoke only the generation THIS call just issued (`tokenId`), never a
-      // blanket revokeAllForTask — a concurrent rotation for the same task may
-      // already have issued and persisted a newer generation by the time this
-      // failure is handled (see runExclusiveForTask's doc comment for why
-      // callers are expected to serialize rotations per task in the first
-      // place; this scoping is the second, independent half of that fix).
-      paneEnvService.revokeGeneration(tokenId, reasonOnFailure);
-      throw err;
-    }
-    if (created.result.code !== 0) {
-      paneEnvService.revokeGeneration(tokenId, reasonOnFailure);
-      throw new Error(
-        `Failed to create tmux window (exit ${created.result.code}): ${created.result.stderr || created.result.stdout}`,
-      );
-    }
-    // `env` (Issue #28 review Critical finding) — returned so a caller that
-    // (re)creates a MULTI-pane window can pass this exact env to every
-    // subsequent split-window it does for the same window (TmuxClient.splitPane's
-    // `extraEnv`): only the window's first pane inherits what new-window/
-    // new-session's own `-e` set, so a later split-window must be told the same
-    // env explicitly or it silently inherits the tmux SESSION's environment
-    // instead (see splitPane's doc comment). `tokenId` is returned so a caller
-    // that later needs to roll THIS generation back (rollbackWindowReference,
-    // for a failure downstream of window creation) can do so precisely.
-    // `server` (the freshly re-read row) is returned too, so a caller whose
-    // OWN subsequent tmux calls (resolvePaneId, splitPane, ...) should keep
-    // using the exact connection info this window was actually created with
-    // can do so instead of falling back to its now-possibly-stale argument.
-    return { windowName: created.windowName, env, tokenId, server: freshServer };
-  });
+  return withServerLock(lock, server, enforceSnapshot, (freshServer) => createRotatedWindowInLock(paneEnvService, freshServer, task, reasonOnFailure, create));
+}
+
+/**
+ * Core of {@link createRotatedWindow}, factored out (Issue #29 review, 14th
+ * pass, Important finding 1) for callers that need to run something ELSE
+ * (e.g. {@link confirmOldWindowGone}) inside the SAME `withServerLock` span
+ * that verified `freshServer`'s snapshot — see {@link withServerLock}'s doc
+ * comment for the orphaning bug this closes. Assumes the per-server
+ * isolation lock is already held and `freshServer` is the row it was
+ * verified against; does no locking or refetching of its own.
+ */
+export async function createRotatedWindowInLock(
+  paneEnvService: TaskPaneEnvironmentService,
+  freshServer: ServerConfig,
+  task: Task,
+  reasonOnFailure: string,
+  create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string }>,
+): Promise<{ windowName: string; env: Record<string, string>; tokenId: number; server: ServerConfig }> {
+  const { env, tokenId } = paneEnvService.buildEnvForNewWindow(task, freshServer);
+  let created: { result: ExecResult; windowName: string };
+  try {
+    created = await create(freshServer, env);
+  } catch (err) {
+    // Revoke only the generation THIS call just issued (`tokenId`), never a
+    // blanket revokeAllForTask — a concurrent rotation for the same task may
+    // already have issued and persisted a newer generation by the time this
+    // failure is handled (see runExclusiveForTask's doc comment for why
+    // callers are expected to serialize rotations per task in the first
+    // place; this scoping is the second, independent half of that fix).
+    paneEnvService.revokeGeneration(tokenId, reasonOnFailure);
+    throw err;
+  }
+  if (created.result.code !== 0) {
+    paneEnvService.revokeGeneration(tokenId, reasonOnFailure);
+    throw new Error(
+      `Failed to create tmux window (exit ${created.result.code}): ${created.result.stderr || created.result.stdout}`,
+    );
+  }
+  // `env` (Issue #28 review Critical finding) — returned so a caller that
+  // (re)creates a MULTI-pane window can pass this exact env to every
+  // subsequent split-window it does for the same window (TmuxClient.splitPane's
+  // `extraEnv`): only the window's first pane inherits what new-window/
+  // new-session's own `-e` set, so a later split-window must be told the same
+  // env explicitly or it silently inherits the tmux SESSION's environment
+  // instead (see splitPane's doc comment). `tokenId` is returned so a caller
+  // that later needs to roll THIS generation back (rollbackWindowReference,
+  // for a failure downstream of window creation) can do so precisely.
+  // `server` (the freshly re-read row) is returned too, so a caller whose
+  // OWN subsequent tmux calls (resolvePaneId, splitPane, ...) should keep
+  // using the exact connection info this window was actually created with
+  // can do so instead of falling back to its now-possibly-stale argument.
+  return { windowName: created.windowName, env, tokenId, server: freshServer };
 }
 
 /**
@@ -385,12 +457,19 @@ export async function createSecondaryWindow(
   create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string }>,
   enforceSnapshot = true,
 ): Promise<{ windowName: string; env: Record<string, string>; server: ServerConfig }> {
-  return lock.serverIsolationMutex.withLock(server.name, async () => {
-    const freshServer = refetchServer(lock, server, enforceSnapshot);
-    const env = paneEnvService.buildEnvForSecondaryWindow(task, freshServer);
-    const created = await create(freshServer, env);
-    return { windowName: created.windowName, env, server: freshServer };
-  });
+  return withServerLock(lock, server, enforceSnapshot, (freshServer) => createSecondaryWindowInLock(paneEnvService, freshServer, task, create));
+}
+
+/** Core of {@link createSecondaryWindow} — see {@link createRotatedWindowInLock}'s doc comment for why this split exists. */
+export async function createSecondaryWindowInLock(
+  paneEnvService: TaskPaneEnvironmentService,
+  freshServer: ServerConfig,
+  task: Task,
+  create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string }>,
+): Promise<{ windowName: string; env: Record<string, string>; server: ServerConfig }> {
+  const env = paneEnvService.buildEnvForSecondaryWindow(task, freshServer);
+  const created = await create(freshServer, env);
+  return { windowName: created.windowName, env, server: freshServer };
 }
 
 /**
@@ -414,12 +493,18 @@ export async function createPlainWindow(
   create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string }>,
   enforceSnapshot = true,
 ): Promise<{ windowName: string; env: Record<string, string>; server: ServerConfig }> {
-  return lock.serverIsolationMutex.withLock(server.name, async () => {
-    const freshServer = refetchServer(lock, server, enforceSnapshot);
-    const env = tmux.uiTokenEnvForServer(freshServer);
-    const created = await create(freshServer, env);
-    return { windowName: created.windowName, env, server: freshServer };
-  });
+  return withServerLock(lock, server, enforceSnapshot, (freshServer) => createPlainWindowInLock(tmux, freshServer, create));
+}
+
+/** Core of {@link createPlainWindow} — see {@link createRotatedWindowInLock}'s doc comment for why this split exists. */
+export async function createPlainWindowInLock(
+  tmux: Pick<TmuxClient, 'uiTokenEnvForServer'>,
+  freshServer: ServerConfig,
+  create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string }>,
+): Promise<{ windowName: string; env: Record<string, string>; server: ServerConfig }> {
+  const env = tmux.uiTokenEnvForServer(freshServer);
+  const created = await create(freshServer, env);
+  return { windowName: created.windowName, env, server: freshServer };
 }
 
 /**

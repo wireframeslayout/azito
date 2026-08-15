@@ -302,7 +302,18 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     );
     if (res.steps) setReinstallSteps(res.steps);
     setReinstalling(null);
-    if (res.error) showToast(`Reinstall failed: ${res.error}`);
+    if (res.error) {
+      // Issue #29 review, 14th pass, Important finding 2: the server now
+      // rejects agent-install on an isolated server with this error code
+      // (see routes.ts's doc comment) — give it the same localized toast
+      // treatment as the PUT handler's isolation gates instead of showing
+      // the raw error code.
+      if (res.error === 'isolation_intent_blocks_agent_install') {
+        showToast(t('overview.isolationBlocksAgentInstallToast'));
+      } else {
+        showToast(`Reinstall failed: ${res.error}`);
+      }
+    }
     refreshAll();
   }, [refreshAll, confirm, showToast, t]);
 

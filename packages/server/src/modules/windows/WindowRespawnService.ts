@@ -21,7 +21,17 @@ import { resolveExecutionManifest, hashExecutionManifest, type RespawnManifestIn
 import { appendLogAndEmit } from '../tasks/execution/AppendLog';
 import type { TaskPaneEnvironmentService } from '../tasks/execution/TaskPaneEnvironmentService';
 import { resolveTmuxSession } from '../tasks/execution/TaskExecutionEnv';
-import { confirmOldWindowGone, createPlainWindow, createRotatedWindow, createSecondaryWindow, rollbackWindowReference, runExclusiveForTask, type ServerIsolationLock } from '../tasks/execution/WindowRotation';
+import {
+  confirmOldWindowGone,
+  createPlainWindowInLock,
+  createRotatedWindow,
+  createRotatedWindowInLock,
+  createSecondaryWindowInLock,
+  rollbackWindowReference,
+  runExclusiveForTask,
+  withServerLock,
+  type ServerIsolationLock,
+} from '../tasks/execution/WindowRotation';
 import type { KeyedMutex } from '../../shared/keyedMutex';
 import { resolveKillOutcome } from '../tmux/killOutcome';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
@@ -279,102 +289,86 @@ export class WindowRespawnService {
       const windowPart = curParts[1]?.split('.')[0];
       if (!windowPart) throw new Error(`Invalid tmuxTarget: ${currentWin.tmuxTarget}`);
 
-      // Pre-lock snapshot, used ONLY to decide whether the OLD window needs
-      // killing below (confirmOldWindowGone) — kill targets don't depend on
-      // isolationIntent, so this snapshot's own staleness is harmless there.
-      // It must NOT be reused to decide createSession-vs-createWindow for
-      // the REPLACEMENT window (see doCreate below): that decision has to
-      // reflect the session state as of the moment the isolation lock is
-      // actually held, not as of whenever this call happened to be queued.
-      const staleSessions = await this.tmux.listSessions(server);
-      const staleSessionExists = staleSessions.some((s) => s.name === sessionName);
+      // Issue #29 review, 14th pass, Important finding 1: the per-server
+      // isolation lock is now acquired — and `server`'s snapshot verified
+      // against the freshly re-read row — BEFORE the old window is killed,
+      // not after. This used to list sessions and run confirmOldWindowGone
+      // (which KILLS the old window) against the `server` argument from
+      // before this call was even queued for the lock, and only reached the
+      // lock+snapshot-check afterwards, inside createRotatedWindow/
+      // createSecondaryWindow/createPlainWindow — so a mismatch (isolation
+      // flipped, connection info swapped mid-flight) aborted AFTER the old
+      // window was already dead, leaving the Window row pointing at a
+      // now-killed target with no replacement ever created. `withServerLock`
+      // performs the lock+refetch+snapshot-check first; the kill, the
+      // create-vs-createSession decision (via `doCreate`, which re-lists
+      // sessions again from `freshServer` — Issue #29 review, 9th pass,
+      // Important finding 2, still honored here), and the window creation
+      // itself all run inside its callback, against the SAME `freshServer`
+      // row throughout.
+      let createdViaNewSession = false;
+      const {
+        newName,
+        windowEnv,
+        tokenId,
+        server: respawnServer,
+      } = await withServerLock(this.serverIsolationLock, server, true, async (freshServer) => {
+        const sessions = await this.tmux.listSessions(freshServer);
+        const sessionExists = sessions.some((s) => s.name === sessionName);
+        const session = sessions.find((s) => s.name === sessionName);
+        const windowAlive = sessionExists && (session?.windows.some((w) => w.name === windowPart) ?? false);
 
-      // Confirm the old window is actually gone BEFORE rotating the task
-      // token (Issue #28 third-party review finding 3), via the same shared
-      // operation execute()/followUp() now use (WindowRotation.ts) —
-      // buildEnvForNewWindow() revokes the current token generation and
-      // issues a new one, so calling it while the old window might still be
-      // alive (a killWindow() failure was previously swallowed via
-      // `.catch(() => {})`) could leave that still-live pane holding a
-      // now-dead credential.
-      const staleSession = staleSessions.find((s) => s.name === sessionName);
-      const windowAlive = staleSessionExists && (staleSession?.windows.some((w) => w.name === windowPart) ?? false);
+        // Confirm the old window is actually gone BEFORE rotating the task
+        // token (Issue #28 third-party review finding 3), via the same
+        // shared operation execute()/followUp() now use (WindowRotation.ts)
+        // — buildEnvForNewWindow() revokes the current token generation and
+        // issues a new one, so calling it while the old window might still
+        // be alive (a killWindow() failure was previously swallowed via
+        // `.catch(() => {})`) could leave that still-live pane holding a
+        // now-dead credential.
+        await confirmOldWindowGone(
+          this.tmux,
+          freshServer,
+          windowAlive ? { target: `${sessionName}:${windowPart}`, kind: 'window' } : null,
+          isPrimary ? task!.id : null,
+        );
 
-      await confirmOldWindowGone(
-        this.tmux,
-        server,
-        windowAlive ? { target: `${sessionName}:${windowPart}`, kind: 'window' } : null,
-        isPrimary ? task!.id : null,
-      );
+        createdViaNewSession = !sessionExists;
+        const doCreate = async (fs: ServerConfig, env: Record<string, string>) => {
+          // Re-lists sessions from `fs` (Issue #29 review, 9th pass,
+          // Important finding 2) rather than trusting `sessionExists`
+          // above: `fs` here is the SAME `freshServer` the outer lock
+          // already re-read, but re-checking immediately before the actual
+          // create call keeps this decision resilient to a session
+          // teardown/creation racing between the two reads within the same
+          // lock turn.
+          const freshSessions = await this.tmux.listSessions(fs);
+          const freshSessionExists = freshSessions.some((s) => s.name === sessionName);
+          createdViaNewSession = !freshSessionExists;
+          return !freshSessionExists
+            ? this.tmux.createSession(fs, sessionName, { windowName: windowPart, exactName: true, extraEnv: env })
+            : this.tmux.createWindow(fs, sessionName, windowPart, { exactName: true, extraEnv: env });
+        };
 
-      // Re-derives whether `sessionName` still exists from `freshServer`
-      // (Issue #29 review, 9th pass, Important finding 2) — `freshServer` is
-      // only available once createRotatedWindow/createSecondaryWindow/
-      // createPlainWindow have actually acquired the per-server isolation
-      // lock and re-read the row, i.e. exactly when this `create` callback
-      // itself runs. Re-listing sessions here (rather than trusting
-      // `staleSessionExists` above) closes the gap where a concurrent
-      // session teardown/creation lands between this call being queued and
-      // the lock actually being acquired.
-      // Set by `doCreate` below to the freshly re-checked value — read after
-      // creation (for the sleep duration) so it reflects the branch
-      // `doCreate` actually took, not the pre-lock `staleSessionExists`.
-      let createdViaNewSession = !staleSessionExists;
-      const doCreate = async (freshServer: ServerConfig, env: Record<string, string>) => {
-        const freshSessions = await this.tmux.listSessions(freshServer);
-        const freshSessionExists = freshSessions.some((s) => s.name === sessionName);
-        createdViaNewSession = !freshSessionExists;
-        return !freshSessionExists
-          ? this.tmux.createSession(freshServer, sessionName, { windowName: windowPart, exactName: true, extraEnv: env })
-          : this.tmux.createWindow(freshServer, sessionName, windowPart, { exactName: true, extraEnv: env });
-      };
-
-      let newName: string;
-      // `windowEnv` is reused below for every additional pane restorePaneLayout
-      // creates via splitPane() — see TmuxClient.splitPane's doc comment for
-      // why a split pane needs the SAME env explicitly, not just the first
-      // pane new-window/new-session set (Issue #28 review Critical finding).
-      let windowEnv: Record<string, string>;
-      // Only set for the primary branch — the only branch that rotated a
-      // task token (createRotatedWindow) and therefore has a generation to
-      // roll back below on a downstream failure.
-      let tokenId: number | null = null;
-      // The server row actually used to create the new window (Issue #29
-      // review, 9th pass, Important finding 2): createRotatedWindow/
-      // createSecondaryWindow/createPlainWindow all re-read this fresh,
-      // AFTER acquiring the per-server isolation lock — every downstream
-      // tmux call in this turn (pane restore, resolvePaneId, rollback kill)
-      // must keep using THIS value, never the `server` argument this
-      // function was called with, which can already be stale by the time
-      // any of that runs.
-      let respawnServer: ServerConfig;
-      if (isPrimary) {
-        const created = await createRotatedWindow(this.paneEnvService, this.serverIsolationLock, server, task!, 'respawn_create_failed', doCreate);
-        newName = created.windowName;
-        windowEnv = created.env;
-        tokenId = created.tokenId;
-        respawnServer = created.server;
-      } else if (task) {
-        const created = await createSecondaryWindow(this.paneEnvService, this.serverIsolationLock, server, task, doCreate);
-        windowEnv = created.env;
-        newName = created.windowName;
-        respawnServer = created.server;
-      } else {
-        // Non-task window respawn — server-aware legacy default (Issue #29
-        // review, Critical finding 1): withholds the token when the server
-        // is declared isolated, same as the manual session/window/pane
-        // routes. Now goes through createPlainWindow (Issue #29 review, 9th
-        // pass, Important finding 1) so this branch also runs the
-        // env-resolution -> create() span inside the same per-server
-        // isolation lock as the primary/secondary branches, against a
-        // freshly re-fetched server row, instead of building
-        // uiTokenEnvForServer from the caller's possibly-stale `server` and
-        // creating with no lock at all.
-        const created = await createPlainWindow(this.tmux, this.serverIsolationLock, server, doCreate);
-        windowEnv = created.env;
-        newName = created.windowName;
-        respawnServer = created.server;
-      }
+        if (isPrimary) {
+          const created = await createRotatedWindowInLock(this.paneEnvService, freshServer, task!, 'respawn_create_failed', doCreate);
+          return { newName: created.windowName, windowEnv: created.env, tokenId: created.tokenId as number | null, server: created.server };
+        } else if (task) {
+          const created = await createSecondaryWindowInLock(this.paneEnvService, freshServer, task, doCreate);
+          return { newName: created.windowName, windowEnv: created.env, tokenId: null as number | null, server: created.server };
+        } else {
+          // Non-task window respawn — server-aware legacy default (Issue #29
+          // review, Critical finding 1): withholds the token when the server
+          // is declared isolated, same as the manual session/window/pane
+          // routes. Goes through createPlainWindowInLock (Issue #29 review,
+          // 9th pass, Important finding 1) so this branch also runs its
+          // env-resolution -> create() span inside the same per-server
+          // isolation lock as the primary/secondary branches, against the
+          // freshly re-fetched `freshServer` row.
+          const created = await createPlainWindowInLock(this.tmux, freshServer, doCreate);
+          return { newName: created.windowName, windowEnv: created.env, tokenId: null as number | null, server: created.server };
+        }
+      });
       await sleep(createdViaNewSession ? 500 : 300);
 
       const baseTarget = `${sessionName}:${newName}`;

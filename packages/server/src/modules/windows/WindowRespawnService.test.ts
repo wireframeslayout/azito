@@ -689,7 +689,16 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
     const task = makeTask({ id: 5, unitId: 10 });
     const unit = makeUnit({ id: 10 });
     const win = makeWindow({ taskId: 5, tmuxTarget: 'azito:task-1--ab12.1' });
-    const { service, tmux, paneEnvService } = buildService({ window: win, task, unit });
+    const { service, tmux, paneEnvService, serverRepo } = buildService({ window: win, task, unit });
+    // buildService()'s default serverRepo.findByName returns
+    // makeServer({ name }) (type: 'local') regardless of what is passed to
+    // respawn() — this test's own `server` argument is deliberately
+    // type: 'agent' (the agent-transport kill-outcome behavior under test),
+    // so the mock must match it or the server-snapshot check (Issue #29
+    // review, 12th/14th pass) correctly rejects a mismatch before the kill
+    // this test is actually about ever runs — see the next test's own
+    // identical comment.
+    serverRepo.findByName.mockImplementation((name: string) => makeServer({ name, type: 'agent' }));
     tmux.listSessions.mockResolvedValue([{
       name: 'azito',
       windowCount: 1,
@@ -704,6 +713,49 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
     expect(paneEnvService.buildEnvForNewWindow).not.toHaveBeenCalled();
     expect(tmux.createWindow).not.toHaveBeenCalled();
     expect(tmux.createSession).not.toHaveBeenCalled();
+  });
+
+  // Issue #29 review, 14th pass, Important finding 1: the per-server
+  // isolation lock + snapshot check now runs BEFORE the old window is
+  // killed, not after (see WindowRotation.ts's withServerLock doc comment).
+  // Before this fix, a snapshot mismatch was only discovered once
+  // createRotatedWindow's own lock+refetch ran — by which point the old
+  // window had already been killed by confirmOldWindowGone, using the
+  // (stale) `server` argument this call was made with. This test asserts
+  // the corrected ordering directly: with a security-relevant field
+  // (isolationIntent) disagreeing between the `server` respawn() was called
+  // with and the row actually committed by the time the lock is acquired,
+  // the old (still-alive) window must survive untouched — killWindow is
+  // never even attempted, and the Window row keeps pointing at it.
+  it('aborts BEFORE killing the old window when the refetched row disagrees on a security field (e.g. isolationIntent)', async () => {
+    const task = makeTask({ id: 5, unitId: 10 });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ id: 1, taskId: 5, tmuxTarget: 'azito:task-1--ab12.1' });
+    const { service, tmux, paneEnvService, windowRepo, serverRepo } = buildService({ window: win, task, unit });
+    const staleServer = makeServer({ isolationIntent: false });
+    const freshServer = makeServer({ isolationIntent: true });
+    serverRepo.findByName.mockImplementation(() => freshServer);
+    tmux.listSessions.mockResolvedValue([{
+      name: 'azito',
+      windowCount: 1,
+      attached: false,
+      created: 0,
+      windows: [{ name: 'task-1--ab12', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+
+    await expect(service.respawn(1, staleServer)).rejects.toThrow(/設定が実行準備中に変更された/);
+
+    // The old window was NEVER killed — the snapshot mismatch aborted the
+    // whole span before confirmOldWindowGone (which calls killWindow) ever
+    // ran.
+    expect(tmux.killWindow).not.toHaveBeenCalled();
+    // Nothing was rotated or created either.
+    expect(paneEnvService.buildEnvForNewWindow).not.toHaveBeenCalled();
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(tmux.createSession).not.toHaveBeenCalled();
+    // The Window row still points at the original (untouched, still-live)
+    // target — never updated to a replacement that was never created.
+    expect(windowRepo.update).not.toHaveBeenCalled();
   });
 
   it('proceeds with rotation when the agent-transport kill resolves with a non-zero code but the window was already gone', async () => {

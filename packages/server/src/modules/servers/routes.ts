@@ -627,6 +627,28 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
 
+      // Issue #29 review, 14th pass, Important finding 2: `PUT /api/servers/:name`
+      // rejects ANY connection-info change while `isolationIntent` is (or
+      // would remain) true (see that handler's `connectionInfoChanged` gate
+      // above) — but this route writes a fresh host/port/token snapshot back
+      // onto the SAME row on install success (below) via the exact same
+      // "read -> remote work -> write connection info" shape, with no such
+      // check. An isolated server's agent-install therefore bypassed the
+      // PUT invariant entirely: an operator (or a script) could reinstall
+      // the agent on an isolated server and have this route silently
+      // overwrite `host`/`agentPort`/`agentToken` with whatever the fresh
+      // install produced, even though isolation was never disabled first.
+      // Rejecting here, before any remote work starts, mirrors the PUT
+      // handler's own policy — the isolation lock (acquired above) already
+      // serializes this against a concurrent isolation PUT, so `srv` here is
+      // never stale relative to that transition.
+      if (srv.isolationIntent === true) {
+        return reply.status(409).send({
+          error: 'isolation_intent_blocks_agent_install',
+          message: '隔離が有効なサーバーではエージェントの再インストールができません。先に隔離を無効化（isolationIntent: false のみを指定した PUT）してから再インストールしてください。',
+        });
+      }
+
       const sshHost = srv.sshHost || srv.host;
       if (!sshHost) return reply.status(400).send({ error: 'No SSH host configured for this server' });
 
