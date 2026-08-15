@@ -53,10 +53,21 @@ export function useServerEditForm() {
       }
       body.isolationIntent = editIsolationIntent;
     }
-    const res = await api<{ error?: string; isolationCleanup?: 'done' | 'failed' | 'skipped' }>(`/servers/${encodeURIComponent(editServer.name)}`, {
+    const res = await api<{ error?: string; windowCount?: number; isolationCleanup?: 'done' | 'failed' | 'skipped' }>(`/servers/${encodeURIComponent(editServer.name)}`, {
       method: 'PUT', body: JSON.stringify(body),
     });
-    if (res.error) { showToast(res.error); return false; }
+    if (res.error) {
+      // Issue #29 review, Critical finding 1: the false->true isolation gate
+      // (routes.ts) rejects with this error code + windowCount when windows
+      // may already hold injected credentials — translate it into a
+      // localized, count-bearing toast rather than showing the raw code.
+      if (res.error === 'isolation_intent_blocked_by_windows') {
+        showToast(t('overview.isolationBlockedByWindowsToast', { count: res.windowCount ?? 0 }));
+      } else {
+        showToast(res.error);
+      }
+      return false;
+    }
     // Issue #29 review (3rd pass), Important finding 4: a false->true
     // transition attempts a synchronous cleanup of any previously-distributed
     // operator token server-side (routes.ts attemptIsolationCleanup) — surface

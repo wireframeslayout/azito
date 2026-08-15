@@ -806,62 +806,36 @@ codex_mcp_replace() {
 # isn't found (a future codex-cli version changing the on-disk format, a
 # hand-edited config, etc.), this fails closed (SETUP_HAD_ERRORS=1) rather
 # than silently doing nothing or falling back to the lossy remove+add.
+# Issue #29 review, Important finding 2 (4th pass): the previous version
+# gated the whole purge on `codex` CLI presence (`command -v codex` /
+# `codex mcp get azt-mcp`) and treated its absence/failure as "nothing to
+# purge" (return 0 = success). But config.toml is edited directly, not via
+# the CLI — a machine with codex uninstalled (or a `codex mcp get` that
+# fails for any transient reason) can still have a live AZITO_UI_TOKEN
+# sitting in config.toml from a prior install, and that token would then
+# never be cleaned up while the caller is told the purge succeeded. This
+# version inspects/edits $CODEX_HOME/config.toml directly, independent of
+# whether the `codex` binary is even present: file-absent is the only case
+# treated as "nothing to clean up" (success); a present-but-unparseable
+# file, or a present file this script cannot confirm is token-free, fails
+# closed (SETUP_HAD_ERRORS=1).
 strip_codex_ui_token() {
-  command -v codex >/dev/null 2>&1 || return 0
-  codex mcp get azt-mcp >/dev/null 2>&1 || return 0
-  if ! command -v node >/dev/null 2>&1; then
-    echo "  azt-mcp (Codex): AZITO_UI_TOKEN 除去に node が必要です。'codex mcp get azt-mcp' で手動確認してください" >&2
-    # Issue #29 review (3rd pass), Critical finding 1: this function only
-    # runs under --purge-operator-token (see call site). Without node there
-    # is no way to inspect/edit the Codex MCP registration's env, so a
-    # leftover AZITO_UI_TOKEN cannot actually be confirmed absent — fail
-    # closed instead of returning 0 (which the caller would otherwise read
-    # as "purge succeeded").
-    SETUP_HAD_ERRORS=1
-    return 1
-  fi
+  local codex_home="${CODEX_HOME:-$HOME/.codex}"
+  local codex_config="$codex_home/config.toml"
 
-  local raw
-  raw="$(codex mcp get azt-mcp --json 2>/dev/null || true)"
-  [[ -z "$raw" ]] && return 0
-
-  # Issue #29 review (3rd pass), Critical finding 1: a JSON.parse failure
-  # used to fall through the same path as "no AZITO_UI_TOKEN present" (both
-  # left has_token empty), so a parse failure silently reported purge
-  # success. Capture node's own exit status via a plain variable assignment
-  # (process substitution would otherwise discard it) and fail closed on a
-  # non-zero exit -- process.exitCode is set to 1 in the catch block
-  # specifically so this check can tell the two cases apart.
-  local has_token node_status=0
-  has_token="$(printf '%s' "$raw" | node -e '
-    let data = "";
-    process.stdin.on("data", (c) => { data += c; });
-    process.stdin.on("end", () => {
-      try {
-        const j = JSON.parse(data);
-        const env = (j && j.transport && j.transport.env) || {};
-        process.stdout.write(("AZITO_UI_TOKEN" in env) ? "1" : "0");
-      } catch (e) {
-        process.stderr.write("parse failed: " + e + "\n");
-        process.exitCode = 1;
-      }
-    });
-  ')" || node_status=$?
-
-  if [[ "$node_status" -ne 0 ]]; then
-    echo "  azt-mcp (Codex): 'codex mcp get azt-mcp --json' の解析に失敗しました。'codex mcp get azt-mcp' で手動確認してください" >&2
-    SETUP_HAD_ERRORS=1
-    return 1
-  fi
-
-  if [[ "$has_token" != "1" ]]; then
+  # No config.toml at all means azt-mcp was never registered via `codex mcp
+  # add` on this host (or Codex itself was never set up) — genuinely nothing
+  # to purge, independent of whether the `codex` binary happens to be on
+  # PATH right now.
+  if [[ ! -f "$codex_config" ]]; then
     return 0
   fi
 
-  local codex_home="${CODEX_HOME:-$HOME/.codex}"
-  local codex_config="$codex_home/config.toml"
-  if [[ ! -f "$codex_config" ]]; then
-    echo "  azt-mcp (Codex): $codex_config が見つかりません。'codex mcp get azt-mcp --json' が AZITO_UI_TOKEN を報告していますが除去できませんでした。手動確認してください" >&2
+  if ! command -v node >/dev/null 2>&1; then
+    echo "  azt-mcp (Codex): AZITO_UI_TOKEN 除去に node が必要です。$codex_config を手動確認してください" >&2
+    # config.toml exists but cannot be inspected/edited without node, so a
+    # leftover AZITO_UI_TOKEN cannot be confirmed absent — fail closed
+    # rather than returning 0 (which the caller would read as "purged").
     SETUP_HAD_ERRORS=1
     return 1
   fi
@@ -873,20 +847,22 @@ strip_codex_ui_token() {
   local orig_mode
   orig_mode="$(stat -c%a "$codex_config" 2>/dev/null || stat -f%Lp "$codex_config" 2>/dev/null || echo 600)"
 
-  local tmp
+  local tmp result node_status=0
   tmp="$(mktemp "$codex_config.XXXXXX")"
-  if node -e '
+  result="$(node -e '
     const fs = require("fs");
     const [inPath, outPath] = process.argv.slice(1);
     const lines = fs.readFileSync(inPath, "utf8").split("\n");
     const sectionHeader = "[mcp_servers.azt-mcp.env]";
     let inSection = false;
+    let sawSection = false;
     let removed = false;
     const out = [];
     for (const line of lines) {
       const trimmed = line.trim();
       if (trimmed === sectionHeader) {
         inSection = true;
+        sawSection = true;
         out.push(line);
         continue;
       }
@@ -899,22 +875,46 @@ strip_codex_ui_token() {
       }
       out.push(line);
     }
-    if (!removed) {
-      process.stderr.write("AZITO_UI_TOKEN line not found under " + sectionHeader + "\n");
-      process.exitCode = 1;
-    } else {
-      fs.writeFileSync(outPath, out.join("\n"));
+    if (!sawSection) {
+      // azt-mcp has no [mcp_servers.azt-mcp.env] table at all (never
+      // registered with env vars, or registered without one) — confidently
+      // nothing to purge.
+      process.stdout.write("no-section");
+      process.exit(0);
     }
-  ' "$codex_config" "$tmp"; then
-    chmod "$orig_mode" "$tmp"
-    mv -f "$tmp" "$codex_config"
-    echo "  azt-mcp (Codex): --purge-operator-token により config.toml から AZITO_UI_TOKEN を除去しました"
-  else
+    if (!removed) {
+      // The env table exists but already has no AZITO_UI_TOKEN line —
+      // already clean.
+      process.stdout.write("clean");
+      process.exit(0);
+    }
+    fs.writeFileSync(outPath, out.join("\n"));
+    process.stdout.write("removed");
+  ' "$codex_config" "$tmp")" || node_status=$?
+
+  if [[ "$node_status" -ne 0 ]]; then
     rm -f "$tmp"
-    echo "  azt-mcp (Codex): $codex_config 内で想定した TOML 形式が見つかりませんでした（'codex mcp get azt-mcp --json' は AZITO_UI_TOKEN ありと報告）。手動で config.toml を確認してください" >&2
+    echo "  azt-mcp (Codex): $codex_config の解析に失敗しました。手動確認してください" >&2
     SETUP_HAD_ERRORS=1
     return 1
   fi
+
+  case "$result" in
+    removed)
+      chmod "$orig_mode" "$tmp"
+      mv -f "$tmp" "$codex_config"
+      echo "  azt-mcp (Codex): --purge-operator-token により config.toml から AZITO_UI_TOKEN を除去しました"
+      ;;
+    no-section|clean)
+      rm -f "$tmp"
+      ;;
+    *)
+      rm -f "$tmp"
+      echo "  azt-mcp (Codex): $codex_config の解析結果を判定できませんでした。手動確認してください" >&2
+      SETUP_HAD_ERRORS=1
+      return 1
+      ;;
+  esac
 }
 
 # ── Codex CLI ──

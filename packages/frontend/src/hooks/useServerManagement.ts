@@ -257,10 +257,18 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
       }
       body.isolationIntent = editIsolationIntent;
     }
-    const res = await api<{ error?: string; isolationCleanup?: 'done' | 'failed' | 'skipped' }>(`/servers/${editServer.name}`, {
+    const res = await api<{ error?: string; windowCount?: number; isolationCleanup?: 'done' | 'failed' | 'skipped' }>(`/servers/${editServer.name}`, {
       method: 'PUT', body: JSON.stringify(body),
     });
-    if (res.error) return showToast(res.error);
+    if (res.error) {
+      // Issue #29 review, Critical finding 1: see useServerEditForm's
+      // identical handling — this hook drives the other edit path
+      // (ServersListPage) and must surface the same localized toast.
+      if (res.error === 'isolation_intent_blocked_by_windows') {
+        return showToast(t('overview.isolationBlockedByWindowsToast', { count: res.windowCount ?? 0 }));
+      }
+      return showToast(res.error);
+    }
     // Issue #29 review (3rd pass), Important finding 4: see
     // useServerEditForm's identical handling — this hook drives the other
     // edit path (ServersListPage) and must surface the same outcome.

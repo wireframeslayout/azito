@@ -45,6 +45,10 @@ function makeOpts(overrides: Partial<ServersRouteOptions> = {}): ServersRouteOpt
     serverRepo,
     tmux: {} as ServersRouteOptions['tmux'],
     transportFactory: { invalidate: vi.fn() } as unknown as ServersRouteOptions['transportFactory'],
+    // Issue #29 review, Critical finding 1: no windows registered by
+    // default, so the false->true gate is a no-op unless a test overrides
+    // findByServer to return risky rows.
+    windowRepo: { findByServer: vi.fn(() => []) } as unknown as ServersRouteOptions['windowRepo'],
     webhookToken: 'wh',
     uiToken: 'ui',
     ...overrides,
@@ -401,5 +405,82 @@ describe('PUT /api/servers/:name — isolationCleanup in the response (Issue #29
     const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { host: '5.6.7.8' } });
 
     expect(res.json().isolationCleanup).toBeUndefined();
+  });
+});
+
+// Issue #29 review, Critical finding 1: a false->true isolation_intent
+// transition must be rejected (fail closed) when a window that may already
+// hold injected credentials is registered on the target server — the old
+// behavior only purged the persisted operator-token config and left any
+// already-running pane's environment untouched.
+describe('isolation_intent false->true window-presence gate (Issue #29 review, Critical finding 1)', () => {
+  it('rejects with 409 when an agent-type window is registered on the server', async () => {
+    const findByServer = vi.fn(() => [
+      { id: 1, windowType: 'agent', taskId: null } as unknown as ReturnType<NonNullable<ServersRouteOptions['windowRepo']>['findByServer']>[number],
+    ]);
+    const opts = makeOpts({ windowRepo: { findByServer } as unknown as ServersRouteOptions['windowRepo'] });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'agent', isolationIntent: false }));
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('isolation_intent_blocked_by_windows');
+    expect(res.json().windowCount).toBe(1);
+    expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
+    expect(findByServer).toHaveBeenCalledWith('srv');
+  });
+
+  it('rejects with 409 when a task-owned (non-agent windowType) window is registered', async () => {
+    const findByServer = vi.fn(() => [
+      { id: 2, windowType: 'terminal', taskId: 42 } as unknown as ReturnType<NonNullable<ServersRouteOptions['windowRepo']>['findByServer']>[number],
+    ]);
+    const opts = makeOpts({ windowRepo: { findByServer } as unknown as ServersRouteOptions['windowRepo'] });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'agent', isolationIntent: false }));
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+    expect(res.statusCode).toBe(409);
+    expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
+  });
+
+  it('allows the transition when only plain terminal, non-task windows are registered', async () => {
+    const findByServer = vi.fn(() => [
+      { id: 3, windowType: 'terminal', taskId: null } as unknown as ReturnType<NonNullable<ServersRouteOptions['windowRepo']>['findByServer']>[number],
+    ]);
+    const opts = makeOpts({ windowRepo: { findByServer } as unknown as ServersRouteOptions['windowRepo'] });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'agent', isolationIntent: false }));
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.serverRepo.updateIsolationIntent).toHaveBeenCalledWith('srv', true);
+  });
+
+  it('does not gate a true->true no-op PUT (no new transition)', async () => {
+    const findByServer = vi.fn(() => [
+      { id: 1, windowType: 'agent', taskId: null } as unknown as ReturnType<NonNullable<ServersRouteOptions['windowRepo']>['findByServer']>[number],
+    ]);
+    const opts = makeOpts({ windowRepo: { findByServer } as unknown as ServersRouteOptions['windowRepo'] });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'agent', isolationIntent: true }));
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
+  });
+
+  it('does not gate a false->true transition when the server has no registered windows at all', async () => {
+    const opts = makeOpts();
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'agent', isolationIntent: false }));
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.serverRepo.updateIsolationIntent).toHaveBeenCalledWith('srv', true);
   });
 });

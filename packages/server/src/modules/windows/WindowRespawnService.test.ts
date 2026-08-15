@@ -159,6 +159,7 @@ function buildService(opts: {
     findByTask: vi.fn(() => []),
     findByTaskIds: vi.fn(() => new Map()),
     findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
+    findByServer: vi.fn(() => []),
     findByServerAndTarget: vi.fn(() => undefined),
     findByServerAndSession: vi.fn(() => []),
     update: vi.fn(),
@@ -1330,6 +1331,7 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
       findByTask: vi.fn(() => []),
       findByTaskIds: vi.fn(() => new Map()),
       findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
+      findByServer: vi.fn(() => []),
       findByServerAndTarget: vi.fn(() => undefined),
       findByServerAndSession: vi.fn(() => []),
       update: vi.fn((_id: number, fields: Partial<Window>) => {

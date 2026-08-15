@@ -15,11 +15,17 @@ interface OverviewSectionProps {
   installStatus: InstallStatusResponse | null;
   sessions: Session[];
   isolationReport: IsolationReport | null;
+  // Issue #29 review, Important finding 3: true when this server declares
+  // isolationIntent but the detail fetch that would carry isolationReport
+  // failed or came back malformed — see useServerDetail's doc comment. Must
+  // not be treated the same as "no report" (isolationReport === null),
+  // which silently reads as "nothing to warn about".
+  isolationReportUnavailable: boolean;
   refresh: () => void;
   onEdit: () => void;
 }
 
-export default function OverviewSection({ server, status, installStatus, sessions, isolationReport, refresh, onEdit }: OverviewSectionProps) {
+export default function OverviewSection({ server, status, installStatus, sessions, isolationReport, isolationReportUnavailable, refresh, onEdit }: OverviewSectionProps) {
   const { t } = useTranslation('servers');
   // Issue #29 review, Important finding 2: a 'cleanup' report that did not
   // land on 'done' means a previously-distributed operator token may still
@@ -138,6 +144,21 @@ export default function OverviewSection({ server, status, installStatus, session
         <div style={{ marginBottom: 'var(--space-4)' }}>
           <Notice tone="warning" sub={t('overview.isolationCleanupWarningSub')}>
             {t('overview.isolationCleanupWarningTitle')}
+          </Notice>
+        </div>
+      )}
+
+      {/* Issue #29 review, Important finding 3: distinct from
+          isolationCleanupWarning above — that one means "we checked, and
+          cleanup didn't fully succeed"; this one means "we couldn't check at
+          all" (fetch failed / malformed body). Both are real uncertainty an
+          operator relying on the isolation promise needs to see, so this
+          never suppresses or replaces the cleanup warning — they can show
+          together if a stale report existed before this fetch failed. */}
+      {isolationReportUnavailable && (
+        <div style={{ marginBottom: 'var(--space-4)' }}>
+          <Notice tone="warning" sub={t('overview.isolationReportUnavailableSub')}>
+            {t('overview.isolationReportUnavailableTitle')}
           </Notice>
         </div>
       )}

@@ -82,6 +82,17 @@ export interface IWindowRepository {
    *  Task ids with no windows are absent from the map. */
   findByTaskIds(taskIds: number[]): Map<number, Window[]>;
   findAgentSessionIdsByServer(serverName: string): Set<string>;
+  /**
+   * Every window row (any ownerType) registered on `serverName`, regardless
+   * of tmuxTarget/session — used by the isolation_intent false->true gate
+   * (Issue #29 review, Critical finding 1) to detect windows that may have
+   * been handed a credential-bearing environment (window_type='agent', or
+   * any task-owned window) before declaring the server isolated. DB-registered
+   * presence is treated as "may still be live" regardless of actual tmux
+   * process liveness (a strict tmux-alive check is cost-prohibitive here and
+   * would risk a false "safe" on a stale check — see the route's own comment).
+   */
+  findByServer(serverName: string): Window[];
   /** Window-granularity lookup (pane suffix stripped on both sides — see paneTarget.ts). */
   findByServerAndTarget(serverName: string, tmuxTarget: string): Window | undefined;
   /**

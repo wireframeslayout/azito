@@ -9,6 +9,7 @@ import type { TransportFactory } from './transport/TransportFactory';
 import type { HarnessInstaller, HarnessInstallProgress, HarnessInstallResult } from './agent-deploy/HarnessInstaller';
 import type { IProjectRepository } from '../projects/Project';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
+import type { IWindowRepository } from '../windows/SqliteWindowRepository';
 import { parseTmuxVersion, parseNodeVersion, parseHarnessCheck, parseTailscaleCheck, parseChromiumInstall } from './installStatusParsers';
 import { findChromiumBinaryCommand } from './agent-deploy/BrowserRuntimeInstaller';
 import { stripTerminalArtifacts } from '../../shared/utils/stripTerminalArtifacts';
@@ -60,6 +61,14 @@ export interface ServersRouteOptions {
   tmuxInstaller?: TmuxInstaller;
   projectRepo?: IProjectRepository;
   projectServerRepo?: IProjectServerRepository;
+  // Issue #29 review, Critical finding 1: used by the isolation_intent
+  // false->true gate to detect windows that may already hold injected
+  // credentials (window_type='agent', or any task-owned window) on the
+  // target server before declaring it isolated. Required (not optional,
+  // unlike most other cross-module deps in this bag) — this is a security
+  // gate, and an unwired dependency here must fail to compile/start rather
+  // than silently fail open by skipping the check.
+  windowRepo: IWindowRepository;
   webhookToken: string;
   uiToken: string;
   harnessPrefix?: string;
@@ -74,7 +83,7 @@ export interface ServersRouteOptions {
 // ─── Plugin ───
 
 const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts, done) => {
-  const { serverRepo, tmux, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, webhookToken, uiToken, harnessPrefix, auditLogService } = opts;
+  const { serverRepo, tmux, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken, harnessPrefix, auditLogService } = opts;
 
   // Issue #29 review, Important finding 1: a false->true isolation_intent
   // transition must actually purge a previously-distributed operator token
@@ -259,6 +268,37 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       const effectiveType = (type || srv.type) as 'local' | 'agent';
       if (effectiveType !== 'agent' && isolationIntent === true) {
         return reply.status(400).send({ error: 'isolationIntent is only settable for agent servers' });
+      }
+      // Issue #29 review, Critical finding 1: a false->true isolation_intent
+      // transition previously only cleaned up the persisted operator-token
+      // config (HarnessInstaller purge via attemptIsolationCleanup below) —
+      // it never checked whether a window on this server might already be
+      // running with a credential-bearing environment already injected into
+      // its live process (AZITO_UI_TOKEN / AZITO_AGENT_TOKEN / AZITO_SECRET_*
+      // — see TaskPaneEnvironmentService). That pane keeps holding the old
+      // credentials in its environment for as long as it runs, regardless of
+      // what the DB says. Draining/recreating those panes automatically is
+      // too complex to do safely here, so this fails closed instead: reject
+      // the transition with 409 while any window row is registered for this
+      // server that could have received credentials (window_type='agent', or
+      // any task-owned window — TaskPaneEnvironmentService injects into both
+      // primary and secondary task windows, not just the primary one).
+      // Liveness is NOT verified against tmux (a real "is this pane still
+      // running" check is costly and, more importantly, a false negative
+      // here would silently defeat the whole gate) — presence of the DB row
+      // alone is treated as "may still be live", which is the conservative
+      // direction to be wrong in.
+      if (effectiveType === 'agent' && isolationIntent === true && isolationIntent !== srv.isolationIntent) {
+        const riskyWindows = windowRepo
+          .findByServer(request.params.name)
+          .filter((w) => w.windowType === 'agent' || w.taskId !== null);
+        if (riskyWindows.length > 0) {
+          return reply.status(409).send({
+            error: 'isolation_intent_blocked_by_windows',
+            message: `${riskyWindows.length} 件のウィンドウがこのサーバー上に登録されているため隔離を有効化できません。対象ウィンドウを閉じてから再度有効化してください。`,
+            windowCount: riskyWindows.length,
+          });
+        }
       }
       // Issue #29 review, Important finding 2: set only when
       // attemptIsolationCleanup actually runs in this request (see below) —

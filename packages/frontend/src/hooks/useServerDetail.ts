@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api } from '../api/client';
+import { api, apiWithStatus } from '../api/client';
 import type { Server, Session, ServerStatus } from './useServerManagement';
 import { useServerStatuses } from './useServerStatuses';
 import type { InstallStatusResponse } from '../components/servers/serverSections';
@@ -18,6 +18,19 @@ export interface IsolationReport {
   at?: string;
 }
 
+// Issue #29 review, Important finding 3: `kind` is the one field every
+// current and future isolationReport variant is required to carry (see the
+// interface's own doc comment distinguishing 'cleanup' from the future
+// 'verification' doctor writes) — a body missing it is not a report this
+// hook understands, so it's treated the same as a fetch failure rather than
+// silently coerced into `null` (which the UI cannot tell apart from "no
+// report exists").
+export function isValidIsolationReport(value: unknown): value is IsolationReport {
+  if (!value || typeof value !== 'object') return false;
+  const kind = (value as { kind?: unknown }).kind;
+  return kind === 'cleanup' || kind === 'verification';
+}
+
 interface UseServerDetailResult {
   server: Server | null;
   servers: Server[];
@@ -25,6 +38,13 @@ interface UseServerDetailResult {
   installStatus: InstallStatusResponse | null;
   sessions: Session[];
   isolationReport: IsolationReport | null;
+  // Issue #29 review, Important finding 3: true when this server declares
+  // isolationIntent but the detail fetch that would carry isolationReport
+  // failed outright or came back in a shape this hook doesn't recognize —
+  // distinguishes "we don't know whether cleanup succeeded" from "cleanup
+  // succeeded" (isolationReport === null), which a bare `.catch(() => null)`
+  // could not: both looked identical to the UI before this field existed.
+  isolationReportUnavailable: boolean;
   loading: boolean;
   error: string | null;
   refresh: () => void;
@@ -37,6 +57,7 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
   const [installStatus, setInstallStatus] = useState<InstallStatusResponse | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [isolationReport, setIsolationReport] = useState<IsolationReport | null>(null);
+  const [isolationReportUnavailable, setIsolationReportUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -46,27 +67,46 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
     setError(null);
     try {
       const encoded = encodeURIComponent(serverName);
-      const [srvList, installRes, sessionsRes, detailRes] = await Promise.all([
+      // Issue #29 review, Important finding 3: the isolationReport fetch
+      // used to swallow every failure (network error, 4xx/5xx, malformed
+      // body) into a bare `null` via `.catch(() => null)` — indistinguishable
+      // from "cleanup completed cleanly, no report to show". A server
+      // declaring isolationIntent needs that distinction surfaced (see
+      // isolationReportUnavailable below), so this uses apiWithStatus and
+      // treats non-2xx / a thrown error / an unrecognized body shape as
+      // "unavailable", not as "no warning".
+      const [srvList, installRes, sessionsRes, detailResult] = await Promise.all([
         refreshStatuses(),
         api<InstallStatusResponse>(`/servers/${encoded}/install-status`),
         api<Session[]>(`/servers/${encoded}/sessions`).catch(() => [] as Session[]),
-        // Issue #29 review, Important finding 2: isolationReport only
-        // exists on the per-server detail route (never the list) — fetched
-        // alongside the other detail-only extras. Best-effort: a fetch
-        // failure here must not block the rest of the detail page (e.g. a
-        // 404 mid-navigation while the server list is still catching up).
-        api<{ isolationReport: string | null }>(`/servers/${encoded}`).catch(() => null),
+        apiWithStatus<{ isolationReport: string | null }>(`/servers/${encoded}`).catch(() => null),
       ]);
       if (!srvList.some((s) => s.name === serverName)) throw new Error(`Server "${serverName}" not found`);
       setInstallStatus(installRes);
       setSessions(Array.isArray(sessionsRes) ? sessionsRes : []);
+
       let parsedReport: IsolationReport | null = null;
-      if (detailRes?.isolationReport) {
+      let reportUnavailable = false;
+      if (detailResult === null || detailResult.status < 200 || detailResult.status >= 300) {
+        reportUnavailable = true;
+      } else if (detailResult.body.isolationReport) {
         try {
-          parsedReport = JSON.parse(detailRes.isolationReport) as IsolationReport;
-        } catch { /* malformed report JSON — treat as absent rather than crash the detail page */ }
+          const parsed = JSON.parse(detailResult.body.isolationReport) as unknown;
+          if (isValidIsolationReport(parsed)) {
+            parsedReport = parsed;
+          } else {
+            reportUnavailable = true;
+          }
+        } catch {
+          reportUnavailable = true;
+        }
       }
+      // reportUnavailable only matters (as UI-visible uncertainty) for a
+      // server that actually declared isolation — a server that never
+      // opted in has no promise to fail to verify.
+      const declaredIsolated = srvList.find((s) => s.name === serverName)?.isolationIntent ?? false;
       setIsolationReport(parsedReport);
+      setIsolationReportUnavailable(declaredIsolated && reportUnavailable);
     } catch (err: unknown) {
       setError((err as Error).message);
     } finally {
@@ -79,5 +119,9 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
   const server = servers.find((s) => s.name === serverName) ?? null;
   const status = serverName ? statuses[serverName] ?? null : null;
 
-  return { server, servers, status, installStatus, sessions, isolationReport, loading, error, refresh: fetchAll };
+  return {
+    server, servers, status, installStatus, sessions,
+    isolationReport, isolationReportUnavailable,
+    loading, error, refresh: fetchAll,
+  };
 }
