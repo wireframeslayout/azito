@@ -30,6 +30,22 @@ describe('extractClaudeMcpUiToken', () => {
     expect(extractClaudeMcpUiToken(content, 'azt-mcp')).toEqual({ status: 'absent' });
     expect(extractClaudeMcpUiToken(content, 'other-mcp')).toEqual({ status: 'present', token: 'x' });
   });
+
+  it('returns unreadable (not a crash) when the JSON document is null', () => {
+    const result = extractClaudeMcpUiToken('null');
+    expect(result.status).toBe('unreadable');
+  });
+
+  it('returns unreadable (not a crash) when the JSON document is an array', () => {
+    const result = extractClaudeMcpUiToken('[1, 2, 3]');
+    expect(result.status).toBe('unreadable');
+  });
+
+  it('returns unreadable (not a crash) when the JSON document is a scalar', () => {
+    expect(extractClaudeMcpUiToken('42').status).toBe('unreadable');
+    expect(extractClaudeMcpUiToken('"just a string"').status).toBe('unreadable');
+    expect(extractClaudeMcpUiToken('true').status).toBe('unreadable');
+  });
 });
 
 describe('hasCodexConfigUiToken', () => {

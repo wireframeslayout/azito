@@ -28,12 +28,26 @@ export type McpUiTokenExtraction =
  * must become `'unknown'`, never `'pass'`).
  */
 export function extractClaudeMcpUiToken(content: string, mcpKey = 'azt-mcp'): McpUiTokenExtraction {
-  let settings: McpSettingsFile;
+  let parsed: unknown;
   try {
-    settings = JSON.parse(content) as McpSettingsFile;
+    parsed = JSON.parse(content);
   } catch (err) {
     return { status: 'unreadable', error: err instanceof Error ? err.message : String(err) };
   }
+  // Review finding (isolation doctor round): `JSON.parse` accepts any valid
+  // JSON document, not just objects — `null`, an array, or a bare scalar
+  // (`"42"`, `true`) all parse without throwing. The old code went straight
+  // to `settings.mcpServers?.[mcpKey]?.env?.AZITO_UI_TOKEN` on the parsed
+  // value, which is safe for `null`/scalars (optional chaining short-circuits)
+  // but throws a TypeError for an array whose first element the accessor
+  // chain doesn't reach — Claude's settings.json is attacker-adjacent content
+  // read from a remote agent server, so a malformed-but-valid-JSON file must
+  // report `'unreadable'` (fail-closed, same as a parse error), never crash
+  // the doctor route or `azito auth doctor`.
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { status: 'unreadable', error: 'settings.json is not a JSON object' };
+  }
+  const settings = parsed as McpSettingsFile;
   const token = settings.mcpServers?.[mcpKey]?.env?.AZITO_UI_TOKEN;
   return token ? { status: 'present', token } : { status: 'absent' };
 }
