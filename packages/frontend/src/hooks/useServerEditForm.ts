@@ -74,6 +74,15 @@ export function useServerEditForm() {
         showToast(t('overview.isolationBlockedByLiveSessionsToast', { count: res.sessionCount ?? 0 }));
       } else if (res.error === 'isolation_intent_blocked_by_session_check_failure') {
         showToast(t('overview.isolationBlockedBySessionCheckFailureToast'));
+      } else if (res.error === 'isolation_intent_requires_scoped_auth') {
+        // Issue #29 Step 2 C-1: the server-side gate (routes.ts) rejects a
+        // false->true declaration (and a true->true cleanup-retry entry)
+        // while AZITO_SCOPED_AUTH is off — the client-side toggle-disable in
+        // ServerModals.tsx already tries to prevent reaching this in the
+        // common case, but the flag can flip between page load and submit,
+        // so the 409 still needs its own toast rather than falling through
+        // to the raw error code below.
+        showToast(t('overview.isolationRequiresScopedAuthToast'));
       } else if (res.error === 'isolation_intent_blocks_connection_change') {
         // Issue #29 review (8th pass), Critical finding 1: the server-side
         // gate now rejects ANY connection-info change while isolation is

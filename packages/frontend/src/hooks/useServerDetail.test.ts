@@ -13,8 +13,17 @@ describe('isValidIsolationReport', () => {
     expect(isValidIsolationReport({ kind: 'cleanup', cleanup: 'done' })).toBe(true);
   });
 
-  it('accepts a verification report', () => {
-    expect(isValidIsolationReport({ kind: 'verification' })).toBe(true);
+  // Issue #29 Step 2 C: now that the doctor actually writes this variant,
+  // the bare discriminant is no longer enough — `verified`/`checks` must be
+  // present in the shape the doctor always produces.
+  it('accepts a verification report with verified + checks', () => {
+    expect(isValidIsolationReport({ kind: 'verification', verified: true, checks: [] })).toBe(true);
+  });
+
+  it('rejects a verification report missing verified/checks', () => {
+    expect(isValidIsolationReport({ kind: 'verification' })).toBe(false);
+    expect(isValidIsolationReport({ kind: 'verification', verified: true })).toBe(false);
+    expect(isValidIsolationReport({ kind: 'verification', checks: [] })).toBe(false);
   });
 
   it('rejects an object missing kind', () => {
@@ -58,11 +67,8 @@ describe('isValidIsolationReport', () => {
     expect(isValidIsolationReport({ kind: 'cleanup', cleanup: 'pending' })).toBe(true);
   });
 
-  // A verification report only needs the discriminant today — see this
-  // function's doc comment for why that's the deliberately minimal bar
-  // (the doctor variant isn't implemented server-side yet).
-  it('accepts a verification report with extra unknown fields', () => {
-    expect(isValidIsolationReport({ kind: 'verification', someFutureField: 1 })).toBe(true);
+  it('accepts a verification report with extra unknown fields alongside verified/checks', () => {
+    expect(isValidIsolationReport({ kind: 'verification', verified: false, checks: [{ id: 'x', status: 'fail', detail: 'd' }], probedAt: 't', someFutureField: 1 })).toBe(true);
   });
 });
 

@@ -22,6 +22,12 @@ export interface IsolationReport {
   reason?: string;
   error?: string;
   at?: string;
+  // Issue #29 Step 2 C: the isolation doctor's own `kind: 'verification'`
+  // fields (servers/isolationDoctor.ts's runIsolationDoctor result, persisted
+  // verbatim by POST /api/servers/:name/isolation/doctor).
+  verified?: boolean;
+  checks?: { id: string; status: 'pass' | 'fail' | 'unknown'; detail: string }[];
+  probedAt?: string;
 }
 
 // Issue #29 review, Important finding 3: `kind` is the one field every
@@ -50,7 +56,19 @@ export function isValidIsolationReport(value: unknown): value is IsolationReport
     const cleanup = (value as { cleanup?: unknown }).cleanup;
     return cleanup === 'pending' || cleanup === 'done' || cleanup === 'failed' || cleanup === 'skipped';
   }
-  return kind === 'verification';
+  if (kind === 'verification') {
+    // Issue #29 Step 2 C: now that the doctor actually writes this variant
+    // (isolationDoctor.ts's runIsolationDoctor via POST
+    // /api/servers/:name/isolation/doctor), require the shape it always
+    // produces — `verified` a boolean and `checks` an array — rather than
+    // just the bare discriminant. A malformed/truncated body is treated the
+    // same as unavailable (see isolationReportUnavailable below), not
+    // silently rendered with undefined fields.
+    const verified = (value as { verified?: unknown }).verified;
+    const checks = (value as { checks?: unknown }).checks;
+    return typeof verified === 'boolean' && Array.isArray(checks);
+  }
+  return false;
 }
 
 // Issue #29 review (5th pass), Important finding 3: the detail fetch's body

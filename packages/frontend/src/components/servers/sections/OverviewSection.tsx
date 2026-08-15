@@ -4,10 +4,18 @@ import type { IsolationReport } from '../../../hooks/useServerDetail';
 import type { ServerStatus, InstallStatusResponse } from '../serverSections';
 import { getHealthLevel, useServerResourcesContext } from '../../../hooks/useServerResources';
 import type { HealthLevel } from '../../../hooks/useServerResources';
+import { useIsolationDoctor } from '../../../hooks/useIsolationDoctor';
 import { HealthDot, HEALTH_COLOR_VAR } from '../../statusbar/HealthDot';
 import { ResourceMeter } from '../../statusbar/ResourceMeter';
 import { healthReasonText, formatBytes } from '../../statusbar/ResourceDropdown';
 import { Chip, Button, Notice } from '../../ui';
+
+// Issue #29 Step 2 C: display-side TTL for the isolation doctor's last
+// verification — purely advisory ("要再検証"), not a policy re-evaluation.
+// Execute-time re-verification against this TTL is explicitly Step 3 scope
+// (see the mission brief's "スコープ外" section); this constant only decides
+// what the Overview page LABELS a stale verification as.
+const ISOLATION_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
 
 interface OverviewSectionProps {
   server: Server;
@@ -50,6 +58,27 @@ export default function OverviewSection({ server, status, installStatus, session
     isolationReport === null ||
     (isolationReport.kind === 'cleanup' && isolationReport.cleanup !== 'done')
   );
+
+  // Issue #29 Step 2 C: the doctor's `kind: 'verification'` report is a
+  // DISTINCT signal from the cleanup outcome above — a server can show
+  // isolationCleanupWarning === false (cleanup reported "done") while never
+  // having been verified at all, or vice versa (cleanup failed, but an
+  // earlier doctor run once passed). Both can be shown together; neither
+  // suppresses the other.
+  const verificationReport = isolationReport?.kind === 'verification' ? isolationReport : null;
+  const isolationDoctorState: 'verified' | 'verifiedStale' | 'unverified' | 'needsAttention' | null =
+    !server.isolationIntent
+      ? null
+      : verificationReport === null
+        ? 'unverified'
+        : verificationReport.verified === false
+          ? 'needsAttention'
+          : server.isolationVerifiedAt && (Date.now() - new Date(server.isolationVerifiedAt).getTime()) > ISOLATION_VERIFICATION_TTL_MS
+            ? 'verifiedStale'
+            : 'verified';
+  const failedOrUnknownChecks = (verificationReport?.checks ?? []).filter((c) => c.status !== 'pass');
+  const { running: isolationDoctorRunning, runDoctor } = useIsolationDoctor(server.type === 'agent' ? server.name : null, refresh);
+
   const resourceEntries = useServerResourcesContext();
   const resourceEntry = resourceEntries.find((s) => s.serverName === server.name);
   const resourcesLoading = resourceEntry === undefined;
@@ -174,6 +203,40 @@ export default function OverviewSection({ server, status, installStatus, session
         <div style={{ marginBottom: 'var(--space-4)' }}>
           <Notice tone="warning" sub={t('overview.isolationReportUnavailableSub')}>
             {t('overview.isolationReportUnavailableTitle')}
+          </Notice>
+        </div>
+      )}
+
+      {/* Issue #29 Step 2 C: the isolation doctor's own state — independent
+          of the cleanup warning above (see isolationDoctorState's doc
+          comment). Only rendered for an agent-type server that currently
+          declares isolation; the run button only appears here too (running
+          the doctor on a non-isolated or non-agent server is rejected
+          server-side with 400). */}
+      {isolationDoctorState !== null && server.type === 'agent' && (
+        <div style={{ marginBottom: 'var(--space-4)' }}>
+          <Notice
+            tone={isolationDoctorState === 'verified' ? 'success' : isolationDoctorState === 'needsAttention' ? 'danger' : 'warning'}
+            sub={
+              isolationDoctorState === 'needsAttention'
+                ? t('overview.isolationDoctorNeedsAttentionSub', {
+                    checks: failedOrUnknownChecks.map((c) => `${c.id} (${c.status})`).join(', '),
+                  })
+                : t('overview.isolationDoctorSnapshotNotice')
+            }
+            action={
+              <Button size="sm" onClick={runDoctor} loading={isolationDoctorRunning} loadingLabel={t('overview.isolationDoctorRunning')}>
+                {t('overview.isolationDoctorRun')}
+              </Button>
+            }
+          >
+            {isolationDoctorState === 'verified' && server.isolationVerifiedAt
+              ? t('overview.isolationDoctorVerified', { at: new Date(server.isolationVerifiedAt).toLocaleString() })
+              : isolationDoctorState === 'verifiedStale' && server.isolationVerifiedAt
+                ? t('overview.isolationDoctorVerifiedStale', { at: new Date(server.isolationVerifiedAt).toLocaleString() })
+                : isolationDoctorState === 'needsAttention'
+                  ? t('overview.isolationDoctorNeedsAttention')
+                  : t('overview.isolationDoctorUnverified')}
           </Notice>
         </div>
       )}

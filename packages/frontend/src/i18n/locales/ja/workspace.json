@@ -146,7 +146,8 @@
     "displayNamePlaceholder": "例: dev-server",
     "isolationIntent": "隔離実行",
     "isolationIntentLabel": "このサーバーへ運用者の資格情報を配布しない",
-    "isolationIntentHint": "有効化時に配布済みの操作トークンの掃除を試みます。確実な確認は今後の検証（doctor）で提供されます。"
+    "isolationIntentHint": "有効化時に配布済みの操作トークンの掃除を試みます。実際に資格情報が残っていないかは、サーバー詳細画面の「隔離を検証」で確認できます。",
+    "isolationRequiresScopedAuth": "隔離を宣言するには scoped auth（AZITO_SCOPED_AUTH）の有効化が必要です。互換モードのままでは無効化のみ行えます。"
   },
   "menu": {
     "windows": "オブジェクト",

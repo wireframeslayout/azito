@@ -5,6 +5,7 @@ import { FormInput, FormSelect, InstallSteps, Button } from '../ui';
 import FormField from '../FormField';
 import type { InstallStep } from '../ui';
 import type { Server } from '../../hooks/useServerManagement';
+import { useHealth } from '../../hooks/useHealth';
 
 interface ServerFormFieldsProps {
   mode: 'add' | 'edit';
@@ -36,6 +37,19 @@ interface ServerFormFieldsProps {
 function ServerFormFields({ mode, autoInstall, type, host, port, token, muxRuntime, onAutoInstallChange, onTypeChange, onHostChange, onPortChange, onTokenChange, onMuxRuntimeChange, nameField, tokenPlaceholder, installSteps, originalMuxRuntime, isolationIntent, onIsolationIntentChange }: ServerFormFieldsProps) {
   const { t } = useTranslation(['workspace', 'common']);
   const [showToken, setShowToken] = useState(false);
+  // Issue #29 Step 2 C-1 (client-side courtesy — the real enforcement is the
+  // server's 409 on PUT /api/servers/:name): a server not yet declaring
+  // isolation cannot be switched ON while scoped auth is confirmed off,
+  // because the API authorization gate only audit-logs what it would deny
+  // in that mode (see routes.ts's isolation_intent_requires_scoped_auth
+  // gate). An already-isolated server (isolationIntent already true) must
+  // stay toggle-able OFF regardless — disabling isolation is never blocked.
+  // `scopedAuthEnabled === null` (health not loaded yet) is treated as "not
+  // confirmed off", so the toggle stays enabled until we positively know
+  // it would be rejected.
+  const { scopedAuthEnabled } = useHealth();
+  const isolationCurrentlyOn = isolationIntent ?? false;
+  const isolationToggleBlocked = scopedAuthEnabled === false && !isolationCurrentlyOn;
 
   if (mode === 'add' && autoInstall) {
     return (
@@ -141,7 +155,8 @@ function ServerFormFields({ mode, autoInstall, type, host, port, token, muxRunti
             <span className="toggle">
               <input
                 type="checkbox"
-                checked={isolationIntent ?? false}
+                checked={isolationCurrentlyOn}
+                disabled={isolationToggleBlocked}
                 onChange={(e) => onIsolationIntentChange(e.target.checked)}
                 aria-describedby="server-modal-isolation-intent-hint"
               />
@@ -152,6 +167,11 @@ function ServerFormFields({ mode, autoInstall, type, host, port, token, muxRunti
           <div id="server-modal-isolation-intent-hint" style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginTop: 6 }}>
             {t('serverModals.isolationIntentHint')}
           </div>
+          {isolationToggleBlocked && (
+            <div style={{ fontSize: 'var(--font-xs)', color: 'var(--warning, #f0ad4e)', marginTop: 6 }}>
+              {t('serverModals.isolationRequiresScopedAuth')}
+            </div>
+          )}
         </FormField>
       )}
     </>
