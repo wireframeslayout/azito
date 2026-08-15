@@ -5,6 +5,7 @@ import type { IServerRepository, ServerConfig } from '../../servers/Server';
 import type { TmuxClient } from '../TmuxClient';
 import type { SqliteWindowRepository } from '../../windows/SqliteWindowRepository';
 import { resolveKillOutcome } from '../killOutcome';
+import { KeyedMutex } from '../../../shared/keyedMutex';
 
 function makeServerRepo(srv: ServerConfig): IServerRepository {
   return {
@@ -127,6 +128,10 @@ async function buildApp(opts: {
     destroyPrimaryTaskWindow: opts.destroyPrimaryTaskWindow,
     destroySessionWindows: opts.destroySessionWindows,
     buildSecondaryWindowEnv: opts.buildSecondaryWindowEnv as ((taskId: number, server: ServerConfig) => Record<string, string>) | undefined,
+    // Issue #29 review (6th pass), Important finding 3: a fresh instance per
+    // app is fine for this file's route-level tests (none exercise
+    // cross-route serialization against servers/routes.ts).
+    serverIsolationMutex: new KeyedMutex(),
   });
   await app.ready();
   return app;

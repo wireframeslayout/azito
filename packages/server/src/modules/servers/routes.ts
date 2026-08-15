@@ -17,6 +17,7 @@ import type { TmuxInstaller } from './agent-deploy/TmuxInstaller';
 import type { AuditLogService } from '../../shared/audit/AuditLogService';
 import { recordAuditBestEffort } from '../../shared/audit/recordAuditBestEffort';
 import { OPERATOR_PRINCIPAL, type Principal } from '../../shared/auth/Principal';
+import type { KeyedMutex } from '../../shared/keyedMutex';
 
 // ─── Tailscale / network helpers ───
 
@@ -72,6 +73,16 @@ export interface ServersRouteOptions {
   webhookToken: string;
   uiToken: string;
   harnessPrefix?: string;
+  // Issue #29 review (6th pass), Important finding 3: serializes the
+  // isolation_intent false->true check-through-commit span below against the
+  // sessions/windows/panes creation routes' server-refetch-through-tmux-create
+  // span (see modules/tmux/routes/sessions.ts), both keyed by server name —
+  // a shared instance wired once in buildServer.ts, not a locally-created
+  // fallback, or the two route files would each serialize against themselves
+  // only and the race between them would remain open. Required (not
+  // optional) for the same reason windowRepo above is: an unwired dependency
+  // here must fail to compile/start rather than silently reopen the race.
+  serverIsolationMutex: KeyedMutex;
   // Best-effort (Issue #29 review, Important finding 1): records the
   // isolation_intent auto-clear PUT /api/servers/:name performs when a
   // server's effective type moves off 'agent'. Optional — matches every
@@ -83,7 +94,7 @@ export interface ServersRouteOptions {
 // ─── Plugin ───
 
 const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts, done) => {
-  const { serverRepo, tmux, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken, harnessPrefix, auditLogService } = opts;
+  const { serverRepo, tmux, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken, harnessPrefix, auditLogService, serverIsolationMutex } = opts;
 
   // Issue #29 review, Important finding 1: a false->true isolation_intent
   // transition must actually purge a previously-distributed operator token
@@ -229,7 +240,14 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
   // ── PUT /api/servers/:name ──
   fastify.put<{ Params: { name: string } }>(
     '/api/servers/:name',
-    async (request, reply) => {
+    // Issue #29 review (6th pass), Important finding 3: the entire
+    // read-check-commit span of this handler runs inside the per-server-name
+    // mutex — not just the false->true branch — so it serializes against
+    // itself (two overlapping PUTs on the same server) as well as against
+    // the sessions/windows/panes creation routes' server-refetch span (see
+    // sessions.ts). See serverIsolationMutex's doc comment on
+    // ServersRouteOptions above.
+    async (request, reply) => serverIsolationMutex.withLock(request.params.name, async () => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       const { type, host, agentPort, agentToken, sshHost, muxRuntime: putMux, isolationIntent } = request.body as {
@@ -288,6 +306,32 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       // here would silently defeat the whole gate) — presence of the DB row
       // alone is treated as "may still be live", which is the conservative
       // direction to be wrong in.
+      // Issue #29 review (6th pass), Important finding 2: the risky-window /
+      // live-session checks just below inspect the server's CURRENT
+      // connection info (srv.host / srv.sshHost / agentPort / agentToken —
+      // read via `srv`, fetched before this PUT's own serverRepo.update()
+      // runs), while a false->true transition's cleanup
+      // (attemptIsolationCleanup) re-fetches the row AFTER the update and
+      // therefore purges against whatever connection info THIS SAME request
+      // just wrote. Accepting both a connection-info change and a
+      // false->true transition in one PUT would inspect one endpoint and
+      // clean up a different one — a credential-bearing session on the NEW
+      // endpoint would never be checked, and the DB would still end up
+      // marked isolated. Reject the combination outright; the caller must
+      // confirm the connection target in one PUT, then declare isolation in
+      // a follow-up PUT once the check/cleanup can agree on which endpoint
+      // they're both looking at.
+      const connectionInfoChanged =
+        (host !== undefined && host !== srv.host) ||
+        (sshHost !== undefined && sshHost !== srv.sshHost) ||
+        (agentPort !== undefined && agentPort !== srv.agentPort) ||
+        (agentToken !== undefined && agentToken !== srv.agentToken);
+      if (effectiveType === 'agent' && isolationIntent === true && isolationIntent !== srv.isolationIntent && connectionInfoChanged) {
+        return reply.status(400).send({
+          error: 'isolation_intent_transition_with_connection_change',
+          message: '接続先情報の変更と隔離の有効化（isolationIntent: false→true）は同じリクエストで指定できません。先に接続先を確定させてから、別のリクエストで隔離を有効化してください。',
+        });
+      }
       if (effectiveType === 'agent' && isolationIntent === true && isolationIntent !== srv.isolationIntent) {
         const riskyWindows = windowRepo
           .findByServer(request.params.name)
@@ -405,7 +449,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       } catch (err: unknown) {
         return reply.status(500).send({ error: (err as Error).message });
       }
-    },
+    }),
   );
 
   // ── POST /api/servers/:name/agent/install ──

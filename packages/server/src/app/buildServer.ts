@@ -17,6 +17,7 @@ import path from 'path';
 import type { WebSocket } from 'ws';
 
 import { resolveRoot } from '../shared/releaseInfo';
+import { KeyedMutex } from '../shared/keyedMutex';
 import type { Wiring } from './wiring';
 
 import serversRoutes from '../modules/servers/routes';
@@ -404,9 +405,16 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
 
   // ─── HTTP routes ───
 
-  await app.register(serversRoutes, { serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, auditLogService });
+  // Issue #29 review (6th pass), Important finding 3: ONE shared instance
+  // passed to both serversRoutes and sessionsRoutes below — the isolation
+  // false->true transition (serversRoutes) and the session/window/pane
+  // creation routes (sessionsRoutes) must serialize against EACH OTHER, keyed
+  // by server name, not just against themselves. See serverIsolationMutex's
+  // doc comment on ServersRouteOptions.
+  const serverIsolationMutex = new KeyedMutex();
+  await app.register(serversRoutes, { serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, auditLogService, serverIsolationMutex });
   await app.register(sessionsRoutes, {
-    serverRepo, tmux: tmuxClient, windowRepo, notificationBus, resourceGuard,
+    serverRepo, tmux: tmuxClient, windowRepo, notificationBus, resourceGuard, serverIsolationMutex,
     destroyPrimaryTaskWindow: (taskId, windowName, serverName, target, reason, kill, onDestroyed) => {
       // Issue #28 third-party review, D-track fix 2: resolve (and hold) the
       // launch BEFORE the kill runs — not a live-connection lookup at

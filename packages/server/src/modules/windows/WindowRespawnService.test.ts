@@ -194,7 +194,7 @@ function buildService(opts: {
     // fallback now calls this server-aware wrapper instead of the
     // server-blind uiTokenEnv() — mirrors it for every existing fixture
     // server (none of which declare isolationIntent).
-    uiTokenEnvForServer: vi.fn(() => ({ AZITO_UI_TOKEN: 'ui-token-fixture' })),
+    uiTokenEnvForServer: vi.fn((_server: ServerConfig) => ({ AZITO_UI_TOKEN: 'ui-token-fixture' })),
   };
 
   const sessionStrategyFactory = {

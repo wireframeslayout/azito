@@ -7,6 +7,7 @@ import { isPrimaryTaskWindow } from '../../windows/SqliteWindowRepository';
 import type { NotificationBus } from '../../notifications/NotificationBus';
 import type { ResourceGuard } from '../../servers/resources/ResourceGuard';
 import { resolveKillOutcome, type KillOutcome } from '../killOutcome';
+import type { KeyedMutex } from '../../../shared/keyedMutex';
 
 // ─── Types ───
 
@@ -120,6 +121,21 @@ export interface SessionsRouteOptions {
    * this to look up the task and call `buildEnvForSecondaryWindow` on it.
    */
   buildSecondaryWindowEnv?: (taskId: number, server: ServerConfig) => Record<string, string>;
+
+  /**
+   * Issue #29 review (6th pass), Important finding 3: serializes the
+   * session/window/pane creation handlers below (from re-fetching the server
+   * row through evaluating `tmux.uiTokenEnvForServer` and issuing the tmux
+   * create call) against the isolation_intent false->true transition's
+   * check-through-commit span in `servers/routes.ts`, keyed by server name.
+   * A shared instance (the SAME object both route files receive — wired once
+   * in buildServer.ts), not a locally-created fallback: two independent
+   * mutex instances would each serialize their own route file against
+   * itself but never against the other, leaving the original race open.
+   * Required, matching windowRepo above — an unwired dependency here must
+   * fail to compile/start rather than silently reopen the race.
+   */
+  serverIsolationMutex: KeyedMutex;
 }
 
 // ─── Helpers ───
@@ -159,7 +175,7 @@ const GC_INTERVAL = 60000;
 // ─── Plugin ───
 
 const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, opts, done) => {
-  const { serverRepo, tmux } = opts;
+  const { serverRepo, tmux, serverIsolationMutex } = opts;
 
   // Invalidate the hub-side cache AND push a sessions:updated notification, so clients
   // refresh immediately after a hub-initiated mutation. Remote (ssh/agent) servers have
@@ -215,16 +231,27 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         if (!status.ok)
           return reply.status(409).send({ error: 'insufficient_resources', resources: status });
       }
-      try {
-        const { result, windowName } = await tmux.createSession(srv, name, { command, windowName: reqWindowName, extraEnv: tmux.uiTokenEnvForServer(srv) });
-        // Agent/SSH transports resolve with a non-zero code instead of throwing — surface it.
-        if (result.code !== 0)
-          return reply.status(500).send({ error: `new-session failed: ${result.stderr || result.stdout}` });
-        notifySessionsChanged(request.params.name);
-        return { ok: true, windowName };
-      } catch (err: unknown) {
-        return reply.status(500).send({ error: (err as Error).message });
-      }
+      // Issue #29 review (6th pass), Important finding 3: re-fetch the
+      // server row INSIDE the same per-server-name lock the isolation
+      // false->true transition holds while it checks + commits, immediately
+      // before evaluating uiTokenEnvForServer — never reuse the `srv` fetched
+      // above, which can already be stale by the time this runs (e.g. after
+      // the resourceGuard check's await). See serverIsolationMutex's doc
+      // comment on SessionsRouteOptions.
+      return serverIsolationMutex.withLock(request.params.name, async () => {
+        const freshSrv = serverRepo.findByName(request.params.name);
+        if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
+        try {
+          const { result, windowName } = await tmux.createSession(freshSrv, name, { command, windowName: reqWindowName, extraEnv: tmux.uiTokenEnvForServer(freshSrv) });
+          // Agent/SSH transports resolve with a non-zero code instead of throwing — surface it.
+          if (result.code !== 0)
+            return reply.status(500).send({ error: `new-session failed: ${result.stderr || result.stdout}` });
+          notifySessionsChanged(request.params.name);
+          return { ok: true, windowName };
+        } catch (err: unknown) {
+          return reply.status(500).send({ error: (err as Error).message });
+        }
+      });
     },
   );
 
@@ -240,15 +267,21 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         if (!status.ok)
           return reply.status(409).send({ error: 'insufficient_resources', resources: status });
       }
-      try {
-        const { result, windowName } = await tmux.createWindow(srv, request.params.session, reqName || undefined, { extraEnv: tmux.uiTokenEnvForServer(srv) });
-        if (result.code !== 0)
-          return reply.status(500).send({ error: `new-window failed: ${result.stderr || result.stdout}` });
-        notifySessionsChanged(request.params.name);
-        return { ok: true, windowName };
-      } catch (err: unknown) {
-        return reply.status(500).send({ error: (err as Error).message });
-      }
+      // Issue #29 review (6th pass), Important finding 3: see the identical
+      // comment on POST /api/servers/:name/sessions above.
+      return serverIsolationMutex.withLock(request.params.name, async () => {
+        const freshSrv = serverRepo.findByName(request.params.name);
+        if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
+        try {
+          const { result, windowName } = await tmux.createWindow(freshSrv, request.params.session, reqName || undefined, { extraEnv: tmux.uiTokenEnvForServer(freshSrv) });
+          if (result.code !== 0)
+            return reply.status(500).send({ error: `new-window failed: ${result.stderr || result.stdout}` });
+          notifySessionsChanged(request.params.name);
+          return { ok: true, windowName };
+        } catch (err: unknown) {
+          return reply.status(500).send({ error: (err as Error).message });
+        }
+      });
     },
   );
 
@@ -277,7 +310,6 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           ?? (identity ? opts.windowRepo?.findByServerAndTarget(request.params.name, `${identity.sessionName}:${identity.windowName}`) : undefined)
           ?? (identity ? opts.windowRepo?.findByServerAndTarget(request.params.name, `${identity.sessionName}:${identity.windowIndex}`) : undefined);
 
-        let extraEnv: Record<string, string>;
         if (windowRow && windowRow.taskId !== null && isPrimaryTaskWindow(windowRow)) {
           // The task's PRIMARY worker window. Its already-running first pane
           // holds the currently-active AZITO_TASK_TOKEN generation in its
@@ -299,20 +331,31 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
             error: 'primary_task_window_pane_add_unsupported',
             message: "Cannot add a pane to a task's primary window directly — respawn the window first, then add panes.",
           });
-        } else if (windowRow && windowRow.taskId !== null) {
-          // Secondary task-owned window: masked-only env (no task token),
-          // same as its own (re)creation env.
-          extraEnv = opts.buildSecondaryWindowEnv?.(windowRow.taskId, srv) ?? {};
-        } else {
-          // Non-task window (manual/project/etc.) — legacy default,
-          // server-aware (Issue #29 review, Critical finding 1): withholds
-          // the token when this server is declared isolated.
-          extraEnv = tmux.uiTokenEnvForServer(srv);
         }
 
-        await tmux.splitPane(srv, target, direction as 'h' | 'v', extraEnv);
-        notifySessionsChanged(request.params.name);
-        return { ok: true };
+        // Issue #29 review (6th pass), Important finding 3: extraEnv
+        // resolution (uiTokenEnvForServer / buildSecondaryWindowEnv) and the
+        // actual splitPane call run INSIDE the per-server-name lock, against
+        // a freshly re-fetched server row — see the identical comment on
+        // POST /api/servers/:name/sessions above. Identity/windowRow
+        // resolution above is not isolation-sensitive and stays outside the
+        // lock.
+        return serverIsolationMutex.withLock(request.params.name, async () => {
+          const freshSrv = serverRepo.findByName(request.params.name);
+          if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
+          const extraEnv: Record<string, string> = windowRow && windowRow.taskId !== null
+            // Secondary task-owned window: masked-only env (no task token),
+            // same as its own (re)creation env.
+            ? (opts.buildSecondaryWindowEnv?.(windowRow.taskId, freshSrv) ?? {})
+            // Non-task window (manual/project/etc.) — legacy default,
+            // server-aware (Issue #29 review, Critical finding 1): withholds
+            // the token when this server is declared isolated.
+            : tmux.uiTokenEnvForServer(freshSrv);
+
+          await tmux.splitPane(freshSrv, target, direction as 'h' | 'v', extraEnv);
+          notifySessionsChanged(request.params.name);
+          return { ok: true };
+        });
       } catch (err: unknown) {
         return reply.status(500).send({ error: (err as Error).message });
       }

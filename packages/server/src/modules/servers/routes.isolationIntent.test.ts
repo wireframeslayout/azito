@@ -3,6 +3,7 @@ import Fastify from 'fastify';
 import serversRoutes from './routes';
 import type { ServersRouteOptions } from './routes';
 import type { IServerRepository, ServerConfig } from './Server';
+import { KeyedMutex } from '../../shared/keyedMutex';
 
 // Issue #29 Step 1: isolation_intent is only settable for agent servers — a
 // local server always shares the hub process's own credential store, so
@@ -55,6 +56,11 @@ function makeOpts(overrides: Partial<ServersRouteOptions> = {}): ServersRouteOpt
     windowRepo: { findByServer: vi.fn(() => []) } as unknown as ServersRouteOptions['windowRepo'],
     webhookToken: 'wh',
     uiToken: 'ui',
+    // Issue #29 review (6th pass), Important finding 3: a fresh instance per
+    // test is fine here (this file never exercises cross-route serialization
+    // against sessions.ts — that's covered by sessions.test.ts's own
+    // instance plus the shared-wiring assertion in buildServer.ts).
+    serverIsolationMutex: new KeyedMutex(),
     ...overrides,
   };
 }
@@ -550,5 +556,116 @@ describe('isolation_intent false->true live-tmux-session gate (Issue #29 review,
 
     expect(res.statusCode).toBe(200);
     expect(listSessions).not.toHaveBeenCalled();
+  });
+});
+
+// Issue #29 review (6th pass), Important finding 2: a false->true transition
+// combined with a connection-info change in the SAME PUT must be rejected —
+// the risky-window/live-session checks inspect the OLD connection (`srv`,
+// fetched before this request's own update), while attemptIsolationCleanup
+// re-fetches the row AFTER the update and purges against the NEW connection.
+// Accepting both at once would check one endpoint and clean up a different
+// one.
+describe('isolation_intent false->true rejects a simultaneous connection-info change (Issue #29 review, 6th pass, Important finding 2)', () => {
+  it('rejects with 400 when host changes alongside isolationIntent: false->true', async () => {
+    const opts = makeOpts();
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: false, host: '1.2.3.4' }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/servers/srv',
+      payload: { host: '9.9.9.9', isolationIntent: true },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('isolation_intent_transition_with_connection_change');
+    expect(opts.serverRepo.update).not.toHaveBeenCalled();
+    expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
+  });
+
+  it('rejects with 400 when sshHost changes alongside isolationIntent: false->true', async () => {
+    const opts = makeOpts();
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: false, sshHost: 'user@old-host' }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/servers/srv',
+      payload: { sshHost: 'user@new-host', isolationIntent: true },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('isolation_intent_transition_with_connection_change');
+    expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
+  });
+
+  it('rejects with 400 when agentPort or agentToken changes alongside isolationIntent: false->true', async () => {
+    const opts = makeOpts();
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: false, agentPort: 4000, agentToken: 'old-tok' }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/servers/srv',
+      payload: { agentToken: 'new-tok', isolationIntent: true },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('isolation_intent_transition_with_connection_change');
+    expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
+  });
+
+  it('allows isolationIntent: false->true alone (no connection-info field in the body)', async () => {
+    const opts = makeOpts();
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: false, host: '1.2.3.4' }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.serverRepo.updateIsolationIntent).toHaveBeenCalledWith('srv', true);
+  });
+
+  it('allows a connection-info change resubmitted with the SAME value (no actual change) alongside isolationIntent: false->true', async () => {
+    const opts = makeOpts();
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: false, host: '1.2.3.4' }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/servers/srv',
+      payload: { host: '1.2.3.4', isolationIntent: true },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.serverRepo.updateIsolationIntent).toHaveBeenCalledWith('srv', true);
+  });
+
+  it('allows a connection-info change alongside a true->true no-op (not a new transition)', async () => {
+    const opts = makeOpts();
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: true, host: '1.2.3.4' }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/servers/srv',
+      payload: { host: '9.9.9.9', isolationIntent: true },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.serverRepo.update).toHaveBeenCalled();
   });
 });
