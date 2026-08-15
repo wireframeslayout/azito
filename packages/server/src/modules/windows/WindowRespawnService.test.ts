@@ -427,6 +427,35 @@ describe('WindowRespawnService.respawn — supervisor wrap', () => {
     // around the legacy uiTokenEnv()).
     expect(tmux.splitPane.mock.calls[0][3]).toEqual(tmux.uiTokenEnvForServer(makeServer()));
   });
+
+  // Issue #29 review (9th pass), Important finding 2: createPlainWindow only
+  // re-reads the server row AFTER the per-server isolation lock is actually
+  // held — if a `PUT /api/servers/:name` isolation transition commits in
+  // between `respawn()` being called and that lock being acquired, every
+  // downstream tmux call in this turn (pane resolve/restore, and a rollback
+  // kill on failure) must use that freshly re-read row, never the `server`
+  // argument respawn() was originally called with.
+  it('uses the server row re-fetched inside the isolation lock — not the stale server respawn() was called with — for pane resolution, and for the rollback kill on a downstream failure', async () => {
+    const staleServer = makeServer({ isolationIntent: false });
+    const freshServer = makeServer({ isolationIntent: true });
+    const win = makeWindow({ id: 1, taskId: null, tmuxTarget: 'azito:task-1--ab12.1' });
+    const { service, tmux, serverRepo } = buildService({ window: win });
+    // Simulates a false->true isolation PUT committing while this respawn()
+    // call was queued for the lock: the row `serverRepo.findByName` returns
+    // once the lock is held no longer matches the `staleServer` argument.
+    serverRepo.findByName.mockImplementation(() => freshServer);
+    tmux.resolvePaneId.mockRejectedValueOnce(new Error('pane resolve failed'));
+
+    await expect(service.respawn(1, staleServer)).rejects.toThrow('pane resolve failed');
+
+    // resolvePaneId (pane resolution, before the failure) got the fresh row.
+    expect(tmux.resolvePaneId).toHaveBeenCalledWith(freshServer, expect.any(String));
+    expect(tmux.resolvePaneId).not.toHaveBeenCalledWith(staleServer, expect.any(String));
+    // The rollback kill triggered by the resolvePaneId failure also got the
+    // fresh row, not the stale argument.
+    expect(tmux.killWindow).toHaveBeenCalledWith(freshServer, expect.any(String));
+    expect(tmux.killWindow).not.toHaveBeenCalledWith(staleServer, expect.any(String));
+  });
 });
 
 // Issue #28 third-party review finding (multi-window token rotation

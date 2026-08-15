@@ -859,17 +859,40 @@ strip_codex_ui_token() {
   # sitting in the file untouched.
   #
   # This version (a) tolerates quote/whitespace variation in both the header
-  # and the key, and additionally strips an inline-table entry, and (b) —
-  # since a TOML-shape purge can never enumerate every legal variant a future
-  # codex-cli version might emit — treats its own removal as advisory only:
-  # after building the candidate output, it re-scans that text for the bare
-  # string "AZITO_UI_TOKEN" anywhere at all (not scoped to the azt-mcp
-  # section — the conservative reading: this codebase has no other reason to
-  # ever write that name into config.toml) and refuses to write the file
-  # ("unverified", handled as a failure below) unless that scan comes back
-  # clean. A successful "removed"/"clean"/"no-section" result is therefore
-  # actually proven token-free, not just believed to be from one specific
-  # shape matching.
+  # and the key, and (b) — since a TOML-shape purge can never enumerate every
+  # legal variant a future codex-cli version might emit — treats its own
+  # removal as advisory only: after building the candidate output, it
+  # re-scans that text for the bare string "AZITO_UI_TOKEN" anywhere at all
+  # (not scoped to the azt-mcp section — the conservative reading: this
+  # codebase has no other reason to ever write that name into config.toml)
+  # and refuses to write the file ("unverified", handled as a failure below)
+  # unless that scan comes back clean. A successful "removed"/"clean"/
+  # "no-section" result is therefore actually proven token-free, not just
+  # believed to be from one specific shape matching.
+  #
+  # Issue #29 review (9th pass), Important finding 3: an inline-table `env =
+  # { ... }` on the [mcp_servers.azt-mcp] table itself is handled by
+  # DETECTION only, never by rewriting. An earlier version rebuilt the
+  # inline table by splitting its contents on "," and dropping whichever
+  # part's key was AZITO_UI_TOKEN — but a fellow entry's own value can
+  # legally contain a comma (`env = { OTHER = "a,b", AZITO_UI_TOKEN = "..."
+  # }`), which that split corrupted (wrong entries rejoined) while still
+  # reporting "removed" success, because the re-scan below only checks for
+  # the literal string "AZITO_UI_TOKEN" — a corrupted-but-token-free file
+  # passes it. Splitting a TOML value correctly requires an actual TOML
+  # parser, which this script deliberately does not depend on (it is run
+  # standalone on arbitrary remote hosts via SSH bootstrap — see this
+  # file's own header — so every dependency has to be justified against
+  # that, and a full TOML parser is not, for what is otherwise a
+  # best-effort advisory purge). So instead: an inline-table AZITO_UI_TOKEN
+  # is only ever DETECTED, never edited — detection doesn't need to
+  # correctly split the table, only to notice the key is present — and
+  # detecting it fails the whole purge closed ("manual-removal", handled
+  # below) with the offending line shown, rather than risk writing back a
+  # silently-corrupted config.toml. The standard sub-table form
+  # ([mcp_servers.azt-mcp.env], one key per line) is unaffected — it never
+  # had a comma-splitting step, since dropping an entire line needs no
+  # value-level parsing at all.
   local tmp result node_status=0
   tmp="$(mktemp "$codex_config.XXXXXX")"
   result="$(node -e '
@@ -895,38 +918,32 @@ strip_codex_ui_token() {
       return /^AZITO_UI_TOKEN=/.test(stripQuotesAndSpace(trimmed));
     }
 
-    // Strips an `AZITO_UI_TOKEN = "..."` entry out of an inline-table value
-    // on an `env = { ... }` line inside the [mcp_servers.azt-mcp] table
-    // itself (as opposed to a separate [mcp_servers.azt-mcp.env] table).
-    // Only the common single-line shape is handled — TOML inline tables
-    // cannot contain a bare newline, so `codex mcp add` cannot emit a
-    // multi-line one anyway.
-    function stripInlineTokenEntry(line) {
-      const m = line.match(/^(\s*)env(\s*=\s*)\{(.*)\}(.*)$/);
-      if (!m) return null;
-      const [, indent, eq, inner, suffix] = m;
-      const parts = inner.split(",");
-      const kept = [];
-      let removedEntry = false;
-      for (const part of parts) {
-        if (part.trim() === "") continue;
-        const eqIdx = part.indexOf("=");
-        if (eqIdx === -1) { kept.push(part.trim()); continue; }
-        const key = stripQuotesAndSpace(part.slice(0, eqIdx));
-        if (key === "AZITO_UI_TOKEN") { removedEntry = true; continue; }
-        kept.push(part.trim());
-      }
-      if (!removedEntry) return null;
-      const body = kept.length > 0 ? "{ " + kept.join(", ") + " }" : "{}";
-      return indent + "env" + eq + body + suffix;
+    // Detects (never rewrites — see the doc comment above this whole
+    // `node -e` block) an `AZITO_UI_TOKEN` key inside an inline-table
+    // `env = { ... }` value on the [mcp_servers.azt-mcp] table itself (as
+    // opposed to a separate [mcp_servers.azt-mcp.env] table). A TOML key
+    // inside `{ ... }` always starts either right after the opening brace
+    // or right after a "," — so anchoring on that, after stripping quotes
+    // and whitespace (same helper used everywhere else in this script), is
+    // enough to notice the key is present without needing to correctly
+    // split the inline table into its comma-separated entries — a bare
+    // comma split cannot do that once an entry value itself contains a
+    // comma.
+    function hasInlineTokenKey(line) {
+      const m = line.match(/^\s*env\s*=\s*\{(.*)\}/);
+      if (!m) return false;
+      return /(^|,)AZITO_UI_TOKEN=/.test(stripQuotesAndSpace(m[1]));
     }
 
     let inEnvSection = false;
     let inOwnTable = false;
     let sawSection = false;
     let removed = false;
+    let manualRemovalNeeded = false;
+    const manualRemovalLines = [];
     const out = [];
-    for (const line of lines) {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
       const trimmed = line.trim();
       if (trimmed.startsWith("[")) {
         const norm = stripQuotesAndSpace(trimmed);
@@ -940,16 +957,23 @@ strip_codex_ui_token() {
         removed = true;
         continue; // drop only this line
       }
-      if (inOwnTable) {
-        const rewritten = stripInlineTokenEntry(line);
-        if (rewritten !== null) {
-          removed = true;
-          sawSection = true;
-          out.push(rewritten);
-          continue;
-        }
+      if (inOwnTable && hasInlineTokenKey(line)) {
+        // Fail closed rather than rewrite — see the doc comment on
+        // hasInlineTokenKey above. Leave the line untouched in `out`
+        // (irrelevant either way, since a manual-removal result is never
+        // written to disk) and keep scanning so every offending line can
+        // be reported at once.
+        manualRemovalNeeded = true;
+        manualRemovalLines.push(`${i + 1}: ${line}`);
+        out.push(line);
+        continue;
       }
       out.push(line);
+    }
+
+    if (manualRemovalNeeded) {
+      process.stdout.write("manual-removal\n" + manualRemovalLines.join("\n"));
+      process.exit(0);
     }
 
     const finalText = out.join("\n");
@@ -985,7 +1009,15 @@ strip_codex_ui_token() {
     return 1
   fi
 
-  case "$result" in
+  # `result`'s first line is the status token; a "manual-removal" status
+  # carries the offending line(s) (1-based line number + source text) on
+  # the lines that follow — see the node script's doc comment above for why
+  # those lines are reported rather than auto-edited.
+  local result_status result_detail
+  result_status="$(printf '%s\n' "$result" | head -n1)"
+  result_detail="$(printf '%s\n' "$result" | tail -n +2)"
+
+  case "$result_status" in
     removed)
       chmod "$orig_mode" "$tmp"
       mv -f "$tmp" "$codex_config"
@@ -993,6 +1025,13 @@ strip_codex_ui_token() {
       ;;
     no-section|clean)
       rm -f "$tmp"
+      ;;
+    manual-removal)
+      rm -f "$tmp"
+      echo "  エラー: azt-mcp (Codex): $codex_config のインラインテーブル (env = { ... }) 内に AZITO_UI_TOKEN が見つかりましたが、他の値がカンマを含んでいる可能性があるため自動編集は行いません。以下の行を手動で除去してください:" >&2
+      echo "$result_detail" >&2
+      SETUP_HAD_ERRORS=1
+      return 1
       ;;
     unverified)
       rm -f "$tmp"

@@ -316,6 +316,34 @@ export async function createSecondaryWindow(
 }
 
 /**
+ * Non-task counterpart of {@link createSecondaryWindow} (Issue #29 review,
+ * 9th pass, Important finding 1). A plain (non-task) window respawn/create
+ * has no task token and no masked-secondary env to resolve — it only ever
+ * needs {@link TmuxClient.uiTokenEnvForServer} — but the isolation-freshness
+ * requirement is identical to both other branches: env must be built from a
+ * server row re-read AFTER this lock is actually held, never from whatever
+ * `server` the caller happened to be holding before queuing for the lock.
+ * Before this helper existed, WindowRespawnService's non-task branch built
+ * `uiTokenEnvForServer(server)` from the caller's own (possibly stale)
+ * argument and created the window with no lock at all — a false->true
+ * isolation PUT committing in between could leave a freshly-created
+ * "isolated" window holding the old, unmasked UI token.
+ */
+export async function createPlainWindow(
+  tmux: Pick<TmuxClient, 'uiTokenEnvForServer'>,
+  lock: ServerIsolationLock,
+  server: ServerConfig,
+  create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string }>,
+): Promise<{ windowName: string; env: Record<string, string>; server: ServerConfig }> {
+  return lock.serverIsolationMutex.withLock(server.name, async () => {
+    const freshServer = refetchServer(lock, server.name);
+    const env = tmux.uiTokenEnvForServer(freshServer);
+    const created = await create(freshServer, env);
+    return { windowName: created.windowName, env, server: freshServer };
+  });
+}
+
+/**
  * Shared "rollback kill → reference bookkeeping" operation (Issue #28
  * third-party review, second round: 3 rollback sites each independently
  * cleared their reference to the about-to-be-killed window BEFORE — or
