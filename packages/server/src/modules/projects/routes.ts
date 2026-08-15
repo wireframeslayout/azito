@@ -14,7 +14,14 @@ import type { GitProviderService } from '../git/providers/GitProviderService';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { IServerRepository } from '../servers/Server';
 import type { SqliteProjectSecretRepository } from './SqliteProjectSecretRepository';
-import { ensureSessionWithLock, type ServerIsolationLock } from '../tasks/execution/WindowRotation';
+// Issue #29 review (independent QC), M-3: imported from the base-layer
+// `modules/servers` (not `modules/tasks/execution/WindowRotation`, which
+// merely re-exports it) — this route file's own `resolveInputPolicy` doc
+// comment in `./ProjectServer.ts` states it "cannot import from tasks", and
+// importing this same primitive via `tasks/execution/WindowRotation`
+// contradicted that. See `ServerIsolationLock.ts`'s doc comment for the full
+// reasoning behind the move.
+import { ensureSessionWithLock, type ServerIsolationLock } from '../servers/ServerIsolationLock';
 import type { KeyedMutex } from '../../shared/keyedMutex';
 
 // ─── Types ───

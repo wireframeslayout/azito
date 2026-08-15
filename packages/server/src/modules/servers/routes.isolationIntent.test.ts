@@ -261,6 +261,36 @@ describe('PUT /api/servers/:name — isolation cleanup on false->true (Issue #29
     expect(report.error).toBe('boom');
   });
 
+  it('redacts a plaintext token embedded in the installer error message before persisting the report (independent QC review, I-1)', async () => {
+    // Simulates SshClient.execIsolated's (pre-fix) timeout message, which
+    // embedded the full setup.sh command line — including
+    // --webhook-token/--ui-token in plaintext — verbatim in the Error thrown
+    // out of harnessInstaller.install(). Even with that message-level fix in
+    // place, this route must not trust any error message reaching it to be
+    // secret-free (defense in depth): a plaintext token in the message must
+    // never survive into the persisted isolation_report.
+    const install = vi.fn(async () => {
+      throw new Error(
+        "Isolated exec timed out: bash /harness/setup.sh --webhook-token 'abcdef0123456789abcdef0123456789' --ui-token 'deadbeefdeadbeefdeadbeefdeadbeef' --purge-operator-token",
+      );
+    });
+    const opts = makeOpts({ harnessInstaller: makeHarnessInstaller(install) });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: false, sshHost: 'user@host' }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+    expect(res.statusCode).toBe(200);
+    const [, reportJson] = (opts.serverRepo.updateIsolationReport as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(reportJson).not.toContain('abcdef0123456789abcdef0123456789');
+    expect(reportJson).not.toContain('deadbeefdeadbeefdeadbeefdeadbeef');
+    const report = JSON.parse(reportJson);
+    expect(report.cleanup).toBe('failed');
+    expect(report.error).toContain('[redacted]');
+  });
+
   it('records a "skipped" report (no installer call, no PUT failure) when unreachable — no sshHost/host', async () => {
     const install = vi.fn();
     const opts = makeOpts({ harnessInstaller: makeHarnessInstaller(install) });

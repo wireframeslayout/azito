@@ -282,7 +282,12 @@ export class SshClient {
       setTimeout(() => {
         if (shell.pending.has(id)) {
           shell.pending.delete(id);
-          reject(new Error(`Command timed out: ${command}`));
+          // Command body deliberately omitted from the message: callers may
+          // embed secrets (e.g. HarnessInstaller's --webhook-token/--ui-token)
+          // in `command`, and this Error's message can end up persisted
+          // verbatim (isolation_report / audit_log) by downstream catch
+          // blocks — see execIsolated's identical comment below.
+          reject(new Error('Command timed out'));
         }
       }, 15000);
     });
@@ -296,7 +301,14 @@ export class SshClient {
 
       const timeout = setTimeout(() => {
         conn.end();
-        reject(new Error(`Isolated exec timed out: ${command}`));
+        // Command body deliberately omitted from the message (see
+        // execRemote's identical comment above) — HarnessInstaller.runSetup
+        // builds `command` with plaintext --webhook-token/--ui-token, and
+        // this rejection propagates into HarnessInstaller.install()'s catch
+        // -> attemptIsolationCleanup's `report.error` -> isolation_report /
+        // audit_log (servers/routes.ts). Redacting here is defense-in-depth
+        // alongside the redaction applied there.
+        reject(new Error('Isolated exec timed out'));
       }, 15000);
 
       conn.on('ready', () => {

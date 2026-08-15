@@ -50,6 +50,21 @@ function getLanIps(): string[] {
   return results;
 }
 
+// Issue #29 review (independent QC), Important finding 1: defense-in-depth
+// alongside SshClient's timeout-message redaction — a plaintext
+// --webhook-token/--ui-token could otherwise reach attemptIsolationCleanup's
+// `error` field (isolation_report column + audit_log detail) via any error
+// message on the harnessInstaller.install() call path, not just the SSH
+// timeout this was first found through. Redacts both the CLI-flag form
+// (`--webhook-token '...'` / `--ui-token '...'`, single- or double-quoted or
+// bare) and any bare 32+ char hex run that looks like a token even without a
+// flag name attached.
+function redactSecrets(message: string): string {
+  return message
+    .replace(/--(webhook-token|ui-token)(\s+)('[^']*'|"[^"]*"|\S+)/gi, '--$1$2[redacted]')
+    .replace(/\b[0-9a-f]{32,}\b/gi, '[redacted]');
+}
+
 // ─── Types ───
 
 export interface ServersRouteOptions {
@@ -139,9 +154,9 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
           });
           report = result.success
             ? { kind: 'cleanup', cleanup: 'done', at }
-            : { kind: 'cleanup', cleanup: 'failed', error: result.error, at };
+            : { kind: 'cleanup', cleanup: 'failed', error: result.error ? redactSecrets(result.error) : result.error, at };
         } catch (err: unknown) {
-          report = { kind: 'cleanup', cleanup: 'failed', error: (err as Error).message, at };
+          report = { kind: 'cleanup', cleanup: 'failed', error: redactSecrets((err as Error).message), at };
         }
       }
     }
