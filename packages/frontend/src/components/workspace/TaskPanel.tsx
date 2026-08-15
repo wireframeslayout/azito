@@ -1845,6 +1845,13 @@ export default function TaskPanel({
 
                   <span style={{ color: 'var(--text-dim)' }}>{t('executionApproval.fields.secrets')}</span>
                   <SecretNamesValue names={approvalData.secretNames} />
+
+                  {approvalData.execution.isolationIntent && (
+                    <>
+                      <span style={{ color: 'var(--text-dim)' }}>{t('executionApproval.fields.isolation')}</span>
+                      <span style={{ color: 'var(--accent)', wordBreak: 'break-word' }}>{t('executionApproval.isolatedNotice')}</span>
+                    </>
+                  )}
                 </div>
               </div>
 

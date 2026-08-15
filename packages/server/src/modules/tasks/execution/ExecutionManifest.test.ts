@@ -444,6 +444,75 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     expect(hashAfterRotation).toBe(hashBeforeRotation);
   });
 
+  // Issue #29 review, Critical finding 2: server.isolationIntent must be
+  // covered by the fingerprint (both the flag itself AND the resulting
+  // secrets.namesDigest, since isolation changes which secrets actually get
+  // injected) — otherwise flipping isolation_intent post-approval, in either
+  // direction, silently changes what a task pane receives without
+  // invalidating the approval that was granted under the OTHER state
+  // (approve-then-deisolate bypass).
+  describe('server.isolationIntent', () => {
+    it('declaring isolation_intent on the resolved server alone invalidates a prior approval, WITHOUT touching the task row', () => {
+      const fixture = (isolationIntent: boolean): Fixture => ({
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer() },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021, isolationIntent }) },
+        secretNames: ['DEPLOY_KEY'],
+      });
+      const task = makeTask();
+
+      const hashUnisolated = hashFor(task, fixture(false));
+      const hashIsolated = hashFor(task, fixture(true));
+
+      expect(hashIsolated).not.toBe(hashUnisolated);
+    });
+
+    it('toggling isolation_intent OFF an already-isolated server alone also invalidates approval (the reverse direction)', () => {
+      const fixture = (isolationIntent: boolean): Fixture => ({
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer() },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021, isolationIntent }) },
+        secretNames: ['DEPLOY_KEY'],
+      });
+      const task = makeTask();
+
+      const hashIsolated = hashFor(task, fixture(true));
+      const hashDeisolated = hashFor(task, fixture(false));
+
+      expect(hashDeisolated).not.toBe(hashIsolated);
+    });
+
+    it('secrets.namesDigest resolves to the empty-set digest for an isolated server regardless of how many project secrets exist', () => {
+      // Mirrors what TaskPaneEnvironmentService.buildEnvForNewWindow actually
+      // does: it skips reading/injecting AZITO_SECRET_* entirely when the
+      // resolved server is isolated, so the fingerprint of "what's actually
+      // injected" must match an isolated server with N secrets to an
+      // unisolated server with ZERO secrets.
+      const isolatedWithSecrets: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer() },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021, isolationIntent: true }) },
+        secretNames: ['DEPLOY_KEY', 'STRIPE_SECRET'],
+      };
+      const unisolatedNoSecrets: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer() },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021, isolationIntent: false }) },
+        secretNames: [],
+      };
+      const task = makeTask();
+
+      const resolved = resolveExecutionManifest(task, makeDeps(isolatedWithSecrets));
+      expect(resolved.manifest.secrets.namesDigest).toBe(
+        resolveExecutionManifest(task, makeDeps(unisolatedNoSecrets)).manifest.secrets.namesDigest,
+      );
+    });
+  });
+
   it('editing task.unitId alone invalidates a prior approval (retargets the Unit)', () => {
     const fixture: Fixture = {
       units: { 20: makeUnit({ id: 20 }), 999: makeUnit({ id: 999, systemPrompt: 'A different unit' }) },

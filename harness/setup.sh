@@ -19,10 +19,21 @@ AZITO_SERVER_NAME="${AZITO_SERVER_NAME:-}"
 # ドット付き prefix のファイルを見逃したまま "all checks passed" を返す
 # （Phase C third-party review 指摘）。
 AZITO_PREFIX="${AZITO_PREFIX:-}"
+# Issue #29 review, Critical finding 3: --ui-token 省略時、setup.sh は
+# operator.env / Claude settings.json の MCP env / Codex MCP 設定に残った
+# 既存の AZITO_UI_TOKEN を意図的に温存する（再実行のたびにトークンが消えては
+# 運用が壊れるため — 下の各節のコメント参照）。この「温存」は、サーバーを
+# 後から isolation_intent=1 に切り替えたケースでは資格情報の残置になる:
+# 隔離化しても、以前 setup.sh --ui-token で書き込んだ全権トークンは
+# ここから掃除されない限り残り続ける。--purge-operator-token は、その残置分を
+# 明示的に消し去るための独立モード。HarnessInstaller は isolationIntent=1の
+# server へ runSetup する際、常にこのフラグを付ける（--ui-token は元々
+# 省略される — HarnessInstaller.ts の isolationIntent 節参照）。
+AZITO_PURGE_OPERATOR_TOKEN=0
 
 # ── 引数パース ──
 usage_exit() {
-  echo "Usage: $0 [--azito-url http://host:3001] [--webhook-token <token>] [--ui-token <token>] [--server-name <name>] [--prefix <prefix>]" >&2
+  echo "Usage: $0 [--azito-url http://host:3001] [--webhook-token <token>] [--ui-token <token>] [--server-name <name>] [--prefix <prefix>] [--purge-operator-token]" >&2
   echo "" >&2
   echo "  --prefix <name>  この配線を独立したハブ用プロファイルとして扱う。設定は" >&2
   echo "                   ~/.azito/azitoctl-<name>.env に書き出され、hook コマンドには" >&2
@@ -30,6 +41,12 @@ usage_exit() {
   echo "                   シグナルを送る場合は、ハブごとに --prefix を変えて実行する" >&2
   echo "                   （URL・トークン・サーバー名はプロファイル単位でまとめて解決され、" >&2
   echo "                   変数単位の部分上書きはできない）。" >&2
+  echo "  --purge-operator-token  operator.env / Claude settings.json の MCP env /" >&2
+  echo "                   Codex MCP 設定から、AZITO が過去に書き込んだ" >&2
+  echo "                   AZITO_UI_TOKEN をすべて除去する。--ui-token 省略時の" >&2
+  echo "                   既定動作（既存トークンを温存する）を上書きする。" >&2
+  echo "                   サーバーを isolation_intent=1 に切り替えた後の" >&2
+  echo "                   資格情報掃除に使う。" >&2
   exit 1
 }
 
@@ -87,6 +104,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --prefix=*)
       AZITO_PREFIX="${1#*=}"
+      shift
+      ;;
+    --purge-operator-token)
+      AZITO_PURGE_OPERATOR_TOKEN=1
       shift
       ;;
     *)
@@ -330,6 +351,19 @@ fi
 # 一切 source しない。
 echo ""
 echo "=== operator.env ==="
+if [[ "$AZITO_PURGE_OPERATOR_TOKEN" == "1" ]]; then
+  OPERATOR_ENV_FILE="$HOME/.azito/operator.env"
+  # operator.env はこの2行（AZITO_URL/AZITO_UI_TOKEN）専用のファイル
+  # （上の節コメント参照）なので、行単位の除去ではなくファイルごと削除する
+  # ——トークンを抜いた「空の資格情報ファイル」を残す理由がない。存在しな
+  # ければ何もしない（冪等）。
+  if [[ -f "$OPERATOR_ENV_FILE" ]]; then
+    rm -f "$OPERATOR_ENV_FILE"
+    echo "  $OPERATOR_ENV_FILE: --purge-operator-token により削除しました"
+  else
+    echo "  $OPERATOR_ENV_FILE: 存在しないためスキップ (--purge-operator-token)"
+  fi
+fi
 if [[ -n "$AZITO_UI_TOKEN" ]]; then
   OPERATOR_ENV_DIR="$HOME/.azito"
   OPERATOR_ENV_FILE="$OPERATOR_ENV_DIR/operator.env"
@@ -384,6 +418,7 @@ if command -v node >/dev/null 2>&1; then
     const questionCmd = process.argv[17];
     const questionHookExists = process.argv[18] === 'true';
     const questionHookPath = process.argv[19];
+    const purgeOperatorToken = process.argv[20] === 'true';
 
     let settings = {};
     try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch {}
@@ -399,6 +434,16 @@ if command -v node >/dev/null 2>&1; then
         let mcpChanged = false;
         if (settings.mcpServers[mcpKey].env.AZITO_URL !== azitoUrl) {
           settings.mcpServers[mcpKey].env.AZITO_URL = azitoUrl;
+          changed = true;
+          mcpChanged = true;
+        }
+        // Issue #29 review, Critical finding 3: --purge-operator-token
+        // overrides the "azitoUiToken が空のときは既存値を触らない" default
+        // below — it exists specifically to remove a token that default
+        // would otherwise preserve indefinitely (e.g. after a server is
+        // switched to isolation_intent=1 post-setup).
+        if (purgeOperatorToken && 'AZITO_UI_TOKEN' in settings.mcpServers[mcpKey].env) {
+          delete settings.mcpServers[mcpKey].env.AZITO_UI_TOKEN;
           changed = true;
           mcpChanged = true;
         }
@@ -513,7 +558,8 @@ if command -v node >/dev/null 2>&1; then
     "$INTERACTION_HOOK_SCRIPT" \
     "$QUESTION_CMD" \
     "$([[ -f "$QUESTION_HOOK_SCRIPT" ]] && echo true || echo false)" \
-    "$QUESTION_HOOK_SCRIPT"
+    "$QUESTION_HOOK_SCRIPT" \
+    "$([[ "$AZITO_PURGE_OPERATOR_TOKEN" == "1" ]] && echo true || echo false)"
 
   if [[ -n "$AZITO_WEBHOOK_TOKEN" ]]; then
     echo "  AZITO_WEBHOOK_TOKEN: 設定済み（hook command に埋め込み）"
@@ -595,8 +641,11 @@ elif command -v codex >/dev/null 2>&1 || [[ -d "$HOME/.codex" ]]; then
   if command -v codex >/dev/null 2>&1; then
     # --ui-token 未指定での再実行時、remove/add により既存の env トークンが
     # 失われないよう、remove する前に既存の AZITO_UI_TOKEN を退避しておく。
+    # --purge-operator-token 指定時はこの退避自体を行わない（Issue #29
+    # review, Critical finding 3）——退避すれば直後の EFFECTIVE_AZT_MCP_UI_TOKEN
+    # 計算で復元されてしまい、掃除にならない。
     EXISTING_AZT_MCP_UI_TOKEN=""
-    if [[ -z "$AZITO_UI_TOKEN" ]] && command -v node >/dev/null 2>&1 && codex mcp get azt-mcp >/dev/null 2>&1; then
+    if [[ -z "$AZITO_UI_TOKEN" && "$AZITO_PURGE_OPERATOR_TOKEN" != "1" ]] && command -v node >/dev/null 2>&1 && codex mcp get azt-mcp >/dev/null 2>&1; then
       EXISTING_AZT_MCP_UI_TOKEN="$(codex mcp get azt-mcp --json 2>/dev/null | node -e '
         let data = "";
         process.stdin.on("data", (c) => { data += c; });
@@ -617,6 +666,8 @@ elif command -v codex >/dev/null 2>&1 || [[ -d "$HOME/.codex" ]]; then
     EFFECTIVE_AZT_MCP_UI_TOKEN="${AZITO_UI_TOKEN:-$EXISTING_AZT_MCP_UI_TOKEN}"
     if [[ -n "$EFFECTIVE_AZT_MCP_UI_TOKEN" ]]; then
       CODEX_MCP_ADD_ARGS+=(--env "AZITO_UI_TOKEN=$EFFECTIVE_AZT_MCP_UI_TOKEN")
+    elif [[ "$AZITO_PURGE_OPERATOR_TOKEN" == "1" ]]; then
+      echo "  azt-mcp (Codex): --purge-operator-token により AZITO_UI_TOKEN を除去しました"
     else
       echo "  警告: AZITO_UI_TOKEN が設定されていません。--ui-token を付けて再実行してください"
     fi

@@ -177,6 +177,16 @@ export class HarnessInstaller {
     if (uiToken && !isolationIntent) cmd += ` --ui-token ${shellQuote(uiToken)}`;
     if (serverName) cmd += ` --server-name ${shellQuote(serverName)}`;
     if (prefix) cmd += ` --prefix ${shellQuote(prefix)}`;
+    // Issue #29 review, Critical finding 3: withholding --ui-token above
+    // only stops a NEW token from being distributed — it does not remove an
+    // ALREADY-distributed one from a previous (pre-isolation) setup.sh run.
+    // setup.sh's own default (--ui-token omitted -> keep whatever operator.env
+    // / Claude settings.json / Codex MCP config already has) exists so that
+    // an ordinary re-run without --ui-token doesn't erase a working
+    // configuration — but that same default is exactly wrong for a server
+    // that has just been declared isolated, so --purge-operator-token
+    // overrides it here.
+    if (isolationIntent) cmd += ' --purge-operator-token';
 
     const result = await this.sshClient.execIsolated(sshHost, cmd);
     if (result.code !== 0) {

@@ -132,6 +132,8 @@ export interface ExecutionApprovalData {
     branches: { base: string; target: string; work: string };
     phases: Array<{ phase: string; sidekickName: string | null }>;
     repository: { id: number; provider: string; url: string; owner: string | null; repoName: string | null } | null;
+    /** Issue #29 review, Critical finding 2: whether the resolved target server is declared isolation_intent=1 — shown as a one-line notice on the approval screen so a human approver can see that no secrets/UI tokens will reach this run's pane. */
+    isolationIntent: boolean;
   };
   secretNames: string[];
 }

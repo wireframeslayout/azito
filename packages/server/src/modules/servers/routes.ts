@@ -13,6 +13,9 @@ import { parseTmuxVersion, parseNodeVersion, parseHarnessCheck, parseTailscaleCh
 import { findChromiumBinaryCommand } from './agent-deploy/BrowserRuntimeInstaller';
 import { stripTerminalArtifacts } from '../../shared/utils/stripTerminalArtifacts';
 import type { TmuxInstaller } from './agent-deploy/TmuxInstaller';
+import type { AuditLogService } from '../../shared/audit/AuditLogService';
+import { recordAuditBestEffort } from '../../shared/audit/recordAuditBestEffort';
+import { OPERATOR_PRINCIPAL } from '../../shared/auth/Principal';
 
 // ─── Tailscale / network helpers ───
 
@@ -60,12 +63,18 @@ export interface ServersRouteOptions {
   webhookToken: string;
   uiToken: string;
   harnessPrefix?: string;
+  // Best-effort (Issue #29 review, Important finding 1): records the
+  // isolation_intent auto-clear PUT /api/servers/:name performs when a
+  // server's effective type moves off 'agent'. Optional — matches every
+  // other recordAuditBestEffort() call site in this codebase (see that
+  // function's own doc comment).
+  auditLogService?: AuditLogService;
 }
 
 // ─── Plugin ───
 
 const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts, done) => {
-  const { serverRepo, tmux, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, webhookToken, uiToken, harnessPrefix } = opts;
+  const { serverRepo, tmux, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, webhookToken, uiToken, harnessPrefix, auditLogService } = opts;
 
   // ── GET /api/servers ──
   fastify.get('/api/servers', async () => {
@@ -144,16 +153,36 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       const validPutMux = putMux || undefined;
       if (validPutMux && validPutMux !== 'system' && validPutMux !== 'managed')
         return reply.status(400).send({ error: 'muxRuntime must be "system" or "managed"' });
+      // Issue #29 review, Important finding 2: isolationIntent must be an
+      // actual boolean, not merely truthy — `"false"` (a string) is truthy
+      // in JS and would otherwise be persisted as `true` by
+      // serverRepo.updateIsolationIntent (which trusts its caller to have
+      // already validated the type). Runtime-checked here because this
+      // value crosses the HTTP boundary as untyped JSON; the `boolean`
+      // annotation on the destructured body above is a compile-time-only
+      // assertion that does not survive `request.body as {...}`.
+      if (isolationIntent !== undefined && typeof isolationIntent !== 'boolean') {
+        return reply.status(400).send({ error: 'isolationIntent must be a boolean' });
+      }
       // isolation_intent is only meaningful for agent servers (Issue #29
       // design v2): a "local" server always shares the hub process's own
       // credential store, so declaring it "isolated" would be a lie the
       // credential-distribution gates (TaskPaneEnvironmentService,
-      // HarnessInstaller) could never actually honor. Reject at the API
-      // boundary rather than silently accepting and ignoring it.
-      if (isolationIntent !== undefined) {
-        const effectiveType = (type || srv.type) as 'local' | 'agent';
-        if (effectiveType !== 'agent')
-          return reply.status(400).send({ error: 'isolationIntent is only settable for agent servers' });
+      // HarnessInstaller) could never actually honor. Reject DECLARING
+      // isolation (isolationIntent: true) for a non-agent effective type at
+      // the API boundary rather than silently accepting and ignoring it.
+      //
+      // Issue #29 review, Important finding 1: explicitly setting
+      // isolationIntent: false alongside a type change to 'local' is NOT
+      // rejected here (unlike the `true` case above) — it's the one
+      // combination a caller trying to undo isolation on a
+      // type-transitioning server needs to be able to send, and the old
+      // code rejected it purely because isolationIntent was present at all
+      // when effectiveType !== 'agent', with no way to explicitly express
+      // "and clear it too" in the same request.
+      const effectiveType = (type || srv.type) as 'local' | 'agent';
+      if (effectiveType !== 'agent' && isolationIntent === true) {
+        return reply.status(400).send({ error: 'isolationIntent is only settable for agent servers' });
       }
       try {
         serverRepo.update(
@@ -165,7 +194,31 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
           sshHost ?? srv.sshHost ?? undefined,
           (validPutMux as MuxRuntime | undefined) ?? srv.muxRuntime,
         );
-        if (isolationIntent !== undefined) {
+        if (effectiveType !== 'agent') {
+          // Issue #29 review, Important finding 1: an isolation-invariant
+          // auto-clear, not a mirror of the request body — a server whose
+          // EFFECTIVE type is no longer 'agent' can never legitimately stay
+          // isolated (see the rejection above for the reverse direction:
+          // declaring isolation on a non-agent type is refused outright).
+          // Runs UNCONDITIONALLY when the row was actually isolated,
+          // regardless of whether this request even mentioned
+          // isolationIntent — a plain `{ type: 'local' }` PUT with no
+          // isolationIntent field at all must not leave `isolation_intent=1`
+          // stranded on a row TaskPaneEnvironmentService/HarnessInstaller no
+          // longer treat as isolatable in the first place (that class of
+          // server only ever sees the credential-distribution gates as
+          // "agent-type or not", so the previously-isolated intent becomes
+          // meaningless dead state, not a preserved decision).
+          if (srv.isolationIntent) {
+            serverRepo.updateIsolationIntent(request.params.name, false);
+            recordAuditBestEffort(auditLogService, {
+              actorClass: (request.principal ?? OPERATOR_PRINCIPAL).class,
+              actorId: (request.principal ?? OPERATOR_PRINCIPAL).id,
+              event: 'server.isolation_intent.auto_cleared',
+              detail: { serverName: request.params.name, reason: 'type_no_longer_agent' },
+            });
+          }
+        } else if (isolationIntent !== undefined) {
           serverRepo.updateIsolationIntent(request.params.name, isolationIntent);
         }
         transportFactory.invalidate(request.params.name);

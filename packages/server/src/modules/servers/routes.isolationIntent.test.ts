@@ -100,6 +100,81 @@ describe('PUT /api/servers/:name — isolationIntent (Issue #29 Step 1)', () => 
     expect(res.statusCode).toBe(400);
     expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
   });
+
+  // Issue #29 review, Important finding 1: switching an isolated agent
+  // server's type to 'local' must not strand isolation_intent=1 on the row —
+  // TaskPaneEnvironmentService/HarnessInstaller only ever gate on
+  // "agent-type or not", so a stranded intent on a local row is dead state
+  // that also blocks a later re-declaration attempt from being visible as a
+  // real change.
+  describe('isolation_intent auto-clear on type -> local (Issue #29 Important finding 1)', () => {
+    it('auto-clears isolation_intent when type changes to local, even without isolationIntent in the request body', async () => {
+      const opts = makeOpts();
+      (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'agent', isolationIntent: true }));
+      const app = await buildApp(opts);
+
+      const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { type: 'local' } });
+
+      expect(res.statusCode).toBe(200);
+      expect(opts.serverRepo.updateIsolationIntent).toHaveBeenCalledWith('srv', false);
+    });
+
+    it('accepts isolationIntent: false alongside type: local (previously rejected as 400)', async () => {
+      const opts = makeOpts();
+      (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'agent', isolationIntent: true }));
+      const app = await buildApp(opts);
+
+      const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { type: 'local', isolationIntent: false } });
+
+      expect(res.statusCode).toBe(200);
+      expect(opts.serverRepo.updateIsolationIntent).toHaveBeenCalledWith('srv', false);
+    });
+
+    it('still rejects isolationIntent: true alongside type: local', async () => {
+      const opts = makeOpts();
+      (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'agent', isolationIntent: false }));
+      const app = await buildApp(opts);
+
+      const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { type: 'local', isolationIntent: true } });
+
+      expect(res.statusCode).toBe(400);
+      expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
+    });
+
+    it('does not call updateIsolationIntent when switching to local and the row was never isolated', async () => {
+      const opts = makeOpts();
+      (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'agent', isolationIntent: false }));
+      const app = await buildApp(opts);
+
+      const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { type: 'local' } });
+
+      expect(res.statusCode).toBe(200);
+      expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
+    });
+  });
+
+  // Issue #29 review, Important finding 2: isolationIntent must be validated
+  // as an actual boolean at the API boundary — truthiness alone would
+  // persist a string like "false" as `true`.
+  describe('isolationIntent runtime type validation (Issue #29 Important finding 2)', () => {
+    it.each([
+      ['the string "false"', 'false'],
+      ['the string "true"', 'true'],
+      ['a number', 1],
+      ['null', null],
+      ['an object', {}],
+      ['an array', []],
+    ])('rejects isolationIntent when it is %s (not a real boolean)', async (_label, value) => {
+      const opts = makeOpts();
+      (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'agent' }));
+      const app = await buildApp(opts);
+
+      const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: value } });
+
+      expect(res.statusCode).toBe(400);
+      expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('GET /api/servers — isolationReport exclusion', () => {

@@ -457,6 +457,11 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
             return { phase: p.phase, sidekickName: sidekick?.name ?? null };
           }),
           repository: manifest.repository,
+          // Issue #29 review, Critical finding 2: surfaced so the approval
+          // screen can show a one-line "isolated — no secrets/tokens will be
+          // injected" notice, matching what `secretNames` above already
+          // reflects (empty for an isolated server).
+          isolationIntent: manifest.server.isolationIntent,
         },
         secretNames,
       };

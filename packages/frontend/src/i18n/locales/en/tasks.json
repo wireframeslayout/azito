@@ -49,12 +49,14 @@
       "branches": "Branches",
       "phases": "Phases",
       "repository": "PR destination",
-      "secrets": "Secrets injected"
+      "secrets": "Secrets injected",
+      "isolation": "Isolation"
     },
     "branchesValue": "base: {{base}} → work: {{work}} → target: {{target}}",
     "unresolved": "(unresolved)",
     "noRepository": "(no repository configured)",
     "noSecrets": "(none)",
+    "isolatedNotice": "This server is declared isolated — no secrets or UI/agent tokens will be injected into this run.",
     "reapprovalNote": "Editing this task's title or description after approval will require re-approval.",
     "approve": "Approve",
     "deny": "Deny",

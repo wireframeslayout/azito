@@ -161,6 +161,37 @@ describe('TaskPaneEnvironmentService.buildEnvForNewWindow', () => {
     expect(env.AZITO_AGENT_TOKEN).toBeUndefined();
   });
 
+  // Issue #29 review, Critical finding 1: isolation must win over compat
+  // mode. Compat mode (scopedAuthEnabled=false) is the hub's DEFAULT — before
+  // this fix, an isolated server still received the full-power hub UI token
+  // (and, for an agent-type server, the hub<->agent-server token) under that
+  // default, exactly the credential isolation_intent declares the server
+  // should hold none of.
+  it('masks AZITO_UI_TOKEN/AZITO_AGENT_TOKEN to empty for an isolated agent server even in compat mode', () => {
+    const { service } = makeDeps(false);
+    const isolatedAgent = makeServer({ type: 'agent', agentPort: 4001, agentToken: 'secret-agent-token', isolationIntent: true });
+    const { env } = service.buildEnvForNewWindow(makeTask(), isolatedAgent);
+
+    expect(env.AZITO_UI_TOKEN).toBe('');
+    expect(env.AZITO_AGENT_TOKEN).toBe('');
+    expect(env.AZITO_AGENT_PORT).toBeUndefined();
+  });
+
+  it('masks AZITO_UI_TOKEN to empty for an isolated local server in compat mode', () => {
+    const { service } = makeDeps(false);
+    const { env } = service.buildEnvForNewWindow(makeTask(), makeServer({ type: 'local', isolationIntent: true }));
+    expect(env.AZITO_UI_TOKEN).toBe('');
+  });
+
+  it('masks tokens for an isolated server even when scoped auth is also on', () => {
+    const { service } = makeDeps(true);
+    const isolatedAgent = makeServer({ type: 'agent', agentPort: 4001, agentToken: 'secret-agent-token', isolationIntent: true });
+    const { env } = service.buildEnvForNewWindow(makeTask(), isolatedAgent);
+
+    expect(env.AZITO_UI_TOKEN).toBe('');
+    expect(env.AZITO_AGENT_TOKEN).toBe('');
+  });
+
   // Third-party review finding (Important): secrets must be read BEFORE the
   // token is rotated, so a decrypt/read failure never leaves the previous
   // generation revoked with no new generation ever issued (or returned to
@@ -252,6 +283,17 @@ describe('TaskPaneEnvironmentService.buildEnvForSecondaryWindow', () => {
     const env = service.buildEnvForSecondaryWindow(makeTask(), agentServer);
     expect(env.AZITO_UI_TOKEN).toBe('');
     expect(env.AZITO_AGENT_TOKEN).toBe('');
+  });
+
+  // Issue #29 review, Critical finding 1 (same fix as buildEnvForNewWindow).
+  it('masks AZITO_UI_TOKEN/AZITO_AGENT_TOKEN to empty for an isolated agent server even in compat mode', () => {
+    const { service } = makeDeps(false);
+    const isolatedAgent = makeServer({ type: 'agent', agentPort: 4001, agentToken: 'secret-agent-token', isolationIntent: true });
+    const env = service.buildEnvForSecondaryWindow(makeTask(), isolatedAgent);
+
+    expect(env.AZITO_UI_TOKEN).toBe('');
+    expect(env.AZITO_AGENT_TOKEN).toBe('');
+    expect(env.AZITO_AGENT_PORT).toBeUndefined();
   });
 });
 
