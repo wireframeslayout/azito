@@ -5,6 +5,7 @@ import type { ServerStatus, InstallStatusResponse } from '../serverSections';
 import { getHealthLevel, useServerResourcesContext } from '../../../hooks/useServerResources';
 import type { HealthLevel } from '../../../hooks/useServerResources';
 import { useIsolationDoctor } from '../../../hooks/useIsolationDoctor';
+import { computeIsolationDoctorState, isValidVerificationReport } from './isolationDoctorState';
 import { HealthDot, HEALTH_COLOR_VAR } from '../../statusbar/HealthDot';
 import { ResourceMeter } from '../../statusbar/ResourceMeter';
 import { healthReasonText, formatBytes } from '../../statusbar/ResourceDropdown';
@@ -82,21 +83,30 @@ export default function OverviewSection({
   // isolationCleanupWarning === false (cleanup reported "done") while never
   // having been verified at all, or vice versa (cleanup failed, but an
   // earlier doctor run once passed). Both can be shown together; neither
-  // suppresses the other. Review round (Important finding 4): reads
-  // isolationReport directly (verification-only field after the split), no
-  // `kind` filter needed.
+  // suppresses the other.
+  //
+  // Follow-up review round, Minor finding 4: `isolationReport` is typed as
+  // the shared `IsolationReport` union (kind: 'cleanup' | 'verification') —
+  // this section must not assume, just because it arrived on the
+  // `isolationReport` field, that it actually IS a verification report. A
+  // cleanup-shaped report reaching here (a stale/pre-split row, a future
+  // server-side regression that writes the wrong field) has no `verified`
+  // boolean, so the old `verificationReport.verified === false` check was
+  // always false for it and fell straight through to the "verified" render
+  // — a false success reading. `computeIsolationDoctorState`
+  // (isolationDoctorState.ts, unit-tested there) gates every field it reads
+  // on the discriminant matching AND the shape it implies actually being
+  // present, exactly like `isValidIsolationReport` (useServerDetail.ts)
+  // already requires for the report as a WHOLE — this is defense in depth
+  // for this render path specifically, not a replacement for that validator.
   const verificationReport = isolationReport;
-  const isolationDoctorState: 'verified' | 'verifiedStale' | 'unverified' | 'needsAttention' | null =
-    !server.isolationIntent
-      ? null
-      : verificationReport === null
-        ? 'unverified'
-        : verificationReport.verified === false
-          ? 'needsAttention'
-          : server.isolationVerifiedAt && (Date.now() - new Date(server.isolationVerifiedAt).getTime()) > ISOLATION_VERIFICATION_TTL_MS
-            ? 'verifiedStale'
-            : 'verified';
-  const failedOrUnknownChecks = (verificationReport?.checks ?? []).filter((c) => c.status !== 'pass');
+  const isolationDoctorState = computeIsolationDoctorState({
+    isolationIntent: !!server.isolationIntent,
+    verificationReport,
+    isolationVerifiedAt: server.isolationVerifiedAt,
+    ttlMs: ISOLATION_VERIFICATION_TTL_MS,
+  });
+  const failedOrUnknownChecks = (isValidVerificationReport(verificationReport) ? (verificationReport.checks ?? []) : []).filter((c) => c.status !== 'pass');
   const { running: isolationDoctorRunning, runDoctor } = useIsolationDoctor(server.type === 'agent' ? server.name : null, refresh);
 
   const resourceEntries = useServerResourcesContext();

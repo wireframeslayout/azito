@@ -67,7 +67,8 @@ function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-// ─── Framed file probing (review round, Critical finding 2) ───
+// ─── Framed file probing (review round, Critical finding 2 / follow-up
+// review round, Important finding 3) ───
 //
 // The previous implementation searched raw shell stdout for bare marker
 // strings like `AZT_FILE_BEGIN` and treated a hit/miss as the file's
@@ -81,10 +82,50 @@ function errMsg(err: unknown): string {
 // itself travel on separate, clearly delimited lines (`AZT_STATUS:<key>:...`),
 // the content itself is base64-encoded so it cannot contain a literal
 // newline (or anything else) that could be mistaken for a status line.
+//
+// Follow-up review round, Important finding 3: the FIRST version of this
+// framing unconditionally echoed `present`/`AZT_STATUS_END` around the
+// `base64` invocation regardless of whether `base64` itself succeeded — a
+// missing `base64` binary, a permission error surviving past the `[ -f ]`
+// test (e.g. a TOCTOU unlink, or a file readable by `stat` but not by the
+// probing user), or any other encode failure would silently degrade to an
+// EMPTY content frame, and `probeFilesFramed` treated that indistinguishably
+// from a genuinely empty file (`{ kind: 'content', content: '' }`) — a
+// silent, wrong pass for checks like `checkNoOperatorToken` that only fail
+// when specific text is FOUND in the content (empty content always looks
+// clean). The command now branches on `base64`'s own exit status via
+// `B64=$(base64 < path 2>/dev/null)`: only a genuinely successful encode
+// emits the `present`/content/`AZT_STATUS_END` frame; a failed encode emits
+// a distinct `unreadable` status with no content frame at all, and the
+// content that IS returned is additionally validated as syntactically valid
+// base64 (charset + padding + round-trip) before being decoded — anything
+// that fails validation, or that doesn't fit one of the three recognized
+// status literals, is `'unrecognized'`. Both `'unreadable'` and
+// `'unrecognized'` fold to the doctor's `'unknown'` in every caller below —
+// never silently read as "empty" or "absent".
 export type FileProbeOutcome =
   | { kind: 'absent' }
   | { kind: 'content'; content: string }
+  | { kind: 'unreadable' }
   | { kind: 'unrecognized' };
+
+const BASE64_STRICT_RE = /^[A-Za-z0-9+/]*={0,2}$/;
+
+/**
+ * Strictly validates that `b64` is syntactically valid base64 (charset,
+ * padding, length%4) AND round-trips (re-encoding the decoded bytes
+ * reproduces the same string) before decoding it. `Buffer.from(x, 'base64')`
+ * does NOT throw on malformed input — it silently drops invalid characters —
+ * so without this check a corrupted/truncated transport stream could decode
+ * to arbitrary wrong bytes and still report `kind: 'content'`. Returns
+ * `null` (never a best-effort decode) on any mismatch.
+ */
+function decodeStrictBase64(b64: string): string | null {
+  if (b64.length % 4 !== 0 || !BASE64_STRICT_RE.test(b64)) return null;
+  const buf = Buffer.from(b64, 'base64');
+  if (buf.toString('base64') !== b64) return null;
+  return buf.toString('utf-8');
+}
 
 /**
  * Probes one or more files in a single round-trip. `entries[].pathExpr` must
@@ -103,9 +144,16 @@ export async function probeFilesFramed(
   entries: { key: string; pathExpr: string }[],
 ): Promise<{ ok: true; results: Map<string, FileProbeOutcome> } | { ok: false; detail: string }> {
   if (entries.length === 0) return { ok: true, results: new Map() };
+  // Follow-up review round, Important finding 3: `base64`'s own exit status
+  // (captured via `B64=$(...)`) gates which status literal gets echoed — the
+  // `present`/content/`AZT_STATUS_END` frame is emitted ONLY when the encode
+  // itself succeeded, never unconditionally around it. A failed encode
+  // (missing `base64`, a TOCTOU permission error after the `[ -f ]` test,
+  // etc.) reports the distinct `unreadable` status with no content frame at
+  // all, instead of degrading to an indistinguishable empty-content frame.
   const cmd = entries
     .map(({ key, pathExpr }) =>
-      `if [ -f ${pathExpr} ]; then echo "AZT_STATUS:${key}:present"; base64 < ${pathExpr} 2>/dev/null; echo "AZT_STATUS_END:${key}"; else echo "AZT_STATUS:${key}:absent"; fi`)
+      `if [ -f ${pathExpr} ]; then if B64=$(base64 < ${pathExpr} 2>/dev/null); then echo "AZT_STATUS:${key}:present"; printf '%s\\n' "$B64"; echo "AZT_STATUS_END:${key}"; else echo "AZT_STATUS:${key}:unreadable"; fi; else echo "AZT_STATUS:${key}:absent"; fi`)
     .join('; ');
   let result;
   try {
@@ -121,8 +169,11 @@ export async function probeFilesFramed(
   for (const { key } of entries) {
     const presentIdx = lines.findIndex((l) => l.trim() === `AZT_STATUS:${key}:present`);
     const absentIdx = lines.findIndex((l) => l.trim() === `AZT_STATUS:${key}:absent`);
+    const unreadableIdx = lines.findIndex((l) => l.trim() === `AZT_STATUS:${key}:unreadable`);
     if (presentIdx === -1) {
-      results.set(key, absentIdx !== -1 ? { kind: 'absent' } : { kind: 'unrecognized' });
+      if (absentIdx !== -1) results.set(key, { kind: 'absent' });
+      else if (unreadableIdx !== -1) results.set(key, { kind: 'unreadable' });
+      else results.set(key, { kind: 'unrecognized' });
       continue;
     }
     const endIdx = lines.findIndex((l, i) => i > presentIdx && l.trim() === `AZT_STATUS_END:${key}`);
@@ -131,15 +182,14 @@ export async function probeFilesFramed(
       continue;
     }
     const b64 = lines.slice(presentIdx + 1, endIdx).join('').trim();
-    if (b64 === '') {
-      results.set(key, { kind: 'content', content: '' });
+    const decoded = decodeStrictBase64(b64);
+    if (decoded === null) {
+      // Malformed/corrupted base64 is never treated as "empty content" —
+      // ambiguous is unrecognized (folds to 'unknown' in every caller).
+      results.set(key, { kind: 'unrecognized' });
       continue;
     }
-    try {
-      results.set(key, { kind: 'content', content: Buffer.from(b64, 'base64').toString('utf-8') });
-    } catch {
-      results.set(key, { kind: 'unrecognized' });
-    }
+    results.set(key, { kind: 'content', content: decoded });
   }
   return { ok: true, results };
 }
@@ -211,9 +261,9 @@ async function checkFsAndHostBoundary(transport: IServerTransport, hub: HubIdent
       const outcome = probed.results.get('canary');
       if (outcome?.kind === 'content' && outcome.content === hub.canary.content) canaryReadable = true;
       else if (outcome?.kind === 'absent') canaryReadable = false;
-      // 'unrecognized', or 'content' with unexpected bytes (should never
-      // happen for a hub-generated random filename, but is not trusted as
-      // proof of absence either): canaryReadable stays null.
+      // 'unreadable', 'unrecognized', or 'content' with unexpected bytes
+      // (should never happen for a hub-generated random filename, but is not
+      // trusted as proof of absence either): canaryReadable stays null.
     }
   }
 
@@ -433,8 +483,8 @@ async function checkNoOperatorToken(transport: IServerTransport): Promise<Isolat
   const offenders: string[] = [];
   for (let i = 0; i < targets.length; i++) {
     const outcome = probed.results.get(String(i));
-    if (!outcome || outcome.kind === 'unrecognized') {
-      return { id, status: 'unknown', detail: `${targets[i]} の内容取得結果が想定外の形式でした` };
+    if (!outcome || outcome.kind === 'unrecognized' || outcome.kind === 'unreadable') {
+      return { id, status: 'unknown', detail: `${targets[i]} の内容取得結果が想定外の形式でした（読み取り不能）` };
     }
     if (outcome.kind === 'absent') continue; // listed by `ls` but gone by the time we read it — nothing to flag
     // operator.env carries AZITO_UI_TOKEN=... on the same line grammar
@@ -467,8 +517,8 @@ async function checkNoClaudeMcpToken(transport: IServerTransport): Promise<Isola
   if (probe.kind === 'absent') {
     return { id, status: 'pass', detail: '~/.claude/settings.json が存在しません' };
   }
-  if (probe.kind === 'unrecognized') {
-    return { id, status: 'unknown', detail: '~/.claude/settings.json の取得結果が想定外の形式でした' };
+  if (probe.kind === 'unrecognized' || probe.kind === 'unreadable') {
+    return { id, status: 'unknown', detail: '~/.claude/settings.json の取得結果が想定外の形式でした（読み取り不能）' };
   }
   const extraction = extractClaudeMcpUiToken(probe.content);
   if (extraction.status === 'unreadable') {
@@ -496,8 +546,8 @@ async function checkNoCodexMcpToken(transport: IServerTransport): Promise<Isolat
   if (probe.kind === 'absent') {
     return { id, status: 'pass', detail: 'config.toml が存在しません' };
   }
-  if (probe.kind === 'unrecognized') {
-    return { id, status: 'unknown', detail: 'config.toml の取得結果が想定外の形式でした' };
+  if (probe.kind === 'unrecognized' || probe.kind === 'unreadable') {
+    return { id, status: 'unknown', detail: 'config.toml の取得結果が想定外の形式でした（読み取り不能）' };
   }
   if (hasCodexConfigUiToken(probe.content)) {
     return { id, status: 'fail', detail: 'config.toml に AZITO_UI_TOKEN が残っています' };
@@ -516,10 +566,21 @@ async function checkNoCodexMcpToken(transport: IServerTransport): Promise<Isolat
  * 値そのものは絶対に detail/report に含めない — `${VAR+x}` という POSIX
  * パラメータ展開（「設定されているか」だけを問う、値には触れない）で存在
  * 有無のみを問い合わせ、変数名のリストだけを報告する。
+ *
+ * Review round (Important finding 1): `AZITO_AGENT_TOKEN` is deliberately
+ * EXCLUDED from `varsToCheck` — it is the hub<->agent TRANSPORT credential
+ * (agent/main.ts requires it to start), not an operator-equivalent secret,
+ * and every genuinely isolated agent server still needs it set for the hub
+ * to reach `/api/exec` in the first place. Flagging its mere presence would
+ * make this check fail permanently for every correctly-configured isolated
+ * agent, which is worse than not checking at all (an operator who sees a
+ * doctor that NEVER passes learns to ignore it). Only hub-side secrets that
+ * grant operator-equivalent capability if leaked — UI/webhook/master-key —
+ * belong here.
  */
 async function checkNoOperatorEnvironment(transport: IServerTransport): Promise<IsolationCheck> {
   const id = 'no_operator_environment';
-  const varsToCheck = ['AZITO_UI_TOKEN', 'AZITO_AGENT_TOKEN', 'AZITO_WEBHOOK_TOKEN', 'AZITO_MASTER_KEY'];
+  const varsToCheck = ['AZITO_UI_TOKEN', 'AZITO_WEBHOOK_TOKEN', 'AZITO_MASTER_KEY'];
   const cmd = varsToCheck
     .map((v) => `if [ -n "\${${v}+x}" ]; then echo "AZT_ENV_PRESENT:${v}"; fi`)
     .join('; ') + '; echo AZT_ENV_DONE';

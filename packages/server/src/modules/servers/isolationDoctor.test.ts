@@ -414,7 +414,8 @@ describe('runIsolationDoctor', () => {
     });
   });
 
-  // ─── Operator-environment check (review round, Critical finding 3) ───
+  // ─── Operator-environment check (review round, Critical finding 3 /
+  // follow-up review round, Important finding 1) ───
   describe('no_operator_environment', () => {
     it('fails when AZITO_UI_TOKEN is present in the exec environment, without leaking its value', async () => {
       const transport = makeTransport((cmd) => {
@@ -428,10 +429,10 @@ describe('runIsolationDoctor', () => {
       expect(result.verified).toBe(false);
     });
 
-    it('reports every present operator variable, still never the value', async () => {
+    it('reports every present hub-secret variable, still never the value', async () => {
       const transport = makeTransport((cmd) => {
         if (cmd.includes('AZT_ENV_PRESENT')) {
-          return { stdout: 'AZT_ENV_PRESENT:AZITO_UI_TOKEN\nAZT_ENV_PRESENT:AZITO_AGENT_TOKEN\nAZT_ENV_DONE\n', stderr: '', code: 0 };
+          return { stdout: 'AZT_ENV_PRESENT:AZITO_UI_TOKEN\nAZT_ENV_PRESENT:AZITO_WEBHOOK_TOKEN\nAZT_ENV_DONE\n', stderr: '', code: 0 };
         }
         return cleanHandler(cmd);
       });
@@ -439,7 +440,31 @@ describe('runIsolationDoctor', () => {
       const check = result.checks.find((c) => c.id === 'no_operator_environment')!;
       expect(check.status).toBe('fail');
       expect(check.detail).toContain('AZITO_UI_TOKEN');
-      expect(check.detail).toContain('AZITO_AGENT_TOKEN');
+      expect(check.detail).toContain('AZITO_WEBHOOK_TOKEN');
+    });
+
+    // Follow-up review round, Important finding 1: AZITO_AGENT_TOKEN is the
+    // hub<->agent TRANSPORT credential every genuinely isolated agent server
+    // MUST have set for /api/exec to be reachable at all — it must never be
+    // checked here, or this check would fail permanently on every correctly
+    // configured isolated server. The generated command itself no longer asks
+    // about it (varsToCheck), so the real shell would never even emit a
+    // AZT_ENV_PRESENT:AZITO_AGENT_TOKEN line — this test simulates that by
+    // asserting the check still passes when the var is genuinely present in
+    // the remote environment (only AZITO_UI_TOKEN/WEBHOOK_TOKEN/MASTER_KEY
+    // could ever appear in real output).
+    it('passes even when AZITO_AGENT_TOKEN is present in the exec environment (transport credential, not operator-equivalent)', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('AZT_ENV_PRESENT')) {
+          expect(cmd).not.toContain('AZITO_AGENT_TOKEN');
+          return { stdout: 'AZT_ENV_DONE\n', stderr: '', code: 0 };
+        }
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      const check = result.checks.find((c) => c.id === 'no_operator_environment')!;
+      expect(check.status).toBe('pass');
+      expect(result.verified).toBe(true);
     });
 
     it('passes when no operator variable is set', async () => {
@@ -534,5 +559,59 @@ describe('probeFilesFramed', () => {
     const transport = makeTransport(async () => ({ stdout: '', stderr: 'boom', code: 1 }));
     const result = await probeFilesFramed(transport, [{ key: 'f', pathExpr: '"/x"' }]);
     expect(result.ok).toBe(false);
+  });
+
+  // ─── Follow-up review round, Important finding 3: base64 framing must not
+  // swallow encode failures / malformed content as a false empty pass ───
+  describe('base64 failure modes (follow-up review round, Important finding 3)', () => {
+    it('reports unreadable (not content) when the base64 encode itself fails (e.g. missing encoder, TOCTOU permission error)', async () => {
+      // The command branches on `base64`'s own exit status; a failed encode
+      // emits `AZT_STATUS:<key>:unreadable` with no content frame at all —
+      // this simulates that branch's real output.
+      const transport = makeTransport(async () => ({ stdout: 'AZT_STATUS:f:unreadable\n', stderr: '', code: 0 }));
+      const result = await probeFilesFramed(transport, [{ key: 'f', pathExpr: '"/x"' }]);
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.results.get('f')).toEqual({ kind: 'unreadable' });
+    });
+
+    it('reports unrecognized (not empty content) when the content frame carries syntactically invalid base64', async () => {
+      const transport = makeTransport(async () => ({
+        stdout: 'AZT_STATUS:f:present\nnot-valid-base64!!!\nAZT_STATUS_END:f\n',
+        stderr: '',
+        code: 0,
+      }));
+      const result = await probeFilesFramed(transport, [{ key: 'f', pathExpr: '"/x"' }]);
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.results.get('f')).toEqual({ kind: 'unrecognized' });
+    });
+
+    it('reports content:"" (never unknown) for a genuinely empty file — the encode succeeded, output is empty', async () => {
+      const transport = makeTransport(async () => ({
+        stdout: 'AZT_STATUS:f:present\nAZT_STATUS_END:f\n',
+        stderr: '',
+        code: 0,
+      }));
+      const result = await probeFilesFramed(transport, [{ key: 'f', pathExpr: '"/x"' }]);
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.results.get('f')).toEqual({ kind: 'content', content: '' });
+    });
+
+    // checkNoOperatorToken only flags files that CONTAIN AZITO_UI_TOKEN=; a
+    // silent "unreadable degrades to empty content" bug would make this
+    // check falsely PASS even though the file's actual (unread) content
+    // carries the token — this is the exact false-pass scenario the fix
+    // closes, exercised through the full doctor.
+    it('checkNoOperatorToken: unknown (never a false pass) when the offending file cannot be base64-encoded', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.startsWith('echo "$HOME"')) return { stdout: '/home/agent\n', stderr: '', code: 0 };
+        if (cmd.includes('ls -1')) return { stdout: 'azitoctl.env\nAZT_LS_DONE\n', stderr: '', code: 0 };
+        if (cmd.includes('AZT_STATUS:0')) return { stdout: 'AZT_STATUS:0:unreadable\n', stderr: '', code: 0 };
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      const check = result.checks.find((c) => c.id === 'no_operator_token')!;
+      expect(check.status).toBe('unknown');
+      expect(result.verified).toBe(false);
+    });
   });
 });

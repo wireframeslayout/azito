@@ -31,6 +31,12 @@ export interface HubCanary {
 }
 
 let current: HubCanary | null = null;
+// The data dir a canary was (or should be) written into — kept so a
+// re-verification failure (see getVerifiedHubCanary below) can attempt a
+// fresh write without the route layer having to re-resolve/pass the path
+// again per request (Resolve at the Boundary: dataDir itself is still only
+// ever resolved once, at startup, by main.ts's writeHubCanary call).
+let knownDataDir: string | null = null;
 
 /**
  * Writes a fresh canary file directly under the hub's data directory.
@@ -42,6 +48,7 @@ let current: HubCanary | null = null;
  * measurement".
  */
 export function writeHubCanary(dataDir: string): HubCanary | null {
+  knownDataDir = dataDir;
   try {
     const suffix = crypto.randomBytes(16).toString('hex');
     const filePath = path.join(dataDir, `.azito-hub-canary-${suffix}`);
@@ -54,9 +61,47 @@ export function writeHubCanary(dataDir: string): HubCanary | null {
   }
 }
 
-/** In-memory accessor — the canary is resolved once at startup (Resolve at
- * the Boundary) and read by routes.ts when it builds the doctor's
- * `HubIdentity`, never re-written per request. */
+/** In-memory accessor — returns whatever the last successful write (or
+ * re-verification) produced, WITHOUT touching the filesystem. Exists only
+ * for callers that must stay synchronous; the isolation doctor route itself
+ * must use `getVerifiedHubCanary()` below, never this. */
 export function getHubCanary(): HubCanary | null {
   return current;
+}
+
+/**
+ * Review round (Important finding 2): `getHubCanary()` used to be the ONLY
+ * accessor, which returns whatever was cached at startup even if the file
+ * has since been deleted (its own content literally invites deletion — "this
+ * file is safe to ignore or delete") or the data dir was recreated. A
+ * same-filesystem agent server would then read back "absent" not because it
+ * is isolated but because the canary itself is gone, and the FS-boundary
+ * check would misread that as `canaryReadable: false` — i.e. proof of
+ * separation — when it proves nothing. This performs a fresh local
+ * existence+content check immediately before each doctor run and
+ * regenerates on mismatch; only a canary that verifiably exists on disk
+ * right now is handed to the doctor. If neither the existing file nor a
+ * fresh write can be confirmed, returns `null` so the FS-boundary check
+ * degrades to `'unknown'` (fail-closed) instead of silently trusting a
+ * stale in-memory value.
+ */
+export function getVerifiedHubCanary(): HubCanary | null {
+  if (current && isCanaryIntact(current)) return current;
+  // Cached value is missing/deleted/mismatched (or never wrote successfully)
+  // — try to (re)write a fresh one into the same data directory before
+  // giving up.
+  if (knownDataDir) {
+    const rewritten = writeHubCanary(knownDataDir);
+    if (rewritten && isCanaryIntact(rewritten)) return rewritten;
+  }
+  current = null;
+  return null;
+}
+
+function isCanaryIntact(canary: HubCanary): boolean {
+  try {
+    return fs.readFileSync(canary.path, 'utf-8') === canary.content;
+  } catch {
+    return false;
+  }
 }

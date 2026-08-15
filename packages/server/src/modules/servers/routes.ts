@@ -19,7 +19,7 @@ import { recordAuditBestEffort } from '../../shared/audit/recordAuditBestEffort'
 import { OPERATOR_PRINCIPAL, type Principal } from '../../shared/auth/Principal';
 import type { KeyedMutex } from '../../shared/keyedMutex';
 import { runIsolationDoctor } from './isolationDoctor';
-import { getHubCanary } from './hubCanary';
+import { getVerifiedHubCanary } from './hubCanary';
 
 // ─── Tailscale / network helpers ───
 
@@ -854,11 +854,16 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       }
 
       const transport = transportFactory.getTransport(srv);
-      // Issue #29 isolation doctor review, Critical finding 1: `canary` is
-      // the hub's own FS-boundary marker file (see hubCanary.ts) — resolved
-      // once at startup (main.ts) and read here at the route boundary, never
-      // re-written per request.
-      const hub = { hostname: os.hostname(), uid: typeof process.getuid === 'function' ? process.getuid() : null, canary: getHubCanary() };
+      // Issue #29 isolation doctor review, Critical finding 1 / review round
+      // Important finding 2: `canary` is the hub's own FS-boundary marker
+      // file (see hubCanary.ts). The file itself is written once at startup
+      // (main.ts), but its continued EXISTENCE is re-verified locally right
+      // here, immediately before each doctor run — `getVerifiedHubCanary()`
+      // re-reads it from disk (regenerating on mismatch) instead of trusting
+      // whatever was cached at startup, so a canary deleted after boot
+      // degrades the FS-boundary check to 'unknown' rather than letting a
+      // stale in-memory value read as proof of separation.
+      const hub = { hostname: os.hostname(), uid: typeof process.getuid === 'function' ? process.getuid() : null, canary: getVerifiedHubCanary() };
       const { verified, checks } = await runIsolationDoctor(transport, hub);
       const probedAt = new Date().toISOString();
       // Issue #29 Step 2 B: `kind: 'verification'` distinguishes this report

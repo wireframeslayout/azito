@@ -5,14 +5,15 @@ import type { ServersRouteOptions } from './routes';
 import type { IServerRepository, ServerConfig } from './Server';
 import { KeyedMutex } from '../../shared/keyedMutex';
 
-// Review round (isolation doctor, Critical finding 1): the FS-boundary
-// check reads a canary via getHubCanary() (hubCanary.ts) — a real hub
-// process writes this at startup, but this test process never does. Mocked
-// with a fixed, known canary so the doctor tests below can control whether
-// it reads back as present/absent, exactly like every other fake `exec`
-// response in this file.
+// Review round (isolation doctor, Critical finding 1 / review round Important
+// finding 2): the FS-boundary check reads a canary via
+// getVerifiedHubCanary() (hubCanary.ts) — a real hub process writes this at
+// startup and re-verifies it on disk before each doctor run, but this test
+// process never does either. Mocked with a fixed, known canary so the doctor
+// tests below can control whether it reads back as present/absent, exactly
+// like every other fake `exec` response in this file.
 vi.mock('./hubCanary', () => ({
-  getHubCanary: () => ({ path: '/hub/data/.azito-hub-canary-test', content: 'test-canary-content' }),
+  getVerifiedHubCanary: () => ({ path: '/hub/data/.azito-hub-canary-test', content: 'test-canary-content' }),
 }));
 
 // Issue #29 Step 1: isolation_intent is only settable for agent servers — a
