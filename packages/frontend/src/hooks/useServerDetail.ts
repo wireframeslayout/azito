@@ -64,11 +64,29 @@ export function isValidIsolationReport(value: unknown): value is IsolationReport
     // just the bare discriminant. A malformed/truncated body is treated the
     // same as unavailable (see isolationReportUnavailable below), not
     // silently rendered with undefined fields.
+    //
+    // Step 2 review, Minor #5: `Array.isArray(checks)` alone let a value
+    // like `[null]` or `[{}]` through — OverviewSection.tsx reads
+    // `c.status`/`c.id` off every entry unconditionally (see its
+    // `failedOrUnknownChecks` filter/map), which throws on a non-object
+    // entry. Each entry is now required to be a non-array object carrying
+    // `id`/`detail` as strings and `status` as one of the three known
+    // values; a single malformed entry fails the whole report closed
+    // (unavailable), matching this function's existing "any unrecognized
+    // shape → invalid" contract rather than rendering a partially-broken
+    // checks list.
     const verified = (value as { verified?: unknown }).verified;
     const checks = (value as { checks?: unknown }).checks;
-    return typeof verified === 'boolean' && Array.isArray(checks);
+    return typeof verified === 'boolean' && Array.isArray(checks) && checks.every(isValidIsolationCheck);
   }
   return false;
+}
+
+function isValidIsolationCheck(value: unknown): value is { id: string; status: 'pass' | 'fail' | 'unknown'; detail: string } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const { id, status, detail } = value as { id?: unknown; status?: unknown; detail?: unknown };
+  return typeof id === 'string' && typeof detail === 'string'
+    && (status === 'pass' || status === 'fail' || status === 'unknown');
 }
 
 // Issue #29 review (5th pass), Important finding 3: the detail fetch's body

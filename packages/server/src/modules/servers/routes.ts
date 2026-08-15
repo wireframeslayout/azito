@@ -821,9 +821,22 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
   // default-deny — see RouteAuthRequirement's doc comment): only an
   // operator principal can ever reach it, exactly like every other route in
   // this file.
+  //
+  // Step 2 review, Important #2: the lookup->probe->persist span used to run
+  // OUTSIDE serverIsolationMutex — a concurrent PUT (isolationIntent flip,
+  // connection-info change) could commit between this route's initial
+  // `findByName` and its final `updateIsolationVerification`/
+  // `updateIsolationReport` write, so a probe that ran against the OLD
+  // connection/isolation state could still persist a "verified" report
+  // describing a server that no longer looks like what was probed. This now
+  // wraps the whole span in the SAME per-server-name mutex the PUT/installer
+  // routes use (see ServersRouteOptions's own doc comment on
+  // serverIsolationMutex), and re-fetches + re-validates the agent/isolated
+  // precondition INSIDE the lock — the pre-lock `findByName` above is gone;
+  // only the post-lock one is authoritative.
   fastify.post<{ Params: { name: string } }>(
     '/api/servers/:name/isolation/doctor',
-    async (request, reply) => {
+    async (request, reply) => serverIsolationMutex.withLock(request.params.name, async () => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       if (srv.type !== 'agent' || srv.isolationIntent !== true) {
@@ -859,7 +872,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       });
 
       return { verified, checks, probedAt };
-    },
+    }),
   );
 
   // ── DELETE /api/servers/:name ──

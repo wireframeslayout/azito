@@ -1,6 +1,7 @@
 import type { IServerTransport } from './transport/ServerTransport';
 import { shellQuote } from '../../shared/shellQuote';
 import { isAzitoctlEnvFilename } from '../../shared/azitoctlEnv';
+import { extractClaudeMcpUiToken, hasCodexConfigUiToken } from '../../shared/mcpTokenStores';
 
 // ─── Isolation doctor (Issue #29 Step 2 B) ───
 //
@@ -58,12 +59,21 @@ function errMsg(err: unknown): string {
  * 1. Same-host detection: an `agent` server whose hostname AND uid both
  * match the hub process's own is, for credential-storage purposes,
  * indistinguishable from the hub itself — any "isolation" declared for it
- * would be a label with no actual separation behind it. Only fails when
- * BOTH match (a shared hostname alone, e.g. containers sharing a Docker
- * host's utsname, does not by itself prove a shared credential store; a
- * shared uid alone, e.g. two hosts both defaulting to uid 1000, doesn't
- * either — but both together is the same process-identity signal the hub
+ * would be a label with no actual separation behind it. Fails only when
+ * BOTH match (that combination is the same process-identity signal the hub
  * would see if this "remote" server were actually itself).
+ *
+ * Review finding (Step 2 review, Important #3): hostname alone is NOT an FS
+ * isolation boundary — two containers sharing a Docker host's utsname can
+ * still differ, and a uid-matching container bind-mounting the hub's own
+ * data directory would pass a "both differ" test while sharing real
+ * filesystem access. Neither a hostname match nor a uid match ALONE proves
+ * anything about shared credential storage either way (a shared hostname
+ * alone doesn't prove a shared FS; two independent hosts both defaulting to
+ * uid 1000 doesn't either) — this check cannot independently verify FS
+ * separation, so EITHER one matching alone is now `'unknown'` (inconclusive),
+ * not `'pass'`. Only "neither matches" is treated as positive evidence of
+ * separation; only "both match" is treated as positive evidence AGAINST it.
  */
 async function checkSameHost(transport: IServerTransport, hub: HubIdentity): Promise<IsolationCheck> {
   const id = 'same_host';
@@ -90,6 +100,15 @@ async function checkSameHost(transport: IServerTransport, hub: HubIdentity): Pro
   const sameUid = remoteUid === hub.uid;
   if (sameHostname && sameUid) {
     return { id, status: 'fail', detail: `agent サーバーの hostname/uid（${remoteHostname}/${remoteUid}）がハブ自身（${hub.hostname}/${hub.uid}）と同一です` };
+  }
+  if (sameHostname || sameUid) {
+    return {
+      id,
+      status: 'unknown',
+      detail:
+        `agent: ${remoteHostname}/${remoteUid}、hub: ${hub.hostname}/${hub.uid}（hostname/uid の一方のみ一致 — ` +
+        'ファイルシステム分離を独立に確認できないため判定不能です）',
+    };
   }
   return { id, status: 'pass', detail: `agent: ${remoteHostname}/${remoteUid}、hub: ${hub.hostname}/${hub.uid}（一致しません）` };
 }
@@ -182,9 +201,40 @@ async function checkNoGitCredentials(transport: IServerTransport): Promise<Isola
     return { id, status: 'pass', detail: 'credential.helper 未設定、~/.git-credentials も不在です' };
   }
   const reasons: string[] = [];
-  if (helper !== '') reasons.push(`credential.helper=${helper}`);
+  // Review finding (Step 2 review, Important #4): `helper`'s raw value is a
+  // shell command string (`credential.helper` can be `!<command>`, e.g.
+  // `!aws codecommit credential-helper $@`, or `store --file
+  // /path/with/user:pass@host`) that can itself embed a username/password/
+  // token. It must never reach `detail` verbatim — this report is persisted
+  // to `isolation_report`, surfaced through the audit log, and rendered in
+  // the browser (see routes.ts's POST .../isolation/doctor and
+  // OverviewSection.tsx). Only classify the helper into a coarse shape
+  // (never the value itself) so a human still learns SOMETHING actionable
+  // ("a helper is configured, here's roughly what kind") without leaking
+  // its contents.
+  if (helper !== '') reasons.push(`credential.helper が設定されています（種別: ${classifyGitCredentialHelper(helper)}）`);
   if (credFileExists) reasons.push('~/.git-credentials が存在します');
   return { id, status: 'fail', detail: reasons.join(' / ') };
+}
+
+/**
+ * Coarse, value-free classification of a `credential.helper` setting for
+ * report/audit-log display — never returns any substring of `helper` itself
+ * (see checkNoGitCredentials's redaction comment above).
+ */
+function classifyGitCredentialHelper(helper: string): string {
+  if (helper.startsWith('!')) return 'shell command (!...)';
+  const first = helper.trim().split(/\s+/)[0] ?? '';
+  const base = first.split('/').pop() || first;
+  switch (base) {
+    case 'store': return 'store';
+    case 'cache': return 'cache';
+    case 'osxkeychain': return 'osxkeychain';
+    case 'manager': return 'manager';
+    case 'manager-core': return 'manager-core';
+    case 'libsecret': return 'libsecret';
+    default: return 'other';
+  }
 }
 
 /**
@@ -196,10 +246,17 @@ async function checkNoGitCredentials(transport: IServerTransport): Promise<Isola
  * 再利用するのは検査の"定義"であって、この関数自体は独立した実行器: あちらは
  * ローカル fs、こちらは agent サーバーへの transport 経由）。
  *
- * 6. ハブの data ディレクトリ・DB ファイルへの FS アクセス不能 — 同一ホスト
- * 検出（checkSameHost）が本質的に同じことを検証しているため統合済み: hub と
- * hostname/uid が異なる agent プロセスは、そもそもハブのローカル fs パスへ
- * アクセスする経路を持たない（別プロセス・別マシン）。
+ * 6. ハブの data ディレクトリ・DB ファイルへの実アクセス不能 — 現状は
+ * checkSameHost の hostname/uid シグナルに委ねている（Step 2 review,
+ * Important #3 で "hostname/uid が違えば FS 到達不能" という過大な主張は
+ * checkSameHost 側から削除済み: 一方のみ一致は今や unknown 判定になり、
+ * 両方一致のみ fail）。ハブの data ディレクトリ/DB ファイルへの実アクセスを
+ * 非機密カナリアで直接検証する独立チェック（例: ハブが書いた既知の無害
+ * マーカーファイルの有無を transport 経由で確認）は本ラウンドでは未実装 —
+ * 採用しない理由: そのカナリアファイルの配置・命名・ライフサイクル管理には
+ * ハブ起動時の書き込み経路が新たに必要で、layer 2 の検証範囲を超える設計
+ * 変更になるため、hostname/uid シグナルの保守的な扱い（一方一致は unknown）
+ * で当面代替する。
  */
 async function checkNoOperatorToken(transport: IServerTransport): Promise<IsolationCheck> {
   const id = 'no_operator_token';
@@ -277,6 +334,98 @@ async function checkNoOperatorToken(transport: IServerTransport): Promise<Isolat
   return { id, status: 'pass', detail: `確認済み: ${targets.join(', ')}` };
 }
 
+// Shared marker-fetch helper for the two checks below (7, 8): "read one
+// file's content if it exists, or report its absence", via begin/end
+// markers so multi-line file content (JSON, TOML) can be extracted without
+// relying on splitting the whole output into lines (a technique already
+// used by checkNoOperatorToken above). `$HOME`/`$CODEX_HOME` are expanded
+// SHELL-SIDE (not interpolated by this TypeScript code), so there is no
+// injection surface here — unlike the ls-derived filenames
+// checkNoOperatorToken quotes, nothing attacker-influenced ever reaches the
+// command string.
+type FileProbeResult =
+  | { kind: 'absent' }
+  | { kind: 'content'; content: string }
+  | { kind: 'unrecognized' };
+
+async function probeFile(transport: IServerTransport, pathExpr: string): Promise<{ ok: true; probe: FileProbeResult } | { ok: false; detail: string }> {
+  const cmd = `F="${pathExpr}"; if [ -f "$F" ]; then echo AZT_FILE_BEGIN; cat "$F"; echo AZT_FILE_END; else echo AZT_FILE_ABSENT; fi`;
+  let result;
+  try {
+    result = await transport.exec(cmd);
+  } catch (err) {
+    return { ok: false, detail: `ファイルの取得に失敗しました（到達不能）: ${errMsg(err)}` };
+  }
+  if (result.code !== 0) {
+    return { ok: false, detail: `ファイルの取得に失敗しました (code ${result.code}): ${result.stderr || result.stdout || '(no output)'}` };
+  }
+  if (result.stdout.includes('AZT_FILE_ABSENT')) {
+    return { ok: true, probe: { kind: 'absent' } };
+  }
+  const beginIdx = result.stdout.indexOf('AZT_FILE_BEGIN');
+  const endIdx = result.stdout.indexOf('AZT_FILE_END');
+  if (beginIdx === -1 || endIdx === -1 || endIdx < beginIdx) {
+    return { ok: true, probe: { kind: 'unrecognized' } };
+  }
+  const content = result.stdout.slice(beginIdx + 'AZT_FILE_BEGIN'.length, endIdx);
+  return { ok: true, probe: { kind: 'content', content } };
+}
+
+/**
+ * 7. Claude の `~/.claude/settings.json` の MCP env に AZITO_UI_TOKEN が
+ * 残っていない — `harness/setup.sh --purge-operator-token` が掃除する対象の
+ * ひとつ（checkNoOperatorToken の doc comment、および
+ * `shared/mcpTokenStores.ts` の doc comment を参照）。cleanup が対象とする
+ * 全ストアを doctor が検査していなかった Step 2 review の Critical 指摘を
+ * 埋める2チェックのうちの1つ。判定ロジック（`extractClaudeMcpUiToken`）は
+ * `azito auth doctor`（authDoctorCommand.ts の readMcpUiToken）と共有。
+ */
+async function checkNoClaudeMcpToken(transport: IServerTransport): Promise<IsolationCheck> {
+  const id = 'no_claude_mcp_token';
+  const probed = await probeFile(transport, '$HOME/.claude/settings.json');
+  if (!probed.ok) return { id, status: 'unknown', detail: `Claude settings.json の${probed.detail}` };
+  const { probe } = probed;
+  if (probe.kind === 'absent') {
+    return { id, status: 'pass', detail: '~/.claude/settings.json が存在しません' };
+  }
+  if (probe.kind === 'unrecognized') {
+    return { id, status: 'unknown', detail: '~/.claude/settings.json の取得結果が想定外の形式でした' };
+  }
+  const extraction = extractClaudeMcpUiToken(probe.content);
+  if (extraction.status === 'unreadable') {
+    return { id, status: 'unknown', detail: `~/.claude/settings.json の JSON パースに失敗しました: ${extraction.error}` };
+  }
+  if (extraction.status === 'present') {
+    return { id, status: 'fail', detail: '~/.claude/settings.json の mcpServers.azt-mcp.env に AZITO_UI_TOKEN が残っています' };
+  }
+  return { id, status: 'pass', detail: '~/.claude/settings.json に azt-mcp の AZITO_UI_TOKEN はありません' };
+}
+
+/**
+ * 8. Codex の `config.toml`（`$CODEX_HOME` または `~/.codex`）の
+ * `mcp_servers.azt-mcp` env に AZITO_UI_TOKEN が残っていない — 7 と同じ
+ * cleanup 対象漏れを埋めるチェック。判定は `hasCodexConfigUiToken`
+ * （`shared/mcpTokenStores.ts`）— `harness/setup.sh`
+ * `strip_codex_ui_token()` 自身が最終防衛線として使っている保守的な
+ * bare-substring スキャンと同じ考え方（採否の根拠は同関数の doc comment）。
+ */
+async function checkNoCodexMcpToken(transport: IServerTransport): Promise<IsolationCheck> {
+  const id = 'no_codex_mcp_token';
+  const probed = await probeFile(transport, '${CODEX_HOME:-$HOME/.codex}/config.toml');
+  if (!probed.ok) return { id, status: 'unknown', detail: `Codex config.toml の${probed.detail}` };
+  const { probe } = probed;
+  if (probe.kind === 'absent') {
+    return { id, status: 'pass', detail: 'config.toml が存在しません' };
+  }
+  if (probe.kind === 'unrecognized') {
+    return { id, status: 'unknown', detail: 'config.toml の取得結果が想定外の形式でした' };
+  }
+  if (hasCodexConfigUiToken(probe.content)) {
+    return { id, status: 'fail', detail: 'config.toml に AZITO_UI_TOKEN が残っています' };
+  }
+  return { id, status: 'pass', detail: 'config.toml に AZITO_UI_TOKEN はありません' };
+}
+
 export async function runIsolationDoctor(transport: IServerTransport, hub: HubIdentity): Promise<IsolationDoctorResult> {
   const checks = await Promise.all([
     checkSameHost(transport, hub),
@@ -284,6 +433,8 @@ export async function runIsolationDoctor(transport: IServerTransport, hub: HubId
     checkGhUnauthenticated(transport),
     checkNoGitCredentials(transport),
     checkNoOperatorToken(transport),
+    checkNoClaudeMcpToken(transport),
+    checkNoCodexMcpToken(transport),
   ]);
   const verified = checks.every((c) => c.status === 'pass');
   return { verified, checks };

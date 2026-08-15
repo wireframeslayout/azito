@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { execFileSync } from 'child_process';
 import { findAzitoctlEnvFiles, hasUiTokenLine } from '../shared/azitoctlEnv';
+import { extractClaudeMcpUiToken, type McpUiTokenExtraction } from '../shared/mcpTokenStores';
 import { resolveCurrentUiToken } from '../shared/currentUiToken';
 import { resolveScopedAuthEnabled } from '../shared/auth/scopedAuthFlag';
 import { resolveDataDir } from '../shared/dataDir';
@@ -132,10 +133,6 @@ function checkOperatorEnvPermissions(): CheckResult {
   };
 }
 
-interface McpSettingsFile {
-  mcpServers?: Record<string, { env?: Record<string, string> }>;
-}
-
 // Issue #28 review Minor finding: a broken/unreadable settings.json used to
 // be indistinguishable from "azt-mcp has no AZITO_UI_TOKEN configured" —
 // both fell through the same `catch { return undefined; }` and `readMcpUiToken`
@@ -145,21 +142,24 @@ interface McpSettingsFile {
 // clean pass and never learn the file was actually broken — the read/parse
 // failure must surface as its own, independently-failing check with its own
 // repair guidance, not be silently folded into the "not configured" case.
-type McpUiTokenResult =
-  | { status: 'absent' }
-  | { status: 'unreadable'; error: string }
-  | { status: 'present'; token: string };
+//
+// The actual JSON-shape predicate (`mcpServers.azt-mcp.env.AZITO_UI_TOKEN`)
+// lives in `shared/mcpTokenStores.ts`'s `extractClaudeMcpUiToken` — shared
+// with the isolation doctor (`isolationDoctor.ts`), which applies the exact
+// same judgment to a remote agent server's settings.json content read over
+// a transport instead of local `fs`. This function only adds the local
+// file-existence/readability layer that predicate can't see on its own.
+type McpUiTokenResult = McpUiTokenExtraction;
 
 function readMcpUiToken(settingsPath: string): McpUiTokenResult {
   if (!fs.existsSync(settingsPath)) return { status: 'absent' };
-  let settings: McpSettingsFile;
+  let content: string;
   try {
-    settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as McpSettingsFile;
+    content = fs.readFileSync(settingsPath, 'utf-8');
   } catch (err) {
     return { status: 'unreadable', error: err instanceof Error ? err.message : String(err) };
   }
-  const token = settings.mcpServers?.['azt-mcp']?.env?.AZITO_UI_TOKEN;
-  return token ? { status: 'present', token } : { status: 'absent' };
+  return extractClaudeMcpUiToken(content);
 }
 
 // (c) MCP settings の AZITO_UI_TOKEN がハブの現在値と一致するか

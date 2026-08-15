@@ -26,6 +26,46 @@ describe('isValidIsolationReport', () => {
     expect(isValidIsolationReport({ kind: 'verification', checks: [] })).toBe(false);
   });
 
+  it('accepts a verification report whose checks entries all have id/status/detail', () => {
+    expect(isValidIsolationReport({
+      kind: 'verification',
+      verified: false,
+      checks: [{ id: 'same_host', status: 'pass', detail: 'ok' }, { id: 'gh_unauthenticated', status: 'unknown', detail: 'n/a' }],
+    })).toBe(true);
+  });
+
+  // Step 2 review, Minor #5: OverviewSection.tsx reads `c.status`/`c.id` off
+  // every checks entry unconditionally (its failedOrUnknownChecks filter/map) —
+  // an entry that isn't a well-formed IsolationCheck must fail the WHOLE
+  // report closed (unavailable), not be silently passed through to a
+  // component that will throw on it.
+  it('rejects a verification report when any checks entry is null', () => {
+    expect(isValidIsolationReport({
+      kind: 'verification',
+      verified: false,
+      checks: [{ id: 'same_host', status: 'pass', detail: 'ok' }, null],
+    })).toBe(false);
+  });
+
+  it('rejects a verification report when a checks entry is missing required fields', () => {
+    expect(isValidIsolationReport({ kind: 'verification', verified: false, checks: [{}] })).toBe(false);
+    expect(isValidIsolationReport({ kind: 'verification', verified: false, checks: [{ id: 'x', detail: 'd' }] })).toBe(false);
+    expect(isValidIsolationReport({ kind: 'verification', verified: false, checks: [{ id: 'x', status: 'pass' }] })).toBe(false);
+  });
+
+  it('rejects a verification report when a checks entry has an invalid status value', () => {
+    expect(isValidIsolationReport({
+      kind: 'verification',
+      verified: false,
+      checks: [{ id: 'x', status: 'not-a-real-status', detail: 'd' }],
+    })).toBe(false);
+  });
+
+  it('rejects a verification report when a checks entry has a non-string id/detail', () => {
+    expect(isValidIsolationReport({ kind: 'verification', verified: false, checks: [{ id: 1, status: 'pass', detail: 'd' }] })).toBe(false);
+    expect(isValidIsolationReport({ kind: 'verification', verified: false, checks: [{ id: 'x', status: 'pass', detail: null }] })).toBe(false);
+  });
+
   it('rejects an object missing kind', () => {
     expect(isValidIsolationReport({ cleanup: 'done' })).toBe(false);
   });

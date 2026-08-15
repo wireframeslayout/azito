@@ -26,6 +26,8 @@ function cleanHandler(cmd: string): ExecResult {
   if (cmd.includes('credential.helper')) return { stdout: 'AZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
   if (cmd.startsWith('echo "$HOME"')) return { stdout: '/home/agent\n', stderr: '', code: 0 };
   if (cmd.includes('ls -1')) return { stdout: 'AZT_LS_DONE\n', stderr: '', code: 0 };
+  if (cmd.includes('.claude/settings.json')) return { stdout: 'AZT_FILE_ABSENT\n', stderr: '', code: 0 };
+  if (cmd.includes('config.toml')) return { stdout: 'AZT_FILE_ABSENT\n', stderr: '', code: 0 };
   throw new Error(`unexpected command: ${cmd}`);
 }
 
@@ -48,9 +50,33 @@ describe('runIsolationDoctor', () => {
     expect(result.verified).toBe(false);
   });
 
-  it('same_host: passes when only hostname matches (uid differs)', async () => {
+  // Step 2 review, Important #3: hostname alone is not an FS isolation
+  // boundary (containers sharing a Docker host's utsname can still differ
+  // in every way that matters) — a hostname-only match can no longer be
+  // reported as 'pass'; it's inconclusive ('unknown').
+  it('same_host: unknown when only hostname matches (uid differs) — hostname alone is not an FS boundary', async () => {
     const transport = makeTransport((cmd) => {
       if (cmd.includes('hostname')) return { stdout: `${HUB.hostname}\n9999\n`, stderr: '', code: 0 };
+      return cleanHandler(cmd);
+    });
+    const result = await runIsolationDoctor(transport, HUB);
+    const check = result.checks.find((c) => c.id === 'same_host')!;
+    expect(check.status).toBe('unknown');
+    expect(result.verified).toBe(false);
+  });
+
+  it('same_host: unknown when only uid matches (hostname differs) — uid alone is not an FS boundary', async () => {
+    const transport = makeTransport((cmd) => {
+      if (cmd.includes('hostname')) return { stdout: `other-host\n${HUB.uid}\n`, stderr: '', code: 0 };
+      return cleanHandler(cmd);
+    });
+    const result = await runIsolationDoctor(transport, HUB);
+    expect(result.checks.find((c) => c.id === 'same_host')!.status).toBe('unknown');
+  });
+
+  it('same_host: passes when neither hostname nor uid match', async () => {
+    const transport = makeTransport((cmd) => {
+      if (cmd.includes('hostname')) return { stdout: 'other-host\n9999\n', stderr: '', code: 0 };
       return cleanHandler(cmd);
     });
     const result = await runIsolationDoctor(transport, HUB);
@@ -120,15 +146,33 @@ describe('runIsolationDoctor', () => {
     expect(result.checks.find((c) => c.id === 'gh_unauthenticated')!.status).toBe('pass');
   });
 
-  it('no_git_credentials: fails when credential.helper is set', async () => {
+  // Step 2 review, Important #4: the raw helper value (which can itself
+  // embed a username/password/token, e.g. `store --file
+  // /path/with/user:pass@host` or a `!command`) must never appear verbatim
+  // in `detail` — only a coarse, value-free classification.
+  it('no_git_credentials: fails when credential.helper is set, without leaking the raw helper value', async () => {
     const transport = makeTransport((cmd) => {
-      if (cmd.includes('credential.helper')) return { stdout: 'store\nAZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
+      if (cmd.includes('credential.helper')) return { stdout: 'store --file /home/agent/.git-credentials-secret\nAZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
       return cleanHandler(cmd);
     });
     const result = await runIsolationDoctor(transport, HUB);
     const check = result.checks.find((c) => c.id === 'no_git_credentials')!;
     expect(check.status).toBe('fail');
-    expect(check.detail).toContain('credential.helper=store');
+    expect(check.detail).toContain('種別: store');
+    expect(check.detail).not.toContain('/home/agent/.git-credentials-secret');
+  });
+
+  it('no_git_credentials: classifies a shell-command (!...) helper without leaking it, and never as "store"', async () => {
+    const transport = makeTransport((cmd) => {
+      if (cmd.includes('credential.helper')) return { stdout: '!aws codecommit credential-helper $@ --profile secretprofile\nAZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
+      return cleanHandler(cmd);
+    });
+    const result = await runIsolationDoctor(transport, HUB);
+    const check = result.checks.find((c) => c.id === 'no_git_credentials')!;
+    expect(check.status).toBe('fail');
+    expect(check.detail).not.toContain('secretprofile');
+    expect(check.detail).not.toContain('aws codecommit');
+    expect(check.detail).toContain('shell command');
   });
 
   it('no_git_credentials: fails when ~/.git-credentials exists', async () => {
@@ -185,6 +229,109 @@ describe('runIsolationDoctor', () => {
     });
     const result = await runIsolationDoctor(transport, HUB);
     expect(result.checks.find((c) => c.id === 'no_operator_token')!.status).toBe('unknown');
+  });
+
+  // Step 2 review, Critical #1: doctor must inspect every store
+  // --purge-operator-token cleans up, not just azitoctl*.env/operator.env —
+  // Claude's settings.json MCP env and Codex's config.toml are the other
+  // two.
+  describe('no_claude_mcp_token (Step 2 review, Critical #1)', () => {
+    it('fails when settings.json carries a live azt-mcp AZITO_UI_TOKEN', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('.claude/settings.json')) {
+          return {
+            stdout: `AZT_FILE_BEGIN\n${JSON.stringify({ mcpServers: { 'azt-mcp': { env: { AZITO_UI_TOKEN: 'deadbeef' } } } })}\nAZT_FILE_END\n`,
+            stderr: '',
+            code: 0,
+          };
+        }
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      const check = result.checks.find((c) => c.id === 'no_claude_mcp_token')!;
+      expect(check.status).toBe('fail');
+      expect(result.verified).toBe(false);
+    });
+
+    it('passes when settings.json exists but has no azt-mcp token', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('.claude/settings.json')) {
+          return { stdout: `AZT_FILE_BEGIN\n${JSON.stringify({ mcpServers: {} })}\nAZT_FILE_END\n`, stderr: '', code: 0 };
+        }
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      expect(result.checks.find((c) => c.id === 'no_claude_mcp_token')!.status).toBe('pass');
+    });
+
+    it('passes when settings.json does not exist', async () => {
+      const transport = makeTransport(cleanHandler);
+      const result = await runIsolationDoctor(transport, HUB);
+      expect(result.checks.find((c) => c.id === 'no_claude_mcp_token')!.status).toBe('pass');
+    });
+
+    it('is unknown (fail-closed) when settings.json is not valid JSON', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('.claude/settings.json')) {
+          return { stdout: 'AZT_FILE_BEGIN\n{ not valid json\nAZT_FILE_END\n', stderr: '', code: 0 };
+        }
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      const check = result.checks.find((c) => c.id === 'no_claude_mcp_token')!;
+      expect(check.status).toBe('unknown');
+      expect(result.verified).toBe(false);
+    });
+
+    it('is unknown when the probe is unreachable', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('.claude/settings.json')) throw new Error('connection refused');
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      expect(result.checks.find((c) => c.id === 'no_claude_mcp_token')!.status).toBe('unknown');
+    });
+  });
+
+  describe('no_codex_mcp_token (Step 2 review, Critical #1)', () => {
+    it('fails when config.toml carries AZITO_UI_TOKEN', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('config.toml')) {
+          return { stdout: 'AZT_FILE_BEGIN\n[mcp_servers.azt-mcp.env]\nAZITO_UI_TOKEN = "deadbeef"\nAZT_FILE_END\n', stderr: '', code: 0 };
+        }
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      const check = result.checks.find((c) => c.id === 'no_codex_mcp_token')!;
+      expect(check.status).toBe('fail');
+      expect(result.verified).toBe(false);
+    });
+
+    it('passes when config.toml exists but has no AZITO_UI_TOKEN', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('config.toml')) {
+          return { stdout: 'AZT_FILE_BEGIN\n[mcp_servers.other]\ncommand = "foo"\nAZT_FILE_END\n', stderr: '', code: 0 };
+        }
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      expect(result.checks.find((c) => c.id === 'no_codex_mcp_token')!.status).toBe('pass');
+    });
+
+    it('passes when config.toml does not exist', async () => {
+      const transport = makeTransport(cleanHandler);
+      const result = await runIsolationDoctor(transport, HUB);
+      expect(result.checks.find((c) => c.id === 'no_codex_mcp_token')!.status).toBe('pass');
+    });
+
+    it('is unknown when the probe result is an unrecognized shape', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('config.toml')) return { stdout: 'garbage output with no markers\n', stderr: '', code: 0 };
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      expect(result.checks.find((c) => c.id === 'no_codex_mcp_token')!.status).toBe('unknown');
+    });
   });
 
   it('a single unknown check keeps the overall result unverified even if every other check passes', async () => {

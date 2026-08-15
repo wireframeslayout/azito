@@ -1364,6 +1364,8 @@ describe('POST /api/servers/:name/isolation/doctor (Issue #29 Step 2 B)', () => 
       if (cmd.includes('credential.helper')) return { stdout: 'AZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
       if (cmd.includes('$HOME"')) return { stdout: '/home/remote\n', stderr: '', code: 0 };
       if (cmd.includes('ls -1')) return { stdout: 'AZT_LS_DONE\n', stderr: '', code: 0 };
+      if (cmd.includes('.claude/settings.json')) return { stdout: 'AZT_FILE_ABSENT\n', stderr: '', code: 0 };
+      if (cmd.includes('config.toml')) return { stdout: 'AZT_FILE_ABSENT\n', stderr: '', code: 0 };
       return { stdout: '', stderr: '', code: 0 };
     });
     const opts = makeOpts({
@@ -1395,6 +1397,8 @@ describe('POST /api/servers/:name/isolation/doctor (Issue #29 Step 2 B)', () => 
       if (cmd.includes('credential.helper')) return { stdout: 'AZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
       if (cmd.includes('$HOME"')) return { stdout: '/home/remote\n', stderr: '', code: 0 };
       if (cmd.includes('ls -1')) return { stdout: 'AZT_LS_DONE\n', stderr: '', code: 0 };
+      if (cmd.includes('.claude/settings.json')) return { stdout: 'AZT_FILE_ABSENT\n', stderr: '', code: 0 };
+      if (cmd.includes('config.toml')) return { stdout: 'AZT_FILE_ABSENT\n', stderr: '', code: 0 };
       return { stdout: '', stderr: '', code: 0 };
     });
     const opts = makeOpts({
@@ -1411,5 +1415,61 @@ describe('POST /api/servers/:name/isolation/doctor (Issue #29 Step 2 B)', () => 
     expect(res.json().verified).toBe(false);
     expect(opts.serverRepo.updateIsolationVerification).not.toHaveBeenCalled();
     expect(opts.serverRepo.updateIsolationReport).toHaveBeenCalledWith('srv', expect.stringContaining('"verified":false'));
+  });
+
+  // Step 2 review, Important #2: the lookup->probe->persist span used to run
+  // OUTSIDE serverIsolationMutex — a concurrent PUT (isolationIntent flip,
+  // connection-info change) could commit mid-probe and this route would
+  // still persist a "verified" report describing stale state. The whole
+  // span (including the initial serverRepo.findByName lookup, which the fix
+  // moved from before the lock to inside it) must now run inside the same
+  // per-server-name mutex the PUT/installer routes use.
+  describe('serializes against serverIsolationMutex (Step 2 review, Important #2)', () => {
+    it('does not even look up the server until a lock held by another operation on the same name is released', async () => {
+      const opts = makeOpts();
+      (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+        makeServer({ type: 'agent', isolationIntent: true, host: '1.2.3.4' }),
+      );
+      let releaseLock: () => void = () => {};
+      const blocker = new Promise<void>((resolve) => { releaseLock = resolve; });
+      // Pre-acquire the lock for 'srv', simulating an in-flight PUT/installer
+      // operation on the same server that hasn't committed yet.
+      const heldLock = opts.serverIsolationMutex.withLock('srv', async () => { await blocker; });
+      const app = await buildApp(opts);
+
+      const doctorRes = app.inject({ method: 'POST', url: '/api/servers/srv/isolation/doctor' });
+      // Give the event loop a few turns — if the route's findByName ran
+      // outside the lock (the bug this fix closes), it would have already
+      // been called by now.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(opts.serverRepo.findByName).not.toHaveBeenCalled();
+
+      releaseLock();
+      await heldLock;
+      await doctorRes;
+      expect(opts.serverRepo.findByName).toHaveBeenCalled();
+    });
+
+    it('re-validates the agent/isolated precondition against state committed while this request was queued for the lock', async () => {
+      const opts = makeOpts();
+      // Simulates a PUT that flips isolationIntent false->true->false again
+      // (or a cleanup) while the doctor request was queued behind the lock —
+      // by the time the doctor's own fn actually runs (post-lock), the
+      // server no longer satisfies the precondition. The stale pre-lock
+      // lookup this fix removed would have missed this entirely.
+      let isolated = true;
+      (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockImplementation(() =>
+        makeServer({ type: 'agent', isolationIntent: isolated, host: '1.2.3.4' }),
+      );
+      const heldLock = opts.serverIsolationMutex.withLock('srv', async () => {
+        isolated = false;
+      });
+      const app = await buildApp(opts);
+
+      const doctorRes = await Promise.all([heldLock, app.inject({ method: 'POST', url: '/api/servers/srv/isolation/doctor' })]).then(([, res]) => res);
+
+      expect(doctorRes.statusCode).toBe(400);
+      expect(doctorRes.json().error).toBe('isolation_doctor_requires_isolated_agent_server');
+    });
   });
 });
