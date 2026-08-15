@@ -65,6 +65,7 @@
     "isolationBlockedByWindowsToast": "Cannot enable isolation: {{count}} window(s) are registered on this server and may hold injected credentials. Close them, then try again.",
     "isolationBlockedByLiveSessionsToast": "Cannot enable isolation: {{count}} live tmux session(s) exist on this server. End them, then try again.",
     "isolationBlockedBySessionCheckFailureToast": "Cannot enable isolation: listing tmux sessions failed, so the change was aborted to fail safe. Check the server connection, then try again.",
+    "isolationBlocksConnectionChangeToast": "Cannot change connection info while isolation is enabled. Disable isolation (isolationIntent: false) first, then change the connection.",
     "isolationReportUnavailableTitle": "Isolation status could not be confirmed",
     "isolationReportUnavailableSub": "This server declares isolated execution, but its status could not be fetched or was in an unexpected format. It may still hold a previously-distributed operator token. Retry, or check the server connection.",
     "muxRuntimeLabel": "mux runtime",

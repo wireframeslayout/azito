@@ -46,10 +46,18 @@ function ServerFormFields({ mode, autoInstall, type, host, port, token, muxRunti
           <FormInput value={host} onChange={(e) => onHostChange(e.target.value)} placeholder={t('serverModals.hostPlaceholder')} autoComplete="off" />
         </div>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--font-md)', cursor: 'pointer', marginBottom: 14 }}>
-          <label className="toggle">
+          {/* Issue #29 review (8th pass), Minor finding: a <label> nested
+              inside another <label> is invalid HTML (only the outer one can
+              legitimately toggle the input; a nested one is ambiguous/
+              ignored by browsers and assistive tech). This inner element
+              exists purely for the `.toggle`/`.toggle-slider` sibling-selector
+              CSS (global.css) — it doesn't need to be a label at all, since
+              the outer <label> already associates the checkbox by
+              containment. */}
+          <span className="toggle">
             <input type="checkbox" checked={autoInstall} onChange={(e) => onAutoInstallChange(e.target.checked)} />
             <span className="toggle-slider" />
-          </label>
+          </span>
           {t('serverModals.autoInstall')}
         </label>
         <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 1.6, padding: '8px 10px', background: 'var(--bg)', borderRadius: 'var(--radius-sm)' }}>
@@ -66,10 +74,18 @@ function ServerFormFields({ mode, autoInstall, type, host, port, token, muxRunti
       {nameField}
       {mode === 'add' && (
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--font-md)', cursor: 'pointer', marginBottom: 14 }}>
-          <label className="toggle">
+          {/* Issue #29 review (8th pass), Minor finding: a <label> nested
+              inside another <label> is invalid HTML (only the outer one can
+              legitimately toggle the input; a nested one is ambiguous/
+              ignored by browsers and assistive tech). This inner element
+              exists purely for the `.toggle`/`.toggle-slider` sibling-selector
+              CSS (global.css) — it doesn't need to be a label at all, since
+              the outer <label> already associates the checkbox by
+              containment. */}
+          <span className="toggle">
             <input type="checkbox" checked={autoInstall} onChange={(e) => onAutoInstallChange(e.target.checked)} />
             <span className="toggle-slider" />
-          </label>
+          </span>
           {t('serverModals.autoInstall')}
         </label>
       )}
@@ -119,7 +135,10 @@ function ServerFormFields({ mode, autoInstall, type, host, port, token, muxRunti
       {mode === 'edit' && type === 'agent' && onIsolationIntentChange && (
         <FormField label={t('serverModals.isolationIntent')}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--font-md)', cursor: 'pointer' }}>
-            <label className="toggle">
+            {/* Issue #29 review (8th pass), Minor finding: same
+                nested-<label> fix as the autoInstall toggles above — the
+                inner element is CSS-only styling, not a second label. */}
+            <span className="toggle">
               <input
                 type="checkbox"
                 checked={isolationIntent ?? false}
@@ -127,7 +146,7 @@ function ServerFormFields({ mode, autoInstall, type, host, port, token, muxRunti
                 aria-describedby="server-modal-isolation-intent-hint"
               />
               <span className="toggle-slider" />
-            </label>
+            </span>
             {t('serverModals.isolationIntentLabel')}
           </label>
           <div id="server-modal-isolation-intent-hint" style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginTop: 6 }}>

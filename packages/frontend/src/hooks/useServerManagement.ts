@@ -275,6 +275,11 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
       if (res.error === 'isolation_intent_blocked_by_session_check_failure') {
         return showToast(t('overview.isolationBlockedBySessionCheckFailureToast'));
       }
+      if (res.error === 'isolation_intent_blocks_connection_change') {
+        // Issue #29 review (8th pass), Critical finding 1: see
+        // useServerEditForm's identical handling.
+        return showToast(t('overview.isolationBlocksConnectionChangeToast'));
+      }
       return showToast(res.error);
     }
     // Issue #29 review (3rd pass), Important finding 4: see

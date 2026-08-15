@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, apiWithStatus } from '../api/client';
 import type { Server, Session, ServerStatus } from './useServerManagement';
 import { useServerStatuses } from './useServerStatuses';
@@ -97,9 +97,34 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
   const [isolationReportUnavailable, setIsolationReportUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Issue #29 review (8th pass), Important finding 3: fetchAll's four
+  // requests are all awaited via Promise.all with no guard against a
+  // serverName switch that happens while they're still in flight — an
+  // earlier request for server A resolving AFTER a later request for
+  // server B (e.g. A's install-status endpoint is slow, B's are all fast)
+  // would overwrite B's freshly-set installStatus/sessions/isolationReport
+  // with A's stale data, with no error surfaced. Mirrors the generation-ref
+  // pattern already used for the same "later call must win" requirement in
+  // useAddWindowModal's openQuickAddWindow/closeQuickAddWindow (rather than
+  // useApi's AbortController-less `cancelled` boolean, which only guards a
+  // single in-flight call per mount and doesn't fit this hook's
+  // externally-triggered `refresh()` re-entrancy).
+  const fetchGenRef = useRef(0);
 
   const fetchAll = useCallback(async () => {
     if (!serverName) return;
+    const gen = ++fetchGenRef.current;
+    // Issue #29 review (8th pass), Important finding 3: reset the
+    // per-server fields synchronously before the first await — otherwise,
+    // while this fetch is in flight, the panel keeps showing the PREVIOUS
+    // server's installStatus/sessions/isolationReport under the new
+    // server's name (e.g. switching from an isolated server to a
+    // non-isolated one would flash the old isolation warning against the
+    // new server until the fetch resolves).
+    setInstallStatus(null);
+    setSessions([]);
+    setIsolationReport(null);
+    setIsolationReportUnavailable(false);
     setLoading(true);
     setError(null);
     try {
@@ -119,6 +144,12 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
         apiWithStatus<unknown>(`/servers/${encoded}`).catch(() => null),
       ]);
       if (!srvList.some((s) => s.name === serverName)) throw new Error(`Server "${serverName}" not found`);
+      // Issue #29 review (8th pass), Important finding 3: a newer fetchAll
+      // call (triggered by a serverName change or an external refresh())
+      // may have already started and even completed while this one was
+      // awaiting — discard this response rather than let it clobber the
+      // newer one's state.
+      if (fetchGenRef.current !== gen) return;
       setInstallStatus(installRes);
       setSessions(Array.isArray(sessionsRes) ? sessionsRes : []);
 
@@ -157,9 +188,9 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
       setIsolationReport(parsedReport);
       setIsolationReportUnavailable(declaredIsolated && reportUnavailable);
     } catch (err: unknown) {
-      setError((err as Error).message);
+      if (fetchGenRef.current === gen) setError((err as Error).message);
     } finally {
-      setLoading(false);
+      if (fetchGenRef.current === gen) setLoading(false);
     }
   }, [serverName, refreshStatuses]);
 

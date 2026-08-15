@@ -361,10 +361,29 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         (sshHost !== undefined && sshHost !== srv.sshHost) ||
         (agentPort !== undefined && agentPort !== srv.agentPort) ||
         (agentToken !== undefined && agentToken !== srv.agentToken);
-      if (effectiveType === 'agent' && isolationIntent === true && isolationIntent !== srv.isolationIntent && connectionInfoChanged) {
+      // Issue #29 review (8th pass), Critical finding 1: the check just below
+      // used to fire ONLY on a false->true transition combined with a
+      // connection change (isolationIntent === true && isolationIntent !==
+      // srv.isolationIntent) — an ALREADY-isolated server
+      // (srv.isolationIntent === true) sending a PUT that omits
+      // isolationIntent entirely (or repeats true) sailed straight past it
+      // and could freely change host/sshHost/agentPort/agentToken/type/
+      // muxRuntime. isolation_report (the cleanup outcome shown in the UI)
+      // still describes the OLD endpoint, but the row now points at a NEW
+      // one — the "done" cleanup report reads as a guarantee about an
+      // endpoint it never actually inspected. Compute the intent this PUT
+      // would leave in place (explicit value if provided, else the
+      // already-persisted one) and reject a connection-info change whenever
+      // THAT is true, not just on the false->true edge — this subsumes the
+      // narrower transition-only check that used to live here. The only way
+      // to change connection info on an isolated server is to explicitly
+      // disable isolation (isolationIntent: false) first, in a prior
+      // request.
+      const effectiveIsolationIntent = isolationIntent !== undefined ? isolationIntent : srv.isolationIntent;
+      if (effectiveType === 'agent' && effectiveIsolationIntent === true && connectionInfoChanged) {
         return reply.status(400).send({
-          error: 'isolation_intent_transition_with_connection_change',
-          message: '接続先情報の変更と隔離の有効化（isolationIntent: false→true）は同じリクエストで指定できません。先に接続先を確定させてから、別のリクエストで隔離を有効化してください。',
+          error: 'isolation_intent_blocks_connection_change',
+          message: '隔離が有効なサーバーの接続先情報は変更できません。先に隔離を無効化（isolationIntent: false）してから接続先を変更してください。',
         });
       }
       if (effectiveType === 'agent' && isolationIntent === true && isolationIntent !== srv.isolationIntent) {

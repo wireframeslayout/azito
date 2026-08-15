@@ -458,7 +458,15 @@ fi
 # node が使えれば自動マージ、なければ手動案内にフォールバック
 if command -v node >/dev/null 2>&1; then
   mkdir -p ~/.claude
-  node -e "
+  # Issue #29 review (8th pass), Important finding 2: previously a bare
+  # (unwrapped) command — under `set -e` a purge-mode read/parse failure
+  # (process.exit(1) added above) would hard-abort the whole script right
+  # here, skipping every later step (skills, AGENTS.md, etc.) with no
+  # SETUP_HAD_ERRORS bookkeeping, unlike every other failure path in this
+  # script (codex_mcp_replace, Codex config.toml purge) which continues and
+  # lets SETUP_HAD_ERRORS drive the final exit code. Wrapping in `if ! ...`
+  # matches that convention: the run continues, and still exits non-zero.
+  if ! node -e "
     const fs = require('fs');
     const settingsPath = process.argv[1];
     const mcpKey = process.argv[2];
@@ -482,7 +490,27 @@ if command -v node >/dev/null 2>&1; then
     const purgeOperatorToken = process.argv[20] === 'true';
 
     let settings = {};
-    try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch {}
+    try {
+      settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    } catch (err) {
+      // Issue #29 review (8th pass), Important finding 2: this used to
+      // collapse EVERY read/parse failure (missing file, permission error,
+      // truncated/invalid JSON) into the same 'no existing settings' case,
+      // silently proceeding with settings = {}. In normal (non-purge) mode
+      // that's the intended first-run behavior. But in --purge-operator-token
+      // mode it means a settings.json that exists and genuinely still holds
+      // AZITO_UI_TOKEN — just unreadable/unparsable right now — gets reported
+      // as 'nothing to purge (removal not needed)' instead of an error, and
+      // the isolationIntent false->true cleanup gate (attemptIsolationCleanup)
+      // would record the purge as 'done' despite never having inspected the
+      // file. Only a missing file (ENOENT) is a legitimate 'nothing to purge'
+      // in purge mode; any other read/parse error must fail the whole setup.sh
+      // run non-zero so the caller cannot mistake it for success.
+      if (purgeOperatorToken && err.code !== 'ENOENT') {
+        console.error('  エラー: --purge-operator-token は ' + settingsPath + ' の読み込みに失敗しました（' + err.message + '）。ファイルの内容を確認し、AZITO_UI_TOKEN の除去が必要か手動で確認してください。');
+        process.exit(1);
+      }
+    }
 
     let changed = false;
     const messages = [];
@@ -638,7 +666,9 @@ if command -v node >/dev/null 2>&1; then
     "$QUESTION_CMD" \
     "$([[ -f "$QUESTION_HOOK_SCRIPT" ]] && echo true || echo false)" \
     "$QUESTION_HOOK_SCRIPT" \
-    "$([[ "$AZITO_PURGE_OPERATOR_TOKEN" == "1" ]] && echo true || echo false)"
+    "$([[ "$AZITO_PURGE_OPERATOR_TOKEN" == "1" ]] && echo true || echo false)"; then
+    SETUP_HAD_ERRORS=1
+  fi
 
   if [[ -n "$AZITO_WEBHOOK_TOKEN" ]]; then
     echo "  AZITO_WEBHOOK_TOKEN: 設定済み（hook command に埋め込み）"

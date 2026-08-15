@@ -621,7 +621,7 @@ describe('isolation_intent false->true live-tmux-session gate (Issue #29 review,
 // re-fetches the row AFTER the update and purges against the NEW connection.
 // Accepting both at once would check one endpoint and clean up a different
 // one.
-describe('isolation_intent false->true rejects a simultaneous connection-info change (Issue #29 review, 6th pass, Important finding 2)', () => {
+describe('isolation_intent blocks a simultaneous connection-info change (Issue #29 review, 6th/8th pass)', () => {
   it('rejects with 400 when host changes alongside isolationIntent: false->true', async () => {
     const opts = makeOpts();
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
@@ -636,7 +636,7 @@ describe('isolation_intent false->true rejects a simultaneous connection-info ch
     });
 
     expect(res.statusCode).toBe(400);
-    expect(res.json().error).toBe('isolation_intent_transition_with_connection_change');
+    expect(res.json().error).toBe('isolation_intent_blocks_connection_change');
     expect(opts.serverRepo.update).not.toHaveBeenCalled();
     expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
   });
@@ -655,7 +655,7 @@ describe('isolation_intent false->true rejects a simultaneous connection-info ch
     });
 
     expect(res.statusCode).toBe(400);
-    expect(res.json().error).toBe('isolation_intent_transition_with_connection_change');
+    expect(res.json().error).toBe('isolation_intent_blocks_connection_change');
     expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
   });
 
@@ -673,7 +673,7 @@ describe('isolation_intent false->true rejects a simultaneous connection-info ch
     });
 
     expect(res.statusCode).toBe(400);
-    expect(res.json().error).toBe('isolation_intent_transition_with_connection_change');
+    expect(res.json().error).toBe('isolation_intent_blocks_connection_change');
     expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
   });
 
@@ -727,7 +727,7 @@ describe('isolation_intent false->true rejects a simultaneous connection-info ch
     });
 
     expect(res.statusCode).toBe(400);
-    expect(res.json().error).toBe('isolation_intent_transition_with_connection_change');
+    expect(res.json().error).toBe('isolation_intent_blocks_connection_change');
     expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
   });
 
@@ -745,11 +745,17 @@ describe('isolation_intent false->true rejects a simultaneous connection-info ch
     });
 
     expect(res.statusCode).toBe(400);
-    expect(res.json().error).toBe('isolation_intent_transition_with_connection_change');
+    expect(res.json().error).toBe('isolation_intent_blocks_connection_change');
     expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
   });
 
-  it('allows a connection-info change alongside a true->true no-op (not a new transition)', async () => {
+  // Issue #29 review (8th pass), Critical finding 1: a true->true PUT used
+  // to be treated as "not a new transition" and therefore exempt from this
+  // gate — but the server is STILL isolated throughout, so a connection
+  // change here has exactly the same "cleanup report describes the wrong
+  // endpoint" problem as the false->true case above. Reversed from the old
+  // "allows" expectation.
+  it('rejects with 400 when a connection-info change accompanies a true->true no-op (server stays isolated)', async () => {
     const opts = makeOpts();
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
       makeServer({ type: 'agent', isolationIntent: true, host: '1.2.3.4' }),
@@ -762,7 +768,58 @@ describe('isolation_intent false->true rejects a simultaneous connection-info ch
       payload: { host: '9.9.9.9', isolationIntent: true },
     });
 
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('isolation_intent_blocks_connection_change');
+    expect(opts.serverRepo.update).not.toHaveBeenCalled();
+  });
+
+  // Issue #29 review (8th pass), Critical finding 1: the actual gap the
+  // finding describes — an already-isolated server (isolationIntent: true
+  // persisted) receiving a PUT that doesn't mention isolationIntent at all.
+  // The old check only looked at `isolationIntent === true && isolationIntent
+  // !== srv.isolationIntent`, so an omitted field (undefined !== true is
+  // false... but the old condition required isolationIntent === true
+  // explicitly) never entered the gate, letting host/sshHost/agentPort/
+  // agentToken/type/muxRuntime change freely on an isolated row.
+  it('rejects with 400 when host changes and isolationIntent is omitted entirely from an already-isolated server', async () => {
+    const opts = makeOpts();
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: true, host: '1.2.3.4' }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/servers/srv',
+      payload: { host: '9.9.9.9' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('isolation_intent_blocks_connection_change');
+    expect(opts.serverRepo.update).not.toHaveBeenCalled();
+    expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
+  });
+
+  // The escape hatch: explicitly disabling isolation in the same request is
+  // the one combination that must still be accepted, matching the message
+  // ("disable isolation first, then change the connection") — this proves
+  // the gate is driven by the EFFECTIVE end-state intent, not merely
+  // "isolationIntent field present and true".
+  it('allows a connection-info change alongside an explicit isolationIntent: true->false in the same request', async () => {
+    const opts = makeOpts();
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: true, host: '1.2.3.4' }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/servers/srv',
+      payload: { host: '9.9.9.9', isolationIntent: false },
+    });
+
     expect(res.statusCode).toBe(200);
     expect(opts.serverRepo.update).toHaveBeenCalled();
+    expect(opts.serverRepo.updateIsolationIntent).toHaveBeenCalledWith('srv', false);
   });
 });

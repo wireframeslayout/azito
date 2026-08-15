@@ -74,6 +74,13 @@ export function useServerEditForm() {
         showToast(t('overview.isolationBlockedByLiveSessionsToast', { count: res.sessionCount ?? 0 }));
       } else if (res.error === 'isolation_intent_blocked_by_session_check_failure') {
         showToast(t('overview.isolationBlockedBySessionCheckFailureToast'));
+      } else if (res.error === 'isolation_intent_blocks_connection_change') {
+        // Issue #29 review (8th pass), Critical finding 1: the server-side
+        // gate now rejects ANY connection-info change while isolation is
+        // (or would remain) enabled, not just the false->true transition —
+        // give it its own localized toast instead of falling through to the
+        // raw error code below.
+        showToast(t('overview.isolationBlocksConnectionChangeToast'));
       } else {
         showToast(res.error);
       }
