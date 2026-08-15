@@ -958,6 +958,40 @@ strip_codex_ui_token() {
       return out;
     }
 
+    // Issue #29 review, Important finding 2: every matcher below
+    // (section-header detection, isTokenKeyLine, hasInlineTokenKey,
+    // isDottedEnvTokenKey) is line-oriented — it has no concept of a TOML
+    // multi-line string (triple-double-quote or triple-single-quote
+    // delimited), which can span many lines and legally contain, as pure
+    // string CONTENT, text that reads exactly like a section header
+    // (`[mcp_servers.azt-mcp.env]`) or a key=value assignment
+    // (`AZITO_UI_TOKEN = "..."`). Feeding such a line to those matchers
+    // would treat string content as real TOML structure — at best a false
+    // "sawSection"/"removed", at worst dropping or rewriting a line that
+    // was never a live key in the first place, corrupting the file while
+    // still reporting success. Correctly tracking open/close state for a
+    // multi-line string needs a real TOML parser, which this script
+    // deliberately does not depend on (see the doc comment above this
+    // whole purge routine). So instead: the mere PRESENCE of a
+    // triple-double-quote or triple-single-quote marker anywhere in the
+    // file — open or close marker, it does not matter which — is enough to
+    // fail the whole purge closed ("manual-removal") before any line is
+    // rewritten. A false positive here just costs an occasional manual
+    // check; treating one as ordinary TOML risks silently corrupting
+    // config.toml.
+    const TRIPLE_DQ = DQ + DQ + DQ;
+    const TRIPLE_SQ = Q + Q + Q;
+    const multilineMarkerLines = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].includes(TRIPLE_DQ) || lines[i].includes(TRIPLE_SQ)) {
+        multilineMarkerLines.push((i + 1) + ": " + lines[i]);
+      }
+    }
+    if (multilineMarkerLines.length > 0) {
+      process.stdout.write("manual-removal\n" + multilineMarkerLines.join("\n"));
+      process.exit(0);
+    }
+
     const ENV_SECTION = stripQuotesAndSpace("[mcp_servers.azt-mcp.env]");
     const OWN_TABLE = stripQuotesAndSpace("[mcp_servers.azt-mcp]");
 
@@ -1136,6 +1170,19 @@ strip_codex_ui_token() {
       process.stdout.write("unverified");
       process.exit(0);
     }
+    // Issue #29 review, Important finding 2: same defense-in-depth pattern
+    // as the dotted-key re-check above — the multiline-string guard earlier
+    // in this script already exits before `out` is even built whenever the
+    // ORIGINAL file contains a triple-double-quote or triple-single-quote
+    // marker, so this should never actually fire. It exists so that this
+    // candidate output is never written as "verified safe" if a multi-line
+    // marker is present in it by any path this scripts author did not
+    // anticipate.
+    const stillHasMultilineMarker = out.some((line) => line.includes(TRIPLE_DQ) || line.includes(TRIPLE_SQ));
+    if (stillHasMultilineMarker) {
+      process.stdout.write("unverified");
+      process.exit(0);
+    }
     if (!sawSection && !removed) {
       // azt-mcp has no [mcp_servers.azt-mcp.env] table and no inline `env =`
       // entry on [mcp_servers.azt-mcp] at all (never registered with env
@@ -1179,7 +1226,7 @@ strip_codex_ui_token() {
       ;;
     manual-removal)
       rm -f "$tmp"
-      echo "  エラー: azt-mcp (Codex): $codex_config のインラインテーブル (env = { ... }) またはドット区切りキー (env.AZITO_UI_TOKEN = ... 等) の形式で AZITO_UI_TOKEN が見つかりましたが、標準のサブテーブル形式ではないため自動編集は行いません。以下の行を手動で除去してください:" >&2
+      echo "  エラー: azt-mcp (Codex): $codex_config のインラインテーブル (env = { ... })・ドット区切りキー (env.AZITO_UI_TOKEN = ... 等)・複数行文字列 (\"\"\"...\"\"\" / '''...''') のいずれかが見つかりましたが、標準のサブテーブル形式ではないため自動編集は行いません。以下の行を手動で確認・除去してください:" >&2
       echo "$result_detail" >&2
       SETUP_HAD_ERRORS=1
       return 1

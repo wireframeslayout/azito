@@ -428,7 +428,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         // server is clean means fail closed (409), not fail open.
         let liveSessions: TmuxSession[];
         try {
-          liveSessions = await tmux.listSessions(srv);
+          liveSessions = await tmux.listSessionsForSecurityGate(srv);
         } catch (err: unknown) {
           return reply.status(409).send({
             error: 'isolation_intent_blocked_by_session_check_failure',

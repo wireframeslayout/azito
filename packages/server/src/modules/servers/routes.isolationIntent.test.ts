@@ -46,9 +46,11 @@ function makeOpts(overrides: Partial<ServersRouteOptions> = {}): ServersRouteOpt
     serverRepo,
     // Issue #29 review (5th pass), Critical finding 1: the false->true gate
     // now also checks for live tmux sessions on the target server —
-    // listSessions() defaults to an empty array so every existing test not
-    // about that specific check stays a no-op through it.
-    tmux: { listSessions: vi.fn(async () => []) } as unknown as ServersRouteOptions['tmux'],
+    // listSessionsForSecurityGate() defaults to an empty array so every
+    // existing test not about that specific check stays a no-op through it.
+    // Issue #29 review (7th pass), Critical finding 1: the gate uses the
+    // security-gate-specific method, not the display-oriented listSessions().
+    tmux: { listSessionsForSecurityGate: vi.fn(async () => []) } as unknown as ServersRouteOptions['tmux'],
     transportFactory: { invalidate: vi.fn() } as unknown as ServersRouteOptions['transportFactory'],
     // Issue #29 review, Critical finding 1: no windows registered by
     // default, so the false->true gate is a no-op unless a test overrides
@@ -560,7 +562,7 @@ describe('isolation_intent false->true window-presence gate (Issue #29 review, C
 describe('isolation_intent false->true live-tmux-session gate (Issue #29 review, 5th pass, Critical finding 1)', () => {
   it('rejects with 409 when the server has a live tmux session, even with no registered windows', async () => {
     const opts = makeOpts({
-      tmux: { listSessions: vi.fn(async () => [{ name: 'manual-session', windowCount: 1, attached: false, created: 0, windows: [] }]) } as unknown as ServersRouteOptions['tmux'],
+      tmux: { listSessionsForSecurityGate: vi.fn(async () => [{ name: 'manual-session', windowCount: 1, attached: false, created: 0, windows: [] }]) } as unknown as ServersRouteOptions['tmux'],
     });
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'agent', isolationIntent: false }));
     const app = await buildApp(opts);
@@ -575,7 +577,7 @@ describe('isolation_intent false->true live-tmux-session gate (Issue #29 review,
 
   it('fails closed (409) when listing live tmux sessions throws', async () => {
     const opts = makeOpts({
-      tmux: { listSessions: vi.fn(async () => { throw new Error('ssh unreachable'); }) } as unknown as ServersRouteOptions['tmux'],
+      tmux: { listSessionsForSecurityGate: vi.fn(async () => { throw new Error('ssh unreachable'); }) } as unknown as ServersRouteOptions['tmux'],
     });
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'agent', isolationIntent: false }));
     const app = await buildApp(opts);
@@ -590,7 +592,7 @@ describe('isolation_intent false->true live-tmux-session gate (Issue #29 review,
 
   it('allows the transition when there are no registered windows and no live tmux sessions', async () => {
     const opts = makeOpts({
-      tmux: { listSessions: vi.fn(async () => []) } as unknown as ServersRouteOptions['tmux'],
+      tmux: { listSessionsForSecurityGate: vi.fn(async () => []) } as unknown as ServersRouteOptions['tmux'],
     });
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'agent', isolationIntent: false }));
     const app = await buildApp(opts);
@@ -602,15 +604,15 @@ describe('isolation_intent false->true live-tmux-session gate (Issue #29 review,
   });
 
   it('does not check live sessions on a true->true no-op PUT', async () => {
-    const listSessions = vi.fn(async () => []);
-    const opts = makeOpts({ tmux: { listSessions } as unknown as ServersRouteOptions['tmux'] });
+    const listSessionsForSecurityGate = vi.fn(async () => []);
+    const opts = makeOpts({ tmux: { listSessionsForSecurityGate } as unknown as ServersRouteOptions['tmux'] });
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'agent', isolationIntent: true }));
     const app = await buildApp(opts);
 
     const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
 
     expect(res.statusCode).toBe(200);
-    expect(listSessions).not.toHaveBeenCalled();
+    expect(listSessionsForSecurityGate).not.toHaveBeenCalled();
   });
 });
 
