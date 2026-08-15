@@ -298,7 +298,20 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
               detail: { serverName: request.params.name, reason: 'type_no_longer_agent' },
             });
           }
-        } else if (isolationIntent !== undefined) {
+        } else if (isolationIntent !== undefined && isolationIntent !== srv.isolationIntent) {
+          // Issue #29 review (3rd pass), Important finding 2: a no-op
+          // true->true (or false->false) PUT used to call
+          // updateIsolationIntent() unconditionally, which unconditionally
+          // clears isolation_verified_at/isolation_report (see that method's
+          // doc comment / SqliteServerRepository) even when nothing actually
+          // changed. Since cleanup retry is currently only wired for the
+          // false->true transition below, a same-value PUT silently erased an
+          // existing report with no corresponding retry to regenerate it —
+          // the UI's isolation notice would just go blank. Gate the call on
+          // an actual value change; true->true/false->false is now a
+          // complete no-op that preserves the existing report. (An explicit
+          // "re-verify" action is out of scope here — left to a future
+          // doctor/reinstall flow.)
           const wasIsolated = srv.isolationIntent;
           serverRepo.updateIsolationIntent(request.params.name, isolationIntent);
           if (isolationIntent === true && !wasIsolated) {

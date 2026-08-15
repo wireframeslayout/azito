@@ -24,9 +24,16 @@ interface ServerFormFieldsProps {
   tokenPlaceholder?: string;
   installSteps?: InstallStep[];
   originalMuxRuntime?: 'system' | 'managed';
+  // Issue #29 review (3rd pass), Important finding 4: only meaningful — and
+  // only rendered — in edit mode for an agent-type server (mirrors the
+  // server-side gate in servers/routes.ts: isolationIntent is rejected
+  // outright for any other effective type). Undefined in add mode, where
+  // isolation declaration is intentionally out of scope for this change.
+  isolationIntent?: boolean;
+  onIsolationIntentChange?: (v: boolean) => void;
 }
 
-function ServerFormFields({ mode, autoInstall, type, host, port, token, muxRuntime, onAutoInstallChange, onTypeChange, onHostChange, onPortChange, onTokenChange, onMuxRuntimeChange, nameField, tokenPlaceholder, installSteps, originalMuxRuntime }: ServerFormFieldsProps) {
+function ServerFormFields({ mode, autoInstall, type, host, port, token, muxRuntime, onAutoInstallChange, onTypeChange, onHostChange, onPortChange, onTokenChange, onMuxRuntimeChange, nameField, tokenPlaceholder, installSteps, originalMuxRuntime, isolationIntent, onIsolationIntentChange }: ServerFormFieldsProps) {
   const { t } = useTranslation(['workspace', 'common']);
   const [showToken, setShowToken] = useState(false);
 
@@ -109,6 +116,25 @@ function ServerFormFields({ mode, autoInstall, type, host, port, token, muxRunti
           {t('serverModals.muxMigrationWarning')}
         </div>
       )}
+      {mode === 'edit' && type === 'agent' && onIsolationIntentChange && (
+        <FormField label={t('serverModals.isolationIntent')}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--font-md)', cursor: 'pointer' }}>
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={isolationIntent ?? false}
+                onChange={(e) => onIsolationIntentChange(e.target.checked)}
+                aria-describedby="server-modal-isolation-intent-hint"
+              />
+              <span className="toggle-slider" />
+            </label>
+            {t('serverModals.isolationIntentLabel')}
+          </label>
+          <div id="server-modal-isolation-intent-hint" style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginTop: 6 }}>
+            {t('serverModals.isolationIntentHint')}
+          </div>
+        </FormField>
+      )}
     </>
   );
 }
@@ -181,6 +207,8 @@ interface EditServerModalProps {
   onTokenChange: (v: string) => void;
   muxRuntime: 'system' | 'managed';
   onMuxRuntimeChange: (v: 'system' | 'managed') => void;
+  isolationIntent: boolean;
+  onIsolationIntentChange: (v: boolean) => void;
 }
 
 export function EditServerModal({
@@ -190,6 +218,7 @@ export function EditServerModal({
   port, onPortChange,
   token, onTokenChange,
   muxRuntime, onMuxRuntimeChange,
+  isolationIntent, onIsolationIntentChange,
 }: EditServerModalProps) {
   const { t } = useTranslation(['workspace', 'common']);
   return (
@@ -202,6 +231,8 @@ export function EditServerModal({
         onTypeChange={onTypeChange} onHostChange={onHostChange} onPortChange={onPortChange} onTokenChange={onTokenChange} onMuxRuntimeChange={onMuxRuntimeChange}
         tokenPlaceholder={server?.hasAgentToken ? t('serverModals.tokenUnchanged') : t('serverModals.tokenPlaceholder')}
         originalMuxRuntime={server?.muxRuntime}
+        isolationIntent={isolationIntent}
+        onIsolationIntentChange={onIsolationIntentChange}
       />
     </Modal>
   );

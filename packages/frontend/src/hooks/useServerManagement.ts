@@ -93,6 +93,10 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
   const [editPort, setEditPort] = useState('3002');
   const [editToken, setEditToken] = useState('');
   const [editMuxRuntime, setEditMuxRuntime] = useState<'system' | 'managed'>('system');
+  // Issue #29 review (3rd pass), Important finding 4: mirrors
+  // useServerEditForm's editIsolationIntent (ServersListPage's edit path,
+  // distinct from ServerDetailPage's).
+  const [editIsolationIntent, setEditIsolationIntent] = useState(false);
 
   const [reinstalling, setReinstalling] = useState<string | null>(null);
   const [reinstallSteps, setReinstallSteps] = useState<InstallStep[]>([]);
@@ -232,6 +236,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     setEditPort(String(srv.agentPort ?? '3002'));
     setEditToken('');
     setEditMuxRuntime(srv.muxRuntime ?? 'system');
+    setEditIsolationIntent(srv.isolationIntent ?? false);
   }, []);
 
   const handleEditServer = useCallback(async () => {
@@ -250,14 +255,20 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
       if (editToken.trim()) {
         body.agentToken = editToken.trim();
       }
+      body.isolationIntent = editIsolationIntent;
     }
-    const res = await api<{ error?: string }>(`/servers/${editServer.name}`, {
+    const res = await api<{ error?: string; isolationCleanup?: 'done' | 'failed' | 'skipped' }>(`/servers/${editServer.name}`, {
       method: 'PUT', body: JSON.stringify(body),
     });
     if (res.error) return showToast(res.error);
+    // Issue #29 review (3rd pass), Important finding 4: see
+    // useServerEditForm's identical handling — this hook drives the other
+    // edit path (ServersListPage) and must surface the same outcome.
+    if (res.isolationCleanup === 'failed') showToast(t('overview.isolationCleanupToastFailed'));
+    else if (res.isolationCleanup === 'skipped') showToast(t('overview.isolationCleanupToastSkipped'));
     setEditServer(null);
     refreshAll();
-  }, [editServer, editType, editHost, editPort, editToken, editMuxRuntime, refreshAll, showToast]);
+  }, [editServer, editType, editHost, editPort, editToken, editMuxRuntime, editIsolationIntent, refreshAll, showToast, t]);
 
   const handleReinstall = useCallback(async (serverName: string) => {
     const ok = await confirm({ title: t('confirm.reinstallAgent'), message: t('confirm.reinstallAgentMessage', { name: serverName }) });
@@ -381,6 +392,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     editPort, setEditPort,
     editToken, setEditToken,
     editMuxRuntime, setEditMuxRuntime,
+    editIsolationIntent, setEditIsolationIntent,
     reinstalling,
     reinstallSteps,
   };

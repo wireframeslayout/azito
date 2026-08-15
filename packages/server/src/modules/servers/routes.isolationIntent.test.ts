@@ -275,6 +275,38 @@ describe('PUT /api/servers/:name — isolation cleanup on false->true (Issue #29
     expect(install).not.toHaveBeenCalled();
     expect(opts.serverRepo.updateIsolationReport).not.toHaveBeenCalled();
   });
+
+  // Issue #29 review (3rd pass), Important finding 2: updateIsolationIntent()
+  // unconditionally clears isolation_verified_at/isolation_report as part of
+  // its own UPDATE (see SqliteServerRepository) — a no-op true->true (or
+  // false->false) PUT must not call it at all, or an existing report
+  // silently disappears with no cleanup retry to regenerate it.
+  it('does not call updateIsolationIntent on a no-op true->true PUT (preserves any existing report)', async () => {
+    const install = vi.fn(async () => ({ success: true, steps: [] }));
+    const opts = makeOpts({ harnessInstaller: makeHarnessInstaller(install) });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationReport: '{"cleanup":"done"}' }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
+  });
+
+  it('does not call updateIsolationIntent on a no-op false->false PUT', async () => {
+    const opts = makeOpts();
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: false }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: false } });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
+  });
 });
 
 describe('GET /api/servers — isolationReport exclusion', () => {

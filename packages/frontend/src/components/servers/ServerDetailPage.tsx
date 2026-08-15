@@ -131,6 +131,8 @@ export default function ServerDetailPage({ serverName, section }: ServerDetailPa
       onTokenChange={mgmt.setEditToken}
       muxRuntime={mgmt.editMuxRuntime}
       onMuxRuntimeChange={mgmt.setEditMuxRuntime}
+      isolationIntent={mgmt.editIsolationIntent}
+      onIsolationIntentChange={mgmt.setEditIsolationIntent}
     />
     </>
   );

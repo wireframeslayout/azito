@@ -60,6 +60,8 @@
     "tokenNotSet": "未設定",
     "isolationCleanupWarningTitle": "隔離設定の掃除が未完了です",
     "isolationCleanupWarningSub": "配布済みの操作トークンがこのサーバーに残っている可能性があります。harness を再インストールすると掃除されます。",
+    "isolationCleanupToastFailed": "隔離実行を有効化しましたが、既存の操作トークンの掃除に失敗しました。サーバーの概要画面の通知を確認してください。",
+    "isolationCleanupToastSkipped": "隔離実行を有効化しましたが、操作トークンの掃除がスキップされました（到達可能なホストがありません）。サーバーの概要画面の通知を確認してください。",
     "muxRuntimeLabel": "mux runtime",
     "muxManaged": "AZITO managed tmux",
     "muxSystem": "system tmux",

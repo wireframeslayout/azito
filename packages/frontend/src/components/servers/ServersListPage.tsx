@@ -121,6 +121,8 @@ export default function ServersListPage() {
         onTokenChange={mgmt.setEditToken}
         muxRuntime={mgmt.editMuxRuntime}
         onMuxRuntimeChange={mgmt.setEditMuxRuntime}
+        isolationIntent={mgmt.editIsolationIntent}
+        onIsolationIntentChange={mgmt.setEditIsolationIntent}
       />
     </div>
   );

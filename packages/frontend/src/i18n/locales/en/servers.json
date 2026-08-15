@@ -60,6 +60,8 @@
     "tokenNotSet": "Not set",
     "isolationCleanupWarningTitle": "Isolation cleanup incomplete",
     "isolationCleanupWarningSub": "A previously-distributed operator token may still be on this server. Reinstalling the harness will clean it up.",
+    "isolationCleanupToastFailed": "Isolated execution enabled, but cleaning up the existing operator token failed. See the notice on this server's Overview page.",
+    "isolationCleanupToastSkipped": "Isolated execution enabled, but the operator token cleanup was skipped (no reachable host). See the notice on this server's Overview page.",
     "muxRuntimeLabel": "mux runtime",
     "muxManaged": "AZITO managed tmux",
     "muxSystem": "system tmux",

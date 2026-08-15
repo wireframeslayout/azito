@@ -143,7 +143,10 @@
     "muxManaged": "AZITO managed tmux",
     "muxMigrationWarning": "Sessions on the previous socket will not be migrated.",
     "displayName": "Display Name",
-    "displayNamePlaceholder": "e.g. dev-server"
+    "displayNamePlaceholder": "e.g. dev-server",
+    "isolationIntent": "Isolated execution",
+    "isolationIntentLabel": "Withhold operator credentials from this server",
+    "isolationIntentHint": "Enabling attempts to clean up any already-distributed operator token. A definitive check will be provided by a future verification (doctor)."
   },
   "menu": {
     "windows": "Objects",
