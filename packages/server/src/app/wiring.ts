@@ -48,6 +48,7 @@ import { SqliteResourceGuardSettingsRepository } from '../modules/servers/resour
 import { SqliteAuditLogRepository } from '../shared/audit/AuditLogRepository';
 import { AuditLogService } from '../shared/audit/AuditLogService';
 import { resolveScopedAuthEnabled } from '../shared/auth/scopedAuthFlag';
+import { KeyedMutex } from '../shared/keyedMutex';
 import { TaskOriginationService } from '../modules/tasks/origination/TaskOriginationService';
 import { TaskPaneEnvironmentService } from '../modules/tasks/execution/TaskPaneEnvironmentService';
 import { ResourceGuard } from '../modules/servers/resources/ResourceGuard';
@@ -109,6 +110,18 @@ export interface SharedInfra {
   turnSignalHub: TurnSignalHub;
   supervisorRegistry: SupervisorRegistry;
   browserSessionManager: BrowserSessionManager;
+  // Issue #29 review (7th pass), Important finding 1: ONE instance, shared
+  // by servers/routes.ts's PUT handler, tmux/routes/sessions.ts's manual
+  // session/window/pane routes, AND (via ApplicationServices below)
+  // WindowRespawnService/TaskRestoreService/ExecuteTaskUseCase — every code
+  // path that can (re)create a task-owned tmux window now serializes on the
+  // same per-server-name mutex the isolation false->true transition itself
+  // holds while it checks+commits, so no window-creation path can ever build
+  // its env from a `ServerConfig` a concurrent transition has already
+  // superseded. Constructed here (not in buildServer.ts, where it used to
+  // live as a route-registration-only concern) because the application
+  // services below are built first and need it too.
+  serverIsolationMutex: KeyedMutex;
 }
 
 export interface Repositories {
@@ -224,6 +237,7 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
     browserSnapshotRepo,
     browserGroupRepo,
   );
+  const serverIsolationMutex = new KeyedMutex();
 
   return {
     sshClient,
@@ -249,6 +263,7 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
     turnSignalHub,
     supervisorRegistry,
     browserSessionManager,
+    serverIsolationMutex,
   };
 }
 
@@ -314,7 +329,7 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
   const taskEvents = new EventEmitter();
   const originationService = new TaskOriginationService(repos.taskRepo, repos.auditLogService);
   const taskPaneEnvironmentService = new TaskPaneEnvironmentService(repos.taskTokenRepo, repos.projectSecretRepo, uiToken, scopedAuthEnabled, repos.auditLogService);
-  const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.tmuxClient, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, repos.serverRepo, repos.projectSecretRepo, taskEvents, taskPaneEnvironmentService, sessionCaptureService);
+  const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.tmuxClient, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, repos.serverRepo, repos.projectSecretRepo, taskEvents, taskPaneEnvironmentService, infra.serverIsolationMutex, sessionCaptureService);
   const taskRestoreService = new TaskRestoreService({
     taskRepo: repos.taskRepo,
     serverRepo: repos.serverRepo,
@@ -332,6 +347,7 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
     projectSecretRepo: repos.projectSecretRepo,
     events: taskEvents,
     paneEnvService: taskPaneEnvironmentService,
+    serverIsolationMutex: infra.serverIsolationMutex,
   });
   // windowSessionResolver / windowActivityStatusService: shared by transcriptsRoutes
   // (session resolution), windowsRoutes (GET /api/windows/activity-status, diagnostics)
@@ -380,6 +396,7 @@ function buildExecuteTaskUseCase(
     repos.projectSecretRepo,
     appServices.taskEvents,
     appServices.taskPaneEnvironmentService,
+    infra.serverIsolationMutex,
   );
 }
 

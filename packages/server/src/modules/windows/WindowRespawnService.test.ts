@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { WindowRespawnService, buildRespawnManifestInput } from './WindowRespawnService';
+import { KeyedMutex } from '../../shared/keyedMutex';
 import { resolveExecutionManifest, hashExecutionManifest } from '../tasks/execution/ExecutionManifest';
 import type { Window, IWindowRepository } from './Window';
 import type { ServerConfig } from '../servers/Server';
@@ -238,10 +239,19 @@ function buildService(opts: {
   // that don't exercise it.
   const unitTypeLoader = { get: vi.fn(() => undefined), getOrThrow: vi.fn(() => { throw new Error('not used in tests'); }) } as any;
   const sidekickLoader = { findByName: vi.fn(() => null), findDefaultForTag: vi.fn(() => null), list: vi.fn(() => []) } as any;
-  // Only needed by resolveExecutionManifest() to resolve the manifest's
-  // `server`/`secrets` fields (Issue #328 tenth-round review) — null/empty
-  // by default, fine for tests that don't exercise them.
-  const serverRepo = { findByName: vi.fn(() => null) } as any;
+  // Used by resolveExecutionManifest() to resolve the manifest's
+  // `server`/`secrets` fields (Issue #328 tenth-round review). Issue #29
+  // review (7th pass), Important finding 1: ALSO now the lookup
+  // createRotatedWindow/createSecondaryWindow's ServerIsolationLock uses to
+  // refetch `server` inside the lock — must resolve to a real row (not
+  // null) or every respawn() call in this file would throw "Server ...
+  // was not found". Returns `makeServer({ name })` for whatever name is
+  // queried, which matches every test's own `makeServer()`/`makeServer({...})`
+  // call passed directly to `respawn()` on every field this file's fixtures
+  // (paneEnvService mocks, tmux mocks) actually inspect — none of them
+  // assert on the SPECIFIC server object identity/overrides beyond what
+  // `expect.anything()` already tolerates.
+  const serverRepo = { findByName: vi.fn((name: string) => makeServer({ name })) } as any;
   const projectSecretRepo = { findByProject: vi.fn(() => []) } as any;
   // Shared task-events EventEmitter (Issue #328 fifteenth-round review) — a
   // real EventEmitter so appendLogAndEmit()'s emit() call is a no-op rather
@@ -283,6 +293,7 @@ function buildService(opts: {
     projectSecretRepo,
     events,
     paneEnvService,
+    new KeyedMutex(),
     undefined,
   );
 
@@ -1024,10 +1035,12 @@ describe('WindowRespawnService.respawn — respawn config fingerprint (Issue #32
       unitRepo: { findById: () => unit } as unknown as IUnitRepository,
       projectRepo: { findById: () => null } as unknown as IProjectRepository,
       projectServerRepo: { find: () => null, findByProject: () => [] } as unknown as IProjectServerRepository,
-      // Empty/null by default (Issue #328 tenth-round review) — matches
-      // buildService()'s own serverRepo/projectSecretRepo defaults, so a
+      // Matches buildService()'s own serverRepo/projectSecretRepo defaults
+      // (Issue #328 tenth-round review; Issue #29 review 7th pass, Important
+      // finding 1 updated the serverRepo default from `null` to a real
+      // `makeServer({ name })` row — see that fix's own comment), so a
       // manifest approved here and one resolved via the real service agree.
-      serverRepo: { findByName: () => null } as any,
+      serverRepo: { findByName: (name: string) => makeServer({ name }) } as any,
       projectSecretRepo: { findByProject: () => [] } as any,
       unitTypeLoader: { get: () => undefined, getOrThrow: () => { throw new Error('not used in tests'); } } as any,
       sidekickLoader: { findByName: () => null, findDefaultForTag: () => null, list: () => [] } as any,
@@ -1418,7 +1431,10 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
     const logRepo = { append: vi.fn() } as any;
     const unitTypeLoader = { get: vi.fn(() => undefined), getOrThrow: vi.fn(() => { throw new Error('not used'); }) } as any;
     const sidekickLoader = { findByName: vi.fn(() => null), findDefaultForTag: vi.fn(() => null), list: vi.fn(() => []) } as any;
-    const serverRepo = { findByName: vi.fn(() => null) } as any;
+    // Issue #29 review (7th pass), Important finding 1: must resolve to a
+    // real row — see the identical fix (with fuller rationale) on
+    // buildService()'s own serverRepo above.
+    const serverRepo = { findByName: vi.fn((name: string) => makeServer({ name })) } as any;
     const projectSecretRepo = { findByProject: vi.fn(() => []) } as any;
     const events = new EventEmitter();
     let generationCounter = 0;
@@ -1449,6 +1465,7 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
       projectSecretRepo,
       events,
       paneEnvService,
+      new KeyedMutex(),
       undefined,
     );
 

@@ -1,9 +1,24 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createRotatedWindow, rollbackWindowReference, runExclusiveForTask } from './WindowRotation';
+import { createRotatedWindow, rollbackWindowReference, runExclusiveForTask, type ServerIsolationLock } from './WindowRotation';
 import { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
 import type { ITaskTokenRepository, IssuedTaskToken } from '../tokens/TaskToken';
 import type { Task } from '../Task';
 import type { ServerConfig } from '../../servers/Server';
+import { KeyedMutex } from '../../../shared/keyedMutex';
+
+// Issue #29 review (7th pass), Important finding 1: createRotatedWindow now
+// locks+refetches `server` via a ServerIsolationLock instead of trusting the
+// caller's own `server` argument — these tests give it a fresh KeyedMutex
+// plus a `serverRepo` stub that always resolves back to the SAME `server`
+// object the test constructed, so its behavior is unchanged from before this
+// fix (no test here exercises a mid-flight isolation transition; that's
+// covered by servers/routes.isolationIntent.test.ts and sessions.test.ts).
+function makeLock(server: ServerConfig): ServerIsolationLock {
+  return {
+    serverIsolationMutex: new KeyedMutex(),
+    serverRepo: { findByName: () => server },
+  };
+}
 
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {
@@ -239,14 +254,14 @@ describe('createRotatedWindow + rollbackWindowReference under runExclusiveForTas
     // the slow one's whole span (including its failure handling) is done.
     const slow = runExclusiveForTask(task.id, async () => {
       order.push('slow-start');
-      const created = await createRotatedWindow(paneEnvService, server, task, 'slow_failed', async () => gateSlow.promise);
+      const created = await createRotatedWindow(paneEnvService, makeLock(server), server, task, 'slow_failed', async () => gateSlow.promise);
       order.push('slow-end');
       return created;
     }).catch((err: unknown) => err as Error);
 
     const fast = runExclusiveForTask(task.id, async () => {
       order.push('fast-start');
-      const created = await createRotatedWindow(paneEnvService, server, task, 'fast_failed', async () => ({
+      const created = await createRotatedWindow(paneEnvService, makeLock(server), server, task, 'fast_failed', async () => ({
         result: { stdout: '', stderr: '', code: 0 },
         windowName: 'fast-window',
       }));
@@ -292,14 +307,14 @@ describe('createRotatedWindow + rollbackWindowReference under runExclusiveForTas
     const task = makeTask({ id: 43 });
 
     // Simulate: rotation A already succeeded and persisted (generation 1)...
-    const a = await createRotatedWindow(paneEnvService, server, task, 'a_failed', async () => ({
+    const a = await createRotatedWindow(paneEnvService, makeLock(server), server, task, 'a_failed', async () => ({
       result: { stdout: '', stderr: '', code: 0 },
       windowName: 'a-window',
     }));
     // ...then a LATER rotation B is issued for the same task (generation 2,
     // which — per issueNextGeneration's contract — revokes generation 1 as
     // part of normal rotation, same as a real follow-up execute() would).
-    const b = await createRotatedWindow(paneEnvService, server, task, 'b_failed', async () => ({
+    const b = await createRotatedWindow(paneEnvService, makeLock(server), server, task, 'b_failed', async () => ({
       result: { stdout: '', stderr: '', code: 0 },
       windowName: 'b-window',
     }));
@@ -342,7 +357,7 @@ describe('rollbackWindowReference: onGone throwing must not skip the revoke', ()
     const server = makeServer();
     const task = makeTask({ id: 50 });
 
-    const created = await createRotatedWindow(paneEnvService, server, task, 'unused', async () => ({
+    const created = await createRotatedWindow(paneEnvService, makeLock(server), server, task, 'unused', async () => ({
       result: { stdout: '', stderr: '', code: 0 },
       windowName: 'w',
     }));
@@ -381,7 +396,7 @@ describe('rollbackWindowReference: onGone throwing must not skip the revoke', ()
     const server = makeServer();
     const task = makeTask({ id: 51 });
 
-    const created = await createRotatedWindow(paneEnvService, server, task, 'unused', async () => ({
+    const created = await createRotatedWindow(paneEnvService, makeLock(server), server, task, 'unused', async () => ({
       result: { stdout: '', stderr: '', code: 0 },
       windowName: 'w',
     }));
@@ -431,7 +446,7 @@ describe('rollbackWindowReference: onGone throwing must not skip the revoke', ()
     const server = makeServer();
     const task = makeTask({ id: 52 });
 
-    const created = await createRotatedWindow(paneEnvService, server, task, 'unused', async () => ({
+    const created = await createRotatedWindow(paneEnvService, makeLock(server), server, task, 'unused', async () => ({
       result: { stdout: '', stderr: '', code: 0 },
       windowName: 'w',
     }));

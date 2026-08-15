@@ -847,48 +847,134 @@ strip_codex_ui_token() {
   local orig_mode
   orig_mode="$(stat -c%a "$codex_config" 2>/dev/null || stat -f%Lp "$codex_config" 2>/dev/null || echo 600)"
 
+  # Issue #29 review (7th pass), Important finding 3: the previous version
+  # matched the section header and the token key by exact string equality
+  # (`trimmed === "[mcp_servers.azt-mcp.env]"`, `/^AZITO_UI_TOKEN\s*=/`) —
+  # a quoted table/key segment (`[mcp_servers."azt-mcp".env]`,
+  # `"AZITO_UI_TOKEN" = "..."`) or an inline-table form
+  # (`env = { AZITO_UI_TOKEN = "..." }` on the `[mcp_servers.azt-mcp]` table
+  # itself, no separate `.env` sub-table) is legal TOML that `codex mcp add`
+  # (or a hand edit) can plausibly emit, and none of it matched — the purge
+  # reported "no-section"/"clean" (success) while the token was still
+  # sitting in the file untouched.
+  #
+  # This version (a) tolerates quote/whitespace variation in both the header
+  # and the key, and additionally strips an inline-table entry, and (b) —
+  # since a TOML-shape purge can never enumerate every legal variant a future
+  # codex-cli version might emit — treats its own removal as advisory only:
+  # after building the candidate output, it re-scans that text for the bare
+  # string "AZITO_UI_TOKEN" anywhere at all (not scoped to the azt-mcp
+  # section — the conservative reading: this codebase has no other reason to
+  # ever write that name into config.toml) and refuses to write the file
+  # ("unverified", handled as a failure below) unless that scan comes back
+  # clean. A successful "removed"/"clean"/"no-section" result is therefore
+  # actually proven token-free, not just believed to be from one specific
+  # shape matching.
   local tmp result node_status=0
   tmp="$(mktemp "$codex_config.XXXXXX")"
   result="$(node -e '
     const fs = require("fs");
     const [inPath, outPath] = process.argv.slice(1);
     const lines = fs.readFileSync(inPath, "utf8").split("\n");
-    const sectionHeader = "[mcp_servers.azt-mcp.env]";
-    let inSection = false;
+    const Q = String.fromCharCode(39);
+    const DQ = String.fromCharCode(34);
+
+    function stripQuotesAndSpace(s) {
+      let out = "";
+      for (const ch of s) {
+        if (ch === " " || ch === "\t" || ch === Q || ch === DQ) continue;
+        out += ch;
+      }
+      return out;
+    }
+
+    const ENV_SECTION = stripQuotesAndSpace("[mcp_servers.azt-mcp.env]");
+    const OWN_TABLE = stripQuotesAndSpace("[mcp_servers.azt-mcp]");
+
+    function isTokenKeyLine(trimmed) {
+      return /^AZITO_UI_TOKEN=/.test(stripQuotesAndSpace(trimmed));
+    }
+
+    // Strips an `AZITO_UI_TOKEN = "..."` entry out of an inline-table value
+    // on an `env = { ... }` line inside the [mcp_servers.azt-mcp] table
+    // itself (as opposed to a separate [mcp_servers.azt-mcp.env] table).
+    // Only the common single-line shape is handled — TOML inline tables
+    // cannot contain a bare newline, so `codex mcp add` cannot emit a
+    // multi-line one anyway.
+    function stripInlineTokenEntry(line) {
+      const m = line.match(/^(\s*)env(\s*=\s*)\{(.*)\}(.*)$/);
+      if (!m) return null;
+      const [, indent, eq, inner, suffix] = m;
+      const parts = inner.split(",");
+      const kept = [];
+      let removedEntry = false;
+      for (const part of parts) {
+        if (part.trim() === "") continue;
+        const eqIdx = part.indexOf("=");
+        if (eqIdx === -1) { kept.push(part.trim()); continue; }
+        const key = stripQuotesAndSpace(part.slice(0, eqIdx));
+        if (key === "AZITO_UI_TOKEN") { removedEntry = true; continue; }
+        kept.push(part.trim());
+      }
+      if (!removedEntry) return null;
+      const body = kept.length > 0 ? "{ " + kept.join(", ") + " }" : "{}";
+      return indent + "env" + eq + body + suffix;
+    }
+
+    let inEnvSection = false;
+    let inOwnTable = false;
     let sawSection = false;
     let removed = false;
     const out = [];
     for (const line of lines) {
       const trimmed = line.trim();
-      if (trimmed === sectionHeader) {
-        inSection = true;
-        sawSection = true;
+      if (trimmed.startsWith("[")) {
+        const norm = stripQuotesAndSpace(trimmed);
+        inEnvSection = norm === ENV_SECTION;
+        inOwnTable = norm === OWN_TABLE;
+        if (inEnvSection) sawSection = true;
         out.push(line);
         continue;
       }
-      if (inSection && trimmed.startsWith("[")) {
-        inSection = false;
-      }
-      if (inSection && /^AZITO_UI_TOKEN\s*=/.test(trimmed)) {
+      if (inEnvSection && isTokenKeyLine(trimmed)) {
         removed = true;
         continue; // drop only this line
       }
+      if (inOwnTable) {
+        const rewritten = stripInlineTokenEntry(line);
+        if (rewritten !== null) {
+          removed = true;
+          sawSection = true;
+          out.push(rewritten);
+          continue;
+        }
+      }
       out.push(line);
     }
-    if (!sawSection) {
-      // azt-mcp has no [mcp_servers.azt-mcp.env] table at all (never
-      // registered with env vars, or registered without one) — confidently
-      // nothing to purge.
+
+    const finalText = out.join("\n");
+    const stillPresent = finalText.includes("AZITO_UI_TOKEN");
+    if (stillPresent) {
+      // Removal logic believes it handled every AZITO_UI_TOKEN occurrence it
+      // recognized, but the raw text still contains the string somewhere —
+      // an unrecognized TOML shape. Refuse to write; caller fails closed.
+      process.stdout.write("unverified");
+      process.exit(0);
+    }
+    if (!sawSection && !removed) {
+      // azt-mcp has no [mcp_servers.azt-mcp.env] table and no inline `env =`
+      // entry on [mcp_servers.azt-mcp] at all (never registered with env
+      // vars, or registered without one) — confidently nothing to purge.
       process.stdout.write("no-section");
       process.exit(0);
     }
     if (!removed) {
-      // The env table exists but already has no AZITO_UI_TOKEN line —
-      // already clean.
+      // The env table (or azt-mcp table) exists but already has no
+      // AZITO_UI_TOKEN entry — already clean.
       process.stdout.write("clean");
       process.exit(0);
     }
-    fs.writeFileSync(outPath, out.join("\n"));
+    fs.writeFileSync(outPath, finalText);
     process.stdout.write("removed");
   ' "$codex_config" "$tmp")" || node_status=$?
 
@@ -907,6 +993,12 @@ strip_codex_ui_token() {
       ;;
     no-section|clean)
       rm -f "$tmp"
+      ;;
+    unverified)
+      rm -f "$tmp"
+      echo "  エラー: azt-mcp (Codex): $codex_config から AZITO_UI_TOKEN を確実に除去できませんでした（既知の除去処理を適用した後も、ファイル内に AZITO_UI_TOKEN という文字列が残っています）。手動で確認・削除してください" >&2
+      SETUP_HAD_ERRORS=1
+      return 1
       ;;
     *)
       rm -f "$tmp"

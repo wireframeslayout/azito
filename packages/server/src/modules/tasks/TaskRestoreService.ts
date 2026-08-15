@@ -8,7 +8,8 @@ import type { IUnitRepository } from '../units/Unit';
 import type { IWindowRepository } from '../windows/Window';
 import type { SqliteProjectSecretRepository } from '../projects/SqliteProjectSecretRepository';
 import type { TmuxClient } from '../tmux/TmuxClient';
-import { createRotatedWindow, rollbackWindowReference, runExclusiveForTask } from './execution/WindowRotation';
+import { createRotatedWindow, rollbackWindowReference, runExclusiveForTask, type ServerIsolationLock } from './execution/WindowRotation';
+import type { KeyedMutex } from '../../shared/keyedMutex';
 import type { WorktreeServiceFactory } from '../git/WorktreeServiceFactory';
 import { PathResolverFactory, assertDirectoryContained } from '../git/PathContainment';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
@@ -60,12 +61,25 @@ export interface TaskRestoreDeps {
   events: EventEmitter;
   /** Issue #28 Phase A後半: the sole task-pane env builder — this is the "TaskRestoreService" entry point design v3 §6 lists explicitly. */
   paneEnvService: TaskPaneEnvironmentService;
+  // Issue #29 review (7th pass), Important finding 1: the SAME
+  // per-server-name mutex `modules/servers/routes.ts`'s PUT handler and
+  // `modules/tmux/routes/sessions.ts`'s manual window/pane routes already
+  // serialize the isolation false->true transition against (see that
+  // mutex's own doc comment) — required here too, so a task restore can
+  // never build env from a `server` object a concurrent transition has
+  // already superseded. See ServerIsolationLock's doc comment in
+  // WindowRotation.ts.
+  serverIsolationMutex: KeyedMutex;
 }
 
 export class TaskRestoreService {
   private readonly pathResolverFactory = new PathResolverFactory();
 
   constructor(private deps: TaskRestoreDeps) {}
+
+  private get serverIsolationLock(): ServerIsolationLock {
+    return { serverIsolationMutex: this.deps.serverIsolationMutex, serverRepo: this.deps.serverRepo };
+  }
 
   async restore(task: Task, log: { warn: (msg: string) => void }): Promise<{ tmuxTarget: string; worktreePath: string | null }> {
     const { taskRepo, serverRepo, projectRepo, projectServerRepo, unitRepo, windowRepo, tmux, worktreeServiceFactory, transportFactory, contentExtractor, logRepo, unitTypeLoader, sidekickLoader, projectSecretRepo, events, paneEnvService } = this.deps;
@@ -199,8 +213,8 @@ export class TaskRestoreService {
       // rethrowing/throwing in both cases, so `windowName` staying null here
       // on failure is correct — there is nothing left for the outer catch to
       // roll back.
-      const created = await createRotatedWindow(paneEnvService, server, task, 'restore_create_failed', (env) =>
-        tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: env }),
+      const created = await createRotatedWindow(paneEnvService, this.serverIsolationLock, server, task, 'restore_create_failed', (freshServer, env) =>
+        tmux.createWindow(freshServer, tmuxSession, `task-${task.id}`, { extraEnv: env }),
       );
       windowName = created.windowName;
       tokenId = created.tokenId;

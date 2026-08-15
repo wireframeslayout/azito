@@ -21,7 +21,8 @@ import { resolveExecutionManifest, hashExecutionManifest, type RespawnManifestIn
 import { appendLogAndEmit } from '../tasks/execution/AppendLog';
 import type { TaskPaneEnvironmentService } from '../tasks/execution/TaskPaneEnvironmentService';
 import { resolveTmuxSession } from '../tasks/execution/TaskExecutionEnv';
-import { confirmOldWindowGone, createRotatedWindow, rollbackWindowReference, runExclusiveForTask } from '../tasks/execution/WindowRotation';
+import { confirmOldWindowGone, createRotatedWindow, createSecondaryWindow, rollbackWindowReference, runExclusiveForTask, type ServerIsolationLock } from '../tasks/execution/WindowRotation';
+import type { KeyedMutex } from '../../shared/keyedMutex';
 import { resolveKillOutcome } from '../tmux/killOutcome';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
@@ -137,8 +138,22 @@ export class WindowRespawnService {
     // window respawn instead falls back to TmuxClient.uiTokenEnv() (see
     // resolveRespawnEnv() below).
     private paneEnvService: TaskPaneEnvironmentService,
+    // Issue #29 review (7th pass), Important finding 1: the SAME
+    // per-server-name mutex `modules/servers/routes.ts`'s PUT handler and
+    // `modules/tmux/routes/sessions.ts`'s manual window/pane routes already
+    // serialize the isolation false->true transition against (see that
+    // mutex's own doc comment) — required (placed before the optional
+    // sessionCaptureService below, not after, so it stays a required
+    // parameter), so respawn()/resumeLegacySession() can never build a
+    // window env from a `server` a concurrent transition has already
+    // superseded. See ServerIsolationLock's doc comment in WindowRotation.ts.
+    private serverIsolationMutex: KeyedMutex,
     private sessionCaptureService?: SessionCaptureService,
   ) {}
+
+  private get serverIsolationLock(): ServerIsolationLock {
+    return { serverIsolationMutex: this.serverIsolationMutex, serverRepo: this.serverRepo };
+  }
 
   async respawn(windowId: number, server: ServerConfig): Promise<{ tmuxTarget: string }> {
     const win = this.windowRepo.findById(windowId);
@@ -285,9 +300,9 @@ export class WindowRespawnService {
         isPrimary ? task!.id : null,
       );
 
-      const doCreate = (env: Record<string, string>) => (!sessionExists
-        ? this.tmux.createSession(server, sessionName, { windowName: windowPart, exactName: true, extraEnv: env })
-        : this.tmux.createWindow(server, sessionName, windowPart, { exactName: true, extraEnv: env }));
+      const doCreate = (freshServer: ServerConfig, env: Record<string, string>) => (!sessionExists
+        ? this.tmux.createSession(freshServer, sessionName, { windowName: windowPart, exactName: true, extraEnv: env })
+        : this.tmux.createWindow(freshServer, sessionName, windowPart, { exactName: true, extraEnv: env }));
 
       let newName: string;
       // `windowEnv` is reused below for every additional pane restorePaneLayout
@@ -300,20 +315,20 @@ export class WindowRespawnService {
       // roll back below on a downstream failure.
       let tokenId: number | null = null;
       if (isPrimary) {
-        const created = await createRotatedWindow(this.paneEnvService, server, task!, 'respawn_create_failed', doCreate);
+        const created = await createRotatedWindow(this.paneEnvService, this.serverIsolationLock, server, task!, 'respawn_create_failed', doCreate);
         newName = created.windowName;
         windowEnv = created.env;
         tokenId = created.tokenId;
       } else if (task) {
-        windowEnv = this.paneEnvService.buildEnvForSecondaryWindow(task, server);
-        const created = await doCreate(windowEnv);
+        const created = await createSecondaryWindow(this.paneEnvService, this.serverIsolationLock, server, task, doCreate);
+        windowEnv = created.env;
         newName = created.windowName;
       } else {
         // Non-task window respawn — server-aware legacy default (Issue #29
         // review, Critical finding 1): withholds the token when `server` is
         // declared isolated, same as the manual session/window/pane routes.
         windowEnv = this.tmux.uiTokenEnvForServer(server);
-        const created = await doCreate(windowEnv);
+        const created = await doCreate(server, windowEnv);
         newName = created.windowName;
       }
       await sleep(sessionExists ? 300 : 500);
@@ -533,8 +548,8 @@ export class WindowRespawnService {
     // WindowRotation.ts) so a concurrent rotation for this task cannot
     // revoke this generation out from under it.
     const { windowName } = await runExclusiveForTask(taskId, async () => {
-      const created = await createRotatedWindow(this.paneEnvService, server, task, 'resume_legacy_create_failed', (env) =>
-        this.tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: env }),
+      const created = await createRotatedWindow(this.paneEnvService, this.serverIsolationLock, server, task, 'resume_legacy_create_failed', (freshServer, env) =>
+        this.tmux.createWindow(freshServer, tmuxSession, `task-${task.id}`, { extraEnv: env }),
       );
       const windowTarget = `${tmuxSession}:${created.windowName}`;
       try {

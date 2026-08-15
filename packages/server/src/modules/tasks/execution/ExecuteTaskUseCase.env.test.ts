@@ -5,6 +5,7 @@ import { tmpdir } from 'os';
 import * as path from 'path';
 import { ExecuteTaskUseCase } from './ExecuteTaskUseCase';
 import { shellQuote } from '../../../shared/shellQuote';
+import { KeyedMutex } from '../../../shared/keyedMutex';
 import { TurnSignalHub } from '../turns/TurnSignalHub';
 import type { AgentTurn, AgentTurnEvent } from '../turns/AgentTurn';
 import type { Task, ITaskRepository } from '../Task';
@@ -385,6 +386,7 @@ function buildUseCase(opts: {
     projectSecretRepo as any,
     new EventEmitter(),
     paneEnvService as any,
+    new KeyedMutex(),
   );
 
   return { useCase, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, paneEnvService };
@@ -1127,6 +1129,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITOç›
       projectSecretRepo as any,
       new EventEmitter(),
       { buildEnvForNewWindow: vi.fn(() => ({ env: {}, tokenId: 1 })), revokeGeneration: vi.fn() } as any,
+      new KeyedMutex(),
     );
 
     await useCase.followUp(42, 1, 'please continue');
@@ -1955,6 +1958,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       projectSecretRepo as any,
       new EventEmitter(),
       { buildEnvForNewWindow: vi.fn(() => ({ env: {}, tokenId: 1 })), revokeGeneration: vi.fn() } as any,
+      new KeyedMutex(),
     );
 
     // execute() itself resolves once setup (session/window/worktree

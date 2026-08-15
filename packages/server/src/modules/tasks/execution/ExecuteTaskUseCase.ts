@@ -13,7 +13,8 @@ import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoade
 import type { SidekickSyncService } from '../../sidekicks/SidekickSyncService';
 import type { IExecutionLogRepository, LogType } from '../ExecutionLog';
 import type { TmuxClient } from '../../tmux/TmuxClient';
-import { confirmOldWindowGone, createRotatedWindow, rollbackWindowReference, runExclusiveForTask } from './WindowRotation';
+import { confirmOldWindowGone, createRotatedWindow, rollbackWindowReference, runExclusiveForTask, type ServerIsolationLock } from './WindowRotation';
+import type { KeyedMutex } from '../../../shared/keyedMutex';
 import type { IWorktreeService, WorktreeInfo } from '../../git/IWorktreeService';
 import type { WorktreeServiceFactory } from '../../git/WorktreeServiceFactory';
 import { PathResolverFactory, assertDirectoryContained } from '../../git/PathContainment';
@@ -128,6 +129,17 @@ export class ExecuteTaskUseCase {
     // former private buildExtraEnv() (removed), which only ever assembled
     // secrets + agent-server env and left AZITO_TASK_TOKEN unissued.
     private paneEnvService: TaskPaneEnvironmentService,
+    // Issue #29 review (7th pass), Important finding 1: the SAME
+    // per-server-name mutex `modules/servers/routes.ts`'s PUT handler and
+    // `modules/tmux/routes/sessions.ts`'s manual window/pane routes already
+    // serialize the isolation false->true transition against (see that
+    // mutex's own doc comment) — required, not optional, so this class can
+    // never construct a window without it. Passed straight through to
+    // `WindowRotation.createRotatedWindow`/`createSecondaryWindow` bundled
+    // with `serverRepo` as a `ServerIsolationLock` (see its own doc comment
+    // in WindowRotation.ts for why env-resolution must be locked+refetched
+    // through this exact key).
+    private serverIsolationMutex: KeyedMutex,
   ) {
     this.gitInfoCollector = new GitInfoCollector(this.tmux);
     this.pushVerifier = new PushVerifier(this.tmux, this.gitProvider);
@@ -176,6 +188,14 @@ export class ExecuteTaskUseCase {
       this.serverRepo,
       this.projectSecretRepo,
     );
+  }
+
+  // Bundled once per call (cheap object literal — `serverRepo`/`serverIsolationMutex`
+  // themselves are the singletons) so createRotatedWindow/createSecondaryWindow
+  // call sites below don't each re-spell the same two-field object. See
+  // ServerIsolationLock's doc comment in WindowRotation.ts.
+  private get serverIsolationLock(): ServerIsolationLock {
+    return { serverIsolationMutex: this.serverIsolationMutex, serverRepo: this.serverRepo };
   }
 
   private getWorktreeService(server: ServerConfig): IWorktreeService {
@@ -553,8 +573,8 @@ export class ExecuteTaskUseCase {
         // resolving with a non-zero exit code (agent transport — see
         // WindowRotation.ts's doc comment; Issue #28 third-party review
         // finding).
-        const created = await createRotatedWindow(this.paneEnvService, server, currentTask, 'execute_create_failed', (env) =>
-          this.tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: env }),
+        const created = await createRotatedWindow(this.paneEnvService, this.serverIsolationLock, server, currentTask, 'execute_create_failed', (freshServer, env) =>
+          this.tmux.createWindow(freshServer, tmuxSession, `task-${task.id}`, { extraEnv: env }),
         );
 
         this.taskRepo.update(taskId, { status: 'in_progress' as TaskStatus, tmuxWindow: created.windowName });
@@ -988,8 +1008,8 @@ export class ExecuteTaskUseCase {
         // WindowRotation.ts's doc comment). The DB is only updated with
         // `windowName` once creation is confirmed to have actually
         // succeeded.
-        const created = await createRotatedWindow(this.paneEnvService, server, currentTask, 'followup_create_failed', (env) =>
-          this.tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: env }),
+        const created = await createRotatedWindow(this.paneEnvService, this.serverIsolationLock, server, currentTask, 'followup_create_failed', (freshServer, env) =>
+          this.tmux.createWindow(freshServer, tmuxSession, `task-${task.id}`, { extraEnv: env }),
         );
         this.taskRepo.update(taskId, { tmuxWindow: created.windowName } as Partial<Task>);
         return { windowName: created.windowName, windowExists: false, tokenId: created.tokenId };

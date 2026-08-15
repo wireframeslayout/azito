@@ -17,7 +17,6 @@ import path from 'path';
 import type { WebSocket } from 'ws';
 
 import { resolveRoot } from '../shared/releaseInfo';
-import { KeyedMutex } from '../shared/keyedMutex';
 import type { Wiring } from './wiring';
 
 import serversRoutes from '../modules/servers/routes';
@@ -411,7 +410,13 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // creation routes (sessionsRoutes) must serialize against EACH OTHER, keyed
   // by server name, not just against themselves. See serverIsolationMutex's
   // doc comment on ServersRouteOptions.
-  const serverIsolationMutex = new KeyedMutex();
+  // Issue #29 review (7th pass), Important finding 1: now constructed in
+  // app/wiring.ts (SharedInfra), not here — WindowRespawnService/
+  // TaskRestoreService/ExecuteTaskUseCase (built inside buildWiring, ahead of
+  // this function) need the SAME instance too, so task-window (re)creation
+  // serializes against this exact mutex as well. `wiring.serverIsolationMutex`
+  // is that one shared instance; reused below, never re-constructed.
+  const { serverIsolationMutex } = wiring;
   await app.register(serversRoutes, { serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, auditLogService, serverIsolationMutex });
   await app.register(sessionsRoutes, {
     serverRepo, tmux: tmuxClient, windowRepo, notificationBus, resourceGuard, serverIsolationMutex,

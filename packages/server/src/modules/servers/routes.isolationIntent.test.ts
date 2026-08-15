@@ -652,6 +652,48 @@ describe('isolation_intent false->true rejects a simultaneous connection-info ch
     expect(opts.serverRepo.updateIsolationIntent).toHaveBeenCalledWith('srv', true);
   });
 
+  // Issue #29 review (7th pass), Important finding 2: `type` (local->agent)
+  // and `muxRuntime` (system->managed) changes are just as much an "endpoint
+  // the check/cleanup could disagree about" as host/sshHost/agentPort/
+  // agentToken — missing them let a false->true transition slip past this
+  // guard while switching the very endpoint the risky-window/live-session
+  // checks and the cleanup purge are each looking at.
+  it('rejects with 400 when type changes from local to agent alongside isolationIntent: false->true', async () => {
+    const opts = makeOpts();
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'local', isolationIntent: false }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/servers/srv',
+      payload: { type: 'agent', isolationIntent: true },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('isolation_intent_transition_with_connection_change');
+    expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
+  });
+
+  it('rejects with 400 when muxRuntime changes alongside isolationIntent: false->true', async () => {
+    const opts = makeOpts();
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: false, muxRuntime: 'system' }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/servers/srv',
+      payload: { muxRuntime: 'managed', isolationIntent: true },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('isolation_intent_transition_with_connection_change');
+    expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
+  });
+
   it('allows a connection-info change alongside a true->true no-op (not a new transition)', async () => {
     const opts = makeOpts();
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(

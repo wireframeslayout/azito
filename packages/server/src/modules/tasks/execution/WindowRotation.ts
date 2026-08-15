@@ -1,9 +1,51 @@
-import type { ServerConfig } from '../../servers/Server';
+import type { IServerRepository, ServerConfig } from '../../servers/Server';
 import type { ExecResult } from '../../servers/transport/ServerTransport';
 import type { TmuxClient } from '../../tmux/TmuxClient';
 import { resolveKillOutcome, type KillOutcome } from '../../tmux/killOutcome';
+import { KeyedMutex } from '../../../shared/keyedMutex';
 import type { Task } from '../Task';
 import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
+
+/**
+ * Bundles the two things {@link createRotatedWindow} and
+ * {@link createSecondaryWindow} need to close the Issue #29 review (7th
+ * pass) Important finding 1 gap: task-window (re)creation used to build its
+ * env from whatever `ServerConfig` object the caller happened to be holding
+ * — often resolved well before the call, and never re-checked against a
+ * `PUT /api/servers/:name` isolation transition that may have committed in
+ * the meantime. `serverIsolationMutex` is the SAME per-server-name mutex
+ * `modules/servers/routes.ts`'s PUT handler and `modules/tmux/routes/
+ * sessions.ts`'s manual window/pane routes already serialize the
+ * false->true isolation transition against (see that mutex's own doc
+ * comment) — task-window creation now queues behind (or ahead of, depending
+ * on arrival order) the exact same transition through the exact same key,
+ * and re-reads the server row from `serverRepo` only once it has actually
+ * acquired the lock, so the env it builds can never straddle a transition
+ * that committed mid-flight.
+ */
+export interface ServerIsolationLock {
+  serverIsolationMutex: KeyedMutex;
+  serverRepo: Pick<IServerRepository, 'findByName'>;
+}
+
+/**
+ * Re-reads `serverName` from `lock.serverRepo` — callers use this ONLY from
+ * inside `lock.serverIsolationMutex.withLock(serverName, ...)`, so the row
+ * this returns reflects whatever the most recently COMMITTED PUT
+ * /api/servers/:name transition left behind, never a snapshot racing it.
+ * Throws rather than falling back to the caller's stale `ServerConfig` — a
+ * server deleted between the caller resolving it and this lock actually
+ * being acquired has no current row to build a trustworthy env from, and
+ * silently reusing the stale one would defeat the whole point of this
+ * refetch.
+ */
+function refetchServer(lock: ServerIsolationLock, serverName: string): ServerConfig {
+  const fresh = lock.serverRepo.findByName(serverName);
+  if (!fresh) {
+    throw new Error(`Server ${serverName} was not found while (re)creating a task window — it may have been deleted mid-flight`);
+  }
+  return fresh;
+}
 
 /**
  * Shared "kill-then-rotate" operation (Issue #28 third-party review,
@@ -184,41 +226,93 @@ export async function confirmOldWindowGone(
  */
 export async function createRotatedWindow(
   paneEnvService: TaskPaneEnvironmentService,
+  lock: ServerIsolationLock,
   server: ServerConfig,
   task: Task,
   reasonOnFailure: string,
-  create: (env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string }>,
-): Promise<{ windowName: string; env: Record<string, string>; tokenId: number }> {
-  const { env, tokenId } = paneEnvService.buildEnvForNewWindow(task, server);
-  let created: { result: ExecResult; windowName: string };
-  try {
-    created = await create(env);
-  } catch (err) {
-    // Revoke only the generation THIS call just issued (`tokenId`), never a
-    // blanket revokeAllForTask — a concurrent rotation for the same task may
-    // already have issued and persisted a newer generation by the time this
-    // failure is handled (see runExclusiveForTask's doc comment for why
-    // callers are expected to serialize rotations per task in the first
-    // place; this scoping is the second, independent half of that fix).
-    paneEnvService.revokeGeneration(tokenId, reasonOnFailure);
-    throw err;
-  }
-  if (created.result.code !== 0) {
-    paneEnvService.revokeGeneration(tokenId, reasonOnFailure);
-    throw new Error(
-      `Failed to create tmux window (exit ${created.result.code}): ${created.result.stderr || created.result.stdout}`,
-    );
-  }
-  // `env` (Issue #28 review Critical finding) — returned so a caller that
-  // (re)creates a MULTI-pane window can pass this exact env to every
-  // subsequent split-window it does for the same window (TmuxClient.splitPane's
-  // `extraEnv`): only the window's first pane inherits what new-window/
-  // new-session's own `-e` set, so a later split-window must be told the same
-  // env explicitly or it silently inherits the tmux SESSION's environment
-  // instead (see splitPane's doc comment). `tokenId` is returned so a caller
-  // that later needs to roll THIS generation back (rollbackWindowReference,
-  // for a failure downstream of window creation) can do so precisely.
-  return { windowName: created.windowName, env, tokenId };
+  create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string }>,
+): Promise<{ windowName: string; env: Record<string, string>; tokenId: number; server: ServerConfig }> {
+  // Issue #29 review (7th pass), Important finding 1: the entire
+  // env-resolution -> `create()` span now runs inside
+  // `lock.serverIsolationMutex.withLock(server.name, ...)` — the SAME mutex
+  // key `PUT /api/servers/:name`'s isolation-transition handler and the
+  // manual session/window/pane routes already serialize on (see
+  // {@link ServerIsolationLock}'s doc comment) — and `server` is re-read
+  // from `lock.serverRepo` only once the lock is actually held, then handed
+  // to BOTH `buildEnvForNewWindow` and `create()` as `freshServer` (the
+  // caller's own `server` argument is used only to select the mutex key,
+  // never to build env or create the window from). Without this, a task
+  // execution/respawn/restore path could resolve `env` from a `ServerConfig`
+  // fetched well before this call, race a concurrent false->true isolation
+  // PUT that commits in between, and still hand the freshly-created pane the
+  // OLD (non-isolated) credential set — exactly the gap
+  // `applyTokenMaskingOrCompat`'s isolation check exists to close, just with
+  // the race moved one layer up from "which branch runs" to "which server
+  // row the check itself runs against".
+  return lock.serverIsolationMutex.withLock(server.name, async () => {
+    const freshServer = refetchServer(lock, server.name);
+    const { env, tokenId } = paneEnvService.buildEnvForNewWindow(task, freshServer);
+    let created: { result: ExecResult; windowName: string };
+    try {
+      created = await create(freshServer, env);
+    } catch (err) {
+      // Revoke only the generation THIS call just issued (`tokenId`), never a
+      // blanket revokeAllForTask — a concurrent rotation for the same task may
+      // already have issued and persisted a newer generation by the time this
+      // failure is handled (see runExclusiveForTask's doc comment for why
+      // callers are expected to serialize rotations per task in the first
+      // place; this scoping is the second, independent half of that fix).
+      paneEnvService.revokeGeneration(tokenId, reasonOnFailure);
+      throw err;
+    }
+    if (created.result.code !== 0) {
+      paneEnvService.revokeGeneration(tokenId, reasonOnFailure);
+      throw new Error(
+        `Failed to create tmux window (exit ${created.result.code}): ${created.result.stderr || created.result.stdout}`,
+      );
+    }
+    // `env` (Issue #28 review Critical finding) — returned so a caller that
+    // (re)creates a MULTI-pane window can pass this exact env to every
+    // subsequent split-window it does for the same window (TmuxClient.splitPane's
+    // `extraEnv`): only the window's first pane inherits what new-window/
+    // new-session's own `-e` set, so a later split-window must be told the same
+    // env explicitly or it silently inherits the tmux SESSION's environment
+    // instead (see splitPane's doc comment). `tokenId` is returned so a caller
+    // that later needs to roll THIS generation back (rollbackWindowReference,
+    // for a failure downstream of window creation) can do so precisely.
+    // `server` (the freshly re-read row) is returned too, so a caller whose
+    // OWN subsequent tmux calls (resolvePaneId, splitPane, ...) should keep
+    // using the exact connection info this window was actually created with
+    // can do so instead of falling back to its now-possibly-stale argument.
+    return { windowName: created.windowName, env, tokenId, server: freshServer };
+  });
+}
+
+/**
+ * Secondary-window counterpart of {@link createRotatedWindow} (Issue #29
+ * review, 7th pass, Important finding 1's own scope note: "secondary window
+ * (buildEnvForSecondaryWindow) の呼び出し元も同様に確認して覆う"). No token
+ * rotation/rollback happens here — {@link TaskPaneEnvironmentService.buildEnvForSecondaryWindow}'s
+ * own doc comment covers why a secondary window never touches the task
+ * token repository — but the isolation-freshness requirement is identical:
+ * env is resolved from `server`, so it must be resolved from the same
+ * lock-then-refetch span `createRotatedWindow` uses, not from a `server`
+ * object the caller may have resolved before a concurrent isolation
+ * transition committed.
+ */
+export async function createSecondaryWindow(
+  paneEnvService: TaskPaneEnvironmentService,
+  lock: ServerIsolationLock,
+  server: ServerConfig,
+  task: Task,
+  create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string }>,
+): Promise<{ windowName: string; env: Record<string, string>; server: ServerConfig }> {
+  return lock.serverIsolationMutex.withLock(server.name, async () => {
+    const freshServer = refetchServer(lock, server.name);
+    const env = paneEnvService.buildEnvForSecondaryWindow(task, freshServer);
+    const created = await create(freshServer, env);
+    return { windowName: created.windowName, env, server: freshServer };
+  });
 }
 
 /**

@@ -321,7 +321,20 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       // confirm the connection target in one PUT, then declare isolation in
       // a follow-up PUT once the check/cleanup can agree on which endpoint
       // they're both looking at.
+      // Issue #29 review (7th pass), Important finding 2: a `type`
+      // (local<->agent) or `muxRuntime` (system<->managed) change is just as
+      // much an "endpoint the check/cleanup could disagree about" as
+      // host/sshHost/agentPort/agentToken — a local->agent switch changes
+      // which transport (and therefore which live pane/session set) is being
+      // inspected, and a muxRuntime switch changes which tmux runtime the
+      // session-liveness check above (`tmux.listSessions`) actually talks to.
+      // Both were missing from this list, so a false->true isolation
+      // transition combined with either change slipped past the guard above
+      // and inspected/cleaned up against the OLD endpoint while committing
+      // isolation for the NEW one.
       const connectionInfoChanged =
+        (type !== undefined && effectiveType !== srv.type) ||
+        (validPutMux !== undefined && validPutMux !== srv.muxRuntime) ||
         (host !== undefined && host !== srv.host) ||
         (sshHost !== undefined && sshHost !== srv.sshHost) ||
         (agentPort !== undefined && agentPort !== srv.agentPort) ||

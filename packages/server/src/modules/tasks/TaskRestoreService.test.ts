@@ -5,6 +5,7 @@ import { tmpdir } from 'os';
 import * as path from 'path';
 import { TaskRestoreService, type TaskRestoreDeps } from './TaskRestoreService';
 import type { Task } from './Task';
+import { KeyedMutex } from '../../shared/keyedMutex';
 
 // Containment checks (Issue #27) resolve real paths via fs.realpath, so the
 // working directory / worktree path fixtures below must exist on disk —
@@ -207,6 +208,11 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
       revokeGeneration: vi.fn(),
       revokeForDestroyedWindow: vi.fn(),
     } as unknown as TaskRestoreDeps['paneEnvService'],
+    // Issue #29 review (7th pass), Important finding 1: a real KeyedMutex
+    // (not a mock) so createRotatedWindow's `withLock` call actually runs
+    // its callback synchronously-in-sequence like production, rather than
+    // needing every test to special-case a mocked lock.
+    serverIsolationMutex: new KeyedMutex(),
     ...overrides,
   };
 }
