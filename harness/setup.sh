@@ -30,6 +30,13 @@ AZITO_PREFIX="${AZITO_PREFIX:-}"
 # server へ runSetup する際、常にこのフラグを付ける（--ui-token は元々
 # 省略される — HarnessInstaller.ts の isolationIntent 節参照）。
 AZITO_PURGE_OPERATOR_TOKEN=0
+# Set when --ui-token/--ui-token=... is explicitly passed on THIS invocation's
+# argv — distinct from AZITO_UI_TOKEN merely being non-empty, which can also
+# happen via inherited environment (line 11). Used below to reject
+# --purge-operator-token + --ui-token together (Issue #29 review, Important
+# finding 2) without also rejecting the common "AZITO_UI_TOKEN happens to be
+# exported in the caller's shell" case.
+AZITO_UI_TOKEN_ARG=0
 
 # ── 引数パース ──
 usage_exit() {
@@ -46,7 +53,7 @@ usage_exit() {
   echo "                   AZITO_UI_TOKEN をすべて除去する。--ui-token 省略時の" >&2
   echo "                   既定動作（既存トークンを温存する）を上書きする。" >&2
   echo "                   サーバーを isolation_intent=1 に切り替えた後の" >&2
-  echo "                   資格情報掃除に使う。" >&2
+  echo "                   資格情報掃除に使う。--ui-token と同時指定はエラー。" >&2
   exit 1
 }
 
@@ -82,10 +89,12 @@ while [[ $# -gt 0 ]]; do
     --ui-token)
       require_value "$@"
       AZITO_UI_TOKEN="$2"
+      AZITO_UI_TOKEN_ARG=1
       shift 2
       ;;
     --ui-token=*)
       AZITO_UI_TOKEN="${1#*=}"
+      AZITO_UI_TOKEN_ARG=1
       shift
       ;;
     --server-name)
@@ -116,6 +125,33 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# Issue #29 review, Important finding 2: --purge-operator-token exists to
+# guarantee a server ends this run with NO AZITO_UI_TOKEN anywhere it writes
+# one. Two things could silently undo that:
+#   1. --ui-token passed alongside it — the caller is explicitly asking to
+#      both purge and (re)install the same token in one run, which is a
+#      contradiction, not a "last write wins" case. Rejected outright rather
+#      than picking a side.
+#   2. AZITO_UI_TOKEN inherited from the parent shell's environment (line 11
+#      seeds it from there) — the CLI parser above only ever OVERWRITES that
+#      seed when --ui-token is given; it never clears it. Without this,
+#      `AZITO_UI_TOKEN=xxx harness/setup.sh --purge-operator-token` (or any
+#      caller — e.g. HarnessInstaller.runSetupLocal, a shell profile — that
+#      happens to have the var exported) would purge existing tokens and then
+#      immediately re-write operator.env / MCP configs with the inherited
+#      value in the very same run.
+# HarnessInstaller.ts's isolationIntent path never passes --ui-token when it
+# passes --purge-operator-token (see that file's runSetup), so this is
+# defense-in-depth against a caller that doesn't go through that path (a
+# human running setup.sh directly, or a future call site).
+if [[ "$AZITO_PURGE_OPERATOR_TOKEN" == "1" ]]; then
+  if [[ "$AZITO_UI_TOKEN_ARG" == "1" ]]; then
+    echo "Error: --purge-operator-token と --ui-token は同時指定できません" >&2
+    exit 1
+  fi
+  AZITO_UI_TOKEN=""
+fi
 
 echo "AZITO Harness セットアップ"
 echo "ハーネス: $HARNESS_DIR"
@@ -438,7 +474,7 @@ if command -v node >/dev/null 2>&1; then
           mcpChanged = true;
         }
         // Issue #29 review, Critical finding 3: --purge-operator-token
-        // overrides the "azitoUiToken が空のときは既存値を触らない" default
+        // overrides the 「azitoUiToken が空のときは既存値を触らない」default
         // below — it exists specifically to remove a token that default
         // would otherwise preserve indefinitely (e.g. after a server is
         // switched to isolation_intent=1 post-setup).
@@ -472,7 +508,20 @@ if command -v node >/dev/null 2>&1; then
         messages.push('  警告: azt-mcp に AZITO_UI_TOKEN が設定されていません。--ui-token を付けて再実行してください');
       }
     } else {
-      messages.push('  azt-mcp: スキップ (MCP サーバーが見つかりません)');
+      messages.push('  azt-mcp: スキップ (MCP サーバーが見つかりません、または --prefix モード)');
+      // Issue #29 review, Important finding 3: mcpServerExists is forced
+      // false in --prefix mode (this run intentionally skips (re)registering
+      // azt-mcp there — a prefix profile shares the single non-prefixed
+      // azt-mcp entry with the primary hub, so re-registering it here would
+      // clobber that hub's own config). But token REMOVAL must not share
+      // that gate: a --purge-operator-token run has to reach a leftover
+      // AZITO_UI_TOKEN on an already-registered azt-mcp entry regardless of
+      // which run originally created it.
+      if (purgeOperatorToken && settings.mcpServers && settings.mcpServers[mcpKey] && settings.mcpServers[mcpKey].env && ('AZITO_UI_TOKEN' in settings.mcpServers[mcpKey].env)) {
+        delete settings.mcpServers[mcpKey].env.AZITO_UI_TOKEN;
+        changed = true;
+        messages.push('  azt-mcp: --purge-operator-token により AZITO_UI_TOKEN を除去しました（登録/更新はスキップ）');
+      }
     }
 
     // Upsert a single hook entry within settings.hooks[eventName], matched by
@@ -628,11 +677,77 @@ else
   fi
 fi
 
+# Issue #29 review, Important finding 3: --prefix mode skips the whole Codex
+# CLI block below (skills, AGENTS.md, azt-mcp registration) because a prefix
+# profile shares the single non-prefixed `azt-mcp` Codex MCP entry with the
+# primary hub — re-registering it here on every prefix profile's setup.sh run
+# would clobber that shared entry. But a --purge-operator-token run must
+# still be able to remove a leftover AZITO_UI_TOKEN from that shared entry
+# even when invoked with --prefix (this is the exact scenario the finding
+# names — "この環境は AZITO_HARNESS_PREFIX 運用なので実害が出る構成"). This
+# strips only the token, preserving every other env var and the existing
+# command/args exactly as configured, by reading them back via
+# `codex mcp get --json` before remove+re-add (never assumes AZITO_URL here
+# equals this run's --azito-url, since azt-mcp is not prefix-scoped).
+strip_codex_ui_token() {
+  command -v codex >/dev/null 2>&1 || return 0
+  codex mcp get azt-mcp >/dev/null 2>&1 || return 0
+  if ! command -v node >/dev/null 2>&1; then
+    echo "  azt-mcp (Codex): AZITO_UI_TOKEN 除去に node が必要です。'codex mcp get azt-mcp' で手動確認してください" >&2
+    return 0
+  fi
+
+  local raw
+  raw="$(codex mcp get azt-mcp --json 2>/dev/null || true)"
+  [[ -z "$raw" ]] && return 0
+
+  local add_args=()
+  while IFS= read -r -d '' tok; do
+    add_args+=("$tok")
+  done < <(printf '%s' "$raw" | node -e '
+    let data = "";
+    process.stdin.on("data", (c) => { data += c; });
+    process.stdin.on("end", () => {
+      try {
+        const j = JSON.parse(data);
+        const t = j && j.transport ? j.transport : {};
+        const env = t.env || {};
+        if (!("AZITO_UI_TOKEN" in env)) return; // nothing to purge
+        const out = [];
+        for (const [k, v] of Object.entries(env)) {
+          if (k === "AZITO_UI_TOKEN") continue;
+          out.push("--env", k + "=" + v);
+        }
+        out.push("--");
+        out.push(t.command || "node");
+        for (const a of (t.args || [])) out.push(a);
+        // NUL-separated so values containing spaces/quotes survive the
+        // shell boundary intact when read back below with `read -d ''`.
+        process.stdout.write(out.join("\u0000") + "\u0000");
+      } catch { /* leave args empty on parse failure */ }
+    });
+  ')
+
+  if [[ "${#add_args[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
+  codex mcp remove azt-mcp >/dev/null 2>&1 || true
+  if codex mcp add azt-mcp "${add_args[@]}" >/dev/null 2>&1; then
+    echo "  azt-mcp (Codex): --purge-operator-token により AZITO_UI_TOKEN を除去しました"
+  else
+    echo "  azt-mcp (Codex): AZITO_UI_TOKEN 除去後の再登録に失敗しました（手動確認してください）" >&2
+  fi
+}
+
 # ── Codex CLI ──
 echo ""
 echo "=== Codex CLI ==="
 if [[ -n "$AZITO_PREFIX" ]]; then
   echo "  スキップ (--prefix モード)"
+  if [[ "$AZITO_PURGE_OPERATOR_TOKEN" == "1" ]]; then
+    strip_codex_ui_token
+  fi
 elif command -v codex >/dev/null 2>&1 || [[ -d "$HOME/.codex" ]]; then
   # Skills
   link_skills "$HOME/.codex/skills"

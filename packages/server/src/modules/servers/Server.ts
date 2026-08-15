@@ -40,5 +40,18 @@ export interface IServerRepository {
   updateFingerprint(name: string, fingerprint: string): void;
   clearFingerprint(name: string): void;
   updateIsolationIntent(name: string, isolationIntent: boolean): void;
+  /**
+   * Persists a JSON blob to `isolation_report` (or clears it with `null`).
+   * Issue #29 review, Important finding 1: used by the false->true
+   * isolation_intent transition in servers routes to record the *outcome*
+   * of the synchronous remote-cleanup attempt it triggers
+   * (`{"cleanup":"done"|"failed"|"skipped",...}`) — a distinct, narrower use
+   * than the full isolation-doctor result this field's own doc comment
+   * describes (that writer doesn't exist yet). Optional: implemented by
+   * `SqliteServerRepository`; the many existing `IServerRepository` mocks
+   * across the test suite predate this method and are not required to stub
+   * it (routes.ts calls it via `?.()`).
+   */
+  updateIsolationReport?(name: string, report: string | null): void;
   delete(name: string): void;
 }

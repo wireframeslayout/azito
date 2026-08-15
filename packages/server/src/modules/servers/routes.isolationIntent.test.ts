@@ -38,6 +38,7 @@ function makeOpts(overrides: Partial<ServersRouteOptions> = {}): ServersRouteOpt
     updateFingerprint: vi.fn(),
     clearFingerprint: vi.fn(),
     updateIsolationIntent: vi.fn(),
+    updateIsolationReport: vi.fn(),
     delete: vi.fn(),
   };
   return {
@@ -174,6 +175,105 @@ describe('PUT /api/servers/:name — isolationIntent (Issue #29 Step 1)', () => 
       expect(res.statusCode).toBe(400);
       expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
     });
+  });
+});
+
+// Issue #29 review, Important finding 1: false->true must trigger a
+// synchronous remote cleanup (withholds --ui-token, forces
+// --purge-operator-token via HarnessInstaller), and record its outcome in
+// isolation_report — never silently leave a stale credential on a server now
+// labeled "isolated".
+describe('PUT /api/servers/:name — isolation cleanup on false->true (Issue #29 Important finding 1)', () => {
+  function makeHarnessInstaller(installImpl: ReturnType<typeof vi.fn>) {
+    return { install: installImpl, installLocal: vi.fn() } as unknown as ServersRouteOptions['harnessInstaller'];
+  }
+
+  it('calls harnessInstaller.install with isolationIntent:true and records a "done" report on success', async () => {
+    const install = vi.fn(async () => ({ success: true, steps: [] }));
+    const opts = makeOpts({ harnessInstaller: makeHarnessInstaller(install) });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: false, sshHost: 'user@host' }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+    expect(res.statusCode).toBe(200);
+    expect(install).toHaveBeenCalledWith(
+      'user@host',
+      expect.objectContaining({ isolationIntent: true }),
+    );
+    expect(opts.serverRepo.updateIsolationReport).toHaveBeenCalledWith(
+      'srv',
+      expect.stringContaining('"cleanup":"done"'),
+    );
+  });
+
+  it('records a "failed" report (without failing the request) when the installer reports failure', async () => {
+    const install = vi.fn(async () => ({ success: false, steps: [], error: 'ssh unreachable' }));
+    const opts = makeOpts({ harnessInstaller: makeHarnessInstaller(install) });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: false, sshHost: 'user@host' }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.serverRepo.updateIsolationReport).toHaveBeenCalledWith(
+      'srv',
+      expect.stringContaining('"cleanup":"failed"'),
+    );
+    const [, reportJson] = (opts.serverRepo.updateIsolationReport as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(JSON.parse(reportJson).error).toBe('ssh unreachable');
+  });
+
+  it('records a "failed" report when the installer throws', async () => {
+    const install = vi.fn(async () => { throw new Error('boom'); });
+    const opts = makeOpts({ harnessInstaller: makeHarnessInstaller(install) });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: false, sshHost: 'user@host' }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+    expect(res.statusCode).toBe(200);
+    const [, reportJson] = (opts.serverRepo.updateIsolationReport as ReturnType<typeof vi.fn>).mock.calls[0];
+    const report = JSON.parse(reportJson);
+    expect(report.cleanup).toBe('failed');
+    expect(report.error).toBe('boom');
+  });
+
+  it('records a "skipped" report (no installer call, no PUT failure) when unreachable — no sshHost/host', async () => {
+    const install = vi.fn();
+    const opts = makeOpts({ harnessInstaller: makeHarnessInstaller(install) });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: false, sshHost: null, host: null }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+    expect(res.statusCode).toBe(200);
+    expect(install).not.toHaveBeenCalled();
+    const [, reportJson] = (opts.serverRepo.updateIsolationReport as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(JSON.parse(reportJson).cleanup).toBe('skipped');
+  });
+
+  it('does not attempt cleanup when isolationIntent was already true (no-op transition)', async () => {
+    const install = vi.fn(async () => ({ success: true, steps: [] }));
+    const opts = makeOpts({ harnessInstaller: makeHarnessInstaller(install) });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host' }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+    expect(res.statusCode).toBe(200);
+    expect(install).not.toHaveBeenCalled();
+    expect(opts.serverRepo.updateIsolationReport).not.toHaveBeenCalled();
   });
 });
 

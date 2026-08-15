@@ -14,6 +14,7 @@ export class SqliteServerRepository implements IServerRepository {
   private updateFingerprintStmt;
   private clearFingerprintStmt;
   private updateIsolationIntentStmt;
+  private updateIsolationReportStmt;
 
   constructor(private db: SqliteDatabase) {
     this.listStmt = db.prepare(`SELECT ${COLUMNS} FROM servers WHERE type IN ('local', 'agent') ORDER BY created_at`);
@@ -25,6 +26,7 @@ export class SqliteServerRepository implements IServerRepository {
     this.updateFingerprintStmt = db.prepare('UPDATE servers SET ssh_host_fingerprint = ? WHERE name = ?');
     this.clearFingerprintStmt = db.prepare('UPDATE servers SET ssh_host_fingerprint = NULL WHERE name = ?');
     this.updateIsolationIntentStmt = db.prepare('UPDATE servers SET isolation_intent = ? WHERE name = ?');
+    this.updateIsolationReportStmt = db.prepare('UPDATE servers SET isolation_report = ? WHERE name = ?');
   }
 
   findAll(): ServerConfig[] {
@@ -59,6 +61,10 @@ export class SqliteServerRepository implements IServerRepository {
 
   updateIsolationIntent(name: string, isolationIntent: boolean): void {
     this.updateIsolationIntentStmt.run(isolationIntent ? 1 : 0, name);
+  }
+
+  updateIsolationReport(name: string, report: string | null): void {
+    this.updateIsolationReportStmt.run(report, name);
   }
 
   delete(name: string): void {

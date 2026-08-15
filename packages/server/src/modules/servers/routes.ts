@@ -15,7 +15,7 @@ import { stripTerminalArtifacts } from '../../shared/utils/stripTerminalArtifact
 import type { TmuxInstaller } from './agent-deploy/TmuxInstaller';
 import type { AuditLogService } from '../../shared/audit/AuditLogService';
 import { recordAuditBestEffort } from '../../shared/audit/recordAuditBestEffort';
-import { OPERATOR_PRINCIPAL } from '../../shared/auth/Principal';
+import { OPERATOR_PRINCIPAL, type Principal } from '../../shared/auth/Principal';
 
 // ─── Tailscale / network helpers ───
 
@@ -75,6 +75,55 @@ export interface ServersRouteOptions {
 
 const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts, done) => {
   const { serverRepo, tmux, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, webhookToken, uiToken, harnessPrefix, auditLogService } = opts;
+
+  // Issue #29 review, Important finding 1: a false->true isolation_intent
+  // transition must actually purge a previously-distributed operator token
+  // from the target server, not just flip the DB flag — otherwise a server
+  // labeled "isolated" can still be holding a live full-access token. Runs
+  // the same HarnessInstaller.install() path the harness/install route uses,
+  // forcing isolationIntent:true (withholds --ui-token, forces
+  // --purge-operator-token — see HarnessInstaller.ts / setup.sh). This is
+  // best-effort by design: "intent is a declaration, verification is the
+  // doctor's job" (a later task) means a cleanup failure here must NOT fail
+  // the PUT or silently pretend the server is clean — it's recorded honestly
+  // in isolation_report so the UI can surface it instead of faking safety.
+  async function attemptIsolationCleanup(serverName: string, principal: Principal): Promise<void> {
+    const at = new Date().toISOString();
+    let report: Record<string, unknown>;
+
+    if (!harnessInstaller) {
+      report = { cleanup: 'skipped', reason: 'harness_installer_unavailable', at };
+    } else {
+      const srv = serverRepo.findByName(serverName);
+      const sshHost = srv?.sshHost || srv?.host;
+      if (!srv || !sshHost) {
+        report = { cleanup: 'skipped', reason: 'no_ssh_host', at };
+      } else {
+        try {
+          const result = await harnessInstaller.install(sshHost, {
+            webhookToken,
+            uiToken,
+            serverName: srv.name,
+            prefix: harnessPrefix,
+            isolationIntent: true,
+          });
+          report = result.success
+            ? { cleanup: 'done', at }
+            : { cleanup: 'failed', error: result.error, at };
+        } catch (err: unknown) {
+          report = { cleanup: 'failed', error: (err as Error).message, at };
+        }
+      }
+    }
+
+    serverRepo.updateIsolationReport?.(serverName, JSON.stringify(report));
+    recordAuditBestEffort(auditLogService, {
+      actorClass: principal.class,
+      actorId: principal.id,
+      event: 'server.isolation_intent.cleanup_attempted',
+      detail: { serverName, ...report },
+    });
+  }
 
   // ── GET /api/servers ──
   fastify.get('/api/servers', async () => {
@@ -219,7 +268,20 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
             });
           }
         } else if (isolationIntent !== undefined) {
+          const wasIsolated = srv.isolationIntent;
           serverRepo.updateIsolationIntent(request.params.name, isolationIntent);
+          if (isolationIntent === true && !wasIsolated) {
+            // Issue #29 review, Important finding 1: fire-and-forget would
+            // race the response with the DB write it depends on reading
+            // back (attemptIsolationCleanup re-fetches the row for its
+            // sshHost) and would leave the caller with no way to learn the
+            // outcome before the response returns — this is a declared
+            // false->true transition, not a hot path, so awaiting it here is
+            // the correct tradeoff (matches the design note: cleanup failure
+            // must not fail the PUT, but the PUT should reflect a completed
+            // attempt).
+            await attemptIsolationCleanup(request.params.name, request.principal ?? OPERATOR_PRINCIPAL);
+          }
         }
         transportFactory.invalidate(request.params.name);
         return { ok: true };
