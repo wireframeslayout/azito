@@ -51,6 +51,7 @@ import { WindowInputService } from '../modules/transcripts/WindowInputService';
 import { createTokenVerifier } from '../modules/servers/auth/tokenAuth';
 import { resolvePrincipal } from '../shared/auth/resolvePrincipal';
 import { evaluateRouteAuth, UNMATCHED_ROUTE } from '../shared/auth/routeAuth';
+import { ISOLATION_MASKED_ENV } from '../shared/auth/isolationMaskedEnv';
 import { resolveUnitId } from '../modules/tasks/execution/TaskExecutionEnv';
 import { destroyPrimaryTaskWindow, destroyPrimaryTaskWindowsForSessionKill } from '../modules/tasks/execution/TaskWindowDestruction';
 import { resolvePhaseSidekick } from '../modules/sidekicks/resolvePhaseSidekick';
@@ -465,7 +466,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       // references this task), but a task that no longer exists must not
       // fall back to a legacy/empty env — mask both credentials exactly as
       // buildEnvForSecondaryWindow's else-branch does.
-      if (!task) return { AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' };
+      if (!task) return { ...ISOLATION_MASKED_ENV };
       return taskPaneEnvironmentService.buildEnvForSecondaryWindow(task, server);
     },
   });

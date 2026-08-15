@@ -253,8 +253,13 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
             // `-e` of their own). This first window is an unmanaged
             // generated-name placeholder nobody uses directly (same as
             // ExecuteTaskUseCase's own throwaway-session bootstrap window),
-            // so it has no legitimate need for the token either.
-            await tmux.createSession(srv, project.slug, { extraEnv: {} });
+            // so it has no legitimate need for the token either. Routed
+            // through `uiTokenEnvForServer`, not a bare `{}` (Issue #29
+            // review, Critical finding 1): an isolated server's pane
+            // inherits whatever process env the tmux SERVER itself runs
+            // under regardless of what this call's own `extraEnv` passes,
+            // so the explicit mask is still required here.
+            await tmux.createSession(srv, project.slug, { extraEnv: tmux.uiTokenEnvForServer(srv) });
             sessionCreated = true;
           }
         } catch {

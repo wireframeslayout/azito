@@ -3,6 +3,7 @@ import { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
 import type { ITaskTokenRepository } from '../tokens/TaskToken';
 import type { Task } from '../Task';
 import type { ServerConfig } from '../../servers/Server';
+import { ISOLATION_MASKED_ENV } from '../../../shared/auth/isolationMaskedEnv';
 
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {
@@ -190,6 +191,22 @@ describe('TaskPaneEnvironmentService.buildEnvForNewWindow', () => {
 
     expect(env.AZITO_UI_TOKEN).toBe('');
     expect(env.AZITO_AGENT_TOKEN).toBe('');
+  });
+
+  // Issue #29 review (final pass), Critical finding 1: `uiTokenEnvForServer`
+  // (TmuxClient) and this method's isolation mask must never drift apart —
+  // both now read from the single shared ISOLATION_MASKED_ENV constant.
+  // Asserted directly here (rather than only checking individual keys above)
+  // so a future edit to either module's mask, without touching the other,
+  // fails this test instead of silently reopening the gap.
+  it('masks the isolated agent-server keys with exactly ISOLATION_MASKED_ENV (single source shared with TmuxClient)', () => {
+    const { service } = makeDeps(false);
+    const isolatedAgent = makeServer({ type: 'agent', agentPort: 4001, agentToken: 'secret-agent-token', isolationIntent: true });
+    const { env } = service.buildEnvForNewWindow(makeTask(), isolatedAgent);
+
+    for (const [key, value] of Object.entries(ISOLATION_MASKED_ENV)) {
+      expect(env[key]).toBe(value);
+    }
   });
 
   // Third-party review finding (Important): secrets must be read BEFORE the

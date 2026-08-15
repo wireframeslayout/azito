@@ -1,6 +1,7 @@
 import type { SqliteDatabase } from '../../shared/db/Database';
 import { seal, open } from '../../shared/crypto/SecretBox';
 import type { ServerConfig, IServerRepository, MuxRuntime } from './Server';
+import { ISOLATION_CLEANUP_PENDING_REPORT } from './Server';
 
 const COLUMNS = 'name, type, host, agent_port, agent_token, agent_version, ssh_host, mux_runtime, ssh_host_fingerprint, isolation_intent, isolation_verified_at, isolation_report, created_at';
 
@@ -32,8 +33,16 @@ export class SqliteServerRepository implements IServerRepository {
     // NEW state. Atomic (single statement) rather than a separate clear call
     // so no reader can observe an intermediate row with a stale report next
     // to the new intent.
+    //
+    // Issue #29 review (final pass), Important finding 2: the report column
+    // is now a bound parameter, not a hardcoded NULL — `updateIsolationIntent`
+    // below passes ISOLATION_CLEANUP_PENDING_REPORT for a false->true flip
+    // (so the pending marker lands in the SAME statement as the flip, not a
+    // later one `attemptIsolationCleanup` might never reach if the process
+    // crashes in between) and NULL for every other direction, matching the
+    // previous unconditional-clear behavior.
     this.updateIsolationIntentStmt = db.prepare(
-      'UPDATE servers SET isolation_intent = ?, isolation_verified_at = NULL, isolation_report = NULL WHERE name = ?',
+      'UPDATE servers SET isolation_intent = ?, isolation_verified_at = NULL, isolation_report = ? WHERE name = ?',
     );
     this.updateIsolationReportStmt = db.prepare('UPDATE servers SET isolation_report = ? WHERE name = ?');
   }
@@ -69,7 +78,17 @@ export class SqliteServerRepository implements IServerRepository {
   }
 
   updateIsolationIntent(name: string, isolationIntent: boolean): void {
-    this.updateIsolationIntentStmt.run(isolationIntent ? 1 : 0, name);
+    // See the constructor comment above and IServerRepository's doc comment:
+    // only the false->true direction gets the pending marker (there is a
+    // cleanup attempt to track); every other direction clears to NULL as
+    // before. This does not distinguish "was already true" from "was
+    // false" — a redundant true->true call here (routes.ts's own no-op
+    // guard normally prevents that) would also reset an existing done/
+    // failed report back to pending, which is why routes.ts never calls
+    // this method for a true->true transition; it calls
+    // `attemptIsolationCleanup`/`updateIsolationReport` directly instead.
+    const report = isolationIntent ? ISOLATION_CLEANUP_PENDING_REPORT : null;
+    this.updateIsolationIntentStmt.run(isolationIntent ? 1 : 0, report, name);
   }
 
   updateIsolationReport(name: string, report: string | null): void {

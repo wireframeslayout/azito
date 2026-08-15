@@ -275,19 +275,74 @@ describe('PUT /api/servers/:name — isolation cleanup on false->true (Issue #29
     expect(JSON.parse(reportJson).cleanup).toBe('skipped');
   });
 
-  it('does not attempt cleanup when isolationIntent was already true (no-op transition)', async () => {
-    const install = vi.fn(async () => ({ success: true, steps: [] }));
-    const opts = makeOpts({ harnessInstaller: makeHarnessInstaller(install) });
-    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
-      makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host' }),
-    );
-    const app = await buildApp(opts);
+  // Issue #29 review (final pass), Important finding 2: a true->true PUT is
+  // NOT a full no-op anymore — a stuck 'pending'/'failed'/missing report
+  // (crash between the intent commit and the cleanup write, or a genuine
+  // prior failure) is retried, because nothing else in this system would
+  // ever prompt a retry otherwise. Only a report that already settled at
+  // 'done' stays untouched (covered separately below).
+  describe('true->true retries a not-yet-done cleanup outcome (Issue #29 review, final pass, Important finding 2)', () => {
+    it('retries when isolationReport is null (e.g. a pre-fix row, or startup recovery has not run yet)', async () => {
+      const install = vi.fn(async () => ({ success: true, steps: [] }));
+      const opts = makeOpts({ harnessInstaller: makeHarnessInstaller(install) });
+      (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+        makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationReport: null }),
+      );
+      const app = await buildApp(opts);
 
-    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+      const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
 
-    expect(res.statusCode).toBe(200);
-    expect(install).not.toHaveBeenCalled();
-    expect(opts.serverRepo.updateIsolationReport).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(200);
+      expect(install).toHaveBeenCalledTimes(1);
+      expect(res.json().isolationCleanup).toBe('done');
+      // Retrying must not re-flip isolation_intent (it was already true) —
+      // only attemptIsolationCleanup's own updateIsolationReport() write runs.
+      expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
+    });
+
+    it('retries when isolationReport.cleanup is "pending" (the atomic marker written by the original false->true flip)', async () => {
+      const install = vi.fn(async () => ({ success: true, steps: [] }));
+      const opts = makeOpts({ harnessInstaller: makeHarnessInstaller(install) });
+      (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+        makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationReport: JSON.stringify({ kind: 'cleanup', cleanup: 'pending' }) }),
+      );
+      const app = await buildApp(opts);
+
+      const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+      expect(res.statusCode).toBe(200);
+      expect(install).toHaveBeenCalledTimes(1);
+    });
+
+    it('retries when isolationReport.cleanup is "failed"', async () => {
+      const install = vi.fn(async () => ({ success: true, steps: [] }));
+      const opts = makeOpts({ harnessInstaller: makeHarnessInstaller(install) });
+      (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+        makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationReport: JSON.stringify({ kind: 'cleanup', cleanup: 'failed', error: 'boom' }) }),
+      );
+      const app = await buildApp(opts);
+
+      const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+      expect(res.statusCode).toBe(200);
+      expect(install).toHaveBeenCalledTimes(1);
+    });
+
+    it('does NOT retry when isolationReport.cleanup is already "done" — stays a complete no-op', async () => {
+      const install = vi.fn(async () => ({ success: true, steps: [] }));
+      const opts = makeOpts({ harnessInstaller: makeHarnessInstaller(install) });
+      (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+        makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationReport: JSON.stringify({ kind: 'cleanup', cleanup: 'done' }) }),
+      );
+      const app = await buildApp(opts);
+
+      const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+      expect(res.statusCode).toBe(200);
+      expect(install).not.toHaveBeenCalled();
+      expect(opts.serverRepo.updateIsolationReport).not.toHaveBeenCalled();
+      expect(res.json().isolationCleanup).toBeUndefined();
+    });
   });
 
   // Issue #29 review (3rd pass), Important finding 2: updateIsolationIntent()
@@ -299,7 +354,7 @@ describe('PUT /api/servers/:name — isolation cleanup on false->true (Issue #29
     const install = vi.fn(async () => ({ success: true, steps: [] }));
     const opts = makeOpts({ harnessInstaller: makeHarnessInstaller(install) });
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
-      makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationReport: '{"cleanup":"done"}' }),
+      makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationReport: '{"kind":"cleanup","cleanup":"done"}' }),
     );
     const app = await buildApp(opts);
 

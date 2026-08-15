@@ -156,6 +156,28 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
     return report.cleanup as 'done' | 'failed' | 'skipped';
   }
 
+  // Issue #29 review (final pass), Important finding 2: a true->true PUT
+  // (isolationIntent already true, requested again unchanged) used to be a
+  // complete no-op — including when the ORIGINAL false->true transition's
+  // cleanup never actually completed (crashed mid-attempt, or genuinely
+  // failed/was skipped). That left the row stuck at
+  // `isolation_intent=1` with a report that never resolves to "done", and
+  // nothing ever retries it: the operator's only way to notice was reading
+  // `isolation_report` directly. A true->true request now re-attempts
+  // cleanup unless the last recorded outcome was already `'done'` — a
+  // malformed/unparseable report is treated the same as "not done" (retry),
+  // since there is no report content that can be trusted as a completed
+  // cleanup other than an explicit `cleanup: 'done'`.
+  function isolationCleanupNeedsRetry(reportJson: string | null): boolean {
+    if (!reportJson) return true;
+    try {
+      const parsed = JSON.parse(reportJson) as { cleanup?: unknown };
+      return parsed.cleanup !== 'done';
+    } catch {
+      return true;
+    }
+  }
+
   // ── GET /api/servers ──
   fastify.get('/api/servers', async () => {
     // Bundle content hash (what deployed agents report at /health) — not the hub git
@@ -433,10 +455,10 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
           // false->true transition below, a same-value PUT silently erased an
           // existing report with no corresponding retry to regenerate it —
           // the UI's isolation notice would just go blank. Gate the call on
-          // an actual value change; true->true/false->false is now a
-          // complete no-op that preserves the existing report. (An explicit
-          // "re-verify" action is out of scope here — left to a future
-          // doctor/reinstall flow.)
+          // an actual value change; false->false is a complete no-op that
+          // preserves the existing report (see the true->true branch below
+          // for the same-value case in the OTHER direction, which is not a
+          // no-op).
           const wasIsolated = srv.isolationIntent;
           serverRepo.updateIsolationIntent(request.params.name, isolationIntent);
           if (isolationIntent === true && !wasIsolated) {
@@ -449,6 +471,24 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
             // the correct tradeoff (matches the design note: cleanup failure
             // must not fail the PUT, but the PUT should reflect a completed
             // attempt).
+            isolationCleanup = await attemptIsolationCleanup(request.params.name, request.principal ?? OPERATOR_PRINCIPAL);
+          }
+        } else if (isolationIntent === true && srv.isolationIntent === true) {
+          // Issue #29 review (final pass), Important finding 2: a true->true
+          // request — same declared value, so `serverRepo.updateIsolationIntent`
+          // is deliberately NOT called (it would reset the report back to the
+          // pending marker for no reason, see that method's doc comment) —
+          // still retries the cleanup attempt when the last recorded outcome
+          // never actually resolved to 'done': a crash between the intent
+          // commit and the cleanup write leaves `isolation_report` at the
+          // pending marker (or, after startup recovery below runs, `'failed'`
+          // with `reason: 'interrupted'`); a genuine remote failure also
+          // leaves `'failed'`. Both are exactly the states an operator
+          // re-submitting the same "isolate this server" request expects to
+          // retry, not silently no-op forever. A `report: 'done'` (the only
+          // fully-settled outcome) stays untouched, matching the pre-existing
+          // true->true no-op for that case.
+          if (isolationCleanupNeedsRetry(srv.isolationReport)) {
             isolationCleanup = await attemptIsolationCleanup(request.params.name, request.principal ?? OPERATOR_PRINCIPAL);
           }
         }

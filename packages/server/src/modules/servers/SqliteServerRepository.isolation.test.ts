@@ -122,7 +122,16 @@ describe('SqliteServerRepository — isolation_intent transitions (Issue #29 rev
     expect(row.isolation_report).toBeNull();
   });
 
-  it('clears a pre-existing report/verifiedAt when intent flips false -> true, before any new report is written', () => {
+  // Issue #29 review (final pass), Important finding 2: a false->true flip
+  // no longer clears the report to NULL — it atomically initializes it to
+  // the pending marker instead, in the SAME statement as the intent flip,
+  // so a crash between this commit and attemptIsolationCleanup's own write
+  // never leaves `isolation_intent=1` with a report indistinguishable from
+  // "cleanup not yet attempted" vs "cleanup silently never ran" (see
+  // Server.ts's ISOLATION_CLEANUP_PENDING_REPORT doc comment). A stale PRE-
+  // transition report is still cleared away (verified below), just replaced
+  // with the pending marker rather than NULL.
+  it('replaces a pre-existing report/verifiedAt with the pending cleanup marker when intent flips false -> true', () => {
     const db = buildSeededDb();
     db.prepare(`INSERT INTO servers (name, type) VALUES ('srv', 'agent')`).run();
     db.prepare('UPDATE servers SET isolation_intent = 0, isolation_verified_at = ?, isolation_report = ? WHERE name = ?')
@@ -134,7 +143,7 @@ describe('SqliteServerRepository — isolation_intent transitions (Issue #29 rev
     const row = db.prepare('SELECT isolation_intent, isolation_verified_at, isolation_report FROM servers WHERE name = ?').get('srv') as Record<string, unknown>;
     expect(row.isolation_intent).toBe(1);
     expect(row.isolation_verified_at).toBeNull();
-    expect(row.isolation_report).toBeNull();
+    expect(JSON.parse(row.isolation_report as string)).toEqual({ kind: 'cleanup', cleanup: 'pending' });
   });
 
   it('a subsequent updateIsolationReport() write after the intent flip is not clobbered by the clear', () => {

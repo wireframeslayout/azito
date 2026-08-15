@@ -176,8 +176,15 @@ export class TaskRestoreService {
       // Throwaway bootstrap window — the real task window is created just
       // below via createWindow, which is what actually gets AZITO_TASK_TOKEN
       // (see the comment there and TaskPaneEnvironmentService's own doc
-      // comment).
-      await tmux.createSession(server, tmuxSession, { extraEnv: {} });
+      // comment). Still routed through `uiTokenEnvForServer` (not a bare
+      // `{}`), same as the manual session/window routes (Issue #29 review,
+      // Critical finding 1): an isolated server's tmux SESSION-level env can
+      // already carry a leftover AZITO_UI_TOKEN/AZITO_AGENT_TOKEN from a
+      // prior non-isolated life, and this window's own pane always inherits
+      // whatever process env the tmux SERVER itself runs under (the remote
+      // agent process's env, for an `agent`-type server) regardless of what
+      // `extraEnv` this call passes — an empty object masks nothing.
+      await tmux.createSession(server, tmuxSession, { extraEnv: tmux.uiTokenEnvForServer(server) });
       await sleep(500);
     }
 

@@ -4,6 +4,7 @@ import type { ITaskTokenRepository } from '../tokens/TaskToken';
 import type { SqliteProjectSecretRepository } from '../../projects/SqliteProjectSecretRepository';
 import type { AuditLogService } from '../../../shared/audit/AuditLogService';
 import { recordAuditBestEffort } from '../../../shared/audit/recordAuditBestEffort';
+import { ISOLATION_MASKED_ENV } from '../../../shared/auth/isolationMaskedEnv';
 
 /**
  * Single builder for the env a task's tmux pane launches with (Issue #28
@@ -76,8 +77,7 @@ function applyTokenMaskingOrCompat(
     // doc comment above for why the previous nesting (compat-mode branch
     // gating isolation) let an isolated server receive full-power tokens
     // under the hub's default (scoped-auth-off) configuration.
-    env.AZITO_UI_TOKEN = '';
-    env.AZITO_AGENT_TOKEN = '';
+    Object.assign(env, ISOLATION_MASKED_ENV);
     return;
   }
   if (!scopedAuthEnabled) {
@@ -115,8 +115,7 @@ function applyTokenMaskingOrCompat(
     // already-running sessions' leftover env unnecessary: any task window
     // created from here on is safe no matter what a session's own env
     // holds.
-    env.AZITO_UI_TOKEN = '';
-    env.AZITO_AGENT_TOKEN = '';
+    Object.assign(env, ISOLATION_MASKED_ENV);
   }
 }
 

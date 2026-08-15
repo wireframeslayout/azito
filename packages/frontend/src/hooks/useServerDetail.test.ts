@@ -49,6 +49,13 @@ describe('isValidIsolationReport', () => {
     expect(isValidIsolationReport({ kind: 'cleanup', cleanup: 'done' })).toBe(true);
     expect(isValidIsolationReport({ kind: 'cleanup', cleanup: 'failed' })).toBe(true);
     expect(isValidIsolationReport({ kind: 'cleanup', cleanup: 'skipped' })).toBe(true);
+    // Issue #29 review (final pass), Important finding 2: 'pending' is the
+    // marker updateIsolationIntent now writes atomically on a false->true
+    // flip, before any cleanup attempt has actually run — a legitimate
+    // value this parser must accept, not reject as "unrecognized" (which
+    // would surface as isolationReportUnavailable instead of the intended
+    // isolationCleanupWarning).
+    expect(isValidIsolationReport({ kind: 'cleanup', cleanup: 'pending' })).toBe(true);
   });
 
   // A verification report only needs the discriminant today — see this

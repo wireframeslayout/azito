@@ -34,7 +34,22 @@ export default function OverviewSection({ server, status, installStatus, session
   // injected", so this has to be surfaced somewhere an operator will
   // actually see it before trusting that promise. 'verification' reports
   // (the future isolation doctor) are intentionally not handled here yet.
-  const isolationCleanupWarning = isolationReport?.kind === 'cleanup' && isolationReport.cleanup && isolationReport.cleanup !== 'done';
+  //
+  // Issue #29 review (final pass), Important finding 2: also fires for
+  // `isolationReport === null` on a server that DOES declare isolation —
+  // previously read as "nothing to warn about" (indistinguishable from "no
+  // report ever needed"), but a declared-isolated server with no report at
+  // all is exactly as unconfirmed as an explicit 'pending'/'failed' one
+  // (either this is a pre-fix row from before `updateIsolationIntent`
+  // started writing the pending marker atomically, or something cleared the
+  // report without settling it). This is independent of, and can show
+  // alongside, `isolationReportUnavailable` below (a fetch failure also
+  // leaves `isolationReport` at `null`) — both represent real uncertainty
+  // about whether the isolation promise actually holds.
+  const isolationCleanupWarning = server.isolationIntent && (
+    isolationReport === null ||
+    (isolationReport.kind === 'cleanup' && isolationReport.cleanup !== 'done')
+  );
   const resourceEntries = useServerResourcesContext();
   const resourceEntry = resourceEntries.find((s) => s.serverName === server.name);
   const resourcesLoading = resourceEntry === undefined;

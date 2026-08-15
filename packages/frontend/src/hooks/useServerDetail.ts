@@ -12,7 +12,13 @@ import type { InstallStatusResponse } from '../components/servers/serverSections
 // doctor's own writes (`'verification'`, not implemented yet).
 export interface IsolationReport {
   kind: 'cleanup' | 'verification';
-  cleanup?: 'done' | 'failed' | 'skipped';
+  // Issue #29 review (final pass), Important finding 2: 'pending' is the
+  // marker `updateIsolationIntent` writes ATOMICALLY with a false->true
+  // isolation_intent flip, before the cleanup attempt itself has run (see
+  // Server.ts's ISOLATION_CLEANUP_PENDING_REPORT / IServerRepository doc
+  // comment) — a legitimate, reachable value this hook must be able to
+  // parse, not just the three settled outcomes.
+  cleanup?: 'pending' | 'done' | 'failed' | 'skipped';
   reason?: string;
   error?: string;
   at?: string;
@@ -42,7 +48,7 @@ export function isValidIsolationReport(value: unknown): value is IsolationReport
   const kind = (value as { kind?: unknown }).kind;
   if (kind === 'cleanup') {
     const cleanup = (value as { cleanup?: unknown }).cleanup;
-    return cleanup === 'done' || cleanup === 'failed' || cleanup === 'skipped';
+    return cleanup === 'pending' || cleanup === 'done' || cleanup === 'failed' || cleanup === 'skipped';
   }
   return kind === 'verification';
 }

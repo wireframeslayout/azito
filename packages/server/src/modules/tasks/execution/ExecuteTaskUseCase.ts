@@ -497,13 +497,19 @@ export class ExecuteTaskUseCase {
 
     // Ensure tmux session exists. This bootstrap window (if the session
     // doesn't exist yet) is immediately abandoned in favor of the real task
-    // window created below — it deliberately gets no env at all (no task
-    // token, no UI token) rather than issuing/rotating a token for a window
-    // nobody uses.
+    // window created below — it deliberately gets no task token (issuing/
+    // rotating one for a window nobody uses would be pointless). It IS still
+    // routed through `uiTokenEnvForServer`, not a bare `{}` (Issue #29
+    // review, Critical finding 1): a bare `{}` injects nothing itself, but
+    // does nothing to mask a credential the pane inherits anyway — either
+    // from the tmux SESSION's own leftover env, or from the tmux SERVER
+    // process's own env (the remote agent process's env, for an
+    // `agent`-type server) — so an isolated server still needs the explicit
+    // mask here exactly like every other window-creation call site does.
     const existingSessions = await this.tmux.listSessions(server);
     const sessionExists = existingSessions.some((s) => s.name === tmuxSession);
     if (!sessionExists) {
-      await this.tmux.createSession(server, tmuxSession, { extraEnv: {} });
+      await this.tmux.createSession(server, tmuxSession, { extraEnv: this.tmux.uiTokenEnvForServer(server) });
       await sleep(500);
     }
 
@@ -947,15 +953,15 @@ export class ExecuteTaskUseCase {
     this.taskRepo.updateStatus(taskId, 'in_progress');
 
     // Ensure tmux session exists. Same throwaway-bootstrap-window reasoning
-    // as execute() above: no env at all when a session must be created here,
-    // since the real task window (created just below, if it doesn't already
-    // exist) is what actually gets AZITO_TASK_TOKEN. Session creation itself
-    // is not part of the task-token rotation, so it stays outside the
-    // per-task lock below (idempotent/harmless to race).
+    // as execute() above — including the same `uiTokenEnvForServer` masking,
+    // not a bare `{}` — since the real task window (created just below, if
+    // it doesn't already exist) is what actually gets AZITO_TASK_TOKEN.
+    // Session creation itself is not part of the task-token rotation, so it
+    // stays outside the per-task lock below (idempotent/harmless to race).
     const existingSessions = await this.tmux.listSessions(server);
     const sessionExists = existingSessions.some((s) => s.name === tmuxSession);
     if (!sessionExists) {
-      await this.tmux.createSession(server, tmuxSession, { extraEnv: {} });
+      await this.tmux.createSession(server, tmuxSession, { extraEnv: this.tmux.uiTokenEnvForServer(server) });
       await sleep(500);
     }
 

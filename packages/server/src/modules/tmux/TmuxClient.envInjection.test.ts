@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { TmuxClient } from './TmuxClient';
 import type { ServerConfig } from '../servers/Server';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
+import { ISOLATION_MASKED_ENV } from '../../shared/auth/isolationMaskedEnv';
 
 const srv: ServerConfig = { name: 'local', type: 'local' } as ServerConfig;
 const remoteSrv: ServerConfig = { name: 'remote', type: 'agent', host: '100.64.1.7' } as ServerConfig;
@@ -142,12 +143,27 @@ describe('TmuxClient.uiTokenEnvForServer', () => {
   it('masks the token with an explicit empty string for an isolation_intent server', async () => {
     const client = makeClient(async () => ({ stdout: '', stderr: '', code: 0 }));
     const isolatedSrv: ServerConfig = { ...remoteSrv, isolationIntent: true };
-    expect(client.uiTokenEnvForServer(isolatedSrv)).toEqual({ AZITO_UI_TOKEN: '' });
+    expect(client.uiTokenEnvForServer(isolatedSrv)).toEqual({ AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' });
   });
 
   it('masks even when the underlying uiToken is empty (still an explicit key, not omitted)', async () => {
     const client = makeClient(async () => ({ stdout: '', stderr: '', code: 0 }), '');
     const isolatedSrv: ServerConfig = { ...remoteSrv, isolationIntent: true };
-    expect(client.uiTokenEnvForServer(isolatedSrv)).toEqual({ AZITO_UI_TOKEN: '' });
+    expect(client.uiTokenEnvForServer(isolatedSrv)).toEqual({ AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' });
+  });
+
+  // Issue #29 review (final pass), Critical finding 1: this mask previously
+  // covered only AZITO_UI_TOKEN — an agent-type isolated server's process
+  // env also holds AZITO_AGENT_TOKEN (see agent/main.ts), which a manual
+  // session/window/pane route or plain respawn could still inject into a
+  // new tmux window via session-env inheritance. `uiTokenEnvForServer` and
+  // `TaskPaneEnvironmentService.applyTokenMaskingOrCompat` must mask the
+  // exact same key set — both now reference the single shared
+  // ISOLATION_MASKED_ENV constant, asserted here directly so the two can
+  // never drift again.
+  it('masks the exact same key set as ISOLATION_MASKED_ENV (single source shared with TaskPaneEnvironmentService)', async () => {
+    const client = makeClient(async () => ({ stdout: '', stderr: '', code: 0 }));
+    const isolatedSrv: ServerConfig = { ...remoteSrv, isolationIntent: true };
+    expect(client.uiTokenEnvForServer(isolatedSrv)).toEqual({ ...ISOLATION_MASKED_ENV });
   });
 });

@@ -3,6 +3,7 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 export { ServerConfig } from '../servers/Server';
 import type { ServerConfig } from '../servers/Server';
 import { generateWindowName, extractWindowId } from './windowNameUtils';
+import { ISOLATION_MASKED_ENV } from '../../shared/auth/isolationMaskedEnv';
 
 // ─── Types ───
 
@@ -239,15 +240,17 @@ export class TmuxClient {
    * the handful of NON-task callers that still call the legacy default
    * directly instead.)
    *
-   * When `server.isolationIntent` is set, returns an explicit `{
-   * AZITO_UI_TOKEN: '' }` mask rather than an empty object — see
+   * When `server.isolationIntent` is set, returns the shared
+   * {@link ISOLATION_MASKED_ENV} mask (both `AZITO_UI_TOKEN` AND
+   * `AZITO_AGENT_TOKEN` — an agent-type isolated server's process env holds
+   * the latter too, see `agent/main.ts`) rather than an empty object — see
    * `applyTokenMaskingOrCompat`'s doc comment for why an explicit empty value
    * is required to override a token the pane's tmux SESSION may already
    * carry (a pre-existing session's env persists across `new-window`, and
    * `-e KEY=` on the new window is the only thing that can mask it).
    */
   uiTokenEnvForServer(server: ServerConfig): Record<string, string> {
-    if (server.isolationIntent) return { AZITO_UI_TOKEN: '' };
+    if (server.isolationIntent) return { ...ISOLATION_MASKED_ENV };
     return this.uiTokenEnv();
   }
 

@@ -143,6 +143,7 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
       resolvePaneId: vi.fn(async () => '%0'),
       sendKeys: vi.fn(async () => {}),
       checkPaneExists: vi.fn(async () => true),
+      uiTokenEnvForServer: vi.fn(() => ({})),
     } as unknown as TaskRestoreDeps['tmux'],
     worktreeServiceFactory: {
       create: vi.fn(() => ({

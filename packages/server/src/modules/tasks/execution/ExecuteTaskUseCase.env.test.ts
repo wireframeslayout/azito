@@ -300,6 +300,7 @@ function buildUseCase(opts: {
     killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
     sendKeys: vi.fn(async () => {}),
     checkPaneExists: vi.fn(async () => true),
+    uiTokenEnvForServer: vi.fn(() => ({})),
   };
 
   const worktreeServiceFactory = { create: vi.fn() };
@@ -1893,6 +1894,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       sendKeys: vi.fn(async () => {}),
       checkPaneExists: vi.fn(async () => true),
+      uiTokenEnvForServer: vi.fn(() => ({})),
       startPipePane: vi.fn(async () => {}),
       stopPipePane: vi.fn(async () => {}),
       execCommand: vi.fn(async () => ({ stdout: '' })),

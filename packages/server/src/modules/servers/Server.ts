@@ -1,5 +1,16 @@
 export type MuxRuntime = 'system' | 'managed';
 
+/**
+ * The `isolation_report` value `updateIsolationIntent` atomically writes on a
+ * false->true transition, BEFORE any cleanup attempt actually runs (Issue
+ * #29 review, final pass, Important finding 2). Exported so both the
+ * repository (write) and the startup recovery pass / route retry logic
+ * (read) parse/compare against the exact same literal — see
+ * `IServerRepository.updateIsolationIntent`'s doc comment for why this must
+ * be written atomically with the intent flip rather than left NULL.
+ */
+export const ISOLATION_CLEANUP_PENDING_REPORT = JSON.stringify({ kind: 'cleanup', cleanup: 'pending' });
+
 export interface ServerConfig {
   name: string;
   type: 'local' | 'agent';
@@ -64,6 +75,20 @@ export interface IServerRepository {
    * statement as the intent flip (see `SqliteServerRepository`'s
    * implementation comment) — callers must not assume a separate clear step
    * is needed or possible to skip.
+   *
+   * Issue #29 review (final pass), Important finding 2: a false->true
+   * transition initializes `isolation_report` to
+   * `{"kind":"cleanup","cleanup":"pending"}` ATOMICALLY in this same
+   * statement, not to NULL — a process crash between this commit and
+   * `attemptIsolationCleanup`'s own `updateIsolationReport()` write
+   * previously left `isolation_intent=1` with `isolation_report=NULL`, a
+   * state indistinguishable from "declared isolated, cleanup not yet
+   * attempted OR quietly skipped" that routes.ts's own true->true no-op
+   * guard then preserved forever (nothing ever retried it). A false->true
+   * transition (`isolationIntent: true`) writes the pending marker; a
+   * true->false transition (`isolationIntent: false`) still clears to NULL
+   * as before — only the true direction needs a placeholder, since only
+   * that direction has a cleanup attempt to track.
    */
   updateIsolationIntent(name: string, isolationIntent: boolean): void;
   /**
