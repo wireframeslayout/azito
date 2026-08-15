@@ -962,8 +962,25 @@ strip_codex_ui_token() {
     const ENV_SECTION = stripQuotesAndSpace("[mcp_servers.azt-mcp.env]");
     const OWN_TABLE = stripQuotesAndSpace("[mcp_servers.azt-mcp]");
 
+    // True when the assignment key of a line (the text before the first
+    // `=`) normalizes, via stripQuotesAndSpace, to exactly `keyName` — the
+    // ONE place key-name comparison happens, so env/"env"/(quote) and
+    // likewise AZITO_UI_TOKEN are all recognized identically. Issue #29
+    // review (13th pass), Important finding 2: hasInlineTokenKey used to
+    // match the env key via a regex anchored on the bare literal
+    // (/^\s*env\s*=\s*\{/) with NO call through stripQuotesAndSpace at
+    // all — a quoted "env" = { "AZITO_UI_TOKEN" = ... } line (legal TOML)
+    // matched neither hasInlineTokenKey nor isTokenKeyLine, so the whole
+    // line fell through untouched and the purge reported success
+    // (no-section/clean) with the token still sitting in the file.
+    function assignmentKeyIs(line, keyName) {
+      const eq = line.indexOf("=");
+      if (eq === -1) return false;
+      return stripQuotesAndSpace(line.slice(0, eq)) === keyName;
+    }
+
     function isTokenKeyLine(trimmed) {
-      return /^AZITO_UI_TOKEN=/.test(stripQuotesAndSpace(trimmed));
+      return assignmentKeyIs(trimmed, "AZITO_UI_TOKEN");
     }
 
     // Detects (never rewrites — see the doc comment above this whole
@@ -978,7 +995,8 @@ strip_codex_ui_token() {
     // comma split cannot do that once an entry value itself contains a
     // comma.
     function hasInlineTokenKey(line) {
-      const m = line.match(/^\s*env\s*=\s*\{(.*)\}/);
+      if (!assignmentKeyIs(line, "env")) return false;
+      const m = line.match(/=\s*\{(.*)\}/);
       if (!m) return false;
       return /(^|,)AZITO_UI_TOKEN=/.test(stripQuotesAndSpace(m[1]));
     }

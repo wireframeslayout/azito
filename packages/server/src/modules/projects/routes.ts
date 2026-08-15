@@ -278,7 +278,22 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
           // against a server row re-read only once the lock is held —
           // never against `srv`, resolved just above with no lock at all,
           // which a concurrent isolation PUT may have already superseded.
-          const sessionResult = await ensureSessionWithLock(tmux, serverIsolationLock, srv, project.slug);
+          //
+          // `enforceSnapshot: false` (Issue #29 review, 12th pass, Critical
+          // finding 1): every OTHER `ensureSessionWithLock`/`createRotatedWindow`
+          // call site sits downstream of a task execution-approval gate
+          // (`enforceExecutionGate`) and resource/containment checks run
+          // against the caller's own `server` snapshot — for those, a
+          // refetch that disagrees with that snapshot on a security field
+          // must abort (the whole point of this finding). This bootstrap
+          // call has no such approval boundary to protect: it is a
+          // best-effort (see the surrounding `catch` below), unauthenticated
+          // "does this project's session exist yet" convenience check that
+          // runs on its own, unrelated to any task's execute/resume path —
+          // there is nothing here that a stale `srv` could have already
+          // approved that the fresh row could contradict. Keeping the old
+          // "adopt whichever row is current" behavior is correct.
+          const sessionResult = await ensureSessionWithLock(tmux, serverIsolationLock, srv, project.slug, false);
           sessionCreated = sessionResult.created;
         } catch {
           // tmux session creation is best-effort

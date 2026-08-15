@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createRotatedWindow, ensureSessionWithLock, rollbackWindowReference, runExclusiveForTask, type ServerIsolationLock } from './WindowRotation';
+import { createRotatedWindow, ensureSessionWithLock, rollbackWindowReference, runExclusiveForTask, ServerSnapshotMismatchError, type ServerIsolationLock } from './WindowRotation';
 import { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
 import type { ITaskTokenRepository, IssuedTaskToken } from '../tokens/TaskToken';
 import type { Task } from '../Task';
@@ -229,6 +229,44 @@ describe('ensureSessionWithLock', () => {
     expect(tmux.createSession).not.toHaveBeenCalled();
   });
 
+  // Issue #29 review (12th pass), Critical finding 1: a PUT /api/servers/:name
+  // committing between the caller's own approval/resource/containment checks
+  // (which ran against `server`, the argument passed in) and this lock being
+  // acquired must abort instead of silently adopting the newer row.
+  it('throws ServerSnapshotMismatchError (default enforceSnapshot=true) when the refetched row disagrees with the caller-supplied server on a security field', async () => {
+    const expected = makeServer({ isolationIntent: false });
+    const fresh = makeServer({ isolationIntent: true });
+    const tmux = makeTmux();
+    const lock: ServerIsolationLock = { serverIsolationMutex: new KeyedMutex(), serverRepo: { findByName: () => fresh } };
+
+    await expect(ensureSessionWithLock(tmux, lock, expected, 'azito')).rejects.toBeInstanceOf(ServerSnapshotMismatchError);
+    expect(tmux.createSession).not.toHaveBeenCalled();
+  });
+
+  it('does NOT throw on a security-field mismatch when enforceSnapshot is explicitly false (projects/routes.ts bootstrap opt-out)', async () => {
+    const expected = makeServer({ isolationIntent: false });
+    const fresh = makeServer({ isolationIntent: true });
+    const tmux = makeTmux();
+    const lock: ServerIsolationLock = { serverIsolationMutex: new KeyedMutex(), serverRepo: { findByName: () => fresh } };
+
+    const result = await ensureSessionWithLock(tmux, lock, expected, 'azito', false);
+
+    expect(result.created).toBe(true);
+    expect(result.server).toBe(fresh);
+  });
+
+  it('does not throw when the refetched row differs only in non-security fields (e.g. agentVersion, isolationVerifiedAt)', async () => {
+    const expected = makeServer({ agentVersion: 'stale', isolationVerifiedAt: null });
+    const fresh = makeServer({ agentVersion: 'fresh', isolationVerifiedAt: '2026-01-02T00:00:00Z' });
+    const tmux = makeTmux();
+    const lock: ServerIsolationLock = { serverIsolationMutex: new KeyedMutex(), serverRepo: { findByName: () => fresh } };
+
+    const result = await ensureSessionWithLock(tmux, lock, expected, 'azito');
+
+    expect(result.created).toBe(true);
+    expect(result.server).toBe(fresh);
+  });
+
   it('serializes against a concurrent createRotatedWindow call for the same server name via the shared mutex', async () => {
     const server = makeServer();
     const order: string[] = [];
@@ -335,6 +373,54 @@ describe('runExclusiveForTask', () => {
     await expect(a).rejects.toThrow('a failed');
     await expect(b).resolves.toBeUndefined();
     expect(order).toEqual(['a', 'b']);
+  });
+});
+
+// Issue #29 review (12th pass), Critical finding 1: createRotatedWindow's own
+// refetch-and-mismatch-check, mirroring the ensureSessionWithLock coverage
+// above.
+describe('createRotatedWindow: server snapshot mismatch (Issue #29 review, 12th pass, Critical finding 1)', () => {
+  function makeServices() {
+    const tokenRepo = new FakeTaskTokenRepo();
+    const projectSecretRepo = { findByProjectWithValues: vi.fn(() => []) } as any;
+    const paneEnvService = new TaskPaneEnvironmentService(tokenRepo, projectSecretRepo, 'ui-token', true);
+    return { tokenRepo, paneEnvService };
+  }
+
+  it('throws ServerSnapshotMismatchError and never calls create() when the refetched row disagrees on a security field', async () => {
+    const { paneEnvService } = makeServices();
+    const expected = makeServer({ type: 'local', host: null });
+    const fresh = makeServer({ type: 'agent', host: '100.64.0.1', agentPort: 4100, agentToken: 'tok' });
+    const lock: ServerIsolationLock = { serverIsolationMutex: new KeyedMutex(), serverRepo: { findByName: () => fresh } };
+    const create = vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' }));
+
+    await expect(createRotatedWindow(paneEnvService, lock, expected, makeTask(), 'test_failed', create)).rejects.toBeInstanceOf(ServerSnapshotMismatchError);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('does not throw, and proceeds to create(), when enforceSnapshot is explicitly false', async () => {
+    const { paneEnvService } = makeServices();
+    const expected = makeServer({ isolationIntent: false });
+    const fresh = makeServer({ isolationIntent: true });
+    const lock: ServerIsolationLock = { serverIsolationMutex: new KeyedMutex(), serverRepo: { findByName: () => fresh } };
+    const create = vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' }));
+
+    const result = await createRotatedWindow(paneEnvService, lock, expected, makeTask(), 'test_failed', create, false);
+
+    expect(result.server).toBe(fresh);
+    expect(create).toHaveBeenCalledWith(fresh, expect.anything());
+  });
+
+  it('proceeds normally (default enforceSnapshot=true) when the refetched row matches on every security field', async () => {
+    const { paneEnvService } = makeServices();
+    const server = makeServer();
+    const lock = makeLock(server);
+    const create = vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' }));
+
+    const result = await createRotatedWindow(paneEnvService, lock, server, makeTask(), 'test_failed', create);
+
+    expect(result.server).toBe(server);
+    expect(create).toHaveBeenCalledTimes(1);
   });
 });
 

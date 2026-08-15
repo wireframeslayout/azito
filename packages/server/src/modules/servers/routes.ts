@@ -371,19 +371,36 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       // muxRuntime. isolation_report (the cleanup outcome shown in the UI)
       // still describes the OLD endpoint, but the row now points at a NEW
       // one — the "done" cleanup report reads as a guarantee about an
-      // endpoint it never actually inspected. Compute the intent this PUT
-      // would leave in place (explicit value if provided, else the
-      // already-persisted one) and reject a connection-info change whenever
-      // THAT is true, not just on the false->true edge — this subsumes the
-      // narrower transition-only check that used to live here. The only way
-      // to change connection info on an isolated server is to explicitly
-      // disable isolation (isolationIntent: false) first, in a prior
-      // request.
+      // endpoint it never actually inspected.
+      //
+      // Issue #29 review (12th pass), Important finding 3: `effectiveIsolationIntent`
+      // (the intent THIS PUT would leave in place) alone let a single
+      // request combine a connection change with an explicit
+      // `isolationIntent: false` — srv.isolationIntent was true,
+      // this PUT sets it to false, so effectiveIsolationIntent === false and
+      // the ORIGINAL guard here never fired. `serverRepo.update()`
+      // (connection info) and `serverRepo.updateIsolationIntent()` (below)
+      // are two separate SQLite statements, not one transaction — a crash
+      // between them left the row isolated=true with the NEW connection info
+      // already committed but isolation_report still describing the OLD
+      // one, exactly the disagreement this whole check exists to prevent.
+      // Also checking `srv.isolationIntent` (the CURRENTLY PERSISTED value,
+      // before this request) closes that gap WITHOUT reopening the
+      // false->true/true->true cases `effectiveIsolationIntent` already
+      // covers: reject whenever EITHER the row was isolated before this
+      // request OR this request would leave it isolated. The only
+      // connection-info change ever accepted is therefore one where
+      // isolation was already off before this request AND stays off (or
+      // isn't agent-typed) after it — the caller must send a first PUT that
+      // ONLY disables isolation (`isolationIntent: false`, no connection
+      // fields), let it commit, then send a second PUT with the connection
+      // change (srv.isolationIntent is false by then, so neither half of
+      // this OR applies).
       const effectiveIsolationIntent = isolationIntent !== undefined ? isolationIntent : srv.isolationIntent;
-      if (effectiveType === 'agent' && effectiveIsolationIntent === true && connectionInfoChanged) {
+      if (effectiveType === 'agent' && (srv.isolationIntent === true || effectiveIsolationIntent === true) && connectionInfoChanged) {
         return reply.status(400).send({
           error: 'isolation_intent_blocks_connection_change',
-          message: '隔離が有効なサーバーの接続先情報は変更できません。先に隔離を無効化（isolationIntent: false）してから接続先を変更してください。',
+          message: '隔離が有効なサーバーの接続先情報は変更できません。先に隔離を無効化（isolationIntent: false のみを指定した PUT）を単独で送信して反映させてから、接続先の変更を別の PUT で送信してください。',
         });
       }
       if (effectiveType === 'agent' && isolationIntent === true && isolationIntent !== srv.isolationIntent) {

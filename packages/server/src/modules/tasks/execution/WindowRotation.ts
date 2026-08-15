@@ -60,20 +60,65 @@ export interface ServerIsolationLock {
 }
 
 /**
- * Re-reads `serverName` from `lock.serverRepo` — callers use this ONLY from
- * inside `lock.serverIsolationMutex.withLock(serverName, ...)`, so the row
- * this returns reflects whatever the most recently COMMITTED PUT
+ * Security-relevant `ServerConfig` fields (Issue #29 review, 12th pass,
+ * Critical finding 1). Manifest resolution, the execution approval gate, and
+ * the resource/containment checks in `ExecuteTaskUseCase`/`TaskRestoreService`/
+ * `WindowRespawnService` all run against the `server` row the caller resolved
+ * BEFORE queuing for `serverIsolationMutex` — but `refetchServer` below
+ * always hands the window-creation callback whatever row is CURRENT once the
+ * lock is actually acquired. If a `PUT /api/servers/:name` commits in the
+ * (however small) window between "caller's checks ran" and "this lock was
+ * acquired", every helper in this file used to silently adopt the newer row
+ * and build the window's env/target from it — meaning a task could end up
+ * executing against an endpoint that was never the one the approval gate
+ * evaluated, or with a secret injected that an isolation transition should
+ * have excluded. These are exactly the fields a change to which invalidates
+ * whatever the caller already checked; anything else (agentVersion,
+ * isolationVerifiedAt/Report, sshHostFingerprint, createdAt, ...) is fine to
+ * silently pick up fresh, same as before.
+ */
+const SECURITY_SNAPSHOT_FIELDS = ['isolationIntent', 'type', 'host', 'sshHost', 'agentPort', 'agentToken', 'muxRuntime'] as const satisfies readonly (keyof ServerConfig)[];
+
+/** Thrown by {@link refetchServer} when `enforceSnapshot` is true and the row that committed while the caller was queued for the lock differs from the one its pre-lock checks ran against. */
+export class ServerSnapshotMismatchError extends Error {
+  constructor(serverName: string) {
+    super(
+      `Server ${serverName} の設定が実行準備中に変更された（isolation/接続設定が承認・チェック時点のものと一致しない）。承認済みでないエンドポイントや誤ったシークレットセットで実行することを避けるため中断した。再実行せよ。`,
+    );
+    this.name = 'ServerSnapshotMismatchError';
+  }
+}
+
+/**
+ * Re-reads `expected.name` from `lock.serverRepo` — callers use this ONLY
+ * from inside `lock.serverIsolationMutex.withLock(expected.name, ...)`, so
+ * the row this returns reflects whatever the most recently COMMITTED PUT
  * /api/servers/:name transition left behind, never a snapshot racing it.
  * Throws rather than falling back to the caller's stale `ServerConfig` — a
  * server deleted between the caller resolving it and this lock actually
  * being acquired has no current row to build a trustworthy env from, and
  * silently reusing the stale one would defeat the whole point of this
  * refetch.
+ *
+ * `enforceSnapshot` (Issue #29 review, 12th pass, Critical finding 1):
+ * when true (the default every exported helper below uses), `expected` is
+ * treated not just as "which row to re-read" but as the exact snapshot the
+ * caller's own approval gate / resource / containment checks already ran
+ * against — if the freshly re-read row disagrees on any
+ * {@link SECURITY_SNAPSHOT_FIELDS}, this throws {@link ServerSnapshotMismatchError}
+ * instead of silently adopting the newer row. The one caller that
+ * legitimately wants the old "adopt whatever is current" behavior
+ * (`projects/routes.ts`'s server-bootstrap `ensureSessionWithLock` call,
+ * which sits outside the task approval boundary entirely — see that call
+ * site's own comment) passes `enforceSnapshot: false`.
  */
-function refetchServer(lock: ServerIsolationLock, serverName: string): ServerConfig {
-  const fresh = lock.serverRepo.findByName(serverName);
+function refetchServer(lock: ServerIsolationLock, expected: ServerConfig, enforceSnapshot: boolean): ServerConfig {
+  const fresh = lock.serverRepo.findByName(expected.name);
   if (!fresh) {
-    throw new Error(`Server ${serverName} was not found while (re)creating a task window — it may have been deleted mid-flight`);
+    throw new Error(`Server ${expected.name} was not found while (re)creating a task window — it may have been deleted mid-flight`);
+  }
+  if (enforceSnapshot && SECURITY_SNAPSHOT_FIELDS.some((field) => expected[field] !== fresh[field])) {
+    throw new ServerSnapshotMismatchError(expected.name);
   }
   return fresh;
 }
@@ -262,6 +307,7 @@ export async function createRotatedWindow(
   task: Task,
   reasonOnFailure: string,
   create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string }>,
+  enforceSnapshot = true,
 ): Promise<{ windowName: string; env: Record<string, string>; tokenId: number; server: ServerConfig }> {
   // Issue #29 review (7th pass), Important finding 1: the entire
   // env-resolution -> `create()` span now runs inside
@@ -281,7 +327,7 @@ export async function createRotatedWindow(
   // the race moved one layer up from "which branch runs" to "which server
   // row the check itself runs against".
   return lock.serverIsolationMutex.withLock(server.name, async () => {
-    const freshServer = refetchServer(lock, server.name);
+    const freshServer = refetchServer(lock, server, enforceSnapshot);
     const { env, tokenId } = paneEnvService.buildEnvForNewWindow(task, freshServer);
     let created: { result: ExecResult; windowName: string };
     try {
@@ -337,9 +383,10 @@ export async function createSecondaryWindow(
   server: ServerConfig,
   task: Task,
   create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string }>,
+  enforceSnapshot = true,
 ): Promise<{ windowName: string; env: Record<string, string>; server: ServerConfig }> {
   return lock.serverIsolationMutex.withLock(server.name, async () => {
-    const freshServer = refetchServer(lock, server.name);
+    const freshServer = refetchServer(lock, server, enforceSnapshot);
     const env = paneEnvService.buildEnvForSecondaryWindow(task, freshServer);
     const created = await create(freshServer, env);
     return { windowName: created.windowName, env, server: freshServer };
@@ -365,9 +412,10 @@ export async function createPlainWindow(
   lock: ServerIsolationLock,
   server: ServerConfig,
   create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string }>,
+  enforceSnapshot = true,
 ): Promise<{ windowName: string; env: Record<string, string>; server: ServerConfig }> {
   return lock.serverIsolationMutex.withLock(server.name, async () => {
-    const freshServer = refetchServer(lock, server.name);
+    const freshServer = refetchServer(lock, server, enforceSnapshot);
     const env = tmux.uiTokenEnvForServer(freshServer);
     const created = await create(freshServer, env);
     return { windowName: created.windowName, env, server: freshServer };
@@ -410,15 +458,27 @@ export async function createPlainWindow(
  * `uiTokenEnvForServer(freshServer)` directly, which regressed exactly
  * that). Uses {@link isolationMaskForServer} instead, which only ever masks
  * (isolated -> the shared mask, non-isolated -> `{}`), never injects.
+ *
+ * `enforceSnapshot` (Issue #29 review, 12th pass, Critical finding 1)
+ * defaults to true, matching every other helper in this file: `server` is
+ * treated as the exact row the caller's approval gate / resource /
+ * containment checks already ran against, and a refetch that disagrees on a
+ * security-relevant field aborts instead of silently adopting the newer row
+ * (see `refetchServer`'s doc comment). The one exception is
+ * `projects/routes.ts`'s server-bootstrap call, which sits outside the task
+ * execution-approval boundary entirely (it is not preceded by any
+ * approval/manifest/resource check to invalidate) and deliberately keeps the
+ * old "adopt whatever is current" behavior by passing `enforceSnapshot: false`.
  */
 export async function ensureSessionWithLock(
   tmux: Pick<TmuxClient, 'listSessions' | 'createSession'>,
   lock: ServerIsolationLock,
   server: ServerConfig,
   sessionName: string,
+  enforceSnapshot = true,
 ): Promise<{ created: boolean; server: ServerConfig }> {
   return lock.serverIsolationMutex.withLock(server.name, async () => {
-    const freshServer = refetchServer(lock, server.name);
+    const freshServer = refetchServer(lock, server, enforceSnapshot);
     const existingSessions = await tmux.listSessions(freshServer);
     const exists = existingSessions.some((s) => s.name === sessionName);
     if (!exists) {

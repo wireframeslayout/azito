@@ -436,13 +436,19 @@ describe('WindowRespawnService.respawn — supervisor wrap', () => {
   // kill on failure) must use that freshly re-read row, never the `server`
   // argument respawn() was originally called with.
   it('uses the server row re-fetched inside the isolation lock — not the stale server respawn() was called with — for pane resolution, and for the rollback kill on a downstream failure', async () => {
-    const staleServer = makeServer({ isolationIntent: false });
-    const freshServer = makeServer({ isolationIntent: true });
+    // Issue #29 review (12th pass), Critical finding 1: differs only on a
+    // NON-security field (agentVersion) — a security-relevant difference
+    // (isolationIntent, host, ...) is now exactly what createPlainWindow's
+    // default `enforceSnapshot` is meant to abort on (see the dedicated test
+    // below), so it can no longer stand in for "some field changed" here.
+    const staleServer = makeServer({ agentVersion: 'stale-version' });
+    const freshServer = makeServer({ agentVersion: 'fresh-version' });
     const win = makeWindow({ id: 1, taskId: null, tmuxTarget: 'azito:task-1--ab12.1' });
     const { service, tmux, serverRepo } = buildService({ window: win });
-    // Simulates a false->true isolation PUT committing while this respawn()
-    // call was queued for the lock: the row `serverRepo.findByName` returns
-    // once the lock is held no longer matches the `staleServer` argument.
+    // Simulates an unrelated server-row update (e.g. agentVersion bump from
+    // an auto-update) committing while this respawn() call was queued for
+    // the lock: the row `serverRepo.findByName` returns once the lock is
+    // held no longer matches the `staleServer` argument.
     serverRepo.findByName.mockImplementation(() => freshServer);
     tmux.resolvePaneId.mockRejectedValueOnce(new Error('pane resolve failed'));
 
@@ -455,6 +461,27 @@ describe('WindowRespawnService.respawn — supervisor wrap', () => {
     // fresh row, not the stale argument.
     expect(tmux.killWindow).toHaveBeenCalledWith(freshServer, expect.any(String));
     expect(tmux.killWindow).not.toHaveBeenCalledWith(staleServer, expect.any(String));
+  });
+
+  // Issue #29 review (12th pass), Critical finding 1: unlike the benign
+  // agentVersion-only drift above, a security-relevant field (isolationIntent
+  // here) disagreeing between the `server` respawn() was called with and the
+  // row actually committed by the time the isolation lock is held must abort
+  // the respawn entirely instead of silently continuing against the fresh
+  // row — createPlainWindow's default `enforceSnapshot: true` is what
+  // enforces this.
+  it('aborts (never resolves a pane / creates a window) when the refetched row disagrees on a security field (e.g. isolationIntent) from the one respawn() was called with', async () => {
+    const staleServer = makeServer({ isolationIntent: false });
+    const freshServer = makeServer({ isolationIntent: true });
+    const win = makeWindow({ id: 1, taskId: null, tmuxTarget: 'azito:task-1--ab12.1' });
+    const { service, tmux, serverRepo } = buildService({ window: win });
+    serverRepo.findByName.mockImplementation(() => freshServer);
+
+    await expect(service.respawn(1, staleServer)).rejects.toThrow(/設定が実行準備中に変更された/);
+
+    expect(tmux.resolvePaneId).not.toHaveBeenCalled();
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(tmux.createSession).not.toHaveBeenCalled();
   });
 });
 
@@ -683,7 +710,15 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
     const task = makeTask({ id: 5, unitId: 10 });
     const unit = makeUnit({ id: 10 });
     const win = makeWindow({ taskId: 5, tmuxTarget: 'azito:task-1--ab12.1' });
-    const { service, tmux, paneEnvService } = buildService({ window: win, task, unit });
+    const { service, tmux, paneEnvService, serverRepo } = buildService({ window: win, task, unit });
+    // buildService()'s default serverRepo.findByName returns
+    // makeServer({ name }) (type: 'local') regardless of what is passed to
+    // respawn() — this test's own `server` argument is deliberately
+    // type: 'agent' (the agent-transport kill-outcome behavior under test),
+    // so the mock must match it or the new server-snapshot check (Issue #29
+    // review, 12th pass, Critical finding 1) correctly rejects a mismatch
+    // that was never meant to be under test here.
+    serverRepo.findByName.mockImplementation((name: string) => makeServer({ name, type: 'agent' }));
     tmux.listSessions.mockResolvedValue([{
       name: 'azito',
       windowCount: 1,

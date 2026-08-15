@@ -8,7 +8,7 @@ import type { IUnitRepository } from '../units/Unit';
 import type { IWindowRepository } from '../windows/Window';
 import type { SqliteProjectSecretRepository } from '../projects/SqliteProjectSecretRepository';
 import type { TmuxClient } from '../tmux/TmuxClient';
-import { createRotatedWindow, ensureSessionWithLock, rollbackWindowReference, runExclusiveForTask, type ServerIsolationLock } from './execution/WindowRotation';
+import { createRotatedWindow, ensureSessionWithLock, rollbackWindowReference, runExclusiveForTask, ServerSnapshotMismatchError, type ServerIsolationLock } from './execution/WindowRotation';
 import type { KeyedMutex } from '../../shared/keyedMutex';
 import type { WorktreeServiceFactory } from '../git/WorktreeServiceFactory';
 import { PathResolverFactory, assertDirectoryContained } from '../git/PathContainment';
@@ -199,7 +199,22 @@ export class TaskRestoreService {
     // everything this function does afterwards (resolvePaneId, the
     // transport used for containment checks, worktree creation, sendKeys,
     // the rollback's killWindow, ...) sees it too.
-    const sessionResult = await ensureSessionWithLock(tmux, this.serverIsolationLock, server, tmuxSession);
+    let sessionResult: { created: boolean; server: ServerConfig };
+    try {
+      sessionResult = await ensureSessionWithLock(tmux, this.serverIsolationLock, server, tmuxSession);
+    } catch (err) {
+      // Issue #29 review, 12th pass, Critical finding 1: the server row
+      // ensureSessionWithLock re-read once the isolation lock was actually
+      // held disagreed with the one this run's execution gate check (above)
+      // ran against — mark the task failed (not left at 'archived', which
+      // reads as "never attempted") instead of letting the generic 500
+      // handler in routes.ts leave status untouched.
+      if (err instanceof ServerSnapshotMismatchError) {
+        if (unitId !== null) appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'server_snapshot_mismatch', message: err.message });
+        taskRepo.update(task.id, { status: 'failed' as TaskStatus } as Partial<Task>);
+      }
+      throw err;
+    }
     server = sessionResult.server;
     if (sessionResult.created) {
       await sleep(500);
@@ -439,6 +454,14 @@ export class TaskRestoreService {
         } catch (e) {
           log.warn(`[task-restore] Failed to rollback worktree: ${(e as Error).message}`);
         }
+      }
+      // Issue #29 review, 12th pass, Critical finding 1: same as the
+      // ensureSessionWithLock catch above — createRotatedWindow's refetch
+      // disagreed with the server row this run's checks ran against, so mark
+      // the task failed rather than leaving it at 'archived'.
+      if (err instanceof ServerSnapshotMismatchError) {
+        if (unitId !== null) appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'server_snapshot_mismatch', message: err.message });
+        taskRepo.update(task.id, { status: 'failed' as TaskStatus } as Partial<Task>);
       }
       throw err;
     }

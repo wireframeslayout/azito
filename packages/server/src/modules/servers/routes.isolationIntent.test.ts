@@ -800,12 +800,20 @@ describe('isolation_intent blocks a simultaneous connection-info change (Issue #
     expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
   });
 
-  // The escape hatch: explicitly disabling isolation in the same request is
-  // the one combination that must still be accepted, matching the message
-  // ("disable isolation first, then change the connection") — this proves
-  // the gate is driven by the EFFECTIVE end-state intent, not merely
-  // "isolationIntent field present and true".
-  it('allows a connection-info change alongside an explicit isolationIntent: true->false in the same request', async () => {
+  // Issue #29 review (12th pass), Important finding 3: this used to be the
+  // documented "escape hatch" — explicitly disabling isolation in the same
+  // request as a connection change was accepted, because the gate keyed off
+  // the EFFECTIVE end-state intent (`false` here), not the CURRENTLY
+  // PERSISTED one. That is exactly the combination the finding flags:
+  // `serverRepo.update()` (connection info) and
+  // `serverRepo.updateIsolationIntent()` are two separate SQLite statements,
+  // not one transaction, so a crash between them could leave the row
+  // isolated=true with the NEW connection info already committed and
+  // isolation_report still describing the OLD one. Now rejected outright —
+  // the gate keys off `srv.isolationIntent` (the row as it stood BEFORE this
+  // request), so this combination must be split into two requests (see the
+  // next test for the two-step flow that IS still accepted).
+  it('rejects with 400 when a connection-info change accompanies an explicit isolationIntent: true->false in the same request', async () => {
     const opts = makeOpts();
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
       makeServer({ type: 'agent', isolationIntent: true, host: '1.2.3.4' }),
@@ -818,8 +826,54 @@ describe('isolation_intent blocks a simultaneous connection-info change (Issue #
       payload: { host: '9.9.9.9', isolationIntent: false },
     });
 
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('isolation_intent_blocks_connection_change');
+    expect(opts.serverRepo.update).not.toHaveBeenCalled();
+    expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
+  });
+
+  // The two-step flow the message now directs callers to: a first PUT that
+  // ONLY disables isolation (no connection-info field at all) is still
+  // accepted — srv.isolationIntent is what the row was BEFORE this specific
+  // request, and there is no connection change in this one to conflict with
+  // it.
+  it('allows a PUT that ONLY disables isolation (no connection-info field), as the first step of the two-step flow', async () => {
+    const opts = makeOpts();
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: true, host: '1.2.3.4' }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/servers/srv',
+      payload: { isolationIntent: false },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.serverRepo.updateIsolationIntent).toHaveBeenCalledWith('srv', false);
+  });
+
+  // Second step of the two-step flow: once isolation has actually been
+  // disabled (srv.isolationIntent is now false, reflecting the first PUT
+  // having already committed), a connection-info change alone is accepted —
+  // srv.isolationIntent === true is what gates this check, and it no longer
+  // is.
+  it('allows a connection-info change once isolation is already persisted as disabled (second step of the two-step flow)', async () => {
+    const opts = makeOpts();
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: false, host: '1.2.3.4' }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/servers/srv',
+      payload: { host: '9.9.9.9' },
+    });
+
     expect(res.statusCode).toBe(200);
     expect(opts.serverRepo.update).toHaveBeenCalled();
-    expect(opts.serverRepo.updateIsolationIntent).toHaveBeenCalledWith('srv', false);
+    expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
   });
 });

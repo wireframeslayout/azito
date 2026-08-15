@@ -13,7 +13,7 @@ import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoade
 import type { SidekickSyncService } from '../../sidekicks/SidekickSyncService';
 import type { IExecutionLogRepository, LogType } from '../ExecutionLog';
 import type { TmuxClient } from '../../tmux/TmuxClient';
-import { confirmOldWindowGone, createRotatedWindow, ensureSessionWithLock, rollbackWindowReference, runExclusiveForTask, type ServerIsolationLock } from './WindowRotation';
+import { confirmOldWindowGone, createRotatedWindow, ensureSessionWithLock, rollbackWindowReference, runExclusiveForTask, ServerSnapshotMismatchError, type ServerIsolationLock } from './WindowRotation';
 import type { KeyedMutex } from '../../../shared/keyedMutex';
 import type { IWorktreeService, WorktreeInfo } from '../../git/IWorktreeService';
 import type { WorktreeServiceFactory } from '../../git/WorktreeServiceFactory';
@@ -358,6 +358,27 @@ export class ExecuteTaskUseCase {
   }
 
   /**
+   * Marks the task `failed` and logs when `err` is a
+   * {@link ServerSnapshotMismatchError} (Issue #29 review, 12th pass,
+   * Critical finding 1) — the server row `ensureSessionWithLock`/
+   * `createRotatedWindow` re-read once the isolation lock was actually held
+   * disagreed with the one this run's execution gate / resource / containment
+   * checks ran against, so continuing would mean acting on an endpoint or
+   * credential set that was never the one approved. Every call site below
+   * that wraps `ensureSessionWithLock`/`createRotatedWindow` checks this
+   * first, before any generic error-wrapping of its own, so the mismatch
+   * error's identity survives for callers/tests that want to distinguish it
+   * — returns whether `err` was in fact a mismatch, purely so call sites can
+   * decide whether to fall through to their own generic handling.
+   */
+  private failOnServerSnapshotMismatch(err: unknown, taskId: number, unitId: number): boolean {
+    if (!(err instanceof ServerSnapshotMismatchError)) return false;
+    this.appendLog(taskId, unitId, 'command', { type: 'server_snapshot_mismatch', message: err.message });
+    this.taskRepo.update(taskId, { status: 'failed' as TaskStatus } as Partial<Task>);
+    return true;
+  }
+
+  /**
    * Resolves the PR/MR URL for a branch via GitProviderService. Returns null
    * (not a fallback CLI guess) when the repo has no owner/name or the lookup
    * fails — PR URL is best-effort metadata, never a phase-completion gate.
@@ -528,7 +549,13 @@ export class ExecuteTaskUseCase {
     // superseded. `server` is reassigned to the fresh row so every
     // subsequent use in this function (including the real task-window
     // creation below) sees it too.
-    const sessionResult = await ensureSessionWithLock(this.tmux, this.serverIsolationLock, server, tmuxSession);
+    let sessionResult: { created: boolean; server: ServerConfig };
+    try {
+      sessionResult = await ensureSessionWithLock(this.tmux, this.serverIsolationLock, server, tmuxSession);
+    } catch (err) {
+      this.failOnServerSnapshotMismatch(err, taskId, unitId);
+      throw err;
+    }
     server = sessionResult.server;
     if (sessionResult.created) {
       await sleep(500);
@@ -615,6 +642,7 @@ export class ExecuteTaskUseCase {
         return { windowName: created.windowName, tokenId: created.tokenId, server: created.server };
       }));
     } catch (err) {
+      if (this.failOnServerSnapshotMismatch(err, taskId, unitId)) throw err;
       throw new Error(`Failed to create tmux window: ${err instanceof Error ? err.message : err}`);
     }
     server = createdServer;
@@ -1001,7 +1029,13 @@ export class ExecuteTaskUseCase {
     // task's window creation on the same server/session — it is now
     // serialized only against the isolation transition, via the
     // per-server-name mutex, not against runExclusiveForTask.)
-    const sessionResult = await ensureSessionWithLock(this.tmux, this.serverIsolationLock, server, tmuxSession);
+    let sessionResult: { created: boolean; server: ServerConfig };
+    try {
+      sessionResult = await ensureSessionWithLock(this.tmux, this.serverIsolationLock, server, tmuxSession);
+    } catch (err) {
+      this.failOnServerSnapshotMismatch(err, taskId, unitId);
+      throw err;
+    }
     server = sessionResult.server;
     if (sessionResult.created) {
       await sleep(500);
@@ -1064,6 +1098,7 @@ export class ExecuteTaskUseCase {
         return { windowName: created.windowName, windowExists: false, tokenId: created.tokenId, server: created.server };
       }));
     } catch (err) {
+      if (this.failOnServerSnapshotMismatch(err, taskId, unitId)) throw err;
       throw new Error(`Failed to create tmux window: ${err instanceof Error ? err.message : err}`);
     }
     // Issue #29 review (10th pass), Important finding 3: use the fresh
