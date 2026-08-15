@@ -171,8 +171,16 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
   function isolationCleanupNeedsRetry(reportJson: string | null): boolean {
     if (!reportJson) return true;
     try {
-      const parsed = JSON.parse(reportJson) as { cleanup?: unknown };
-      return parsed.cleanup !== 'done';
+      // Issue #29 review, Nit finding 3: `cleanup === 'done'` alone is not
+      // enough — a future `kind: 'verification'` report from the isolation
+      // doctor (see attemptIsolationCleanup's doc comment above and
+      // Server.ts's isolationReport doc comment) could plausibly carry an
+      // unrelated `cleanup`-shaped field of its own. Only a report that is
+      // BOTH this route's own `kind: 'cleanup'` AND `cleanup: 'done'` counts
+      // as a settled cleanup; anything else (wrong kind, missing kind,
+      // cleanup !== 'done') is treated as not-done and retried.
+      const parsed = JSON.parse(reportJson) as { kind?: unknown; cleanup?: unknown };
+      return !(parsed.kind === 'cleanup' && parsed.cleanup === 'done');
     } catch {
       return true;
     }
@@ -570,7 +578,28 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
   // ── POST /api/servers/:name/harness/install ──
   fastify.post<{ Params: { name: string } }>(
     '/api/servers/:name/harness/install',
-    async (request, reply) => {
+    // Issue #29 review, Important finding 1: this route reads
+    // `srv.isolationIntent` and threads it into `installOptions` (it decides
+    // whether the remote install withholds --ui-token / forces
+    // --purge-operator-token — see HarnessInstaller.ts / setup.sh) without
+    // holding serverIsolationMutex. A normal harness-install kicked off
+    // while `srv.isolationIntent` is still false could read that stale
+    // `false` here, then race a concurrent isolation PUT
+    // (false->true, which itself takes the lock — see the PUT handler
+    // above) to completion: the PUT's own cleanup finishes first (purging
+    // the remote token), and only afterwards does this already-in-flight
+    // install — using the stale non-isolated `installOptions` it read
+    // before the lock existed — write --ui-token back to the very server
+    // the PUT just tried to isolate. Wrapping the server refetch through
+    // install completion in the same per-server-name mutex closes that
+    // window: this route now only ever acts on a freshly-read row, and is
+    // serialized against isolation transitions and session/window/pane
+    // creation on the same server (see serverIsolationMutex's doc comment
+    // on ServersRouteOptions above). A harness install can take a while,
+    // but serializing it against isolation transitions on the SAME server
+    // is exactly the safe-by-default behavior intended — it never blocks
+    // installs on other servers.
+    async (request, reply) => serverIsolationMutex.withLock(request.params.name, async () => {
       if (!harnessInstaller) return reply.status(501).send({ error: 'Harness installer not available' });
 
       const srv = serverRepo.findByName(request.params.name);
@@ -599,7 +628,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       }
 
       return { ok: true, steps: result.steps };
-    },
+    }),
   );
 
   // ── DELETE /api/servers/:name ──

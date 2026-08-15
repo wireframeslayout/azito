@@ -418,7 +418,18 @@ if [[ "$AZITO_PURGE_OPERATOR_TOKEN" == "1" ]]; then
   # （上の節コメント参照）なので、行単位の除去ではなくファイルごと削除する
   # ——トークンを抜いた「空の資格情報ファイル」を残す理由がない。存在しな
   # ければ何もしない（冪等）。
-  if [[ -f "$OPERATOR_ENV_FILE" ]]; then
+  #
+  # Issue #29 review, Important finding 2: `rm -f` on a symlink only removes
+  # the link itself — dotfiles managers (chezmoi/stow/etc.) commonly replace
+  # this path with a symlink into a version-controlled repo. The token would
+  # then keep living in the link target, untouched, while this step reports
+  # success. Fail closed instead: never resolve/edit the link target (that
+  # would be an unpredictable write into a repo this script doesn't own),
+  # just surface the target path and require a manual purge there.
+  if [[ -L "$OPERATOR_ENV_FILE" ]]; then
+    echo "  エラー: $OPERATOR_ENV_FILE はシンボリックリンクです（リンク先: $(readlink "$OPERATOR_ENV_FILE")）。dotfiles 管理等の可能性があるため自動削除しません。リンク先のファイルを手動で確認し、AZITO_UI_TOKEN を除去してください" >&2
+    SETUP_HAD_ERRORS=1
+  elif [[ -f "$OPERATOR_ENV_FILE" ]]; then
     rm -f "$OPERATOR_ENV_FILE"
     echo "  $OPERATOR_ENV_FILE: --purge-operator-token により削除しました"
   else
@@ -456,7 +467,16 @@ else
 fi
 
 # node が使えれば自動マージ、なければ手動案内にフォールバック
-if command -v node >/dev/null 2>&1; then
+# Issue #29 review, Important finding 2: purge モードで $SETTINGS が symlink
+# の場合（dotfiles 管理等）、下の node 処理は fs.writeFileSync でリンク先
+# ファイルへ直接書き込むため技術的には動くが、このスクリプトが把握していない
+# 別リポジトリのファイルを黙って書き換える副作用は operator.env / config.toml
+# と同じ理由で許容しない。fail closed: 自動編集せずリンク先を提示し、手動対応
+# を要求する（非 purge モードの通常登録フローには影響しない）。
+if [[ "$AZITO_PURGE_OPERATOR_TOKEN" == "1" && -L "$SETTINGS" ]]; then
+  echo "  エラー: $SETTINGS はシンボリックリンクです（リンク先: $(readlink "$SETTINGS")）。dotfiles 管理等の可能性があるため自動編集しません。リンク先のファイルを手動で確認し、MCP env の AZITO_UI_TOKEN を除去してください" >&2
+  SETUP_HAD_ERRORS=1
+elif command -v node >/dev/null 2>&1; then
   mkdir -p ~/.claude
   # Issue #29 review (8th pass), Important finding 2: previously a bare
   # (unwrapped) command — under `set -e` a purge-mode read/parse failure
@@ -876,6 +896,21 @@ strip_codex_ui_token() {
   # PATH right now.
   if [[ ! -f "$codex_config" ]]; then
     return 0
+  fi
+
+  # Issue #29 review, Important finding 2: the write-back below
+  # (`mv -f "$tmp" "$codex_config"`) replaces whatever inode currently sits
+  # at $codex_config — if that's a symlink (dotfiles managers commonly
+  # replace config.toml with one), `mv` overwrites the LINK ITSELF with a
+  # plain file, silently detaching it from the link target. The token stays
+  # untouched in the (now orphaned) target file, while this step reports
+  # "removed" success. Fail closed instead: never resolve/edit the link
+  # target (an unpredictable write into a repo this script doesn't own),
+  # just surface the target path and require a manual purge there.
+  if [[ -L "$codex_config" ]]; then
+    echo "  エラー: azt-mcp (Codex): $codex_config はシンボリックリンクです（リンク先: $(readlink "$codex_config")）。dotfiles 管理等の可能性があるため自動編集しません。リンク先のファイルを手動で確認し、AZITO_UI_TOKEN を除去してください" >&2
+    SETUP_HAD_ERRORS=1
+    return 1
   fi
 
   if ! command -v node >/dev/null 2>&1; then

@@ -345,6 +345,42 @@ describe('PUT /api/servers/:name — isolation cleanup on false->true (Issue #29
       expect(opts.serverRepo.updateIsolationReport).not.toHaveBeenCalled();
       expect(res.json().isolationCleanup).toBeUndefined();
     });
+
+    // Issue #29 review, Nit finding 3: `cleanup === 'done'` alone used to be
+    // sufficient to skip a retry — but a report missing `kind` entirely (a
+    // shape this route itself never writes, since attemptIsolationCleanup
+    // always sets `kind: 'cleanup'`), or one whose `kind` is something else
+    // (e.g. a future isolation doctor's `kind: 'verification'` write to the
+    // same column — see Server.ts's isolationReport doc comment), must not
+    // be trusted as a settled cleanup outcome just because it happens to
+    // carry a `cleanup: 'done'`-shaped field.
+    it('retries when isolationReport.cleanup is "done" but kind is missing', async () => {
+      const install = vi.fn(async () => ({ success: true, steps: [] }));
+      const opts = makeOpts({ harnessInstaller: makeHarnessInstaller(install) });
+      (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+        makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationReport: JSON.stringify({ cleanup: 'done' }) }),
+      );
+      const app = await buildApp(opts);
+
+      const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+      expect(res.statusCode).toBe(200);
+      expect(install).toHaveBeenCalledTimes(1);
+    });
+
+    it('retries when isolationReport.cleanup is "done" but kind is "verification" (not this route\'s own report)', async () => {
+      const install = vi.fn(async () => ({ success: true, steps: [] }));
+      const opts = makeOpts({ harnessInstaller: makeHarnessInstaller(install) });
+      (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+        makeServer({ type: 'agent', isolationIntent: true, sshHost: 'user@host', isolationReport: JSON.stringify({ kind: 'verification', cleanup: 'done' }) }),
+      );
+      const app = await buildApp(opts);
+
+      const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+      expect(res.statusCode).toBe(200);
+      expect(install).toHaveBeenCalledTimes(1);
+    });
   });
 
   // Issue #29 review (3rd pass), Important finding 2: updateIsolationIntent()
@@ -877,5 +913,90 @@ describe('isolation_intent blocks a simultaneous connection-info change (Issue #
     expect(res.statusCode).toBe(200);
     expect(opts.serverRepo.update).toHaveBeenCalled();
     expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
+  });
+});
+
+// Issue #29 review, Important finding 1: POST harness/install reads
+// srv.isolationIntent (it decides whether the remote install withholds
+// --ui-token / forces --purge-operator-token) and must do so under the same
+// serverIsolationMutex as the isolation-intent PUT above, using only a row
+// fetched INSIDE the lock — otherwise a normal install kicked off just
+// before a false->true isolation PUT could read a stale `isolationIntent:
+// false`, then complete (writing --ui-token back to the server) only AFTER
+// the PUT's own cleanup already purged it.
+describe('POST /api/servers/:name/harness/install — serialized via serverIsolationMutex (Issue #29 Important finding 1)', () => {
+  function makeHarnessInstaller(installLocalImpl: ReturnType<typeof vi.fn>, installImpl: ReturnType<typeof vi.fn>) {
+    return { installLocal: installLocalImpl, install: installImpl } as unknown as ServersRouteOptions['harnessInstaller'];
+  }
+
+  it('acquires serverIsolationMutex.withLock keyed by the server name before reading the row', async () => {
+    const installLocal = vi.fn(async () => ({ success: true, steps: [] }));
+    const withLock = vi.fn((key: string, fn: () => Promise<unknown>) => fn());
+    const opts = makeOpts({
+      harnessInstaller: makeHarnessInstaller(installLocal, vi.fn()),
+      serverIsolationMutex: { withLock } as unknown as ServersRouteOptions['serverIsolationMutex'],
+    });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'local' }));
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv/harness/install', payload: {} });
+
+    expect(res.statusCode).toBe(200);
+    expect(withLock).toHaveBeenCalledWith('srv', expect.any(Function));
+    // findByName (the row read that feeds installOptions.isolationIntent)
+    // must happen only once withLock has invoked its callback, not before.
+    expect(opts.serverRepo.findByName).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the isolationIntent value from the row fetched inside the lock, not a value read beforehand', async () => {
+    const installLocal = vi.fn(async () => ({ success: true, steps: [] }));
+    const opts = makeOpts({ harnessInstaller: makeHarnessInstaller(installLocal, vi.fn()) });
+    // findByName only ever returns the fresh (isolated) row — this simulates
+    // a concurrent isolation PUT having already flipped isolation_intent to
+    // true by the time this route's lock-protected read runs.
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'local', isolationIntent: true }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv/harness/install', payload: {} });
+
+    expect(res.statusCode).toBe(200);
+    expect(installLocal).toHaveBeenCalledWith(expect.objectContaining({ isolationIntent: true }));
+  });
+
+  it('serializes against a concurrent isolation-intent PUT on the same server (real KeyedMutex)', async () => {
+    let releaseInstall!: () => void;
+    const installGate = new Promise<void>((resolve) => { releaseInstall = resolve; });
+    const install = vi.fn(async () => {
+      await installGate;
+      return { success: true, steps: [] };
+    });
+    const opts = makeOpts({
+      harnessInstaller: makeHarnessInstaller(vi.fn(), install),
+      serverIsolationMutex: new KeyedMutex(),
+    });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: false, sshHost: 'user@host' }),
+    );
+    const app = await buildApp(opts);
+
+    const installPromise = app.inject({ method: 'POST', url: '/api/servers/srv/harness/install', payload: {} });
+    // Give the install request a turn of the event loop to enter the lock
+    // and start awaiting installGate before firing the PUT.
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
+
+    const putPromise = app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+    await new Promise((resolve) => setImmediate(resolve));
+    // The PUT is queued behind the same key and must not have run yet.
+    expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
+
+    releaseInstall();
+    const [installRes, putRes] = await Promise.all([installPromise, putPromise]);
+
+    expect(installRes.statusCode).toBe(200);
+    expect(putRes.statusCode).toBe(200);
+    expect(opts.serverRepo.updateIsolationIntent).toHaveBeenCalledWith('srv', true);
   });
 });
