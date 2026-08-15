@@ -58,6 +58,9 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     agentVersion: null,
     sshHost: null,
     sshHostFingerprint: null,
+    isolationIntent: false,
+    isolationVerifiedAt: null,
+    isolationReport: null,
     muxRuntime: 'system',
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -96,6 +99,33 @@ describe('TaskPaneEnvironmentService.buildEnvForNewWindow', () => {
     const { service } = makeDeps(false);
     const { env } = service.buildEnvForNewWindow(makeTask(), makeServer());
     expect(env.AZITO_UI_TOKEN).toBe('ui-token-123');
+  });
+
+  // Issue #29 Step 1: buildEnvForNewWindow is the single credential-injection
+  // point every execute/restore/respawn/recovery/splitPane path funnels
+  // through — this is the one place isolation_intent must actually withhold
+  // project secrets from a server declared to hold none.
+  it('withholds AZITO_SECRET_* entirely for a server with isolationIntent=true', () => {
+    const { service, projectSecretRepo } = makeDeps(false);
+    const { env } = service.buildEnvForNewWindow(makeTask(), makeServer({ isolationIntent: true }));
+
+    expect(env.AZITO_SECRET_FOO).toBeUndefined();
+    expect(Object.keys(env).some((k) => k.startsWith('AZITO_SECRET_'))).toBe(false);
+    // Not just filtered post-read — never even decrypted.
+    expect(projectSecretRepo.findByProjectWithValues).not.toHaveBeenCalled();
+  });
+
+  it('still injects project secrets for a server with isolationIntent=false (default/unset)', () => {
+    const { service } = makeDeps(false);
+    const { env } = service.buildEnvForNewWindow(makeTask(), makeServer({ isolationIntent: false }));
+    expect(env.AZITO_SECRET_FOO).toBe('bar');
+  });
+
+  it('still issues/rotates the task token for an isolated server (isolation only withholds secrets, not the task token)', () => {
+    const { service, taskTokenRepo } = makeDeps(false);
+    const { env } = service.buildEnvForNewWindow(makeTask({ id: 9 }), makeServer({ isolationIntent: true }));
+    expect(taskTokenRepo.issueNextGeneration).toHaveBeenCalledWith(9, 'window_regenerated');
+    expect(env.AZITO_TASK_TOKEN).toMatch(/^azt\.task\.1\./);
   });
 
   it('explicitly overrides AZITO_UI_TOKEN to empty when the scoped-auth flag is on', () => {

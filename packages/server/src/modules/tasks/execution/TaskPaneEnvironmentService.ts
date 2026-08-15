@@ -75,7 +75,20 @@ export class TaskPaneEnvironmentService {
     // itself has been invoked. Reading secrets first means the only
     // remaining fallible step after rotation is `create()`, which
     // createRotatedWindow already rolls back correctly.
-    const secretEntries = this.projectSecretRepo.findByProjectWithValues(task.projectId);
+    // Isolation intent (Issue #29 design v2, 層3「遮断」): a server declared
+    // isolation_intent=1 is meant to hold no credentials, so this is the ONE
+    // place — the single call site every execute/restore/respawn/recovery/
+    // splitPane path funnels through (see the class doc comment above) —
+    // that withholds project secrets from it. Skipped entirely (not just
+    // filtered post-decrypt) so an isolated server's window never even
+    // triggers a secret decrypt.
+    //
+    // Deliberate exception planned, not yet implemented: pushing案A (a later
+    // task) will need exactly one isolation-push credential to reach an
+    // isolated server so it can still push/PR its own work — when that
+    // lands, it is injected as its own dedicated env var here, NOT by
+    // relaxing this skip to let ordinary AZITO_SECRET_* rows back in.
+    const secretEntries = server.isolationIntent ? [] : this.projectSecretRepo.findByProjectWithValues(task.projectId);
     const issued = this.taskTokenRepo.issueNextGeneration(task.id, 'window_regenerated');
     // Generation number + reason only (design v3 §10: detail must never
     // carry secret material) — `issued.token` (the plaintext) is

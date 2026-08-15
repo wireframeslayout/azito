@@ -410,7 +410,18 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       // digest a human can't read, so they're read here directly from the
       // same repository/query resolveExecutionManifest() reads its digest
       // input from — not a differently-scoped or differently-filtered read.
-      const secretNames = projectSecretRepo.findByProject(task.projectId).map((s) => s.name).sort();
+      //
+      // Empty for an isolation_intent=1 server (Issue #29 Step 1): this list
+      // must reflect what TaskPaneEnvironmentService.buildEnvForNewWindow
+      // will ACTUALLY inject, not what the project merely has configured —
+      // an isolated server never receives AZITO_SECRET_* at all (see that
+      // method's isolation-intent skip), so showing names here would be a
+      // display/reality mismatch a human approver would reasonably read as
+      // "these are the secrets this run will have".
+      const resolvedServer = serverName ? serverRepo.findByName(serverName) : null;
+      const secretNames = resolvedServer?.isolationIntent
+        ? []
+        : projectSecretRepo.findByProject(task.projectId).map((s) => s.name).sort();
 
       return {
         taskId: task.id,

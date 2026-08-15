@@ -27,6 +27,17 @@ export interface HarnessInstallOptions {
   uiToken?: string;
   serverName?: string;
   prefix?: string;
+  /**
+   * Issue #29 design v2, 層3「遮断」: when the target server has declared
+   * isolation_intent (isolation_intent=1), `--ui-token` is withheld from
+   * setup.sh so the fixed UI token is never distributed to a server meant to
+   * hold no credentials (setup.sh itself already tolerates a missing
+   * `--ui-token` — Issue #28). `--webhook-token` is deliberately still
+   * passed: it authenticates the runtime signal (hook/activity) channel, not
+   * a task credential, so it's correct to distribute at this level
+   * regardless of isolation.
+   */
+  isolationIntent?: boolean;
 }
 
 const VALID_PREFIX = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
@@ -155,12 +166,15 @@ export class HarnessInstaller {
   }
 
   private async runSetup(sshHost: string, options: HarnessInstallOptions): Promise<void> {
-    const { azitoUrl, webhookToken, uiToken, serverName, prefix } = options;
+    const { azitoUrl, webhookToken, uiToken, serverName, prefix, isolationIntent } = options;
     const harnessDir = remoteHarnessDir(prefix);
     let cmd = `bash ${harnessDir}/setup.sh`;
     if (azitoUrl) cmd += ` --azito-url ${shellQuote(azitoUrl)}`;
     if (webhookToken) cmd += ` --webhook-token ${shellQuote(webhookToken)}`;
-    if (uiToken) cmd += ` --ui-token ${shellQuote(uiToken)}`;
+    // Withhold --ui-token for an isolation-intent server (see this option's
+    // doc comment on HarnessInstallOptions.isolationIntent) — the one place
+    // this class distributes it.
+    if (uiToken && !isolationIntent) cmd += ` --ui-token ${shellQuote(uiToken)}`;
     if (serverName) cmd += ` --server-name ${shellQuote(serverName)}`;
     if (prefix) cmd += ` --prefix ${shellQuote(prefix)}`;
 
