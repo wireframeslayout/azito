@@ -1400,14 +1400,25 @@ describe('POST /api/servers/:name/isolation/doctor (Issue #29 Step 2 B)', () => 
     expect(res.statusCode).toBe(404);
   });
 
-  it('runs the probe for an isolated agent server and persists a verification report via transportFactory.getTransport', async () => {
+  // Follow-up review round, Important finding 1: `same_host` can no longer
+  // resolve to 'pass' from a canary-absent + differing-identity probe alone
+  // (see checkFsAndHostBoundary's doc comment) — a run with every OTHER
+  // check clean therefore still reports `verified: false` overall and
+  // persists via `updateIsolationReport`, not `updateIsolationVerification`.
+  // This test now covers that realistic "mostly clean, still unverified"
+  // shape; the fully-passing `updateIsolationVerification` path is exercised
+  // directly against `runIsolationDoctor` in isolationDoctor.test.ts (no
+  // scenario reaches it through this HTTP-level mock, since same_host is the
+  // one check this doctor cannot currently pass on its own).
+  it('runs the probe for an isolated agent server and persists a report via transportFactory.getTransport, even when every check but same_host is clean', async () => {
     const exec = vi.fn(async (cmd: string) => {
       if (cmd.includes('hostname')) return { stdout: 'remote-host\n9999\n', stderr: '', code: 0 };
       // Review round (Critical finding 1): the FS-boundary canary probe —
       // a different command than the plain hostname/uid one above, matched
       // by the mocked hub canary's path (see the vi.mock('./hubCanary')
-      // block at the top of this file). Reports absent, so the check falls
-      // through to the (differing) hostname/uid signal and passes.
+      // block at the top of this file). Reports absent — absence is not
+      // proof of separation (Important finding 1), so same_host resolves to
+      // 'unknown' even though hostname/uid both differ from the hub's.
       if (cmd.includes('.azito-hub-canary-test')) return { stdout: 'AZT_STATUS:canary:absent\n', stderr: '', code: 0 };
       if (cmd.includes('.ssh')) return { stdout: 'AZT_SSH_NO_DIR\n', stderr: '', code: 0 };
       if (cmd.includes('gh auth')) return { stdout: 'AZT_GH_ABSENT\n', stderr: '', code: 0 };
@@ -1437,13 +1448,11 @@ describe('POST /api/servers/:name/isolation/doctor (Issue #29 Step 2 B)', () => 
 
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.verified).toBe(true);
+    expect(body.verified).toBe(false);
     expect(Array.isArray(body.checks)).toBe(true);
-    expect(opts.serverRepo.updateIsolationVerification).toHaveBeenCalledWith(
-      'srv',
-      expect.stringContaining('"kind":"verification"'),
-      expect.any(String),
-    );
+    expect(body.checks.find((c: { id: string }) => c.id === 'same_host').status).toBe('unknown');
+    expect(opts.serverRepo.updateIsolationVerification).not.toHaveBeenCalled();
+    expect(opts.serverRepo.updateIsolationReport).toHaveBeenCalledWith('srv', expect.stringContaining('"kind":"verification"'));
   });
 
   it('does not advance isolation_verified_at when a check fails', async () => {
@@ -1529,6 +1538,157 @@ describe('POST /api/servers/:name/isolation/doctor (Issue #29 Step 2 B)', () => 
 
       expect(doctorRes.statusCode).toBe(400);
       expect(doctorRes.json().error).toBe('isolation_doctor_requires_isolated_agent_server');
+    });
+  });
+
+  // Isolation doctor review, Important finding 3: POST /api/servers/:name/isolation/doctor
+  // was already the only lock-holder for its own findByName->probe->persist
+  // span, but POST /api/servers (create) and DELETE /api/servers/:name ran
+  // OUTSIDE serverIsolationMutex entirely — a slow doctor probe could have a
+  // same-name delete+recreate race past it underneath, and the doctor would
+  // still persist a "verified" report describing a server that no longer
+  // exists (or that was replaced). Fixed two ways: (1) POST create / DELETE
+  // now take the same per-server-name lock as the doctor (below), and (2) as
+  // defense in depth, the doctor re-reads the row one more time immediately
+  // before persisting and aborts on any identity mismatch, reusing the same
+  // ServerSnapshotMismatchError convention `refetchServer` already throws
+  // elsewhere (ServerIsolationLock.ts).
+  describe('serverIsolationMutex also serializes POST /api/servers and DELETE /api/servers/:name (isolation doctor review, Important finding 3)', () => {
+    it('POST /api/servers acquires serverIsolationMutex.withLock keyed by the new server name', async () => {
+      const withLock = vi.fn((key: string, fn: () => Promise<unknown>) => fn());
+      const opts = makeOpts({ serverIsolationMutex: { withLock } as unknown as ServersRouteOptions['serverIsolationMutex'] });
+      (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(null);
+      const app = await buildApp(opts);
+
+      const res = await app.inject({ method: 'POST', url: '/api/servers', payload: { name: 'new-srv', type: 'local' } });
+
+      expect(res.statusCode).toBe(200);
+      expect(withLock).toHaveBeenCalledWith('new-srv', expect.any(Function));
+    });
+
+    it('DELETE /api/servers/:name acquires serverIsolationMutex.withLock keyed by the server name', async () => {
+      const withLock = vi.fn((key: string, fn: () => Promise<unknown>) => fn());
+      const opts = makeOpts({ serverIsolationMutex: { withLock } as unknown as ServersRouteOptions['serverIsolationMutex'] });
+      (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'local' }));
+      const app = await buildApp(opts);
+
+      const res = await app.inject({ method: 'DELETE', url: '/api/servers/srv' });
+
+      expect(res.statusCode).toBe(200);
+      expect(withLock).toHaveBeenCalledWith('srv', expect.any(Function));
+    });
+
+    it('a slow doctor probe blocks a concurrent same-name DELETE, then a concurrent same-name POST recreate, until the probe finishes (real KeyedMutex)', async () => {
+      let releaseProbe!: () => void;
+      const probeGate = new Promise<void>((resolve) => { releaseProbe = resolve; });
+      const exec = vi.fn(async (cmd: string) => {
+        await probeGate;
+        if (cmd.includes('hostname')) return { stdout: 'remote-host\n9999\n', stderr: '', code: 0 };
+        if (cmd.includes('.azito-hub-canary-test')) return { stdout: 'AZT_STATUS:canary:absent\n', stderr: '', code: 0 };
+        if (cmd.includes('.ssh')) return { stdout: 'AZT_SSH_NO_DIR\n', stderr: '', code: 0 };
+        if (cmd.includes('gh auth')) return { stdout: 'AZT_GH_ABSENT\n', stderr: '', code: 0 };
+        if (cmd.includes('credential.helper')) return { stdout: 'AZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
+        if (cmd.includes('$HOME"')) return { stdout: '/home/remote\n', stderr: '', code: 0 };
+        if (cmd.includes('ls -1')) return { stdout: 'AZT_LS_DONE\n', stderr: '', code: 0 };
+        if (cmd.includes('.claude/settings.json')) return { stdout: 'AZT_STATUS:f:absent\n', stderr: '', code: 0 };
+        if (cmd.includes('config.toml')) return { stdout: 'AZT_STATUS:f:absent\n', stderr: '', code: 0 };
+        if (cmd.includes('AZT_ENV_PRESENT')) return { stdout: 'AZT_ENV_DONE\n', stderr: '', code: 0 };
+        return { stdout: '', stderr: '', code: 0 };
+      });
+      const opts = makeOpts({
+        transportFactory: { getTransport: vi.fn(() => ({ exec })), invalidate: vi.fn() } as unknown as ServersRouteOptions['transportFactory'],
+        serverIsolationMutex: new KeyedMutex(),
+      });
+      (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+        makeServer({ type: 'agent', isolationIntent: true, host: '1.2.3.4' }),
+      );
+      const app = await buildApp(opts);
+
+      const doctorPromise = app.inject({ method: 'POST', url: '/api/servers/srv/isolation/doctor' });
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(opts.serverRepo.delete).not.toHaveBeenCalled();
+
+      const deletePromise = app.inject({ method: 'DELETE', url: '/api/servers/srv' });
+      await new Promise((resolve) => setImmediate(resolve));
+      // Queued behind the doctor's held lock — must not have run yet.
+      expect(opts.serverRepo.delete).not.toHaveBeenCalled();
+
+      releaseProbe();
+      const [doctorRes, deleteRes] = await Promise.all([doctorPromise, deletePromise]);
+
+      expect(doctorRes.statusCode).toBe(200);
+      expect(deleteRes.statusCode).toBe(200);
+      expect(opts.serverRepo.delete).toHaveBeenCalledWith('srv');
+    });
+
+    it('defense in depth: aborts without persisting when the row read right before persist differs in identity from the one the probe started against', async () => {
+      const exec = vi.fn(async (cmd: string) => {
+        if (cmd.includes('hostname')) return { stdout: 'remote-host\n9999\n', stderr: '', code: 0 };
+        if (cmd.includes('.azito-hub-canary-test')) return { stdout: 'AZT_STATUS:canary:absent\n', stderr: '', code: 0 };
+        if (cmd.includes('.ssh')) return { stdout: 'AZT_SSH_NO_DIR\n', stderr: '', code: 0 };
+        if (cmd.includes('gh auth')) return { stdout: 'AZT_GH_ABSENT\n', stderr: '', code: 0 };
+        if (cmd.includes('credential.helper')) return { stdout: 'AZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
+        if (cmd.includes('$HOME"')) return { stdout: '/home/remote\n', stderr: '', code: 0 };
+        if (cmd.includes('ls -1')) return { stdout: 'AZT_LS_DONE\n', stderr: '', code: 0 };
+        if (cmd.includes('.claude/settings.json')) return { stdout: 'AZT_STATUS:f:absent\n', stderr: '', code: 0 };
+        if (cmd.includes('config.toml')) return { stdout: 'AZT_STATUS:f:absent\n', stderr: '', code: 0 };
+        if (cmd.includes('AZT_ENV_PRESENT')) return { stdout: 'AZT_ENV_DONE\n', stderr: '', code: 0 };
+        return { stdout: '', stderr: '', code: 0 };
+      });
+      const opts = makeOpts({
+        transportFactory: { getTransport: vi.fn(() => ({ exec })), invalidate: vi.fn() } as unknown as ServersRouteOptions['transportFactory'],
+      });
+      const original = makeServer({ type: 'agent', isolationIntent: true, host: '1.2.3.4', createdAt: '2026-01-01T00:00:00Z' });
+      // Simulates a delete+recreate landing between the two reads within the
+      // same lock hold — createdAt is the one field that changes on every
+      // INSERT even when every connection field is set back identically.
+      const recreated = { ...original, createdAt: '2026-01-01T00:00:05Z' };
+      let calls = 0;
+      (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        calls += 1;
+        return calls === 1 ? original : recreated;
+      });
+      const app = await buildApp(opts);
+
+      const res = await app.inject({ method: 'POST', url: '/api/servers/srv/isolation/doctor' });
+
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toBe('server_identity_changed_during_probe');
+      expect(opts.serverRepo.updateIsolationVerification).not.toHaveBeenCalled();
+      expect(opts.serverRepo.updateIsolationReport).not.toHaveBeenCalled();
+    });
+
+    it('defense in depth: aborts without persisting when the server was deleted between the initial read and the persist-time re-read', async () => {
+      const exec = vi.fn(async (cmd: string) => {
+        if (cmd.includes('hostname')) return { stdout: 'remote-host\n9999\n', stderr: '', code: 0 };
+        if (cmd.includes('.azito-hub-canary-test')) return { stdout: 'AZT_STATUS:canary:absent\n', stderr: '', code: 0 };
+        if (cmd.includes('.ssh')) return { stdout: 'AZT_SSH_NO_DIR\n', stderr: '', code: 0 };
+        if (cmd.includes('gh auth')) return { stdout: 'AZT_GH_ABSENT\n', stderr: '', code: 0 };
+        if (cmd.includes('credential.helper')) return { stdout: 'AZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
+        if (cmd.includes('$HOME"')) return { stdout: '/home/remote\n', stderr: '', code: 0 };
+        if (cmd.includes('ls -1')) return { stdout: 'AZT_LS_DONE\n', stderr: '', code: 0 };
+        if (cmd.includes('.claude/settings.json')) return { stdout: 'AZT_STATUS:f:absent\n', stderr: '', code: 0 };
+        if (cmd.includes('config.toml')) return { stdout: 'AZT_STATUS:f:absent\n', stderr: '', code: 0 };
+        if (cmd.includes('AZT_ENV_PRESENT')) return { stdout: 'AZT_ENV_DONE\n', stderr: '', code: 0 };
+        return { stdout: '', stderr: '', code: 0 };
+      });
+      const opts = makeOpts({
+        transportFactory: { getTransport: vi.fn(() => ({ exec })), invalidate: vi.fn() } as unknown as ServersRouteOptions['transportFactory'],
+      });
+      const original = makeServer({ type: 'agent', isolationIntent: true, host: '1.2.3.4' });
+      let calls = 0;
+      (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        calls += 1;
+        return calls === 1 ? original : null;
+      });
+      const app = await buildApp(opts);
+
+      const res = await app.inject({ method: 'POST', url: '/api/servers/srv/isolation/doctor' });
+
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toBe('server_deleted_during_probe');
+      expect(opts.serverRepo.updateIsolationVerification).not.toHaveBeenCalled();
+      expect(opts.serverRepo.updateIsolationReport).not.toHaveBeenCalled();
     });
   });
 });

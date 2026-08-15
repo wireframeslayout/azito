@@ -30,6 +30,22 @@ import type { HubCanary } from './hubCanary';
 // single `'unknown'` or `'fail'` anywhere blocks it, matching the isolation
 // gate's own "unable to prove clean means fail closed" philosophy
 // (servers/routes.ts's checkIsolationBlockers).
+//
+// Scope of this module (review round, Important finding 1): this doctor's
+// job is to catch a server that is CLEARLY not isolated (same filesystem,
+// leftover credentials, live tokens in the exec environment) — it is a
+// fail-closed TRIPWIRE, not a full attestation of separation. Because the
+// FS-boundary check below can only ever produce `'fail'` (positive proof of
+// sharing) or `'unknown'` (no proof either way — see its own doc comment for
+// why absence of a canary hit is not evidence of separation), an `agent`
+// server whose hostname/uid legitimately differ from the hub's will
+// currently never see `same_host` resolve to `'pass'`, and therefore will
+// rarely (if ever) reach an overall `verified: true` from this check set
+// alone. That is intentional fail-closed behavior, not a bug to work around
+// by loosening the check — a real, positive attestation that a target
+// filesystem/process namespace is genuinely separate from the hub's belongs
+// to a future DEPLOYMENT-side mechanism (e.g. container/VM attestation, or
+// an operator-supplied signed statement), out of scope for this step.
 
 export type IsolationCheckStatus = 'pass' | 'fail' | 'unknown';
 
@@ -219,12 +235,22 @@ async function probeFile(transport: IServerTransport, pathExpr: string): Promise
  *    trying to read a marker the hub itself just wrote does that.
  *
  * `fail` if the canary was read back with matching content, OR both
- * hostname and uid match. `pass` only when the canary is confirmed
- * unreadable/absent AND both hostname and uid differ — every other
- * combination (one of hostname/uid matching without a canary result either
- * way, or the canary probe itself being inconclusive/unreachable) is
- * `unknown`, never `pass` — this module's fail-closed contract (a check
- * that cannot prove separation must not report separation).
+ * hostname and uid match.
+ *
+ * Follow-up review round, Important finding 1: a canary that reads back as
+ * `'absent'` (or that could not be probed at all) is NOT treated as evidence
+ * of separation — only a successful, matching READ is a positive signal, and
+ * that signal is used solely for `'fail'`. A hub whose data directory is
+ * bind-mounted at a DIFFERENT path inside the target container (or simply
+ * not mounted there at all) would report the canary "absent" even on a
+ * fully SHARED filesystem, so absence proves nothing either way. Concretely:
+ * a canary read with matching content → `'fail'`; both hostname and uid
+ * matching → `'fail'`; every other combination — including "neither
+ * hostname nor uid match AND the canary was confirmed unreadable/absent" —
+ * is `'unknown'`. This check can therefore never resolve to `'pass'` on its
+ * own; see this module's top-of-file doc comment ("Scope of this module")
+ * for why that is the correct fail-closed behavior rather than a gap to
+ * paper over here.
  */
 async function checkFsAndHostBoundary(transport: IServerTransport, hub: HubIdentity): Promise<IsolationCheck> {
   const id = 'same_host';
@@ -277,8 +303,19 @@ async function checkFsAndHostBoundary(transport: IServerTransport, hub: HubIdent
   if (sameHostname && sameUid) {
     return { id, status: 'fail', detail: `${identity}（hostname/uid が両方とも一致）` };
   }
+  // Follow-up review round, Important finding 1: an absent (or otherwise
+  // inconclusive) canary is never treated as proof of separation — it falls
+  // through to 'unknown' below, even when hostname and uid both differ. A
+  // hub data directory mounted at a different path inside the target (or
+  // not mounted at all) would also report "absent" on a genuinely SHARED
+  // filesystem, so absence carries no evidential weight either way; only a
+  // matching canary READ (handled above, as 'fail') is a real measurement.
   if (canaryReadable === false && !sameHostname && !sameUid) {
-    return { id, status: 'pass', detail: `${identity}（一致せず、カナリアファイルも読み取れませんでした — 実測によるファイルシステム分離を確認）` };
+    return {
+      id,
+      status: 'unknown',
+      detail: `${identity}（hostname/uid は一致しませんでしたが、カナリアファイルが読み取れなかった／存在しなかったことは分離の証明にはなりません — 別パスへの mount 等でも同じ結果になり得るため、判定不能です）`,
+    };
   }
   if (canaryReadable === null) {
     return {
@@ -299,10 +336,30 @@ async function checkFsAndHostBoundary(transport: IServerTransport, hub: HubIdent
 /**
  * 2. `~/.ssh` に秘密鍵が無い — `PRIVATE KEY` ヘッダ走査。ディレクトリ自体が
  * 存在しない場合は自明に pass（走査対象がない）。
+ *
+ * Review round (Important finding 2): the previous command echoed a
+ * terminator (`AZT_SSH_DIR_EXISTS`) unconditionally AFTER `grep`, discarding
+ * `grep`'s own exit status — a `grep` that failed outright (binary missing
+ * from PATH, a scan error on an unreadable subentry, anything other than a
+ * clean "ran and found nothing") produced empty stdout indistinguishable
+ * from "ran cleanly and found no private keys", silently reporting `'pass'`
+ * for a scan that never actually happened. `grep`'s own `$?` is now
+ * captured and reported as an explicit `AZT_GREP_STATUS:<n>` line: exit 0
+ * (matches found) -> `'fail'`, exit 1 (ran cleanly, no matches) -> `'pass'`,
+ * any other exit code (2+: usage/read error) -> `'unknown'`. `grep` itself
+ * being absent from PATH is also its own explicit `unknown`, never folded
+ * into "no matches".
  */
 async function checkNoPrivateKeys(transport: IServerTransport): Promise<IsolationCheck> {
   const id = 'no_ssh_private_keys';
-  const cmd = 'if [ -d "$HOME/.ssh" ]; then grep -rIl "PRIVATE KEY" "$HOME/.ssh" 2>/dev/null; echo AZT_SSH_DIR_EXISTS; else echo AZT_SSH_NO_DIR; fi';
+  const cmd = 'if [ -d "$HOME/.ssh" ]; then '
+    + 'if command -v grep >/dev/null 2>&1; then '
+    + 'OUT=$(grep -rIl "PRIVATE KEY" "$HOME/.ssh" 2>/dev/null); GREP_STATUS=$?; '
+    + 'echo "AZT_GREP_STATUS:$GREP_STATUS"; '
+    + 'printf \'%s\\n\' "$OUT"; '
+    + 'echo AZT_SSH_DIR_EXISTS; '
+    + 'else echo AZT_GREP_ABSENT; fi; '
+    + 'else echo AZT_SSH_NO_DIR; fi';
   let result;
   try {
     result = await transport.exec(cmd);
@@ -312,18 +369,33 @@ async function checkNoPrivateKeys(transport: IServerTransport): Promise<Isolatio
   if (result.code !== 0) {
     return { id, status: 'unknown', detail: `~/.ssh の走査に失敗しました (code ${result.code}): ${result.stderr || result.stdout || '(no output)'}` };
   }
-  const lines = result.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
-  if (lines.includes('AZT_SSH_NO_DIR')) {
+  const lines = result.stdout.split('\n').map((l) => l.trim());
+  const trimmedNonEmpty = lines.filter(Boolean);
+  if (trimmedNonEmpty.includes('AZT_SSH_NO_DIR')) {
     return { id, status: 'pass', detail: '~/.ssh ディレクトリが存在しません' };
   }
-  if (!lines.includes('AZT_SSH_DIR_EXISTS')) {
+  if (trimmedNonEmpty.includes('AZT_GREP_ABSENT')) {
+    return { id, status: 'unknown', detail: 'grep コマンドが見つからないため、~/.ssh の秘密鍵走査ができませんでした' };
+  }
+  const statusIdx = lines.findIndex((l) => /^AZT_GREP_STATUS:-?\d+$/.test(l));
+  const endIdx = lines.findIndex((l) => l === 'AZT_SSH_DIR_EXISTS');
+  if (statusIdx === -1 || endIdx === -1 || endIdx <= statusIdx) {
     return { id, status: 'unknown', detail: `~/.ssh の走査結果が想定外の形式でした: ${JSON.stringify(result.stdout)}` };
   }
-  const offenders = lines.filter((l) => l !== 'AZT_SSH_DIR_EXISTS');
-  if (offenders.length > 0) {
+  const grepStatus = Number(lines[statusIdx].slice('AZT_GREP_STATUS:'.length));
+  const offenders = lines.slice(statusIdx + 1, endIdx).filter(Boolean);
+  if (grepStatus === 0) {
+    if (offenders.length === 0) {
+      // grep reported a match (exit 0) but no filename made it through —
+      // an internal inconsistency this doctor must not paper over as clean.
+      return { id, status: 'unknown', detail: 'grep が一致を報告しましたが、対象ファイル名を取得できませんでした' };
+    }
     return { id, status: 'fail', detail: `秘密鍵らしきファイルが見つかりました: ${offenders.join(', ')}` };
   }
-  return { id, status: 'pass', detail: '~/.ssh 配下に秘密鍵は見つかりませんでした' };
+  if (grepStatus === 1) {
+    return { id, status: 'pass', detail: '~/.ssh 配下に秘密鍵は見つかりませんでした' };
+  }
+  return { id, status: 'unknown', detail: `grep の走査が異常終了しました (exit ${grepStatus})` };
 }
 
 /** 3. `gh auth status` が未認証または gh 不在。 */

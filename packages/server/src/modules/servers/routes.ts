@@ -20,6 +20,7 @@ import { OPERATOR_PRINCIPAL, type Principal } from '../../shared/auth/Principal'
 import type { KeyedMutex } from '../../shared/keyedMutex';
 import { runIsolationDoctor } from './isolationDoctor';
 import { getVerifiedHubCanary } from './hubCanary';
+import { assertServerIdentityUnchanged, ServerSnapshotMismatchError } from './ServerIsolationLock';
 
 // ─── Tailscale / network helpers ───
 
@@ -313,6 +314,15 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
   });
 
   // ── POST /api/servers ──
+  // Isolation doctor review (Important finding 3): this route's own
+  // existence-check-then-create span, and DELETE /api/servers/:name below,
+  // now both run inside the SAME per-server-name serverIsolationMutex that
+  // PUT/installer/doctor already serialize on (see that mutex's doc comment
+  // on ServersRouteOptions above). Without this, a name freed by a
+  // concurrent DELETE could be recreated here while the isolation doctor's
+  // (also-locked) probe/persist span for the SAME name was still running
+  // against the OLD row — closing that race is the whole point of taking the
+  // lock here, not just validating input.
   fastify.post('/api/servers', async (request, reply) => {
     const { name, type, host, agentPort, agentToken, autoInstall, muxRuntime } = request.body as {
       name?: string;
@@ -329,37 +339,39 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
     if (!name) return reply.status(400).send({ error: 'Server name required' });
     if (!/^[\w.@ -]{1,64}$/.test(name)) return reply.status(400).send({ error: 'Invalid server name' });
 
-    if (autoInstall && agentInstaller) {
-      if (!host) return reply.status(400).send({ error: 'Host (user@host) required' });
-      if (serverRepo.findByName(name))
-        return reply.status(409).send({ error: 'Server already exists' });
+    return serverIsolationMutex.withLock(name, async () => {
+      if (autoInstall && agentInstaller) {
+        if (!host) return reply.status(400).send({ error: 'Host (user@host) required' });
+        if (serverRepo.findByName(name))
+          return reply.status(409).send({ error: 'Server already exists' });
 
-      const steps: InstallProgress[] = [];
-      const result = await agentInstaller.install(host, (p) => steps.push(p), validMuxRuntime);
+        const steps: InstallProgress[] = [];
+        const result = await agentInstaller.install(host, (p) => steps.push(p), validMuxRuntime);
 
-      if (result.success) {
-        serverRepo.create(name, 'agent', result.host, result.port, result.token, result.version, host, validMuxRuntime as MuxRuntime | undefined);
-        return { ok: true, type: 'agent', steps, startMethod: result.startMethod };
+        if (result.success) {
+          serverRepo.create(name, 'agent', result.host, result.port, result.token, result.version, host, validMuxRuntime as MuxRuntime | undefined);
+          return { ok: true, type: 'agent', steps, startMethod: result.startMethod };
+        }
+
+        return reply.status(500).send({ error: result.error, steps });
       }
 
-      return reply.status(500).send({ error: result.error, steps });
-    }
-
-    if (!type || !['local', 'agent'].includes(type))
-      return reply.status(400).send({ error: 'Type must be "local" or "agent"' });
-    if (type === 'agent') {
-      if (!host) return reply.status(400).send({ error: 'Host required for agent servers' });
-      if (!agentPort) return reply.status(400).send({ error: 'Port required for agent servers' });
-      if (!agentToken) return reply.status(400).send({ error: 'Token required for agent servers' });
-    }
-    if (serverRepo.findByName(name))
-      return reply.status(409).send({ error: 'Server already exists' });
-    try {
-      serverRepo.create(name, type, host, agentPort, agentToken, undefined, undefined, validMuxRuntime as MuxRuntime | undefined);
-      return { ok: true };
-    } catch (err: unknown) {
-      return reply.status(500).send({ error: (err as Error).message });
-    }
+      if (!type || !['local', 'agent'].includes(type))
+        return reply.status(400).send({ error: 'Type must be "local" or "agent"' });
+      if (type === 'agent') {
+        if (!host) return reply.status(400).send({ error: 'Host required for agent servers' });
+        if (!agentPort) return reply.status(400).send({ error: 'Port required for agent servers' });
+        if (!agentToken) return reply.status(400).send({ error: 'Token required for agent servers' });
+      }
+      if (serverRepo.findByName(name))
+        return reply.status(409).send({ error: 'Server already exists' });
+      try {
+        serverRepo.create(name, type, host, agentPort, agentToken, undefined, undefined, validMuxRuntime as MuxRuntime | undefined);
+        return { ok: true };
+      } catch (err: unknown) {
+        return reply.status(500).send({ error: (err as Error).message });
+      }
+    });
   });
 
   // ── PUT /api/servers/:name ──
@@ -866,6 +878,44 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       const hub = { hostname: os.hostname(), uid: typeof process.getuid === 'function' ? process.getuid() : null, canary: getVerifiedHubCanary() };
       const { verified, checks } = await runIsolationDoctor(transport, hub);
       const probedAt = new Date().toISOString();
+
+      // Isolation doctor review (Important finding 3): defense in depth on
+      // top of serverIsolationMutex (see POST/DELETE /api/servers's doc
+      // comments — they now take this same per-name lock, which already
+      // makes a same-name delete+recreate impossible while this probe holds
+      // it). `runIsolationDoctor` above made many slow remote round-trips;
+      // right before writing its result, re-read the row ONE more time
+      // (still inside this lock) and confirm it is still the exact row
+      // (identity, not just current isolation state) the probe started
+      // against. A mismatch here means something raced the lock (a bug, not
+      // an expected path today) — abort without persisting rather than write
+      // a verification report that no longer describes what was probed.
+      const rowAtPersist = serverRepo.findByName(request.params.name);
+      if (!rowAtPersist) {
+        recordAuditBestEffort(auditLogService, {
+          actorClass: (request.principal ?? OPERATOR_PRINCIPAL).class,
+          actorId: (request.principal ?? OPERATOR_PRINCIPAL).id,
+          event: 'server.isolation_intent.doctor_run_aborted',
+          detail: { serverName: request.params.name, reason: 'server_deleted_during_probe' },
+        });
+        return reply.status(409).send({
+          error: 'server_deleted_during_probe',
+          message: 'isolation doctor の実行中にサーバーが削除されたため、結果を保存せずに中止しました。再実行してください。',
+        });
+      }
+      try {
+        assertServerIdentityUnchanged(srv, rowAtPersist);
+      } catch (err) {
+        if (!(err instanceof ServerSnapshotMismatchError)) throw err;
+        recordAuditBestEffort(auditLogService, {
+          actorClass: (request.principal ?? OPERATOR_PRINCIPAL).class,
+          actorId: (request.principal ?? OPERATOR_PRINCIPAL).id,
+          event: 'server.isolation_intent.doctor_run_aborted',
+          detail: { serverName: request.params.name, reason: 'server_identity_changed_during_probe' },
+        });
+        return reply.status(409).send({ error: 'server_identity_changed_during_probe', message: err.message });
+      }
+
       // Issue #29 Step 2 B: `kind: 'verification'` distinguishes this report
       // from the `kind: 'cleanup'` writer above (attemptIsolationCleanup) —
       // see Server.ts's isolationReport doc comment. Only a fully-passing
@@ -892,9 +942,14 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
   );
 
   // ── DELETE /api/servers/:name ──
+  // Isolation doctor review (Important finding 3): serialized on the same
+  // per-server-name serverIsolationMutex as POST /api/servers above and the
+  // isolation doctor route below — see POST's doc comment for the race this
+  // closes (a delete racing a concurrent doctor probe/persist on the same
+  // name).
   fastify.delete<{ Params: { name: string } }>(
     '/api/servers/:name',
-    async (request, reply) => {
+    async (request, reply) => serverIsolationMutex.withLock(request.params.name, async () => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       try {
@@ -903,7 +958,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       } catch (err: unknown) {
         return reply.status(500).send({ error: (err as Error).message });
       }
-    },
+    }),
   );
 
   // ── GET /api/servers/:name/status ──

@@ -103,6 +103,45 @@ export class ServerSnapshotMismatchError extends Error {
 }
 
 /**
+ * Identity fields for {@link assertServerIdentityUnchanged}: the same
+ * {@link SECURITY_SNAPSHOT_FIELDS} `refetchServer` already snapshots, PLUS
+ * `createdAt` — the one column `SECURITY_SNAPSHOT_FIELDS` deliberately
+ * excludes (see its own doc comment: "fine to silently pick up fresh") but
+ * that is exactly the signal needed here. A DELETE followed by a POST
+ * recreating a server under the SAME name with IDENTICAL connection fields
+ * (type/host/agentPort/agentToken/...) would satisfy `SECURITY_SNAPSHOT_FIELDS`
+ * even though it is a genuinely different row (a different remote endpoint
+ * could easily reuse the same declared host/port by coincidence, or an
+ * operator could recreate against the same connection info deliberately) —
+ * `createdAt` changes on every INSERT and is the cheapest available "is this
+ * still the same row I started with" signal given `servers.name` is a plain
+ * TEXT PRIMARY KEY (no surrogate id column to key off instead).
+ */
+const IDENTITY_FIELDS = [...SECURITY_SNAPSHOT_FIELDS, 'createdAt'] as const satisfies readonly (keyof ServerConfig)[];
+
+/**
+ * Isolation doctor defense-in-depth (Issue #29 isolation doctor review,
+ * Important finding 3): `POST /api/servers/:name/isolation/doctor` probes a
+ * live remote server over potentially many slow round-trips, all inside
+ * `serverIsolationMutex.withLock(name, ...)` — which by itself already
+ * serializes the doctor against `PUT`/`DELETE`/`POST /api/servers` on the
+ * SAME name (those routes must take the same lock; see routes.ts). This
+ * assertion is the second layer: right before the doctor persists its
+ * result, it re-reads the row one more time (still inside the same lock) and
+ * calls this to confirm it is still describing the exact row `expected` was
+ * read from at the start of the probe — never silently trusting that no
+ * other code path (present or future) could have raced the mutex.
+ *
+ * Reuses `ServerSnapshotMismatchError`, the same convention `refetchServer`
+ * already throws for its own "the row moved out from under me" case.
+ */
+export function assertServerIdentityUnchanged(expected: ServerConfig, current: ServerConfig): void {
+  if (IDENTITY_FIELDS.some((field) => expected[field] !== current[field])) {
+    throw new ServerSnapshotMismatchError(expected.name);
+  }
+}
+
+/**
  * Re-reads `expected.name` from `lock.serverRepo` — callers use this ONLY
  * from inside `lock.serverIsolationMutex.withLock(expected.name, ...)`, so
  * the row this returns reflects whatever the most recently COMMITTED PUT

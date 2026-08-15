@@ -45,11 +45,20 @@ function cleanHandler(cmd: string): ExecResult {
 }
 
 describe('runIsolationDoctor', () => {
-  it('reports verified:true when every check passes', async () => {
+  // Follow-up review round, Important finding 1: `same_host` can no longer
+  // resolve to 'pass' from absence-only signals (see checkFsAndHostBoundary's
+  // doc comment and this module's top-of-file "Scope of this module" note) —
+  // `cleanHandler`'s canary-absent + differing-identity scenario is now
+  // `'unknown'`, so even a fully "clean" agent server reports `verified:
+  // false` overall through this check set alone; every OTHER check still
+  // resolves to 'pass'.
+  it('reports verified:false overall (same_host stays unknown) even when every other check passes', async () => {
     const transport = makeTransport(cleanHandler);
     const result = await runIsolationDoctor(transport, HUB);
-    expect(result.verified).toBe(true);
-    expect(result.checks.every((c) => c.status === 'pass')).toBe(true);
+    expect(result.verified).toBe(false);
+    const otherChecks = result.checks.filter((c) => c.id !== 'same_host');
+    expect(otherChecks.every((c) => c.status === 'pass')).toBe(true);
+    expect(result.checks.find((c) => c.id === 'same_host')!.status).toBe('unknown');
   });
 
   it('same_host: fails when hostname AND uid both match the hub, even with an unreadable canary', async () => {
@@ -88,13 +97,18 @@ describe('runIsolationDoctor', () => {
     expect(result.checks.find((c) => c.id === 'same_host')!.status).toBe('unknown');
   });
 
-  it('same_host: passes when neither hostname nor uid match AND the canary is confirmed unreadable', async () => {
+  // Follow-up review round, Important finding 1: an absent/unreadable canary
+  // is never proof of separation (a hub data dir mounted at a different path
+  // inside the target would also read "absent" on a genuinely SHARED
+  // filesystem) — this can no longer resolve to 'pass', even though neither
+  // hostname nor uid match.
+  it('same_host: unknown when neither hostname nor uid match but the canary is only confirmed absent, not read (absence is not proof of separation)', async () => {
     const transport = makeTransport((cmd) => {
       if (cmd.includes('hostname')) return { stdout: 'other-host\n9999\n', stderr: '', code: 0 };
       return cleanHandler(cmd);
     });
     const result = await runIsolationDoctor(transport, HUB);
-    expect(result.checks.find((c) => c.id === 'same_host')!.status).toBe('pass');
+    expect(result.checks.find((c) => c.id === 'same_host')!.status).toBe('unknown');
   });
 
   it('same_host: unknown when the exec throws (unreachable)', async () => {
@@ -162,9 +176,9 @@ describe('runIsolationDoctor', () => {
     });
   });
 
-  it('no_ssh_private_keys: fails when a private key file is found', async () => {
+  it('no_ssh_private_keys: fails when a private key file is found (grep exit 0)', async () => {
     const transport = makeTransport((cmd) => {
-      if (cmd.includes('.ssh')) return { stdout: '/home/agent/.ssh/id_rsa\nAZT_SSH_DIR_EXISTS\n', stderr: '', code: 0 };
+      if (cmd.includes('.ssh')) return { stdout: 'AZT_GREP_STATUS:0\n/home/agent/.ssh/id_rsa\nAZT_SSH_DIR_EXISTS\n', stderr: '', code: 0 };
       return cleanHandler(cmd);
     });
     const result = await runIsolationDoctor(transport, HUB);
@@ -173,9 +187,9 @@ describe('runIsolationDoctor', () => {
     expect(check.detail).toContain('id_rsa');
   });
 
-  it('no_ssh_private_keys: passes when the directory exists but is empty of keys', async () => {
+  it('no_ssh_private_keys: passes when the directory exists but grep exits 1 (no match)', async () => {
     const transport = makeTransport((cmd) => {
-      if (cmd.includes('.ssh')) return { stdout: 'AZT_SSH_DIR_EXISTS\n', stderr: '', code: 0 };
+      if (cmd.includes('.ssh')) return { stdout: 'AZT_GREP_STATUS:1\nAZT_SSH_DIR_EXISTS\n', stderr: '', code: 0 };
       return cleanHandler(cmd);
     });
     const result = await runIsolationDoctor(transport, HUB);
@@ -185,6 +199,27 @@ describe('runIsolationDoctor', () => {
   it('no_ssh_private_keys: unknown on a non-zero exit code', async () => {
     const transport = makeTransport((cmd) => {
       if (cmd.includes('.ssh')) return { stdout: '', stderr: 'boom', code: 1 };
+      return cleanHandler(cmd);
+    });
+    const result = await runIsolationDoctor(transport, HUB);
+    expect(result.checks.find((c) => c.id === 'no_ssh_private_keys')!.status).toBe('unknown');
+  });
+
+  // Review round (Important finding 2): grep's own exit status must never be
+  // swallowed — a failed scan (missing grep, or grep itself erroring) must
+  // never silently read as "no private keys found".
+  it('no_ssh_private_keys: unknown when grep is not on PATH', async () => {
+    const transport = makeTransport((cmd) => {
+      if (cmd.includes('.ssh')) return { stdout: 'AZT_GREP_ABSENT\n', stderr: '', code: 0 };
+      return cleanHandler(cmd);
+    });
+    const result = await runIsolationDoctor(transport, HUB);
+    expect(result.checks.find((c) => c.id === 'no_ssh_private_keys')!.status).toBe('unknown');
+  });
+
+  it('no_ssh_private_keys: unknown when grep exits with a scan error (status >= 2)', async () => {
+    const transport = makeTransport((cmd) => {
+      if (cmd.includes('.ssh')) return { stdout: 'AZT_GREP_STATUS:2\nAZT_SSH_DIR_EXISTS\n', stderr: '', code: 0 };
       return cleanHandler(cmd);
     });
     const result = await runIsolationDoctor(transport, HUB);
@@ -464,7 +499,11 @@ describe('runIsolationDoctor', () => {
       const result = await runIsolationDoctor(transport, HUB);
       const check = result.checks.find((c) => c.id === 'no_operator_environment')!;
       expect(check.status).toBe('pass');
-      expect(result.verified).toBe(true);
+      // Follow-up review round, Important finding 1: `same_host` can never
+      // resolve to 'pass' from cleanHandler's canary-absent scenario alone
+      // (see checkFsAndHostBoundary's doc comment) — this check's own 'pass'
+      // is what's under test here, not the overall `verified` flag.
+      expect(result.checks.find((c) => c.id === 'same_host')!.status).toBe('unknown');
     });
 
     it('passes when no operator variable is set', async () => {
