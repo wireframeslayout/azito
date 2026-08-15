@@ -1,24 +1,34 @@
 import { useTranslation } from 'react-i18next';
 import type { Server, Session } from '../../../hooks/useServerManagement';
+import type { IsolationReport } from '../../../hooks/useServerDetail';
 import type { ServerStatus, InstallStatusResponse } from '../serverSections';
 import { getHealthLevel, useServerResourcesContext } from '../../../hooks/useServerResources';
 import type { HealthLevel } from '../../../hooks/useServerResources';
 import { HealthDot, HEALTH_COLOR_VAR } from '../../statusbar/HealthDot';
 import { ResourceMeter } from '../../statusbar/ResourceMeter';
 import { healthReasonText, formatBytes } from '../../statusbar/ResourceDropdown';
-import { Chip, Button } from '../../ui';
+import { Chip, Button, Notice } from '../../ui';
 
 interface OverviewSectionProps {
   server: Server;
   status: ServerStatus | null;
   installStatus: InstallStatusResponse | null;
   sessions: Session[];
+  isolationReport: IsolationReport | null;
   refresh: () => void;
   onEdit: () => void;
 }
 
-export default function OverviewSection({ server, status, installStatus, sessions, refresh, onEdit }: OverviewSectionProps) {
+export default function OverviewSection({ server, status, installStatus, sessions, isolationReport, refresh, onEdit }: OverviewSectionProps) {
   const { t } = useTranslation('servers');
+  // Issue #29 review, Important finding 2: a 'cleanup' report that did not
+  // land on 'done' means a previously-distributed operator token may still
+  // be sitting on this server despite it now being labeled isolated — the
+  // approval UI elsewhere in the app already promises operators "no token is
+  // injected", so this has to be surfaced somewhere an operator will
+  // actually see it before trusting that promise. 'verification' reports
+  // (the future isolation doctor) are intentionally not handled here yet.
+  const isolationCleanupWarning = isolationReport?.kind === 'cleanup' && isolationReport.cleanup && isolationReport.cleanup !== 'done';
   const resourceEntries = useServerResourcesContext();
   const resourceEntry = resourceEntries.find((s) => s.serverName === server.name);
   const resourcesLoading = resourceEntry === undefined;
@@ -123,6 +133,14 @@ export default function OverviewSection({ server, status, installStatus, session
           {server.type !== 'local' && <Button size="sm" onClick={onEdit}>{t('overview.edit')}</Button>}
         </div>
       </div>
+
+      {isolationCleanupWarning && (
+        <div style={{ marginBottom: 'var(--space-4)' }}>
+          <Notice tone="warning" sub={t('overview.isolationCleanupWarningSub')}>
+            {t('overview.isolationCleanupWarningTitle')}
+          </Notice>
+        </div>
+      )}
 
       <div style={{
         display: 'grid',

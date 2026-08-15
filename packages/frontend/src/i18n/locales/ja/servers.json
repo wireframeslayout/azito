@@ -58,6 +58,8 @@
     "authToken": "認証トークン",
     "tokenSet": "設定済み",
     "tokenNotSet": "未設定",
+    "isolationCleanupWarningTitle": "隔離設定の掃除が未完了です",
+    "isolationCleanupWarningSub": "配布済みの操作トークンがこのサーバーに残っている可能性があります。harness を再インストールすると掃除されます。",
     "muxRuntimeLabel": "mux runtime",
     "muxManaged": "AZITO managed tmux",
     "muxSystem": "system tmux",

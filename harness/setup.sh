@@ -37,6 +37,18 @@ AZITO_PURGE_OPERATOR_TOKEN=0
 # finding 2) without also rejecting the common "AZITO_UI_TOKEN happens to be
 # exported in the caller's shell" case.
 AZITO_UI_TOKEN_ARG=0
+# Issue #29 review, Important finding 1 (2nd pass): flipped to 1 whenever a
+# codex mcp remove→add replacement fails and the script chooses to continue
+# with the remaining setup steps (skills/AGENTS.md) rather than aborting
+# mid-script. Checked once at the very end of the script so the process still
+# exits non-zero — HarnessInstaller.install()/installLocal() key `success` off
+# that exit code, and PUT /api/servers/:name's attemptIsolationCleanup()
+# records `cleanup: 'failed'` only when `result.success` is false. Without
+# this, a remove-succeeded/add-failed codex mcp replacement was silently
+# swallowed (`|| true` / warning-only echo) and the whole run still reported
+# exit 0, so a --purge-operator-token run that failed to actually purge the
+# token got recorded as `cleanup: 'done'`.
+SETUP_HAD_ERRORS=0
 
 # ── 引数パース ──
 usage_exit() {
@@ -677,6 +689,82 @@ else
   fi
 fi
 
+# Issue #29 review, Important finding 1 (2nd pass): reconstructs the
+# `codex mcp add` args that would recreate the CURRENT azt-mcp registration
+# exactly as it stood before a remove — used to restore it when a
+# remove→add replacement fails partway through (see codex_mcp_replace()
+# below). Takes the raw `codex mcp get azt-mcp --json` output as $1, writes
+# NUL-separated args to stdout (empty output on parse failure / no
+# registration, so callers must check for that).
+codex_mcp_reconstruct_add_args() {
+  printf '%s' "$1" | node -e '
+    let data = "";
+    process.stdin.on("data", (c) => { data += c; });
+    process.stdin.on("end", () => {
+      try {
+        const j = JSON.parse(data);
+        const t = j && j.transport ? j.transport : {};
+        const env = t.env || {};
+        const out = [];
+        for (const [k, v] of Object.entries(env)) {
+          out.push("--env", k + "=" + v);
+        }
+        out.push("--");
+        out.push(t.command || "node");
+        for (const a of (t.args || [])) out.push(a);
+        process.stdout.write(out.join("\u0000") + "\u0000");
+      } catch { /* leave stdout empty on parse failure */ }
+    });
+  '
+}
+
+# Issue #29 review, Important finding 1 (2nd pass): replaces the azt-mcp
+# Codex MCP registration atomically from the caller's perspective — a bare
+# `codex mcp remove` + `codex mcp add` left a "removed but never re-added"
+# window on add failure that was previously only warned about (exit 0, entry
+# gone). This restores the pre-remove registration (reconstructed from $1,
+# the raw `codex mcp get --json` captured BEFORE remove) when add fails, and
+# sets SETUP_HAD_ERRORS=1 in every failure path (add failed, whether or not
+# restore succeeded) so the script's final exit code reflects that the
+# intended replacement did not happen — restoring the old registration keeps
+# azt-mcp usable, but it is still not the outcome the caller asked for.
+#   $1        = raw `codex mcp get azt-mcp --json` output, captured before remove
+#   $2.. = new `codex mcp add azt-mcp` args to attempt
+# Returns 0 on a clean replacement, 1 otherwise (registration may be the new
+# one, the restored old one, or entirely gone — see the echoed messages).
+codex_mcp_replace() {
+  local raw="$1"; shift
+  local new_args=("$@")
+
+  codex mcp remove azt-mcp >/dev/null 2>&1 || true
+  if codex mcp add azt-mcp "${new_args[@]}" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  SETUP_HAD_ERRORS=1
+
+  if [[ -z "$raw" ]]; then
+    # No prior registration existed (fresh install) — nothing to restore,
+    # just surface that the add failed.
+    echo "  azt-mcp (Codex): 登録に失敗しました（元々登録は存在しませんでした。'codex mcp add azt-mcp ...' を手動で再設定してください）" >&2
+    return 1
+  fi
+
+  echo "  azt-mcp (Codex): 再登録に失敗しました。元の登録の復元を試みます..." >&2
+  local restore_args=()
+  while IFS= read -r -d '' tok; do
+    restore_args+=("$tok")
+  done < <(codex_mcp_reconstruct_add_args "$raw")
+
+  if [[ "${#restore_args[@]}" -gt 0 ]] && codex mcp add azt-mcp "${restore_args[@]}" >/dev/null 2>&1; then
+    echo "  azt-mcp (Codex): 元の登録を復元しました（意図した変更は未適用です。手動確認してください）" >&2
+    return 1
+  fi
+
+  echo "  azt-mcp (Codex): 登録の復元にも失敗しました。'codex mcp add azt-mcp ...' を手動で再設定してください" >&2
+  return 1
+}
+
 # Issue #29 review, Important finding 3: --prefix mode skips the whole Codex
 # CLI block below (skills, AGENTS.md, azt-mcp registration) because a prefix
 # profile shares the single non-prefixed `azt-mcp` Codex MCP entry with the
@@ -732,12 +820,11 @@ strip_codex_ui_token() {
     return 0
   fi
 
-  codex mcp remove azt-mcp >/dev/null 2>&1 || true
-  if codex mcp add azt-mcp "${add_args[@]}" >/dev/null 2>&1; then
+  if codex_mcp_replace "$raw" "${add_args[@]}"; then
     echo "  azt-mcp (Codex): --purge-operator-token により AZITO_UI_TOKEN を除去しました"
-  else
-    echo "  azt-mcp (Codex): AZITO_UI_TOKEN 除去後の再登録に失敗しました（手動確認してください）" >&2
   fi
+  # codex_mcp_replace() already echoed the failure/restore detail and set
+  # SETUP_HAD_ERRORS=1 on failure — nothing further to do here.
 }
 
 # ── Codex CLI ──
@@ -774,8 +861,14 @@ elif command -v codex >/dev/null 2>&1 || [[ -d "$HOME/.codex" ]]; then
       ' 2>/dev/null || true)"
     fi
 
+    # Issue #29 review, Important finding 1 (2nd pass): captured BEFORE
+    # remove so codex_mcp_replace() can restore this exact registration if
+    # the re-add below fails (previously the remove ran unconditionally via
+    # `|| true` with no way back — a failed re-add just left azt-mcp gone,
+    # and the script still exited 0).
+    EXISTING_AZT_MCP_RAW=""
     if codex mcp get azt-mcp >/dev/null 2>&1; then
-      codex mcp remove azt-mcp >/dev/null 2>&1 || true
+      EXISTING_AZT_MCP_RAW="$(codex mcp get azt-mcp --json 2>/dev/null || true)"
     fi
     CODEX_MCP_ADD_ARGS=(--env "AZITO_URL=$AZITO_URL_VALUE")
     EFFECTIVE_AZT_MCP_UI_TOKEN="${AZITO_UI_TOKEN:-$EXISTING_AZT_MCP_UI_TOKEN}"
@@ -786,7 +879,7 @@ elif command -v codex >/dev/null 2>&1 || [[ -d "$HOME/.codex" ]]; then
     else
       echo "  警告: AZITO_UI_TOKEN が設定されていません。--ui-token を付けて再実行してください"
     fi
-    if codex mcp add azt-mcp "${CODEX_MCP_ADD_ARGS[@]}" -- node "$MCP_SERVER_PATH" >/dev/null 2>&1; then
+    if codex_mcp_replace "$EXISTING_AZT_MCP_RAW" "${CODEX_MCP_ADD_ARGS[@]}" -- node "$MCP_SERVER_PATH"; then
       echo "  azt-mcp: 登録しました"
     else
       echo "  azt-mcp: 登録に失敗しました（codex mcp add エラー）"
@@ -843,4 +936,19 @@ if [[ -n "$AZITO_WEBHOOK_TOKEN" ]]; then
   echo ""
   echo "注意: AZITO サーバーも同じトークンで起動してください（通知・稼働検出 Webhook 共通）:"
   echo "  AZITO_WEBHOOK_TOKEN=$AZITO_WEBHOOK_TOKEN npm run dev"
+fi
+
+# Issue #29 review, Important finding 1 (2nd pass): a codex mcp
+# remove→add replacement failure (see codex_mcp_replace()) no longer
+# silently exits 0 — it sets SETUP_HAD_ERRORS=1 above but lets the rest of
+# setup (skills/AGENTS.md) run to completion first. Checked last so
+# HarnessInstaller.install()/installLocal() (which key `result.success` off
+# this process's exit code) and, transitively,
+# PUT /api/servers/:name's attemptIsolationCleanup() record `cleanup:
+# 'failed'` instead of `'done'` when the intended MCP registration change
+# did not actually happen.
+if [[ "$SETUP_HAD_ERRORS" == "1" ]]; then
+  echo ""
+  echo "警告: 一部の手順が失敗しました（上記ログを確認してください）" >&2
+  exit 1
 fi

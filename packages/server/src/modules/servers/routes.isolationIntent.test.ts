@@ -293,3 +293,81 @@ describe('GET /api/servers — isolationReport exclusion', () => {
     expect(body[0].isolationReport).toBeUndefined();
   });
 });
+
+// Issue #29 review, Important finding 2: cleanup outcome must be visible via
+// the API — previously it was recorded only in isolation_report, a field the
+// list endpoint deliberately excludes and no detail route ever returned.
+describe('GET /api/servers/:name — isolationReport detail route (Issue #29 Important finding 2)', () => {
+  it('returns the full server config including isolationReport', async () => {
+    const opts = makeOpts();
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ isolationIntent: true, isolationVerifiedAt: null, isolationReport: '{"kind":"cleanup","cleanup":"failed","error":"ssh unreachable"}' }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'GET', url: '/api/servers/srv' });
+    const body = res.json();
+
+    expect(res.statusCode).toBe(200);
+    expect(body.isolationIntent).toBe(true);
+    expect(JSON.parse(body.isolationReport).cleanup).toBe('failed');
+    expect(body.agentToken).toBeUndefined();
+    expect(body.hasAgentToken).toBe(true);
+  });
+
+  it('404s for an unknown server', async () => {
+    const opts = makeOpts();
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'GET', url: '/api/servers/missing' });
+
+    expect(res.statusCode).toBe(404);
+  });
+});
+
+// Issue #29 review, Important finding 2: the PUT response itself must carry
+// the cleanup outcome — an operator declaring isolation should not have to
+// make a second request to learn whether a stale token was actually purged.
+describe('PUT /api/servers/:name — isolationCleanup in the response (Issue #29 Important finding 2)', () => {
+  function makeHarnessInstaller(installImpl: ReturnType<typeof vi.fn>) {
+    return { install: installImpl, installLocal: vi.fn() } as unknown as ServersRouteOptions['harnessInstaller'];
+  }
+
+  it('includes isolationCleanup: "done" when cleanup succeeds', async () => {
+    const install = vi.fn(async () => ({ success: true, steps: [] }));
+    const opts = makeOpts({ harnessInstaller: makeHarnessInstaller(install) });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: false, sshHost: 'user@host' }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+    expect(res.json().isolationCleanup).toBe('done');
+  });
+
+  it('includes isolationCleanup: "failed" when cleanup fails, without failing the request', async () => {
+    const install = vi.fn(async () => ({ success: false, steps: [], error: 'ssh unreachable' }));
+    const opts = makeOpts({ harnessInstaller: makeHarnessInstaller(install) });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: false, sshHost: 'user@host' }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().isolationCleanup).toBe('failed');
+  });
+
+  it('omits isolationCleanup when no cleanup was attempted (plain host update)', async () => {
+    const opts = makeOpts();
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'agent' }));
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { host: '5.6.7.8' } });
+
+    expect(res.json().isolationCleanup).toBeUndefined();
+  });
+});

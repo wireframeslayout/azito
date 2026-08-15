@@ -28,7 +28,7 @@ export default function ServerDetailPage({ serverName, section }: ServerDetailPa
   const navigate = useNavigate();
   const { t } = useTranslation('servers');
   const isMobile = useIsMobile();
-  const { server, servers, status, installStatus, sessions, loading, error, refresh } = useServerDetail(serverName);
+  const { server, servers, status, installStatus, sessions, isolationReport, loading, error, refresh } = useServerDetail(serverName);
   const mgmt = useServerEditForm();
 
   const activeSection: ServerSectionId = section && VALID_SECTIONS.has(section)
@@ -97,6 +97,7 @@ export default function ServerDetailPage({ serverName, section }: ServerDetailPa
               status={status}
               installStatus={installStatus}
               sessions={sessions}
+              isolationReport={isolationReport}
               refresh={refresh}
               onEdit={() => mgmt.openEditModal(server)}
             />

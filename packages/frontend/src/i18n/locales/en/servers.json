@@ -58,6 +58,8 @@
     "authToken": "Auth token",
     "tokenSet": "Configured",
     "tokenNotSet": "Not set",
+    "isolationCleanupWarningTitle": "Isolation cleanup incomplete",
+    "isolationCleanupWarningSub": "A previously-distributed operator token may still be on this server. Reinstalling the harness will clean it up.",
     "muxRuntimeLabel": "mux runtime",
     "muxManaged": "AZITO managed tmux",
     "muxSystem": "system tmux",

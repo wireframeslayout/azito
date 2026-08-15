@@ -25,7 +25,16 @@ export class SqliteServerRepository implements IServerRepository {
     this.updateAgentVersionStmt = db.prepare('UPDATE servers SET agent_version = ? WHERE name = ?');
     this.updateFingerprintStmt = db.prepare('UPDATE servers SET ssh_host_fingerprint = ? WHERE name = ?');
     this.clearFingerprintStmt = db.prepare('UPDATE servers SET ssh_host_fingerprint = NULL WHERE name = ?');
-    this.updateIsolationIntentStmt = db.prepare('UPDATE servers SET isolation_intent = ? WHERE name = ?');
+    // Issue #29 review, Important finding 3: clears isolation_verified_at
+    // and isolation_report in the SAME UPDATE as the intent flip — an intent
+    // switch (true<->false, or auto-cleared on type -> local) must not leave
+    // a PRE-transition doctor/cleanup report looking like it describes the
+    // NEW state. Atomic (single statement) rather than a separate clear call
+    // so no reader can observe an intermediate row with a stale report next
+    // to the new intent.
+    this.updateIsolationIntentStmt = db.prepare(
+      'UPDATE servers SET isolation_intent = ?, isolation_verified_at = NULL, isolation_report = NULL WHERE name = ?',
+    );
     this.updateIsolationReportStmt = db.prepare('UPDATE servers SET isolation_report = ? WHERE name = ?');
   }
 

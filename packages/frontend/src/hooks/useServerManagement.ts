@@ -18,6 +18,10 @@ export interface Server {
   sshHost?: string;
   muxRuntime?: 'system' | 'managed';
   hubVersion?: string;
+  /** Issue #29: declared isolation intent — see servers.isolationIntent's server-side doc comment. */
+  isolationIntent?: boolean;
+  /** ISO timestamp of the isolation doctor's last check, or null/undefined if never run. */
+  isolationVerifiedAt?: string | null;
 }
 
 export interface Pane {

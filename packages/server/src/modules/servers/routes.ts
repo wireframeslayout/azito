@@ -87,17 +87,27 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
   // doctor's job" (a later task) means a cleanup failure here must NOT fail
   // the PUT or silently pretend the server is clean — it's recorded honestly
   // in isolation_report so the UI can surface it instead of faking safety.
-  async function attemptIsolationCleanup(serverName: string, principal: Principal): Promise<void> {
+  // Issue #29 review, Important finding 2: returns the cleanup outcome so
+  // the PUT handler can surface it to the caller as `isolationCleanup` —
+  // previously this result was recorded ONLY in isolation_report (a
+  // detail-only, list-excluded field with no route to read it back), so an
+  // operator declaring isolation had no way to learn a purge had silently
+  // failed short of inspecting the DB directly.
+  async function attemptIsolationCleanup(serverName: string, principal: Principal): Promise<'done' | 'failed' | 'skipped'> {
     const at = new Date().toISOString();
+    // Issue #29 review, Important finding 3: `kind: 'cleanup'` distinguishes
+    // this synchronous remote-token-purge outcome from the isolation
+    // doctor's future `kind: 'verification'` writes to the same column —
+    // see Server.ts's isolationReport doc comment.
     let report: Record<string, unknown>;
 
     if (!harnessInstaller) {
-      report = { cleanup: 'skipped', reason: 'harness_installer_unavailable', at };
+      report = { kind: 'cleanup', cleanup: 'skipped', reason: 'harness_installer_unavailable', at };
     } else {
       const srv = serverRepo.findByName(serverName);
       const sshHost = srv?.sshHost || srv?.host;
       if (!srv || !sshHost) {
-        report = { cleanup: 'skipped', reason: 'no_ssh_host', at };
+        report = { kind: 'cleanup', cleanup: 'skipped', reason: 'no_ssh_host', at };
       } else {
         try {
           const result = await harnessInstaller.install(sshHost, {
@@ -108,10 +118,10 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
             isolationIntent: true,
           });
           report = result.success
-            ? { cleanup: 'done', at }
-            : { cleanup: 'failed', error: result.error, at };
+            ? { kind: 'cleanup', cleanup: 'done', at }
+            : { kind: 'cleanup', cleanup: 'failed', error: result.error, at };
         } catch (err: unknown) {
-          report = { cleanup: 'failed', error: (err as Error).message, at };
+          report = { kind: 'cleanup', cleanup: 'failed', error: (err as Error).message, at };
         }
       }
     }
@@ -123,6 +133,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       event: 'server.isolation_intent.cleanup_attempted',
       detail: { serverName, ...report },
     });
+    return report.cleanup as 'done' | 'failed' | 'skipped';
   }
 
   // ── GET /api/servers ──
@@ -138,6 +149,22 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       hasAgentToken: agentToken != null,
       hubVersion: hubBundleHash,
     }));
+  });
+
+  // ── GET /api/servers/:name ──
+  // Issue #29 review, Important finding 2: the detail-only counterpart to
+  // the list route above — this is the one place isolationReport (the
+  // cleanup/verification outcome JSON, see Server.ts's doc comment) is ever
+  // returned over the API. Access control is the same default-deny the rest
+  // of this route file relies on (no per-route principal check here matches
+  // every other route in this file); nothing operator-sensitive beyond what
+  // PUT/DELETE on the same path already exposes to the same caller class.
+  fastify.get<{ Params: { name: string } }>('/api/servers/:name', async (request, reply) => {
+    const srv = serverRepo.findByName(request.params.name);
+    if (!srv) return reply.status(404).send({ error: 'Server not found' });
+    const hubBundleHash = agentBundler ? agentBundler.getBundleHashIfBuilt() : null;
+    const { agentToken, ...rest } = srv;
+    return { ...rest, hasAgentToken: agentToken != null, hubVersion: hubBundleHash };
   });
 
   // ── POST /api/servers ──
@@ -233,6 +260,10 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       if (effectiveType !== 'agent' && isolationIntent === true) {
         return reply.status(400).send({ error: 'isolationIntent is only settable for agent servers' });
       }
+      // Issue #29 review, Important finding 2: set only when
+      // attemptIsolationCleanup actually runs in this request (see below) —
+      // stays undefined, and therefore omitted from the response, otherwise.
+      let isolationCleanup: 'done' | 'failed' | 'skipped' | undefined;
       try {
         serverRepo.update(
           request.params.name,
@@ -280,11 +311,16 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
             // the correct tradeoff (matches the design note: cleanup failure
             // must not fail the PUT, but the PUT should reflect a completed
             // attempt).
-            await attemptIsolationCleanup(request.params.name, request.principal ?? OPERATOR_PRINCIPAL);
+            isolationCleanup = await attemptIsolationCleanup(request.params.name, request.principal ?? OPERATOR_PRINCIPAL);
           }
         }
         transportFactory.invalidate(request.params.name);
-        return { ok: true };
+        // Issue #29 review, Important finding 2: surfaces the cleanup
+        // outcome directly in the PUT response — undefined (field omitted)
+        // when no cleanup ran this request, so callers can distinguish "no
+        // cleanup was attempted" from an actual result without probing
+        // isolation_report separately.
+        return { ok: true, ...(isolationCleanup !== undefined ? { isolationCleanup } : {}) };
       } catch (err: unknown) {
         return reply.status(500).send({ error: (err as Error).message });
       }

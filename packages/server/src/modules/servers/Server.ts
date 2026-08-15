@@ -24,9 +24,28 @@ export interface ServerConfig {
    * — a local server always shares the hub's own credential store).
    */
   isolationIntent: boolean;
-  /** ISO timestamp of the isolation doctor's last check, or null if it has never run. */
+  /**
+   * ISO timestamp of the isolation doctor's last check, or null if it has
+   * never run. Issue #29 review, Important finding 3: cleared atomically
+   * (same UPDATE) whenever isolationIntent changes — see
+   * `updateIsolationIntent`'s doc comment. A stale verifiedAt/report pair
+   * from before the transition must never be readable as describing the
+   * server's current declared state.
+   */
   isolationVerifiedAt: string | null;
-  /** JSON blob of the isolation doctor's last check result, or null. Detail-only — not returned by the servers-list API. */
+  /**
+   * JSON blob of the isolation doctor's last check result, or null.
+   * Detail-only — not returned by the servers-list API, only by the
+   * per-server detail route. Issue #29 review, Important finding 3: the
+   * JSON always carries a `kind: 'cleanup' | 'verification'` field so a
+   * reader (frontend, future doctor implementation) can tell which of the
+   * two distinct writers produced it — `'cleanup'` for the synchronous
+   * remote-token-purge outcome PUT /api/servers/:name's false->true
+   * transition records (`attemptIsolationCleanup` in routes.ts), reserving
+   * `'verification'` for the isolation doctor (a later task) that this
+   * field's own name describes. Cleared together with isolationVerifiedAt
+   * on every isolation_intent change (see updateIsolationIntent).
+   */
   isolationReport: string | null;
   createdAt: string;
 }
@@ -39,15 +58,24 @@ export interface IServerRepository {
   updateAgentVersion(name: string, version: string): void;
   updateFingerprint(name: string, fingerprint: string): void;
   clearFingerprint(name: string): void;
+  /**
+   * Issue #29 review, Important finding 3: also clears
+   * `isolation_verified_at`/`isolation_report` to NULL in the same
+   * statement as the intent flip (see `SqliteServerRepository`'s
+   * implementation comment) — callers must not assume a separate clear step
+   * is needed or possible to skip.
+   */
   updateIsolationIntent(name: string, isolationIntent: boolean): void;
   /**
    * Persists a JSON blob to `isolation_report` (or clears it with `null`).
    * Issue #29 review, Important finding 1: used by the false->true
    * isolation_intent transition in servers routes to record the *outcome*
    * of the synchronous remote-cleanup attempt it triggers
-   * (`{"cleanup":"done"|"failed"|"skipped",...}`) — a distinct, narrower use
-   * than the full isolation-doctor result this field's own doc comment
-   * describes (that writer doesn't exist yet). Optional: implemented by
+   * (`{"kind":"cleanup","cleanup":"done"|"failed"|"skipped",...}`) — a
+   * distinct, narrower use than the full isolation-doctor result this
+   * field's own doc comment describes (that writer doesn't exist yet, and
+   * will use `"kind":"verification"` to stay distinguishable — Issue #29
+   * review, Important finding 3). Optional: implemented by
    * `SqliteServerRepository`; the many existing `IServerRepository` mocks
    * across the test suite predate this method and are not required to stub
    * it (routes.ts calls it via `?.()`).
