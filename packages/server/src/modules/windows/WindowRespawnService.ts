@@ -309,7 +309,10 @@ export class WindowRespawnService {
         const created = await doCreate(windowEnv);
         newName = created.windowName;
       } else {
-        windowEnv = this.tmux.uiTokenEnv();
+        // Non-task window respawn — server-aware legacy default (Issue #29
+        // review, Critical finding 1): withholds the token when `server` is
+        // declared isolated, same as the manual session/window/pane routes.
+        windowEnv = this.tmux.uiTokenEnvForServer(server);
         const created = await doCreate(windowEnv);
         newName = created.windowName;
       }

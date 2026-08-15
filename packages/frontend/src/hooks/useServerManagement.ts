@@ -257,15 +257,23 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
       }
       body.isolationIntent = editIsolationIntent;
     }
-    const res = await api<{ error?: string; windowCount?: number; isolationCleanup?: 'done' | 'failed' | 'skipped' }>(`/servers/${editServer.name}`, {
+    const res = await api<{ error?: string; windowCount?: number; sessionCount?: number; isolationCleanup?: 'done' | 'failed' | 'skipped' }>(`/servers/${editServer.name}`, {
       method: 'PUT', body: JSON.stringify(body),
     });
     if (res.error) {
       // Issue #29 review, Critical finding 1: see useServerEditForm's
       // identical handling — this hook drives the other edit path
       // (ServersListPage) and must surface the same localized toast.
+      // Issue #29 review (5th pass), Critical finding 1: same live-session
+      // gate cases as useServerEditForm — see that hook's comment.
       if (res.error === 'isolation_intent_blocked_by_windows') {
         return showToast(t('overview.isolationBlockedByWindowsToast', { count: res.windowCount ?? 0 }));
+      }
+      if (res.error === 'isolation_intent_blocked_by_live_sessions') {
+        return showToast(t('overview.isolationBlockedByLiveSessionsToast', { count: res.sessionCount ?? 0 }));
+      }
+      if (res.error === 'isolation_intent_blocked_by_session_check_failure') {
+        return showToast(t('overview.isolationBlockedBySessionCheckFailureToast'));
       }
       return showToast(res.error);
     }

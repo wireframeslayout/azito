@@ -43,7 +43,11 @@ function makeOpts(overrides: Partial<ServersRouteOptions> = {}): ServersRouteOpt
   };
   return {
     serverRepo,
-    tmux: {} as ServersRouteOptions['tmux'],
+    // Issue #29 review (5th pass), Critical finding 1: the false->true gate
+    // now also checks for live tmux sessions on the target server —
+    // listSessions() defaults to an empty array so every existing test not
+    // about that specific check stays a no-op through it.
+    tmux: { listSessions: vi.fn(async () => []) } as unknown as ServersRouteOptions['tmux'],
     transportFactory: { invalidate: vi.fn() } as unknown as ServersRouteOptions['transportFactory'],
     // Issue #29 review, Critical finding 1: no windows registered by
     // default, so the false->true gate is a no-op unless a test overrides
@@ -482,5 +486,69 @@ describe('isolation_intent false->true window-presence gate (Issue #29 review, C
 
     expect(res.statusCode).toBe(200);
     expect(opts.serverRepo.updateIsolationIntent).toHaveBeenCalledWith('srv', true);
+  });
+});
+
+// Issue #29 review (5th pass), Critical finding 1: the `windows` DB table
+// only covers windows AZITO itself created and is still tracking — it says
+// nothing about a session created directly on the server (e.g. via the
+// generic manual tmux session/window/pane routes, which before this same
+// review round's fix could inject AZITO_UI_TOKEN with no corresponding
+// `windows` row at all). A live tmux session is an INDEPENDENT signal,
+// checked in addition to the windowRepo check above, not instead of it.
+describe('isolation_intent false->true live-tmux-session gate (Issue #29 review, 5th pass, Critical finding 1)', () => {
+  it('rejects with 409 when the server has a live tmux session, even with no registered windows', async () => {
+    const opts = makeOpts({
+      tmux: { listSessions: vi.fn(async () => [{ name: 'manual-session', windowCount: 1, attached: false, created: 0, windows: [] }]) } as unknown as ServersRouteOptions['tmux'],
+    });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'agent', isolationIntent: false }));
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('isolation_intent_blocked_by_live_sessions');
+    expect(res.json().sessionCount).toBe(1);
+    expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
+  });
+
+  it('fails closed (409) when listing live tmux sessions throws', async () => {
+    const opts = makeOpts({
+      tmux: { listSessions: vi.fn(async () => { throw new Error('ssh unreachable'); }) } as unknown as ServersRouteOptions['tmux'],
+    });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'agent', isolationIntent: false }));
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('isolation_intent_blocked_by_session_check_failure');
+    expect(res.json().message).toContain('ssh unreachable');
+    expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
+  });
+
+  it('allows the transition when there are no registered windows and no live tmux sessions', async () => {
+    const opts = makeOpts({
+      tmux: { listSessions: vi.fn(async () => []) } as unknown as ServersRouteOptions['tmux'],
+    });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'agent', isolationIntent: false }));
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.serverRepo.updateIsolationIntent).toHaveBeenCalledWith('srv', true);
+  });
+
+  it('does not check live sessions on a true->true no-op PUT', async () => {
+    const listSessions = vi.fn(async () => []);
+    const opts = makeOpts({ tmux: { listSessions } as unknown as ServersRouteOptions['tmux'] });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'agent', isolationIntent: true }));
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+    expect(res.statusCode).toBe(200);
+    expect(listSessions).not.toHaveBeenCalled();
   });
 });

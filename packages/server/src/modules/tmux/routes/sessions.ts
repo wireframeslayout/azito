@@ -216,7 +216,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           return reply.status(409).send({ error: 'insufficient_resources', resources: status });
       }
       try {
-        const { result, windowName } = await tmux.createSession(srv, name, { command, windowName: reqWindowName, extraEnv: tmux.uiTokenEnv() });
+        const { result, windowName } = await tmux.createSession(srv, name, { command, windowName: reqWindowName, extraEnv: tmux.uiTokenEnvForServer(srv) });
         // Agent/SSH transports resolve with a non-zero code instead of throwing — surface it.
         if (result.code !== 0)
           return reply.status(500).send({ error: `new-session failed: ${result.stderr || result.stdout}` });
@@ -241,7 +241,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           return reply.status(409).send({ error: 'insufficient_resources', resources: status });
       }
       try {
-        const { result, windowName } = await tmux.createWindow(srv, request.params.session, reqName || undefined, { extraEnv: tmux.uiTokenEnv() });
+        const { result, windowName } = await tmux.createWindow(srv, request.params.session, reqName || undefined, { extraEnv: tmux.uiTokenEnvForServer(srv) });
         if (result.code !== 0)
           return reply.status(500).send({ error: `new-window failed: ${result.stderr || result.stdout}` });
         notifySessionsChanged(request.params.name);
@@ -304,8 +304,10 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           // same as its own (re)creation env.
           extraEnv = opts.buildSecondaryWindowEnv?.(windowRow.taskId, srv) ?? {};
         } else {
-          // Non-task window (manual/project/etc.) — legacy default.
-          extraEnv = tmux.uiTokenEnv();
+          // Non-task window (manual/project/etc.) — legacy default,
+          // server-aware (Issue #29 review, Critical finding 1): withholds
+          // the token when this server is declared isolated.
+          extraEnv = tmux.uiTokenEnvForServer(srv);
         }
 
         await tmux.splitPane(srv, target, direction as 'h' | 'v', extraEnv);

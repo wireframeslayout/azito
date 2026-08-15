@@ -53,7 +53,7 @@ export function useServerEditForm() {
       }
       body.isolationIntent = editIsolationIntent;
     }
-    const res = await api<{ error?: string; windowCount?: number; isolationCleanup?: 'done' | 'failed' | 'skipped' }>(`/servers/${encodeURIComponent(editServer.name)}`, {
+    const res = await api<{ error?: string; windowCount?: number; sessionCount?: number; isolationCleanup?: 'done' | 'failed' | 'skipped' }>(`/servers/${encodeURIComponent(editServer.name)}`, {
       method: 'PUT', body: JSON.stringify(body),
     });
     if (res.error) {
@@ -61,8 +61,19 @@ export function useServerEditForm() {
       // (routes.ts) rejects with this error code + windowCount when windows
       // may already hold injected credentials — translate it into a
       // localized, count-bearing toast rather than showing the raw code.
+      // Issue #29 review (5th pass), Critical finding 1: the same gate also
+      // rejects with `isolation_intent_blocked_by_live_sessions` (+
+      // sessionCount) when a live tmux session exists on the server with no
+      // corresponding `windows` row, and with
+      // `isolation_intent_blocked_by_session_check_failure` when listing
+      // those sessions itself failed (fail-closed) — both need their own
+      // localized toast for the same reason the windows case does.
       if (res.error === 'isolation_intent_blocked_by_windows') {
         showToast(t('overview.isolationBlockedByWindowsToast', { count: res.windowCount ?? 0 }));
+      } else if (res.error === 'isolation_intent_blocked_by_live_sessions') {
+        showToast(t('overview.isolationBlockedByLiveSessionsToast', { count: res.sessionCount ?? 0 }));
+      } else if (res.error === 'isolation_intent_blocked_by_session_check_failure') {
+        showToast(t('overview.isolationBlockedBySessionCheckFailureToast'));
       } else {
         showToast(res.error);
       }

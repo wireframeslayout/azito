@@ -920,11 +920,26 @@ strip_codex_ui_token() {
 # ── Codex CLI ──
 echo ""
 echo "=== Codex CLI ==="
+# Issue #29 review (5th pass), Critical finding 2: --purge-operator-token
+# must strip a leftover AZITO_UI_TOKEN from $CODEX_HOME/config.toml
+# unconditionally — run BEFORE the prefix / codex-CLI-presence / ~/.codex
+# directory-presence branching below, not nested inside only the --prefix
+# arm. The normal (non-prefix) arm below only proceeds past its `elif`
+# guard when `codex` is on PATH or `$HOME/.codex` exists; a host that had
+# Codex CLI uninstalled (or never had `$HOME/.codex`) but still has a
+# config.toml under a custom `$CODEX_HOME` previously fell straight to the
+# final `else` ("スキップ (codex 未検出)") and never called
+# strip_codex_ui_token at all, silently leaving that token in place despite
+# the caller being told the purge ran. strip_codex_ui_token itself already
+# respects `$CODEX_HOME` (falling back to `~/.codex`, see its doc comment)
+# and treats a missing config.toml as "nothing to purge" (return 0), so
+# calling it unconditionally here is safe on every host shape — it is a
+# pure no-op when there is genuinely nothing to strip.
+if [[ "$AZITO_PURGE_OPERATOR_TOKEN" == "1" ]]; then
+  strip_codex_ui_token
+fi
 if [[ -n "$AZITO_PREFIX" ]]; then
   echo "  スキップ (--prefix モード)"
-  if [[ "$AZITO_PURGE_OPERATOR_TOKEN" == "1" ]]; then
-    strip_codex_ui_token
-  fi
 elif command -v codex >/dev/null 2>&1 || [[ -d "$HOME/.codex" ]]; then
   # Skills
   link_skills "$HOME/.codex/skills"

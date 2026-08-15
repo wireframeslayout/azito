@@ -226,6 +226,32 @@ export class TmuxClient {
   }
 
   /**
+   * Server-aware wrapper around {@link uiTokenEnv} (Issue #29 review, Critical
+   * finding 1): `uiTokenEnv()` above has no way to know which server it is
+   * injecting into, so every one of its call sites — manual session/window/
+   * pane creation in `modules/tmux/routes/sessions.ts`, and the non-task
+   * respawn fallback in `WindowRespawnService.run()` — happily injected the
+   * hub's all-powerful `AZITO_UI_TOKEN` into an `isolation_intent=1` server's
+   * pane too, exactly the credential that server is declared to hold none of.
+   * (Task-owned windows already avoid this via
+   * `TaskPaneEnvironmentService`/`applyTokenMaskingOrCompat`, which checks
+   * `server.isolationIntent` first — this is the same decision, applied to
+   * the handful of NON-task callers that still call the legacy default
+   * directly instead.)
+   *
+   * When `server.isolationIntent` is set, returns an explicit `{
+   * AZITO_UI_TOKEN: '' }` mask rather than an empty object — see
+   * `applyTokenMaskingOrCompat`'s doc comment for why an explicit empty value
+   * is required to override a token the pane's tmux SESSION may already
+   * carry (a pre-existing session's env persists across `new-window`, and
+   * `-e KEY=` on the new window is the only thing that can mask it).
+   */
+  uiTokenEnvForServer(server: ServerConfig): Record<string, string> {
+    if (server.isolationIntent) return { AZITO_UI_TOKEN: '' };
+    return this.uiTokenEnv();
+  }
+
+  /**
    * Post-creation decoration only (the tmux status-bar window label), called
    * by both `createSession` and `createWindow` right after the window itself
    * is already up. Deliberately best-effort (Issue #28 Phase A last-round

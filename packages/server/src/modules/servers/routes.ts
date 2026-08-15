@@ -2,7 +2,7 @@ import type { FastifyPluginCallback } from 'fastify';
 import { execSync } from 'child_process';
 import os from 'os';
 import type { IServerRepository, MuxRuntime } from './Server';
-import type { TmuxClient } from '../tmux/TmuxClient';
+import type { TmuxClient, TmuxSession } from '../tmux/TmuxClient';
 import type { AgentInstaller, InstallProgress } from './agent-deploy/AgentInstaller';
 import type { AgentBundler } from './agent-deploy/AgentBundler';
 import type { TransportFactory } from './transport/TransportFactory';
@@ -297,6 +297,34 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
             error: 'isolation_intent_blocked_by_windows',
             message: `${riskyWindows.length} 件のウィンドウがこのサーバー上に登録されているため隔離を有効化できません。対象ウィンドウを閉じてから再度有効化してください。`,
             windowCount: riskyWindows.length,
+          });
+        }
+        // Issue #29 review (4th pass), Critical finding 1: the DB `windows`
+        // table only covers windows AZITO itself created and is still
+        // tracking — it says nothing about a session a human (or another
+        // process) created directly on this server via the generic tmux
+        // session/window/pane routes (`modules/tmux/routes/sessions.ts`),
+        // which — before this same review round's fix to those routes —
+        // could have injected AZITO_UI_TOKEN into a live pane with no
+        // corresponding `windows` row at all. A live tmux session is
+        // therefore an independent signal from the DB check above, checked
+        // in addition to it, not instead of it. Listing failure is treated
+        // the same conservative way as the DB check: unable to prove the
+        // server is clean means fail closed (409), not fail open.
+        let liveSessions: TmuxSession[];
+        try {
+          liveSessions = await tmux.listSessions(srv);
+        } catch (err: unknown) {
+          return reply.status(409).send({
+            error: 'isolation_intent_blocked_by_session_check_failure',
+            message: `隔離対象サーバーの tmux セッション一覧取得に失敗したため、安全側に倒して隔離を有効化できません（${(err as Error).message}）。サーバーの疎通を確認してから再度お試しください。`,
+          });
+        }
+        if (liveSessions.length > 0) {
+          return reply.status(409).send({
+            error: 'isolation_intent_blocked_by_live_sessions',
+            message: `${liveSessions.length} 件の稼働中 tmux セッションがこのサーバー上に存在するため隔離を有効化できません。セッションを終了してから再度有効化してください。`,
+            sessionCount: liveSessions.length,
           });
         }
       }

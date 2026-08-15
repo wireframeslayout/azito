@@ -25,10 +25,41 @@ export interface IsolationReport {
 // hook understands, so it's treated the same as a fetch failure rather than
 // silently coerced into `null` (which the UI cannot tell apart from "no
 // report exists").
+//
+// Issue #29 review (5th pass), Important finding 3: `kind==='cleanup'`
+// additionally requires `cleanup` to actually be one of the three values the
+// interface declares — the previous version accepted `{ kind: 'cleanup' }`
+// with no `cleanup` field (or any junk value in it) as "valid", which the UI
+// (OverviewSection's cleanup-outcome switch) then had no defined behavior
+// for. `kind==='verification'` still only checks the discriminant itself —
+// that variant is not implemented server-side yet (see the interface's doc
+// comment), so there is no further shape to require of it today; the
+// discriminant check alone is deliberately the "minimal" bar the task
+// description asks for, left for a future round once the doctor writes its
+// first real 'verification' report.
 export function isValidIsolationReport(value: unknown): value is IsolationReport {
-  if (!value || typeof value !== 'object') return false;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const kind = (value as { kind?: unknown }).kind;
-  return kind === 'cleanup' || kind === 'verification';
+  if (kind === 'cleanup') {
+    const cleanup = (value as { cleanup?: unknown }).cleanup;
+    return cleanup === 'done' || cleanup === 'failed' || cleanup === 'skipped';
+  }
+  return kind === 'verification';
+}
+
+// Issue #29 review (5th pass), Important finding 3: the detail fetch's body
+// is untyped JSON from the network — asserting it as `{ isolationReport:
+// string | null }` (the old signature) let a null/array/scalar body reach
+// `detailResult.body.isolationReport` below, which throws for `null` (the
+// whole fetchAll() try/catch would then report a spurious page-level
+// `error` instead of the intended "unavailable" Notice) and silently reads
+// `undefined` for an array or scalar body (indistinguishable from "no
+// report exists"). This guards for "a non-array object that owns an
+// `isolationReport` property" — anything else is treated the same as an
+// unreadable report, per this hook's existing "unavailable on any
+// unrecognized shape" contract.
+export function hasIsolationReportField(body: unknown): body is { isolationReport: unknown } {
+  return !!body && typeof body === 'object' && !Array.isArray(body) && Object.prototype.hasOwnProperty.call(body, 'isolationReport');
 }
 
 interface UseServerDetailResult {
@@ -79,7 +110,7 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
         refreshStatuses(),
         api<InstallStatusResponse>(`/servers/${encoded}/install-status`),
         api<Session[]>(`/servers/${encoded}/sessions`).catch(() => [] as Session[]),
-        apiWithStatus<{ isolationReport: string | null }>(`/servers/${encoded}`).catch(() => null),
+        apiWithStatus<unknown>(`/servers/${encoded}`).catch(() => null),
       ]);
       if (!srvList.some((s) => s.name === serverName)) throw new Error(`Server "${serverName}" not found`);
       setInstallStatus(installRes);
@@ -89,7 +120,14 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
       let reportUnavailable = false;
       if (detailResult === null || detailResult.status < 200 || detailResult.status >= 300) {
         reportUnavailable = true;
-      } else if (detailResult.body.isolationReport) {
+      } else if (!hasIsolationReportField(detailResult.body)) {
+        // Issue #29 review (5th pass), Important finding 3: a 2xx body that
+        // isn't a non-array object owning `isolationReport` at all (null,
+        // an array, a scalar, or an object missing the field) is not a
+        // shape this hook understands — treated as unavailable rather than
+        // risking a `.isolationReport` access on a non-object body.
+        reportUnavailable = true;
+      } else if (typeof detailResult.body.isolationReport === 'string' && detailResult.body.isolationReport) {
         try {
           const parsed = JSON.parse(detailResult.body.isolationReport) as unknown;
           if (isValidIsolationReport(parsed)) {
@@ -100,6 +138,11 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
         } catch {
           reportUnavailable = true;
         }
+      } else if (detailResult.body.isolationReport != null) {
+        // Present but neither a string nor null/undefined (e.g. a stray
+        // number/object from a malformed response) — not a shape this hook
+        // can parse as a report.
+        reportUnavailable = true;
       }
       // reportUnavailable only matters (as UI-visible uncertainty) for a
       // server that actually declared isolation — a server that never

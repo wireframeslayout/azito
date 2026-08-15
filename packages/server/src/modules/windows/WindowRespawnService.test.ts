@@ -190,6 +190,11 @@ function buildService(opts: {
     listPaneIds: vi.fn(async () => [{ index: 0, paneId: '%0' }]),
     execCommand: vi.fn(async () => ({ stdout: '' })),
     uiTokenEnv: vi.fn(() => ({ AZITO_UI_TOKEN: 'ui-token-fixture' })),
+    // Issue #29 review (5th pass), Critical finding 1: the non-task respawn
+    // fallback now calls this server-aware wrapper instead of the
+    // server-blind uiTokenEnv() — mirrors it for every existing fixture
+    // server (none of which declare isolationIntent).
+    uiTokenEnvForServer: vi.fn(() => ({ AZITO_UI_TOKEN: 'ui-token-fixture' })),
   };
 
   const sessionStrategyFactory = {
@@ -386,7 +391,7 @@ describe('WindowRespawnService.respawn — supervisor wrap', () => {
     }
   });
 
-  it('passes the legacy uiTokenEnv() to splitPane calls for a non-task multi-pane window', async () => {
+  it('passes the legacy uiTokenEnvForServer() to splitPane calls for a non-task multi-pane window', async () => {
     const win = makeWindow({
       id: 1,
       taskId: null,
@@ -405,7 +410,11 @@ describe('WindowRespawnService.respawn — supervisor wrap', () => {
     await service.respawn(1, makeServer());
 
     expect(tmux.splitPane).toHaveBeenCalledTimes(1);
-    expect(tmux.splitPane.mock.calls[0][3]).toEqual(tmux.uiTokenEnv());
+    // Issue #29 review (5th pass), Critical finding 1: uiTokenEnvForServer()
+    // is what the non-task window/pane env is actually built from now — see
+    // WindowRespawnService's `windowEnv` assignment (server-aware wrapper
+    // around the legacy uiTokenEnv()).
+    expect(tmux.splitPane.mock.calls[0][3]).toEqual(tmux.uiTokenEnvForServer(makeServer()));
   });
 });
 
@@ -1389,6 +1398,7 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
       listPaneIds: vi.fn(async () => [{ index: 0, paneId: '%0' }]),
       execCommand: vi.fn(async () => ({ stdout: '' })),
       uiTokenEnv: vi.fn(() => ({ AZITO_UI_TOKEN: 'ui-token-fixture' })),
+      uiTokenEnvForServer: vi.fn(() => ({ AZITO_UI_TOKEN: 'ui-token-fixture' })),
     };
 
     const sessionStrategyFactory = {

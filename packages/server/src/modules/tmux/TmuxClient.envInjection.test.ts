@@ -126,3 +126,28 @@ describe('TmuxClient AZITO_UI_TOKEN injection (Issue #28 Phase A後半: no longe
     expect(client.uiTokenEnv()).toEqual({});
   });
 });
+
+// Issue #29 review (5th pass), Critical finding 1: uiTokenEnv() itself has
+// no way to know which server it's injecting into, so every one of its
+// legacy call sites (manual session/window/pane routes,
+// WindowRespawnService's non-task fallback) happily injected the hub's
+// AZITO_UI_TOKEN into an isolation_intent=1 server's pane too. This is the
+// server-aware wrapper those call sites now use instead.
+describe('TmuxClient.uiTokenEnvForServer', () => {
+  it('returns the legacy uiTokenEnv() for a non-isolated server', async () => {
+    const client = makeClient(async () => ({ stdout: '', stderr: '', code: 0 }));
+    expect(client.uiTokenEnvForServer(srv)).toEqual({ AZITO_UI_TOKEN: UI_TOKEN });
+  });
+
+  it('masks the token with an explicit empty string for an isolation_intent server', async () => {
+    const client = makeClient(async () => ({ stdout: '', stderr: '', code: 0 }));
+    const isolatedSrv: ServerConfig = { ...remoteSrv, isolationIntent: true };
+    expect(client.uiTokenEnvForServer(isolatedSrv)).toEqual({ AZITO_UI_TOKEN: '' });
+  });
+
+  it('masks even when the underlying uiToken is empty (still an explicit key, not omitted)', async () => {
+    const client = makeClient(async () => ({ stdout: '', stderr: '', code: 0 }), '');
+    const isolatedSrv: ServerConfig = { ...remoteSrv, isolationIntent: true };
+    expect(client.uiTokenEnvForServer(isolatedSrv)).toEqual({ AZITO_UI_TOKEN: '' });
+  });
+});

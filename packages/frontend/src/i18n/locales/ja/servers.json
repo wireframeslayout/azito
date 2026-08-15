@@ -63,6 +63,8 @@
     "isolationCleanupToastFailed": "隔離実行を有効化しましたが、既存の操作トークンの掃除に失敗しました。サーバーの概要画面の通知を確認してください。",
     "isolationCleanupToastSkipped": "隔離実行を有効化しましたが、操作トークンの掃除がスキップされました（到達可能なホストがありません）。サーバーの概要画面の通知を確認してください。",
     "isolationBlockedByWindowsToast": "隔離を有効化できません: このサーバーに {{count}} 件のウィンドウが登録されており、資格情報を保持している可能性があります。対象ウィンドウを閉じてから再度お試しください。",
+    "isolationBlockedByLiveSessionsToast": "隔離を有効化できません: このサーバーに {{count}} 件の稼働中 tmux セッションが存在します。セッションを終了してから再度お試しください。",
+    "isolationBlockedBySessionCheckFailureToast": "隔離を有効化できません: tmux セッション一覧の取得に失敗したため、安全側に倒して有効化を中止しました。サーバーの疎通を確認してから再度お試しください。",
     "isolationReportUnavailableTitle": "隔離状態を確認できません",
     "isolationReportUnavailableSub": "このサーバーは隔離実行を宣言していますが、状態の取得に失敗したか、想定外の形式でした。以前配布された操作トークンが残っている可能性があります。再試行するか、サーバーへの接続状況を確認してください。",
     "muxRuntimeLabel": "mux runtime",
