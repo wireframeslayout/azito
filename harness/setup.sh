@@ -348,21 +348,52 @@ AZITOCTL_ENV_FILE="$AZITOCTL_ENV_DIR/azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env
 # 既存ファイルに AZITO_UI_TOKEN 行が残っていれば、書き直し条件に関わらず
 # 除去する（冪等: 該当行が無ければ何もしない）。umask 077 + アトミック置換は
 # 下の書き直し節と同じ作法。
-if [[ -f "$AZITOCTL_ENV_FILE" ]] && grep -q '^AZITO_UI_TOKEN=' "$AZITOCTL_ENV_FILE" 2>/dev/null; then
-  AZITOCTL_ENV_CLEAN_TMP="$(mktemp "$AZITOCTL_ENV_DIR/.azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env.XXXXXX")"
-  (
-    umask 077
-    # `grep -v` はマッチ行を除いた結果が0行になる場合（＝除去対象の
-    # AZITO_UI_TOKEN 行のみのファイル）に exit 1 を返し、set -e でセット
-    # アップ全体を中止させてしまう（third-party review Important finding、
-    # 実再現あり）。awk の `!/pattern/` は該当0件でも常に exit 0 なので
-    # 同じ用途に置き換える（真の read エラー時は awk 自身が非ゼロで落ちる
-    # ため、その場合はここも失敗する＝挙動は保たれる）。
-    awk '!/^AZITO_UI_TOKEN=/' "$AZITOCTL_ENV_FILE" > "$AZITOCTL_ENV_CLEAN_TMP"
-  )
-  chmod 600 "$AZITOCTL_ENV_CLEAN_TMP"
-  mv -f "$AZITOCTL_ENV_CLEAN_TMP" "$AZITOCTL_ENV_FILE"
-  echo "  $AZITOCTL_ENV_FILE: 旧 AZITO_UI_TOKEN 行を除去しました"
+#
+# Issue #29 review, follow-up pass, Important finding 1: この掃除は従来
+# 「今回の $AZITO_PREFIX に対応する1ファイルだけ」しか見ていなかったため、
+# (a) 別の --prefix で過去に作られた azitoctl-<other>.env に残る旧
+#     AZITO_UI_TOKEN 行は今回の実行では一切検出されず、
+# (b) 対象ファイルが symlink（dotfiles 管理等）だった場合 `mv -f` はリンク
+#     自体を差し替えるだけでリンク先には触れないため、旧トークンがリンク先
+#     に残ったまま「除去しました」と成功表示していた
+# （operator.env / config.toml 節と同じ symlink 空振りパターン）。
+# 読み出し側 findAzitoctlEnvFiles と同じ文法 `^azitoctl(?:-.+)?\.env$`
+# （packages/server/src/shared/azitoctlEnv.ts）に一致する全ファイルを走査し、
+# symlink は operator.env と同じく fail closed（リンク先を提示するだけで
+# 編集しない・SETUP_HAD_ERRORS=1）にする。
+if [[ -d "$AZITOCTL_ENV_DIR" ]]; then
+  shopt -s nullglob
+  AZITOCTL_LEGACY_CANDIDATES=("$AZITOCTL_ENV_DIR"/azitoctl.env "$AZITOCTL_ENV_DIR"/azitoctl-*.env)
+  shopt -u nullglob
+  for legacy_file in "${AZITOCTL_LEGACY_CANDIDATES[@]}"; do
+    # ディレクトリ・グロブ由来のノイズ（例: 隣接する .azitoctl-*.env.XXXXXX
+    # 一時ファイルの取りこぼし）を除外し、読み出し側と同じ文法で厳密一致
+    # するファイルのみを対象にする。
+    [[ "$(basename "$legacy_file")" =~ ^azitoctl(-.+)?\.env$ ]] || continue
+    if [[ -L "$legacy_file" ]]; then
+      if grep -q '^AZITO_UI_TOKEN=' "$legacy_file" 2>/dev/null; then
+        echo "  エラー: $legacy_file はシンボリックリンクです（リンク先: $(readlink "$legacy_file")）。dotfiles 管理等の可能性があるため自動編集しません。リンク先のファイルを手動で確認し、AZITO_UI_TOKEN を除去してください" >&2
+        SETUP_HAD_ERRORS=1
+      fi
+      continue
+    fi
+    [[ -f "$legacy_file" ]] || continue
+    grep -q '^AZITO_UI_TOKEN=' "$legacy_file" 2>/dev/null || continue
+    legacy_tmp="$(mktemp "$AZITOCTL_ENV_DIR/.$(basename "$legacy_file").XXXXXX")"
+    (
+      umask 077
+      # `grep -v` はマッチ行を除いた結果が0行になる場合（＝除去対象の
+      # AZITO_UI_TOKEN 行のみのファイル）に exit 1 を返し、set -e でセット
+      # アップ全体を中止させてしまう（third-party review Important finding、
+      # 実再現あり）。awk の `!/pattern/` は該当0件でも常に exit 0 なので
+      # 同じ用途に置き換える（真の read エラー時は awk 自身が非ゼロで落ちる
+      # ため、その場合はここも失敗する＝挙動は保たれる）。
+      awk '!/^AZITO_UI_TOKEN=/' "$legacy_file" > "$legacy_tmp"
+    )
+    chmod 600 "$legacy_tmp"
+    mv -f "$legacy_tmp" "$legacy_file"
+    echo "  $legacy_file: 旧 AZITO_UI_TOKEN 行を除去しました"
+  done
 fi
 if [[ -n "$AZITO_URL" && -n "$AZITO_WEBHOOK_TOKEN" ]]; then
   mkdir -p "$AZITOCTL_ENV_DIR"
@@ -1023,24 +1054,30 @@ strip_codex_ui_token() {
     // double-quoted segment is ever in scope here, matching the actual
     // ambiguity TOML defines.
     //
-    // Implemented as a single whole-line scan for a double-quoted,
-    // backslash-containing segment sitting directly in KEY position —
-    // immediately followed (after only whitespace) by "=" — rather than as
-    // a per-matcher helper, because one pattern already covers every shape
-    // the matchers below need to worry about on a single line: the standard
-    // sub-table form (a double-quoted AZITO_UI_TOKEN key), the inline-table
-    // form (env = { ... } — the match fires on the segment INSIDE the
-    // braces, not just the outer env key), and the last segment of the
-    // dotted form (env."AZITO_UI_TOKEN..." = ... or
-    // mcp_servers.azt-mcp.env."AZITO_UI_TOKEN..." = ..., where the escaped
-    // segment is always the one immediately preceding "="). It does not
-    // catch an escape on a NON-final dotted segment (an escaped env segment
-    // rather than an escaped AZITO_UI_TOKEN segment) — an intentionally
-    // accepted gap for a shape codex mcp add has never been observed to
-    // emit and a hand-editor has essentially no reason to produce, versus
-    // the realistic one this exists for.
+    // Issue #29 review, follow-up pass, Important finding 2: the original
+    // version anchored on a double-quoted, backslash-containing segment
+    // sitting immediately before "=" — so it only caught an escape on the
+    // FINAL dotted segment (env."AZITO_UI_TOKEN..." = ... or
+    // mcp_servers.azt-mcp.env."AZITO_UI_TOKEN..." = ...). A dotted key with
+    // the escape on a NON-final segment instead — e.g.
+    // mcp_servers."azt-mcp".env.AZITO_UI_TOKEN = ... where "azt-mcp" itself
+    // carries a backslash escape — sails through untouched: none of
+    // isTokenKeyLine/hasInlineTokenKey/isDottedEnvTokenKey decode escapes
+    // either, so the purge would report success while a live,
+    // semantically-identical AZITO_UI_TOKEN key sits in the file untouched.
+    //
+    // Generalized: scan the entire KEY portion of the line — everything
+    // before the first "=" (or, for a table-header line with no "=" at
+    // all, the whole line, since a headers entire text is key-position
+    // content) — for ANY double-quoted segment containing a backslash,
+    // regardless of where in that portion it sits. This still never
+    // touches the VALUE side of an assignment (text after "="), so an
+    // escaped backslash inside an ordinary string value (e.g.
+    // AZITO_URL = "https://example.com/a\path") does not trip it.
     function hasEscapedQuotedKeyAssignment(line) {
-      return /"[^"]*\\[^"]*"\s*=/.test(line);
+      const eq = line.indexOf("=");
+      const keyPart = eq === -1 ? line : line.slice(0, eq);
+      return /"[^"]*\\[^"]*"/.test(keyPart);
     }
 
     // Issue #29 review, Important finding 2: every matcher below
