@@ -24,9 +24,16 @@ properties.
 | Layer 2: distribution blocking | The hub **does not inject** operator-equivalent tokens into task panes on a server that has declared isolation | Implemented (`TaskPaneEnvironmentService`) |
 | Layer 3: API authorization | Scoped auth restricts the task principal to an allowlisted set of APIs | Implemented in Issue #28. A **precondition** for declaring isolation |
 
-The isolation doctor (below) is a self-reported health check confirming Layer 2 is actually in
-effect. Layer 1 is the operational configuration itself; the doctor only **confirms** it is in the
-state the operator intended, it does not enforce the configuration.
+The isolation doctor (below) is a self-reported health check that probes a fixed list of known
+residual-credential locations (files, environment variables, `gh`/git config, ssh-agent
+forwarding) on the target host. **It is not an end-to-end verification that Layer 2 holds on
+every code path.** In particular, it never inspects the **task's tmux pane environment** — the
+place where `TaskPaneEnvironmentService` applies its masking at window-creation time — so a
+wiring regression that stopped that masking from reaching a newly created task window would leave
+the doctor green while a task pane still leaked credentials. Layer 1 is the operational
+configuration itself; the doctor only **confirms** the known locations it checks are in the state
+the operator intended — it does not enforce the configuration, and it does not cover every
+location Layer 2 depends on.
 
 As a consequence of C-1 (Layer 3 as a precondition), **the PUT that enables `isolation_intent` is
 rejected with 409 unless the hub has scoped auth (`AZITO_SCOPED_AUTH=1`) enabled** (see below).
@@ -107,6 +114,13 @@ The isolation doctor's job is to confirm that structural gate is actually in the
 operator believes it's in — a health check on the gate, not a substitute assurance for hosts the
 gate doesn't cover.
 
+**Scope note**: the nine checks above enumerate known locations where a leftover credential could
+sit — files, environment variables, `gh`/git config, ssh-agent forwarding. None of them exercise
+the **task tmux pane environment** a real task run actually creates (the place
+`TaskPaneEnvironmentService` masks at window-creation time). This doctor is therefore a snapshot
+health check of the known-location gate, not proof that the entire Layer 2 path is intact for a
+given task run.
+
 ### Verification TTL and immediate invalidation on doctor failure
 
 When the doctor completes with every check `pass`, `isolationVerifiedAt` is recorded, and this
@@ -163,6 +177,14 @@ isolation with network-level isolation.
 
 ### Tailnet ACL discipline (Tailscale deployments)
 
+**Scope limitation**: Tailscale ACLs only govern traffic that goes through the tailnet overlay
+(destinations reached via a Tailscale-assigned IP / MagicDNS name). Direct reachability to the
+public internet, or to other hosts on the same LAN segment, is outside the ACL's control — an ACL
+alone is not sufficient defense against lateral movement. The ACL example below only closes off
+SSH lateral movement *within the tailnet*; blocking public-internet/LAN paths requires the
+persistent host firewall in the next subsection, applied in addition to this ACL, not instead of
+it.
+
 Tag the isolated server `tag:isolated`, deny Tailscale SSH from that tag to every destination, and
 allow outbound only to the hub's webhook port. Example ACL:
 
@@ -187,15 +209,63 @@ The key is to never write an SSH rule with `tag:isolated` as the **src**. Tailsc
 only permits explicitly-allowed pairs, so with no entry allowing SSH from `tag:isolated`, a host
 carrying that tag cannot SSH out to anything.
 
-### Firewall variant (non-Tailscale deployments)
+### Firewall variant (required as a persistent host firewall regardless of Tailscale)
 
-In a deployment without Tailscale, restrict outbound on the isolated server's OS firewall. Example
-(`iptables`; replace the hub address/port with your environment's values):
+Because the tailnet ACL only governs tailnet-overlay traffic (previous subsection), blocking
+lateral movement over the public internet, the local LAN, or IPv6 requires a **persistent**
+dual-stack (IPv4 + IPv6) host firewall on the isolated server itself. Apply this at all times, as a
+complement to the tailnet ACL, whether or not Tailscale is in use.
+
+`iptables` only covers IPv4 — omitting `ip6tables` lets **IPv6 egress bypass the rule set
+entirely**. `nftables` is recommended since it can cover both families in one rule set;
+`iptables`/`ip6tables` in tandem (with the exact same rules applied to both) is equally effective.
+Below is a complete stateful rule set: allow loopback → allow established/related traffic →
+explicitly allow the required hub<->agent traffic → deny everything else (replace the hub
+address/port with your environment's values):
 
 ```bash
-# allow outbound only to the hub's webhook port, deny everything else
-iptables -A OUTPUT -d <hub-ip> -p tcp --dport 3001 -j ACCEPT
-iptables -A OUTPUT -j REJECT
+# --- nftables (recommended: one rule set covers IPv4 and IPv6) ---
+nft add table inet isolated
+nft add chain inet isolated output '{ type filter hook output priority 0; policy drop; }'
+nft add chain inet isolated input  '{ type filter hook input  priority 0; policy drop; }'
+
+# Always allow loopback
+nft add rule inet isolated output oif lo accept
+nft add rule inet isolated input  iif lo accept
+
+# Allow established/related traffic (required: the hub's inbound response
+# lands on the hub's ephemeral port — without this rule the agent becomes
+# unreachable from the hub)
+nft add rule inet isolated output ct state established,related accept
+nft add rule inet isolated input  ct state established,related accept
+
+# Allow only new outbound connections to the hub's webhook/agent port
+nft add rule inet isolated output ip  daddr <hub-ipv4> tcp dport 3001 ct state new accept
+nft add rule inet isolated output ip6 daddr <hub-ipv6> tcp dport 3001 ct state new accept
+
+# Everything else is denied automatically (chain policy is drop; no
+# explicit rule needed for packets that don't match anything above)
+```
+
+```bash
+# --- iptables + ip6tables (for environments without nftables — apply the
+#     exact same rules to BOTH IPv4 and IPv6) ---
+for CMD in iptables ip6tables; do
+  # Always allow loopback
+  $CMD -A OUTPUT -o lo -j ACCEPT
+  $CMD -A INPUT  -i lo -j ACCEPT
+  # Allow established/related traffic (required for the hub's inbound response)
+  $CMD -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+  $CMD -A INPUT  -m state --state ESTABLISHED,RELATED -j ACCEPT
+done
+# Allow only new outbound connections to the hub's webhook/agent port (IPv4 and IPv6 each)
+iptables  -A OUTPUT -d <hub-ipv4> -p tcp --dport 3001 -m state --state NEW -j ACCEPT
+ip6tables -A OUTPUT -d <hub-ipv6> -p tcp --dport 3001 -m state --state NEW -j ACCEPT
+# Deny everything else
+for CMD in iptables ip6tables; do
+  $CMD -A OUTPUT -j REJECT
+  $CMD -A INPUT  -j REJECT
+done
 ```
 
 ### Planned future work
@@ -209,14 +279,18 @@ not include tailnet ACL verification.
 ## 7. Pushing from isolated tasks is the operator's responsibility for now
 
 Because an isolated server is assumed to hold no push credentials at all (no `gh` auth, SSH key,
-or git credential helper), **an externally-sourced task running on an isolated server currently
-terminates at the testing phase**; the pushing phase (commit, push, PR creation) is not executed.
-Merging and PR creation must be done manually by the operator.
+or git credential helper), `PhaseLoopRunner` **automatically skips the pushing phase** (any phase
+carrying the `pushVerify` flag) for a task running on a server with `isolationIntent: true`, even
+if the Unit's `phaseConfig` includes it. The skip is recorded in the execution log as
+`pushing_skipped_isolated`; once every other phase has completed normally, the task transitions to
+`review` the same way a testing-terminated run would. Commit, push, and PR creation must be done
+manually by the operator.
 
 Official support for the hub pushing on behalf of an isolated task is planned in **#87** (a design
 for distributing a push-only, scoped credential to isolated servers is under consideration). Until
-then, avoid assigning a Unit whose phase config includes `pushing` to tasks running on an isolated
-server.
+then, assigning a Unit whose phase config includes `pushing` to tasks running on an isolated server
+is safe (it is skipped automatically), but assigning a Unit without a `pushing` phase is still
+recommended so the intent stays explicit.
 
 Similarly, features that require operator-level privilege (e.g. operations via the CDP browser
 / "browser-ops") are not reachable from tasks on an isolated server under the current

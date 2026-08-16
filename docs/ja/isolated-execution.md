@@ -22,9 +22,14 @@
 | 層2: 配布遮断 | ハブが、隔離を宣言したサーバー宛のタスクペインに operator 相当のトークンを**注入しない** | 実装済み（`TaskPaneEnvironmentService`） |
 | 層3: API 認可 | scoped auth により、task principal が使える API を allowlist 済みのものだけに制限する | Issue #28 で実装済み。隔離宣言の**前提条件**として必須 |
 
-層2が実際に効いていることを確認する自己申告ベースの健全性チェックが「isolation doctor」（後述）
-です。層1は運用上の構成そのものであり、doctor はその構成が意図どおりかを**確認**する立場に
-あり、構成自体を強制するものではありません。
+「isolation doctor」（後述）は、既知の資格情報残留箇所（ファイル・環境変数・`gh`/git 設定・
+ssh-agent フォワード）を対象ホスト上の自己申告で確認する健全性チェックです。**層2が全経路で
+効いていることを end-to-end に検証するものではありません**。特に、実際のタスク実行が使う
+tmux ペインの実行環境（`TaskPaneEnvironmentService` によるマスクが適用される場所）は doctor の
+検査対象に含まれません — タスクウィンドウ作成の配線にリグレッションが入り、そのマスクが
+新規タスクウィンドウへ届かなくなっても、doctor は green のまま気づけません。層1は運用上の
+構成そのものであり、doctor は「doctor が把握している既知の箇所」が意図どおりかを**確認**する
+立場にあり、構成自体を強制するものでも、層2が依存する全箇所をカバーするものでもありません。
 
 C-1（層3が前提）の帰結として、**`isolation_intent` を有効化する PUT は、scoped auth
 （`AZITO_SCOPED_AUTH=1`）が有効なハブでなければ 409 で拒否されます**（後述）。
@@ -105,6 +110,13 @@ isolation doctor の役割は、その構造的なゲートが「operator が期
 なっているかを確認する健全性チェックであって、ゲートが対象にしていないホストに対する
 代替の保証ではありません。
 
+**検査範囲の注記**: 上表の9 check は、資格情報が残留しうる既知の箇所（ファイル・環境変数・
+`gh`/git 設定・ssh-agent フォワード）を列挙したものです。実際のタスク実行が使う **tmux
+ペインの実行環境**（`TaskPaneEnvironmentService` がウィンドウ作成時にマスクを適用する場所）は
+これらの検査のどれも通しません。そのため、この doctor は「既知の箇所」の健全性チェックの
+スナップショットであり、あるタスク実行における層2経路全体が無傷であることの証明では
+ありません。
+
 ### verified の TTL と doctor 失敗時の即時無効化
 
 doctor が全 check `pass` で完了すると、`isolationVerifiedAt` が記録され、以後
@@ -161,6 +173,12 @@ doctor の実行が1つでも `fail`/`unknown` を含んで完了した場合、
 
 ### tailnet ACL 規律版（Tailscale 使用時）
 
+**適用範囲の限定**: Tailscale ACL が制御できるのは tailnet オーバーレイ経由のトラフィック
+（Tailscale が割り当てた IP / MagicDNS 名宛の通信）だけです。public internet への直接到達や
+同一 LAN セグメント上の他ホストへの到達は ACL の対象外であり、ACL だけでは横移動対策として
+不十分です。下記の ACL 例はあくまで「tailnet 内での SSH 横移動」を塞ぐものであり、
+public/LAN 経路の遮断には次項の恒常的なホストファイアウォールが別途必要です。
+
 隔離サーバーに `tag:isolated` を付与し、その tag からの Tailscale SSH を全宛先で拒否、
 outbound はハブの webhook ポートのみ許可する ACL 例:
 
@@ -185,15 +203,62 @@ outbound はハブの webhook ポートのみ許可する ACL 例:
 `ssh` ブロックは明示的に許可されたペアのみを通すため、`tag:isolated` からの SSH を許可する
 エントリが無ければ、そのタグを持つホストから他ホストへの SSH は成立しません。
 
-### ファイアウォール版（非 Tailscale 構成）
+### ファイアウォール版（永続的なホストファイアウォールとして必須）
 
-Tailscale を使わない構成では、隔離サーバーの OS ファイアウォールで outbound を絞ります。
-例（`iptables`、ハブのアドレスとポートは環境に合わせて置き換え）:
+Tailscale ACL は tailnet 宛のトラフィックしか制御しないため（前項）、public internet 直接到達
+・同一 LAN・IPv6 経路での横移動を塞ぐには、隔離サーバー本体に**恒常的な** dual-stack（IPv4 +
+IPv6）のホストファイアウォールが別途必要です。Tailscale 使用の有無に関わらず、tailnet ACL の
+補完として常時適用してください。
+
+`iptables` は IPv4 のみを対象とするため、`ip6tables` を省略すると **IPv6 の egress が素通り**
+します。IPv4/IPv6 を一体で書ける `nftables` を推奨しますが、`iptables`/`ip6tables` の組でも
+同内容を両方に適用すれば同等です。以下は完全な stateful ルールセットの例（ループバック許可 →
+確立済み/関連トラフィック許可 → 必要な hub↔agent トラフィックの明示許可 → 残りを拒否、の順。
+ハブのアドレスとポートは環境に合わせて置き換え）:
 
 ```bash
-# outbound はハブの webhook ポートのみ許可し、それ以外は拒否
-iptables -A OUTPUT -d <hub-ip> -p tcp --dport 3001 -j ACCEPT
-iptables -A OUTPUT -j REJECT
+# --- nftables 推奨版（IPv4/IPv6 を単一ルールセットでカバー） ---
+nft add table inet isolated
+nft add chain inet isolated output '{ type filter hook output priority 0; policy drop; }'
+nft add chain inet isolated input  '{ type filter hook input  priority 0; policy drop; }'
+
+# ループバックは無条件許可
+nft add rule inet isolated output oif lo accept
+nft add rule inet isolated input  iif lo accept
+
+# 確立済み/関連トラフィックを許可（hub からの inbound 応答が
+# ハブの ephemeral port 宛に返ってくるため、これが無いと agent が
+# ハブに到達不能になる）
+nft add rule inet isolated output ct state established,related accept
+nft add rule inet isolated input  ct state established,related accept
+
+# 新規の outbound はハブの webhook/agent ポート宛のみ許可
+nft add rule inet isolated output ip  daddr <hub-ipv4> tcp dport 3001 ct state new accept
+nft add rule inet isolated output ip6 daddr <hub-ipv6> tcp dport 3001 ct state new accept
+
+# 残りはすべて拒否（chain policy が drop のため明示ルール不要。
+# ここまでに合致しなかったパケットは自動的に落ちる）
+```
+
+```bash
+# --- iptables + ip6tables 版（nftables が使えない環境向け。
+#     IPv4/IPv6 の両方に必ず同じルールを適用すること） ---
+for CMD in iptables ip6tables; do
+  # ループバックは無条件許可
+  $CMD -A OUTPUT -o lo -j ACCEPT
+  $CMD -A INPUT  -i lo -j ACCEPT
+  # 確立済み/関連トラフィックを許可（hub からの inbound 応答に必須）
+  $CMD -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+  $CMD -A INPUT  -m state --state ESTABLISHED,RELATED -j ACCEPT
+done
+# 新規の outbound はハブの webhook/agent ポート宛のみ許可（IPv4/IPv6 それぞれ）
+iptables  -A OUTPUT -d <hub-ipv4> -p tcp --dport 3001 -m state --state NEW -j ACCEPT
+ip6tables -A OUTPUT -d <hub-ipv6> -p tcp --dport 3001 -m state --state NEW -j ACCEPT
+# 残りは拒否
+for CMD in iptables ip6tables; do
+  $CMD -A OUTPUT -j REJECT
+  $CMD -A INPUT  -j REJECT
+done
 ```
 
 ### 将来計画
@@ -207,13 +272,16 @@ iptables -A OUTPUT -j REJECT
 ## 7. 隔離タスクの pushing は当面 operator 責務
 
 隔離サーバーには push 資格情報（gh 認証、SSH 鍵、git credential helper）を一切配置しない
-構成が前提のため、現状、**隔離サーバー上で実行される外部由来タスクは testing フェーズで
-終端**し、pushing フェーズ（コミット・プッシュ・PR 作成）は実行されません。マージ・PR 作成は
-operator が手動で行ってください。
+構成が前提のため、`PhaseLoopRunner` は `isolationIntent: true` のサーバー上で実行される
+タスクについて、Unit の `phaseConfig` に `pushing` フェーズ（`pushVerify` フラグを持つフェーズ）
+が含まれていても**自動的にスキップ**します。実行ログに `pushing_skipped_isolated` として
+記録され、他の全フェーズが正常完了していれば testing 終端と同じ扱いでタスクは `review` へ
+遷移します。コミット・プッシュ・PR 作成は operator が手動で行ってください。
 
 ハブが隔離タスクに代わって push を代行する正式サポートは **#87** で計画中です（隔離サーバーへ
 push 専用の限定資格情報を配布する設計を検討中）。それまでは、隔離サーバー上のタスクに
-`pushing` フェーズを含む Unit を割り当てないことを推奨します。
+`pushing` フェーズを含む Unit を割り当てても安全側にスキップされますが、意図が明確になるよう
+`pushing` を含まない Unit を割り当てることを推奨します。
 
 また、browser-ops など operator 権限を要する機能（CDP ブラウザ経由の操作など）についても、
 隔離サーバー上のタスクからの利用は現状のアーキテクチャ上想定されていません（operator 相当の
