@@ -4,6 +4,7 @@ import { deriveInputTrust, validateTaskSourceFields } from './Task';
 import type { TaskStatus } from './TaskStatus';
 import type { IProjectRepository } from '../projects/Project';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
+import { resolveEffectiveInputPolicy } from '../projects/ProjectServer';
 import type { IExecutionLogRepository } from './ExecutionLog';
 import type { ExecuteTaskUseCase } from './execution/ExecuteTaskUseCase';
 import type { IUnitRepository, SubagentConfig } from '../units/Unit';
@@ -116,6 +117,15 @@ export interface TasksRouteOptions {
     kill: () => Promise<ExecResult>,
     onDestroyed: () => void,
   ) => Promise<KillOutcome>;
+  /**
+   * Issue #29 Step 3a: needed by GET /api/tasks/:id/execution-approval to
+   * compute `allowDegradedReason` via `resolveEffectiveInputPolicy()` —
+   * the SAME flag ExecuteTaskUseCase/PhaseLoopRunner/TaskRestoreService/
+   * WindowRespawnService are constructed with (see app/wiring.ts), so the
+   * approval screen's degradation reason never drifts from what the actual
+   * gate re-check will decide at execution time.
+   */
+  scopedAuthEnabled: boolean;
 }
 
 /** POST /api/tasks/:id/children: a task principal may only create children under its own (parent) task; operator always passes (Issue #28 design v3 §4). */
@@ -181,7 +191,7 @@ function toListItem(task: Task, windows: unknown[]): Record<string, unknown> {
 }
 
 const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, done) => {
-  const { taskRepo, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService, taskRestoreService, unitTypeLoader, sidekickLoader, projectSecretRepo, auditLogService, originationService, taskTokenRepo, destroyPrimaryTaskWindow } = opts;
+  const { taskRepo, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService, taskRestoreService, unitTypeLoader, sidekickLoader, projectSecretRepo, auditLogService, originationService, taskTokenRepo, destroyPrimaryTaskWindow, scopedAuthEnabled } = opts;
   const taskCleanupService = new TaskCleanupService({ serverRepo, tmux, worktreeServiceFactory, transportFactory, projectServerRepo, projectRepo });
 
   // ── GET /api/tasks ──
@@ -423,6 +433,15 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         ? []
         : projectSecretRepo.findByProject(task.projectId).map((s) => s.name).sort();
 
+      // Issue #29 Step 3a: same resolveEffectiveInputPolicy() call every
+      // execution entry point makes — shown here so a human looking at the
+      // approval screen can see WHY this task landed on pending_approval
+      // despite the project server being configured for 'allow' (rather than
+      // silently looking identical to an ordinary 'manual-approval' block).
+      // `null` when the requested policy was never 'allow' in the first
+      // place (nothing to explain).
+      const effectivePolicy = resolveEffectiveInputPolicy(projectServer, resolvedServer, scopedAuthEnabled);
+
       return {
         taskId: task.id,
         title: task.title,
@@ -430,6 +449,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         inputTrust: task.inputTrust,
         pendingOperation: task.pendingOperation,
         inputPolicy: projectServer?.inputPolicy ?? null,
+        allowDegradedReason: effectivePolicy.allowDegradedReason,
         // Fingerprint of the manifest THIS RESPONSE displays (Issue #328
         // review fix 1) — the client must send it back unchanged with
         // POST /api/tasks/:id/approve-execution's `approved: true`. The

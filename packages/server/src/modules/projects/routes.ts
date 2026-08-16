@@ -226,22 +226,31 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       const branch = 'branch' in body
         ? (body.branch ?? null)
         : (existingRow?.branch ?? null);
-      // 'allow' is rejected here, not just left undocumented: it would skip the
-      // execution-approval gate entirely for untrusted tasks, but the isolated
-      // execution profile that would make that safe (Issue #328 design doc)
-      // doesn't exist yet. Rejecting at the API boundary keeps a misconfigured
-      // client from silently granting unattended execution of external input.
+      // Issue #29 Step 3a: 'allow' is now selectable, but ONLY declaratively
+      // for a server that has declared isolation intent — the real safety
+      // property (verified, time-bounded, scoped-auth-gated) is enforced at
+      // RUN TIME by resolveEffectiveInputPolicy() (projects/ProjectServer.ts),
+      // not here. This check only prevents an obviously-wrong configuration
+      // (declaring 'allow' against a server that was never even INTENDED to
+      // be isolated) from being saved at all; it deliberately does not
+      // require `isolationVerifiedAt` to be current — an operator may
+      // legitimately configure 'allow' before ever running the doctor, and
+      // the run-time gate will simply keep it degraded to 'manual-approval'
+      // until verification catches up.
       if (body.input_policy === 'allow') {
-        return reply.status(400).send({ error: "input_policy 'allow' is not selectable yet (isolated execution profile not implemented)" });
+        const targetServer = serverRepo.findByName(serverName);
+        if (!targetServer?.isolationIntent) {
+          return reply.status(400).send({ error: 'input_policy_allow_requires_isolation', message: "input_policy 'allow' requires the server to have isolation intent declared first" });
+        }
       }
-      if (body.input_policy !== undefined && body.input_policy !== 'deny' && body.input_policy !== 'manual-approval') {
-        return reply.status(400).send({ error: "input_policy must be 'deny' or 'manual-approval'" });
+      if (body.input_policy !== undefined && body.input_policy !== 'deny' && body.input_policy !== 'manual-approval' && body.input_policy !== 'allow') {
+        return reply.status(400).send({ error: "input_policy must be 'deny', 'manual-approval', or 'allow'" });
       }
       // resolveInputPolicy (projects/ProjectServer.ts) is the single place
       // that applies the "unset -> manual-approval" default (Issue #29 Step
       // 0 — this used to be a second, independently-hardcoded copy of the
       // same literal).
-      const inputPolicy = (body.input_policy as 'deny' | 'manual-approval' | undefined) ?? resolveInputPolicy(existingRow);
+      const inputPolicy = (body.input_policy as 'deny' | 'manual-approval' | 'allow' | undefined) ?? resolveInputPolicy(existingRow);
       projectServerRepo.upsert({
         projectId,
         serverName,

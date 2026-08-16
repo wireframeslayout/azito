@@ -84,9 +84,9 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
   };
 }
 
-describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328)', () => {
-  it('rejects input_policy "allow" (isolated execution profile not implemented yet)', async () => {
-    const opts = makeOpts();
+describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328 / Issue #29 Step 3a)', () => {
+  it('rejects input_policy "allow" when the target server has no isolation intent declared', async () => {
+    const opts = makeOpts(); // default serverRepo.findByName returns null (no server row at all)
     const app = Fastify();
     await app.register(projectsRoutes, opts);
     await app.ready();
@@ -98,7 +98,77 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
     });
 
     expect(res.statusCode).toBe(400);
+    const body = res.json();
+    expect(body.error).toBe('input_policy_allow_requires_isolation');
     expect(opts.projectServerRepo.upsert).not.toHaveBeenCalled();
+  });
+
+  it('rejects input_policy "allow" when the server row exists but isolationIntent is false', async () => {
+    const opts = makeOpts({
+      serverRepo: {
+        findAll: vi.fn(() => []),
+        findByName: vi.fn(() => ({
+          name: 'test-server', type: 'agent' as const, host: null, agentPort: null, agentToken: null, agentVersion: null,
+          sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const,
+          isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01',
+        })),
+        create: vi.fn(),
+        update: vi.fn(),
+        updateAgentVersion: vi.fn(),
+        updateFingerprint: vi.fn(),
+        clearFingerprint: vi.fn(),
+        updateIsolationIntent: vi.fn(),
+        delete: vi.fn(),
+      },
+    });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10/servers/test-server',
+      payload: { input_policy: 'allow' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('input_policy_allow_requires_isolation');
+    expect(opts.projectServerRepo.upsert).not.toHaveBeenCalled();
+  });
+
+  it('accepts input_policy "allow" when the server has isolation intent declared — verification is NOT required at configuration time', async () => {
+    const opts = makeOpts({
+      serverRepo: {
+        findAll: vi.fn(() => []),
+        findByName: vi.fn(() => ({
+          name: 'test-server', type: 'agent' as const, host: null, agentPort: null, agentToken: null, agentVersion: null,
+          sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const,
+          // isolationIntent declared, but never verified — still accepted at
+          // the config boundary; the run-time gate (resolveEffectiveInputPolicy)
+          // is what keeps 'allow' degraded until a doctor run verifies it.
+          isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01',
+        })),
+        create: vi.fn(),
+        update: vi.fn(),
+        updateAgentVersion: vi.fn(),
+        updateFingerprint: vi.fn(),
+        clearFingerprint: vi.fn(),
+        updateIsolationIntent: vi.fn(),
+        delete: vi.fn(),
+      },
+    });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10/servers/test-server',
+      payload: { input_policy: 'allow' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.projectServerRepo.upsert).toHaveBeenCalledWith(expect.objectContaining({ inputPolicy: 'allow' }));
   });
 
   it('accepts input_policy "deny"', async () => {
