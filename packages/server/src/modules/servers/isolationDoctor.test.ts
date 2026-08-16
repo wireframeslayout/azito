@@ -404,7 +404,7 @@ describe('runIsolationDoctor', () => {
   // in `detail` — only a coarse, value-free classification.
   it('no_git_credentials: fails when credential.helper is set, without leaking the raw helper value', async () => {
     const transport = makeTransport((cmd) => {
-      if (cmd.includes('credential.helper')) return { stdout: 'AZT_GIT_EXIT:0\nstore --file /home/agent/.git-credentials-secret\nAZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
+      if (cmd.includes('credential.helper')) return { stdout: 'AZT_GIT_EXIT:0\nfile:/home/agent/.gitconfig\tstore --file /home/agent/.git-credentials-secret\nAZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
       return cleanHandler(cmd);
     });
     const result = await runIsolationDoctor(transport, HUB);
@@ -416,7 +416,7 @@ describe('runIsolationDoctor', () => {
 
   it('no_git_credentials: classifies a shell-command (!...) helper without leaking it, and never as "store"', async () => {
     const transport = makeTransport((cmd) => {
-      if (cmd.includes('credential.helper')) return { stdout: 'AZT_GIT_EXIT:0\n!aws codecommit credential-helper $@ --profile secretprofile\nAZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
+      if (cmd.includes('credential.helper')) return { stdout: 'AZT_GIT_EXIT:0\nfile:/home/agent/.gitconfig\t!aws codecommit credential-helper $@ --profile secretprofile\nAZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
       return cleanHandler(cmd);
     });
     const result = await runIsolationDoctor(transport, HUB);
@@ -457,6 +457,57 @@ describe('runIsolationDoctor', () => {
       });
       const result = await runIsolationDoctor(transport, HUB);
       expect(result.checks.find((c) => c.id === 'no_git_credentials')!.status).toBe('unknown');
+    });
+  });
+
+  // Follow-up review round (Important finding): `--global` alone missed a
+  // helper set via `/etc/gitconfig` (system scope) or `GIT_CONFIG_SYSTEM` —
+  // switched to unscoped `--show-origin --get-all` to check the actual
+  // effective config, the same set of files git itself would consult.
+  describe('no_git_credentials (follow-up review round, system-scope helper)', () => {
+    it('fails on a helper set only in system scope (/etc/gitconfig), which --global alone would have missed', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('credential.helper')) return { stdout: 'AZT_GIT_EXIT:0\nfile:/etc/gitconfig\tstore\nAZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      const check = result.checks.find((c) => c.id === 'no_git_credentials')!;
+      expect(check.status).toBe('fail');
+      expect(check.detail).toContain('種別: store');
+      expect(check.detail).toContain('/etc/gitconfig');
+    });
+
+    it('fails and reports both kinds when multiple helpers are configured across scopes, without leaking either value', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('credential.helper')) {
+          return {
+            stdout: 'AZT_GIT_EXIT:0\n'
+              + 'file:/etc/gitconfig\tstore --file /etc/git-credentials-secret\n'
+              + 'file:/home/agent/.gitconfig\t!aws codecommit credential-helper $@ --profile secretprofile\n'
+              + 'AZT_HELPER_END\nAZT_CREDFILE_ABSENT\n',
+            stderr: '', code: 0,
+          };
+        }
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      const check = result.checks.find((c) => c.id === 'no_git_credentials')!;
+      expect(check.status).toBe('fail');
+      expect(check.detail).toContain('store');
+      expect(check.detail).toContain('shell command');
+      expect(check.detail).toContain('/etc/gitconfig');
+      expect(check.detail).toContain('/home/agent/.gitconfig');
+      expect(check.detail).not.toContain('/etc/git-credentials-secret');
+      expect(check.detail).not.toContain('secretprofile');
+    });
+
+    it('pass: still treated as truly unset when git config reports the key missing entirely (exit 1), unscoped', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('credential.helper')) return { stdout: 'AZT_GIT_EXIT:1\nAZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      expect(result.checks.find((c) => c.id === 'no_git_credentials')!.status).toBe('pass');
     });
   });
 

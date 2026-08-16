@@ -296,6 +296,11 @@ async function probeFile(transport: IServerTransport, pathExpr: string): Promise
  *    signal this check can produce that the target is a distinct
  *    filesystem/process namespace; it is a misconfiguration-detector-grade
  *    signal, not an attestation — see the module doctrine above)
+ *
+ * Out of scope: a bind-mount of the hub's data directory at a DIFFERENT path
+ * on the target (so the canary's exact path probe misses it) is not
+ * detected by this check. That gap is an accepted limit of the ratified
+ * misconfiguration-detector doctrine above, not a defect to re-litigate here.
  */
 async function checkFsAndHostBoundary(transport: IServerTransport, hub: HubIdentity): Promise<IsolationCheck> {
   const id = 'same_host';
@@ -619,17 +624,30 @@ async function checkGhUnauthenticated(transport: IServerTransport): Promise<Isol
  * credential.helper` 自身の exit status を捨てて stdout だけを見ていたため、
  * git 自体が不在、または設定ファイル読取エラー（壊れた `.gitconfig` 等）で
  * コマンドが失敗した場合も stdout が空になり「未設定」と区別が付かず、真の
- * 未設定と同じ `'pass'` 方向に丸め込まれていた。`git config --global --get`
- * の exit code を明示的に捕捉して分類する: 0（設定あり）→ 既存の分類へ、
- * 1（キーが存在しない = 真に未設定）→ pass 方向、それ以外（2+: 構文エラー等）
- * または git コマンド自体が不在 → `'unknown'`。
+ * 未設定と同じ `'pass'` 方向に丸め込まれていた。`git config --get` の exit
+ * code を明示的に捕捉して分類する: 0（設定あり）→ 既存の分類へ、1（キーが
+ * 存在しない = 真に未設定）→ pass 方向、それ以外（2+: 構文エラー等）または
+ * git コマンド自体が不在 → `'unknown'`。
+ *
+ * Follow-up review round (Important finding): `--global` scope alone misses
+ * a helper set via `/etc/gitconfig` (system scope) or `GIT_CONFIG_SYSTEM`
+ * — a real, honest misconfiguration this doctor exists to catch, not just an
+ * adversarial-host concern. Switched to `git config --show-origin --get-all
+ * credential.helper` with NO scope flag, which resolves the actual EFFECTIVE
+ * setting the same way git itself would (system → global → local →
+ * worktree, all included files, `GIT_CONFIG_SYSTEM` honoured automatically)
+ * and reports every value set for the key (a multivalued key is legal git
+ * config). `--show-origin` prefixes each line with the origin (e.g.
+ * `file:/etc/gitconfig\t...`), which is surfaced in `detail` — the origin is
+ * a file path or a fixed git-defined label, never secret, unlike the helper
+ * value itself (see the redaction comment below).
  */
 async function checkNoGitCredentials(transport: IServerTransport): Promise<IsolationCheck> {
   const id = 'no_git_credentials';
   const cmd = 'if command -v git >/dev/null 2>&1; then '
-    + 'HELPER=$(git config --global --get credential.helper 2>/dev/null); GIT_EXIT=$?; '
+    + 'OUT=$(git config --show-origin --get-all credential.helper 2>/dev/null); GIT_EXIT=$?; '
     + 'echo "AZT_GIT_EXIT:$GIT_EXIT"; '
-    + 'printf \'%s\\n\' "$HELPER"; '
+    + 'printf \'%s\\n\' "$OUT"; '
     + 'echo AZT_HELPER_END; '
     + 'test -f "$HOME/.git-credentials" && echo AZT_CREDFILE_EXISTS || echo AZT_CREDFILE_ABSENT; '
     + 'else echo AZT_GIT_ABSENT; fi';
@@ -652,7 +670,16 @@ async function checkNoGitCredentials(transport: IServerTransport): Promise<Isola
     return { id, status: 'unknown', detail: unrecognizedOutputDetail('git credential 設定の確認結果を解析できませんでした') };
   }
   const gitExit = Number(lines[exitIdx].slice('AZT_GIT_EXIT:'.length));
-  const helper = lines.slice(exitIdx + 1, helperEndIdx).join('\n').trim();
+  // Each line is `<origin>\t<value>` (git's --show-origin framing). Lines
+  // without a tab are unrecognized origin-less noise and are skipped rather
+  // than misread as a bare helper value.
+  const rawLines = lines.slice(exitIdx + 1, helperEndIdx).filter((l) => l !== '');
+  const helperEntries: { origin: string; value: string }[] = [];
+  for (const l of rawLines) {
+    const tabIdx = l.indexOf('\t');
+    if (tabIdx === -1) continue;
+    helperEntries.push({ origin: l.slice(0, tabIdx), value: l.slice(tabIdx + 1) });
+  }
   const rest = lines.slice(helperEndIdx + 1).join('\n');
   const credFileExists = rest.includes('AZT_CREDFILE_EXISTS');
   const credFileAbsent = rest.includes('AZT_CREDFILE_ABSENT');
@@ -660,16 +687,15 @@ async function checkNoGitCredentials(transport: IServerTransport): Promise<Isola
     return { id, status: 'unknown', detail: unrecognizedOutputDetail('~/.git-credentials の有無を確認できませんでした') };
   }
   if (gitExit !== 0 && gitExit !== 1) {
-    return { id, status: 'unknown', detail: `git config --global --get credential.helper が判別不能な exit code を返しました (exit ${gitExit})` };
+    return { id, status: 'unknown', detail: `git config --show-origin --get-all credential.helper が判別不能な exit code を返しました (exit ${gitExit})` };
   }
-  // gitExit === 1: credential.helper キー自体が存在しない（真の未設定）。
-  // gitExit === 0 だが helper が空文字列という組み合わせは通常起こらないが、
-  // 起きた場合も「設定が読めた」結果として以降の既存分類に委ねる。
+  // gitExit === 1: credential.helper キーがどのスコープにも存在しない（真の
+  // 未設定）。
   if (gitExit === 1 && !credFileExists) {
     return { id, status: 'pass', detail: 'credential.helper 未設定、~/.git-credentials も不在です' };
   }
   const reasons: string[] = [];
-  // Review finding (Step 2 review, Important #4): `helper`'s raw value is a
+  // Review finding (Step 2 review, Important #4): a helper's raw VALUE is a
   // shell command string (`credential.helper` can be `!<command>`, e.g.
   // `!aws codecommit credential-helper $@`, or `store --file
   // /path/with/user:pass@host`) that can itself embed a username/password/
@@ -678,9 +704,15 @@ async function checkNoGitCredentials(transport: IServerTransport): Promise<Isola
   // the browser (see routes.ts's POST .../isolation/doctor and
   // OverviewSection.tsx). Only classify the helper into a coarse shape
   // (never the value itself) so a human still learns SOMETHING actionable
-  // ("a helper is configured, here's roughly what kind") without leaking
-  // its contents.
-  if (helper !== '') reasons.push(`credential.helper が設定されています（種別: ${classifyGitCredentialHelper(helper)}）`);
+  // ("a helper is configured, here's roughly what kind, and from where").
+  // The ORIGIN (file path / git-defined label) is safe to show as-is — it
+  // carries no capability, unlike the value.
+  const configuredEntries = helperEntries.filter((e) => e.value !== '');
+  if (configuredEntries.length > 0) {
+    const kinds = Array.from(new Set(configuredEntries.map((e) => classifyGitCredentialHelper(e.value))));
+    const origins = Array.from(new Set(configuredEntries.map((e) => e.origin)));
+    reasons.push(`credential.helper が設定されています（種別: ${kinds.join(', ')} / 設定元: ${origins.join(', ')}）`);
+  }
   if (credFileExists) reasons.push('~/.git-credentials が存在します');
   return { id, status: 'fail', detail: reasons.join(' / ') };
 }

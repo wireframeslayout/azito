@@ -22,6 +22,11 @@ import crypto from 'crypto';
 // capability and grant nothing if read by a legitimate remote server (the
 // whole point is that a genuinely isolated server CAN'T read it) — so a
 // write failure at startup is a warning, never a reason to block hub boot.
+//
+// Each regeneration (startup, or a mid-run re-verification triggered by
+// getVerifiedHubCanary finding the cached file missing/tampered) prunes any
+// other `.azito-hub-canary-*` file left in the data directory, so restarts
+// and rotations don't accumulate stale marker files indefinitely.
 
 const CANARY_CONTENT = 'azito-hub-fs-boundary-canary — this file is safe to ignore or delete';
 
@@ -54,10 +59,42 @@ export function writeHubCanary(dataDir: string): HubCanary | null {
     const filePath = path.join(dataDir, `.azito-hub-canary-${suffix}`);
     fs.writeFileSync(filePath, CANARY_CONTENT, { mode: 0o600 });
     current = { path: filePath, content: CANARY_CONTENT };
+    removeStaleCanaries(dataDir, filePath);
     return current;
   } catch {
     current = null;
     return null;
+  }
+}
+
+/**
+ * Review round (Nit): every regeneration (startup, or a mid-run
+ * re-verification after `getVerifiedHubCanary()` finds the cached file
+ * missing/tampered) previously left the OLD `.azito-hub-canary-*` file
+ * behind forever — over a long-lived hub's lifetime these accumulate
+ * unboundedly in the data directory. Best-effort cleanup only: a failure to
+ * list or unlink a stale file is a warning, never a reason to fail the write
+ * that just succeeded (the fresh canary is already in place and usable).
+ * Scoped strictly to the `.azito-hub-canary-*` filename pattern so it never
+ * touches any other file in the data directory, and explicitly skips the
+ * file just written.
+ */
+function removeStaleCanaries(dataDir: string, keepPath: string): void {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dataDir);
+  } catch {
+    return;
+  }
+  for (const name of entries) {
+    if (!name.startsWith('.azito-hub-canary-')) continue;
+    const fullPath = path.join(dataDir, name);
+    if (fullPath === keepPath) continue;
+    try {
+      fs.unlinkSync(fullPath);
+    } catch {
+      // Best-effort — leave it for the next rotation to retry.
+    }
   }
 }
 

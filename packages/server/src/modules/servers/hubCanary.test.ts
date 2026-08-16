@@ -73,4 +73,58 @@ describe('hubCanary', () => {
     expect(result).toBeNull();
     expect(getVerifiedHubCanary()).toBeNull();
   });
+
+  // Review round (Nit): every regeneration previously left the old canary
+  // file behind forever, so a long-lived hub restarting (or re-verifying)
+  // repeatedly would accumulate `.azito-hub-canary-*` files without bound.
+  describe('stale canary cleanup', () => {
+    it('removes the previous canary file when writeHubCanary regenerates', () => {
+      const first = writeHubCanary(dataDir);
+      expect(first).not.toBeNull();
+      expect(fs.existsSync(first!.path)).toBe(true);
+
+      const second = writeHubCanary(dataDir);
+      expect(second).not.toBeNull();
+      expect(second!.path).not.toBe(first!.path);
+      expect(fs.existsSync(first!.path)).toBe(false);
+      expect(fs.existsSync(second!.path)).toBe(true);
+    });
+
+    it('removes ALL stale canary files, not just the immediately preceding one', () => {
+      // Simulate several past regenerations without cleanup ever having run
+      // (e.g. files left over from a version predating this fix).
+      fs.writeFileSync(path.join(dataDir, '.azito-hub-canary-aaaa'), 'stale-1');
+      fs.writeFileSync(path.join(dataDir, '.azito-hub-canary-bbbb'), 'stale-2');
+      fs.writeFileSync(path.join(dataDir, '.azito-hub-canary-cccc'), 'stale-3');
+
+      const fresh = writeHubCanary(dataDir);
+      expect(fresh).not.toBeNull();
+
+      const remaining = fs.readdirSync(dataDir).filter((n) => n.startsWith('.azito-hub-canary-'));
+      expect(remaining).toEqual([path.basename(fresh!.path)]);
+    });
+
+    it('does not touch unrelated files in the data directory', () => {
+      const unrelatedPath = path.join(dataDir, 'data.db');
+      fs.writeFileSync(unrelatedPath, 'not-a-canary');
+
+      writeHubCanary(dataDir);
+      writeHubCanary(dataDir); // second regeneration, to also exercise the cleanup path
+
+      expect(fs.existsSync(unrelatedPath)).toBe(true);
+      expect(fs.readFileSync(unrelatedPath, 'utf-8')).toBe('not-a-canary');
+    });
+
+    it('cleanup after a getVerifiedHubCanary-triggered regeneration also removes the stale file', () => {
+      const original = writeHubCanary(dataDir);
+      expect(original).not.toBeNull();
+      fs.rmSync(original!.path); // simulate deletion, forcing getVerifiedHubCanary to rewrite
+
+      const verified = getVerifiedHubCanary();
+      expect(verified).not.toBeNull();
+
+      const remaining = fs.readdirSync(dataDir).filter((n) => n.startsWith('.azito-hub-canary-'));
+      expect(remaining).toEqual([path.basename(verified!.path)]);
+    });
+  });
 });
