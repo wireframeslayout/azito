@@ -417,10 +417,25 @@ async function checkNoPrivateKeys(transport: IServerTransport): Promise<Isolatio
   return { id, status: 'unknown', detail: `grep の走査が異常終了しました (exit ${grepStatus})` };
 }
 
-/** 3. `gh auth status` が未認証または gh 不在。 */
+/**
+ * 3. gh にローカル資格情報（保存済みトークン）が残っていない。
+ *
+ * Review round (Important finding 3): `gh auth status` はネットワーク到達性
+ * や API 応答も判定に含む複合コマンドで、GitHub 側の一時的な不達や設定読取
+ * 失敗など「ローカルにトークンは残っているが確認コマンド自体が失敗した」
+ * ケースを未認証（`'pass'`）に丸めてしまっていた。判定対象をローカル資格情報
+ * の有無だけに絞るため `gh auth token >/dev/null 2>&1` の exit code を見る
+ * （値そのものは決して出力させない — stdout は破棄）。
+ *
+ * exit code 分類:
+ *  - `gh` コマンド自体が不在 → `'pass'`（ローカル資格情報を保持しようがない）
+ *  - exit 0（トークン取得成功 = ローカルに資格情報が存在する）→ `'fail'`
+ *  - exit 1（gh 自身の「どのホストにもログインしていません」規約上の失敗）→ `'pass'`
+ *  - それ以外の exit code（usage エラー等、判別不能な異常）→ `'unknown'`
+ */
 async function checkGhUnauthenticated(transport: IServerTransport): Promise<IsolationCheck> {
   const id = 'gh_unauthenticated';
-  const cmd = 'if command -v gh >/dev/null 2>&1; then gh auth status >/dev/null 2>&1; echo "AZT_GH_EXIT:$?"; else echo AZT_GH_ABSENT; fi';
+  const cmd = 'if command -v gh >/dev/null 2>&1; then gh auth token >/dev/null 2>&1; echo "AZT_GH_TOKEN_EXIT:$?"; else echo AZT_GH_ABSENT; fi';
   let result;
   try {
     result = await transport.exec(cmd);
@@ -434,22 +449,45 @@ async function checkGhUnauthenticated(transport: IServerTransport): Promise<Isol
   if (content === 'AZT_GH_ABSENT') {
     return { id, status: 'pass', detail: 'gh コマンドが見つかりません' };
   }
-  const match = /^AZT_GH_EXIT:(\d+)$/m.exec(content);
+  const match = /^AZT_GH_TOKEN_EXIT:(\d+)$/m.exec(content);
   if (!match) {
-    return { id, status: 'unknown', detail: `gh auth status の結果が想定外の形式でした: ${JSON.stringify(content)}` };
+    return { id, status: 'unknown', detail: `gh auth token の結果が想定外の形式でした: ${JSON.stringify(content)}` };
   }
   const exitCode = Number(match[1]);
   if (exitCode === 0) {
-    return { id, status: 'fail', detail: 'gh が認証済みです（gh auth status が成功）' };
+    return { id, status: 'fail', detail: 'gh にローカル資格情報（トークン）が残っています（gh auth token exit 0）' };
   }
-  return { id, status: 'pass', detail: `gh は未認証です（gh auth status exit ${exitCode}）` };
+  if (exitCode === 1) {
+    return { id, status: 'pass', detail: `gh にローカル資格情報はありません（gh auth token exit ${exitCode}）` };
+  }
+  return {
+    id,
+    status: 'unknown',
+    detail: `gh auth token が判別不能な exit code を返しました (exit ${exitCode}) — ローカル資格情報の有無を確定できません`,
+  };
 }
 
-/** 4. git credential helper が空・`~/.git-credentials` が不在。 */
+/**
+ * 4. git credential helper が空・`~/.git-credentials` が不在。
+ *
+ * Review round (Important finding 2): `git config --global --get
+ * credential.helper` 自身の exit status を捨てて stdout だけを見ていたため、
+ * git 自体が不在、または設定ファイル読取エラー（壊れた `.gitconfig` 等）で
+ * コマンドが失敗した場合も stdout が空になり「未設定」と区別が付かず、真の
+ * 未設定と同じ `'pass'` 方向に丸め込まれていた。`git config --global --get`
+ * の exit code を明示的に捕捉して分類する: 0（設定あり）→ 既存の分類へ、
+ * 1（キーが存在しない = 真に未設定）→ pass 方向、それ以外（2+: 構文エラー等）
+ * または git コマンド自体が不在 → `'unknown'`。
+ */
 async function checkNoGitCredentials(transport: IServerTransport): Promise<IsolationCheck> {
   const id = 'no_git_credentials';
-  const cmd = 'git config --global --get credential.helper 2>/dev/null; echo AZT_HELPER_END; '
-    + 'test -f "$HOME/.git-credentials" && echo AZT_CREDFILE_EXISTS || echo AZT_CREDFILE_ABSENT';
+  const cmd = 'if command -v git >/dev/null 2>&1; then '
+    + 'HELPER=$(git config --global --get credential.helper 2>/dev/null); GIT_EXIT=$?; '
+    + 'echo "AZT_GIT_EXIT:$GIT_EXIT"; '
+    + 'printf \'%s\\n\' "$HELPER"; '
+    + 'echo AZT_HELPER_END; '
+    + 'test -f "$HOME/.git-credentials" && echo AZT_CREDFILE_EXISTS || echo AZT_CREDFILE_ABSENT; '
+    + 'else echo AZT_GIT_ABSENT; fi';
   let result;
   try {
     result = await transport.exec(cmd);
@@ -459,19 +497,30 @@ async function checkNoGitCredentials(transport: IServerTransport): Promise<Isola
   if (result.code !== 0) {
     return { id, status: 'unknown', detail: `git credential 設定の確認に失敗しました (code ${result.code}): ${result.stderr || result.stdout || '(no output)'}` };
   }
-  const lines = result.stdout.split('\n');
-  const helperEndIdx = lines.findIndex((l) => l.trim() === 'AZT_HELPER_END');
-  if (helperEndIdx === -1) {
+  const lines = result.stdout.split('\n').map((l) => l.trim());
+  if (lines.includes('AZT_GIT_ABSENT')) {
+    return { id, status: 'unknown', detail: 'git コマンドが見つからないため、credential 設定を確認できませんでした' };
+  }
+  const exitIdx = lines.findIndex((l) => /^AZT_GIT_EXIT:-?\d+$/.test(l));
+  const helperEndIdx = lines.findIndex((l) => l === 'AZT_HELPER_END');
+  if (exitIdx === -1 || helperEndIdx === -1 || helperEndIdx <= exitIdx) {
     return { id, status: 'unknown', detail: `git credential 設定の確認結果が想定外の形式でした: ${JSON.stringify(result.stdout)}` };
   }
-  const helper = lines.slice(0, helperEndIdx).join('\n').trim();
+  const gitExit = Number(lines[exitIdx].slice('AZT_GIT_EXIT:'.length));
+  const helper = lines.slice(exitIdx + 1, helperEndIdx).join('\n').trim();
   const rest = lines.slice(helperEndIdx + 1).join('\n');
   const credFileExists = rest.includes('AZT_CREDFILE_EXISTS');
   const credFileAbsent = rest.includes('AZT_CREDFILE_ABSENT');
   if (!credFileExists && !credFileAbsent) {
     return { id, status: 'unknown', detail: `~/.git-credentials の有無を確認できませんでした: ${JSON.stringify(rest)}` };
   }
-  if (helper === '' && !credFileExists) {
+  if (gitExit !== 0 && gitExit !== 1) {
+    return { id, status: 'unknown', detail: `git config --global --get credential.helper が判別不能な exit code を返しました (exit ${gitExit})` };
+  }
+  // gitExit === 1: credential.helper キー自体が存在しない（真の未設定）。
+  // gitExit === 0 だが helper が空文字列という組み合わせは通常起こらないが、
+  // 起きた場合も「設定が読めた」結果として以降の既存分類に委ねる。
+  if (gitExit === 1 && !credFileExists) {
     return { id, status: 'pass', detail: 'credential.helper 未設定、~/.git-credentials も不在です' };
   }
   const reasons: string[] = [];
@@ -537,22 +586,48 @@ async function checkNoOperatorToken(transport: IServerTransport): Promise<Isolat
     return { id, status: 'unknown', detail: `$HOME の解決に失敗しました (code ${homeResult.code}): ${homeResult.stderr || homeResult.stdout || '(no output)'}` };
   }
 
+  // Review round (Important finding 1): the previous command echoed the
+  // `AZT_LS_DONE` terminator unconditionally after `ls`, discarding `ls`'s
+  // own exit status — a `ls` that failed outright (directory exists but is
+  // unreadable due to permissions, or any other listing error other than
+  // "directory absent") produced empty/partial stdout indistinguishable from
+  // "directory absent" or "directory genuinely empty", silently reporting
+  // `'pass'` for a scan that never actually completed. The command now
+  // distinguishes three outcomes via an explicit `AZT_LS_STATUS:<kind>` line
+  // captured from `ls`'s own `$?`: `absent` (the `[ -d ]` test itself failed
+  // — nothing to scan, a legitimate pass path), `listed` (the directory
+  // exists AND `ls` itself completed successfully), and `unreadable` (the
+  // directory exists but `ls` failed — e.g. no execute permission) which
+  // folds to `'unknown'`, never silently treated as "no targets found".
   const azitoDir = `${remoteHome}/.azito`;
+  const quotedDir = shellQuote(azitoDir);
+  const lsCmd = `if [ -d ${quotedDir} ]; then `
+    + `if OUT=$(ls -1 ${quotedDir} 2>/dev/null); then `
+    + `echo AZT_LS_STATUS:listed; printf '%s\\n' "$OUT"; echo AZT_LS_DONE; `
+    + `else echo AZT_LS_STATUS:unreadable; fi; `
+    + `else echo AZT_LS_STATUS:absent; fi`;
   let listResult;
   try {
-    listResult = await transport.exec(`ls -1 ${shellQuote(azitoDir)} 2>/dev/null; echo AZT_LS_DONE`);
+    listResult = await transport.exec(lsCmd);
   } catch (err) {
     return { id, status: 'unknown', detail: `~/.azito の一覧取得に失敗しました（到達不能）: ${errMsg(err)}` };
   }
   if (listResult.code !== 0) {
     return { id, status: 'unknown', detail: `~/.azito の一覧取得に失敗しました (code ${listResult.code}): ${listResult.stderr || listResult.stdout || '(no output)'}` };
   }
-  const lines = listResult.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
-  const doneIdx = lines.indexOf('AZT_LS_DONE');
-  if (doneIdx === -1) {
+  const rawLines = listResult.stdout.split('\n').map((l) => l.trim());
+  if (rawLines.includes('AZT_LS_STATUS:absent')) {
+    return { id, status: 'pass', detail: '~/.azito ディレクトリが存在しません' };
+  }
+  if (rawLines.includes('AZT_LS_STATUS:unreadable')) {
+    return { id, status: 'unknown', detail: '~/.azito が存在しますが、一覧取得に失敗しました（権限等で列挙不能）' };
+  }
+  const statusIdx = rawLines.indexOf('AZT_LS_STATUS:listed');
+  const doneIdx = rawLines.indexOf('AZT_LS_DONE');
+  if (statusIdx === -1 || doneIdx === -1 || doneIdx <= statusIdx) {
     return { id, status: 'unknown', detail: `~/.azito の一覧取得結果が想定外の形式でした: ${JSON.stringify(listResult.stdout)}` };
   }
-  const entries = lines.slice(0, doneIdx);
+  const entries = rawLines.slice(statusIdx + 1, doneIdx).filter(Boolean);
   const targets = entries.filter((name) => isAzitoctlEnvFilename(name) || name === 'operator.env');
   if (targets.length === 0) {
     return { id, status: 'pass', detail: '~/.azito に azitoctl*.env / operator.env が存在しません' };
@@ -701,6 +776,75 @@ async function checkNoOperatorEnvironment(transport: IServerTransport): Promise<
   return { id, status: 'pass', detail: '/api/exec が起動する実行環境に operator 相当の環境変数は見つかりませんでした' };
 }
 
+/**
+ * 9. Forward された ssh-agent（`SSH_AUTH_SOCK`）経由で認証可能な鍵が無い。
+ *
+ * Review round (Important finding 4): checks 2〜8 は鍵ファイル・helper・
+ * トークンの「静的な保管場所」しか見ておらず、それらが全て無くても
+ * forward された ssh-agent ソケットが到達可能なら、そこに登録された鍵で
+ * 認証できてしまう — 未検査の抜け道だった。
+ *
+ * `SSH_AUTH_SOCK` が実行環境に無ければ、そもそも agent へ到達する経路が
+ * 存在しないため自明に `'pass'`。存在する場合は `ssh-add -l` の exit code
+ * で分類する:
+ *  - exit 0（鍵が1件以上登録されている）→ `'fail'`
+ *  - exit 1（agent は稼働しているが登録鍵ゼロ）→ `'fail'` — ソケット自体が
+ *    到達可能（forward 経路が生きている）ことは確認できており、その状態で
+ *    鍵ゼロは一時的な状態でしかない（呼び出し元が後から鍵を追加すれば即座に
+ *    認証可能になる）ため、経路が生きている以上は安全側に倒して fail 扱いと
+ *    する（採否は本チェック固有の判断であり、モジュール冒頭のドクトリンに
+ *    追記するほどの一般則ではない）
+ *  - exit 2、または `ssh-add` コマンド自体が不在 → `'unknown'`（agent に
+ *    接続できない/確認手段が無い。`SSH_AUTH_SOCK` 変数だけが残った死骸
+ *    ソケットの可能性もあるが、その断定はできない）
+ *
+ * 鍵の指紋・コメント等は detail に含めない（登録件数のみ）。
+ */
+async function checkNoSshAgent(transport: IServerTransport): Promise<IsolationCheck> {
+  const id = 'no_ssh_agent';
+  const cmd = 'if [ -n "${SSH_AUTH_SOCK+x}" ]; then '
+    + 'if command -v ssh-add >/dev/null 2>&1; then '
+    + 'OUT=$(ssh-add -l 2>/dev/null); SSH_ADD_EXIT=$?; '
+    + 'echo "AZT_SSHADD_EXIT:$SSH_ADD_EXIT"; '
+    + 'echo "AZT_SSHADD_COUNT:$(printf \'%s\\n\' "$OUT" | grep -c .)"; '
+    + 'else echo AZT_SSHADD_ABSENT; fi; '
+    + 'else echo AZT_NO_SOCK; fi';
+  let result;
+  try {
+    result = await transport.exec(cmd);
+  } catch (err) {
+    return { id, status: 'unknown', detail: `ssh-agent の確認に失敗しました（到達不能）: ${errMsg(err)}` };
+  }
+  if (result.code !== 0) {
+    return { id, status: 'unknown', detail: `ssh-agent の確認に失敗しました (code ${result.code}): ${result.stderr || result.stdout || '(no output)'}` };
+  }
+  const lines = result.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+  if (lines.includes('AZT_NO_SOCK')) {
+    return { id, status: 'pass', detail: 'SSH_AUTH_SOCK が設定されていません（forward された ssh-agent 経路はありません）' };
+  }
+  if (lines.includes('AZT_SSHADD_ABSENT')) {
+    return { id, status: 'unknown', detail: 'ssh-add コマンドが見つからないため、ssh-agent の鍵登録状況を確認できませんでした（SSH_AUTH_SOCK は設定されています）' };
+  }
+  const exitLine = lines.find((l) => /^AZT_SSHADD_EXIT:-?\d+$/.test(l));
+  const countLine = lines.find((l) => /^AZT_SSHADD_COUNT:\d+$/.test(l));
+  if (!exitLine) {
+    return { id, status: 'unknown', detail: `ssh-agent の確認結果が想定外の形式でした: ${JSON.stringify(result.stdout)}` };
+  }
+  const sshAddExit = Number(exitLine.slice('AZT_SSHADD_EXIT:'.length));
+  const count = countLine ? Number(countLine.slice('AZT_SSHADD_COUNT:'.length)) : null;
+  if (sshAddExit === 0) {
+    return { id, status: 'fail', detail: `SSH_AUTH_SOCK に到達可能な ssh-agent が稼働しており、鍵が登録されています（${count ?? '不明'}件）` };
+  }
+  if (sshAddExit === 1) {
+    return { id, status: 'fail', detail: 'SSH_AUTH_SOCK に到達可能な ssh-agent が稼働しています（現在の登録鍵は0件ですが、forward 経路自体が生きています）' };
+  }
+  return {
+    id,
+    status: 'unknown',
+    detail: `ssh-add が判別不能な exit code を返しました (exit ${sshAddExit}) — ssh-agent に接続できなかった可能性があります（SSH_AUTH_SOCK は設定されています）`,
+  };
+}
+
 export async function runIsolationDoctor(transport: IServerTransport, hub: HubIdentity): Promise<IsolationDoctorResult> {
   const checks = await Promise.all([
     checkFsAndHostBoundary(transport, hub),
@@ -711,6 +855,7 @@ export async function runIsolationDoctor(transport: IServerTransport, hub: HubId
     checkNoClaudeMcpToken(transport),
     checkNoCodexMcpToken(transport),
     checkNoOperatorEnvironment(transport),
+    checkNoSshAgent(transport),
   ]);
   const verified = checks.every((c) => c.status === 'pass');
   return { verified, checks };

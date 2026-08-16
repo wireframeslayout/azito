@@ -30,9 +30,10 @@ function cleanHandler(cmd: string): ExecResult {
   if (cmd.includes(HUB.canary.path)) return { stdout: 'AZT_STATUS:canary:absent\n', stderr: '', code: 0 };
   if (cmd.includes('.ssh')) return { stdout: 'AZT_SSH_NO_DIR\n', stderr: '', code: 0 };
   if (cmd.includes('gh auth')) return { stdout: 'AZT_GH_ABSENT\n', stderr: '', code: 0 };
-  if (cmd.includes('credential.helper')) return { stdout: 'AZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
+  if (cmd.includes('credential.helper')) return { stdout: 'AZT_GIT_EXIT:1\nAZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
   if (cmd.startsWith('echo "$HOME"')) return { stdout: '/home/agent\n', stderr: '', code: 0 };
-  if (cmd.includes('ls -1')) return { stdout: 'AZT_LS_DONE\n', stderr: '', code: 0 };
+  if (cmd.includes('ls -1')) return { stdout: 'AZT_LS_STATUS:absent\n', stderr: '', code: 0 };
+  if (cmd.includes('SSH_AUTH_SOCK')) return { stdout: 'AZT_NO_SOCK\n', stderr: '', code: 0 };
   // Review round (Critical finding 2): framed base64 presence/absence,
   // replacing the old bare AZT_FILE_ABSENT marker — see probeFilesFramed's
   // doc comment in isolationDoctor.ts.
@@ -226,22 +227,50 @@ describe('runIsolationDoctor', () => {
     expect(result.checks.find((c) => c.id === 'no_ssh_private_keys')!.status).toBe('unknown');
   });
 
-  it('gh_unauthenticated: fails when gh auth status succeeds (authenticated)', async () => {
-    const transport = makeTransport((cmd) => {
-      if (cmd.includes('gh auth')) return { stdout: 'AZT_GH_EXIT:0\n', stderr: '', code: 0 };
-      return cleanHandler(cmd);
+  // Review round (Important finding 3): checks LOCAL credential existence via
+  // `gh auth token`'s own exit code, not the composite `gh auth status`
+  // (which also probes network reachability and can false-pass on a
+  // transient API failure while a token is still stored locally).
+  describe('gh_unauthenticated (review round, Important finding 3)', () => {
+    it('fails when gh auth token succeeds (exit 0 — a local token is stored)', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('gh auth')) return { stdout: 'AZT_GH_TOKEN_EXIT:0\n', stderr: '', code: 0 };
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      expect(result.checks.find((c) => c.id === 'gh_unauthenticated')!.status).toBe('fail');
     });
-    const result = await runIsolationDoctor(transport, HUB);
-    expect(result.checks.find((c) => c.id === 'gh_unauthenticated')!.status).toBe('fail');
-  });
 
-  it('gh_unauthenticated: passes when gh is installed but unauthenticated', async () => {
-    const transport = makeTransport((cmd) => {
-      if (cmd.includes('gh auth')) return { stdout: 'AZT_GH_EXIT:1\n', stderr: '', code: 0 };
-      return cleanHandler(cmd);
+    it('passes when gh is installed but gh auth token exits 1 (not logged into any host)', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('gh auth')) return { stdout: 'AZT_GH_TOKEN_EXIT:1\n', stderr: '', code: 0 };
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      expect(result.checks.find((c) => c.id === 'gh_unauthenticated')!.status).toBe('pass');
     });
-    const result = await runIsolationDoctor(transport, HUB);
-    expect(result.checks.find((c) => c.id === 'gh_unauthenticated')!.status).toBe('pass');
+
+    it('passes when gh is not installed at all', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('gh auth')) return { stdout: 'AZT_GH_ABSENT\n', stderr: '', code: 0 };
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      expect(result.checks.find((c) => c.id === 'gh_unauthenticated')!.status).toBe('pass');
+    });
+
+    // A remote-unreachable / API-failure `gh auth status` used to false-pass
+    // this check even with a token stored locally — `gh auth token` doesn't
+    // touch the network, so any exit code other than 0/1 is a genuinely
+    // indeterminate result and must fold to 'unknown', never 'pass'.
+    it('unknown when gh auth token returns an indeterminate exit code (e.g. usage error)', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('gh auth')) return { stdout: 'AZT_GH_TOKEN_EXIT:4\n', stderr: '', code: 0 };
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      expect(result.checks.find((c) => c.id === 'gh_unauthenticated')!.status).toBe('unknown');
+    });
   });
 
   // Step 2 review, Important #4: the raw helper value (which can itself
@@ -250,7 +279,7 @@ describe('runIsolationDoctor', () => {
   // in `detail` — only a coarse, value-free classification.
   it('no_git_credentials: fails when credential.helper is set, without leaking the raw helper value', async () => {
     const transport = makeTransport((cmd) => {
-      if (cmd.includes('credential.helper')) return { stdout: 'store --file /home/agent/.git-credentials-secret\nAZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
+      if (cmd.includes('credential.helper')) return { stdout: 'AZT_GIT_EXIT:0\nstore --file /home/agent/.git-credentials-secret\nAZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
       return cleanHandler(cmd);
     });
     const result = await runIsolationDoctor(transport, HUB);
@@ -262,7 +291,7 @@ describe('runIsolationDoctor', () => {
 
   it('no_git_credentials: classifies a shell-command (!...) helper without leaking it, and never as "store"', async () => {
     const transport = makeTransport((cmd) => {
-      if (cmd.includes('credential.helper')) return { stdout: '!aws codecommit credential-helper $@ --profile secretprofile\nAZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
+      if (cmd.includes('credential.helper')) return { stdout: 'AZT_GIT_EXIT:0\n!aws codecommit credential-helper $@ --profile secretprofile\nAZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
       return cleanHandler(cmd);
     });
     const result = await runIsolationDoctor(transport, HUB);
@@ -275,11 +304,35 @@ describe('runIsolationDoctor', () => {
 
   it('no_git_credentials: fails when ~/.git-credentials exists', async () => {
     const transport = makeTransport((cmd) => {
-      if (cmd.includes('credential.helper')) return { stdout: 'AZT_HELPER_END\nAZT_CREDFILE_EXISTS\n', stderr: '', code: 0 };
+      if (cmd.includes('credential.helper')) return { stdout: 'AZT_GIT_EXIT:1\nAZT_HELPER_END\nAZT_CREDFILE_EXISTS\n', stderr: '', code: 0 };
       return cleanHandler(cmd);
     });
     const result = await runIsolationDoctor(transport, HUB);
     expect(result.checks.find((c) => c.id === 'no_git_credentials')!.status).toBe('fail');
+  });
+
+  // Review round (Important finding 2): `git config --global --get
+  // credential.helper`'s own exit status must never be swallowed — a read
+  // failure (corrupted .gitconfig, unusual exit code) or git itself being
+  // absent must never silently read as "not configured".
+  describe('no_git_credentials (review round, Important finding 2)', () => {
+    it('unknown when git config exits with an indeterminate code (e.g. corrupted .gitconfig)', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('credential.helper')) return { stdout: 'AZT_GIT_EXIT:128\nAZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      expect(result.checks.find((c) => c.id === 'no_git_credentials')!.status).toBe('unknown');
+    });
+
+    it('unknown when git itself is not installed', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('credential.helper')) return { stdout: 'AZT_GIT_ABSENT\n', stderr: '', code: 0 };
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      expect(result.checks.find((c) => c.id === 'no_git_credentials')!.status).toBe('unknown');
+    });
   });
 
   // Review round (Critical finding 2): content now travels base64-encoded
@@ -288,7 +341,7 @@ describe('runIsolationDoctor', () => {
   it('no_operator_token: fails when an azitoctl*.env file still carries AZITO_UI_TOKEN', async () => {
     const transport = makeTransport((cmd) => {
       if (cmd.startsWith('echo "$HOME"')) return { stdout: '/home/agent\n', stderr: '', code: 0 };
-      if (cmd.includes('ls -1')) return { stdout: 'azitoctl.env\nAZT_LS_DONE\n', stderr: '', code: 0 };
+      if (cmd.includes('ls -1')) return { stdout: 'AZT_LS_STATUS:listed\nazitoctl.env\nAZT_LS_DONE\n', stderr: '', code: 0 };
       if (cmd.includes('AZT_STATUS:0')) {
         return { stdout: `AZT_STATUS:0:present\n${b64('AZITO_UI_TOKEN=deadbeef\n')}\nAZT_STATUS_END:0\n`, stderr: '', code: 0 };
       }
@@ -303,7 +356,7 @@ describe('runIsolationDoctor', () => {
   it('no_operator_token: passes when azitoctl*.env exists but has no AZITO_UI_TOKEN line', async () => {
     const transport = makeTransport((cmd) => {
       if (cmd.startsWith('echo "$HOME"')) return { stdout: '/home/agent\n', stderr: '', code: 0 };
-      if (cmd.includes('ls -1')) return { stdout: 'azitoctl.env\nAZT_LS_DONE\n', stderr: '', code: 0 };
+      if (cmd.includes('ls -1')) return { stdout: 'AZT_LS_STATUS:listed\nazitoctl.env\nAZT_LS_DONE\n', stderr: '', code: 0 };
       if (cmd.includes('AZT_STATUS:0')) {
         return { stdout: `AZT_STATUS:0:present\n${b64('AZITO_WEBHOOK_TOKEN=abc\n')}\nAZT_STATUS_END:0\n`, stderr: '', code: 0 };
       }
@@ -316,11 +369,34 @@ describe('runIsolationDoctor', () => {
   it('no_operator_token: ignores filenames that do not match the azitoctl*.env / operator.env grammar', async () => {
     const transport = makeTransport((cmd) => {
       if (cmd.startsWith('echo "$HOME"')) return { stdout: '/home/agent\n', stderr: '', code: 0 };
-      if (cmd.includes('ls -1')) return { stdout: 'notes.txt\nAZT_LS_DONE\n', stderr: '', code: 0 };
+      if (cmd.includes('ls -1')) return { stdout: 'AZT_LS_STATUS:listed\nnotes.txt\nAZT_LS_DONE\n', stderr: '', code: 0 };
       return cleanHandler(cmd);
     });
     const result = await runIsolationDoctor(transport, HUB);
     expect(result.checks.find((c) => c.id === 'no_operator_token')!.status).toBe('pass');
+  });
+
+  it('no_operator_token: passes when ~/.azito does not exist', async () => {
+    const transport = makeTransport((cmd) => {
+      if (cmd.startsWith('echo "$HOME"')) return { stdout: '/home/agent\n', stderr: '', code: 0 };
+      if (cmd.includes('ls -1')) return { stdout: 'AZT_LS_STATUS:absent\n', stderr: '', code: 0 };
+      return cleanHandler(cmd);
+    });
+    const result = await runIsolationDoctor(transport, HUB);
+    expect(result.checks.find((c) => c.id === 'no_operator_token')!.status).toBe('pass');
+  });
+
+  // Review round (Important finding 1): `ls`'s own exit status must never be
+  // swallowed — a directory that exists but cannot be enumerated (permission
+  // error) must never silently read as "no matching files" (pass).
+  it('no_operator_token: unknown when ~/.azito exists but ls fails to enumerate it (permission error)', async () => {
+    const transport = makeTransport((cmd) => {
+      if (cmd.startsWith('echo "$HOME"')) return { stdout: '/home/agent\n', stderr: '', code: 0 };
+      if (cmd.includes('ls -1')) return { stdout: 'AZT_LS_STATUS:unreadable\n', stderr: '', code: 0 };
+      return cleanHandler(cmd);
+    });
+    const result = await runIsolationDoctor(transport, HUB);
+    expect(result.checks.find((c) => c.id === 'no_operator_token')!.status).toBe('unknown');
   });
 
   it('no_operator_token: unknown when $HOME cannot be resolved', async () => {
@@ -531,6 +607,86 @@ describe('runIsolationDoctor', () => {
     });
   });
 
+  // ─── no_ssh_agent (review round, Important finding 4) ───
+  // A forwarded ssh-agent (SSH_AUTH_SOCK) is an authentication path that
+  // checks 2-8 (all of which only look at on-disk key/helper/token storage)
+  // cannot see: even with no private key file, no git credential helper, and
+  // no operator token anywhere on disk, a reachable forwarded agent socket
+  // can still authenticate as the operator.
+  describe('no_ssh_agent (review round, Important finding 4)', () => {
+    it('passes when SSH_AUTH_SOCK is not set (no forwarded-agent path exists)', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('SSH_AUTH_SOCK')) return { stdout: 'AZT_NO_SOCK\n', stderr: '', code: 0 };
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      expect(result.checks.find((c) => c.id === 'no_ssh_agent')!.status).toBe('pass');
+    });
+
+    it('fails when ssh-add -l exits 0 (agent reachable, keys registered)', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('SSH_AUTH_SOCK')) return { stdout: 'AZT_SSHADD_EXIT:0\nAZT_SSHADD_COUNT:2\n', stderr: '', code: 0 };
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      const check = result.checks.find((c) => c.id === 'no_ssh_agent')!;
+      expect(check.status).toBe('fail');
+      expect(result.verified).toBe(false);
+    });
+
+    // Design decision (per task spec): a reachable-but-empty agent socket
+    // (exit 1) is still classified as 'fail', not 'unknown' — the forward
+    // path itself being alive is the security-relevant fact; zero keys right
+    // now does not mean zero keys a moment later.
+    it('fails when ssh-add -l exits 1 (agent reachable, zero keys registered right now)', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('SSH_AUTH_SOCK')) return { stdout: 'AZT_SSHADD_EXIT:1\nAZT_SSHADD_COUNT:0\n', stderr: '', code: 0 };
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      expect(result.checks.find((c) => c.id === 'no_ssh_agent')!.status).toBe('fail');
+    });
+
+    it('unknown when ssh-add -l exits 2 (cannot connect to the agent)', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('SSH_AUTH_SOCK')) return { stdout: 'AZT_SSHADD_EXIT:2\nAZT_SSHADD_COUNT:0\n', stderr: '', code: 0 };
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      expect(result.checks.find((c) => c.id === 'no_ssh_agent')!.status).toBe('unknown');
+    });
+
+    it('unknown when ssh-add is not on PATH but SSH_AUTH_SOCK is set', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('SSH_AUTH_SOCK')) return { stdout: 'AZT_SSHADD_ABSENT\n', stderr: '', code: 0 };
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      expect(result.checks.find((c) => c.id === 'no_ssh_agent')!.status).toBe('unknown');
+    });
+
+    it('unknown when the probe is unreachable', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('SSH_AUTH_SOCK')) throw new Error('connection refused');
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      expect(result.checks.find((c) => c.id === 'no_ssh_agent')!.status).toBe('unknown');
+    });
+
+    // Never leak fingerprints/comments — only a key count.
+    it('never includes key fingerprints or comments in the detail, only a count', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('SSH_AUTH_SOCK')) return { stdout: 'AZT_SSHADD_EXIT:0\nAZT_SSHADD_COUNT:1\n', stderr: '', code: 0 };
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      const check = result.checks.find((c) => c.id === 'no_ssh_agent')!;
+      expect(check.detail).toContain('1');
+      expect(check.detail).not.toMatch(/SHA256:|ssh-rsa|ssh-ed25519/);
+    });
+  });
+
   it('a single unknown check keeps the overall result unverified even if every other check passes', async () => {
     const transport = makeTransport((cmd) => {
       if (cmd.includes('gh auth')) throw new Error('unreachable');
@@ -643,7 +799,7 @@ describe('probeFilesFramed', () => {
     it('checkNoOperatorToken: unknown (never a false pass) when the offending file cannot be base64-encoded', async () => {
       const transport = makeTransport((cmd) => {
         if (cmd.startsWith('echo "$HOME"')) return { stdout: '/home/agent\n', stderr: '', code: 0 };
-        if (cmd.includes('ls -1')) return { stdout: 'azitoctl.env\nAZT_LS_DONE\n', stderr: '', code: 0 };
+        if (cmd.includes('ls -1')) return { stdout: 'AZT_LS_STATUS:listed\nazitoctl.env\nAZT_LS_DONE\n', stderr: '', code: 0 };
         if (cmd.includes('AZT_STATUS:0')) return { stdout: 'AZT_STATUS:0:unreadable\n', stderr: '', code: 0 };
         return cleanHandler(cmd);
       });
