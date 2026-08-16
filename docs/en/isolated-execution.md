@@ -7,7 +7,14 @@ the operator did not write directly), code manipulated by a worker that can reac
 operator-equivalent credentials could, via prompt injection, seize write access to the entire
 hub, other servers, and repositories. The **isolated execution profile** is the
 declaration/verification/runtime-gate mechanism for running such externally-sourced tasks only
-on servers that hold **no credentials at all**.
+on servers that hold **no operator-equivalent or repository-push credentials** (SSH private keys,
+`gh` auth, the operator token, hub secrets — see the table below). An isolated install
+intentionally still retains a narrower set of transport/signal credentials: `AZITO_WEBHOOK_TOKEN`
+(used by `~/.azito/azitoctl*.env` and the activity/interaction hook scripts) and the agent
+transport token (`AZITO_AGENT_TOKEN`, the hub<->agent connection credential). Both are scoped to
+talking to the hub — reporting activity/completion signals and accepting hub-issued commands over
+that one channel — and carry none of the operator's actual authority (they cannot push code,
+authenticate `gh`, or call any API outside what the agent transport itself exposes).
 
 For principal separation (operator/task principal, scoped auth) itself, see the
 [Security Configuration & Environment Setup Guide](./security-setup.md). This document covers the
@@ -185,6 +192,20 @@ SSH lateral movement *within the tailnet*; blocking public-internet/LAN paths re
 persistent host firewall in the next subsection, applied in addition to this ACL, not instead of
 it.
 
+**ACLs are additive, not exclusive**: Tailscale's `acls` list is evaluated as an allowlist — every
+`accept` rule that matches a given src/dst pair is independently in effect, regardless of what
+other rules exist. Adding the two `accept` rules below does **not** by itself produce "only these
+two directions are reachable." If your tailnet already has a broad grant (a wildcard rule covering
+`*`, an `autogroup:member`-to-`*` default, or any other pre-existing rule whose `dst` happens to
+also match `tag:isolated`), that rule keeps matching traffic to/from the isolated server exactly as
+it did before you tagged it — the two rules below add reachability on top, they never subtract it.
+**Before relying on this ACL, audit the tailnet's full `acls` list for any existing rule whose
+`dst` (or `src`, for outbound) would match `tag:isolated`, and narrow or remove it** — most
+commonly a legacy `{"action":"accept","src":["*"],"dst":["*:*"]}`-shaped default, or a
+"management/monitoring" grant that was written before this tag existed. The isolated server's
+actual reachability is the union of every matching rule in the tailnet-wide policy file, not just
+the two rules shown here.
+
 There are **two directions** of traffic between the hub and an isolated server, and they carry
 different intent. The ACL needs to distinguish and allow both:
 
@@ -221,7 +242,45 @@ ACL:
 
 The key is to never write an SSH rule with `tag:isolated` as the **src**. Tailscale's `ssh` block
 only permits explicitly-allowed pairs, so with no entry allowing SSH from `tag:isolated`, a host
-carrying that tag cannot SSH out to anything.
+carrying that tag cannot SSH out to anything — but that block only ever governs **Tailscale SSH's
+own authorization layer** (who Tailscale SSH will let in as which local user). It does not replace
+the `acls` network-reachability check above: a connection to port 22 must first be allowed by an
+`acls` rule (network authorization) before Tailscale SSH's `ssh` block is even consulted (session
+authorization). An empty/absent `ssh` entry for `tag:isolated` closes the SSH-specific layer, but
+if an `acls` grant (audited above) still permits `tag:isolated` to reach port 22 on some host, that
+network path is open regardless — non-Tailscale-SSH services listening on 22, or a non-Tailscale
+SSH daemon, would still be reachable.
+
+Assert both — network reachability and SSH authorization — as machine-checked policy tests, using
+Tailscale's [ACL test syntax](https://tailscale.com/kb/1337/acl-syntax#tests) (`tests`/`sshTests`,
+run via `tailscale acl test` or the admin console's "Preview" action before saving):
+
+```jsonc
+{
+  // ... tagOwners / acls / ssh as above ...
+  "tests": [
+    {
+      "src": "tag:isolated",
+      // Port 22 on an unrelated host must NOT be reachable — proves no leftover
+      // broad grant is still matching src=tag:isolated.
+      "deny": ["<some-other-tailnet-host>:22"],
+      // The two explicit directions above must still work.
+      "accept": ["<hub-tailscale-ip>:<hub-webhook-port>"],
+    },
+  ],
+  "sshTests": [
+    {
+      "src": "tag:isolated",
+      "dst": ["<some-other-tailnet-host>"],
+      "accept": false,
+    },
+  ],
+}
+```
+
+A `tests`/`sshTests` failure blocks the ACL from saving in the admin console and fails `tailscale
+acl test` in CI — treat this as the actual proof that "isolated server cannot reach anything but
+the hub," not the absence of a rule you wrote yourself.
 
 ### Firewall variant (required as a persistent host firewall regardless of Tailscale)
 
@@ -243,6 +302,48 @@ everything else. Replace the hub address and each port (`<agent-port>` is this s
 **Important**: the commands below only apply the rules at runtime via `nft`/`iptables` — **they
 are wiped out on reboot as-is**. In production you must also complete the "Making it persistent"
 step in the next subsection.
+
+### Name resolution under this firewall (MagicDNS / `AZITO_PUBLIC_URL`)
+
+The rule sets below deliberately allow only direct TCP to a fixed destination — **they do not open
+DNS**. If `<hub-ipv4>`/`<hub-ipv6>` in the commands is a hostname (in particular a MagicDNS name,
+which is what `AZITO_PUBLIC_URL` normally holds), the isolated server has no way left to resolve it
+once its existing DNS cache entry expires: the hook scripts (`agent-done`/`agent-activity`/etc.)
+silently stop reaching the hub, and the outage never shows up as a firewall deny in the logs — it
+looks like a name that simply stopped resolving.
+
+Two ways to close this gap; pick one before relying on this ruleset in production:
+
+- **Pin a numeric IP (recommended)**: resolve the hub's Tailscale IP once and configure the
+  isolated server's webhook target (and `<hub-ipv4>`/`<hub-ipv6>` in the rules below) with that
+  literal address instead of the MagicDNS hostname. No DNS lookup is ever needed, so the rule sets
+  as written are already correct and complete. If the hook scripts speak HTTPS to the hub, confirm
+  their TLS verification is configured to accept the certificate for that IP (a certificate issued
+  for the MagicDNS name may not validate against the bare IP depending on your TLS setup) — or use
+  the tailnet's plain-HTTP path if your deployment already treats the tailnet itself as the trust
+  boundary.
+- **Allow DNS to one explicit resolver**: if you must keep resolving a hostname, add a rule
+  permitting DNS (UDP **and** TCP, port 53) to your resolver's numeric IP only — never a wildcard
+  allow to "any" DNS server, which would reopen a broad egress path. Tailscale's own resolver
+  (`100.100.100.100`) is the usual choice for a MagicDNS name. Add, for each of `nft`/`iptables`:
+
+  ```bash
+  # nftables — insert before the final OUTPUT allow rule
+  nft add rule inet isolated output ip daddr 100.100.100.100 udp dport 53 ct state new accept
+  nft add rule inet isolated output ip daddr 100.100.100.100 tcp dport 53 ct state new accept
+
+  # iptables — insert before the trailing REJECT rules
+  iptables -A OUTPUT -d 100.100.100.100 -p udp --dport 53 -m state --state NEW -j ACCEPT
+  iptables -A OUTPUT -d 100.100.100.100 -p tcp --dport 53 -m state --state NEW -j ACCEPT
+  ```
+
+  Whichever option you pick, verify it under the firewall (not just before applying it) — from the
+  isolated server itself:
+
+  ```bash
+  getent hosts <hub-hostname-or-ip>     # confirms resolution still works (or isn't needed)
+  curl -v <hub-webhook-url>             # confirms the hook path actually reaches the hub
+  ```
 
 ```bash
 # --- nftables (recommended: one rule set covers IPv4 and IPv6) ---
@@ -275,25 +376,61 @@ nft add rule inet isolated output ip6 daddr <hub-ipv6> tcp dport <hub-webhook-po
 ```bash
 # --- iptables + ip6tables (for environments without nftables — apply the
 #     exact same rules to BOTH IPv4 and IPv6) ---
-for CMD in iptables ip6tables; do
-  # Always allow loopback
-  $CMD -A OUTPUT -o lo -j ACCEPT
-  $CMD -A INPUT  -i lo -j ACCEPT
-  # Allow established/related traffic (needed in both directions)
-  $CMD -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-  $CMD -A INPUT  -m state --state ESTABLISHED,RELATED -j ACCEPT
-done
-# INPUT: allow only new inbound connections from the hub to this server's agentPort (IPv4 and IPv6 each)
-iptables  -A INPUT -s <hub-ipv4> -p tcp --dport <agent-port> -m state --state NEW -j ACCEPT
-ip6tables -A INPUT -s <hub-ipv6> -p tcp --dport <agent-port> -m state --state NEW -j ACCEPT
-# OUTPUT: allow only new outbound connections to the hub's webhook port (IPv4 and IPv6 each)
-iptables  -A OUTPUT -d <hub-ipv4> -p tcp --dport <hub-webhook-port> -m state --state NEW -j ACCEPT
-ip6tables -A OUTPUT -d <hub-ipv6> -p tcp --dport <hub-webhook-port> -m state --state NEW -j ACCEPT
-# Deny everything else
-for CMD in iptables ip6tables; do
-  $CMD -A OUTPUT -j REJECT
-  $CMD -A INPUT  -j REJECT
-done
+#
+# Applied atomically via `iptables-restore`/`ip6tables-restore`: this REPLACES
+# the entire filter table's INPUT/OUTPUT/FORWARD chains in one call, with a
+# default policy of DROP. Building the same ruleset with a sequence of
+# `iptables -A ...` calls (appending one rule at a time) is NOT equivalent and
+# is NOT safe here — appending a REJECT rule at the end only outranks rules
+# that come AFTER it in the same chain. Any broad ACCEPT rule already present
+# in INPUT/OUTPUT before you start (a leftover from another tool, a prior
+# manual `-A INPUT -j ACCEPT`, a management/monitoring exception, etc.) still
+# matches first and the appended REJECT never gets evaluated. Loading a full
+# `*filter ... COMMIT` ruleset via `-restore` sidesteps that entirely: nothing
+# from before this call survives, so there is no earlier rule left to outrank
+# the ones below.
+cat <<'EOF' | iptables-restore
+*filter
+:INPUT DROP [0:0]
+:FORWARD DROP [0:0]
+:OUTPUT DROP [0:0]
+-A INPUT -i lo -j ACCEPT
+-A OUTPUT -o lo -j ACCEPT
+-A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+-A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+-A INPUT -s <hub-ipv4> -p tcp --dport <agent-port> -m state --state NEW -j ACCEPT
+-A OUTPUT -d <hub-ipv4> -p tcp --dport <hub-webhook-port> -m state --state NEW -j ACCEPT
+COMMIT
+EOF
+
+cat <<'EOF' | ip6tables-restore
+*filter
+:INPUT DROP [0:0]
+:FORWARD DROP [0:0]
+:OUTPUT DROP [0:0]
+-A INPUT -i lo -j ACCEPT
+-A OUTPUT -o lo -j ACCEPT
+-A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+-A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+-A INPUT -s <hub-ipv6> -p tcp --dport <agent-port> -m state --state NEW -j ACCEPT
+-A OUTPUT -d <hub-ipv6> -p tcp --dport <hub-webhook-port> -m state --state NEW -j ACCEPT
+COMMIT
+EOF
+```
+
+Because the chain policy itself is `DROP`, there is no trailing REJECT/DROP rule to accidentally
+place in the wrong position — every packet that doesn't match one of the explicit ACCEPT rules
+above falls through to the chain policy. If you added the optional DNS-allow rules from the
+previous subsection, insert their `-A` lines into the `*filter` block above (order among the
+ACCEPT rules doesn't matter; only "before `COMMIT`, after the chain headers" does).
+
+**Verify rule order after loading**, not just that the rules exist — `-S` output lists rules in
+match order, so confirm the policy line reads `DROP` and no ACCEPT rule you didn't intend for
+appears above the ones you just loaded:
+
+```bash
+iptables  -S       # first line should be "-P INPUT DROP" / "-P OUTPUT DROP" / "-P FORWARD DROP"
+ip6tables -S        # same check for IPv6 — don't stop at IPv4
 ```
 
 ### Making it persistent (surviving reboot)
