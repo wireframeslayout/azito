@@ -734,6 +734,40 @@ describe('PhaseLoopRunner pushing-phase PR auto-creation (git provider abstracti
   });
 });
 
+// Issue #29 docs review, Important finding 1: isolated agent servers hold no
+// push credentials, so the pushing phase must never be sent to the worker on
+// one — it must be skipped and the run land on the same terminal path a
+// normal last-phase completion would (terminal status 'review'), leaving push
+// to the operator until #87 (hub-proxied push) ships.
+describe('PhaseLoopRunner isolation cutoff (Issue #29 docs review, finding 1)', () => {
+  it('skips the pushing phase and terminates at review when server.isolationIntent is true', async () => {
+    const isolatedServer = { ...server, isolationIntent: true };
+    const { runner, taskRepo, workerWaiter, appendLog } = makeRunner();
+    const unit = makeUnitForRun();
+
+    await runner.stateMachineLoop(unit, 'local', task, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    // 4 phases (planning/implementing/reviewing/testing) actually run the
+    // worker; pushing is skipped without ever calling waitForWorker for it.
+    expect(workerWaiter.waitForWorker).toHaveBeenCalledTimes(4);
+    expect(appendLog).toHaveBeenCalledWith(1, 1, 'command', expect.objectContaining({
+      type: 'pushing_skipped_isolated',
+      phase: 'pushing',
+    }));
+    expect(taskRepo.updateStatus).not.toHaveBeenCalledWith(1, 'failed');
+    expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'review');
+  });
+
+  it('runs the pushing phase normally (sends the worker prompt) when the server is not isolated', async () => {
+    const { runner, workerWaiter } = makeRunner();
+    const unit = makeUnitForRun();
+
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    expect(workerWaiter.waitForWorker).toHaveBeenCalledTimes(5);
+  });
+});
+
 // Issue #328 ninth-round review, finding 1 (most important): the untrusted-
 // input execution gate used to be checked only at execute()/resumeStateMachine()
 // entry — but this loop re-resolves the Sidekick/task/Unit/server config for
