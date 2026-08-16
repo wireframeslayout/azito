@@ -1,5 +1,9 @@
-import type { Task } from '../Task';
+import type { EventEmitter } from 'events';
+import type { Task, ITaskRepository } from '../Task';
 import type { ProjectServer } from '../../projects/ProjectServer';
+import { resolveEffectiveInputPolicy } from '../../projects/ProjectServer';
+import type { IExecutionLogRepository } from '../ExecutionLog';
+import { appendLogAndEmit } from './AppendLog';
 
 /**
  * Execution gate for untrusted-origin tasks (Issue #328).
@@ -108,6 +112,89 @@ export function checkExecutionGate(
   // manifest (see ExecutionManifest.ts for what's covered and why).
   if (task.executionApprovedFingerprintHash === manifestHash) return { allowed: true };
   return { allowed: false, reason: 'pending_approval' };
+}
+
+/**
+ * In-lock TOCTOU re-check for the untrusted-input execution gate (Issue #29
+ * Step 3a review, Important finding 2). Every execution entry point
+ * (ExecuteTaskUseCase.execute/followUp, TaskRestoreService.restore,
+ * WindowRespawnService.respawn) resolves `resolveEffectiveInputPolicy()` and
+ * calls `checkExecutionGate()` BEFORE queuing for `serverIsolationMutex` —
+ * the SAME ordering `ServerIsolationLock.ts`'s own doc comment already flags
+ * for connection-identity fields (host/port/token/...), except the `'allow'`
+ * policy's safety is EVEN MORE time-bounded than those: an isolation doctor
+ * run can flip a server's `isolationVerifiedAt`/`isolationReport` to a
+ * failing state WHILE this call is queued for the lock, and the outer gate's
+ * decision (taken before queuing) has no way to observe that.
+ *
+ * `ServerIsolationLock.ts`'s own `SECURITY_SNAPSHOT_FIELDS` deliberately
+ * excludes `isolationVerifiedAt`/`isolationReport` (see that file's doc
+ * comment: "fine to silently pick up fresh") — adding them there would abort
+ * every in-flight task each time ANY doctor run completes on the server,
+ * trusted or not, which is far more disruptive than the actual risk this
+ * closes (an untrusted task briefly running unattended past a verification
+ * lapse). Instead, every window-creation call site re-runs the SAME
+ * `resolveEffectiveInputPolicy()` + `checkExecutionGate()` pair the outer
+ * gate ran, but against `freshServer` — the row already re-read once the
+ * lock is actually held — immediately before the window (and any
+ * secret/task-token env) is built. A downgrade discovered here aborts
+ * exactly like the outer gate does: `ExecutionGateDeniedError`/
+ * `ExecutionGatePendingApprovalError`, `recordExecutionGateBlock` for the
+ * pending_approval case — instead of silently proceeding on the
+ * already-stale `'allow'` decision.
+ *
+ * No-op for a trusted task, matching `checkExecutionGate`'s own
+ * short-circuit — this exists purely to close the untrusted-input gate's own
+ * TOCTOU window, not to add a second, independent check trusted tasks never
+ * needed in the first place.
+ */
+export function reverifyExecutionGateInLock(
+  deps: { taskRepo: Pick<ITaskRepository, 'recordExecutionGateBlock'>; logRepo: IExecutionLogRepository; events: EventEmitter },
+  task: Pick<Task, 'id' | 'status' | 'inputTrust' | 'executionApprovedFingerprintHash' | 'pendingOperation'>,
+  unitId: number | null,
+  operation: NonNullable<Task['pendingOperation']>,
+  projectServer: Pick<ProjectServer, 'inputPolicy'> | null | undefined,
+  freshServer: { isolationIntent: boolean; isolationVerifiedAt: string | null; isolationReport: string | null } | null | undefined,
+  scopedAuthEnabled: boolean,
+  manifestHash: string,
+  windowId: number | null = null,
+): void {
+  if (task.inputTrust !== 'untrusted') return;
+
+  const effective = resolveEffectiveInputPolicy(projectServer, freshServer, scopedAuthEnabled);
+  if (unitId !== null && effective.allowDegradedReason) {
+    appendLogAndEmit(deps.logRepo, deps.events, task.id, unitId, 'command', {
+      type: 'execution_policy_degraded',
+      requestedPolicy: effective.requestedPolicy,
+      effectivePolicy: effective.effectivePolicy,
+      allowDegradedReason: effective.allowDegradedReason,
+      reverifiedInLock: true,
+    });
+  }
+
+  const gate = checkExecutionGate(task, effective.effectivePolicy, manifestHash);
+  if (gate.allowed) return;
+
+  if (unitId !== null) {
+    appendLogAndEmit(deps.logRepo, deps.events, task.id, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason, reverifiedInLock: true });
+  }
+  if (gate.reason === 'pending_approval') {
+    const recorded = deps.taskRepo.recordExecutionGateBlock(task.id, {
+      pendingOperation: operation,
+      priorStatus: task.status,
+      manifestHash,
+      pendingOperationWindowId: windowId,
+    });
+    if (unitId !== null) {
+      if (recorded) {
+        appendLogAndEmit(deps.logRepo, deps.events, task.id, unitId, 'status_change', { status: 'pending_approval', operation });
+      } else {
+        appendLogAndEmit(deps.logRepo, deps.events, task.id, unitId, 'command', { type: 'execution_gate_already_pending', operation });
+      }
+    }
+    throw new ExecutionGatePendingApprovalError(task.id);
+  }
+  throw new ExecutionGateDeniedError(task.id);
 }
 
 /** Thrown by execution entry points when checkExecutionGate() denies outright ('deny' policy). */

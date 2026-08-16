@@ -60,6 +60,7 @@ function makeOpts(overrides: Partial<ServersRouteOptions> = {}): ServersRouteOpt
     updateIsolationReport: vi.fn(),
     updateIsolationCleanupReport: vi.fn(),
     updateIsolationVerification: vi.fn(),
+    updateIsolationFailure: vi.fn(),
     delete: vi.fn(),
   };
   return {
@@ -1529,7 +1530,65 @@ describe('POST /api/servers/:name/isolation/doctor (Issue #29 Step 2 B)', () => 
     expect(res.statusCode).toBe(200);
     expect(res.json().verified).toBe(false);
     expect(opts.serverRepo.updateIsolationVerification).not.toHaveBeenCalled();
-    expect(opts.serverRepo.updateIsolationReport).toHaveBeenCalledWith('srv', expect.stringContaining('"verified":false'));
+    // Issue #29 review Step 3a, Critical finding 1: a failing run now goes
+    // through updateIsolationFailure (report + atomic isolation_verified_at
+    // clear), not the plain updateIsolationReport (report only) — see that
+    // method's doc comment on IServerRepository for why leaving a prior
+    // pass's verified_at untouched here would keep 'allow' silently
+    // effective for up to ISOLATION_VERIFICATION_TTL_MS after isolation
+    // actually broke.
+    expect(opts.serverRepo.updateIsolationFailure).toHaveBeenCalledWith('srv', expect.stringContaining('"verified":false'));
+    expect(opts.serverRepo.updateIsolationReport).not.toHaveBeenCalled();
+  });
+
+  // Issue #29 review Step 3a, Critical finding 1: regression coverage for
+  // the exact scenario the fix closes — a PASSING doctor run sets
+  // isolation_verified_at, a LATER FAILING run must invalidate it instead of
+  // leaving it valid within its TTL window.
+  it('clears a prior passing isolation_verified_at when a later doctor run fails (pass -> fail)', async () => {
+    // Real repository this time (not a mock), so the atomic clear inside
+    // updateIsolationFailure's own UPDATE statement is exercised for real,
+    // not merely asserted-called-with on a stub.
+    const { SqliteServerRepository } = await import('./SqliteServerRepository.js');
+    const { openDatabase } = await import('../../shared/db/Database.js');
+    const db = openDatabase(':memory:');
+    const realServerRepo = new SqliteServerRepository(db);
+    realServerRepo.create('srv', 'agent', '1.2.3.4', 3002);
+    realServerRepo.updateIsolationIntent('srv', true);
+
+    const passingReport = JSON.stringify({ kind: 'verification', verified: true, checks: [], probedAt: new Date().toISOString() });
+    realServerRepo.updateIsolationVerification('srv', passingReport, new Date().toISOString());
+    expect(realServerRepo.findByName('srv')?.isolationVerifiedAt).not.toBeNull();
+
+    const exec = vi.fn(async (cmd: string) => {
+      if (cmd.startsWith('hostname;')) return { stdout: 'remote-host\n9999\n', stderr: '', code: 0 };
+      if (cmd.includes('.azito-hub-canary-test')) return { stdout: 'AZT_STATUS:canary:absent\n', stderr: '', code: 0 };
+      if (cmd.includes('.ssh')) return { stdout: '/home/remote/.ssh/id_rsa\nAZT_SSH_DIR_EXISTS\n', stderr: '', code: 0 };
+      if (cmd.includes('hosts.yml')) return { stdout: 'AZT_STATUS:f:absent\n', stderr: '', code: 0 };
+      if (cmd.includes('AZT_GH_CHECK_DONE')) return { stdout: 'AZT_GH_ABSENT\nAZT_GH_CHECK_DONE\n', stderr: '', code: 0 };
+      if (cmd.includes('credential.helper')) return { stdout: 'AZT_GIT_EXIT:1\nAZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
+      if (cmd.includes('$HOME"')) return { stdout: '/home/remote\n', stderr: '', code: 0 };
+      if (cmd.includes('ls -1')) return { stdout: 'AZT_LS_STATUS:absent\n', stderr: '', code: 0 };
+      if (cmd.includes('SSH_AUTH_SOCK')) return { stdout: 'AZT_NO_SOCK\n', stderr: '', code: 0 };
+      if (cmd.includes('.claude/settings.json')) return { stdout: 'AZT_STATUS:f:absent\n', stderr: '', code: 0 };
+      if (cmd.includes('config.toml')) return { stdout: 'AZT_STATUS:f:absent\n', stderr: '', code: 0 };
+      if (cmd.includes('AZT_ENV_PRESENT')) return { stdout: 'AZT_ENV_DONE\n', stderr: '', code: 0 };
+      return { stdout: '', stderr: '', code: 0 };
+    });
+    const opts = makeOpts({
+      serverRepo: realServerRepo,
+      transportFactory: { getTransport: vi.fn(() => ({ exec })), invalidate: vi.fn() } as unknown as ServersRouteOptions['transportFactory'],
+    });
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv/isolation/doctor' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().verified).toBe(false);
+    // The prior PASSING run's isolation_verified_at must not survive this
+    // failing run.
+    expect(realServerRepo.findByName('srv')?.isolationVerifiedAt).toBeNull();
+    db.close();
   });
 
   // Step 2 review, Important #2: the lookup->probe->persist span used to run

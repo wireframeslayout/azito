@@ -204,6 +204,14 @@ export async function createRotatedWindow(
   reasonOnFailure: string,
   create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string }>,
   enforceSnapshot = true,
+  // Issue #29 Step 3a review, Important finding 2: optional hook run against
+  // `freshServer` INSIDE this same lock, before any env/token is built — see
+  // `createRotatedWindowInLock`'s own doc comment on `preCheck` for what
+  // this closes. Callers that need it pass
+  // `tasks/execution/ExecutionGate.ts`'s `reverifyExecutionGateInLock`
+  // (throws to abort); callers with nothing to re-check (trusted tasks,
+  // manual/plain windows) simply omit it.
+  preCheck?: (freshServer: ServerConfig) => void,
 ): Promise<{ windowName: string; env: Record<string, string>; tokenId: number; server: ServerConfig }> {
   // Issue #29 review (7th pass), Important finding 1: the entire
   // env-resolution -> `create()` span now runs inside
@@ -222,7 +230,7 @@ export async function createRotatedWindow(
   // `applyTokenMaskingOrCompat`'s isolation check exists to close, just with
   // the race moved one layer up from "which branch runs" to "which server
   // row the check itself runs against".
-  return withServerLock(lock, server, enforceSnapshot, (freshServer) => createRotatedWindowInLock(paneEnvService, freshServer, task, reasonOnFailure, create));
+  return withServerLock(lock, server, enforceSnapshot, (freshServer) => createRotatedWindowInLock(paneEnvService, freshServer, task, reasonOnFailure, create, preCheck));
 }
 
 /**
@@ -240,7 +248,20 @@ export async function createRotatedWindowInLock(
   task: Task,
   reasonOnFailure: string,
   create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string }>,
+  // Issue #29 Step 3a review, Important finding 2: invoked FIRST, against
+  // `freshServer`, before any env/task-token is built or `create()` runs —
+  // callers that queued for this lock before their own execution-gate
+  // decision could go stale (a doctor run flipping isolation verification
+  // mid-flight) pass a re-check here so a downgrade discovered only once the
+  // lock is actually held still aborts before any secret/token touches the
+  // new window, instead of silently proceeding on the pre-lock decision.
+  // Throws to abort (no window is created, no token is issued); a caller
+  // with nothing to re-check (a trusted task, or a non-task window — see
+  // `createSecondaryWindowInLock`/`createPlainWindowInLock`, which take no
+  // such hook since they never build an untrusted-task-owned env) omits it.
+  preCheck?: (freshServer: ServerConfig) => void,
 ): Promise<{ windowName: string; env: Record<string, string>; tokenId: number; server: ServerConfig }> {
+  preCheck?.(freshServer);
   const { env, tokenId } = paneEnvService.buildEnvForNewWindow(task, freshServer);
   let created: { result: ExecResult; windowName: string };
   try {

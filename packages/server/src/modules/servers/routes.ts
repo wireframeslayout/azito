@@ -947,6 +947,15 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       const report = JSON.stringify({ kind: 'verification', verified, checks, probedAt });
       if (verified && serverRepo.updateIsolationVerification) {
         serverRepo.updateIsolationVerification(request.params.name, report, probedAt);
+      } else if (serverRepo.updateIsolationFailure) {
+        // Issue #29 review Step 3a, Critical finding 1: a failing/
+        // unverifiable run must invalidate whatever a PRIOR passing run
+        // proved, not just record what THIS run found — otherwise a stale
+        // isolation_verified_at from an earlier pass stays within its TTL
+        // window and 'allow' silently stays in effect for up to
+        // ISOLATION_VERIFICATION_TTL_MS after isolation actually broke. See
+        // IServerRepository.updateIsolationFailure's doc comment.
+        serverRepo.updateIsolationFailure(request.params.name, report);
       } else {
         serverRepo.updateIsolationReport?.(request.params.name, report);
       }

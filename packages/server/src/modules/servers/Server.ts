@@ -142,6 +142,26 @@ export interface IServerRepository {
    */
   updateIsolationReport?(name: string, report: string | null): void;
   /**
+   * Persists a failing/unverifiable doctor report to `isolation_report` AND
+   * atomically clears `isolation_verified_at` to NULL in the SAME statement
+   * (Issue #29 review Step 3a, Critical finding 1). Before this method
+   * existed, a failing/unverifiable doctor run only ever called
+   * `updateIsolationReport` above, which leaves a PRIOR passing run's
+   * `isolation_verified_at` untouched — `resolveEffectiveInputPolicy`
+   * (projects/ProjectServer.ts) then kept reading that stale timestamp as
+   * "verified" for up to {@link
+   * import('../projects/ProjectServer').ISOLATION_VERIFICATION_TTL_MS} after
+   * isolation had already broken, silently keeping `'allow'` in effect. A
+   * verification failure must invalidate whatever the last PASSING run
+   * proved, not just record what this run found: the doctor route now calls
+   * this instead of `updateIsolationReport` whenever `verified` is false.
+   * Optional for the same reason every other isolation writer on this
+   * interface is: implemented by `SqliteServerRepository`; existing
+   * `IServerRepository` mocks predate this method and fall back to
+   * `updateIsolationReport` (routes.ts calls both via `?.()`).
+   */
+  updateIsolationFailure?(name: string, report: string): void;
+  /**
    * Persists a JSON blob to `isolation_cleanup_report` (the CLEANUP-only
    * column split out of the doctor's verification column — see Server.ts's
    * `isolationCleanupReport` doc comment and the review round's Important

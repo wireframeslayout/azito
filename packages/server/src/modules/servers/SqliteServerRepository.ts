@@ -18,6 +18,7 @@ export class SqliteServerRepository implements IServerRepository {
   private updateIsolationReportStmt;
   private updateIsolationCleanupReportStmt;
   private updateIsolationVerificationStmt;
+  private updateIsolationFailureStmt;
 
   constructor(private db: SqliteDatabase) {
     this.listStmt = db.prepare(`SELECT ${COLUMNS} FROM servers WHERE type IN ('local', 'agent') ORDER BY created_at`);
@@ -66,6 +67,13 @@ export class SqliteServerRepository implements IServerRepository {
     // never observes one updated without the other (see
     // IServerRepository.updateIsolationVerification's doc comment).
     this.updateIsolationVerificationStmt = db.prepare('UPDATE servers SET isolation_report = ?, isolation_verified_at = ? WHERE name = ?');
+    // Issue #29 review Step 3a, Critical finding 1: the doctor's
+    // failing/unverifiable-run writer — sets isolation_report AND clears
+    // isolation_verified_at to NULL atomically, so a stale PASSING
+    // isolation_verified_at from an earlier run can never survive a later
+    // run that failed to reconfirm it (see IServerRepository.
+    // updateIsolationFailure's doc comment).
+    this.updateIsolationFailureStmt = db.prepare('UPDATE servers SET isolation_report = ?, isolation_verified_at = NULL WHERE name = ?');
   }
 
   findAll(): ServerConfig[] {
@@ -139,6 +147,10 @@ export class SqliteServerRepository implements IServerRepository {
 
   updateIsolationVerification(name: string, report: string, verifiedAt: string): void {
     this.updateIsolationVerificationStmt.run(report, verifiedAt, name);
+  }
+
+  updateIsolationFailure(name: string, report: string): void {
+    this.updateIsolationFailureStmt.run(report, name);
   }
 
   delete(name: string): void {

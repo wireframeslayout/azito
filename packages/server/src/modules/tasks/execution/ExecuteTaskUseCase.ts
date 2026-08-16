@@ -42,7 +42,7 @@ import { HttpSignalTurnCoordinator } from './HttpSignalTurnCoordinator';
 import type { SupervisorRegistry } from '../../supervisors/SupervisorRegistry';
 import { shouldSupervise } from '../../supervisors/SupervisorLaunch';
 import { ResourceExhaustedError, type ResourceGuard } from '../../servers/resources/ResourceGuard';
-import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError } from './ExecutionGate';
+import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError, reverifyExecutionGateInLock } from './ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionManifest';
 import { TuiWorkerRuntime } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
@@ -376,6 +376,47 @@ export class ExecuteTaskUseCase {
     throw new ExecutionGateDeniedError(task.id);
   }
 
+  /**
+   * In-lock counterpart of {@link enforceExecutionGate} (Issue #29 Step 3a
+   * review, Important finding 2): re-resolves the manifest from `currentTask`
+   * (the row re-read inside `runExclusiveForTask`, not the possibly-stale
+   * `task` `enforceExecutionGate` ran against before either lock was queued
+   * for) and re-runs `resolveEffectiveInputPolicy()`/`checkExecutionGate()`
+   * against `freshServer` — the row `withServerLock` already re-read once
+   * the per-server isolation lock was actually acquired. Passed as
+   * `createRotatedWindow`/`createRotatedWindowInLock`'s `preCheck` so it
+   * runs immediately before any task-token/secret env is built, not after.
+   * See `ExecutionGate.reverifyExecutionGateInLock`'s own doc comment for
+   * the TOCTOU this closes.
+   */
+  private reverifyGateInLock(
+    currentTask: Task,
+    unitId: number,
+    operation: NonNullable<Task['pendingOperation']>,
+    freshServer: ServerConfig,
+  ): void {
+    const { manifest, projectServer } = resolveExecutionManifest(currentTask, {
+      unitRepo: this.unitRepo,
+      projectRepo: this.projectRepo,
+      projectServerRepo: this.projectServerRepo,
+      serverRepo: this.serverRepo,
+      projectSecretRepo: this.projectSecretRepo,
+      unitTypeLoader: this.unitTypeLoader,
+      sidekickLoader: this.sidekickLoader,
+    });
+    const manifestHash = hashExecutionManifest(manifest);
+    reverifyExecutionGateInLock(
+      { taskRepo: this.taskRepo, logRepo: this.logRepo, events: this.events },
+      currentTask,
+      unitId,
+      operation,
+      projectServer,
+      freshServer,
+      this.scopedAuthEnabled,
+      manifestHash,
+    );
+  }
+
   private appendLog(taskId: number, unitId: number, type: LogType, content: unknown): void {
     appendLogAndEmit(this.logRepo, this.events, taskId, unitId, type, content);
   }
@@ -668,6 +709,7 @@ export class ExecuteTaskUseCase {
           // third-party review finding).
           return createRotatedWindowInLock(this.paneEnvService, freshServer, currentTask, 'execute_create_failed', (fs, env) =>
             this.tmux.createWindow(fs, tmuxSession, `task-${task.id}`, { extraEnv: env }),
+            (fs) => this.reverifyGateInLock(currentTask, unitId, 'execute', fs),
           );
         });
 
@@ -682,6 +724,13 @@ export class ExecuteTaskUseCase {
       }));
     } catch (err) {
       if (this.failOnServerSnapshotMismatch(err, taskId, unitId)) throw err;
+      // Issue #29 Step 3a review, Important finding 2: reverifyGateInLock
+      // (run as this window creation's `preCheck`, above) throws the SAME
+      // ExecutionGate* errors enforceExecutionGate() throws pre-lock — these
+      // must survive identity-intact for replyToExecutionGateError()
+      // (routes.ts) to translate correctly, not be swallowed into the
+      // generic "Failed to create tmux window" wrap below.
+      if (err instanceof ExecutionGateDeniedError || err instanceof ExecutionGatePendingApprovalError) throw err;
       throw new Error(`Failed to create tmux window: ${err instanceof Error ? err.message : err}`);
     }
     server = createdServer;
@@ -1132,12 +1181,18 @@ export class ExecuteTaskUseCase {
         // succeeded.
         const created = await createRotatedWindow(this.paneEnvService, this.serverIsolationLock, server, currentTask, 'followup_create_failed', (freshServer, env) =>
           this.tmux.createWindow(freshServer, tmuxSession, `task-${task.id}`, { extraEnv: env }),
+          true,
+          (fs) => this.reverifyGateInLock(currentTask, unitId, 'resume', fs),
         );
         this.taskRepo.update(taskId, { tmuxWindow: created.windowName } as Partial<Task>);
         return { windowName: created.windowName, windowExists: false, tokenId: created.tokenId, server: created.server };
       }));
     } catch (err) {
       if (this.failOnServerSnapshotMismatch(err, taskId, unitId)) throw err;
+      // Issue #29 Step 3a review, Important finding 2: see the matching
+      // comment in execute() above — reverifyGateInLock's errors must not be
+      // swallowed into the generic wrap below.
+      if (err instanceof ExecutionGateDeniedError || err instanceof ExecutionGatePendingApprovalError) throw err;
       throw new Error(`Failed to create tmux window: ${err instanceof Error ? err.message : err}`);
     }
     // Issue #29 review (10th pass), Important finding 3: use the fresh

@@ -63,7 +63,8 @@
         "not_isolated": "対象サーバーに隔離（isolation）が宣言されていません。",
         "verification_missing": "対象サーバーの隔離が isolation doctor によって検証されていません。",
         "verification_expired": "対象サーバーの隔離検証の有効期限が切れています。再検証してください。",
-        "scoped_auth_disabled": "スコープ認証（AZITO_SCOPED_AUTH）が現在無効です。"
+        "scoped_auth_disabled": "スコープ認証（AZITO_SCOPED_AUTH）が現在無効です。",
+        "verification_failed": "対象サーバーの最新の isolation doctor 実行が検証に失敗しています。再検証してください。"
       }
     },
     "reapprovalNote": "承認後にこのタスクのタイトルまたは本文を編集すると、再承認が必要になります。",

@@ -18,7 +18,7 @@ import type { IExecutionLogRepository } from './ExecutionLog';
 import { resolveTaskServerName, resolveTmuxSession, resolveBaseBranch } from './execution/TaskExecutionEnv';
 import { buildWorkerLaunchCommand } from '../agents/LaunchCommand';
 import { shellQuote } from '../../shared/shellQuote';
-import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError } from './execution/ExecutionGate';
+import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError, reverifyExecutionGateInLock } from './execution/ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest } from './execution/ExecutionManifest';
 import { appendLogAndEmit } from './execution/AppendLog';
 import type { TaskPaneEnvironmentService } from './execution/TaskPaneEnvironmentService';
@@ -272,6 +272,27 @@ export class TaskRestoreService {
       // roll back.
       const created = await createRotatedWindow(paneEnvService, this.serverIsolationLock, server, task, 'restore_create_failed', (freshServer, env) =>
         tmux.createWindow(freshServer, tmuxSession, `task-${task.id}`, { extraEnv: env }),
+        true,
+        // Issue #29 Step 3a review, Important finding 2: re-verify the
+        // untrusted-execution gate against `freshServer` — the row the lock
+        // above already re-read — immediately before this window's env/task
+        // token is built. See ExecutionGate.reverifyExecutionGateInLock's
+        // doc comment for the TOCTOU this closes.
+        (freshServer) => {
+          const { manifest, projectServer: freshProjectServer } = resolveExecutionManifest(task, {
+            unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader,
+          });
+          reverifyExecutionGateInLock(
+            { taskRepo, logRepo, events },
+            task,
+            unitId,
+            'restore',
+            freshProjectServer,
+            freshServer,
+            scopedAuthEnabled,
+            hashExecutionManifest(manifest),
+          );
+        },
       );
       windowName = created.windowName;
       tokenId = created.tokenId;

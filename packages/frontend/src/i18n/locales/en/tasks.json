@@ -63,7 +63,8 @@
         "not_isolated": "The target server has no isolation declared.",
         "verification_missing": "The target server's isolation has not been verified by the isolation doctor.",
         "verification_expired": "The target server's isolation verification has expired — re-verify it.",
-        "scoped_auth_disabled": "Scoped auth (AZITO_SCOPED_AUTH) is currently disabled."
+        "scoped_auth_disabled": "Scoped auth (AZITO_SCOPED_AUTH) is currently disabled.",
+        "verification_failed": "The target server's last isolation doctor run did not pass — re-verify it."
       }
     },
     "reapprovalNote": "Editing this task's title or description after approval will require re-approval.",

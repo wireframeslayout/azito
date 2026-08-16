@@ -338,7 +338,12 @@ describe('GET /api/tasks/:id/execution-approval (Issue #51)', () => {
     opts.serverRepo.findByName = vi.fn(() => ({
       name: 'test-server', type: 'agent' as const, host: '', agentPort: null, agentToken: null, agentVersion: null,
       sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const,
-      isolationIntent: true, isolationVerifiedAt: new Date().toISOString(), isolationReport: null, isolationCleanupReport: null, createdAt: '',
+      isolationIntent: true, isolationVerifiedAt: new Date().toISOString(),
+      // A current isolationVerifiedAt must be paired with a passing
+      // isolationReport (Issue #29 review Step 3a, Critical finding 1
+      // follow-up defense-in-depth check in resolveEffectiveInputPolicy).
+      isolationReport: JSON.stringify({ kind: 'verification', verified: true, checks: [], probedAt: new Date().toISOString() }),
+      isolationCleanupReport: null, createdAt: '',
     }));
     opts.scopedAuthEnabled = true;
     const app = Fastify();

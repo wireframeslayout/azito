@@ -16,7 +16,7 @@ import { shellQuote } from '../../shared/shellQuote';
 import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
 import type { SessionCaptureService } from './SessionCaptureService';
-import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError } from '../tasks/execution/ExecutionGate';
+import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError, reverifyExecutionGateInLock } from '../tasks/execution/ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest, type RespawnManifestInput } from '../tasks/execution/ExecutionManifest';
 import { appendLogAndEmit } from '../tasks/execution/AppendLog';
 import type { TaskPaneEnvironmentService } from '../tasks/execution/TaskPaneEnvironmentService';
@@ -356,7 +356,36 @@ export class WindowRespawnService {
         };
 
         if (isPrimary) {
-          const created = await createRotatedWindowInLock(this.paneEnvService, freshServer, task!, 'respawn_create_failed', doCreate);
+          const created = await createRotatedWindowInLock(this.paneEnvService, freshServer, task!, 'respawn_create_failed', doCreate,
+            // Issue #29 Step 3a review, Important finding 2: re-verify the
+            // untrusted-execution gate against `freshServer` — re-read once
+            // this lock was actually acquired — immediately before this
+            // window's task token/env is built. See
+            // ExecutionGate.reverifyExecutionGateInLock's doc comment for
+            // the TOCTOU this closes.
+            (fs) => {
+              const { manifest, projectServer: freshProjectServer } = resolveExecutionManifest(task!, {
+                unitRepo: this.unitRepo,
+                projectRepo: this.projectRepo,
+                projectServerRepo: this.projectServerRepo,
+                serverRepo: this.serverRepo,
+                projectSecretRepo: this.projectSecretRepo,
+                unitTypeLoader: this.unitTypeLoader,
+                sidekickLoader: this.sidekickLoader,
+              }, buildRespawnManifestInput(currentWin), fs.name);
+              reverifyExecutionGateInLock(
+                { taskRepo: this.taskRepo, logRepo: this.logRepo, events: this.events },
+                task!,
+                unitId,
+                'respawn',
+                freshProjectServer,
+                fs,
+                this.scopedAuthEnabled,
+                hashExecutionManifest(manifest),
+                windowId,
+              );
+            },
+          );
           return { newName: created.windowName, windowEnv: created.env, tokenId: created.tokenId as number | null, server: created.server };
         } else if (task) {
           const created = await createSecondaryWindowInLock(this.paneEnvService, freshServer, task, doCreate);

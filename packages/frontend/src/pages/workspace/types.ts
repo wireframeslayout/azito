@@ -118,7 +118,7 @@ export interface ExecutionApprovalData {
   pendingOperation: string | null;
   inputPolicy: 'deny' | 'manual-approval' | 'allow' | null;
   /** Issue #29 Step 3a: why an `inputPolicy: 'allow'` project server still landed this task on the approval screen — `null` when the requested policy was never 'allow' (nothing to explain), or when 'allow' was actually effective (in which case this task would never have reached pending_approval in the first place). */
-  allowDegradedReason: 'not_isolated' | 'verification_missing' | 'verification_expired' | 'scoped_auth_disabled' | null;
+  allowDegradedReason: 'not_isolated' | 'verification_missing' | 'verification_expired' | 'scoped_auth_disabled' | 'verification_failed' | null;
   /** Fingerprint of the manifest this response describes (Issue #328 review
    * fix 1) — must be echoed back unchanged in POST
    * /api/tasks/:id/approve-execution's `approved: true` request. A 409 with

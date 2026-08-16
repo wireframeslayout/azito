@@ -75,7 +75,7 @@ export function resolveInputPolicy(
 export const ISOLATION_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
 
 /** Why `resolveEffectiveInputPolicy` downgraded a requested `'allow'` to `'manual-approval'`. `null` when no downgrade occurred (the requested policy was returned as-is). */
-export type AllowDegradedReason = 'not_isolated' | 'verification_missing' | 'verification_expired' | 'scoped_auth_disabled';
+export type AllowDegradedReason = 'not_isolated' | 'verification_missing' | 'verification_expired' | 'scoped_auth_disabled' | 'verification_failed';
 
 export interface EffectiveInputPolicy {
   /** The policy `resolveInputPolicy` resolved from the project_servers row — what the operator asked for. */
@@ -111,7 +111,7 @@ export interface EffectiveInputPolicy {
  */
 export function resolveEffectiveInputPolicy(
   projectServer: Pick<ProjectServer, 'inputPolicy'> | null | undefined,
-  server: { isolationIntent: boolean; isolationVerifiedAt: string | null } | null | undefined,
+  server: { isolationIntent: boolean; isolationVerifiedAt: string | null; isolationReport: string | null } | null | undefined,
   scopedAuthEnabled: boolean,
   now: number = Date.now(),
 ): EffectiveInputPolicy {
@@ -123,13 +123,37 @@ export function resolveEffectiveInputPolicy(
     ({ requestedPolicy, effectivePolicy: 'manual-approval', allowDegradedReason });
 
   if (!server?.isolationIntent) return degrade('not_isolated');
-  // `isolationVerifiedAt` is only ever written by a FULLY PASSING isolation
-  // doctor run (see Server.ts's `updateIsolationVerification` doc comment) —
-  // a non-null, non-stale value already implies a genuine `verified: true`
-  // report, so there is no separate isolationReport check needed here.
+  // `isolationVerifiedAt` is written ONLY by a FULLY PASSING isolation
+  // doctor run (`SqliteServerRepository.updateIsolationVerification`), and
+  // cleared to NULL atomically by every OTHER writer of `isolation_report`
+  // (`updateIsolationFailure` for a failing/unverifiable doctor run,
+  // `updateIsolationIntent` for an intent flip — see Server.ts's
+  // `isolationVerifiedAt` doc comment and Issue #29 review Step 3a Critical
+  // finding 1). A non-null, non-stale value should therefore already imply a
+  // genuine `verified: true` report by construction.
   if (!server.isolationVerifiedAt) return degrade('verification_missing');
   const verifiedAtMs = new Date(server.isolationVerifiedAt).getTime();
   if (!Number.isFinite(verifiedAtMs) || now - verifiedAtMs > ISOLATION_VERIFICATION_TTL_MS) return degrade('verification_expired');
   if (!scopedAuthEnabled) return degrade('scoped_auth_disabled');
+  // Defense in depth (Issue #29 review Step 3a Critical finding 1 follow-up):
+  // do not trust a non-null, non-stale `isolationVerifiedAt` blindly — parse
+  // the report it should be paired with and confirm it actually says
+  // `verified: true`. This is deliberately redundant with the invariant the
+  // comment above describes; it exists only so a future writer that
+  // violates that invariant (updates `isolationVerifiedAt` without also
+  // writing a passing `isolationReport`, or vice versa) fails closed here
+  // instead of silently granting unattended execution.
+  if (!isPassingVerificationReport(server.isolationReport)) return degrade('verification_failed');
   return { requestedPolicy, effectivePolicy: 'allow', allowDegradedReason: null };
+}
+
+/** Parses `isolationReport` and confirms it is a passing (`kind: 'verification', verified: true`) doctor report — see `resolveEffectiveInputPolicy`'s defense-in-depth check above. Malformed/missing/non-passing JSON is treated as "not a passing report" (fail closed), never as an error to propagate. */
+function isPassingVerificationReport(report: string | null): boolean {
+  if (!report) return false;
+  try {
+    const parsed = JSON.parse(report) as { kind?: unknown; verified?: unknown };
+    return parsed.kind === 'verification' && parsed.verified === true;
+  } catch {
+    return false;
+  }
 }

@@ -52,8 +52,10 @@ const VERIFIED_JUST_NOW = new Date(NOW).toISOString();
 const VERIFIED_EXPIRED = new Date(NOW - ISOLATION_VERIFICATION_TTL_MS - 1).toISOString();
 const VERIFIED_AT_TTL_BOUNDARY = new Date(NOW - ISOLATION_VERIFICATION_TTL_MS).toISOString();
 
-function makeIsolatedServer(overrides: { isolationIntent?: boolean; isolationVerifiedAt?: string | null } = {}) {
-  return { isolationIntent: true, isolationVerifiedAt: VERIFIED_JUST_NOW, ...overrides };
+const PASSING_REPORT = JSON.stringify({ kind: 'verification', verified: true, checks: [], probedAt: VERIFIED_JUST_NOW });
+
+function makeIsolatedServer(overrides: { isolationIntent?: boolean; isolationVerifiedAt?: string | null; isolationReport?: string | null } = {}) {
+  return { isolationIntent: true, isolationVerifiedAt: VERIFIED_JUST_NOW, isolationReport: PASSING_REPORT, ...overrides };
 }
 
 describe('resolveEffectiveInputPolicy', () => {
@@ -152,5 +154,52 @@ describe('resolveEffectiveInputPolicy', () => {
     );
     expect(result.effectivePolicy).toBe('manual-approval');
     expect(result.allowDegradedReason).toBe('verification_expired');
+  });
+
+  // Issue #29 review Step 3a, Critical finding 1 follow-up: defense in depth
+  // on top of the doctor route's own fix (a failing/unverifiable run now
+  // clears isolationVerifiedAt atomically via updateIsolationFailure — see
+  // SqliteServerRepository.isolation.test.ts / routes.isolationIntent.test.ts
+  // for that half). These cover the case where a future writer violates the
+  // "isolationVerifiedAt implies a passing isolationReport" invariant this
+  // check exists to catch.
+  it('degrades "allow" to "manual-approval" with reason "verification_failed" when isolationReport is null despite a current isolationVerifiedAt', () => {
+    const result = resolveEffectiveInputPolicy(
+      makeProjectServer({ inputPolicy: 'allow' }),
+      makeIsolatedServer({ isolationReport: null }),
+      true,
+      NOW,
+    );
+    expect(result).toEqual({ requestedPolicy: 'allow', effectivePolicy: 'manual-approval', allowDegradedReason: 'verification_failed' });
+  });
+
+  it('degrades "allow" to "manual-approval" with reason "verification_failed" when isolationReport says verified: false', () => {
+    const result = resolveEffectiveInputPolicy(
+      makeProjectServer({ inputPolicy: 'allow' }),
+      makeIsolatedServer({ isolationReport: JSON.stringify({ kind: 'verification', verified: false, checks: [], probedAt: VERIFIED_JUST_NOW }) }),
+      true,
+      NOW,
+    );
+    expect(result).toEqual({ requestedPolicy: 'allow', effectivePolicy: 'manual-approval', allowDegradedReason: 'verification_failed' });
+  });
+
+  it('degrades "allow" to "manual-approval" with reason "verification_failed" when isolationReport is malformed JSON', () => {
+    const result = resolveEffectiveInputPolicy(
+      makeProjectServer({ inputPolicy: 'allow' }),
+      makeIsolatedServer({ isolationReport: 'not-json' }),
+      true,
+      NOW,
+    );
+    expect(result).toEqual({ requestedPolicy: 'allow', effectivePolicy: 'manual-approval', allowDegradedReason: 'verification_failed' });
+  });
+
+  it('degrades "allow" to "manual-approval" with reason "verification_failed" when isolationReport is a cleanup report (kind !== "verification")', () => {
+    const result = resolveEffectiveInputPolicy(
+      makeProjectServer({ inputPolicy: 'allow' }),
+      makeIsolatedServer({ isolationReport: JSON.stringify({ kind: 'cleanup', cleanup: 'done' }) }),
+      true,
+      NOW,
+    );
+    expect(result).toEqual({ requestedPolicy: 'allow', effectivePolicy: 'manual-approval', allowDegradedReason: 'verification_failed' });
   });
 });

@@ -1084,6 +1084,12 @@ describe('ExecuteTaskUseCase execution gate — "allow" policy 3-point AND gate 
   const isolatedVerifiedServer = () => makeServer({
     isolationIntent: true,
     isolationVerifiedAt: new Date().toISOString(),
+    // A current isolationVerifiedAt must be paired with a passing
+    // isolationReport (Issue #29 review Step 3a, Critical finding 1
+    // follow-up defense-in-depth check in resolveEffectiveInputPolicy) —
+    // real writers (SqliteServerRepository.updateIsolationVerification)
+    // always set both atomically; this fixture mirrors that invariant.
+    isolationReport: JSON.stringify({ kind: 'verification', verified: true, checks: [], probedAt: new Date().toISOString() }),
   });
 
   it('runs unattended (no approval required) when isolated, verified within TTL, and scoped auth is enabled', async () => {
@@ -1186,6 +1192,59 @@ describe('ExecuteTaskUseCase execution gate — "allow" policy 3-point AND gate 
       effectivePolicy: 'manual-approval',
       allowDegradedReason: 'scoped_auth_disabled',
     });
+  });
+
+  // Issue #29 Step 3a review, Important finding 2 (TOCTOU): the outer
+  // enforceExecutionGate() check runs BEFORE this run ever queues for
+  // serverIsolationMutex — if an isolation doctor run commits a failure
+  // WHILE this call is queued for the lock, the outer 'allow' decision is
+  // already stale by the time the lock is actually acquired.
+  // reverifyGateInLock (wired as createRotatedWindowInLock's `preCheck`)
+  // must catch this and abort BEFORE the window/task-token env is built,
+  // not silently proceed on the outer decision.
+  it('re-verifies the gate INSIDE the isolation lock and blocks execution when a doctor failure commits between the outer check and window creation', async () => {
+    const task = makeTask({ serverName: 'local-server', unitId: 10, inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
+    const { useCase, serverRepo, logRepo, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [makeUnit({ id: 10 })],
+      projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'allow' },
+      server: isolatedVerifiedServer(),
+      scopedAuthEnabled: true,
+    });
+
+    // Simulate a doctor run committing a failure (isolationVerifiedAt
+    // cleared) after the outer enforceExecutionGate() check — and every
+    // pre-lock read (the top-of-execute() server resolution, the
+    // session-bootstrap lock's own refetch) — already read the passing row,
+    // but before this run's window-creation lock actually re-checks the
+    // gate: the first several findByName calls still see the passing row
+    // (isolationVerifiedAt/isolationReport are excluded from
+    // ServerIsolationLock's own snapshot-mismatch check, so switching mid-run
+    // never trips ServerSnapshotMismatchError), then every call from the
+    // window-creation lock's own refetch onward sees the now-degraded row.
+    const degradedServer = makeServer({ isolationIntent: true, isolationVerifiedAt: null, isolationReport: null });
+    let findByNameCalls = 0;
+    (serverRepo.findByName as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      findByNameCalls += 1;
+      return findByNameCalls <= 3 ? isolatedVerifiedServer() : degradedServer;
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/requires approval/);
+
+    // The window must never have been created — the whole point of running
+    // this check as createRotatedWindowInLock's preCheck is that it fires
+    // BEFORE any task-token/secret env is built or `create()` runs.
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(logRepo.append).toHaveBeenCalledWith(1, 10, 'command', {
+      type: 'execution_policy_degraded',
+      requestedPolicy: 'allow',
+      effectivePolicy: 'manual-approval',
+      allowDegradedReason: 'verification_missing',
+      reverifiedInLock: true,
+    });
+    expect(task.pendingOperation).toBe('execute');
+    expect(task.status).toBe('pending_approval');
   });
 });
 
