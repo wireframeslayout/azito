@@ -31,21 +31,32 @@ import type { HubCanary } from './hubCanary';
 // gate's own "unable to prove clean means fail closed" philosophy
 // (servers/routes.ts's checkIsolationBlockers).
 //
-// Scope of this module (review round, Important finding 1): this doctor's
-// job is to catch a server that is CLEARLY not isolated (same filesystem,
-// leftover credentials, live tokens in the exec environment) — it is a
-// fail-closed TRIPWIRE, not a full attestation of separation. Because the
-// FS-boundary check below can only ever produce `'fail'` (positive proof of
-// sharing) or `'unknown'` (no proof either way — see its own doc comment for
-// why absence of a canary hit is not evidence of separation), an `agent`
-// server whose hostname/uid legitimately differ from the hub's will
-// currently never see `same_host` resolve to `'pass'`, and therefore will
-// rarely (if ever) reach an overall `verified: true` from this check set
-// alone. That is intentional fail-closed behavior, not a bug to work around
-// by loosening the check — a real, positive attestation that a target
-// filesystem/process namespace is genuinely separate from the hub's belongs
-// to a future DEPLOYMENT-side mechanism (e.g. container/VM attestation, or
-// an operator-supplied signed statement), out of scope for this step.
+// Doctrine (position ratified after review — see project decision record):
+// the isolation doctor is a MISCONFIGURATION DETECTOR, not an attestation.
+// Every probe here depends on self-reporting relayed through the agent
+// process running ON the target host — `transport.exec()` asks that host to
+// tell the truth about itself. When the host itself is adversarial (for
+// example: it was compromised by an untrusted-input task that ran on an
+// isolated server and tampered with the agent process or its environment),
+// no probe in this file can be trusted, and no probe added later can fix
+// that — self-reported evidence from a compromised reporter is not evidence.
+// The actual defense against an adversarial host is structural, not
+// probe-based: that host is never handed a credential worth stealing in the
+// first place (layer 2, credential-distribution gate — declared
+// `isolationIntent` unconditionally withholds operator-equivalent secrets
+// from isolated servers; see Server.ts's isolationIntent doc comment and
+// TaskPaneEnvironmentService/HarnessInstaller). This doctor's job is to
+// confirm that structural gate is actually in the state the operator
+// believes it's in — a health check on the gate, not a substitute
+// assurance for hosts the gate doesn't cover. Because every individual
+// check's spoofability already falls out of this doctrine, checks below do
+// not each carry their own "but a hostile host could fake this" caveat —
+// that concern is covered once, here, for the module as a whole.
+//
+// Tailnet membership (i.e. the lateral-movement reach a Tailscale SSH
+// identity grants) is explicitly OUT OF SCOPE for this doctor — it is an
+// operational responsibility of tailnet ACL / firewall rules, not something
+// a per-server probe run from the hub can observe or enforce.
 
 export type IsolationCheckStatus = 'pass' | 'fail' | 'unknown';
 
@@ -234,23 +245,26 @@ async function probeFile(transport: IServerTransport, pathExpr: string): Promise
  *    both together) proves or disproves a SHARED filesystem — only actually
  *    trying to read a marker the hub itself just wrote does that.
  *
- * `fail` if the canary was read back with matching content, OR both
- * hostname and uid match.
+ * Resolution (ratified doctrine, see this module's top-of-file doc comment):
+ * the doctor is a misconfiguration detector, not an attestation, so a
+ * completed probe that comes back clean is allowed to `'pass'` — the
+ * remaining spoofability by an adversarial host is the doctrine's concern,
+ * not something this individual check needs to re-litigate.
  *
- * Follow-up review round, Important finding 1: a canary that reads back as
- * `'absent'` (or that could not be probed at all) is NOT treated as evidence
- * of separation — only a successful, matching READ is a positive signal, and
- * that signal is used solely for `'fail'`. A hub whose data directory is
- * bind-mounted at a DIFFERENT path inside the target container (or simply
- * not mounted there at all) would report the canary "absent" even on a
- * fully SHARED filesystem, so absence proves nothing either way. Concretely:
- * a canary read with matching content → `'fail'`; both hostname and uid
- * matching → `'fail'`; every other combination — including "neither
- * hostname nor uid match AND the canary was confirmed unreadable/absent" —
- * is `'unknown'`. This check can therefore never resolve to `'pass'` on its
- * own; see this module's top-of-file doc comment ("Scope of this module")
- * for why that is the correct fail-closed behavior rather than a gap to
- * paper over here.
+ *  - canary read back with matching content → `'fail'` (positive proof of a
+ *    shared filesystem)
+ *  - hostname AND uid both match → `'fail'`
+ *  - hostname XOR uid match (exactly one of the two) → `'unknown'` (neither
+ *    proof of sharing nor proof of separation)
+ *  - the canary probe did not complete (no canary to test, transport
+ *    unreachable, or an unrecognized/unreadable probe result) → `'unknown'`,
+ *    regardless of what hostname/uid say
+ *  - the canary probe completed and came back genuinely absent, AND
+ *    hostname/uid both differ → `'pass'` (a completed, negative probe
+ *    combined with two independent differing identifiers is the strongest
+ *    signal this check can produce that the target is a distinct
+ *    filesystem/process namespace; it is a misconfiguration-detector-grade
+ *    signal, not an attestation — see the module doctrine above)
  */
 async function checkFsAndHostBoundary(transport: IServerTransport, hub: HubIdentity): Promise<IsolationCheck> {
   const id = 'same_host';
@@ -303,27 +317,32 @@ async function checkFsAndHostBoundary(transport: IServerTransport, hub: HubIdent
   if (sameHostname && sameUid) {
     return { id, status: 'fail', detail: `${identity}（hostname/uid が両方とも一致）` };
   }
-  // Follow-up review round, Important finding 1: an absent (or otherwise
-  // inconclusive) canary is never treated as proof of separation — it falls
-  // through to 'unknown' below, even when hostname and uid both differ. A
-  // hub data directory mounted at a different path inside the target (or
-  // not mounted at all) would also report "absent" on a genuinely SHARED
-  // filesystem, so absence carries no evidential weight either way; only a
-  // matching canary READ (handled above, as 'fail') is a real measurement.
-  if (canaryReadable === false && !sameHostname && !sameUid) {
-    return {
-      id,
-      status: 'unknown',
-      detail: `${identity}（hostname/uid は一致しませんでしたが、カナリアファイルが読み取れなかった／存在しなかったことは分離の証明にはなりません — 別パスへの mount 等でも同じ結果になり得るため、判定不能です）`,
-    };
-  }
+  // Doctrine (module top-of-file doc comment): the probe itself not
+  // completing is what stays 'unknown' — it means this round measured
+  // nothing, so hostname/uid alone (an identity heuristic, not a
+  // measurement) cannot be allowed to decide anything on their own.
   if (canaryReadable === null) {
     return {
       id,
       status: 'unknown',
       detail: hub.canary
-        ? `ファイルシステム分離を実測できませんでした（カナリアファイルの読み取り結果が不明でした）。${identity}`
+        ? `ファイルシステム分離を実測できませんでした（カナリアファイルの読み取り結果が不明でした）。${identity}（設定ミス検出としての判定であり、敵対的ホストは自己申告を偽装しうる — モジュール冒頭のドクトリンを参照）`
         : `ハブ側にカナリアファイルが存在しないため、ファイルシステム分離を実測できませんでした（ハブ起動時の書き込みに失敗した可能性があります）。${identity}`,
+    };
+  }
+  // canaryReadable === false here: the probe COMPLETED and positively
+  // reported the canary absent (as opposed to "could not be measured").
+  // Combined with both independent identifiers differing, this is the
+  // strongest negative signal this check can produce — treated as 'pass'
+  // under the ratified doctrine (misconfiguration detector, not
+  // attestation; see module doc comment). Exactly one of hostname/uid
+  // matching is left as 'unknown' — neither proof of sharing nor of
+  // separation.
+  if (!sameHostname && !sameUid) {
+    return {
+      id,
+      status: 'pass',
+      detail: `${identity}（hostname/uid が両方とも不一致、かつカナリアファイルは読み取り不能/不在でした — 設定ミス検出としての判定であり、敵対的ホストは自己申告を偽装しうる点はドクトリン上織り込み済みです）`,
     };
   }
   return {

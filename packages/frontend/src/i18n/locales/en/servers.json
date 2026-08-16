@@ -75,7 +75,7 @@
     "isolationDoctorUnverified": "Isolated · Unverified",
     "isolationDoctorNeedsAttention": "Isolated · Needs attention",
     "isolationDoctorNeedsAttentionSub": "The following checks failed or could not be confirmed: {{checks}}",
-    "isolationDoctorSnapshotNotice": "This result is a snapshot taken at verification time. Ongoing enforcement during execution is layer 2's (credential-distribution gate) responsibility.",
+    "isolationDoctorSnapshotNotice": "This result is a snapshot taken at verification time and detects misconfiguration — it is not a guarantee or attestation. It cannot detect an adversarial host itself; that is handled structurally by withholding credentials (layer 2, the credential-distribution gate).",
     "isolationDoctorFailedToast": "Isolation verification failed: {{error}}",
     "isolationDoctorCheckPass": "Pass",
     "isolationDoctorCheckFail": "Fail",

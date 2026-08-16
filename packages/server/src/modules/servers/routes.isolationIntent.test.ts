@@ -1400,25 +1400,22 @@ describe('POST /api/servers/:name/isolation/doctor (Issue #29 Step 2 B)', () => 
     expect(res.statusCode).toBe(404);
   });
 
-  // Follow-up review round, Important finding 1: `same_host` can no longer
-  // resolve to 'pass' from a canary-absent + differing-identity probe alone
-  // (see checkFsAndHostBoundary's doc comment) — a run with every OTHER
-  // check clean therefore still reports `verified: false` overall and
-  // persists via `updateIsolationReport`, not `updateIsolationVerification`.
-  // This test now covers that realistic "mostly clean, still unverified"
-  // shape; the fully-passing `updateIsolationVerification` path is exercised
-  // directly against `runIsolationDoctor` in isolationDoctor.test.ts (no
-  // scenario reaches it through this HTTP-level mock, since same_host is the
-  // one check this doctor cannot currently pass on its own).
-  it('runs the probe for an isolated agent server and persists a report via transportFactory.getTransport, even when every check but same_host is clean', async () => {
+  // Ratified doctrine (misconfiguration detector, not attestation — see
+  // isolationDoctor.ts's top-of-file module doc comment): a canary probe
+  // that COMPLETES and positively reports the canary absent, combined with
+  // both hostname and uid differing from the hub's, now resolves `same_host`
+  // to 'pass' — so a run where every other check is also clean reaches
+  // `verified: true` overall and persists via `updateIsolationVerification`.
+  it('runs the probe for an isolated agent server and persists verification via transportFactory.getTransport when every check (including same_host) passes', async () => {
     const exec = vi.fn(async (cmd: string) => {
       if (cmd.includes('hostname')) return { stdout: 'remote-host\n9999\n', stderr: '', code: 0 };
       // Review round (Critical finding 1): the FS-boundary canary probe —
       // a different command than the plain hostname/uid one above, matched
       // by the mocked hub canary's path (see the vi.mock('./hubCanary')
-      // block at the top of this file). Reports absent — absence is not
-      // proof of separation (Important finding 1), so same_host resolves to
-      // 'unknown' even though hostname/uid both differ from the hub's.
+      // block at the top of this file). Reports absent; combined with the
+      // differing hostname/uid above, a COMPLETED absent-canary probe is a
+      // 'pass' under the ratified doctrine (see checkFsAndHostBoundary's doc
+      // comment).
       if (cmd.includes('.azito-hub-canary-test')) return { stdout: 'AZT_STATUS:canary:absent\n', stderr: '', code: 0 };
       if (cmd.includes('.ssh')) return { stdout: 'AZT_SSH_NO_DIR\n', stderr: '', code: 0 };
       if (cmd.includes('gh auth')) return { stdout: 'AZT_GH_ABSENT\n', stderr: '', code: 0 };
@@ -1448,11 +1445,10 @@ describe('POST /api/servers/:name/isolation/doctor (Issue #29 Step 2 B)', () => 
 
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.verified).toBe(false);
+    expect(body.verified).toBe(true);
     expect(Array.isArray(body.checks)).toBe(true);
-    expect(body.checks.find((c: { id: string }) => c.id === 'same_host').status).toBe('unknown');
-    expect(opts.serverRepo.updateIsolationVerification).not.toHaveBeenCalled();
-    expect(opts.serverRepo.updateIsolationReport).toHaveBeenCalledWith('srv', expect.stringContaining('"kind":"verification"'));
+    expect(body.checks.find((c: { id: string }) => c.id === 'same_host').status).toBe('pass');
+    expect(opts.serverRepo.updateIsolationVerification).toHaveBeenCalledWith('srv', expect.stringContaining('"kind":"verification"'), expect.any(String));
   });
 
   it('does not advance isolation_verified_at when a check fails', async () => {

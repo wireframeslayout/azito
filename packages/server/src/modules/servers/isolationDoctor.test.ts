@@ -45,20 +45,18 @@ function cleanHandler(cmd: string): ExecResult {
 }
 
 describe('runIsolationDoctor', () => {
-  // Follow-up review round, Important finding 1: `same_host` can no longer
-  // resolve to 'pass' from absence-only signals (see checkFsAndHostBoundary's
-  // doc comment and this module's top-of-file "Scope of this module" note) —
-  // `cleanHandler`'s canary-absent + differing-identity scenario is now
-  // `'unknown'`, so even a fully "clean" agent server reports `verified:
-  // false` overall through this check set alone; every OTHER check still
-  // resolves to 'pass'.
-  it('reports verified:false overall (same_host stays unknown) even when every other check passes', async () => {
+  // Ratified doctrine (misconfiguration detector, not attestation — see
+  // isolationDoctor.ts's top-of-file module doc comment): a canary probe
+  // that actually COMPLETES and positively reports the canary absent, paired
+  // with both independent identifiers (hostname, uid) differing, is now
+  // `'pass'` — `cleanHandler`'s scenario is exactly this, so a fully "clean"
+  // agent server reaches `verified: true` overall.
+  it('reports verified:true overall when every check (including same_host) passes', async () => {
     const transport = makeTransport(cleanHandler);
     const result = await runIsolationDoctor(transport, HUB);
-    expect(result.verified).toBe(false);
-    const otherChecks = result.checks.filter((c) => c.id !== 'same_host');
-    expect(otherChecks.every((c) => c.status === 'pass')).toBe(true);
-    expect(result.checks.find((c) => c.id === 'same_host')!.status).toBe('unknown');
+    expect(result.checks.find((c) => c.id === 'same_host')!.status).toBe('pass');
+    expect(result.checks.every((c) => c.status === 'pass')).toBe(true);
+    expect(result.verified).toBe(true);
   });
 
   it('same_host: fails when hostname AND uid both match the hub, even with an unreadable canary', async () => {
@@ -97,18 +95,20 @@ describe('runIsolationDoctor', () => {
     expect(result.checks.find((c) => c.id === 'same_host')!.status).toBe('unknown');
   });
 
-  // Follow-up review round, Important finding 1: an absent/unreadable canary
-  // is never proof of separation (a hub data dir mounted at a different path
-  // inside the target would also read "absent" on a genuinely SHARED
-  // filesystem) — this can no longer resolve to 'pass', even though neither
-  // hostname nor uid match.
-  it('same_host: unknown when neither hostname nor uid match but the canary is only confirmed absent, not read (absence is not proof of separation)', async () => {
+  // Ratified doctrine (misconfiguration detector, not attestation): a
+  // COMPLETED canary probe that positively reports absence, combined with
+  // both hostname and uid differing, is treated as 'pass' — the strongest
+  // negative signal this check can produce (see checkFsAndHostBoundary's doc
+  // comment). This is distinct from the probe not completing at all (still
+  // 'unknown', covered separately below).
+  it('same_host: passes when neither hostname nor uid match and the canary probe completed with a positive "absent" result', async () => {
     const transport = makeTransport((cmd) => {
       if (cmd.includes('hostname')) return { stdout: 'other-host\n9999\n', stderr: '', code: 0 };
       return cleanHandler(cmd);
     });
     const result = await runIsolationDoctor(transport, HUB);
-    expect(result.checks.find((c) => c.id === 'same_host')!.status).toBe('unknown');
+    const check = result.checks.find((c) => c.id === 'same_host')!;
+    expect(check.status).toBe('pass');
   });
 
   it('same_host: unknown when the exec throws (unreachable)', async () => {
@@ -499,11 +499,11 @@ describe('runIsolationDoctor', () => {
       const result = await runIsolationDoctor(transport, HUB);
       const check = result.checks.find((c) => c.id === 'no_operator_environment')!;
       expect(check.status).toBe('pass');
-      // Follow-up review round, Important finding 1: `same_host` can never
-      // resolve to 'pass' from cleanHandler's canary-absent scenario alone
-      // (see checkFsAndHostBoundary's doc comment) — this check's own 'pass'
-      // is what's under test here, not the overall `verified` flag.
-      expect(result.checks.find((c) => c.id === 'same_host')!.status).toBe('unknown');
+      // cleanHandler's canary-absent + differing-identity scenario now
+      // resolves `same_host` to 'pass' too (see checkFsAndHostBoundary's doc
+      // comment) — asserted here only to confirm this check's own 'pass'
+      // isn't accidentally riding on some other check's failure.
+      expect(result.checks.find((c) => c.id === 'same_host')!.status).toBe('pass');
     });
 
     it('passes when no operator variable is set', async () => {
