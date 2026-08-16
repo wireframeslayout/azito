@@ -329,7 +329,7 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
   const taskEvents = new EventEmitter();
   const originationService = new TaskOriginationService(repos.taskRepo, repos.auditLogService);
   const taskPaneEnvironmentService = new TaskPaneEnvironmentService(repos.taskTokenRepo, repos.projectSecretRepo, uiToken, scopedAuthEnabled, repos.auditLogService);
-  const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.tmuxClient, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, repos.serverRepo, repos.projectSecretRepo, taskEvents, taskPaneEnvironmentService, infra.serverIsolationMutex, sessionCaptureService);
+  const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.tmuxClient, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, repos.serverRepo, repos.projectSecretRepo, taskEvents, taskPaneEnvironmentService, infra.serverIsolationMutex, scopedAuthEnabled, sessionCaptureService);
   const taskRestoreService = new TaskRestoreService({
     taskRepo: repos.taskRepo,
     serverRepo: repos.serverRepo,
@@ -348,6 +348,7 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
     events: taskEvents,
     paneEnvService: taskPaneEnvironmentService,
     serverIsolationMutex: infra.serverIsolationMutex,
+    scopedAuthEnabled,
   });
   // windowSessionResolver / windowActivityStatusService: shared by transcriptsRoutes
   // (session resolution), windowsRoutes (GET /api/windows/activity-status, diagnostics)
@@ -369,6 +370,7 @@ function buildExecuteTaskUseCase(
   repos: Repositories,
   appServices: ApplicationServices,
   resourceGuard: ResourceGuard,
+  scopedAuthEnabled: boolean,
 ): ExecuteTaskUseCase {
   return new ExecuteTaskUseCase(
     repos.taskRepo,
@@ -397,6 +399,7 @@ function buildExecuteTaskUseCase(
     appServices.taskEvents,
     appServices.taskPaneEnvironmentService,
     infra.serverIsolationMutex,
+    scopedAuthEnabled,
   );
 }
 
@@ -488,7 +491,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   const agentUpdater = buildAgentUpdater(agentBundler, infra, repos);
   const appServices = buildApplicationServices(infra, repos, uiToken, scopedAuthEnabled);
   const resourceGuard = new ResourceGuard(infra.transportFactory, repos.resourceGuardSettingsRepo);
-  const executeTaskUseCase = buildExecuteTaskUseCase(infra, repos, appServices, resourceGuard);
+  const executeTaskUseCase = buildExecuteTaskUseCase(infra, repos, appServices, resourceGuard, scopedAuthEnabled);
   const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService, appServices.windowActivityStatusService);
   const interactionMonitor = new InteractionMonitor(repos.windowRepo);
   const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos);

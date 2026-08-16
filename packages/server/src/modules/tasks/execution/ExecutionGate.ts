@@ -89,11 +89,14 @@ export function checkExecutionGate(
   if (task.inputTrust !== 'untrusted') return { allowed: true };
 
   if (policy === 'deny') return { allowed: false, reason: 'denied' };
-  // 'allow' is reserved for a future isolated execution profile and is not
-  // reachable today — PUT /api/projects/:id/servers/:serverName rejects
-  // setting it (see modules/projects/routes.ts) — but the check is kept
-  // explicit rather than falling through, so this module stays correct the
-  // day that profile ships and the API restriction is lifted.
+  // Issue #29 Step 3a: `policy` here is always the EFFECTIVE policy — every
+  // call site resolves it via `resolveEffectiveInputPolicy()` (projects/
+  // ProjectServer.ts), which already applies the 3-point AND gate (server
+  // isolation intent + a current doctor verification + scoped auth enabled)
+  // and downgrades to 'manual-approval' the moment any of those isn't true.
+  // By the time 'allow' reaches this pure comparator, it has already been
+  // proven safe to skip approval for — this function itself still does no
+  // repository access and re-checks nothing.
   if (policy === 'allow') return { allowed: true };
 
   // A block already outstanding always wins over a hash match — see this

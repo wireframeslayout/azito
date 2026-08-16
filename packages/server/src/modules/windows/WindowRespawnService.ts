@@ -6,7 +6,7 @@ import type { ITaskRepository, Task } from '../tasks/Task';
 import type { IUnitRepository } from '../units/Unit';
 import type { IProjectRepository } from '../projects/Project';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
-import { resolveInputPolicy } from '../projects/ProjectServer';
+import { resolveEffectiveInputPolicy } from '../projects/ProjectServer';
 import type { IServerRepository } from '../servers/Server';
 import type { SqliteProjectSecretRepository } from '../projects/SqliteProjectSecretRepository';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
@@ -158,6 +158,11 @@ export class WindowRespawnService {
     // window env from a `server` a concurrent transition has already
     // superseded. See ServerIsolationLock's doc comment in WindowRotation.ts.
     private serverIsolationMutex: KeyedMutex,
+    // Issue #29 Step 3a: same flag ExecuteTaskUseCase/PhaseLoopRunner/
+    // TaskRestoreService are constructed with — enforceExecutionGate() below
+    // needs it for resolveEffectiveInputPolicy(). Placed before the optional
+    // sessionCaptureService (required params must precede optional ones).
+    private scopedAuthEnabled: boolean,
     private sessionCaptureService?: SessionCaptureService,
   ) {}
 
@@ -498,7 +503,20 @@ export class WindowRespawnService {
     }, respawnInput, server.name);
     const unitId = unit?.id ?? null;
     const manifestHash = hashExecutionManifest(manifest);
-    const gate = checkExecutionGate(task, resolveInputPolicy(projectServer), manifestHash);
+    // Issue #29 Step 3a: `server` is the caller-resolved ACTUAL target
+    // server for this respawn (see the comment on this method's `server`
+    // param above) — same re-check every other entry point runs, see
+    // resolveEffectiveInputPolicy's doc comment.
+    const effective = resolveEffectiveInputPolicy(projectServer, server, this.scopedAuthEnabled);
+    if (unitId !== null && effective.allowDegradedReason) {
+      appendLogAndEmit(this.logRepo, this.events, task.id, unitId, 'command', {
+        type: 'execution_policy_degraded',
+        requestedPolicy: effective.requestedPolicy,
+        effectivePolicy: effective.effectivePolicy,
+        allowDegradedReason: effective.allowDegradedReason,
+      });
+    }
+    const gate = checkExecutionGate(task, effective.effectivePolicy, manifestHash);
     if (gate.allowed) return unitId;
 
     if (unitId !== null) {

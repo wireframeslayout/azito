@@ -8,7 +8,7 @@ import type { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
 import type { IWorkerRuntime, WorkerContext } from './runtime/IWorkerRuntime';
 import type { IProjectRepository } from '../../projects/Project';
 import type { IProjectServerRepository } from '../../projects/ProjectServer';
-import { resolveInputPolicy } from '../../projects/ProjectServer';
+import { resolveEffectiveInputPolicy } from '../../projects/ProjectServer';
 import type { IServerRepository } from '../../servers/Server';
 import type { SqliteProjectSecretRepository } from '../../projects/SqliteProjectSecretRepository';
 import type { PhaseConfig } from '../../sidekicks/PhaseConfig';
@@ -99,6 +99,12 @@ export class PhaseLoopRunner {
     // depend on these repositories.
     private serverRepo: IServerRepository,
     private projectSecretRepo: SqliteProjectSecretRepository,
+    // Issue #29 Step 3a: same flag ExecuteTaskUseCase is constructed with
+    // (it constructs this class and passes its own copy through) — needed by
+    // reverifyExecutionGateForPhase()'s resolveEffectiveInputPolicy() call
+    // below, so a per-phase re-verification degrades 'allow' exactly the way
+    // the run's original entry-point check did.
+    private scopedAuthEnabled: boolean,
   ) {}
 
   private async findPrUrl(task: { projectId: number }, branch: string | null): Promise<string | null> {
@@ -149,7 +155,7 @@ export class PhaseLoopRunner {
   private reverifyExecutionGateForPhase(taskId: number, currentTask: Task, loopUnitId: number): boolean {
     if (currentTask.inputTrust !== 'untrusted') return true;
 
-    const { manifest, projectServer } = resolveExecutionManifest(currentTask, {
+    const { manifest, projectServer, serverConfig } = resolveExecutionManifest(currentTask, {
       unitRepo: this.unitRepo,
       projectRepo: this.projectRepo,
       projectServerRepo: this.projectServerRepo,
@@ -159,8 +165,10 @@ export class PhaseLoopRunner {
       sidekickLoader: this.sidekickLoader,
     });
     const manifestHash = hashExecutionManifest(manifest);
-    const gate = checkExecutionGate(currentTask, resolveInputPolicy(projectServer), manifestHash);
-    if (gate.allowed) return true;
+    // Issue #29 Step 3a: same re-check as ExecuteTaskUseCase.enforceExecutionGate
+    // — see resolveEffectiveInputPolicy's doc comment.
+    const effective = resolveEffectiveInputPolicy(projectServer, serverConfig, this.scopedAuthEnabled);
+    const gate = checkExecutionGate(currentTask, effective.effectivePolicy, manifestHash);
 
     // Resolve a Unit id to attach log entries to WITHOUT ever falling back to
     // a dummy value (Issue #328 review round fix 4): execution_log.unit_id is
@@ -174,8 +182,21 @@ export class PhaseLoopRunner {
     // by stateMachineLoop() — but ONLY if it still resolves; otherwise skip
     // the unit-scoped log entirely (unitId stays null below) while still
     // recording the task-level gate transition (recordExecutionGateBlock /
-    // updateStatus), which has no such foreign-key dependency.
+    // updateStatus), which has no such foreign-key dependency. Resolved here
+    // (before the `gate.allowed` fast-return) so a degraded 'allow' can be
+    // logged even on a phase that a stale manual-approval match still lets
+    // through unattended (Issue #29 Step 3a).
     const unitId = manifest.unit?.id ?? (this.unitRepo.findById(loopUnitId) ? loopUnitId : null);
+    if (unitId !== null && effective.allowDegradedReason) {
+      this.appendLog(taskId, unitId, 'command', {
+        type: 'execution_policy_degraded',
+        requestedPolicy: effective.requestedPolicy,
+        effectivePolicy: effective.effectivePolicy,
+        allowDegradedReason: effective.allowDegradedReason,
+      });
+    }
+    if (gate.allowed) return true;
+
     if (unitId !== null) {
       this.appendLog(taskId, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
     }

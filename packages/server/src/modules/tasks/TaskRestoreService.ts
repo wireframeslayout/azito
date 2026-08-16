@@ -3,7 +3,7 @@ import type { TaskStatus } from './TaskStatus';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { IProjectRepository } from '../projects/Project';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
-import { resolveInputPolicy } from '../projects/ProjectServer';
+import { resolveEffectiveInputPolicy } from '../projects/ProjectServer';
 import type { IUnitRepository } from '../units/Unit';
 import type { IWindowRepository } from '../windows/Window';
 import type { SqliteProjectSecretRepository } from '../projects/SqliteProjectSecretRepository';
@@ -70,6 +70,11 @@ export interface TaskRestoreDeps {
   // already superseded. See ServerIsolationLock's doc comment in
   // WindowRotation.ts.
   serverIsolationMutex: KeyedMutex;
+  // Issue #29 Step 3a: same flag ExecuteTaskUseCase/PhaseLoopRunner are
+  // constructed with — restore()'s own execution-gate re-check below needs
+  // it for resolveEffectiveInputPolicy(), the same as every other entry
+  // point.
+  scopedAuthEnabled: boolean;
 }
 
 export class TaskRestoreService {
@@ -82,7 +87,7 @@ export class TaskRestoreService {
   }
 
   async restore(task: Task, log: { warn: (msg: string) => void }): Promise<{ tmuxTarget: string; worktreePath: string | null }> {
-    const { taskRepo, serverRepo, projectRepo, projectServerRepo, unitRepo, windowRepo, tmux, worktreeServiceFactory, transportFactory, contentExtractor, logRepo, unitTypeLoader, sidekickLoader, projectSecretRepo, events, paneEnvService } = this.deps;
+    const { taskRepo, serverRepo, projectRepo, projectServerRepo, unitRepo, windowRepo, tmux, worktreeServiceFactory, transportFactory, contentExtractor, logRepo, unitTypeLoader, sidekickLoader, projectSecretRepo, events, paneEnvService, scopedAuthEnabled } = this.deps;
 
     const serverName = resolveTaskServerName(task, projectServerRepo);
     if (!serverName) {
@@ -113,7 +118,20 @@ export class TaskRestoreService {
     const { manifest, project, unit, projectServer } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader });
     const unitId = unit?.id ?? null;
     const manifestHash = hashExecutionManifest(manifest);
-    const gate = checkExecutionGate(task, resolveInputPolicy(projectServer), manifestHash);
+    // Issue #29 Step 3a: `server` here is the already-resolved ServerConfig
+    // (serverAtStart, re-read fresh under the isolation lock further down) —
+    // same re-check every other entry point runs, see
+    // resolveEffectiveInputPolicy's doc comment.
+    const effective = resolveEffectiveInputPolicy(projectServer, server, scopedAuthEnabled);
+    if (unitId !== null && effective.allowDegradedReason) {
+      appendLogAndEmit(logRepo, events, task.id, unitId, 'command', {
+        type: 'execution_policy_degraded',
+        requestedPolicy: effective.requestedPolicy,
+        effectivePolicy: effective.effectivePolicy,
+        allowDegradedReason: effective.allowDegradedReason,
+      });
+    }
+    const gate = checkExecutionGate(task, effective.effectivePolicy, manifestHash);
     if (!gate.allowed) {
       if (unitId !== null) {
         appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });

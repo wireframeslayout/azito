@@ -5,7 +5,7 @@ import type { Task } from '../Task';
 import type { IUnitRepository, SubagentConfig, Unit } from '../../units/Unit';
 import type { IProjectRepository, ProjectDetail } from '../../projects/Project';
 import type { IProjectServerRepository, ProjectServer } from '../../projects/ProjectServer';
-import type { IServerRepository } from '../../servers/Server';
+import type { IServerRepository, ServerConfig } from '../../servers/Server';
 import type { SqliteProjectSecretRepository } from '../../projects/SqliteProjectSecretRepository';
 import type { PhaseConfig } from '../../sidekicks/PhaseConfig';
 import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoader';
@@ -777,6 +777,21 @@ export interface ExecutionManifestResolution {
   unit: Unit | null;
   serverName: string | null;
   projectServer: ProjectServer | null;
+  /**
+   * The full resolved `servers` row for `serverName` (Issue #29 Step 3a), or
+   * `null` under the same conditions `manifest.server.isolationIntent`
+   * already tolerates (no resolvable `serverName`, or the row was deleted
+   * after being registered). Exists alongside `manifest.server` (which only
+   * carries the fields the approval fingerprint hashes) because
+   * `resolveEffectiveInputPolicy` (projects/ProjectServer.ts) additionally
+   * needs `isolationVerifiedAt` — deliberately NOT part of the manifest/
+   * fingerprint (a doctor re-verification must not self-invalidate an
+   * already-approved manual-approval task; see the manifest's own "server"
+   * field doc comment for the excluded-fields rationale). Every
+   * `checkExecutionGate` call site resolves the effective policy from THIS
+   * field, not by re-querying `serverRepo` a second time.
+   */
+  serverConfig: ServerConfig | null;
 }
 
 export interface ExecutionManifestDeps {
@@ -1017,7 +1032,7 @@ export function resolveExecutionManifest(
     respawn: respawnInput ?? null,
   };
 
-  return { manifest, project, unit, serverName, projectServer };
+  return { manifest, project, unit, serverName, projectServer, serverConfig };
 }
 
 function normalizeSubagent(cfg: SubagentConfig | null): { enabled: boolean; provider: string; model: string } | null {

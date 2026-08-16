@@ -7,7 +7,7 @@ import { usesHttpSignalPath } from '../../units/Unit';
 import type { IServerRepository } from '../../servers/Server';
 import type { IProjectRepository } from '../../projects/Project';
 import type { IProjectServerRepository } from '../../projects/ProjectServer';
-import { resolveInputPolicy } from '../../projects/ProjectServer';
+import { resolveEffectiveInputPolicy } from '../../projects/ProjectServer';
 import type { SqliteProjectSecretRepository } from '../../projects/SqliteProjectSecretRepository';
 import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoader';
 import type { SidekickSyncService } from '../../sidekicks/SidekickSyncService';
@@ -140,6 +140,14 @@ export class ExecuteTaskUseCase {
     // in WindowRotation.ts for why env-resolution must be locked+refetched
     // through this exact key).
     private serverIsolationMutex: KeyedMutex,
+    // Issue #29 Step 3a: threaded through to enforceExecutionGate() below and
+    // to the PhaseLoopRunner instance this class constructs (its own
+    // per-phase re-verification needs the identical flag) — resolved ONCE at
+    // the composition root (app/wiring.ts, shared/auth/scopedAuthFlag.ts) and
+    // passed down, never re-read from process.env here (Resolve at the
+    // Boundary). Required (not optional) so a caller can never forget to
+    // wire it and silently fall back to treating scoped auth as enabled.
+    private scopedAuthEnabled: boolean,
   ) {
     this.gitInfoCollector = new GitInfoCollector(this.tmux);
     this.pushVerifier = new PushVerifier(this.tmux, this.gitProvider);
@@ -187,6 +195,7 @@ export class ExecuteTaskUseCase {
       this.runtimeRegistry,
       this.serverRepo,
       this.projectSecretRepo,
+      this.scopedAuthEnabled,
     );
   }
 
@@ -297,7 +306,7 @@ export class ExecuteTaskUseCase {
     // fingerprint of RESOLVED execution content instead of raw task columns
     // (see ExecutionManifest.ts). `project`/`projectServer` returned here are
     // reused by execute()'s working-directory logic below, same as before.
-    const { manifest, project, projectServer } = resolveExecutionManifest(task, {
+    const { manifest, project, projectServer, serverConfig } = resolveExecutionManifest(task, {
       unitRepo: this.unitRepo,
       projectRepo: this.projectRepo,
       projectServerRepo: this.projectServerRepo,
@@ -307,7 +316,21 @@ export class ExecuteTaskUseCase {
       sidekickLoader: this.sidekickLoader,
     });
     const manifestHash = hashExecutionManifest(manifest);
-    const gate = checkExecutionGate(task, resolveInputPolicy(projectServer), manifestHash);
+    // Issue #29 Step 3a: the 3-point AND gate for 'allow' is re-evaluated on
+    // every entry point, not just resolved once at approval time — see
+    // resolveEffectiveInputPolicy's own doc comment for why (isolation
+    // verification is a live, time-bounded fact, not something a human
+    // approval should freeze).
+    const effective = resolveEffectiveInputPolicy(projectServer, serverConfig, this.scopedAuthEnabled);
+    if (effective.allowDegradedReason) {
+      this.appendLog(task.id, unitId, 'command', {
+        type: 'execution_policy_degraded',
+        requestedPolicy: effective.requestedPolicy,
+        effectivePolicy: effective.effectivePolicy,
+        allowDegradedReason: effective.allowDegradedReason,
+      });
+    }
+    const gate = checkExecutionGate(task, effective.effectivePolicy, manifestHash);
     if (gate.allowed) return { project, projectServer };
 
     this.appendLog(task.id, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
