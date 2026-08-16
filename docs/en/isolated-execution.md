@@ -407,7 +407,10 @@ sudo reboot
 # after reboot:
 sudo nft list ruleset                 # or: sudo iptables -L -n -v / sudo ip6tables -L -n -v
 tailscale status                      # confirms the tailnet connection is alive (underlay not blocked)
-curl -v <hub-webhook-url>             # confirms reachability to the hub (agentPort connectivity)
+curl -v <hub-webhook-url>             # isolated -> hub webhook path (OUTBOUND direction only)
+# The INBOUND direction (hub -> this server's <agent-port>) is not tested by the curl above.
+# Verify it from the HUB instead — e.g. the hub's server detail / isolation doctor must reach
+# this agent; a green doctor run confirms inbound agentPort control is working.
 ```
 
 ### Planned future work

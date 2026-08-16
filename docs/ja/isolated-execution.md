@@ -397,7 +397,10 @@ sudo reboot
 # 再起動後:
 sudo nft list ruleset                 # または: sudo iptables -L -n -v / sudo ip6tables -L -n -v
 tailscale status                      # tailnet 接続が生きていること（underlay が塞がれていないこと）を確認
-curl -v <hub-webhook-url>             # hub への到達性を確認（agentPort への接続確認）
+curl -v <hub-webhook-url>             # 隔離サーバー -> hub の webhook 経路（OUTBOUND 方向のみ）
+# INBOUND 方向（hub -> このサーバーの <agent-port>）は上記 curl では検証できません。
+# こちらは hub 側から確認してください。例: hub のサーバー詳細 / isolation doctor がこの agent に
+# 到達できること。doctor が green になれば inbound の agentPort 制御が働いていることを確認できます。
 ```
 
 ### 将来計画
