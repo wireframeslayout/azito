@@ -185,8 +185,20 @@ SSH lateral movement *within the tailnet*; blocking public-internet/LAN paths re
 persistent host firewall in the next subsection, applied in addition to this ACL, not instead of
 it.
 
-Tag the isolated server `tag:isolated`, deny Tailscale SSH from that tag to every destination, and
-allow outbound only to the hub's webhook port. Example ACL:
+There are **two directions** of traffic between the hub and an isolated server, and they carry
+different intent. The ACL needs to distinguish and allow both:
+
+- **hub → isolated server (inbound)**: the hub dials out to the `agent`-type server's HTTP/WS port
+  for exec, terminal, and doctor probes. The destination is the isolated server's `agentPort` (the
+  agent process's listen port — fixed at install time; get the value from your AZITO configuration)
+- **isolated server → hub (outbound)**: the isolated server's hook scripts POST webhooks
+  (`agent-done`, `agent-activity`, etc.) to the hub. The destination is the hub's webhook port (the
+  hub's listen port as reachable via `AZITO_PUBLIC_URL` — get the value from your AZITO
+  configuration)
+
+Tag the isolated server `tag:isolated`, allow only those two directions, and implicitly deny
+everything else to/from the isolated server (including lateral movement to other nodes). Example
+ACL:
 
 ```jsonc
 {
@@ -194,8 +206,10 @@ allow outbound only to the hub's webhook port. Example ACL:
     "tag:isolated": ["autogroup:admin"],
   },
   "acls": [
-    // outbound from the isolated server is allowed only to the hub's webhook port
-    { "action": "accept", "src": ["tag:isolated"], "dst": ["<hub-tailscale-ip>:3001"] },
+    // hub -> isolated server: allow reaching the agent's HTTP/WS port (agentPort)
+    { "action": "accept", "src": ["<hub-tailscale-ip>"], "dst": ["tag:isolated:<agent-port>"] },
+    // isolated server -> hub: allow outbound only to the hub's webhook port
+    { "action": "accept", "src": ["tag:isolated"], "dst": ["<hub-tailscale-ip>:<hub-webhook-port>"] },
     // everything else from the isolated server is implicitly denied (allowlist model)
   ],
   "ssh": [
@@ -219,9 +233,16 @@ complement to the tailnet ACL, whether or not Tailscale is in use.
 `iptables` only covers IPv4 — omitting `ip6tables` lets **IPv6 egress bypass the rule set
 entirely**. `nftables` is recommended since it can cover both families in one rule set;
 `iptables`/`ip6tables` in tandem (with the exact same rules applied to both) is equally effective.
-Below is a complete stateful rule set: allow loopback → allow established/related traffic →
-explicitly allow the required hub<->agent traffic → deny everything else (replace the hub
-address/port with your environment's values):
+
+Because traffic is asymmetric (previous subsection), the **INPUT chain** (inbound to the isolated
+server) and the **OUTPUT chain** (outbound from it) need different rules. The common order is:
+allow loopback → allow established/related traffic → explicitly allow the required traffic → deny
+everything else. Replace the hub address and each port (`<agent-port>` is this server's
+`agentPort`; `<hub-webhook-port>` is the hub's webhook port) with your environment's values.
+
+**Important**: the commands below only apply the rules at runtime via `nft`/`iptables` — **they
+are wiped out on reboot as-is**. In production you must also complete the "Making it persistent"
+step in the next subsection.
 
 ```bash
 # --- nftables (recommended: one rule set covers IPv4 and IPv6) ---
@@ -233,15 +254,19 @@ nft add chain inet isolated input  '{ type filter hook input  priority 0; policy
 nft add rule inet isolated output oif lo accept
 nft add rule inet isolated input  iif lo accept
 
-# Allow established/related traffic (required: the hub's inbound response
-# lands on the hub's ephemeral port — without this rule the agent becomes
-# unreachable from the hub)
+# Allow established/related traffic (needed in both directions)
 nft add rule inet isolated output ct state established,related accept
 nft add rule inet isolated input  ct state established,related accept
 
-# Allow only new outbound connections to the hub's webhook/agent port
-nft add rule inet isolated output ip  daddr <hub-ipv4> tcp dport 3001 ct state new accept
-nft add rule inet isolated output ip6 daddr <hub-ipv6> tcp dport 3001 ct state new accept
+# INPUT: allow only new inbound connections from the hub to this server's agentPort
+# (the path the hub uses to dial in for exec/terminal/doctor probes)
+nft add rule inet isolated input ip  saddr <hub-ipv4> tcp dport <agent-port> ct state new accept
+nft add rule inet isolated input ip6 saddr <hub-ipv6> tcp dport <agent-port> ct state new accept
+
+# OUTPUT: allow only new outbound connections to the hub's webhook port
+# (the path hook scripts use to POST agent-done / agent-activity; the main point is blocking lateral movement to other nodes)
+nft add rule inet isolated output ip  daddr <hub-ipv4> tcp dport <hub-webhook-port> ct state new accept
+nft add rule inet isolated output ip6 daddr <hub-ipv6> tcp dport <hub-webhook-port> ct state new accept
 
 # Everything else is denied automatically (chain policy is drop; no
 # explicit rule needed for packets that don't match anything above)
@@ -254,18 +279,53 @@ for CMD in iptables ip6tables; do
   # Always allow loopback
   $CMD -A OUTPUT -o lo -j ACCEPT
   $CMD -A INPUT  -i lo -j ACCEPT
-  # Allow established/related traffic (required for the hub's inbound response)
+  # Allow established/related traffic (needed in both directions)
   $CMD -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
   $CMD -A INPUT  -m state --state ESTABLISHED,RELATED -j ACCEPT
 done
-# Allow only new outbound connections to the hub's webhook/agent port (IPv4 and IPv6 each)
-iptables  -A OUTPUT -d <hub-ipv4> -p tcp --dport 3001 -m state --state NEW -j ACCEPT
-ip6tables -A OUTPUT -d <hub-ipv6> -p tcp --dport 3001 -m state --state NEW -j ACCEPT
+# INPUT: allow only new inbound connections from the hub to this server's agentPort (IPv4 and IPv6 each)
+iptables  -A INPUT -s <hub-ipv4> -p tcp --dport <agent-port> -m state --state NEW -j ACCEPT
+ip6tables -A INPUT -s <hub-ipv6> -p tcp --dport <agent-port> -m state --state NEW -j ACCEPT
+# OUTPUT: allow only new outbound connections to the hub's webhook port (IPv4 and IPv6 each)
+iptables  -A OUTPUT -d <hub-ipv4> -p tcp --dport <hub-webhook-port> -m state --state NEW -j ACCEPT
+ip6tables -A OUTPUT -d <hub-ipv6> -p tcp --dport <hub-webhook-port> -m state --state NEW -j ACCEPT
 # Deny everything else
 for CMD in iptables ip6tables; do
   $CMD -A OUTPUT -j REJECT
   $CMD -A INPUT  -j REJECT
 done
+```
+
+### Making it persistent (surviving reboot)
+
+Runtime commands alone are wiped on reboot, silently removing lateral-movement protection. You
+**must** persist the rules with one of the following, so they are always in effect.
+
+**nftables**: write the rule set above into `/etc/nftables.conf` verbatim (as a
+`table inet isolated { ... }` block with both chains), then enable the service:
+
+```bash
+sudo systemctl enable --now nftables.service
+```
+
+**iptables**: save with `iptables-persistent` (Debian/Ubuntu):
+
+```bash
+sudo apt-get install -y iptables-persistent
+sudo netfilter-persistent save        # saves the current iptables AND ip6tables rules
+sudo systemctl enable netfilter-persistent
+```
+
+**Verify after reboot**: reboot and confirm the rules are actually in effect — do not assume they
+are.
+
+```bash
+sudo reboot
+# after reboot:
+sudo nft list ruleset                 # nftables: confirm the rules above are listed
+# or
+sudo iptables  -L -n -v               # iptables: confirm the INPUT/OUTPUT allow/deny rules
+sudo ip6tables -L -n -v               # always check ip6tables too — don't stop at IPv4
 ```
 
 ### Planned future work

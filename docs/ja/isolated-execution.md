@@ -179,8 +179,18 @@ doctor の実行が1つでも `fail`/`unknown` を含んで完了した場合、
 不十分です。下記の ACL 例はあくまで「tailnet 内での SSH 横移動」を塞ぐものであり、
 public/LAN 経路の遮断には次項の恒常的なホストファイアウォールが別途必要です。
 
-隔離サーバーに `tag:isolated` を付与し、その tag からの Tailscale SSH を全宛先で拒否、
-outbound はハブの webhook ポートのみ許可する ACL 例:
+ハブと隔離サーバーの間には、性質の異なる **2方向の通信**があります。ACL はこの両方を
+区別して許可する必要があります。
+
+- **hub → 隔離サーバー（inbound）**: ハブが `agent` 型サーバーへコマンド実行・ターミナル・
+  doctor プローブ等のために**接続を張る**方向。宛先は隔離サーバーの `agentPort`（agent
+  プロセスの listen ポート。AZITO の設定から取得。既定値は導入時に固定される）
+- **隔離サーバー → hub（outbound）**: 隔離サーバー上の hook スクリプトが `agent-done` /
+  `agent-activity` などの webhook を hub へ POST する方向。宛先はハブの webhook ポート
+  （`AZITO_PUBLIC_URL` が指すハブの listen ポート。AZITO の設定から取得）
+
+隔離サーバーに `tag:isolated` を付与し、上記2方向のみを許可、それ以外の隔離サーバー発着の
+通信（他ノードへの横移動を含む）を暗黙 deny とする ACL 例:
 
 ```jsonc
 {
@@ -188,9 +198,11 @@ outbound はハブの webhook ポートのみ許可する ACL 例:
     "tag:isolated": ["autogroup:admin"],
   },
   "acls": [
-    // 隔離サーバーからの outbound は、ハブの webhook ポートのみ許可
-    { "action": "accept", "src": ["tag:isolated"], "dst": ["<hub-tailscale-ip>:3001"] },
-    // それ以外の隔離サーバー発の通信は暗黙 deny（allowlist 方式）
+    // hub → 隔離サーバー: agent の HTTP/WS ポート（agentPort）への接続を許可
+    { "action": "accept", "src": ["<hub-tailscale-ip>"], "dst": ["tag:isolated:<agent-port>"] },
+    // 隔離サーバー → hub: webhook ポートへの outbound のみ許可
+    { "action": "accept", "src": ["tag:isolated"], "dst": ["<hub-tailscale-ip>:<hub-webhook-port>"] },
+    // それ以外の隔離サーバーの通信は暗黙 deny（allowlist 方式）
   ],
   "ssh": [
     // 隔離サーバー "への" SSH は運用上必要な範囲でのみ許可（別途定義）
@@ -212,9 +224,16 @@ IPv6）のホストファイアウォールが別途必要です。Tailscale 使
 
 `iptables` は IPv4 のみを対象とするため、`ip6tables` を省略すると **IPv6 の egress が素通り**
 します。IPv4/IPv6 を一体で書ける `nftables` を推奨しますが、`iptables`/`ip6tables` の組でも
-同内容を両方に適用すれば同等です。以下は完全な stateful ルールセットの例（ループバック許可 →
-確立済み/関連トラフィック許可 → 必要な hub↔agent トラフィックの明示許可 → 残りを拒否、の順。
-ハブのアドレスとポートは環境に合わせて置き換え）:
+同内容を両方に適用すれば同等です。
+
+前項のとおり通信は2方向あるため、**INPUT chain**（隔離サーバーへの inbound）と **OUTPUT
+chain**（隔離サーバーからの outbound）を非対称に扱います。共通の順序は、ループバック許可 →
+確立済み/関連トラフィック許可 → 必要なトラフィックの明示許可 → 残りを拒否、です。ハブの
+アドレスと各ポート（`<agent-port>` はこのサーバーの `agentPort`、`<hub-webhook-port>` はハブの
+webhook ポート）は環境に合わせて置き換えてください。
+
+**重要**: 以下はいずれも runtime（実行時）に nft/iptables コマンドを直接叩くだけの例であり、
+**このままでは reboot で消えます**。実運用では次項の「永続化」の手順まで必ず行ってください。
 
 ```bash
 # --- nftables 推奨版（IPv4/IPv6 を単一ルールセットでカバー） ---
@@ -226,15 +245,19 @@ nft add chain inet isolated input  '{ type filter hook input  priority 0; policy
 nft add rule inet isolated output oif lo accept
 nft add rule inet isolated input  iif lo accept
 
-# 確立済み/関連トラフィックを許可（hub からの inbound 応答が
-# ハブの ephemeral port 宛に返ってくるため、これが無いと agent が
-# ハブに到達不能になる）
+# 確立済み/関連トラフィックを許可（両方向とも必要）
 nft add rule inet isolated output ct state established,related accept
 nft add rule inet isolated input  ct state established,related accept
 
-# 新規の outbound はハブの webhook/agent ポート宛のみ許可
-nft add rule inet isolated output ip  daddr <hub-ipv4> tcp dport 3001 ct state new accept
-nft add rule inet isolated output ip6 daddr <hub-ipv6> tcp dport 3001 ct state new accept
+# INPUT: hub から自分の agentPort への新規 inbound のみ許可
+# （hub がコマンド実行・ターミナル・doctor プローブのために接続を張ってくる経路）
+nft add rule inet isolated input ip  saddr <hub-ipv4> tcp dport <agent-port> ct state new accept
+nft add rule inet isolated input ip6 saddr <hub-ipv6> tcp dport <agent-port> ct state new accept
+
+# OUTPUT: ハブの webhook ポート宛の新規 outbound のみ許可
+# （agent-done / agent-activity 等の hook スクリプトが POST する経路。他ノードへの横移動を防ぐのが主目的）
+nft add rule inet isolated output ip  daddr <hub-ipv4> tcp dport <hub-webhook-port> ct state new accept
+nft add rule inet isolated output ip6 daddr <hub-ipv6> tcp dport <hub-webhook-port> ct state new accept
 
 # 残りはすべて拒否（chain policy が drop のため明示ルール不要。
 # ここまでに合致しなかったパケットは自動的に落ちる）
@@ -247,18 +270,52 @@ for CMD in iptables ip6tables; do
   # ループバックは無条件許可
   $CMD -A OUTPUT -o lo -j ACCEPT
   $CMD -A INPUT  -i lo -j ACCEPT
-  # 確立済み/関連トラフィックを許可（hub からの inbound 応答に必須）
+  # 確立済み/関連トラフィックを許可（両方向とも必要）
   $CMD -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
   $CMD -A INPUT  -m state --state ESTABLISHED,RELATED -j ACCEPT
 done
-# 新規の outbound はハブの webhook/agent ポート宛のみ許可（IPv4/IPv6 それぞれ）
-iptables  -A OUTPUT -d <hub-ipv4> -p tcp --dport 3001 -m state --state NEW -j ACCEPT
-ip6tables -A OUTPUT -d <hub-ipv6> -p tcp --dport 3001 -m state --state NEW -j ACCEPT
+# INPUT: hub から自分の agentPort への新規 inbound のみ許可（IPv4/IPv6 それぞれ）
+iptables  -A INPUT -s <hub-ipv4> -p tcp --dport <agent-port> -m state --state NEW -j ACCEPT
+ip6tables -A INPUT -s <hub-ipv6> -p tcp --dport <agent-port> -m state --state NEW -j ACCEPT
+# OUTPUT: ハブの webhook ポート宛の新規 outbound のみ許可（IPv4/IPv6 それぞれ）
+iptables  -A OUTPUT -d <hub-ipv4> -p tcp --dport <hub-webhook-port> -m state --state NEW -j ACCEPT
+ip6tables -A OUTPUT -d <hub-ipv6> -p tcp --dport <hub-webhook-port> -m state --state NEW -j ACCEPT
 # 残りは拒否
 for CMD in iptables ip6tables; do
   $CMD -A OUTPUT -j REJECT
   $CMD -A INPUT  -j REJECT
 done
+```
+
+### 永続化（reboot 後も消えないようにする）
+
+runtime コマンドだけでは reboot でルールセットが消え、横移動保護が黙って外れます。**必ず**
+以下のいずれかで永続化し、恒常的に適用してください。
+
+**nftables 版**: 上記のルールセットをそのまま `/etc/nftables.conf`（`table inet isolated { ... }`
+形式でチェイン定義ごと）に書き込み、サービスを有効化します。
+
+```bash
+sudo systemctl enable --now nftables.service
+```
+
+**iptables 版**: `iptables-persistent`（Debian/Ubuntu 系）で保存します。
+
+```bash
+sudo apt-get install -y iptables-persistent
+sudo netfilter-persistent save        # 現在の iptables/ip6tables ルールを両方保存
+sudo systemctl enable netfilter-persistent
+```
+
+**reboot 後の検証**: 再起動してから、ルールが実際に生きていることを必ず確認してください。
+
+```bash
+sudo reboot
+# 再起動後:
+sudo nft list ruleset                 # nftables 版: 上記のルールが表示されることを確認
+# または
+sudo iptables  -L -n -v               # iptables 版: INPUT/OUTPUT の許可・拒否ルールを確認
+sudo ip6tables -L -n -v               # ip6tables も必ず同様に確認（片方だけ確認して安心しない）
 ```
 
 ### 将来計画
