@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { runIsolationDoctor, probeFilesFramed } from './isolationDoctor';
 import { isCanaryStillIntact } from './hubCanary';
 import type { IServerTransport, ExecResult } from './transport/ServerTransport';
@@ -506,6 +506,54 @@ describe('runIsolationDoctor', () => {
       });
       const result = await runIsolationDoctor(transport, HUB);
       expect(result.checks.find((c) => c.id === 'gh_unauthenticated')!.status).toBe('unknown');
+    });
+
+    // ─── gh absent + plaintext hosts.yml token (Important finding 1) — gh
+    // itself being missing from PATH must not exempt a genuine hosts.yml
+    // secret from detection, since Linux headless gh writes oauth_token in
+    // plaintext when no OS keyring is available.
+    it('fails when gh is absent but hosts.yml still has a stored oauth_token', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('hosts.yml')) {
+          const content = 'github.com:\n    oauth_token: xxx\n    user: alice\n';
+          return { stdout: `AZT_STATUS:f:present\n${b64(content)}\nAZT_STATUS_END:f\n`, stderr: '', code: 0 };
+        }
+        if (cmd.includes('AZT_GH_CHECK_DONE')) {
+          return { stdout: 'AZT_GH_ABSENT\nAZT_GH_CHECK_DONE\n', stderr: '', code: 0 };
+        }
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      const check = result.checks.find((c) => c.id === 'gh_unauthenticated')!;
+      expect(check.status).toBe('fail');
+      expect(check.detail).not.toMatch(/xxx|oauth_token: /);
+    });
+
+    it('passes when gh is absent and hosts.yml has no oauth_token key', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('hosts.yml')) {
+          const content = 'github.com:\n    user: alice\n';
+          return { stdout: `AZT_STATUS:f:present\n${b64(content)}\nAZT_STATUS_END:f\n`, stderr: '', code: 0 };
+        }
+        if (cmd.includes('AZT_GH_CHECK_DONE')) {
+          return { stdout: 'AZT_GH_ABSENT\nAZT_GH_CHECK_DONE\n', stderr: '', code: 0 };
+        }
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      expect(result.checks.find((c) => c.id === 'gh_unauthenticated')!.status).toBe('pass');
+    });
+
+    it('passes when gh is absent and hosts.yml itself is absent', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('hosts.yml')) return { stdout: 'AZT_STATUS:f:absent\n', stderr: '', code: 0 };
+        if (cmd.includes('AZT_GH_CHECK_DONE')) {
+          return { stdout: 'AZT_GH_ABSENT\nAZT_GH_CHECK_DONE\n', stderr: '', code: 0 };
+        }
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      expect(result.checks.find((c) => c.id === 'gh_unauthenticated')!.status).toBe('pass');
     });
   });
 
@@ -1031,6 +1079,27 @@ describe('runIsolationDoctor', () => {
     const result = await runIsolationDoctor(transport, HUB);
     expect(result.verified).toBe(false);
     expect(result.checks.some((c) => c.status === 'unknown')).toBe(true);
+  });
+
+  // Minor finding 2 (per-server mutex + unbounded remote probe): a probe
+  // whose transport never responds (a TCP blackhole to an `agent`-type
+  // server, e.g.) must not hang the doctor run indefinitely — every check
+  // must fold to 'unknown' once the doctor's own probe timeout elapses,
+  // rather than waiting on undici's much longer default.
+  describe('probe timeout', () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it('resolves every check as unknown when the transport never responds', async () => {
+      const transport = makeTransport(() => new Promise<ExecResult>(() => {
+        // Never resolves/rejects — simulates a TCP blackhole.
+      }));
+      const resultPromise = runIsolationDoctor(transport, HUB);
+      await vi.advanceTimersByTimeAsync(20_000);
+      const result = await resultPromise;
+      expect(result.verified).toBe(false);
+      expect(result.checks.every((c) => c.status === 'unknown')).toBe(true);
+    });
   });
 });
 

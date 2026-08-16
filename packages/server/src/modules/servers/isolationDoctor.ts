@@ -96,6 +96,46 @@ function errMsg(err: unknown): string {
 }
 
 /**
+ * Review round (Minor finding 2): every probe in this module runs while
+ * `routes.ts` holds a per-server mutex (`serverIsolationMutex`) for the
+ * WHOLE doctor run, and for `agent`-type servers `transport.exec()` is an
+ * unbounded `fetch()` under the hood (`AgentTransport`'s `post()` sets no
+ * `AbortSignal` — the `timeoutMs` param it forwards only bounds the child
+ * process the AGENT runs, not the hub-to-agent HTTP round trip itself). A
+ * network partition to that agent (TCP blackhole: SYN/ACK completes but the
+ * peer never replies) would otherwise stall on undici's ~300s default,
+ * holding the mutex and blocking every OTHER isolation/deploy operation on
+ * that same server name for minutes. This wraps every doctor-issued
+ * `transport.exec()` call in an explicit `Promise.race` against a short
+ * timer — a minimal, doctor-local guard (no change to `IServerTransport` or
+ * any transport implementation). A timeout is surfaced as a rejected
+ * promise so every existing call site's `catch (err) { ... unknown ... }`
+ * handles it exactly like any other unreachable-transport error, matching
+ * this module's fail-closed contract (an unproven check is `'unknown'`,
+ * never `'pass'`).
+ */
+const DOCTOR_PROBE_TIMEOUT_MS = 20_000;
+
+async function execProbe(
+  transport: IServerTransport,
+  command: string,
+  timeoutMs = DOCTOR_PROBE_TIMEOUT_MS,
+): Promise<ReturnType<IServerTransport['exec']> extends Promise<infer R> ? R : never> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`probe timed out after ${timeoutMs}ms`)),
+      timeoutMs,
+    );
+  });
+  try {
+    return await Promise.race([transport.exec(command, timeoutMs), timeoutPromise]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Review round (Important finding 1, isolation doctor doc レビュー): a
  * non-zero exit from a probe command must NEVER surface `stdout`/`stderr`
  * verbatim into a persisted `detail` — this doctor's own probes read
@@ -216,7 +256,7 @@ export async function probeFilesFramed(
     .join('; ');
   let result;
   try {
-    result = await transport.exec(cmd);
+    result = await execProbe(transport, cmd);
   } catch (err) {
     return { ok: false, detail: `ファイルの取得に失敗しました（到達不能）: ${errMsg(err)}` };
   }
@@ -307,7 +347,7 @@ async function checkFsAndHostBoundary(transport: IServerTransport, hub: HubIdent
   const id = 'same_host';
   let hostResult;
   try {
-    hostResult = await transport.exec('hostname; id -u');
+    hostResult = await execProbe(transport, 'hostname; id -u');
   } catch (err) {
     return { id, status: 'unknown', detail: `hostname/uid の取得に失敗しました（到達不能）: ${errMsg(err)}` };
   }
@@ -433,6 +473,11 @@ async function checkFsAndHostBoundary(transport: IServerTransport, hub: HubIdent
  * any other exit code (2+: usage/read error) -> `'unknown'`. `grep` itself
  * being absent from PATH is also its own explicit `unknown`, never folded
  * into "no matches".
+ *
+ * Scope note: this scan only covers PEM-style headers (`PRIVATE KEY`) under
+ * `~/.ssh`. PuTTY's `.ppk` format and keys stored outside `~/.ssh` are not
+ * scanned — a known limitation of a misconfiguration detector, not a
+ * completeness guarantee (see the module-level doctrine comment).
  */
 async function checkNoPrivateKeys(transport: IServerTransport): Promise<IsolationCheck> {
   const id = 'no_ssh_private_keys';
@@ -454,7 +499,7 @@ async function checkNoPrivateKeys(transport: IServerTransport): Promise<Isolatio
     + 'else echo AZT_SSH_NO_DIR; fi';
   let result;
   try {
-    result = await transport.exec(cmd);
+    result = await execProbe(transport, cmd);
   } catch (err) {
     return { id, status: 'unknown', detail: `~/.ssh の走査に失敗しました（到達不能）: ${errMsg(err)}` };
   }
@@ -569,7 +614,28 @@ function parseGhHostsYamlKeys(content: string): string[] {
  *  - exit 0（トークン取得成功 = そのホストにローカル資格情報が存在する）→ `'fail'`
  *  - exit 1（gh 自身の「そのホストにログインしていません」規約上の失敗）→ pass 方向
  *  - それ以外の exit code（usage エラー等、判別不能な異常）→ `'unknown'`
- *  - `gh` コマンド自体が不在 → ホスト単位チェックはスキップ（環境変数チェックのみ有効）
+ *  - `gh` コマンド自体が不在 → ホスト単位チェック（`gh auth token`）はスキップ
+ *
+ * Review round (Important finding 1): `gh` が PATH に無い場合、上記のホスト単位
+ * チェックが丸ごとスキップされ、環境変数も未設定なら `'pass'` になっていた。だが
+ * Linux のヘッドレス環境（OS キーリングが使えない）では `gh` はログイン時に
+ * `hosts.yml` へ `oauth_token:` を**平文で**書き込む。「`gh` を後から削除したが
+ * `hosts.yml` は残っている」という設定ミスは、ディスク上に読める資格情報がある
+ * のに `gh` がいないという理由だけで検査対象から外れてしまう — これは「`gh` の
+ * 有無」ではなく「資格情報が残っているか」を見るべき検査の趣旨に反する。そのため
+ * `gh` 不在の場合でも、Step 1 で既に読み取り済みの `hosts.yml` の内容
+ * （`hostsProbe.kind === 'content'`）に対し、ホストキー配下のインデント行に
+ * `oauth_token:` キーが見つかれば `'fail'` とする（値・対応するホスト名は出さず、
+ * 固定文言のみを detail に載せる。ホスト名の列挙自体は非秘匿情報なので許容する）。
+ * `hosts.yml` が不在（`hostsProbe.kind === 'absent'`）なら、そもそも `gh` が
+ * 一度もログインしたことがないので従来どおり pass 方向。`hosts.yml` が
+ * unreadable/unrecognized の場合は Step 1 で既に `'unknown'` を返しており、
+ * この分岐には到達しない。
+ *
+ * 補助線としての限界: OS キーリング（macOS Keychain 等）が有効な環境では `gh`
+ * はトークンをキーリングへ保存し、`hosts.yml` には現れない。この `hosts.yml`
+ * 走査はあくまで「平文ファイルが残っていないか」を見る補助的な検査であり、本線は
+ * （`gh` が存在する環境での）`gh auth token` 経由の照会である。
  */
 async function checkGhUnauthenticated(transport: IServerTransport): Promise<IsolationCheck> {
   const id = 'gh_unauthenticated';
@@ -631,7 +697,7 @@ async function checkGhUnauthenticated(transport: IServerTransport): Promise<Isol
     + 'echo AZT_GH_CHECK_DONE';
   let result;
   try {
-    result = await transport.exec(cmd);
+    result = await execProbe(transport, cmd);
   } catch (err) {
     return { id, status: 'unknown', detail: `gh の確認に失敗しました（到達不能）: ${errMsg(err)}` };
   }
@@ -668,10 +734,18 @@ async function checkGhUnauthenticated(transport: IServerTransport): Promise<Isol
     }
   }
 
-  if (anyFail || envTokenPresent) {
+  // Review round (Important finding 1): gh 不在でも hosts.yml に平文トークンが
+  // 残っていれば fail とする（see the doc comment above the function for the
+  // full rationale and the "OS keyring は補助線" caveat).
+  const hostsFileHasPlaintextToken = ghAbsent
+    && hostsProbe.kind === 'content'
+    && hostsProbe.content.split('\n').some((l) => /^[ \t]+oauth_token\s*:/.test(l));
+
+  if (anyFail || envTokenPresent || hostsFileHasPlaintextToken) {
     const reasons: string[] = [];
     if (anyFail) reasons.push('少なくとも1つのホストで gh にローカル資格情報（トークン）が残っています');
     if (envTokenPresent) reasons.push('GH_TOKEN/GITHUB_TOKEN/GH_ENTERPRISE_TOKEN/GITHUB_ENTERPRISE_TOKEN のいずれかの環境変数が設定されています（値は表示しません）');
+    if (hostsFileHasPlaintextToken) reasons.push('gh コマンドは見つかりませんが、hosts.yml に保存済みトークンがあります');
     return { id, status: 'fail', detail: reasons.join(' / ') };
   }
   if (anyUnknown) {
@@ -681,7 +755,7 @@ async function checkGhUnauthenticated(transport: IServerTransport): Promise<Isol
     id,
     status: 'pass',
     detail: ghAbsent
-      ? 'gh コマンドが見つかりません（GH_TOKEN/GITHUB_TOKEN/GH_ENTERPRISE_TOKEN/GITHUB_ENTERPRISE_TOKEN も未設定です）'
+      ? 'gh コマンドが見つかりません（GH_TOKEN/GITHUB_TOKEN/GH_ENTERPRISE_TOKEN/GITHUB_ENTERPRISE_TOKEN も未設定、hosts.yml にも保存済みトークンはありません）'
       : `gh にローカル資格情報はありません（確認したホスト: ${hosts.join(', ')}）`,
   };
 }
@@ -722,7 +796,7 @@ async function checkNoGitCredentials(transport: IServerTransport): Promise<Isola
     + 'else echo AZT_GIT_ABSENT; fi';
   let result;
   try {
-    result = await transport.exec(cmd);
+    result = await execProbe(transport, cmd);
   } catch (err) {
     return { id, status: 'unknown', detail: `git credential 設定の確認に失敗しました（到達不能）: ${errMsg(err)}` };
   }
@@ -866,7 +940,7 @@ async function checkNoOperatorToken(transport: IServerTransport): Promise<Isolat
   const id = 'no_operator_token';
   let homeResult;
   try {
-    homeResult = await transport.exec('echo "$HOME"');
+    homeResult = await execProbe(transport, 'echo "$HOME"');
   } catch (err) {
     return { id, status: 'unknown', detail: `$HOME の解決に失敗しました（到達不能）: ${errMsg(err)}` };
   }
@@ -897,7 +971,7 @@ async function checkNoOperatorToken(transport: IServerTransport): Promise<Isolat
     + `else echo AZT_LS_STATUS:absent; fi`;
   let listResult;
   try {
-    listResult = await transport.exec(lsCmd);
+    listResult = await execProbe(transport, lsCmd);
   } catch (err) {
     return { id, status: 'unknown', detail: `~/.azito の一覧取得に失敗しました（到達不能）: ${errMsg(err)}` };
   }
@@ -1041,7 +1115,7 @@ async function checkNoOperatorEnvironment(transport: IServerTransport): Promise<
     .join('; ') + '; echo AZT_ENV_DONE';
   let result;
   try {
-    result = await transport.exec(cmd);
+    result = await execProbe(transport, cmd);
   } catch (err) {
     return { id, status: 'unknown', detail: `実行環境の変数確認に失敗しました（到達不能）: ${errMsg(err)}` };
   }
@@ -1100,7 +1174,7 @@ async function checkNoSshAgent(transport: IServerTransport): Promise<IsolationCh
     + 'else echo AZT_NO_SOCK; fi';
   let result;
   try {
-    result = await transport.exec(cmd);
+    result = await execProbe(transport, cmd);
   } catch (err) {
     return { id, status: 'unknown', detail: `ssh-agent の確認に失敗しました（到達不能）: ${errMsg(err)}` };
   }
