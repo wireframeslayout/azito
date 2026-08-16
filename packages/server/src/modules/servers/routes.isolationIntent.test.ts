@@ -12,8 +12,14 @@ import { KeyedMutex } from '../../shared/keyedMutex';
 // process never does either. Mocked with a fixed, known canary so the doctor
 // tests below can control whether it reads back as present/absent, exactly
 // like every other fake `exec` response in this file.
+// Final review round, Important finding 3: `checkFsAndHostBoundary` also
+// re-verifies the canary via `isCanaryStillIntact()` immediately after each
+// remote 'absent' round-trip — mocked as always-intact here so this file's
+// existing "absent" scenarios keep reaching `same_host: 'pass'` (a dedicated
+// rotation-during-probe scenario is covered in isolationDoctor.test.ts).
 vi.mock('./hubCanary', () => ({
   getVerifiedHubCanary: () => ({ path: '/hub/data/.azito-hub-canary-test', content: 'test-canary-content' }),
+  isCanaryStillIntact: () => true,
 }));
 
 // Issue #29 Step 1: isolation_intent is only settable for agent servers — a

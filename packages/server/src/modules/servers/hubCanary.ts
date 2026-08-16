@@ -142,3 +142,27 @@ function isCanaryIntact(canary: HubCanary): boolean {
     return false;
   }
 }
+
+/**
+ * Final review round, Important finding 3: `hub.canary` is resolved ONCE at
+ * the route boundary (via `getVerifiedHubCanary()` above) and handed to
+ * `runIsolationDoctor`, but the FS-boundary check's remote probe is a slow
+ * round-trip — the local canary can be deleted or rotated (a concurrent
+ * doctor run for another server, a startup racing this one, or simply this
+ * process's own next regeneration) WHILE that round-trip is in flight. If a
+ * remote agent on a genuinely SHARED filesystem happens to read the OLD path
+ * after it was rotated out from under it, it too sees "absent" — the exact
+ * same observation a truly isolated server would report — and the doctor
+ * would misread that race as proof of separation. `isolationDoctor.ts`'s
+ * `checkFsAndHostBoundary` calls this immediately after the remote probe
+ * returns an `absent` outcome, BEFORE folding that into `canaryReadable:
+ * false` (a 'pass'-eligible signal): only when the exact `HubCanary` object
+ * passed in (same path, same content) is still verifiably intact on disk
+ * RIGHT NOW does the negative remote result still mean what it claims.
+ * Deliberately read-only (never rewrites/rotates) — a caller mid-verification
+ * must observe the canary's actual state at this instant, not trigger a side
+ * effect that changes it again.
+ */
+export function isCanaryStillIntact(canary: HubCanary): boolean {
+  return isCanaryIntact(canary);
+}

@@ -3,6 +3,7 @@ import { shellQuote } from '../../shared/shellQuote';
 import { isAzitoctlEnvFilename } from '../../shared/azitoctlEnv';
 import { extractClaudeMcpUiToken, hasCodexConfigUiToken } from '../../shared/mcpTokenStores';
 import type { HubCanary } from './hubCanary';
+import { isCanaryStillIntact } from './hubCanary';
 
 // ─── Isolation doctor (Issue #29 Step 2 B) ───
 //
@@ -331,12 +332,38 @@ async function checkFsAndHostBoundary(transport: IServerTransport, hub: HubIdent
   // this round" (no canary to test, transport unreachable, or an
   // unrecognized probe result), which must never be folded into a pass.
   let canaryReadable: boolean | null = null;
+  // Final review round, Important finding 3: distinguishes "the remote probe
+  // itself never completed" (handled by canaryReadable staying null below)
+  // from "the remote probe DID complete with a clean 'absent' answer, but the
+  // local canary rotated out from under it during that round-trip" — the
+  // latter needs its own detail text since it is a positive detection of a
+  // race, not a generic unmeasured state.
+  let canaryRotatedDuringProbe = false;
   if (hub.canary) {
     const probed = await probeFilesFramed(transport, [{ key: 'canary', pathExpr: shellQuote(hub.canary.path) }]);
     if (probed.ok) {
       const outcome = probed.results.get('canary');
       if (outcome?.kind === 'content' && outcome.content === hub.canary.content) canaryReadable = true;
-      else if (outcome?.kind === 'absent') canaryReadable = false;
+      else if (outcome?.kind === 'absent') {
+        // Final review round, Important finding 3: a remote "absent" is only
+        // trustworthy as proof of separation if the exact canary (same path,
+        // same content) this probe was sent for is STILL intact on the hub's
+        // own disk right now — re-verified here, immediately after the
+        // round-trip completes and before the result is allowed to feed
+        // 'pass'. If it changed or vanished mid-flight (a concurrent
+        // regeneration/rotation), a same-filesystem target reading the now-
+        // stale path would ALSO see "absent" and be indistinguishable from a
+        // genuinely isolated one — so this round's remote answer no longer
+        // proves anything and must not decide the check. Deliberately no
+        // retry (fail-closed priority per this finding): degrades straight to
+        // 'unknown' rather than attempting a second round-trip against a
+        // possibly-still-unstable canary.
+        if (isCanaryStillIntact(hub.canary)) {
+          canaryReadable = false;
+        } else {
+          canaryRotatedDuringProbe = true;
+        }
+      }
       // 'unreadable', 'unrecognized', or 'content' with unexpected bytes
       // (should never happen for a hub-generated random filename, but is not
       // trusted as proof of absence either): canaryReadable stays null.
@@ -361,9 +388,11 @@ async function checkFsAndHostBoundary(transport: IServerTransport, hub: HubIdent
     return {
       id,
       status: 'unknown',
-      detail: hub.canary
-        ? `ファイルシステム分離を実測できませんでした（カナリアファイルの読み取り結果が不明でした）。${identity}（設定ミス検出としての判定であり、敵対的ホストは自己申告を偽装しうる — モジュール冒頭のドクトリンを参照）`
-        : `ハブ側にカナリアファイルが存在しないため、ファイルシステム分離を実測できませんでした（ハブ起動時の書き込みに失敗した可能性があります）。${identity}`,
+      detail: canaryRotatedDuringProbe
+        ? `カナリアファイルがプローブの往復中にローテーション/削除されたため、リモートの「不在」応答を信頼できませんでした。${identity}（設定ミス検出としての判定であり、敵対的ホストは自己申告を偽装しうる — モジュール冒頭のドクトリンを参照）`
+        : hub.canary
+          ? `ファイルシステム分離を実測できませんでした（カナリアファイルの読み取り結果が不明でした）。${identity}（設定ミス検出としての判定であり、敵対的ホストは自己申告を偽装しうる — モジュール冒頭のドクトリンを参照）`
+          : `ハブ側にカナリアファイルが存在しないため、ファイルシステム分離を実測できませんでした（ハブ起動時の書き込みに失敗した可能性があります）。${identity}`,
     };
   }
   // canaryReadable === false here: the probe COMPLETED and positively
@@ -521,14 +550,20 @@ function parseGhHostsYamlKeys(content: string): string[] {
  *    "check the default host only", per this finding's own fail-closed
  *    requirement.
  *
- * `GH_TOKEN`/`GITHUB_TOKEN` (review round, same finding): `gh` itself reads
- * these environment variables as an authentication override, bypassing
- * `hosts.yml`/`gh auth token` entirely, and (unlike `AZITO_AGENT_TOKEN`)
- * neither is a transport credential this doctor must tolerate — their mere
- * PRESENCE (never the value; same `${VAR+x}` existence-only technique as
- * `checkNoOperatorEnvironment`) is enough to fail this check, independent of
- * the per-host `gh auth token` results and even when `gh` itself is absent
- * (some other tool, or a `gh` installed later, could still consume them).
+ * `GH_TOKEN`/`GITHUB_TOKEN`/`GH_ENTERPRISE_TOKEN`/`GITHUB_ENTERPRISE_TOKEN`
+ * (review round, same finding; Enterprise variants added in a later review
+ * round): `gh` itself reads all four environment variables as authentication
+ * overrides, bypassing `hosts.yml`/`gh auth token` entirely, and (unlike
+ * `AZITO_AGENT_TOKEN`) none is a transport credential this doctor must
+ * tolerate — their mere PRESENCE (never the value; same `${VAR+x}`
+ * existence-only technique as `checkNoOperatorEnvironment`) is enough to fail
+ * this check, independent of the per-host `gh auth token` results and even
+ * when `gh` itself is absent (some other tool, or a `gh` installed later,
+ * could still consume them). The Enterprise pair matters specifically
+ * because host enumeration (above) only walks `hosts.yml` — when that file
+ * is absent, only `github.com` is probed via `gh auth token`, so a Enterprise
+ * token supplied purely via environment (never written to `hosts.yml`) would
+ * otherwise be invisible to every check in this function.
  *
  * exit code 分類 (per host):
  *  - exit 0（トークン取得成功 = そのホストにローカル資格情報が存在する）→ `'fail'`
@@ -584,13 +619,15 @@ async function checkGhUnauthenticated(transport: IServerTransport): Promise<Isol
   }
 
   // Step 2: probe every enumerated host's local token in one round-trip,
-  // plus GH_TOKEN/GITHUB_TOKEN existence (never their value).
+  // plus GH_TOKEN/GITHUB_TOKEN/GH_ENTERPRISE_TOKEN/GITHUB_ENTERPRISE_TOKEN existence (never their value).
   const hostChecks = hosts
     .map((h, i) => `if command -v gh >/dev/null 2>&1; then gh auth token --hostname ${shellQuote(h)} >/dev/null 2>&1; echo "AZT_GH_HOST_EXIT:${i}:$?"; else echo AZT_GH_ABSENT; fi`)
     .join('; ');
   const cmd = `${hostChecks}; `
     + '[ -n "${GH_TOKEN+x}" ] && echo AZT_GH_TOKEN_ENV_PRESENT; '
     + '[ -n "${GITHUB_TOKEN+x}" ] && echo AZT_GITHUB_TOKEN_ENV_PRESENT; '
+    + '[ -n "${GH_ENTERPRISE_TOKEN+x}" ] && echo AZT_GH_ENTERPRISE_TOKEN_ENV_PRESENT; '
+    + '[ -n "${GITHUB_ENTERPRISE_TOKEN+x}" ] && echo AZT_GITHUB_ENTERPRISE_TOKEN_ENV_PRESENT; '
     + 'echo AZT_GH_CHECK_DONE';
   let result;
   try {
@@ -606,7 +643,10 @@ async function checkGhUnauthenticated(transport: IServerTransport): Promise<Isol
     return { id, status: 'unknown', detail: unrecognizedOutputDetail('gh の確認結果を解析できませんでした') };
   }
   const ghAbsent = lines.includes('AZT_GH_ABSENT');
-  const envTokenPresent = lines.includes('AZT_GH_TOKEN_ENV_PRESENT') || lines.includes('AZT_GITHUB_TOKEN_ENV_PRESENT');
+  const envTokenPresent = lines.includes('AZT_GH_TOKEN_ENV_PRESENT')
+    || lines.includes('AZT_GITHUB_TOKEN_ENV_PRESENT')
+    || lines.includes('AZT_GH_ENTERPRISE_TOKEN_ENV_PRESENT')
+    || lines.includes('AZT_GITHUB_ENTERPRISE_TOKEN_ENV_PRESENT');
 
   let anyFail = false;
   let anyUnknown = false;
@@ -631,7 +671,7 @@ async function checkGhUnauthenticated(transport: IServerTransport): Promise<Isol
   if (anyFail || envTokenPresent) {
     const reasons: string[] = [];
     if (anyFail) reasons.push('少なくとも1つのホストで gh にローカル資格情報（トークン）が残っています');
-    if (envTokenPresent) reasons.push('GH_TOKEN/GITHUB_TOKEN 環境変数が設定されています（値は表示しません）');
+    if (envTokenPresent) reasons.push('GH_TOKEN/GITHUB_TOKEN/GH_ENTERPRISE_TOKEN/GITHUB_ENTERPRISE_TOKEN のいずれかの環境変数が設定されています（値は表示しません）');
     return { id, status: 'fail', detail: reasons.join(' / ') };
   }
   if (anyUnknown) {
@@ -641,7 +681,7 @@ async function checkGhUnauthenticated(transport: IServerTransport): Promise<Isol
     id,
     status: 'pass',
     detail: ghAbsent
-      ? 'gh コマンドが見つかりません（GH_TOKEN/GITHUB_TOKEN も未設定です）'
+      ? 'gh コマンドが見つかりません（GH_TOKEN/GITHUB_TOKEN/GH_ENTERPRISE_TOKEN/GITHUB_ENTERPRISE_TOKEN も未設定です）'
       : `gh にローカル資格情報はありません（確認したホスト: ${hosts.join(', ')}）`,
   };
 }

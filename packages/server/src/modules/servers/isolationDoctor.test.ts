@@ -1,12 +1,28 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { runIsolationDoctor, probeFilesFramed } from './isolationDoctor';
+import { isCanaryStillIntact } from './hubCanary';
 import type { IServerTransport, ExecResult } from './transport/ServerTransport';
+
+// Final review round, Important finding 3: `checkFsAndHostBoundary` now
+// re-verifies (via `isCanaryStillIntact`) that the local canary is still the
+// same one right after the remote probe completes an 'absent' round-trip —
+// mocked here so tests can drive both outcomes without touching the real
+// filesystem (HUB.canary.path below is a fictional path that never exists on
+// disk, so leaving this unmocked would make every "absent" scenario report a
+// rotation regardless of intent).
+vi.mock('./hubCanary', () => ({
+  isCanaryStillIntact: vi.fn(() => true),
+}));
 
 // Issue #29 Step 2 B: fail-closed contract — every check must default to
 // 'unknown' unless it actually confirmed something, and the overall
 // `verified` flag is true only when EVERY check is 'pass'.
 
 const HUB = { hostname: 'hub-host', uid: 1000, canary: { path: '/hub/data/.azito-hub-canary-test', content: 'canary-content' } };
+
+beforeEach(() => {
+  vi.mocked(isCanaryStillIntact).mockReturnValue(true);
+});
 
 function b64(s: string): string {
   return Buffer.from(s, 'utf-8').toString('base64');
@@ -181,6 +197,24 @@ describe('runIsolationDoctor', () => {
       });
       const result = await runIsolationDoctor(transport, { hostname: HUB.hostname, uid: HUB.uid, canary: null });
       expect(result.checks.find((c) => c.id === 'same_host')!.status).toBe('unknown');
+    });
+
+    // Final review round, Important finding 3: a remote 'absent' answer
+    // arriving after the local canary was rotated/removed mid-round-trip must
+    // not be trusted as proof of separation — a genuinely same-filesystem
+    // agent reading the now-stale path would report the identical "absent"
+    // observation, so the doctor cannot tell the two apart and must degrade
+    // to 'unknown' rather than 'pass'.
+    it('unknown (not pass) when the canary was rotated/removed locally during the remote round-trip, even though hostname/uid both differ and the remote reports absent', async () => {
+      vi.mocked(isCanaryStillIntact).mockReturnValue(false);
+      const transport = makeTransport((cmd) => {
+        if (cmd.startsWith('hostname;')) return { stdout: 'other-host\n9999\n', stderr: '', code: 0 };
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      const check = result.checks.find((c) => c.id === 'same_host')!;
+      expect(check.status).toBe('unknown');
+      expect(result.verified).toBe(false);
     });
   });
 
@@ -416,6 +450,40 @@ describe('runIsolationDoctor', () => {
       const check = result.checks.find((c) => c.id === 'gh_unauthenticated')!;
       expect(check.status).toBe('fail');
       expect(check.detail).toContain('GITHUB_TOKEN');
+    });
+
+    // ─── GH_ENTERPRISE_TOKEN / GITHUB_ENTERPRISE_TOKEN env override (final
+    // review round, Important finding 1) — `gh` also reads these as an auth
+    // override for a non-default (Enterprise) host, and host enumeration only
+    // walks hosts.yml: when that file is absent, only github.com gets probed
+    // via `gh auth token`, so an Enterprise token supplied purely via
+    // environment would otherwise never be seen by this check at all.
+    it('fails when GH_ENTERPRISE_TOKEN is present in the exec environment, even with hosts.yml absent (only github.com enumerated)', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('hosts.yml')) return { stdout: 'AZT_STATUS:f:absent\n', stderr: '', code: 0 };
+        if (cmd.includes('AZT_GH_CHECK_DONE')) {
+          return { stdout: 'AZT_GH_HOST_EXIT:0:1\nAZT_GH_ENTERPRISE_TOKEN_ENV_PRESENT\nAZT_GH_CHECK_DONE\n', stderr: '', code: 0 };
+        }
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      const check = result.checks.find((c) => c.id === 'gh_unauthenticated')!;
+      expect(check.status).toBe('fail');
+      expect(check.detail).toContain('GH_ENTERPRISE_TOKEN');
+    });
+
+    it('fails when GITHUB_ENTERPRISE_TOKEN is present in the exec environment, even with hosts.yml absent', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('hosts.yml')) return { stdout: 'AZT_STATUS:f:absent\n', stderr: '', code: 0 };
+        if (cmd.includes('AZT_GH_CHECK_DONE')) {
+          return { stdout: 'AZT_GH_HOST_EXIT:0:1\nAZT_GITHUB_ENTERPRISE_TOKEN_ENV_PRESENT\nAZT_GH_CHECK_DONE\n', stderr: '', code: 0 };
+        }
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      const check = result.checks.find((c) => c.id === 'gh_unauthenticated')!;
+      expect(check.status).toBe('fail');
+      expect(check.detail).toContain('GITHUB_ENTERPRISE_TOKEN');
     });
 
     it('never leaks the token value itself into detail, only variable names / host results', async () => {

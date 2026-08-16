@@ -76,6 +76,8 @@
     "isolationDoctorNeedsAttention": "Isolated · Needs attention",
     "isolationDoctorScopedAuthDisabled": "Isolated · Verification disabled",
     "isolationDoctorScopedAuthDisabledSub": "Scoped auth (AZITO_SCOPED_AUTH) is disabled, so verification results (including past ones) are meaningless. In compat mode, a task principal is operator-equivalent for every API route, so isolation is not actually enforced. Re-verify after enabling scoped auth.",
+    "isolationDoctorScopedAuthUnknown": "Isolated · Authorization mode unconfirmed",
+    "isolationDoctorScopedAuthUnknownSub": "Could not confirm whether scoped auth is enabled (the health check hasn't loaded, or failed). A previously passing verification cannot be shown as current until this is confirmed. Try reconnecting.",
     "isolationDoctorNeedsAttentionSub": "The following checks failed or could not be confirmed: {{checks}}",
     "isolationDoctorSnapshotNotice": "This result is a snapshot taken at verification time and detects misconfiguration — it is not a guarantee or attestation. It cannot detect an adversarial host itself; that is handled structurally by withholding credentials (layer 2, the credential-distribution gate).",
     "isolationDoctorFailedToast": "Isolation verification failed: {{error}}",

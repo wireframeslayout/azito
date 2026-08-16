@@ -157,11 +157,13 @@ describe('computeIsolationDoctorState', () => {
     })).toBe('scopedAuthDisabled');
   });
 
-  // scopedAuthEnabled === null (health fetch not yet resolved / failed) must
-  // NOT trigger the override — matches ServerModals.tsx's
-  // isolationToggleBlocked treatment of the same null signal (fail-open on
-  // "not yet known", not fail-closed).
-  it('does not override with scopedAuthDisabled when scopedAuthEnabled is null (health not yet loaded)', () => {
+  // Final review round, Important finding 2: scopedAuthEnabled === null
+  // (health fetch not yet resolved / failed) must NOT be treated the same as
+  // scopedAuthEnabled === true — an otherwise-fresh, passing report degrades
+  // to the dedicated 'scopedAuthUnknown' state rather than rendering
+  // 'verified', since a persisted report says nothing about whether scoped
+  // auth is enforced RIGHT NOW when this client cannot even confirm that.
+  it('returns scopedAuthUnknown — not verified, not scopedAuthDisabled — when scopedAuthEnabled is null (health not yet loaded)', () => {
     expect(computeIsolationDoctorState({
       isolationIntent: true,
       verificationReport: verified(),
@@ -169,6 +171,33 @@ describe('computeIsolationDoctorState', () => {
       ttlMs: TTL,
       scopedAuthEnabled: null,
       now: NOW,
-    })).toBe('verified');
+    })).toBe('scopedAuthUnknown');
+  });
+
+  // Also applies to the stale-verification branch — null health must not
+  // let a stale-but-passing report through as 'verifiedStale' either.
+  it('returns scopedAuthUnknown when the report would otherwise be verifiedStale and scopedAuthEnabled is null', () => {
+    expect(computeIsolationDoctorState({
+      isolationIntent: true,
+      verificationReport: verified(),
+      isolationVerifiedAt: new Date(NOW - TTL - 1000).toISOString(),
+      ttlMs: TTL,
+      scopedAuthEnabled: null,
+      now: NOW,
+    })).toBe('scopedAuthUnknown');
+  });
+
+  // A null health state must not upgrade an already-non-success outcome —
+  // 'unverified'/'needsAttention' are unaffected by the scopedAuthEnabled
+  // gate since they never claimed success in the first place.
+  it('still returns needsAttention (not scopedAuthUnknown) when the report fails and scopedAuthEnabled is null', () => {
+    expect(computeIsolationDoctorState({
+      isolationIntent: true,
+      verificationReport: verified({ verified: false }),
+      isolationVerifiedAt: null,
+      ttlMs: TTL,
+      scopedAuthEnabled: null,
+      now: NOW,
+    })).toBe('needsAttention');
   });
 });

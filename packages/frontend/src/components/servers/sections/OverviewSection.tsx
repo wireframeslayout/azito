@@ -273,11 +273,13 @@ export default function OverviewSection({
             sub={
               isolationDoctorState === 'scopedAuthDisabled'
                 ? t('overview.isolationDoctorScopedAuthDisabledSub')
-                : isolationDoctorState === 'needsAttention'
-                  ? t('overview.isolationDoctorNeedsAttentionSub', {
-                      checks: failedOrUnknownChecks.map((c) => `${c.id} (${c.status})`).join(', '),
-                    })
-                  : t('overview.isolationDoctorSnapshotNotice')
+                : isolationDoctorState === 'scopedAuthUnknown'
+                  ? t('overview.isolationDoctorScopedAuthUnknownSub')
+                  : isolationDoctorState === 'needsAttention'
+                    ? t('overview.isolationDoctorNeedsAttentionSub', {
+                        checks: failedOrUnknownChecks.map((c) => `${c.id} (${c.status})`).join(', '),
+                      })
+                    : t('overview.isolationDoctorSnapshotNotice')
             }
             action={
               // Issue #29 review (5th pass), Important finding 1: the run
@@ -285,12 +287,19 @@ export default function OverviewSection({
               // backend would reject the request with 409 anyway, and
               // letting an operator retry a call that can never succeed
               // while compat mode is on is worse than telling them upfront.
+              //
+              // Final review round, Important finding 2: also disabled while
+              // scoped auth is UNCONFIRMED (scopedAuthUnknown) — a health
+              // check that hasn't resolved gives no basis to know whether the
+              // backend would even accept the run, so the button stays
+              // disabled until that's confirmed one way or the other, same as
+              // the confirmed-off case above.
               <Button
                 size="sm"
                 onClick={runDoctor}
                 loading={isolationDoctorRunning}
                 loadingLabel={t('overview.isolationDoctorRunning')}
-                disabled={isolationDoctorState === 'scopedAuthDisabled'}
+                disabled={isolationDoctorState === 'scopedAuthDisabled' || isolationDoctorState === 'scopedAuthUnknown'}
               >
                 {t('overview.isolationDoctorRun')}
               </Button>
@@ -298,13 +307,15 @@ export default function OverviewSection({
           >
             {isolationDoctorState === 'scopedAuthDisabled'
               ? t('overview.isolationDoctorScopedAuthDisabled')
-              : isolationDoctorState === 'verified' && server.isolationVerifiedAt
-                ? t('overview.isolationDoctorVerified', { at: new Date(server.isolationVerifiedAt).toLocaleString() })
-                : isolationDoctorState === 'verifiedStale' && server.isolationVerifiedAt
-                  ? t('overview.isolationDoctorVerifiedStale', { at: new Date(server.isolationVerifiedAt).toLocaleString() })
-                  : isolationDoctorState === 'needsAttention'
-                    ? t('overview.isolationDoctorNeedsAttention')
-                    : t('overview.isolationDoctorUnverified')}
+              : isolationDoctorState === 'scopedAuthUnknown'
+                ? t('overview.isolationDoctorScopedAuthUnknown')
+                : isolationDoctorState === 'verified' && server.isolationVerifiedAt
+                  ? t('overview.isolationDoctorVerified', { at: new Date(server.isolationVerifiedAt).toLocaleString() })
+                  : isolationDoctorState === 'verifiedStale' && server.isolationVerifiedAt
+                    ? t('overview.isolationDoctorVerifiedStale', { at: new Date(server.isolationVerifiedAt).toLocaleString() })
+                    : isolationDoctorState === 'needsAttention'
+                      ? t('overview.isolationDoctorNeedsAttention')
+                      : t('overview.isolationDoctorUnverified')}
           </Notice>
         </div>
       )}
