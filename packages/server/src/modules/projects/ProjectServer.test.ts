@@ -156,6 +156,35 @@ describe('resolveEffectiveInputPolicy', () => {
     expect(result.allowDegradedReason).toBe('verification_expired');
   });
 
+  // Issue #29 Step 3a review round, Important finding 3: a future
+  // `isolationVerifiedAt` (rolled-back clock, or a corrupted/forged write)
+  // must fail closed the same way an actually-stale one does — before this
+  // fix, `now - verifiedAtMs` went negative and satisfied `> TTL` forever,
+  // so 'allow' stayed effective indefinitely once a timestamp landed in the
+  // future.
+  it('degrades "allow" to "manual-approval" with reason "verification_expired" when isolationVerifiedAt is meaningfully in the future (rolled-back clock, not benign skew)', () => {
+    const farFuture = new Date(NOW + 60 * 60 * 1000).toISOString(); // 1 hour ahead — well past any plausible clock drift
+    const result = resolveEffectiveInputPolicy(
+      makeProjectServer({ inputPolicy: 'allow' }),
+      makeIsolatedServer({ isolationVerifiedAt: farFuture }),
+      true,
+      NOW,
+    );
+    expect(result).toEqual({ requestedPolicy: 'allow', effectivePolicy: 'manual-approval', allowDegradedReason: 'verification_expired' });
+  });
+
+  it('tolerates a small future isolationVerifiedAt as ordinary clock skew (keeps "allow" effective)', () => {
+    const slightlyAhead = new Date(NOW + 30 * 1000).toISOString(); // 30s ahead — within the skew tolerance
+    const result = resolveEffectiveInputPolicy(
+      makeProjectServer({ inputPolicy: 'allow' }),
+      makeIsolatedServer({ isolationVerifiedAt: slightlyAhead }),
+      true,
+      NOW,
+    );
+    expect(result.effectivePolicy).toBe('allow');
+    expect(result.allowDegradedReason).toBeNull();
+  });
+
   // Issue #29 review Step 3a, Critical finding 1 follow-up: defense in depth
   // on top of the doctor route's own fix (a failing/unverifiable run now
   // clears isolationVerifiedAt atomically via updateIsolationFailure — see

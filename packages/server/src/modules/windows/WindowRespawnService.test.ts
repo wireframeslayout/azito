@@ -1644,3 +1644,96 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
     expect(paneEnvService.buildEnvForNewWindow).toHaveBeenCalledTimes(2);
   });
 });
+
+// Issue #29 Step 3a review round, Important findings 1/2: the in-lock
+// execution-gate reverify must actually run for legacy recovery, and must
+// run BEFORE respawn() kills the primary window it's about to replace — in
+// both cases the scenario under test is an 'allow' policy that is still
+// valid when the outer (pre-lock) gate decision is made, but has lapsed by
+// the time the per-server isolation lock is actually acquired (e.g. a
+// concurrent isolation-doctor re-verification committing while this call sat
+// queued behind another rotation). `isolationVerifiedAt`/`isolationReport`
+// are excluded from `withServerLock`'s own security-snapshot mismatch check
+// (see ServerIsolationLock.ts) — changing only those two fields between the
+// caller's server snapshot and the lock-acquisition refetch below therefore
+// reaches the in-lock reverify itself, not a `ServerSnapshotMismatchError`.
+describe('WindowRespawnService — in-lock execution-gate TOCTOU (Issue #29 Step 3a review round)', () => {
+  const PASSING_REPORT = JSON.stringify({ kind: 'verification', verified: true });
+
+  function allowProjectServerRepo(): Pick<IProjectServerRepository, 'find' | 'findByProject'> {
+    const row = { projectId: 1, serverName: 'local-server', workingDirectory: null, branch: 'main', tmuxSession: 'azito', inputPolicy: 'allow' as const };
+    return { find: vi.fn(() => row), findByProject: vi.fn(() => [row]) };
+  }
+
+  function verifiedServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
+    return makeServer({
+      isolationIntent: true,
+      isolationVerifiedAt: '2026-01-01T00:00:00Z',
+      isolationReport: PASSING_REPORT,
+      ...overrides,
+    });
+  }
+
+  it('resumeLegacySession blocks (does not create a window) when the 3-point AND gate degrades between the outer check and the in-lock refetch', async () => {
+    const task = makeTask({ id: 9, unitId: 10, agentSessionId: 'sess-xyz', inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 9 });
+    const { service, tmux, taskRepo, serverRepo } = buildService({
+      window: win, task, unit, projectServerRepo: allowProjectServerRepo(),
+    });
+    // The outer, pre-lock decision (enforceExecutionGate) is made from the
+    // `server` argument passed to resumeLegacySession() directly — a fully
+    // verified, isolated server, so 'allow' is effective and no block is
+    // recorded yet. The in-lock refetch (serverRepo.findByName, used by
+    // createRotatedWindow's ServerIsolationLock) returns a row whose
+    // verification has since lapsed (isolationVerifiedAt: null) — same
+    // isolationIntent, so no snapshot-mismatch abort — which must degrade
+    // 'allow' back to 'manual-approval' and block before any window is made.
+    serverRepo.findByName.mockImplementation((name: string) => verifiedServer({ name, isolationVerifiedAt: null, isolationReport: null }));
+
+    await expect(service.resumeLegacySession(9, verifiedServer())).rejects.toThrow(/requires approval/);
+
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(tmux.sendKeys).not.toHaveBeenCalled();
+    expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(9, {
+      pendingOperation: 'recover_session_legacy',
+      priorStatus: 'open',
+      manifestHash: expect.any(String),
+      pendingOperationWindowId: null,
+    });
+  });
+
+  it('respawn (PRIMARY task window) blocks BEFORE killing the existing window when the 3-point AND gate degrades between the outer check and the in-lock refetch', async () => {
+    const task = makeTask({ id: 5, unitId: 10, inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ id: 1, taskId: 5, isPrimary: true, tmuxTarget: 'azito:task-1--ab12.1' });
+    const { service, tmux, taskRepo, windowRepo, serverRepo } = buildService({
+      window: win, task, unit, projectServerRepo: allowProjectServerRepo(),
+    });
+    serverRepo.findByName.mockImplementation((name: string) => verifiedServer({ name, isolationVerifiedAt: null, isolationReport: null }));
+    tmux.listSessions.mockResolvedValue([{
+      name: 'azito',
+      windowCount: 1,
+      attached: false,
+      created: 0,
+      windows: [{ name: 'task-1--ab12', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+
+    await expect(service.respawn(1, verifiedServer())).rejects.toThrow(/requires approval/);
+
+    // The core regression assertion (Important finding 2): the still-live
+    // old window must survive untouched — the reverify now runs BEFORE
+    // confirmOldWindowGone, not after, so a downgrade discovered here must
+    // never reach killWindow at all.
+    expect(tmux.killWindow).not.toHaveBeenCalled();
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(tmux.createSession).not.toHaveBeenCalled();
+    expect(windowRepo.update).not.toHaveBeenCalled();
+    expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(5, {
+      pendingOperation: 'respawn',
+      priorStatus: 'open',
+      manifestHash: expect.any(String),
+      pendingOperationWindowId: 1,
+    });
+  });
+});

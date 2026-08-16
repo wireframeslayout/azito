@@ -74,6 +74,22 @@ export function resolveInputPolicy(
  */
 export const ISOLATION_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * Tolerance for `isolationVerifiedAt` reading slightly ahead of `now` (Issue
+ * #29 Step 3a review round, Important finding 3): ordinary clock drift
+ * between the process that wrote the doctor verification and the process
+ * reading it back (e.g. NTP correction mid-request) can put a genuinely
+ * fresh timestamp a few seconds/minutes in the future. 5 minutes comfortably
+ * covers that without opening a meaningful window for abuse — a
+ * `verifiedAtMs` any further ahead of `now` than this is not clock drift,
+ * it's either a rolled-back system clock or a corrupted/forged write, and
+ * `now - verifiedAtMs` would otherwise be negative and satisfy the TTL
+ * comparison below forever (Issue #29 Step 3a review round finding 3: an
+ * `'allow'` policy staying effective indefinitely because its verification
+ * timestamp never "expires" is a fail-open bug, not a display glitch).
+ */
+const ISOLATION_VERIFICATION_CLOCK_SKEW_TOLERANCE_MS = 5 * 60 * 1000;
+
 /** Why `resolveEffectiveInputPolicy` downgraded a requested `'allow'` to `'manual-approval'`. `null` when no downgrade occurred (the requested policy was returned as-is). */
 export type AllowDegradedReason = 'not_isolated' | 'verification_missing' | 'verification_expired' | 'scoped_auth_disabled' | 'verification_failed';
 
@@ -133,7 +149,18 @@ export function resolveEffectiveInputPolicy(
   // genuine `verified: true` report by construction.
   if (!server.isolationVerifiedAt) return degrade('verification_missing');
   const verifiedAtMs = new Date(server.isolationVerifiedAt).getTime();
-  if (!Number.isFinite(verifiedAtMs) || now - verifiedAtMs > ISOLATION_VERIFICATION_TTL_MS) return degrade('verification_expired');
+  // A timestamp meaningfully in the future (beyond ordinary clock skew) must
+  // fail closed the same way an actually-stale one does — `now - verifiedAtMs`
+  // going negative would otherwise satisfy the TTL check below forever (Issue
+  // #29 Step 3a review round, Important finding 3). Reported as the same
+  // 'verification_expired' reason: this is a variant of "the verification
+  // this process can trust has lapsed", not a new user-facing category, and
+  // reusing it avoids adding a reason value the frontend's i18n tables
+  // (tasks.json en/ja) and duplicated AllowDegradedReason union would both
+  // need updating for.
+  if (!Number.isFinite(verifiedAtMs) || verifiedAtMs > now + ISOLATION_VERIFICATION_CLOCK_SKEW_TOLERANCE_MS || now - verifiedAtMs > ISOLATION_VERIFICATION_TTL_MS) {
+    return degrade('verification_expired');
+  }
   if (!scopedAuthEnabled) return degrade('scoped_auth_disabled');
   // Defense in depth (Issue #29 review Step 3a Critical finding 1 follow-up):
   // do not trust a non-null, non-stale `isolationVerifiedAt` blindly — parse

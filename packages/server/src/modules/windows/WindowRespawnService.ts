@@ -318,6 +318,42 @@ export class WindowRespawnService {
         tokenId,
         server: respawnServer,
       } = await withServerLock(this.serverIsolationLock, server, true, async (freshServer) => {
+        // Issue #29 Step 3a review round, Important finding 2: re-verify the
+        // untrusted-execution gate against `freshServer` — re-read once this
+        // lock is actually acquired — BEFORE confirmOldWindowGone below kills
+        // the existing primary window, not after. This used to run only
+        // inside createRotatedWindowInLock's preCheck, which fires
+        // immediately before the new window's task token/env is built —
+        // i.e. AFTER the old window was already destroyed. A downgrade
+        // discovered there still aborted the respawn, but by then the task's
+        // only working pane was already gone: the caller was left at
+        // pending_approval with no window at all, instead of the still-live
+        // pre-respawn window an in-lock block is supposed to leave
+        // untouched. Moving the same check here means a downgrade aborts
+        // before anything is torn down.
+        if (isPrimary) {
+          const { manifest, projectServer: freshProjectServer } = resolveExecutionManifest(task!, {
+            unitRepo: this.unitRepo,
+            projectRepo: this.projectRepo,
+            projectServerRepo: this.projectServerRepo,
+            serverRepo: this.serverRepo,
+            projectSecretRepo: this.projectSecretRepo,
+            unitTypeLoader: this.unitTypeLoader,
+            sidekickLoader: this.sidekickLoader,
+          }, buildRespawnManifestInput(currentWin), freshServer.name);
+          reverifyExecutionGateInLock(
+            { taskRepo: this.taskRepo, logRepo: this.logRepo, events: this.events },
+            task!,
+            unitId,
+            'respawn',
+            freshProjectServer,
+            freshServer,
+            this.scopedAuthEnabled,
+            hashExecutionManifest(manifest),
+            windowId,
+          );
+        }
+
         const sessions = await this.tmux.listSessions(freshServer);
         const sessionExists = sessions.some((s) => s.name === sessionName);
         const session = sessions.find((s) => s.name === sessionName);
@@ -356,36 +392,10 @@ export class WindowRespawnService {
         };
 
         if (isPrimary) {
-          const created = await createRotatedWindowInLock(this.paneEnvService, freshServer, task!, 'respawn_create_failed', doCreate,
-            // Issue #29 Step 3a review, Important finding 2: re-verify the
-            // untrusted-execution gate against `freshServer` — re-read once
-            // this lock was actually acquired — immediately before this
-            // window's task token/env is built. See
-            // ExecutionGate.reverifyExecutionGateInLock's doc comment for
-            // the TOCTOU this closes.
-            (fs) => {
-              const { manifest, projectServer: freshProjectServer } = resolveExecutionManifest(task!, {
-                unitRepo: this.unitRepo,
-                projectRepo: this.projectRepo,
-                projectServerRepo: this.projectServerRepo,
-                serverRepo: this.serverRepo,
-                projectSecretRepo: this.projectSecretRepo,
-                unitTypeLoader: this.unitTypeLoader,
-                sidekickLoader: this.sidekickLoader,
-              }, buildRespawnManifestInput(currentWin), fs.name);
-              reverifyExecutionGateInLock(
-                { taskRepo: this.taskRepo, logRepo: this.logRepo, events: this.events },
-                task!,
-                unitId,
-                'respawn',
-                freshProjectServer,
-                fs,
-                this.scopedAuthEnabled,
-                hashExecutionManifest(manifest),
-                windowId,
-              );
-            },
-          );
+          // No preCheck here — the same reverify already ran above, before
+          // confirmOldWindowGone, against this same `freshServer` snapshot
+          // (see the comment at the top of this lock callback).
+          const created = await createRotatedWindowInLock(this.paneEnvService, freshServer, task!, 'respawn_create_failed', doCreate);
           return { newName: created.windowName, windowEnv: created.env, tokenId: created.tokenId as number | null, server: created.server };
         } else if (task) {
           const created = await createSecondaryWindowInLock(this.paneEnvService, freshServer, task, doCreate);
@@ -618,7 +628,7 @@ export class WindowRespawnService {
     if (!task) throw new Error(`Task ${taskId} not found`);
     if (!task.agentSessionId) throw new Error(`Task ${taskId} has no agent session ID`);
 
-    this.enforceExecutionGate(task, server, 'recover_session_legacy', null);
+    const unitId = this.enforceExecutionGate(task, server, 'recover_session_legacy', null);
 
     const tmuxSession = resolveTmuxSession(task.projectId, server.name, this.projectServerRepo);
     // Window generation point — rotates the task token via createRotatedWindow,
@@ -635,6 +645,42 @@ export class WindowRespawnService {
     const { windowName } = await runExclusiveForTask(taskId, async () => {
       const created = await createRotatedWindow(this.paneEnvService, this.serverIsolationLock, server, task, 'resume_legacy_create_failed', (freshServer, env) =>
         this.tmux.createWindow(freshServer, tmuxSession, `task-${task.id}`, { extraEnv: env }),
+        true,
+        // Issue #29 Step 3a review round, Important finding 1: re-verify the
+        // untrusted-execution gate against `freshServer` — re-read once this
+        // lock is actually acquired — before this legacy-recovery window's
+        // task token/env is built, same as respawn()'s primary branch and
+        // ExecuteTaskUseCase/TaskRestoreService already do. Without this, a
+        // verification lapse (isolation doctor re-run, scoped auth toggled
+        // off) discovered only while this call sat queued for the lock was
+        // never observed — the outer enforceExecutionGate() call above ran
+        // on the pre-lock snapshot and this path had no in-lock preCheck at
+        // all, so a downgrade mid-wait still resumed the untrusted session
+        // under the stale 'allow' decision. `respawnInput` is omitted (see
+        // enforceExecutionGate's own doc comment: this operation has no
+        // Window row to diverge from).
+        (freshServer) => {
+          const { manifest, projectServer: freshProjectServer } = resolveExecutionManifest(task, {
+            unitRepo: this.unitRepo,
+            projectRepo: this.projectRepo,
+            projectServerRepo: this.projectServerRepo,
+            serverRepo: this.serverRepo,
+            projectSecretRepo: this.projectSecretRepo,
+            unitTypeLoader: this.unitTypeLoader,
+            sidekickLoader: this.sidekickLoader,
+          }, undefined, freshServer.name);
+          reverifyExecutionGateInLock(
+            { taskRepo: this.taskRepo, logRepo: this.logRepo, events: this.events },
+            task,
+            unitId,
+            'recover_session_legacy',
+            freshProjectServer,
+            freshServer,
+            this.scopedAuthEnabled,
+            hashExecutionManifest(manifest),
+            null,
+          );
+        },
       );
       // Issue #29 review (10th pass), Important finding 3: use the fresh
       // `server` row createRotatedWindow re-read and actually created the
