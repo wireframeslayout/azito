@@ -183,6 +183,7 @@ function makeOpts(existingTask: Task, opts: { gateAllows: boolean }): { opts: Ta
       onDestroyed();
       return { success: result.code === 0, alreadyGone: false, result };
     }),
+    scopedAuthEnabled: true,
   };
   return { opts: routeOpts, task };
 }

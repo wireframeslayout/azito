@@ -175,6 +175,7 @@ function makeOpts(existingTask: Task): { opts: TasksRouteOptions; createCalls: R
       onDestroyed();
       return { success: result.code === 0, alreadyGone: false, result };
     }),
+    scopedAuthEnabled: true,
   };
   return { opts, createCalls };
 }

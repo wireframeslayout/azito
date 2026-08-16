@@ -124,6 +124,7 @@ function buildApp(scopedAuthEnabled: boolean, db: SqliteDatabase, createCalls: R
       onDestroyed();
       return { success: result.code === 0, alreadyGone: false, result };
     }),
+    scopedAuthEnabled: true,
   };
 
   const app = Fastify();

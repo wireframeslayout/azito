@@ -294,6 +294,7 @@ function buildService(opts: {
     events,
     paneEnvService,
     new KeyedMutex(),
+    true,
     undefined,
   );
 
@@ -1603,6 +1604,7 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
       events,
       paneEnvService,
       new KeyedMutex(),
+      true,
       undefined,
     );
 

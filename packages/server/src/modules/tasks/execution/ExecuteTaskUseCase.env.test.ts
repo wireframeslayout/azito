@@ -193,6 +193,8 @@ function buildUseCase(opts: {
   projectServersList?: Array<{ projectId: number; serverName: string; workingDirectory: string | null; branch: string | null; tmuxSession: string; inputPolicy?: 'deny' | 'manual-approval' | 'allow' }>;
   /** When set, overrides the server returned by serverRepo.findByName (default: makeServer(), type 'local'). */
   server?: ServerConfig;
+  /** Issue #29 Step 3a: defaults to true so pre-existing tests (all predating 'allow') are unaffected. */
+  scopedAuthEnabled?: boolean;
 }) {
   const taskRepo: ITaskRepository = {
     findAll: vi.fn(() => []),
@@ -388,6 +390,7 @@ function buildUseCase(opts: {
     new EventEmitter(),
     paneEnvService as any,
     new KeyedMutex(),
+    opts.scopedAuthEnabled ?? true,
   );
 
   return { useCase, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, transportFactory, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, paneEnvService };
@@ -1071,6 +1074,121 @@ describe('ExecuteTaskUseCase execution gate (Issue #328)', () => {
   });
 });
 
+// Issue #29 Step 3a: the 3-point AND gate for 'allow' (server isolation
+// intent + a current doctor verification + scoped auth enabled), exercised
+// end-to-end through ExecuteTaskUseCase.enforceExecutionGate() rather than
+// just the pure resolveEffectiveInputPolicy() unit tests (ProjectServer.test.ts)
+// — this also proves the degradation is actually wired to checkExecutionGate,
+// not just computed and discarded.
+describe('ExecuteTaskUseCase execution gate — "allow" policy 3-point AND gate (Issue #29 Step 3a)', () => {
+  const isolatedVerifiedServer = () => makeServer({
+    isolationIntent: true,
+    isolationVerifiedAt: new Date().toISOString(),
+  });
+
+  it('runs unattended (no approval required) when isolated, verified within TTL, and scoped auth is enabled', async () => {
+    const task = makeTask({ serverName: 'local-server', unitId: 10, inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
+    const { useCase, tmux, logRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [makeUnit({ id: 10 })],
+      projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'allow' },
+      server: isolatedVerifiedServer(),
+      scopedAuthEnabled: true,
+    });
+
+    await useCase.execute(10, 1);
+
+    expect(tmux.createWindow).toHaveBeenCalled();
+    expect(logRepo.append).not.toHaveBeenCalledWith(1, 10, 'command', expect.objectContaining({ type: 'execution_policy_degraded' }));
+  });
+
+  it('degrades to manual-approval (reason "not_isolated") and blocks when the server has no isolation intent', async () => {
+    const task = makeTask({ serverName: 'local-server', unitId: 10, inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
+    const { useCase, logRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [makeUnit({ id: 10 })],
+      projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'allow' },
+      server: makeServer({ isolationIntent: false, isolationVerifiedAt: null }),
+      scopedAuthEnabled: true,
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/requires approval/);
+
+    expect(logRepo.append).toHaveBeenCalledWith(1, 10, 'command', {
+      type: 'execution_policy_degraded',
+      requestedPolicy: 'allow',
+      effectivePolicy: 'manual-approval',
+      allowDegradedReason: 'not_isolated',
+    });
+  });
+
+  it('degrades to manual-approval (reason "verification_missing") when isolated but never doctor-verified', async () => {
+    const task = makeTask({ serverName: 'local-server', unitId: 10, inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
+    const { useCase, logRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [makeUnit({ id: 10 })],
+      projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'allow' },
+      server: makeServer({ isolationIntent: true, isolationVerifiedAt: null }),
+      scopedAuthEnabled: true,
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/requires approval/);
+
+    expect(logRepo.append).toHaveBeenCalledWith(1, 10, 'command', {
+      type: 'execution_policy_degraded',
+      requestedPolicy: 'allow',
+      effectivePolicy: 'manual-approval',
+      allowDegradedReason: 'verification_missing',
+    });
+  });
+
+  it('degrades to manual-approval (reason "verification_expired") when the doctor verification is older than the TTL', async () => {
+    const task = makeTask({ serverName: 'local-server', unitId: 10, inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
+    const { ISOLATION_VERIFICATION_TTL_MS } = await import('../../projects/ProjectServer.js');
+    const { useCase, logRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [makeUnit({ id: 10 })],
+      projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'allow' },
+      server: makeServer({ isolationIntent: true, isolationVerifiedAt: new Date(Date.now() - ISOLATION_VERIFICATION_TTL_MS - 1000).toISOString() }),
+      scopedAuthEnabled: true,
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/requires approval/);
+
+    expect(logRepo.append).toHaveBeenCalledWith(1, 10, 'command', {
+      type: 'execution_policy_degraded',
+      requestedPolicy: 'allow',
+      effectivePolicy: 'manual-approval',
+      allowDegradedReason: 'verification_expired',
+    });
+  });
+
+  it('degrades to manual-approval (reason "scoped_auth_disabled") when isolated and verified but scoped auth is off', async () => {
+    const task = makeTask({ serverName: 'local-server', unitId: 10, inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
+    const { useCase, logRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [makeUnit({ id: 10 })],
+      projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'allow' },
+      server: isolatedVerifiedServer(),
+      scopedAuthEnabled: false,
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/requires approval/);
+
+    expect(logRepo.append).toHaveBeenCalledWith(1, 10, 'command', {
+      type: 'execution_policy_degraded',
+      requestedPolicy: 'allow',
+      effectivePolicy: 'manual-approval',
+      allowDegradedReason: 'scoped_auth_disabled',
+    });
+  });
+});
+
 describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO監視強化 Phase 1)', () => {
   it('creates a follow_up turn (kind, phase:null) via the real HttpSignalTurnCoordinator, sends the http-signal envelope (not the tmux marker echo), and reconciles the turn as aborted when the run is stopped', async () => {
     const unit = makeUnit({ id: 42, workerExecutionMode: 'http-signal' });
@@ -1218,6 +1336,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
       new EventEmitter(),
       { buildEnvForNewWindow: vi.fn(() => ({ env: {}, tokenId: 1 })), revokeGeneration: vi.fn() } as any,
       new KeyedMutex(),
+      true,
     );
 
     await useCase.followUp(42, 1, 'please continue');
@@ -2092,6 +2211,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       new EventEmitter(),
       { buildEnvForNewWindow: vi.fn(() => ({ env: {}, tokenId: 1 })), revokeGeneration: vi.fn() } as any,
       new KeyedMutex(),
+      true,
     );
 
     // execute() itself resolves once setup (session/window/worktree

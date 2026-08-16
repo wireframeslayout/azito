@@ -169,6 +169,7 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
       onDestroyed();
       return { success: result.code === 0, alreadyGone: false, result };
     }),
+    scopedAuthEnabled: true,
   };
 }
 

@@ -198,6 +198,7 @@ function makeOpts(
     destroyPrimaryTaskWindow: (taskId, windowName, _serverName, _target, reason, kill, onDestroyed) =>
       destroyPrimaryTaskWindow(taskId, windowName, taskRepo, paneEnvService as TaskPaneEnvironmentService, reason, kill, onDestroyed),
     paneEnvService,
+    scopedAuthEnabled: true,
   };
 }
 

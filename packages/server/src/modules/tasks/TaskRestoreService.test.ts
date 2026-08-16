@@ -214,6 +214,7 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
     // its callback synchronously-in-sequence like production, rather than
     // needing every test to special-case a mocked lock.
     serverIsolationMutex: new KeyedMutex(),
+    scopedAuthEnabled: true,
     ...overrides,
   };
 }

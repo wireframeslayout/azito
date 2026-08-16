@@ -55,6 +55,7 @@ function makeRunner(overrides: {
   projectRepo?: Record<string, unknown>;
   projectServerRepo?: Record<string, unknown>;
   unitTypeLoader?: Record<string, unknown>;
+  scopedAuthEnabled?: boolean;
 } = {}) {
   const taskRepo = {
     findById: vi.fn(() => ({
@@ -190,6 +191,7 @@ function makeRunner(overrides: {
     })(),
     serverRepo as any,
     projectSecretRepo as any,
+    overrides.scopedAuthEnabled ?? true,
   );
 
   return { runner, taskRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitRepo, unitTypeLoader, sidekickLoader, workerInput, workerWaiter, appendLog, getWorktreeService, transportFactory, sidekickSyncService, httpSignalCoordinator, pushVerifier, gitProvider, pullRequestCreator };
