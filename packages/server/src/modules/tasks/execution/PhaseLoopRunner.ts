@@ -320,6 +320,21 @@ export class PhaseLoopRunner {
       const phase = enabledPhases[currentPhaseIndex];
       const phaseDef = phaseDefMap.get(phase)!;
 
+      // Untrusted-input execution gate re-check (Issue #328 ninth-round
+      // review) — must run BEFORE the isolation cutoff below and BEFORE the
+      // Sidekick is resolved / prompt is built further down, so a block
+      // never lets a stale/rewritten instruction reach the worker, and a
+      // skipped pushing phase never bypasses a gate that would otherwise
+      // have caught drift (Issue #29 review, Important finding 1): the
+      // isolation cutoff advances the task straight to the terminal 'review'
+      // status without ever building a prompt, so re-checking after it would
+      // never run for the one phase it guards. See
+      // reverifyExecutionGateForPhase's doc comment.
+      const currentTask = this.taskRepo.findById(task.id);
+      if (currentTask && !this.reverifyExecutionGateForPhase(task.id, currentTask, unit.id)) {
+        return;
+      }
+
       // Isolation cutoff (Issue #29 docs review, Important finding 1):
       // isolated agent servers never hold push credentials (see
       // ServerIsolationLock.ts / TaskPaneEnvironmentService.ts — the same
@@ -334,7 +349,9 @@ export class PhaseLoopRunner {
       // the "all phases complete" block below, terminal status 'review').
       // Push becomes the operator's responsibility until #87 (hub-proxied
       // push) ships; this is deliberately the only cutoff logic added here —
-      // no push-credential injection, per the Issue #29 review scope.
+      // no push-credential injection, per the Issue #29 review scope. Runs
+      // only after the gate re-check above has already confirmed the
+      // approved manifest/input-policy still holds for this phase.
       if (server.isolationIntent === true && phaseDef.pushVerify) {
         this.taskRepo.updateCurrentPhase(task.id, phase);
         this.appendLog(task.id, unit.id, 'command', {
@@ -349,15 +366,6 @@ export class PhaseLoopRunner {
       this.taskRepo.updateStatus(task.id, 'running');
       this.taskRepo.updateCurrentPhase(task.id, phase);
       this.appendLog(task.id, unit.id, 'status_change', { status: 'phase_started', phase });
-
-      // Untrusted-input execution gate re-check (Issue #328 ninth-round
-      // review) — must run BEFORE the Sidekick is resolved and the prompt is
-      // built below, so a block never lets a stale/rewritten instruction
-      // reach the worker. See reverifyExecutionGateForPhase's doc comment.
-      const currentTask = this.taskRepo.findById(task.id);
-      if (currentTask && !this.reverifyExecutionGateForPhase(task.id, currentTask, unit.id)) {
-        return;
-      }
 
       const sidekick = resolvePhaseSidekick(this.sidekickLoader, phase, unit.phaseConfig, phaseDef);
       const sidekickDir = resolveSidekickDir(sidekick, server);
