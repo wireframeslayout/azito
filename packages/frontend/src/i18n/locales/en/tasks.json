@@ -57,6 +57,15 @@
     "noRepository": "(no repository configured)",
     "noSecrets": "(none)",
     "isolatedNotice": "This server is declared isolated — no secrets or UI/agent tokens will be injected into this run.",
+    "allowDegraded": {
+      "notice": "This project server is configured to run automatically without approval, but this task was automatically downgraded to manual approval for the reason below.",
+      "reason": {
+        "not_isolated": "The target server has no isolation declared.",
+        "verification_missing": "The target server's isolation has not been verified by the isolation doctor.",
+        "verification_expired": "The target server's isolation verification has expired — re-verify it.",
+        "scoped_auth_disabled": "Scoped auth (AZITO_SCOPED_AUTH) is currently disabled."
+      }
+    },
     "reapprovalNote": "Editing this task's title or description after approval will require re-approval.",
     "approve": "Approve",
     "deny": "Deny",
