@@ -252,8 +252,13 @@ network path is open regardless — non-Tailscale-SSH services listening on 22, 
 SSH daemon, would still be reachable.
 
 Assert both — network reachability and SSH authorization — as machine-checked policy tests, using
-Tailscale's [ACL test syntax](https://tailscale.com/kb/1337/acl-syntax#tests) (`tests`/`sshTests`,
-run via `tailscale acl test` or the admin console's "Preview" action before saving):
+Tailscale's [ACL test syntax](https://tailscale.com/kb/1337/acl-syntax#tests) (`tests`/`sshTests`).
+The policy file itself is managed and validated either through the admin console's "Preview"
+action before saving, or through GitOps using the
+[Tailscale API](https://tailscale.com/kb/1101/api) /
+[Manage tailnet policies](https://tailscale.com/kb/1276/tailnet-policy-file) (a CI pipeline that
+fetches, validates, and applies the policy via the API). There is no standalone `tailscale acl
+test` CLI subcommand — if you want this in CI, run the tests through the API instead.
 
 ```jsonc
 {
@@ -272,15 +277,19 @@ run via `tailscale acl test` or the admin console's "Preview" action before savi
     {
       "src": "tag:isolated",
       "dst": ["<some-other-tailnet-host>"],
-      "accept": false,
+      // accept/check/deny are each arrays of *remote usernames being attempted* (not booleans).
+      // Since tag:isolated is never granted SSH, list the representative login name(s) actually
+      // used in your operation (e.g. "root" or the operator's SSH username) under deny, asserting
+      // "cannot log in as that user."
+      "deny": ["<remote-user>"],
     },
   ],
 }
 ```
 
-A `tests`/`sshTests` failure blocks the ACL from saving in the admin console and fails `tailscale
-acl test` in CI — treat this as the actual proof that "isolated server cannot reach anything but
-the hub," not the absence of a rule you wrote yourself.
+A `tests`/`sshTests` failure blocks the ACL from saving in the admin console — treat this as the
+actual proof that "isolated server cannot reach anything but the hub," not the absence of a rule
+you wrote yourself.
 
 ### Firewall variant (required as a persistent host firewall regardless of Tailscale)
 
@@ -289,180 +298,116 @@ lateral movement over the public internet, the local LAN, or IPv6 requires a **p
 dual-stack (IPv4 + IPv6) host firewall on the isolated server itself. Apply this at all times, as a
 complement to the tailnet ACL, whether or not Tailscale is in use.
 
-`iptables` only covers IPv4 — omitting `ip6tables` lets **IPv6 egress bypass the rule set
-entirely**. `nftables` is recommended since it can cover both families in one rule set;
-`iptables`/`ip6tables` in tandem (with the exact same rules applied to both) is equally effective.
+**The principle (this is the part that matters)**: keep the isolated server's outbound traffic to
+the bare minimum, and block everything that could reach another node directly — especially SSH
+tcp/22 — along with any unrelated egress. "Bare minimum" means exactly these two things:
 
-Because traffic is asymmetric (previous subsection), the **INPUT chain** (inbound to the isolated
-server) and the **OUTPUT chain** (outbound from it) need different rules. The common order is:
-allow loopback → allow established/related traffic → explicitly allow the required traffic → deny
-everything else. Replace the hub address and each port (`<agent-port>` is this server's
-`agentPort`; `<hub-webhook-port>` is the hub's webhook port) with your environment's values.
+1. **Reaching the hub's webhook** (the path hook scripts use to POST `agent-done`/
+   `agent-activity`, etc.)
+2. **`tailscaled`'s own underlay connection** (the traffic that makes the tailnet overlay itself
+   work: outbound TCP 443 to the coordination server / DERP relays, the UDP used for DERP/STUN,
+   and DNS to a configured resolver. Blocking this cuts the isolated server off from the tailnet
+   entirely, which also destroys the hub's inbound control path)
 
-**Important**: the commands below only apply the rules at runtime via `nft`/`iptables` — **they
-are wiped out on reboot as-is**. In production you must also complete the "Making it persistent"
-step in the next subsection.
+Inbound should allow only the hub reaching this server's `agentPort`.
+
+**Do not break the netfilter chains Tailscale manages**: on Linux, `tailscaled` creates its own
+netfilter chains (`ts-input`, `ts-forward`, etc.) and inserts jump rules at the top of the
+`INPUT`/`FORWARD` chains to manage traffic for the `tailscale0` interface. Replacing the entire
+filter table's `INPUT`/`OUTPUT`/`FORWARD` chains in one shot via a `-restore`-style command wipes
+out those `tailscaled`-owned chains and jump rules along with everything else. Do not use that
+wholesale-replace approach as the basis for a persistent rule set. Safer directions:
+
+- Check `iptables -S`/`nft list ruleset` before applying anything, leave whatever chains and jump
+  rules `tailscaled` has inserted intact, and **append** the isolation-specific restrictions on
+  top (never a full replace).
+- Ideally, run `tailscaled` under a dedicated service UID/cgroup and scope the egress restriction
+  to the task process (the UID/cgroup the agent/worker runs under) instead. That way
+  `tailscaled`'s underlay traffic and the task's egress are never conflated, and you never have to
+  touch `tailscaled`'s own rules — though this requires a configuration change and is out of scope
+  for this document.
+
+**What follows is reference material laying out the requirements — validation in your own
+environment is required.** The authoritative source for what ports/protocols `tailscaled`'s
+underlay actually needs is Tailscale's official
+[Firewall ports](https://tailscale.com/kb/1082/firewall-ports) page. These can vary by version and
+network configuration (DERP-relayed vs. direct connection, etc.), so defer to the official
+documentation for exact port numbers.
+
+**Requirements table**:
+
+| Direction | Destination | Protocol/Port | Allow? | Notes |
+|---|---|---|---|---|
+| INPUT | this host (loopback) | any | allow | loopback is always allowed |
+| OUTPUT | this host (loopback) | any | allow | same |
+| INPUT/OUTPUT | - | established/related | allow | needed in both directions for replies |
+| INPUT | hub's tailscale IP | TCP `<agent-port>` | allow | path the hub uses to dial in for exec/terminal/doctor probes |
+| OUTPUT | hub's tailscale IP | TCP `<hub-webhook-port>` | allow | path hook scripts use to POST agent-done/agent-activity |
+| OUTPUT | coordination server / DERP | TCP 443 | allow | `tailscaled`'s underlay — see the official requirements |
+| OUTPUT | DERP/STUN | UDP (ports per official requirements) | allow | `tailscaled` direct-connection establishment / DERP relay |
+| OUTPUT | one configured DNS resolver (usually `100.100.100.100`) | UDP/TCP 53 | allow (only if name resolution is needed) | see next subsection; never a wildcard allow to any DNS server |
+| INPUT/OUTPUT | everything else (including SSH tcp/22 to other nodes) | any | deny | this is the actual lateral-movement defense |
+
+**Notes**:
+- The table above lays out direction/destination/protocol; the concrete IPs/ports depend on your
+  environment (Tailscale's DERP map, region configuration, etc.). Before applying anything, verify
+  the addresses/ports actually in use from `tailscaled`'s own logs or the official documentation.
+- If you build your own rule set, implement it in a way that doesn't destroy the chains
+  `tailscaled` inserted (append, as described above).
+- No single "paste this and you're done" firewall script is provided here. Whatever
+  implementation you use — dual-stack (IPv4/IPv6), `nft` or `iptables` — build rules that satisfy
+  the requirements table above and validate them in your own environment before going to
+  production.
 
 ### Name resolution under this firewall (MagicDNS / `AZITO_PUBLIC_URL`)
 
-The rule sets below deliberately allow only direct TCP to a fixed destination — **they do not open
-DNS**. If `<hub-ipv4>`/`<hub-ipv6>` in the commands is a hostname (in particular a MagicDNS name,
-which is what `AZITO_PUBLIC_URL` normally holds), the isolated server has no way left to resolve it
-once its existing DNS cache entry expires: the hook scripts (`agent-done`/`agent-activity`/etc.)
-silently stop reaching the hub, and the outage never shows up as a firewall deny in the logs — it
-looks like a name that simply stopped resolving.
+The requirements table above is built around direct reachability to fixed destinations, so DNS
+needs an explicit decision. If the hub-facing configuration (in particular a MagicDNS name, which
+is what `AZITO_PUBLIC_URL` normally holds) is a hostname, the isolated server has no way left to
+resolve it once its existing DNS cache entry expires: the hook scripts (`agent-done`/
+`agent-activity`/etc.) silently stop reaching the hub, and the outage never shows up as a firewall
+deny in the logs — it looks like a name that simply stopped resolving.
 
-Two ways to close this gap; pick one before relying on this ruleset in production:
+Two ways to close this gap; pick one before relying on this requirements table in production:
 
 - **Pin a numeric IP (recommended)**: resolve the hub's Tailscale IP once and configure the
-  isolated server's webhook target (and `<hub-ipv4>`/`<hub-ipv6>` in the rules below) with that
-  literal address instead of the MagicDNS hostname. No DNS lookup is ever needed, so the rule sets
-  as written are already correct and complete. If the hook scripts speak HTTPS to the hub, confirm
-  their TLS verification is configured to accept the certificate for that IP (a certificate issued
-  for the MagicDNS name may not validate against the bare IP depending on your TLS setup) — or use
-  the tailnet's plain-HTTP path if your deployment already treats the tailnet itself as the trust
-  boundary.
-- **Allow DNS to one explicit resolver**: if you must keep resolving a hostname, add a rule
-  permitting DNS (UDP **and** TCP, port 53) to your resolver's numeric IP only — never a wildcard
-  allow to "any" DNS server, which would reopen a broad egress path. Tailscale's own resolver
-  (`100.100.100.100`) is the usual choice for a MagicDNS name. Add, for each of `nft`/`iptables`:
+  isolated server's webhook target with that literal address instead of the MagicDNS hostname. No
+  DNS lookup is ever needed, so you can drop the DNS row from the requirements table entirely. If
+  the hook scripts speak HTTPS to the hub, confirm their TLS verification is configured to accept
+  the certificate for that IP (a certificate issued for the MagicDNS name may not validate against
+  the bare IP depending on your TLS setup) — or use the tailnet's plain-HTTP path if your
+  deployment already treats the tailnet itself as the trust boundary.
+- **Allow DNS to one explicit resolver**: if you must keep resolving a hostname, follow the DNS row
+  in the requirements table and allow DNS (UDP **and** TCP, port 53) to your resolver's numeric IP
+  only — never a wildcard allow to "any" DNS server, which would reopen a broad egress path.
+  Tailscale's own resolver (`100.100.100.100`) is the usual choice for a MagicDNS name.
 
-  ```bash
-  # nftables — insert before the final OUTPUT allow rule
-  nft add rule inet isolated output ip daddr 100.100.100.100 udp dport 53 ct state new accept
-  nft add rule inet isolated output ip daddr 100.100.100.100 tcp dport 53 ct state new accept
-
-  # iptables — insert before the trailing REJECT rules
-  iptables -A OUTPUT -d 100.100.100.100 -p udp --dport 53 -m state --state NEW -j ACCEPT
-  iptables -A OUTPUT -d 100.100.100.100 -p tcp --dport 53 -m state --state NEW -j ACCEPT
-  ```
-
-  Whichever option you pick, verify it under the firewall (not just before applying it) — from the
-  isolated server itself:
-
-  ```bash
-  getent hosts <hub-hostname-or-ip>     # confirms resolution still works (or isn't needed)
-  curl -v <hub-webhook-url>             # confirms the hook path actually reaches the hub
-  ```
+Whichever option you pick, verify it under the firewall (not just before applying it) — from the
+isolated server itself:
 
 ```bash
-# --- nftables (recommended: one rule set covers IPv4 and IPv6) ---
-nft add table inet isolated
-nft add chain inet isolated output '{ type filter hook output priority 0; policy drop; }'
-nft add chain inet isolated input  '{ type filter hook input  priority 0; policy drop; }'
-
-# Always allow loopback
-nft add rule inet isolated output oif lo accept
-nft add rule inet isolated input  iif lo accept
-
-# Allow established/related traffic (needed in both directions)
-nft add rule inet isolated output ct state established,related accept
-nft add rule inet isolated input  ct state established,related accept
-
-# INPUT: allow only new inbound connections from the hub to this server's agentPort
-# (the path the hub uses to dial in for exec/terminal/doctor probes)
-nft add rule inet isolated input ip  saddr <hub-ipv4> tcp dport <agent-port> ct state new accept
-nft add rule inet isolated input ip6 saddr <hub-ipv6> tcp dport <agent-port> ct state new accept
-
-# OUTPUT: allow only new outbound connections to the hub's webhook port
-# (the path hook scripts use to POST agent-done / agent-activity; the main point is blocking lateral movement to other nodes)
-nft add rule inet isolated output ip  daddr <hub-ipv4> tcp dport <hub-webhook-port> ct state new accept
-nft add rule inet isolated output ip6 daddr <hub-ipv6> tcp dport <hub-webhook-port> ct state new accept
-
-# Everything else is denied automatically (chain policy is drop; no
-# explicit rule needed for packets that don't match anything above)
-```
-
-```bash
-# --- iptables + ip6tables (for environments without nftables — apply the
-#     exact same rules to BOTH IPv4 and IPv6) ---
-#
-# Applied atomically via `iptables-restore`/`ip6tables-restore`: this REPLACES
-# the entire filter table's INPUT/OUTPUT/FORWARD chains in one call, with a
-# default policy of DROP. Building the same ruleset with a sequence of
-# `iptables -A ...` calls (appending one rule at a time) is NOT equivalent and
-# is NOT safe here — appending a REJECT rule at the end only outranks rules
-# that come AFTER it in the same chain. Any broad ACCEPT rule already present
-# in INPUT/OUTPUT before you start (a leftover from another tool, a prior
-# manual `-A INPUT -j ACCEPT`, a management/monitoring exception, etc.) still
-# matches first and the appended REJECT never gets evaluated. Loading a full
-# `*filter ... COMMIT` ruleset via `-restore` sidesteps that entirely: nothing
-# from before this call survives, so there is no earlier rule left to outrank
-# the ones below.
-cat <<'EOF' | iptables-restore
-*filter
-:INPUT DROP [0:0]
-:FORWARD DROP [0:0]
-:OUTPUT DROP [0:0]
--A INPUT -i lo -j ACCEPT
--A OUTPUT -o lo -j ACCEPT
--A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
--A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
--A INPUT -s <hub-ipv4> -p tcp --dport <agent-port> -m state --state NEW -j ACCEPT
--A OUTPUT -d <hub-ipv4> -p tcp --dport <hub-webhook-port> -m state --state NEW -j ACCEPT
-COMMIT
-EOF
-
-cat <<'EOF' | ip6tables-restore
-*filter
-:INPUT DROP [0:0]
-:FORWARD DROP [0:0]
-:OUTPUT DROP [0:0]
--A INPUT -i lo -j ACCEPT
--A OUTPUT -o lo -j ACCEPT
--A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
--A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
--A INPUT -s <hub-ipv6> -p tcp --dport <agent-port> -m state --state NEW -j ACCEPT
--A OUTPUT -d <hub-ipv6> -p tcp --dport <hub-webhook-port> -m state --state NEW -j ACCEPT
-COMMIT
-EOF
-```
-
-Because the chain policy itself is `DROP`, there is no trailing REJECT/DROP rule to accidentally
-place in the wrong position — every packet that doesn't match one of the explicit ACCEPT rules
-above falls through to the chain policy. If you added the optional DNS-allow rules from the
-previous subsection, insert their `-A` lines into the `*filter` block above (order among the
-ACCEPT rules doesn't matter; only "before `COMMIT`, after the chain headers" does).
-
-**Verify rule order after loading**, not just that the rules exist — `-S` output lists rules in
-match order, so confirm the policy line reads `DROP` and no ACCEPT rule you didn't intend for
-appears above the ones you just loaded:
-
-```bash
-iptables  -S       # first line should be "-P INPUT DROP" / "-P OUTPUT DROP" / "-P FORWARD DROP"
-ip6tables -S        # same check for IPv6 — don't stop at IPv4
+tailscale status                      # confirms the tailnet connection is alive (detects a blocked underlay)
+getent hosts <hub-hostname-or-ip>     # confirms resolution still works (or isn't needed)
+curl -v <hub-webhook-url>             # confirms the hook path actually reaches the hub
 ```
 
 ### Making it persistent (surviving reboot)
 
-Runtime commands alone are wiped on reboot, silently removing lateral-movement protection. You
-**must** persist the rules with one of the following, so they are always in effect.
+Rules built at runtime alone are wiped on reboot, silently removing lateral-movement protection.
+You **must** persist them through your distribution's standard mechanism — `nftables.service` for
+an `nft` implementation, or `iptables-persistent` for an `iptables`/`ip6tables` implementation
+(Debian/Ubuntu) — so they're always in effect. As above, this assumes the rule set being persisted
+was built by appending to, not replacing, whatever chains/jump rules `tailscaled` inserted.
 
-**nftables**: write the rule set above into `/etc/nftables.conf` verbatim (as a
-`table inet isolated { ... }` block with both chains), then enable the service:
-
-```bash
-sudo systemctl enable --now nftables.service
-```
-
-**iptables**: save with `iptables-persistent` (Debian/Ubuntu):
-
-```bash
-sudo apt-get install -y iptables-persistent
-sudo netfilter-persistent save        # saves the current iptables AND ip6tables rules
-sudo systemctl enable netfilter-persistent
-```
-
-**Verify after reboot**: reboot and confirm the rules are actually in effect — do not assume they
-are.
+**Verifying after reboot is required.** Reboot and confirm both that the rules are actually in
+effect and that `tailscaled`'s underlay connection hasn't broken.
 
 ```bash
 sudo reboot
 # after reboot:
-sudo nft list ruleset                 # nftables: confirm the rules above are listed
-# or
-sudo iptables  -L -n -v               # iptables: confirm the INPUT/OUTPUT allow/deny rules
-sudo ip6tables -L -n -v               # always check ip6tables too — don't stop at IPv4
+sudo nft list ruleset                 # or: sudo iptables -L -n -v / sudo ip6tables -L -n -v
+tailscale status                      # confirms the tailnet connection is alive (underlay not blocked)
+curl -v <hub-webhook-url>             # confirms reachability to the hub (agentPort connectivity)
 ```
 
 ### Planned future work
@@ -471,7 +416,7 @@ sudo ip6tables -L -n -v               # always check ip6tables too — don't sto
 - Turning the above into an application feature (settings UI / automatic application): **#86**
 
 Both are manual operational procedures today. The isolation doctor's nine checks (section 3) do
-not include tailnet ACL verification.
+not include verification of either the tailnet ACL or the host firewall.
 
 ## 7. Pushing from isolated tasks is the operator's responsibility for now
 

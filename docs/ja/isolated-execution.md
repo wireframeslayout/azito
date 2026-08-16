@@ -244,9 +244,14 @@ Tailscale SSH の `ssh` ブロック（セッション認可）の評価に進�
 Tailscale SSH を使わない SSH デーモンには、それでも到達できてしまいます。
 
 ネットワーク到達可否と SSH 認可の両方を、Tailscale の
-[ACL テスト構文](https://tailscale.com/kb/1337/acl-syntax#tests)（`tests`/`sshTests`。
-`tailscale acl test` コマンドまたは管理コンソールの「Preview」で保存前に実行）で
-機械検証可能なポリシーテストとして表明してください:
+[ACL テスト構文](https://tailscale.com/kb/1337/acl-syntax#tests)（`tests`/`sshTests`）で
+機械検証可能なポリシーテストとして表明してください。ポリシーファイル自体の管理・検証は、
+保存前の管理コンソール「Preview」、または
+[Tailscale API](https://tailscale.com/kb/1101/api) /
+[Manage tailnet policies](https://tailscale.com/kb/1276/tailnet-policy-file) を使った
+GitOps 連携（API 経由でポリシーを取得・検証・適用する CI パイプライン）で行います。単体の
+`tailscale acl test` という CLI サブコマンドは存在しないため、CI に組み込む場合は API 経由で
+テストを実行してください。
 
 ```jsonc
 {
@@ -265,193 +270,134 @@ Tailscale SSH を使わない SSH デーモンには、それでも到達でき�
     {
       "src": "tag:isolated",
       "dst": ["<some-other-tailnet-host>"],
-      "accept": false,
+      // accept/check/deny はいずれも「到達を試みるリモートユーザー名」の配列（真偽値ではない）。
+      // tag:isolated からの SSH を許可しない前提なので、実運用で使われる代表的なログイン名
+      // （例: "root" や operator の SSH ユーザー名）を deny に列挙し、「そのユーザーとしては
+      // ログインできない」ことを表明する。
+      "deny": ["<remote-user>"],
     },
   ],
 }
 ```
 
-`tests`/`sshTests` が失敗すると管理コンソールでの ACL 保存自体がブロックされ、CI での
-`tailscale acl test` も失敗します。「隔離サーバーはハブ以外の何にも到達できない」ことの
-実際の証明はこちらであり、自分で書いたルールが存在しないことそれ自体ではありません。
+`tests`/`sshTests` が失敗すると管理コンソールでの ACL 保存自体がブロックされます。「隔離
+サーバーはハブ以外の何にも到達できない」ことの実際の証明はこちらであり、自分で書いた
+ルールが存在しないことそれ自体ではありません。
 
 ### ファイアウォール版（永続的なホストファイアウォールとして必須）
 
-Tailscale ACL は tailnet 宛のトラフィックしか制御しないため（前項）、public internet 直接到達
+Tailscale ACL は tailnet 宛のトラフィックしか制御しないため（前項）、public internet への直接到達
 ・同一 LAN・IPv6 経路での横移動を塞ぐには、隔離サーバー本体に**恒常的な** dual-stack（IPv4 +
 IPv6）のホストファイアウォールが別途必要です。Tailscale 使用の有無に関わらず、tailnet ACL の
 補完として常時適用してください。
 
-`iptables` は IPv4 のみを対象とするため、`ip6tables` を省略すると **IPv6 の egress が素通り**
-します。IPv4/IPv6 を一体で書ける `nftables` を推奨しますが、`iptables`/`ip6tables` の組でも
-同内容を両方に適用すれば同等です。
+**原則（ここが本質です）**: 隔離サーバーの outbound は必要最小限に絞り、他ノードへの直接到達
+（特に SSH の tcp/22）と無関係な egress をすべて塞ぎます。「必要最小限」に含まれるのは次の
+2種類だけです。
 
-前項のとおり通信は2方向あるため、**INPUT chain**（隔離サーバーへの inbound）と **OUTPUT
-chain**（隔離サーバーからの outbound）を非対称に扱います。共通の順序は、ループバック許可 →
-確立済み/関連トラフィック許可 → 必要なトラフィックの明示許可 → 残りを拒否、です。ハブの
-アドレスと各ポート（`<agent-port>` はこのサーバーの `agentPort`、`<hub-webhook-port>` はハブの
-webhook ポート）は環境に合わせて置き換えてください。
+1. **hub の webhook への到達**（`agent-done`/`agent-activity` 等の hook スクリプトが POST する
+   経路）
+2. **`tailscaled` 自身の underlay 接続**（tailnet オーバーレイを成立させるための下回りの通信 —
+   coordination server / DERP リレーへの outbound TCP 443、DERP/STUN で使う UDP、設定用リゾルバ
+   への DNS。ここを塞ぐと隔離サーバーは tailnet に接続できなくなり、hub からの inbound 制御経路
+   自体も失われます）
 
-**重要**: 以下はいずれも runtime（実行時）に nft/iptables コマンドを直接叩くだけの例であり、
-**このままでは reboot で消えます**。実運用では次項の「永続化」の手順まで必ず行ってください。
+inbound は hub からの `agentPort` のみを許可します。
+
+**Tailscale が管理する netfilter チェーンを壊さないこと**: Linux 版 `tailscaled` は自身の
+netfilter チェーン（`ts-input`/`ts-forward` 等）を作成し、`INPUT`/`FORWARD` チェインの先頭に
+それらへの jump ルールを挿入して `tailscale0` インターフェースの経路を管理しています。filter
+テーブルの `INPUT`/`OUTPUT`/`FORWARD` を丸ごと `-restore` 系コマンドで一括置換する方式は、
+この `tailscaled` 由来のチェイン・jump ルールも一緒に消し去ります。恒常適用のベースにこの
+一括置換方式を使わないでください。安全な方向性は次のいずれかです。
+
+- 適用前に `iptables -S`/`nft list ruleset` を確認し、`tailscaled` が挿入したチェイン・jump
+  ルールをそのまま残した上で、隔離用の制限ルールを**追記**する（丸ごと置換しない）。
+- 理想的には `tailscaled` を専用のサービス UID/cgroup で動かし、隔離の egress 制限は
+  task プロセス（agent/worker が属する UID・cgroup）にだけ適用する。`tailscaled` の
+  underlay 通信とタスクの egress を混同せず、`tailscaled` 側のルールに一切触れずに済みますが、
+  構成変更を伴うため本書のスコープ外です。
+
+**以下は要件を整理した参考情報であり、環境ごとの検証が必須です**。`tailscaled` の underlay が
+実際に必要とするポート・プロトコルの正本は Tailscale 公式の
+[Firewall ports](https://tailscale.com/kb/1082/firewall-ports) です。バージョンやネットワーク
+構成（DERP 経由か direct connection か等）によって変わり得るため、記載のポート番号は公式
+ドキュメントを優先してください。
+
+**要件表**:
+
+| 方向 | 宛先 | プロトコル/ポート | 可否 | 備考 |
+|---|---|---|---|---|
+| INPUT | 自ホスト（loopback） | any | 許可 | ループバックは無条件許可 |
+| OUTPUT | 自ホスト（loopback） | any | 許可 | 同上 |
+| INPUT/OUTPUT | - | established/related | 許可 | 応答パケットを通すため両方向に必要 |
+| INPUT | hub の tailscale IP | TCP `<agent-port>` | 許可 | hub がコマンド実行・ターミナル・doctor プローブのために接続してくる経路 |
+| OUTPUT | hub の tailscale IP | TCP `<hub-webhook-port>` | 許可 | hook スクリプトが agent-done/agent-activity を POST する経路 |
+| OUTPUT | coordination server / DERP | TCP 443 | 許可 | `tailscaled` の underlay。公式要件を参照 |
+| OUTPUT | DERP/STUN | UDP（公式要件のポート） | 許可 | `tailscaled` の direct connection 確立・DERP リレー |
+| OUTPUT | 設定した DNS リゾルバ1台（通常 `100.100.100.100`） | UDP/TCP 53 | 許可（名前解決が必要な場合のみ） | 次項参照。任意の DNS サーバーへの包括許可はしない |
+| INPUT/OUTPUT | 上記以外すべて（他ノードへの SSH tcp/22 を含む） | any | 拒否 | 横移動対策の本体 |
+
+**注意点**:
+- 上記は方向・宛先・プロトコルの整理であり、具体的な IP/ポートは環境（Tailscale の DERP
+  マップ、リージョン設定など）に依存します。適用前に必ず現物の `tailscaled` ログや公式
+  ドキュメントで実際に使用されるアドレス/ポートを確認してください。
+- ルールセットを自作する場合も、`tailscaled` が挿入したチェインを壊さない実装（追記方式）
+  にしてください（前述）。
+- ここには「そのまま流し込める完全なファイアウォールスクリプト」は用意していません。
+  dual-stack（IPv4/IPv6）・`nft`/`iptables` いずれの実装でも、上記の要件表を満たすルールを
+  組み立て、必ず自環境で検証してから本番投入してください。
 
 ### このファイアウォール下での名前解決（MagicDNS / `AZITO_PUBLIC_URL`）
 
-以下のルールセットは意図的に固定宛先への直接 TCP のみを許可しており、**DNS は開いていません**。
-ルール中の `<hub-ipv4>`/`<hub-ipv6>` がホスト名（特に `AZITO_PUBLIC_URL` が通常保持する
-MagicDNS 名）である場合、隔離サーバー側の既存 DNS キャッシュが失効した時点で、それ以降その名前を
-解決する手段がなくなります。hook スクリプト（`agent-done`/`agent-activity` 等）は静かに hub へ
-届かなくなり、しかもこの障害はファイアウォールの deny ログとしては現れません — 単に「名前が
-引けなくなった」ように見えるだけです。
+上記の要件表は固定宛先への直接到達を基本方針としており、DNS の扱いは明示的に選択する必要が
+あります。ハブ宛の設定（特に `AZITO_PUBLIC_URL` が通常保持する MagicDNS 名）がホスト名である
+場合、隔離サーバー側の既存 DNS キャッシュが失効した時点で、それ以降その名前を解決する手段が
+なくなります。hook スクリプト（`agent-done`/`agent-activity` 等）は静かに hub へ届かなくなり、
+しかもこの障害はファイアウォールの deny ログとしては現れません — 単に「名前が引けなくなった」
+ように見えるだけです。
 
-このギャップを塞ぐ方法は2つあります。本番でこのルールセットに依存する前にどちらかを選んでください。
+このギャップを塞ぐ方法は2つあります。本番でこの要件表に依存する前にどちらかを選んでください。
 
 - **数値 IP を固定する（推奨）**: ハブの Tailscale IP を一度解決し、隔離サーバー側の webhook
-  宛先設定（および下記ルール中の `<hub-ipv4>`/`<hub-ipv6>`）を MagicDNS ホスト名ではなくその
-  リテラルアドレスで構成します。DNS 解決が一切不要になるため、上記のルールセットはそのままで
-  正しく完結します。hook スクリプトが hub と HTTPS で通信する場合は、その IP 宛の証明書検証が
-  通る設定になっているか確認してください（TLS 設定によっては MagicDNS 名向けに発行された証明書が
-  裸の IP に対しては検証を通らないことがあります）。デプロイがすでに tailnet 自体を信頼境界と
-  扱っているなら、tailnet 上の平文 HTTP 経路を使う選択肢もあります。
-- **明示的なリゾルバ1台への DNS のみ許可する**: ホスト名の解決をどうしても維持する必要がある
-  場合は、リゾルバの数値 IP 1つに限定して DNS（UDP **と** TCP の両方、ポート53）を許可する
-  ルールを追加してください。「任意の DNS サーバー」への包括許可は egress 経路を広く開け直すため
-  避けます。MagicDNS 名の解決には通常 Tailscale 自身のリゾルバ（`100.100.100.100`）を使います。
-  `nft`/`iptables` それぞれに追加:
+  宛先設定を MagicDNS ホスト名ではなくそのリテラルアドレスで構成します。DNS 解決が一切不要に
+  なり、要件表の DNS 行を丸ごと省略できます。hook スクリプトが hub と HTTPS で通信する場合は、
+  その IP 宛の証明書検証が通る設定になっているか確認してください（TLS 設定によっては
+  MagicDNS 名向けに発行された証明書が裸の IP に対しては検証を通らないことがあります）。
+  デプロイがすでに tailnet 自体を信頼境界と扱っているなら、tailnet 上の平文 HTTP 経路を
+  使う選択肢もあります。
+- **明示的なリゾルバ1台への DNS のみ許可する**: ホスト名の解決をどうしても維持する必要が
+  ある場合は、要件表の DNS 行のとおり、リゾルバの数値 IP 1つに限定して DNS（UDP **と** TCP
+  の両方、ポート53）を許可してください。「任意の DNS サーバー」への包括許可は egress 経路を
+  広く開け直すため避けます。MagicDNS 名の解決には通常 Tailscale 自身のリゾルバ
+  （`100.100.100.100`）を使います。
 
-  ```bash
-  # nftables — 最終の OUTPUT 許可ルールより前に挿入
-  nft add rule inet isolated output ip daddr 100.100.100.100 udp dport 53 ct state new accept
-  nft add rule inet isolated output ip daddr 100.100.100.100 tcp dport 53 ct state new accept
-
-  # iptables — 末尾の REJECT ルールより前に挿入
-  iptables -A OUTPUT -d 100.100.100.100 -p udp --dport 53 -m state --state NEW -j ACCEPT
-  iptables -A OUTPUT -d 100.100.100.100 -p tcp --dport 53 -m state --state NEW -j ACCEPT
-  ```
-
-  どちらを選んだ場合も、適用前ではなく**ファイアウォール適用後**に隔離サーバー自身から検証
-  してください。
-
-  ```bash
-  getent hosts <hub-hostname-or-ip>     # 名前解決が実際に通る（または不要である）ことを確認
-  curl -v <hub-webhook-url>             # hook の通信経路が実際に hub まで到達することを確認
-  ```
+どちらを選んだ場合も、適用前ではなく**ファイアウォール適用後**に隔離サーバー自身から検証
+してください。
 
 ```bash
-# --- nftables 推奨版（IPv4/IPv6 を単一ルールセットでカバー） ---
-nft add table inet isolated
-nft add chain inet isolated output '{ type filter hook output priority 0; policy drop; }'
-nft add chain inet isolated input  '{ type filter hook input  priority 0; policy drop; }'
-
-# ループバックは無条件許可
-nft add rule inet isolated output oif lo accept
-nft add rule inet isolated input  iif lo accept
-
-# 確立済み/関連トラフィックを許可（両方向とも必要）
-nft add rule inet isolated output ct state established,related accept
-nft add rule inet isolated input  ct state established,related accept
-
-# INPUT: hub から自分の agentPort への新規 inbound のみ許可
-# （hub がコマンド実行・ターミナル・doctor プローブのために接続を張ってくる経路）
-nft add rule inet isolated input ip  saddr <hub-ipv4> tcp dport <agent-port> ct state new accept
-nft add rule inet isolated input ip6 saddr <hub-ipv6> tcp dport <agent-port> ct state new accept
-
-# OUTPUT: ハブの webhook ポート宛の新規 outbound のみ許可
-# （agent-done / agent-activity 等の hook スクリプトが POST する経路。他ノードへの横移動を防ぐのが主目的）
-nft add rule inet isolated output ip  daddr <hub-ipv4> tcp dport <hub-webhook-port> ct state new accept
-nft add rule inet isolated output ip6 daddr <hub-ipv6> tcp dport <hub-webhook-port> ct state new accept
-
-# 残りはすべて拒否（chain policy が drop のため明示ルール不要。
-# ここまでに合致しなかったパケットは自動的に落ちる）
-```
-
-```bash
-# --- iptables + ip6tables 版（nftables が使えない環境向け。
-#     IPv4/IPv6 の両方に必ず同じルールを適用すること） ---
-#
-# `iptables-restore`/`ip6tables-restore` で filter テーブルの INPUT/OUTPUT/
-# FORWARD 全チェインをデフォルトポリシー DROP ごと一括置換します。同じ内容を
-# `iptables -A ...` の逐次実行で組み立てるのは**等価ではなく安全でもありません**
-# — 末尾に REJECT を append しても、それより**後ろ**に来るルールしか上書きでき
-# ません。実行前から INPUT/OUTPUT に既に広い ACCEPT ルールが存在していれば
-# （別ツールの残留物、過去に手動で打った `-A INPUT -j ACCEPT`、監視/管理用の
-# 例外など）、それが先にマッチし、後から append した REJECT は一切評価されません。
-# `*filter ... COMMIT` 形式の完全なルールセットを `-restore` で読み込めばこの
-# 問題を根本から回避できます — この呼び出し以前のルールは一切残らないため、
-# 以下のルールより先にマッチしうる既存ルールがそもそも存在しません。
-cat <<'EOF' | iptables-restore
-*filter
-:INPUT DROP [0:0]
-:FORWARD DROP [0:0]
-:OUTPUT DROP [0:0]
--A INPUT -i lo -j ACCEPT
--A OUTPUT -o lo -j ACCEPT
--A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
--A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
--A INPUT -s <hub-ipv4> -p tcp --dport <agent-port> -m state --state NEW -j ACCEPT
--A OUTPUT -d <hub-ipv4> -p tcp --dport <hub-webhook-port> -m state --state NEW -j ACCEPT
-COMMIT
-EOF
-
-cat <<'EOF' | ip6tables-restore
-*filter
-:INPUT DROP [0:0]
-:FORWARD DROP [0:0]
-:OUTPUT DROP [0:0]
--A INPUT -i lo -j ACCEPT
--A OUTPUT -o lo -j ACCEPT
--A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
--A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
--A INPUT -s <hub-ipv6> -p tcp --dport <agent-port> -m state --state NEW -j ACCEPT
--A OUTPUT -d <hub-ipv6> -p tcp --dport <hub-webhook-port> -m state --state NEW -j ACCEPT
-COMMIT
-EOF
-```
-
-チェインポリシー自体が `DROP` のため、末尾に置く REJECT/DROP ルールの位置を誤る余地が
-ありません — 上記の明示的な ACCEPT ルールにマッチしなかったパケットは、すべてチェイン
-ポリシーへ落ちます。前項の DNS 許可ルール（任意）を追加する場合は、`*filter` ブロック内の
-`-A` 行として挿入してください（ACCEPT ルール同士の順序は問いませんが、「チェインヘッダーの
-後・`COMMIT` の前」という位置だけは守ってください）。
-
-**読み込み後は、ルールが存在することだけでなく順序も検証してください** — `-S` の出力は
-マッチ順にルールを列挙するため、ポリシー行が `DROP` になっていること、意図しない ACCEPT
-ルールが今回読み込んだルールより前に出ていないことを確認します。
-
-```bash
-iptables  -S       # 先頭付近が "-P INPUT DROP" / "-P OUTPUT DROP" / "-P FORWARD DROP" であること
-ip6tables -S        # IPv6 も同様に確認（IPv4 だけで安心しない）
+tailscale status                      # tailnet 接続が生きていることを確認（underlay 遮断の検出）
+getent hosts <hub-hostname-or-ip>     # 名前解決が実際に通る（または不要である）ことを確認
+curl -v <hub-webhook-url>             # hook の通信経路が実際に hub まで到達することを確認
 ```
 
 ### 永続化（reboot 後も消えないようにする）
 
-runtime コマンドだけでは reboot でルールセットが消え、横移動保護が黙って外れます。**必ず**
-以下のいずれかで永続化し、恒常的に適用してください。
+runtime で組み立てたルールだけでは reboot でルールセットが消え、横移動保護が黙って外れます。
+**必ず** `nftables.service`（`nft` 実装の場合）や `iptables-persistent`（`iptables`/
+`ip6tables` 実装の場合、Debian/Ubuntu 系）等、ディストリビューションの標準的な永続化機構で
+恒常適用してください。前述のとおり、`tailscaled` が挿入したチェイン・jump ルールを消さない
+（追記方式で組み立てた）ルールセットを保存対象にすることが前提です。
 
-**nftables 版**: 上記のルールセットをそのまま `/etc/nftables.conf`（`table inet isolated { ... }`
-形式でチェイン定義ごと）に書き込み、サービスを有効化します。
-
-```bash
-sudo systemctl enable --now nftables.service
-```
-
-**iptables 版**: `iptables-persistent`（Debian/Ubuntu 系）で保存します。
-
-```bash
-sudo apt-get install -y iptables-persistent
-sudo netfilter-persistent save        # 現在の iptables/ip6tables ルールを両方保存
-sudo systemctl enable netfilter-persistent
-```
-
-**reboot 後の検証**: 再起動してから、ルールが実際に生きていることを必ず確認してください。
+**reboot 後の検証は必須**です。再起動してから、ルールが実際に生きていることと、`tailscaled`
+の underlay 接続が壊れていないことの両方を確認してください。
 
 ```bash
 sudo reboot
 # 再起動後:
-sudo nft list ruleset                 # nftables 版: 上記のルールが表示されることを確認
-# または
-sudo iptables  -L -n -v               # iptables 版: INPUT/OUTPUT の許可・拒否ルールを確認
-sudo ip6tables -L -n -v               # ip6tables も必ず同様に確認（片方だけ確認して安心しない）
+sudo nft list ruleset                 # または: sudo iptables -L -n -v / sudo ip6tables -L -n -v
+tailscale status                      # tailnet 接続が生きていること（underlay が塞がれていないこと）を確認
+curl -v <hub-webhook-url>             # hub への到達性を確認（agentPort への接続確認）
 ```
 
 ### 将来計画
@@ -459,8 +405,8 @@ sudo ip6tables -L -n -v               # ip6tables も必ず同様に確認（片
 - ACL の機械検証（`tailnet_acl` check としての isolation doctor への追加）: **#85**
 - 上記のアプリケーション化（設定 UI / 自動適用）: **#86**
 
-現時点ではいずれも手動運用です。isolation doctor の9 check（3節）には tailnet ACL の検証は
-含まれていません。
+現時点ではいずれも手動運用です。isolation doctor の9 check（3節）には tailnet ACL・ホスト
+ファイアウォールいずれの検証も含まれていません。
 
 ## 7. 隔離タスクの pushing は当面 operator 責務
 
