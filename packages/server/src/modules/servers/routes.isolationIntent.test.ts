@@ -1408,7 +1408,7 @@ describe('POST /api/servers/:name/isolation/doctor (Issue #29 Step 2 B)', () => 
   // `verified: true` overall and persists via `updateIsolationVerification`.
   it('runs the probe for an isolated agent server and persists verification via transportFactory.getTransport when every check (including same_host) passes', async () => {
     const exec = vi.fn(async (cmd: string) => {
-      if (cmd.includes('hostname')) return { stdout: 'remote-host\n9999\n', stderr: '', code: 0 };
+      if (cmd.startsWith('hostname;')) return { stdout: 'remote-host\n9999\n', stderr: '', code: 0 };
       // Review round (Critical finding 1): the FS-boundary canary probe —
       // a different command than the plain hostname/uid one above, matched
       // by the mocked hub canary's path (see the vi.mock('./hubCanary')
@@ -1418,7 +1418,8 @@ describe('POST /api/servers/:name/isolation/doctor (Issue #29 Step 2 B)', () => 
       // comment).
       if (cmd.includes('.azito-hub-canary-test')) return { stdout: 'AZT_STATUS:canary:absent\n', stderr: '', code: 0 };
       if (cmd.includes('.ssh')) return { stdout: 'AZT_SSH_NO_DIR\n', stderr: '', code: 0 };
-      if (cmd.includes('gh auth')) return { stdout: 'AZT_GH_ABSENT\n', stderr: '', code: 0 };
+      if (cmd.includes('hosts.yml')) return { stdout: 'AZT_STATUS:f:absent\n', stderr: '', code: 0 };
+      if (cmd.includes('AZT_GH_CHECK_DONE')) return { stdout: 'AZT_GH_ABSENT\nAZT_GH_CHECK_DONE\n', stderr: '', code: 0 };
       if (cmd.includes('credential.helper')) return { stdout: 'AZT_GIT_EXIT:1\nAZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
       if (cmd.includes('$HOME"')) return { stdout: '/home/remote\n', stderr: '', code: 0 };
       if (cmd.includes('ls -1')) return { stdout: 'AZT_LS_STATUS:absent\n', stderr: '', code: 0 };
@@ -1454,10 +1455,11 @@ describe('POST /api/servers/:name/isolation/doctor (Issue #29 Step 2 B)', () => 
 
   it('does not advance isolation_verified_at when a check fails', async () => {
     const exec = vi.fn(async (cmd: string) => {
-      if (cmd.includes('hostname')) return { stdout: 'remote-host\n9999\n', stderr: '', code: 0 };
+      if (cmd.startsWith('hostname;')) return { stdout: 'remote-host\n9999\n', stderr: '', code: 0 };
       if (cmd.includes('.azito-hub-canary-test')) return { stdout: 'AZT_STATUS:canary:absent\n', stderr: '', code: 0 };
       if (cmd.includes('.ssh')) return { stdout: '/home/remote/.ssh/id_rsa\nAZT_SSH_DIR_EXISTS\n', stderr: '', code: 0 };
-      if (cmd.includes('gh auth')) return { stdout: 'AZT_GH_ABSENT\n', stderr: '', code: 0 };
+      if (cmd.includes('hosts.yml')) return { stdout: 'AZT_STATUS:f:absent\n', stderr: '', code: 0 };
+      if (cmd.includes('AZT_GH_CHECK_DONE')) return { stdout: 'AZT_GH_ABSENT\nAZT_GH_CHECK_DONE\n', stderr: '', code: 0 };
       if (cmd.includes('credential.helper')) return { stdout: 'AZT_GIT_EXIT:1\nAZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
       if (cmd.includes('$HOME"')) return { stdout: '/home/remote\n', stderr: '', code: 0 };
       if (cmd.includes('ls -1')) return { stdout: 'AZT_LS_STATUS:absent\n', stderr: '', code: 0 };
@@ -1581,10 +1583,11 @@ describe('POST /api/servers/:name/isolation/doctor (Issue #29 Step 2 B)', () => 
       const probeGate = new Promise<void>((resolve) => { releaseProbe = resolve; });
       const exec = vi.fn(async (cmd: string) => {
         await probeGate;
-        if (cmd.includes('hostname')) return { stdout: 'remote-host\n9999\n', stderr: '', code: 0 };
+        if (cmd.startsWith('hostname;')) return { stdout: 'remote-host\n9999\n', stderr: '', code: 0 };
         if (cmd.includes('.azito-hub-canary-test')) return { stdout: 'AZT_STATUS:canary:absent\n', stderr: '', code: 0 };
         if (cmd.includes('.ssh')) return { stdout: 'AZT_SSH_NO_DIR\n', stderr: '', code: 0 };
-        if (cmd.includes('gh auth')) return { stdout: 'AZT_GH_ABSENT\n', stderr: '', code: 0 };
+        if (cmd.includes('hosts.yml')) return { stdout: 'AZT_STATUS:f:absent\n', stderr: '', code: 0 };
+      if (cmd.includes('AZT_GH_CHECK_DONE')) return { stdout: 'AZT_GH_ABSENT\nAZT_GH_CHECK_DONE\n', stderr: '', code: 0 };
         if (cmd.includes('credential.helper')) return { stdout: 'AZT_GIT_EXIT:1\nAZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
         if (cmd.includes('$HOME"')) return { stdout: '/home/remote\n', stderr: '', code: 0 };
         if (cmd.includes('ls -1')) return { stdout: 'AZT_LS_STATUS:absent\n', stderr: '', code: 0 };
@@ -1622,10 +1625,11 @@ describe('POST /api/servers/:name/isolation/doctor (Issue #29 Step 2 B)', () => 
 
     it('defense in depth: aborts without persisting when the row read right before persist differs in identity from the one the probe started against', async () => {
       const exec = vi.fn(async (cmd: string) => {
-        if (cmd.includes('hostname')) return { stdout: 'remote-host\n9999\n', stderr: '', code: 0 };
+        if (cmd.startsWith('hostname;')) return { stdout: 'remote-host\n9999\n', stderr: '', code: 0 };
         if (cmd.includes('.azito-hub-canary-test')) return { stdout: 'AZT_STATUS:canary:absent\n', stderr: '', code: 0 };
         if (cmd.includes('.ssh')) return { stdout: 'AZT_SSH_NO_DIR\n', stderr: '', code: 0 };
-        if (cmd.includes('gh auth')) return { stdout: 'AZT_GH_ABSENT\n', stderr: '', code: 0 };
+        if (cmd.includes('hosts.yml')) return { stdout: 'AZT_STATUS:f:absent\n', stderr: '', code: 0 };
+      if (cmd.includes('AZT_GH_CHECK_DONE')) return { stdout: 'AZT_GH_ABSENT\nAZT_GH_CHECK_DONE\n', stderr: '', code: 0 };
         if (cmd.includes('credential.helper')) return { stdout: 'AZT_GIT_EXIT:1\nAZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
         if (cmd.includes('$HOME"')) return { stdout: '/home/remote\n', stderr: '', code: 0 };
         if (cmd.includes('ls -1')) return { stdout: 'AZT_LS_STATUS:absent\n', stderr: '', code: 0 };
@@ -1660,10 +1664,11 @@ describe('POST /api/servers/:name/isolation/doctor (Issue #29 Step 2 B)', () => 
 
     it('defense in depth: aborts without persisting when the server was deleted between the initial read and the persist-time re-read', async () => {
       const exec = vi.fn(async (cmd: string) => {
-        if (cmd.includes('hostname')) return { stdout: 'remote-host\n9999\n', stderr: '', code: 0 };
+        if (cmd.startsWith('hostname;')) return { stdout: 'remote-host\n9999\n', stderr: '', code: 0 };
         if (cmd.includes('.azito-hub-canary-test')) return { stdout: 'AZT_STATUS:canary:absent\n', stderr: '', code: 0 };
         if (cmd.includes('.ssh')) return { stdout: 'AZT_SSH_NO_DIR\n', stderr: '', code: 0 };
-        if (cmd.includes('gh auth')) return { stdout: 'AZT_GH_ABSENT\n', stderr: '', code: 0 };
+        if (cmd.includes('hosts.yml')) return { stdout: 'AZT_STATUS:f:absent\n', stderr: '', code: 0 };
+      if (cmd.includes('AZT_GH_CHECK_DONE')) return { stdout: 'AZT_GH_ABSENT\nAZT_GH_CHECK_DONE\n', stderr: '', code: 0 };
         if (cmd.includes('credential.helper')) return { stdout: 'AZT_GIT_EXIT:1\nAZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
         if (cmd.includes('$HOME"')) return { stdout: '/home/remote\n', stderr: '', code: 0 };
         if (cmd.includes('ls -1')) return { stdout: 'AZT_LS_STATUS:absent\n', stderr: '', code: 0 };

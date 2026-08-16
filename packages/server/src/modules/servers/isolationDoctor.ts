@@ -94,6 +94,37 @@ function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/**
+ * Review round (Important finding 1, isolation doctor doc レビュー): a
+ * non-zero exit from a probe command must NEVER surface `stdout`/`stderr`
+ * verbatim into a persisted `detail` — this doctor's own probes read
+ * `settings.json`/`config.toml`/`operator.env`/azitoctl*.env content
+ * (base64-framed) in the SAME command batch that can fail non-zero for an
+ * unrelated reason (timeout, buffer overflow, one entry in a batch tripping
+ * an error after a prior entry's content was already echoed), so raw
+ * stdout/stderr is not "diagnostic noise" here — it can BE the secret this
+ * doctor exists to detect. `detail` is written to `isolation_report`,
+ * relayed through the audit log, and rendered in the browser (routes.ts's
+ * POST .../isolation/doctor, OverviewSection.tsx), so redaction must happen
+ * at the source, not only at the routes-layer `redactSecrets` last line of
+ * defense. Every non-zero-exit branch in this file reports ONLY the exit
+ * code and a fixed, code-controlled label — never any captured output.
+ */
+function execFailureDetail(label: string, code: number): string {
+  return `${label} (exit ${code})`;
+}
+
+/**
+ * Same redaction contract as `execFailureDetail`, for the "output parsed but
+ * didn't match any recognized shape" branches: these still hold raw
+ * stdout at the call site (it just failed to match expected markers), so
+ * the caller must never interpolate it into `detail` either — see
+ * `execFailureDetail`'s doc comment.
+ */
+function unrecognizedOutputDetail(label: string): string {
+  return `${label}（想定外の形式）`;
+}
+
 // ─── Framed file probing (review round, Critical finding 2 / follow-up
 // review round, Important finding 3) ───
 //
@@ -189,7 +220,7 @@ export async function probeFilesFramed(
     return { ok: false, detail: `ファイルの取得に失敗しました（到達不能）: ${errMsg(err)}` };
   }
   if (result.code !== 0) {
-    return { ok: false, detail: `ファイルの取得に失敗しました (code ${result.code}): ${result.stderr || result.stdout || '(no output)'}` };
+    return { ok: false, detail: execFailureDetail('ファイルの取得に失敗しました', result.code) };
   }
   const lines = result.stdout.split('\n');
   const results = new Map<string, FileProbeOutcome>();
@@ -275,14 +306,14 @@ async function checkFsAndHostBoundary(transport: IServerTransport, hub: HubIdent
     return { id, status: 'unknown', detail: `hostname/uid の取得に失敗しました（到達不能）: ${errMsg(err)}` };
   }
   if (hostResult.code !== 0) {
-    return { id, status: 'unknown', detail: `hostname/uid の取得に失敗しました (code ${hostResult.code}): ${hostResult.stderr || hostResult.stdout || '(no output)'}` };
+    return { id, status: 'unknown', detail: execFailureDetail('hostname/uid の取得に失敗しました', hostResult.code) };
   }
   const lines = hostResult.stdout.split('\n').map((l) => l.trim());
   const remoteHostname = lines[0] ?? '';
   const remoteUidStr = lines[1] ?? '';
   const remoteUid = /^\d+$/.test(remoteUidStr) ? Number(remoteUidStr) : null;
   if (!remoteHostname || remoteUid === null) {
-    return { id, status: 'unknown', detail: `hostname/uid の出力が想定外の形式でした: ${JSON.stringify(hostResult.stdout)}` };
+    return { id, status: 'unknown', detail: unrecognizedOutputDetail('hostname/uid の出力を解析できませんでした') };
   }
   if (hub.uid === null) {
     return { id, status: 'unknown', detail: 'ハブ側の uid を取得できなかったため、同一ホスト判定ができません（process.getuid が利用不可）' };
@@ -386,7 +417,7 @@ async function checkNoPrivateKeys(transport: IServerTransport): Promise<Isolatio
     return { id, status: 'unknown', detail: `~/.ssh の走査に失敗しました（到達不能）: ${errMsg(err)}` };
   }
   if (result.code !== 0) {
-    return { id, status: 'unknown', detail: `~/.ssh の走査に失敗しました (code ${result.code}): ${result.stderr || result.stdout || '(no output)'}` };
+    return { id, status: 'unknown', detail: execFailureDetail('~/.ssh の走査に失敗しました', result.code) };
   }
   const lines = result.stdout.split('\n').map((l) => l.trim());
   const trimmedNonEmpty = lines.filter(Boolean);
@@ -399,7 +430,7 @@ async function checkNoPrivateKeys(transport: IServerTransport): Promise<Isolatio
   const statusIdx = lines.findIndex((l) => /^AZT_GREP_STATUS:-?\d+$/.test(l));
   const endIdx = lines.findIndex((l) => l === 'AZT_SSH_DIR_EXISTS');
   if (statusIdx === -1 || endIdx === -1 || endIdx <= statusIdx) {
-    return { id, status: 'unknown', detail: `~/.ssh の走査結果が想定外の形式でした: ${JSON.stringify(result.stdout)}` };
+    return { id, status: 'unknown', detail: unrecognizedOutputDetail('~/.ssh の走査結果を解析できませんでした') };
   }
   const grepStatus = Number(lines[statusIdx].slice('AZT_GREP_STATUS:'.length));
   const offenders = lines.slice(statusIdx + 1, endIdx).filter(Boolean);
@@ -418,6 +449,31 @@ async function checkNoPrivateKeys(transport: IServerTransport): Promise<Isolatio
 }
 
 /**
+ * Conservative, non-YAML-library extraction of `gh`'s `hosts.yml` top-level
+ * keys (each key is a hostname `gh` is authenticated against). Deliberately
+ * NOT a general YAML parser — `gh`'s own hosts.yml shape is always a flat
+ * mapping of `hostname:` at column 0 with everything else (oauth_token,
+ * user, git_protocol, ...) indented underneath, so a line-based rule
+ * ("no leading whitespace, not a comment, ends in `key:` with nothing but
+ * an optional trailing comment") is sufficient and avoids pulling in a YAML
+ * dependency for a single-purpose, adversarial-input-adjacent parse. Any
+ * line that doesn't fit this shape is simply not counted as a host — see
+ * `checkGhUnauthenticated`'s caller-side handling of "zero keys extracted"
+ * for how that ambiguity is NOT silently treated as "no other hosts".
+ */
+function parseGhHostsYamlKeys(content: string): string[] {
+  const keys: string[] = [];
+  for (const rawLine of content.split('\n')) {
+    if (/^\s/.test(rawLine)) continue; // indented -> nested value, not a top-level host key
+    const line = rawLine.trimEnd();
+    if (line === '' || line.startsWith('#')) continue;
+    const m = /^([^\s:#][^:#]*):\s*(#.*)?$/.exec(line);
+    if (m) keys.push(m[1]);
+  }
+  return keys;
+}
+
+/**
  * 3. gh にローカル資格情報（保存済みトークン）が残っていない。
  *
  * Review round (Important finding 3): `gh auth status` はネットワーク到達性
@@ -427,15 +483,81 @@ async function checkNoPrivateKeys(transport: IServerTransport): Promise<Isolatio
  * の有無だけに絞るため `gh auth token >/dev/null 2>&1` の exit code を見る
  * （値そのものは決して出力させない — stdout は破棄）。
  *
- * exit code 分類:
- *  - `gh` コマンド自体が不在 → `'pass'`（ローカル資格情報を保持しようがない）
- *  - exit 0（トークン取得成功 = ローカルに資格情報が存在する）→ `'fail'`
- *  - exit 1（gh 自身の「どのホストにもログインしていません」規約上の失敗）→ `'pass'`
+ * Follow-up review round (Important finding 2): `gh auth token` with no
+ * `--hostname` only ever resolves the DEFAULT host (`github.com`, or a repo
+ * host inferred from cwd) — a token stored against a second host (GitHub
+ * Enterprise, a self-hosted instance) was invisible to the old single-shot
+ * check even though `gh` could still use it to authenticate against that
+ * host. This now enumerates every host `gh` has ever logged into by reading
+ * its `hosts.yml` (honoring `$GH_CONFIG_DIR`, `gh`'s own override for where
+ * that file lives) and probes `gh auth token --hostname <host>` against
+ * EACH ONE — any single host succeeding is a `'fail'`, matching the
+ * fail-closed contract (one reachable credential is enough).
+ *
+ * Host enumeration:
+ *  - `hosts.yml` absent → the default host (`github.com`) alone is checked
+ *    (nothing else to enumerate; a legitimate `'pass'` path per this
+ *    review's own guidance).
+ *  - `hosts.yml` present and readable → parsed via `parseGhHostsYamlKeys`
+ *    (conservative top-level-key extraction, see its doc comment) and
+ *    merged with `github.com` (always checked as a baseline regardless of
+ *    what the file does or doesn't mention).
+ *  - `hosts.yml` present but unreadable/unrecognized (the framed probe
+ *    could not confirm its content) → `'unknown'` for the WHOLE check —
+ *    enumeration that might be incomplete must never silently degrade to
+ *    "check the default host only", per this finding's own fail-closed
+ *    requirement.
+ *
+ * `GH_TOKEN`/`GITHUB_TOKEN` (review round, same finding): `gh` itself reads
+ * these environment variables as an authentication override, bypassing
+ * `hosts.yml`/`gh auth token` entirely, and (unlike `AZITO_AGENT_TOKEN`)
+ * neither is a transport credential this doctor must tolerate — their mere
+ * PRESENCE (never the value; same `${VAR+x}` existence-only technique as
+ * `checkNoOperatorEnvironment`) is enough to fail this check, independent of
+ * the per-host `gh auth token` results and even when `gh` itself is absent
+ * (some other tool, or a `gh` installed later, could still consume them).
+ *
+ * exit code 分類 (per host):
+ *  - exit 0（トークン取得成功 = そのホストにローカル資格情報が存在する）→ `'fail'`
+ *  - exit 1（gh 自身の「そのホストにログインしていません」規約上の失敗）→ pass 方向
  *  - それ以外の exit code（usage エラー等、判別不能な異常）→ `'unknown'`
+ *  - `gh` コマンド自体が不在 → ホスト単位チェックはスキップ（環境変数チェックのみ有効）
  */
 async function checkGhUnauthenticated(transport: IServerTransport): Promise<IsolationCheck> {
   const id = 'gh_unauthenticated';
-  const cmd = 'if command -v gh >/dev/null 2>&1; then gh auth token >/dev/null 2>&1; echo "AZT_GH_TOKEN_EXIT:$?"; else echo AZT_GH_ABSENT; fi';
+
+  // Step 1: enumerate hosts via hosts.yml (env-token existence is checked
+  // together with the host probes below, in the same round-trip).
+  const hostsFileProbe = await probeFile(
+    transport,
+    '"${GH_CONFIG_DIR:-$HOME/.config/gh}/hosts.yml"',
+  );
+  if (!hostsFileProbe.ok) {
+    return { id, status: 'unknown', detail: `gh hosts.yml の${hostsFileProbe.detail}` };
+  }
+  const { probe: hostsProbe } = hostsFileProbe;
+  let hosts: string[];
+  if (hostsProbe.kind === 'absent') {
+    hosts = ['github.com'];
+  } else if (hostsProbe.kind === 'content') {
+    const parsed = parseGhHostsYamlKeys(hostsProbe.content);
+    hosts = Array.from(new Set(['github.com', ...parsed]));
+  } else {
+    // 'unreadable' | 'unrecognized': the file exists but its content could
+    // not be confirmed, so the host list may be incomplete — checking only
+    // the default host here would be an unenumerated-scope fail-open.
+    return { id, status: 'unknown', detail: 'gh hosts.yml の内容を確認できなかったため、認証済みホストを列挙できませんでした' };
+  }
+
+  // Step 2: probe every enumerated host's local token in one round-trip,
+  // plus GH_TOKEN/GITHUB_TOKEN existence (never their value).
+  const hostChecks = hosts
+    .map((h, i) => `if command -v gh >/dev/null 2>&1; then gh auth token --hostname ${shellQuote(h)} >/dev/null 2>&1; echo "AZT_GH_HOST_EXIT:${i}:$?"; else echo AZT_GH_ABSENT; fi`)
+    .join('; ');
+  const cmd = `${hostChecks}; `
+    + '[ -n "${GH_TOKEN+x}" ] && echo AZT_GH_TOKEN_ENV_PRESENT; '
+    + '[ -n "${GITHUB_TOKEN+x}" ] && echo AZT_GITHUB_TOKEN_ENV_PRESENT; '
+    + 'echo AZT_GH_CHECK_DONE';
   let result;
   try {
     result = await transport.exec(cmd);
@@ -443,27 +565,50 @@ async function checkGhUnauthenticated(transport: IServerTransport): Promise<Isol
     return { id, status: 'unknown', detail: `gh の確認に失敗しました（到達不能）: ${errMsg(err)}` };
   }
   if (result.code !== 0) {
-    return { id, status: 'unknown', detail: `gh の確認に失敗しました (code ${result.code}): ${result.stderr || result.stdout || '(no output)'}` };
+    return { id, status: 'unknown', detail: execFailureDetail('gh の確認に失敗しました', result.code) };
   }
-  const content = result.stdout.trim();
-  if (content === 'AZT_GH_ABSENT') {
-    return { id, status: 'pass', detail: 'gh コマンドが見つかりません' };
+  const lines = result.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+  if (!lines.includes('AZT_GH_CHECK_DONE')) {
+    return { id, status: 'unknown', detail: unrecognizedOutputDetail('gh の確認結果を解析できませんでした') };
   }
-  const match = /^AZT_GH_TOKEN_EXIT:(\d+)$/m.exec(content);
-  if (!match) {
-    return { id, status: 'unknown', detail: `gh auth token の結果が想定外の形式でした: ${JSON.stringify(content)}` };
+  const ghAbsent = lines.includes('AZT_GH_ABSENT');
+  const envTokenPresent = lines.includes('AZT_GH_TOKEN_ENV_PRESENT') || lines.includes('AZT_GITHUB_TOKEN_ENV_PRESENT');
+
+  let anyFail = false;
+  let anyUnknown = false;
+  if (!ghAbsent) {
+    for (let i = 0; i < hosts.length; i++) {
+      const line = lines.find((l) => l.startsWith(`AZT_GH_HOST_EXIT:${i}:`));
+      if (!line) {
+        anyUnknown = true;
+        continue;
+      }
+      const exitCode = Number(line.slice(`AZT_GH_HOST_EXIT:${i}:`.length));
+      if (!Number.isFinite(exitCode)) {
+        anyUnknown = true;
+      } else if (exitCode === 0) {
+        anyFail = true;
+      } else if (exitCode !== 1) {
+        anyUnknown = true;
+      }
+    }
   }
-  const exitCode = Number(match[1]);
-  if (exitCode === 0) {
-    return { id, status: 'fail', detail: 'gh にローカル資格情報（トークン）が残っています（gh auth token exit 0）' };
+
+  if (anyFail || envTokenPresent) {
+    const reasons: string[] = [];
+    if (anyFail) reasons.push('少なくとも1つのホストで gh にローカル資格情報（トークン）が残っています');
+    if (envTokenPresent) reasons.push('GH_TOKEN/GITHUB_TOKEN 環境変数が設定されています（値は表示しません）');
+    return { id, status: 'fail', detail: reasons.join(' / ') };
   }
-  if (exitCode === 1) {
-    return { id, status: 'pass', detail: `gh にローカル資格情報はありません（gh auth token exit ${exitCode}）` };
+  if (anyUnknown) {
+    return { id, status: 'unknown', detail: 'gh auth token が一部のホストで判別不能な結果を返しました — ローカル資格情報の有無を確定できません' };
   }
   return {
     id,
-    status: 'unknown',
-    detail: `gh auth token が判別不能な exit code を返しました (exit ${exitCode}) — ローカル資格情報の有無を確定できません`,
+    status: 'pass',
+    detail: ghAbsent
+      ? 'gh コマンドが見つかりません（GH_TOKEN/GITHUB_TOKEN も未設定です）'
+      : `gh にローカル資格情報はありません（確認したホスト: ${hosts.join(', ')}）`,
   };
 }
 
@@ -495,7 +640,7 @@ async function checkNoGitCredentials(transport: IServerTransport): Promise<Isola
     return { id, status: 'unknown', detail: `git credential 設定の確認に失敗しました（到達不能）: ${errMsg(err)}` };
   }
   if (result.code !== 0) {
-    return { id, status: 'unknown', detail: `git credential 設定の確認に失敗しました (code ${result.code}): ${result.stderr || result.stdout || '(no output)'}` };
+    return { id, status: 'unknown', detail: execFailureDetail('git credential 設定の確認に失敗しました', result.code) };
   }
   const lines = result.stdout.split('\n').map((l) => l.trim());
   if (lines.includes('AZT_GIT_ABSENT')) {
@@ -504,7 +649,7 @@ async function checkNoGitCredentials(transport: IServerTransport): Promise<Isola
   const exitIdx = lines.findIndex((l) => /^AZT_GIT_EXIT:-?\d+$/.test(l));
   const helperEndIdx = lines.findIndex((l) => l === 'AZT_HELPER_END');
   if (exitIdx === -1 || helperEndIdx === -1 || helperEndIdx <= exitIdx) {
-    return { id, status: 'unknown', detail: `git credential 設定の確認結果が想定外の形式でした: ${JSON.stringify(result.stdout)}` };
+    return { id, status: 'unknown', detail: unrecognizedOutputDetail('git credential 設定の確認結果を解析できませんでした') };
   }
   const gitExit = Number(lines[exitIdx].slice('AZT_GIT_EXIT:'.length));
   const helper = lines.slice(exitIdx + 1, helperEndIdx).join('\n').trim();
@@ -512,7 +657,7 @@ async function checkNoGitCredentials(transport: IServerTransport): Promise<Isola
   const credFileExists = rest.includes('AZT_CREDFILE_EXISTS');
   const credFileAbsent = rest.includes('AZT_CREDFILE_ABSENT');
   if (!credFileExists && !credFileAbsent) {
-    return { id, status: 'unknown', detail: `~/.git-credentials の有無を確認できませんでした: ${JSON.stringify(rest)}` };
+    return { id, status: 'unknown', detail: unrecognizedOutputDetail('~/.git-credentials の有無を確認できませんでした') };
   }
   if (gitExit !== 0 && gitExit !== 1) {
     return { id, status: 'unknown', detail: `git config --global --get credential.helper が判別不能な exit code を返しました (exit ${gitExit})` };
@@ -583,7 +728,7 @@ async function checkNoOperatorToken(transport: IServerTransport): Promise<Isolat
   }
   const remoteHome = homeResult.stdout.trim();
   if (homeResult.code !== 0 || !remoteHome) {
-    return { id, status: 'unknown', detail: `$HOME の解決に失敗しました (code ${homeResult.code}): ${homeResult.stderr || homeResult.stdout || '(no output)'}` };
+    return { id, status: 'unknown', detail: execFailureDetail('$HOME の解決に失敗しました', homeResult.code) };
   }
 
   // Review round (Important finding 1): the previous command echoed the
@@ -613,7 +758,7 @@ async function checkNoOperatorToken(transport: IServerTransport): Promise<Isolat
     return { id, status: 'unknown', detail: `~/.azito の一覧取得に失敗しました（到達不能）: ${errMsg(err)}` };
   }
   if (listResult.code !== 0) {
-    return { id, status: 'unknown', detail: `~/.azito の一覧取得に失敗しました (code ${listResult.code}): ${listResult.stderr || listResult.stdout || '(no output)'}` };
+    return { id, status: 'unknown', detail: execFailureDetail('~/.azito の一覧取得に失敗しました', listResult.code) };
   }
   const rawLines = listResult.stdout.split('\n').map((l) => l.trim());
   if (rawLines.includes('AZT_LS_STATUS:absent')) {
@@ -625,7 +770,7 @@ async function checkNoOperatorToken(transport: IServerTransport): Promise<Isolat
   const statusIdx = rawLines.indexOf('AZT_LS_STATUS:listed');
   const doneIdx = rawLines.indexOf('AZT_LS_DONE');
   if (statusIdx === -1 || doneIdx === -1 || doneIdx <= statusIdx) {
-    return { id, status: 'unknown', detail: `~/.azito の一覧取得結果が想定外の形式でした: ${JSON.stringify(listResult.stdout)}` };
+    return { id, status: 'unknown', detail: unrecognizedOutputDetail('~/.azito の一覧取得結果を解析できませんでした') };
   }
   const entries = rawLines.slice(statusIdx + 1, doneIdx).filter(Boolean);
   const targets = entries.filter((name) => isAzitoctlEnvFilename(name) || name === 'operator.env');
@@ -757,11 +902,11 @@ async function checkNoOperatorEnvironment(transport: IServerTransport): Promise<
     return { id, status: 'unknown', detail: `実行環境の変数確認に失敗しました（到達不能）: ${errMsg(err)}` };
   }
   if (result.code !== 0) {
-    return { id, status: 'unknown', detail: `実行環境の変数確認に失敗しました (code ${result.code}): ${result.stderr || result.stdout || '(no output)'}` };
+    return { id, status: 'unknown', detail: execFailureDetail('実行環境の変数確認に失敗しました', result.code) };
   }
   const lines = result.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
   if (!lines.includes('AZT_ENV_DONE')) {
-    return { id, status: 'unknown', detail: `実行環境の変数確認結果が想定外の形式でした: ${JSON.stringify(result.stdout)}` };
+    return { id, status: 'unknown', detail: unrecognizedOutputDetail('実行環境の変数確認結果を解析できませんでした') };
   }
   const present = lines
     .filter((l) => l.startsWith('AZT_ENV_PRESENT:'))
@@ -816,7 +961,7 @@ async function checkNoSshAgent(transport: IServerTransport): Promise<IsolationCh
     return { id, status: 'unknown', detail: `ssh-agent の確認に失敗しました（到達不能）: ${errMsg(err)}` };
   }
   if (result.code !== 0) {
-    return { id, status: 'unknown', detail: `ssh-agent の確認に失敗しました (code ${result.code}): ${result.stderr || result.stdout || '(no output)'}` };
+    return { id, status: 'unknown', detail: execFailureDetail('ssh-agent の確認に失敗しました', result.code) };
   }
   const lines = result.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
   if (lines.includes('AZT_NO_SOCK')) {
@@ -828,7 +973,7 @@ async function checkNoSshAgent(transport: IServerTransport): Promise<IsolationCh
   const exitLine = lines.find((l) => /^AZT_SSHADD_EXIT:-?\d+$/.test(l));
   const countLine = lines.find((l) => /^AZT_SSHADD_COUNT:\d+$/.test(l));
   if (!exitLine) {
-    return { id, status: 'unknown', detail: `ssh-agent の確認結果が想定外の形式でした: ${JSON.stringify(result.stdout)}` };
+    return { id, status: 'unknown', detail: unrecognizedOutputDetail('ssh-agent の確認結果を解析できませんでした') };
   }
   const sshAddExit = Number(exitLine.slice('AZT_SSHADD_EXIT:'.length));
   const count = countLine ? Number(countLine.slice('AZT_SSHADD_COUNT:'.length)) : null;

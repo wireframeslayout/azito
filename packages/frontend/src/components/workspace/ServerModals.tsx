@@ -32,9 +32,21 @@ interface ServerFormFieldsProps {
   // isolation declaration is intentionally out of scope for this change.
   isolationIntent?: boolean;
   onIsolationIntentChange?: (v: boolean) => void;
+  // Issue #29 review (Minor finding, isolation doctor pass): the PERSISTED
+  // value (the server entity's own `isolationIntent`, as loaded when the
+  // edit modal opened — see useServerManagement.ts's `setEditIsolationIntent
+  // (srv.isolationIntent ?? false)`), distinct from `isolationIntent` above
+  // which is the live, in-progress FORM value. Disabling the toggle must be
+  // driven by what is actually saved server-side right now, never by the
+  // form's own unsaved edits — otherwise unchecking an already-isolated
+  // server's toggle (to preview turning it off) immediately re-locks the
+  // checkbox via `isolationToggleBlocked` before Save is even pressed, with
+  // no way to change your mind and re-check it inside the same modal
+  // session. Undefined in add mode, matching `isolationIntent` above.
+  persistedIsolationIntent?: boolean;
 }
 
-function ServerFormFields({ mode, autoInstall, type, host, port, token, muxRuntime, onAutoInstallChange, onTypeChange, onHostChange, onPortChange, onTokenChange, onMuxRuntimeChange, nameField, tokenPlaceholder, installSteps, originalMuxRuntime, isolationIntent, onIsolationIntentChange }: ServerFormFieldsProps) {
+function ServerFormFields({ mode, autoInstall, type, host, port, token, muxRuntime, onAutoInstallChange, onTypeChange, onHostChange, onPortChange, onTokenChange, onMuxRuntimeChange, nameField, tokenPlaceholder, installSteps, originalMuxRuntime, isolationIntent, onIsolationIntentChange, persistedIsolationIntent }: ServerFormFieldsProps) {
   const { t } = useTranslation(['workspace', 'common']);
   const [showToken, setShowToken] = useState(false);
   // Issue #29 Step 2 C-1 (client-side courtesy — the real enforcement is the
@@ -47,9 +59,17 @@ function ServerFormFields({ mode, autoInstall, type, host, port, token, muxRunti
   // `scopedAuthEnabled === null` (health not loaded yet) is treated as "not
   // confirmed off", so the toggle stays enabled until we positively know
   // it would be rejected.
+  //
+  // `checked` uses the live form value (isolationIntent) so the checkbox
+  // reflects what the user is currently editing; `disabled` uses the
+  // PERSISTED value (persistedIsolationIntent) so unchecking an
+  // already-isolated server doesn't strand the toggle in a disabled state
+  // before the edit is saved — see persistedIsolationIntent's doc comment
+  // above.
   const { scopedAuthEnabled } = useHealth();
   const isolationCurrentlyOn = isolationIntent ?? false;
-  const isolationToggleBlocked = scopedAuthEnabled === false && !isolationCurrentlyOn;
+  const isolationPersistedOn = persistedIsolationIntent ?? false;
+  const isolationToggleBlocked = scopedAuthEnabled === false && !isolationPersistedOn;
 
   if (mode === 'add' && autoInstall) {
     return (
@@ -272,6 +292,7 @@ export function EditServerModal({
         originalMuxRuntime={server?.muxRuntime}
         isolationIntent={isolationIntent}
         onIsolationIntentChange={onIsolationIntentChange}
+        persistedIsolationIntent={server?.isolationIntent}
       />
     </Modal>
   );

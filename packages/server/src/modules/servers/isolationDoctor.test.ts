@@ -24,12 +24,19 @@ function makeTransport(handler: (cmd: string) => Promise<ExecResult> | ExecResul
 // A transport that reports a fully clean agent server — every individual
 // test below overrides just the one command it cares about.
 function cleanHandler(cmd: string): ExecResult {
-  if (cmd.includes('hostname')) return { stdout: 'agent-host\n2000\n', stderr: '', code: 0 };
+  // Made maximally specific (exact command text is literally `hostname; id
+  // -u`) so it never collides with the gh host-check command below, whose
+  // `--hostname` flag also contains the substring "hostname".
+  if (cmd.startsWith('hostname;')) return { stdout: 'agent-host\n2000\n', stderr: '', code: 0 };
   // Review round (Critical finding 1): the FS-boundary canary — absent on a
   // genuinely separate filesystem.
   if (cmd.includes(HUB.canary.path)) return { stdout: 'AZT_STATUS:canary:absent\n', stderr: '', code: 0 };
   if (cmd.includes('.ssh')) return { stdout: 'AZT_SSH_NO_DIR\n', stderr: '', code: 0 };
-  if (cmd.includes('gh auth')) return { stdout: 'AZT_GH_ABSENT\n', stderr: '', code: 0 };
+  // Follow-up review round (Important finding 2): gh host enumeration —
+  // hosts.yml absent (default host only), gh itself absent, no GH_TOKEN/
+  // GITHUB_TOKEN in the exec environment.
+  if (cmd.includes('hosts.yml')) return { stdout: 'AZT_STATUS:f:absent\n', stderr: '', code: 0 };
+  if (cmd.includes('AZT_GH_CHECK_DONE')) return { stdout: 'AZT_GH_ABSENT\nAZT_GH_CHECK_DONE\n', stderr: '', code: 0 };
   if (cmd.includes('credential.helper')) return { stdout: 'AZT_GIT_EXIT:1\nAZT_HELPER_END\nAZT_CREDFILE_ABSENT\n', stderr: '', code: 0 };
   if (cmd.startsWith('echo "$HOME"')) return { stdout: '/home/agent\n', stderr: '', code: 0 };
   if (cmd.includes('ls -1')) return { stdout: 'AZT_LS_STATUS:absent\n', stderr: '', code: 0 };
@@ -62,7 +69,7 @@ describe('runIsolationDoctor', () => {
 
   it('same_host: fails when hostname AND uid both match the hub, even with an unreadable canary', async () => {
     const transport = makeTransport((cmd) => {
-      if (cmd.includes('hostname')) return { stdout: `${HUB.hostname}\n${HUB.uid}\n`, stderr: '', code: 0 };
+      if (cmd.startsWith('hostname;')) return { stdout: `${HUB.hostname}\n${HUB.uid}\n`, stderr: '', code: 0 };
       return cleanHandler(cmd);
     });
     const result = await runIsolationDoctor(transport, HUB);
@@ -78,7 +85,7 @@ describe('runIsolationDoctor', () => {
   // itself is unreadable (no positive proof of separation either).
   it('same_host: unknown when only hostname matches (uid differs) — hostname alone is not an FS boundary', async () => {
     const transport = makeTransport((cmd) => {
-      if (cmd.includes('hostname')) return { stdout: `${HUB.hostname}\n9999\n`, stderr: '', code: 0 };
+      if (cmd.startsWith('hostname;')) return { stdout: `${HUB.hostname}\n9999\n`, stderr: '', code: 0 };
       return cleanHandler(cmd);
     });
     const result = await runIsolationDoctor(transport, HUB);
@@ -89,7 +96,7 @@ describe('runIsolationDoctor', () => {
 
   it('same_host: unknown when only uid matches (hostname differs) — uid alone is not an FS boundary', async () => {
     const transport = makeTransport((cmd) => {
-      if (cmd.includes('hostname')) return { stdout: `other-host\n${HUB.uid}\n`, stderr: '', code: 0 };
+      if (cmd.startsWith('hostname;')) return { stdout: `other-host\n${HUB.uid}\n`, stderr: '', code: 0 };
       return cleanHandler(cmd);
     });
     const result = await runIsolationDoctor(transport, HUB);
@@ -104,7 +111,7 @@ describe('runIsolationDoctor', () => {
   // 'unknown', covered separately below).
   it('same_host: passes when neither hostname nor uid match and the canary probe completed with a positive "absent" result', async () => {
     const transport = makeTransport((cmd) => {
-      if (cmd.includes('hostname')) return { stdout: 'other-host\n9999\n', stderr: '', code: 0 };
+      if (cmd.startsWith('hostname;')) return { stdout: 'other-host\n9999\n', stderr: '', code: 0 };
       return cleanHandler(cmd);
     });
     const result = await runIsolationDoctor(transport, HUB);
@@ -114,7 +121,7 @@ describe('runIsolationDoctor', () => {
 
   it('same_host: unknown when the exec throws (unreachable)', async () => {
     const transport = makeTransport((cmd) => {
-      if (cmd.includes('hostname')) throw new Error('connection refused');
+      if (cmd.startsWith('hostname;')) throw new Error('connection refused');
       return cleanHandler(cmd);
     });
     const result = await runIsolationDoctor(transport, HUB);
@@ -132,7 +139,7 @@ describe('runIsolationDoctor', () => {
   describe('same_host: FS-boundary canary', () => {
     it('fails when the canary is read back with matching content, even though hostname/uid both differ', async () => {
       const transport = makeTransport((cmd) => {
-        if (cmd.includes('hostname')) return { stdout: 'other-host\n9999\n', stderr: '', code: 0 };
+        if (cmd.startsWith('hostname;')) return { stdout: 'other-host\n9999\n', stderr: '', code: 0 };
         if (cmd.includes(HUB.canary.path)) {
           return { stdout: `AZT_STATUS:canary:present\n${b64(HUB.canary.content)}\nAZT_STATUS_END:canary\n`, stderr: '', code: 0 };
         }
@@ -147,7 +154,7 @@ describe('runIsolationDoctor', () => {
 
     it('unknown when hostname/uid both differ but the canary probe itself is unreachable', async () => {
       const transport = makeTransport((cmd) => {
-        if (cmd.includes('hostname')) return { stdout: 'other-host\n9999\n', stderr: '', code: 0 };
+        if (cmd.startsWith('hostname;')) return { stdout: 'other-host\n9999\n', stderr: '', code: 0 };
         if (cmd.includes(HUB.canary.path)) throw new Error('connection refused');
         return cleanHandler(cmd);
       });
@@ -157,7 +164,7 @@ describe('runIsolationDoctor', () => {
 
     it('unknown when the canary path exists but its content does not match (not trusted as proof of absence)', async () => {
       const transport = makeTransport((cmd) => {
-        if (cmd.includes('hostname')) return { stdout: 'other-host\n9999\n', stderr: '', code: 0 };
+        if (cmd.startsWith('hostname;')) return { stdout: 'other-host\n9999\n', stderr: '', code: 0 };
         if (cmd.includes(HUB.canary.path)) {
           return { stdout: `AZT_STATUS:canary:present\n${b64('unexpected-content')}\nAZT_STATUS_END:canary\n`, stderr: '', code: 0 };
         }
@@ -169,7 +176,7 @@ describe('runIsolationDoctor', () => {
 
     it('unknown when the hub has no canary at all (write failed at startup) — never silently skipped as a pass', async () => {
       const transport = makeTransport((cmd) => {
-        if (cmd.includes('hostname')) return { stdout: 'other-host\n9999\n', stderr: '', code: 0 };
+        if (cmd.startsWith('hostname;')) return { stdout: 'other-host\n9999\n', stderr: '', code: 0 };
         return cleanHandler(cmd);
       });
       const result = await runIsolationDoctor(transport, { hostname: HUB.hostname, uid: HUB.uid, canary: null });
@@ -231,19 +238,27 @@ describe('runIsolationDoctor', () => {
   // `gh auth token`'s own exit code, not the composite `gh auth status`
   // (which also probes network reachability and can false-pass on a
   // transient API failure while a token is still stored locally).
-  describe('gh_unauthenticated (review round, Important finding 3)', () => {
-    it('fails when gh auth token succeeds (exit 0 — a local token is stored)', async () => {
+  //
+  // Follow-up review round (Important finding 2): `gh auth token` with no
+  // `--hostname` only ever resolved the default host — a token for a second
+  // (e.g. GitHub Enterprise) host was invisible. The check now enumerates
+  // every host in `hosts.yml` and probes each one; see checkGhUnauthenticated's
+  // doc comment in isolationDoctor.ts for the full host-enumeration contract.
+  describe('gh_unauthenticated (review round, Important finding 3 / follow-up Important finding 2)', () => {
+    // hosts.yml is absent in all of these — only the default host
+    // (github.com) is checked, matching cleanHandler's own hosts.yml branch.
+    it('fails when gh auth token succeeds for the default host (exit 0 — a local token is stored)', async () => {
       const transport = makeTransport((cmd) => {
-        if (cmd.includes('gh auth')) return { stdout: 'AZT_GH_TOKEN_EXIT:0\n', stderr: '', code: 0 };
+        if (cmd.includes('AZT_GH_CHECK_DONE')) return { stdout: 'AZT_GH_HOST_EXIT:0:0\nAZT_GH_CHECK_DONE\n', stderr: '', code: 0 };
         return cleanHandler(cmd);
       });
       const result = await runIsolationDoctor(transport, HUB);
       expect(result.checks.find((c) => c.id === 'gh_unauthenticated')!.status).toBe('fail');
     });
 
-    it('passes when gh is installed but gh auth token exits 1 (not logged into any host)', async () => {
+    it('passes when gh is installed but gh auth token exits 1 for the default host (not logged in)', async () => {
       const transport = makeTransport((cmd) => {
-        if (cmd.includes('gh auth')) return { stdout: 'AZT_GH_TOKEN_EXIT:1\n', stderr: '', code: 0 };
+        if (cmd.includes('AZT_GH_CHECK_DONE')) return { stdout: 'AZT_GH_HOST_EXIT:0:1\nAZT_GH_CHECK_DONE\n', stderr: '', code: 0 };
         return cleanHandler(cmd);
       });
       const result = await runIsolationDoctor(transport, HUB);
@@ -252,7 +267,7 @@ describe('runIsolationDoctor', () => {
 
     it('passes when gh is not installed at all', async () => {
       const transport = makeTransport((cmd) => {
-        if (cmd.includes('gh auth')) return { stdout: 'AZT_GH_ABSENT\n', stderr: '', code: 0 };
+        if (cmd.includes('AZT_GH_CHECK_DONE')) return { stdout: 'AZT_GH_ABSENT\nAZT_GH_CHECK_DONE\n', stderr: '', code: 0 };
         return cleanHandler(cmd);
       });
       const result = await runIsolationDoctor(transport, HUB);
@@ -265,7 +280,117 @@ describe('runIsolationDoctor', () => {
     // indeterminate result and must fold to 'unknown', never 'pass'.
     it('unknown when gh auth token returns an indeterminate exit code (e.g. usage error)', async () => {
       const transport = makeTransport((cmd) => {
-        if (cmd.includes('gh auth')) return { stdout: 'AZT_GH_TOKEN_EXIT:4\n', stderr: '', code: 0 };
+        if (cmd.includes('AZT_GH_CHECK_DONE')) return { stdout: 'AZT_GH_HOST_EXIT:0:4\nAZT_GH_CHECK_DONE\n', stderr: '', code: 0 };
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      expect(result.checks.find((c) => c.id === 'gh_unauthenticated')!.status).toBe('unknown');
+    });
+
+    // ─── Multi-host enumeration (follow-up review round, Important finding 2) ───
+    it('fails when a SECOND host in hosts.yml has a local token, even though the default host does not', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('hosts.yml')) {
+          const content = 'github.com:\n    oauth_token: xxx\n    user: alice\nghe.example.com:\n    oauth_token: yyy\n    user: alice\n';
+          return { stdout: `AZT_STATUS:f:present\n${b64(content)}\nAZT_STATUS_END:f\n`, stderr: '', code: 0 };
+        }
+        if (cmd.includes('AZT_GH_CHECK_DONE')) {
+          // hosts order: github.com (index 0, deduped baseline) then
+          // ghe.example.com (index 1, parsed from hosts.yml) — the default
+          // host has no token (exit 1), the enterprise host does (exit 0).
+          expect(cmd).toContain('ghe.example.com');
+          return { stdout: 'AZT_GH_HOST_EXIT:0:1\nAZT_GH_HOST_EXIT:1:0\nAZT_GH_CHECK_DONE\n', stderr: '', code: 0 };
+        }
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      const check = result.checks.find((c) => c.id === 'gh_unauthenticated')!;
+      expect(check.status).toBe('fail');
+    });
+
+    it('passes when hosts.yml lists a second host but neither host has a local token', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('hosts.yml')) {
+          const content = 'ghe.example.com:\n    user: alice\n';
+          return { stdout: `AZT_STATUS:f:present\n${b64(content)}\nAZT_STATUS_END:f\n`, stderr: '', code: 0 };
+        }
+        if (cmd.includes('AZT_GH_CHECK_DONE')) {
+          return { stdout: 'AZT_GH_HOST_EXIT:0:1\nAZT_GH_HOST_EXIT:1:1\nAZT_GH_CHECK_DONE\n', stderr: '', code: 0 };
+        }
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      expect(result.checks.find((c) => c.id === 'gh_unauthenticated')!.status).toBe('pass');
+    });
+
+    // hosts.yml present but its content could not be confirmed (unreadable/
+    // unrecognized framed probe) — the host list may be incomplete, so this
+    // must fold to 'unknown' rather than silently checking only the default
+    // host (an unenumerated-scope fail-open the review flagged).
+    it('unknown when hosts.yml exists but its content cannot be confirmed (incomplete enumeration must not fail-open)', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('hosts.yml')) return { stdout: 'AZT_STATUS:f:unreadable\n', stderr: '', code: 0 };
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      expect(result.checks.find((c) => c.id === 'gh_unauthenticated')!.status).toBe('unknown');
+    });
+
+    it('unknown when the hosts.yml probe itself is unreachable', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('hosts.yml')) throw new Error('connection refused');
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      expect(result.checks.find((c) => c.id === 'gh_unauthenticated')!.status).toBe('unknown');
+    });
+
+    // ─── GH_TOKEN / GITHUB_TOKEN env override (follow-up review round,
+    // Important finding 2) — `gh` itself reads these, bypassing hosts.yml
+    // entirely, so their mere presence must fail this check regardless of
+    // the per-host `gh auth token` results, and even with gh absent.
+    it('fails when GH_TOKEN is present in the exec environment, even though no host has a stored token', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('AZT_GH_CHECK_DONE')) {
+          return { stdout: 'AZT_GH_HOST_EXIT:0:1\nAZT_GH_TOKEN_ENV_PRESENT\nAZT_GH_CHECK_DONE\n', stderr: '', code: 0 };
+        }
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      const check = result.checks.find((c) => c.id === 'gh_unauthenticated')!;
+      expect(check.status).toBe('fail');
+      expect(check.detail).toContain('GH_TOKEN');
+    });
+
+    it('fails when GITHUB_TOKEN is present even though gh itself is not installed', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('AZT_GH_CHECK_DONE')) {
+          return { stdout: 'AZT_GH_ABSENT\nAZT_GITHUB_TOKEN_ENV_PRESENT\nAZT_GH_CHECK_DONE\n', stderr: '', code: 0 };
+        }
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      const check = result.checks.find((c) => c.id === 'gh_unauthenticated')!;
+      expect(check.status).toBe('fail');
+      expect(check.detail).toContain('GITHUB_TOKEN');
+    });
+
+    it('never leaks the token value itself into detail, only variable names / host results', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('AZT_GH_CHECK_DONE')) {
+          return { stdout: 'AZT_GH_HOST_EXIT:0:0\nAZT_GH_CHECK_DONE\n', stderr: '', code: 0 };
+        }
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      const check = result.checks.find((c) => c.id === 'gh_unauthenticated')!;
+      expect(check.status).toBe('fail');
+      expect(check.detail).not.toMatch(/gho_|ghp_|github_pat_/);
+    });
+
+    it('unknown when the host-check round-trip result is unparseable', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('AZT_GH_CHECK_DONE')) return { stdout: 'garbage\n', stderr: '', code: 0 };
         return cleanHandler(cmd);
       });
       const result = await runIsolationDoctor(transport, HUB);
