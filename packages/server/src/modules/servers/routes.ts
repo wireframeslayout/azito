@@ -864,6 +864,26 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
           message: 'isolation doctor は隔離実行（isolationIntent: true）を宣言済みの agent 型サーバーに対してのみ実行できます。',
         });
       }
+      // Issue #29 review (5th pass), Important finding 1 (C-1 裁定の穴): C-1
+      // gates the isolationIntent false->true *declaration* PUT behind
+      // scoped auth (see the PUT handler above), but a doctor run against an
+      // ALREADY-isolated row never checked `scopedAuthEnabled` at all — a
+      // compat-mode hub could still persist a fresh `isolation_verified_at`
+      // and render "検証済み" for a server whose declared isolation the
+      // system as a whole does not actually enforce (in compat mode a task
+      // principal is operator-equivalent for every route — see the PUT
+      // handler's own comment). Mirror the same gate here: a doctor run is
+      // just as misleading as the declaration it would otherwise validate.
+      if (!scopedAuthEnabled) {
+        return reply.status(409).send({
+          error: 'isolation_doctor_requires_scoped_auth',
+          message:
+            '隔離実行を宣言するには scoped auth（AZITO_SCOPED_AUTH）の有効化が必要です。互換モードのままでは、' +
+            'この隔離宣言が実態より安全であるかのように見えてしまいます。手順: 1) `azito auth doctor` を実行しすべての検査が ' +
+            'green になることを確認する → 2) `AZITO_SCOPED_AUTH=1` を設定してハブを再起動する → 3) `azito token rotate` を実行する。' +
+            'この手順を終えてから、改めて isolation doctor を実行してください。',
+        });
+      }
 
       const transport = transportFactory.getTransport(srv);
       // Issue #29 isolation doctor review, Critical finding 1 / review round

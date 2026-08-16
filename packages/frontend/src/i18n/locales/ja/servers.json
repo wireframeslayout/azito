@@ -74,6 +74,8 @@
     "isolationDoctorVerifiedStale": "隔離・要再検証（前回検証: {{at}}）",
     "isolationDoctorUnverified": "隔離・未検証",
     "isolationDoctorNeedsAttention": "隔離・要対応",
+    "isolationDoctorScopedAuthDisabled": "隔離・検証は無効です",
+    "isolationDoctorScopedAuthDisabledSub": "scoped auth（AZITO_SCOPED_AUTH）が無効なため、検証結果（過去の結果を含む）に意味がありません。互換モードでは task principal がすべての API で operator と同等に扱われるため、隔離が実際に強制されているとは言えません。scoped auth を有効化してから再検証してください。",
     "isolationDoctorNeedsAttentionSub": "以下の検査に失敗、または確認できませんでした: {{checks}}",
     "isolationDoctorSnapshotNotice": "この結果は検証時点のスナップショットであり、設定ミスを検出するものです（保証・証明ではありません）。ホスト自体が敵対的な場合は検出できず、その対策は資格情報を配布しない構造（層2: credential-distribution gate）が担います。",
     "isolationDoctorFailedToast": "隔離の検証に失敗しました: {{error}}",

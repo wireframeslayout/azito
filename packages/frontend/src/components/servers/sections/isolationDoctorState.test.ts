@@ -39,6 +39,7 @@ describe('computeIsolationDoctorState', () => {
       verificationReport: verified(),
       isolationVerifiedAt: '2026-08-15T00:00:00Z',
       ttlMs: TTL,
+      scopedAuthEnabled: true,
       now: NOW,
     })).toBeNull();
   });
@@ -49,6 +50,7 @@ describe('computeIsolationDoctorState', () => {
       verificationReport: null,
       isolationVerifiedAt: null,
       ttlMs: TTL,
+      scopedAuthEnabled: true,
       now: NOW,
     })).toBe('unverified');
   });
@@ -63,6 +65,7 @@ describe('computeIsolationDoctorState', () => {
       verificationReport: cleanupReport,
       isolationVerifiedAt: '2026-08-15T00:00:00Z',
       ttlMs: TTL,
+      scopedAuthEnabled: true,
       now: NOW,
     })).toBe('unverified');
   });
@@ -73,6 +76,7 @@ describe('computeIsolationDoctorState', () => {
       verificationReport: verified({ verified: false }),
       isolationVerifiedAt: null,
       ttlMs: TTL,
+      scopedAuthEnabled: true,
       now: NOW,
     })).toBe('needsAttention');
   });
@@ -83,6 +87,7 @@ describe('computeIsolationDoctorState', () => {
       verificationReport: verified(),
       isolationVerifiedAt: new Date(NOW - 1000).toISOString(),
       ttlMs: TTL,
+      scopedAuthEnabled: true,
       now: NOW,
     })).toBe('verified');
   });
@@ -93,6 +98,7 @@ describe('computeIsolationDoctorState', () => {
       verificationReport: verified(),
       isolationVerifiedAt: new Date(NOW - TTL - 1000).toISOString(),
       ttlMs: TTL,
+      scopedAuthEnabled: true,
       now: NOW,
     })).toBe('verifiedStale');
   });
@@ -107,6 +113,7 @@ describe('computeIsolationDoctorState', () => {
       verificationReport: verified(),
       isolationVerifiedAt: null,
       ttlMs: TTL,
+      scopedAuthEnabled: true,
       now: NOW,
     })).toBe('unverified');
   });
@@ -117,7 +124,51 @@ describe('computeIsolationDoctorState', () => {
       verificationReport: verified(),
       isolationVerifiedAt: 'not-a-date',
       ttlMs: TTL,
+      scopedAuthEnabled: true,
       now: NOW,
     })).toBe('unverified');
+  });
+
+  // Issue #29 review (5th pass), Important finding 1: mirrors the backend's
+  // C-1 gate on the doctor route (409 isolation_doctor_requires_scoped_auth
+  // while scopedAuthEnabled is false) — a report that would otherwise read
+  // as a fresh, passing 'verified' must not survive once scoped auth is
+  // confirmed off, since that report no longer describes an enforced
+  // guarantee.
+  it('returns scopedAuthDisabled — overriding an otherwise-fresh verified report — when scopedAuthEnabled is false', () => {
+    expect(computeIsolationDoctorState({
+      isolationIntent: true,
+      verificationReport: verified(),
+      isolationVerifiedAt: new Date(NOW - 1000).toISOString(),
+      ttlMs: TTL,
+      scopedAuthEnabled: false,
+      now: NOW,
+    })).toBe('scopedAuthDisabled');
+  });
+
+  it('returns scopedAuthDisabled even when there is no report at all, as long as isolation is declared', () => {
+    expect(computeIsolationDoctorState({
+      isolationIntent: true,
+      verificationReport: null,
+      isolationVerifiedAt: null,
+      ttlMs: TTL,
+      scopedAuthEnabled: false,
+      now: NOW,
+    })).toBe('scopedAuthDisabled');
+  });
+
+  // scopedAuthEnabled === null (health fetch not yet resolved / failed) must
+  // NOT trigger the override — matches ServerModals.tsx's
+  // isolationToggleBlocked treatment of the same null signal (fail-open on
+  // "not yet known", not fail-closed).
+  it('does not override with scopedAuthDisabled when scopedAuthEnabled is null (health not yet loaded)', () => {
+    expect(computeIsolationDoctorState({
+      isolationIntent: true,
+      verificationReport: verified(),
+      isolationVerifiedAt: new Date(NOW - 1000).toISOString(),
+      ttlMs: TTL,
+      scopedAuthEnabled: null,
+      now: NOW,
+    })).toBe('verified');
   });
 });

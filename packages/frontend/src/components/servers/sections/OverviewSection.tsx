@@ -5,6 +5,7 @@ import type { ServerStatus, InstallStatusResponse } from '../serverSections';
 import { getHealthLevel, useServerResourcesContext } from '../../../hooks/useServerResources';
 import type { HealthLevel } from '../../../hooks/useServerResources';
 import { useIsolationDoctor } from '../../../hooks/useIsolationDoctor';
+import { useHealth } from '../../../hooks/useHealth';
 import { computeIsolationDoctorState, isValidVerificationReport } from './isolationDoctorState';
 import { HealthDot, HEALTH_COLOR_VAR } from '../../statusbar/HealthDot';
 import { ResourceMeter } from '../../statusbar/ResourceMeter';
@@ -100,11 +101,20 @@ export default function OverviewSection({
   // already requires for the report as a WHOLE — this is defense in depth
   // for this render path specifically, not a replacement for that validator.
   const verificationReport = isolationReport;
+  // Issue #29 review (5th pass), Important finding 1: mirrors the backend's
+  // own C-1 gate (routes.ts's POST .../isolation/doctor now returns 409
+  // isolation_doctor_requires_scoped_auth while scopedAuthEnabled is false)
+  // — a stale "verified" report persisted from before compat mode (or from
+  // before scoped auth was ever turned on) must not keep rendering as proof
+  // of anything. See computeIsolationDoctorState's own doc comment for the
+  // null-treated-as-"not confirmed off" rationale.
+  const { scopedAuthEnabled } = useHealth();
   const isolationDoctorState = computeIsolationDoctorState({
     isolationIntent: !!server.isolationIntent,
     verificationReport,
     isolationVerifiedAt: server.isolationVerifiedAt,
     ttlMs: ISOLATION_VERIFICATION_TTL_MS,
+    scopedAuthEnabled,
   });
   const failedOrUnknownChecks = (isValidVerificationReport(verificationReport) ? (verificationReport.checks ?? []) : []).filter((c) => c.status !== 'pass');
   const { running: isolationDoctorRunning, runDoctor } = useIsolationDoctor(server.type === 'agent' ? server.name : null, refresh);
@@ -259,27 +269,42 @@ export default function OverviewSection({
       {isolationDoctorState !== null && server.type === 'agent' && (
         <div style={{ marginBottom: 'var(--space-4)' }}>
           <Notice
-            tone={isolationDoctorState === 'verified' ? 'success' : isolationDoctorState === 'needsAttention' ? 'danger' : 'warning'}
+            tone={isolationDoctorState === 'verified' ? 'success' : isolationDoctorState === 'needsAttention' || isolationDoctorState === 'scopedAuthDisabled' ? 'danger' : 'warning'}
             sub={
-              isolationDoctorState === 'needsAttention'
-                ? t('overview.isolationDoctorNeedsAttentionSub', {
-                    checks: failedOrUnknownChecks.map((c) => `${c.id} (${c.status})`).join(', '),
-                  })
-                : t('overview.isolationDoctorSnapshotNotice')
+              isolationDoctorState === 'scopedAuthDisabled'
+                ? t('overview.isolationDoctorScopedAuthDisabledSub')
+                : isolationDoctorState === 'needsAttention'
+                  ? t('overview.isolationDoctorNeedsAttentionSub', {
+                      checks: failedOrUnknownChecks.map((c) => `${c.id} (${c.status})`).join(', '),
+                    })
+                  : t('overview.isolationDoctorSnapshotNotice')
             }
             action={
-              <Button size="sm" onClick={runDoctor} loading={isolationDoctorRunning} loadingLabel={t('overview.isolationDoctorRunning')}>
+              // Issue #29 review (5th pass), Important finding 1: the run
+              // button is disabled while scoped auth is confirmed off — the
+              // backend would reject the request with 409 anyway, and
+              // letting an operator retry a call that can never succeed
+              // while compat mode is on is worse than telling them upfront.
+              <Button
+                size="sm"
+                onClick={runDoctor}
+                loading={isolationDoctorRunning}
+                loadingLabel={t('overview.isolationDoctorRunning')}
+                disabled={isolationDoctorState === 'scopedAuthDisabled'}
+              >
                 {t('overview.isolationDoctorRun')}
               </Button>
             }
           >
-            {isolationDoctorState === 'verified' && server.isolationVerifiedAt
-              ? t('overview.isolationDoctorVerified', { at: new Date(server.isolationVerifiedAt).toLocaleString() })
-              : isolationDoctorState === 'verifiedStale' && server.isolationVerifiedAt
-                ? t('overview.isolationDoctorVerifiedStale', { at: new Date(server.isolationVerifiedAt).toLocaleString() })
-                : isolationDoctorState === 'needsAttention'
-                  ? t('overview.isolationDoctorNeedsAttention')
-                  : t('overview.isolationDoctorUnverified')}
+            {isolationDoctorState === 'scopedAuthDisabled'
+              ? t('overview.isolationDoctorScopedAuthDisabled')
+              : isolationDoctorState === 'verified' && server.isolationVerifiedAt
+                ? t('overview.isolationDoctorVerified', { at: new Date(server.isolationVerifiedAt).toLocaleString() })
+                : isolationDoctorState === 'verifiedStale' && server.isolationVerifiedAt
+                  ? t('overview.isolationDoctorVerifiedStale', { at: new Date(server.isolationVerifiedAt).toLocaleString() })
+                  : isolationDoctorState === 'needsAttention'
+                    ? t('overview.isolationDoctorNeedsAttention')
+                    : t('overview.isolationDoctorUnverified')}
           </Notice>
         </div>
       )}

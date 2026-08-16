@@ -1400,6 +1400,47 @@ describe('POST /api/servers/:name/isolation/doctor (Issue #29 Step 2 B)', () => 
     expect(res.statusCode).toBe(404);
   });
 
+  // Issue #29 review (5th pass), Important finding 1: C-1 gates the
+  // false->true isolationIntent *declaration* PUT behind scoped auth, but
+  // this route (running the doctor against an ALREADY-isolated row) never
+  // checked scopedAuthEnabled at all — a compat-mode hub could still
+  // persist a fresh isolation_verified_at and render "検証済み" for a
+  // server whose declared isolation the system as a whole does not actually
+  // enforce. This block covers the fix: the doctor route now applies the
+  // same 409 gate the PUT handler already does.
+  describe('requires scoped auth (Issue #29 review, 5th pass, Important finding 1 / C-1 doctor gate)', () => {
+    it('409s and never invokes the transport when scopedAuthEnabled is false', async () => {
+      const exec = vi.fn();
+      const opts = makeOpts({
+        scopedAuthEnabled: false,
+        transportFactory: { getTransport: vi.fn(() => ({ exec })), invalidate: vi.fn() } as unknown as ServersRouteOptions['transportFactory'],
+      });
+      (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+        makeServer({ type: 'agent', isolationIntent: true, host: '1.2.3.4' }),
+      );
+      const app = await buildApp(opts);
+
+      const res = await app.inject({ method: 'POST', url: '/api/servers/srv/isolation/doctor' });
+
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toBe('isolation_doctor_requires_scoped_auth');
+      expect(exec).not.toHaveBeenCalled();
+      expect(opts.serverRepo.updateIsolationVerification).not.toHaveBeenCalled();
+      expect(opts.serverRepo.updateIsolationReport).not.toHaveBeenCalled();
+    });
+
+    it('still 400s the non-isolated/non-agent precondition first, even when scopedAuthEnabled is false', async () => {
+      const opts = makeOpts({ scopedAuthEnabled: false });
+      (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'agent', isolationIntent: false }));
+      const app = await buildApp(opts);
+
+      const res = await app.inject({ method: 'POST', url: '/api/servers/srv/isolation/doctor' });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('isolation_doctor_requires_isolated_agent_server');
+    });
+  });
+
   // Ratified doctrine (misconfiguration detector, not attestation — see
   // isolationDoctor.ts's top-of-file module doc comment): a canary probe
   // that COMPLETES and positively reports the canary absent, combined with

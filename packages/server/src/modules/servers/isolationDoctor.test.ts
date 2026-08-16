@@ -195,6 +195,28 @@ describe('runIsolationDoctor', () => {
     expect(check.detail).toContain('id_rsa');
   });
 
+  // Review round (Issue #29 5th pass, Important finding 3): `grep -r` does
+  // not follow symlinks it encounters WITHIN the scanned directory — a key
+  // reachable only via `~/.ssh/id_ed25519 -> /path/to/actual/key` would be
+  // invisible. The scan command must use `-R` (--dereference-recursive) so a
+  // symlinked key is actually found. This asserts on the exact command
+  // string sent to the transport, since the outcome classification itself
+  // (exit 0 -> fail) is already covered by the test above.
+  it('no_ssh_private_keys: scans with grep -R (dereferences symlinks), not grep -r', async () => {
+    let sshCmd: string | null = null;
+    const transport = makeTransport((cmd) => {
+      if (cmd.includes('.ssh')) {
+        sshCmd = cmd;
+        return { stdout: 'AZT_GREP_STATUS:1\nAZT_SSH_DIR_EXISTS\n', stderr: '', code: 0 };
+      }
+      return cleanHandler(cmd);
+    });
+    await runIsolationDoctor(transport, HUB);
+    expect(sshCmd).not.toBeNull();
+    expect(sshCmd).toContain('grep -RIl');
+    expect(sshCmd).not.toContain('grep -rIl');
+  });
+
   it('no_ssh_private_keys: passes when the directory exists but grep exits 1 (no match)', async () => {
     const transport = makeTransport((cmd) => {
       if (cmd.includes('.ssh')) return { stdout: 'AZT_GREP_STATUS:1\nAZT_SSH_DIR_EXISTS\n', stderr: '', code: 0 };
@@ -339,6 +361,27 @@ describe('runIsolationDoctor', () => {
     it('unknown when the hosts.yml probe itself is unreachable', async () => {
       const transport = makeTransport((cmd) => {
         if (cmd.includes('hosts.yml')) throw new Error('connection refused');
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      expect(result.checks.find((c) => c.id === 'gh_unauthenticated')!.status).toBe('unknown');
+    });
+
+    // Review round (Issue #29 5th pass, Important finding 2): a top-level
+    // key was extracted, but the content has NO indented line anywhere —
+    // the nested structure (oauth_token/user/... under each host) could not
+    // be confirmed to have been read correctly, so enumeration is treated as
+    // unreliable rather than trusted. Never reaches the host-exec command at
+    // all (the check must short-circuit before that round-trip).
+    it('unknown when hosts.yml content has a top-level host key but no indented lines anywhere (nesting unreadable)', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('hosts.yml')) {
+          const content = 'github.com:\nghe.example.com:\n';
+          return { stdout: `AZT_STATUS:f:present\n${b64(content)}\nAZT_STATUS_END:f\n`, stderr: '', code: 0 };
+        }
+        if (cmd.includes('AZT_GH_CHECK_DONE')) {
+          throw new Error('should not enumerate hosts when nesting could not be confirmed');
+        }
         return cleanHandler(cmd);
       });
       const result = await runIsolationDoctor(transport, HUB);
@@ -508,6 +551,55 @@ describe('runIsolationDoctor', () => {
       });
       const result = await runIsolationDoctor(transport, HUB);
       expect(result.checks.find((c) => c.id === 'no_git_credentials')!.status).toBe('pass');
+    });
+  });
+
+  // Review round (Issue #29 5th pass, Minor finding 4): git's own semantics
+  // for a multivalued config key are cumulative-WITH-RESET — a scope that
+  // sets `credential.helper =` (empty) clears everything accumulated in
+  // earlier-resolved scopes, it is not merely "one more ignorable entry".
+  // `--show-origin --get-all` lists every scope's value in RESOLUTION ORDER
+  // (system, then global, then local, ...), so replaying that order and
+  // clearing the accumulator on an empty value reproduces git's actual
+  // effective helper set.
+  describe('no_git_credentials (Issue #29 5th pass, Minor finding 4 — empty-value scope reset)', () => {
+    it('pass: a real helper set in system scope, then reset to empty in global scope, resolves to no effective helper', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('credential.helper')) {
+          return {
+            stdout: 'AZT_GIT_EXIT:0\n'
+              + 'file:/etc/gitconfig\tstore\n'
+              + 'file:/home/agent/.gitconfig\t\n'
+              + 'AZT_HELPER_END\nAZT_CREDFILE_ABSENT\n',
+            stderr: '', code: 0,
+          };
+        }
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      const check = result.checks.find((c) => c.id === 'no_git_credentials')!;
+      expect(check.status).toBe('pass');
+    });
+
+    it('fail: a helper reset to empty in global scope, then re-set in local scope, still reports the surviving local helper', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.includes('credential.helper')) {
+          return {
+            stdout: 'AZT_GIT_EXIT:0\n'
+              + 'file:/etc/gitconfig\tstore\n'
+              + 'file:/home/agent/.gitconfig\t\n'
+              + 'file:.git/config\tcache\n'
+              + 'AZT_HELPER_END\nAZT_CREDFILE_ABSENT\n',
+            stderr: '', code: 0,
+          };
+        }
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, HUB);
+      const check = result.checks.find((c) => c.id === 'no_git_credentials')!;
+      expect(check.status).toBe('fail');
+      expect(check.detail).toContain('cache');
+      expect(check.detail).not.toContain('store');
     });
   });
 

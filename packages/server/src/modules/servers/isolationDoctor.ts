@@ -407,9 +407,17 @@ async function checkFsAndHostBoundary(transport: IServerTransport, hub: HubIdent
  */
 async function checkNoPrivateKeys(transport: IServerTransport): Promise<IsolationCheck> {
   const id = 'no_ssh_private_keys';
+  // Review round (Issue #29 5th pass, Important finding 3): `-r` does not
+  // follow symlinks it encounters WITHIN the scanned directory (a common
+  // real layout: `~/.ssh/id_ed25519 -> /path/to/actual/key`), so a private
+  // key reachable only through a symlink was silently invisible to this
+  // scan. `-R` (--dereference-recursive) follows those symlinks; a broken
+  // link or a permission error on the link target still folds into grep's
+  // own non-zero-but-not-2 exit classification below (unknown), not a
+  // silent skip.
   const cmd = 'if [ -d "$HOME/.ssh" ]; then '
     + 'if command -v grep >/dev/null 2>&1; then '
-    + 'OUT=$(grep -rIl "PRIVATE KEY" "$HOME/.ssh" 2>/dev/null); GREP_STATUS=$?; '
+    + 'OUT=$(grep -RIl "PRIVATE KEY" "$HOME/.ssh" 2>/dev/null); GREP_STATUS=$?; '
     + 'echo "AZT_GREP_STATUS:$GREP_STATUS"; '
     + 'printf \'%s\\n\' "$OUT"; '
     + 'echo AZT_SSH_DIR_EXISTS; '
@@ -546,6 +554,27 @@ async function checkGhUnauthenticated(transport: IServerTransport): Promise<Isol
     hosts = ['github.com'];
   } else if (hostsProbe.kind === 'content') {
     const parsed = parseGhHostsYamlKeys(hostsProbe.content);
+    // Review round (Issue #29 5th pass, Important finding 2): a top-level
+    // key extraction succeeding is not, by itself, proof the file's NESTED
+    // structure was read correctly — `gh`'s hosts.yml always indents every
+    // value (oauth_token, user, ...) under its host key, so a genuine
+    // hosts.yml with at least one host has at least one indented line.
+    // Content that has ≥1 top-level key but ZERO indented lines anywhere is
+    // a shape this doctor cannot explain (truncated content, a hosts.yml
+    // rewritten with unconventional formatting, transport corruption) —
+    // treat enumeration as unreliable rather than trust the possibly-partial
+    // key list. Chosen conservatively (any indented line anywhere counts,
+    // not tied to a specific host key) to minimize false 'unknown's on
+    // legitimate hosts.yml files while still catching the "we clearly
+    // didn't parse the nesting" case.
+    const hasIndentedLine = hostsProbe.content.split('\n').some((l) => /^[ \t]+\S/.test(l));
+    if (parsed.length > 0 && !hasIndentedLine) {
+      return {
+        id,
+        status: 'unknown',
+        detail: 'gh hosts.yml のネスト構造を読み取れなかったため（ホストキー行以外にインデント行が見つかりません）、認証済みホストを列挙できませんでした',
+      };
+    }
     hosts = Array.from(new Set(['github.com', ...parsed]));
   } else {
     // 'unreadable' | 'unrecognized': the file exists but its content could
@@ -670,10 +699,24 @@ async function checkNoGitCredentials(transport: IServerTransport): Promise<Isola
     return { id, status: 'unknown', detail: unrecognizedOutputDetail('git credential 設定の確認結果を解析できませんでした') };
   }
   const gitExit = Number(lines[exitIdx].slice('AZT_GIT_EXIT:'.length));
-  // Each line is `<origin>\t<value>` (git's --show-origin framing). Lines
-  // without a tab are unrecognized origin-less noise and are skipped rather
-  // than misread as a bare helper value.
-  const rawLines = lines.slice(exitIdx + 1, helperEndIdx).filter((l) => l !== '');
+  // Each line is `<origin>\t<value>` (git's --show-origin framing). Review
+  // round (Issue #29 5th pass, Minor finding 4): the shared `lines` array
+  // above is `.trim()`-ed for locating the fixed control markers
+  // (AZT_GIT_EXIT/AZT_HELPER_END/...), but `trim()` also strips a TRAILING
+  // tab — exactly the shape a scope's empty-value reset line has
+  // (`<origin>\t` with nothing after the tab, git's documented way to CLEAR
+  // credential.helper). Slicing helper content out of the trimmed `lines`
+  // silently turned every empty-value reset line into a tab-less,
+  // "unrecognized origin-less noise" line that got skipped entirely —
+  // dropping the very reset event this finding's fix needs to see. Helper
+  // content is now sliced from the RAW (untrimmed, only CR-stripped)
+  // stdout lines instead, using the same indices located via the trimmed
+  // array above (the fixed marker lines themselves carry no meaningful
+  // leading/trailing whitespace, so trimming for their own detection is
+  // still safe). Lines without a tab are still unrecognized origin-less
+  // noise and are skipped rather than misread as a bare helper value.
+  const rawStdoutLines = result.stdout.split('\n').map((l) => l.replace(/\r$/, ''));
+  const rawLines = rawStdoutLines.slice(exitIdx + 1, helperEndIdx).filter((l) => l !== '');
   const helperEntries: { origin: string; value: string }[] = [];
   for (const l of rawLines) {
     const tabIdx = l.indexOf('\t');
@@ -695,6 +738,15 @@ async function checkNoGitCredentials(transport: IServerTransport): Promise<Isola
     return { id, status: 'pass', detail: 'credential.helper 未設定、~/.git-credentials も不在です' };
   }
   const reasons: string[] = [];
+  // Review round (Issue #29 5th pass, Minor finding 4, continued): gitExit
+  // can be 0 (the key exists in SOME scope) while the reset-aware replay
+  // below still resolves the EFFECTIVE set to empty — the canonical case
+  // this finding is about, e.g. system sets a real helper and global resets
+  // it with `credential.helper =`. That must reach the same 'pass' outcome
+  // as the gitExit===1 case above, not fall through to a 'fail' with an
+  // empty `reasons` array (which the code below would otherwise produce).
+  // Deferred until after `configuredEntries` is computed, so this check sits
+  // right below its own comment describing the replay.
   // Review finding (Step 2 review, Important #4): a helper's raw VALUE is a
   // shell command string (`credential.helper` can be `!<command>`, e.g.
   // `!aws codecommit credential-helper $@`, or `store --file
@@ -707,7 +759,27 @@ async function checkNoGitCredentials(transport: IServerTransport): Promise<Isola
   // ("a helper is configured, here's roughly what kind, and from where").
   // The ORIGIN (file path / git-defined label) is safe to show as-is — it
   // carries no capability, unlike the value.
-  const configuredEntries = helperEntries.filter((e) => e.value !== '');
+  // Review round (Issue #29 5th pass, Minor finding 4): git's own semantics
+  // for a multivalued config key are cumulative-with-reset, not
+  // filter-out-blanks — `--show-origin --get-all` lists every scope's value
+  // IN RESOLUTION ORDER (system, then global, then local, ...), and a scope
+  // that sets `credential.helper =` (empty) is git's documented way to CLEAR
+  // everything accumulated so far, not merely "one more, ignorable entry".
+  // The previous `.filter((e) => e.value !== '')` treated every non-empty
+  // entry as still active regardless of a later reset — e.g. system sets a
+  // real helper, global resets it to empty — and reported the system-scope
+  // helper as configured even though git's actual effective helper set is
+  // empty. Replayed here in the same order git resolves them: an empty value
+  // clears the accumulator; a non-empty value appends to it. Only what
+  // survives to the end is "configured".
+  let configuredEntries: { origin: string; value: string }[] = [];
+  for (const entry of helperEntries) {
+    if (entry.value === '') configuredEntries = [];
+    else configuredEntries.push(entry);
+  }
+  if (configuredEntries.length === 0 && !credFileExists) {
+    return { id, status: 'pass', detail: 'credential.helper の実効設定は空です（上位スコープの設定が下位スコープで空リセットされています）、~/.git-credentials も不在です' };
+  }
   if (configuredEntries.length > 0) {
     const kinds = Array.from(new Set(configuredEntries.map((e) => classifyGitCredentialHelper(e.value))));
     const origins = Array.from(new Set(configuredEntries.map((e) => e.origin)));

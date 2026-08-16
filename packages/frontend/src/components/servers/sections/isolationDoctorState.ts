@@ -30,7 +30,7 @@ export function isValidTimestamp(value: string | null | undefined): value is str
   return typeof value === 'string' && Number.isFinite(new Date(value).getTime());
 }
 
-export type IsolationDoctorState = 'verified' | 'verifiedStale' | 'unverified' | 'needsAttention' | null;
+export type IsolationDoctorState = 'verified' | 'verifiedStale' | 'unverified' | 'needsAttention' | 'scopedAuthDisabled' | null;
 
 /**
  * A server only ever reaches `'verified'`/`'verifiedStale'` when the report
@@ -40,16 +40,41 @@ export type IsolationDoctorState = 'verified' | 'verifiedStale' | 'unverified' |
  * success on an ambiguous or malformed signal), matching the isolation
  * doctor's own "unable to prove clean means fail closed" contract
  * (isolationDoctor.ts's module doc comment).
+ *
+ * Issue #29 review (5th pass), Important finding 1: the backend now refuses
+ * to even RUN the doctor while `scopedAuthEnabled` is false (409
+ * `isolation_doctor_requires_scoped_auth` — see routes.ts's POST
+ * .../isolation/doctor), but a report already persisted from BEFORE the hub
+ * dropped into compat mode (or from before scoped auth was ever turned on)
+ * can still sit in the DB looking exactly like a valid, passing
+ * verification. Rendering that stale report as `'verified'`/`'verifiedStale'`
+ * would repeat the exact deception C-1 exists to prevent — a "検証済み"
+ * badge implying layer 3 is actually enforced when, in compat mode, a task
+ * principal is operator-equivalent for every route (buildServer.ts's
+ * onRequest hook only records `route_auth.would_deny` there). So this check
+ * runs FIRST, ahead of every other branch: whenever isolation is declared
+ * AND scoped auth is off, the state is unconditionally `'scopedAuthDisabled'`
+ * regardless of what the persisted report says.
+ *
+ * `scopedAuthEnabled === null` (useHealth's `GET /api/health` fetch hasn't
+ * resolved yet, or failed) is treated as "not confirmed off" — i.e. it does
+ * NOT trigger this override — matching the same fail-open-on-unknown
+ * treatment `ServerModals.tsx`'s `isolationToggleBlocked` already uses for
+ * the identical signal (see that file's own doc comment): a transient health
+ * fetch hiccup must not make an already-verified server suddenly render as
+ * misconfigured.
  */
 export function computeIsolationDoctorState(params: {
   isolationIntent: boolean;
   verificationReport: IsolationReport | null;
   isolationVerifiedAt: string | null | undefined;
   ttlMs: number;
+  scopedAuthEnabled: boolean | null;
   now?: number;
 }): IsolationDoctorState {
-  const { isolationIntent, verificationReport, isolationVerifiedAt, ttlMs, now = Date.now() } = params;
+  const { isolationIntent, verificationReport, isolationVerifiedAt, ttlMs, scopedAuthEnabled, now = Date.now() } = params;
   if (!isolationIntent) return null;
+  if (scopedAuthEnabled === false) return 'scopedAuthDisabled';
   if (!isValidVerificationReport(verificationReport)) return 'unverified';
   if (verificationReport.verified === false) return 'needsAttention';
   if (!isValidTimestamp(isolationVerifiedAt)) return 'unverified';
