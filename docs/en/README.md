@@ -105,6 +105,7 @@ Click a project name to open its Workspace. The workspace is the main working ar
 
 - [Installation and Updates](install-and-update.md) -- Release install, where config lives, Tailscale access, updating and rolling back
 - [Security & Environment Setup Guide](security-setup.md) -- Required env vars, migrating an existing install, new environment setup, Tailscale, troubleshooting
+- [Isolated Execution Profile](isolated-execution.md) -- Running externally-sourced tasks on credential-free servers (the 3-layer model, the isolation doctor, the allow policy, network isolation)
 - [Workspace Guide](workspace.md) -- Layout, sidebar modes, tab management, keyboard shortcuts
 - [Push Notifications Setup](push-notifications.md) -- Enable PWA notifications via Tailscale HTTPS
 - [File Storage Guide](storage.md) -- MinIO setup, uploading, and managing files
