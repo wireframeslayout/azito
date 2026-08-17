@@ -4,10 +4,14 @@ export interface CliArgs {
   taskId: number | null;
   unitId: number | null;
   command: string;
+  /** Issue #28 Phase C launch binding (design v3 §8) — both optional, absent for a manual `azs`. */
+  launchId: string | null;
+  bootstrapToken: string | null;
 }
 
 const USAGE =
-  'Usage: tui-supervisor --server <name> --target <target> [--task-id <n>] [--unit-id <n>] -- <command...>';
+  'Usage: tui-supervisor --server <name> --target <target> [--task-id <n>] [--unit-id <n>] ' +
+  '[--launch-id <id> --bootstrap-token <token>] -- <command...>';
 
 /**
  * Parses argv into supervisor options + the wrapped command. Everything after
@@ -27,6 +31,8 @@ export function parseArgs(argv: string[]): CliArgs {
   let target: string | undefined;
   let taskId: number | null = null;
   let unitId: number | null = null;
+  let launchId: string | null = null;
+  let bootstrapToken: string | null = null;
 
   for (let i = 0; i < flagArgs.length; i += 1) {
     const flag = flagArgs[i];
@@ -48,6 +54,16 @@ export function parseArgs(argv: string[]): CliArgs {
         unitId = parseNumericFlag(flag, value);
         i += 1;
         break;
+      case '--launch-id':
+        if (value === undefined) fail(`${flag} requires a value`);
+        launchId = value;
+        i += 1;
+        break;
+      case '--bootstrap-token':
+        if (value === undefined) fail(`${flag} requires a value`);
+        bootstrapToken = value;
+        i += 1;
+        break;
       default:
         fail(`unknown flag: ${flag}`);
     }
@@ -57,7 +73,7 @@ export function parseArgs(argv: string[]): CliArgs {
   if (!target) fail('missing --target');
   if (!command) fail('empty command after --');
 
-  return { server: server!, target: target!, taskId, unitId, command };
+  return { server: server!, target: target!, taskId, unitId, command, launchId, bootstrapToken };
 }
 
 function parseNumericFlag(flag: string, value: string | undefined): number {

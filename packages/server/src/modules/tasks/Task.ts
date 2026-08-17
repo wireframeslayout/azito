@@ -30,6 +30,49 @@ export interface Task {
    */
   inputTrust: 'trusted' | 'untrusted';
   /**
+   * Who/what originated this task (Issue #28 design v3 §5,
+   * TaskOriginationService) — set once at creation by the single
+   * `TaskOriginationService.create()` every task-creation path funnels
+   * through (`POST /api/tasks`, `POST /api/projects/:id/import-issue`,
+   * `POST /api/tasks/:id/children`, and the future #62 trigger layer) and
+   * never updated afterward. `'system'` is the catch-all for a principal
+   * class with no single human/task subject (`runtime`/`agent`) — nothing
+   * in this phase actually creates a task under that principal, but the
+   * type exists so a future trigger/system entry point has somewhere to
+   * land instead of being force-fit into `'operator'`.
+   *
+   * This is the ONLY input {@link deriveInputTrust} trusts to decide
+   * `inputTrust` — unlike `source` (freely rewritable via /azt-link),
+   * `createdByKind`/`createdById` are never accepted from a request body.
+   */
+  createdByKind: 'operator' | 'task' | 'trigger' | 'system';
+  /** The class-specific origin id (e.g. the parent task's id for `createdByKind: 'task'`). Null for `'operator'`/`'system'`, which have no single subject. */
+  createdById: number | null;
+  /**
+   * The creating task-token's `window_generation` at the moment `POST
+   * /api/tasks/:id/children` created this row (Issue #28 third-party review
+   * fix: "children count limit was lifetime, not per-run"). NULL when this
+   * task wasn't created by a task principal at all (`createdByKind !==
+   * 'task'`, e.g. `POST /api/tasks`/`import-issue`) OR when an OPERATOR
+   * principal called `POST /api/tasks/:id/children` directly (design v3 §4
+   * fixes `origin.kind` to `'task'` regardless of which principal actually
+   * called it — see TaskOriginationService's doc comment — but only a task
+   * principal has a token generation to stamp here).
+   *
+   * This is what makes the children-count rate limit reset across follow-up
+   * calls instead of accumulating forever: `countChildrenInGeneration` scopes
+   * the count to `createdByKind = 'task' AND createdById = parentId AND
+   * createdViaGeneration = <the parent's CURRENT active generation>`, so a
+   * parent whose window was regenerated (a fresh execute()/follow-up/respawn)
+   * gets a fresh N=20 budget for the new run — the OLD generation's already-
+   * created children remain in the table (a full audit trail) but no longer
+   * count toward the limit. An operator-originated child (generation NULL)
+   * is counted by the separate, looser lifetime cap instead (see
+   * `countChildren`'s doc comment) since there is no generation to scope it
+   * to.
+   */
+  createdViaGeneration: number | null;
+  /**
    * Fingerprint (see ExecutionManifest.hashExecutionManifest) of the
    * RESOLVED execution manifest — not raw task columns — that a human most
    * recently approved for unattended execution while input_trust =
@@ -155,19 +198,34 @@ export interface Task {
 }
 
 /**
- * The single source of truth for how `Task['source']` maps to
- * `Task['inputTrust']` (Issue #328 hardening) — every task-creation and
- * task-update code path MUST derive `inputTrust` through this function
- * rather than deciding it inline. Before this function existed, `POST
+ * The single source of truth for how a task's origin maps to
+ * `Task['inputTrust']` (Issue #28 design v3 §5, fail-safe reversal of the
+ * Issue #328 original) — every task-creation and task-update code path MUST
+ * derive `inputTrust` through this function rather than deciding it inline.
+ *
+ * Trusted requires BOTH conditions: `createdByKind === 'operator'` (a human
+ * acting through the UI/CLI with a UI token, not a task/trigger/system
+ * principal) AND `source === 'local'` (not an imported external issue).
+ * Every other combination — `task`/`trigger`/`system` origin regardless of
+ * `source`, or `operator` origin with `source` `'github'`/`'gitlab'` — is
+ * `'untrusted'`. This is deliberately fail-safe in the direction that
+ * matters: a new `source` value or a new principal class added later that
+ * nobody updates this function for falls through to `'untrusted'`, not
+ * `'trusted'` (the earlier, Issue #328 version of this function inverted
+ * that: it listed the untrusted cases and defaulted everything else to
+ * trusted, so a forgotten update silently widened trust instead of
+ * narrowing it).
+ *
+ * Before Issue #328's original version of this function existed, `POST
  * /api/tasks` hardcoded `inputTrust: 'trusted'` regardless of `source`
  * while `POST /api/projects/:id/import-issue` independently hardcoded
  * `'untrusted'` — the two decisions drifted, and the browser's actual
  * GitHub-issue-import flow (which posts to `/api/tasks`, not
  * `import-issue`) went through the always-`'trusted'` path, defeating the
- * execution gate entirely for externally-sourced tasks.
- *
- * `github`/`gitlab` (untrusted external content, not yet reviewed by a
- * human) map to `'untrusted'`; `local` maps to `'trusted'`.
+ * execution gate entirely for externally-sourced tasks. Issue #28's
+ * TaskOriginationService (modules/tasks/origination/TaskOriginationService.ts)
+ * is now the ONLY caller of this function at creation time, closing that gap
+ * for good — no route decides `inputTrust` on its own anymore.
  *
  * This function is intentionally one-directional in effect only when
  * combined with the monotonicity rule enforced at each call site (never
@@ -175,11 +233,11 @@ export interface Task {
  * `PUT /api/tasks/:id` in modules/tasks/routes.ts, which floors the
  * derived value at the task's current trust level instead of applying
  * this function's output unconditionally). This function alone is a pure
- * mapping from `source` and does not know about a task's prior trust
- * level.
+ * mapping from `createdByKind`/`source` and does not know about a task's
+ * prior trust level.
  */
-export function deriveInputTrust(source: Task['source']): Task['inputTrust'] {
-  return source === 'github' || source === 'gitlab' ? 'untrusted' : 'trusted';
+export function deriveInputTrust(createdByKind: Task['createdByKind'], source: Task['source']): Task['inputTrust'] {
+  return createdByKind === 'operator' && source === 'local' ? 'trusted' : 'untrusted';
 }
 
 /** The only values {@link deriveInputTrust} (and thus the execution gate) understands. */
@@ -401,4 +459,58 @@ export interface ITaskRepository {
    * caller must reject, not silently retry with a different manifest).
    */
   preApproveExecution(id: number, fingerprintHash: string): boolean;
+
+  /**
+   * Count of tasks with `createdByKind: 'task'` and `createdById:
+   * parentTaskId` — LIFETIME total, across every generation and every caller
+   * (task principal or operator). Backs the loose operator-path cap on `POST
+   * /api/tasks/:id/children` (Issue #28 third-party review fix: an operator
+   * call has no window generation to scope a per-run limit to — see
+   * `createdViaGeneration`'s doc comment — so it falls back to this
+   * unscoped, deliberately-looser lifetime bound rather than being
+   * unlimited). Also used as a general "how many children has this task ever
+   * spawned" figure wherever the per-generation number isn't the right
+   * question.
+   */
+  countChildren(parentTaskId: number): number;
+  /**
+   * Count of tasks with `createdByKind: 'task'`, `createdById: parentTaskId`,
+   * AND `createdViaGeneration: generation` — backs the per-run N=20 cap on
+   * `POST /api/tasks/:id/children` when the caller is a task principal
+   * (Issue #28 third-party review fix: the previous `countChildren` cap
+   * counted the parent's ENTIRE lifetime child count, so a parent that spans
+   * multiple follow-up runs could never spawn more children at all once the
+   * lifetime total crossed 20, even though only the CURRENT run should be
+   * bounded). `generation` is the parent's currently active
+   * `task_tokens.window_generation` (see
+   * `ITaskTokenRepository.getActiveGeneration`), resolved by the route at
+   * request time — never the caller-supplied body, which cannot be trusted
+   * to report its own generation honestly.
+   */
+  countChildrenInGeneration(parentTaskId: number, generation: number): number;
+
+  /**
+   * Atomically clears `tmuxWindow` — but ONLY if it still equals
+   * `expectedWindowName` — and reports whether it did (Issue #28 third-party
+   * review, Fix 3: rollback-race finding). `ExecuteTaskUseCase.execute()`/
+   * `followUp()` create a new tmux window generation under
+   * `runExclusiveForTask` (see WindowRotation.ts), but everything downstream
+   * of that (worktree creation and ITS OWN failure rollback) runs OUTSIDE
+   * the lock — deliberately, since worktree creation can be a slow
+   * network/SSH round trip and holding the in-memory per-task lock that long
+   * would serialize unrelated work for no benefit. That gap means a second,
+   * concurrent `execute()`/`followUp()` call for the SAME task (e.g. a UI
+   * respawn racing a follow-up) can acquire the lock, create ITS OWN newer
+   * window generation, and persist ITS `tmuxWindow` — all while the FIRST
+   * call's worktree step is still failing and about to roll back. A plain
+   * `update(id, { tmuxWindow: null })` at that point would blindly null out
+   * the newer generation's window reference (whichever one happens to be in
+   * the row right now), untracking a live pane and its token. This method's
+   * WHERE-guarded UPDATE makes the rollback a no-op instead whenever the row
+   * has already moved on to a different window — the caller's own rollback
+   * (kill + token revoke, scoped to the tokenId IT issued) still runs
+   * unconditionally, since that part only ever affects the generation this
+   * specific call created.
+   */
+  clearTmuxWindowIfMatches(id: number, expectedWindowName: string): boolean;
 }

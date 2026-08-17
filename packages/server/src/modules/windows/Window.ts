@@ -48,6 +48,30 @@ export function isAgentWindow(w: Window): w is AgentWindow {
   return w.windowType === 'agent' && w.workerType !== null;
 }
 
+/**
+ * Single judgment point for "is `win` the task's primary worker window"
+ * (Issue #28 third-party review finding — multi-window token rotation
+ * collision). A task's AZITO_TASK_TOKEN is bound one-to-one to its primary
+ * worker window's generation (design v3 §2: the generation IS the primary
+ * window's generation — `task.tmuxWindow` names it, and `isPrimary` is set
+ * `true` on exactly that row by ExecuteTaskUseCase.execute()/
+ * TaskRestoreService.restore(), never on a secondary window added via
+ * `POST /api/tasks/:id/windows`). A secondary window is not a caller of the
+ * task's own API surface, so it must never rotate or revoke that token:
+ * rotating on a secondary respawn would 401 a still-live primary pane, and
+ * revoking on a secondary window's destruction would do the same.
+ *
+ * Every rotate/revoke decision point (WindowRespawnService.respawn(), the
+ * generic tmux kill-window/kill-session routes' `onTaskWindowDestroyed`
+ * callback) must call this instead of re-deriving the same check inline, so
+ * the two can never independently drift (see this module's own history for
+ * why: the original bug was exactly this check being ownerType/taskId-only,
+ * missing the isPrimary half, in one of the call sites but not the others).
+ */
+export function isPrimaryTaskWindow(win: Pick<Window, 'ownerType' | 'isPrimary'>): boolean {
+  return win.ownerType === 'task' && win.isPrimary;
+}
+
 export interface IWindowRepository {
   add(window: Omit<Window, 'id' | 'createdAt'>): number;
   findAll(): Window[];
@@ -60,6 +84,27 @@ export interface IWindowRepository {
   findAgentSessionIdsByServer(serverName: string): Set<string>;
   /** Window-granularity lookup (pane suffix stripped on both sides — see paneTarget.ts). */
   findByServerAndTarget(serverName: string, tmuxTarget: string): Window | undefined;
+  /**
+   * Every window row (any ownerType) whose tmuxTarget belongs to
+   * `sessionName` on `serverName` — used by the session-delete route
+   * (Issue #28 third-party review finding 4) to resolve which windows a
+   * whole-session kill is about to take down BEFORE the kill runs (once the
+   * session is gone, tmux itself can no longer answer "which windows did it
+   * hold").
+   */
+  findByServerAndSession(serverName: string, sessionName: string): Window[];
+  /**
+   * The DB's own current timestamp, in the exact same string format as
+   * `created_at` on every row (Issue #28 third-party review finding: the
+   * session-delete route's post-kill safety-net cleanup — see
+   * `tmux/routes/sessions.ts`'s `DELETE /api/servers/:name/sessions/:session`
+   * handler — needs a cutoff instant to bound "was this row created before
+   * the kill started", and comparing against a Node-side `Date.now()`/ISO
+   * string risks both clock skew against the DB process and a format
+   * mismatch with `created_at`'s `datetime('now')` format). Never cached —
+   * always a fresh read.
+   */
+  now(): string;
   update(id: number, data: Partial<Pick<Window,
     'tmuxTarget' | 'label' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType'
   >>): void;

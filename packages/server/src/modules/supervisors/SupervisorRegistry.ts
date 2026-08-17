@@ -13,6 +13,12 @@ import {
   type SendKeysMessage,
   type SupervisorToHubMessage,
 } from './protocol';
+import type {
+  ISupervisorLaunchRepository,
+  SupervisorLaunchExpectation,
+  IssuedSupervisorLaunch,
+} from './SupervisorLaunchRepository';
+import type { AuditLogService } from '../../shared/audit/AuditLogService';
 
 const ACK_TIMEOUT_MS = 10_000;
 const PING_INTERVAL_MS = 15_000;
@@ -73,6 +79,17 @@ interface SupervisorConnection {
   /** Set once the child TUI has reported 'ready' on this connection. See handleMessage's 'ready' case. */
   ready: boolean;
   /**
+   * True iff this connection's identity was verified against a persisted
+   * `supervisor_launches` row (Issue #28 Phase C, design v3 §8). False for a
+   * launchId-less registration (manual `azs`) once `AZITO_SCOPED_AUTH` is
+   * on — an "unbound" connection is display-only: it must never drive
+   * AgentActivityMonitor's Tier 0 override or a task turn's idle-timer
+   * refresh, since nothing verified it actually corresponds to the task/unit
+   * it claims. See resolveLaunchAuth().
+   */
+  bound: boolean;
+  launchId: string | null;
+  /**
    * Diagnostics only (GET /api/debug/activity): when the last `activity` frame
    * arrived on this connection and what it said. Nothing in the judgment path
    * reads these — the activity frame is forwarded to AgentActivityMonitor as it
@@ -94,6 +111,7 @@ export interface SupervisorEntry {
   connectedAt: number;
   lastHeartbeatAt: number;
   ready: boolean;
+  bound: boolean;
   /** See SupervisorConnection — diagnostics only. */
   lastActivityFrameAt: number | null;
   lastReportedState: ActivityState | null;
@@ -113,6 +131,8 @@ export interface SupervisorActivityEvent {
    * carried through so callers can derive a display label for supervised
    * panes that have no `windows` table row. */
   childCommand: string;
+  /** See SupervisorConnection.bound's doc comment — false means "display only, do not drive Tier 0 / turn idle refresh". */
+  bound: boolean;
 }
 
 export interface SupervisorReadyEvent {
@@ -128,9 +148,27 @@ export interface SupervisorChildExitEvent {
   taskId: number | null;
   exitCode: number | null;
   signal: number | null;
+  bound: boolean;
 }
 
 export interface SupervisorDisconnectedEvent {
+  serverName: string;
+  target: string;
+  bound: boolean;
+}
+
+/**
+ * Emitted by {@link SupervisorRegistry.downgradeToUnbound} the moment a
+ * previously-bound connection loses its authority (see that method's doc
+ * comment) — WITHOUT the connection itself closing/reconnecting, so neither
+ * `child_exit` nor `disconnected` fires on its own to prompt cleanup.
+ * Issue #28 third-party review (Important): consumed by buildServer.ts to
+ * immediately clear any Tier 0 state AgentActivityMonitor recorded for this
+ * key (`recordSupervisorSignal(..., 'exited')`) — otherwise a stale Tier 0
+ * verdict from the now-unauthoritative connection lingers until some later,
+ * unrelated event happens to overwrite it.
+ */
+export interface SupervisorAuthorityRevokedEvent {
   serverName: string;
   target: string;
 }
@@ -151,7 +189,30 @@ function keyFor(serverName: string, target: string): string {
  * happens in ws/supervisorSocketHandler.ts; this class only deals with
  * already-typed messages.
  */
+type LaunchAuthResult =
+  | { ok: true; bound: boolean; launchId: string | null; sessionToken?: string }
+  | { ok: false; event: string; reason: string };
+
 export class SupervisorRegistry extends EventEmitter {
+  /**
+   * @param launchRepo Persists/validates `--launch-id`/`--bootstrap-token` launches (Issue #28
+   *   Phase C). Undefined only where no DB is available (e.g. some test/dev infra) — a
+   *   launchId-bearing register is then rejected outright (fail closed) rather than silently
+   *   trusted, since there is no way to validate it.
+   * @param auditLogService Best-effort audit trail for launch bind/reject/unbound decisions
+   *   (design v3 §10). Undefined is tolerated (tests) — audit calls are then skipped.
+   * @param scopedAuthEnabled Compat gate (design v3 §12): while false, a launchId-less register
+   *   (manual `azs`, or a pre-Phase-C supervisor) is treated as `bound` exactly like before this
+   *   phase — flipping it to `unbound` only takes effect once the flag is on.
+   */
+  constructor(
+    private launchRepo?: ISupervisorLaunchRepository,
+    private auditLogService?: AuditLogService,
+    private scopedAuthEnabled: boolean = false,
+  ) {
+    super();
+  }
+
   private connections = new Map<string, SupervisorConnection>();
   private socketKeys = new WeakMap<WebSocket, string>();
   private pingTimers = new Map<string, NodeJS.Timeout>();
@@ -180,10 +241,242 @@ export class SupervisorRegistry extends EventEmitter {
   }
 
   /**
+   * Issues a fresh `supervisor_launches` row for a launch about to be wrapped
+   * (`wrapWithSupervisor()`, called immediately after) — Issue #28 Phase C,
+   * design v3 §8. Returns undefined when no `launchRepo` was injected (no DB
+   * available at this hub instance); callers fall back to wrapping without
+   * `--launch-id`/`--bootstrap-token`, which registers as `unbound` under
+   * scoped auth (or `bound` under the compat flag, same as always).
+   *
+   * Issue #28 third-party review finding (Important): `launchRepo.create()`
+   * below invalidates any prior `supervisor_launches` row for this
+   * `(serverName, target)` (its own doc comment's "supersede step") — but
+   * that only affects the PERSISTED row, not whatever in-memory `connections`
+   * entry is still live for the key. If the OLD supervisor process's
+   * WebSocket is still connected when this is called (the hub hasn't yet
+   * observed its disconnect) and the NEW supervisor process then fails to
+   * start/register at all, the OLD connection would otherwise stay `bound`
+   * — still driving AgentActivityMonitor's Tier 0 override and the task
+   * turn's idle-timer refresh — forever, as the authority for a launch that
+   * was just superseded and no longer has a valid token. Downgrading it to
+   * `unbound` HERE (immediately, at issuance) rather than waiting for the
+   * new registration to evict it (`register()`'s own eviction path) or for
+   * the new supervisor's activity to arrive is the cheap option: it's a
+   * single in-memory map lookup on the rare (re-launch) path, with no new
+   * I/O, no new persisted state, and no behavior change for the common case
+   * (no existing connection for the key). The connection itself is left
+   * alone — still displayed, still able to reconnect — only its authority to
+   * drive Tier 0/turn-idle-refresh is revoked; `register()`'s later replace
+   * either evicts it for real (successful new registration) or never comes
+   * (new supervisor never starts), in which case it now correctly shows as
+   * unbound/display-only instead of silently remaining authoritative.
+   */
+  issueLaunch(expectation: SupervisorLaunchExpectation): IssuedSupervisorLaunch | undefined {
+    const issued = this.launchRepo?.create(expectation);
+    if (issued) this.downgradeToUnbound(keyFor(expectation.serverName, expectation.target));
+    return issued;
+  }
+
+  /**
+   * Demotes an existing bound connection for `key` to unbound in place —
+   * does NOT close/replace the socket. See {@link issueLaunch}'s doc comment
+   * for why this exists. No-op if there is no connection for the key, or it
+   * is already unbound.
+   *
+   * Issue #28 third-party review (Important): downgrading in-memory `bound`
+   * here is not enough on its own — AgentActivityMonitor's Tier 0 state for
+   * this key was set by this connection's earlier (bound) `activity` events
+   * and has no other trigger to re-evaluate itself. Without an explicit
+   * signal, that stale Tier 0 verdict keeps overriding Tier 1/2 detection
+   * for as long as nothing else happens to fire `child_exit`/`disconnected`
+   * on this now-unauthoritative connection (which, per `issueLaunch`'s doc
+   * comment, is exactly the "new supervisor never starts" case this exists
+   * to handle). Emitting `authority_revoked` lets buildServer.ts clear that
+   * stale state immediately via `recordSupervisorSignal(..., 'exited')` —
+   * the same removal a genuine child_exit/disconnect would have caused.
+   */
+  private downgradeToUnbound(key: string): void {
+    const existing = this.connections.get(key);
+    if (!existing || !existing.bound) return;
+    existing.bound = false;
+    existing.launchId = null;
+    this.audit('supervisor_launch.superseded_downgrade', {
+      serverName: existing.serverName,
+      target: existing.target,
+    });
+    this.emit('authority_revoked', {
+      serverName: existing.serverName,
+      target: existing.target,
+    } satisfies SupervisorAuthorityRevokedEvent);
+  }
+
+  /**
+   * Marks a launch `expired` in the persisted `supervisor_launches` row
+   * (best-effort — never throws). Call sites: `child_exit` (below — a
+   * connected supervisor reporting its own child's exit) and
+   * {@link expireResolvedLaunch} (the task/window-destruction path — see its
+   * doc comment).
+   */
+  private expireLaunchId(launchId: string): void {
+    try {
+      this.launchRepo?.markStatus(launchId, 'expired');
+    } catch (err) {
+      console.warn(`[supervisors] failed to mark launch ${launchId} expired`, err);
+    }
+  }
+
+  /**
+   * Resolves the current (pending/active) launch for `(serverName, target)`
+   * — the same key `wrapWithSupervisor()`/`issueLaunch()` register a launch
+   * under — as a DB-backed lookup (Issue #28 third-party review, D-track fix
+   * 2). Superseded an earlier in-memory-only `markLaunchExpired`, which
+   * looked up the launchId via the live `connections` map AT CLEANUP time —
+   * a task/window destroyed through `destroyPrimaryTaskWindow`
+   * (modules/tasks/execution/TaskWindowDestruction.ts) kills the WHOLE tmux
+   * window/pane, so the supervisor process wrapping the child (and its
+   * WebSocket connection) has usually already died along with it by the time
+   * a caller got around to expiring the launch — that in-memory lookup found
+   * nothing to expire in exactly the case it existed to handle.
+   *
+   * Callers are expected to call this BEFORE issuing the kill and hold onto
+   * just the returned launchId (not a live reference), then pass it to
+   * {@link expireResolvedLaunch} once the kill is confirmed. Resolving here,
+   * ahead of the kill, and expiring the SPECIFIC launchId this returned
+   * (never a target-based re-query at expiry time) means a concurrent
+   * relaunch that issues a brand-new launch for the same key while the kill
+   * is in flight is never wrongly expired by this call.
+   *
+   * Returns null (a legitimate, silent no-op for the paired
+   * `expireResolvedLaunch` call) when no `launchRepo` is available or no
+   * pending/active launch exists for the key.
+   */
+  resolveLaunchForExpiry(serverName: string, target: string): string | null {
+    return this.launchRepo?.findActiveByTarget(serverName, target)?.launchId ?? null;
+  }
+
+  /** Pairs with {@link resolveLaunchForExpiry} — expires the exact launchId it resolved, if any. No-op for null. */
+  expireResolvedLaunch(launchId: string | null): void {
+    if (launchId) this.expireLaunchId(launchId);
+  }
+
+  private audit(event: string, detail: Record<string, unknown>): void {
+    try {
+      this.auditLogService?.record({ actorClass: 'runtime', actorId: null, event, detail });
+    } catch {
+      // Best-effort — never let an audit write failure affect registration handling.
+    }
+  }
+
+  /**
+   * Decides whether `info` is `bound` (verified against a persisted launch)
+   * or should be rejected outright. Never throws. See SupervisorConnection.bound's
+   * doc comment for what `bound` gates downstream.
+   */
+  /**
+   * @param hasLiveConnectionForLaunch True iff a connection is CURRENTLY live
+   *   (present in `this.connections`) for this exact launchId. Fix 2 (Issue
+   *   #28 third-party review, Important finding): bootstrap tokens are no
+   *   longer strictly one-shot at the DB layer (see `verifyBootstrap`'s doc
+   *   comment — they remain valid until a session-token register completes),
+   *   so THIS is what actually keeps a bootstrap replay from hijacking an
+   *   already-established live connection: if this key already has a live
+   *   connection bound to this launchId, a bootstrapToken-based register is
+   *   redundant at best (the launch is already connected) and a captured/
+   *   replayed bootstrap token at worst — reject it without touching launch
+   *   state. Only once that live connection is actually gone (a genuine
+   *   disconnect — `handleSocketClosed` removed it from `this.connections`)
+   *   does a retry with the same bootstrap token get to verify again.
+   */
+  private resolveLaunchAuth(info: RegisterMessage, hasLiveConnectionForLaunch: boolean): LaunchAuthResult {
+    if (info.launchId === undefined) {
+      // Manual `azs`, or a supervisor build predating launch binding.
+      if (!this.scopedAuthEnabled) {
+        // Compat mode (design v3 §12): unchanged behavior — treated as bound.
+        return { ok: true, bound: true, launchId: null };
+      }
+      this.audit('supervisor_launch.unbound', { serverName: info.serverName, target: info.target });
+      return { ok: true, bound: false, launchId: null };
+    }
+
+    if (!this.launchRepo) {
+      return { ok: false, event: 'supervisor_launch.no_repo', reason: 'launch repository unavailable' };
+    }
+
+    const row = this.launchRepo.findByLaunchId(info.launchId);
+    if (!row) {
+      this.audit('supervisor_launch.unknown', { launchId: info.launchId, serverName: info.serverName, target: info.target });
+      return { ok: false, event: 'supervisor_launch.unknown', reason: 'unknown launch id' };
+    }
+
+    const mismatch =
+      row.serverName !== info.serverName ||
+      row.target !== info.target ||
+      row.taskId !== info.taskId ||
+      row.unitId !== info.unitId;
+    if (mismatch) {
+      this.audit('supervisor_launch.mismatch', {
+        launchId: info.launchId,
+        expected: { serverName: row.serverName, target: row.target, taskId: row.taskId, unitId: row.unitId },
+        claimed: { serverName: info.serverName, target: info.target, taskId: info.taskId, unitId: info.unitId },
+      });
+      return { ok: false, event: 'supervisor_launch.mismatch', reason: 'declared identity does not match the issued launch' };
+    }
+
+    if (info.sessionToken !== undefined) {
+      if (!this.launchRepo.verifySession(row, info.sessionToken)) {
+        this.audit('supervisor_launch.session_rejected', { launchId: info.launchId });
+        return { ok: false, event: 'supervisor_launch.session_rejected', reason: 'invalid session token' };
+      }
+      this.launchRepo.touchRegistered(info.launchId);
+      return { ok: true, bound: true, launchId: info.launchId };
+    }
+
+    if (info.bootstrapToken !== undefined) {
+      if (hasLiveConnectionForLaunch) {
+        this.audit('supervisor_launch.bootstrap_rejected', { launchId: info.launchId, status: row.status, reason: 'already_connected' });
+        return { ok: false, event: 'supervisor_launch.bootstrap_rejected', reason: 'a live connection for this launch is already registered' };
+      }
+      if (!this.launchRepo.verifyBootstrap(row, info.bootstrapToken)) {
+        this.audit('supervisor_launch.bootstrap_rejected', { launchId: info.launchId, status: row.status });
+        return { ok: false, event: 'supervisor_launch.bootstrap_rejected', reason: 'invalid or already-consumed bootstrap token' };
+      }
+      const sessionToken = this.launchRepo.activateWithSession(info.launchId);
+      this.audit('supervisor_launch.bound', { launchId: info.launchId, serverName: info.serverName, target: info.target });
+      return { ok: true, bound: true, launchId: info.launchId, sessionToken };
+    }
+
+    return { ok: false, event: 'supervisor_launch.missing_credential', reason: 'launchId present without a bootstrap/session token' };
+  }
+
+  /**
    * Registers a supervisor connection. Same-key re-registration replaces the
    * previous connection (closes the old socket with code 1000 and rejects its
    * pending acks) rather than rejecting the new one — a supervisor process
    * reconnecting after a hub restart/network blip is the expected case.
+   *
+   * EXCEPTION (Issue #28 Phase C): if the existing connection on this key is
+   * `bound` to a launchId and the new registration's launchId differs (or is
+   * absent), the new registration is normally rejected and the existing
+   * connection is left untouched — a different launch must never evict a
+   * bound one (design v3 §8: "異なる launchId からの置換（追い出し）は拒否").
+   *
+   * Sub-exception (Issue #28 Phase C review, Important finding): credentials
+   * are checked BEFORE that eviction guard, not after. A legitimate
+   * re-launch for the same key (e.g. WindowRespawnService re-executing a
+   * task) issues a fresh `supervisor_launches` row that supersedes the old
+   * one — `SqliteSupervisorLaunchRepository.create()` invalidates the prior
+   * row so its bootstrap/session token stops verifying. If the OLD
+   * supervisor's WebSocket is still connected (hub hasn't yet observed the
+   * disconnect) when the NEW supervisor process registers with its NEW,
+   * already-authenticated launchId, `resolveLaunchAuth` below has already
+   * confirmed the new registration IS the current launch for this key (an
+   * old/superseded/forged launchId simply fails auth and never reaches this
+   * branch as "authenticated"). Refusing it anyway — as a pre-auth ordering
+   * used to — would strand the task with a dead old connection forever,
+   * since the old process is never coming back to free the key. Only a
+   * registration that failed authentication (unknown/mismatched/invalid
+   * token, or no launchId at all) is still refused outright here, leaving
+   * the existing bound connection untouched.
    */
   register(socket: WebSocket, info: RegisterMessage): void {
     if (info.protocolVersion !== SUPERVISOR_PROTOCOL_VERSION) {
@@ -197,6 +490,31 @@ export class SupervisorRegistry extends EventEmitter {
 
     const key = keyFor(info.serverName, info.target);
     const existing = this.connections.get(key);
+    const hasLiveConnectionForLaunch =
+      info.launchId !== undefined && existing !== undefined && existing.launchId === info.launchId;
+    const authResult = this.resolveLaunchAuth(info, hasLiveConnectionForLaunch);
+
+    if (existing?.bound && existing.launchId !== null && existing.launchId !== (info.launchId ?? null)) {
+      const isAuthenticatedReplacement = info.launchId !== undefined && authResult.ok;
+      if (!isAuthenticatedReplacement) {
+        this.audit('supervisor_launch.replace_rejected', {
+          serverName: info.serverName,
+          target: info.target,
+          existingLaunchId: existing.launchId,
+          newLaunchId: info.launchId ?? null,
+        });
+        this.safeClose(socket, 4009, 'existing bound connection retained (launch id mismatch)');
+        return;
+      }
+      // Falls through: authResult.ok is true, so the new registration is the
+      // verified current launch for this key — evict the stale connection below.
+    }
+
+    if (!authResult.ok) {
+      this.safeClose(socket, 4001, authResult.reason);
+      return;
+    }
+
     if (existing) {
       this.socketKeys.delete(existing.socket);
       this.teardown(key, existing, new Error('replaced by new registration'));
@@ -224,6 +542,8 @@ export class SupervisorRegistry extends EventEmitter {
       // behavior) rather than leaving `ready: false` forever and forcing every frontend open of
       // that pane to sit out the full loading-overlay timeout.
       ready: info.reportsReady === true ? false : true,
+      bound: authResult.bound,
+      launchId: authResult.launchId,
       lastActivityFrameAt: null,
       lastReportedState: null,
       lastReportedStatus: null,
@@ -235,7 +555,7 @@ export class SupervisorRegistry extends EventEmitter {
       conn.missedPongs = 0;
     });
 
-    this.safeSend(socket, { type: 'registered' });
+    this.safeSend(socket, authResult.sessionToken ? { type: 'registered', sessionToken: authResult.sessionToken } : { type: 'registered' });
     this.startPing(key, conn);
   }
 
@@ -263,6 +583,7 @@ export class SupervisorRegistry extends EventEmitter {
           state: msg.state,
           status: msg.status,
           childCommand: conn.childCommand,
+          bound: conn.bound,
         } satisfies SupervisorActivityEvent);
         break;
 
@@ -292,9 +613,38 @@ export class SupervisorRegistry extends EventEmitter {
           taskId: conn.taskId,
           exitCode: msg.exitCode,
           signal: msg.signal,
+          bound: conn.bound,
         } satisfies SupervisorChildExitEvent);
+        // Issue #28 third-party review, second round: `markStatus` was never
+        // called from production — a launch's session token stayed
+        // authenticatable (`verifySession` accepts `active`/`pending`)
+        // indefinitely even after its child process (and the supervisor
+        // wrapping it) had actually exited. The child exiting is definitive
+        // proof this launch is done; expire it here rather than waiting for
+        // some later relaunch's supersede step to notice.
+        if (conn.launchId) this.expireLaunchId(conn.launchId);
         this.socketKeys.delete(conn.socket);
         this.teardown(key, conn, new Error('supervisor child exited'));
+        break;
+      }
+
+      case 'register_ack': {
+        // Issue #28 third-party review, Important finding — see RegisterAckMessage's
+        // doc comment in protocol.ts. Promotes the launch pending -> active THE
+        // MOMENT the supervisor confirms it received sessionToken, instead of
+        // waiting for a reconnect that may never happen while this socket stays
+        // live. Verified against the launch's persisted session hash (not merely
+        // "arrived on the already-registered socket") so a party that never saw
+        // the real session token cannot force early promotion.
+        if (typeof msg.sessionToken !== 'string' || !conn.launchId || !this.launchRepo) break;
+        const row = this.launchRepo.findByLaunchId(conn.launchId);
+        if (!row || !this.launchRepo.verifySession(row, msg.sessionToken)) break;
+        this.launchRepo.touchRegistered(conn.launchId);
+        this.audit('supervisor_launch.ack_activated', {
+          launchId: conn.launchId,
+          serverName: conn.serverName,
+          target: conn.target,
+        });
         break;
       }
 
@@ -331,11 +681,27 @@ export class SupervisorRegistry extends EventEmitter {
     // supervisor process crashing and being relaunched) — unlike an explicit
     // child_exit, this only releases the key back to Tier 1/2 detection
     // rather than asserting idle. See AgentActivityMonitor.recordSupervisorSignal.
-    this.emit('disconnected', { serverName: conn.serverName, target: conn.target } satisfies SupervisorDisconnectedEvent);
+    this.emit('disconnected', { serverName: conn.serverName, target: conn.target, bound: conn.bound } satisfies SupervisorDisconnectedEvent);
   }
 
   isConnected(serverName: string, target: string): boolean {
     return this.connections.has(keyFor(serverName, target));
+  }
+
+  /**
+   * True iff a connection is live for `(serverName, target)` AND it is
+   * `bound` (verified against a persisted launch — see
+   * `SupervisorConnection.bound`'s doc comment). Issue #28 third-party
+   * review (Important): callers that use the supervisor connection to
+   * CARRY something (task input, in this codebase — WorkerInputService) must
+   * gate on this, not on {@link isConnected}, under the same "unbound is
+   * display-only" contract Tier 0/turn-idle-refresh already follow. Compat
+   * mode (`AZITO_SCOPED_AUTH` off) makes every connection `bound: true`, so
+   * this degrades to `isConnected` exactly then — no behavior change outside
+   * scoped auth.
+   */
+  isBoundConnected(serverName: string, target: string): boolean {
+    return this.connections.get(keyFor(serverName, target))?.bound === true;
   }
 
   /** True if this key's supervisor child exited (within EXITED_KEY_TTL_MS) and no new connection
@@ -378,6 +744,7 @@ export class SupervisorRegistry extends EventEmitter {
       connectedAt: conn.connectedAt,
       lastHeartbeatAt: conn.lastHeartbeatAt,
       ready: conn.ready,
+      bound: conn.bound,
       lastActivityFrameAt: conn.lastActivityFrameAt,
       lastReportedState: conn.lastReportedState,
       lastReportedStatus: conn.lastReportedStatus,

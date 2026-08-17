@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { MetadataField, Button } from '../ui';
+import { MetadataField, Button, SecretNamesValue } from '../ui';
+import type { SecretNamesState } from '../ui';
 import { buildIssueUrl, parseSourceRef } from '../../lib/issueRef';
 import { isSupportedProvider } from '../../lib/gitProvider';
 import { Icon } from '../ui/Icon';
@@ -30,6 +31,43 @@ export default function TaskGitTab({ task, projectId, onSwitchToDiff, onRefresh 
       .catch(() => {});
     return () => { cancelled = true; };
   }, [projectId]);
+
+  // Issue #28 Phase D-3: "which secrets will this task's agent receive"
+  // shown unconditionally for the task's project — GET /api/projects/:id/secrets
+  // returns names only (no `value` field), same endpoint/shape TaskFormView's
+  // untrusted-import banner already reads. Not gated behind isLinked/hasUnit
+  // etc.: every task in this project runs with the same secret set regardless
+  // of git-linkage state.
+  //
+  // Labeled "next launch", not "injected" (Issue #28 third-party review Minor
+  // finding): this reads the PROJECT's current secret configuration, which
+  // can drift from the set actually injected into an already-running task
+  // pane (a pane's env is fixed at the tmux window's creation time — see
+  // TaskPaneEnvironmentService — while this fetch is live and re-runs on
+  // every render/nonce bump). Reconciling this against the live pane would
+  // mean snapshotting the exact secret set at each window-(re)creation and
+  // exposing that snapshot back to the UI — real scope, not a one-line fix,
+  // and not what this tab needs: an operator reading this tab wants to know
+  // "what will this task get if it (re)launches now", which is exactly what
+  // the project's current config answers. Deferred out of this fix's scope.
+  const [secretNames, setSecretNames] = useState<string[]>([]);
+  const [secretsState, setSecretsState] = useState<SecretNamesState>('loading');
+  const [secretsFetchNonce, setSecretsFetchNonce] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    setSecretsState('loading');
+    api<{ name: string }[]>(`/projects/${projectId}/secrets`)
+      .then((rows) => {
+        if (cancelled) return;
+        setSecretNames(rows.map((r) => r.name).sort());
+        setSecretsState('loaded');
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSecretsState('error');
+      });
+    return () => { cancelled = true; };
+  }, [projectId, secretsFetchNonce]);
 
   const hasChangedFiles = !!task.changedFiles;
   let files: { status: string; file: string }[] = [];
@@ -74,6 +112,9 @@ export default function TaskGitTab({ task, projectId, onSwitchToDiff, onRefresh 
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, fontSize: 'var(--font-md)' }}>
+      <MetadataField label={t('tasks:git.secretsNextLaunch')}>
+        <SecretNamesValue names={secretNames} state={secretsState} onRetry={() => setSecretsFetchNonce((n) => n + 1)} />
+      </MetadataField>
       {isLinked && (() => {
         const parsed = parseSourceRef(task.sourceRef!);
         const matchedRepo = parsed

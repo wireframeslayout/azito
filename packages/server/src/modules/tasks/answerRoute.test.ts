@@ -49,6 +49,9 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     pendingOperation: null,
     pendingOperationWindowId: null,
     pendingOperationPriorStatus: null,
+    createdByKind: 'operator',
+    createdById: null,
+    createdViaGeneration: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -85,6 +88,9 @@ function makeOpts(existingTask: Task, opts: { gateAllows: boolean }): { opts: Ta
       consumePendingApproval: vi.fn(() => false),
       recordExecutionGateBlock: vi.fn(() => true),
       preApproveExecution: vi.fn(() => true),
+      countChildren: vi.fn(() => 0),
+      countChildrenInGeneration: vi.fn(() => 0),
+      clearTmuxWindowIfMatches: vi.fn(() => true),
     },
     projectRepo: {
       findAll: vi.fn(() => []),
@@ -152,11 +158,13 @@ function makeOpts(existingTask: Task, opts: { gateAllows: boolean }): { opts: Ta
       findByTask: vi.fn(() => []),
       findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
       findByServerAndTarget: vi.fn(() => undefined),
+      findByServerAndSession: vi.fn(() => []),
       update: vi.fn(),
       updateAgentSessionIdByWindow: vi.fn(),
       remove: vi.fn(),
       removeByServerAndTarget: vi.fn(() => 0),
       updatePaneLayout: vi.fn(),
+      now: vi.fn(() => '2026-01-01 00:00:00'),
     },
     respawnService: {
       respawn: vi.fn(async () => ({ tmuxTarget: 'azito:task-1.1' })),
@@ -166,6 +174,14 @@ function makeOpts(existingTask: Task, opts: { gateAllows: boolean }): { opts: Ta
     unitTypeLoader: { getOrThrow: vi.fn(() => ({ name: 'devops', label: 'DevOps', description: '', phases: [] })) } as unknown as TasksRouteOptions['unitTypeLoader'],
     sidekickLoader: { get: vi.fn(() => undefined) } as unknown as TasksRouteOptions['sidekickLoader'],
     projectSecretRepo: { findByProject: vi.fn(() => []) } as unknown as TasksRouteOptions['projectSecretRepo'],
+    auditLogService: { record: vi.fn() } as unknown as TasksRouteOptions['auditLogService'],
+    originationService: { create: vi.fn(() => 1) } as unknown as TasksRouteOptions['originationService'],
+    taskTokenRepo: { issue: vi.fn(), verify: vi.fn(() => false), revokeAllForTask: vi.fn(() => 0), issueNextGeneration: vi.fn(), getActiveGeneration: vi.fn(() => null) } as unknown as TasksRouteOptions['taskTokenRepo'],
+    destroyPrimaryTaskWindow: vi.fn(async (_taskId, _windowName, _serverName, _target, _reason, kill, onDestroyed) => {
+      const result = await kill();
+      onDestroyed();
+      return { success: result.code === 0, alreadyGone: false, result };
+    }),
   };
   return { opts: routeOpts, task };
 }

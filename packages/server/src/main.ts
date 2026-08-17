@@ -14,6 +14,7 @@ import { RecoverStuckTasksUseCase } from './modules/tasks/recovery/RecoverStuckT
 import { AgentEventStream } from './modules/servers/transport/AgentEventStream';
 import { invalidateSessionCache } from './modules/tmux/routes/sessions';
 import { tokenCommand } from './cli/tokenCommand';
+import { authDoctorCommand } from './cli/authDoctorCommand';
 import { runUpdate } from './modules/system/updateScript';
 
 // ─── Graceful shutdown ───
@@ -25,6 +26,25 @@ const SHUTDOWN_HARD_CAP_MS = 8000;
 async function main(): Promise<void> {
   if (process.argv[2] === 'token') {
     await tokenCommand(process.argv.slice(3));
+    return;
+  }
+
+  if (process.argv[2] === 'auth' && process.argv[3] === 'doctor') {
+    // Fix 1 (Issue #28 third-party review, Important): `authDoctorCommand`'s
+    // task-owned-window check (checkTaskOwnedWindowsBeforeScopedAuth) reads
+    // `servers.agent_token` and decrypts it via SecretBox's `open()` — but
+    // `auth doctor` used to skip straight past the normal startup sequence
+    // (resolveDataDir/migrateDataIfNeeded/initSecretBox happen further down,
+    // AFTER this dispatch returns), so on any DB with an encrypted (`v1.*`)
+    // agent token, `open()` throws "SecretBox not initialized" and crashes
+    // the entire doctor run instead of reporting a single check's result.
+    // Run the same data-dir resolution + migration + SecretBox init the
+    // normal server startup does (but nothing heavier — no DB open, no
+    // Fastify) so decryption has a key to work with.
+    const doctorPaths = resolveDataDir();
+    migrateDataIfNeeded(doctorPaths, getLegacyPaths());
+    initSecretBox(doctorPaths.masterKey);
+    await authDoctorCommand();
     return;
   }
 

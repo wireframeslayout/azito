@@ -1,0 +1,351 @@
+import { describe, it, expect } from 'vitest';
+import Database from 'better-sqlite3';
+
+// Migrations 001->059 must be replayed against a fresh in-memory DB before 060 can run.
+import * as m001 from './001_initial_schema';
+import * as m002 from './002_legacy_migrations';
+import * as m003 from './003_seed_defaults';
+import * as m004 from './004_project_sidekick_prompt';
+import * as m005 from './005_model_restructure';
+import * as m006 from './006_task_orchestrator';
+import * as m007 from './007_repository_provider';
+import * as m008 from './008_fix_gitlab_repos';
+import * as m009 from './009_storage_settings';
+import * as m010 from './010_plan_approval';
+import * as m011 from './011_push_subscriptions';
+import * as m012 from './012_task_git_info';
+import * as m013 from './013_project_icon_color';
+import * as m014 from './014_task_worktree';
+import * as m015 from './015_sidekick_max_concurrency';
+import * as m016 from './016_structured_prompts';
+import * as m017 from './017_pending_questions';
+import * as m018 from './018_questions_json_prompt';
+import * as m019 from './019_plan_in_implementing_prompt';
+import * as m020 from './020_project_slug';
+import * as m021 from './021_agent_servers';
+import * as m022 from './022_agent_bootstrap';
+import * as m023 from './023_worker_extra_args';
+import * as m024 from './024_subagent_config';
+import * as m025 from './025_inject_prompt_modules';
+import * as m026 from './026_task_target_branch';
+import * as m027 from './027_pushing_target_branch';
+import * as m028 from './028_deduplicate_project_windows';
+import * as m029 from './029_task_summary';
+import * as m030 from './030_agent_session_id';
+import * as m031 from './031_task_skip_pr';
+import * as m032 from './032_task_working_directory';
+import * as m033 from './033_pushing_prompt_skip_pr';
+import * as m034 from './034_task_multi_window';
+import * as m035 from './035_unified_windows';
+import * as m036 from './036_remove_sidekick_legacy';
+import * as m037 from './037_worker_profile_split';
+import * as m038 from './038_rename_sidekicks_to_operations';
+import * as m039 from './039_export_edited_phase_prompts';
+import * as m040 from './040_operation_phase_config';
+import * as m041 from './041_sidekick_tags';
+import * as m042 from './042_units';
+import * as m043 from './043_agent_turns';
+import * as m044 from './044_agent_watches';
+import * as m045 from './045_server_mux_runtime';
+import * as m046 from './046_remove_orchestrator_mode';
+import * as m047 from './047_task_current_phase';
+import * as m048 from './048_unit_type_column';
+import * as m049 from './049_worker_runtime';
+import * as m050 from './050_window_supervised';
+import * as m051 from './051_resource_guard_settings';
+import * as m052 from './052_project_secrets';
+import * as m053 from './053_browser_tab_snapshots';
+import * as m054 from './054_ssh_host_fingerprint';
+import * as m055 from './055_reduce_worker_execution_mode';
+import * as m056 from './056_drop_windows_supervised';
+import * as m057 from './057_push_subscription_lang';
+import * as m058 from './058_disable_ssh_servers';
+import * as m059 from './059_input_trust_and_exec_gate';
+import * as m060 from './060_authz_foundation';
+
+interface Migration {
+  version: number;
+  up: (db: Database.Database) => void;
+}
+
+const PRIOR_MIGRATIONS: Migration[] = [
+  m001, m002, m003, m004, m005, m006, m007, m008, m009, m010,
+  m011, m012, m013, m014, m015, m016, m017, m018, m019, m020,
+  m021, m022, m023, m024, m025, m026, m027, m028, m029, m030,
+  m031, m032, m033, m034, m035, m036, m037, m038, m039, m040,
+  m041, m042, m043, m044, m045, m046, m047, m048, m049, m050,
+  m051, m052, m053, m054, m055, m056, m057, m058, m059,
+];
+
+// Same table-rebuild toggle as the real migration runner in Database.ts.
+const MIGRATIONS_REQUIRING_TABLE_REBUILD = new Set([36, 37, 42, 46]);
+
+function buildSeededDb(): Database.Database {
+  const db = new Database(':memory:');
+  db.pragma('foreign_keys = ON');
+  for (const migration of PRIOR_MIGRATIONS) {
+    const needsRebuild = MIGRATIONS_REQUIRING_TABLE_REBUILD.has(migration.version);
+    if (needsRebuild) {
+      db.pragma('foreign_keys = OFF');
+      db.pragma('legacy_alter_table = ON');
+    }
+    db.transaction(() => migration.up(db))();
+    if (needsRebuild) {
+      db.pragma('legacy_alter_table = OFF');
+      db.pragma('foreign_keys = ON');
+    }
+  }
+  db.prepare(`INSERT INTO projects (id, name, slug) VALUES (1, 'Test Project', 'test-project')`).run();
+  db.prepare(`INSERT INTO servers (name, type) VALUES ('srv-a', 'local')`).run();
+  return db;
+}
+
+function insertTask(db: Database.Database): number {
+  const id = Number(
+    db.prepare(
+      `INSERT INTO tasks (project_id, title, status, priority, self_review_count, require_plan_approval, source, skip_pr)
+       VALUES (1, 'Test task', 'open', 0, 0, 1, 'local', 0)`,
+    ).run().lastInsertRowid,
+  );
+  return id;
+}
+
+describe('migration 060: authz_foundation', () => {
+  it('creates task_tokens with the expected columns and defaults', () => {
+    const db = buildSeededDb();
+    const taskId = insertTask(db);
+    m060.up(db);
+
+    db.prepare(
+      `INSERT INTO task_tokens (task_id, token_hash, window_generation) VALUES (?, ?, ?)`,
+    ).run(taskId, 'a'.repeat(64), 1);
+
+    const row = db.prepare('SELECT * FROM task_tokens WHERE task_id = ?').get(taskId) as Record<string, unknown>;
+    expect(row.task_id).toBe(taskId);
+    expect(row.token_hash).toBe('a'.repeat(64));
+    expect(row.window_generation).toBe(1);
+    expect(row.issued_at).toBeTruthy();
+    expect(row.revoked_at).toBeNull();
+    expect(row.revoke_reason).toBeNull();
+  });
+
+  it('rejects a duplicate token_hash (unique index)', () => {
+    const db = buildSeededDb();
+    const taskId = insertTask(db);
+    m060.up(db);
+
+    db.prepare(`INSERT INTO task_tokens (task_id, token_hash, window_generation) VALUES (?, ?, ?)`).run(taskId, 'b'.repeat(64), 1);
+    expect(() =>
+      db.prepare(`INSERT INTO task_tokens (task_id, token_hash, window_generation) VALUES (?, ?, ?)`).run(taskId, 'b'.repeat(64), 2),
+    ).toThrow();
+  });
+
+  it('does not FK-constrain task_tokens.task_id (rows survive their task row being deleted)', () => {
+    const db = buildSeededDb();
+    const taskId = insertTask(db);
+    m060.up(db);
+    db.prepare(`INSERT INTO task_tokens (task_id, token_hash, window_generation) VALUES (?, ?, ?)`).run(taskId, 'c'.repeat(64), 1);
+
+    expect(() => db.prepare('DELETE FROM tasks WHERE id = ?').run(taskId)).not.toThrow();
+    const row = db.prepare('SELECT * FROM task_tokens WHERE task_id = ?').get(taskId);
+    expect(row).toBeTruthy();
+  });
+
+  it('creates audit_log with the expected columns', () => {
+    const db = buildSeededDb();
+    m060.up(db);
+
+    db.prepare(
+      `INSERT INTO audit_log (actor_class, actor_id, event, detail) VALUES (?, ?, ?, ?)`,
+    ).run('task', 1, 'task_token.issued', JSON.stringify({ taskId: 1 }));
+
+    const row = db.prepare('SELECT * FROM audit_log WHERE event = ?').get('task_token.issued') as Record<string, unknown>;
+    expect(row.actor_class).toBe('task');
+    expect(row.actor_id).toBe(1);
+    expect(row.ts).toBeTruthy();
+    expect(JSON.parse(row.detail as string)).toEqual({ taskId: 1 });
+  });
+
+  it('allows audit_log.actor_id to be NULL (operator-class events with no single subject)', () => {
+    const db = buildSeededDb();
+    m060.up(db);
+
+    db.prepare(`INSERT INTO audit_log (actor_class, event) VALUES (?, ?)`).run('operator', 'route_auth.denied');
+    const row = db.prepare('SELECT * FROM audit_log WHERE event = ?').get('route_auth.denied') as Record<string, unknown>;
+    expect(row.actor_id).toBeNull();
+    expect(row.detail).toBeNull();
+  });
+
+  it('backfills existing tasks rows with created_by_kind = operator and created_by_id = NULL', () => {
+    const db = buildSeededDb();
+    const taskId = insertTask(db);
+    m060.up(db);
+
+    const row = db.prepare('SELECT created_by_kind, created_by_id FROM tasks WHERE id = ?').get(taskId) as Record<string, unknown>;
+    expect(row.created_by_kind).toBe('operator');
+    expect(row.created_by_id).toBeNull();
+  });
+
+  it('accepts an explicit created_by_kind/created_by_id for a newly-inserted task row', () => {
+    const db = buildSeededDb();
+    m060.up(db);
+
+    db.prepare(
+      `INSERT INTO tasks (project_id, title, status, priority, self_review_count, require_plan_approval, source, skip_pr, created_by_kind, created_by_id)
+       VALUES (1, 'Child task', 'open', 0, 0, 1, 'local', 0, 'task', 42)`,
+    ).run();
+    const row = db.prepare("SELECT created_by_kind, created_by_id FROM tasks WHERE title = 'Child task'").get() as Record<string, unknown>;
+    expect(row.created_by_kind).toBe('task');
+    expect(row.created_by_id).toBe(42);
+  });
+
+  // Issue #28 third-party review fix: created_via_generation backs the
+  // per-run (not lifetime) children rate limit — see Task.ts's
+  // createdViaGeneration doc comment.
+  it('adds a nullable created_via_generation column, defaulting to NULL for existing rows', () => {
+    const db = buildSeededDb();
+    const taskId = insertTask(db);
+    m060.up(db);
+
+    const row = db.prepare('SELECT created_via_generation FROM tasks WHERE id = ?').get(taskId) as Record<string, unknown>;
+    expect(row.created_via_generation).toBeNull();
+  });
+
+  it('accepts an explicit created_via_generation for a newly-inserted task row', () => {
+    const db = buildSeededDb();
+    m060.up(db);
+
+    db.prepare(
+      `INSERT INTO tasks (project_id, title, status, priority, self_review_count, require_plan_approval, source, skip_pr, created_by_kind, created_by_id, created_via_generation)
+       VALUES (1, 'Generation-scoped child', 'open', 0, 0, 1, 'local', 0, 'task', 42, 3)`,
+    ).run();
+    const row = db.prepare("SELECT created_via_generation FROM tasks WHERE title = 'Generation-scoped child'").get() as Record<string, unknown>;
+    expect(row.created_via_generation).toBe(3);
+  });
+
+  // Issue #28 third-party review, Minor finding: the children-count queries
+  // in SqliteTaskRepository.ts (`WHERE created_by_kind = 'task' AND
+  // created_by_id = ?` and the same plus `created_via_generation = ?`) had no
+  // supporting index — a full table scan on every child-task creation.
+  it('creates a composite index on (created_by_kind, created_by_id, created_via_generation)', () => {
+    const db = buildSeededDb();
+    m060.up(db);
+
+    const index = db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_tasks_created_by'").get();
+    expect(index).toBeTruthy();
+
+    const columns = db.prepare('PRAGMA index_info(idx_tasks_created_by)').all() as Array<{ name: string }>;
+    expect(columns.map((c) => c.name)).toEqual(['created_by_kind', 'created_by_id', 'created_via_generation']);
+  });
+
+  it('creates supervisor_launches with the expected columns and defaults', () => {
+    const db = buildSeededDb();
+    m060.up(db);
+
+    db.prepare(
+      `INSERT INTO supervisor_launches (launch_id, server_name, target, task_id, unit_id, bootstrap_hash)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run('launch-1', 'srv-a', 'session:0.1', 1, 2, 'a'.repeat(64));
+
+    const row = db.prepare('SELECT * FROM supervisor_launches WHERE launch_id = ?').get('launch-1') as Record<string, unknown>;
+    expect(row.server_name).toBe('srv-a');
+    expect(row.target).toBe('session:0.1');
+    expect(row.task_id).toBe(1);
+    expect(row.unit_id).toBe(2);
+    expect(row.bootstrap_hash).toBe('a'.repeat(64));
+    expect(row.session_hash).toBeNull();
+    expect(row.status).toBe('pending');
+    expect(row.created_at).toBeTruthy();
+    expect(row.last_registered_at).toBeNull();
+  });
+
+  it('rejects a duplicate launch_id (unique index)', () => {
+    const db = buildSeededDb();
+    m060.up(db);
+
+    db.prepare(`INSERT INTO supervisor_launches (launch_id, server_name, target, bootstrap_hash) VALUES (?, ?, ?, ?)`)
+      .run('dup', 'srv-a', 'session:0.1', 'a'.repeat(64));
+    expect(() =>
+      db.prepare(`INSERT INTO supervisor_launches (launch_id, server_name, target, bootstrap_hash) VALUES (?, ?, ?, ?)`)
+        .run('dup', 'srv-a', 'session:0.2', 'b'.repeat(64)),
+    ).toThrow();
+  });
+
+  it('allows multiple NULL session_hash rows but rejects a duplicate non-null session_hash', () => {
+    const db = buildSeededDb();
+    m060.up(db);
+
+    db.prepare(`INSERT INTO supervisor_launches (launch_id, server_name, target, bootstrap_hash) VALUES (?, ?, ?, ?)`)
+      .run('launch-a', 'srv-a', 'session:0.1', 'a'.repeat(64));
+    db.prepare(`INSERT INTO supervisor_launches (launch_id, server_name, target, bootstrap_hash) VALUES (?, ?, ?, ?)`)
+      .run('launch-b', 'srv-a', 'session:0.2', 'b'.repeat(64));
+
+    db.prepare(`UPDATE supervisor_launches SET session_hash = ?, status = 'active' WHERE launch_id = 'launch-a'`).run('s'.repeat(64));
+    expect(() =>
+      db.prepare(`UPDATE supervisor_launches SET session_hash = ?, status = 'active' WHERE launch_id = 'launch-b'`).run('s'.repeat(64)),
+    ).toThrow();
+  });
+
+  // SupervisorLaunchRepository.supersedeForTargetStmt filters by exactly
+  // this triple on every launch creation — without this index it's a full
+  // table scan (same reasoning as idx_tasks_created_by above).
+  it('creates a composite index on (server_name, target, status)', () => {
+    const db = buildSeededDb();
+    m060.up(db);
+
+    const index = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_supervisor_launches_server_target_status'")
+      .get();
+    expect(index).toBeTruthy();
+
+    const columns = db.prepare('PRAGMA index_info(idx_supervisor_launches_server_target_status)').all() as Array<{ name: string }>;
+    expect(columns.map((c) => c.name)).toEqual(['server_name', 'target', 'status']);
+  });
+
+  it('creates browser_groups with the expected columns and a nullable task_id', () => {
+    const db = buildSeededDb();
+    m060.up(db);
+
+    db.prepare(`INSERT INTO browser_groups (group_id, server_name, task_id) VALUES (?, ?, ?)`).run('agent-abc12345', 'srv-a', 7);
+    db.prepare(`INSERT INTO browser_groups (group_id, server_name, task_id) VALUES (?, ?, ?)`).run('agent-def67890', 'srv-a', null);
+
+    const owned = db.prepare('SELECT * FROM browser_groups WHERE group_id = ?').get('agent-abc12345') as Record<string, unknown>;
+    expect(owned.server_name).toBe('srv-a');
+    expect(owned.task_id).toBe(7);
+    expect(owned.created_at).toBeTruthy();
+
+    const unowned = db.prepare('SELECT * FROM browser_groups WHERE group_id = ?').get('agent-def67890') as Record<string, unknown>;
+    expect(unowned.task_id).toBeNull();
+  });
+
+  it('rejects a duplicate (server_name, group_id) pair (composite primary key)', () => {
+    const db = buildSeededDb();
+    m060.up(db);
+
+    db.prepare(`INSERT INTO browser_groups (group_id, server_name, task_id) VALUES (?, ?, ?)`).run('agent-dup', 'srv-a', 1);
+    expect(() =>
+      db.prepare(`INSERT INTO browser_groups (group_id, server_name, task_id) VALUES (?, ?, ?)`).run('agent-dup', 'srv-a', 2),
+    ).toThrow();
+  });
+
+  // Issue #28 review fix 4: the primary key is `(server_name, group_id)`,
+  // not `group_id` alone — every route-level lookup/delete already scopes
+  // by both columns together (SqliteBrowserGroupRepository), so the same
+  // `group_id` recorded under two DIFFERENT servers must be two distinct
+  // rows, not a collision.
+  it('allows the same group_id to be recorded under two different servers', () => {
+    const db = buildSeededDb();
+    m060.up(db);
+
+    db.prepare(`INSERT INTO browser_groups (group_id, server_name, task_id) VALUES (?, ?, ?)`).run('agent-shared', 'srv-a', 1);
+    expect(() =>
+      db.prepare(`INSERT INTO browser_groups (group_id, server_name, task_id) VALUES (?, ?, ?)`).run('agent-shared', 'srv-b', 2),
+    ).not.toThrow();
+
+    const rows = db.prepare('SELECT server_name, task_id FROM browser_groups WHERE group_id = ? ORDER BY server_name').all('agent-shared');
+    expect(rows).toEqual([
+      { server_name: 'srv-a', task_id: 1 },
+      { server_name: 'srv-b', task_id: 2 },
+    ]);
+  });
+});

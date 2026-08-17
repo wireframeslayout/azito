@@ -25,6 +25,7 @@ function makeSupervisor(overrides: Partial<SupervisorEntry> = {}): SupervisorEnt
     connectedAt: 1_000,
     lastHeartbeatAt: 1_000,
     ready: true,
+    bound: true,
     lastActivityFrameAt: null,
     lastReportedState: null,
     lastReportedStatus: null,

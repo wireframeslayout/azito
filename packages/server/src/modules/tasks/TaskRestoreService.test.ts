@@ -51,6 +51,9 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     pendingOperation: null,
     pendingOperationWindowId: null,
     pendingOperationPriorStatus: null,
+    createdByKind: 'operator',
+    createdById: null,
+    createdViaGeneration: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -75,6 +78,9 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
       consumePendingApproval: vi.fn(() => false),
       recordExecutionGateBlock: vi.fn(() => true),
       preApproveExecution: vi.fn(() => true),
+      countChildren: vi.fn(() => 0),
+      countChildrenInGeneration: vi.fn(() => 0),
+      clearTmuxWindowIfMatches: vi.fn(() => true),
     },
     serverRepo: {
       findAll: vi.fn(() => []),
@@ -119,11 +125,13 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
       findByTaskIds: vi.fn(() => new Map()),
       findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
       findByServerAndTarget: vi.fn(() => undefined),
+      findByServerAndSession: vi.fn(() => []),
       update: vi.fn(),
       updateAgentSessionIdByWindow: vi.fn(),
       remove: vi.fn(),
       removeByServerAndTarget: vi.fn(() => 0),
       updatePaneLayout: vi.fn(),
+      now: vi.fn(() => '2026-01-01 00:00:00'),
     },
     tmux: {
       listSessions: vi.fn(async () => [{ name: 'azito', windows: [] }]),
@@ -182,6 +190,22 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
     // a real EventEmitter so appendLogAndEmit()'s emit() call is a no-op
     // rather than a crash when no test subscribes to it.
     events: new EventEmitter(),
+    // Issue #28 Phase A後半: real TmuxClient.createWindow call args aren't
+    // asserted on in this file (see TaskPaneEnvironmentService.test.ts for
+    // that) — just needs to return a plausible env Record.
+    paneEnvService: {
+      buildEnvForNewWindow: vi.fn(() => ({
+        env: { AZITO_TASK_TOKEN: 'azt.task.1.' + 'a'.repeat(64), AZITO_TASK_ID: '1' },
+        tokenId: 1,
+      })),
+      // Issue #28 third-party review fix: restore()'s catch-block rollback
+      // calls this after successfully killing the freshly-created window —
+      // several tests below exercise that rollback path. Scoped to the
+      // specific generation (`tokenId`, mocked as 1 above), not the whole
+      // task, per the WindowRotation.ts revokeGeneration fix.
+      revokeGeneration: vi.fn(),
+      revokeForDestroyedWindow: vi.fn(),
+    } as unknown as TaskRestoreDeps['paneEnvService'],
     ...overrides,
   };
 }
@@ -215,6 +239,7 @@ describe('TaskRestoreService', () => {
       expect.objectContaining({ name: 'test-server' }),
       'azito',
       'task-1',
+      { extraEnv: expect.objectContaining({ AZITO_TASK_TOKEN: expect.any(String), AZITO_TASK_ID: '1' }) },
     );
     expect(deps.windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({
       ownerType: 'task',
@@ -412,6 +437,12 @@ describe('TaskRestoreService', () => {
       expect.objectContaining({ name: 'test-server' }),
       'azito:task-1',
     );
+    // Issue #28 third-party review fix: the task stays 'archived' throughout
+    // this rollback (no status WRITE happens here to trigger
+    // TOKEN_REVOKING_STATUSES again), so the generation this restore()
+    // attempt just issued via buildEnvForNewWindow would otherwise leak —
+    // revoke it directly once the kill above is confirmed.
+    expect(deps.paneEnvService.revokeGeneration).toHaveBeenCalledWith(1, 'restore_rollback');
   });
 
   it('throws when tmux window creation fails and task remains archived', async () => {
@@ -427,6 +458,114 @@ describe('TaskRestoreService', () => {
 
     await expect(service.restore(task, log)).rejects.toThrow('tmux failed');
     expect(deps.taskRepo.update).not.toHaveBeenCalled();
+    // Issue #28 Phase A last-round fix: restore() now creates the window via
+    // WindowRotation.createRotatedWindow() instead of calling
+    // buildEnvForNewWindow()+tmux.createWindow() directly — the direct-call
+    // form assigned `windowName` only after creation resolved, so a thrown
+    // creation failure skipped restore()'s own `if (windowName)` rollback
+    // below and left the freshly-issued generation valid with no window
+    // backing it. createRotatedWindow revokes the just-issued generation
+    // itself before rethrowing, so the revoke must still happen here even
+    // though nothing was ever created (no window to kill — killWindow must
+    // NOT be called for a window that never came into existence).
+    expect(deps.paneEnvService.revokeGeneration).toHaveBeenCalledWith(1, 'restore_create_failed');
+    expect(deps.tmux.killWindow).not.toHaveBeenCalled();
+  });
+
+  it('throws and revokes the just-issued generation when tmux window creation resolves with a non-zero exit code (agent-transport failure mode)', async () => {
+    // Issue #28 Phase A last-round fix: an agent-transport
+    // TmuxClient.createWindow() never rejects on the remote command's own
+    // exit code — it resolves with `{ result: { code !== 0 }, windowName }`.
+    // Before routing through createRotatedWindow(), restore() ignored
+    // `result.code` entirely and treated ANY resolved call as success,
+    // persisting a window row/task update for a window that was never
+    // actually created.
+    const task = makeTask({ serverName: 'test-server' });
+    deps = makeDeps({
+      ...deps,
+      tmux: {
+        ...deps.tmux,
+        createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: 'no server running', code: 1 }, windowName: 'task-1' })),
+      } as unknown as TaskRestoreDeps['tmux'],
+    });
+    service = new TaskRestoreService(deps);
+
+    await expect(service.restore(task, log)).rejects.toThrow(/Failed to create tmux window/);
+    expect(deps.taskRepo.update).not.toHaveBeenCalled();
+    expect(deps.windowRepo.add).not.toHaveBeenCalled();
+    expect(deps.paneEnvService.revokeGeneration).toHaveBeenCalledWith(1, 'restore_create_failed');
+    expect(deps.tmux.killWindow).not.toHaveBeenCalled();
+  });
+
+  // Issue #28 third-party review, second round: TaskRestoreService's rollback
+  // used to remove the Window row (and, before that, clear the DB reference
+  // in ExecuteTaskUseCase's siblings) regardless of whether the rollback kill
+  // itself actually succeeded — a kill failure left a still-live,
+  // still-token-authenticated window with no DB row left pointing at it. The
+  // 3 sites now share WindowRotation.rollbackWindowReference, which only
+  // clears/removes the reference once the kill is confirmed.
+  it('does not revoke the generation when the rollback kill fails during worktree-creation-failure rollback (a still-live pane must keep a valid token)', async () => {
+    const task = makeTask({ serverName: 'test-server' });
+    deps = makeDeps({
+      ...deps,
+      worktreeServiceFactory: {
+        create: vi.fn(() => ({
+          create: vi.fn(async () => { throw new Error('worktree failed'); }),
+          remove: vi.fn(async () => {}),
+        })),
+      } as unknown as TaskRestoreDeps['worktreeServiceFactory'],
+      tmux: {
+        ...deps.tmux,
+        killWindow: vi.fn(async () => ({ stdout: '', stderr: 'device busy', code: 1 })),
+      } as unknown as TaskRestoreDeps['tmux'],
+    });
+    service = new TaskRestoreService(deps);
+
+    await expect(service.restore(task, log)).rejects.toThrow('worktree failed');
+    expect(deps.tmux.killWindow).toHaveBeenCalled();
+    expect(deps.paneEnvService.revokeGeneration).not.toHaveBeenCalled();
+  });
+
+  it('does not remove the Window row when the rollback kill fails after the row was already persisted — the still-live window must stay discoverable', async () => {
+    const task = makeTask({ serverName: 'test-server' });
+    deps = makeDeps({
+      ...deps,
+      taskRepo: {
+        ...deps.taskRepo,
+        // Forces restore()'s final success-path taskRepo.update (after
+        // windowRepo.add has already run) to throw, so the outer catch runs
+        // with windowRowId already set — the scenario the fix targets.
+        update: vi.fn(() => { throw new Error('db write failed'); }),
+      },
+      tmux: {
+        ...deps.tmux,
+        killWindow: vi.fn(async () => ({ stdout: '', stderr: 'device busy', code: 1 })),
+      } as unknown as TaskRestoreDeps['tmux'],
+    });
+    service = new TaskRestoreService(deps);
+
+    await expect(service.restore(task, log)).rejects.toThrow('db write failed');
+    expect(deps.windowRepo.add).toHaveBeenCalled();
+    expect(deps.tmux.killWindow).toHaveBeenCalled();
+    expect(deps.windowRepo.remove).not.toHaveBeenCalled();
+    expect(deps.paneEnvService.revokeGeneration).not.toHaveBeenCalled();
+  });
+
+  it('removes the Window row and revokes the generation when the rollback kill succeeds after the row was already persisted', async () => {
+    const task = makeTask({ serverName: 'test-server' });
+    deps = makeDeps({
+      ...deps,
+      taskRepo: {
+        ...deps.taskRepo,
+        update: vi.fn(() => { throw new Error('db write failed'); }),
+      },
+    });
+    service = new TaskRestoreService(deps);
+
+    await expect(service.restore(task, log)).rejects.toThrow('db write failed');
+    expect(deps.windowRepo.add).toHaveBeenCalled();
+    expect(deps.windowRepo.remove).toHaveBeenCalledWith(100);
+    expect(deps.paneEnvService.revokeGeneration).toHaveBeenCalledWith(1, 'restore_rollback');
   });
 
   it('throws when server cannot be resolved', async () => {
@@ -461,7 +600,7 @@ describe('TaskRestoreService', () => {
     expect(deps.tmux.createSession).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'test-server' }),
       'azito',
-      {},
+      { extraEnv: {} },
     );
   });
 

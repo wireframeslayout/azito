@@ -21,6 +21,15 @@ export interface ActivityDiagnosticRow extends ActivityDiagnosticEntry {
     lastActivityFrameAt: number | null;
     lastReportedState: 'active' | 'idle' | null;
     lastReportedStatus: 'working' | 'blocked' | null;
+    /**
+     * Issue #28 Phase C: whether this connection's identity was verified against a
+     * persisted `supervisor_launches` row. An `unbound` connection is display-only —
+     * it never drove the Tier 0 decision above (see SupervisorRegistry.bound's doc
+     * comment and the `if (!event.bound) return;` guards in buildServer.ts) even when
+     * present here; surfaced so the panel can tell "Tier 0 wired but display-only"
+     * apart from "Tier 0 authoritative".
+     */
+    bound: boolean;
   };
 }
 
@@ -104,6 +113,7 @@ export function buildActivityDiagnostics(
         lastActivityFrameAt: supervisor.lastActivityFrameAt,
         lastReportedState: supervisor.lastReportedState,
         lastReportedStatus: supervisor.lastReportedStatus ?? null,
+        bound: supervisor.bound,
       },
     };
   });
@@ -124,6 +134,7 @@ export function buildActivityDiagnostics(
         lastActivityFrameAt: supervisor.lastActivityFrameAt,
         lastReportedState: supervisor.lastReportedState,
         lastReportedStatus: supervisor.lastReportedStatus ?? null,
+        bound: supervisor.bound,
       },
     });
   }

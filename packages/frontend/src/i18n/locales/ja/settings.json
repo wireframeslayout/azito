@@ -5,7 +5,14 @@
     "storage": "ストレージ",
     "resources": "リソースガード",
     "notifications": "通知",
+    "security": "セキュリティ",
     "system": "システム"
+  },
+  "auditLog": {
+    "description": "直近{{count}}件のセキュリティ監査イベント（task トークンの発行/失効、拒否されたリクエスト、承認、supervisor 登録など）。これは運用上の記録であり、改ざん耐性はありません。",
+    "loadError": "監査ログの読み込みに失敗しました。",
+    "empty": "監査イベントはまだありません。",
+    "recentEvents": "{{count}}件のイベント"
   },
   "appearance": {
     "preview": "プレビュー",
@@ -210,6 +217,7 @@
     "lastFrame": "最終フレーム {{time}}",
     "noFrames": "フレーム未受信",
     "notDeciding": "下位 Tier が判定中",
+    "unbound": "unbound（表示専用）",
     "refinedBlocked": "+ {{tier}} が確認待ちと判定",
     "transitionStarted": "検知開始",
     "reason": {

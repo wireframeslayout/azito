@@ -85,6 +85,8 @@ function makeRunner(overrides: {
     updateCurrentPhase: vi.fn(),
     recordExecutionGateBlock: vi.fn(() => true),
     preApproveExecution: vi.fn(() => true),
+    countChildren: vi.fn(() => 0),
+    countChildrenInGeneration: vi.fn(() => 0),
     ...overrides.taskRepo,
   };
   const projectRepo = {
@@ -181,7 +183,7 @@ function makeRunner(overrides: {
     workerInput as any,
     unitTypeLoader as any,
     (() => {
-      const tuiRuntime = new TuiWorkerRuntime({ sendKeys: vi.fn() } as any, workerInput as any, workerWaiter as any, httpSignalCoordinator as any);
+      const tuiRuntime = new TuiWorkerRuntime({ sendKeys: vi.fn() } as any, workerInput as any, workerWaiter as any, httpSignalCoordinator as any, { issueLaunch: vi.fn(() => undefined) } as any);
       const registry = new WorkerRuntimeRegistry();
       registry.register('tui', tuiRuntime);
       return registry;
@@ -841,6 +843,8 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
       findById: vi.fn(() => fixedTask), update: vi.fn(), updateStatus: vi.fn(), updateCurrentPhase: vi.fn(),
       recordExecutionGateBlock: vi.fn(() => true),
       preApproveExecution: vi.fn(() => true),
+      countChildren: vi.fn(() => 0),
+      countChildrenInGeneration: vi.fn(() => 0),
     };
     const { runner, workerInput, appendLog } = makeRunner({ taskRepo, unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader });
     const unit = makeUnitForRun();
@@ -903,6 +907,8 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
       findById: vi.fn(() => fixedTask), update: vi.fn(), updateStatus: vi.fn(), updateCurrentPhase: vi.fn(),
       recordExecutionGateBlock: vi.fn(() => true),
       preApproveExecution: vi.fn(() => true),
+      countChildren: vi.fn(() => 0),
+      countChildrenInGeneration: vi.fn(() => 0),
     };
     const { runner, workerInput, appendLog } = makeRunner({ taskRepo, unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader });
     const unit = makeUnitForRun();

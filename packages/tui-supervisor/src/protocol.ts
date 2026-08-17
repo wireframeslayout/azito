@@ -28,6 +28,21 @@ export interface RegisterMessage {
    * exists so older, still-running supervisor processes keep working without a protocol bump.
    */
   reportsReady?: true;
+  /**
+   * Launch binding (Issue #28 Phase C, design v3 §8). Set when this process
+   * was invoked with `--launch-id`/`--bootstrap-token` (or `--session-token`
+   * on a reconnect). Absent for a manually started `azs` — the hub registers
+   * those as `unbound` (display-only).
+   */
+  launchId?: string;
+  /**
+   * Exactly one of `bootstrapToken`/`sessionToken` accompanies `launchId`:
+   * `bootstrapToken` on the FIRST register after this launch was wrapped
+   * (one-shot), `sessionToken` on every reconnect after (see
+   * RegisteredMessage.sessionToken).
+   */
+  bootstrapToken?: string;
+  sessionToken?: string;
 }
 
 export interface HeartbeatMessage {
@@ -79,18 +94,38 @@ export interface AckMessage {
   error?: string;
 }
 
+/**
+ * Confirms receipt of a freshly-issued `sessionToken` (Issue #28 third-party
+ * review, Important finding). Sent immediately after a `RegisteredMessage`
+ * carrying `sessionToken` arrives, on the same connection that just
+ * registered with the one-shot `bootstrapToken` — see the hub-side copy of
+ * this doc comment (packages/server/.../protocol.ts) for the full rationale.
+ * A hub predating this message type simply ignores it (forward-compatible).
+ */
+export interface RegisterAckMessage {
+  type: 'register_ack';
+  sessionToken: string;
+}
+
 export type SupervisorToHubMessage =
   | RegisterMessage
   | HeartbeatMessage
   | ActivityMessage
   | ChildExitMessage
   | ReadyMessage
-  | AckMessage;
+  | AckMessage
+  | RegisterAckMessage;
 
 // ---- Hub -> Supervisor ----
 
 export interface RegisteredMessage {
   type: 'registered';
+  /**
+   * Returned exactly once, in the ack for a register that consumed a
+   * `bootstrapToken`. Must be held in memory and sent as `sessionToken` on
+   * every subsequent register for this process's lifetime.
+   */
+  sessionToken?: string;
 }
 
 export interface InjectPromptMessage {

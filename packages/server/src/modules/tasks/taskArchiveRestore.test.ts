@@ -39,6 +39,9 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     pendingOperation: null,
     pendingOperationWindowId: null,
     pendingOperationPriorStatus: null,
+    createdByKind: 'operator',
+    createdById: null,
+    createdViaGeneration: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -64,6 +67,9 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
       consumePendingApproval: vi.fn(() => false),
       recordExecutionGateBlock: vi.fn(() => true),
       preApproveExecution: vi.fn(() => true),
+      countChildren: vi.fn(() => 0),
+      countChildrenInGeneration: vi.fn(() => 0),
+      clearTmuxWindowIfMatches: vi.fn(() => true),
     },
     projectRepo: {
       findAll: vi.fn(() => []),
@@ -137,11 +143,13 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
       findByTask: vi.fn(() => [{ id: 50, ownerType: 'task' as const, taskId: 1, isPrimary: true, serverName: 'test-server', tmuxTarget: 'azito:task-1.1', label: 'task-1', windowType: 'agent' as const, workerType: 'claude', workerModel: null, agentSessionId: null, launchCommand: null, workingDirectory: null, paneLayout: null, projectId: null, createdAt: '' }]),
       findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
       findByServerAndTarget: vi.fn(() => undefined),
+      findByServerAndSession: vi.fn(() => []),
       update: vi.fn(),
       updateAgentSessionIdByWindow: vi.fn(),
       remove: vi.fn(),
       removeByServerAndTarget: vi.fn(() => 0),
       updatePaneLayout: vi.fn(),
+      now: vi.fn(() => '2026-01-01 00:00:00'),
     },
     respawnService: {
       respawn: vi.fn(async () => ({ tmuxTarget: 'azito:task-1.1' })),
@@ -152,6 +160,14 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
     unitTypeLoader: { getOrThrow: vi.fn(() => ({ name: 'devops', label: 'DevOps', description: '', phases: [] })) } as unknown as TasksRouteOptions['unitTypeLoader'],
     sidekickLoader: { get: vi.fn(() => undefined) } as unknown as TasksRouteOptions['sidekickLoader'],
     projectSecretRepo: { findByProject: vi.fn(() => []) } as unknown as TasksRouteOptions['projectSecretRepo'],
+    auditLogService: { record: vi.fn() } as unknown as TasksRouteOptions['auditLogService'],
+    originationService: { create: vi.fn(() => 1) } as unknown as TasksRouteOptions['originationService'],
+    taskTokenRepo: { issue: vi.fn(), verify: vi.fn(() => false), revokeAllForTask: vi.fn(() => 0), issueNextGeneration: vi.fn(), getActiveGeneration: vi.fn(() => null) } as unknown as TasksRouteOptions['taskTokenRepo'],
+    destroyPrimaryTaskWindow: vi.fn(async (_taskId, _windowName, _serverName, _target, _reason, kill, onDestroyed) => {
+      const result = await kill();
+      onDestroyed();
+      return { success: result.code === 0, alreadyGone: false, result };
+    }),
   };
 }
 
@@ -245,6 +261,15 @@ describe('POST /api/tasks/:id/archive', () => {
     // the pre-fix code left behind.
     expect(task.pendingOperation).toBeNull();
     expect(task.status).toBe('archived');
+    // Issue #28 Phase E follow-up: archive-triggered denials go through the
+    // same denyPendingApproval() audit path as an explicit Deny.
+    expect(opts.auditLogService.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorClass: 'operator',
+        event: 'execution.denied',
+        detail: expect.objectContaining({ taskId: 1, operation: 'execute', targetStatus: 'archived' }),
+      }),
+    );
   });
 
   it('returns 409 without archiving when the pending approval was already resolved by a concurrent request', async () => {

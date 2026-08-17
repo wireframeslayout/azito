@@ -62,6 +62,29 @@ describe('wrapWithSupervisor', () => {
     expect(wrapped).toContain(`-- 'echo "it'\\''s a test" && run --flag value'`);
   });
 
+  it('includes --launch-id and --bootstrap-token when both are provided (Issue #28 Phase C)', () => {
+    const wrapped = wrapWithSupervisor('claude', {
+      server: { name: 'local-server', type: 'local' },
+      target: 'azito:task-9.1',
+      launchId: 'launch-abc',
+      bootstrapToken: 'secret-xyz',
+    });
+
+    expect(wrapped).toContain("--launch-id 'launch-abc'");
+    expect(wrapped).toContain("--bootstrap-token 'secret-xyz'");
+  });
+
+  it('omits --launch-id/--bootstrap-token when only one of the pair is provided', () => {
+    const wrapped = wrapWithSupervisor('claude', {
+      server: { name: 'local-server', type: 'local' },
+      target: 'azito:task-9.2',
+      launchId: 'launch-abc',
+    });
+
+    expect(wrapped).not.toContain('--launch-id');
+    expect(wrapped).not.toContain('--bootstrap-token');
+  });
+
   it('resolves an agent-server command using the ~/.azito/agent/current path', () => {
     const wrapped = wrapWithSupervisor('claude', {
       server: { name: 'agent-server', type: 'agent' },

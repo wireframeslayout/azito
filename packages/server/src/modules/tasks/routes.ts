@@ -17,6 +17,8 @@ import type { TaskRestoreService } from './TaskRestoreService';
 import { TaskCleanupService } from './TaskCleanupService';
 import { SAFE_PATH_PATTERN, SAFE_BRANCH_PATTERN } from '../git/assertSafeGitArgs';
 import { resolveTaskServerName, resolveTmuxSession, resolveUnitId } from './execution/TaskExecutionEnv';
+import type { KillOutcome } from '../tmux/killOutcome';
+import type { ExecResult } from '../servers/transport/ServerTransport';
 import { replyToExecutionGateError } from './execution/ExecutionGate';
 import { hashExecutionManifest } from './execution/ExecutionManifest';
 import { failAsyncTaskOperation } from './execution/AppendLog';
@@ -24,6 +26,12 @@ import { decideExecutionApproval, decideExecutionPreApproval, denyPendingApprova
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { SqliteProjectSecretRepository } from '../projects/SqliteProjectSecretRepository';
+import type { AuditLogService } from '../../shared/audit/AuditLogService';
+import type { Principal } from '../../shared/auth/Principal';
+import { OPERATOR_PRINCIPAL } from '../../shared/auth/Principal';
+import type { RouteAuthRequirement } from '../../shared/auth/routeAuth';
+import { TaskOriginationService, originFromPrincipal } from './origination/TaskOriginationService';
+import type { ITaskTokenRepository } from './tokens/TaskToken';
 
 function parseSubagentConfigInput(raw: unknown, fieldName: string): SubagentConfig | null {
   if (raw === null || raw === undefined) return null;
@@ -74,7 +82,86 @@ export interface TasksRouteOptions {
   // something other than what actually gets hashed/executed.
   sidekickLoader: SidekickPackageLoader;
   projectSecretRepo: SqliteProjectSecretRepository;
+  auditLogService: AuditLogService;
+  /** Issue #28 Phase A後半: the sole task-creation funnel — see TaskOriginationService's own doc comment. */
+  originationService: TaskOriginationService;
+  /** Issue #28 third-party review fix: POST /api/tasks/:id/children resolves the calling task principal's active window generation here to scope its rate limit — see getActiveGeneration's doc comment. */
+  taskTokenRepo: ITaskTokenRepository;
+  /**
+   * Issue #28 review Important finding: POST /api/tasks/:id/retry used to
+   * clear `task.tmuxWindow` without killing the abandoned tmux window or
+   * revoking its task-token generation — the pane kept running with a
+   * still-valid token, and losing the `tmuxWindow` reference meant the next
+   * execution's kill-and-rotate (createRotatedWindow, via
+   * confirmOldWindowGone) had nothing left to find and kill either. Mirrors
+   * `destroyPrimaryTaskWindow` (registered the same way for sessionsRoutes in
+   * buildServer.ts) instead of taking a `TaskPaneEnvironmentService`
+   * directly, so this module only depends on the one function it actually
+   * calls.
+   *
+   * Second-round finding: the kill and the revoke must run inside the SAME
+   * per-task lock (`runExclusiveForTask`, via `destroyPrimaryTaskWindow`) —
+   * retry previously killed the window and revoked its token as two
+   * separate, unlocked steps, leaving a gap a concurrent respawn could land
+   * a fresh generation into before the blanket revoke ran, which would then
+   * wrongly take that new generation out too.
+   */
+  destroyPrimaryTaskWindow: (
+    taskId: number,
+    windowName: string,
+    /** See sessionsRoutes' `destroyPrimaryTaskWindow` option — same pass-through purpose (supervisor launch expiry). */
+    serverName: string,
+    target: string,
+    reason: string,
+    kill: () => Promise<ExecResult>,
+    onDestroyed: () => void,
+  ) => Promise<KillOutcome>;
 }
+
+/** POST /api/tasks/:id/children: a task principal may only create children under its own (parent) task; operator always passes (Issue #28 design v3 §4). */
+const childrenAuth: RouteAuthRequirement = {
+  classes: ['task'],
+  operation: 'tasks.children.create',
+  condition: (principal: Principal, request) => {
+    const id = Number((request.params as { id: string }).id);
+    return Number.isInteger(id) && principal.id === id;
+  },
+};
+
+/**
+ * Per-run cap on POST /api/tasks/:id/children when the caller is a task
+ * principal (Issue #28 design v3 §4: "実行あたり件数制限N=20") — scoped to the
+ * parent's CURRENT active window generation via
+ * `countChildrenInGeneration`/`getActiveGeneration` (Issue #28 third-party
+ * review fix: the original implementation counted the parent's entire
+ * lifetime child count, so a parent that crossed 20 children across several
+ * follow-up runs could never spawn another child again, in ANY future run).
+ */
+const MAX_CHILDREN_PER_GENERATION = 20;
+
+/**
+ * Looser lifetime cap applied when an OPERATOR principal calls POST
+ * /api/tasks/:id/children directly (Issue #28 third-party review fix): an
+ * operator call has no window generation to scope a per-run limit to (see
+ * `Task.createdViaGeneration`'s doc comment), so this path can't reuse
+ * `MAX_CHILDREN_PER_GENERATION`'s per-run reset — but leaving it fully
+ * unbounded would let a compromised/scripted operator credential spawn
+ * unlimited child tasks. 100 is deliberately generous relative to the N=20
+ * per-run task-principal cap (an operator is a human/trusted-credential
+ * caller, not an autonomous agent looping on its own output) while still
+ * being a real ceiling.
+ */
+const MAX_CHILDREN_PER_PARENT_OPERATOR = 100;
+
+/** GET /api/tasks/:id: a task principal may only read its own record (Issue #28 design v3 §4). */
+const taskSelfAuth: RouteAuthRequirement = {
+  classes: ['task'],
+  operation: 'tasks.detail',
+  condition: (principal: Principal, request) => {
+    const id = Number((request.params as { id: string }).id);
+    return Number.isInteger(id) && principal.id === id;
+  },
+};
 
 // ─── Plugin ───
 
@@ -94,7 +181,7 @@ function toListItem(task: Task, windows: unknown[]): Record<string, unknown> {
 }
 
 const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, done) => {
-  const { taskRepo, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService, taskRestoreService, unitTypeLoader, sidekickLoader, projectSecretRepo } = opts;
+  const { taskRepo, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService, taskRestoreService, unitTypeLoader, sidekickLoader, projectSecretRepo, auditLogService, originationService, taskTokenRepo, destroyPrimaryTaskWindow } = opts;
   const taskCleanupService = new TaskCleanupService({ serverRepo, tmux, worktreeServiceFactory, transportFactory, projectServerRepo, projectRepo });
 
   // ── GET /api/tasks ──
@@ -165,7 +252,14 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       // created that way. A caller-supplied `source` therefore now decides
       // trust, not the endpoint used to reach this route.
       const resolvedSource = sourceFields.source ?? 'local';
-      const id = taskRepo.create({
+      // This route has no `config.auth` declaration, so it default-denies
+      // any non-operator principal (Issue #28 design v3 §4: "通常の POST
+      // /api/tasks は task principal から不可のまま") — request.principal is
+      // still 'task'-classed here in AZITO_SCOPED_AUTH compat mode (the
+      // onRequest hook audits, not blocks, while the flag is off), so origin
+      // is still derived honestly from the actual caller rather than
+      // hardcoded to 'operator'.
+      const id = originationService.create({
         projectId: project_id as number,
         unitId: (unit_id as number) ?? null,
         serverName: (server_name as string) ?? null,
@@ -195,12 +289,11 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         agentSessionId: null,
         reviewSubagent,
         implementSubagent,
-        inputTrust: deriveInputTrust(resolvedSource),
         executionApprovedFingerprintHash: null,
         pendingOperation: null,
         pendingOperationWindowId: null,
         pendingOperationPriorStatus: null,
-      });
+      }, originFromPrincipal(request.principal), request.principal ?? OPERATOR_PRINCIPAL);
       return { ok: true, id };
     } catch (err: unknown) {
       return reply.status(500).send({ error: (err as Error).message });
@@ -210,6 +303,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
   // ── GET /api/tasks/:id ──
   fastify.get<{ Params: { id: string } }>(
     '/api/tasks/:id',
+    { config: { auth: taskSelfAuth } },
     async (request, reply) => {
       const t = taskRepo.findById(parseInt(request.params.id, 10));
       if (!t) return reply.status(404).send({ error: 'Task not found' });
@@ -431,8 +525,8 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       }
 
       const outcome = decideExecutionApproval(
-        { taskRepo, logRepo, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, windowRepo, respawnService, executeTaskUseCase, taskRestoreService },
-        { taskId, unitId, approved: body.approved, fingerprint: body.approved ? (body.fingerprint as string) : undefined, origin },
+        { taskRepo, logRepo, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, windowRepo, respawnService, executeTaskUseCase, taskRestoreService, auditLog: auditLogService },
+        { taskId, unitId, approved: body.approved, fingerprint: body.approved ? (body.fingerprint as string) : undefined, origin, actor: request.principal ?? OPERATOR_PRINCIPAL },
         request.log,
       );
       return reply.status(outcome.status).send(outcome.body);
@@ -510,8 +604,11 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         // edited back to 'local' — otherwise that edit would be exactly the
         // bypass this gate exists to prevent.
         const effectiveSource = sourceFields.source !== undefined ? sourceFields.source : existing.source;
+        // createdByKind is immutable (set once at origination — see Task.ts's
+        // doc comment) and reused here unchanged; only `source` can move
+        // between local/github/gitlab via this PUT.
         const nextInputTrust: Task['inputTrust'] =
-          existing.inputTrust === 'untrusted' ? 'untrusted' : deriveInputTrust(effectiveSource);
+          existing.inputTrust === 'untrusted' ? 'untrusted' : deriveInputTrust(existing.createdByKind, effectiveSource);
         taskRepo.update(id, {
           title: (title as string) || existing.title,
           description:
@@ -565,6 +662,126 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
     },
   );
 
+  // ── POST /api/tasks/:id/children ── task-self or operator (Issue #28 design v3 §4).
+  //
+  // The only way a task principal may create a task at all — plain POST
+  // /api/tasks stays operator-only by omission (default-deny). Fixed to the
+  // PARENT's project (a body `project_id` would let a task spawn work in a
+  // project it has no relationship to — silently dropped, not merely
+  // ignored, by never reading it from the body below) and always
+  // `inputTrust: 'untrusted'` regardless of the caller's own trust level or
+  // any `source` the body might try to set — `source` itself is not even
+  // accepted here, it is fixed to `'local'` and `created_by_kind: 'task'`
+  // (recorded by TaskOriginationService from the `origin` argument, not from
+  // the body) is what actually records the real origin. See
+  // TaskOriginationService's doc comment for why `origin` is fixed to the
+  // PARENT task regardless of which principal (task or operator) issued this
+  // request.
+  fastify.post<{ Params: { id: string } }>(
+    '/api/tasks/:id/children',
+    { config: { auth: childrenAuth } },
+    async (request, reply) => {
+      const parentId = parseInt(request.params.id, 10);
+      const parent = taskRepo.findById(parentId);
+      if (!parent) return reply.status(404).send({ error: 'Task not found' });
+
+      const { title, description, unit_id, base_branch, branch } = request.body as Record<string, unknown>;
+      if (!title || typeof title !== 'string') {
+        return reply.status(400).send({ error: 'title required' });
+      }
+      // description was cast straight to `string` with no runtime check
+      // (Issue #28 third-party review finding 4): an object/array/number
+      // body value passed the cast, then reached the SQLite bind as an
+      // unbindable type and 500'd. title/unit_id (below)/base_branch/branch
+      // (validateGitFields) are all already runtime-checked; this closes
+      // the one field that wasn't.
+      if (description !== undefined && description !== null && typeof description !== 'string') {
+        return reply.status(400).send({ error: 'description must be a string or null' });
+      }
+      const gitError = validateGitFields(request.body as Record<string, unknown>);
+      if (gitError) return reply.status(400).send({ error: gitError });
+
+      let unitId: number | null = null;
+      if (unit_id !== undefined && unit_id !== null) {
+        if (typeof unit_id !== 'number' || !unitRepo.findById(unit_id)) {
+          return reply.status(400).send({ error: 'unit_id not found' });
+        }
+        unitId = unit_id;
+      }
+
+      const actor = request.principal ?? OPERATOR_PRINCIPAL;
+      // Task principal -> scope the count/cap to the PARENT's current active
+      // window generation (per-run N=20, resets on every new generation).
+      // Operator (or a task principal with no active generation, which
+      // `childrenAuth`'s condition above should never actually let through
+      // — defensive fallback only) -> the looser, ungenerationed lifetime
+      // cap. See the two constants' doc comments above.
+      const generation = actor.class === 'task' ? taskTokenRepo.getActiveGeneration(parentId) : null;
+      const existingChildren = generation !== null
+        ? taskRepo.countChildrenInGeneration(parentId, generation)
+        : taskRepo.countChildren(parentId);
+      const limit = generation !== null ? MAX_CHILDREN_PER_GENERATION : MAX_CHILDREN_PER_PARENT_OPERATOR;
+      if (existingChildren >= limit) {
+        // Audit persistence is best-effort, same as every other audit write
+        // site (TaskOriginationService.create, buildServer.ts's route-auth
+        // hook) — a write failure here (disk full, locked DB, etc.) must
+        // never turn an already-decided 429 into a generic 500 (Issue #28
+        // third-party review finding, Minor). The 429 below is the response
+        // this branch computed regardless of whether the audit write
+        // actually landed.
+        try {
+          auditLogService.record({
+            actorClass: actor.class,
+            actorId: actor.id ?? null,
+            event: 'tasks.children.limit_exceeded',
+            detail: { parentTaskId: parentId, existingChildren, limit, generation },
+          });
+        } catch (err) {
+          console.error(`[tasks.children] audit log write failed for parent task ${parentId} (429 still returned):`, err);
+        }
+        return reply.status(429).send({ error: `Task ${parentId} already has ${existingChildren} children (limit ${limit})` });
+      }
+
+      const id = originationService.create({
+        projectId: parent.projectId,
+        unitId,
+        serverName: null,
+        title,
+        description: (description as string | null | undefined) ?? null,
+        status: 'open',
+        currentPhase: null,
+        selfReviewCount: 0,
+        priority: 0,
+        tmuxWindow: null,
+        selfReviewMaxAttempts: null,
+        requirePlanApproval: true,
+        source: 'local',
+        sourceRef: null,
+        worktreePath: null,
+        worktreeBranch: null,
+        baseBranch: (base_branch as string) || null,
+        targetBranch: null,
+        skipPr: false,
+        workingDirectory: null,
+        branch: (branch as string) || null,
+        planMarkdown: null,
+        pendingQuestions: null,
+        changedFiles: null,
+        summaryJson: null,
+        prUrl: null,
+        agentSessionId: null,
+        reviewSubagent: null,
+        implementSubagent: null,
+        executionApprovedFingerprintHash: null,
+        pendingOperation: null,
+        pendingOperationWindowId: null,
+        pendingOperationPriorStatus: null,
+      }, { kind: 'task', id: parentId, generation }, actor);
+
+      return reply.status(201).send({ ok: true, id });
+    },
+  );
+
   // ── GET /api/tasks/:id/logs ──
   fastify.get<{ Params: { id: string } }>(
     '/api/tasks/:id/logs',
@@ -612,10 +829,64 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         return reply.status(400).send({ error: `Task status '${task.status}' is not retryable` });
       }
 
-      // Try to stop any running execution for this task
+      // Verify (non-mutating, from this handler's own state-machine point of
+      // view) that any abandoned tmux window can actually be killed BEFORE
+      // stopping the running execution or touching task state (Issue #28
+      // third-party review, Minor finding: retry を副作用の後に未変更の 409
+      // を返す問題). `stopByTaskId` used to run first, so a 409 returned
+      // below claimed "task unchanged" while the execution had, in fact,
+      // already been torn down (PhaseLoopRunner can transition it to
+      // `failed` once stopped). Resolving the server first keeps every 409
+      // response in this handler accurate — nothing about the task or its
+      // execution changes unless the kill (or "already gone") is confirmed.
+      //
+      // Fail-closed on an unconfirmed kill (third-party review, Phase B):
+      // a kill failure or an unresolvable server must leave the task
+      // untouched and the request errors, so the caller can check the
+      // server / kill the pane by hand and retry.
+      //
+      // Second-round finding: the kill and the token revoke must run inside
+      // ONE per-task lock (`runExclusiveForTask`, via
+      // `destroyPrimaryTaskWindow`) — running them as two separate,
+      // unlocked steps (as this handler used to) left a gap between kill
+      // success and revoke where a concurrent respawn could land a fresh
+      // generation that the revoke would then wrongly take out too.
+      // `destroyPrimaryTaskWindow`'s own reread (`clearTmuxWindowIfMatches`)
+      // guards against exactly that: it only revokes if the task's tmuxWindow
+      // is STILL the one this call is killing. No `windows` table row exists
+      // for a task's primary window, so `onDestroyed` is a no-op here.
+      if (task.tmuxWindow) {
+        const resolvedServerName = resolveTaskServerName(task, projectServerRepo);
+        const srv = resolvedServerName ? serverRepo.findByName(resolvedServerName) : null;
+        if (!resolvedServerName || !srv) {
+          return reply.status(409).send({
+            error: `Could not resolve the server for task ${id}'s abandoned tmux window '${task.tmuxWindow}'; ` +
+              'the pane could not be confirmed dead. Check the server is reachable, kill the window manually if needed, then retry.',
+          });
+        }
+        const tmuxSession = resolveTmuxSession(task.projectId, resolvedServerName, projectServerRepo);
+        const windowName = task.tmuxWindow;
+        const target = `${tmuxSession}:${windowName}`;
+        const outcome = await destroyPrimaryTaskWindow(id, windowName, resolvedServerName, target, 'retry_abandoned_window', () => tmux.killWindow(srv, target), () => {});
+        if (!outcome.success) {
+          return reply.status(409).send({
+            error: `Failed to kill task ${id}'s abandoned tmux window '${target}'; ` +
+              'it may still be running with a valid token. Check the server / kill the window manually, then retry.',
+          });
+        }
+      }
+
+      // Only reached once the kill (and, when it was still the task's
+      // current window, the token revoke) is confirmed — now safe to stop
+      // any running execution for this task and reset its status.
       executeTaskUseCase.stopByTaskId(id);
 
-      // Reset task status and clear tmux window
+      // Reset task status and clear tmux window — only reached once any
+      // abandoned window has been confirmed dead (or there was none). The
+      // revoke above (when it fired) already happened before this clears
+      // `tmuxWindow` (Issue #28 review Important finding's invariant): a
+      // reader must never observe `tmuxWindow: null` with the prior
+      // generation's token still active.
       taskRepo.update(id, { status: 'open' as TaskStatus, tmuxWindow: null });
 
       return { ok: true };
@@ -821,7 +1092,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       if (task.status === ('pending_approval' as TaskStatus)) {
         const project = projectRepo.findById(task.projectId);
         const unitId = resolveUnitId(task, project);
-        const outcome = denyPendingApproval({ taskRepo, logRepo, executeTaskUseCase }, task, unitId, 'archived' as TaskStatus);
+        const outcome = denyPendingApproval({ taskRepo, logRepo, executeTaskUseCase, auditLog: auditLogService }, task, unitId, 'archived' as TaskStatus, request.principal ?? OPERATOR_PRINCIPAL);
         if (!outcome.consumed) {
           return reply.status(409).send({ error: `Task ${id}'s pending approval was already resolved by a concurrent request` });
         }

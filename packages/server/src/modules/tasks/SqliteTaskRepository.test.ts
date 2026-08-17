@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { openDatabase, type SqliteDatabase } from '../../shared/db/Database';
 import { SqliteTaskRepository } from './SqliteTaskRepository';
+import { SqliteTaskTokenRepository } from './tokens/SqliteTaskTokenRepository';
 
 // consumePendingApproval() (Issue #328 ninth-round review finding 4): the
 // approve-execution route used to clear pendingOperation via the generic
@@ -19,7 +20,7 @@ describe('SqliteTaskRepository.consumePendingApproval (Issue #328 ninth-round re
 
   beforeEach(() => {
     db = openDatabase(':memory:');
-    repo = new SqliteTaskRepository(db);
+    repo = new SqliteTaskRepository(db, new SqliteTaskTokenRepository(db));
     db.prepare(
       "INSERT INTO projects (id, name, slug, default_branch) VALUES (1, 'P', 'p', 'main')",
     ).run();
@@ -58,6 +59,9 @@ describe('SqliteTaskRepository.consumePendingApproval (Issue #328 ninth-round re
       pendingOperation: 'execute',
       pendingOperationWindowId: null,
       pendingOperationPriorStatus: 'open',
+      createdByKind: 'operator',
+      createdById: null,
+      createdViaGeneration: null,
     });
     // create() doesn't accept `status` (it's always inserted as the
     // schema's 'open' default) — set it directly to reach the
@@ -131,7 +135,7 @@ describe('SqliteTaskRepository.recordExecutionGateBlock (Issue #328 review round
 
   beforeEach(() => {
     db = openDatabase(':memory:');
-    repo = new SqliteTaskRepository(db);
+    repo = new SqliteTaskRepository(db, new SqliteTaskTokenRepository(db));
     db.prepare(
       "INSERT INTO projects (id, name, slug, default_branch) VALUES (1, 'P', 'p', 'main')",
     ).run();
@@ -169,6 +173,9 @@ describe('SqliteTaskRepository.recordExecutionGateBlock (Issue #328 review round
       executionApprovedFingerprintHash: null,
       pendingOperation: null,
       pendingOperationWindowId: null,
+      createdByKind: 'operator',
+      createdById: null,
+      createdViaGeneration: null,
       pendingOperationPriorStatus: null,
     });
     // create() always inserts status = the schema default ('open') — set it
@@ -303,7 +310,7 @@ describe('SqliteTaskRepository.preApproveExecution (task/328 follow-up)', () => 
 
   beforeEach(() => {
     db = openDatabase(':memory:');
-    repo = new SqliteTaskRepository(db);
+    repo = new SqliteTaskRepository(db, new SqliteTaskTokenRepository(db));
     db.prepare(
       "INSERT INTO projects (id, name, slug, default_branch) VALUES (1, 'P', 'p', 'main')",
     ).run();
@@ -345,6 +352,9 @@ describe('SqliteTaskRepository.preApproveExecution (task/328 follow-up)', () => 
       pendingOperation: overrides.pendingOperation ?? null,
       pendingOperationWindowId: null,
       pendingOperationPriorStatus: null,
+      createdByKind: 'operator',
+      createdById: null,
+      createdViaGeneration: null,
     });
   }
 
@@ -389,5 +399,334 @@ describe('SqliteTaskRepository.preApproveExecution (task/328 follow-up)', () => 
     expect(secondWrite).toBe(false);
     // First write's value survives untouched.
     expect(repo.findById(taskId)?.executionApprovedFingerprintHash).toBe('hash-abc');
+  });
+});
+
+// Token-revoking-status revocation (Issue #28 third-party review finding 1,
+// design v3 §2, then corrected by a later third-party review round — see
+// TOKEN_REVOKING_STATUSES' doc comment on SqliteTaskRepository.ts):
+// updateStatus() was originally the ONLY status-writing method that revoked
+// outstanding task_tokens on a terminal status. update() (used by, e.g.,
+// archive routes and async-failure handlers) and consumePendingApproval()
+// (used by deny decisions, which can land on 'failed'/'archived') could each
+// write such a status while leaving tokens live. These tests exercise the
+// real SqliteTaskTokenRepository (not a mock) to prove every status-writing
+// path revokes in the same transaction as its status write — AND that
+// 'review'/'failed' (both follow-up-resumable onto a still-live tmux window)
+// are deliberately excluded, so a resumed pane never inherits a dead token.
+describe('SqliteTaskRepository token-revoking-status revocation (Issue #28 review finding 1)', () => {
+  let db: SqliteDatabase;
+  let repo: SqliteTaskRepository;
+  let tokenRepo: SqliteTaskTokenRepository;
+  let taskId: number;
+
+  beforeEach(() => {
+    db = openDatabase(':memory:');
+    tokenRepo = new SqliteTaskTokenRepository(db);
+    repo = new SqliteTaskRepository(db, tokenRepo);
+    db.prepare(
+      "INSERT INTO projects (id, name, slug, default_branch) VALUES (1, 'P', 'p', 'main')",
+    ).run();
+    taskId = repo.create({
+      projectId: 1,
+      unitId: null,
+      serverName: null,
+      title: 'Test task',
+      description: null,
+      status: 'running',
+      currentPhase: null,
+      selfReviewCount: 0,
+      priority: 0,
+      tmuxWindow: null,
+      selfReviewMaxAttempts: null,
+      requirePlanApproval: true,
+      source: 'github',
+      sourceRef: null,
+      worktreePath: null,
+      worktreeBranch: null,
+      baseBranch: null,
+      targetBranch: null,
+      skipPr: false,
+      workingDirectory: null,
+      branch: null,
+      planMarkdown: null,
+      pendingQuestions: null,
+      changedFiles: null,
+      summaryJson: null,
+      prUrl: null,
+      agentSessionId: null,
+      reviewSubagent: null,
+      implementSubagent: null,
+      inputTrust: 'untrusted',
+      executionApprovedFingerprintHash: null,
+      pendingOperation: 'execute',
+      pendingOperationWindowId: null,
+      pendingOperationPriorStatus: 'open',
+      createdByKind: 'operator',
+      createdById: null,
+      createdViaGeneration: null,
+    });
+    repo.updateStatus(taskId, 'running');
+  });
+
+  it('updateStatus() to a token-revoking status revokes every active token (baseline)', () => {
+    const { token } = tokenRepo.issue(taskId, 1);
+    const secret = token.split('.')[3];
+    expect(tokenRepo.verify(taskId, secret)).toBe(true);
+
+    repo.updateStatus(taskId, 'done');
+
+    expect(tokenRepo.verify(taskId, secret)).toBe(false);
+  });
+
+  it('update({ status: "archived" }) revokes every active token — the read-then-write path archive handlers use', () => {
+    const { token } = tokenRepo.issue(taskId, 1);
+    const secret = token.split('.')[3];
+    expect(tokenRepo.verify(taskId, secret)).toBe(true);
+
+    repo.update(taskId, { status: 'archived' });
+
+    expect(tokenRepo.verify(taskId, secret)).toBe(false);
+    expect(repo.findById(taskId)?.status).toBe('archived');
+  });
+
+  it('update({ status: "done" }) revokes every active token', () => {
+    const { token } = tokenRepo.issue(taskId, 1);
+    const secret = token.split('.')[3];
+
+    repo.update(taskId, { status: 'done' });
+
+    expect(tokenRepo.verify(taskId, secret)).toBe(false);
+  });
+
+  it('update() writing an unrelated field (no status change) leaves active tokens alone', () => {
+    const { token } = tokenRepo.issue(taskId, 1);
+    const secret = token.split('.')[3];
+
+    repo.update(taskId, { agentSessionId: 'session-abc' });
+
+    expect(tokenRepo.verify(taskId, secret)).toBe(true);
+  });
+
+  it("updateStatus() to 'review' leaves active tokens alone — review is the success terminal a human resumes from via follow-up, onto the same (still-token-bearing) tmux window", () => {
+    const { token } = tokenRepo.issue(taskId, 1);
+    const secret = token.split('.')[3];
+
+    repo.updateStatus(taskId, 'review');
+
+    expect(tokenRepo.verify(taskId, secret)).toBe(true);
+  });
+
+  it("update({ status: 'failed' }) leaves active tokens alone — most failure paths keep tmuxWindow alive and the follow-up comment box is enabled for 'failed' exactly like it is for 'review'", () => {
+    const { token } = tokenRepo.issue(taskId, 1);
+    const secret = token.split('.')[3];
+
+    repo.update(taskId, { status: 'failed' });
+
+    expect(tokenRepo.verify(taskId, secret)).toBe(true);
+    expect(repo.findById(taskId)?.status).toBe('failed');
+  });
+
+  it("consumePendingApproval() landing on 'failed' via a deny decision leaves active tokens alone (same reasoning as the update() case above)", () => {
+    repo.updateStatus(taskId, 'pending_approval');
+    const { token } = tokenRepo.issue(taskId, 1);
+    const secret = token.split('.')[3];
+    expect(tokenRepo.verify(taskId, secret)).toBe(true);
+
+    const consumed = repo.consumePendingApproval(taskId, { status: 'failed' });
+
+    expect(consumed).toBe(true);
+    expect(tokenRepo.verify(taskId, secret)).toBe(true);
+    expect(repo.findById(taskId)?.status).toBe('failed');
+  });
+
+  it("consumePendingApproval() landing on 'archived' via a deny decision (e.g. a restore denial) revokes every active token", () => {
+    repo.updateStatus(taskId, 'pending_approval');
+    const { token } = tokenRepo.issue(taskId, 1);
+    const secret = token.split('.')[3];
+    expect(tokenRepo.verify(taskId, secret)).toBe(true);
+
+    const consumed = repo.consumePendingApproval(taskId, { status: 'archived' });
+
+    expect(consumed).toBe(true);
+    expect(tokenRepo.verify(taskId, secret)).toBe(false);
+    expect(repo.findById(taskId)?.status).toBe('archived');
+  });
+
+  it('consumePendingApproval() approving into a non-revoking status leaves active tokens alone', () => {
+    repo.updateStatus(taskId, 'pending_approval');
+    const { token } = tokenRepo.issue(taskId, 1);
+    const secret = token.split('.')[3];
+
+    const consumed = repo.consumePendingApproval(taskId, { status: 'running' });
+
+    expect(consumed).toBe(true);
+    expect(tokenRepo.verify(taskId, secret)).toBe(true);
+  });
+});
+
+// Issue #28 third-party review fix: the original countChildren()-based cap
+// counted a parent's ENTIRE lifetime child count, so a parent that crossed
+// N=20 across several follow-up runs could never spawn another child again,
+// in ANY future run. countChildrenInGeneration scopes the count to a single
+// window generation instead.
+describe('SqliteTaskRepository.countChildrenInGeneration (Issue #28 third-party review fix)', () => {
+  let db: SqliteDatabase;
+  let repo: SqliteTaskRepository;
+  let parentId: number;
+
+  function makeChildFields(overrides: Partial<Parameters<SqliteTaskRepository['create']>[0]> = {}) {
+    return {
+      projectId: 1,
+      unitId: null,
+      serverName: null,
+      title: 'Child task',
+      description: null,
+      status: 'open' as const,
+      currentPhase: null,
+      selfReviewCount: 0,
+      priority: 0,
+      tmuxWindow: null,
+      selfReviewMaxAttempts: null,
+      requirePlanApproval: true,
+      source: 'local' as const,
+      sourceRef: null,
+      worktreePath: null,
+      worktreeBranch: null,
+      baseBranch: null,
+      targetBranch: null,
+      skipPr: false,
+      workingDirectory: null,
+      branch: null,
+      planMarkdown: null,
+      pendingQuestions: null,
+      changedFiles: null,
+      summaryJson: null,
+      prUrl: null,
+      agentSessionId: null,
+      reviewSubagent: null,
+      implementSubagent: null,
+      inputTrust: 'untrusted' as const,
+      executionApprovedFingerprintHash: null,
+      pendingOperation: null,
+      pendingOperationWindowId: null,
+      pendingOperationPriorStatus: null,
+      createdByKind: 'task' as const,
+      createdById: parentId,
+      createdViaGeneration: null,
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    db = openDatabase(':memory:');
+    repo = new SqliteTaskRepository(db, new SqliteTaskTokenRepository(db));
+    db.prepare("INSERT INTO projects (id, name, slug, default_branch) VALUES (1, 'P', 'p', 'main')").run();
+    parentId = repo.create(makeChildFields({ title: 'Parent task', createdByKind: 'operator', createdById: null }));
+  });
+
+  it('counts only children created under the given generation', () => {
+    repo.create(makeChildFields({ createdViaGeneration: 1 }));
+    repo.create(makeChildFields({ createdViaGeneration: 1 }));
+    repo.create(makeChildFields({ createdViaGeneration: 2 }));
+
+    expect(repo.countChildrenInGeneration(parentId, 1)).toBe(2);
+    expect(repo.countChildrenInGeneration(parentId, 2)).toBe(1);
+    expect(repo.countChildrenInGeneration(parentId, 3)).toBe(0);
+  });
+
+  it('does not count operator-originated children (createdViaGeneration NULL) toward any generation', () => {
+    repo.create(makeChildFields({ createdViaGeneration: null }));
+    repo.create(makeChildFields({ createdViaGeneration: 1 }));
+
+    expect(repo.countChildrenInGeneration(parentId, 1)).toBe(1);
+    // countChildren() (lifetime, ungenerationed) still sees both.
+    expect(repo.countChildren(parentId)).toBe(2);
+  });
+
+  it('does not count another parent\'s children even under the same generation number', () => {
+    const otherParentId = repo.create(makeChildFields({ title: 'Other parent', createdByKind: 'operator', createdById: null }));
+    repo.create(makeChildFields({ createdViaGeneration: 1 }));
+    repo.create(makeChildFields({ createdById: otherParentId, createdViaGeneration: 1 }));
+
+    expect(repo.countChildrenInGeneration(parentId, 1)).toBe(1);
+    expect(repo.countChildrenInGeneration(otherParentId, 1)).toBe(1);
+  });
+});
+
+// clearTmuxWindowIfMatches() (Issue #28 third-party review, Fix 3): backs
+// ExecuteTaskUseCase's rollback of a just-created tmux window when
+// downstream setup (worktree creation, containment checks) fails AFTER the
+// per-task rotation lock has already released. A concurrent rotation for the
+// same task can persist a NEWER `tmux_window` in that gap; this guarded
+// UPDATE must only clear the row when it still holds the exact window name
+// the caller's own (failed) generation created, never a newer one.
+describe('SqliteTaskRepository.clearTmuxWindowIfMatches (Issue #28 third-party review, Fix 3)', () => {
+  let db: SqliteDatabase;
+  let repo: SqliteTaskRepository;
+  let taskId: number;
+
+  beforeEach(() => {
+    db = openDatabase(':memory:');
+    repo = new SqliteTaskRepository(db, new SqliteTaskTokenRepository(db));
+    db.prepare("INSERT INTO projects (id, name, slug, default_branch) VALUES (1, 'P', 'p', 'main')").run();
+    taskId = repo.create({
+      projectId: 1,
+      unitId: null,
+      serverName: null,
+      title: 'Test task',
+      description: null,
+      status: 'in_progress',
+      currentPhase: null,
+      selfReviewCount: 0,
+      priority: 0,
+      tmuxWindow: 'w1',
+      selfReviewMaxAttempts: null,
+      requirePlanApproval: true,
+      source: 'local',
+      sourceRef: null,
+      worktreePath: null,
+      worktreeBranch: null,
+      baseBranch: null,
+      targetBranch: null,
+      skipPr: false,
+      workingDirectory: null,
+      branch: null,
+      planMarkdown: null,
+      pendingQuestions: null,
+      changedFiles: null,
+      summaryJson: null,
+      prUrl: null,
+      agentSessionId: null,
+      reviewSubagent: null,
+      implementSubagent: null,
+      inputTrust: 'trusted',
+      executionApprovedFingerprintHash: null,
+      pendingOperation: null,
+      pendingOperationWindowId: null,
+      pendingOperationPriorStatus: null,
+      createdByKind: 'operator',
+      createdById: null,
+      createdViaGeneration: null,
+    });
+  });
+
+  it('clears tmux_window and returns true when it still matches the expected window name', () => {
+    expect(repo.clearTmuxWindowIfMatches(taskId, 'w1')).toBe(true);
+    expect(repo.findById(taskId)!.tmuxWindow).toBeNull();
+  });
+
+  it('leaves tmux_window untouched and returns false when a newer generation has already replaced it', () => {
+    // Simulates a concurrent execute()/followUp() for the same task having
+    // already rotated to a new window between this caller's window creation
+    // and its (failed) downstream setup.
+    repo.update(taskId, { tmuxWindow: 'w2' });
+
+    expect(repo.clearTmuxWindowIfMatches(taskId, 'w1')).toBe(false);
+    expect(repo.findById(taskId)!.tmuxWindow).toBe('w2');
+  });
+
+  it('returns false and does nothing for an unknown task id', () => {
+    expect(repo.clearTmuxWindowIfMatches(999999, 'w1')).toBe(false);
   });
 });

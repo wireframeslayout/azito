@@ -2,6 +2,8 @@ import type { IExecutionLogRepository } from '../ExecutionLog';
 import { parseTurnToken } from './AgentTurn';
 import type { SqliteAgentTurnRepository } from './SqliteAgentTurnRepository';
 import type { TurnSignalHub, TurnSignal } from './TurnSignalHub';
+import type { AuditLogService } from '../../../shared/audit/AuditLogService';
+import { recordAuditBestEffort } from '../../../shared/audit/recordAuditBestEffort';
 
 const MAX_OUTPUT_BYTES = 256 * 1024;
 
@@ -94,17 +96,25 @@ function toTurnSignal(value: ValidatedSignalBody): TurnSignal {
 }
 
 /**
- * Handles the body of `POST /api/agent-signals` once the caller (route
- * handler) has already verified the shared bearer token. Resolves the turn
- * addressed by the request's `turnToken`, records the raw event, advances
- * the turn's terminal state where applicable, and republishes the signal on
- * `TurnSignalHub` for any subscribed `InProcessSignalStream`.
+ * Handles the body of `POST /api/agent-signals`. The route handler
+ * (agentSignalRoutes.ts) checks the shared bearer token only for audit
+ * purposes (design v3 §8) — it is not required, since a valid `turnToken`
+ * alone is sufficient proof of identity (see that file's doc comment). This
+ * class is therefore the actual point of authentication: it resolves the
+ * turn addressed by the request's `turnToken` and verifies it matches
+ * (taskId + nonce) BEFORE touching the database (Issue #28 third-party
+ * review, Important finding — see the `!turn`/mismatch branches below for
+ * why persistence must never happen ahead of that check). Only once
+ * authenticated does it record the raw event, advance the turn's terminal
+ * state where applicable, and republish the signal on `TurnSignalHub` for
+ * any subscribed `InProcessSignalStream`.
  */
 export class AgentSignalService {
   constructor(
     private turnRepo: SqliteAgentTurnRepository,
     private turnSignalHub: TurnSignalHub,
     private logRepo: IExecutionLogRepository,
+    private auditLogService: AuditLogService,
   ) {}
 
   handleSignal(rawBody: unknown): SignalHandlerResult {
@@ -118,19 +128,55 @@ export class AgentSignalService {
     const parsed = parseTurnToken(value.turnToken)!;
     const turn = this.turnRepo.findById(parsed.turnId);
 
+    // Authentication (turn exists + taskId/nonce match) runs to completion
+    // BEFORE any persistence side effect (Issue #28 third-party review,
+    // Important finding): this used to call `this.turnRepo.appendEvent(...)`
+    // — writing the full request body (up to MAX_EVENT_PAYLOAD_BYTES, 256KiB)
+    // into `agent_turn_events` — for a turnToken that merely resolved a
+    // turnId but failed the taskId/nonce match, before returning 403. An
+    // unauthenticated caller could brute-force turnIds (small sequential
+    // integers) and grow `agent_turn_events` without bound, each row costing
+    // up to 256KiB. Neither branch below writes anything to `agent_turns`/
+    // `agent_turn_events`; the only record of a failed credential is the
+    // flood-suppressed, metadata-only `auditLogService.record()` call
+    // (AuditLogService already collapses identical repeats within its own
+    // window — see its doc comment — so a caller hammering the SAME invalid
+    // turnToken doesn't grow audit_log unbounded either; a caller trying
+    // many DISTINCT turnIds still gets one small metadata row per attempt,
+    // never a 256KiB body).
     if (!turn) {
+      // Best-effort (Issue #28 third-party review finding): an audit write
+      // failure here (disk full, locked DB, ...) must never turn this 404
+      // into a 500 — see recordAuditBestEffort's doc comment.
+      recordAuditBestEffort(
+        this.auditLogService,
+        {
+          actorClass: 'runtime',
+          actorId: null,
+          event: 'agent_signal.rejected',
+          detail: { reason: 'turn_not_found' },
+        },
+        (err) => console.error('[AgentSignalService] audit log write failed (turn_not_found); continuing with 404', err),
+      );
       return { status: 404, body: { error: 'Turn not found' } };
     }
 
     if (turn.taskId !== parsed.taskId || turn.nonce !== parsed.nonce) {
-      this.turnRepo.appendEvent(turn.id, {
-        type: 'invalid',
-        payload: JSON.stringify(rawBody),
-        source: 'http',
-      });
+      recordAuditBestEffort(
+        this.auditLogService,
+        {
+          actorClass: 'runtime',
+          actorId: null,
+          event: 'agent_signal.rejected',
+          detail: { reason: 'turn_mismatch', turnId: turn.id },
+        },
+        (err) => console.error('[AgentSignalService] audit log write failed (turn_mismatch); continuing with 403', err),
+      );
       return { status: 403, body: { error: 'Turn token does not match the resolved turn' } };
     }
 
+    // Everything below this point only runs once the turnToken has actually
+    // authenticated against a resolved turn — no persistence above this line.
     if (turn.status !== 'running') {
       this.turnRepo.appendEvent(turn.id, {
         type: 'duplicate',

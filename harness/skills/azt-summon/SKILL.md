@@ -10,6 +10,8 @@ argument-hint: [何をスキル化/どう直すか (任意)]
 
 # azt-summon — Sidekick を作成・編集する
 
+> **オペレーター専用**（UI トークンが必要）。タスクペインで実行すると operator_required になる。
+
 Sidekick は `SKILL.md`（frontmatter + テンプレート変数入り本文）と、任意の `scripts/`
 （決定的な処理を委譲するシェルスクリプト）からなるスキルパッケージです。このスキルは、
 いま会話中に行った作業やユーザーの依頼を Sidekick として切り出して**新規作成**するか、

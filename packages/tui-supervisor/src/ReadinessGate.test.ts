@@ -133,7 +133,12 @@ describe('ReadinessGate', () => {
       exitSpy.mockRestore();
     });
 
-    it('holds an injection until the child prints its boot output and settles', async () => {
+    // Spawns a real pty child (`sleep 1; echo booted; cat`) and waits out quietMs (300ms) on
+    // top of that — under scheduling contention (e.g. the full suite running many test files'
+    // worth of process spawns in parallel) that can exceed vitest's default 5000ms test
+    // timeout with nothing actually wrong. Same pattern as the tmux-integration tests' and
+    // authDoctorCommand.test.ts's per-test timeout bump (see TmuxClient.splitPane.tmuxIntegration.test.ts).
+    it('holds an injection until the child prints its boot output and settles', { timeout: 20_000 }, async () => {
       // minOutputBytes lowered: the test child's boot banner ("booted") is tiny
       // compared to a real TUI welcome screen.
       const gate = new ReadinessGate({ quietMs: 300, minOutputBytes: 5, maxWaitMs: 8_000 });

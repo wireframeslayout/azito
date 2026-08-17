@@ -16,6 +16,10 @@ import type { TaskRestoreService } from '../TaskRestoreService';
 import { resolveExecutionManifest, hashExecutionManifest, type ExecutionManifestResolution } from './ExecutionManifest';
 import { resolveTaskServerName } from './TaskExecutionEnv';
 import { appendLogAndEmit, failAsyncTaskOperation } from './AppendLog';
+import type { AuditLogService } from '../../../shared/audit/AuditLogService';
+import { recordAuditBestEffort } from '../../../shared/audit/recordAuditBestEffort';
+import type { Principal } from '../../../shared/auth/Principal';
+import { OPERATOR_PRINCIPAL } from '../../../shared/auth/Principal';
 
 /**
  * Dependencies needed to resolve the manifest for a `pending_approval` task
@@ -139,6 +143,22 @@ export interface ExecutionApprovalDeps {
   respawnService: WindowRespawnService;
   executeTaskUseCase: ExecuteTaskUseCase;
   taskRestoreService: TaskRestoreService;
+  /**
+   * Issue #28 Phase E follow-up (third-party review, D-track "gap"
+   * finding): the audit UI's own description promises an "approved"/
+   * "denied" event lands in `audit_log` for every execution-approval
+   * decision, but this file only ever wrote to `execution_log`
+   * (`appendLogIfUnitKnown`, below) — a task-log-scoped, per-task view, not
+   * the security audit trail `audit_log` is (see AuditLogService's own doc
+   * comment: dedup'd, cross-task, meant for an operator reviewing WHO
+   * approved/denied WHAT). Both are kept: `execution_log`'s
+   * 'execution_approved' entry (and the 'execution_denied'-reason
+   * status_change denyPendingApproval writes) still drives the task's own
+   * timeline/WS notifications; `audit_log`'s 'execution.approved'/
+   * 'execution.denied' rows are for the separate cross-task audit view and
+   * carry the deciding principal, which execution_log's entries do not.
+   */
+  auditLog: AuditLogService;
 }
 
 export interface ExecutionApprovalParams {
@@ -174,6 +194,17 @@ export interface ExecutionApprovalParams {
   fingerprint?: string;
   /** See {@link ApprovalOrigin} — audit-only, defaults to 'approval_panel' when omitted (every caller before this field existed WAS the approval panel). */
   origin?: ApprovalOrigin;
+  /**
+   * The principal that made this decision — audit-only, recorded onto the
+   * `audit_log` 'execution.approved'/'execution.denied' row (see
+   * {@link ExecutionApprovalDeps.auditLog}'s doc comment), never a decision
+   * input (same treatment as `origin`, above). Defaults to
+   * `OPERATOR_PRINCIPAL` when omitted — this route currently declares no
+   * `config.auth`, so it is operator-only in practice, but callers pass
+   * `request.principal` explicitly rather than relying on the default so the
+   * audit row is never silently wrong if that ever changes.
+   */
+  actor?: Principal;
 }
 
 export interface ExecutionApprovalOutcome {
@@ -255,12 +286,13 @@ function resolveApprovedStatus(operation: NonNullable<Task['pendingOperation']>,
  * already handles, surfaced here so the archive route can 409 the same way.
  */
 export function denyPendingApproval(
-  deps: Pick<ExecutionApprovalDeps, 'taskRepo' | 'logRepo' | 'executeTaskUseCase'>,
+  deps: Pick<ExecutionApprovalDeps, 'taskRepo' | 'logRepo' | 'executeTaskUseCase' | 'auditLog'>,
   task: Task,
   unitId: number | null,
   targetStatus?: TaskStatus,
+  actor: Principal = OPERATOR_PRINCIPAL,
 ): { consumed: boolean; status: TaskStatus } {
-  const { taskRepo, logRepo, executeTaskUseCase } = deps;
+  const { taskRepo, logRepo, executeTaskUseCase, auditLog } = deps;
   const operation = task.pendingOperation as NonNullable<Task['pendingOperation']>;
   const denyStatus = targetStatus ?? ((operation === 'restore' ? 'archived' : 'failed') as TaskStatus);
   const consumed = taskRepo.consumePendingApproval(task.id, { status: denyStatus });
@@ -278,6 +310,19 @@ export function denyPendingApproval(
   if (unitId !== null) {
     appendLogAndEmit(logRepo, executeTaskUseCase.events, task.id, unitId, 'status_change', { status: denyStatus, reason: 'execution_denied' });
   }
+  // Best-effort (see recordAuditBestEffort's doc comment) — a write failure
+  // here must never turn an already-committed denial into an error
+  // response; the denial itself (consumed=true above) already landed.
+  recordAuditBestEffort(
+    auditLog,
+    {
+      actorClass: actor.class,
+      actorId: actor.id ?? null,
+      event: 'execution.denied',
+      detail: { taskId: task.id, operation, targetStatus: denyStatus },
+    },
+    (err) => console.error(`[ExecutionApprovalDecision] audit log write failed for task ${task.id} denial (denial still applied):`, err),
+  );
   return { consumed: true, status: denyStatus };
 }
 
@@ -286,8 +331,8 @@ export function decideExecutionApproval(
   params: ExecutionApprovalParams,
   log: ApprovalLogger,
 ): ExecutionApprovalOutcome {
-  const { taskRepo, logRepo, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, windowRepo, respawnService, executeTaskUseCase, taskRestoreService } = deps;
-  const { taskId, unitId, approved, fingerprint, origin } = params;
+  const { taskRepo, logRepo, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, windowRepo, respawnService, executeTaskUseCase, taskRestoreService, auditLog } = deps;
+  const { taskId, unitId, approved, fingerprint, origin, actor = OPERATOR_PRINCIPAL } = params;
 
   const task = taskRepo.findById(taskId);
   if (!task || task.status !== ('pending_approval' as TaskStatus)) {
@@ -319,7 +364,7 @@ export function decideExecutionApproval(
   };
 
   if (!approved) {
-    const outcome = denyPendingApproval({ taskRepo, logRepo, executeTaskUseCase }, task, unitId);
+    const outcome = denyPendingApproval({ taskRepo, logRepo, executeTaskUseCase, auditLog }, task, unitId, undefined, actor);
     if (!outcome.consumed) {
       return { status: 409, body: { error: `Task ${taskId}'s pending approval was already resolved by a concurrent request` } };
     }
@@ -410,6 +455,21 @@ export function decideExecutionApproval(
   // push bridges only react to 'status_change' entries, forwarding
   // entry.content.status verbatim as the WS `task:status` payload).
   appendLogIfUnitKnown('command', { type: 'execution_approved', origin: origin ?? 'approval_panel' });
+  // Best-effort `audit_log` row (see ExecutionApprovalDeps.auditLog's doc
+  // comment) — distinct from the execution_log 'command' entry just above,
+  // which drives the task's own timeline/WS notifications, not the
+  // cross-task audit view. A write failure here must never turn an
+  // already-committed approval into an error response.
+  recordAuditBestEffort(
+    auditLog,
+    {
+      actorClass: actor.class,
+      actorId: actor.id ?? null,
+      event: 'execution.approved',
+      detail: { taskId, operation, unitId, origin: origin ?? 'approval_panel' },
+    },
+    (err) => log.error({ err, taskId }, 'audit log write failed for execution approval (approval still applied)'),
+  );
 
   // Re-fetches the task and emits its CURRENT (real) status as a
   // 'status_change' entry — used by every async operation's success

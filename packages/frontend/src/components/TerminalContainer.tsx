@@ -3,7 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { IconButton } from './ui/IconButton';
 import { Icon } from './ui/Icon';
 import { SegmentedToggle, type SegmentedToggleOption } from './ui/SegmentedToggle';
-import { WindowStatusDropdown, findWindow } from './WindowStatusDropdown';
+import { WindowStatusDropdown, findWindow, isTaskOwnedWindow } from './WindowStatusDropdown';
+import { TaskOwnedPaneBadge } from './workspace/TaskOwnedPaneBadge';
 import XTermView, { type XTermViewHandle } from './XTermView';
 import WindowChatPanel from './transcript/WindowChatPanel';
 import { StyleSwitcher } from './transcript/StyleSwitcher';
@@ -102,13 +103,18 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
   const [respawnError, setRespawnError] = useState<string | null>(null);
   const [resourceWarning, setResourceWarning] = useState<{ resources: ResourceStatus; retry: () => void } | null>(null);
 
-  // 端末⇄チャット切替（Issue #69 Phase E-2）にはウィンドウの永続 id が必要なため、windowMissing に
-  // 関係なく常に解決する（respawn 導線の従来挙動は変えない）。project/allTasks 経由で見つからない
-  // 表示経路（プレーンな pane 直接表示等）では windowId は null になり、トグル自体を出さない。
-  const dbWindow = useMemo(
+  // Issue #28 Phase D-2 / Issue #69 Phase E-2: computed unconditionally (not just when
+  // windowMissing, unlike the old dbWindow-only lookup) so the task-owned badge can reflect the
+  // `windows` row's real ownerType/taskId regardless of pane liveness, and so the terminal⇄chat
+  // toggle has the persisted window id available (respawn 導線の従来挙動は変えない). Where the
+  // window isn't resolvable via project/allTasks (a plain pane direct view etc.), windowId is
+  // null and the toggle itself is not rendered.
+  const currentWindow = useMemo(
     () => findWindow(serverName, target, project ?? null, allTasks ?? []),
     [serverName, target, project, allTasks],
   );
+  const isTaskOwnedPane = isTaskOwnedWindow(currentWindow);
+  const dbWindow = currentWindow;
   const windowId = dbWindow?.id ?? null;
 
   const [style, setStyle] = useTranscriptStyle();
@@ -296,6 +302,7 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
           </div>
         )}
         <div style={{ marginLeft: (activePaneName && !isMobile) ? undefined : 'auto', display: 'flex', alignItems: 'center', gap: 8, paddingRight: 4, minWidth: 0 }}>
+          {isTaskOwnedPane && <TaskOwnedPaneBadge />}
           {!isMobile && windowId !== null && viewMode === 'chat' && (
             // チャット表示中のみ表示スタイル切替を出す（Issue #69 調整1）。端末⇄チャットトグルの隣に
             // 置くのが自然と判断: ConversationView 埋め込み時はページ自前ヘッダーを描画しないため、

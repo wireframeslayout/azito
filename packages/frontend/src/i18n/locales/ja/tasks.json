@@ -212,7 +212,8 @@
     "linkIssue": "Issueをリンク",
     "linkConfirm": "タスクのタイトルと説明をIssueの内容で更新しますか？",
     "linkOnly": "リンクのみ",
-    "linkAndOverwrite": "リンクして上書き"
+    "linkAndOverwrite": "リンクして上書き",
+    "secretsNextLaunch": "次回起動時に渡されるシークレット"
   },
   "summary": {
     "noSummary": "サマリーがありません",

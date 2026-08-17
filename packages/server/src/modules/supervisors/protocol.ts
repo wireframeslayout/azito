@@ -29,6 +29,25 @@ export interface RegisterMessage {
    * exists so older, still-running supervisor processes keep working without a protocol bump.
    */
   reportsReady?: true;
+  /**
+   * Launch binding (Issue #28 Phase C, design v3 §8). Set by `tui-supervisor`
+   * when it was invoked via `wrapWithSupervisor()`'s `--launch-id`/
+   * `--bootstrap-token`/`--session-token` flags. Absent for a manually
+   * started `azs` (or a supervisor process too old to know about launch
+   * binding) — the hub registers those as `unbound` (display-only; see
+   * SupervisorRegistry's doc comment) rather than rejecting them outright,
+   * so a manual debugging session still shows up in the UI.
+   */
+  launchId?: string;
+  /**
+   * Exactly one of `bootstrapToken`/`sessionToken` accompanies `launchId`:
+   * `bootstrapToken` on the FIRST register after this launch was wrapped
+   * (one-shot — the hub rejects it a second time), `sessionToken` on every
+   * reconnect after the hub accepted that first register (see
+   * RegisteredMessage.sessionToken).
+   */
+  bootstrapToken?: string;
+  sessionToken?: string;
 }
 
 export interface HeartbeatMessage {
@@ -80,18 +99,50 @@ export interface AckMessage {
   error?: string;
 }
 
+/**
+ * Confirms receipt of a freshly-issued `sessionToken` (Issue #28 third-party
+ * review, Important finding — "bootstrap 失効の瞬間が来ない"). Sent by the
+ * supervisor immediately after a `RegisteredMessage` carrying `sessionToken`
+ * arrives, on the SAME connection that just registered with the one-shot
+ * `bootstrapToken`. Until this ack lands, the hub leaves the launch `pending`
+ * (bootstrap retry stays possible, e.g. across a disconnect before the ack);
+ * once it lands, the hub promotes the launch to `active` — the actual moment
+ * the bootstrap token retires. `sessionToken` here is the value the
+ * supervisor just received; the hub verifies it hashes to the launch's
+ * `session_hash` before promoting, so an ack cannot be spoofed by a party
+ * that never saw the real session token. A hub predating this message type
+ * simply ignores it (unknown `type`, forward-compatible); a supervisor
+ * predating it never sends one, leaving the existing sessionToken-reconnect
+ * promotion (see touchRegistered) as the fallback path — see
+ * SupervisorRegistry.resolveLaunchAuth's sessionToken branch.
+ */
+export interface RegisterAckMessage {
+  type: 'register_ack';
+  sessionToken: string;
+}
+
 export type SupervisorToHubMessage =
   | RegisterMessage
   | HeartbeatMessage
   | ActivityMessage
   | ChildExitMessage
   | ReadyMessage
-  | AckMessage;
+  | AckMessage
+  | RegisterAckMessage;
 
 // ---- Hub -> Supervisor ----
 
 export interface RegisteredMessage {
   type: 'registered';
+  /**
+   * Returned exactly once, in the ack for a register that consumed a
+   * `bootstrapToken` (a fresh launch's first register). The supervisor must
+   * hold this in memory and send it as `sessionToken` on every subsequent
+   * register (reconnects) for the process's lifetime — it is never re-issued.
+   * Absent when the register was unbound (no launchId) or authenticated via
+   * an already-valid `sessionToken`.
+   */
+  sessionToken?: string;
 }
 
 export interface InjectPromptMessage {

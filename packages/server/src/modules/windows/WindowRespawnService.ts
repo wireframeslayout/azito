@@ -1,4 +1,4 @@
-import type { IWindowRepository, PaneLayout, Window } from './Window';
+import { isPrimaryTaskWindow, type IWindowRepository, type PaneLayout, type Window } from './Window';
 import type { ServerConfig } from '../servers/Server';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { ISessionStrategyFactory } from '../agents/SessionStrategy';
@@ -18,7 +18,10 @@ import type { SessionCaptureService } from './SessionCaptureService';
 import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError } from '../tasks/execution/ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest, type RespawnManifestInput } from '../tasks/execution/ExecutionManifest';
 import { appendLogAndEmit } from '../tasks/execution/AppendLog';
+import type { TaskPaneEnvironmentService } from '../tasks/execution/TaskPaneEnvironmentService';
 import { resolveTmuxSession } from '../tasks/execution/TaskExecutionEnv';
+import { confirmOldWindowGone, createRotatedWindow, rollbackWindowReference, runExclusiveForTask } from '../tasks/execution/WindowRotation';
+import { resolveKillOutcome } from '../tmux/killOutcome';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { EventEmitter } from 'events';
@@ -126,6 +129,13 @@ export class WindowRespawnService {
     // THIS emitter's 'log' event, not to logRepo.append() rows directly. See
     // AppendLog.ts's appendLogAndEmit() doc comment.
     private events: EventEmitter,
+    // Issue #28 Phase A後半: the sole task-pane env builder — see
+    // TaskPaneEnvironmentService's own doc comment. respawn()'s
+    // window-(re)creation calls (both branches — session exists or not) and
+    // resumeLegacySession() all go through this now; a plain (non-task)
+    // window respawn instead falls back to TmuxClient.uiTokenEnv() (see
+    // resolveRespawnEnv() below).
+    private paneEnvService: TaskPaneEnvironmentService,
     private sessionCaptureService?: SessionCaptureService,
   ) {}
 
@@ -133,10 +143,12 @@ export class WindowRespawnService {
     const win = this.windowRepo.findById(windowId);
     if (!win) throw new Error('Window not found');
 
-    const parts = win.tmuxTarget.split(':');
-    const sessionName = parts[0];
-    const windowPart = parts[1]?.split('.')[0];
-    if (!windowPart) throw new Error(`Invalid tmuxTarget: ${win.tmuxTarget}`);
+    // Validated once here for a fast, early failure on an obviously-corrupt
+    // row — the ACTUAL session/window names `rotate` below acts on are
+    // re-read fresh from the DB inside the lock (see the comment on that
+    // re-read for why: this initial `win` snapshot can go stale while this
+    // call sits queued behind another rotation for the same task).
+    if (!win.tmuxTarget.split(':')[1]?.split('.')[0]) throw new Error(`Invalid tmuxTarget: ${win.tmuxTarget}`);
 
     // Resolve the owning task up front and run the untrusted-input execution
     // gate (Issue #328) before touching tmux or the DB at all — respawn()
@@ -161,6 +173,15 @@ export class WindowRespawnService {
       unitId = this.enforceExecutionGate(task, server, 'respawn', windowId, buildRespawnManifestInput(win));
     }
 
+    // Whether `win` is the task's PRIMARY worker window — the only window a
+    // task token generation is bound to (Issue #28 third-party review
+    // finding: a secondary window, added via POST /api/tasks/:id/windows,
+    // must never rotate or revoke that token — see isPrimaryTaskWindow's doc
+    // comment on windows/Window.ts). `task` is required in addition to the
+    // window-row check: a window whose owning task was deleted (task is
+    // null) has nothing to rotate either.
+    const isPrimary = task !== null && isPrimaryTaskWindow(win);
+
     // Resolve and verify every working directory this respawn will `cd`
     // into before touching tmux or the DB at all. Containment verification
     // used to run per-pane inside restorePaneLayout/setupSinglePane, i.e.
@@ -173,44 +194,185 @@ export class WindowRespawnService {
     const allowedRoot = this.resolveAllowedRoot(win, server.name);
     const resolvedCwds = await this.resolveAllCwds(server, win, allowedRoot);
 
-    const sessions = await this.tmux.listSessions(server);
-    const sessionExists = sessions.some((s) => s.name === sessionName);
-
-    let newName: string;
-    if (!sessionExists) {
-      // The session's mandatory first window IS the respawn target — creating the
-      // session with a generated name and then adding the real window separately
-      // would strand that first window as an unmanaged bare shell.
-      newName = (await this.tmux.createSession(server, sessionName, { windowName: windowPart, exactName: true })).windowName;
-      await sleep(500);
-    } else {
-      const session = sessions.find((s) => s.name === sessionName);
-      const windowAlive = session?.windows.some((w) => w.name === windowPart);
-      if (windowAlive) {
-        await this.tmux.killWindow(server, `${sessionName}:${windowPart}`).catch(() => {});
-      }
-      newName = (await this.tmux.createWindow(server, sessionName, windowPart, { exactName: true })).windowName;
-      await sleep(300);
-    }
-
-    const baseTarget = `${sessionName}:${newName}`;
-    const dbTarget = `${baseTarget}.1`;
-
-    this.windowRepo.update(windowId, { tmuxTarget: dbTarget });
-
     const supervise = shouldSupervise(server.type, win.windowType);
     // task/unitId already resolved above for the execution gate — reused
     // here instead of re-querying the repositories a second time.
     const supervision: SupervisionContext = { supervise, taskId: win.taskId, unitId };
 
-    if (win.paneLayout) {
-      await this.restorePaneLayout(server, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds);
-    } else {
-      const paneId = await this.tmux.resolvePaneId(server, baseTarget);
-      await this.setupSinglePane(server, paneId, baseTarget, win, supervision, resolvedCwds.singleCwd);
-    }
+    // Window-generation point for this window: EITHER branch below actually
+    // (re)creates the window that becomes the respawned pane (unlike
+    // ExecuteTaskUseCase's throwaway-session-then-real-window split, respawn
+    // has no separate bootstrap step — whichever tmux call runs here IS the
+    // respawn target). Only the task's PRIMARY worker window rotates its
+    // task token via TaskPaneEnvironmentService (createRotatedWindow, which
+    // also rolls the new generation back on a creation failure — whether
+    // thrown or resolved with a non-zero exit code, see WindowRotation.ts);
+    // a secondary task window gets a masked-only env (buildEnvForSecondaryWindow
+    // — never a task token, never rotates/revokes) and a plain (non-task)
+    // window keeps getting the legacy default UI-token env instead — neither
+    // has a generation to roll back (Issue #28 design v3 §3/§5 only scope
+    // task panes; the third-party review's multi-window finding further
+    // scopes the token itself to the primary window alone — see
+    // isPrimaryTaskWindow's doc comment). The rotation itself only happens
+    // once the old window's demise is confirmed above, so the primary pane
+    // is never left holding a revoked token for a window that, in fact,
+    // survived the kill attempt.
+    //
+    // The whole listSessions -> confirm-kill -> rotate-token -> create ->
+    // pane-restore -> final-persist span runs INSIDE ONE per-task lock
+    // callback when this window belongs to a task (Issue #28 third-party
+    // review, design v3 §2 — see runExclusiveForTask's doc comment in
+    // WindowRotation.ts). This used to be split: session/window liveness was
+    // read ONCE, before the lock was even queued for, and pane restoration
+    // ran AFTER the lock released — Phase C round-4 review, Important
+    // finding. Two concrete bugs came from that split:
+    //   1. TOCTOU on `windowAlive` — a second respawn queued behind this one
+    //      still decided "is the old window alive?" from a snapshot taken
+    //      before EITHER call started. Concretely: call A creates its new
+    //      window and persists it; call B, still holding its stale
+    //      `windowAlive=false` from before A ran, skips confirmOldWindowGone
+    //      entirely (nothing to kill, as far as B's stale snapshot is
+    //      concerned) and creates its own window anyway — but
+    //      createRotatedWindow's buildEnvForNewWindow ALWAYS revokes the
+    //      task's current generation when issuing a new one, so B's rotation
+    //      revokes A's still-live window's token without ever killing that
+    //      window. A's pane is now orphaned: alive, unreachable via the API,
+    //      and holding a dead credential.
+    //   2. Pane restoration racing the NEXT queued rotation — with restore
+    //      outside the lock, call B's rotate() (queued behind A) could start
+    //      as soon as A's rotate() resolved, while A's own restorePaneLayout/
+    //      setupSinglePane was still sending keys into A's pane.
+    // Re-reading session/window state HERE (fresh, at the moment this
+    // specific queued turn actually runs) and moving pane restoration inside
+    // the same lock callback closes both gaps: every respawn for a task now
+    // owns the window's entire kill-through-restore lifecycle atomically
+    // before the next queued rotation for that task can begin. A window with
+    // no owning task has no generation to protect and no concurrent rotation
+    // to race, so it still runs unlocked.
+    const run = async (): Promise<{ tmuxTarget: string }> => {
+      // Re-read the window's CURRENT tmuxTarget from the DB inside the lock
+      // (mirrors ExecuteTaskUseCase's `currentTask` re-read — see its own
+      // comment on the TOCTOU this closes): a prior queued rotation for this
+      // task may have already replaced this window's session/window name by
+      // the time this turn actually runs, and `win` (captured once, before
+      // this call was even queued) would not reflect that.
+      const currentWin = this.windowRepo.findById(windowId);
+      if (!currentWin) throw new Error('Window not found');
+      const curParts = currentWin.tmuxTarget.split(':');
+      const sessionName = curParts[0];
+      const windowPart = curParts[1]?.split('.')[0];
+      if (!windowPart) throw new Error(`Invalid tmuxTarget: ${currentWin.tmuxTarget}`);
 
-    return { tmuxTarget: dbTarget };
+      const sessions = await this.tmux.listSessions(server);
+      const sessionExists = sessions.some((s) => s.name === sessionName);
+
+      // Confirm the old window is actually gone BEFORE rotating the task
+      // token (Issue #28 third-party review finding 3), via the same shared
+      // operation execute()/followUp() now use (WindowRotation.ts) —
+      // buildEnvForNewWindow() revokes the current token generation and
+      // issues a new one, so calling it while the old window might still be
+      // alive (a killWindow() failure was previously swallowed via
+      // `.catch(() => {})`) could leave that still-live pane holding a
+      // now-dead credential.
+      const session = sessions.find((s) => s.name === sessionName);
+      const windowAlive = sessionExists && (session?.windows.some((w) => w.name === windowPart) ?? false);
+
+      await confirmOldWindowGone(
+        this.tmux,
+        server,
+        windowAlive ? { target: `${sessionName}:${windowPart}`, kind: 'window' } : null,
+        isPrimary ? task!.id : null,
+      );
+
+      const doCreate = (env: Record<string, string>) => (!sessionExists
+        ? this.tmux.createSession(server, sessionName, { windowName: windowPart, exactName: true, extraEnv: env })
+        : this.tmux.createWindow(server, sessionName, windowPart, { exactName: true, extraEnv: env }));
+
+      let newName: string;
+      // `windowEnv` is reused below for every additional pane restorePaneLayout
+      // creates via splitPane() — see TmuxClient.splitPane's doc comment for
+      // why a split pane needs the SAME env explicitly, not just the first
+      // pane new-window/new-session set (Issue #28 review Critical finding).
+      let windowEnv: Record<string, string>;
+      // Only set for the primary branch — the only branch that rotated a
+      // task token (createRotatedWindow) and therefore has a generation to
+      // roll back below on a downstream failure.
+      let tokenId: number | null = null;
+      if (isPrimary) {
+        const created = await createRotatedWindow(this.paneEnvService, server, task!, 'respawn_create_failed', doCreate);
+        newName = created.windowName;
+        windowEnv = created.env;
+        tokenId = created.tokenId;
+      } else if (task) {
+        windowEnv = this.paneEnvService.buildEnvForSecondaryWindow(task, server);
+        const created = await doCreate(windowEnv);
+        newName = created.windowName;
+      } else {
+        windowEnv = this.tmux.uiTokenEnv();
+        const created = await doCreate(windowEnv);
+        newName = created.windowName;
+      }
+      await sleep(sessionExists ? 300 : 500);
+
+      const baseTarget = `${sessionName}:${newName}`;
+      const dbTarget = `${baseTarget}.1`;
+
+      // Pane restoration now runs INSIDE this same lock turn, before the
+      // final persist below — see the design-rationale comment above this
+      // function for the orphaning bug this ordering closes.
+      //
+      // Everything from here through the final persist is wrapped in
+      // try/catch (Issue #28 third-party review Important finding): a
+      // restore/resolve/launch failure AFTER the new window was already
+      // created — and, for the primary window, its task token already
+      // rotated — used to propagate straight out of run(), leaving that new
+      // window alive and completely untracked (the DB row still points at
+      // the OLD, already-killed tmuxTarget) and, for the primary window, its
+      // freshly-issued generation neither killed nor revoked. Same
+      // generation-leak shape resumeLegacySession()'s own rollback closes
+      // (its doc comment above), applied here via the same
+      // rollbackWindowReference helper: kill the just-created window, and
+      // only revoke the generation once that kill is CONFIRMED (agent
+      // transports resolve, not reject, on a failed kill — see
+      // resolveKillOutcome's doc comment) — a still-alive orphan instead
+      // gets its dbTarget persisted so it stays discoverable, exactly like
+      // resumeLegacySession's onStillAlive branch. A non-primary window has
+      // no generation to protect, so it only needs the kill + discoverability
+      // half (no revoke call).
+      try {
+        if (win.paneLayout) {
+          await this.restorePaneLayout(server, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv);
+        } else {
+          const paneId = await this.tmux.resolvePaneId(server, baseTarget);
+          await this.setupSinglePane(server, paneId, baseTarget, win, supervision, resolvedCwds.singleCwd);
+        }
+      } catch (err) {
+        try {
+          if (isPrimary && tokenId !== null) {
+            await rollbackWindowReference(
+              this.tmux.killWindow(server, baseTarget),
+              this.paneEnvService,
+              tokenId,
+              'respawn_restore_failed_rollback',
+              () => {},
+              () => this.windowRepo.update(windowId, { tmuxTarget: dbTarget }),
+            );
+          } else {
+            const outcome = await resolveKillOutcome(this.tmux.killWindow(server, baseTarget));
+            if (!outcome.success) {
+              this.windowRepo.update(windowId, { tmuxTarget: dbTarget });
+            }
+          }
+        } catch {}
+        throw err;
+      }
+
+      this.windowRepo.update(windowId, { tmuxTarget: dbTarget });
+
+      return { tmuxTarget: dbTarget };
+    };
+
+    return task ? await runExclusiveForTask(task.id, run) : await run();
   }
 
   /**
@@ -355,19 +517,78 @@ export class WindowRespawnService {
     this.enforceExecutionGate(task, server, 'recover_session_legacy', null);
 
     const tmuxSession = resolveTmuxSession(task.projectId, server.name, this.projectServerRepo);
-    const { windowName } = await this.tmux.createWindow(server, tmuxSession, `task-${task.id}`);
-    const windowTarget = `${tmuxSession}:${windowName}`;
-    const paneId = await this.tmux.resolvePaneId(server, windowTarget);
-    const resumeCommand = `claude --resume ${task.agentSessionId} --dangerously-skip-permissions`;
-    const isSupervised = shouldSupervise(server.type, 'agent');
-    if (isSupervised) {
-      this.supervisorRegistry.clearExitMarker(server.name, windowTarget);
-    }
-    const sendCmd = isSupervised
-      ? wrapWithSupervisor(resumeCommand, { server, target: windowTarget, taskId: task.id, unitId: task.unitId ?? undefined })
-      : resumeCommand;
-    await this.tmux.sendKeys(server, paneId, [sendCmd, 'Enter']);
-    this.taskRepo.update(taskId, { tmuxWindow: windowName } as Partial<Task>);
+    // Window generation point — rotates the task token via createRotatedWindow,
+    // the same shared operation respawn()/execute()/followUp() use (Issue #28
+    // third-party review finding 2): this used to call
+    // paneEnvService.buildEnvForNewWindow() + tmux.createWindow() directly,
+    // bypassing createRotatedWindow's rollback entirely — a createWindow that
+    // resolved with a non-zero exit code (agent transport) was read as
+    // success and the freshly-issued generation was never revoked. The whole
+    // issue->create->launch->persist span below runs under a per-task lock
+    // (design v3 §2 — see runExclusiveForTask's doc comment in
+    // WindowRotation.ts) so a concurrent rotation for this task cannot
+    // revoke this generation out from under it.
+    const { windowName } = await runExclusiveForTask(taskId, async () => {
+      const created = await createRotatedWindow(this.paneEnvService, server, task, 'resume_legacy_create_failed', (env) =>
+        this.tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: env }),
+      );
+      const windowTarget = `${tmuxSession}:${created.windowName}`;
+      try {
+        const paneId = await this.tmux.resolvePaneId(server, windowTarget);
+        // --strict-mcp-config (Issue #28 design v3 §3): this is a claude worker
+        // launch, same as buildClaudeLaunchCommand's, just hardcoded here instead
+        // of going through it (see that function's own doc comment for why the
+        // rest of its flags don't apply to a `--resume` relaunch).
+        const resumeCommand = `claude --resume ${task.agentSessionId} --dangerously-skip-permissions --strict-mcp-config`;
+        const isSupervised = shouldSupervise(server.type, 'agent');
+        if (isSupervised) {
+          this.supervisorRegistry.clearExitMarker(server.name, windowTarget);
+        }
+        const sendCmd = isSupervised
+          ? wrapWithSupervisor(resumeCommand, {
+              server,
+              target: windowTarget,
+              taskId: task.id,
+              unitId: task.unitId ?? undefined,
+              ...this.supervisorRegistry.issueLaunch({
+                serverName: server.name,
+                target: windowTarget,
+                taskId: task.id,
+                unitId: task.unitId ?? null,
+              }),
+            })
+          : resumeCommand;
+        await this.tmux.sendKeys(server, paneId, [sendCmd, 'Enter']);
+      } catch (err) {
+        // resolvePaneId()/sendKeys() failing after createRotatedWindow already
+        // succeeded used to leave an untracked window (tmuxWindow never
+        // persisted) holding a live token generation — same generation-leak
+        // shape as ExecuteTaskUseCase's worktree-failure rollback branches
+        // (Issue #28 third-party review finding 2). Kill the just-created
+        // window via rollbackWindowReference: only revoke the generation once
+        // the kill is confirmed to have actually worked, and — the second-round
+        // fix — when it DIDN'T work, persist `tmuxWindow` (onStillAlive) instead
+        // of leaving the just-created window with no DB reference at all; a
+        // still-live pane must both keep its valid token AND stay discoverable
+        // for an operator to find and clean up. The original launch error is
+        // what surfaces to the caller either way. Scoped to `created.tokenId`
+        // (this specific generation), not the whole task — see
+        // TaskPaneEnvironmentService.revokeGeneration's doc comment.
+        try {
+          await rollbackWindowReference(
+            this.tmux.killWindow(server, windowTarget),
+            this.paneEnvService,
+            created.tokenId,
+            'resume_legacy_launch_failed_rollback',
+            () => {},
+            () => this.taskRepo.update(taskId, { tmuxWindow: created.windowName } as Partial<Task>),
+          );
+        } catch {}
+        throw err;
+      }
+      this.taskRepo.update(taskId, { tmuxWindow: created.windowName } as Partial<Task>);
+      return { windowName: created.windowName };
+    });
     return { windowName };
   }
 
@@ -444,6 +665,12 @@ export class WindowRespawnService {
       target: supervisorTarget,
       taskId: supervision.taskId ?? undefined,
       unitId: supervision.unitId ?? undefined,
+      ...this.supervisorRegistry.issueLaunch({
+        serverName: server.name,
+        target: supervisorTarget,
+        taskId: supervision.taskId ?? null,
+        unitId: supervision.unitId ?? null,
+      }),
     });
   }
 
@@ -481,11 +708,19 @@ export class WindowRespawnService {
     win: { workerType: string | null; agentSessionId: string | null; workerModel: string | null; workingDirectory: string | null },
     supervision: SupervisionContext,
     paneCwds: Map<number, string>,
+    // `paneEnv` (Issue #28 review Critical finding): the SAME env the
+    // window's first pane was created with (task token + rotated
+    // generation, or the legacy uiTokenEnv() for a non-task window) — must
+    // be passed to every splitPane() call below, since `split-window -e`
+    // is the only thing that keeps an additional pane from silently
+    // inheriting the tmux SESSION's own environment instead (see
+    // TmuxClient.splitPane's doc comment).
+    paneEnv: Record<string, string>,
   ): Promise<void> {
     const paneCount = paneLayout.panes.length;
     const firstPaneId = await this.tmux.resolvePaneId(server, baseTarget);
     for (let i = 1; i < paneCount; i++) {
-      await this.tmux.splitPane(server, firstPaneId, i % 2 === 0 ? 'v' : 'h');
+      await this.tmux.splitPane(server, firstPaneId, i % 2 === 0 ? 'v' : 'h', paneEnv);
       await sleep(200);
     }
 

@@ -42,8 +42,13 @@ export function findWindow(serverName: string, target: string, project: Project 
   return null;
 }
 
+/** Real-data ownership check (Issue #28 Phase D-2) — a window is task-owned iff the `windows` row itself says so, never inferred from which screen happened to render it. */
+export function isTaskOwnedWindow(win: Pick<Window, 'ownerType' | 'taskId'> | null | undefined): boolean {
+  return !!win && win.ownerType === 'task' && win.taskId != null;
+}
+
 function findTaskForWindow(win: Window, allTasks: Task[]): Task | null {
-  if (win.ownerType !== 'task' || !win.taskId) return null;
+  if (!isTaskOwnedWindow(win)) return null;
   return allTasks.find((t) => t.id === win.taskId) ?? null;
 }
 

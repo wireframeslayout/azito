@@ -184,7 +184,6 @@ export class TmuxClient {
       ? options.windowName
       : generateWindowName(options?.windowName || 'win');
     const args = ['new-session', '-d', '-s', sessionName, '-n', windowName, '-e', `AZITO_URL=${this.hubUrlFor(server)}`];
-    if (this.uiToken) args.push('-e', `AZITO_UI_TOKEN=${this.uiToken}`);
     if (options?.extraEnv) {
       for (const [k, v] of Object.entries(options.extraEnv)) {
         args.push('-e', `${k}=${v}`);
@@ -199,7 +198,6 @@ export class TmuxClient {
   async createWindow(server: ServerConfig, sessionName: string, baseName?: string, options?: { exactName?: boolean; extraEnv?: Record<string, string> }): Promise<{ result: ExecResult; windowName: string }> {
     const windowName = options?.exactName && baseName ? baseName : generateWindowName(baseName || 'win');
     const args = ['new-window', '-t', sessionName, '-n', windowName, '-e', `AZITO_URL=${this.hubUrlFor(server)}`];
-    if (this.uiToken) args.push('-e', `AZITO_UI_TOKEN=${this.uiToken}`);
     if (options?.extraEnv) {
       for (const [k, v] of Object.entries(options.extraEnv)) {
         args.push('-e', `${k}=${v}`);
@@ -210,13 +208,46 @@ export class TmuxClient {
     return { result, windowName };
   }
 
+  /**
+   * Legacy default env for a window that is NOT a task pane (Issue #28
+   * Phase A後半): `createSession`/`createWindow` above used to inject
+   * AZITO_UI_TOKEN unconditionally into every window they created,
+   * regardless of caller — that meant a task pane always carried the
+   * all-powerful UI token too, which is exactly what design v3 §2 (task
+   * panes get a scoped AZITO_TASK_TOKEN instead) needs to stop. The
+   * unconditional injection is gone; every caller now decides its own
+   * `extraEnv` explicitly. Callers that open a plain terminal/manual/project
+   * window (not a task's — those go through TaskPaneEnvironmentService
+   * instead, which decides UI-token inclusion via the AZITO_SCOPED_AUTH
+   * flag) call this to reproduce the old default.
+   */
+  uiTokenEnv(): Record<string, string> {
+    return this.uiToken ? { AZITO_UI_TOKEN: this.uiToken } : {};
+  }
+
+  /**
+   * Post-creation decoration only (the tmux status-bar window label), called
+   * by both `createSession` and `createWindow` right after the window itself
+   * is already up. Deliberately best-effort (Issue #28 Phase A last-round
+   * fix): a failure here is a cosmetic status-bar miss, not a reason to fail
+   * the whole `createWindow`/`createSession` call — the caller's window was
+   * already created, and `WindowRotation.createRotatedWindow` treats any
+   * rejection out of its `create` callback as "nothing was actually
+   * created," revoking the just-issued task-token generation. Letting this
+   * decoration failure propagate would misreport a real, live, untracked
+   * pane as never having been created, leaving it holding a revoked token.
+   * Failures are still surfaced via a warn log rather than swallowed
+   * silently, so they remain visible for diagnosis.
+   */
   private async setWindowStatusFormat(server: ServerConfig, sessionName: string, windowName: string): Promise<void> {
     const id = extractWindowId(windowName);
     if (!id) return;
     await this.runTmuxCommand(server, [
       'set-window-option', '-t', `${sessionName}:${windowName}`,
       'window-status-format', `#I:${windowName}`,
-    ]).catch(() => {});
+    ]).catch((err: unknown) => {
+      console.warn(`[tmux] Failed to set window-status-format for ${sessionName}:${windowName}: ${err instanceof Error ? err.message : err}`);
+    });
   }
 
   /**
@@ -374,9 +405,70 @@ export class TmuxClient {
     }
   }
 
-  async splitPane(server: ServerConfig, target: string, direction: 'h' | 'v'): Promise<ExecResult> {
+  /**
+   * Like {@link checkPaneExists}, but distinguishes "confirmed gone" from
+   * "couldn't verify" instead of collapsing both into `false` (Issue #28
+   * third-party review finding — `azito auth doctor`'s drain check: a caller
+   * that treats every failure as "pane gone" reports a clean/green result
+   * for a server it in fact could never reach, e.g. an `agent` server that's
+   * down, or a token mismatch). Mirrors `resolveKillOutcome`'s local-throws
+   * vs agent-resolves-with-nonzero-code normalization (see its doc comment):
+   * `LocalTransport.execTmux` rejects on ANY non-zero tmux exit, so a local
+   * "pane not found" and a local "tmux binary missing" are both caught here
+   * and must be told apart by message content, while `AgentTransport.execTmux`
+   * only rejects on an HTTP-level failure (network unreachable, auth
+   * rejected) and otherwise resolves with whatever `ExecResult` (including a
+   * non-zero `code`) the remote agent's own tmux run produced.
+   */
+  async checkPaneLiveness(server: ServerConfig, target: string): Promise<{ alive: boolean; verified: boolean }> {
+    let result: ExecResult;
+    try {
+      result = await this.runTmuxCommand(server, ['list-panes', '-t', target]);
+    } catch (err) {
+      result = { stdout: '', stderr: err instanceof Error ? err.message : String(err), code: 1 };
+    }
+    if (result.code === 0) return { alive: true, verified: true };
+    const output = `${result.stderr || ''}${result.stdout || ''}`;
+    // Same "confirmed absent" phrasing `resolveKillOutcome` matches — see its
+    // doc comment for why each of these three strings means "definitely not
+    // there" rather than "we couldn't tell."
+    const confirmedAbsent =
+      output.includes("can't find") ||
+      output.includes('no such session') ||
+      output.includes('no server running');
+    return { alive: false, verified: confirmedAbsent };
+  }
+
+  /**
+   * `extraEnv` (Issue #28 review Critical finding): `tmux new-window -e` only
+   * affects the FIRST pane of a newly-created window — every pane a
+   * subsequent `split-window` adds to that window inherits the tmux
+   * SESSION's environment instead (verified against tmux 3.4, same
+   * inheritance behavior TaskPaneEnvironmentService.buildEnvForNewWindow's
+   * denylist-override comment documents for `new-window` into an existing
+   * session). A task-owned window with more than one pane therefore left
+   * every pane after the first authenticating with whatever the session
+   * happened to carry (the operator's own AZITO_UI_TOKEN in a pre-existing
+   * session) instead of the task's scoped AZITO_TASK_TOKEN, and never
+   * received the task token at all. `split-window -e` accepts the same
+   * `-e KEY=VALUE` env override `new-window`/`new-session` do — supported
+   * since tmux 3.0 (`new-window -e` and `split-window -e` were added
+   * together in that release; this codebase targets tmux 3.4, see
+   * AGENTS.md). Callers that (re)create panes for a task-owned window MUST
+   * pass the same env `createRotatedWindow()` used for the window's first
+   * pane so every pane in the window carries an identical, correctly-scoped
+   * environment; a plain (non-task) manual pane split passes nothing, same
+   * as before.
+   */
+  async splitPane(server: ServerConfig, target: string, direction: 'h' | 'v', extraEnv?: Record<string, string>): Promise<ExecResult> {
     const flag = direction === 'h' ? '-h' : '-v';
-    return this.runTmuxCommand(server, ['split-window', flag, '-t', target]);
+    const args = ['split-window', flag, '-t', target];
+    if (extraEnv) {
+      for (const [k, v] of Object.entries(extraEnv)) {
+        args.push('-e', `${k}=${v}`);
+      }
+    }
+    return this.runTmuxCommand(server, args);
   }
 
   async killSession(server: ServerConfig, sessionName: string): Promise<ExecResult> {

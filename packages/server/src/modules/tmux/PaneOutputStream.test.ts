@@ -6,6 +6,31 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/**
+ * Polls `getBuffer` until it stops changing for a short quiet period, instead of a
+ * single fixed sleep. Needed for the large-write truncation test below: `tail -f`
+ * reading + reassembling ~2.5MB (~25k lines) through processChunk can, under system
+ * load, take much longer than a short fixed delay — and a fixed-length buffer size
+ * check can't tell "settled" from "mid-stream, happens to be exactly at the cap"
+ * apart, since every truncating append re-slices back down to the same length.
+ */
+async function waitForBufferSettled(getBuffer: () => string, timeoutMs = 10_000): Promise<string> {
+  const start = Date.now();
+  let last = getBuffer();
+  let stableSince = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    await sleep(50);
+    const current = getBuffer();
+    if (current === last) {
+      if (Date.now() - stableSince >= 150) return current;
+    } else {
+      last = current;
+      stableSince = Date.now();
+    }
+  }
+  throw new Error('waitForBufferSettled: buffer did not settle within timeout');
+}
+
 describe('PaneOutputStream', () => {
   let stream: PaneOutputStream | null = null;
 
@@ -381,9 +406,7 @@ describe('PaneOutputStream', () => {
     const line = 'A'.repeat(99) + '\n';
     const bigChunk = line.repeat(25000); // 2.5MB
     fs.appendFileSync(stream.getFilePath(), bigChunk);
-    await sleep(500);
-
-    const buffer = stream.getBuffer();
+    const buffer = await waitForBufferSettled(() => stream!.getBuffer());
     // Buffer should be capped around 2MB + truncation prefix
     expect(buffer.length).toBeLessThan(2.2 * 1024 * 1024);
     expect(buffer.startsWith('[...truncated]\n')).toBe(true);

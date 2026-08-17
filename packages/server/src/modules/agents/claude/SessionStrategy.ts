@@ -23,7 +23,10 @@ export class ClaudeSessionStrategy implements ISessionStrategy {
     if (agentSessionId) {
       const modelFlag = model ? ` --model ${shellQuote(model)}` : '';
       const extra = extraArgs?.trim() ? ` ${extraArgs.trim()}` : '';
-      return `claude --resume ${agentSessionId} --dangerously-skip-permissions${modelFlag}${extra}`;
+      // --strict-mcp-config: same MCP lockdown as buildClaudeLaunchCommand
+      // (Issue #28 design v3 §3) — a `--resume` relaunch is still a task
+      // worker pane, not a human-driven terminal.
+      return `claude --resume ${agentSessionId} --dangerously-skip-permissions --strict-mcp-config${modelFlag}${extra}`;
     }
     return buildClaudeLaunchCommand({ model, extraArgs });
   }

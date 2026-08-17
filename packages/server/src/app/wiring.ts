@@ -35,6 +35,7 @@ import { SqliteProjectRepository } from '../modules/projects/SqliteProjectReposi
 import { SqliteProviderRepository } from '../modules/llm/SqliteProviderRepository';
 import { SqliteUnitRepository } from '../modules/units/SqliteUnitRepository';
 import { SqliteTaskRepository } from '../modules/tasks/SqliteTaskRepository';
+import { SqliteTaskTokenRepository } from '../modules/tasks/tokens/SqliteTaskTokenRepository';
 import { SqliteExecutionLogRepository } from '../modules/tasks/SqliteExecutionLogRepository';
 import { SqliteProjectServerRepository } from '../modules/projects/SqliteProjectServerRepository';
 import { SqliteProjectSecretRepository } from '../modules/projects/SqliteProjectSecretRepository';
@@ -44,6 +45,11 @@ import { SqliteAgentWatchRepository } from '../modules/notifications/SqliteAgent
 import { SqliteWindowRepository } from '../modules/windows/SqliteWindowRepository';
 import { SqliteAgentTurnRepository } from '../modules/tasks/turns/SqliteAgentTurnRepository';
 import { SqliteResourceGuardSettingsRepository } from '../modules/servers/resources/SqliteResourceGuardSettingsRepository';
+import { SqliteAuditLogRepository } from '../shared/audit/AuditLogRepository';
+import { AuditLogService } from '../shared/audit/AuditLogService';
+import { resolveScopedAuthEnabled } from '../shared/auth/scopedAuthFlag';
+import { TaskOriginationService } from '../modules/tasks/origination/TaskOriginationService';
+import { TaskPaneEnvironmentService } from '../modules/tasks/execution/TaskPaneEnvironmentService';
 import { ResourceGuard } from '../modules/servers/resources/ResourceGuard';
 import { TurnSignalHub } from '../modules/tasks/turns/TurnSignalHub';
 import { AgentSignalService } from '../modules/tasks/turns/AgentSignalService';
@@ -53,8 +59,10 @@ import { SidekickSyncService } from '../modules/sidekicks/SidekickSyncService';
 import { UnitTypeLoader } from '../modules/sidekicks/UnitTypeLoader';
 import { ChatCommandLoader } from '../modules/chat-commands/ChatCommandLoader';
 import { SupervisorRegistry } from '../modules/supervisors/SupervisorRegistry';
+import { SqliteSupervisorLaunchRepository } from '../modules/supervisors/SupervisorLaunchRepository';
 import { BrowserSessionManager } from '../modules/browser/BrowserSessionManager';
 import { SqliteBrowserSnapshotRepository } from '../modules/browser/SqliteBrowserSnapshotRepository';
+import { SqliteBrowserGroupRepository } from '../modules/browser/SqliteBrowserGroupRepository';
 
 import { AgentRegistry, createDefaultRegistry } from '../modules/agents/registry';
 
@@ -110,6 +118,7 @@ export interface Repositories {
   providerRepo: SqliteProviderRepository;
   unitRepo: SqliteUnitRepository;
   taskRepo: SqliteTaskRepository;
+  taskTokenRepo: SqliteTaskTokenRepository;
   logRepo: SqliteExecutionLogRepository;
   projectServerRepo: SqliteProjectServerRepository;
   projectSecretRepo: SqliteProjectSecretRepository;
@@ -118,6 +127,9 @@ export interface Repositories {
   agentTurnRepo: SqliteAgentTurnRepository;
   agentWatchRepo: SqliteAgentWatchRepository;
   resourceGuardSettingsRepo: SqliteResourceGuardSettingsRepository;
+  auditLogRepo: SqliteAuditLogRepository;
+  auditLogService: AuditLogService;
+  browserGroupRepo: SqliteBrowserGroupRepository;
 }
 
 export interface PushNotificationModule {
@@ -144,6 +156,10 @@ export interface ApplicationServices {
   // (the previous shape) silently dropped notifications from every entry
   // point except ExecuteTaskUseCase's own.
   taskEvents: EventEmitter;
+  /** Issue #28 Phase A後半: the sole task-creation funnel — see TaskOriginationService's own doc comment. */
+  originationService: TaskOriginationService;
+  /** Issue #28 Phase A後半: the sole task-pane env builder — see TaskPaneEnvironmentService's own doc comment. */
+  taskPaneEnvironmentService: TaskPaneEnvironmentService;
 }
 
 export interface SystemUpdateModule {
@@ -160,11 +176,13 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
   agentActivityMonitor: AgentActivityMonitor;
   interactionMonitor: InteractionMonitor;
   resourceGuard: ResourceGuard;
+  /** Issue #28 Phase A: resolved once here (the composition root boundary) via shared/auth/scopedAuthFlag.ts, then threaded through — see that file's doc comment for why buildServer.ts reads this instead of process.env directly. */
+  scopedAuthEnabled: boolean;
 }
 
 // ─── Per-module factories ───
 
-function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, db?: SqliteDatabase, fingerprintStore?: FingerprintStore): SharedInfra {
+function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, db?: SqliteDatabase, fingerprintStore?: FingerprintStore, auditLogService?: AuditLogService, scopedAuthEnabled: boolean = false): SharedInfra {
   const sshClient = new SshClient(fingerprintStore);
   const agentInstaller = new AgentInstaller(sshClient, agentBundler);
   const harnessInstaller = new HarnessInstaller(sshClient);
@@ -188,11 +206,23 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
   // （Issue #338 フェーズC、設定駆動コマンドパレット）。
   const chatCommandLoader = new ChatCommandLoader(undefined, path.join(dataPaths.dir, 'chat-commands.json'));
   const turnSignalHub = new TurnSignalHub();
-  const supervisorRegistry = new SupervisorRegistry();
+  const supervisorLaunchRepo = db ? new SqliteSupervisorLaunchRepository(db) : undefined;
+  const supervisorRegistry = new SupervisorRegistry(supervisorLaunchRepo, auditLogService, scopedAuthEnabled);
   const browserSnapshotRepo = db ? new SqliteBrowserSnapshotRepository(db) : undefined;
+  // Separate instance from `buildRepositories`'s own `browserGroupRepo`
+  // (both are thin, stateless wrappers over prepared statements against the
+  // same `db` handle — Repositories.browserGroupRepo backs the route-level
+  // ownership check in browser/routes.ts; this one lets BrowserSessionManager
+  // clean up ownership rows itself on session stop / idle-TTL group expiry,
+  // Issue #28 review fix 4). `undefined` when `db` isn't wired (matches
+  // `browserSnapshotRepo` right above) — BrowserSessionManager already
+  // treats a missing repo as a no-op (same as the agent process, which never
+  // has one at all).
+  const browserGroupRepo = db ? new SqliteBrowserGroupRepository(db) : undefined;
   const browserSessionManager = new BrowserSessionManager(
     dataPaths.browserProfile,
     browserSnapshotRepo,
+    browserGroupRepo,
   );
 
   return {
@@ -228,7 +258,8 @@ function buildRepositories(db: SqliteDatabase): Repositories {
   const projectRepo = new SqliteProjectRepository(db, windowRepo);
   const providerRepo = new SqliteProviderRepository(db);
   const unitRepo = new SqliteUnitRepository(db);
-  const taskRepo = new SqliteTaskRepository(db);
+  const taskTokenRepo = new SqliteTaskTokenRepository(db);
+  const taskRepo = new SqliteTaskRepository(db, taskTokenRepo);
   const logRepo = new SqliteExecutionLogRepository(db);
   const projectServerRepo = new SqliteProjectServerRepository(db);
   const projectSecretRepo = new SqliteProjectSecretRepository(db);
@@ -237,6 +268,9 @@ function buildRepositories(db: SqliteDatabase): Repositories {
   const agentTurnRepo = new SqliteAgentTurnRepository(db);
   const agentWatchRepo = new SqliteAgentWatchRepository(db);
   const resourceGuardSettingsRepo = new SqliteResourceGuardSettingsRepository(db);
+  const auditLogRepo = new SqliteAuditLogRepository(db);
+  const auditLogService = new AuditLogService(auditLogRepo);
+  const browserGroupRepo = new SqliteBrowserGroupRepository(db);
 
   return {
     serverRepo,
@@ -245,6 +279,7 @@ function buildRepositories(db: SqliteDatabase): Repositories {
     providerRepo,
     unitRepo,
     taskRepo,
+    taskTokenRepo,
     logRepo,
     projectServerRepo,
     projectSecretRepo,
@@ -253,6 +288,9 @@ function buildRepositories(db: SqliteDatabase): Repositories {
     agentTurnRepo,
     agentWatchRepo,
     resourceGuardSettingsRepo,
+    auditLogRepo,
+    auditLogService,
+    browserGroupRepo,
   };
 }
 
@@ -267,14 +305,16 @@ function buildAgentUpdater(agentBundler: AgentBundler, infra: SharedInfra, repos
   return new AgentUpdater(agentBundler, infra.agentInstaller, repos.serverRepo, repos.taskRepo);
 }
 
-function buildApplicationServices(infra: SharedInfra, repos: Repositories): ApplicationServices {
+function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiToken: string, scopedAuthEnabled: boolean): ApplicationServices {
   const sessionStrategyFactory = new SessionStrategyFactory(infra.agentRegistry, infra.transportFactory);
   const sessionCaptureService = new SessionCaptureService(repos.windowRepo, repos.taskRepo, repos.serverRepo, sessionStrategyFactory);
   // Constructed here (ahead of ExecuteTaskUseCase, built later in
   // buildWiring) and shared with it below — see ApplicationServices.taskEvents'
   // own doc comment for why this must be ONE instance, not one per class.
   const taskEvents = new EventEmitter();
-  const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.tmuxClient, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, repos.serverRepo, repos.projectSecretRepo, taskEvents, sessionCaptureService);
+  const originationService = new TaskOriginationService(repos.taskRepo, repos.auditLogService);
+  const taskPaneEnvironmentService = new TaskPaneEnvironmentService(repos.taskTokenRepo, repos.projectSecretRepo, uiToken, scopedAuthEnabled, repos.auditLogService);
+  const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.tmuxClient, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, repos.serverRepo, repos.projectSecretRepo, taskEvents, taskPaneEnvironmentService, sessionCaptureService);
   const taskRestoreService = new TaskRestoreService({
     taskRepo: repos.taskRepo,
     serverRepo: repos.serverRepo,
@@ -291,6 +331,7 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories): Appl
     sidekickLoader: infra.sidekickPackageLoader,
     projectSecretRepo: repos.projectSecretRepo,
     events: taskEvents,
+    paneEnvService: taskPaneEnvironmentService,
   });
   // windowSessionResolver / windowActivityStatusService: shared by transcriptsRoutes
   // (session resolution), windowsRoutes (GET /api/windows/activity-status, diagnostics)
@@ -299,8 +340,12 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories): Appl
   const windowSessionResolver = new WindowSessionResolver(repos.taskRepo, infra.tmuxClient, repos.serverRepo, TRANSCRIPT_SOURCES, sessionCaptureService);
   const windowActivityStatusService = new WindowActivityStatusService(repos.windowRepo, repos.serverRepo, windowSessionResolver);
   const usageService = new UsageService(infra.agentRegistry);
-  const agentSignalService = new AgentSignalService(repos.agentTurnRepo, infra.turnSignalHub, repos.logRepo);
-  return { sessionStrategyFactory, sessionCaptureService, windowSessionResolver, windowActivityStatusService, windowRespawnService, taskRestoreService, usageService, agentSignalService, taskEvents };
+  const agentSignalService = new AgentSignalService(repos.agentTurnRepo, infra.turnSignalHub, repos.logRepo, repos.auditLogService);
+  return {
+    sessionStrategyFactory, sessionCaptureService, windowSessionResolver, windowActivityStatusService,
+    windowRespawnService, taskRestoreService, usageService, agentSignalService, taskEvents,
+    originationService, taskPaneEnvironmentService,
+  };
 }
 
 function buildExecuteTaskUseCase(
@@ -334,6 +379,7 @@ function buildExecuteTaskUseCase(
     resourceGuard,
     repos.projectSecretRepo,
     appServices.taskEvents,
+    appServices.taskPaneEnvironmentService,
   );
 }
 
@@ -413,10 +459,17 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
       if (srv) repos.serverRepo.updateFingerprint(srv.name, fingerprint);
     },
   };
-  const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, db, fingerprintStore);
+  // Resolved once here (Resolve at the Boundary) — see scopedAuthFlag.ts's
+  // doc comment for why buildServer.ts must read the SAME resolved value
+  // (via wiring.scopedAuthEnabled) instead of independently re-reading
+  // process.env. Moved ahead of buildSharedInfra (Issue #28 Phase C) so
+  // SupervisorRegistry — constructed inside it — can be given the same
+  // resolved flag instead of re-reading process.env itself.
+  const scopedAuthEnabled = resolveScopedAuthEnabled();
+  const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, db, fingerprintStore, repos.auditLogService, scopedAuthEnabled);
   const pushNotification = buildPushNotificationModule(repos.pushSubRepo);
   const agentUpdater = buildAgentUpdater(agentBundler, infra, repos);
-  const appServices = buildApplicationServices(infra, repos);
+  const appServices = buildApplicationServices(infra, repos, uiToken, scopedAuthEnabled);
   const resourceGuard = new ResourceGuard(infra.transportFactory, repos.resourceGuardSettingsRepo);
   const executeTaskUseCase = buildExecuteTaskUseCase(infra, repos, appServices, resourceGuard);
   const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService, appServices.windowActivityStatusService);
@@ -435,6 +488,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
     agentActivityMonitor,
     interactionMonitor,
     resourceGuard,
+    scopedAuthEnabled,
     ...systemUpdateModule,
   };
 }

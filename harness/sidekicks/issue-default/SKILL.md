@@ -6,6 +6,8 @@ isDefault: false
 ---
 # issue-default -- イシュー作成スキル
 
+> **オペレーター専用**（UI トークンが必要）。タスクペインで実行すると operator_required になる。
+
 ユーザーの要望をヒアリングし、**sonnet級の自律エージェントがそのまま実装に着手できる詳細度** のイシューを作成する。
 
 （harness/skills/azt-issue/SKILL.md はこのパッケージを取得して従う薄いラッパー。実装手順の本体はここ。）

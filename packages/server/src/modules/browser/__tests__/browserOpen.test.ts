@@ -24,6 +24,17 @@ const mockServerRepo = {
   findByName: vi.fn(() => ({ type: 'local', name: 'local' })),
 } as never;
 
+// Issue #28 Phase E: `/api/browser/open` now records ownership on every
+// successful open — these route-level tests register the plugin directly
+// (no operator/task principal resolved, same as before this fix), so
+// `recordOwner` runs with `ownerTaskId: null` (no `taskId` in the body =
+// operator-shaped, unowned group).
+const mockBrowserGroupRepo = {
+  recordOwner: vi.fn(),
+  findOwnerTaskId: vi.fn(() => null),
+  remove: vi.fn(),
+} as never;
+
 describe('POST /api/browser/open', () => {
   let app: ReturnType<typeof Fastify>;
 
@@ -33,6 +44,7 @@ describe('POST /api/browser/open', () => {
     app.register(browserRoutes, {
       browserSessionManager: mockBrowserSessionManager,
       serverRepo: mockServerRepo,
+      browserGroupRepo: mockBrowserGroupRepo,
     });
     await app.ready();
   });

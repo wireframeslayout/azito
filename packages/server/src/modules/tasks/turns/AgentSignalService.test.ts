@@ -5,6 +5,7 @@ import { TurnSignalHub } from './TurnSignalHub';
 import type { SqliteAgentTurnRepository } from './SqliteAgentTurnRepository';
 import type { IExecutionLogRepository } from '../ExecutionLog';
 import type { AgentTurn } from './AgentTurn';
+import type { AuditLogService } from '../../../shared/audit/AuditLogService';
 
 function makeTurn(overrides: Partial<AgentTurn> = {}): AgentTurn {
   return {
@@ -42,6 +43,10 @@ function makeLogRepo(): IExecutionLogRepository {
   return { append: vi.fn(), findByTask: vi.fn(), findByUnit: vi.fn() };
 }
 
+function makeAuditLogService(): AuditLogService {
+  return { record: vi.fn() } as unknown as AuditLogService;
+}
+
 describe('AgentSignalService', () => {
   let hub: TurnSignalHub;
 
@@ -51,7 +56,7 @@ describe('AgentSignalService', () => {
 
   it('returns 400 when the body is not an object', () => {
     const turnRepo = makeTurnRepo(null);
-    const service = new AgentSignalService(turnRepo, hub, makeLogRepo());
+    const service = new AgentSignalService(turnRepo, hub, makeLogRepo(), makeAuditLogService());
 
     const result = service.handleSignal('not-an-object');
 
@@ -61,7 +66,7 @@ describe('AgentSignalService', () => {
 
   it('returns 400 when turnToken is missing', () => {
     const turnRepo = makeTurnRepo(null);
-    const service = new AgentSignalService(turnRepo, hub, makeLogRepo());
+    const service = new AgentSignalService(turnRepo, hub, makeLogRepo(), makeAuditLogService());
 
     const result = service.handleSignal({ type: 'progress' });
 
@@ -70,7 +75,7 @@ describe('AgentSignalService', () => {
 
   it('returns 400 when turnToken has an invalid format', () => {
     const turnRepo = makeTurnRepo(null);
-    const service = new AgentSignalService(turnRepo, hub, makeLogRepo());
+    const service = new AgentSignalService(turnRepo, hub, makeLogRepo(), makeAuditLogService());
 
     const result = service.handleSignal({ turnToken: 'not-a-valid-token', type: 'progress' });
 
@@ -79,7 +84,7 @@ describe('AgentSignalService', () => {
 
   it('returns 400 when type is not one of the known signal types', () => {
     const turnRepo = makeTurnRepo(null);
-    const service = new AgentSignalService(turnRepo, hub, makeLogRepo());
+    const service = new AgentSignalService(turnRepo, hub, makeLogRepo(), makeAuditLogService());
 
     const result = service.handleSignal({ turnToken: '10.1.nonce-1', type: 'bogus' });
 
@@ -88,7 +93,7 @@ describe('AgentSignalService', () => {
 
   it('returns 400 when testFailed is present but not a boolean', () => {
     const turnRepo = makeTurnRepo(null);
-    const service = new AgentSignalService(turnRepo, hub, makeLogRepo());
+    const service = new AgentSignalService(turnRepo, hub, makeLogRepo(), makeAuditLogService());
 
     const result = service.handleSignal({ turnToken: '10.1.nonce-1', type: 'complete', testFailed: 'yes' });
 
@@ -97,48 +102,117 @@ describe('AgentSignalService', () => {
 
   it('returns 400 when type is "questions" without a questions array', () => {
     const turnRepo = makeTurnRepo(null);
-    const service = new AgentSignalService(turnRepo, hub, makeLogRepo());
+    const service = new AgentSignalService(turnRepo, hub, makeLogRepo(), makeAuditLogService());
 
     const result = service.handleSignal({ turnToken: '10.1.nonce-1', type: 'questions' });
 
     expect(result.status).toBe(400);
   });
 
-  it('returns 404 when the turn does not exist', () => {
+  it('returns 404 when the turn does not exist, records a metadata-only audit event, and writes nothing to agent_turn_events', () => {
     const turnRepo = makeTurnRepo(null);
-    const service = new AgentSignalService(turnRepo, hub, makeLogRepo());
+    const auditLogService = makeAuditLogService();
+    const service = new AgentSignalService(turnRepo, hub, makeLogRepo(), auditLogService);
 
     const result = service.handleSignal({ turnToken: '10.1.nonce-1', type: 'progress' });
 
     expect(result.status).toBe(404);
+    expect(turnRepo.appendEvent).not.toHaveBeenCalled();
+    expect(auditLogService.record).toHaveBeenCalledWith(expect.objectContaining({
+      event: 'agent_signal.rejected',
+      detail: expect.objectContaining({ reason: 'turn_not_found' }),
+    }));
   });
 
-  it('returns 403 and logs an "invalid" event when taskId does not match the resolved turn', () => {
+  // Issue #28 third-party review, Minor finding: `auditLogService.record()`
+  // in the rejection paths used to be called unguarded — a write failure
+  // there (disk full, locked DB, ...) propagated out of handleSignal and
+  // turned the intended 404 into an uncaught exception (a 500 at the route
+  // layer), silently upgrading the caller's visible failure mode. It must
+  // stay best-effort: the 404 is returned regardless of whether the audit
+  // write itself succeeded.
+  it('still returns 404 when the audit log write fails for a not-found turn (best-effort)', () => {
+    const turnRepo = makeTurnRepo(null);
+    const auditLogService = makeAuditLogService();
+    (auditLogService.record as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      throw new Error('disk full');
+    });
+    const service = new AgentSignalService(turnRepo, hub, makeLogRepo(), auditLogService);
+
+    const result = service.handleSignal({ turnToken: '10.1.nonce-1', type: 'progress' });
+
+    expect(result.status).toBe(404);
+    expect(auditLogService.record).toHaveBeenCalled();
+  });
+
+  // Issue #28 third-party review, Important finding: an unauthenticated
+  // caller could previously brute-force turnIds and grow agent_turn_events
+  // without bound (each row carrying the full, up-to-256KiB request body)
+  // before ever failing auth. Repeating a resolvable-but-mismatched turnToken
+  // must never write a turn event, no matter how many times it's retried.
+  it('never appends to agent_turn_events across repeated invalid-credential attempts (flood/DB-bloat guard)', () => {
     const turn = makeTurn({ taskId: 999 });
     const turnRepo = makeTurnRepo(turn);
-    const service = new AgentSignalService(turnRepo, hub, makeLogRepo());
+    const auditLogService = makeAuditLogService();
+    const service = new AgentSignalService(turnRepo, hub, makeLogRepo(), auditLogService);
 
-    const result = service.handleSignal({ turnToken: '10.1.nonce-1', type: 'progress' });
+    for (let i = 0; i < 25; i++) {
+      const result = service.handleSignal({ turnToken: '10.1.nonce-1', type: 'progress', output: 'x'.repeat(1000) });
+      expect(result.status).toBe(403);
+    }
 
-    expect(result.status).toBe(403);
-    expect(turnRepo.appendEvent).toHaveBeenCalledWith(turn.id, expect.objectContaining({ type: 'invalid' }));
+    expect(turnRepo.appendEvent).not.toHaveBeenCalled();
   });
 
-  it('returns 403 and logs an "invalid" event when nonce does not match the resolved turn', () => {
-    const turn = makeTurn({ taskId: 10, nonce: 'different-nonce' });
+  it('returns 403, records a metadata-only audit event (no request body), and writes nothing to agent_turn_events when taskId does not match the resolved turn', () => {
+    const turn = makeTurn({ taskId: 999 });
     const turnRepo = makeTurnRepo(turn);
-    const service = new AgentSignalService(turnRepo, hub, makeLogRepo());
+    const auditLogService = makeAuditLogService();
+    const service = new AgentSignalService(turnRepo, hub, makeLogRepo(), auditLogService);
+
+    const result = service.handleSignal({ turnToken: '10.1.nonce-1', type: 'progress', output: 'sensitive-body-content' });
+
+    expect(result.status).toBe(403);
+    expect(turnRepo.appendEvent).not.toHaveBeenCalled();
+    expect(auditLogService.record).toHaveBeenCalledWith(expect.objectContaining({
+      event: 'agent_signal.rejected',
+      detail: expect.objectContaining({ reason: 'turn_mismatch', turnId: turn.id }),
+    }));
+    // The raw request body must never appear in the audit detail either.
+    const call = (auditLogService.record as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(JSON.stringify(call)).not.toContain('sensitive-body-content');
+  });
+
+  it('still returns 403 when the audit log write fails for a turn_mismatch rejection (best-effort)', () => {
+    const turn = makeTurn({ taskId: 999 });
+    const turnRepo = makeTurnRepo(turn);
+    const auditLogService = makeAuditLogService();
+    (auditLogService.record as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      throw new Error('disk full');
+    });
+    const service = new AgentSignalService(turnRepo, hub, makeLogRepo(), auditLogService);
 
     const result = service.handleSignal({ turnToken: '10.1.nonce-1', type: 'progress' });
 
     expect(result.status).toBe(403);
-    expect(turnRepo.appendEvent).toHaveBeenCalledWith(turn.id, expect.objectContaining({ type: 'invalid' }));
+    expect(auditLogService.record).toHaveBeenCalled();
+  });
+
+  it('returns 403 and writes nothing to agent_turn_events when nonce does not match the resolved turn', () => {
+    const turn = makeTurn({ taskId: 10, nonce: 'different-nonce' });
+    const turnRepo = makeTurnRepo(turn);
+    const service = new AgentSignalService(turnRepo, hub, makeLogRepo(), makeAuditLogService());
+
+    const result = service.handleSignal({ turnToken: '10.1.nonce-1', type: 'progress' });
+
+    expect(result.status).toBe(403);
+    expect(turnRepo.appendEvent).not.toHaveBeenCalled();
   });
 
   it('returns 200 duplicate=true and logs a "duplicate" event when the turn is already terminal', () => {
     const turn = makeTurn({ status: 'completed' });
     const turnRepo = makeTurnRepo(turn);
-    const service = new AgentSignalService(turnRepo, hub, makeLogRepo());
+    const service = new AgentSignalService(turnRepo, hub, makeLogRepo(), makeAuditLogService());
 
     const result = service.handleSignal({ turnToken: buildTurnToken(turn), type: 'progress' });
 
@@ -151,7 +225,7 @@ describe('AgentSignalService', () => {
   it('marks the turn completed when type is "complete" and testFailed is false', () => {
     const turn = makeTurn();
     const turnRepo = makeTurnRepo(turn);
-    const service = new AgentSignalService(turnRepo, hub, makeLogRepo());
+    const service = new AgentSignalService(turnRepo, hub, makeLogRepo(), makeAuditLogService());
 
     const result = service.handleSignal({ turnToken: buildTurnToken(turn), type: 'complete', testFailed: false });
 
@@ -166,7 +240,7 @@ describe('AgentSignalService', () => {
   it('marks the turn completed and returns 200 when type is "complete" without testFailed (azitoctl default)', () => {
     const turn = makeTurn();
     const turnRepo = makeTurnRepo(turn);
-    const service = new AgentSignalService(turnRepo, hub, makeLogRepo());
+    const service = new AgentSignalService(turnRepo, hub, makeLogRepo(), makeAuditLogService());
     const received: unknown[] = [];
     hub.subscribe(turn.id, (signal) => received.push(signal));
 
@@ -185,7 +259,7 @@ describe('AgentSignalService', () => {
   it('marks the turn test_failed when type is "complete" and testFailed is true', () => {
     const turn = makeTurn();
     const turnRepo = makeTurnRepo(turn);
-    const service = new AgentSignalService(turnRepo, hub, makeLogRepo());
+    const service = new AgentSignalService(turnRepo, hub, makeLogRepo(), makeAuditLogService());
 
     const result = service.handleSignal({ turnToken: buildTurnToken(turn), type: 'complete', testFailed: true });
 
@@ -200,7 +274,7 @@ describe('AgentSignalService', () => {
   it('marks the turn questions when type is "questions"', () => {
     const turn = makeTurn();
     const turnRepo = makeTurnRepo(turn);
-    const service = new AgentSignalService(turnRepo, hub, makeLogRepo());
+    const service = new AgentSignalService(turnRepo, hub, makeLogRepo(), makeAuditLogService());
 
     const result = service.handleSignal({ turnToken: buildTurnToken(turn), type: 'questions', questions: [{ text: 'q1' }] });
 
@@ -215,7 +289,7 @@ describe('AgentSignalService', () => {
   it('marks the turn failed when type is "fail"', () => {
     const turn = makeTurn();
     const turnRepo = makeTurnRepo(turn);
-    const service = new AgentSignalService(turnRepo, hub, makeLogRepo());
+    const service = new AgentSignalService(turnRepo, hub, makeLogRepo(), makeAuditLogService());
 
     const result = service.handleSignal({ turnToken: buildTurnToken(turn), type: 'fail', reason: 'crashed' });
 
@@ -230,7 +304,7 @@ describe('AgentSignalService', () => {
   it('does not change turn status when type is "progress"', () => {
     const turn = makeTurn();
     const turnRepo = makeTurnRepo(turn);
-    const service = new AgentSignalService(turnRepo, hub, makeLogRepo());
+    const service = new AgentSignalService(turnRepo, hub, makeLogRepo(), makeAuditLogService());
 
     const result = service.handleSignal({ turnToken: buildTurnToken(turn), type: 'progress' });
 
@@ -243,7 +317,7 @@ describe('AgentSignalService', () => {
     const turn = makeTurn({ unitId: 42 });
     const turnRepo = makeTurnRepo(turn);
     const logRepo = makeLogRepo();
-    const service = new AgentSignalService(turnRepo, hub, logRepo);
+    const service = new AgentSignalService(turnRepo, hub, logRepo, makeAuditLogService());
 
     service.handleSignal({ turnToken: buildTurnToken(turn), type: 'progress' });
 
@@ -258,7 +332,7 @@ describe('AgentSignalService', () => {
     const turn = makeTurn({ unitId: null });
     const turnRepo = makeTurnRepo(turn);
     const logRepo = makeLogRepo();
-    const service = new AgentSignalService(turnRepo, hub, logRepo);
+    const service = new AgentSignalService(turnRepo, hub, logRepo, makeAuditLogService());
 
     service.handleSignal({ turnToken: buildTurnToken(turn), type: 'progress' });
 
@@ -268,7 +342,7 @@ describe('AgentSignalService', () => {
   it('emits the signal on TurnSignalHub for the resolved turn id', () => {
     const turn = makeTurn();
     const turnRepo = makeTurnRepo(turn);
-    const service = new AgentSignalService(turnRepo, hub, makeLogRepo());
+    const service = new AgentSignalService(turnRepo, hub, makeLogRepo(), makeAuditLogService());
     const received: unknown[] = [];
     hub.subscribe(turn.id, (signal) => received.push(signal));
 
@@ -279,7 +353,7 @@ describe('AgentSignalService', () => {
 
   it('does not emit on the hub when the request is rejected (404)', () => {
     const turnRepo = makeTurnRepo(null);
-    const service = new AgentSignalService(turnRepo, hub, makeLogRepo());
+    const service = new AgentSignalService(turnRepo, hub, makeLogRepo(), makeAuditLogService());
     const received: unknown[] = [];
     hub.subscribe(1, (signal) => received.push(signal));
 

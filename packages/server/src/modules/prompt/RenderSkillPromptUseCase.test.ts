@@ -48,6 +48,9 @@ const makeTask = (overrides = {}) => ({
   pendingOperation: null,
   pendingOperationWindowId: null,
   pendingOperationPriorStatus: null,
+  createdByKind: 'operator' as const,
+  createdById: null,
+  createdViaGeneration: null,
   createdAt: '2024-01-01',
   updatedAt: '2024-01-01',
   ...overrides,
@@ -154,6 +157,9 @@ function makeRepos(overrides: {
     consumePendingApproval: vi.fn(() => false),
     recordExecutionGateBlock: vi.fn(() => true),
     preApproveExecution: vi.fn(() => true),
+    countChildren: vi.fn(() => 0),
+    countChildrenInGeneration: vi.fn(() => 0),
+    clearTmuxWindowIfMatches: vi.fn(() => true),
     ...overrides.task,
   };
 

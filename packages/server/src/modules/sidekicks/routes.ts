@@ -4,6 +4,7 @@ import type { ITaskPromptVarsResolver } from './ITaskPromptVarsResolver';
 import type { UnitTypeLoader } from './UnitTypeLoader';
 import { renderSidekickBody } from './renderSidekickBody';
 import { loadPromptModules } from '../prompt/PromptModuleLoader';
+import type { RouteAuthRequirement } from '../../shared/auth/routeAuth';
 
 // ─── Types ───
 
@@ -11,6 +12,46 @@ export interface SidekicksRouteOptions {
   sidekickService: SidekickPackageService;
   taskPromptVarsResolver: ITaskPromptVarsResolver;
   unitTypeLoader: UnitTypeLoader;
+  /**
+   * Auth requirement for GET /api/sidekicks/:name (Issue #28 design v3 §4:
+   * task principal allowed only for render=1 + task_id=self + a Sidekick
+   * assigned to that task's Unit). Built in buildServer.ts because the
+   * condition needs cross-module task/unit lookups this mid-layer module
+   * must not depend on directly (see .dependency-cruiser.cjs).
+   */
+  detailAuth: RouteAuthRequirement;
+  /**
+   * Auth requirement for GET /api/sidekicks (list). A task principal is
+   * always let through the gate; the response is then narrowed to that
+   * task's Unit's assigned Sidekicks via `resolveAssignedSidekickNames`
+   * (Issue #28 third-party review fix 1+2) — but ONLY when `scopedAuthEnabled`
+   * is true (see that field's own doc comment for why the narrowing itself
+   * must also be gated, not just the auth requirement).
+   */
+  listAuth: RouteAuthRequirement;
+  /**
+   * Resolves the set of Sidekick names assigned to a task's Unit's phases
+   * (built in buildServer.ts — see `sidekickDetailAuth`'s comment for why
+   * this cross-module lookup can't live in this mid-layer module).
+   */
+  resolveAssignedSidekickNames: (taskId: number) => Set<string>;
+  /**
+   * Resolved `AZITO_SCOPED_AUTH` flag (Issue #28 Phase C round-4 review,
+   * Important finding). The onRequest hook in buildServer.ts only actually
+   * ENFORCES `detailAuth`/`listAuth` when this is true — while it's false
+   * (compat mode), a task principal still gets `request.principal.class ===
+   * 'task'` set, and the GET /api/sidekicks handler below used to narrow the
+   * list to that task's assigned Sidekicks unconditionally, regardless of
+   * the flag. That broke this PR's own central promise ("flag off means
+   * behavior is unchanged"): a fresh task pane always carries a task token
+   * (azt-sidekick prefers it over any operator credential), so compat-mode
+   * deployments saw the list silently narrowed even though detail requests
+   * for names outside that narrowed set were never actually rejected (the
+   * hook lets them through in compat mode) — list and detail disagreed with
+   * each other AND with the flag's own contract. The narrowing below is now
+   * skipped entirely unless this is true.
+   */
+  scopedAuthEnabled: boolean;
 }
 
 // ─── Helpers ───
@@ -63,16 +104,29 @@ function parseTagsInput(raw: unknown): string[] | undefined {
 // ─── Plugin ───
 
 const sidekicksRoutes: FastifyPluginCallback<SidekicksRouteOptions> = (fastify, opts, done) => {
-  const { sidekickService, taskPromptVarsResolver } = opts;
+  const { sidekickService, taskPromptVarsResolver, detailAuth, listAuth, resolveAssignedSidekickNames, scopedAuthEnabled } = opts;
 
   // ── GET /api/sidekicks ── マージ済み一覧（メタ情報のみ、body は含まない）
-  fastify.get('/api/sidekicks', async () => {
-    return sidekickService.list();
+  // task principal は自タスクの Unit のフェーズに割当済みの Sidekick のみを見る
+  // （Issue #28 third-party review fix 1+2）。operator は従来どおり全件。
+  // 絞り込み自体は scopedAuthEnabled が true のときだけ適用する（Phase C
+  // round-4 review, Important finding — SidekicksRouteOptions.scopedAuthEnabled
+  // の doc comment参照）: 互換モード（flag off）では task principal も
+  // operator 相当として全件見える、という本 PR の互換性保証を一覧側でも
+  // 満たす。
+  fastify.get('/api/sidekicks', { config: { auth: listAuth } }, async (request) => {
+    const all = sidekickService.list();
+    if (scopedAuthEnabled && request.principal?.class === 'task' && request.principal.id !== undefined) {
+      const assigned = resolveAssignedSidekickNames(request.principal.id);
+      return all.filter((pkg) => assigned.has(pkg.name));
+    }
+    return all;
   });
 
   // ── GET /api/sidekicks/:name ── 詳細（body 含む）、?render=1 でテンプレート変数展開（Issue #263 Phase 5、azt-sidekick 用）
   fastify.get<{ Params: { name: string }; Querystring: { render?: string; task_id?: string } }>(
     '/api/sidekicks/:name',
+    { config: { auth: detailAuth } },
     async (request, reply) => {
       const pkg = sidekickService.getDetail(request.params.name);
       if (!pkg) return reply.status(404).send({ error: 'Sidekick not found' });

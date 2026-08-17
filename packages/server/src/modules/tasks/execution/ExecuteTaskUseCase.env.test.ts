@@ -50,6 +50,9 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     pendingOperation: null,
     pendingOperationWindowId: null,
     pendingOperationPriorStatus: null,
+    createdByKind: 'operator',
+    createdById: null,
+    createdViaGeneration: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -214,6 +217,17 @@ function buildUseCase(opts: {
       return true;
     }),
     preApproveExecution: vi.fn(() => true),
+    countChildren: vi.fn(() => 0),
+    countChildrenInGeneration: vi.fn(() => 0),
+    // Fix 3 (Issue #28 third-party review): mirrors SqliteTaskRepository's
+    // guarded UPDATE — only "clears" (here: nulls opts.task.tmuxWindow,
+    // findById always returns the same object reference) when the current
+    // tmuxWindow still matches the caller's own generation's window name.
+    clearTmuxWindowIfMatches: vi.fn((_id: number, expectedWindowName: string) => {
+      if (opts.task.tmuxWindow !== expectedWindowName) return false;
+      opts.task.tmuxWindow = null;
+      return true;
+    }),
   };
 
   const unitRepo: IUnitRepository = {
@@ -273,12 +287,12 @@ function buildUseCase(opts: {
 
 
   const tmux = {
-    listSessions: vi.fn(async () => []),
+    listSessions: vi.fn(async (): Promise<{ name: string; windows: { name: string; index: number }[] }[]> => []),
     createSession: vi.fn(async () => {}),
-    createWindow: vi.fn(async () => ({ windowName: 'w1' })),
+    createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'w1' })),
     resolvePaneId: vi.fn(async () => '%0'),
-    killPane: vi.fn(async () => {}),
-    killWindow: vi.fn(async () => {}),
+    killPane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
+    killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
     sendKeys: vi.fn(async () => {}),
     checkPaneExists: vi.fn(async () => true),
   };
@@ -313,7 +327,7 @@ function buildUseCase(opts: {
     appendEvent: vi.fn(),
   };
   const turnSignalHub = { emitSignal: vi.fn(), subscribe: vi.fn(() => () => {}) };
-  const supervisorRegistry = { isConnected: vi.fn(() => false), sendCommand: vi.fn(async () => {}), clearExitMarker: vi.fn() };
+  const supervisorRegistry = { isConnected: vi.fn(() => false), isBoundConnected: vi.fn(() => false), sendCommand: vi.fn(async () => {}), clearExitMarker: vi.fn(), issueLaunch: vi.fn(() => undefined) };
   const projectSecretRepo = { findByProjectWithValues: vi.fn(() => []), findByProject: vi.fn(() => []) };
   // Only `get` matters for resolveExecutionManifest()'s `sidekick` field
   // resolution (Issue #328 sixth-round review); returning a UnitType with no
@@ -323,6 +337,22 @@ function buildUseCase(opts: {
   const unitTypeLoader = {
     get: vi.fn(() => ({ name: 'devops', label: 'DevOps', description: '', phases: [] })),
     getOrThrow: vi.fn(() => ({ name: 'devops', label: 'DevOps', description: '', phases: [] })),
+  };
+  // Stands in for TaskPaneEnvironmentService — this file's tests assert on
+  // tmux.createWindow call sequencing/branching, not on the exact env
+  // contents (see TaskPaneEnvironmentService.test.ts for those).
+  const paneEnvService = {
+    buildEnvForNewWindow: vi.fn(() => ({
+      env: { AZITO_TASK_TOKEN: 'azt.task.1.' + 'a'.repeat(64), AZITO_TASK_ID: '1' },
+      tokenId: 101,
+    })),
+    // Issue #28 third-party review fix: the worktree/working-directory
+    // rollback branches call this after successfully killing the
+    // just-created window — several tests below exercise those branches.
+    // Scoped to the specific generation (`tokenId`, mocked as 101 above),
+    // not the whole task, per the WindowRotation.ts revokeGeneration fix.
+    revokeGeneration: vi.fn(),
+    revokeForDestroyedWindow: vi.fn(),
   };
 
   const useCase = new ExecuteTaskUseCase(
@@ -350,9 +380,10 @@ function buildUseCase(opts: {
     { check: vi.fn(async () => ({ ok: true, reasons: [], memAvailablePercent: null, loadPerCore: null, memAvailablePercentMin: 10, loadPerCoreMax: 2 })) } as any,
     projectSecretRepo as any,
     new EventEmitter(),
+    paneEnvService as any,
   );
 
-  return { useCase, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader };
+  return { useCase, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, paneEnvService };
 }
 
 describe('ExecuteTaskUseCase execution-env resolution', () => {
@@ -603,6 +634,193 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
   });
 });
 
+// Issue #28 third-party review finding (Important, TOCTOU): the confirm-kill
+// -> rotate-token -> create -> persist span inside runExclusiveForTask used
+// to read task/tmux window state captured BEFORE the lock was even queued
+// for. Two execute() calls racing for the same task could both compute
+// "the old window to kill" from the SAME pre-lock snapshot; the second call
+// (running after the first has already created and persisted its own
+// generation) would then decide there is nothing to kill, create ANOTHER
+// window, and — via issueNextGeneration()'s revoke-everything-else contract
+// — revoke the first call's still-live generation without ever having killed
+// its window. That orphans the first call's pane with a dead token. The fix
+// re-reads task state from the repository INSIDE the lock callback, so each
+// queued rotation always acts on whatever the immediately-prior rotation
+// actually persisted.
+describe('ExecuteTaskUseCase concurrent execute() serialization (Issue #28 review: TOCTOU inside the per-task lock)', () => {
+  it('two concurrent execute() calls for the same task converge to exactly one live tmux window with exactly one valid (non-revoked) token generation', async () => {
+    vi.useFakeTimers();
+    try {
+      const unit = makeUnit({ id: 42, workerType: 'claude', workerModel: 'opus' });
+      const task = makeTask({ id: 1, serverName: 'local-server', unitId: 42, tmuxWindow: null });
+
+      // Canonical "DB row" separate from any single call's snapshot of it —
+      // this is what actually distinguishes the bug from the fix. Both
+      // concurrent execute() calls fetch their OWN task snapshot via
+      // taskRepo.findById() at the top of execute() (a fresh copy, exactly
+      // like a real SQLite row read); only the code path re-reading via
+      // taskRepo.findById() INSIDE the lock (the fix under test) observes
+      // the other call's persisted tmuxWindow. Without that re-read, each
+      // call would keep using its OWN stale top-of-execute() snapshot for
+      // the entire confirm-kill decision, which is exactly the TOCTOU this
+      // test guards against.
+      let dbTask: Task = { ...task };
+
+      // Shared fake tmux window store — both concurrent execute() calls read
+      // and write the SAME store, so a call's re-read inside the lock sees
+      // whatever the previously-queued call actually persisted.
+      let windows: { name: string; index: number }[] = [];
+      let windowCounter = 0;
+      let tokenCounter = 0;
+      const liveTokens = new Set<number>();
+
+      const { useCase, taskRepo, tmux, paneEnvService } = buildUseCase({
+        task,
+        project: makeProject({ defaultUnitId: null }),
+        units: [unit],
+        projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito' },
+      });
+
+      (taskRepo.findById as ReturnType<typeof vi.fn>).mockImplementation(() => ({ ...dbTask }));
+      (taskRepo.update as ReturnType<typeof vi.fn>).mockImplementation((_id: number, updates: Partial<Task>) => {
+        dbTask = { ...dbTask, ...updates };
+      });
+
+      (tmux.listSessions as ReturnType<typeof vi.fn>).mockImplementation(async () => [{ name: 'azito', windows: [...windows] }]);
+      (tmux.createSession as ReturnType<typeof vi.fn>).mockImplementation(async () => {});
+      (tmux.createWindow as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        const name = `w${++windowCounter}`;
+        windows.push({ name, index: windows.length });
+        return { result: { stdout: '', stderr: '', code: 0 }, windowName: name };
+      });
+      // confirmOldWindowGone (execute()'s old-window kill) addresses the
+      // target as `${tmuxSession}:${oldWin.index}` (tmux index-based), while
+      // rollbackWindowReference's kills address it as
+      // `${tmuxSession}:${windowName}` (name-based) — this mock matches
+      // either form against the shared window store, same as real tmux would
+      // resolve either addressing scheme to the same window.
+      (tmux.killWindow as ReturnType<typeof vi.fn>).mockImplementation(async (_server: unknown, target: string) => {
+        const seg = (target as string).split(':')[1];
+        windows = windows.filter((w) => w.name !== seg && String(w.index) !== seg);
+        return { stdout: '', stderr: '', code: 0 };
+      });
+
+      (paneEnvService.buildEnvForNewWindow as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        // Mirrors the real ITaskTokenRepository.issueNextGeneration contract
+        // (see TaskPaneEnvironmentService's doc comment): issuing a new
+        // generation revokes every other outstanding generation for the
+        // task, so at most one is ever live.
+        liveTokens.clear();
+        const tokenId = ++tokenCounter;
+        liveTokens.add(tokenId);
+        return { env: { AZITO_TASK_TOKEN: `t${tokenId}`, AZITO_TASK_ID: '1' }, tokenId };
+      });
+      (paneEnvService.revokeGeneration as ReturnType<typeof vi.fn>).mockImplementation((tokenId: number) => {
+        liveTokens.delete(tokenId);
+      });
+
+      const runA = useCase.execute(42, 1);
+      const runB = useCase.execute(42, 1);
+      await vi.runAllTimersAsync();
+      await Promise.all([runA, runB]);
+
+      // Exactly one tmux window survives — the other was either never
+      // created without its predecessor being killed first, or was killed as
+      // part of the later rotation's confirm-kill step.
+      expect(windows).toHaveLength(1);
+      // The task's persisted tmuxWindow points at that same surviving window
+      // — never a stale reference to a window that was actually killed.
+      expect(dbTask.tmuxWindow).toBe(windows[0].name);
+      // Exactly one token generation is left live (the real
+      // ITaskTokenRepository.issueNextGeneration always enforces this by
+      // revoking every prior generation as part of issuing a new one — see
+      // this mock's buildEnvForNewWindow above). What the TOCTOU bug this
+      // test guards against actually breaks is NOT this invariant, but the
+      // window/token pairing above: without the fix, the surviving window
+      // can be the ORPHANED one — created by the call whose own generation
+      // then got revoked by the other call's rotation — while `windows`
+      // ends up with more than one live entry because neither call's kill
+      // targeted the window the other actually created.
+      expect(liveTokens.size).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Same TOCTOU shape as execute() above, but for followUp(): the old code
+  // computed `windowExists` from a task/tmux snapshot taken BEFORE
+  // runExclusiveForTask was even entered. Two concurrent follow-ups for the
+  // same not-yet-running task could both observe "no window yet" from their
+  // own pre-lock snapshot, both enter the rotation, and the second's
+  // issueNextGeneration() would revoke the first's still-being-created
+  // generation. The fix moves the ENTIRE read-decide-act sequence
+  // (`taskRepo.findById` + the tmux existence check) inside the lock.
+  it('two concurrent followUp() calls for a task with no window yet converge to exactly one live tmux window with exactly one valid generation', async () => {
+    vi.useFakeTimers();
+    try {
+      const unit = makeUnit({ id: 42, workerType: 'claude', workerModel: 'opus' });
+      const task = makeTask({ id: 1, serverName: 'local-server', unitId: 42, tmuxWindow: null });
+      let dbTask: Task = { ...task };
+
+      let windows: { name: string; index: number }[] = [];
+      let windowCounter = 0;
+      let tokenCounter = 0;
+      const liveTokens = new Set<number>();
+
+      const { useCase, taskRepo, tmux, paneEnvService } = buildUseCase({
+        task,
+        project: makeProject({ defaultUnitId: null }),
+        units: [unit],
+        projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito' },
+      });
+
+      (taskRepo.findById as ReturnType<typeof vi.fn>).mockImplementation(() => ({ ...dbTask }));
+      (taskRepo.update as ReturnType<typeof vi.fn>).mockImplementation((_id: number, updates: Partial<Task>) => {
+        dbTask = { ...dbTask, ...updates };
+      });
+
+      (tmux.listSessions as ReturnType<typeof vi.fn>).mockImplementation(async () => [{ name: 'azito', windows: [...windows] }]);
+      (tmux.createSession as ReturnType<typeof vi.fn>).mockImplementation(async () => {});
+      (tmux.createWindow as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        const name = `w${++windowCounter}`;
+        windows.push({ name, index: windows.length });
+        return { result: { stdout: '', stderr: '', code: 0 }, windowName: name };
+      });
+      (tmux.killWindow as ReturnType<typeof vi.fn>).mockImplementation(async (_server: unknown, target: string) => {
+        const seg = (target as string).split(':')[1];
+        windows = windows.filter((w) => w.name !== seg && String(w.index) !== seg);
+        return { stdout: '', stderr: '', code: 0 };
+      });
+
+      (paneEnvService.buildEnvForNewWindow as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        liveTokens.clear();
+        const tokenId = ++tokenCounter;
+        liveTokens.add(tokenId);
+        return { env: { AZITO_TASK_TOKEN: `t${tokenId}`, AZITO_TASK_ID: '1' }, tokenId };
+      });
+      (paneEnvService.revokeGeneration as ReturnType<typeof vi.fn>).mockImplementation((tokenId: number) => {
+        liveTokens.delete(tokenId);
+      });
+
+      const runA = useCase.followUp(42, 1, 'go');
+      const runB = useCase.followUp(42, 1, 'go');
+      await vi.runAllTimersAsync();
+      await Promise.all([runA, runB]);
+
+      // followUp() never kills a pre-existing window (design v3 §2: it only
+      // rotates when NO window exists yet) — so unlike execute(), a correct
+      // outcome here is that the SECOND queued follow-up recognizes the
+      // window the first one just created and reuses it, rather than both
+      // creating their own.
+      expect(windows).toHaveLength(1);
+      expect(dbTask.tmuxWindow).toBe(windows[0].name);
+      expect(liveTokens.size).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('ExecuteTaskUseCase execution gate (Issue #328)', () => {
   const gateProjectServer = { workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const };
 
@@ -780,6 +998,13 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
       consumePendingApproval: vi.fn(() => false),
       recordExecutionGateBlock: vi.fn(() => true),
       preApproveExecution: vi.fn(() => true),
+      countChildren: vi.fn(() => 0),
+      countChildrenInGeneration: vi.fn(() => 0),
+      clearTmuxWindowIfMatches: vi.fn((_id: number, expectedWindowName: string) => {
+        if (task.tmuxWindow !== expectedWindowName) return false;
+        task.tmuxWindow = null;
+        return true;
+      }),
     };
     const unitRepo: IUnitRepository = {
       findAll: vi.fn(() => [unit]),
@@ -824,10 +1049,10 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
     const tmux = {
       listSessions: vi.fn(async () => [{ name: 'azito', windows: [{ name: 'task-1', index: 1 }] }]),
       createSession: vi.fn(async () => {}),
-      createWindow: vi.fn(async () => ({ windowName: 'task-1' })),
+      createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' })),
       resolvePaneId: vi.fn(async () => '%0'),
-      killPane: vi.fn(async () => {}),
-      killWindow: vi.fn(async () => {}),
+      killPane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
+      killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       sendKeys: vi.fn(async (_server: unknown, _target: string, _keys: string[]) => {}),
       startPipePane: vi.fn(async () => {}),
       stopPipePane: vi.fn(async () => {}),
@@ -865,7 +1090,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
     const sidekickSyncService = { sync: vi.fn(async () => {}) };
     const turnRepo = new FakeAgentTurnRepo();
     const turnSignalHub = new TurnSignalHub();
-    const supervisorRegistry = { isConnected: vi.fn(() => false), sendCommand: vi.fn(async () => {}), clearExitMarker: vi.fn() };
+    const supervisorRegistry = { isConnected: vi.fn(() => false), isBoundConnected: vi.fn(() => false), sendCommand: vi.fn(async () => {}), clearExitMarker: vi.fn(), issueLaunch: vi.fn(() => undefined) };
     const projectSecretRepo = { findByProjectWithValues: vi.fn(() => []), findByProject: vi.fn(() => []) };
 
     const useCase = new ExecuteTaskUseCase(
@@ -896,6 +1121,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
       { check: vi.fn(async () => ({ ok: true, reasons: [], memAvailablePercent: null, loadPerCore: null, memAvailablePercentMin: 10, loadPerCoreMax: 2 })) } as any,
       projectSecretRepo as any,
       new EventEmitter(),
+      { buildEnvForNewWindow: vi.fn(() => ({ env: {}, tokenId: 1 })), revokeGeneration: vi.fn() } as any,
     );
 
     await useCase.followUp(42, 1, 'please continue');
@@ -1034,7 +1260,7 @@ describe('ExecuteTaskUseCase working-directory containment (Issue #27)', () => {
   it('rejects when the created worktree path resolves outside the project working directory (symlink escape)', async () => {
     const unit = makeUnit({ id: 13, workerType: 'claude', workerModel: 'opus' });
     const task = makeTask({ id: 4, serverName: 'local-server', unitId: 13 });
-    const { useCase, taskRepo, windowRepo, logRepo, worktreeServiceFactory } = buildUseCase({
+    const { useCase, taskRepo, windowRepo, logRepo, worktreeServiceFactory, tmux, paneEnvService } = buildUseCase({
       task,
       project: makeProject({ defaultUnitId: null }),
       units: [unit],
@@ -1052,6 +1278,12 @@ describe('ExecuteTaskUseCase working-directory containment (Issue #27)', () => {
     expect(taskRepo.update).toHaveBeenCalledWith(4, expect.objectContaining({ status: 'failed' }));
     expect(windowRepo.add).not.toHaveBeenCalled();
     expect(logRepo.append).toHaveBeenCalledWith(4, 13, 'command', expect.objectContaining({ type: 'worktree_path_rejected' }));
+    // Issue #28 third-party review fix: 'failed' doesn't auto-revoke (see
+    // TOKEN_REVOKING_STATUSES), so the just-created window's token
+    // generation would otherwise leak — the rollback must kill the window
+    // AND revoke it directly, once the kill is confirmed.
+    expect(tmux.killWindow).toHaveBeenCalled();
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'worktree_path_rejected_rollback');
   });
 
   it('skips containment checks when the project has no configured working directory (legacy behavior preserved)', async () => {
@@ -1102,6 +1334,308 @@ describe('ExecuteTaskUseCase working-directory containment (Issue #27)', () => {
   });
 });
 
+// Issue #28 third-party review: execute()/followUp() must apply the same
+// rollback-safe window-rotation order respawn() already established (kill
+// old window → confirm gone → rotate token → create; revoke the new
+// generation if creation fails, whether by throwing or by resolving with a
+// non-zero exit code). See WindowRotation.ts.
+describe('ExecuteTaskUseCase window-rotation rollback safety (Issue #28 third-party review)', () => {
+  it('execute(): aborts before rotating the token when killing the leftover task window fails (non-zero exit code)', async () => {
+    const unit = makeUnit({ id: 30, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 40, serverName: 'local-server', unitId: 30, tmuxWindow: 'old-window' });
+    const { useCase, tmux, paneEnvService, windowRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: null,
+    });
+    tmux.listSessions.mockResolvedValue([
+      { name: 'azito', windows: [{ name: 'old-window', index: 5 }] },
+    ]);
+    // Agent-transport style failure: resolves (doesn't throw) with a
+    // non-zero code — a bare await/`.then` here previously read this as
+    // success (Issue #28 third-party review finding 2).
+    tmux.killWindow.mockResolvedValue({ stdout: '', stderr: 'device busy', code: 1 });
+
+    await expect(useCase.execute(30, 40)).rejects.toThrow(/Failed to kill window .* before rotating window/);
+
+    expect(paneEnvService.buildEnvForNewWindow).not.toHaveBeenCalled();
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(windowRepo.add).not.toHaveBeenCalled();
+  });
+
+  it('execute(): kills the whole leftover window (not just the active pane) so a surviving second pane cannot keep the old token alive (Issue #28 third-party review finding 1)', async () => {
+    const unit = makeUnit({ id: 35, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 45, serverName: 'local-server', unitId: 35, tmuxWindow: 'old-window' });
+    const { useCase, tmux, windowRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: null,
+    });
+    // The old task window has two panes (e.g. a split terminal the user
+    // opened alongside the worker pane) — not modeled in this listSessions
+    // mock's minimal { name, index } shape, but that's exactly the point:
+    // confirmOldWindowGone must target the whole window regardless of how
+    // many panes it holds. Only killWindow removes all of them; a killPane
+    // call targeting just the active pane would leave a sibling pane (and
+    // the old token it still holds) alive.
+    tmux.listSessions.mockResolvedValue([
+      { name: 'azito', windows: [{ name: 'old-window', index: 5 }] },
+    ]);
+
+    await useCase.execute(35, 45);
+
+    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:5');
+    expect(tmux.killPane).not.toHaveBeenCalled();
+    expect(windowRepo.add).toHaveBeenCalled();
+  });
+
+  it('execute(): revokes the new token generation and does not persist the window when createWindow resolves with a non-zero exit code', async () => {
+    const unit = makeUnit({ id: 31, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 41, serverName: 'local-server', unitId: 31, tmuxWindow: null });
+    const { useCase, tmux, paneEnvService, windowRepo, taskRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: null,
+    });
+    tmux.createWindow.mockResolvedValue({ result: { stdout: '', stderr: 'boom', code: 1 }, windowName: 'w1' });
+
+    await expect(useCase.execute(31, 41)).rejects.toThrow(/Failed to create tmux window/);
+
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'execute_create_failed');
+    expect(windowRepo.add).not.toHaveBeenCalled();
+    expect(taskRepo.update).not.toHaveBeenCalledWith(41, expect.objectContaining({ tmuxWindow: 'w1' }));
+  });
+
+  it('execute(): revokes the new token generation when createWindow throws', async () => {
+    const unit = makeUnit({ id: 32, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 42, serverName: 'local-server', unitId: 32, tmuxWindow: null });
+    const { useCase, tmux, paneEnvService, windowRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: null,
+    });
+    tmux.createWindow.mockRejectedValue(new Error('tmux new-window failed'));
+
+    await expect(useCase.execute(32, 42)).rejects.toThrow(/Failed to create tmux window/);
+
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'execute_create_failed');
+    expect(windowRepo.add).not.toHaveBeenCalled();
+  });
+
+  it('followUp(): revokes the new token generation and does not persist tmuxWindow when createWindow resolves with a non-zero exit code', async () => {
+    const unit = makeUnit({ id: 33, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 43, serverName: 'local-server', unitId: 33, tmuxWindow: null });
+    const { useCase, tmux, paneEnvService, taskRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: null,
+    });
+    tmux.createWindow.mockResolvedValue({ result: { stdout: '', stderr: 'boom', code: 1 }, windowName: 'w2' });
+
+    await expect(useCase.followUp(33, 43, 'continue')).rejects.toThrow(/Failed to create tmux window/);
+
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'followup_create_failed');
+    expect(taskRepo.update).not.toHaveBeenCalledWith(43, expect.objectContaining({ tmuxWindow: 'w2' }));
+  });
+
+  it('followUp(): revokes the new token generation when createWindow throws', async () => {
+    const unit = makeUnit({ id: 34, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 44, serverName: 'local-server', unitId: 34, tmuxWindow: null });
+    const { useCase, tmux, paneEnvService } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: null,
+    });
+    tmux.createWindow.mockRejectedValue(new Error('tmux new-window failed'));
+
+    await expect(useCase.followUp(34, 44, 'continue')).rejects.toThrow(/Failed to create tmux window/);
+
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'followup_create_failed');
+  });
+});
+
+// Issue #28 third-party review, second round: all 3 rollback sites used to
+// clear their DB reference to the just-created window (tmuxWindow: null /
+// removing the Window row) either before confirming the kill, or regardless
+// of whether it succeeded. A kill failure then left a still-live,
+// still-token-authenticated window completely untracked. The 3 sites now
+// route through WindowRotation.rollbackWindowReference, which only clears
+// the reference once resolveKillOutcome confirms the window is actually
+// gone; on failure the reference (and the token) is left alone.
+describe('ExecuteTaskUseCase rollback keeps the window reference tracked when the rollback kill fails (Issue #28 third-party review, second round)', () => {
+  let allowedRoot: string;
+  let outsideDir: string;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    allowedRoot = mkdtempSync(path.join(tmpdir(), 'azito-exec-rollback-root-'));
+    outsideDir = mkdtempSync(path.join(tmpdir(), 'azito-exec-rollback-outside-'));
+  });
+
+  afterEach(() => {
+    rmSync(allowedRoot, { recursive: true, force: true });
+    rmSync(outsideDir, { recursive: true, force: true });
+  });
+
+  it('execute(): worktree-creation-failure rollback keeps tmuxWindow set and does not revoke the generation when the rollback kill fails', async () => {
+    const unit = makeUnit({ id: 50, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 60, serverName: 'local-server', unitId: 50 });
+    const { useCase, tmux, taskRepo, paneEnvService, worktreeServiceFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: { workingDirectory: allowedRoot, branch: null, tmuxSession: 'azito' },
+    });
+    worktreeServiceFactory.create.mockReturnValue({
+      create: vi.fn(async () => { throw new Error('worktree failed'); }),
+    });
+    tmux.killWindow.mockResolvedValue({ stdout: '', stderr: 'device busy', code: 1 });
+
+    await expect(useCase.execute(50, 60)).rejects.toThrow(/Worktree creation failed/);
+
+    expect(taskRepo.update).not.toHaveBeenCalledWith(60, expect.objectContaining({ tmuxWindow: null }));
+    expect(paneEnvService.revokeGeneration).not.toHaveBeenCalled();
+  });
+
+  it('execute(): worktree-path-rejection rollback keeps tmuxWindow set and does not revoke the generation when the rollback kill fails', async () => {
+    const unit = makeUnit({ id: 51, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 61, serverName: 'local-server', unitId: 51 });
+    const { useCase, tmux, taskRepo, paneEnvService, worktreeServiceFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: { workingDirectory: allowedRoot, branch: null, tmuxSession: 'azito' },
+    });
+    worktreeServiceFactory.create.mockReturnValue({
+      create: vi.fn(async () => ({ path: outsideDir, branch: 'task/61-slug' })),
+      remove: vi.fn(async () => {}),
+    });
+    tmux.killWindow.mockResolvedValue({ stdout: '', stderr: 'device busy', code: 1 });
+
+    await expect(useCase.execute(51, 61)).rejects.toThrow(/Worktree path rejected/);
+
+    expect(taskRepo.update).not.toHaveBeenCalledWith(61, expect.objectContaining({ tmuxWindow: null }));
+    expect(paneEnvService.revokeGeneration).not.toHaveBeenCalled();
+  });
+
+  it('followUp(): working-directory-rejection rollback keeps tmuxWindow set and does not revoke the generation when the rollback kill fails', async () => {
+    const unit = makeUnit({ id: 52, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 62, serverName: 'local-server', unitId: 52, tmuxWindow: null, workingDirectory: outsideDir });
+    const { useCase, tmux, taskRepo, paneEnvService, worktreeServiceFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: { workingDirectory: allowedRoot, branch: null, tmuxSession: 'azito' },
+    });
+    worktreeServiceFactory.create.mockReturnValue({ exists: vi.fn(async () => false) });
+    tmux.killWindow.mockResolvedValue({ stdout: '', stderr: 'device busy', code: 1 });
+
+    await expect(useCase.followUp(52, 62, 'please continue')).rejects.toThrow(/Follow-up working directory rejected/);
+
+    expect(taskRepo.update).not.toHaveBeenCalledWith(62, expect.objectContaining({ tmuxWindow: null }));
+    expect(paneEnvService.revokeGeneration).not.toHaveBeenCalled();
+  });
+});
+
+// Fix 3 (Issue #28 third-party review, Important finding): the worktree
+// creation step (and its own failure rollback) runs OUTSIDE
+// runExclusiveForTask — see WindowRotation.ts's doc comment for why (the lock
+// only needs to cover confirm-kill -> rotate-token -> create -> persist, not
+// the potentially-slow worktree creation that follows). That gap means a
+// SECOND, concurrent execute()/followUp() for the SAME task can acquire the
+// lock, create a NEWER window generation, and persist its own `tmuxWindow`
+// while the FIRST call's worktree step is still failing. These tests
+// reproduce that interleaving directly (mutating the shared task object mid-
+// worktree-creation, exactly where the real race would land) and confirm the
+// rollback no longer clobbers the newer generation's window reference — only
+// the failed call's OWN token generation gets revoked.
+describe('ExecuteTaskUseCase rollback does not clobber a newer window generation persisted by a concurrent execute()/followUp() for the same task (Issue #28 third-party review, Fix 3)', () => {
+  let allowedRoot: string;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    allowedRoot = mkdtempSync(path.join(tmpdir(), 'azito-exec-race-root-'));
+  });
+
+  afterEach(() => {
+    rmSync(allowedRoot, { recursive: true, force: true });
+  });
+
+  it('execute(): a worktree-creation failure does not null out a newer tmuxWindow a concurrent rotation already persisted', async () => {
+    const unit = makeUnit({ id: 70, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 70, serverName: 'local-server', unitId: 70 });
+    const { useCase, taskRepo, paneEnvService, worktreeServiceFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: { workingDirectory: allowedRoot, branch: null, tmuxSession: 'azito' },
+    });
+    worktreeServiceFactory.create.mockReturnValue({
+      // This runs AFTER runExclusiveForTask's window-creation span has
+      // already released the lock and persisted `tmuxWindow: 'w1'` (this
+      // call's own generation) — exactly where a concurrent execute()/
+      // followUp() for the same task would slot in, acquire the lock, create
+      // window 'w2', and persist ITS OWN tmuxWindow before this worktree
+      // creation fails.
+      create: vi.fn(async () => {
+        task.tmuxWindow = 'w2';
+        throw new Error('worktree failed');
+      }),
+    });
+
+    await expect(useCase.execute(70, 70)).rejects.toThrow(/Worktree creation failed/);
+
+    // The rollback must have attempted to clear ITS OWN generation ('w1')...
+    expect(taskRepo.clearTmuxWindowIfMatches).toHaveBeenCalledWith(70, 'w1');
+    // ...but since the row had already moved on to 'w2', the clear must be a
+    // no-op — the newer generation's window reference stays intact.
+    expect(task.tmuxWindow).toBe('w2');
+    // The failed call's OWN token generation is still revoked regardless —
+    // token cleanup for the generation THIS call issued must not depend on
+    // whether the DB reference clear succeeded.
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'worktree_creation_failed_rollback');
+  });
+
+  it('followUp(): a working-directory-rejection rollback does not null out a newer tmuxWindow a concurrent rotation already persisted', async () => {
+    const outsideDir = mkdtempSync(path.join(tmpdir(), 'azito-exec-race-outside-'));
+    try {
+      const unit = makeUnit({ id: 71, workerType: 'claude', workerModel: 'opus' });
+      const task = makeTask({ id: 71, serverName: 'local-server', unitId: 71, tmuxWindow: null, worktreePath: outsideDir });
+      const { useCase, taskRepo, paneEnvService, worktreeServiceFactory } = buildUseCase({
+        task,
+        project: makeProject({ defaultUnitId: null }),
+        units: [unit],
+        projectServer: { workingDirectory: allowedRoot, branch: null, tmuxSession: 'azito' },
+      });
+      worktreeServiceFactory.create.mockReturnValue({
+        // followUp() awaits this while resolving followUpDir, which runs
+        // after window creation released the lock and persisted
+        // `tmuxWindow: 'w1'` — same race window as execute() above,
+        // simulated the same way. Returning true routes followUpDir to
+        // task.worktreePath (outsideDir), which then fails containment.
+        exists: vi.fn(async () => {
+          task.tmuxWindow = 'w2';
+          return true;
+        }),
+      });
+
+      await expect(useCase.followUp(71, 71, 'please continue')).rejects.toThrow(/Follow-up working directory rejected/);
+
+      expect(taskRepo.clearTmuxWindowIfMatches).toHaveBeenCalledWith(71, 'w1');
+      expect(task.tmuxWindow).toBe('w2');
+      expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'followup_working_directory_rejected_rollback');
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('ExecuteTaskUseCase.followUp working-directory containment (Issue #27 review finding 1)', () => {
   let allowedRoot: string;
   let outsideDir: string;
@@ -1120,7 +1654,7 @@ describe('ExecuteTaskUseCase.followUp working-directory containment (Issue #27 r
   it('rejects a task.workingDirectory that escapes the project working directory (no tmux window exists yet)', async () => {
     const unit = makeUnit({ id: 20, workerType: 'claude', workerModel: 'opus' });
     const task = makeTask({ id: 7, serverName: 'local-server', unitId: 20, tmuxWindow: null, workingDirectory: outsideDir });
-    const { useCase, taskRepo, worktreeServiceFactory } = buildUseCase({
+    const { useCase, taskRepo, worktreeServiceFactory, tmux, paneEnvService } = buildUseCase({
       task,
       project: makeProject({ defaultUnitId: null }),
       units: [unit],
@@ -1131,6 +1665,12 @@ describe('ExecuteTaskUseCase.followUp working-directory containment (Issue #27 r
     await expect(useCase.followUp(20, 7, 'please continue')).rejects.toThrow(/Follow-up working directory rejected/);
 
     expect(taskRepo.update).toHaveBeenCalledWith(7, expect.objectContaining({ status: 'failed' }));
+    // Issue #28 third-party review fix: this branch only runs when
+    // !windowExists just created a fresh window (and rotated the task
+    // token) for this follow-up — 'failed' doesn't auto-revoke, so the
+    // rollback must kill the window AND revoke it directly.
+    expect(tmux.killWindow).toHaveBeenCalled();
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'followup_working_directory_rejected_rollback');
   });
 
   it('rejects a persisted task.worktreePath that exists on disk but resolves outside the project working directory (regression: existence was previously treated as trust)', async () => {
@@ -1338,10 +1878,10 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
     const tmux = {
       listSessions: vi.fn(async () => []),
       createSession: vi.fn(async () => {}),
-      createWindow: vi.fn(async () => ({ windowName: 'w1' })),
+      createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'w1' })),
       resolvePaneId: vi.fn(async () => '%0'),
-      killPane: vi.fn(async () => {}),
-      killWindow: vi.fn(async () => {}),
+      killPane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
+      killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       sendKeys: vi.fn(async () => {}),
       checkPaneExists: vi.fn(async () => true),
       startPipePane: vi.fn(async () => {}),
@@ -1381,7 +1921,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
     const sidekickSyncService = { sync: vi.fn(async () => {}) };
     const turnRepo = { supersedeRunning: vi.fn(), create: vi.fn(), findById: vi.fn(() => null), findLatestEventByType: vi.fn(() => null), markEnded: vi.fn(), appendEvent: vi.fn() };
     const turnSignalHub = { emitSignal: vi.fn(), subscribe: vi.fn(() => () => {}) };
-    const supervisorRegistry = { isConnected: vi.fn(() => false), sendCommand: vi.fn(async () => {}), clearExitMarker: vi.fn() };
+    const supervisorRegistry = { isConnected: vi.fn(() => false), isBoundConnected: vi.fn(() => false), sendCommand: vi.fn(async () => {}), clearExitMarker: vi.fn(), issueLaunch: vi.fn(() => undefined) };
 
     const useCase = new ExecuteTaskUseCase(
       taskRepo as any,
@@ -1408,6 +1948,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       { check: vi.fn(async () => ({ ok: true, reasons: [], memAvailablePercent: null, loadPerCore: null, memAvailablePercentMin: 10, loadPerCoreMax: 2 })) } as any,
       projectSecretRepo as any,
       new EventEmitter(),
+      { buildEnvForNewWindow: vi.fn(() => ({ env: {}, tokenId: 1 })), revokeGeneration: vi.fn() } as any,
     );
 
     // execute() itself resolves once setup (session/window/worktree

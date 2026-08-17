@@ -37,8 +37,11 @@ MinIO credentials (`MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`) live in the **repo
 
 After changing `AZITO_UI_TOKEN` (or running `azito token rotate`), re-run `harness/setup.sh --azito-url <url> --webhook-token <t> --ui-token <t>
 --server-name <name>` on every server, or `/azt-*` skills get 401. `azito token rotate` auto-updates
-`~/.azito/azitoctl*.env` on the local server. Full procedures (migration, new environment,
-Tailscale, troubleshooting): `docs/ja/security-setup.md` / `docs/en/security-setup.md`.
+the local `~/.azito/operator.env` and `~/.claude/settings.json` MCP token (if present) — it does
+**not** touch `~/.azito/azitoctl*.env`, which never carries `AZITO_UI_TOKEN` (Issue #28 Phase B:
+operator/task credential separation — `azito auth doctor` checks local drift). Full procedures
+(migration, new environment, Tailscale, troubleshooting): `docs/ja/security-setup.md` /
+`docs/en/security-setup.md`.
 
 ### Production (Daemon)
 

@@ -10,6 +10,8 @@ argument-hint: [task_id]
 
 # azt-prepare — タスクの作業環境を準備する
 
+> **オペレーター専用**（UI トークンが必要）。タスクペインで実行すると operator_required になる。
+
 ## 引数
 
 - `task_id`: AZITOのタスクID（数値）

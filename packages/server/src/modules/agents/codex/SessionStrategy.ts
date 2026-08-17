@@ -2,8 +2,7 @@ import type { ISessionStrategy } from '../SessionStrategy';
 import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import { buildListCandidatesWithMeta, normalizePath, parseCandidates } from '../sessionScanUtils';
-import { shellQuote } from '../../../shared/shellQuote';
-import { buildCodexLaunchCommand } from './launchCommand';
+import { buildCodexLaunchCommand, buildCodexRespawnCommand } from './launchCommand';
 
 export class CodexSessionStrategy implements ISessionStrategy {
   readonly supportsSession = true;
@@ -26,9 +25,7 @@ export class CodexSessionStrategy implements ISessionStrategy {
 
   buildRespawnCommand(agentSessionId: string | null, model: string | null, extraArgs: string | null): string | null {
     if (agentSessionId) {
-      const modelFlag = model ? ` --model ${shellQuote(model)}` : '';
-      const extra = extraArgs?.trim() ? ` ${extraArgs.trim()}` : '';
-      return `codex resume ${agentSessionId} --dangerously-bypass-approvals-and-sandbox${modelFlag}${extra}`;
+      return buildCodexRespawnCommand(agentSessionId, { model, extraArgs });
     }
     return buildCodexLaunchCommand({ model, extraArgs });
   }

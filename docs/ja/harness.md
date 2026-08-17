@@ -105,9 +105,10 @@ setup.sh は次の処理を行います。
 2. **Rules** -- `harness/prompt-modules/*.md` を `~/.claude/rules/` へシンボリックリンク
 3. **Settings** -- `~/.claude/settings.json` に azt-mcp（MCP サーバー）と hook（`azito-notify.sh` + `azito-activity.sh`）をマージ登録
 4. **CLI tools** -- `harness/bin/` 配下のツール（`azs`, `azitoctl`）に実行権を付与
-5. **Env file** -- `--azito-url` と `--webhook-token` の両方が指定された場合のみ、`~/.azito/azitoctl.env`（mode 600）を書き出し。必須: `AZITO_URL`, `AZITO_WEBHOOK_TOKEN`。任意（指定時のみ）: `AZITO_UI_TOKEN`, `AZITO_SERVER_NAME`。`AZITO_SUPERVISOR_PATH` は常に追加される
+5. **Env file** -- `--azito-url` と `--webhook-token` の両方が指定された場合のみ、`~/.azito/azitoctl.env`（mode 600）を書き出し。必須: `AZITO_URL`, `AZITO_WEBHOOK_TOKEN`。任意（指定時のみ）: `AZITO_SERVER_NAME`。`AZITO_SUPERVISOR_PATH` は常に追加される。**`AZITO_UI_TOKEN` はここには書かれない**（Issue #28 Phase B）
+6. **operator.env** -- `--ui-token` が指定された場合のみ、`~/.azito/operator.env`（mode 600）に `AZITO_URL` と `AZITO_UI_TOKEN` を書き出す。setup.sh 自身はこのファイルを source しない。人間が `source ~/.azito/operator.env` して明示的に有効化する運用者用ファイル
 
-`AZITO_URL`（既定値 `http://localhost:3001`）と `AZITO_WEBHOOK_TOKEN` は環境変数からも解決します。既存のリンク・設定がある場合はスキップまたは更新され、安全に再実行できます。`--ui-token`（`AZITO_UI_TOKEN`）は省略可能ですが、省略すると MCP サーバー設定にトークンが含まれない旨の警告が表示されます。
+`AZITO_URL`（既定値 `http://localhost:3001`）と `AZITO_WEBHOOK_TOKEN` は環境変数からも解決します。既存のリンク・設定がある場合はスキップまたは更新され、安全に再実行できます。`--ui-token`（`AZITO_UI_TOKEN`）は省略可能ですが、省略すると MCP サーバー設定にトークンが含まれない旨の警告が表示されます。全権トークンの配布分離とその限界（同一 UNIX ユーザーでは chmod 600 は保護にならない）は [security-setup.md](./security-setup.md#主体分離operator--task) を参照してください。
 
 Codex CLI がインストールされている環境（`codex` コマンドまたは `~/.codex` が存在）では、同じ skills / rules を `~/.codex/` 配下にも配置し、`codex mcp add` で azt-mcp を登録します。Claude Code と Codex の両方から同じハーネスを利用できます。
 

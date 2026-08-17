@@ -10,6 +10,14 @@ AZITO_URL="${AZITO_URL:-}"
 AZITO_WEBHOOK_TOKEN="${AZITO_WEBHOOK_TOKEN:-}"
 AZITO_UI_TOKEN="${AZITO_UI_TOKEN:-}"
 AZITO_SERVER_NAME="${AZITO_SERVER_NAME:-}"
+# --prefix は任意の文字列を受け付ける（charset 制限なし。ドットを含む値
+# `--prefix prod.eu` も許可される）。生成される azitoctl*.env のファイル名は
+# `azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env` （下記 azitoctl.env 節参照）。
+# 読み出し側（packages/server/src/shared/azitoctlEnv.ts の
+# findAzitoctlEnvFiles）はこの文法に合わせて `^azitoctl(?:-.+)?\.env$` で
+# 発見する — 発見側の正規表現をここより狭めると、`azito auth doctor` が
+# ドット付き prefix のファイルを見逃したまま "all checks passed" を返す
+# （Phase C third-party review 指摘）。
 AZITO_PREFIX="${AZITO_PREFIX:-}"
 
 # ── 引数パース ──
@@ -241,43 +249,115 @@ fi
 # ファイルとして残しておく。
 # AZITO_SERVER_NAME / AZITO_SUPERVISOR_PATH は azs (harness/bin/azs) が同じ
 # ファイルを source して使う。
+#
+# NOTE (Issue #28 Phase B): このファイルには AZITO_UI_TOKEN を書かない。
+# azitoctl / azs は task principal（AZITO_TASK_TOKEN）文脈で動くプロセスから
+# source されるため、全権トークンをここに置くと配布経路の穴になる。
+# --ui-token が指定された場合の書き込み先は operator.env（下記）のみ。
+# 全体を都度 `>` で書き直すため、--azito-url / --webhook-token が両方揃った
+# 実行では過去バージョンの setup.sh が残した AZITO_UI_TOKEN 行も自動的に消える。
+# 一方 webhook トークン省略時（下の else 節）は書き直し自体をスキップするため、
+# 過去に書かれた AZITO_UI_TOKEN 行が残り続けてしまう（Phase C 残件1）。
+# そのため掃除は書き直し条件と独立に、常に先に行う。
 echo ""
 echo "=== azitoctl.env ==="
+AZITOCTL_ENV_DIR="$HOME/.azito"
+AZITOCTL_ENV_FILE="$AZITOCTL_ENV_DIR/azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env"
+# 既存ファイルに AZITO_UI_TOKEN 行が残っていれば、書き直し条件に関わらず
+# 除去する（冪等: 該当行が無ければ何もしない）。umask 077 + アトミック置換は
+# 下の書き直し節と同じ作法。
+if [[ -f "$AZITOCTL_ENV_FILE" ]] && grep -q '^AZITO_UI_TOKEN=' "$AZITOCTL_ENV_FILE" 2>/dev/null; then
+  AZITOCTL_ENV_CLEAN_TMP="$(mktemp "$AZITOCTL_ENV_DIR/.azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env.XXXXXX")"
+  (
+    umask 077
+    # `grep -v` はマッチ行を除いた結果が0行になる場合（＝除去対象の
+    # AZITO_UI_TOKEN 行のみのファイル）に exit 1 を返し、set -e でセット
+    # アップ全体を中止させてしまう（third-party review Important finding、
+    # 実再現あり）。awk の `!/pattern/` は該当0件でも常に exit 0 なので
+    # 同じ用途に置き換える（真の read エラー時は awk 自身が非ゼロで落ちる
+    # ため、その場合はここも失敗する＝挙動は保たれる）。
+    awk '!/^AZITO_UI_TOKEN=/' "$AZITOCTL_ENV_FILE" > "$AZITOCTL_ENV_CLEAN_TMP"
+  )
+  chmod 600 "$AZITOCTL_ENV_CLEAN_TMP"
+  mv -f "$AZITOCTL_ENV_CLEAN_TMP" "$AZITOCTL_ENV_FILE"
+  echo "  $AZITOCTL_ENV_FILE: 旧 AZITO_UI_TOKEN 行を除去しました"
+fi
 if [[ -n "$AZITO_URL" && -n "$AZITO_WEBHOOK_TOKEN" ]]; then
-  AZITOCTL_ENV_DIR="$HOME/.azito"
-  AZITOCTL_ENV_FILE="$AZITOCTL_ENV_DIR/azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env"
   mkdir -p "$AZITOCTL_ENV_DIR"
-  # azitoctl / azs がこのファイルを source するため、値は printf %q で必ず
-  # シェルクォートする（生値だと空白・引用符で壊れ、$() は任意コマンド
-  # 実行になる）。hook コマンドの ENV_PREFIX 埋め込みと同じ流儀。
-  {
-    printf 'AZITO_URL=%q\n' "$AZITO_URL"
-    printf 'AZITO_WEBHOOK_TOKEN=%q\n' "$AZITO_WEBHOOK_TOKEN"
-    if [[ -n "$AZITO_UI_TOKEN" ]]; then
-      printf 'AZITO_UI_TOKEN=%q\n' "$AZITO_UI_TOKEN"
-    fi
-    if [[ -n "$AZITO_SERVER_NAME" ]]; then
-      printf 'AZITO_SERVER_NAME=%q\n' "$AZITO_SERVER_NAME"
-    fi
-    # AZITO_SUPERVISOR_PATH: azs が実行する supervisor バンドルの絶対パス
-    # （実行ファイルのパスのみ。ランナーは azs 側の AZITO_SUPERVISOR_RUNNER で
-    # 固定的に前置され、既定は node）。azs はこの値を eval せず 1 引数として
-    # 扱うため、$(...) 等が混入しても実行されない。
-    # setup.sh 単体では local/agent/ssh のどの種別に対して実行されているか
-    # 判別できないため、agent サーバーの既定パス
-    # (~/.azito/agent/current/azito-supervisor.cjs、AgentInstaller.ts が
-    # デプロイする場所、SupervisorPath.ts の AGENT_SUPERVISOR_PATH と同じ)
-    # を書いておく。$HOME はここでは展開せず、azs 側が source した時点の
-    # 実行時ユーザーの $HOME で展開されるようにする（%q は使わない — %q だと
-    # $ がエスケープされ展開自体が止まる。パスに空白は無いので単純代入で安全）。
-    # local チェックアウトではこのパスが存在しないため、azs 側の探索順 b
-    # （スクリプト位置から repo dist を解決、存在チェック）へフォールバックする。
-    printf 'AZITO_SUPERVISOR_PATH=$HOME/.azito/agent/current/azito-supervisor.cjs\n'
-  } > "$AZITOCTL_ENV_FILE"
-  chmod 600 "$AZITOCTL_ENV_FILE"
-  echo "  $AZITOCTL_ENV_FILE: 書き出しました"
+  # AZITO_WEBHOOK_TOKEN を含むため、書き込み中も world-readable にならないよう
+  # umask 077 のサブシェルで隣接一時ファイルに書き、chmod 600 確定後に mv で
+  # アトミックに置換する（operator.env と同じ対策、third-party review Important
+  # finding）。同一ディレクトリ内の mktemp なので mv はリネームのみで済む。
+  AZITOCTL_ENV_TMP="$(mktemp "$AZITOCTL_ENV_DIR/.azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env.XXXXXX")"
+  (
+    umask 077
+    # azitoctl / azs がこのファイルを source するため、値は printf %q で必ず
+    # シェルクォートする（生値だと空白・引用符で壊れ、$() は任意コマンド
+    # 実行になる）。hook コマンドの ENV_PREFIX 埋め込みと同じ流儀。
+    {
+      printf 'AZITO_URL=%q\n' "$AZITO_URL"
+      printf 'AZITO_WEBHOOK_TOKEN=%q\n' "$AZITO_WEBHOOK_TOKEN"
+      if [[ -n "$AZITO_SERVER_NAME" ]]; then
+        printf 'AZITO_SERVER_NAME=%q\n' "$AZITO_SERVER_NAME"
+      fi
+      # AZITO_SUPERVISOR_PATH: azs が実行する supervisor バンドルの絶対パス
+      # （実行ファイルのパスのみ。ランナーは azs 側の AZITO_SUPERVISOR_RUNNER で
+      # 固定的に前置され、既定は node）。azs はこの値を eval せず 1 引数として
+      # 扱うため、$(...) 等が混入しても実行されない。
+      # setup.sh 単体では local/agent/ssh のどの種別に対して実行されているか
+      # 判別できないため、agent サーバーの既定パス
+      # (~/.azito/agent/current/azito-supervisor.cjs、AgentInstaller.ts が
+      # デプロイする場所、SupervisorPath.ts の AGENT_SUPERVISOR_PATH と同じ)
+      # を書いておく。$HOME はここでは展開せず、azs 側が source した時点の
+      # 実行時ユーザーの $HOME で展開されるようにする（%q は使わない — %q だと
+      # $ がエスケープされ展開自体が止まる。パスに空白は無いので単純代入で安全）。
+      # local チェックアウトではこのパスが存在しないため、azs 側の探索順 b
+      # （スクリプト位置から repo dist を解決、存在チェック）へフォールバックする。
+      printf 'AZITO_SUPERVISOR_PATH=$HOME/.azito/agent/current/azito-supervisor.cjs\n'
+    } > "$AZITOCTL_ENV_TMP"
+  )
+  chmod 600 "$AZITOCTL_ENV_TMP"
+  mv -f "$AZITOCTL_ENV_TMP" "$AZITOCTL_ENV_FILE"
+  echo "  $AZITOCTL_ENV_FILE: 書き出しました（AZITO_UI_TOKEN は含みません）"
 else
   echo "  スキップ (--azito-url と --webhook-token の両方が必要)"
+fi
+
+# ── operator.env (人間が明示的に source する運用者用資格情報) ──
+# --ui-token が渡されたときのみ書き出す。azitoctl.env とは別ファイルにする
+# ことで、「タスク実行プロセスが自動的に読む設定」と「人間が明示的に有効化する
+# 全権クレデンシャル」を混在させない（設計 §9）。setup.sh 自身はこのファイルを
+# 一切 source しない。
+echo ""
+echo "=== operator.env ==="
+if [[ -n "$AZITO_UI_TOKEN" ]]; then
+  OPERATOR_ENV_DIR="$HOME/.azito"
+  OPERATOR_ENV_FILE="$OPERATOR_ENV_DIR/operator.env"
+  mkdir -p "$OPERATOR_ENV_DIR"
+  # AZITO_UI_TOKEN（全権トークン）を含むため、書き込み中も world-readable に
+  # ならないよう umask 077 のサブシェルで隣接一時ファイルに書き、chmod 600
+  # 確定後に mv でアトミックに置換する。umask 022 環境で `>` 直書き＋事後
+  # chmod だと、書き込みが始まった瞬間から chmod が効くまでの間 0644 で
+  # トークンが露出する窓ができていた（third-party review Important finding）。
+  OPERATOR_ENV_TMP="$(mktemp "$OPERATOR_ENV_DIR/.operator.env.XXXXXX")"
+  (
+    umask 077
+    {
+      echo "# AZITO operator credentials"
+      echo "#"
+      echo "# このファイルは人間が明示的に \`source ~/.azito/operator.env\` して使う"
+      echo "# ためのものです。setup.sh を含むいかなるスクリプトからも自動 source"
+      echo "# してはいけません。source した時点でそのシェルはオペレーター権限"
+      echo "# （全権）で動作します。"
+      printf 'AZITO_URL=%q\n' "$AZITO_URL_VALUE"
+      printf 'AZITO_UI_TOKEN=%q\n' "$AZITO_UI_TOKEN"
+    } > "$OPERATOR_ENV_TMP"
+  )
+  chmod 600 "$OPERATOR_ENV_TMP"
+  mv -f "$OPERATOR_ENV_TMP" "$OPERATOR_ENV_FILE"
+  echo "  $OPERATOR_ENV_FILE: 書き出しました（使うには: source $OPERATOR_ENV_FILE）"
+else
+  echo "  スキップ (--ui-token が未指定)"
 fi
 
 # node が使えれば自動マージ、なければ手動案内にフォールバック

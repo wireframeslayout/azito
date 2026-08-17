@@ -2,6 +2,58 @@ import type { SqliteDatabase } from '../../shared/db/Database';
 import type { Task, ITaskRepository } from './Task';
 import type { TaskStatus } from './TaskStatus';
 import type { SubagentConfig } from '../units/Unit';
+import type { ITaskTokenRepository } from './tokens/TaskToken';
+
+/**
+ * Statuses that must revoke every outstanding task_tokens row for the task
+ * (Issue #28 design v3 §2: "失効はリポジトリの状態遷移 API 1箇所に集約").
+ * Enforced by {@link SqliteTaskRepository.revokeIfTokenRevokingStatus}, the single
+ * internal helper every status-writing method (updateStatus(), update(),
+ * consumePendingApproval()) routes through in the same transaction as its
+ * status write — every one of the ~25 scattered
+ * `taskRepo.updateStatus(...)`/`taskRepo.update(..., { status })` call sites
+ * across PhaseLoopRunner/ExecuteTaskUseCase/RecoverStuckTasksUseCase/units
+ * routes benefits automatically, and none of them needs to know task_tokens
+ * exists. (recordExecutionGateBlock()/preApproveExecution() never write a
+ * terminal status — see their own doc comments on ITaskRepository — so they
+ * do not need this helper.)
+ *
+ * NOT the same set as "terminal status" (renamed from
+ * TERMINAL_TASK_STATUSES — Issue #28 third-party review finding 1): `review`
+ * and `failed` are both statuses a human can resume from via
+ * `ExecuteTaskUseCase.followUp()` (units routes' `/api/units/:id/follow-up`,
+ * also reachable through the answer-submit and plan-feedback flows), which
+ * — when the task's tmux window is still alive, the common case for both —
+ * resumes onto that SAME window without minting a new token (design v3 §2:
+ * "resume onto an existing window never rotates"). Revoking on a status the
+ * task can still be resumed from would hand that resumed pane a dead token
+ * and 401 every authorized call it makes.
+ *   - `review`: the success terminal of a normal run. Follow-up on a
+ *     `review` task is the PRIMARY way a human continues it (feedback,
+ *     more work) — this is not an edge case.
+ *   - `failed`: also follow-up-resumable in practice. The purpose-built
+ *     `POST /api/tasks/:id/retry` path explicitly clears `tmuxWindow` before
+ *     resetting to `open`, so it always gets a fresh window + token and
+ *     never depends on this set either way — but most `failed` transitions
+ *     in ExecuteTaskUseCase/PhaseLoopRunner do NOT clear `tmuxWindow`, and
+ *     the frontend's follow-up comment box is enabled for `failed` exactly
+ *     like it is for `review` (`TaskLogView.tsx`'s `canComment` excludes
+ *     only `in_progress`/`open`). So a `failed` task with a live window hits
+ *     the identical resume-onto-existing-window path as `review` and must
+ *     be excluded for the same reason.
+ *   - `done`/`archived`: neither is resumed onto a live window. `done` is
+ *     not reachable through the normal completion flow at all (that always
+ *     lands on `review` — see PhaseLoopRunner.finalize()); `archived` always
+ *     clears `tmuxWindow` in the same write that sets the status (tasks
+ *     routes' archive handler). Revoking here can never break a resume.
+ *
+ * A revoked token's authority is narrow (a handful of read-only,
+ * own-task-scoped routes — see routeAuth.ts), so keeping it alive through
+ * `review`/`failed` is not a meaningful risk increase; it is fully retired
+ * the moment the task reaches a true terminal state (`done`/`archived`) or
+ * is deleted.
+ */
+const TOKEN_REVOKING_STATUSES: ReadonlySet<TaskStatus> = new Set(['done', 'archived']);
 
 interface TaskRow {
   id: number;
@@ -39,6 +91,9 @@ interface TaskRow {
   agent_session_id: string | null;
   review_subagent: string | null;
   implement_subagent: string | null;
+  created_by_kind: string;
+  created_by_id: number | null;
+  created_via_generation: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -73,14 +128,17 @@ export class SqliteTaskRepository implements ITaskRepository {
   private touchStmt;
   private deleteStmt;
   private findAgentSessionIdsByServerStmt;
-  constructor(private db: SqliteDatabase) {
+  private countChildrenStmt;
+  private countChildrenInGenerationStmt;
+  private clearTmuxWindowIfMatchesStmt;
+  constructor(private db: SqliteDatabase, private taskTokenRepo: ITaskTokenRepository) {
     this.listStmt = db.prepare('SELECT * FROM tasks ORDER BY priority DESC, created_at DESC');
     this.listByProjectStmt = db.prepare('SELECT * FROM tasks WHERE project_id = ? ORDER BY priority DESC, created_at DESC');
     this.listByUnitStmt = db.prepare('SELECT * FROM tasks WHERE unit_id = ? ORDER BY priority DESC, created_at DESC');
     this.listByStatusStmt = db.prepare('SELECT * FROM tasks WHERE status = ? ORDER BY priority DESC, created_at DESC');
     this.getStmt = db.prepare('SELECT * FROM tasks WHERE id = ?');
     this.createStmt = db.prepare(
-      'INSERT INTO tasks (project_id, unit_id, server_name, title, description, priority, tmux_window, self_review_max_attempts, require_plan_approval, source, source_ref, worktree_path, worktree_branch, base_branch, target_branch, skip_pr, working_directory, branch, plan_markdown, pending_questions, changed_files, summary_json, pr_url, agent_session_id, review_subagent, implement_subagent, input_trust, execution_approved_fingerprint_hash, pending_operation, pending_operation_window_id, pending_operation_prior_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO tasks (project_id, unit_id, server_name, title, description, priority, tmux_window, self_review_max_attempts, require_plan_approval, source, source_ref, worktree_path, worktree_branch, base_branch, target_branch, skip_pr, working_directory, branch, plan_markdown, pending_questions, changed_files, summary_json, pr_url, agent_session_id, review_subagent, implement_subagent, input_trust, execution_approved_fingerprint_hash, pending_operation, pending_operation_window_id, pending_operation_prior_status, created_by_kind, created_by_id, created_via_generation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
     this.updateStmt = db.prepare(
       "UPDATE tasks SET title = ?, description = ?, status = ?, unit_id = ?, server_name = ?, priority = ?, tmux_window = ?, self_review_max_attempts = ?, require_plan_approval = ?, source = ?, source_ref = ?, worktree_path = ?, worktree_branch = ?, base_branch = ?, target_branch = ?, skip_pr = ?, working_directory = ?, branch = ?, plan_markdown = ?, pending_questions = ?, changed_files = ?, summary_json = ?, pr_url = ?, agent_session_id = ?, review_subagent = ?, implement_subagent = ?, input_trust = ?, execution_approved_fingerprint_hash = ?, pending_operation = ?, pending_operation_window_id = ?, pending_operation_prior_status = ?, updated_at = datetime('now') WHERE id = ?",
@@ -126,6 +184,20 @@ export class SqliteTaskRepository implements ITaskRepository {
     this.deleteStmt = db.prepare('DELETE FROM tasks WHERE id = ?');
     this.findAgentSessionIdsByServerStmt = db.prepare(
       'SELECT DISTINCT agent_session_id FROM tasks WHERE server_name = ? AND agent_session_id IS NOT NULL',
+    );
+    this.countChildrenStmt = db.prepare(
+      "SELECT COUNT(*) AS n FROM tasks WHERE created_by_kind = 'task' AND created_by_id = ?",
+    );
+    this.countChildrenInGenerationStmt = db.prepare(
+      "SELECT COUNT(*) AS n FROM tasks WHERE created_by_kind = 'task' AND created_by_id = ? AND created_via_generation = ?",
+    );
+    // Guarded compare-and-clear for clearTmuxWindowIfMatches() — see that
+    // method's doc comment on ITaskRepository (Issue #28 third-party review,
+    // Fix 3). Only clears when the row's current tmux_window still equals
+    // the caller's own generation's window name; a concurrent rotation that
+    // already replaced it with a newer window leaves this a no-op.
+    this.clearTmuxWindowIfMatchesStmt = db.prepare(
+      "UPDATE tasks SET tmux_window = NULL, updated_at = datetime('now') WHERE id = ? AND tmux_window = ?",
     );
   }
 
@@ -188,6 +260,9 @@ export class SqliteTaskRepository implements ITaskRepository {
       data.pendingOperation ?? null,
       data.pendingOperationWindowId ?? null,
       data.pendingOperationPriorStatus ?? null,
+      data.createdByKind,
+      data.createdById ?? null,
+      data.createdViaGeneration ?? null,
     );
     return Number(result.lastInsertRowid);
   }
@@ -195,6 +270,18 @@ export class SqliteTaskRepository implements ITaskRepository {
   update(id: number, data: Partial<Task>): void {
     const current = this.getStmt.get(id) as TaskRow | undefined;
     if (!current) return;
+    const run = this.db.transaction(() => {
+      this.runUpdateStmt(id, data, current);
+      // Only an explicit status write can move the task into a terminal
+      // status here — a write that leaves status untouched can't newly
+      // terminate it, and revoking on every unrelated field write (e.g. a
+      // plain agentSessionId update) would just be dead work.
+      if (data.status !== undefined) this.revokeIfTokenRevokingStatus(id, data.status);
+    });
+    run();
+  }
+
+  private runUpdateStmt(id: number, data: Partial<Task>, current: TaskRow): void {
     this.updateStmt.run(
       data.title ?? current.title,
       data.description ?? current.description,
@@ -232,8 +319,19 @@ export class SqliteTaskRepository implements ITaskRepository {
   }
 
   consumePendingApproval(id: number, fields: { status?: TaskStatus; executionApprovedFingerprintHash?: string }): boolean {
-    const result = this.consumePendingApprovalStmt.run(fields.status ?? null, fields.executionApprovedFingerprintHash ?? null, id);
-    return result.changes > 0;
+    const run = this.db.transaction(() => {
+      const result = this.consumePendingApprovalStmt.run(fields.status ?? null, fields.executionApprovedFingerprintHash ?? null, id);
+      // A deny decision can land the task on 'failed'/'archived' (see
+      // ExecutionApprovalDecision.ts's denyStatus) in this same guarded
+      // UPDATE, never through updateStatus(). Route it through the same
+      // revocation helper regardless — only 'archived' actually revokes
+      // (see the doc comment on TOKEN_REVOKING_STATUSES above), but every
+      // status-writing path must go through this chokepoint so none of them
+      // has to know which statuses revoke.
+      if (result.changes > 0 && fields.status !== undefined) this.revokeIfTokenRevokingStatus(id, fields.status);
+      return result.changes > 0;
+    });
+    return run();
   }
 
   recordExecutionGateBlock(
@@ -270,7 +368,24 @@ export class SqliteTaskRepository implements ITaskRepository {
   }
 
   updateStatus(id: number, status: TaskStatus): void {
-    this.updateStatusStmt.run(status, id);
+    const run = this.db.transaction(() => {
+      this.updateStatusStmt.run(status, id);
+      this.revokeIfTokenRevokingStatus(id, status);
+    });
+    run();
+  }
+
+  /**
+   * Single internal chokepoint for token revocation on a status write — see
+   * the doc comment on TOKEN_REVOKING_STATUSES above. Callers MUST invoke
+   * this inside the same `this.db.transaction(...)` as the status-writing
+   * UPDATE it follows, so a crash between the two can never leave a
+   * revoking status with live tokens.
+   */
+  private revokeIfTokenRevokingStatus(id: number, status: TaskStatus): void {
+    if (TOKEN_REVOKING_STATUSES.has(status)) {
+      this.taskTokenRepo.revokeAllForTask(id, `task_status:${status}`);
+    }
   }
 
   updateCurrentPhase(id: number, phase: string | null): void {
@@ -282,7 +397,28 @@ export class SqliteTaskRepository implements ITaskRepository {
   }
 
   delete(id: number): void {
-    this.deleteStmt.run(id);
+    // Deletion revokes (not cascades) outstanding task tokens in the same
+    // transaction — see the doc comment on ITaskTokenRepository.revokeAllForTask.
+    const run = this.db.transaction(() => {
+      this.taskTokenRepo.revokeAllForTask(id, 'task_deleted');
+      this.deleteStmt.run(id);
+    });
+    run();
+  }
+
+  countChildren(parentTaskId: number): number {
+    const row = this.countChildrenStmt.get(parentTaskId) as { n: number };
+    return row.n;
+  }
+
+  countChildrenInGeneration(parentTaskId: number, generation: number): number {
+    const row = this.countChildrenInGenerationStmt.get(parentTaskId, generation) as { n: number };
+    return row.n;
+  }
+
+  clearTmuxWindowIfMatches(id: number, expectedWindowName: string): boolean {
+    const result = this.clearTmuxWindowIfMatchesStmt.run(id, expectedWindowName);
+    return result.changes > 0;
   }
 
   private toEntity(row: TaskRow): Task {
@@ -330,6 +466,9 @@ export class SqliteTaskRepository implements ITaskRepository {
         | null,
       pendingOperationWindowId: row.pending_operation_window_id ?? null,
       pendingOperationPriorStatus: (row.pending_operation_prior_status ?? null) as TaskStatus | null,
+      createdByKind: row.created_by_kind as Task['createdByKind'],
+      createdById: row.created_by_id ?? null,
+      createdViaGeneration: row.created_via_generation ?? null,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };

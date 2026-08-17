@@ -2,6 +2,13 @@ import type { Database as SqliteDatabase } from 'better-sqlite3';
 import type { Window, PaneLayout, IWindowRepository } from './Window';
 import { isSameWindowTarget } from './paneTarget';
 
+// Re-exported so tmux/routes/sessions.ts (base layer — dependency-cruiser's
+// `base-tmux-limited-upward` rule only allow-lists this file, not Window.ts
+// itself) can share the exact same primary-window judgment
+// WindowRespawnService uses, instead of re-deriving it inline (Issue #28
+// third-party review finding — see isPrimaryTaskWindow's own doc comment).
+export { isPrimaryTaskWindow } from './Window';
+
 interface WindowRow {
   id: number;
   owner_type: string;
@@ -32,6 +39,7 @@ export class SqliteWindowRepository implements IWindowRepository {
   private findProjectWindowStmt;
   private findByServerStmt;
   private findAgentSessionIdsByServerStmt;
+  private nowStmt;
 
   constructor(private db: SqliteDatabase) {
     this.addStmt = db.prepare(`
@@ -51,6 +59,11 @@ export class SqliteWindowRepository implements IWindowRepository {
     this.findAgentSessionIdsByServerStmt = db.prepare(
       'SELECT DISTINCT agent_session_id FROM windows WHERE server_name = ? AND agent_session_id IS NOT NULL',
     );
+    this.nowStmt = db.prepare("SELECT datetime('now') as ts");
+  }
+
+  now(): string {
+    return (this.nowStmt.get() as { ts: string }).ts;
   }
 
   add(window: Omit<Window, 'id' | 'createdAt'>): number {
@@ -138,6 +151,12 @@ export class SqliteWindowRepository implements IWindowRepository {
     // Supervised-or-not is now derived from windowType, so the choice doesn't affect that.
     const row = matches.find((r) => r.task_id !== null) ?? matches[0];
     return this.toWindow(row);
+  }
+
+  findByServerAndSession(serverName: string, sessionName: string): Window[] {
+    const rows = this.findByServerStmt.all(serverName) as WindowRow[];
+    const prefix = `${sessionName}:`;
+    return rows.filter((r) => r.tmux_target.startsWith(prefix)).map((r) => this.toWindow(r));
   }
 
   update(id: number, data: Partial<Pick<Window,

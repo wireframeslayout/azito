@@ -23,6 +23,7 @@ import serversRoutes from '../modules/servers/routes';
 import projectsRoutes from '../modules/projects/routes';
 import unitsRoutes from '../modules/units/routes';
 import operationsRoutes from '../modules/operations/routes';
+import auditLogRoutes from '../modules/audit/routes';
 import tasksRoutes from '../modules/tasks/routes';
 import providersRoutes from '../modules/agents/routes';
 import phasePromptsRoutes from '../modules/prompt/routes';
@@ -48,6 +49,13 @@ import { TranscriptPaneService } from '../modules/transcripts/TranscriptPaneServ
 import { WindowInputService } from '../modules/transcripts/WindowInputService';
 
 import { createTokenVerifier } from '../modules/servers/auth/tokenAuth';
+import { resolvePrincipal } from '../shared/auth/resolvePrincipal';
+import { evaluateRouteAuth, UNMATCHED_ROUTE } from '../shared/auth/routeAuth';
+import { resolveUnitId } from '../modules/tasks/execution/TaskExecutionEnv';
+import { destroyPrimaryTaskWindow, destroyPrimaryTaskWindowsForSessionKill } from '../modules/tasks/execution/TaskWindowDestruction';
+import { resolvePhaseSidekick } from '../modules/sidekicks/resolvePhaseSidekick';
+import type { Principal } from '../shared/auth/Principal';
+import type { RouteAuthRequirement } from '../shared/auth/routeAuth';
 
 import { handleTerminalConnection } from '../modules/tmux/ws/terminalHandler';
 import { handleTaskLogStream } from '../modules/tasks/ws/taskLogHandler';
@@ -71,7 +79,7 @@ export interface ServerHandles {
 
 export async function buildServer(app: FastifyInstance, wiring: Wiring, port: number): Promise<ServerHandles> {
   const {
-    serverRepo, windowRepo, projectRepo, projectServerRepo, unitRepo, taskRepo, logRepo,
+    serverRepo, windowRepo, projectRepo, projectServerRepo, unitRepo, taskRepo, taskTokenRepo, logRepo,
     projectSecretRepo, storageSettingsRepo, pushSubRepo, agentWatchRepo, resourceGuardSettingsRepo, resourceGuard,
     tmuxClient, transportFactory, worktreeServiceFactory, gitProvider, storageClient,
     agentInstaller, agentBundler, harnessInstaller, tmuxInstaller,
@@ -79,7 +87,8 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     windowSessionResolver, windowActivityStatusService,
     pushService, vapidKeys, notificationBus, sidekickPackageService, sidekickPackageLoader,
     sidekickSyncService, unitTypeLoader, chatCommandLoader, agentSignalService, supervisorRegistry, agentTurnRepo, turnSignalHub,
-    browserSessionManager, deployModeDetector, systemUpdateService, channelResolver,
+    browserSessionManager, browserGroupRepo, deployModeDetector, systemUpdateService, channelResolver, auditLogService,
+    originationService, scopedAuthEnabled, taskPaneEnvironmentService,
   } = wiring;
 
   // ─── Webhook token ───
@@ -181,6 +190,11 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // (C) ready bridge — forwards the child TUI's boot-complete signal to the
   //     frontend as a `supervisor:ready` notification (events WS).
   supervisorRegistry.on('activity', (event) => {
+    // Issue #28 Phase C (design v3 §8): an `unbound` connection (manual `azs`
+    // under scoped auth) is display-only — it must never refresh a task
+    // turn's idle timer or override AgentActivityMonitor's Tier 0, since its
+    // claimed taskId/unitId were never verified against a persisted launch.
+    if (!event.bound) return;
     bridgeSupervisorActivityToProgress(event, { agentTurnRepo, turnSignalHub });
     // Label a "pure supervised" entry (no windows-table row) from the child
     // command's first token (e.g. "claude --dangerously-skip-permissions" →
@@ -189,10 +203,36 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     const label = event.childCommand.trim().split(/\s+/)[0] || null;
     agentActivityMonitor.recordSupervisorSignal(event.serverName, event.target, event.state, event.taskId, label, event.status);
   });
+  // Issue #28 third-party review (Important): promotion vs. deletion are
+  // asymmetric here on purpose. `activity` above only fires for `bound`
+  // connections — an unbound connection's claimed taskId/unitId is
+  // unverified, so it must never be allowed to CREATE/refresh Tier 0 state
+  // (the "isBoundConnected"-style rule that keeps applying above). `exited`
+  // (child_exit/disconnected), by contrast, only DELETES whatever Tier 0
+  // state is currently recorded for the key (see
+  // AgentActivityMonitor.recordSupervisorSignal's doc comment) — relaying it
+  // regardless of `bound` is what actually closes the bug this fixes: after
+  // `downgradeToUnbound()` flips a connection's authority off (see
+  // SupervisorRegistry's `authority_revoked` handler below), that SAME
+  // connection's own eventual child_exit/disconnect must still be able to
+  // clear a stale Tier 0 entry it can no longer refresh — deleting stale
+  // state is always safe, unlike asserting new state from an unverified
+  // source.
   supervisorRegistry.on('child_exit', (event) => {
     agentActivityMonitor.recordSupervisorSignal(event.serverName, event.target, 'exited');
   });
   supervisorRegistry.on('disconnected', (event) => {
+    agentActivityMonitor.recordSupervisorSignal(event.serverName, event.target, 'exited');
+  });
+  // Issue #28 third-party review (Important): a downgrade to unbound
+  // (superseded-launch case — see downgradeToUnbound's doc comment) leaves
+  // the connection itself alive, so neither child_exit nor disconnected
+  // fires to trigger the cleanup above. Without this, a stale Tier 0
+  // verdict recorded from this connection's earlier (bound) activity frames
+  // would linger — and, worse, downstream consumers would stop receiving
+  // even the deletion-only child_exit/disconnected events for it, because
+  // (pre-fix) both were gated on `event.bound`. Clear it immediately here.
+  supervisorRegistry.on('authority_revoked', (event) => {
     agentActivityMonitor.recordSupervisorSignal(event.serverName, event.target, 'exited');
   });
   supervisorRegistry.on('ready', (event) => {
@@ -214,6 +254,104 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // frequent responses (health, sessions) from paying compression overhead.
   await app.register(compress, { global: true, threshold: 1024, encodings: ['gzip', 'deflate'] });
 
+  // ─── Authorization (Issue #28 Phase A) ───
+  //
+  // AZITO_SCOPED_AUTH gates whether a route auth declaration's rejection is
+  // actually enforced (403) or only audit-logged as "would have been
+  // denied" (design v3 §12 staged migration: A~E all merge behind this
+  // flag, then it flips on once every stage is deployed). Default off keeps
+  // every existing behavior byte-for-byte identical except that task panes
+  // now always carry an AZITO_TASK_TOKEN (see TaskPaneEnvironmentService) —
+  // a credential nothing recognized before Phase A, so its presence changes
+  // nothing observable until AZITO_SCOPED_AUTH=1.
+  //
+  // Resolved ONCE in app/wiring.ts (shared/auth/scopedAuthFlag.ts) — not
+  // read from process.env here — so this file and
+  // TaskPaneEnvironmentService (constructed earlier, in wiring.ts) can never
+  // disagree about which mode the hub is running in.
+
+  // ── GET /api/sidekicks(/:name) task-principal auth ──
+  // Cross-module (task -> project -> unit -> phaseConfig -> Sidekick tags)
+  // lookup, so it lives here rather than in modules/sidekicks/routes.ts —
+  // sidekicks is a mid-layer module and must not depend on tasks/units
+  // (see .dependency-cruiser.cjs's mid-sidekicks-limited rule).
+  //
+  // Single source of truth for "which Sidekicks is this task's Unit allowed
+  // to see" — both the detail route's condition (single-name check) and the
+  // list route's response filter (Issue #28 third-party review fix 1+2:
+  // GET /api/sidekicks previously had no task-principal auth at all, and
+  // GET /api/sidekicks/:name required an explicit task_id even though the
+  // task pane's own AZITO_TASK_ID env var already identifies it) derive from
+  // this one resolver, never reimplementing the phase-walk themselves.
+  function resolveAssignedSidekickNamesForTask(taskId: number): Set<string> {
+    const task = taskRepo.findById(taskId);
+    if (!task) return new Set();
+    const project = projectRepo.findById(task.projectId);
+    const resolvedUnitId = resolveUnitId(task, project);
+    if (resolvedUnitId === null) return new Set();
+    const unit = unitRepo.findById(resolvedUnitId);
+    if (!unit) return new Set();
+    const unitType = unitTypeLoader.getOrThrow(unit.unitType);
+    const names = new Set<string>();
+    for (const phaseDef of unitType.phases) {
+      try {
+        const pkg = resolvePhaseSidekick(sidekickPackageLoader, phaseDef.name, unit.phaseConfig, phaseDef);
+        names.add(pkg.name);
+      } catch {
+        // Phase misconfigured (e.g. assigned package no longer exists) — not
+        // a grant for this task, fall through to the next phase.
+      }
+    }
+    return names;
+  }
+
+  const sidekickDetailAuth: RouteAuthRequirement = {
+    classes: ['task'],
+    operation: 'sidekicks.render',
+    condition: (principal, request) => {
+      const query = request.query as { render?: string; task_id?: string };
+      if (query.render !== '1' || !query.task_id) return false;
+      const taskId = Number(query.task_id);
+      if (!Number.isInteger(taskId) || principal.id !== taskId) return false;
+      const name = (request.params as { name: string }).name;
+      return resolveAssignedSidekickNamesForTask(taskId).has(name);
+    },
+  };
+
+  // GET /api/sidekicks (list): a task principal is always allowed to reach
+  // the route — the response itself is narrowed to that task's Unit's
+  // assigned Sidekicks in modules/sidekicks/routes.ts via
+  // `resolveAssignedSidekickNames`, so there's no per-name relationship to
+  // check at the auth-gate level (unlike the detail route, which grants or
+  // denies a single named Sidekick).
+  const sidekickListAuth: RouteAuthRequirement = {
+    classes: ['task'],
+    operation: 'sidekicks.list',
+  };
+
+  /**
+   * `POST /api/projects/:id/storage/upload`: a task principal may only
+   * upload into its OWN task's project (Issue #28 Phase E requirement 5 —
+   * this is the upload route `browser-ops` uses to save screenshots/assets).
+   * Built here, not in modules/files/routes.ts, for the same
+   * cross-module-lookup reason `sidekickDetailAuth` above is (files is an
+   * upper-layer module and must not depend on tasks, another upper-layer
+   * module — `.dependency-cruiser.cjs`). `:id` is a route PARAM (unlike
+   * `close-group`'s body-only `group` — see browserCloseGroupAuth's own doc
+   * comment), so it IS available at the onRequest stage this condition runs
+   * at, and a `condition` (not an in-handler check) is the right shape here.
+   */
+  const storageUploadAuth: RouteAuthRequirement = {
+    classes: ['task'],
+    operation: 'storage.upload',
+    condition: (principal, request) => {
+      const projectId = Number((request.params as { id: string }).id);
+      if (!Number.isInteger(projectId)) return false;
+      const task = principal.id !== undefined ? taskRepo.findById(principal.id) : undefined;
+      return task !== undefined && task !== null && task.projectId === projectId;
+    },
+  };
+
   app.addHook('onRequest', async (request, reply) => {
     if (!request.url.startsWith('/api')) return;
     if (request.url.startsWith('/api/health')) return;
@@ -221,22 +359,122 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     if (request.url.startsWith('/api/hooks/')) return;
     if (request.url.startsWith('/api/agent-signal')) return;
 
-    if (!verifyUiToken(request.headers.authorization)) {
+    const principal = resolvePrincipal(request.headers.authorization, { verifyUiToken, taskTokenRepo });
+    if (!principal) {
       return reply.status(401).send({ error: 'Unauthorized' });
+    }
+    request.principal = principal;
+
+    const { allowed, operation } = evaluateRouteAuth(principal, request);
+    if (!allowed) {
+      // Audit persistence is best-effort: a write failure (disk full, locked
+      // DB, etc.) must never overturn the authorization decision already
+      // computed above. Without this catch, a throwing record() would
+      // propagate out of this hook and Fastify would answer with a generic
+      // 500 instead of the 403 (enforcement) / pass-through (compat) the
+      // evaluation actually produced — silently upgrading a would-be-denied
+      // request's visible failure mode (Issue #28 third-party review finding).
+      try {
+        auditLogService.record({
+          actorClass: principal.class,
+          actorId: principal.id ?? null,
+          event: scopedAuthEnabled ? 'route_auth.denied' : 'route_auth.would_deny',
+          // The normalized ROUTE path (e.g. '/api/tasks/:id'), never
+          // request.url — that includes the raw query string, which can carry
+          // arbitrary caller-supplied values (search terms, tokens pasted into
+          // a query param by mistake, etc.) into audit_log (Issue #28
+          // third-party review finding 3). An UNMATCHED route (no route at all
+          // — routeOptions.url is undefined) falls back to the fixed
+          // UNMATCHED_ROUTE placeholder, never request.url: the raw URL here
+          // is fully caller-controlled (an unmatched path always 403s before
+          // this point) and varying its query string on every probe would
+          // otherwise defeat AuditLogService's flood dedup, which keys on the
+          // full JSON-serialized `detail` (Issue #28 third-party review
+          // finding 2 — a later round on the same file).
+          detail: { operation, method: request.method, url: request.routeOptions.url ?? UNMATCHED_ROUTE },
+        });
+      } catch (err) {
+        request.log.error({ err, operation }, 'route_auth audit log write failed; continuing with computed decision');
+      }
+      if (scopedAuthEnabled) {
+        return reply.status(403).send({ error: 'operator_required', operation });
+      }
     }
   });
 
   // ─── HTTP routes ───
 
   await app.register(serversRoutes, { serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix });
-  await app.register(sessionsRoutes, { serverRepo, tmux: tmuxClient, windowRepo, notificationBus, resourceGuard });
+  await app.register(sessionsRoutes, {
+    serverRepo, tmux: tmuxClient, windowRepo, notificationBus, resourceGuard,
+    destroyPrimaryTaskWindow: (taskId, windowName, serverName, target, reason, kill, onDestroyed) => {
+      // Issue #28 third-party review, D-track fix 2: resolve (and hold) the
+      // launch BEFORE the kill runs — not a live-connection lookup at
+      // cleanup time (`markLaunchExpired`'s original behavior), which misses
+      // every case where the supervisor's connection already died along with
+      // the pane being killed. See SupervisorRegistry.resolveLaunchForExpiry's
+      // doc comment.
+      const launchId = supervisorRegistry.resolveLaunchForExpiry(serverName, target);
+      return destroyPrimaryTaskWindow(taskId, windowName, taskRepo, taskPaneEnvironmentService, reason, kill, () => {
+        onDestroyed();
+        supervisorRegistry.expireResolvedLaunch(launchId);
+      });
+    },
+    destroySessionWindows: (resolveWindows, serverName, reason, killSession) => {
+      return destroyPrimaryTaskWindowsForSessionKill(
+        () => resolveWindows().map((w) => {
+          // Same resolve-before-kill pattern as destroyPrimaryTaskWindow
+          // above, applied per window — each window may belong to a launch
+          // registered under its own target. `resolveWindows` (and so this
+          // whole mapping) is re-invoked by destroyPrimaryTaskWindowsForSessionKill
+          // right before the kill actually runs (see its doc comment), so
+          // `resolveLaunchForExpiry` is resolved at that same authoritative
+          // moment — never against a snapshot taken before the lock.
+          const launchId = supervisorRegistry.resolveLaunchForExpiry(serverName, w.target);
+          return {
+            ...w,
+            onDestroyed: () => {
+              w.onDestroyed();
+              supervisorRegistry.expireResolvedLaunch(launchId);
+            },
+          };
+        }),
+        taskRepo,
+        taskPaneEnvironmentService,
+        reason,
+        killSession,
+      );
+    },
+    buildSecondaryWindowEnv: (taskId, server) => {
+      const task = taskRepo.findById(taskId);
+      // Should be unreachable in practice (the caller only reaches here for
+      // a `windowRow.taskId` pulled from the same `windows` table row that
+      // references this task), but a task that no longer exists must not
+      // fall back to a legacy/empty env — mask both credentials exactly as
+      // buildEnvForSecondaryWindow's else-branch does.
+      if (!task) return { AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' };
+      return taskPaneEnvironmentService.buildEnvForSecondaryWindow(task, server);
+    },
+  });
   const fileSearchService = new FileSearchService(transportFactory);
   await app.register(fileBrowseRoutes, { serverRepo, tmux: tmuxClient, projectServerRepo, transportFactory, searchService: fileSearchService });
   await app.register(gitRoutes, { serverRepo, transportFactory, taskRepo, projectServerRepo, worktreeServiceFactory });
-  await app.register(projectsRoutes, { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux: tmuxClient, serverRepo, projectSecretRepo });
+  await app.register(projectsRoutes, { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux: tmuxClient, serverRepo, projectSecretRepo, originationService });
   await app.register(unitsRoutes, { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, projectServerRepo, serverRepo, sidekickLoader: sidekickPackageLoader, unitTypeLoader });
   await app.register(operationsRoutes, { executeTaskUseCase, agentActivityMonitor, supervisorRegistry, windowRepo });
-  await app.register(tasksRoutes, { taskRepo, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux: tmuxClient, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService: windowRespawnService, taskRestoreService, unitTypeLoader, sidekickLoader: sidekickPackageLoader, projectSecretRepo });
+  await app.register(auditLogRoutes, { auditLogService });
+  await app.register(tasksRoutes, {
+    taskRepo, auditLogService, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux: tmuxClient, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService: windowRespawnService, taskRestoreService, unitTypeLoader, sidekickLoader: sidekickPackageLoader, projectSecretRepo, originationService, taskTokenRepo,
+    destroyPrimaryTaskWindow: (taskId, windowName, serverName, target, reason, kill, onDestroyed) => {
+      // Issue #28 third-party review, D-track fix 2 — see the identical
+      // wiring on sessionsRoutes above for the rationale.
+      const launchId = supervisorRegistry.resolveLaunchForExpiry(serverName, target);
+      return destroyPrimaryTaskWindow(taskId, windowName, taskRepo, taskPaneEnvironmentService, reason, kill, () => {
+        onDestroyed();
+        supervisorRegistry.expireResolvedLaunch(launchId);
+      });
+    },
+  });
   await app.register(windowsRoutes, { windowRepo, projectRepo, taskRepo, tmux: tmuxClient, serverRepo, respawnService: windowRespawnService, sessionStrategyFactory, sessionCaptureService, supervisorRegistry, windowActivityStatusService, notificationBus, resourceGuard });
   await app.register(providersRoutes, { providerRepo: wiring.providerRepo });
   const renderSkillPromptUseCase = new RenderSkillPromptUseCase(
@@ -252,7 +490,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   );
 
   await app.register(phasePromptsRoutes, { sidekickLoader: sidekickPackageLoader, renderSkillPromptUseCase, unitTypeLoader });
-  await app.register(storageRoutes, { projectRepo, storageSettingsRepo, storageClient });
+  await app.register(storageRoutes, { projectRepo, storageSettingsRepo, storageClient, uploadAuth: storageUploadAuth });
   await app.register(resourceGuardRoutes, { settingsRepo: resourceGuardSettingsRepo, resourceGuard, serverRepo, transportFactory });
   await app.register(notificationRoutes, { pushSubRepo, pushService, vapidKeys, agentWatchRepo });
   await app.register(usageRoutes, { usageService });
@@ -262,7 +500,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     recordAgentActivity: (signal) => agentActivityMonitor.recordHookSignal(signal),
     recordInteractionSignal: (signal) => interactionMonitor.recordSignal(signal),
   });
-  await app.register(agentSignalRoutes, { agentSignalService, verifyToken: verifyWebhookToken });
+  await app.register(agentSignalRoutes, { agentSignalService, verifyToken: verifyWebhookToken, auditLogService });
   await app.register(hooksRoutes, { notificationBus, verifyToken: verifyWebhookToken });
   const taskPromptVarsResolver = new TaskPromptVarsResolver(
     taskRepo,
@@ -274,10 +512,18 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     sidekickPackageLoader,
     sidekickSyncService,
   );
-  await app.register(sidekicksRoutes, { sidekickService: sidekickPackageService, taskPromptVarsResolver, unitTypeLoader });
+  await app.register(sidekicksRoutes, {
+    sidekickService: sidekickPackageService,
+    taskPromptVarsResolver,
+    unitTypeLoader,
+    detailAuth: sidekickDetailAuth,
+    listAuth: sidekickListAuth,
+    resolveAssignedSidekickNames: resolveAssignedSidekickNamesForTask,
+    scopedAuthEnabled,
+  });
   await app.register(chatCommandsRoutes, { chatCommandLoader });
   await app.register(supervisorsRoutes, { supervisorRegistry });
-  await app.register(healthRoutes, { deployModeDetector });
+  await app.register(healthRoutes, { deployModeDetector, scopedAuthEnabled });
   await app.register(transcriptsRoutes, {
     sources: TRANSCRIPT_SOURCES,
     transcriptPaneService: new TranscriptPaneService(claudeTranscriptSource, tmuxClient, serverRepo),
@@ -290,6 +536,8 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   await app.register(browserRoutes, {
     browserSessionManager,
     serverRepo,
+    browserGroupRepo,
+    auditLogService,
     onTabOpened: (payload) => {
       notificationBus.emit({ type: 'browser:opened', payload });
     },

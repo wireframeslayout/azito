@@ -24,7 +24,7 @@ git 操作は `{{sidekick.dir}}/scripts/push.sh` に委譲される）から サ
 
 ```bash
 TASK_ID="$1"
-curl -sf -H "Authorization: Bearer ${AZITO_UI_TOKEN}" "${AZITO_URL}/api/phase-prompts/pushing?render=skill&task_id=${TASK_ID}"
+curl -sf -H "Authorization: Bearer ${AZITO_TASK_TOKEN:-$AZITO_UI_TOKEN}" "${AZITO_URL}/api/phase-prompts/pushing?render=skill&task_id=${TASK_ID}"
 ```
 
 取得した JSON の `prompt` フィールドがこのフェーズの指示内容です。`nextPhase` フィールドが次フェーズのスキル名（最終フェーズの場合は null）です。

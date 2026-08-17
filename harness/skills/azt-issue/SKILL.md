@@ -10,6 +10,8 @@ argument-hint: [issue description (optional)]
 
 # azt-issue -- イシュー作成スキル（ラッパー）
 
+> **オペレーター専用**（UI トークンが必要）。タスクペインで実行すると operator_required になる。
+
 イシュー作成の実装手順は Sidekick パッケージ `issue-default`
 （`harness/sidekicks/issue-default`）に集約されている。このスキルは薄いラッパーであり、
 `issue-default` のレンダリング済み本文を取得し、その指示にそのまま従う。

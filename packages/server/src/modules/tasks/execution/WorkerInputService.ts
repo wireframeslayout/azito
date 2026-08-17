@@ -23,8 +23,18 @@ export type AppendLogFn = (taskId: number, unitId: number, type: LogType, conten
 const SHELL_COMMANDS = new Set(['bash', 'zsh', 'sh', 'fish', 'dash']);
 
 /**
- * Routes worker input through the supervisor's PTY when a supervisor is
+ * Routes worker input through the supervisor's PTY when a BOUND supervisor is
  * connected for the target pane, otherwise falls back to tmux send-keys.
+ *
+ * Issue #28 third-party review (Important): this carries task input (prompt
+ * injection / key sends) into the pane, so it must apply the same "unbound
+ * is display-only" contract Tier 0/turn-idle-refresh already follow
+ * (SupervisorConnection.bound's doc comment) — an unbound connection's
+ * claimed taskId/unitId was never verified against a persisted launch, so
+ * routing this task's input to it would hand task input to an unverified
+ * process. `isBoundConnected` (not `isConnected`) gates both send paths
+ * below; an unbound (or absent) connection falls through to the tmux
+ * send-keys path, same as "no supervisor" always has.
  */
 export class WorkerInputService {
   constructor(
@@ -41,7 +51,7 @@ export class WorkerInputService {
     supervisorTarget?: string,
   ): Promise<void> {
     const supervisorKey = supervisorTarget ?? target;
-    if (this.registry.isConnected(server.name, supervisorKey)) {
+    if (this.registry.isBoundConnected(server.name, supervisorKey)) {
       try {
         await this.registry.sendCommand(server.name, supervisorKey, { type: 'inject_prompt', text, submit: true });
         return;
@@ -74,7 +84,7 @@ export class WorkerInputService {
     supervisorTarget?: string,
   ): Promise<void> {
     const supervisorKey = supervisorTarget ?? target;
-    if (this.registry.isConnected(server.name, supervisorKey)) {
+    if (this.registry.isBoundConnected(server.name, supervisorKey)) {
       try {
         await this.registry.sendCommand(server.name, supervisorKey, { type: 'send_keys', keys });
         return;

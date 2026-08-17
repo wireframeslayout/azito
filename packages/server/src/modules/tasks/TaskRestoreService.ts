@@ -7,6 +7,7 @@ import type { IUnitRepository } from '../units/Unit';
 import type { IWindowRepository } from '../windows/Window';
 import type { SqliteProjectSecretRepository } from '../projects/SqliteProjectSecretRepository';
 import type { TmuxClient } from '../tmux/TmuxClient';
+import { createRotatedWindow, rollbackWindowReference, runExclusiveForTask } from './execution/WindowRotation';
 import type { WorktreeServiceFactory } from '../git/WorktreeServiceFactory';
 import { PathResolverFactory, assertDirectoryContained } from '../git/PathContainment';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
@@ -18,6 +19,7 @@ import { shellQuote } from '../../shared/shellQuote';
 import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError } from './execution/ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest } from './execution/ExecutionManifest';
 import { appendLogAndEmit } from './execution/AppendLog';
+import type { TaskPaneEnvironmentService } from './execution/TaskPaneEnvironmentService';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { EventEmitter } from 'events';
@@ -55,6 +57,8 @@ export interface TaskRestoreDeps {
   // AppendLog.ts's doc comment for why a second, unwired notification path
   // is exactly how the bug this fixes happened.
   events: EventEmitter;
+  /** Issue #28 Phase A後半: the sole task-pane env builder — this is the "TaskRestoreService" entry point design v3 §6 lists explicitly. */
+  paneEnvService: TaskPaneEnvironmentService;
 }
 
 export class TaskRestoreService {
@@ -63,7 +67,7 @@ export class TaskRestoreService {
   constructor(private deps: TaskRestoreDeps) {}
 
   async restore(task: Task, log: { warn: (msg: string) => void }): Promise<{ tmuxTarget: string; worktreePath: string | null }> {
-    const { taskRepo, serverRepo, projectRepo, projectServerRepo, unitRepo, windowRepo, tmux, worktreeServiceFactory, transportFactory, contentExtractor, logRepo, unitTypeLoader, sidekickLoader, projectSecretRepo, events } = this.deps;
+    const { taskRepo, serverRepo, projectRepo, projectServerRepo, unitRepo, windowRepo, tmux, worktreeServiceFactory, transportFactory, contentExtractor, logRepo, unitTypeLoader, sidekickLoader, projectSecretRepo, events, paneEnvService } = this.deps;
 
     const serverName = resolveTaskServerName(task, projectServerRepo);
     if (!serverName) {
@@ -154,7 +158,11 @@ export class TaskRestoreService {
     const existingSessions = await tmux.listSessions(server);
     const sessionExists = existingSessions.some((s) => s.name === tmuxSession);
     if (!sessionExists) {
-      await tmux.createSession(server, tmuxSession, {});
+      // Throwaway bootstrap window — the real task window is created just
+      // below via createWindow, which is what actually gets AZITO_TASK_TOKEN
+      // (see the comment there and TaskPaneEnvironmentService's own doc
+      // comment).
+      await tmux.createSession(server, tmuxSession, { extraEnv: {} });
       await sleep(500);
     }
 
@@ -162,10 +170,39 @@ export class TaskRestoreService {
     let worktreePath: string | null = null;
     let windowRowId: number | null = null;
     let repoDir: string | null = null;
+    // Set once createRotatedWindow issues a generation below — the specific
+    // row the catch block's rollbackWindowReference call revokes (Issue #28
+    // third-party review, WindowRotation.ts finding: never a blanket
+    // revoke-all, which could clobber a newer generation a concurrent
+    // rotation for this task already persisted).
+    let tokenId: number | null = null;
 
+    // The whole issue->create->persist span this function performs (plus its
+    // own rollback below) runs under a per-task lock (design v3 §2 — see
+    // runExclusiveForTask's doc comment in WindowRotation.ts): without it, a
+    // concurrent execute()/respawn() for the same task could revoke this
+    // generation before restore() finishes persisting it.
+    return await runExclusiveForTask(task.id, async () => {
     try {
-      const created = await tmux.createWindow(server, tmuxSession, `task-${task.id}`);
+      // Window generation point — rotates the task token (design v3 §2/§6:
+      // restore() always (re)creates the task's window from scratch, so it
+      // always rotates, same as execute()). Routed through
+      // createRotatedWindow() (Issue #28 Phase A last-round fix) instead of
+      // calling paneEnvService.buildEnvForNewWindow() + tmux.createWindow()
+      // directly: the direct-call form only assigned `windowName` AFTER
+      // creation resolved, so a thrown creation failure skipped this
+      // function's own `if (windowName)` rollback below and left the
+      // freshly-issued generation valid with no window backing it; it also
+      // never checked a non-zero exit code on an agent-transport creation.
+      // createRotatedWindow revokes the just-issued generation itself before
+      // rethrowing/throwing in both cases, so `windowName` staying null here
+      // on failure is correct — there is nothing left for the outer catch to
+      // roll back.
+      const created = await createRotatedWindow(paneEnvService, server, task, 'restore_create_failed', (env) =>
+        tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: env }),
+      );
       windowName = created.windowName;
+      tokenId = created.tokenId;
 
       const windowTarget = `${tmuxSession}:${windowName}`;
       const paneId = await tmux.resolvePaneId(server, windowTarget);
@@ -298,8 +335,54 @@ export class TaskRestoreService {
       return { tmuxTarget: dbTarget, worktreePath };
     } catch (err) {
       if (windowName) {
-        try { await tmux.killWindow(server, `${tmuxSession}:${windowName}`); } catch (e) {
+        try {
+          // The createWindow() above (line ~177) already rotated the task
+          // token for THIS window generation via buildEnvForNewWindow. The
+          // task's status stays 'archived' throughout this rollback (no
+          // taskRepo.update touches status here) — 'archived' IS in
+          // TOKEN_REVOKING_STATUSES, but that revocation already fired back
+          // when the task was originally archived, before this restore
+          // attempt; no status WRITE happens on this failure path to trigger
+          // it again for the freshly-issued generation. Revoke it directly,
+          // same fix as ExecuteTaskUseCase's rollback branches (Issue #28
+          // third-party review finding) — only once rollbackWindowReference
+          // confirms the kill actually worked.
+          //
+          // The Window row (windowRowId, added at line ~283) is removed
+          // inside the SAME success branch (Issue #28 third-party review,
+          // second round): removing it unconditionally — as a separate step
+          // below, regardless of whether the kill above actually succeeded —
+          // used to delete the only DB reference to a window that was still
+          // alive and still holding a valid token whenever the kill failed.
+          // Scoped to `tokenId!` (non-null here — set right after
+          // createRotatedWindow, same branch condition as `windowName`
+          // being set), not `task.id` — a blanket revoke could otherwise
+          // clobber a newer generation a concurrent rotation for this task
+          // already persisted (Issue #28 third-party review, WindowRotation.ts
+          // finding).
+          await rollbackWindowReference(
+            tmux.killWindow(server, `${tmuxSession}:${windowName}`),
+            paneEnvService,
+            tokenId!,
+            'restore_rollback',
+            () => {
+              if (windowRowId) {
+                try { windowRepo.remove(windowRowId); } catch (e) {
+                  log.warn(`[task-restore] Failed to rollback window row: ${(e as Error).message}`);
+                }
+              }
+            },
+            () => {},
+          );
+        } catch (e) {
           log.warn(`[task-restore] Failed to rollback tmux window: ${(e as Error).message}`);
+        }
+      } else if (windowRowId) {
+        // Defensive fallback only — windowRowId is never set before
+        // windowName in the try block above, so this branch should be
+        // unreachable in practice.
+        try { windowRepo.remove(windowRowId); } catch (e) {
+          log.warn(`[task-restore] Failed to rollback window row: ${(e as Error).message}`);
         }
       }
       if (worktreePath && repoDir) {
@@ -311,12 +394,8 @@ export class TaskRestoreService {
           log.warn(`[task-restore] Failed to rollback worktree: ${(e as Error).message}`);
         }
       }
-      if (windowRowId) {
-        try { windowRepo.remove(windowRowId); } catch (e) {
-          log.warn(`[task-restore] Failed to rollback window row: ${(e as Error).message}`);
-        }
-      }
       throw err;
     }
+    });
   }
 }

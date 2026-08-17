@@ -4,6 +4,7 @@ import tasksRoutes from './routes';
 import type { TasksRouteOptions } from './routes';
 import type { Task } from './Task';
 import { ExecutionGateDeniedError } from './execution/ExecutionGate';
+import { TaskOriginationService } from './origination/TaskOriginationService';
 
 // Covers Issue #328's client-facing surface on the tasks routes: input_trust
 // must never be settable from a request body (only server-side code paths —
@@ -45,6 +46,9 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     pendingOperation: null,
     pendingOperationWindowId: null,
     pendingOperationPriorStatus: null,
+    createdByKind: 'operator',
+    createdById: null,
+    createdViaGeneration: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -53,24 +57,34 @@ function makeTask(overrides: Partial<Task> = {}): Task {
 
 function makeOpts(existingTask: Task): { opts: TasksRouteOptions; createCalls: Record<string, unknown>[] } {
   const createCalls: Record<string, unknown>[] = [];
+  const taskRepo: TasksRouteOptions['taskRepo'] = {
+    findAll: vi.fn(() => []),
+    findByProject: vi.fn(() => []),
+    findByUnit: vi.fn(() => []),
+    findByStatus: vi.fn(() => []),
+    findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
+    findById: vi.fn((id: number) => (id === existingTask.id ? existingTask : null)),
+    create: vi.fn((data: Record<string, unknown>) => { createCalls.push(data); return 2; }),
+    update: vi.fn(),
+    updateStatus: vi.fn(),
+    updateCurrentPhase: vi.fn(),
+    touch: vi.fn(),
+    delete: vi.fn(),
+    consumePendingApproval: vi.fn(() => false),
+    recordExecutionGateBlock: vi.fn(() => true),
+    preApproveExecution: vi.fn(() => true),
+    countChildren: vi.fn(() => 0),
+    countChildrenInGeneration: vi.fn(() => 0),
+    clearTmuxWindowIfMatches: vi.fn(() => true),
+  };
+  // A real TaskOriginationService wrapping the mock taskRepo above, so this
+  // file's "what did taskRepo.create() actually receive" assertions
+  // (createCalls) still exercise the real deriveInputTrust() mapping POST
+  // /api/tasks now routes through, instead of a hand-mocked pass-through
+  // that would silently stop testing that mapping at all.
+  const originationService = new TaskOriginationService(taskRepo, { record: vi.fn() } as unknown as TasksRouteOptions['auditLogService']);
   const opts: TasksRouteOptions = {
-    taskRepo: {
-      findAll: vi.fn(() => []),
-      findByProject: vi.fn(() => []),
-      findByUnit: vi.fn(() => []),
-      findByStatus: vi.fn(() => []),
-      findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
-      findById: vi.fn((id: number) => (id === existingTask.id ? existingTask : null)),
-      create: vi.fn((data: Record<string, unknown>) => { createCalls.push(data); return 2; }),
-      update: vi.fn(),
-      updateStatus: vi.fn(),
-      updateCurrentPhase: vi.fn(),
-      touch: vi.fn(),
-      delete: vi.fn(),
-      consumePendingApproval: vi.fn(() => false),
-      recordExecutionGateBlock: vi.fn(() => true),
-      preApproveExecution: vi.fn(() => true),
-    },
+    taskRepo,
     projectRepo: {
       findAll: vi.fn(() => []),
       findById: vi.fn(() => ({ id: 10, name: 'P', slug: 'p', description: null, repositoryUrl: null, defaultBranch: 'main', sidekickPrompt: null, icon: null, color: null, defaultUnitId: 20, servers: [], repositories: [], windows: [], createdAt: '', updatedAt: '' })),
@@ -136,11 +150,13 @@ function makeOpts(existingTask: Task): { opts: TasksRouteOptions; createCalls: R
       findByTask: vi.fn(() => []),
       findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
       findByServerAndTarget: vi.fn(() => undefined),
+      findByServerAndSession: vi.fn(() => []),
       update: vi.fn(),
       updateAgentSessionIdByWindow: vi.fn(),
       remove: vi.fn(),
       removeByServerAndTarget: vi.fn(() => 0),
       updatePaneLayout: vi.fn(),
+      now: vi.fn(() => '2026-01-01 00:00:00'),
     },
     respawnService: {
       respawn: vi.fn(async () => ({ tmuxTarget: 'azito:task-1.1' })),
@@ -150,6 +166,14 @@ function makeOpts(existingTask: Task): { opts: TasksRouteOptions; createCalls: R
     unitTypeLoader: { getOrThrow: vi.fn(() => ({ name: 'devops', label: 'DevOps', description: '', phases: [] })) } as unknown as TasksRouteOptions['unitTypeLoader'],
     sidekickLoader: { get: vi.fn(() => undefined) } as unknown as TasksRouteOptions['sidekickLoader'],
     projectSecretRepo: { findByProject: vi.fn(() => []) } as unknown as TasksRouteOptions['projectSecretRepo'],
+    auditLogService: { record: vi.fn() } as unknown as TasksRouteOptions['auditLogService'],
+    originationService,
+    taskTokenRepo: { issue: vi.fn(), verify: vi.fn(() => false), revokeAllForTask: vi.fn(() => 0), issueNextGeneration: vi.fn(), getActiveGeneration: vi.fn(() => null) } as unknown as TasksRouteOptions['taskTokenRepo'],
+    destroyPrimaryTaskWindow: vi.fn(async (_taskId, _windowName, _serverName, _target, _reason, kill, onDestroyed) => {
+      const result = await kill();
+      onDestroyed();
+      return { success: result.code === 0, alreadyGone: false, result };
+    }),
   };
   return { opts, createCalls };
 }

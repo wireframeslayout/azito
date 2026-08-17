@@ -2,7 +2,13 @@ import type { FastifyPluginCallback } from 'fastify';
 import type { IProjectRepository, RepositoryProvider } from './Project';
 import type { IProjectServerRepository } from './ProjectServer';
 import type { ITaskRepository } from '../tasks/Task';
-import { deriveInputTrust } from '../tasks/Task';
+import type { TaskOriginationService } from '../tasks/origination/TaskOriginationService';
+import { originFromPrincipal } from '../tasks/origination/TaskOriginationService';
+// request.principal is always set by buildServer.ts's onRequest hook in
+// production; the fallback below exists only for route-level unit tests
+// that register this plugin directly (bypassing that hook) — same
+// convention as originFromPrincipal() itself.
+import { OPERATOR_PRINCIPAL } from '../../shared/auth/Principal';
 import type { GitProviderService } from '../git/providers/GitProviderService';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { IServerRepository } from '../servers/Server';
@@ -18,12 +24,14 @@ export interface ProjectsRouteOptions {
   tmux: TmuxClient;
   serverRepo: IServerRepository;
   projectSecretRepo: SqliteProjectSecretRepository;
+  /** Issue #28 Phase A後半: import-issue is a task-origination path too — see TaskOriginationService's own doc comment. */
+  originationService: TaskOriginationService;
 }
 
 // ─── Plugin ───
 
 const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, opts, done) => {
-  const { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux, serverRepo, projectSecretRepo } = opts;
+  const { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux, serverRepo, projectSecretRepo, originationService } = opts;
   const SECRET_NAME_PATTERN = /^[A-Z0-9_]{1,64}$/;
 
   // ── GET /api/projects ──
@@ -226,7 +234,22 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
           const sessions = await tmux.listSessions(srv);
           const exists = sessions.some((s) => s.name === project.slug);
           if (!exists) {
-            await tmux.createSession(srv, project.slug, {});
+            // No token in extraEnv (Issue #28 third-party review finding,
+            // Critical): `tmux new-session -e` sets the SESSION's own
+            // environment, not just this call's window — every window
+            // created later in this session (including a task's, via
+            // ExecuteTaskUseCase/TaskRestoreService's `createWindow` into
+            // this exact `project.slug` session) would inherit
+            // AZITO_UI_TOKEN from here and bypass scoped task-token auth
+            // entirely, with no reference anywhere to this createSession
+            // call to explain why (verified empirically against tmux 3.4:
+            // a session-level var set via `-e` on `new-session` propagates
+            // to windows added afterwards with `new-window`, even with no
+            // `-e` of their own). This first window is an unmanaged
+            // generated-name placeholder nobody uses directly (same as
+            // ExecuteTaskUseCase's own throwaway-session bootstrap window),
+            // so it has no legitimate need for the token either.
+            await tmux.createSession(srv, project.slug, { extraEnv: {} });
             sessionCreated = true;
           }
         } catch {
@@ -393,7 +416,16 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       try {
         const issue = await gitProvider.getIssue(repo, issue_number);
         const source = repo.provider === 'gitlab' ? 'gitlab' : 'github';
-        const taskId = taskRepo.create({
+        // Issue body content comes straight from an external tracker with no
+        // human review yet — TaskOriginationService derives `inputTrust` from
+        // `origin.kind` ('operator', since this route is operator-only by
+        // omission — no `config.auth` declared) AND `source` together (Issue
+        // #28 design v3 §5's fail-safe reversal of the original Issue #328
+        // rule): 'github'/'gitlab' still lands on 'untrusted' regardless of
+        // the operator origin. The execution gate (ExecutionGate.ts) treats
+        // this the same as any GitHub/GitLab-sourced task regardless of what
+        // `source`/`source_ref` end up being edited to later (Issue #328).
+        const taskId = originationService.create({
           projectId,
           unitId: unit_id,
           serverName: null,
@@ -421,19 +453,13 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
           summaryJson: null,
           prUrl: null,
           agentSessionId: null,
-          // Issue body content comes straight from an external tracker with no
-          // human review yet — derived via deriveInputTrust() (the SAME
-          // function POST /api/tasks uses), which maps `source` ('github'/
-          // 'gitlab' here) to 'untrusted'. The execution gate (ExecutionGate.ts)
-          // treats this the same as any GitHub/GitLab-sourced task regardless
-          // of what `source`/`source_ref` end up being edited to later
-          // (Issue #328).
-          inputTrust: deriveInputTrust(source),
+          reviewSubagent: null,
+          implementSubagent: null,
           executionApprovedFingerprintHash: null,
           pendingOperation: null,
           pendingOperationWindowId: null,
           pendingOperationPriorStatus: null,
-        });
+        }, originFromPrincipal(request.principal), request.principal ?? OPERATOR_PRINCIPAL);
         return { ok: true, taskId, issue: { number: issue.number, title: issue.title } };
       } catch (err: unknown) {
         return reply.status(502).send({ error: (err as Error).message });

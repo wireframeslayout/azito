@@ -10,6 +10,8 @@ argument-hint: [task_id] [issue_url]
 
 # azt-link — azitoタスクへのイシューリンク
 
+> **オペレーター専用**（UI トークンが必要）。タスクペインで実行すると operator_required になる。
+
 ## 引数
 
 - `task_id`: azito のタスクID（数値）

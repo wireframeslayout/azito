@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { randomUUID } from 'crypto';
+import { randomUUID, randomBytes } from 'crypto';
 import type { ITaskRepository, Task } from '../Task';
 import type { TaskStatus } from '../TaskStatus';
 import type { IUnitRepository, Unit } from '../../units/Unit';
@@ -12,6 +12,7 @@ import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoade
 import type { SidekickSyncService } from '../../sidekicks/SidekickSyncService';
 import type { IExecutionLogRepository, LogType } from '../ExecutionLog';
 import type { TmuxClient } from '../../tmux/TmuxClient';
+import { confirmOldWindowGone, createRotatedWindow, rollbackWindowReference, runExclusiveForTask } from './WindowRotation';
 import type { IWorktreeService, WorktreeInfo } from '../../git/IWorktreeService';
 import type { WorktreeServiceFactory } from '../../git/WorktreeServiceFactory';
 import { PathResolverFactory, assertDirectoryContained } from '../../git/PathContainment';
@@ -44,6 +45,7 @@ import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionMani
 import { TuiWorkerRuntime } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
 import { resolveTaskServerName, resolveTmuxSession, resolveUnitId, resolveBaseBranch } from './TaskExecutionEnv';
+import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
 import type { SqliteAgentTurnRepository } from '../turns/SqliteAgentTurnRepository';
 import type { TurnSignalHub } from '../turns/TurnSignalHub';
 import type { AgentTurn } from '../turns/AgentTurn';
@@ -120,6 +122,11 @@ export class ExecuteTaskUseCase {
     // silently unnotified. See AppendLog.ts's appendLogAndEmit() doc
     // comment for the shared helper this and those two classes now all use.
     public readonly events: EventEmitter,
+    // Issue #28 Phase A後半: the sole task-pane env builder — see
+    // TaskPaneEnvironmentService's own doc comment. Replaces this class's
+    // former private buildExtraEnv() (removed), which only ever assembled
+    // secrets + agent-server env and left AZITO_TASK_TOKEN unissued.
+    private paneEnvService: TaskPaneEnvironmentService,
   ) {
     this.gitInfoCollector = new GitInfoCollector(this.tmux);
     this.pushVerifier = new PushVerifier(this.tmux, this.gitProvider);
@@ -143,7 +150,7 @@ export class ExecuteTaskUseCase {
       this.workerInput,
     );
     this.httpSignalCoordinator = new HttpSignalTurnCoordinator(this.turnRepo, this.turnSignalHub);
-    const tuiRuntime = new TuiWorkerRuntime(this.tmux, this.workerInput, this.workerWaiter, this.httpSignalCoordinator);
+    const tuiRuntime = new TuiWorkerRuntime(this.tmux, this.workerInput, this.workerWaiter, this.httpSignalCoordinator, this.supervisorRegistry);
     this.runtimeRegistry = new WorkerRuntimeRegistry();
     this.runtimeRegistry.register('tui', tuiRuntime);
     this.phaseLoopRunner = new PhaseLoopRunner(
@@ -168,19 +175,6 @@ export class ExecuteTaskUseCase {
       this.serverRepo,
       this.projectSecretRepo,
     );
-  }
-
-  private buildExtraEnv(projectId: number, server: ServerConfig): Record<string, string> {
-    const secrets = this.projectSecretRepo.findByProjectWithValues(projectId);
-    const env: Record<string, string> = {};
-    for (const s of secrets) {
-      env[`AZITO_SECRET_${s.name}`] = s.value;
-    }
-    if (server.type === 'agent') {
-      if (server.agentPort) env.AZITO_AGENT_PORT = String(server.agentPort);
-      if (server.agentToken) env.AZITO_AGENT_TOKEN = server.agentToken;
-    }
-    return env;
   }
 
   private getWorktreeService(server: ServerConfig): IWorktreeService {
@@ -480,39 +474,94 @@ export class ExecuteTaskUseCase {
       }
     }
 
-    // Ensure tmux session exists
+    // Ensure tmux session exists. This bootstrap window (if the session
+    // doesn't exist yet) is immediately abandoned in favor of the real task
+    // window created below — it deliberately gets no env at all (no task
+    // token, no UI token) rather than issuing/rotating a token for a window
+    // nobody uses.
     const existingSessions = await this.tmux.listSessions(server);
     const sessionExists = existingSessions.some((s) => s.name === tmuxSession);
     if (!sessionExists) {
-      await this.tmux.createSession(server, tmuxSession, {});
+      await this.tmux.createSession(server, tmuxSession, { extraEnv: {} });
       await sleep(500);
     }
 
-    // Kill existing task window if leftover
-    if (task.tmuxWindow) {
-      try {
-        const preCheck = await this.tmux.listSessions(server);
-        const preSession = preCheck.find((s) => s.name === tmuxSession);
-        if (preSession) {
-          const oldWin = preSession.windows.find((w) => w.name === task.tmuxWindow);
-          if (oldWin) {
-            await this.tmux.killPane(server, `${tmuxSession}:${oldWin.index}`);
-            await sleep(300);
-          }
-        }
-      } catch {}
-    }
-
-    // Create a new tmux window for the task
+    // Kill existing task window if leftover, and confirm it's actually gone
+    // BEFORE the token rotation below (Issue #28 third-party review,
+    // execute() rollback-safety finding): this used to be an unconditional
+    // best-effort `catch {}` with nothing gating the rotation that followed
+    // — a kill failure left a still-live pane while a fresh token was issued
+    // anyway. confirmOldWindowGone throws (aborting execute() before any
+    // rotation happens) when a task-owned old window survives the kill.
+    //
+    // kind MUST be 'window', not 'pane' (Issue #28 third-party review finding
+    // 1): a task window can hold multiple panes (e.g. a split terminal the
+    // user opened alongside the worker pane), and killPane only kills the
+    // active pane. A surviving sibling pane would still be authenticated
+    // with the token this rotation is about to revoke, and the old task
+    // window would linger alongside the freshly-created one instead of being
+    // replaced by it.
+    // The whole confirm-kill -> rotate-token -> create -> persist span runs
+    // under a per-task lock (Issue #28 third-party review, design v3 §2):
+    // without it, a concurrent rotation for this same task (e.g. a respawn
+    // triggered from the UI while this execute() is still creating its
+    // window) could issue a newer generation that revokes THIS generation
+    // before it gets persisted below — see runExclusiveForTask's doc comment
+    // in WindowRotation.ts.
     let windowName: string;
+    let tokenId: number;
     try {
-      const created = await this.tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: this.buildExtraEnv(task.projectId, server) });
-      windowName = created.windowName;
+      ({ windowName, tokenId } = await runExclusiveForTask(taskId, async () => {
+        // Task/tmux state is re-read HERE, inside the lock (Issue #28
+        // third-party review, TOCTOU finding) — not taken from the `task`
+        // captured before this lock was even queued for. Without this, a
+        // second execute()/followUp() queued behind this one on
+        // runExclusiveForTask still decides what to kill using the SAME
+        // stale `task.tmuxWindow` its own pre-lock snapshot had, i.e. the
+        // window that existed before EITHER call started — not the window
+        // this call is about to create. Concretely: call A (this one) creates
+        // generation A's window; call B, still holding its own stale
+        // snapshot, sees that same old (pre-A) window as "the" window to
+        // kill, finds it already gone (or races the kill against A live),
+        // and creates generation B — whose issueNextGeneration() revokes
+        // generation A regardless, since A's window was never what B tried
+        // to kill. Generation A's pane is now orphaned with a dead token.
+        // Re-fetching `currentTask` here means each queued rotation always
+        // targets whatever the immediately-prior rotation for this task
+        // actually persisted.
+        const currentTask = this.taskRepo.findById(taskId);
+        if (!currentTask) throw new Error(`Task ${taskId} not found`);
+        if (currentTask.tmuxWindow) {
+          const preCheck = await this.tmux.listSessions(server);
+          const preSession = preCheck.find((s) => s.name === tmuxSession);
+          const oldWin = preSession?.windows.find((w) => w.name === currentTask.tmuxWindow);
+          await confirmOldWindowGone(
+            this.tmux,
+            server,
+            oldWin ? { target: `${tmuxSession}:${oldWin.index}`, kind: 'window' } : null,
+            task.id,
+          );
+          if (oldWin) await sleep(300);
+        }
+
+        // Create a new tmux window for the task — this call is the actual
+        // window-generation point, so it's the one that rotates the task
+        // token (TaskPaneEnvironmentService.buildEnvForNewWindow; design v3
+        // §2). createRotatedWindow revokes the freshly-issued generation if
+        // creation fails, whether by throwing (local transport) or
+        // resolving with a non-zero exit code (agent transport — see
+        // WindowRotation.ts's doc comment; Issue #28 third-party review
+        // finding).
+        const created = await createRotatedWindow(this.paneEnvService, server, currentTask, 'execute_create_failed', (env) =>
+          this.tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: env }),
+        );
+
+        this.taskRepo.update(taskId, { status: 'in_progress' as TaskStatus, tmuxWindow: created.windowName });
+        return { windowName: created.windowName, tokenId: created.tokenId };
+      }));
     } catch (err) {
       throw new Error(`Failed to create tmux window: ${err instanceof Error ? err.message : err}`);
     }
-
-    this.taskRepo.update(taskId, { status: 'in_progress' as TaskStatus, tmuxWindow: windowName });
 
     const windowTarget = `${tmuxSession}:${windowName}`;
     const target = await this.tmux.resolvePaneId(server, windowTarget);
@@ -530,8 +579,44 @@ export class ExecuteTaskUseCase {
           type: 'worktree_failed',
           message,
         });
-        this.taskRepo.update(taskId, { status: 'failed' as TaskStatus, tmuxWindow: null } as Partial<Task>);
-        try { await this.tmux.killWindow(server, `${tmuxSession}:${windowName}`); } catch {}
+        this.taskRepo.update(taskId, { status: 'failed' as TaskStatus } as Partial<Task>);
+        // 'failed' is deliberately NOT in TOKEN_REVOKING_STATUSES (a failed
+        // task is resumable via follow-up onto a later window), so the
+        // window-generation token this createWindow() just issued would
+        // otherwise leak — revoke it directly, but only once the kill below
+        // actually confirms the window is gone (Issue #28 third-party review
+        // finding; see TaskPaneEnvironmentService.revokeGeneration's doc
+        // comment). Routed through rollbackWindowReference (Issue #28
+        // third-party review, second round) so `tmuxWindow` is cleared ONLY
+        // once the kill is confirmed — a kill failure leaves the DB row
+        // pointing at the still-live, still-authenticated window instead of
+        // silently untracking it. Scoped to `tokenId` (the generation
+        // createRotatedWindow issued above, inside runExclusiveForTask), not
+        // the whole task — a blanket revoke here could otherwise clobber a
+        // newer generation a concurrent rotation for this task already
+        // persisted (Issue #28 third-party review, WindowRotation.ts finding).
+        //
+        // Fix 3 (Issue #28 third-party review, Important finding): onGone
+        // clears `tmuxWindow` via clearTmuxWindowIfMatches, NOT a blanket
+        // `update(taskId, { tmuxWindow: null })` — this whole span (worktree
+        // creation + its own rollback) runs OUTSIDE runExclusiveForTask, so a
+        // concurrent execute()/followUp() for the SAME task could have
+        // already acquired the lock, created a NEWER window generation, and
+        // persisted its own `tmuxWindow` by the time this rollback runs. An
+        // unconditional null-out would clobber that newer, still-live
+        // reference. Gating on `windowName` (this call's own generation)
+        // makes the clear a no-op when the row has already moved on — see
+        // ITaskRepository.clearTmuxWindowIfMatches's doc comment.
+        try {
+          await rollbackWindowReference(
+            this.tmux.killWindow(server, `${tmuxSession}:${windowName}`),
+            this.paneEnvService,
+            tokenId,
+            'worktree_creation_failed_rollback',
+            () => this.taskRepo.clearTmuxWindowIfMatches(taskId, windowName),
+            () => {},
+          );
+        } catch {}
         throw new Error(`Worktree creation failed: ${message}`);
       }
 
@@ -563,11 +648,27 @@ export class ExecuteTaskUseCase {
           }
           this.taskRepo.update(taskId, {
             status: 'failed' as TaskStatus,
-            tmuxWindow: null,
             worktreePath: null,
             worktreeBranch: null,
           } as Partial<Task>);
-          try { await this.tmux.killWindow(server, `${tmuxSession}:${windowName}`); } catch {}
+          // Same generation-leak fix as the worktree_failed branch above —
+          // see that branch's comment. `tmuxWindow` is cleared inside
+          // rollbackWindowReference's onGone callback, not unconditionally
+          // above, for the same reason. Scoped to `tokenId`, same reasoning
+          // as the worktree_failed branch's rollbackWindowReference call.
+          // Fix 3: same clearTmuxWindowIfMatches reasoning as the
+          // worktree_failed branch above — this span also runs outside
+          // runExclusiveForTask.
+          try {
+            await rollbackWindowReference(
+              this.tmux.killWindow(server, `${tmuxSession}:${windowName}`),
+              this.paneEnvService,
+              tokenId,
+              'worktree_path_rejected_rollback',
+              () => this.taskRepo.clearTmuxWindowIfMatches(taskId, windowName),
+              () => {},
+            );
+          } catch {}
           throw new Error(`Worktree path rejected: ${message}`);
         }
       }
@@ -824,33 +925,76 @@ export class ExecuteTaskUseCase {
     this.appendLog(taskId, unitId, 'user_comment', { text: comment });
     this.taskRepo.updateStatus(taskId, 'in_progress');
 
-    let windowName = task.tmuxWindow || `task-${task.id}`;
-
-    // Ensure tmux session and window exist
+    // Ensure tmux session exists. Same throwaway-bootstrap-window reasoning
+    // as execute() above: no env at all when a session must be created here,
+    // since the real task window (created just below, if it doesn't already
+    // exist) is what actually gets AZITO_TASK_TOKEN. Session creation itself
+    // is not part of the task-token rotation, so it stays outside the
+    // per-task lock below (idempotent/harmless to race).
     const existingSessions = await this.tmux.listSessions(server);
     const sessionExists = existingSessions.some((s) => s.name === tmuxSession);
     if (!sessionExists) {
-      await this.tmux.createSession(server, tmuxSession, {});
+      await this.tmux.createSession(server, tmuxSession, { extraEnv: {} });
       await sleep(500);
     }
 
-    let windowExists = false;
+    // Threaded to the working-directory-rejected rollback below (needs the
+    // specific generation to revoke — see that branch's comment); stays null
+    // when the `windowExists` result is true, since nothing was rotated.
+    let windowName: string;
+    let windowExists: boolean;
+    let tokenId: number | null;
     try {
-      const sessions = await this.tmux.listSessions(server);
-      const session = sessions.find((s) => s.name === tmuxSession);
-      if (session) {
-        windowExists = session.windows.some((w) => w.name === windowName);
-      }
-    } catch {}
+      // The ENTIRE "read current window state -> decide whether to rotate ->
+      // create -> persist" sequence now runs inside runExclusiveForTask, not
+      // just the create/persist half (Issue #28 third-party review, TOCTOU
+      // finding): the old code computed `windowExists` from a `task`/tmux
+      // snapshot taken BEFORE the lock. Two concurrent follow-ups for the
+      // same not-yet-running task could both observe "no window yet" from
+      // their own pre-lock snapshot, both enter the rotation, and the
+      // second's issueNextGeneration() would revoke the first's
+      // still-being-created generation before its window creation even
+      // resolved — runExclusiveForTask only serializes the callbacks, it
+      // doesn't protect state read before either callback started. Reading
+      // `task.tmuxWindow` fresh from the repository INSIDE the lock, and
+      // re-checking tmux for it there too, means the decision is always made
+      // against the latest state any prior queued rotation for this task
+      // (execute()/followUp()/respawn()) actually persisted.
+      ({ windowName, windowExists, tokenId } = await runExclusiveForTask(taskId, async () => {
+        const currentTask = this.taskRepo.findById(taskId);
+        if (!currentTask) throw new Error(`Task ${taskId} not found`);
+        const candidateWindowName = currentTask.tmuxWindow || `task-${task.id}`;
+        let exists = false;
+        try {
+          const sessions = await this.tmux.listSessions(server);
+          const session = sessions.find((s) => s.name === tmuxSession);
+          if (session) exists = session.windows.some((w) => w.name === candidateWindowName);
+        } catch {}
+        if (exists) {
+          return { windowName: candidateWindowName, windowExists: true, tokenId: null };
+        }
 
-    if (!windowExists) {
-      try {
-        const created = await this.tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: this.buildExtraEnv(task.projectId, server) });
-        windowName = created.windowName;
-        this.taskRepo.update(taskId, { tmuxWindow: windowName } as Partial<Task>);
-      } catch (err) {
-        throw new Error(`Failed to create tmux window: ${err instanceof Error ? err.message : err}`);
-      }
+        // Window generation point for a follow-up that has no window to
+        // resume onto — rotates the task token, same as execute() above. A
+        // follow-up onto an ALREADY-existing window (the common case) never
+        // reaches this branch at all, matching design v3 §2's "resume onto
+        // an existing window never rotates". No old window to kill here
+        // (exists is false), so unlike execute() this only needs the
+        // create-failure rollback half of the shared operation —
+        // createRotatedWindow revokes the freshly-issued generation whether
+        // creation throws or resolves with a non-zero exit code (Issue #28
+        // third-party review, followUp() rollback-safety finding; see
+        // WindowRotation.ts's doc comment). The DB is only updated with
+        // `windowName` once creation is confirmed to have actually
+        // succeeded.
+        const created = await createRotatedWindow(this.paneEnvService, server, currentTask, 'followup_create_failed', (env) =>
+          this.tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: env }),
+        );
+        this.taskRepo.update(taskId, { tmuxWindow: created.windowName } as Partial<Task>);
+        return { windowName: created.windowName, windowExists: false, tokenId: created.tokenId };
+      }));
+    } catch (err) {
+      throw new Error(`Failed to create tmux window: ${err instanceof Error ? err.message : err}`);
     }
 
     const windowTarget = `${tmuxSession}:${windowName}`;
@@ -879,8 +1023,28 @@ export class ExecuteTaskUseCase {
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           this.appendLog(taskId, unitId, 'command', { type: 'working_directory_rejected', message });
-          this.taskRepo.update(taskId, { status: 'failed' as TaskStatus, tmuxWindow: null } as Partial<Task>);
-          try { await this.tmux.killWindow(server, `${tmuxSession}:${windowName}`); } catch {}
+          this.taskRepo.update(taskId, { status: 'failed' as TaskStatus } as Partial<Task>);
+          // Same generation-leak fix as execute()'s worktree_failed branch
+          // above — this branch only runs when !windowExists just created a
+          // fresh window (and rotated the task token, so `tokenId` is
+          // non-null here) for this follow-up. `tmuxWindow` is cleared
+          // inside rollbackWindowReference's onGone callback, not
+          // unconditionally above, for the same reason. Scoped to `tokenId`,
+          // same reasoning as execute()'s rollbackWindowReference calls.
+          // Fix 3 (Issue #28 third-party review, Important finding): same
+          // clearTmuxWindowIfMatches reasoning as execute()'s
+          // rollbackWindowReference calls — this span also runs outside
+          // runExclusiveForTask.
+          try {
+            await rollbackWindowReference(
+              this.tmux.killWindow(server, `${tmuxSession}:${windowName}`),
+              this.paneEnvService,
+              tokenId!,
+              'followup_working_directory_rejected_rollback',
+              () => this.taskRepo.clearTmuxWindowIfMatches(taskId, windowName),
+              () => {},
+            );
+          } catch {}
           throw new Error(`Follow-up working directory rejected: ${message}`);
         }
       }
@@ -930,7 +1094,10 @@ export class ExecuteTaskUseCase {
 
     const runFollowUp = async () => {
       // Generate unique markers for follow-up
-      const nonce = Math.random().toString(36).slice(2, 8);
+      // crypto.randomBytes (not Math.random) — the nonce is also embedded in
+      // turnToken (design v3 §8), which /api/agent-signals now accepts as a
+      // standalone credential, so it must not be predictable.
+      const nonce = randomBytes(16).toString('hex');
       const doneMarker = `AZITO_DONE_${taskId}_${nonce}`;
       const questionsMarker = `AZITO_QUESTIONS_${taskId}_${nonce}`;
       const testFailedMarker = `AZITO_TEST_FAILED_${taskId}_${nonce}`;
