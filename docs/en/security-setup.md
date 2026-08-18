@@ -184,15 +184,18 @@ also accepts the legacy UI-token-only flow, so nothing breaks mid-rollout. Roll 
    up, is its agent token current) and re-run.
 
    This also changes how supervisor registrations are treated (design §8). A `tui-supervisor`
-   started by task execution registers with a hub-issued `--launch-id`/`--bootstrap-token`, and is
-   marked **bound** — driving the dashboard activity display, a task turn's idle-timer refresh, and
-   AgentActivityMonitor's Tier 0 signal — only once its claimed serverName/target/taskId/unitId
-   match what the hub recorded for that launch. A manually started `azs` (bare `tui-supervisor`,
-   e.g. for local debugging) carries no `--launch-id`, so registration is still accepted but marked
-   **unbound** (display-only): it no longer refreshes a turn's idle timer or drives Tier 0 activity
-   detection at all. This is a behavior change from before the flag — a manual `azs` used to count
-   as real task activity, and no longer does. While the flag is off, no downgrade happens: every
-   registration is treated as bound regardless of `--launch-id`, exactly as before this phase.
+   started by task execution registers with a hub-issued launchId/bootstrapToken — passed as
+   `AZITO_SUPERVISOR_LAUNCH_ID`/`AZITO_SUPERVISOR_BOOTSTRAP` env vars prefixed onto the launch
+   command (the older `--launch-id`/`--bootstrap-token` flag form, as emitted by a hub predating
+   this change, is still accepted for backward compatibility) — and is marked **bound** — driving
+   the dashboard activity display, a task turn's idle-timer refresh, and AgentActivityMonitor's
+   Tier 0 signal — only once its claimed serverName/target/taskId/unitId match what the hub
+   recorded for that launch. A manually started `azs` (bare `tui-supervisor`, e.g. for local
+   debugging) carries no launchId, so registration is still accepted but marked **unbound**
+   (display-only): it no longer refreshes a turn's idle timer or drives Tier 0 activity detection
+   at all. This is a behavior change from before the flag — a manual `azs` used to count as real
+   task activity, and no longer does. While the flag is off, no downgrade happens: every
+   registration is treated as bound regardless of launchId, exactly as before this phase.
 5. **Rotate the UI token last.** Run `azito token rotate`, then update the browser (re-enter the
    token), any MCP client config it didn't reach automatically, and `operator.env` on any other
    machine you use as an operator. **This last rotate also finishes invalidating any leftover pane

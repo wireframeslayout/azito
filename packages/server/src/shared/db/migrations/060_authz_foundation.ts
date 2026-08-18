@@ -90,7 +90,7 @@ export function up(db: Database.Database): void {
   // (design v3 §8): persists one row per `tui-supervisor` launch so a
   // `register` message's claimed identity (serverName/target/taskId/unitId)
   // can be checked against what the hub itself expected when it wrapped the
-  // launch command with `--launch-id`/`--bootstrap-token`
+  // launch command with a launchId/bootstrapToken
   // (SupervisorLaunch.ts's wrapWithSupervisor), surviving a hub restart.
   //
   // `bootstrap_hash` / `session_hash` store only sha256 of the respective

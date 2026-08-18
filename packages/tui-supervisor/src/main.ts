@@ -1,4 +1,4 @@
-import { parseArgs } from './cli';
+import { parseArgs, resolveLaunchBinding } from './cli';
 import { ActivityTracker } from './ActivityTracker';
 import { resolveHubEnv } from './env';
 import { HubClient } from './HubClient';
@@ -8,6 +8,7 @@ import { TitleStateTracker } from './TitleStateTracker';
 import type { ActivityState, AgentStatus } from './protocol';
 
 const args = parseArgs(process.argv.slice(2));
+const launchBinding = resolveLaunchBinding(args);
 
 const hubEnv = resolveHubEnv();
 // With a hub attached, delay process exit slightly so the child_exit message
@@ -40,11 +41,13 @@ if (hubEnv) {
       unitId: args.unitId ?? null,
       pid: process.pid,
       childCommand: args.command,
-      // Issue #28 Phase C launch binding (design v3 §8) — both undefined for
-      // a manual `azs` invocation (no --launch-id/--bootstrap-token), in
-      // which case the hub registers this connection as unbound.
-      ...(args.launchId !== null ? { launchId: args.launchId } : {}),
-      ...(args.bootstrapToken !== null ? { bootstrapToken: args.bootstrapToken } : {}),
+      // Issue #28 Phase C launch binding (design v3 §8) — both null for a
+      // manual `azs` invocation (no launch env vars/flags), in which case
+      // the hub registers this connection as unbound. Resolved via
+      // `resolveLaunchBinding()`: env vars (current hub shape) take
+      // precedence over the legacy `--launch-id`/`--bootstrap-token` flags.
+      ...(launchBinding.launchId !== null ? { launchId: launchBinding.launchId } : {}),
+      ...(launchBinding.bootstrapToken !== null ? { bootstrapToken: launchBinding.bootstrapToken } : {}),
     },
     write: (data) => proxy.write(data),
     readiness,
