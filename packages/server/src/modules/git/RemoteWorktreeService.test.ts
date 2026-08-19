@@ -20,6 +20,43 @@ function ok(stdout = ''): ExecResult {
 }
 
 describe('RemoteWorktreeService', () => {
+  describe('list', () => {
+    it('returns empty array when working directory is not a git repository', async () => {
+      const transport = mockTransport([
+        { stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git\n', code: 128 },
+      ]);
+      const svc = new RemoteWorktreeService(transport);
+      const result = await svc.list('/home/user/non-git-dir');
+      expect(result).toEqual([]);
+    });
+
+    it('returns empty array when not-a-git-repository appears in stdout (SSH code 0)', async () => {
+      const transport = mockTransport([
+        { stdout: 'fatal: not a git repository (or any of the parent directories): .git\n', stderr: '', code: 0 },
+      ]);
+      const svc = new RemoteWorktreeService(transport);
+      const result = await svc.list('/home/user/non-git-dir');
+      expect(result).toEqual([]);
+    });
+
+    it('throws on other git errors', async () => {
+      const transport = mockTransport([
+        { stdout: '', stderr: 'fatal: invalid reference: bad-ref', code: 128 },
+      ]);
+      const svc = new RemoteWorktreeService(transport);
+      await expect(svc.list('/home/user/project')).rejects.toThrow('Failed to list worktrees');
+    });
+
+    it('parses worktree list output', async () => {
+      const porcelainOutput = 'worktree /home/user/project\nHEAD abc1234\nbranch refs/heads/main\n\n';
+      const transport = mockTransport([ok(porcelainOutput)]);
+      const svc = new RemoteWorktreeService(transport);
+      const result = await svc.list('/home/user/project');
+      expect(result.length).toBe(1);
+      expect(result[0].branch).toBe('main');
+    });
+  });
+
   describe('create', () => {
     it('creates worktree on remote with correct commands', async () => {
       const transport = mockTransport([

@@ -11,6 +11,9 @@ export class RemoteWorktreeService implements IWorktreeService {
     assertSafePath(workingDir, 'workingDir');
     const result = await this.exec(`cd ${workingDir} && git worktree list --porcelain`);
     if (this.hasGitError(result)) {
+      if (`${result.stdout}\n${result.stderr}`.includes('not a git repository')) {
+        return [];
+      }
       throw new Error(`Failed to list worktrees: ${result.stderr || result.stdout}`);
     }
     return parseWorktreePorcelain(result.stdout);

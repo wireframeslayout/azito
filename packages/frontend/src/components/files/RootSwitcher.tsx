@@ -50,8 +50,9 @@ export function RootSwitcher({ serverName, projectId, selectedPath, onSelect, on
       const data = await api<{ worktrees: WorktreeItem[] }>(
         `/servers/${encodeURIComponent(serverName)}/git/worktrees?project_id=${projectId}`,
       );
-      setWorktrees(data.worktrees);
-      const current = findCurrent(data.worktrees, selectedPath);
+      const items = data.worktrees ?? [];
+      setWorktrees(items);
+      const current = findCurrent(items, selectedPath);
       setCurrentWorktree(current);
       onWorktreeChangeRef.current?.(current);
     } catch (err) {
