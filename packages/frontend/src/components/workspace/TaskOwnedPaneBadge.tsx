@@ -27,9 +27,11 @@ import { resolveTaskOwnedPaneBadgeCopy } from './taskOwnedPaneBadgeCopy';
  * The long explanation moves from a native `title` attribute (no wrapping/
  * timing control) into the reusable `Tooltip` component. At narrow widths
  * (`useIsMobile`) the text label is dropped entirely — icon only — but the
- * full explanation stays reachable via the tooltip and `aria-label` keeps
- * carrying the full text regardless of viewport, so no information is lost
- * for assistive tech.
+ * full explanation stays reachable via the tooltip. `aria-label` carries only
+ * the short label (so the badge always has a concise accessible name, even
+ * icon-only on mobile) while `Tooltip` supplies the full explanation via
+ * `aria-describedby` — the name/description split means assistive tech reads
+ * each once, not the long text twice.
  */
 export function TaskOwnedPaneBadge() {
   const { t } = useTranslation('common');
@@ -42,7 +44,7 @@ export function TaskOwnedPaneBadge() {
     <Tooltip content={tooltip}>
       <span
         tabIndex={0}
-        aria-label={tooltip}
+        aria-label={label}
         style={{ display: 'inline-flex', alignItems: 'center', marginRight: 4 }}
       >
         <Badge tone={tone} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>

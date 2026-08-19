@@ -44,6 +44,10 @@ export interface TooltipClampResult {
 const DEFAULT_MARGIN = 8;
 const DEFAULT_GAP = 8;
 
+/** `computeTooltipClamp` の既定 gap（px）。呼び出し側で `top`/`bottom` の絶対座標を
+ * 組み立てる際、CSS の `calc(100% + Npx)` と同じ値を使うためにエクスポートする。 */
+export { DEFAULT_GAP as TOOLTIP_GAP };
+
 /**
  * トリガー中央基準（`left:50%` + `translate(-50%)`）・下側配置を起点に、画面端で見切れない
  * よう水平方向の補正オフセットと、下に入りきらない場合の上側反転可否を計算する純関数。

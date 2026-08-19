@@ -12,12 +12,13 @@ import {
   type ReactElement,
   type ReactNode,
 } from 'react';
+import { createPortal } from 'react-dom';
 import {
   computeTooltipClamp,
   initialTooltipVisibilityState,
   isTooltipOpen,
   tooltipVisibilityReducer,
-  type TooltipClampResult,
+  TOOLTIP_GAP,
 } from './tooltipLogic';
 
 export interface TooltipProps {
@@ -27,7 +28,12 @@ export interface TooltipProps {
   children: ReactElement;
 }
 
-const NO_CLAMP: TooltipClampResult = { shiftX: 0, flipToTop: false };
+/** ビューポート基準の絶対配置（`position: fixed` の `left`/`top` にそのまま渡す）。 */
+interface TooltipPosition {
+  left: number;
+  top: number;
+  flipToTop: boolean;
+}
 
 /**
  * Generic hover/focus tooltip (Issue #28 C案 §3). Reusable at the ui/ altitude
@@ -40,12 +46,18 @@ const NO_CLAMP: TooltipClampResult = { shiftX: 0, flipToTop: false };
  * interactive content, no click-outside handling needed since it closes on
  * blur/mouseleave/Esc).
  *
- * Positioning: the tooltip defaults to trigger-centered below the trigger,
- * then clamps horizontally (and flips above when there's no room below) so it
- * never runs off-screen — right-aligned toolbar triggers (e.g.
- * `TaskOwnedPaneBadge`) and narrow mobile viewports both stay readable. No
- * ancestor here uses `overflow: hidden`, so clamping within this stacking
- * context is enough; a portal isn't needed (see `tooltipLogic.ts`).
+ * Positioning: portaled to `document.body` and rendered `position: fixed` in
+ * viewport coordinates — ancestors that clip overflow (e.g. `Workspace.tsx`'s
+ * tab panes, `SplitLayout.tsx`'s split panes both use `overflow: hidden`)
+ * cannot cut it off, unlike an in-tree `position: absolute` tooltip. Geometry
+ * is computed from `wrapperEl.getBoundingClientRect()` (viewport-relative,
+ * same basis as `position: fixed`) via `computeTooltipClamp()`, then
+ * converted to an absolute `left`/`top` — no `translate(-50%)` centering,
+ * since re-measuring an already-transformed box would make corrections
+ * diverge across reopens/resizes (see `tooltipLogic.ts`). The tooltip
+ * re-measures on `resize` and `scroll` (capture) while open, since `fixed`
+ * positioning does not track an ancestor's scroll offset the way `absolute`
+ * did.
  */
 export function Tooltip({ content, children }: TooltipProps) {
   const [visibility, dispatch] = useReducer(tooltipVisibilityReducer, initialTooltipVisibilityState);
@@ -53,7 +65,7 @@ export function Tooltip({ content, children }: TooltipProps) {
   const tooltipId = useId();
   const wrapperRef = useRef<HTMLSpanElement>(null);
   const tooltipRef = useRef<HTMLSpanElement>(null);
-  const [clamp, setClamp] = useState<TooltipClampResult>(NO_CLAMP);
+  const [position, setPosition] = useState<TooltipPosition | null>(null);
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -61,27 +73,33 @@ export function Tooltip({ content, children }: TooltipProps) {
       const wrapperEl = wrapperRef.current;
       const tooltipEl = tooltipRef.current;
       if (!wrapperEl || !tooltipEl) return;
-      // レビュー指摘: tooltipRect（getBoundingClientRect）は前回の shiftX/flipToTop の
-      // transform・配置切り替えを反映した「補正後」の矩形なので使わない。wrapper は
-      // transform を当てていないので安全、offsetWidth/offsetHeight は transform の影響を
-      // 受けないレイアウト寸法 — この2つから「未補正・下側配置」の正準幾何を組み立てる。
       const wrapperRect = wrapperEl.getBoundingClientRect();
-      setClamp(
-        computeTooltipClamp({
-          wrapperLeft: wrapperRect.left,
-          wrapperRight: wrapperRect.right,
-          wrapperTop: wrapperRect.top,
-          wrapperBottom: wrapperRect.bottom,
-          tooltipWidth: tooltipEl.offsetWidth,
-          tooltipHeight: tooltipEl.offsetHeight,
-          viewportWidth: window.innerWidth,
-          viewportHeight: window.innerHeight,
-        }),
-      );
+      const clamp = computeTooltipClamp({
+        wrapperLeft: wrapperRect.left,
+        wrapperRight: wrapperRect.right,
+        wrapperTop: wrapperRect.top,
+        wrapperBottom: wrapperRect.bottom,
+        tooltipWidth: tooltipEl.offsetWidth,
+        tooltipHeight: tooltipEl.offsetHeight,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+      });
+      const wrapperCenterX = (wrapperRect.left + wrapperRect.right) / 2;
+      setPosition({
+        left: wrapperCenterX - tooltipEl.offsetWidth / 2 + clamp.shiftX,
+        top: clamp.flipToTop
+          ? wrapperRect.top - TOOLTIP_GAP - tooltipEl.offsetHeight
+          : wrapperRect.bottom + TOOLTIP_GAP,
+        flipToTop: clamp.flipToTop,
+      });
     };
     measure();
     window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
+    window.addEventListener('scroll', measure, true);
+    return () => {
+      window.removeEventListener('resize', measure);
+      window.removeEventListener('scroll', measure, true);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- re-measure whenever content changes size too
   }, [open, content]);
 
@@ -128,42 +146,51 @@ export function Tooltip({ content, children }: TooltipProps) {
     'aria-describedby': describedBy,
   } as Record<string, unknown>);
 
-  const closedOffsetY = clamp.flipToTop ? -4 : 4;
+  const closedOffsetY = position?.flipToTop ? -4 : 4;
+  // 初回測定前（position === null）は画面外に置き、opacity/visibility でも二重に隠す。
+  const left = position?.left ?? -9999;
+  const top = position?.top ?? -9999;
+
+  const tooltipEl = (
+    <span
+      ref={tooltipRef}
+      role="tooltip"
+      id={tooltipId}
+      className="ui-tooltip"
+      style={{
+        position: 'fixed',
+        left,
+        top,
+        transform: `translateY(${open ? 0 : closedOffsetY}px)`,
+        // GlassPopover(130)/BottomSheet(130) などの既存オーバーレイより上、
+        // ContextMenu(310) より上（メニュー項目にツールチップが付く場合も隠れない）、
+        // NotificationCenter(400)/UpdateOverlay(1000) より下（通知・更新中の最前面は譲る）。
+        zIndex: 320,
+        maxWidth: 'min(320px, calc(100vw - 16px))',
+        width: 'max-content',
+        padding: '10px 13px',
+        background: 'var(--bg-elevated)',
+        border: '1px solid transparent',
+        borderRadius: 'var(--radius-md)',
+        boxShadow: 'var(--shadow-2)',
+        color: 'var(--text)',
+        fontSize: 'var(--font-sm)',
+        lineHeight: 1.5,
+        whiteSpace: 'normal',
+        opacity: open ? 1 : 0,
+        visibility: open ? 'visible' : 'hidden',
+        pointerEvents: 'none',
+        transition: 'opacity 0.14s ease, transform 0.14s ease, visibility 0.14s ease',
+      }}
+    >
+      {content}
+    </span>
+  );
 
   return (
-    <span ref={wrapperRef} style={{ position: 'relative', display: 'inline-flex' }}>
+    <span ref={wrapperRef} style={{ display: 'inline-flex' }}>
       {trigger}
-      <span
-        ref={tooltipRef}
-        role="tooltip"
-        id={tooltipId}
-        className="ui-tooltip"
-        style={{
-          position: 'absolute',
-          top: clamp.flipToTop ? 'auto' : 'calc(100% + 8px)',
-          bottom: clamp.flipToTop ? 'calc(100% + 8px)' : 'auto',
-          left: '50%',
-          transform: `translate(calc(-50% + ${clamp.shiftX}px), ${open ? 0 : closedOffsetY}px)`,
-          zIndex: 140,
-          maxWidth: 'min(320px, calc(100vw - 16px))',
-          width: 'max-content',
-          padding: '10px 13px',
-          background: 'var(--bg-elevated)',
-          border: '1px solid transparent',
-          borderRadius: 'var(--radius-md)',
-          boxShadow: 'var(--shadow-2)',
-          color: 'var(--text)',
-          fontSize: 'var(--font-sm)',
-          lineHeight: 1.5,
-          whiteSpace: 'normal',
-          opacity: open ? 1 : 0,
-          visibility: open ? 'visible' : 'hidden',
-          pointerEvents: 'none',
-          transition: 'opacity 0.14s ease, transform 0.14s ease, visibility 0.14s ease',
-        }}
-      >
-        {content}
-      </span>
+      {createPortal(tooltipEl, document.body)}
     </span>
   );
 }
