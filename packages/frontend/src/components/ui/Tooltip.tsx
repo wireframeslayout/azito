@@ -152,17 +152,6 @@ export function Tooltip({ content, children }: TooltipProps) {
     if (e.key === 'Escape') dispatch({ type: 'escape' });
   };
 
-  // Hover bridge: the tooltip body itself can contain interactive content
-  // (e.g. a DocsLink) that needs to be reachable by moving the pointer off
-  // the trigger and across the `gap` (8px) into the tooltip. Without this,
-  // `handleMouseLeave` on the trigger fires the instant the pointer leaves
-  // it, closing the tooltip before the pointer ever reaches the link below.
-  // Treating mouseenter/mouseleave on the tooltip span itself as more of the
-  // same 'hovered' state (same reducer action as the trigger) keeps it open
-  // across that gap and closes it once the pointer leaves both.
-  const handleTooltipMouseEnter = () => dispatch({ type: 'mouseenter' });
-  const handleTooltipMouseLeave = () => dispatch({ type: 'mouseleave' });
-
   // レビュー指摘 #2: 利用側が既に `aria-describedby` を付けている場合、上書きせず連結する。
   const existingDescribedBy = childProps['aria-describedby'];
   const describedBy = [
@@ -195,8 +184,6 @@ export function Tooltip({ content, children }: TooltipProps) {
       role="tooltip"
       id={tooltipId}
       className="ui-tooltip"
-      onMouseEnter={handleTooltipMouseEnter}
-      onMouseLeave={handleTooltipMouseLeave}
       style={{
         position: 'fixed',
         left,
@@ -220,12 +207,15 @@ export function Tooltip({ content, children }: TooltipProps) {
         whiteSpace: 'normal',
         opacity: open ? 1 : 0,
         visibility: open ? 'visible' : 'hidden',
-        // 常時 auto: ツールチップ本文にリンク等の操作可能な要素（DocsLink 等）が入る
-        // ケースを許容するため。`visibility`/`opacity` で閉時は非表示・クリック不可に
-        // なる上、表示中も badge 直下という限られた領域にしか重ならないため、下の UI の
-        // クリックを妨げる範囲は許容範囲（Issue #29 docs linking の一環でツールチップ内
-        // リンクをクリック可能にする要件）。
-        pointerEvents: 'auto',
+        // このツールチップは受動的な説明専用（role="tooltip"）。`document.body` へ
+        // portal 化しているため、DOM のタブ順がトリガーから分断される — トリガーから
+        // Tab しても中の要素へは行かず、body 末尾に飛ぶ。トリガーから Tab すると blur で
+        // 閉じてもしまう。そのため content にリンクやボタンなど操作可能な要素を
+        // 入れてはいけない（キーボードで到達不能になる）。pointerEvents は既定で
+        // 'none'（クリックは常に下の UI へ通す）。内容が長くスクロールが要る場合
+        // （maxHeight 設定時）のみ、その領域内でのスクロール操作を受け付けるために 'auto'
+        // にする。
+        pointerEvents: maxHeight != null ? 'auto' : 'none',
         transition: 'opacity 0.14s ease, transform 0.14s ease, visibility 0.14s ease',
       }}
     >

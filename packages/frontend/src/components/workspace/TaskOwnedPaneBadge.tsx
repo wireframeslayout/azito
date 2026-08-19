@@ -2,7 +2,6 @@ import { useTranslation } from 'react-i18next';
 import { Badge } from '../ui/Badge';
 import { Icon } from '../ui/Icon';
 import { Tooltip } from '../ui/Tooltip';
-import { DocsLink } from '../ui/DocsLink';
 import { useHealth } from '../../hooks/useHealth';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { resolveTaskOwnedPaneBadgeCopy } from './taskOwnedPaneBadgeCopy';
@@ -33,6 +32,14 @@ import { resolveTaskOwnedPaneBadgeCopy } from './taskOwnedPaneBadgeCopy';
  * icon-only on mobile) while `Tooltip` supplies the full explanation via
  * `aria-describedby` — the name/description split means assistive tech reads
  * each once, not the long text twice.
+ *
+ * Tooltip content is text-only (Issue #29 third-party review): `Tooltip` is a
+ * passive `role="tooltip"` description portaled to `document.body`, so an
+ * interactive element (e.g. a `DocsLink`) placed inside it is unreachable by
+ * keyboard — Tab from the trigger jumps past it to the end of the DOM, and
+ * Tab off the trigger closes the tooltip via blur anyway. The scoped-auth
+ * docs remain reachable from Settings → Security (`AuditLogSection`'s
+ * `DocsLink`), so this isn't a functional dead end.
  */
 export function TaskOwnedPaneBadge() {
   const { t } = useTranslation('common');
@@ -41,13 +48,8 @@ export function TaskOwnedPaneBadge() {
   const { labelKey, tooltipKey, tone, icon } = resolveTaskOwnedPaneBadgeCopy(scopedAuthEnabled);
   const label = t(labelKey);
   const tooltip = t(tooltipKey);
-  const tooltipContent = (
-    <>
-      {tooltip} <DocsLink page="security-setup" />
-    </>
-  );
   return (
-    <Tooltip content={tooltipContent}>
+    <Tooltip content={tooltip}>
       <span
         tabIndex={0}
         aria-label={label}
