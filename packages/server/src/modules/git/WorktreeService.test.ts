@@ -4,6 +4,18 @@ import { LocalWorktreeService } from './WorktreeService';
 describe('LocalWorktreeService', () => {
   const svc = new LocalWorktreeService();
 
+  describe('list()', () => {
+    it('returns empty array for non-git directory', async () => {
+      const tmpDir = '/tmp';
+      const result = await svc.list(tmpDir);
+      expect(result).toEqual([]);
+    });
+
+    it('throws on other git errors', async () => {
+      await expect(svc.list('/nonexistent/path/that/does/not/exist')).rejects.toThrow();
+    });
+  });
+
   describe('create() input validation', () => {
     it('rejects workingDir with $() injection', async () => {
       await expect(svc.create('$(id)', 1, 'slug', 'main')).rejects.toThrow('Unsafe');

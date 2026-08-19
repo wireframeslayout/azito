@@ -7,10 +7,17 @@ import { parseWorktreePorcelain } from './parseWorktreePorcelain';
 export class LocalWorktreeService implements IWorktreeService {
   async list(workingDir: string): Promise<WorktreeEntry[]> {
     assertSafePath(workingDir, 'workingDir');
-    const output = execFileSync('git', ['worktree', 'list', '--porcelain'], {
-      cwd: workingDir, encoding: 'utf-8', timeout: 15000,
-    });
-    return parseWorktreePorcelain(output);
+    try {
+      const output = execFileSync('git', ['worktree', 'list', '--porcelain'], {
+        cwd: workingDir, encoding: 'utf-8', timeout: 15000,
+      });
+      return parseWorktreePorcelain(output);
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('not a git repository')) {
+        return [];
+      }
+      throw err;
+    }
   }
 
   async create(workingDir: string, taskId: number, taskSlug: string, baseBranch: string, branchName?: string): Promise<WorktreeInfo> {
