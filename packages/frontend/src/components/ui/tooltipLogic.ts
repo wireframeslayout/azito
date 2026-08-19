@@ -2,22 +2,36 @@
 // jsdom なしでテストできる現状のテスト構成（vitest environment: 'node', *.test.ts のみ）に
 // 合わせ、ビューポートクランプ計算と hover/focus の開閉状態遷移をここへ抽出している。
 
-/** ビューポート内クランプ計算に必要な実測値。単位はすべて px（getBoundingClientRect 由来）。 */
+/**
+ * クランプ計算に必要な実測値。**すべて「未補正・下側配置」の正準幾何**（前回の shiftX /
+ * flipToTop による transform や配置切り替えの影響を受けない値）で渡すこと。
+ *
+ * - `wrapper*` は `wrapperEl.getBoundingClientRect()`（wrapper 自身には transform を
+ *   当てていないので安全）。
+ * - `tooltipWidth` / `tooltipHeight` は `tooltipEl.offsetWidth` / `offsetHeight`
+ *   （CSS transform の影響を受けないレイアウト寸法。`getBoundingClientRect()` は
+ *   transform 後・前回の上下反転後の矩形を返すため使わないこと — 再オープンやリサイズの
+ *   たびに補正が発散する原因になる）。
+ */
 export interface TooltipClampInput {
-  /** クランプ前（`left: 50%; translate(-50%)`）のツールチップ左端。 */
-  tooltipLeft: number;
-  /** クランプ前のツールチップ右端。 */
-  tooltipRight: number;
-  /** クランプ前のツールチップ下端。 */
-  tooltipBottom: number;
-  /** ツールチップの高さ（上側反転時の再配置に使う）。 */
+  /** トリガー（wrapper）要素の左端。 */
+  wrapperLeft: number;
+  /** トリガー（wrapper）要素の右端。 */
+  wrapperRight: number;
+  /** トリガー（wrapper）要素の上端。上側反転時、そこに収まるかの判定に使う。 */
+  wrapperTop: number;
+  /** トリガー（wrapper）要素の下端。下側配置の基準に使う。 */
+  wrapperBottom: number;
+  /** ツールチップの幅（`offsetWidth`）。 */
+  tooltipWidth: number;
+  /** ツールチップの高さ（`offsetHeight`）。上側反転時の再配置にも使う。 */
   tooltipHeight: number;
-  /** トリガー要素の上端。上側反転時、そこに収まるかの判定に使う。 */
-  triggerTop: number;
   viewportWidth: number;
   viewportHeight: number;
   /** ビューポート端からの最小マージン。デフォルト 8px。 */
   margin?: number;
+  /** トリガーとツールチップの間隔。CSS の `calc(100% + Npx)` と一致させる。デフォルト 8px。 */
+  gap?: number;
 }
 
 export interface TooltipClampResult {
@@ -28,26 +42,41 @@ export interface TooltipClampResult {
 }
 
 const DEFAULT_MARGIN = 8;
+const DEFAULT_GAP = 8;
 
 /**
- * トリガー中央基準（`left:50%` + `translate(-50%)`）で配置したツールチップが画面端で
- * 見切れないよう、水平方向の補正オフセットと、下に入りきらない場合の上側反転可否を計算する。
+ * トリガー中央基準（`left:50%` + `translate(-50%)`）・下側配置を起点に、画面端で見切れない
+ * よう水平方向の補正オフセットと、下に入りきらない場合の上側反転可否を計算する純関数。
  *
  * 反転は「上に置いても収まる」場合のみ行う。上下どちらにも収まらない極小ビューポートでは、
  * 反転せず下側配置のまま返す（それ以上の救済はスクロール等の別対応に委ねる）。
+ *
+ * 入力は必ず「未補正・下側配置」の正準幾何（`wrapperEl.getBoundingClientRect()` +
+ * `tooltipEl.offsetWidth/offsetHeight`）で渡すこと。前回のクランプ結果（shiftX 適用後の
+ * transform や flipToTop 適用後の配置）を入力に混ぜると、再オープンやリサイズのたびに
+ * 補正がずれていく（レビュー指摘: 補正の発散）。同じ入力に対しては常に同じ出力を返す
+ * （冪等）— `tooltipLogic.test.ts` の "idempotence" テスト参照。
  */
 export function computeTooltipClamp(input: TooltipClampInput): TooltipClampResult {
   const margin = input.margin ?? DEFAULT_MARGIN;
+  const gap = input.gap ?? DEFAULT_GAP;
+
+  const wrapperCenterX = (input.wrapperLeft + input.wrapperRight) / 2;
+  const centeredLeft = wrapperCenterX - input.tooltipWidth / 2;
+  const centeredRight = centeredLeft + input.tooltipWidth;
 
   let shiftX = 0;
-  if (input.tooltipLeft < margin) {
-    shiftX = margin - input.tooltipLeft;
-  } else if (input.tooltipRight > input.viewportWidth - margin) {
-    shiftX = input.viewportWidth - margin - input.tooltipRight;
+  if (centeredLeft < margin) {
+    shiftX = margin - centeredLeft;
+  } else if (centeredRight > input.viewportWidth - margin) {
+    shiftX = input.viewportWidth - margin - centeredRight;
   }
 
-  const overflowsBottom = input.tooltipBottom > input.viewportHeight - margin;
-  const fitsAbove = input.triggerTop - input.tooltipHeight - margin >= margin;
+  const belowBottom = input.wrapperBottom + gap + input.tooltipHeight;
+  const aboveTop = input.wrapperTop - gap - input.tooltipHeight;
+
+  const overflowsBottom = belowBottom > input.viewportHeight - margin;
+  const fitsAbove = aboveTop >= margin;
   const flipToTop = overflowsBottom && fitsAbove;
 
   return { shiftX, flipToTop };

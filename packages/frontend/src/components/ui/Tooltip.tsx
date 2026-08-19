@@ -61,15 +61,19 @@ export function Tooltip({ content, children }: TooltipProps) {
       const wrapperEl = wrapperRef.current;
       const tooltipEl = tooltipRef.current;
       if (!wrapperEl || !tooltipEl) return;
-      const triggerRect = wrapperEl.getBoundingClientRect();
-      const tooltipRect = tooltipEl.getBoundingClientRect();
+      // レビュー指摘: tooltipRect（getBoundingClientRect）は前回の shiftX/flipToTop の
+      // transform・配置切り替えを反映した「補正後」の矩形なので使わない。wrapper は
+      // transform を当てていないので安全、offsetWidth/offsetHeight は transform の影響を
+      // 受けないレイアウト寸法 — この2つから「未補正・下側配置」の正準幾何を組み立てる。
+      const wrapperRect = wrapperEl.getBoundingClientRect();
       setClamp(
         computeTooltipClamp({
-          tooltipLeft: tooltipRect.left,
-          tooltipRight: tooltipRect.right,
-          tooltipBottom: tooltipRect.bottom,
-          tooltipHeight: tooltipRect.height,
-          triggerTop: triggerRect.top,
+          wrapperLeft: wrapperRect.left,
+          wrapperRight: wrapperRect.right,
+          wrapperTop: wrapperRect.top,
+          wrapperBottom: wrapperRect.bottom,
+          tooltipWidth: tooltipEl.offsetWidth,
+          tooltipHeight: tooltipEl.offsetHeight,
           viewportWidth: window.innerWidth,
           viewportHeight: window.innerHeight,
         }),
@@ -106,13 +110,22 @@ export function Tooltip({ content, children }: TooltipProps) {
     if (e.key === 'Escape') dispatch({ type: 'escape' });
   };
 
+  // レビュー指摘 #2: 利用側が既に `aria-describedby` を付けている場合、上書きせず連結する。
+  const existingDescribedBy = childProps['aria-describedby'];
+  const describedBy = [
+    typeof existingDescribedBy === 'string' ? existingDescribedBy.trim() : undefined,
+    tooltipId,
+  ]
+    .filter(Boolean)
+    .join(' ');
+
   const trigger = cloneElement(children, {
     onMouseEnter: handleMouseEnter,
     onMouseLeave: handleMouseLeave,
     onFocus: handleFocus,
     onBlur: handleBlur,
     onKeyDown: handleKeyDown,
-    'aria-describedby': tooltipId,
+    'aria-describedby': describedBy,
   } as Record<string, unknown>);
 
   const closedOffsetY = clamp.flipToTop ? -4 : 4;
