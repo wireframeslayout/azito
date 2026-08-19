@@ -152,6 +152,17 @@ export function Tooltip({ content, children }: TooltipProps) {
     if (e.key === 'Escape') dispatch({ type: 'escape' });
   };
 
+  // Hover bridge: the tooltip body itself can contain interactive content
+  // (e.g. a DocsLink) that needs to be reachable by moving the pointer off
+  // the trigger and across the `gap` (8px) into the tooltip. Without this,
+  // `handleMouseLeave` on the trigger fires the instant the pointer leaves
+  // it, closing the tooltip before the pointer ever reaches the link below.
+  // Treating mouseenter/mouseleave on the tooltip span itself as more of the
+  // same 'hovered' state (same reducer action as the trigger) keeps it open
+  // across that gap and closes it once the pointer leaves both.
+  const handleTooltipMouseEnter = () => dispatch({ type: 'mouseenter' });
+  const handleTooltipMouseLeave = () => dispatch({ type: 'mouseleave' });
+
   // レビュー指摘 #2: 利用側が既に `aria-describedby` を付けている場合、上書きせず連結する。
   const existingDescribedBy = childProps['aria-describedby'];
   const describedBy = [
@@ -174,9 +185,8 @@ export function Tooltip({ content, children }: TooltipProps) {
   // 初回測定前（position === null）は画面外に置き、opacity/visibility でも二重に隠す。
   const left = position?.left ?? -9999;
   const top = position?.top ?? -9999;
-  // 上下どちらにも収まりきらない場合のみ maxHeight が設定される。その場合はスクロールで内容
-  // を読めるようにする必要があるため、`pointerEvents: 'none'`（ホバー中の操作を邪魔しない
-  // ための既定）を一時的に 'auto' に切り替える。
+  // 上下どちらにも収まりきらない場合のみ maxHeight が設定される。その場合はスクロールで
+  // 内容を読めるようにする（`overflowY: 'auto'`）。
   const maxHeight = position?.maxHeight ?? null;
 
   const tooltipEl = (
@@ -185,6 +195,8 @@ export function Tooltip({ content, children }: TooltipProps) {
       role="tooltip"
       id={tooltipId}
       className="ui-tooltip"
+      onMouseEnter={handleTooltipMouseEnter}
+      onMouseLeave={handleTooltipMouseLeave}
       style={{
         position: 'fixed',
         left,
@@ -208,9 +220,12 @@ export function Tooltip({ content, children }: TooltipProps) {
         whiteSpace: 'normal',
         opacity: open ? 1 : 0,
         visibility: open ? 'visible' : 'hidden',
-        // 通常はホバー/操作を妨げないよう none。maxHeight で内容が切られている場合のみ、
-        // 中身をスクロールで読めるよう auto にする（#28 レビュー指摘 #2: 収まらない場合の救済）。
-        pointerEvents: maxHeight != null ? 'auto' : 'none',
+        // 常時 auto: ツールチップ本文にリンク等の操作可能な要素（DocsLink 等）が入る
+        // ケースを許容するため。`visibility`/`opacity` で閉時は非表示・クリック不可に
+        // なる上、表示中も badge 直下という限られた領域にしか重ならないため、下の UI の
+        // クリックを妨げる範囲は許容範囲（Issue #29 docs linking の一環でツールチップ内
+        // リンクをクリック可能にする要件）。
+        pointerEvents: 'auto',
         transition: 'opacity 0.14s ease, transform 0.14s ease, visibility 0.14s ease',
       }}
     >

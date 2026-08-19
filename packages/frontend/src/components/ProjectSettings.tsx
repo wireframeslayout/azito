@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { Icon } from './ui/Icon';
+import { DocsLink } from './ui/DocsLink';
 import { useApi } from '../hooks/useApi';
 import { useAddWindowModal } from '../hooks/useAddWindowModal';
 import { useIsMobile } from '../hooks/useIsMobile';
@@ -524,7 +525,7 @@ function ServersSection({ settings: s }: { settings: ReturnType<typeof useProjec
           </FormField>
           {s.psInputPolicy === 'allow' && (
             <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: -8, marginBottom: 12 }}>
-              {t('settings.servers.inputPolicyAllowHint')}
+              {t('settings.servers.inputPolicyAllowHint')} <DocsLink page="isolated-execution" />
             </div>
           )}
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>

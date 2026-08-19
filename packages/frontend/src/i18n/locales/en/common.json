@@ -213,5 +213,8 @@
   },
   "errors": {
     "operatorRequired": "Operator privileges are required for this operation ({{operation}}). If you pasted a task token into the token prompt by mistake, use your operator UI token instead."
+  },
+  "docs": {
+    "learnMore": "Learn more in the docs"
   }
 }

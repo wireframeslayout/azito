@@ -50,3 +50,4 @@ export { Notice } from './Notice';
 export type { NoticeTone } from './Notice';
 export { Tooltip } from './Tooltip';
 export type { TooltipProps } from './Tooltip';
+export { DocsLink } from './DocsLink';

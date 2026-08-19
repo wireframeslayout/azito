@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { Badge } from '../ui/Badge';
 import { Icon } from '../ui/Icon';
 import { Tooltip } from '../ui/Tooltip';
+import { DocsLink } from '../ui/DocsLink';
 import { useHealth } from '../../hooks/useHealth';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { resolveTaskOwnedPaneBadgeCopy } from './taskOwnedPaneBadgeCopy';
@@ -40,8 +41,13 @@ export function TaskOwnedPaneBadge() {
   const { labelKey, tooltipKey, tone, icon } = resolveTaskOwnedPaneBadgeCopy(scopedAuthEnabled);
   const label = t(labelKey);
   const tooltip = t(tooltipKey);
+  const tooltipContent = (
+    <>
+      {tooltip} <DocsLink page="security-setup" />
+    </>
+  );
   return (
-    <Tooltip content={tooltip}>
+    <Tooltip content={tooltipContent}>
       <span
         tabIndex={0}
         aria-label={label}

@@ -4,7 +4,7 @@ import { api } from '../../api/client';
 import { useNotificationChannel } from '../../hooks/useNotificationChannel';
 import { useWindowActions } from '../../hooks/useWindowActions';
 import { StatusDot } from '../StatusBadge';
-import { MiniTabBar, IconButton, Button, PanelHeader, Spinner, WindowActivityIndicator, SecretNamesValue, Notice } from '../ui';
+import { MiniTabBar, IconButton, Button, PanelHeader, Spinner, WindowActivityIndicator, SecretNamesValue, Notice, DocsLink } from '../ui';
 import type { MiniTab } from '../ui';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
 import TaskRefBadges from '../TaskRefBadges';
@@ -1787,6 +1787,9 @@ export default function TaskPanel({
                   {t('executionApproval.allowDegraded.notice')}
                   <span style={{ display: 'block', marginTop: 2 }}>
                     {t(`executionApproval.allowDegraded.reason.${approvalData.allowDegradedReason}`)}
+                  </span>
+                  <span style={{ display: 'block', marginTop: 4 }}>
+                    <DocsLink page="isolated-execution" />
                   </span>
                 </Notice>
               )}

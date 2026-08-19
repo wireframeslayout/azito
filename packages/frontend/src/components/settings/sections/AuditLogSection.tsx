@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import { useApi } from '../../../hooks/useApi';
 import { formatRelativeTime } from '../../../utils/time';
-import { Badge, Button, EmptyState, ListRow, ListRowGroup, LoadingState, SectionHeader } from '../../ui';
+import { Badge, Button, DocsLink, EmptyState, ListRow, ListRowGroup, LoadingState, SectionHeader } from '../../ui';
 import type { BadgeTone } from '../../ui';
 
 const AUDIT_LOG_LIMIT = 100;
@@ -41,7 +41,7 @@ export default function AuditLogSection() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', margin: 0 }}>
-        {t('auditLog.description', { count: AUDIT_LOG_LIMIT })}
+        {t('auditLog.description', { count: AUDIT_LOG_LIMIT })} <DocsLink page="security-setup" />
       </p>
 
       {loading && <LoadingState />}

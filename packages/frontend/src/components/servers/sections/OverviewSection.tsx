@@ -10,7 +10,7 @@ import { computeIsolationDoctorState, isValidVerificationReport } from './isolat
 import { HealthDot, HEALTH_COLOR_VAR } from '../../statusbar/HealthDot';
 import { ResourceMeter } from '../../statusbar/ResourceMeter';
 import { healthReasonText, formatBytes } from '../../statusbar/ResourceDropdown';
-import { Chip, Button, Notice } from '../../ui';
+import { Chip, Button, Notice, DocsLink } from '../../ui';
 
 // Issue #29 Step 2 C: display-side TTL for the isolation doctor's last
 // verification — purely advisory ("要再検証"), not a policy re-evaluation.
@@ -271,15 +271,24 @@ export default function OverviewSection({
           <Notice
             tone={isolationDoctorState === 'verified' ? 'success' : isolationDoctorState === 'needsAttention' || isolationDoctorState === 'scopedAuthDisabled' ? 'danger' : 'warning'}
             sub={
-              isolationDoctorState === 'scopedAuthDisabled'
-                ? t('overview.isolationDoctorScopedAuthDisabledSub')
-                : isolationDoctorState === 'scopedAuthUnknown'
-                  ? t('overview.isolationDoctorScopedAuthUnknownSub')
-                  : isolationDoctorState === 'needsAttention'
-                    ? t('overview.isolationDoctorNeedsAttentionSub', {
-                        checks: failedOrUnknownChecks.map((c) => `${c.id} (${c.status})`).join(', '),
-                      })
-                    : t('overview.isolationDoctorSnapshotNotice')
+              <>
+                {isolationDoctorState === 'scopedAuthDisabled'
+                  ? t('overview.isolationDoctorScopedAuthDisabledSub')
+                  : isolationDoctorState === 'scopedAuthUnknown'
+                    ? t('overview.isolationDoctorScopedAuthUnknownSub')
+                    : isolationDoctorState === 'needsAttention'
+                      ? t('overview.isolationDoctorNeedsAttentionSub', {
+                          checks: failedOrUnknownChecks.map((c) => `${c.id} (${c.status})`).join(', '),
+                        })
+                      : t('overview.isolationDoctorSnapshotNotice')}
+                {' '}
+                {/* Issue #29 docs linking: shown once per isolation-doctor
+                    Notice (not per Notice above it) — this is the block
+                    operators reach for when they need to actually understand
+                    isolation, not the transient cleanup/fetch-failure
+                    warnings, so a single link here is enough. */}
+                <DocsLink page="isolated-execution" />
+              </>
             }
             action={
               // Issue #29 review (5th pass), Important finding 1: the run
