@@ -2,12 +2,16 @@ import fs from 'fs';
 import os from 'os';
 import { createHash } from 'crypto';
 import Fastify from 'fastify';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import path from 'path';
 import { sanitizeFileName, fileBrowseRoutes } from './routes';
+import storageRoutes from './routes';
 import { isPathContained } from '../git/PathContainment';
 import type { IServerRepository } from '../servers/Server';
+import type { IProjectRepository } from '../projects/Project';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
+import type { IStorageSettingsRepository } from './SqliteStorageSettingsRepository';
+import type { MinioStorageClient } from './storage/MinioStorageClient';
 
 describe('sanitizeFileName', () => {
   it('preserves Japanese filename', () => {
@@ -240,5 +244,106 @@ describe('PUT /api/servers/:name/files/content — baseMtime/baseHash enforcemen
     });
     expect(res.statusCode).toBe(200);
     expect(fs.readFileSync(filePath, 'utf-8')).toBe('forced\n');
+  });
+});
+
+describe('storage /raw and /url routes — presigned URL usage', () => {
+  let app: ReturnType<typeof Fastify>;
+  let mockStorageClient: {
+    getPresignedUrl: ReturnType<typeof vi.fn>;
+    getDirectUrl: ReturnType<typeof vi.fn>;
+  };
+  let originalFetch: typeof globalThis.fetch;
+
+  beforeEach(async () => {
+    originalFetch = globalThis.fetch;
+
+    const projectRepo: Partial<IProjectRepository> = {
+      findById: (id: number) => (id === 1 ? { id: 1, name: 'test' } as any : null),
+    };
+    const storageSettingsRepo: Partial<IStorageSettingsRepository> = {
+      get: () => ({
+        endpoint: 'http://minio:9000',
+        accessKey: 'key',
+        secretKey: 'secret',
+        bucket: 'bucket',
+        region: 'us-east-1',
+        maxFileSize: 10 * 1024 * 1024,
+        useSsl: false,
+      }),
+    };
+    mockStorageClient = {
+      getPresignedUrl: vi.fn(),
+      getDirectUrl: vi.fn(),
+    };
+
+    app = Fastify();
+    app.register(storageRoutes, {
+      projectRepo: projectRepo as IProjectRepository,
+      storageSettingsRepo: storageSettingsRepo as IStorageSettingsRepository,
+      storageClient: mockStorageClient as unknown as MinioStorageClient,
+    });
+    await app.ready();
+  });
+
+  afterEach(async () => {
+    globalThis.fetch = originalFetch;
+    await app.close();
+  });
+
+  it('/raw uses getPresignedUrl, not getDirectUrl', async () => {
+    mockStorageClient.getPresignedUrl.mockResolvedValueOnce('http://minio:9000/bucket/projects/1/img.png?X-Amz-Signature=abc');
+    globalThis.fetch = vi.fn().mockResolvedValueOnce(new Response(Buffer.from('image-data'), {
+      status: 200,
+      headers: { 'content-type': 'image/png' },
+    }));
+
+    const res = await app.inject({ method: 'GET', url: '/api/projects/1/storage/img.png/raw' });
+    expect(res.statusCode).toBe(200);
+    expect(mockStorageClient.getPresignedUrl).toHaveBeenCalledOnce();
+    expect(mockStorageClient.getDirectUrl).not.toHaveBeenCalled();
+  });
+
+  it('/raw returns 404 when upstream returns 404', async () => {
+    mockStorageClient.getPresignedUrl.mockResolvedValueOnce('http://minio:9000/signed');
+    globalThis.fetch = vi.fn().mockResolvedValueOnce(new Response(null, { status: 404 }));
+
+    const res = await app.inject({ method: 'GET', url: '/api/projects/1/storage/missing.png/raw' });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: 'File not found' });
+  });
+
+  it('/raw returns 502 when upstream returns 403', async () => {
+    mockStorageClient.getPresignedUrl.mockResolvedValueOnce('http://minio:9000/signed');
+    globalThis.fetch = vi.fn().mockResolvedValueOnce(new Response(null, { status: 403 }));
+
+    const res = await app.inject({ method: 'GET', url: '/api/projects/1/storage/denied.png/raw' });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({ error: 'Storage access denied' });
+  });
+
+  it('/url returns a presigned URL', async () => {
+    mockStorageClient.getPresignedUrl.mockResolvedValueOnce('http://minio:9000/bucket/projects/1/img.png?X-Amz-Signature=abc');
+
+    const res = await app.inject({ method: 'GET', url: '/api/projects/1/storage/img.png/url' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().url).toContain('X-Amz-Signature');
+    expect(mockStorageClient.getDirectUrl).not.toHaveBeenCalled();
+  });
+
+  it('/url returns 502 when presigning fails', async () => {
+    mockStorageClient.getPresignedUrl.mockRejectedValueOnce(new Error('signing failed'));
+
+    const res = await app.inject({ method: 'GET', url: '/api/projects/1/storage/img.png/url' });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({ error: 'signing failed' });
+  });
+
+  it('/raw returns 502 when presigning fails', async () => {
+    mockStorageClient.getPresignedUrl.mockRejectedValueOnce(new Error('signing failed'));
+
+    const res = await app.inject({ method: 'GET', url: '/api/projects/1/storage/img.png/raw' });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({ error: 'signing failed' });
   });
 });

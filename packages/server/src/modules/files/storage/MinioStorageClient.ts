@@ -115,15 +115,11 @@ export class MinioStorageClient {
   }
 
   async getPresignedUrl(settings: StorageSettings, projectId: number, filename: string): Promise<string> {
-    try {
-      const s3 = this.getClient(settings);
-      const key = `projects/${projectId}/${filename}`;
-      return await getSignedUrl(s3, new GetObjectCommand({
-        Bucket: settings.bucket,
-        Key: key,
-      }), { expiresIn: 3600 });
-    } catch {
-      return this.getDirectUrl(settings, projectId, filename);
-    }
+    const s3 = this.getClient(settings);
+    const key = `projects/${projectId}/${filename}`;
+    return await getSignedUrl(s3, new GetObjectCommand({
+      Bucket: settings.bucket,
+      Key: key,
+    }), { expiresIn: 3600 });
   }
 }
