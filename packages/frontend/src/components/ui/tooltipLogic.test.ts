@@ -105,18 +105,56 @@ describe('computeTooltipClamp', () => {
     expect(result.flipToTop).toBe(true);
   });
 
-  it('does not flip when there is not enough room above either', () => {
+  it('picks the side with more room and caps maxHeight when neither side fully fits', () => {
+    // aboveSpace = 20 - 8(gap) - 8(margin) = 4; belowSpace = 768 - 8 - 8 - 712 = 40.
+    // Below has more room, so it stays below (unlike a plain "does it overflow" check,
+    // this compares available space on both sides) and gets capped to that space.
     const result = computeTooltipClamp({
       wrapperLeft: 100,
       wrapperRight: 300,
-      wrapperTop: 20, // only 20px above the trigger — a 60px tooltip does not fit
+      wrapperTop: 20, // only a sliver of room above the trigger
       wrapperBottom: 712,
+      tooltipWidth: 200,
+      tooltipHeight: 60, // fits in neither the 4px above nor the 40px below
+      viewportWidth: 1024,
+      viewportHeight: 768,
+    });
+    expect(result.flipToTop).toBe(false);
+    expect(result.top).toBe(720); // wrapperBottom(712) + gap(8)
+    expect(result.maxHeight).toBe(40);
+  });
+
+  it('flips to the top and caps maxHeight when the top has more room but still not enough', () => {
+    // aboveSpace = 500 - 8(gap) - 8(margin) = 484; belowSpace = 768 - 8 - 8 - 760 = -8.
+    // Above has (much) more room, so it flips and clamps `top` to the viewport margin.
+    const result = computeTooltipClamp({
+      wrapperLeft: 100,
+      wrapperRight: 300,
+      wrapperTop: 500,
+      wrapperBottom: 760, // trigger sits almost at the bottom edge
+      tooltipWidth: 200,
+      tooltipHeight: 600, // taller than either available space
+      viewportWidth: 1024,
+      viewportHeight: 768,
+    });
+    expect(result.flipToTop).toBe(true);
+    expect(result.top).toBe(8); // clamped to the viewport margin
+    expect(result.maxHeight).toBe(484);
+  });
+
+  it('does not set maxHeight when the tooltip fits without clamping', () => {
+    const result = computeTooltipClamp({
+      wrapperLeft: 130,
+      wrapperRight: 170,
+      wrapperTop: 80,
+      wrapperBottom: 100,
       tooltipWidth: 200,
       tooltipHeight: 60,
       viewportWidth: 1024,
       viewportHeight: 768,
     });
-    expect(result.flipToTop).toBe(false);
+    expect(result.maxHeight).toBeNull();
+    expect(result.top).toBe(108); // wrapperBottom(100) + gap(8)
   });
 
   it('does not flip when the tooltip fits within the bottom edge', () => {
@@ -150,14 +188,21 @@ describe('computeTooltipClamp', () => {
     expect(result.flipToTop).toBe(true);
   });
 
-  describe('idempotence (regression: corrected-element re-measurement drift)', () => {
-    // A previous implementation re-measured `tooltipRef.getBoundingClientRect()` — which
-    // already had the prior shiftX/flipToTop transform applied — and fed that back into
-    // computeTooltipClamp(). Because the function assumes an *uncorrected, below-placed*
-    // input geometry, feeding it corrected geometry made the correction drift further on
-    // every reopen/resize. computeTooltipClamp() itself must be a pure, idempotent function
-    // of the trigger's own (transform-free) rect + the tooltip's offsetWidth/offsetHeight —
-    // never of its own previous output.
+  describe('deterministic output from the uncorrected canonical geometry (contract test)', () => {
+    // This block verifies a *contract of the pure function itself*: given the same
+    // uncorrected, below-placed canonical input (wrapper rect + tooltip offsetWidth/
+    // offsetHeight), computeTooltipClamp() always returns the same result, and its input
+    // shape has no field that could accept a post-transform tooltip rect.
+    //
+    // What this does NOT cover: whether the *call site* (Tooltip.tsx) actually keeps
+    // re-deriving that canonical geometry from `wrapperEl.getBoundingClientRect()` +
+    // `tooltipEl.offsetWidth/offsetHeight` on every re-measure, rather than accidentally
+    // feeding back an already-corrected value (e.g. `tooltipRef.getBoundingClientRect()`
+    // after a transform was applied). This project's frontend vitest config runs with
+    // `environment: 'node'` (no jsdom/testing-library — see AGENTS.md / vitest config), so
+    // there is no DOM to mount Tooltip.tsx against and assert on real re-measure calls.
+    // That call-site regression is guarded only by the comments in Tooltip.tsx at the
+    // measurement site, not by an automated test here.
 
     const edgeInput: TooltipClampInput = {
       // Trigger pinned near the right edge and near the bottom of a small viewport, so both

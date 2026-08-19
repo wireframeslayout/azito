@@ -18,7 +18,6 @@ import {
   initialTooltipVisibilityState,
   isTooltipOpen,
   tooltipVisibilityReducer,
-  TOOLTIP_GAP,
 } from './tooltipLogic';
 
 export interface TooltipProps {
@@ -33,6 +32,8 @@ interface TooltipPosition {
   left: number;
   top: number;
   flipToTop: boolean;
+  /** 上下どちらにも収まりきらない場合のみ設定。`maxHeight` + `overflowY: 'auto'` を適用する。 */
+  maxHeight: number | null;
 }
 
 /**
@@ -57,7 +58,13 @@ interface TooltipPosition {
  * diverge across reopens/resizes (see `tooltipLogic.ts`). The tooltip
  * re-measures on `resize` and `scroll` (capture) while open, since `fixed`
  * positioning does not track an ancestor's scroll offset the way `absolute`
- * did.
+ * did. Viewport bounds prefer `window.visualViewport` (falling back to
+ * `window.innerWidth/innerHeight`) since `innerWidth/innerHeight` describe the
+ * *layout* viewport — during pinch-zoom or with an on-screen virtual keyboard
+ * open, the actually-visible area can be smaller, which would otherwise place
+ * the tooltip off-screen. When neither placement fully fits (e.g. a short
+ * split pane), `computeTooltipClamp()` picks the side with more room and
+ * returns a `maxHeight` the tooltip must respect with internal scrolling.
  */
 export function Tooltip({ content, children }: TooltipProps) {
   const [visibility, dispatch] = useReducer(tooltipVisibilityReducer, initialTooltipVisibilityState);
@@ -73,7 +80,18 @@ export function Tooltip({ content, children }: TooltipProps) {
       const wrapperEl = wrapperRef.current;
       const tooltipEl = tooltipRef.current;
       if (!wrapperEl || !tooltipEl) return;
+      // 正準幾何（未補正・下側配置基準）を必ずここから作ること — `wrapperEl` 自身には
+      // transform を当てていないので `getBoundingClientRect()` は安全だが、`tooltipEl` の
+      // 矩形は前回の shiftX/flipToTop 補正後の transform を反映してしまうため使わない。
+      // 代わりに transform の影響を受けない `offsetWidth`/`offsetHeight` を使う
+      // （このテスト範囲は tooltipLogic.test.ts 側の契約テストではカバーできない —
+      // 呼び出し側のこの2点が守られているかは目視レビューで担保する）。
       const wrapperRect = wrapperEl.getBoundingClientRect();
+      // `window.innerWidth/innerHeight` describe the layout viewport, which stays full-size
+      // during pinch-zoom or with an on-screen keyboard open — the actually-visible area
+      // (`visualViewport`) can be smaller/offset, so prefer it when available (Safari/older
+      // WebViews without `visualViewport` fall back to the layout viewport).
+      const vv = window.visualViewport;
       const clamp = computeTooltipClamp({
         wrapperLeft: wrapperRect.left,
         wrapperRight: wrapperRect.right,
@@ -81,24 +99,30 @@ export function Tooltip({ content, children }: TooltipProps) {
         wrapperBottom: wrapperRect.bottom,
         tooltipWidth: tooltipEl.offsetWidth,
         tooltipHeight: tooltipEl.offsetHeight,
-        viewportWidth: window.innerWidth,
-        viewportHeight: window.innerHeight,
+        viewportWidth: vv?.width ?? window.innerWidth,
+        viewportHeight: vv?.height ?? window.innerHeight,
+        viewportOffsetLeft: vv?.offsetLeft ?? 0,
+        viewportOffsetTop: vv?.offsetTop ?? 0,
       });
       const wrapperCenterX = (wrapperRect.left + wrapperRect.right) / 2;
       setPosition({
         left: wrapperCenterX - tooltipEl.offsetWidth / 2 + clamp.shiftX,
-        top: clamp.flipToTop
-          ? wrapperRect.top - TOOLTIP_GAP - tooltipEl.offsetHeight
-          : wrapperRect.bottom + TOOLTIP_GAP,
+        top: clamp.top,
         flipToTop: clamp.flipToTop,
+        maxHeight: clamp.maxHeight,
       });
     };
     measure();
     window.addEventListener('resize', measure);
     window.addEventListener('scroll', measure, true);
+    const vv = window.visualViewport;
+    vv?.addEventListener('resize', measure);
+    vv?.addEventListener('scroll', measure);
     return () => {
       window.removeEventListener('resize', measure);
       window.removeEventListener('scroll', measure, true);
+      vv?.removeEventListener('resize', measure);
+      vv?.removeEventListener('scroll', measure);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- re-measure whenever content changes size too
   }, [open, content]);
@@ -150,6 +174,10 @@ export function Tooltip({ content, children }: TooltipProps) {
   // 初回測定前（position === null）は画面外に置き、opacity/visibility でも二重に隠す。
   const left = position?.left ?? -9999;
   const top = position?.top ?? -9999;
+  // 上下どちらにも収まりきらない場合のみ maxHeight が設定される。その場合はスクロールで内容
+  // を読めるようにする必要があるため、`pointerEvents: 'none'`（ホバー中の操作を邪魔しない
+  // ための既定）を一時的に 'auto' に切り替える。
+  const maxHeight = position?.maxHeight ?? null;
 
   const tooltipEl = (
     <span
@@ -167,6 +195,7 @@ export function Tooltip({ content, children }: TooltipProps) {
         // NotificationCenter(400)/UpdateOverlay(1000) より下（通知・更新中の最前面は譲る）。
         zIndex: 320,
         maxWidth: 'min(320px, calc(100vw - 16px))',
+        ...(maxHeight != null ? { maxHeight, overflowY: 'auto' as const } : {}),
         width: 'max-content',
         padding: '10px 13px',
         background: 'var(--bg-elevated)',
@@ -179,7 +208,9 @@ export function Tooltip({ content, children }: TooltipProps) {
         whiteSpace: 'normal',
         opacity: open ? 1 : 0,
         visibility: open ? 'visible' : 'hidden',
-        pointerEvents: 'none',
+        // 通常はホバー/操作を妨げないよう none。maxHeight で内容が切られている場合のみ、
+        // 中身をスクロールで読めるよう auto にする（#28 レビュー指摘 #2: 収まらない場合の救済）。
+        pointerEvents: maxHeight != null ? 'auto' : 'none',
         transition: 'opacity 0.14s ease, transform 0.14s ease, visibility 0.14s ease',
       }}
     >
