@@ -1,28 +1,22 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { runIsolationDoctor, probeFilesFramed } from './isolationDoctor';
-import { isCanaryStillIntact } from './hubCanary';
 import type { IServerTransport, ExecResult } from './transport/ServerTransport';
-
-// Final review round, Important finding 3: `checkFsAndHostBoundary` now
-// re-verifies (via `isCanaryStillIntact`) that the local canary is still the
-// same one right after the remote probe completes an 'absent' round-trip —
-// mocked here so tests can drive both outcomes without touching the real
-// filesystem (HUB.canary.path below is a fictional path that never exists on
-// disk, so leaving this unmocked would make every "absent" scenario report a
-// rotation regardless of intent).
-vi.mock('./hubCanary', () => ({
-  isCanaryStillIntact: vi.fn(() => true),
-}));
 
 // Issue #29 Step 2 B: fail-closed contract — every check must default to
 // 'unknown' unless it actually confirmed something, and the overall
 // `verified` flag is true only when EVERY check is 'pass'.
 
-const HUB = { hostname: 'hub-host', uid: 1000, canary: { path: '/hub/data/.azito-hub-canary-test', content: 'canary-content' } };
-
-beforeEach(() => {
-  vi.mocked(isCanaryStillIntact).mockReturnValue(true);
-});
+// Security fix (same_host boot_id-based detection): `same_host` now decides
+// `'pass'`/`'fail'` primarily by comparing the hub's and the target's Linux
+// kernel boot id (see isolationDoctor.ts's checkFsAndHostBoundary doc
+// comment) — hostname/uid are only a fallback, and that fallback can never
+// reach `'pass'` on its own.
+const HUB = {
+  hostname: 'hub-host',
+  uid: 1000,
+  canary: { path: '/hub/data/.azito-hub-canary-test', content: 'canary-content' },
+  bootId: '11111111-1111-1111-1111-111111111111',
+};
 
 function b64(s: string): string {
   return Buffer.from(s, 'utf-8').toString('base64');
@@ -47,6 +41,11 @@ function cleanHandler(cmd: string): ExecResult {
   // Review round (Critical finding 1): the FS-boundary canary — absent on a
   // genuinely separate filesystem.
   if (cmd.includes(HUB.canary.path)) return { stdout: 'AZT_STATUS:canary:absent\n', stderr: '', code: 0 };
+  // Security fix (boot_id-based same_host detection): a clean agent server
+  // has its own, DIFFERENT kernel boot id from the hub's.
+  if (cmd.includes('/proc/sys/kernel/random/boot_id')) {
+    return { stdout: `AZT_STATUS:f:present\n${b64('22222222-2222-2222-2222-222222222222')}\nAZT_STATUS_END:f\n`, stderr: '', code: 0 };
+  }
   if (cmd.includes('.ssh')) return { stdout: 'AZT_SSH_NO_DIR\n', stderr: '', code: 0 };
   // Follow-up review round (Important finding 2): gh host enumeration —
   // hosts.yml absent (default host only), gh itself absent, no GH_TOKEN/
@@ -68,13 +67,19 @@ function cleanHandler(cmd: string): ExecResult {
   throw new Error(`unexpected command: ${cmd}`);
 }
 
+// Helper: builds an ExecResult answering the boot_id probe
+// (`/proc/sys/kernel/random/boot_id`) with a given value, or an absent
+// result when `value` is null (simulating a non-Linux target/unavailable
+// boot_id).
+function bootIdResult(value: string | null): ExecResult {
+  if (value === null) return { stdout: 'AZT_STATUS:f:absent\n', stderr: '', code: 0 };
+  return { stdout: `AZT_STATUS:f:present\n${b64(value)}\nAZT_STATUS_END:f\n`, stderr: '', code: 0 };
+}
+
 describe('runIsolationDoctor', () => {
-  // Ratified doctrine (misconfiguration detector, not attestation — see
-  // isolationDoctor.ts's top-of-file module doc comment): a canary probe
-  // that actually COMPLETES and positively reports the canary absent, paired
-  // with both independent identifiers (hostname, uid) differing, is now
-  // `'pass'` — `cleanHandler`'s scenario is exactly this, so a fully "clean"
-  // agent server reaches `verified: true` overall.
+  // cleanHandler answers the boot_id probe with a value different from
+  // HUB.bootId, so a fully "clean" agent server reaches `verified: true`
+  // overall via the boot_id comparison (hostname/uid are not consulted).
   it('reports verified:true overall when every check (including same_host) passes', async () => {
     const transport = makeTransport(cleanHandler);
     const result = await runIsolationDoctor(transport, HUB);
@@ -83,58 +88,30 @@ describe('runIsolationDoctor', () => {
     expect(result.verified).toBe(true);
   });
 
-  it('same_host: fails when hostname AND uid both match the hub, even with an unreadable canary', async () => {
+  // Security fix (boot_id-based same_host detection): boot_id is the
+  // decisive signal — a matching boot_id fails the check even when
+  // hostname/uid both differ (the exact chroot/container-on-the-same-host
+  // scenario the old hostname/uid-only heuristic missed).
+  it('same_host: fails when boot_id matches the hub, even though hostname AND uid both differ', async () => {
     const transport = makeTransport((cmd) => {
-      if (cmd.startsWith('hostname;')) return { stdout: `${HUB.hostname}\n${HUB.uid}\n`, stderr: '', code: 0 };
+      if (cmd.startsWith('hostname;')) return { stdout: 'other-host\n9999\n', stderr: '', code: 0 };
+      if (cmd.includes('/proc/sys/kernel/random/boot_id')) return bootIdResult(HUB.bootId);
       return cleanHandler(cmd);
     });
     const result = await runIsolationDoctor(transport, HUB);
     const check = result.checks.find((c) => c.id === 'same_host')!;
     expect(check.status).toBe('fail');
+    expect(check.detail).toContain('boot_id');
     expect(result.verified).toBe(false);
   });
 
-  // Step 2 review, Important #3: hostname alone is not an FS isolation
-  // boundary (containers sharing a Docker host's utsname can still differ
-  // in every way that matters) — a hostname-only match can no longer be
-  // reported as 'pass'; it's inconclusive ('unknown') as long as the canary
-  // itself is unreadable (no positive proof of separation either).
-  it('same_host: unknown when only hostname matches (uid differs) — hostname alone is not an FS boundary', async () => {
+  // Security fix: a differing boot_id passes the check even when
+  // hostname AND uid both match the hub — boot_id alone decides, hostname/
+  // uid are not consulted when boot_id was obtained from both sides.
+  it('same_host: passes when boot_id differs, even though hostname AND uid both match the hub', async () => {
     const transport = makeTransport((cmd) => {
-      if (cmd.startsWith('hostname;')) return { stdout: `${HUB.hostname}\n9999\n`, stderr: '', code: 0 };
-      return cleanHandler(cmd);
-    });
-    const result = await runIsolationDoctor(transport, HUB);
-    const check = result.checks.find((c) => c.id === 'same_host')!;
-    expect(check.status).toBe('unknown');
-    expect(result.verified).toBe(false);
-  });
-
-  // Real-deployment fix: uid 1000 is the default first user on virtually
-  // every Linux distribution, so two genuinely separate machines almost
-  // always share it. Requiring uid to differ made 'pass' unreachable in
-  // practice (the first real isolated server had a differing hostname and
-  // both uid 1000), which made the whole 'allow' profile unusable. A
-  // matching uid across DIFFERENT hostnames carries no host-identity
-  // information, so it must not gate this check.
-  it('same_host: passes when only uid matches (hostname differs) — uid is not a host identifier', async () => {
-    const transport = makeTransport((cmd) => {
-      if (cmd.startsWith('hostname;')) return { stdout: `other-host\n${HUB.uid}\n`, stderr: '', code: 0 };
-      return cleanHandler(cmd);
-    });
-    const result = await runIsolationDoctor(transport, HUB);
-    expect(result.checks.find((c) => c.id === 'same_host')!.status).toBe('pass');
-  });
-
-  // Ratified doctrine (misconfiguration detector, not attestation): a
-  // COMPLETED canary probe that positively reports absence, combined with
-  // both hostname and uid differing, is treated as 'pass' — the strongest
-  // negative signal this check can produce (see checkFsAndHostBoundary's doc
-  // comment). This is distinct from the probe not completing at all (still
-  // 'unknown', covered separately below).
-  it('same_host: passes when neither hostname nor uid match and the canary probe completed with a positive "absent" result', async () => {
-    const transport = makeTransport((cmd) => {
-      if (cmd.startsWith('hostname;')) return { stdout: 'other-host\n9999\n', stderr: '', code: 0 };
+      if (cmd.startsWith('hostname;')) return { stdout: `${HUB.hostname}\n${HUB.uid}\n`, stderr: '', code: 0 };
+      if (cmd.includes('/proc/sys/kernel/random/boot_id')) return bootIdResult('33333333-3333-3333-3333-333333333333');
       return cleanHandler(cmd);
     });
     const result = await runIsolationDoctor(transport, HUB);
@@ -154,13 +131,13 @@ describe('runIsolationDoctor', () => {
 
   it('same_host: unknown when hub uid could not be resolved', async () => {
     const transport = makeTransport(cleanHandler);
-    const result = await runIsolationDoctor(transport, { hostname: 'hub-host', uid: null, canary: HUB.canary });
+    const result = await runIsolationDoctor(transport, { hostname: 'hub-host', uid: null, canary: HUB.canary, bootId: HUB.bootId });
     expect(result.checks.find((c) => c.id === 'same_host')!.status).toBe('unknown');
   });
 
-  // ─── FS-boundary canary (review round, Critical finding 1) ───
+  // ─── FS-boundary canary (kept from the prior implementation) ───
   describe('same_host: FS-boundary canary', () => {
-    it('fails when the canary is read back with matching content, even though hostname/uid both differ', async () => {
+    it('fails when the canary is read back with matching content, even though hostname/uid/boot_id all differ', async () => {
       const transport = makeTransport((cmd) => {
         if (cmd.startsWith('hostname;')) return { stdout: 'other-host\n9999\n', stderr: '', code: 0 };
         if (cmd.includes(HUB.canary.path)) {
@@ -175,53 +152,72 @@ describe('runIsolationDoctor', () => {
       expect(result.verified).toBe(false);
     });
 
-    it('unknown when hostname/uid both differ but the canary probe itself is unreachable', async () => {
+    it('is not decided by the canary alone (boot_id still governs) when the canary probe itself is unreachable', async () => {
       const transport = makeTransport((cmd) => {
         if (cmd.startsWith('hostname;')) return { stdout: 'other-host\n9999\n', stderr: '', code: 0 };
         if (cmd.includes(HUB.canary.path)) throw new Error('connection refused');
         return cleanHandler(cmd);
       });
       const result = await runIsolationDoctor(transport, HUB);
-      expect(result.checks.find((c) => c.id === 'same_host')!.status).toBe('unknown');
+      // cleanHandler's boot_id still differs from HUB.bootId, so the check
+      // reaches 'pass' via boot_id even though the canary probe failed.
+      expect(result.checks.find((c) => c.id === 'same_host')!.status).toBe('pass');
     });
 
-    it('unknown when the canary path exists but its content does not match (not trusted as proof of absence)', async () => {
+    it('unknown when the hub has no canary at all AND boot_id is unavailable on both sides, with hostname/uid not fully matching', async () => {
       const transport = makeTransport((cmd) => {
         if (cmd.startsWith('hostname;')) return { stdout: 'other-host\n9999\n', stderr: '', code: 0 };
-        if (cmd.includes(HUB.canary.path)) {
-          return { stdout: `AZT_STATUS:canary:present\n${b64('unexpected-content')}\nAZT_STATUS_END:canary\n`, stderr: '', code: 0 };
-        }
+        if (cmd.includes('/proc/sys/kernel/random/boot_id')) return bootIdResult(null);
         return cleanHandler(cmd);
       });
-      const result = await runIsolationDoctor(transport, HUB);
-      expect(result.checks.find((c) => c.id === 'same_host')!.status).toBe('unknown');
-    });
-
-    it('unknown when the hub has no canary at all (write failed at startup) — never silently skipped as a pass', async () => {
-      const transport = makeTransport((cmd) => {
-        if (cmd.startsWith('hostname;')) return { stdout: 'other-host\n9999\n', stderr: '', code: 0 };
-        return cleanHandler(cmd);
-      });
-      const result = await runIsolationDoctor(transport, { hostname: HUB.hostname, uid: HUB.uid, canary: null });
-      expect(result.checks.find((c) => c.id === 'same_host')!.status).toBe('unknown');
-    });
-
-    // Final review round, Important finding 3: a remote 'absent' answer
-    // arriving after the local canary was rotated/removed mid-round-trip must
-    // not be trusted as proof of separation — a genuinely same-filesystem
-    // agent reading the now-stale path would report the identical "absent"
-    // observation, so the doctor cannot tell the two apart and must degrade
-    // to 'unknown' rather than 'pass'.
-    it('unknown (not pass) when the canary was rotated/removed locally during the remote round-trip, even though hostname/uid both differ and the remote reports absent', async () => {
-      vi.mocked(isCanaryStillIntact).mockReturnValue(false);
-      const transport = makeTransport((cmd) => {
-        if (cmd.startsWith('hostname;')) return { stdout: 'other-host\n9999\n', stderr: '', code: 0 };
-        return cleanHandler(cmd);
-      });
-      const result = await runIsolationDoctor(transport, HUB);
+      const result = await runIsolationDoctor(transport, { hostname: HUB.hostname, uid: HUB.uid, canary: null, bootId: null });
       const check = result.checks.find((c) => c.id === 'same_host')!;
       expect(check.status).toBe('unknown');
-      expect(result.verified).toBe(false);
+      expect(check.detail).toContain('boot_id');
+    });
+  });
+
+  // ─── boot_id fallback (non-Linux hub/target) ───
+  describe('same_host: boot_id unavailable — hostname/uid fallback', () => {
+    it('fails when boot_id is unavailable on both sides AND hostname AND uid both match', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.startsWith('hostname;')) return { stdout: `${HUB.hostname}\n${HUB.uid}\n`, stderr: '', code: 0 };
+        if (cmd.includes('/proc/sys/kernel/random/boot_id')) return bootIdResult(null);
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, { ...HUB, bootId: null });
+      const check = result.checks.find((c) => c.id === 'same_host')!;
+      expect(check.status).toBe('fail');
+      expect(check.detail).toContain('フォールバック');
+    });
+
+    // The fallback must never reach 'pass' on its own — a differing
+    // hostname/uid is not proof of separation the way a differing boot_id
+    // is, so this degrades to 'unknown' rather than 'pass'.
+    it('unknown (never pass) when boot_id is unavailable on both sides and hostname/uid do not both match', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.startsWith('hostname;')) return { stdout: 'other-host\n9999\n', stderr: '', code: 0 };
+        if (cmd.includes('/proc/sys/kernel/random/boot_id')) return bootIdResult(null);
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, { ...HUB, bootId: null });
+      const check = result.checks.find((c) => c.id === 'same_host')!;
+      expect(check.status).toBe('unknown');
+      expect(check.detail).toContain('フォールバック');
+    });
+
+    it('falls back when only the hub side is missing a boot_id (target reports one)', async () => {
+      const transport = makeTransport((cmd) => {
+        if (cmd.startsWith('hostname;')) return { stdout: `${HUB.hostname}\n${HUB.uid}\n`, stderr: '', code: 0 };
+        // Target DOES report a boot_id, but the hub side is null — the
+        // comparison branch requires BOTH sides.
+        if (cmd.includes('/proc/sys/kernel/random/boot_id')) return bootIdResult('44444444-4444-4444-4444-444444444444');
+        return cleanHandler(cmd);
+      });
+      const result = await runIsolationDoctor(transport, { ...HUB, bootId: null });
+      const check = result.checks.find((c) => c.id === 'same_host')!;
+      expect(check.status).toBe('fail');
+      expect(check.detail).toContain('フォールバック');
     });
   });
 

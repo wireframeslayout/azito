@@ -88,7 +88,7 @@ operator 相当のトークンを積極的に除去します。
 
 | check id | 検出する設定ミス |
 |---|---|
-| `same_host` | 対象サーバーがハブと同一ホスト/同一ファイルシステムである（hostname/uid 一致 + カナリアファイル読み取り） |
+| `same_host` | 対象サーバーがハブと同一ホスト/同一ファイルシステムである（boot_id〈カーネルの起動ID〉一致、またはカナリアファイル読み取り。boot_id が双方から取得できない場合のみ hostname/uid の一致を見るが、その場合は不一致でも pass にはしない） |
 | `no_ssh_private_keys` | `~/.ssh` 配下に PEM 形式の秘密鍵が残っている |
 | `gh_unauthenticated` | `gh` にローカル資格情報（`hosts.yml` のトークン、`GH_TOKEN`/`GITHUB_TOKEN`/`GH_ENTERPRISE_TOKEN`/`GITHUB_ENTERPRISE_TOKEN` 環境変数）が残っている |
 | `no_git_credentials` | `git config credential.helper` に実効設定がある、または `~/.git-credentials` が存在する |

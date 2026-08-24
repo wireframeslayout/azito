@@ -12,15 +12,27 @@ import { KeyedMutex } from '../../shared/keyedMutex';
 // process never does either. Mocked with a fixed, known canary so the doctor
 // tests below can control whether it reads back as present/absent, exactly
 // like every other fake `exec` response in this file.
-// Final review round, Important finding 3: `checkFsAndHostBoundary` also
-// re-verifies the canary via `isCanaryStillIntact()` immediately after each
-// remote 'absent' round-trip — mocked as always-intact here so this file's
-// existing "absent" scenarios keep reaching `same_host: 'pass'` (a dedicated
-// rotation-during-probe scenario is covered in isolationDoctor.test.ts).
 vi.mock('./hubCanary', () => ({
   getVerifiedHubCanary: () => ({ path: '/hub/data/.azito-hub-canary-test', content: 'test-canary-content' }),
-  isCanaryStillIntact: () => true,
 }));
+
+// Security fix (same_host boot_id-based detection): routes.ts reads the
+// hub's own boot_id straight off the real host running this test process
+// (readHubBootId(), a plain `fs.readFileSync`, is not mocked). Every fake
+// `exec` handler below that wants `same_host` to resolve to 'pass' must
+// answer the boot_id probe with SOME syntactically valid, differing value
+// (the exact value doesn't matter — it only needs to not collide with
+// whatever the real test host's boot_id happens to be) rather than leaving
+// it unanswered (which falls through to the never-'pass' hostname/uid
+// fallback).
+function b64(s: string): string {
+  return Buffer.from(s, 'utf-8').toString('base64');
+}
+const FAKE_REMOTE_BOOT_ID_RESPONSE = {
+  stdout: `AZT_STATUS:f:present\n${b64('99999999-9999-9999-9999-999999999999')}\nAZT_STATUS_END:f\n`,
+  stderr: '',
+  code: 0,
+};
 
 // Issue #29 Step 1: isolation_intent is only settable for agent servers — a
 // local server always shares the hub process's own credential store, so
@@ -1448,22 +1460,20 @@ describe('POST /api/servers/:name/isolation/doctor (Issue #29 Step 2 B)', () => 
     });
   });
 
-  // Ratified doctrine (misconfiguration detector, not attestation — see
-  // isolationDoctor.ts's top-of-file module doc comment): a canary probe
-  // that COMPLETES and positively reports the canary absent, combined with
-  // both hostname and uid differing from the hub's, now resolves `same_host`
-  // to 'pass' — so a run where every other check is also clean reaches
-  // `verified: true` overall and persists via `updateIsolationVerification`.
+  // Security fix (same_host boot_id-based detection): a boot_id probe that
+  // resolves to a value DIFFERENT from the hub's own (real, unmocked)
+  // boot_id resolves `same_host` to 'pass' regardless of hostname/uid — so a
+  // run where every other check is also clean reaches `verified: true`
+  // overall and persists via `updateIsolationVerification`.
   it('runs the probe for an isolated agent server and persists verification via transportFactory.getTransport when every check (including same_host) passes', async () => {
     const exec = vi.fn(async (cmd: string) => {
       if (cmd.startsWith('hostname;')) return { stdout: 'remote-host\n9999\n', stderr: '', code: 0 };
+      if (cmd.includes('/proc/sys/kernel/random/boot_id')) return FAKE_REMOTE_BOOT_ID_RESPONSE;
       // Review round (Critical finding 1): the FS-boundary canary probe —
       // a different command than the plain hostname/uid one above, matched
       // by the mocked hub canary's path (see the vi.mock('./hubCanary')
-      // block at the top of this file). Reports absent; combined with the
-      // differing hostname/uid above, a COMPLETED absent-canary probe is a
-      // 'pass' under the ratified doctrine (see checkFsAndHostBoundary's doc
-      // comment).
+      // block at the top of this file). Reports absent — no longer decisive
+      // for `same_host` on its own (the boot_id probe above decides it).
       if (cmd.includes('.azito-hub-canary-test')) return { stdout: 'AZT_STATUS:canary:absent\n', stderr: '', code: 0 };
       if (cmd.includes('.ssh')) return { stdout: 'AZT_SSH_NO_DIR\n', stderr: '', code: 0 };
       if (cmd.includes('hosts.yml')) return { stdout: 'AZT_STATUS:f:absent\n', stderr: '', code: 0 };

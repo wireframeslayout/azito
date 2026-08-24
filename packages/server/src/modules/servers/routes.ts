@@ -1,6 +1,7 @@
 import type { FastifyPluginCallback } from 'fastify';
 import { execSync } from 'child_process';
 import os from 'os';
+import fs from 'fs';
 import type { IServerRepository, MuxRuntime, ServerConfig } from './Server';
 import type { TmuxClient, TmuxSession } from '../tmux/TmuxClient';
 import type { AgentInstaller, InstallProgress } from './agent-deploy/AgentInstaller';
@@ -21,6 +22,31 @@ import type { KeyedMutex } from '../../shared/keyedMutex';
 import { runIsolationDoctor } from './isolationDoctor';
 import { getVerifiedHubCanary } from './hubCanary';
 import { assertServerIdentityUnchanged, ServerSnapshotMismatchError } from './ServerIsolationLock';
+
+// ─── Hub identity helpers ───
+
+/**
+ * Security fix (isolation doctor `same_host` check, boot_id-based
+ * same-host detection): the Linux kernel boot id
+ * (`/proc/sys/kernel/random/boot_id`) is generated once per kernel boot and
+ * is shared by every process running under that kernel — including a
+ * container/chroot on the SAME physical host, which can freely set its own
+ * UTS hostname (defeating the old hostname/uid heuristic) but cannot fake a
+ * different kernel. Read once at the route boundary (Resolve at the
+ * Boundary — this module owns `fs`/`os` access; `isolationDoctor.ts` only
+ * ever receives the already-resolved value). Returns `null` on any read
+ * failure (non-Linux hosts have no such file; permission errors are also
+ * treated the same way) so the doctor can fall back to the hostname/uid
+ * heuristic rather than fail the whole probe.
+ */
+function readHubBootId(): string | null {
+  try {
+    const raw = fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+    return raw || null;
+  } catch {
+    return null;
+  }
+}
 
 // ─── Tailscale / network helpers ───
 
@@ -895,7 +921,12 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       // whatever was cached at startup, so a canary deleted after boot
       // degrades the FS-boundary check to 'unknown' rather than letting a
       // stale in-memory value read as proof of separation.
-      const hub = { hostname: os.hostname(), uid: typeof process.getuid === 'function' ? process.getuid() : null, canary: getVerifiedHubCanary() };
+      const hub = {
+        hostname: os.hostname(),
+        uid: typeof process.getuid === 'function' ? process.getuid() : null,
+        canary: getVerifiedHubCanary(),
+        bootId: readHubBootId(),
+      };
       const { verified, checks } = await runIsolationDoctor(transport, hub);
       const probedAt = new Date().toISOString();
 

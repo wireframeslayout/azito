@@ -93,7 +93,7 @@ declared isolation (`agent`-type only), checking whether credentials have actual
 
 | check id | Misconfiguration it detects |
 |---|---|
-| `same_host` | The target server is the same host / shares a filesystem with the hub (hostname/uid match + a canary file readback) |
+| `same_host` | The target server is the same host / shares a filesystem with the hub (a matching kernel boot_id, or a canary file readback. Only when boot_id cannot be obtained from both sides does it fall back to hostname/uid — and that fallback never passes on a mismatch alone) |
 | `no_ssh_private_keys` | A PEM-format private key remains under `~/.ssh` |
 | `gh_unauthenticated` | `gh` still has local credentials (a token in `hosts.yml`, or `GH_TOKEN`/`GITHUB_TOKEN`/`GH_ENTERPRISE_TOKEN`/`GITHUB_ENTERPRISE_TOKEN` set) |
 | `no_git_credentials` | `git config credential.helper` resolves to something effective, or `~/.git-credentials` exists |
