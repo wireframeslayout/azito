@@ -443,17 +443,23 @@ async function checkFsAndHostBoundary(transport: IServerTransport, hub: HubIdent
   // attestation; see module doc comment). Exactly one of hostname/uid
   // matching is left as 'unknown' — neither proof of sharing nor of
   // separation.
-  if (!sameHostname && !sameUid) {
+  // uid は「異なること」を要求しない（実環境テストで判明した修正）: uid 1000 は
+  // ほぼ全ての Linux ディストリで最初のユーザーの既定値であり、完全に別のマシン同士
+  // でも一致するのが普通。異なる hostname 同士で uid が一致していても、ホスト同一性に
+  // ついて何の情報も持たない。uid の不一致を pass の条件にしていたため、最初の実サーバー
+  // （hostname 相違・両方 uid 1000）が永久に verified に到達できず、allow（承認なし自動
+  // 実行）プロファイル全体が使用不能になっていた。hostname の一致は引き続き判定に使う。
+  if (!sameHostname) {
     return {
       id,
       status: 'pass',
-      detail: `${identity}（hostname/uid が両方とも不一致、かつカナリアファイルは読み取り不能/不在でした — 設定ミス検出としての判定であり、敵対的ホストは自己申告を偽装しうる点はドクトリン上織り込み済みです）`,
+      detail: `${identity}（hostname が不一致、かつカナリアファイルは読み取り不能/不在でした — 設定ミス検出としての判定であり、敵対的ホストは自己申告を偽装しうる点はドクトリン上織り込み済みです）`,
     };
   }
   return {
     id,
     status: 'unknown',
-    detail: `${identity}（hostname/uid の一方のみ一致 — カナリアは読み取れませんでしたが、識別子の不一致が確認できないため判定不能です）`,
+    detail: `${identity}（hostname が一致 — カナリアは読み取れませんでしたが、同一ホストである可能性を否定できないため判定不能です）`,
   };
 }
 

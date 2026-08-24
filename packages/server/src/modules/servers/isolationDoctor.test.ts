@@ -110,13 +110,20 @@ describe('runIsolationDoctor', () => {
     expect(result.verified).toBe(false);
   });
 
-  it('same_host: unknown when only uid matches (hostname differs) — uid alone is not an FS boundary', async () => {
+  // Real-deployment fix: uid 1000 is the default first user on virtually
+  // every Linux distribution, so two genuinely separate machines almost
+  // always share it. Requiring uid to differ made 'pass' unreachable in
+  // practice (the first real isolated server had a differing hostname and
+  // both uid 1000), which made the whole 'allow' profile unusable. A
+  // matching uid across DIFFERENT hostnames carries no host-identity
+  // information, so it must not gate this check.
+  it('same_host: passes when only uid matches (hostname differs) — uid is not a host identifier', async () => {
     const transport = makeTransport((cmd) => {
       if (cmd.startsWith('hostname;')) return { stdout: `other-host\n${HUB.uid}\n`, stderr: '', code: 0 };
       return cleanHandler(cmd);
     });
     const result = await runIsolationDoctor(transport, HUB);
-    expect(result.checks.find((c) => c.id === 'same_host')!.status).toBe('unknown');
+    expect(result.checks.find((c) => c.id === 'same_host')!.status).toBe('pass');
   });
 
   // Ratified doctrine (misconfiguration detector, not attestation): a
