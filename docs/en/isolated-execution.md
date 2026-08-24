@@ -93,7 +93,7 @@ declared isolation (`agent`-type only), checking whether credentials have actual
 
 | check id | Misconfiguration it detects |
 |---|---|
-| `same_host` | The target server is the same host / shares a filesystem with the hub (a matching kernel boot_id, or a canary file readback. Only when boot_id cannot be obtained from both sides does it fall back to hostname/uid — and that fallback never passes on a mismatch alone) |
+| `same_host` | The target server is the same host / shares a filesystem with the hub (judgment table below) |
 | `no_ssh_private_keys` | A PEM-format private key remains under `~/.ssh` |
 | `gh_unauthenticated` | `gh` still has local credentials (a token in `hosts.yml`, or `GH_TOKEN`/`GITHUB_TOKEN`/`GH_ENTERPRISE_TOKEN`/`GITHUB_ENTERPRISE_TOKEN` set) |
 | `no_git_credentials` | `git config credential.helper` resolves to something effective, or `~/.git-credentials` exists |
@@ -106,6 +106,34 @@ declared isolation (`agent`-type only), checking whether credentials have actual
 Each check reports one of `pass` / `fail` / `unknown`; `verified` is `true` only when **every**
 check is `pass`. A probe that could not actually run (unreachable target, unrecognized output
 shape, etc.) always folds to `unknown` — never rounded up to `pass` (fail-closed).
+
+### `same_host` judgment table
+
+`same_host` is evaluated in this order. **Only the canary's actual measurement can justify a
+`pass`** — a boot_id mismatch or a hostname/uid mismatch is never used to reach `pass` (both can
+be virtualized or spoofed); boot_id equality and hostname+uid equality only push the result toward
+`fail`.
+
+1. The canary file (a non-secret marker file inside the hub's data directory) reads back with
+   matching content → **fail** (the same filesystem is shared).
+2. Both the hub's and the target's boot_id (the kernel boot id — validated as a strict UUID and
+   lower-cased before comparison) were obtained, and they are equal → **fail** (same kernel = same
+   host).
+3. Hostname and uid both match → **fail** (a strong same-host hint).
+4. The canary's "absence" was obtained as a trustworthy measurement — the probe completed with a
+   genuine `absent` result, AND the hub's own canary is confirmed still intact (same path, same
+   content) after the round trip, guarding against a rotation race → **pass**. Whether boot_id
+   could be obtained at all is irrelevant to this branch — a macOS hub (where boot_id is always
+   unavailable) can still reach `pass` here.
+5. Anything else (the canary was unmeasurable, a rotation was detected mid-probe, the hub has no
+   canary at all, etc.) → **unknown**.
+
+**Limits of this judgment**: a `pass` here is evidence that this probe could not reach the hub's
+data directory — it is not proof of running on a separate host. A container on the SAME physical
+host with an isolated filesystem namespace can reach `pass` if it also virtualizes its boot_id;
+even so, because it still cannot reach the hub's data, Layer 2's premise (never hand out a
+credential) still holds. An adversarial host can still spoof its self-reported answers, per the
+doctrine in section 3.
 
 ### Doctrine: the doctor is a misconfiguration detector, not an attestation
 

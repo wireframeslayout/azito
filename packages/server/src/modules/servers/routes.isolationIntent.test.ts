@@ -12,8 +12,14 @@ import { KeyedMutex } from '../../shared/keyedMutex';
 // process never does either. Mocked with a fixed, known canary so the doctor
 // tests below can control whether it reads back as present/absent, exactly
 // like every other fake `exec` response in this file.
+//
+// same_host judgment restructure: `checkFsAndHostBoundary` also calls
+// `isCanaryStillIntact()` right after a remote 'absent' answer, to guard
+// against a rotation race — mocked to always report intact (`true`) here
+// since this fixed canary is never actually rewritten during a test run.
 vi.mock('./hubCanary', () => ({
   getVerifiedHubCanary: () => ({ path: '/hub/data/.azito-hub-canary-test', content: 'test-canary-content' }),
+  isCanaryStillIntact: () => true,
 }));
 
 // Security fix (same_host boot_id-based detection): routes.ts reads the

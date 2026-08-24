@@ -3,6 +3,7 @@ import { shellQuote } from '../../shared/shellQuote';
 import { isAzitoctlEnvFilename } from '../../shared/azitoctlEnv';
 import { extractClaudeMcpUiToken, hasCodexConfigUiToken } from '../../shared/mcpTokenStores';
 import type { HubCanary } from './hubCanary';
+import { isCanaryStillIntact } from './hubCanary';
 
 // ─── Isolation doctor (Issue #29 Step 2 B) ───
 //
@@ -89,12 +90,21 @@ export interface HubIdentity {
    */
   canary: HubCanary | null;
   /**
-   * Security fix (same_host boot_id-based detection): the hub's own Linux
-   * kernel boot id (`/proc/sys/kernel/random/boot_id`), read once at the
-   * route boundary (`readHubBootId()` in routes.ts) — never re-read here.
-   * `null` on a non-Linux hub (no such file) or any read failure; when
-   * `null`, `checkFsAndHostBoundary` falls back to the hostname/uid
-   * heuristic instead of comparing boot ids.
+   * Review round (same_host judgment restructure, Critical finding 1): the
+   * hub's own Linux kernel boot id (`/proc/sys/kernel/random/boot_id`), read
+   * once at the route boundary (`readHubBootId()` in routes.ts) — never
+   * re-read here. `null` on a non-Linux hub (no such file, e.g. every
+   * darwin/macOS hub build this project ships) or any read failure.
+   *
+   * `checkFsAndHostBoundary` no longer treats a matching value as decisive
+   * proof of separation, nor a mismatch as one — boot_id CAN be virtualized
+   * per-container (systemd-nspawn / LXC can each report a different value on
+   * the SAME physical host), so a mismatch is not evidence of separation. A
+   * MATCH is still trustworthy as evidence of a SHARED kernel (a container
+   * cannot fake a different kernel, only spoof its own reported id), so it is
+   * used only to strengthen `'fail'`. `pass` is decided solely by the FS
+   * canary probe (see that function's doc comment) — this field never gates
+   * reaching `pass`, so a hub with `bootId: null` can still verify.
    */
   bootId: string | null;
 }
@@ -308,46 +318,94 @@ async function probeFile(transport: IServerTransport, pathExpr: string): Promise
   return { ok: true, probe: batch.results.get('f') ?? { kind: 'unrecognized' } };
 }
 
+// Strict RFC-4122-shaped UUID matcher for `/proc/sys/kernel/random/boot_id`.
+// Review round (Nit, same_host judgment restructure): the prior loose
+// `/^[0-9a-fA-F-]{8,}$/` accepted degenerate values like `11111111` or
+// `--------` — neither is a real boot id, so treating either as "obtained"
+// would let a garbled/truncated read masquerade as a valid comparison
+// input. Anything that doesn't fit this shape is treated as "could not be
+// obtained", exactly like a read failure. Applied to BOTH the hub side and
+// the remote side before they are ever compared.
+const STRICT_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Validates and lower-cases a boot_id candidate; returns `null` (never a
+ * best-effort passthrough) for anything not shaped like a UUID. */
+function normalizeBootId(raw: string | null): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  return STRICT_UUID_RE.test(trimmed) ? trimmed.toLowerCase() : null;
+}
+
 /**
  * 1. Same-host / FS-boundary detection.
  *
- * Security fix (boot_id-based same-host detection): the previous version of
- * this check treated "hostname/uid both differ" as strong-enough evidence
- * of separation to `'pass'`. Review found the gap: a chroot/container running
- * on the SAME physical host as the hub can freely set its own UTS hostname
- * (and often defaults to a different uid than the hub process), so it would
- * sail straight through as "isolated" while actually sharing the hub's
- * kernel and, depending on mount configuration, its filesystem.
+ * Review round (same_host judgment restructure — the prior boot_id-primary
+ * version had three problems, fixed here):
  *
- * The Linux kernel boot id (`/proc/sys/kernel/random/boot_id`) fixes this:
- * it is generated once per kernel boot and shared by EVERY process running
- * under that kernel, including any container/chroot on the same host —
- * unlike hostname/uid, it cannot be namespaced away by the target. Judgment
- * order (canary check kept from the prior implementation):
+ *  - boot_id CAN be virtualized per-container (systemd-nspawn / LXC can each
+ *    report a different value on the same physical host), so a MISMATCH is
+ *    not proof of separation — treating it as decisive `'pass'` evidence (as
+ *    the prior version did) was wrong.
+ *  - the prior version folded a canary-measurement failure into
+ *    `canaryReadable = false`, i.e. indistinguishable from a genuinely
+ *    absent canary — an unmeasurable canary could reach `'pass'` via the
+ *    boot_id-mismatch branch, silently regressing the rotation-race defense
+ *    this check used to have.
+ *  - on a darwin/macOS hub (a build target this project ships), `bootId` is
+ *    always `null` — the prior version's non-Linux fallback (hostname/uid)
+ *    can only reach `'fail'`/`'unknown'`, never `'pass'`, so a macOS hub
+ *    could never verify an agent server at all.
  *
- *  1. canary read back with matching content → `'fail'` (positive proof of
- *     a shared filesystem; unchanged from before)
- *  2. both hub and target boot_id were obtained → compare them:
- *     - equal → `'fail'` (same kernel = same host; this is what catches the
- *       chroot/container case the old hostname/uid check missed)
- *     - different → `'pass'` (definitively separate hosts; hostname/uid are
- *       not consulted at all in this branch)
- *  3. boot_id could not be obtained on either side (non-Linux hub or
- *     target, or the probe failed) → fall back to the hostname/uid
- *     heuristic, but — because that heuristic alone cannot prove
- *     separation — it is never allowed to `'pass'` on its own:
- *     - hostname AND uid both match → `'fail'`
- *     - anything else → `'unknown'`
+ * The canary probe (an actual, measured FS-reachability test) is restored as
+ * the ONLY path to `'pass'`; boot_id is demoted to a same-kernel signal that
+ * can only strengthen `'fail'` (a MATCH still proves a shared kernel — a
+ * container cannot fake reporting a different kernel's id, only spoof its
+ * own value — so it is trustworthy in that one direction). Judgment order:
  *
- * `detail` always states which branch decided the check (boot_id comparison
- * vs. the hostname/uid fallback) so an operator can see what evidence the
- * judgment rests on.
+ *  1. canary read back with matching content → `'fail'` (positive proof of a
+ *     shared filesystem).
+ *  2. both hub and target boot_id were obtained (strict UUID shape on both
+ *     sides — see `normalizeBootId`) AND equal → `'fail'` (same kernel =
+ *     same host; catches the chroot/container case hostname/uid alone
+ *     misses). A mismatch here decides nothing by itself — it is NOT used to
+ *     reach `'pass'`.
+ *  3. hostname AND uid both match → `'fail'` (a strong same-host hint; used
+ *     only in the fail direction, same reasoning as boot_id).
+ *  4. the canary probe completed with a genuine `absent` result AND the
+ *     hub's own canary is confirmed still intact on disk RIGHT NOW (see
+ *     `isCanaryStillIntact` — guards against the local canary rotating out
+ *     from under an in-flight probe, which would make a same-filesystem
+ *     target's "absent" answer indistinguishable from a truly isolated
+ *     one's) → `'pass'`. boot_id's availability is irrelevant to this
+ *     branch — a macOS hub (`bootId: null`) reaches `'pass'` here exactly
+ *     like a Linux one, since the canary is the actual measurement.
+ *  5. anything else (canary unmeasurable — no hub canary, probe
+ *     unreachable/timed out, an `'unreadable'`/`'unrecognized'` outcome, or
+ *     `'content'` that didn't match; a rotation race caught by step 4's
+ *     intactness check; boot_id/hostname/uid that didn't reach a `'fail'`
+ *     branch) → `'unknown'`.
+ *
+ * `detail` always names which branch decided the check, but NEVER includes
+ * either side's raw boot_id value (`detail` is persisted to
+ * `isolation_report` and the audit log) — only the fact that it matched or
+ * did not.
+ *
+ * Doctrine (ties into the module top-of-file doctrine comment): a `'pass'`
+ * here is evidence that this probe could not reach the hub's data
+ * directory — it is NOT proof of running on a separate physical/virtual
+ * host. A container sharing the hub's kernel but given its own filesystem
+ * namespace (and a virtualized boot_id) can reach `'pass'` legitimately,
+ * because the property this doctor actually cares about — layer 2's "no
+ * credential is handed to a principal that can read the hub's data" — still
+ * holds in that configuration even though it is not a different host. An
+ * adversarial target can still self-report false answers to every probe in
+ * this module; that gap is the ratified doctrine's concern, not something
+ * this individual check can close.
  *
  * Out of scope: a bind-mount of the hub's data directory at a DIFFERENT path
  * on the target (so the canary's exact path probe misses it) is not
  * detected by this check — an accepted limit of the misconfiguration-detector
- * doctrine (see module top-of-file doc comment), not a defect to re-litigate
- * here.
+ * doctrine, not a defect to re-litigate here.
  */
 async function checkFsAndHostBoundary(transport: IServerTransport, hub: HubIdentity): Promise<IsolationCheck> {
   const id = 'same_host';
@@ -374,30 +432,43 @@ async function checkFsAndHostBoundary(transport: IServerTransport, hub: HubIdent
   const sameUid = remoteUid === hub.uid;
   const identity = `agent: ${remoteHostname}/${remoteUid}、hub: ${hub.hostname}/${hub.uid}`;
 
-  // Probe the canary (if the hub has one) and the target's own boot_id as
-  // two independent round-trips (kept separate rather than batched into one
-  // probeFilesFramed call so a canary-probe failure/timeout can never mask
-  // a successful boot_id read, or vice versa).
-  let canaryReadable = false;
+  // Actual FS-reachability measurement — null means "could not be measured
+  // this round" (no canary to test, transport unreachable, or an
+  // unrecognized probe result), which must never be folded into a pass.
+  let canaryReadable: boolean | null = null;
+  // Distinguishes "the remote probe itself never completed" (handled by
+  // canaryReadable staying null below) from "the remote probe DID complete
+  // with a clean 'absent' answer, but the local canary rotated out from
+  // under it during that round-trip" — the latter needs its own detail text
+  // since it is a positive detection of a race, not a generic unmeasured
+  // state.
+  let canaryRotatedDuringProbe = false;
   if (hub.canary) {
     const probed = await probeFilesFramed(transport, [{ key: 'canary', pathExpr: shellQuote(hub.canary.path) }]);
     if (probed.ok) {
       const outcome = probed.results.get('canary');
-      if (outcome?.kind === 'content' && outcome.content === hub.canary.content) canaryReadable = true;
-      // 'absent', 'unreadable', 'unrecognized', or 'content' with unexpected
-      // bytes: the canary no longer decides `'pass'` on its own (see the
-      // boot_id-based judgment order above), so nothing further to derive
-      // from a non-matching canary here.
+      if (outcome?.kind === 'content' && outcome.content === hub.canary.content) {
+        canaryReadable = true;
+      } else if (outcome?.kind === 'absent') {
+        // A remote "absent" is only trustworthy as proof of separation if
+        // the exact canary (same path, same content) this probe was sent
+        // for is STILL intact on the hub's own disk right now. If it
+        // changed or vanished mid-flight (a concurrent regeneration/
+        // rotation), a same-filesystem target reading the now-stale path
+        // would ALSO see "absent" and be indistinguishable from a genuinely
+        // isolated one — so this round's remote answer no longer proves
+        // anything. Deliberately no retry: degrades straight to 'unknown'
+        // rather than attempting a second round-trip against a possibly
+        // still-unstable canary.
+        if (isCanaryStillIntact(hub.canary)) {
+          canaryReadable = false;
+        } else {
+          canaryRotatedDuringProbe = true;
+        }
+      }
+      // 'unreadable', 'unrecognized', or 'content' with unexpected bytes:
+      // canaryReadable stays null (unmeasured).
     }
-  }
-
-  let remoteBootId: string | null = null;
-  const bootProbed = await probeFile(transport, '/proc/sys/kernel/random/boot_id');
-  if (bootProbed.ok && bootProbed.probe.kind === 'content') {
-    const trimmed = bootProbed.probe.content.trim();
-    // /proc/sys/kernel/random/boot_id is a UUID; validated loosely (hex +
-    // hyphens) so a malformed/truncated read is never trusted as a value.
-    if (/^[0-9a-fA-F-]{8,}$/.test(trimmed)) remoteBootId = trimmed;
   }
 
   if (canaryReadable) {
@@ -408,33 +479,50 @@ async function checkFsAndHostBoundary(transport: IServerTransport, hub: HubIdent
     };
   }
 
-  if (remoteBootId && hub.bootId) {
-    if (remoteBootId === hub.bootId) {
-      return {
-        id,
-        status: 'fail',
-        detail: `boot_id（カーネルの起動ID）が一致しました — 同一カーネルを共有しているため同一ホストと判定します。${identity}、boot_id: ${remoteBootId}`,
-      };
-    }
+  const bootProbed = await probeFile(transport, '/proc/sys/kernel/random/boot_id');
+  const remoteBootIdValue = bootProbed.ok && bootProbed.probe.kind === 'content'
+    ? normalizeBootId(bootProbed.probe.content)
+    : null;
+  const hubBootIdValue = normalizeBootId(hub.bootId);
+
+  if (remoteBootIdValue && hubBootIdValue && remoteBootIdValue === hubBootIdValue) {
     return {
       id,
-      status: 'pass',
-      detail: `boot_id（カーネルの起動ID）が不一致でした — 別ホストと判定します（hostname/uid は判定に使用していません）。${identity}、agent boot_id: ${remoteBootId} / hub boot_id: ${hub.bootId}`,
+      status: 'fail',
+      detail: `boot_id（カーネルの起動ID）が一致しました — 同一カーネルを共有しているため同一ホストと判定します。${identity}`,
     };
   }
 
-  // boot_id を双方から取得できなかった場合のフォールバック（非 Linux 環境等）。
-  // boot_id という確実な手段が使えない以上、hostname/uid の一致だけでは同一
-  // ホストと断定できても、不一致であることの証明にはならない — フォールバック
-  // 時は fail か unknown のみで、pass にはしない。
-  const fallbackNote = `boot_id を双方から取得できなかったため、hostname/uid によるフォールバック判定を行いました（この判定単独では別ホストであることを証明できないため pass にはなりません）`;
   if (sameHostname && sameUid) {
-    return { id, status: 'fail', detail: `${fallbackNote}。${identity}（hostname/uid が両方とも一致）` };
+    return {
+      id,
+      status: 'fail',
+      detail: `hostname と uid が両方とも一致しました — 同一ホストの強い示唆として判定します。${identity}`,
+    };
   }
+
+  if (canaryReadable === false) {
+    return {
+      id,
+      status: 'pass',
+      detail: `agent サーバーからハブのデータディレクトリ内のカナリアファイルを読み取れませんでした（不在）— ハブのデータに到達できないため別ファイルシステムと判定します。プローブ往復後もハブ側のカナリアは健在で、ローテーション競合の影響も受けていません。${identity}`,
+    };
+  }
+
+  if (canaryRotatedDuringProbe) {
+    return {
+      id,
+      status: 'unknown',
+      detail: `カナリアファイルがプローブの往復中にローテーション/削除されたため、リモートの「不在」応答を信頼できませんでした。${identity}（設定ミス検出としての判定であり、敵対的ホストは自己申告を偽装しうる — モジュール冒頭のドクトリンを参照）`,
+    };
+  }
+
   return {
     id,
     status: 'unknown',
-    detail: `${fallbackNote}。${identity}`,
+    detail: hub.canary
+      ? `ファイルシステム分離を実測できませんでした（カナリアファイルの読み取り結果が不明でした）。${identity}（設定ミス検出としての判定であり、敵対的ホストは自己申告を偽装しうる — モジュール冒頭のドクトリンを参照）`
+      : `ハブ側にカナリアファイルが存在しないため、ファイルシステム分離を実測できませんでした（ハブ起動時の書き込みに失敗した可能性があります）。${identity}`,
   };
 }
 
