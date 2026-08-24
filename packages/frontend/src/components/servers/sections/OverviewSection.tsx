@@ -272,6 +272,8 @@ export default function OverviewSection({
             tone={isolationDoctorState === 'verified' ? 'success' : isolationDoctorState === 'needsAttention' || isolationDoctorState === 'scopedAuthDisabled' ? 'danger' : 'warning'}
             sub={
               <>
+                {t('overview.isolationPurposeSub')}
+                {' '}
                 {isolationDoctorState === 'scopedAuthDisabled'
                   ? t('overview.isolationDoctorScopedAuthDisabledSub')
                   : isolationDoctorState === 'scopedAuthUnknown'
@@ -388,6 +390,39 @@ export default function OverviewSection({
             <KvRow label={t('overview.authToken')}>
               <span style={{ fontSize: 'var(--font-xs)' }}>
                 {server.hasAgentToken ? t('overview.tokenSet') : t('overview.tokenNotSet')}
+              </span>
+            </KvRow>
+          )}
+          {isAgent && (
+            <KvRow label={t('overview.isolationLabel')}>
+              <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span style={{
+                  fontSize: 'var(--font-xs)',
+                  color: !server.isolationIntent
+                    ? 'var(--text-dim)'
+                    : isolationDoctorState === 'verified'
+                      ? 'var(--success)'
+                      : isolationDoctorState === 'needsAttention' || isolationDoctorState === 'scopedAuthDisabled'
+                        ? 'var(--danger)'
+                        : 'var(--warning)',
+                }}>
+                  {!server.isolationIntent
+                    ? t('overview.isolationDisabledValue')
+                    : isolationDoctorState === 'verified'
+                      ? t('overview.isolationEnabledVerified')
+                      : isolationDoctorState === 'verifiedStale'
+                        ? t('overview.isolationEnabledVerifiedStale')
+                        : isolationDoctorState === 'needsAttention'
+                          ? t('overview.isolationEnabledNeedsAttention')
+                          : isolationDoctorState === 'scopedAuthDisabled'
+                            ? t('overview.isolationEnabledScopedAuthDisabled')
+                            : isolationDoctorState === 'scopedAuthUnknown'
+                              ? t('overview.isolationEnabledScopedAuthUnknown')
+                              : t('overview.isolationEnabledUnverified')}
+                </span>
+                <span style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
+                  {server.isolationIntent ? t('overview.isolationEnabledHint') : t('overview.isolationDisabledHint')}
+                </span>
               </span>
             </KvRow>
           )}
