@@ -160,12 +160,30 @@ describe('runIsolationDoctor', () => {
   // Step 3: hostname AND uid both matching fails the check even when the
   // canary reports absent and boot_id differs — this is a fail-only signal,
   // never used to reach 'pass' (see step 4's independence from it).
-  it('same_host: fails when hostname AND uid both match the hub, even with a clean (absent) canary and a differing boot_id', async () => {
+  // Review finding: hostname/uid equality must NOT override a trustworthy
+  // canary measurement. Hostname reuse across separate machines is legal and
+  // uid 1000 is the near-universal default, so two genuinely isolated hosts
+  // can coincide on both — rejecting them despite a direct filesystem probe
+  // that says 'cannot reach the hub data dir' would be a false negative.
+  // The identity heuristic is only consulted when the canary is unavailable.
+  it('same_host: a trustworthy absent canary still passes even when hostname AND uid both match', async () => {
     const transport = makeTransport((cmd) => {
       if (cmd.startsWith('hostname;')) return { stdout: `${HUB.hostname}\n${HUB.uid}\n`, stderr: '', code: 0 };
       return cleanHandler(cmd);
     });
     const result = await runIsolationDoctor(transport, HUB);
+    expect(result.checks.find((c) => c.id === 'same_host')!.status).toBe('pass');
+  });
+
+  // ...but with no usable canary measurement, that same coincidence IS the
+  // strongest signal available, so it fails closed.
+  it('same_host: fails when hostname AND uid both match and the canary could not be measured', async () => {
+    const transport = makeTransport((cmd) => {
+      if (cmd.startsWith('hostname;')) return { stdout: `${HUB.hostname}\n${HUB.uid}\n`, stderr: '', code: 0 };
+      if (cmd.includes('AZT_STATUS')) return { stdout: '', stderr: 'probe failed', code: 1 };
+      return cleanHandler(cmd);
+    });
+    const result = await runIsolationDoctor(transport, { ...HUB, canary: null });
     const check = result.checks.find((c) => c.id === 'same_host')!;
     expect(check.status).toBe('fail');
     expect(check.detail).toContain('hostname');

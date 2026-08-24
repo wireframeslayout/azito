@@ -34,10 +34,16 @@ import { assertServerIdentityUnchanged, ServerSnapshotMismatchError } from './Se
  * UTS hostname (defeating the old hostname/uid heuristic) but cannot fake a
  * different kernel. Read once at the route boundary (Resolve at the
  * Boundary — this module owns `fs`/`os` access; `isolationDoctor.ts` only
- * ever receives the already-resolved value). Returns `null` on any read
- * failure (non-Linux hosts have no such file; permission errors are also
- * treated the same way) so the doctor can fall back to the hostname/uid
- * heuristic rather than fail the whole probe.
+ * ever receives the already-resolved value).
+ *
+ * NOTE the boot id only ever produces a FAIL (equal ids = same kernel =
+ * same host). It is never evidence of SEPARATION: container managers such
+ * as systemd-nspawn/LXC can hand a container its own boot id, so a
+ * DIFFERING id proves nothing. The only pass path is the canary
+ * measurement in checkFsAndHostBoundary ("the target cannot read the
+ * hub's data dir"), which is also why a `null` here (non-Linux hub,
+ * permission error) does not block verification — see that function's
+ * decision table.
  */
 function readHubBootId(): string | null {
   try {

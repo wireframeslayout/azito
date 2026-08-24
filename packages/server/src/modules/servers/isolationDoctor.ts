@@ -493,19 +493,23 @@ async function checkFsAndHostBoundary(transport: IServerTransport, hub: HubIdent
     };
   }
 
-  if (sameHostname && sameUid) {
-    return {
-      id,
-      status: 'fail',
-      detail: `hostname と uid が両方とも一致しました — 同一ホストの強い示唆として判定します。${identity}`,
-    };
-  }
-
   if (canaryReadable === false) {
     return {
       id,
       status: 'pass',
       detail: `agent サーバーからハブのデータディレクトリ内のカナリアファイルを読み取れませんでした（不在）— ハブのデータに到達できないため別ファイルシステムと判定します。プローブ往復後もハブ側のカナリアは健在で、ローテーション競合の影響も受けていません。${identity}`,
+    };
+  }
+
+  // hostname/uid はカナリアが測定できなかった場合の補助的な手掛かりに留める
+  // （レビュー指摘）: hostname の再利用は別マシン間でも起こり得るし uid 1000 は
+  // ほぼ全ての Linux で既定値。直接の実測であるカナリアが「到達不能」を信頼できる
+  // 形で示している場合、その弱い識別子の偶然の一致で棄却してはならない。
+  if (sameHostname && sameUid) {
+    return {
+      id,
+      status: 'fail',
+      detail: `hostname と uid が両方とも一致しました — 同一ホストの強い示唆として判定します。${identity}`,
     };
   }
 
