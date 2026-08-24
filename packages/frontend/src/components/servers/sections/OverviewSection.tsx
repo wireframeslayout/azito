@@ -6,7 +6,8 @@ import { getHealthLevel, useServerResourcesContext } from '../../../hooks/useSer
 import type { HealthLevel } from '../../../hooks/useServerResources';
 import { useIsolationDoctor } from '../../../hooks/useIsolationDoctor';
 import { useHealth } from '../../../hooks/useHealth';
-import { computeIsolationDoctorState, isValidVerificationReport } from './isolationDoctorState';
+import { computeIsolationDoctorState, computeIsolationRowState, isValidVerificationReport } from './isolationDoctorState';
+import type { IsolationRowState } from './isolationDoctorState';
 import { HealthDot, HEALTH_COLOR_VAR } from '../../statusbar/HealthDot';
 import { ResourceMeter } from '../../statusbar/ResourceMeter';
 import { healthReasonText, formatBytes } from '../../statusbar/ResourceDropdown';
@@ -18,6 +19,23 @@ import { Chip, Button, Notice, DocsLink } from '../../ui';
 // (see the mission brief's "スコープ外" section); this constant only decides
 // what the Overview page LABELS a stale verification as.
 const ISOLATION_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
+
+// Connection card "隔離" row copy/color per `IsolationRowState` (see
+// computeIsolationRowState's doc comment for the full state table). Colors
+// are existing design tokens only — never a raw value, and never a left
+// border (see this project's own "no status left-border" convention).
+const ISOLATION_ROW_COPY: Record<IsolationRowState, { valueKey: string; hintKey: string; color: string }> = {
+  notApplicable: { valueKey: 'overview.isolationNotApplicableValue', hintKey: 'overview.isolationNotApplicableHint', color: 'var(--text-dim)' },
+  scopedAuthRequired: { valueKey: 'overview.isolationDisabledValue', hintKey: 'overview.isolationScopedAuthRequiredHint', color: 'var(--text-dim)' },
+  scopedAuthUnconfirmed: { valueKey: 'overview.isolationDisabledValue', hintKey: 'overview.isolationScopedAuthUnknownHint', color: 'var(--text-dim)' },
+  disabled: { valueKey: 'overview.isolationDisabledValue', hintKey: 'overview.isolationDisabledHint', color: 'var(--text-dim)' },
+  verified: { valueKey: 'overview.isolationEnabledVerified', hintKey: 'overview.isolationEnabledHint', color: 'var(--success)' },
+  verifiedStale: { valueKey: 'overview.isolationEnabledVerifiedStale', hintKey: 'overview.isolationEnabledHint', color: 'var(--warning)' },
+  unverified: { valueKey: 'overview.isolationEnabledUnverified', hintKey: 'overview.isolationEnabledHint', color: 'var(--warning)' },
+  needsAttention: { valueKey: 'overview.isolationEnabledNeedsAttention', hintKey: 'overview.isolationEnabledHint', color: 'var(--danger)' },
+  scopedAuthDisabled: { valueKey: 'overview.isolationEnabledScopedAuthDisabled', hintKey: 'overview.isolationEnabledHint', color: 'var(--danger)' },
+  scopedAuthUnknown: { valueKey: 'overview.isolationEnabledScopedAuthUnknown', hintKey: 'overview.isolationEnabledHint', color: 'var(--warning)' },
+};
 
 interface OverviewSectionProps {
   server: Server;
@@ -117,6 +135,16 @@ export default function OverviewSection({
     scopedAuthEnabled,
   });
   const failedOrUnknownChecks = (isValidVerificationReport(verificationReport) ? (verificationReport.checks ?? []) : []).filter((c) => c.status !== 'pass');
+  // Connection card "隔離" row: always shown (not gated on server.type), so
+  // an operator can discover the feature exists and whether it can be
+  // enabled yet — see computeIsolationRowState's own doc comment for the
+  // full state table.
+  const isolationRowState = computeIsolationRowState({
+    serverType: server.type,
+    isolationIntent: !!server.isolationIntent,
+    doctorState: isolationDoctorState,
+    scopedAuthEnabled,
+  });
   const { running: isolationDoctorRunning, runDoctor } = useIsolationDoctor(server.type === 'agent' ? server.name : null, refresh);
 
   const resourceEntries = useServerResourcesContext();
@@ -393,39 +421,16 @@ export default function OverviewSection({
               </span>
             </KvRow>
           )}
-          {isAgent && (
-            <KvRow label={t('overview.isolationLabel')}>
-              <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <span style={{
-                  fontSize: 'var(--font-xs)',
-                  color: !server.isolationIntent
-                    ? 'var(--text-dim)'
-                    : isolationDoctorState === 'verified'
-                      ? 'var(--success)'
-                      : isolationDoctorState === 'needsAttention' || isolationDoctorState === 'scopedAuthDisabled'
-                        ? 'var(--danger)'
-                        : 'var(--warning)',
-                }}>
-                  {!server.isolationIntent
-                    ? t('overview.isolationDisabledValue')
-                    : isolationDoctorState === 'verified'
-                      ? t('overview.isolationEnabledVerified')
-                      : isolationDoctorState === 'verifiedStale'
-                        ? t('overview.isolationEnabledVerifiedStale')
-                        : isolationDoctorState === 'needsAttention'
-                          ? t('overview.isolationEnabledNeedsAttention')
-                          : isolationDoctorState === 'scopedAuthDisabled'
-                            ? t('overview.isolationEnabledScopedAuthDisabled')
-                            : isolationDoctorState === 'scopedAuthUnknown'
-                              ? t('overview.isolationEnabledScopedAuthUnknown')
-                              : t('overview.isolationEnabledUnverified')}
-                </span>
-                <span style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
-                  {server.isolationIntent ? t('overview.isolationEnabledHint') : t('overview.isolationDisabledHint')}
-                </span>
+          <KvRow label={t('overview.isolationLabel')}>
+            <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <span style={{ fontSize: 'var(--font-xs)', color: ISOLATION_ROW_COPY[isolationRowState].color }}>
+                {t(ISOLATION_ROW_COPY[isolationRowState].valueKey)}
               </span>
-            </KvRow>
-          )}
+              <span style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
+                {t(ISOLATION_ROW_COPY[isolationRowState].hintKey)}
+              </span>
+            </span>
+          </KvRow>
         </KvCard>
 
         <KvCard title={t('overview.runtimeTitle')}>

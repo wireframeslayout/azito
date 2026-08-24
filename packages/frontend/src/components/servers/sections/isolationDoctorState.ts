@@ -104,3 +104,43 @@ export function computeIsolationDoctorState(params: {
   if (scopedAuthEnabled === null) return 'scopedAuthUnknown';
   return now - new Date(isolationVerifiedAt).getTime() > ttlMs ? 'verifiedStale' : 'verified';
 }
+
+/**
+ * The connection card's "隔離" (isolation) row previously only rendered for
+ * `server.type === 'agent'`, and (within that) only distinguished "the
+ * operator declared isolation" from "did not declare it" — it never told an
+ * operator on a non-agent server, or a not-yet-scoped-auth-ready agent
+ * server, that the FEATURE exists at all or whether they could even turn it
+ * on right now. This computes the row's state for EVERY server type so the
+ * row is always shown; `OverviewSection.tsx` maps each state to its
+ * value/hint copy and color.
+ *
+ * `isolationIntent === true` defers entirely to `computeIsolationDoctorState`
+ * (already exhaustively covers the enabled states, including its own
+ * `scopedAuthDisabled`/`scopedAuthUnknown` sub-states) — this function must
+ * not re-derive or shadow that logic, only decide what to show BEFORE an
+ * operator has declared isolation at all.
+ */
+export type IsolationRowState =
+  | 'notApplicable'
+  | 'scopedAuthRequired'
+  | 'scopedAuthUnconfirmed'
+  | 'disabled'
+  | Exclude<IsolationDoctorState, null>;
+
+export function computeIsolationRowState(params: {
+  serverType: string;
+  isolationIntent: boolean;
+  doctorState: IsolationDoctorState;
+  scopedAuthEnabled: boolean | null;
+}): IsolationRowState {
+  const { serverType, isolationIntent, doctorState, scopedAuthEnabled } = params;
+  if (serverType !== 'agent') return 'notApplicable';
+  // isolationIntent === true always yields a non-null doctorState (see
+  // computeIsolationDoctorState's first branch) — the `?? 'unverified'`
+  // fallback only guards the type, it is never actually exercised.
+  if (isolationIntent) return doctorState ?? 'unverified';
+  if (scopedAuthEnabled === false) return 'scopedAuthRequired';
+  if (scopedAuthEnabled === null) return 'scopedAuthUnconfirmed';
+  return 'disabled';
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeIsolationDoctorState, isValidVerificationReport } from './isolationDoctorState';
+import { computeIsolationDoctorState, computeIsolationRowState, isValidVerificationReport } from './isolationDoctorState';
 import type { IsolationReport } from '../../../hooks/useServerDetail';
 
 const TTL = 24 * 60 * 60 * 1000;
@@ -199,5 +199,52 @@ describe('computeIsolationDoctorState', () => {
       scopedAuthEnabled: null,
       now: NOW,
     })).toBe('needsAttention');
+  });
+});
+
+describe('computeIsolationRowState', () => {
+  it('returns notApplicable for a non-agent server, regardless of isolationIntent/scopedAuthEnabled', () => {
+    expect(computeIsolationRowState({
+      serverType: 'local',
+      isolationIntent: true,
+      doctorState: 'verified',
+      scopedAuthEnabled: true,
+    })).toBe('notApplicable');
+  });
+
+  it('defers entirely to doctorState when isolationIntent is true, even when scopedAuthEnabled is false', () => {
+    expect(computeIsolationRowState({
+      serverType: 'agent',
+      isolationIntent: true,
+      doctorState: 'scopedAuthDisabled',
+      scopedAuthEnabled: false,
+    })).toBe('scopedAuthDisabled');
+  });
+
+  it('returns scopedAuthRequired when isolationIntent is false and scopedAuthEnabled is false', () => {
+    expect(computeIsolationRowState({
+      serverType: 'agent',
+      isolationIntent: false,
+      doctorState: null,
+      scopedAuthEnabled: false,
+    })).toBe('scopedAuthRequired');
+  });
+
+  it('returns scopedAuthUnconfirmed when isolationIntent is false and scopedAuthEnabled is null', () => {
+    expect(computeIsolationRowState({
+      serverType: 'agent',
+      isolationIntent: false,
+      doctorState: null,
+      scopedAuthEnabled: null,
+    })).toBe('scopedAuthUnconfirmed');
+  });
+
+  it('returns disabled when isolationIntent is false and scopedAuthEnabled is true', () => {
+    expect(computeIsolationRowState({
+      serverType: 'agent',
+      isolationIntent: false,
+      doctorState: null,
+      scopedAuthEnabled: true,
+    })).toBe('disabled');
   });
 });
