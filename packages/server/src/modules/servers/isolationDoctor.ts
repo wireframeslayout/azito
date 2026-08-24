@@ -369,9 +369,7 @@ function normalizeBootId(raw: string | null): string | null {
  *     same host; catches the chroot/container case hostname/uid alone
  *     misses). A mismatch here decides nothing by itself — it is NOT used to
  *     reach `'pass'`.
- *  3. hostname AND uid both match → `'fail'` (a strong same-host hint; used
- *     only in the fail direction, same reasoning as boot_id).
- *  4. the canary probe completed with a genuine `absent` result AND the
+ *  3. the canary probe completed with a genuine `absent` result AND the
  *     hub's own canary is confirmed still intact on disk RIGHT NOW (see
  *     `isCanaryStillIntact` — guards against the local canary rotating out
  *     from under an in-flight probe, which would make a same-filesystem
@@ -379,6 +377,12 @@ function normalizeBootId(raw: string | null): string | null {
  *     one's) → `'pass'`. boot_id's availability is irrelevant to this
  *     branch — a macOS hub (`bootId: null`) reaches `'pass'` here exactly
  *     like a Linux one, since the canary is the actual measurement.
+ *  4. hostname AND uid both match → `'fail'` (a strong same-host hint — a FALLBACK, consulted
+ *     only in the fail direction, same reasoning as boot_id).
+ *     ONLY when the canary could not be measured: hostname reuse across
+ *     separate machines is legal and uid 1000 is the near-universal
+ *     default, so this coincidence must never override a trustworthy
+ *     canary measurement above.
  *  5. anything else (canary unmeasurable — no hub canary, probe
  *     unreachable/timed out, an `'unreadable'`/`'unrecognized'` outcome, or
  *     `'content'` that didn't match; a rotation race caught by step 4's

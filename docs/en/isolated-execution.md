@@ -119,12 +119,15 @@ be virtualized or spoofed); boot_id equality and hostname+uid equality only push
 2. Both the hub's and the target's boot_id (the kernel boot id — validated as a strict UUID and
    lower-cased before comparison) were obtained, and they are equal → **fail** (same kernel = same
    host).
-3. Hostname and uid both match → **fail** (a strong same-host hint).
-4. The canary's "absence" was obtained as a trustworthy measurement — the probe completed with a
+3. The canary's "absence" was obtained as a trustworthy measurement — the probe completed with a
    genuine `absent` result, AND the hub's own canary is confirmed still intact (same path, same
    content) after the round trip, guarding against a rotation race → **pass**. Whether boot_id
    could be obtained at all is irrelevant to this branch — a macOS hub (where boot_id is always
    unavailable) can still reach `pass` here.
+4. Hostname and uid both match → **fail** (a strong same-host hint). This is a **fallback,
+   consulted only when the canary could not be measured**: hostname reuse across separate
+   machines is legal and uid 1000 is the near-universal default, so this coincidence never
+   overrides the direct filesystem measurement above.
 5. Anything else (the canary was unmeasurable, a rotation was detected mid-probe, the hub has no
    canary at all, etc.) → **unknown**.
 
