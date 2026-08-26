@@ -121,8 +121,12 @@ const storageRoutes: FastifyPluginCallback<StorageRouteOptions> = (fastify, opts
 
       const settings = storageSettingsRepo.get();
       const filename = decodeURIComponent(request.params.filename);
-      const url = storageClient.getDirectUrl(settings, projectId, filename);
-      return { url };
+      try {
+        const url = await storageClient.getPresignedUrl(settings, projectId, filename);
+        return { url };
+      } catch (err: unknown) {
+        return reply.status(502).send({ error: (err as Error).message });
+      }
     },
   );
 
@@ -136,10 +140,13 @@ const storageRoutes: FastifyPluginCallback<StorageRouteOptions> = (fastify, opts
 
       const settings = storageSettingsRepo.get();
       const filename = decodeURIComponent(request.params.filename);
-      const url = storageClient.getDirectUrl(settings, projectId, filename);
       try {
+        const url = await storageClient.getPresignedUrl(settings, projectId, filename);
         const res = await fetch(url);
-        if (!res.ok) return reply.status(res.status).send({ error: 'File not found' });
+        if (!res.ok) {
+          if (res.status === 404) return reply.status(404).send({ error: 'File not found' });
+          return reply.status(502).send({ error: 'Storage access denied' });
+        }
         const contentType = res.headers.get('content-type') || 'application/octet-stream';
         reply.header('Content-Type', contentType);
         reply.header('Cache-Control', 'public, max-age=3600');
