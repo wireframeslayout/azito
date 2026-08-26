@@ -30,8 +30,9 @@ export interface RegisterMessage {
   reportsReady?: true;
   /**
    * Launch binding (Issue #28 Phase C, design v3 §8). Set when this process
-   * was invoked with `--launch-id`/`--bootstrap-token` (or `--session-token`
-   * on a reconnect). Absent for a manually started `azs` — the hub registers
+   * was invoked with the `AZITO_SUPERVISOR_LAUNCH_ID`/`AZITO_SUPERVISOR_BOOTSTRAP`
+   * env vars (or the legacy `--launch-id`/`--bootstrap-token` flags, or
+   * `--session-token` on a reconnect). Absent for a manually started `azs` — the hub registers
    * those as `unbound` (display-only).
    */
   launchId?: string;

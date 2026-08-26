@@ -11,7 +11,9 @@ export interface CliArgs {
 
 const USAGE =
   'Usage: tui-supervisor --server <name> --target <target> [--task-id <n>] [--unit-id <n>] ' +
-  '[--launch-id <id> --bootstrap-token <token>] -- <command...>';
+  '[--launch-id <id> --bootstrap-token <token>] -- <command...>\n' +
+  '  (launch binding is now normally passed via AZITO_SUPERVISOR_LAUNCH_ID/AZITO_SUPERVISOR_BOOTSTRAP ' +
+  'env vars; the flags above remain accepted for backward compatibility)';
 
 /**
  * Parses argv into supervisor options + the wrapped command. Everything after
@@ -74,6 +76,34 @@ export function parseArgs(argv: string[]): CliArgs {
   if (!command) fail('empty command after --');
 
   return { server: server!, target: target!, taskId, unitId, command, launchId, bootstrapToken };
+}
+
+/**
+ * Resolves the launch binding (launchId + bootstrapToken), preferring the
+ * `AZITO_SUPERVISOR_LAUNCH_ID`/`AZITO_SUPERVISOR_BOOTSTRAP` env vars over the
+ * legacy `--launch-id`/`--bootstrap-token` argv flags.
+ *
+ * The hub (`wrapWithSupervisor()` in packages/server/src/modules/supervisors/
+ * SupervisorLaunch.ts) now emits the binding as env vars prefixed onto the
+ * command line, not as flags — a pre-Issue-#28 supervisor binary's strict
+ * argv parser dies on any unrecognized flag, so `--launch-id`/
+ * `--bootstrap-token` could brick every agent window launch during a
+ * hub-ahead-of-supervisor update window. The flags are still parsed above
+ * and read here as a fallback, purely for the reverse direction: an
+ * already-typed command from a hub that has not yet picked up this change.
+ * Both sources are never mixed — env wins outright when both of its vars are
+ * present.
+ */
+export function resolveLaunchBinding(
+  args: Pick<CliArgs, 'launchId' | 'bootstrapToken'>,
+  env: NodeJS.ProcessEnv = process.env,
+): { launchId: string | null; bootstrapToken: string | null } {
+  const envLaunchId = env.AZITO_SUPERVISOR_LAUNCH_ID;
+  const envBootstrapToken = env.AZITO_SUPERVISOR_BOOTSTRAP;
+  if (envLaunchId !== undefined && envBootstrapToken !== undefined) {
+    return { launchId: envLaunchId, bootstrapToken: envBootstrapToken };
+  }
+  return { launchId: args.launchId, bootstrapToken: args.bootstrapToken };
 }
 
 function parseNumericFlag(flag: string, value: string | undefined): number {

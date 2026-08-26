@@ -195,7 +195,7 @@ type LaunchAuthResult =
 
 export class SupervisorRegistry extends EventEmitter {
   /**
-   * @param launchRepo Persists/validates `--launch-id`/`--bootstrap-token` launches (Issue #28
+   * @param launchRepo Persists/validates launchId/bootstrapToken launches (Issue #28
    *   Phase C). Undefined only where no DB is available (e.g. some test/dev infra) — a
    *   launchId-bearing register is then rejected outright (fail closed) rather than silently
    *   trusted, since there is no way to validate it.
@@ -245,7 +245,7 @@ export class SupervisorRegistry extends EventEmitter {
    * (`wrapWithSupervisor()`, called immediately after) — Issue #28 Phase C,
    * design v3 §8. Returns undefined when no `launchRepo` was injected (no DB
    * available at this hub instance); callers fall back to wrapping without
-   * `--launch-id`/`--bootstrap-token`, which registers as `unbound` under
+   * a launchId/bootstrapToken, which registers as `unbound` under
    * scoped auth (or `bound` under the compat flag, same as always).
    *
    * Issue #28 third-party review finding (Important): `launchRepo.create()`

@@ -62,7 +62,7 @@ describe('wrapWithSupervisor', () => {
     expect(wrapped).toContain(`-- 'echo "it'\\''s a test" && run --flag value'`);
   });
 
-  it('includes --launch-id and --bootstrap-token when both are provided (Issue #28 Phase C)', () => {
+  it('prefixes AZITO_SUPERVISOR_LAUNCH_ID/AZITO_SUPERVISOR_BOOTSTRAP env vars when both are provided (fix/supervisor-launch-flag-compat)', () => {
     const wrapped = wrapWithSupervisor('claude', {
       server: { name: 'local-server', type: 'local' },
       target: 'azito:task-9.1',
@@ -70,19 +70,65 @@ describe('wrapWithSupervisor', () => {
       bootstrapToken: 'secret-xyz',
     });
 
-    expect(wrapped).toContain("--launch-id 'launch-abc'");
-    expect(wrapped).toContain("--bootstrap-token 'secret-xyz'");
+    expect(wrapped).toMatch(/^AZITO_SUPERVISOR_LAUNCH_ID='launch-abc' AZITO_SUPERVISOR_BOOTSTRAP='secret-xyz' /);
+    expect(wrapped).not.toContain('--launch-id');
+    expect(wrapped).not.toContain('--bootstrap-token');
   });
 
-  it('omits --launch-id/--bootstrap-token when only one of the pair is provided', () => {
+  it('omits the launch env prefix when only one of the pair is provided', () => {
     const wrapped = wrapWithSupervisor('claude', {
       server: { name: 'local-server', type: 'local' },
       target: 'azito:task-9.2',
       launchId: 'launch-abc',
     });
 
+    expect(wrapped).not.toContain('AZITO_SUPERVISOR_LAUNCH_ID');
+    expect(wrapped).not.toContain('AZITO_SUPERVISOR_BOOTSTRAP');
     expect(wrapped).not.toContain('--launch-id');
     expect(wrapped).not.toContain('--bootstrap-token');
+  });
+
+  it('regression: a command with launch binding parses cleanly on a pre-Issue-#28 supervisor argv parser (no unknown-flag death)', () => {
+    // Minimal reproduction of packages/tui-supervisor/src/cli.ts's parseArgs
+    // BEFORE Issue #28 Phase C added --launch-id/--bootstrap-token support —
+    // any flag it doesn't recognize is fatal. This is the exact failure
+    // reproduced on this host: "tui-supervisor: unknown flag: --launch-id".
+    function legacyParseFlags(flagArgs: string[]): void {
+      for (let i = 0; i < flagArgs.length; i += 1) {
+        const flag = flagArgs[i];
+        switch (flag) {
+          case '--server':
+          case '--target':
+          case '--task-id':
+          case '--unit-id':
+            i += 1;
+            break;
+          default:
+            throw new Error(`tui-supervisor: unknown flag: ${flag}`);
+        }
+      }
+    }
+
+    const wrapped = wrapWithSupervisor('claude', {
+      server: { name: 'local-server', type: 'local' },
+      target: 'azito:task-9.3',
+      taskId: 1,
+      unitId: 2,
+      launchId: 'launch-abc',
+      bootstrapToken: 'secret-xyz',
+    });
+
+    // The hub types `wrapped` into the pane's shell via tmux send-keys; the
+    // shell consumes the leading NAME=value assignments itself and only
+    // passes the remaining tokens as argv to the supervisor binary — mirror
+    // that split here.
+    const withoutEnvPrefix = wrapped.replace(/^(?:\S+='[^']*'\s+)*/, '');
+    const argv = withoutEnvPrefix.split(' ');
+    const sepIndex = argv.indexOf('--');
+    const serverFlagIndex = argv.indexOf('--server'); // skips the (variable-length) binary invocation prefix
+    const flagArgs = argv.slice(serverFlagIndex, sepIndex);
+
+    expect(() => legacyParseFlags(flagArgs)).not.toThrow();
   });
 
   it('resolves an agent-server command using the ~/.azito/agent/current path', () => {

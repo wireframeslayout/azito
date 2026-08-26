@@ -31,8 +31,10 @@ export interface RegisterMessage {
   reportsReady?: true;
   /**
    * Launch binding (Issue #28 Phase C, design v3 §8). Set by `tui-supervisor`
-   * when it was invoked via `wrapWithSupervisor()`'s `--launch-id`/
-   * `--bootstrap-token`/`--session-token` flags. Absent for a manually
+   * when it was invoked via `wrapWithSupervisor()`'s launchId/bootstrapToken
+   * (passed as `AZITO_SUPERVISOR_LAUNCH_ID`/`AZITO_SUPERVISOR_BOOTSTRAP` env
+   * vars, or the legacy `--launch-id`/`--bootstrap-token`/`--session-token`
+   * flags for backward compat). Absent for a manually
    * started `azs` (or a supervisor process too old to know about launch
    * binding) — the hub registers those as `unbound` (display-only; see
    * SupervisorRegistry's doc comment) rather than rejecting them outright,

@@ -184,17 +184,19 @@ azito auth doctor
    （起動しているか、agent トークンが最新か等）を確認してから再実行してください。
 
    同時に supervisor 登録の扱いも変わります（設計 §8）。タスク実行が起動する
-   `tui-supervisor` はハブが発行した `--launch-id`/`--bootstrap-token` を伴って登録し、
-   申告した serverName/target/taskId/unitId がハブの記録と一致した場合のみ **bound**
-   （ダッシュボードの活動表示・タスク turn のアイドルタイマー更新・
-   AgentActivityMonitor の最優先シグナルを駆動する対象）として扱われます。
-   一方、`azito auth doctor` の起動ログや手動デバッグで `azs`（tui-supervisor の裸起動）
-   を直接叩いた場合は `--launch-id` を持たないため、登録自体は引き続き受理されますが
-   **unbound**（表示専用）になります。unbound な接続は turn のアイドルタイマーや
-   Tier 0 活動判定には一切影響しません — フラグ ON 以前と違って「手動 azs もタスクの
-   活動として扱われる」ことはなくなる点に注意してください。フラグ OFF の間は
-   このダウングレードは発生せず、`--launch-id` の有無に関わらず常に bound 扱いです
-   （挙動不変）。
+   `tui-supervisor` はハブが発行した launchId/bootstrapToken（コマンド前置の
+   `AZITO_SUPERVISOR_LAUNCH_ID`/`AZITO_SUPERVISOR_BOOTSTRAP` env 変数として渡される。
+   旧版ハブが生成した `--launch-id`/`--bootstrap-token` フラグ形式も後方互換で
+   受理される）を伴って登録し、申告した serverName/target/taskId/unitId がハブの
+   記録と一致した場合のみ **bound**（ダッシュボードの活動表示・タスク turn の
+   アイドルタイマー更新・AgentActivityMonitor の最優先シグナルを駆動する対象）
+   として扱われます。一方、`azito auth doctor` の起動ログや手動デバッグで
+   `azs`（tui-supervisor の裸起動）を直接叩いた場合は launchId を持たないため、
+   登録自体は引き続き受理されますが **unbound**（表示専用）になります。unbound
+   な接続は turn のアイドルタイマーや Tier 0 活動判定には一切影響しません —
+   フラグ ON 以前と違って「手動 azs もタスクの活動として扱われる」ことはなくなる
+   点に注意してください。フラグ OFF の間はこのダウングレードは発生せず、launchId
+   の有無に関わらず常に bound 扱いです（挙動不変）。
 5. **最後に UI トークンをローテートする。** `azito token rotate` を実行し、ブラウザ（トークン
    再入力）・自動更新が届かなかった MCP クライアント設定・他の operator 用マシンの
    `operator.env` を更新します。**この最後の rotate は、ドレインしきれずに残ってしまった
