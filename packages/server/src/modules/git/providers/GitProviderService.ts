@@ -65,4 +65,9 @@ export class GitProviderService {
     const ref = this.toRepoRef(repo);
     return this.getClient(ref.provider).createPullRequest(ref, params);
   }
+
+  async getBranchHeadSha(repo: ProjectRepository, branch: string): Promise<string | null> {
+    const ref = this.toRepoRef(repo);
+    return this.getClient(ref.provider).getBranchHeadSha(ref, branch);
+  }
 }

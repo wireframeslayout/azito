@@ -192,6 +192,7 @@ function makeRunner(overrides: {
     serverRepo as any,
     projectSecretRepo as any,
     overrides.scopedAuthEnabled ?? true,
+    null,
   );
 
   return { runner, taskRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitRepo, unitTypeLoader, sidekickLoader, workerInput, workerWaiter, appendLog, getWorktreeService, transportFactory, sidekickSyncService, httpSignalCoordinator, pushVerifier, gitProvider, pullRequestCreator };

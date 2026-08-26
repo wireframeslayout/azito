@@ -65,6 +65,15 @@ fi
 
 # ─── push（作業ブランチをそのまま push） ───
 
+if [ "${AZITO_HUB_PUSH:-}" = "1" ]; then
+  COMMIT_SHA="$(git rev-parse HEAD)"
+  echo "BRANCH: $WORK_BRANCH"
+  echo "COMMIT_SHA: $COMMIT_SHA"
+  echo "=== Hub-proxied push mode ==="
+  echo "Commit completed. Push will be handled by the hub."
+  exit 0
+fi
+
 git push -u origin "$WORK_BRANCH"
 
 COMMIT_SHA="$(git rev-parse HEAD)"

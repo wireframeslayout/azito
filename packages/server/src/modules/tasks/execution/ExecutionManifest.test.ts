@@ -204,8 +204,12 @@ function makeDeps(fixture: Fixture) {
   const unitRepo: Pick<IUnitRepository, 'findById'> = {
     findById: vi.fn((id: number) => fixture.units[id] ?? null),
   };
-  const projectRepo: Pick<IProjectRepository, 'findById'> = {
+  const projectRepo: Pick<IProjectRepository, 'findById' | 'findRepositoryById'> = {
     findById: vi.fn(() => fixture.project),
+    findRepositoryById: vi.fn((id: number) => {
+      const repo = fixture.project?.repositories?.find((r: any) => r.id === id);
+      return repo ? { ...repo, token: null } : null;
+    }),
   };
   const projectServerRepo: Pick<IProjectServerRepository, 'find' | 'findByProject'> = {
     find: vi.fn((_projectId: number, serverName: string) => fixture.projectServers[serverName] ?? null),

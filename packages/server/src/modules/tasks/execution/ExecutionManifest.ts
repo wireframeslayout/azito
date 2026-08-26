@@ -689,6 +689,7 @@ export interface ResolvedExecutionManifest {
     url: string;
     owner: string | null;
     repoName: string | null;
+    tokenDigest: string;
   } | null;
   // See the module doc comment's `secrets.namesDigest` bullet above for what
   // this covers and why only names (sorted, digested), never values, are
@@ -1020,9 +1021,12 @@ export function resolveExecutionManifest(
     // fix 2).
     repository: (() => {
       const repo = project?.repositories?.[0] ?? null;
-      return repo
-        ? { id: repo.id, provider: repo.provider, url: repo.url, owner: repo.owner, repoName: repo.repoName }
-        : null;
+      if (!repo) return null;
+      const repoWithToken = deps.projectRepo.findRepositoryById(repo.id);
+      const tokenDigest = repoWithToken?.token
+        ? createHash('sha256').update(repoWithToken.token).digest('hex')
+        : 'no_token';
+      return { id: repo.id, provider: repo.provider, url: repo.url, owner: repo.owner, repoName: repo.repoName, tokenDigest };
     })(),
     secrets: {
       namesDigest: hashSecretNameSet(secretNames),
@@ -1115,6 +1119,7 @@ export function hashExecutionManifest(manifest: ResolvedExecutionManifest): stri
           url: manifest.repository.url,
           owner: manifest.repository.owner ?? '',
           repoName: manifest.repository.repoName ?? '',
+          tokenDigest: manifest.repository.tokenDigest,
         }
       : null,
     secrets: {

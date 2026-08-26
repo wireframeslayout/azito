@@ -371,7 +371,25 @@ function buildExecuteTaskUseCase(
   appServices: ApplicationServices,
   resourceGuard: ResourceGuard,
   scopedAuthEnabled: boolean,
+  dataPaths: DataPaths,
+  db: SqliteDatabase,
 ): ExecuteTaskUseCase {
+  const { SftpService } = require('../modules/servers/ssh/SftpService') as typeof import('../modules/servers/ssh/SftpService');
+  const { HubRepoCache } = require('../modules/git/hub-transfer/HubRepoCache') as typeof import('../modules/git/hub-transfer/HubRepoCache');
+  const { RemoteBundleOps } = require('../modules/git/hub-transfer/RemoteBundleOps') as typeof import('../modules/git/hub-transfer/RemoteBundleOps');
+  const { CleanPusher } = require('../modules/git/hub-transfer/CleanPusher') as typeof import('../modules/git/hub-transfer/CleanPusher');
+  const { SqliteDistributionStateRepository } = require('../modules/git/hub-transfer/SqliteDistributionStateRepository') as typeof import('../modules/git/hub-transfer/SqliteDistributionStateRepository');
+  const { FetchDistributionService } = require('../modules/git/hub-transfer/FetchDistributionService') as typeof import('../modules/git/hub-transfer/FetchDistributionService');
+  const { PushNotaryService } = require('../modules/git/hub-transfer/PushNotaryService') as typeof import('../modules/git/hub-transfer/PushNotaryService');
+
+  const sftpService = new SftpService(infra.sshClient);
+  const hubRepoCache = new HubRepoCache(dataPaths.dir);
+  const remoteBundleOps = new RemoteBundleOps();
+  const cleanPusher = new CleanPusher();
+  const distributionStateRepo = new SqliteDistributionStateRepository(db);
+  const fetchDistributionService = new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService, distributionStateRepo);
+  const pushNotaryService = new PushNotaryService(remoteBundleOps, sftpService, cleanPusher, infra.gitProvider);
+
   return new ExecuteTaskUseCase(
     repos.taskRepo,
     repos.unitRepo,
@@ -400,6 +418,8 @@ function buildExecuteTaskUseCase(
     appServices.taskPaneEnvironmentService,
     infra.serverIsolationMutex,
     scopedAuthEnabled,
+    pushNotaryService,
+    fetchDistributionService,
   );
 }
 
@@ -491,7 +511,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   const agentUpdater = buildAgentUpdater(agentBundler, infra, repos);
   const appServices = buildApplicationServices(infra, repos, uiToken, scopedAuthEnabled);
   const resourceGuard = new ResourceGuard(infra.transportFactory, repos.resourceGuardSettingsRepo);
-  const executeTaskUseCase = buildExecuteTaskUseCase(infra, repos, appServices, resourceGuard, scopedAuthEnabled);
+  const executeTaskUseCase = buildExecuteTaskUseCase(infra, repos, appServices, resourceGuard, scopedAuthEnabled, dataPaths, db);
   const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService, appServices.windowActivityStatusService);
   const interactionMonitor = new InteractionMonitor(repos.windowRepo);
   const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos);

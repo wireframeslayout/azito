@@ -78,4 +78,18 @@ export class PushVerifier {
       return null;
     }
   }
+
+  async verifyHubPushCompleted(
+    repo: ProjectRepository | null,
+    branch: string,
+    expectedSha: string,
+  ): Promise<boolean> {
+    if (!repo || !repo.owner || !repo.repoName) return false;
+    try {
+      const remoteSha = await this.gitProvider.getBranchHeadSha(repo, branch);
+      return remoteSha === expectedSha;
+    } catch {
+      return false;
+    }
+  }
 }
