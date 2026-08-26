@@ -106,7 +106,9 @@ packages/
           auth/                    # Token-based auth for agent connections
           agent-deploy/            # AgentBundler, AgentInstaller, AgentUpdater, HarnessInstaller
         agents/                   # [mid] Worker (Claude/Codex/Generic), SessionStrategy(Factory), IAgentProvider registry, LaunchCommand
-        git/                      # [mid] IWorktreeService, Local/RemoteWorktreeService(Factory), GitDiffService, DiffParser
+        git/                      # [mid] IWorktreeService, Local/RemoteWorktreeService(Factory), GitDiffService, DiffParser,
+                                  #       PathContainment (assertPathContained/assertDirectoryContained) — worktree listing API
+                                  #       (GET .../git/worktrees) and diff scope (uncommitted/base/commit) also live here
           providers/               # GitProviderService (GitHub/GitLab provider abstraction)
         llm/                      # [mid] LlmClient, Provider, CodexExecClient, PaneClassifier, LlmContentExtractor
         prompt/                   # [mid] PhasePrompt, PhasePromptRenderer, PromptModuleLoader, RenderSkillPromptUseCase
@@ -120,7 +122,8 @@ packages/
         units/                    # [upper] Unit (behavior + runtime, merged Operation+WorkerProfile), SqliteUnitRepository
         operations/               # [upper] running-execution-runs API only (GET /api/operations); no operations table
         projects/                 # [upper] Project, ProjectServer, SqliteProjectRepository/SqliteProjectServerRepository
-        files/                    # [upper] FileBrowseService, SqliteStorageSettingsRepository
+        files/                    # [upper] FileBrowseService (browse/read/write/create/delete/rename), FileSearchService
+                                  #       (rg-preferred, grep fallback), SqliteStorageSettingsRepository
           storage/, ws/            # MinioStorageClient + file-tail WS handler
         usage/                    # [upper] UsageService, Claude/CodexUsageCollector (token usage aggregation)
         notifications/            # [upper] NotificationBus, webhooks (agent-done), push subscriptions
@@ -353,7 +356,20 @@ packages/
 - All routes return camelCase JSON
 - Request bodies accept snake_case (for historical reasons in some endpoints)
 - Session cache: 5s TTL for tmux session listings
-- File APIs: `/api/servers/:name/files?path=` (listing), `/api/servers/:name/files/content?path=` (content)
+- File APIs (path containment enforced via `assertDirectoryContained`/`assertPathContained`; write/create/delete/rename
+  reject targets outside the project's `workingDirectory`, and delete additionally rejects `.git` and the root itself):
+  - `GET /api/servers/:name/files?path=&showHidden=` (listing)
+  - `GET /api/servers/:name/files/content?path=` (content, returns sha256 hash)
+  - `GET /api/servers/:name/files/download?path=` (download)
+  - `PUT /api/servers/:name/files/content` (save; requires `projectId`; optimistic-lock via `baseMtime`/`baseHash`
+    unless `force: true`)
+  - `POST /api/servers/:name/files` (create file/directory), `DELETE /api/servers/:name/files` (delete),
+    `PATCH /api/servers/:name/files` (rename via `newName`)
+  - `GET /api/servers/:name/files/search?q=&project_id=&root=&case=&whole_word=&regex=&include=&exclude=` (rg-preferred,
+    grep-fallback content/name search)
+  - `GET /api/servers/:name/git/diff?path=&base=&commit=&scope=&includeUncommitted=` (uncommitted / base-branch
+    merge-base / commit diff scopes)
+  - `GET /api/servers/:name/git/worktrees?project_id=` (worktree list for the root switcher, joined to tasks)
 - Directory autocomplete: `/api/servers/:name/directories?path=`
 - Agent routes: `/api/agent/*` (authenticated via `X-Agent-Token` header)
 - Task answer: `POST /api/tasks/:id/answer` (submit question responses)

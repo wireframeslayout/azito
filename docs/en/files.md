@@ -14,6 +14,34 @@ Selecting **Files** mode in the workspace activity bar shows the file tree on th
 
 The file tree is rooted at the project's `workingDirectory`. Directory expansion is requested from the server in real time, so the latest file state is reflected.
 
+### Creating, Deleting, and Renaming
+
+Right-clicking a node in the file tree (long-press on mobile) opens a context menu with the following actions:
+
+| Action | Description |
+|---|---|
+| New File | Create a file under the selected directory |
+| New Folder | Create a folder under the selected directory |
+| Rename | Rename the file or folder |
+| Copy Path | Copy the full path to the clipboard |
+| Download | Download the file (folders are not supported) |
+| Delete | Show a confirmation modal, then delete |
+
+Create and rename use an inline input field in the tree; only delete goes through a confirmation modal. The server always verifies that every write operation — create, save, rename, and delete — stays inside the project's `workingDirectory`; paths outside that root are rejected. Delete additionally rejects the `.git` directory and the root directory itself.
+
+### Switching Worktree Roots
+
+The root switcher row at the top of the sidebar lets you switch which worktree (branch) is currently displayed. That row shows the currently selected worktree's changed-file count as a badge. Clicking it opens a picker with a filterable list of worktrees on the project server, showing each branch name and the status of any task tied to it. Worktrees created for a running task show that task's status; among worktrees whose path matches `.worktrees/task-<taskId>`, one with no matching task is marked as orphaned.
+
+## File Search
+
+The search mode in the sidebar lets you search file names and file contents across the tree.
+
+- Three inline toggles next to the search box — `Aa` (match case), `ab` (whole word), `.*` (regular expression) — narrow the search
+- Expanding the details reveals "Files to Include" / "Files to Exclude" glob fields (default exclusions such as `node_modules`, `.git`, `dist`, `.worktrees`)
+- `rg` (ripgrep) is used when available on the server, falling back to `grep` otherwise
+- The search scope is also confined to the project's `workingDirectory`
+
 ## File Preview
 
 Clicking a file shows a preview in the main area.
@@ -71,6 +99,24 @@ PDF files (`.pdf`) are previewed using an embedded viewer.
 ### Storage Image Preview
 
 When selecting an image file in the file storage (MinIO) file list, a preview is displayed within the sidebar. On mobile, clicking the image preview automatically closes the sidebar.
+
+## In-Browser Editor
+
+For text files other than Markdown, the preview area itself is a CodeMirror 6-based editor — files are editable directly, with no separate "edit mode" to switch into. Markdown files have three switchable view modes — Source / Preview / Split — defaulting to Preview. The default Preview mode is read-only; switch to Source or Split to edit.
+
+- **Vim mode**: a toggle at the top-right of the editor enables vim keybindings (the setting is persisted per device and off by default at mobile widths). In vim mode, `:w` also triggers a save
+- **Saving**: edits are sent to `PUT /api/servers/:name/files/content` on save
+- **Conflict detection**: the request includes the file's mtime and sha256 hash captured at load time (`baseMtime`/`baseHash`); if they no longer match the server's current values, the save is rejected as a conflict. A banner then lets you reload the server's latest content or force-overwrite it with your own edits (`force`)
+
+## Git Diff View
+
+The workspace's Diff tab shows a worktree's changes across three switchable scopes:
+
+| Scope | Description |
+|---|---|
+| Uncommitted | Uncommitted changes in the working tree (including untracked files) |
+| Compare with base | Diff against the merge-base with the base branch. An "Include uncommitted" toggle controls whether working-tree changes are included |
+| Commit | The diff for a single selected commit |
 
 ## Download
 
