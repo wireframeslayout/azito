@@ -5,6 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { resolveExecutionManifest, hashExecutionManifest, hashSidekickPackageTree } from './ExecutionManifest';
 import { checkExecutionGate } from './ExecutionGate';
+import { resolveInputPolicy } from '../../projects/ProjectServer';
 import type { Task } from '../Task';
 import type { IUnitRepository, Unit } from '../../units/Unit';
 import type { IProjectRepository, ProjectDetail, ProjectRepository } from '../../projects/Project';
@@ -133,6 +134,9 @@ function makeServerConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
     sshHost: null,
     muxRuntime: 'system',
     sshHostFingerprint: null,
+    isolationIntent: false,
+    isolationVerifiedAt: null,
+    isolationReport: null, isolationCleanupReport: null,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
@@ -264,7 +268,7 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     // the cached `manifest` from above) — nothing changed in between, so
     // this must still be allowed, not fall back into pending_approval.
     const { manifest: manifestAtRunTime } = resolveExecutionManifest(approvedTask, deps);
-    const gate = checkExecutionGate(approvedTask, projectServer, hashExecutionManifest(manifestAtRunTime));
+    const gate = checkExecutionGate(approvedTask, resolveInputPolicy(projectServer), hashExecutionManifest(manifestAtRunTime));
     expect(gate).toEqual({ allowed: true });
   });
 
@@ -438,6 +442,75 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     const hashAfterRotation = hashFor(task, fixture);
 
     expect(hashAfterRotation).toBe(hashBeforeRotation);
+  });
+
+  // Issue #29 review, Critical finding 2: server.isolationIntent must be
+  // covered by the fingerprint (both the flag itself AND the resulting
+  // secrets.namesDigest, since isolation changes which secrets actually get
+  // injected) — otherwise flipping isolation_intent post-approval, in either
+  // direction, silently changes what a task pane receives without
+  // invalidating the approval that was granted under the OTHER state
+  // (approve-then-deisolate bypass).
+  describe('server.isolationIntent', () => {
+    it('declaring isolation_intent on the resolved server alone invalidates a prior approval, WITHOUT touching the task row', () => {
+      const fixture = (isolationIntent: boolean): Fixture => ({
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer() },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021, isolationIntent }) },
+        secretNames: ['DEPLOY_KEY'],
+      });
+      const task = makeTask();
+
+      const hashUnisolated = hashFor(task, fixture(false));
+      const hashIsolated = hashFor(task, fixture(true));
+
+      expect(hashIsolated).not.toBe(hashUnisolated);
+    });
+
+    it('toggling isolation_intent OFF an already-isolated server alone also invalidates approval (the reverse direction)', () => {
+      const fixture = (isolationIntent: boolean): Fixture => ({
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer() },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021, isolationIntent }) },
+        secretNames: ['DEPLOY_KEY'],
+      });
+      const task = makeTask();
+
+      const hashIsolated = hashFor(task, fixture(true));
+      const hashDeisolated = hashFor(task, fixture(false));
+
+      expect(hashDeisolated).not.toBe(hashIsolated);
+    });
+
+    it('secrets.namesDigest resolves to the empty-set digest for an isolated server regardless of how many project secrets exist', () => {
+      // Mirrors what TaskPaneEnvironmentService.buildEnvForNewWindow actually
+      // does: it skips reading/injecting AZITO_SECRET_* entirely when the
+      // resolved server is isolated, so the fingerprint of "what's actually
+      // injected" must match an isolated server with N secrets to an
+      // unisolated server with ZERO secrets.
+      const isolatedWithSecrets: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer() },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021, isolationIntent: true }) },
+        secretNames: ['DEPLOY_KEY', 'STRIPE_SECRET'],
+      };
+      const unisolatedNoSecrets: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer() },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021, isolationIntent: false }) },
+        secretNames: [],
+      };
+      const task = makeTask();
+
+      const resolved = resolveExecutionManifest(task, makeDeps(isolatedWithSecrets));
+      expect(resolved.manifest.secrets.namesDigest).toBe(
+        resolveExecutionManifest(task, makeDeps(unisolatedNoSecrets)).manifest.secrets.namesDigest,
+      );
+    });
   });
 
   it('editing task.unitId alone invalidates a prior approval (retargets the Unit)', () => {
@@ -739,7 +812,7 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     // very next gate check (e.g. approve-plan's resumeStateMachine() call).
     const atImplementing = { ...atPlanning, currentPhase: 'implementing', executionApprovedFingerprintHash: approvedHash };
     const { manifest: manifestAtImplementing, projectServer } = resolveExecutionManifest(atImplementing, makeDeps(fixture));
-    const gate = checkExecutionGate(atImplementing, projectServer, hashExecutionManifest(manifestAtImplementing));
+    const gate = checkExecutionGate(atImplementing, resolveInputPolicy(projectServer), hashExecutionManifest(manifestAtImplementing));
 
     expect(hashExecutionManifest(manifestAtImplementing)).toBe(approvedHash);
     expect(gate).toEqual({ allowed: true });
@@ -769,7 +842,7 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     // 'testing' by the time the gate is re-checked.
     const atTesting = { ...atImplementing, currentPhase: 'testing', executionApprovedFingerprintHash: approvedHash };
     const { manifest: manifestAtTesting, projectServer } = resolveExecutionManifest(atTesting, makeDeps(fixture));
-    const gate = checkExecutionGate(atTesting, projectServer, hashExecutionManifest(manifestAtTesting));
+    const gate = checkExecutionGate(atTesting, resolveInputPolicy(projectServer), hashExecutionManifest(manifestAtTesting));
 
     expect(hashExecutionManifest(manifestAtTesting)).toBe(approvedHash);
     expect(gate).toEqual({ allowed: true });
@@ -1142,7 +1215,7 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
 
       const atPushing = { ...atPlanning, currentPhase: 'pushing', executionApprovedFingerprintHash: approvedHash };
       const { manifest: manifestAtPushing, projectServer } = resolveExecutionManifest(atPushing, makeDeps(fixture));
-      const gate = checkExecutionGate(atPushing, projectServer, hashExecutionManifest(manifestAtPushing));
+      const gate = checkExecutionGate(atPushing, resolveInputPolicy(projectServer), hashExecutionManifest(manifestAtPushing));
 
       expect(hashExecutionManifest(manifestAtPushing)).toBe(approvedHash);
       expect(gate).toEqual({ allowed: true });

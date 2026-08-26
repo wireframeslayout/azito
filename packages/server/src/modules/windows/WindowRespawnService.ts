@@ -6,6 +6,7 @@ import type { ITaskRepository, Task } from '../tasks/Task';
 import type { IUnitRepository } from '../units/Unit';
 import type { IProjectRepository } from '../projects/Project';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
+import { resolveEffectiveInputPolicy } from '../projects/ProjectServer';
 import type { IServerRepository } from '../servers/Server';
 import type { SqliteProjectSecretRepository } from '../projects/SqliteProjectSecretRepository';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
@@ -15,12 +16,23 @@ import { shellQuote } from '../../shared/shellQuote';
 import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
 import type { SessionCaptureService } from './SessionCaptureService';
-import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError } from '../tasks/execution/ExecutionGate';
+import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError, reverifyExecutionGateInLock } from '../tasks/execution/ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest, type RespawnManifestInput } from '../tasks/execution/ExecutionManifest';
 import { appendLogAndEmit } from '../tasks/execution/AppendLog';
 import type { TaskPaneEnvironmentService } from '../tasks/execution/TaskPaneEnvironmentService';
 import { resolveTmuxSession } from '../tasks/execution/TaskExecutionEnv';
-import { confirmOldWindowGone, createRotatedWindow, rollbackWindowReference, runExclusiveForTask } from '../tasks/execution/WindowRotation';
+import {
+  confirmOldWindowGone,
+  createPlainWindowInLock,
+  createRotatedWindow,
+  createRotatedWindowInLock,
+  createSecondaryWindowInLock,
+  rollbackWindowReference,
+  runExclusiveForTask,
+  withServerLock,
+  type ServerIsolationLock,
+} from '../tasks/execution/WindowRotation';
+import type { KeyedMutex } from '../../shared/keyedMutex';
 import { resolveKillOutcome } from '../tmux/killOutcome';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
@@ -136,8 +148,27 @@ export class WindowRespawnService {
     // window respawn instead falls back to TmuxClient.uiTokenEnv() (see
     // resolveRespawnEnv() below).
     private paneEnvService: TaskPaneEnvironmentService,
+    // Issue #29 review (7th pass), Important finding 1: the SAME
+    // per-server-name mutex `modules/servers/routes.ts`'s PUT handler and
+    // `modules/tmux/routes/sessions.ts`'s manual window/pane routes already
+    // serialize the isolation false->true transition against (see that
+    // mutex's own doc comment) — required (placed before the optional
+    // sessionCaptureService below, not after, so it stays a required
+    // parameter), so respawn()/resumeLegacySession() can never build a
+    // window env from a `server` a concurrent transition has already
+    // superseded. See ServerIsolationLock's doc comment in WindowRotation.ts.
+    private serverIsolationMutex: KeyedMutex,
+    // Issue #29 Step 3a: same flag ExecuteTaskUseCase/PhaseLoopRunner/
+    // TaskRestoreService are constructed with — enforceExecutionGate() below
+    // needs it for resolveEffectiveInputPolicy(). Placed before the optional
+    // sessionCaptureService (required params must precede optional ones).
+    private scopedAuthEnabled: boolean,
     private sessionCaptureService?: SessionCaptureService,
   ) {}
+
+  private get serverIsolationLock(): ServerIsolationLock {
+    return { serverIsolationMutex: this.serverIsolationMutex, serverRepo: this.serverRepo };
+  }
 
   async respawn(windowId: number, server: ServerConfig): Promise<{ tmuxTarget: string }> {
     const win = this.windowRepo.findById(windowId);
@@ -263,56 +294,126 @@ export class WindowRespawnService {
       const windowPart = curParts[1]?.split('.')[0];
       if (!windowPart) throw new Error(`Invalid tmuxTarget: ${currentWin.tmuxTarget}`);
 
-      const sessions = await this.tmux.listSessions(server);
-      const sessionExists = sessions.some((s) => s.name === sessionName);
+      // Issue #29 review, 14th pass, Important finding 1: the per-server
+      // isolation lock is now acquired — and `server`'s snapshot verified
+      // against the freshly re-read row — BEFORE the old window is killed,
+      // not after. This used to list sessions and run confirmOldWindowGone
+      // (which KILLS the old window) against the `server` argument from
+      // before this call was even queued for the lock, and only reached the
+      // lock+snapshot-check afterwards, inside createRotatedWindow/
+      // createSecondaryWindow/createPlainWindow — so a mismatch (isolation
+      // flipped, connection info swapped mid-flight) aborted AFTER the old
+      // window was already dead, leaving the Window row pointing at a
+      // now-killed target with no replacement ever created. `withServerLock`
+      // performs the lock+refetch+snapshot-check first; the kill, the
+      // create-vs-createSession decision (via `doCreate`, which re-lists
+      // sessions again from `freshServer` — Issue #29 review, 9th pass,
+      // Important finding 2, still honored here), and the window creation
+      // itself all run inside its callback, against the SAME `freshServer`
+      // row throughout.
+      let createdViaNewSession = false;
+      const {
+        newName,
+        windowEnv,
+        tokenId,
+        server: respawnServer,
+      } = await withServerLock(this.serverIsolationLock, server, true, async (freshServer) => {
+        // Issue #29 Step 3a review round, Important finding 2: re-verify the
+        // untrusted-execution gate against `freshServer` — re-read once this
+        // lock is actually acquired — BEFORE confirmOldWindowGone below kills
+        // the existing primary window, not after. This used to run only
+        // inside createRotatedWindowInLock's preCheck, which fires
+        // immediately before the new window's task token/env is built —
+        // i.e. AFTER the old window was already destroyed. A downgrade
+        // discovered there still aborted the respawn, but by then the task's
+        // only working pane was already gone: the caller was left at
+        // pending_approval with no window at all, instead of the still-live
+        // pre-respawn window an in-lock block is supposed to leave
+        // untouched. Moving the same check here means a downgrade aborts
+        // before anything is torn down.
+        if (isPrimary) {
+          const { manifest, projectServer: freshProjectServer } = resolveExecutionManifest(task!, {
+            unitRepo: this.unitRepo,
+            projectRepo: this.projectRepo,
+            projectServerRepo: this.projectServerRepo,
+            serverRepo: this.serverRepo,
+            projectSecretRepo: this.projectSecretRepo,
+            unitTypeLoader: this.unitTypeLoader,
+            sidekickLoader: this.sidekickLoader,
+          }, buildRespawnManifestInput(currentWin), freshServer.name);
+          reverifyExecutionGateInLock(
+            { taskRepo: this.taskRepo, logRepo: this.logRepo, events: this.events },
+            task!,
+            unitId,
+            'respawn',
+            freshProjectServer,
+            freshServer,
+            this.scopedAuthEnabled,
+            hashExecutionManifest(manifest),
+            windowId,
+          );
+        }
 
-      // Confirm the old window is actually gone BEFORE rotating the task
-      // token (Issue #28 third-party review finding 3), via the same shared
-      // operation execute()/followUp() now use (WindowRotation.ts) —
-      // buildEnvForNewWindow() revokes the current token generation and
-      // issues a new one, so calling it while the old window might still be
-      // alive (a killWindow() failure was previously swallowed via
-      // `.catch(() => {})`) could leave that still-live pane holding a
-      // now-dead credential.
-      const session = sessions.find((s) => s.name === sessionName);
-      const windowAlive = sessionExists && (session?.windows.some((w) => w.name === windowPart) ?? false);
+        const sessions = await this.tmux.listSessions(freshServer);
+        const sessionExists = sessions.some((s) => s.name === sessionName);
+        const session = sessions.find((s) => s.name === sessionName);
+        const windowAlive = sessionExists && (session?.windows.some((w) => w.name === windowPart) ?? false);
 
-      await confirmOldWindowGone(
-        this.tmux,
-        server,
-        windowAlive ? { target: `${sessionName}:${windowPart}`, kind: 'window' } : null,
-        isPrimary ? task!.id : null,
-      );
+        // Confirm the old window is actually gone BEFORE rotating the task
+        // token (Issue #28 third-party review finding 3), via the same
+        // shared operation execute()/followUp() now use (WindowRotation.ts)
+        // — buildEnvForNewWindow() revokes the current token generation and
+        // issues a new one, so calling it while the old window might still
+        // be alive (a killWindow() failure was previously swallowed via
+        // `.catch(() => {})`) could leave that still-live pane holding a
+        // now-dead credential.
+        await confirmOldWindowGone(
+          this.tmux,
+          freshServer,
+          windowAlive ? { target: `${sessionName}:${windowPart}`, kind: 'window' } : null,
+          isPrimary ? task!.id : null,
+        );
 
-      const doCreate = (env: Record<string, string>) => (!sessionExists
-        ? this.tmux.createSession(server, sessionName, { windowName: windowPart, exactName: true, extraEnv: env })
-        : this.tmux.createWindow(server, sessionName, windowPart, { exactName: true, extraEnv: env }));
+        createdViaNewSession = !sessionExists;
+        const doCreate = async (fs: ServerConfig, env: Record<string, string>) => {
+          // Re-lists sessions from `fs` (Issue #29 review, 9th pass,
+          // Important finding 2) rather than trusting `sessionExists`
+          // above: `fs` here is the SAME `freshServer` the outer lock
+          // already re-read, but re-checking immediately before the actual
+          // create call keeps this decision resilient to a session
+          // teardown/creation racing between the two reads within the same
+          // lock turn.
+          const freshSessions = await this.tmux.listSessions(fs);
+          const freshSessionExists = freshSessions.some((s) => s.name === sessionName);
+          createdViaNewSession = !freshSessionExists;
+          return !freshSessionExists
+            ? this.tmux.createSession(fs, sessionName, { windowName: windowPart, exactName: true, extraEnv: env })
+            : this.tmux.createWindow(fs, sessionName, windowPart, { exactName: true, extraEnv: env });
+        };
 
-      let newName: string;
-      // `windowEnv` is reused below for every additional pane restorePaneLayout
-      // creates via splitPane() — see TmuxClient.splitPane's doc comment for
-      // why a split pane needs the SAME env explicitly, not just the first
-      // pane new-window/new-session set (Issue #28 review Critical finding).
-      let windowEnv: Record<string, string>;
-      // Only set for the primary branch — the only branch that rotated a
-      // task token (createRotatedWindow) and therefore has a generation to
-      // roll back below on a downstream failure.
-      let tokenId: number | null = null;
-      if (isPrimary) {
-        const created = await createRotatedWindow(this.paneEnvService, server, task!, 'respawn_create_failed', doCreate);
-        newName = created.windowName;
-        windowEnv = created.env;
-        tokenId = created.tokenId;
-      } else if (task) {
-        windowEnv = this.paneEnvService.buildEnvForSecondaryWindow(task, server);
-        const created = await doCreate(windowEnv);
-        newName = created.windowName;
-      } else {
-        windowEnv = this.tmux.uiTokenEnv();
-        const created = await doCreate(windowEnv);
-        newName = created.windowName;
-      }
-      await sleep(sessionExists ? 300 : 500);
+        if (isPrimary) {
+          // No preCheck here — the same reverify already ran above, before
+          // confirmOldWindowGone, against this same `freshServer` snapshot
+          // (see the comment at the top of this lock callback).
+          const created = await createRotatedWindowInLock(this.paneEnvService, freshServer, task!, 'respawn_create_failed', doCreate);
+          return { newName: created.windowName, windowEnv: created.env, tokenId: created.tokenId as number | null, server: created.server };
+        } else if (task) {
+          const created = await createSecondaryWindowInLock(this.paneEnvService, freshServer, task, doCreate);
+          return { newName: created.windowName, windowEnv: created.env, tokenId: null as number | null, server: created.server };
+        } else {
+          // Non-task window respawn — server-aware legacy default (Issue #29
+          // review, Critical finding 1): withholds the token when the server
+          // is declared isolated, same as the manual session/window/pane
+          // routes. Goes through createPlainWindowInLock (Issue #29 review,
+          // 9th pass, Important finding 1) so this branch also runs its
+          // env-resolution -> create() span inside the same per-server
+          // isolation lock as the primary/secondary branches, against the
+          // freshly re-fetched `freshServer` row.
+          const created = await createPlainWindowInLock(this.tmux, freshServer, doCreate);
+          return { newName: created.windowName, windowEnv: created.env, tokenId: null as number | null, server: created.server };
+        }
+      });
+      await sleep(createdViaNewSession ? 500 : 300);
 
       const baseTarget = `${sessionName}:${newName}`;
       const dbTarget = `${baseTarget}.1`;
@@ -341,16 +442,16 @@ export class WindowRespawnService {
       // half (no revoke call).
       try {
         if (win.paneLayout) {
-          await this.restorePaneLayout(server, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv);
+          await this.restorePaneLayout(respawnServer, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv);
         } else {
-          const paneId = await this.tmux.resolvePaneId(server, baseTarget);
-          await this.setupSinglePane(server, paneId, baseTarget, win, supervision, resolvedCwds.singleCwd);
+          const paneId = await this.tmux.resolvePaneId(respawnServer, baseTarget);
+          await this.setupSinglePane(respawnServer, paneId, baseTarget, win, supervision, resolvedCwds.singleCwd);
         }
       } catch (err) {
         try {
           if (isPrimary && tokenId !== null) {
             await rollbackWindowReference(
-              this.tmux.killWindow(server, baseTarget),
+              this.tmux.killWindow(respawnServer, baseTarget),
               this.paneEnvService,
               tokenId,
               'respawn_restore_failed_rollback',
@@ -358,7 +459,7 @@ export class WindowRespawnService {
               () => this.windowRepo.update(windowId, { tmuxTarget: dbTarget }),
             );
           } else {
-            const outcome = await resolveKillOutcome(this.tmux.killWindow(server, baseTarget));
+            const outcome = await resolveKillOutcome(this.tmux.killWindow(respawnServer, baseTarget));
             if (!outcome.success) {
               this.windowRepo.update(windowId, { tmuxTarget: dbTarget });
             }
@@ -441,7 +542,20 @@ export class WindowRespawnService {
     }, respawnInput, server.name);
     const unitId = unit?.id ?? null;
     const manifestHash = hashExecutionManifest(manifest);
-    const gate = checkExecutionGate(task, projectServer, manifestHash);
+    // Issue #29 Step 3a: `server` is the caller-resolved ACTUAL target
+    // server for this respawn (see the comment on this method's `server`
+    // param above) — same re-check every other entry point runs, see
+    // resolveEffectiveInputPolicy's doc comment.
+    const effective = resolveEffectiveInputPolicy(projectServer, server, this.scopedAuthEnabled);
+    if (unitId !== null && effective.allowDegradedReason) {
+      appendLogAndEmit(this.logRepo, this.events, task.id, unitId, 'command', {
+        type: 'execution_policy_degraded',
+        requestedPolicy: effective.requestedPolicy,
+        effectivePolicy: effective.effectivePolicy,
+        allowDegradedReason: effective.allowDegradedReason,
+      });
+    }
+    const gate = checkExecutionGate(task, effective.effectivePolicy, manifestHash);
     if (gate.allowed) return unitId;
 
     if (unitId !== null) {
@@ -514,7 +628,7 @@ export class WindowRespawnService {
     if (!task) throw new Error(`Task ${taskId} not found`);
     if (!task.agentSessionId) throw new Error(`Task ${taskId} has no agent session ID`);
 
-    this.enforceExecutionGate(task, server, 'recover_session_legacy', null);
+    const unitId = this.enforceExecutionGate(task, server, 'recover_session_legacy', null);
 
     const tmuxSession = resolveTmuxSession(task.projectId, server.name, this.projectServerRepo);
     // Window generation point — rotates the task token via createRotatedWindow,
@@ -529,9 +643,51 @@ export class WindowRespawnService {
     // WindowRotation.ts) so a concurrent rotation for this task cannot
     // revoke this generation out from under it.
     const { windowName } = await runExclusiveForTask(taskId, async () => {
-      const created = await createRotatedWindow(this.paneEnvService, server, task, 'resume_legacy_create_failed', (env) =>
-        this.tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: env }),
+      const created = await createRotatedWindow(this.paneEnvService, this.serverIsolationLock, server, task, 'resume_legacy_create_failed', (freshServer, env) =>
+        this.tmux.createWindow(freshServer, tmuxSession, `task-${task.id}`, { extraEnv: env }),
+        true,
+        // Issue #29 Step 3a review round, Important finding 1: re-verify the
+        // untrusted-execution gate against `freshServer` — re-read once this
+        // lock is actually acquired — before this legacy-recovery window's
+        // task token/env is built, same as respawn()'s primary branch and
+        // ExecuteTaskUseCase/TaskRestoreService already do. Without this, a
+        // verification lapse (isolation doctor re-run, scoped auth toggled
+        // off) discovered only while this call sat queued for the lock was
+        // never observed — the outer enforceExecutionGate() call above ran
+        // on the pre-lock snapshot and this path had no in-lock preCheck at
+        // all, so a downgrade mid-wait still resumed the untrusted session
+        // under the stale 'allow' decision. `respawnInput` is omitted (see
+        // enforceExecutionGate's own doc comment: this operation has no
+        // Window row to diverge from).
+        (freshServer) => {
+          const { manifest, projectServer: freshProjectServer } = resolveExecutionManifest(task, {
+            unitRepo: this.unitRepo,
+            projectRepo: this.projectRepo,
+            projectServerRepo: this.projectServerRepo,
+            serverRepo: this.serverRepo,
+            projectSecretRepo: this.projectSecretRepo,
+            unitTypeLoader: this.unitTypeLoader,
+            sidekickLoader: this.sidekickLoader,
+          }, undefined, freshServer.name);
+          reverifyExecutionGateInLock(
+            { taskRepo: this.taskRepo, logRepo: this.logRepo, events: this.events },
+            task,
+            unitId,
+            'recover_session_legacy',
+            freshProjectServer,
+            freshServer,
+            this.scopedAuthEnabled,
+            hashExecutionManifest(manifest),
+            null,
+          );
+        },
       );
+      // Issue #29 review (10th pass), Important finding 3: use the fresh
+      // `server` row createRotatedWindow re-read and actually created the
+      // window with — not the (possibly now-stale) `server` argument this
+      // method was called with — for resolvePaneId/sendKeys/killWindow
+      // below, same as respawn()'s other two branches already do.
+      server = created.server;
       const windowTarget = `${tmuxSession}:${created.windowName}`;
       try {
         const paneId = await this.tmux.resolvePaneId(server, windowTarget);

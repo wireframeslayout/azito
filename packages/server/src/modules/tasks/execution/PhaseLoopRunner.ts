@@ -8,6 +8,7 @@ import type { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
 import type { IWorkerRuntime, WorkerContext } from './runtime/IWorkerRuntime';
 import type { IProjectRepository } from '../../projects/Project';
 import type { IProjectServerRepository } from '../../projects/ProjectServer';
+import { resolveEffectiveInputPolicy } from '../../projects/ProjectServer';
 import type { IServerRepository } from '../../servers/Server';
 import type { SqliteProjectSecretRepository } from '../../projects/SqliteProjectSecretRepository';
 import type { PhaseConfig } from '../../sidekicks/PhaseConfig';
@@ -98,6 +99,12 @@ export class PhaseLoopRunner {
     // depend on these repositories.
     private serverRepo: IServerRepository,
     private projectSecretRepo: SqliteProjectSecretRepository,
+    // Issue #29 Step 3a: same flag ExecuteTaskUseCase is constructed with
+    // (it constructs this class and passes its own copy through) — needed by
+    // reverifyExecutionGateForPhase()'s resolveEffectiveInputPolicy() call
+    // below, so a per-phase re-verification degrades 'allow' exactly the way
+    // the run's original entry-point check did.
+    private scopedAuthEnabled: boolean,
   ) {}
 
   private async findPrUrl(task: { projectId: number }, branch: string | null): Promise<string | null> {
@@ -148,7 +155,7 @@ export class PhaseLoopRunner {
   private reverifyExecutionGateForPhase(taskId: number, currentTask: Task, loopUnitId: number): boolean {
     if (currentTask.inputTrust !== 'untrusted') return true;
 
-    const { manifest, projectServer } = resolveExecutionManifest(currentTask, {
+    const { manifest, projectServer, serverConfig } = resolveExecutionManifest(currentTask, {
       unitRepo: this.unitRepo,
       projectRepo: this.projectRepo,
       projectServerRepo: this.projectServerRepo,
@@ -158,8 +165,10 @@ export class PhaseLoopRunner {
       sidekickLoader: this.sidekickLoader,
     });
     const manifestHash = hashExecutionManifest(manifest);
-    const gate = checkExecutionGate(currentTask, projectServer, manifestHash);
-    if (gate.allowed) return true;
+    // Issue #29 Step 3a: same re-check as ExecuteTaskUseCase.enforceExecutionGate
+    // — see resolveEffectiveInputPolicy's doc comment.
+    const effective = resolveEffectiveInputPolicy(projectServer, serverConfig, this.scopedAuthEnabled);
+    const gate = checkExecutionGate(currentTask, effective.effectivePolicy, manifestHash);
 
     // Resolve a Unit id to attach log entries to WITHOUT ever falling back to
     // a dummy value (Issue #328 review round fix 4): execution_log.unit_id is
@@ -173,8 +182,21 @@ export class PhaseLoopRunner {
     // by stateMachineLoop() — but ONLY if it still resolves; otherwise skip
     // the unit-scoped log entirely (unitId stays null below) while still
     // recording the task-level gate transition (recordExecutionGateBlock /
-    // updateStatus), which has no such foreign-key dependency.
+    // updateStatus), which has no such foreign-key dependency. Resolved here
+    // (before the `gate.allowed` fast-return) so a degraded 'allow' can be
+    // logged even on a phase that a stale manual-approval match still lets
+    // through unattended (Issue #29 Step 3a).
     const unitId = manifest.unit?.id ?? (this.unitRepo.findById(loopUnitId) ? loopUnitId : null);
+    if (unitId !== null && effective.allowDegradedReason) {
+      this.appendLog(taskId, unitId, 'command', {
+        type: 'execution_policy_degraded',
+        requestedPolicy: effective.requestedPolicy,
+        effectivePolicy: effective.effectivePolicy,
+        allowDegradedReason: effective.allowDegradedReason,
+      });
+    }
+    if (gate.allowed) return true;
+
     if (unitId !== null) {
       this.appendLog(taskId, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
     }
@@ -298,18 +320,52 @@ export class PhaseLoopRunner {
       const phase = enabledPhases[currentPhaseIndex];
       const phaseDef = phaseDefMap.get(phase)!;
 
-      this.taskRepo.updateStatus(task.id, 'running');
-      this.taskRepo.updateCurrentPhase(task.id, phase);
-      this.appendLog(task.id, unit.id, 'status_change', { status: 'phase_started', phase });
-
       // Untrusted-input execution gate re-check (Issue #328 ninth-round
-      // review) — must run BEFORE the Sidekick is resolved and the prompt is
-      // built below, so a block never lets a stale/rewritten instruction
-      // reach the worker. See reverifyExecutionGateForPhase's doc comment.
+      // review) — must run BEFORE the isolation cutoff below and BEFORE the
+      // Sidekick is resolved / prompt is built further down, so a block
+      // never lets a stale/rewritten instruction reach the worker, and a
+      // skipped pushing phase never bypasses a gate that would otherwise
+      // have caught drift (Issue #29 review, Important finding 1): the
+      // isolation cutoff advances the task straight to the terminal 'review'
+      // status without ever building a prompt, so re-checking after it would
+      // never run for the one phase it guards. See
+      // reverifyExecutionGateForPhase's doc comment.
       const currentTask = this.taskRepo.findById(task.id);
       if (currentTask && !this.reverifyExecutionGateForPhase(task.id, currentTask, unit.id)) {
         return;
       }
+
+      // Isolation cutoff (Issue #29 docs review, Important finding 1):
+      // isolated agent servers never hold push credentials (see
+      // ServerIsolationLock.ts / TaskPaneEnvironmentService.ts — the same
+      // isolationIntent gate that withholds secrets from the task pane).
+      // Without this, an isolated task whose Unit still has the pushing
+      // phase enabled would reach it, send the phase prompt, and have it
+      // fail/hang for lack of credentials. `phaseDef.pushVerify` is the
+      // existing generic signal a phase is a "pushing" phase (already used
+      // above to arm the pushingProbe) — reused here instead of a hardcoded
+      // phase-name check. Skipping lands the run on the same terminal path
+      // as a normal last-phase completion (falls through the while loop to
+      // the "all phases complete" block below, terminal status 'review').
+      // Push becomes the operator's responsibility until #87 (hub-proxied
+      // push) ships; this is deliberately the only cutoff logic added here —
+      // no push-credential injection, per the Issue #29 review scope. Runs
+      // only after the gate re-check above has already confirmed the
+      // approved manifest/input-policy still holds for this phase.
+      if (server.isolationIntent === true && phaseDef.pushVerify) {
+        this.taskRepo.updateCurrentPhase(task.id, phase);
+        this.appendLog(task.id, unit.id, 'command', {
+          type: 'pushing_skipped_isolated',
+          phase,
+          reason: '隔離サーバーは push 資格情報を持たないため。operator が push してください / hub 代行 push は #87',
+        });
+        currentPhaseIndex++;
+        continue;
+      }
+
+      this.taskRepo.updateStatus(task.id, 'running');
+      this.taskRepo.updateCurrentPhase(task.id, phase);
+      this.appendLog(task.id, unit.id, 'status_change', { status: 'phase_started', phase });
 
       const sidekick = resolvePhaseSidekick(this.sidekickLoader, phase, unit.phaseConfig, phaseDef);
       const sidekickDir = resolveSidekickDir(sidekick, server);

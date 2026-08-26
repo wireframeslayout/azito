@@ -115,7 +115,9 @@
       "inputPolicy": "Untrusted Input Policy",
       "inputPolicyHint": "Controls whether tasks imported from an external source (e.g. a GitHub/GitLab issue) may run on this server. Defaults to requiring manual approval.",
       "inputPolicyManualApproval": "Require manual approval",
-      "inputPolicyDeny": "Deny execution"
+      "inputPolicyDeny": "Deny execution",
+      "inputPolicyAllow": "Run automatically without approval",
+      "inputPolicyAllowHint": "Runs automatically without approval — only effective on a verified isolated server. Automatically falls back to manual approval when verification is missing, expired, or scoped auth is disabled."
     },
     "secrets": {
       "note": "Values registered here are injected as environment variables (AZITO_SECRET_<NAME>) into task execution panes. Only register credentials that are safe to share with agents. Values cannot be retrieved after saving.",

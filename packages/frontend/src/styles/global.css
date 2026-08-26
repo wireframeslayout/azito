@@ -644,6 +644,7 @@ button:focus-within .diff-open-btn {
 @media (prefers-reduced-motion: reduce) {
   .qa-bar-transition,
   .glass-popover,
+  .ui-tooltip,
   .notification-toast,
   .notification-bell-btn,
   .notification-row,

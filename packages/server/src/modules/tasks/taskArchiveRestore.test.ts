@@ -117,12 +117,12 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
     } as unknown as TasksRouteOptions['tmux'],
     serverRepo: {
       findAll: vi.fn(() => []),
-      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, createdAt: '' })),
+      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '' })),
       create: vi.fn(),
       update: vi.fn(),
       updateAgentVersion: vi.fn(),
       updateFingerprint: vi.fn(),
-      clearFingerprint: vi.fn(),
+      clearFingerprint: vi.fn(), updateIsolationIntent: vi.fn(),
       delete: vi.fn(),
     },
     worktreeServiceFactory: {
@@ -143,6 +143,7 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
       findByTask: vi.fn(() => [{ id: 50, ownerType: 'task' as const, taskId: 1, isPrimary: true, serverName: 'test-server', tmuxTarget: 'azito:task-1.1', label: 'task-1', windowType: 'agent' as const, workerType: 'claude', workerModel: null, agentSessionId: null, launchCommand: null, workingDirectory: null, paneLayout: null, projectId: null, createdAt: '' }]),
       findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
       findByServerAndTarget: vi.fn(() => undefined),
+      findByServer: vi.fn(() => []),
       findByServerAndSession: vi.fn(() => []),
       update: vi.fn(),
       updateAgentSessionIdByWindow: vi.fn(),
@@ -168,6 +169,7 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
       onDestroyed();
       return { success: result.code === 0, alreadyGone: false, result };
     }),
+    scopedAuthEnabled: true,
   };
 }
 

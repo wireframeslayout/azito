@@ -164,9 +164,9 @@
     "supervisedMonitoring": "Monitoring agent launch…",
     "continueDisplay": "Continuing to display",
     "respawning": "Respawning…",
-    "taskOwnedPaneBadge": "Task execution (restricted privileges)",
+    "taskOwnedPaneBadge": "Task execution",
     "taskOwnedPaneTooltip": "Input into this pane does not elevate privileges. Perform operator actions from the browser or a session that has sourced operator.env.",
-    "taskOwnedPaneBadgeCompat": "Task execution (compat mode — restrictions not enforced)",
+    "taskOwnedPaneBadgeCompat": "Task execution · unrestricted",
     "taskOwnedPaneTooltipCompat": "Scoped authorization is not yet enabled on this hub, so input into this pane currently carries operator-equivalent privileges, same as any other pane. Enable AZITO_SCOPED_AUTH to enforce the restriction this badge otherwise describes.",
     "viewMode": {
       "ariaLabel": "Display mode",
@@ -213,5 +213,8 @@
   },
   "errors": {
     "operatorRequired": "Operator privileges are required for this operation ({{operation}}). If you pasted a task token into the token prompt by mistake, use your operator UI token instead."
+  },
+  "docs": {
+    "learnMore": "Learn more in the docs"
   }
 }

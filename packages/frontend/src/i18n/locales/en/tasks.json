@@ -49,12 +49,24 @@
       "branches": "Branches",
       "phases": "Phases",
       "repository": "PR destination",
-      "secrets": "Secrets injected"
+      "secrets": "Secrets injected",
+      "isolation": "Isolation"
     },
     "branchesValue": "base: {{base}} → work: {{work}} → target: {{target}}",
     "unresolved": "(unresolved)",
     "noRepository": "(no repository configured)",
     "noSecrets": "(none)",
+    "isolatedNotice": "This server is declared isolated — no secrets or UI/agent tokens will be injected into this run.",
+    "allowDegraded": {
+      "notice": "This project server is configured to run automatically without approval, but this task was automatically downgraded to manual approval for the reason below.",
+      "reason": {
+        "not_isolated": "The target server has no isolation declared.",
+        "verification_missing": "The target server's isolation has not been verified by the isolation doctor.",
+        "verification_expired": "The target server's isolation verification has expired — re-verify it.",
+        "scoped_auth_disabled": "Scoped auth (AZITO_SCOPED_AUTH) is currently disabled.",
+        "verification_failed": "The target server's last isolation doctor run did not pass — re-verify it."
+      }
+    },
     "reapprovalNote": "Editing this task's title or description after approval will require re-approval.",
     "approve": "Approve",
     "deny": "Deny",

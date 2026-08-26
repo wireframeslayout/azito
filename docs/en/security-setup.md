@@ -153,7 +153,9 @@ the process. If a task worker runs attacker-controlled code, that code can read
 Unix user can read — including, in principle, `operator.env` if the task process's shell also
 happens to inherit or read it (which is exactly why nothing auto-sources it). Isolating against
 **malicious code**, as opposed to structuring **well-behaved code's** access, is out of scope
-here and tracked separately (#29, OS-level isolation). Likewise, the audit log this phase writes
+here and tracked separately (#29, OS-level isolation — see the
+[Isolated Execution Profile](./isolated-execution.md) for setup steps, the isolation doctor, and
+the allow policy). Likewise, the audit log this phase writes
 is an operational record for debugging and review — it makes no tamper-resistance claim.
 
 ### Migration steps (staged activation)

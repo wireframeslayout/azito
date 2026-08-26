@@ -5,6 +5,7 @@ import { FormInput, FormSelect, InstallSteps, Button } from '../ui';
 import FormField from '../FormField';
 import type { InstallStep } from '../ui';
 import type { Server } from '../../hooks/useServerManagement';
+import { useHealth } from '../../hooks/useHealth';
 
 interface ServerFormFieldsProps {
   mode: 'add' | 'edit';
@@ -24,11 +25,51 @@ interface ServerFormFieldsProps {
   tokenPlaceholder?: string;
   installSteps?: InstallStep[];
   originalMuxRuntime?: 'system' | 'managed';
+  // Issue #29 review (3rd pass), Important finding 4: only meaningful — and
+  // only rendered — in edit mode for an agent-type server (mirrors the
+  // server-side gate in servers/routes.ts: isolationIntent is rejected
+  // outright for any other effective type). Undefined in add mode, where
+  // isolation declaration is intentionally out of scope for this change.
+  isolationIntent?: boolean;
+  onIsolationIntentChange?: (v: boolean) => void;
+  // Issue #29 review (Minor finding, isolation doctor pass): the PERSISTED
+  // value (the server entity's own `isolationIntent`, as loaded when the
+  // edit modal opened — see useServerManagement.ts's `setEditIsolationIntent
+  // (srv.isolationIntent ?? false)`), distinct from `isolationIntent` above
+  // which is the live, in-progress FORM value. Disabling the toggle must be
+  // driven by what is actually saved server-side right now, never by the
+  // form's own unsaved edits — otherwise unchecking an already-isolated
+  // server's toggle (to preview turning it off) immediately re-locks the
+  // checkbox via `isolationToggleBlocked` before Save is even pressed, with
+  // no way to change your mind and re-check it inside the same modal
+  // session. Undefined in add mode, matching `isolationIntent` above.
+  persistedIsolationIntent?: boolean;
 }
 
-function ServerFormFields({ mode, autoInstall, type, host, port, token, muxRuntime, onAutoInstallChange, onTypeChange, onHostChange, onPortChange, onTokenChange, onMuxRuntimeChange, nameField, tokenPlaceholder, installSteps, originalMuxRuntime }: ServerFormFieldsProps) {
+function ServerFormFields({ mode, autoInstall, type, host, port, token, muxRuntime, onAutoInstallChange, onTypeChange, onHostChange, onPortChange, onTokenChange, onMuxRuntimeChange, nameField, tokenPlaceholder, installSteps, originalMuxRuntime, isolationIntent, onIsolationIntentChange, persistedIsolationIntent }: ServerFormFieldsProps) {
   const { t } = useTranslation(['workspace', 'common']);
   const [showToken, setShowToken] = useState(false);
+  // Issue #29 Step 2 C-1 (client-side courtesy — the real enforcement is the
+  // server's 409 on PUT /api/servers/:name): a server not yet declaring
+  // isolation cannot be switched ON while scoped auth is confirmed off,
+  // because the API authorization gate only audit-logs what it would deny
+  // in that mode (see routes.ts's isolation_intent_requires_scoped_auth
+  // gate). An already-isolated server (isolationIntent already true) must
+  // stay toggle-able OFF regardless — disabling isolation is never blocked.
+  // `scopedAuthEnabled === null` (health not loaded yet) is treated as "not
+  // confirmed off", so the toggle stays enabled until we positively know
+  // it would be rejected.
+  //
+  // `checked` uses the live form value (isolationIntent) so the checkbox
+  // reflects what the user is currently editing; `disabled` uses the
+  // PERSISTED value (persistedIsolationIntent) so unchecking an
+  // already-isolated server doesn't strand the toggle in a disabled state
+  // before the edit is saved — see persistedIsolationIntent's doc comment
+  // above.
+  const { scopedAuthEnabled } = useHealth();
+  const isolationCurrentlyOn = isolationIntent ?? false;
+  const isolationPersistedOn = persistedIsolationIntent ?? false;
+  const isolationToggleBlocked = scopedAuthEnabled === false && !isolationPersistedOn;
 
   if (mode === 'add' && autoInstall) {
     return (
@@ -39,10 +80,18 @@ function ServerFormFields({ mode, autoInstall, type, host, port, token, muxRunti
           <FormInput value={host} onChange={(e) => onHostChange(e.target.value)} placeholder={t('serverModals.hostPlaceholder')} autoComplete="off" />
         </div>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--font-md)', cursor: 'pointer', marginBottom: 14 }}>
-          <label className="toggle">
+          {/* Issue #29 review (8th pass), Minor finding: a <label> nested
+              inside another <label> is invalid HTML (only the outer one can
+              legitimately toggle the input; a nested one is ambiguous/
+              ignored by browsers and assistive tech). This inner element
+              exists purely for the `.toggle`/`.toggle-slider` sibling-selector
+              CSS (global.css) — it doesn't need to be a label at all, since
+              the outer <label> already associates the checkbox by
+              containment. */}
+          <span className="toggle">
             <input type="checkbox" checked={autoInstall} onChange={(e) => onAutoInstallChange(e.target.checked)} />
             <span className="toggle-slider" />
-          </label>
+          </span>
           {t('serverModals.autoInstall')}
         </label>
         <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 1.6, padding: '8px 10px', background: 'var(--bg)', borderRadius: 'var(--radius-sm)' }}>
@@ -59,10 +108,18 @@ function ServerFormFields({ mode, autoInstall, type, host, port, token, muxRunti
       {nameField}
       {mode === 'add' && (
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--font-md)', cursor: 'pointer', marginBottom: 14 }}>
-          <label className="toggle">
+          {/* Issue #29 review (8th pass), Minor finding: a <label> nested
+              inside another <label> is invalid HTML (only the outer one can
+              legitimately toggle the input; a nested one is ambiguous/
+              ignored by browsers and assistive tech). This inner element
+              exists purely for the `.toggle`/`.toggle-slider` sibling-selector
+              CSS (global.css) — it doesn't need to be a label at all, since
+              the outer <label> already associates the checkbox by
+              containment. */}
+          <span className="toggle">
             <input type="checkbox" checked={autoInstall} onChange={(e) => onAutoInstallChange(e.target.checked)} />
             <span className="toggle-slider" />
-          </label>
+          </span>
           {t('serverModals.autoInstall')}
         </label>
       )}
@@ -108,6 +165,34 @@ function ServerFormFields({ mode, autoInstall, type, host, port, token, muxRunti
         <div style={{ fontSize: 'var(--font-sm)', color: 'var(--warning, #f0ad4e)', padding: '8px 10px', background: 'var(--bg)', borderRadius: 'var(--radius-sm)', marginBottom: 14 }}>
           {t('serverModals.muxMigrationWarning')}
         </div>
+      )}
+      {mode === 'edit' && type === 'agent' && onIsolationIntentChange && (
+        <FormField label={t('serverModals.isolationIntent')}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--font-md)', cursor: 'pointer' }}>
+            {/* Issue #29 review (8th pass), Minor finding: same
+                nested-<label> fix as the autoInstall toggles above — the
+                inner element is CSS-only styling, not a second label. */}
+            <span className="toggle">
+              <input
+                type="checkbox"
+                checked={isolationCurrentlyOn}
+                disabled={isolationToggleBlocked}
+                onChange={(e) => onIsolationIntentChange(e.target.checked)}
+                aria-describedby="server-modal-isolation-intent-hint"
+              />
+              <span className="toggle-slider" />
+            </span>
+            {t('serverModals.isolationIntentLabel')}
+          </label>
+          <div id="server-modal-isolation-intent-hint" style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginTop: 6 }}>
+            {t('serverModals.isolationIntentHint')}
+          </div>
+          {isolationToggleBlocked && (
+            <div style={{ fontSize: 'var(--font-xs)', color: 'var(--warning, #f0ad4e)', marginTop: 6 }}>
+              {t('serverModals.isolationRequiresScopedAuth')}
+            </div>
+          )}
+        </FormField>
       )}
     </>
   );
@@ -181,6 +266,8 @@ interface EditServerModalProps {
   onTokenChange: (v: string) => void;
   muxRuntime: 'system' | 'managed';
   onMuxRuntimeChange: (v: 'system' | 'managed') => void;
+  isolationIntent: boolean;
+  onIsolationIntentChange: (v: boolean) => void;
 }
 
 export function EditServerModal({
@@ -190,6 +277,7 @@ export function EditServerModal({
   port, onPortChange,
   token, onTokenChange,
   muxRuntime, onMuxRuntimeChange,
+  isolationIntent, onIsolationIntentChange,
 }: EditServerModalProps) {
   const { t } = useTranslation(['workspace', 'common']);
   return (
@@ -202,6 +290,9 @@ export function EditServerModal({
         onTypeChange={onTypeChange} onHostChange={onHostChange} onPortChange={onPortChange} onTokenChange={onTokenChange} onMuxRuntimeChange={onMuxRuntimeChange}
         tokenPlaceholder={server?.hasAgentToken ? t('serverModals.tokenUnchanged') : t('serverModals.tokenPlaceholder')}
         originalMuxRuntime={server?.muxRuntime}
+        isolationIntent={isolationIntent}
+        onIsolationIntentChange={onIsolationIntentChange}
+        persistedIsolationIntent={server?.isolationIntent}
       />
     </Modal>
   );

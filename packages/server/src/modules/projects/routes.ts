@@ -1,6 +1,7 @@
 import type { FastifyPluginCallback } from 'fastify';
 import type { IProjectRepository, RepositoryProvider } from './Project';
 import type { IProjectServerRepository } from './ProjectServer';
+import { resolveInputPolicy } from './ProjectServer';
 import type { ITaskRepository } from '../tasks/Task';
 import type { TaskOriginationService } from '../tasks/origination/TaskOriginationService';
 import { originFromPrincipal } from '../tasks/origination/TaskOriginationService';
@@ -13,6 +14,15 @@ import type { GitProviderService } from '../git/providers/GitProviderService';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { IServerRepository } from '../servers/Server';
 import type { SqliteProjectSecretRepository } from './SqliteProjectSecretRepository';
+// Issue #29 review (independent QC), M-3: imported from the base-layer
+// `modules/servers` (not `modules/tasks/execution/WindowRotation`, which
+// merely re-exports it) — this route file's own `resolveInputPolicy` doc
+// comment in `./ProjectServer.ts` states it "cannot import from tasks", and
+// importing this same primitive via `tasks/execution/WindowRotation`
+// contradicted that. See `ServerIsolationLock.ts`'s doc comment for the full
+// reasoning behind the move.
+import { ensureSessionWithLock, type ServerIsolationLock } from '../servers/ServerIsolationLock';
+import type { KeyedMutex } from '../../shared/keyedMutex';
 
 // ─── Types ───
 
@@ -26,12 +36,22 @@ export interface ProjectsRouteOptions {
   projectSecretRepo: SqliteProjectSecretRepository;
   /** Issue #28 Phase A後半: import-issue is a task-origination path too — see TaskOriginationService's own doc comment. */
   originationService: TaskOriginationService;
+  // Issue #29 review (10th pass), Critical finding 1: the SAME per-server-name
+  // mutex `modules/servers/routes.ts`'s PUT handler, `modules/tmux/routes/
+  // sessions.ts`'s manual session/window/pane routes, and task-window
+  // (re)creation already serialize the isolation false->true transition
+  // against (see that mutex's own doc comment) — required here too, so this
+  // route's project-session bootstrap can never build env from a `server`
+  // row a concurrent transition has already superseded. See
+  // ServerIsolationLock's doc comment in tasks/execution/WindowRotation.ts.
+  serverIsolationMutex: KeyedMutex;
 }
 
 // ─── Plugin ───
 
 const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, opts, done) => {
-  const { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux, serverRepo, projectSecretRepo, originationService } = opts;
+  const { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux, serverRepo, projectSecretRepo, originationService, serverIsolationMutex } = opts;
+  const serverIsolationLock: ServerIsolationLock = { serverIsolationMutex, serverRepo };
   const SECRET_NAME_PATTERN = /^[A-Z0-9_]{1,64}$/;
 
   // ── GET /api/projects ──
@@ -206,18 +226,31 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       const branch = 'branch' in body
         ? (body.branch ?? null)
         : (existingRow?.branch ?? null);
-      // 'allow' is rejected here, not just left undocumented: it would skip the
-      // execution-approval gate entirely for untrusted tasks, but the isolated
-      // execution profile that would make that safe (Issue #328 design doc)
-      // doesn't exist yet. Rejecting at the API boundary keeps a misconfigured
-      // client from silently granting unattended execution of external input.
+      // Issue #29 Step 3a: 'allow' is now selectable, but ONLY declaratively
+      // for a server that has declared isolation intent — the real safety
+      // property (verified, time-bounded, scoped-auth-gated) is enforced at
+      // RUN TIME by resolveEffectiveInputPolicy() (projects/ProjectServer.ts),
+      // not here. This check only prevents an obviously-wrong configuration
+      // (declaring 'allow' against a server that was never even INTENDED to
+      // be isolated) from being saved at all; it deliberately does not
+      // require `isolationVerifiedAt` to be current — an operator may
+      // legitimately configure 'allow' before ever running the doctor, and
+      // the run-time gate will simply keep it degraded to 'manual-approval'
+      // until verification catches up.
       if (body.input_policy === 'allow') {
-        return reply.status(400).send({ error: "input_policy 'allow' is not selectable yet (isolated execution profile not implemented)" });
+        const targetServer = serverRepo.findByName(serverName);
+        if (!targetServer?.isolationIntent) {
+          return reply.status(400).send({ error: 'input_policy_allow_requires_isolation', message: "input_policy 'allow' requires the server to have isolation intent declared first" });
+        }
       }
-      if (body.input_policy !== undefined && body.input_policy !== 'deny' && body.input_policy !== 'manual-approval') {
-        return reply.status(400).send({ error: "input_policy must be 'deny' or 'manual-approval'" });
+      if (body.input_policy !== undefined && body.input_policy !== 'deny' && body.input_policy !== 'manual-approval' && body.input_policy !== 'allow') {
+        return reply.status(400).send({ error: "input_policy must be 'deny', 'manual-approval', or 'allow'" });
       }
-      const inputPolicy = (body.input_policy as 'deny' | 'manual-approval' | undefined) ?? existingRow?.inputPolicy ?? 'manual-approval';
+      // resolveInputPolicy (projects/ProjectServer.ts) is the single place
+      // that applies the "unset -> manual-approval" default (Issue #29 Step
+      // 0 — this used to be a second, independently-hardcoded copy of the
+      // same literal).
+      const inputPolicy = (body.input_policy as 'deny' | 'manual-approval' | 'allow' | undefined) ?? resolveInputPolicy(existingRow);
       projectServerRepo.upsert({
         projectId,
         serverName,
@@ -231,27 +264,53 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       const srv = serverRepo.findByName(serverName);
       if (srv) {
         try {
-          const sessions = await tmux.listSessions(srv);
-          const exists = sessions.some((s) => s.name === project.slug);
-          if (!exists) {
-            // No token in extraEnv (Issue #28 third-party review finding,
-            // Critical): `tmux new-session -e` sets the SESSION's own
-            // environment, not just this call's window — every window
-            // created later in this session (including a task's, via
-            // ExecuteTaskUseCase/TaskRestoreService's `createWindow` into
-            // this exact `project.slug` session) would inherit
-            // AZITO_UI_TOKEN from here and bypass scoped task-token auth
-            // entirely, with no reference anywhere to this createSession
-            // call to explain why (verified empirically against tmux 3.4:
-            // a session-level var set via `-e` on `new-session` propagates
-            // to windows added afterwards with `new-window`, even with no
-            // `-e` of their own). This first window is an unmanaged
-            // generated-name placeholder nobody uses directly (same as
-            // ExecuteTaskUseCase's own throwaway-session bootstrap window),
-            // so it has no legitimate need for the token either.
-            await tmux.createSession(srv, project.slug, { extraEnv: {} });
-            sessionCreated = true;
-          }
+          // No token in extraEnv (Issue #28 third-party review finding,
+          // Critical): `tmux new-session -e` sets the SESSION's own
+          // environment, not just this call's window — every window
+          // created later in this session (including a task's, via
+          // ExecuteTaskUseCase/TaskRestoreService's `createWindow` into
+          // this exact `project.slug` session) would inherit
+          // AZITO_UI_TOKEN from here and bypass scoped task-token auth
+          // entirely, with no reference anywhere to this createSession
+          // call to explain why (verified empirically against tmux 3.4:
+          // a session-level var set via `-e` on `new-session` propagates
+          // to windows added afterwards with `new-window`, even with no
+          // `-e` of their own). This first window is an unmanaged
+          // generated-name placeholder nobody uses directly (same as
+          // ExecuteTaskUseCase's own throwaway-session bootstrap window),
+          // so it has no legitimate need for the token either. Routed
+          // through `ensureSessionWithLock`'s `isolationMaskForServer`,
+          // not a bare `{}` and not `uiTokenEnvForServer` (Issue #29
+          // review, 11th pass, Critical finding 1 — this is a task-owned
+          // session, so it must never inject the operator UI token the
+          // way `uiTokenEnvForServer` does): an isolated server's pane
+          // inherits whatever process env the tmux SERVER itself runs
+          // under regardless of what this call's own `extraEnv` passes,
+          // so the explicit mask is still required here.
+          //
+          // Routed through ensureSessionWithLock (Issue #29 review, 10th
+          // pass, Critical finding 1): the existence check AND the
+          // createSession call both now run inside serverIsolationLock,
+          // against a server row re-read only once the lock is held —
+          // never against `srv`, resolved just above with no lock at all,
+          // which a concurrent isolation PUT may have already superseded.
+          //
+          // `enforceSnapshot: false` (Issue #29 review, 12th pass, Critical
+          // finding 1): every OTHER `ensureSessionWithLock`/`createRotatedWindow`
+          // call site sits downstream of a task execution-approval gate
+          // (`enforceExecutionGate`) and resource/containment checks run
+          // against the caller's own `server` snapshot — for those, a
+          // refetch that disagrees with that snapshot on a security field
+          // must abort (the whole point of this finding). This bootstrap
+          // call has no such approval boundary to protect: it is a
+          // best-effort (see the surrounding `catch` below), unauthenticated
+          // "does this project's session exist yet" convenience check that
+          // runs on its own, unrelated to any task's execute/resume path —
+          // there is nothing here that a stale `srv` could have already
+          // approved that the fresh row could contradict. Keeping the old
+          // "adopt whichever row is current" behavior is correct.
+          const sessionResult = await ensureSessionWithLock(tmux, serverIsolationLock, srv, project.slug, false);
+          sessionCreated = sessionResult.created;
         } catch {
           // tmux session creation is best-effort
         }

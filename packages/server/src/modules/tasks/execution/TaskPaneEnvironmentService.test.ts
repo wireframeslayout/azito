@@ -3,6 +3,7 @@ import { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
 import type { ITaskTokenRepository } from '../tokens/TaskToken';
 import type { Task } from '../Task';
 import type { ServerConfig } from '../../servers/Server';
+import { ISOLATION_MASKED_ENV } from '../../../shared/auth/isolationMaskedEnv';
 
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {
@@ -58,6 +59,9 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     agentVersion: null,
     sshHost: null,
     sshHostFingerprint: null,
+    isolationIntent: false,
+    isolationVerifiedAt: null,
+    isolationReport: null, isolationCleanupReport: null,
     muxRuntime: 'system',
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -98,6 +102,33 @@ describe('TaskPaneEnvironmentService.buildEnvForNewWindow', () => {
     expect(env.AZITO_UI_TOKEN).toBe('ui-token-123');
   });
 
+  // Issue #29 Step 1: buildEnvForNewWindow is the single credential-injection
+  // point every execute/restore/respawn/recovery/splitPane path funnels
+  // through — this is the one place isolation_intent must actually withhold
+  // project secrets from a server declared to hold none.
+  it('withholds AZITO_SECRET_* entirely for a server with isolationIntent=true', () => {
+    const { service, projectSecretRepo } = makeDeps(false);
+    const { env } = service.buildEnvForNewWindow(makeTask(), makeServer({ isolationIntent: true }));
+
+    expect(env.AZITO_SECRET_FOO).toBeUndefined();
+    expect(Object.keys(env).some((k) => k.startsWith('AZITO_SECRET_'))).toBe(false);
+    // Not just filtered post-read — never even decrypted.
+    expect(projectSecretRepo.findByProjectWithValues).not.toHaveBeenCalled();
+  });
+
+  it('still injects project secrets for a server with isolationIntent=false (default/unset)', () => {
+    const { service } = makeDeps(false);
+    const { env } = service.buildEnvForNewWindow(makeTask(), makeServer({ isolationIntent: false }));
+    expect(env.AZITO_SECRET_FOO).toBe('bar');
+  });
+
+  it('still issues/rotates the task token for an isolated server (isolation only withholds secrets, not the task token)', () => {
+    const { service, taskTokenRepo } = makeDeps(false);
+    const { env } = service.buildEnvForNewWindow(makeTask({ id: 9 }), makeServer({ isolationIntent: true }));
+    expect(taskTokenRepo.issueNextGeneration).toHaveBeenCalledWith(9, 'window_regenerated');
+    expect(env.AZITO_TASK_TOKEN).toMatch(/^azt\.task\.1\./);
+  });
+
   it('explicitly overrides AZITO_UI_TOKEN to empty when the scoped-auth flag is on', () => {
     // Issue #28 third-party review finding (Critical): an explicit empty
     // override, not just omission, is required — tmux `new-window -e` only
@@ -129,6 +160,53 @@ describe('TaskPaneEnvironmentService.buildEnvForNewWindow', () => {
     const { service } = makeDeps(false);
     const { env } = service.buildEnvForNewWindow(makeTask(), makeServer({ type: 'local' }));
     expect(env.AZITO_AGENT_TOKEN).toBeUndefined();
+  });
+
+  // Issue #29 review, Critical finding 1: isolation must win over compat
+  // mode. Compat mode (scopedAuthEnabled=false) is the hub's DEFAULT — before
+  // this fix, an isolated server still received the full-power hub UI token
+  // (and, for an agent-type server, the hub<->agent-server token) under that
+  // default, exactly the credential isolation_intent declares the server
+  // should hold none of.
+  it('masks AZITO_UI_TOKEN/AZITO_AGENT_TOKEN to empty for an isolated agent server even in compat mode', () => {
+    const { service } = makeDeps(false);
+    const isolatedAgent = makeServer({ type: 'agent', agentPort: 4001, agentToken: 'secret-agent-token', isolationIntent: true });
+    const { env } = service.buildEnvForNewWindow(makeTask(), isolatedAgent);
+
+    expect(env.AZITO_UI_TOKEN).toBe('');
+    expect(env.AZITO_AGENT_TOKEN).toBe('');
+    expect(env.AZITO_AGENT_PORT).toBeUndefined();
+  });
+
+  it('masks AZITO_UI_TOKEN to empty for an isolated local server in compat mode', () => {
+    const { service } = makeDeps(false);
+    const { env } = service.buildEnvForNewWindow(makeTask(), makeServer({ type: 'local', isolationIntent: true }));
+    expect(env.AZITO_UI_TOKEN).toBe('');
+  });
+
+  it('masks tokens for an isolated server even when scoped auth is also on', () => {
+    const { service } = makeDeps(true);
+    const isolatedAgent = makeServer({ type: 'agent', agentPort: 4001, agentToken: 'secret-agent-token', isolationIntent: true });
+    const { env } = service.buildEnvForNewWindow(makeTask(), isolatedAgent);
+
+    expect(env.AZITO_UI_TOKEN).toBe('');
+    expect(env.AZITO_AGENT_TOKEN).toBe('');
+  });
+
+  // Issue #29 review (final pass), Critical finding 1: `uiTokenEnvForServer`
+  // (TmuxClient) and this method's isolation mask must never drift apart —
+  // both now read from the single shared ISOLATION_MASKED_ENV constant.
+  // Asserted directly here (rather than only checking individual keys above)
+  // so a future edit to either module's mask, without touching the other,
+  // fails this test instead of silently reopening the gap.
+  it('masks the isolated agent-server keys with exactly ISOLATION_MASKED_ENV (single source shared with TmuxClient)', () => {
+    const { service } = makeDeps(false);
+    const isolatedAgent = makeServer({ type: 'agent', agentPort: 4001, agentToken: 'secret-agent-token', isolationIntent: true });
+    const { env } = service.buildEnvForNewWindow(makeTask(), isolatedAgent);
+
+    for (const [key, value] of Object.entries(ISOLATION_MASKED_ENV)) {
+      expect(env[key]).toBe(value);
+    }
   });
 
   // Third-party review finding (Important): secrets must be read BEFORE the
@@ -222,6 +300,17 @@ describe('TaskPaneEnvironmentService.buildEnvForSecondaryWindow', () => {
     const env = service.buildEnvForSecondaryWindow(makeTask(), agentServer);
     expect(env.AZITO_UI_TOKEN).toBe('');
     expect(env.AZITO_AGENT_TOKEN).toBe('');
+  });
+
+  // Issue #29 review, Critical finding 1 (same fix as buildEnvForNewWindow).
+  it('masks AZITO_UI_TOKEN/AZITO_AGENT_TOKEN to empty for an isolated agent server even in compat mode', () => {
+    const { service } = makeDeps(false);
+    const isolatedAgent = makeServer({ type: 'agent', agentPort: 4001, agentToken: 'secret-agent-token', isolationIntent: true });
+    const env = service.buildEnvForSecondaryWindow(makeTask(), isolatedAgent);
+
+    expect(env.AZITO_UI_TOKEN).toBe('');
+    expect(env.AZITO_AGENT_TOKEN).toBe('');
+    expect(env.AZITO_AGENT_PORT).toBeUndefined();
   });
 });
 

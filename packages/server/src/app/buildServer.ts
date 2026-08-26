@@ -51,6 +51,7 @@ import { WindowInputService } from '../modules/transcripts/WindowInputService';
 import { createTokenVerifier } from '../modules/servers/auth/tokenAuth';
 import { resolvePrincipal } from '../shared/auth/resolvePrincipal';
 import { evaluateRouteAuth, UNMATCHED_ROUTE } from '../shared/auth/routeAuth';
+import { ISOLATION_MASKED_ENV } from '../shared/auth/isolationMaskedEnv';
 import { resolveUnitId } from '../modules/tasks/execution/TaskExecutionEnv';
 import { destroyPrimaryTaskWindow, destroyPrimaryTaskWindowsForSessionKill } from '../modules/tasks/execution/TaskWindowDestruction';
 import { resolvePhaseSidekick } from '../modules/sidekicks/resolvePhaseSidekick';
@@ -404,9 +405,22 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
 
   // ─── HTTP routes ───
 
-  await app.register(serversRoutes, { serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix });
+  // Issue #29 review (6th pass), Important finding 3: ONE shared instance
+  // passed to both serversRoutes and sessionsRoutes below — the isolation
+  // false->true transition (serversRoutes) and the session/window/pane
+  // creation routes (sessionsRoutes) must serialize against EACH OTHER, keyed
+  // by server name, not just against themselves. See serverIsolationMutex's
+  // doc comment on ServersRouteOptions.
+  // Issue #29 review (7th pass), Important finding 1: now constructed in
+  // app/wiring.ts (SharedInfra), not here — WindowRespawnService/
+  // TaskRestoreService/ExecuteTaskUseCase (built inside buildWiring, ahead of
+  // this function) need the SAME instance too, so task-window (re)creation
+  // serializes against this exact mutex as well. `wiring.serverIsolationMutex`
+  // is that one shared instance; reused below, never re-constructed.
+  const { serverIsolationMutex } = wiring;
+  await app.register(serversRoutes, { serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled });
   await app.register(sessionsRoutes, {
-    serverRepo, tmux: tmuxClient, windowRepo, notificationBus, resourceGuard,
+    serverRepo, tmux: tmuxClient, windowRepo, notificationBus, resourceGuard, serverIsolationMutex,
     destroyPrimaryTaskWindow: (taskId, windowName, serverName, target, reason, kill, onDestroyed) => {
       // Issue #28 third-party review, D-track fix 2: resolve (and hold) the
       // launch BEFORE the kill runs — not a live-connection lookup at
@@ -452,19 +466,19 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       // references this task), but a task that no longer exists must not
       // fall back to a legacy/empty env — mask both credentials exactly as
       // buildEnvForSecondaryWindow's else-branch does.
-      if (!task) return { AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' };
+      if (!task) return { ...ISOLATION_MASKED_ENV };
       return taskPaneEnvironmentService.buildEnvForSecondaryWindow(task, server);
     },
   });
   const fileSearchService = new FileSearchService(transportFactory);
   await app.register(fileBrowseRoutes, { serverRepo, tmux: tmuxClient, projectServerRepo, transportFactory, searchService: fileSearchService });
   await app.register(gitRoutes, { serverRepo, transportFactory, taskRepo, projectServerRepo, worktreeServiceFactory });
-  await app.register(projectsRoutes, { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux: tmuxClient, serverRepo, projectSecretRepo, originationService });
+  await app.register(projectsRoutes, { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux: tmuxClient, serverRepo, projectSecretRepo, originationService, serverIsolationMutex });
   await app.register(unitsRoutes, { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, projectServerRepo, serverRepo, sidekickLoader: sidekickPackageLoader, unitTypeLoader });
   await app.register(operationsRoutes, { executeTaskUseCase, agentActivityMonitor, supervisorRegistry, windowRepo });
   await app.register(auditLogRoutes, { auditLogService });
   await app.register(tasksRoutes, {
-    taskRepo, auditLogService, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux: tmuxClient, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService: windowRespawnService, taskRestoreService, unitTypeLoader, sidekickLoader: sidekickPackageLoader, projectSecretRepo, originationService, taskTokenRepo,
+    taskRepo, auditLogService, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux: tmuxClient, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService: windowRespawnService, taskRestoreService, unitTypeLoader, sidekickLoader: sidekickPackageLoader, projectSecretRepo, originationService, taskTokenRepo, scopedAuthEnabled,
     destroyPrimaryTaskWindow: (taskId, windowName, serverName, target, reason, kill, onDestroyed) => {
       // Issue #28 third-party review, D-track fix 2 — see the identical
       // wiring on sessionsRoutes above for the rationale.

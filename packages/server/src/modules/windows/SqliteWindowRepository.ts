@@ -8,6 +8,12 @@ import { isSameWindowTarget } from './paneTarget';
 // WindowRespawnService uses, instead of re-deriving it inline (Issue #28
 // third-party review finding — see isPrimaryTaskWindow's own doc comment).
 export { isPrimaryTaskWindow } from './Window';
+// Re-exported so servers/routes.ts (base layer; only allowed to reach this
+// file, not windows/Window.ts directly — see .dependency-cruiser.cjs's
+// base-servers-limited-upward exception) can type the isolation_intent
+// false->true window-presence check (Issue #29 review, Critical finding 1)
+// without importing across the layer boundary.
+export type { Window, IWindowRepository } from './Window';
 
 interface WindowRow {
   id: number;
@@ -137,6 +143,11 @@ export class SqliteWindowRepository implements IWindowRepository {
   findAgentSessionIdsByServer(serverName: string): Set<string> {
     const rows = this.findAgentSessionIdsByServerStmt.all(serverName) as { agent_session_id: string }[];
     return new Set(rows.map((r) => r.agent_session_id));
+  }
+
+  findByServer(serverName: string): Window[] {
+    const rows = this.findByServerStmt.all(serverName) as WindowRow[];
+    return rows.map((r) => this.toWindow(r));
   }
 
   findByServerAndTarget(serverName: string, tmuxTarget: string): Window | undefined {

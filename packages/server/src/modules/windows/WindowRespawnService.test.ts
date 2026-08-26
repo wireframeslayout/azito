@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { WindowRespawnService, buildRespawnManifestInput } from './WindowRespawnService';
+import { KeyedMutex } from '../../shared/keyedMutex';
 import { resolveExecutionManifest, hashExecutionManifest } from '../tasks/execution/ExecutionManifest';
 import type { Window, IWindowRepository } from './Window';
 import type { ServerConfig } from '../servers/Server';
@@ -45,6 +46,9 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     agentVersion: null,
     sshHost: null,
     sshHostFingerprint: null,
+    isolationIntent: false,
+    isolationVerifiedAt: null,
+    isolationReport: null, isolationCleanupReport: null,
   muxRuntime: 'system',
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -156,6 +160,7 @@ function buildService(opts: {
     findByTask: vi.fn(() => []),
     findByTaskIds: vi.fn(() => new Map()),
     findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
+    findByServer: vi.fn(() => []),
     findByServerAndTarget: vi.fn(() => undefined),
     findByServerAndSession: vi.fn(() => []),
     update: vi.fn(),
@@ -186,6 +191,11 @@ function buildService(opts: {
     listPaneIds: vi.fn(async () => [{ index: 0, paneId: '%0' }]),
     execCommand: vi.fn(async () => ({ stdout: '' })),
     uiTokenEnv: vi.fn(() => ({ AZITO_UI_TOKEN: 'ui-token-fixture' })),
+    // Issue #29 review (5th pass), Critical finding 1: the non-task respawn
+    // fallback now calls this server-aware wrapper instead of the
+    // server-blind uiTokenEnv() — mirrors it for every existing fixture
+    // server (none of which declare isolationIntent).
+    uiTokenEnvForServer: vi.fn((_server: ServerConfig) => ({ AZITO_UI_TOKEN: 'ui-token-fixture' })),
   };
 
   const sessionStrategyFactory = {
@@ -229,10 +239,19 @@ function buildService(opts: {
   // that don't exercise it.
   const unitTypeLoader = { get: vi.fn(() => undefined), getOrThrow: vi.fn(() => { throw new Error('not used in tests'); }) } as any;
   const sidekickLoader = { findByName: vi.fn(() => null), findDefaultForTag: vi.fn(() => null), list: vi.fn(() => []) } as any;
-  // Only needed by resolveExecutionManifest() to resolve the manifest's
-  // `server`/`secrets` fields (Issue #328 tenth-round review) — null/empty
-  // by default, fine for tests that don't exercise them.
-  const serverRepo = { findByName: vi.fn(() => null) } as any;
+  // Used by resolveExecutionManifest() to resolve the manifest's
+  // `server`/`secrets` fields (Issue #328 tenth-round review). Issue #29
+  // review (7th pass), Important finding 1: ALSO now the lookup
+  // createRotatedWindow/createSecondaryWindow's ServerIsolationLock uses to
+  // refetch `server` inside the lock — must resolve to a real row (not
+  // null) or every respawn() call in this file would throw "Server ...
+  // was not found". Returns `makeServer({ name })` for whatever name is
+  // queried, which matches every test's own `makeServer()`/`makeServer({...})`
+  // call passed directly to `respawn()` on every field this file's fixtures
+  // (paneEnvService mocks, tmux mocks) actually inspect — none of them
+  // assert on the SPECIFIC server object identity/overrides beyond what
+  // `expect.anything()` already tolerates.
+  const serverRepo = { findByName: vi.fn((name: string) => makeServer({ name })) } as any;
   const projectSecretRepo = { findByProject: vi.fn(() => []) } as any;
   // Shared task-events EventEmitter (Issue #328 fifteenth-round review) — a
   // real EventEmitter so appendLogAndEmit()'s emit() call is a no-op rather
@@ -274,6 +293,8 @@ function buildService(opts: {
     projectSecretRepo,
     events,
     paneEnvService,
+    new KeyedMutex(),
+    true,
     undefined,
   );
 
@@ -382,7 +403,7 @@ describe('WindowRespawnService.respawn — supervisor wrap', () => {
     }
   });
 
-  it('passes the legacy uiTokenEnv() to splitPane calls for a non-task multi-pane window', async () => {
+  it('passes the legacy uiTokenEnvForServer() to splitPane calls for a non-task multi-pane window', async () => {
     const win = makeWindow({
       id: 1,
       taskId: null,
@@ -401,7 +422,67 @@ describe('WindowRespawnService.respawn — supervisor wrap', () => {
     await service.respawn(1, makeServer());
 
     expect(tmux.splitPane).toHaveBeenCalledTimes(1);
-    expect(tmux.splitPane.mock.calls[0][3]).toEqual(tmux.uiTokenEnv());
+    // Issue #29 review (5th pass), Critical finding 1: uiTokenEnvForServer()
+    // is what the non-task window/pane env is actually built from now — see
+    // WindowRespawnService's `windowEnv` assignment (server-aware wrapper
+    // around the legacy uiTokenEnv()).
+    expect(tmux.splitPane.mock.calls[0][3]).toEqual(tmux.uiTokenEnvForServer(makeServer()));
+  });
+
+  // Issue #29 review (9th pass), Important finding 2: createPlainWindow only
+  // re-reads the server row AFTER the per-server isolation lock is actually
+  // held — if a `PUT /api/servers/:name` isolation transition commits in
+  // between `respawn()` being called and that lock being acquired, every
+  // downstream tmux call in this turn (pane resolve/restore, and a rollback
+  // kill on failure) must use that freshly re-read row, never the `server`
+  // argument respawn() was originally called with.
+  it('uses the server row re-fetched inside the isolation lock — not the stale server respawn() was called with — for pane resolution, and for the rollback kill on a downstream failure', async () => {
+    // Issue #29 review (12th pass), Critical finding 1: differs only on a
+    // NON-security field (agentVersion) — a security-relevant difference
+    // (isolationIntent, host, ...) is now exactly what createPlainWindow's
+    // default `enforceSnapshot` is meant to abort on (see the dedicated test
+    // below), so it can no longer stand in for "some field changed" here.
+    const staleServer = makeServer({ agentVersion: 'stale-version' });
+    const freshServer = makeServer({ agentVersion: 'fresh-version' });
+    const win = makeWindow({ id: 1, taskId: null, tmuxTarget: 'azito:task-1--ab12.1' });
+    const { service, tmux, serverRepo } = buildService({ window: win });
+    // Simulates an unrelated server-row update (e.g. agentVersion bump from
+    // an auto-update) committing while this respawn() call was queued for
+    // the lock: the row `serverRepo.findByName` returns once the lock is
+    // held no longer matches the `staleServer` argument.
+    serverRepo.findByName.mockImplementation(() => freshServer);
+    tmux.resolvePaneId.mockRejectedValueOnce(new Error('pane resolve failed'));
+
+    await expect(service.respawn(1, staleServer)).rejects.toThrow('pane resolve failed');
+
+    // resolvePaneId (pane resolution, before the failure) got the fresh row.
+    expect(tmux.resolvePaneId).toHaveBeenCalledWith(freshServer, expect.any(String));
+    expect(tmux.resolvePaneId).not.toHaveBeenCalledWith(staleServer, expect.any(String));
+    // The rollback kill triggered by the resolvePaneId failure also got the
+    // fresh row, not the stale argument.
+    expect(tmux.killWindow).toHaveBeenCalledWith(freshServer, expect.any(String));
+    expect(tmux.killWindow).not.toHaveBeenCalledWith(staleServer, expect.any(String));
+  });
+
+  // Issue #29 review (12th pass), Critical finding 1: unlike the benign
+  // agentVersion-only drift above, a security-relevant field (isolationIntent
+  // here) disagreeing between the `server` respawn() was called with and the
+  // row actually committed by the time the isolation lock is held must abort
+  // the respawn entirely instead of silently continuing against the fresh
+  // row — createPlainWindow's default `enforceSnapshot: true` is what
+  // enforces this.
+  it('aborts (never resolves a pane / creates a window) when the refetched row disagrees on a security field (e.g. isolationIntent) from the one respawn() was called with', async () => {
+    const staleServer = makeServer({ isolationIntent: false });
+    const freshServer = makeServer({ isolationIntent: true });
+    const win = makeWindow({ id: 1, taskId: null, tmuxTarget: 'azito:task-1--ab12.1' });
+    const { service, tmux, serverRepo } = buildService({ window: win });
+    serverRepo.findByName.mockImplementation(() => freshServer);
+
+    await expect(service.respawn(1, staleServer)).rejects.toThrow(/設定が実行準備中に変更された/);
+
+    expect(tmux.resolvePaneId).not.toHaveBeenCalled();
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(tmux.createSession).not.toHaveBeenCalled();
   });
 });
 
@@ -609,7 +690,16 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
     const task = makeTask({ id: 5, unitId: 10 });
     const unit = makeUnit({ id: 10 });
     const win = makeWindow({ taskId: 5, tmuxTarget: 'azito:task-1--ab12.1' });
-    const { service, tmux, paneEnvService } = buildService({ window: win, task, unit });
+    const { service, tmux, paneEnvService, serverRepo } = buildService({ window: win, task, unit });
+    // buildService()'s default serverRepo.findByName returns
+    // makeServer({ name }) (type: 'local') regardless of what is passed to
+    // respawn() — this test's own `server` argument is deliberately
+    // type: 'agent' (the agent-transport kill-outcome behavior under test),
+    // so the mock must match it or the server-snapshot check (Issue #29
+    // review, 12th/14th pass) correctly rejects a mismatch before the kill
+    // this test is actually about ever runs — see the next test's own
+    // identical comment.
+    serverRepo.findByName.mockImplementation((name: string) => makeServer({ name, type: 'agent' }));
     tmux.listSessions.mockResolvedValue([{
       name: 'azito',
       windowCount: 1,
@@ -626,11 +716,62 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
     expect(tmux.createSession).not.toHaveBeenCalled();
   });
 
+  // Issue #29 review, 14th pass, Important finding 1: the per-server
+  // isolation lock + snapshot check now runs BEFORE the old window is
+  // killed, not after (see WindowRotation.ts's withServerLock doc comment).
+  // Before this fix, a snapshot mismatch was only discovered once
+  // createRotatedWindow's own lock+refetch ran — by which point the old
+  // window had already been killed by confirmOldWindowGone, using the
+  // (stale) `server` argument this call was made with. This test asserts
+  // the corrected ordering directly: with a security-relevant field
+  // (isolationIntent) disagreeing between the `server` respawn() was called
+  // with and the row actually committed by the time the lock is acquired,
+  // the old (still-alive) window must survive untouched — killWindow is
+  // never even attempted, and the Window row keeps pointing at it.
+  it('aborts BEFORE killing the old window when the refetched row disagrees on a security field (e.g. isolationIntent)', async () => {
+    const task = makeTask({ id: 5, unitId: 10 });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ id: 1, taskId: 5, tmuxTarget: 'azito:task-1--ab12.1' });
+    const { service, tmux, paneEnvService, windowRepo, serverRepo } = buildService({ window: win, task, unit });
+    const staleServer = makeServer({ isolationIntent: false });
+    const freshServer = makeServer({ isolationIntent: true });
+    serverRepo.findByName.mockImplementation(() => freshServer);
+    tmux.listSessions.mockResolvedValue([{
+      name: 'azito',
+      windowCount: 1,
+      attached: false,
+      created: 0,
+      windows: [{ name: 'task-1--ab12', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+
+    await expect(service.respawn(1, staleServer)).rejects.toThrow(/設定が実行準備中に変更された/);
+
+    // The old window was NEVER killed — the snapshot mismatch aborted the
+    // whole span before confirmOldWindowGone (which calls killWindow) ever
+    // ran.
+    expect(tmux.killWindow).not.toHaveBeenCalled();
+    // Nothing was rotated or created either.
+    expect(paneEnvService.buildEnvForNewWindow).not.toHaveBeenCalled();
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(tmux.createSession).not.toHaveBeenCalled();
+    // The Window row still points at the original (untouched, still-live)
+    // target — never updated to a replacement that was never created.
+    expect(windowRepo.update).not.toHaveBeenCalled();
+  });
+
   it('proceeds with rotation when the agent-transport kill resolves with a non-zero code but the window was already gone', async () => {
     const task = makeTask({ id: 5, unitId: 10 });
     const unit = makeUnit({ id: 10 });
     const win = makeWindow({ taskId: 5, tmuxTarget: 'azito:task-1--ab12.1' });
-    const { service, tmux, paneEnvService } = buildService({ window: win, task, unit });
+    const { service, tmux, paneEnvService, serverRepo } = buildService({ window: win, task, unit });
+    // buildService()'s default serverRepo.findByName returns
+    // makeServer({ name }) (type: 'local') regardless of what is passed to
+    // respawn() — this test's own `server` argument is deliberately
+    // type: 'agent' (the agent-transport kill-outcome behavior under test),
+    // so the mock must match it or the new server-snapshot check (Issue #29
+    // review, 12th pass, Critical finding 1) correctly rejects a mismatch
+    // that was never meant to be under test here.
+    serverRepo.findByName.mockImplementation((name: string) => makeServer({ name, type: 'agent' }));
     tmux.listSessions.mockResolvedValue([{
       name: 'azito',
       windowCount: 1,
@@ -1011,10 +1152,12 @@ describe('WindowRespawnService.respawn — respawn config fingerprint (Issue #32
       unitRepo: { findById: () => unit } as unknown as IUnitRepository,
       projectRepo: { findById: () => null } as unknown as IProjectRepository,
       projectServerRepo: { find: () => null, findByProject: () => [] } as unknown as IProjectServerRepository,
-      // Empty/null by default (Issue #328 tenth-round review) — matches
-      // buildService()'s own serverRepo/projectSecretRepo defaults, so a
+      // Matches buildService()'s own serverRepo/projectSecretRepo defaults
+      // (Issue #328 tenth-round review; Issue #29 review 7th pass, Important
+      // finding 1 updated the serverRepo default from `null` to a real
+      // `makeServer({ name })` row — see that fix's own comment), so a
       // manifest approved here and one resolved via the real service agree.
-      serverRepo: { findByName: () => null } as any,
+      serverRepo: { findByName: (name: string) => makeServer({ name }) } as any,
       projectSecretRepo: { findByProject: () => [] } as any,
       unitTypeLoader: { get: () => undefined, getOrThrow: () => { throw new Error('not used in tests'); } } as any,
       sidekickLoader: { findByName: () => null, findDefaultForTag: () => null, list: () => [] } as any,
@@ -1176,6 +1319,27 @@ describe('WindowRespawnService.resumeLegacySession (Issue #328 fourth-round revi
     expect(result.windowName).toBe('task-7-new');
   });
 
+  // Issue #29 review (10th pass), Important finding 3: resumeLegacySession's
+  // own `resolvePaneId`/`sendKeys` calls (and its rollback's `killWindow`,
+  // covered by the sibling describe block below) previously kept using the
+  // `server` this method was CALLED with — never the fresher row
+  // createRotatedWindow's own lock span re-read via `serverRepo.findByName`
+  // — even though every other respawn() branch already did this correctly.
+  // Tags each server object via `agentVersion` so the assertion below can
+  // tell exactly which one a given tmux call actually received.
+  it('uses the server row createRotatedWindow re-read, not the server argument it was called with, for resolvePaneId/sendKeys', async () => {
+    const task = makeTask({ id: 7, unitId: 10, agentSessionId: 'sess-abc', inputTrust: 'trusted' });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 7 });
+    const { service, tmux, serverRepo } = buildService({ window: win, task, unit });
+    (serverRepo.findByName as ReturnType<typeof vi.fn>).mockImplementation((name: string) => makeServer({ name, agentVersion: 'fresh-from-lock' }));
+
+    await service.resumeLegacySession(7, makeServer({ agentVersion: 'stale-caller-arg' }));
+
+    expect((tmux.resolvePaneId as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({ agentVersion: 'fresh-from-lock' });
+    expect((tmux.sendKeys as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({ agentVersion: 'fresh-from-lock' });
+  });
+
   it('throws when the task has no agent session ID', async () => {
     const task = makeTask({ id: 8, agentSessionId: null });
     const win = makeWindow({ taskId: 8 });
@@ -1327,6 +1491,7 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
       findByTask: vi.fn(() => []),
       findByTaskIds: vi.fn(() => new Map()),
       findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
+      findByServer: vi.fn(() => []),
       findByServerAndTarget: vi.fn(() => undefined),
       findByServerAndSession: vi.fn(() => []),
       update: vi.fn((_id: number, fields: Partial<Window>) => {
@@ -1384,6 +1549,7 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
       listPaneIds: vi.fn(async () => [{ index: 0, paneId: '%0' }]),
       execCommand: vi.fn(async () => ({ stdout: '' })),
       uiTokenEnv: vi.fn(() => ({ AZITO_UI_TOKEN: 'ui-token-fixture' })),
+      uiTokenEnvForServer: vi.fn(() => ({ AZITO_UI_TOKEN: 'ui-token-fixture' })),
     };
 
     const sessionStrategyFactory = {
@@ -1403,7 +1569,10 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
     const logRepo = { append: vi.fn() } as any;
     const unitTypeLoader = { get: vi.fn(() => undefined), getOrThrow: vi.fn(() => { throw new Error('not used'); }) } as any;
     const sidekickLoader = { findByName: vi.fn(() => null), findDefaultForTag: vi.fn(() => null), list: vi.fn(() => []) } as any;
-    const serverRepo = { findByName: vi.fn(() => null) } as any;
+    // Issue #29 review (7th pass), Important finding 1: must resolve to a
+    // real row — see the identical fix (with fuller rationale) on
+    // buildService()'s own serverRepo above.
+    const serverRepo = { findByName: vi.fn((name: string) => makeServer({ name })) } as any;
     const projectSecretRepo = { findByProject: vi.fn(() => []) } as any;
     const events = new EventEmitter();
     let generationCounter = 0;
@@ -1434,6 +1603,8 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
       projectSecretRepo,
       events,
       paneEnvService,
+      new KeyedMutex(),
+      true,
       undefined,
     );
 
@@ -1471,5 +1642,98 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
     // window that held the first one, rather than issuing on top of a
     // window it never touched.
     expect(paneEnvService.buildEnvForNewWindow).toHaveBeenCalledTimes(2);
+  });
+});
+
+// Issue #29 Step 3a review round, Important findings 1/2: the in-lock
+// execution-gate reverify must actually run for legacy recovery, and must
+// run BEFORE respawn() kills the primary window it's about to replace — in
+// both cases the scenario under test is an 'allow' policy that is still
+// valid when the outer (pre-lock) gate decision is made, but has lapsed by
+// the time the per-server isolation lock is actually acquired (e.g. a
+// concurrent isolation-doctor re-verification committing while this call sat
+// queued behind another rotation). `isolationVerifiedAt`/`isolationReport`
+// are excluded from `withServerLock`'s own security-snapshot mismatch check
+// (see ServerIsolationLock.ts) — changing only those two fields between the
+// caller's server snapshot and the lock-acquisition refetch below therefore
+// reaches the in-lock reverify itself, not a `ServerSnapshotMismatchError`.
+describe('WindowRespawnService — in-lock execution-gate TOCTOU (Issue #29 Step 3a review round)', () => {
+  const PASSING_REPORT = JSON.stringify({ kind: 'verification', verified: true });
+
+  function allowProjectServerRepo(): Pick<IProjectServerRepository, 'find' | 'findByProject'> {
+    const row = { projectId: 1, serverName: 'local-server', workingDirectory: null, branch: 'main', tmuxSession: 'azito', inputPolicy: 'allow' as const };
+    return { find: vi.fn(() => row), findByProject: vi.fn(() => [row]) };
+  }
+
+  function verifiedServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
+    return makeServer({
+      isolationIntent: true,
+      isolationVerifiedAt: '2026-01-01T00:00:00Z',
+      isolationReport: PASSING_REPORT,
+      ...overrides,
+    });
+  }
+
+  it('resumeLegacySession blocks (does not create a window) when the 3-point AND gate degrades between the outer check and the in-lock refetch', async () => {
+    const task = makeTask({ id: 9, unitId: 10, agentSessionId: 'sess-xyz', inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 9 });
+    const { service, tmux, taskRepo, serverRepo } = buildService({
+      window: win, task, unit, projectServerRepo: allowProjectServerRepo(),
+    });
+    // The outer, pre-lock decision (enforceExecutionGate) is made from the
+    // `server` argument passed to resumeLegacySession() directly — a fully
+    // verified, isolated server, so 'allow' is effective and no block is
+    // recorded yet. The in-lock refetch (serverRepo.findByName, used by
+    // createRotatedWindow's ServerIsolationLock) returns a row whose
+    // verification has since lapsed (isolationVerifiedAt: null) — same
+    // isolationIntent, so no snapshot-mismatch abort — which must degrade
+    // 'allow' back to 'manual-approval' and block before any window is made.
+    serverRepo.findByName.mockImplementation((name: string) => verifiedServer({ name, isolationVerifiedAt: null, isolationReport: null }));
+
+    await expect(service.resumeLegacySession(9, verifiedServer())).rejects.toThrow(/requires approval/);
+
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(tmux.sendKeys).not.toHaveBeenCalled();
+    expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(9, {
+      pendingOperation: 'recover_session_legacy',
+      priorStatus: 'open',
+      manifestHash: expect.any(String),
+      pendingOperationWindowId: null,
+    });
+  });
+
+  it('respawn (PRIMARY task window) blocks BEFORE killing the existing window when the 3-point AND gate degrades between the outer check and the in-lock refetch', async () => {
+    const task = makeTask({ id: 5, unitId: 10, inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ id: 1, taskId: 5, isPrimary: true, tmuxTarget: 'azito:task-1--ab12.1' });
+    const { service, tmux, taskRepo, windowRepo, serverRepo } = buildService({
+      window: win, task, unit, projectServerRepo: allowProjectServerRepo(),
+    });
+    serverRepo.findByName.mockImplementation((name: string) => verifiedServer({ name, isolationVerifiedAt: null, isolationReport: null }));
+    tmux.listSessions.mockResolvedValue([{
+      name: 'azito',
+      windowCount: 1,
+      attached: false,
+      created: 0,
+      windows: [{ name: 'task-1--ab12', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+
+    await expect(service.respawn(1, verifiedServer())).rejects.toThrow(/requires approval/);
+
+    // The core regression assertion (Important finding 2): the still-live
+    // old window must survive untouched — the reverify now runs BEFORE
+    // confirmOldWindowGone, not after, so a downgrade discovered here must
+    // never reach killWindow at all.
+    expect(tmux.killWindow).not.toHaveBeenCalled();
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(tmux.createSession).not.toHaveBeenCalled();
+    expect(windowRepo.update).not.toHaveBeenCalled();
+    expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(5, {
+      pendingOperation: 'respawn',
+      priorStatus: 'open',
+      manifestHash: expect.any(String),
+      pendingOperationWindowId: 1,
+    });
   });
 });

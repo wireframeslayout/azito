@@ -4,6 +4,7 @@ import type { ITaskTokenRepository } from '../tokens/TaskToken';
 import type { SqliteProjectSecretRepository } from '../../projects/SqliteProjectSecretRepository';
 import type { AuditLogService } from '../../../shared/audit/AuditLogService';
 import { recordAuditBestEffort } from '../../../shared/audit/recordAuditBestEffort';
+import { ISOLATION_MASKED_ENV } from '../../../shared/auth/isolationMaskedEnv';
 
 /**
  * Single builder for the env a task's tmux pane launches with (Issue #28
@@ -35,6 +36,89 @@ import { recordAuditBestEffort } from '../../../shared/audit/recordAuditBestEffo
  * `isPrimaryTaskWindow` (windows/Window.ts) for the shared judgment every
  * call site uses to tell the two apart.
  */
+/**
+ * Applies the AZITO_UI_TOKEN/AZITO_AGENT_TOKEN(+PORT) injection-or-mask
+ * decision shared by {@link TaskPaneEnvironmentService.buildEnvForNewWindow}
+ * and {@link TaskPaneEnvironmentService.buildEnvForSecondaryWindow} — kept as
+ * one function so the two call sites can never drift on this decision (Issue
+ * #29 review, Critical finding 1).
+ *
+ * isolation_intent is checked FIRST, before the scoped-auth compat-mode
+ * branch, and wins unconditionally: a server declared isolation_intent=1 is
+ * meant to hold no credentials (see the class doc comment's Issue #29 note
+ * on `secretEntries` above), but the previous version of this logic only
+ * gated PROJECT secrets on isolation — it left AZITO_UI_TOKEN/
+ * AZITO_AGENT_TOKEN entirely under the scoped-auth flag's compat-mode
+ * branch, which is ON BY DEFAULT (AZITO_SCOPED_AUTH is off-by-default, design
+ * v3 §12 staged migration). That meant every isolated server, under the
+ * hub's default configuration, still received the full-power hub UI token
+ * (and, for an `agent`-type isolated server, the hub<->agent-server token)
+ * in every task pane it launched — exactly the credential this server was
+ * declared to hold none of. Isolation is a stronger, narrower guarantee than
+ * the compat-mode flag (which is a global migration switch, not a per-server
+ * trust decision), so it must be evaluated independently of — and before —
+ * that flag, not as a sub-case nested inside "scoped auth is on".
+ *
+ * When isolated, both keys are set to the empty string explicitly (not
+ * simply omitted) for the same masking reason the scoped-auth branch below
+ * already relies on: `tmux new-window -e KEY=...` only stops this call from
+ * injecting a key, it does NOT stop the new pane from inheriting a key
+ * already present in the tmux SESSION's own environment (verified against
+ * tmux 3.4). An explicit empty value always overrides an inherited one.
+ */
+function applyTokenMaskingOrCompat(
+  env: Record<string, string>,
+  server: ServerConfig,
+  uiToken: string,
+  scopedAuthEnabled: boolean,
+): void {
+  if (server.isolationIntent) {
+    // Isolation wins over compat mode unconditionally — see this function's
+    // doc comment above for why the previous nesting (compat-mode branch
+    // gating isolation) let an isolated server receive full-power tokens
+    // under the hub's default (scoped-auth-off) configuration.
+    Object.assign(env, ISOLATION_MASKED_ENV);
+    return;
+  }
+  if (!scopedAuthEnabled) {
+    // Compat mode: keep injecting exactly what every task pane got before
+    // Phase A, so harness skills / azt-mcp / browser-ops that still expect
+    // AZITO_UI_TOKEN keep working until every migration stage in design v3
+    // §12 has actually been deployed and this flag is flipped on.
+    if (uiToken) env.AZITO_UI_TOKEN = uiToken;
+    if (server.type === 'agent') {
+      if (server.agentPort) env.AZITO_AGENT_PORT = String(server.agentPort);
+      if (server.agentToken) env.AZITO_AGENT_TOKEN = server.agentToken;
+    }
+  } else {
+    // Denylist override (Issue #28 third-party review finding, Critical):
+    // `tmux new-window -e KEY=...` only stops THIS call from injecting a
+    // key — it does NOT stop the new pane from inheriting a key already
+    // present in the tmux SESSION's own environment (`tmux new-session -e`
+    // persists into the session, and every window created afterwards in
+    // that session inherits it — verified directly against tmux 3.4). A
+    // task window is very often created inside a pre-existing session
+    // (e.g. a project's tmux session, created via
+    // `POST /api/projects/:id/servers/:name` with `tmux.uiTokenEnv()`, or
+    // any manual "New Session" a human made from the terminal UI) — if
+    // that session's env still carries AZITO_UI_TOKEN/AZITO_AGENT_TOKEN
+    // from before, a task pane would inherit the full-power UI token (or
+    // the hub<->agent-server token) straight through the session, bypassing
+    // scoped auth entirely despite this branch never assigning either key
+    // itself. Explicitly setting both to '' here forces THIS pane's `-e`
+    // override to win regardless of what the session carries — tmux
+    // applies a new pane's own `-e` values on top of the inherited session
+    // environment, so an explicit empty value always masks an inherited
+    // one (confirmed empirically: a session-level var set via `-e` on
+    // `new-session` is overridden to empty by `-e KEY=` on a later
+    // `new-window` into that same session). This makes cleaning up
+    // already-running sessions' leftover env unnecessary: any task window
+    // created from here on is safe no matter what a session's own env
+    // holds.
+    Object.assign(env, ISOLATION_MASKED_ENV);
+  }
+}
+
 export class TaskPaneEnvironmentService {
   constructor(
     private taskTokenRepo: ITaskTokenRepository,
@@ -75,7 +159,20 @@ export class TaskPaneEnvironmentService {
     // itself has been invoked. Reading secrets first means the only
     // remaining fallible step after rotation is `create()`, which
     // createRotatedWindow already rolls back correctly.
-    const secretEntries = this.projectSecretRepo.findByProjectWithValues(task.projectId);
+    // Isolation intent (Issue #29 design v2, 層3「遮断」): a server declared
+    // isolation_intent=1 is meant to hold no credentials, so this is the ONE
+    // place — the single call site every execute/restore/respawn/recovery/
+    // splitPane path funnels through (see the class doc comment above) —
+    // that withholds project secrets from it. Skipped entirely (not just
+    // filtered post-decrypt) so an isolated server's window never even
+    // triggers a secret decrypt.
+    //
+    // Deliberate exception planned, not yet implemented: pushing案A (a later
+    // task) will need exactly one isolation-push credential to reach an
+    // isolated server so it can still push/PR its own work — when that
+    // lands, it is injected as its own dedicated env var here, NOT by
+    // relaxing this skip to let ordinary AZITO_SECRET_* rows back in.
+    const secretEntries = server.isolationIntent ? [] : this.projectSecretRepo.findByProjectWithValues(task.projectId);
     const issued = this.taskTokenRepo.issueNextGeneration(task.id, 'window_regenerated');
     // Generation number + reason only (design v3 §10: detail must never
     // carry secret material) — `issued.token` (the plaintext) is
@@ -93,44 +190,7 @@ export class TaskPaneEnvironmentService {
     for (const secret of secretEntries) {
       env[`AZITO_SECRET_${secret.name}`] = secret.value;
     }
-    if (!this.scopedAuthEnabled) {
-      // Compat mode: keep injecting exactly what every task pane got before
-      // Phase A, so harness skills / azt-mcp / browser-ops that still expect
-      // AZITO_UI_TOKEN keep working until every migration stage in design v3
-      // §12 has actually been deployed and this flag is flipped on.
-      if (this.uiToken) env.AZITO_UI_TOKEN = this.uiToken;
-      if (server.type === 'agent') {
-        if (server.agentPort) env.AZITO_AGENT_PORT = String(server.agentPort);
-        if (server.agentToken) env.AZITO_AGENT_TOKEN = server.agentToken;
-      }
-    } else {
-      // Denylist override (Issue #28 third-party review finding, Critical):
-      // `tmux new-window -e KEY=...` only stops THIS call from injecting a
-      // key — it does NOT stop the new pane from inheriting a key already
-      // present in the tmux SESSION's own environment (`tmux new-session -e`
-      // persists into the session, and every window created afterwards in
-      // that session inherits it — verified directly against tmux 3.4). A
-      // task window is very often created inside a pre-existing session
-      // (e.g. a project's tmux session, created via
-      // `POST /api/projects/:id/servers/:name` with `tmux.uiTokenEnv()`, or
-      // any manual "New Session" a human made from the terminal UI) — if
-      // that session's env still carries AZITO_UI_TOKEN/AZITO_AGENT_TOKEN
-      // from before, a task pane would inherit the full-power UI token (or
-      // the hub<->agent-server token) straight through the session, bypassing
-      // scoped auth entirely despite this branch never assigning either key
-      // itself. Explicitly setting both to '' here forces THIS pane's `-e`
-      // override to win regardless of what the session carries — tmux
-      // applies a new pane's own `-e` values on top of the inherited session
-      // environment, so an explicit empty value always masks an inherited
-      // one (confirmed empirically: a session-level var set via `-e` on
-      // `new-session` is overridden to empty by `-e KEY=` on a later
-      // `new-window` into that same session). This makes cleaning up
-      // already-running sessions' leftover env unnecessary: any task window
-      // created from here on is safe no matter what a session's own env
-      // holds.
-      env.AZITO_UI_TOKEN = '';
-      env.AZITO_AGENT_TOKEN = '';
-    }
+    applyTokenMaskingOrCompat(env, server, this.uiToken, this.scopedAuthEnabled);
     return { env, tokenId: issued.id };
   }
 
@@ -155,16 +215,7 @@ export class TaskPaneEnvironmentService {
    */
   buildEnvForSecondaryWindow(task: Task, server: ServerConfig): Record<string, string> {
     const env: Record<string, string> = { AZITO_TASK_ID: String(task.id) };
-    if (!this.scopedAuthEnabled) {
-      if (this.uiToken) env.AZITO_UI_TOKEN = this.uiToken;
-      if (server.type === 'agent') {
-        if (server.agentPort) env.AZITO_AGENT_PORT = String(server.agentPort);
-        if (server.agentToken) env.AZITO_AGENT_TOKEN = server.agentToken;
-      }
-    } else {
-      env.AZITO_UI_TOKEN = '';
-      env.AZITO_AGENT_TOKEN = '';
-    }
+    applyTokenMaskingOrCompat(env, server, this.uiToken, this.scopedAuthEnabled);
     return env;
   }
 

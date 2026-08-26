@@ -3,6 +3,7 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 export { ServerConfig } from '../servers/Server';
 import type { ServerConfig } from '../servers/Server';
 import { generateWindowName, extractWindowId } from './windowNameUtils';
+import { ISOLATION_MASKED_ENV } from '../../shared/auth/isolationMaskedEnv';
 
 // ─── Types ───
 
@@ -72,6 +73,84 @@ export function windowSpecMatches(windowSpec: string, windowIndex: number, windo
   return false;
 }
 
+// ─── Session listing (shared by listSessions / listSessionsForSecurityGate) ───
+
+const TMUX_LIST_PANES_FORMAT = [
+  '#{session_name}', '#{session_windows}', '#{session_attached}', '#{session_created}',
+  '#{window_index}', '#{window_name}', '#{window_active}', '#{window_activity}',
+  '#{pane_index}', '#{pane_current_command}', '#{pane_width}', '#{pane_height}', '#{pane_active}', '#{pane_pid}', '#{pane_title}',
+].join('|||');
+
+/** Parses `tmux list-panes -a -F <TMUX_LIST_PANES_FORMAT>` stdout into sessions (unfiltered). */
+function parseSessionLines(stdout: string): TmuxSession[] {
+  const sessionMap = new Map<string, {
+    name: string;
+    windowCount: number;
+    attached: boolean;
+    created: number;
+    windows: Map<number, TmuxWindow>;
+  }>();
+
+  for (const line of stdout.trim().split('\n')) {
+    if (!line) continue;
+    const parts = line.split('|||');
+    const [sName, sWindows, sAttached, sCreated, wIndex, wName, wActive, wActivity, pIndex, pCommand, pWidth, pHeight, pActive, pPid, pTitle] = parts;
+
+    if (!sessionMap.has(sName)) {
+      sessionMap.set(sName, {
+        name: sName,
+        windowCount: parseInt(sWindows, 10),
+        attached: sAttached === '1',
+        created: parseInt(sCreated, 10),
+        windows: new Map(),
+      });
+    }
+
+    const session = sessionMap.get(sName)!;
+    const wIdx = parseInt(wIndex, 10);
+    if (!session.windows.has(wIdx)) {
+      session.windows.set(wIdx, {
+        index: wIdx,
+        name: wName,
+        active: wActive === '1',
+        activity: parseInt(wActivity, 10),
+        panes: [],
+      });
+    }
+
+    session.windows.get(wIdx)!.panes.push({
+      index: parseInt(pIndex, 10),
+      command: pCommand,
+      title: pTitle || '',
+      width: parseInt(pWidth, 10),
+      height: parseInt(pHeight, 10),
+      active: pActive === '1',
+      pid: parseInt(pPid, 10),
+    });
+  }
+
+  return Array.from(sessionMap.values()).map((s) => ({
+    ...s,
+    windows: Array.from(s.windows.values()),
+  }));
+}
+
+/**
+ * Matches the two `tmux list-panes -a` failure wordings that mean "there is
+ * no tmux server to list sessions from" — verified against a live tmux 3.4
+ * binary (this project's target version, see AGENTS.md):
+ *   - `error connecting to <sock> (No such file or directory)` — socket file
+ *     never existed (server never started).
+ *   - `no server running on <sock>` — socket file exists but the server
+ *     process behind it is gone.
+ * See `TmuxClient.listSessionsForSecurityGate` for why this distinction
+ * matters: anything NOT matching one of these two is an unverifiable failure
+ * that must be treated as "cannot confirm no sessions," not as "no sessions."
+ */
+function isTmuxNoServerRunning(output: string): boolean {
+  return /no server running on|error connecting to .*\(no such file or directory\)/i.test(output);
+}
+
 // ─── TmuxClient ───
 
 export class TmuxClient {
@@ -102,67 +181,9 @@ export class TmuxClient {
   }
 
   async listSessions(server: ServerConfig): Promise<TmuxSession[]> {
-    const format = [
-      '#{session_name}', '#{session_windows}', '#{session_attached}', '#{session_created}',
-      '#{window_index}', '#{window_name}', '#{window_active}', '#{window_activity}',
-      '#{pane_index}', '#{pane_current_command}', '#{pane_width}', '#{pane_height}', '#{pane_active}', '#{pane_pid}', '#{pane_title}',
-    ].join('|||');
-
     try {
-      const { stdout } = await this.runTmuxCommand(server, ['list-panes', '-a', '-F', format]);
-
-      const sessionMap = new Map<string, {
-        name: string;
-        windowCount: number;
-        attached: boolean;
-        created: number;
-        windows: Map<number, TmuxWindow>;
-      }>();
-
-      for (const line of stdout.trim().split('\n')) {
-        if (!line) continue;
-        const parts = line.split('|||');
-        const [sName, sWindows, sAttached, sCreated, wIndex, wName, wActive, wActivity, pIndex, pCommand, pWidth, pHeight, pActive, pPid, pTitle] = parts;
-
-        if (!sessionMap.has(sName)) {
-          sessionMap.set(sName, {
-            name: sName,
-            windowCount: parseInt(sWindows, 10),
-            attached: sAttached === '1',
-            created: parseInt(sCreated, 10),
-            windows: new Map(),
-          });
-        }
-
-        const session = sessionMap.get(sName)!;
-        const wIdx = parseInt(wIndex, 10);
-        if (!session.windows.has(wIdx)) {
-          session.windows.set(wIdx, {
-            index: wIdx,
-            name: wName,
-            active: wActive === '1',
-            activity: parseInt(wActivity, 10),
-            panes: [],
-          });
-        }
-
-        session.windows.get(wIdx)!.panes.push({
-          index: parseInt(pIndex, 10),
-          command: pCommand,
-          title: pTitle || '',
-          width: parseInt(pWidth, 10),
-          height: parseInt(pHeight, 10),
-          active: pActive === '1',
-          pid: parseInt(pPid, 10),
-        });
-      }
-
-      return Array.from(sessionMap.values())
-        .filter((s) => !s.name.startsWith('_azito_'))
-        .map((s) => ({
-          ...s,
-          windows: Array.from(s.windows.values()),
-        }));
+      const stdout = await this.execListPanesAll(server);
+      return parseSessionLines(stdout).filter((s) => !s.name.startsWith('_azito_'));
     } catch (err: unknown) {
       const e = err as { message?: string; stderr?: string };
       if (e.message?.includes('no server running') || e.stderr?.includes('no server running')) {
@@ -170,6 +191,68 @@ export class TmuxClient {
       }
       throw err;
     }
+  }
+
+  /**
+   * Security-gate-only variant of {@link listSessions}, used exclusively by
+   * the isolation-enablement check in `servers/routes.ts` (Issue #29 review,
+   * Critical finding 1). Two deliberate differences from the display-oriented
+   * `listSessions()`:
+   *
+   * 1. Exit code is authoritative. `LocalTransport.execTmux` rejects the
+   *    promise on ANY non-zero tmux exit, but `AgentTransport.execTmux` never
+   *    rejects on the remote command's own exit code — it resolves with
+   *    whatever `ExecResult` (including non-zero `code`) the agent process's
+   *    tmux run produced, only rejecting on an HTTP-level failure (see
+   *    `AgentTransport.post` / `agent/routes.ts`'s `execTmuxCommand`, and the
+   *    same normalization already used by `resolveKillOutcome`/
+   *    `checkPaneLiveness`). `listSessions()` only inspects `stdout`, so on an
+   *    `agent`-type server a connection/permission failure that still HTTP
+   *    200s with an empty `stdout` reads as "no sessions" — fail open. Here,
+   *    ANY non-zero code is treated as "cannot verify" (thrown) UNLESS the
+   *    output matches one of the two tmux-no-server-running wordings verified
+   *    against a live tmux 3.4 binary below.
+   * 2. `_azito_` linked sessions (the temporary sessions `openTerminal`
+   *    creates) are NOT excluded. `listSessions()` hides them because they're
+   *    display noise, but if the original session they link to disappeared
+   *    while the linked one is still alive, a pane carrying credentials can
+   *    still be live under that name — the isolation gate must count it.
+   *
+   * No-server confirmation is limited to the two wordings actually produced
+   * by `tmux list-panes -a` when there is nothing to list (verified by
+   * running both scenarios against tmux 3.4, the version this project
+   * targets — see AGENTS.md):
+   *   - `error connecting to <sock> (No such file or directory)` — the tmux
+   *     socket file itself has never been created (server never started).
+   *   - `no server running on <sock>` — the socket file exists but the tmux
+   *     server process behind it is gone (e.g. it exited after its last
+   *     session was killed).
+   * Any other failure (auth rejection, network unreachable, timeout, a
+   * genuinely unexpected tmux error) does NOT match either wording and is
+   * therefore re-thrown, so the caller fails closed (409) instead of
+   * treating an unverifiable state as "no sessions."
+   */
+  async listSessionsForSecurityGate(server: ServerConfig): Promise<TmuxSession[]> {
+    const format = TMUX_LIST_PANES_FORMAT;
+    let result: ExecResult;
+    try {
+      result = await this.runTmuxCommand(server, ['list-panes', '-a', '-F', format]);
+    } catch (err) {
+      result = { stdout: '', stderr: err instanceof Error ? err.message : String(err), code: 1 };
+    }
+    if (result.code === 0) {
+      return parseSessionLines(result.stdout);
+    }
+    const output = `${result.stderr || ''}${result.stdout || ''}`;
+    if (isTmuxNoServerRunning(output)) {
+      return [];
+    }
+    throw new Error(`tmux list-panes failed (code ${result.code}): ${output || '(no output)'}`);
+  }
+
+  private async execListPanesAll(server: ServerConfig): Promise<string> {
+    const { stdout } = await this.runTmuxCommand(server, ['list-panes', '-a', '-F', TMUX_LIST_PANES_FORMAT]);
+    return stdout;
   }
 
   /**
@@ -223,6 +306,34 @@ export class TmuxClient {
    */
   uiTokenEnv(): Record<string, string> {
     return this.uiToken ? { AZITO_UI_TOKEN: this.uiToken } : {};
+  }
+
+  /**
+   * Server-aware wrapper around {@link uiTokenEnv} (Issue #29 review, Critical
+   * finding 1): `uiTokenEnv()` above has no way to know which server it is
+   * injecting into, so every one of its call sites — manual session/window/
+   * pane creation in `modules/tmux/routes/sessions.ts`, and the non-task
+   * respawn fallback in `WindowRespawnService.run()` — happily injected the
+   * hub's all-powerful `AZITO_UI_TOKEN` into an `isolation_intent=1` server's
+   * pane too, exactly the credential that server is declared to hold none of.
+   * (Task-owned windows already avoid this via
+   * `TaskPaneEnvironmentService`/`applyTokenMaskingOrCompat`, which checks
+   * `server.isolationIntent` first — this is the same decision, applied to
+   * the handful of NON-task callers that still call the legacy default
+   * directly instead.)
+   *
+   * When `server.isolationIntent` is set, returns the shared
+   * {@link ISOLATION_MASKED_ENV} mask (both `AZITO_UI_TOKEN` AND
+   * `AZITO_AGENT_TOKEN` — an agent-type isolated server's process env holds
+   * the latter too, see `agent/main.ts`) rather than an empty object — see
+   * `applyTokenMaskingOrCompat`'s doc comment for why an explicit empty value
+   * is required to override a token the pane's tmux SESSION may already
+   * carry (a pre-existing session's env persists across `new-window`, and
+   * `-e KEY=` on the new window is the only thing that can mask it).
+   */
+  uiTokenEnvForServer(server: ServerConfig): Record<string, string> {
+    if (server.isolationIntent) return { ...ISOLATION_MASKED_ENV };
+    return this.uiTokenEnv();
   }
 
   /**

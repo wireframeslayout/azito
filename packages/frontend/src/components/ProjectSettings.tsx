@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { Icon } from './ui/Icon';
+import { DocsLink } from './ui/DocsLink';
 import { useApi } from '../hooks/useApi';
 import { useAddWindowModal } from '../hooks/useAddWindowModal';
 import { useIsMobile } from '../hooks/useIsMobile';
@@ -22,8 +23,8 @@ import { useConfirm } from '../hooks/useConfirm';
 interface Repository { id: number; url: string; name?: string; provider?: string; owner?: string; repoName?: string; }
 interface ProjectServer {
   projectId: number; serverName: string; workingDirectory?: string; branch?: string; tmuxSession: string;
-  /** Issue #51 — 'allow' deliberately not selectable in the UI (server rejects it; see routes.ts). */
-  inputPolicy?: 'deny' | 'manual-approval';
+  /** Issue #29 Step 3a: 'allow' is now selectable, but only ever effective for a verified-isolated server — the server degrades it to 'manual-approval' at run time otherwise (see routes.ts's PUT validation and ProjectServer.resolveEffectiveInputPolicy). */
+  inputPolicy?: 'deny' | 'manual-approval' | 'allow';
 }
 interface Project {
   id: number; name: string; slug: string; description?: string;
@@ -65,10 +66,14 @@ export function useProjectSettings(
   const [psTmuxSession, setPsTmuxSession] = useState('');
   // Default 'manual-approval' — matches the server's own fallback when no
   // project_servers row exists yet (see routes.ts PUT handler and
-  // ProjectServer.inputPolicy's doc comment). 'allow' is intentionally not
-  // an option here (Issue #51/#328: no isolated execution profile exists
-  // yet to make it safe — the server rejects it with 400).
-  const [psInputPolicy, setPsInputPolicy] = useState<'deny' | 'manual-approval'>('manual-approval');
+  // ProjectServer.inputPolicy's doc comment). 'allow' is selectable (Issue
+  // #29 Step 3a) but the select below only enables it for a row whose
+  // target server has declared isolation intent — the server additionally
+  // enforces this at save time (400 `input_policy_allow_requires_isolation`)
+  // and, more importantly, re-derives the actually-effective policy at RUN
+  // TIME from live verification/scoped-auth state, degrading back to
+  // 'manual-approval' whenever any of that isn't currently true.
+  const [psInputPolicy, setPsInputPolicy] = useState<'deny' | 'manual-approval' | 'allow'>('manual-approval');
 
   const [addRepoOpen, setAddRepoOpen] = useState(false);
   const [repoUrl, setRepoUrl] = useState('');
@@ -186,7 +191,7 @@ export function useProjectSettings(
     setPsWorkDir(existing?.workingDirectory ?? '');
     setPsBranch(existing?.branch ?? '');
     setPsTmuxSession(existing?.tmuxSession ?? '');
-    setPsInputPolicy(existing?.inputPolicy === 'deny' ? 'deny' : 'manual-approval');
+    setPsInputPolicy(existing?.inputPolicy === 'deny' || existing?.inputPolicy === 'allow' ? existing.inputPolicy : 'manual-approval');
     setAddPsOpen(true);
   }, [projectServers]);
 
@@ -500,13 +505,29 @@ function ServersSection({ settings: s }: { settings: ReturnType<typeof useProjec
           <FormField label={t('settings.servers.inputPolicy')} hint={t('settings.servers.inputPolicyHint')}>
             <FormSelect
               value={s.psInputPolicy}
-              onChange={(e) => s.setPsInputPolicy(e.target.value === 'deny' ? 'deny' : 'manual-approval')}
+              onChange={(e) => {
+                const v = e.target.value;
+                s.setPsInputPolicy(v === 'deny' || v === 'allow' ? v : 'manual-approval');
+              }}
             >
-              {/* 'allow' is deliberately not an option — see psInputPolicy's doc comment. */}
               <option value="manual-approval">{t('settings.servers.inputPolicyManualApproval')}</option>
               <option value="deny">{t('settings.servers.inputPolicyDeny')}</option>
+              {/* Issue #29 Step 3a: client-side hint only — selectable ONLY for
+                  a row whose target server has declared isolation intent. The
+                  real enforcement is server-side: PUT rejects 'allow' for a
+                  non-isolated server (400), and the run-time gate additionally
+                  requires a current doctor verification + scoped auth before
+                  'allow' is ever actually effective. */}
+              <option value="allow" disabled={!(s.servers || []).find((sv) => sv.name === s.psServer)?.isolationIntent}>
+                {t('settings.servers.inputPolicyAllow')}
+              </option>
             </FormSelect>
           </FormField>
+          {s.psInputPolicy === 'allow' && (
+            <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: -8, marginBottom: 12 }}>
+              {t('settings.servers.inputPolicyAllowHint')} <DocsLink page="isolated-execution" />
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
             <Button size="sm" onClick={() => s.setAddPsOpen(false)}>{t('common:actions.cancel')}</Button>
             <Button variant="primary" size="sm" onClick={s.handleSaveServer}>{t('common:actions.save')}</Button>
@@ -523,8 +544,8 @@ function ServersSection({ settings: s }: { settings: ReturnType<typeof useProjec
               {ps.workingDirectory && <span style={{ color: 'var(--text-dim)', marginLeft: 8 }}>{ps.workingDirectory}</span>}
               {ps.branch && <span style={{ color: 'var(--accent)', marginLeft: 8 }}>{ps.branch}</span>}
               <span style={{ color: 'var(--text-dim)', marginLeft: 8 }}>{t('settings.servers.session', { name: ps.tmuxSession })}</span>
-              <span style={{ color: ps.inputPolicy === 'deny' ? 'var(--danger)' : 'var(--text-dim)', marginLeft: 8 }}>
-                {ps.inputPolicy === 'deny' ? t('settings.servers.inputPolicyDeny') : t('settings.servers.inputPolicyManualApproval')}
+              <span style={{ color: ps.inputPolicy === 'deny' ? 'var(--danger)' : ps.inputPolicy === 'allow' ? 'var(--accent)' : 'var(--text-dim)', marginLeft: 8 }}>
+                {ps.inputPolicy === 'deny' ? t('settings.servers.inputPolicyDeny') : ps.inputPolicy === 'allow' ? t('settings.servers.inputPolicyAllow') : t('settings.servers.inputPolicyManualApproval')}
               </span>
             </span>
             <span style={{ display: 'flex', gap: 8 }}>

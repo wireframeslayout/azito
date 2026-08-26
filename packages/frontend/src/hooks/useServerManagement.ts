@@ -18,6 +18,10 @@ export interface Server {
   sshHost?: string;
   muxRuntime?: 'system' | 'managed';
   hubVersion?: string;
+  /** Issue #29: declared isolation intent — see servers.isolationIntent's server-side doc comment. */
+  isolationIntent?: boolean;
+  /** ISO timestamp of the isolation doctor's last check, or null/undefined if never run. */
+  isolationVerifiedAt?: string | null;
 }
 
 export interface Pane {
@@ -89,6 +93,10 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
   const [editPort, setEditPort] = useState('3002');
   const [editToken, setEditToken] = useState('');
   const [editMuxRuntime, setEditMuxRuntime] = useState<'system' | 'managed'>('system');
+  // Issue #29 review (3rd pass), Important finding 4: mirrors
+  // useServerEditForm's editIsolationIntent (ServersListPage's edit path,
+  // distinct from ServerDetailPage's).
+  const [editIsolationIntent, setEditIsolationIntent] = useState(false);
 
   const [reinstalling, setReinstalling] = useState<string | null>(null);
   const [reinstallSteps, setReinstallSteps] = useState<InstallStep[]>([]);
@@ -228,6 +236,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     setEditPort(String(srv.agentPort ?? '3002'));
     setEditToken('');
     setEditMuxRuntime(srv.muxRuntime ?? 'system');
+    setEditIsolationIntent(srv.isolationIntent ?? false);
   }, []);
 
   const handleEditServer = useCallback(async () => {
@@ -246,14 +255,41 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
       if (editToken.trim()) {
         body.agentToken = editToken.trim();
       }
+      body.isolationIntent = editIsolationIntent;
     }
-    const res = await api<{ error?: string }>(`/servers/${editServer.name}`, {
+    const res = await api<{ error?: string; windowCount?: number; sessionCount?: number; isolationCleanup?: 'done' | 'failed' | 'skipped' }>(`/servers/${editServer.name}`, {
       method: 'PUT', body: JSON.stringify(body),
     });
-    if (res.error) return showToast(res.error);
+    if (res.error) {
+      // Issue #29 review, Critical finding 1: see useServerEditForm's
+      // identical handling — this hook drives the other edit path
+      // (ServersListPage) and must surface the same localized toast.
+      // Issue #29 review (5th pass), Critical finding 1: same live-session
+      // gate cases as useServerEditForm — see that hook's comment.
+      if (res.error === 'isolation_intent_blocked_by_windows') {
+        return showToast(t('overview.isolationBlockedByWindowsToast', { count: res.windowCount ?? 0 }));
+      }
+      if (res.error === 'isolation_intent_blocked_by_live_sessions') {
+        return showToast(t('overview.isolationBlockedByLiveSessionsToast', { count: res.sessionCount ?? 0 }));
+      }
+      if (res.error === 'isolation_intent_blocked_by_session_check_failure') {
+        return showToast(t('overview.isolationBlockedBySessionCheckFailureToast'));
+      }
+      if (res.error === 'isolation_intent_blocks_connection_change') {
+        // Issue #29 review (8th pass), Critical finding 1: see
+        // useServerEditForm's identical handling.
+        return showToast(t('overview.isolationBlocksConnectionChangeToast'));
+      }
+      return showToast(res.error);
+    }
+    // Issue #29 review (3rd pass), Important finding 4: see
+    // useServerEditForm's identical handling — this hook drives the other
+    // edit path (ServersListPage) and must surface the same outcome.
+    if (res.isolationCleanup === 'failed') showToast(t('overview.isolationCleanupToastFailed'));
+    else if (res.isolationCleanup === 'skipped') showToast(t('overview.isolationCleanupToastSkipped'));
     setEditServer(null);
     refreshAll();
-  }, [editServer, editType, editHost, editPort, editToken, editMuxRuntime, refreshAll, showToast]);
+  }, [editServer, editType, editHost, editPort, editToken, editMuxRuntime, editIsolationIntent, refreshAll, showToast, t]);
 
   const handleReinstall = useCallback(async (serverName: string) => {
     const ok = await confirm({ title: t('confirm.reinstallAgent'), message: t('confirm.reinstallAgentMessage', { name: serverName }) });
@@ -266,7 +302,18 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     );
     if (res.steps) setReinstallSteps(res.steps);
     setReinstalling(null);
-    if (res.error) showToast(`Reinstall failed: ${res.error}`);
+    if (res.error) {
+      // Issue #29 review, 14th pass, Important finding 2: the server now
+      // rejects agent-install on an isolated server with this error code
+      // (see routes.ts's doc comment) — give it the same localized toast
+      // treatment as the PUT handler's isolation gates instead of showing
+      // the raw error code.
+      if (res.error === 'isolation_intent_blocks_agent_install') {
+        showToast(t('overview.isolationBlocksAgentInstallToast'));
+      } else {
+        showToast(`Reinstall failed: ${res.error}`);
+      }
+    }
     refreshAll();
   }, [refreshAll, confirm, showToast, t]);
 
@@ -377,6 +424,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     editPort, setEditPort,
     editToken, setEditToken,
     editMuxRuntime, setEditMuxRuntime,
+    editIsolationIntent, setEditIsolationIntent,
     reinstalling,
     reinstallSteps,
   };

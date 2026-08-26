@@ -5,6 +5,7 @@ import { tmpdir } from 'os';
 import * as path from 'path';
 import { ExecuteTaskUseCase } from './ExecuteTaskUseCase';
 import { shellQuote } from '../../../shared/shellQuote';
+import { KeyedMutex } from '../../../shared/keyedMutex';
 import { TurnSignalHub } from '../turns/TurnSignalHub';
 import type { AgentTurn, AgentTurnEvent } from '../turns/AgentTurn';
 import type { Task, ITaskRepository } from '../Task';
@@ -70,6 +71,9 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     sshHost: null,
     sshHostFingerprint: null,
   muxRuntime: 'system',
+    isolationIntent: false,
+    isolationVerifiedAt: null,
+    isolationReport: null, isolationCleanupReport: null,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
@@ -189,6 +193,8 @@ function buildUseCase(opts: {
   projectServersList?: Array<{ projectId: number; serverName: string; workingDirectory: string | null; branch: string | null; tmuxSession: string; inputPolicy?: 'deny' | 'manual-approval' | 'allow' }>;
   /** When set, overrides the server returned by serverRepo.findByName (default: makeServer(), type 'local'). */
   server?: ServerConfig;
+  /** Issue #29 Step 3a: defaults to true so pre-existing tests (all predating 'allow') are unaffected. */
+  scopedAuthEnabled?: boolean;
 }) {
   const taskRepo: ITaskRepository = {
     findAll: vi.fn(() => []),
@@ -246,6 +252,7 @@ function buildUseCase(opts: {
     updateAgentVersion: vi.fn(),
     updateFingerprint: vi.fn(),
     clearFingerprint: vi.fn(),
+    updateIsolationIntent: vi.fn(),
     delete: vi.fn(),
   };
 
@@ -295,6 +302,7 @@ function buildUseCase(opts: {
     killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
     sendKeys: vi.fn(async () => {}),
     checkPaneExists: vi.fn(async () => true),
+    uiTokenEnvForServer: vi.fn(() => ({})),
   };
 
   const worktreeServiceFactory = { create: vi.fn() };
@@ -381,9 +389,11 @@ function buildUseCase(opts: {
     projectSecretRepo as any,
     new EventEmitter(),
     paneEnvService as any,
+    new KeyedMutex(),
+    opts.scopedAuthEnabled ?? true,
   );
 
-  return { useCase, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, paneEnvService };
+  return { useCase, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, transportFactory, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, paneEnvService };
 }
 
 describe('ExecuteTaskUseCase execution-env resolution', () => {
@@ -403,6 +413,93 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
     await useCase.execute(42, 1);
 
     expect(windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({ workerType: 'claude', workerModel: 'opus' }));
+  });
+
+  // Issue #29 review (10th pass): Critical finding 1 (execute()'s session
+  // bootstrap must run inside the isolation lock, against a freshly re-read
+  // server) and Important finding 3 (the fresh `server` createRotatedWindow
+  // returns must be used for everything downstream, not the `server`
+  // resolved at the top of execute()). serverRepo.findByName is stubbed to
+  // hand back a distinct ServerConfig (tagged via `agentVersion`) on every
+  // call, so each server-carrying call this run makes can be checked against
+  // exactly which lock-and-refetch span actually produced the object it saw.
+  it('uses the server row re-read inside each isolation-lock span for every subsequent tmux/transport call, not the server resolved before execute() started', async () => {
+    const unit = makeUnit({ id: 60, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 60, serverName: 'local-server', unitId: 60, workingDirectory: '/some/work/dir' });
+    const { useCase, serverRepo, tmux, transportFactory, worktreeServiceFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      // No projectServer configured -> allowedRoot is null -> containment is
+      // skipped and workingDir resolves straight from task.workingDirectory,
+      // keeping this test focused on server freshness rather than PathContainment.
+      projectServer: null,
+    });
+    let generation = 0;
+    (serverRepo.findByName as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      generation += 1;
+      return makeServer({ agentVersion: `gen-${generation}` });
+    });
+    worktreeServiceFactory.create.mockReturnValue({
+      create: vi.fn(async () => ({ path: '/some/work/dir/.worktrees/task-60', branch: 'task/60' })),
+    });
+
+    await useCase.execute(60, 60);
+
+    const createSessionServer = (tmux.createSession as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const createWindowServer = (tmux.createWindow as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const resolvePaneIdServer = (tmux.resolvePaneId as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const getTransportServer = (transportFactory.getTransport as ReturnType<typeof vi.fn>).mock.calls[0][0];
+
+    // ensureSessionWithLock's lock span re-read the server for the session
+    // bootstrap — createSession must see that row.
+    expect(createSessionServer.agentVersion).toBeDefined();
+    // createRotatedWindow's own, LATER lock span re-read the server again
+    // for the real task window — createWindow must see a STRICTLY NEWER row
+    // than ensureSessionWithLock's, never the same or an earlier one.
+    expect(createWindowServer.agentVersion).not.toBe(createSessionServer.agentVersion);
+    // Everything execute() does after createRotatedWindow returns
+    // (resolvePaneId, the worktree transport) must keep using THAT exact
+    // fresh row, not fall back to the `server` resolved before either lock
+    // span ran.
+    expect(resolvePaneIdServer.agentVersion).toBe(createWindowServer.agentVersion);
+    expect(getTransportServer.agentVersion).toBe(createWindowServer.agentVersion);
+  });
+
+  // Same Issue #29 review (10th pass) fix as execute()'s own test above,
+  // exercised through followUp()'s "no window yet" branch instead (the
+  // branch that actually calls createRotatedWindow — the common "resume onto
+  // an existing window" case never rotates, per design v3 §2, and so has no
+  // fresh server to lose track of in the first place).
+  it('followUp(): uses the server row re-read inside each isolation-lock span for resolvePaneId, not the server resolved before followUp() started', async () => {
+    const unit = makeUnit({ id: 61, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 61, serverName: 'local-server', unitId: 61, tmuxWindow: null });
+    const { useCase, serverRepo, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: null,
+    });
+    let generation = 0;
+    (serverRepo.findByName as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      generation += 1;
+      return makeServer({ agentVersion: `gen-${generation}` });
+    });
+
+    await useCase.followUp(61, 61, 'please continue');
+
+    const createSessionServer = (tmux.createSession as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const createWindowServer = (tmux.createWindow as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const resolvePaneIdServer = (tmux.resolvePaneId as ReturnType<typeof vi.fn>).mock.calls[0][0];
+
+    expect(createSessionServer.agentVersion).toBeDefined();
+    // createRotatedWindow's lock span re-read the server again for the real
+    // task window — createWindow must see a STRICTLY NEWER row than
+    // ensureSessionWithLock's.
+    expect(createWindowServer.agentVersion).not.toBe(createSessionServer.agentVersion);
+    // resolvePaneId (called right after createRotatedWindow returns) must
+    // keep using that exact fresh row.
+    expect(resolvePaneIdServer.agentVersion).toBe(createWindowServer.agentVersion);
   });
 
   it('clears the exit marker before runtime.resume() for a supervised follow-up on a local server', async () => {
@@ -977,6 +1074,180 @@ describe('ExecuteTaskUseCase execution gate (Issue #328)', () => {
   });
 });
 
+// Issue #29 Step 3a: the 3-point AND gate for 'allow' (server isolation
+// intent + a current doctor verification + scoped auth enabled), exercised
+// end-to-end through ExecuteTaskUseCase.enforceExecutionGate() rather than
+// just the pure resolveEffectiveInputPolicy() unit tests (ProjectServer.test.ts)
+// — this also proves the degradation is actually wired to checkExecutionGate,
+// not just computed and discarded.
+describe('ExecuteTaskUseCase execution gate — "allow" policy 3-point AND gate (Issue #29 Step 3a)', () => {
+  const isolatedVerifiedServer = () => makeServer({
+    isolationIntent: true,
+    isolationVerifiedAt: new Date().toISOString(),
+    // A current isolationVerifiedAt must be paired with a passing
+    // isolationReport (Issue #29 review Step 3a, Critical finding 1
+    // follow-up defense-in-depth check in resolveEffectiveInputPolicy) —
+    // real writers (SqliteServerRepository.updateIsolationVerification)
+    // always set both atomically; this fixture mirrors that invariant.
+    isolationReport: JSON.stringify({ kind: 'verification', verified: true, checks: [], probedAt: new Date().toISOString() }),
+  });
+
+  it('runs unattended (no approval required) when isolated, verified within TTL, and scoped auth is enabled', async () => {
+    const task = makeTask({ serverName: 'local-server', unitId: 10, inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
+    const { useCase, tmux, logRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [makeUnit({ id: 10 })],
+      projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'allow' },
+      server: isolatedVerifiedServer(),
+      scopedAuthEnabled: true,
+    });
+
+    await useCase.execute(10, 1);
+
+    expect(tmux.createWindow).toHaveBeenCalled();
+    expect(logRepo.append).not.toHaveBeenCalledWith(1, 10, 'command', expect.objectContaining({ type: 'execution_policy_degraded' }));
+  });
+
+  it('degrades to manual-approval (reason "not_isolated") and blocks when the server has no isolation intent', async () => {
+    const task = makeTask({ serverName: 'local-server', unitId: 10, inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
+    const { useCase, logRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [makeUnit({ id: 10 })],
+      projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'allow' },
+      server: makeServer({ isolationIntent: false, isolationVerifiedAt: null }),
+      scopedAuthEnabled: true,
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/requires approval/);
+
+    expect(logRepo.append).toHaveBeenCalledWith(1, 10, 'command', {
+      type: 'execution_policy_degraded',
+      requestedPolicy: 'allow',
+      effectivePolicy: 'manual-approval',
+      allowDegradedReason: 'not_isolated',
+    });
+  });
+
+  it('degrades to manual-approval (reason "verification_missing") when isolated but never doctor-verified', async () => {
+    const task = makeTask({ serverName: 'local-server', unitId: 10, inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
+    const { useCase, logRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [makeUnit({ id: 10 })],
+      projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'allow' },
+      server: makeServer({ isolationIntent: true, isolationVerifiedAt: null }),
+      scopedAuthEnabled: true,
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/requires approval/);
+
+    expect(logRepo.append).toHaveBeenCalledWith(1, 10, 'command', {
+      type: 'execution_policy_degraded',
+      requestedPolicy: 'allow',
+      effectivePolicy: 'manual-approval',
+      allowDegradedReason: 'verification_missing',
+    });
+  });
+
+  it('degrades to manual-approval (reason "verification_expired") when the doctor verification is older than the TTL', async () => {
+    const task = makeTask({ serverName: 'local-server', unitId: 10, inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
+    const { ISOLATION_VERIFICATION_TTL_MS } = await import('../../projects/ProjectServer.js');
+    const { useCase, logRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [makeUnit({ id: 10 })],
+      projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'allow' },
+      server: makeServer({ isolationIntent: true, isolationVerifiedAt: new Date(Date.now() - ISOLATION_VERIFICATION_TTL_MS - 1000).toISOString() }),
+      scopedAuthEnabled: true,
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/requires approval/);
+
+    expect(logRepo.append).toHaveBeenCalledWith(1, 10, 'command', {
+      type: 'execution_policy_degraded',
+      requestedPolicy: 'allow',
+      effectivePolicy: 'manual-approval',
+      allowDegradedReason: 'verification_expired',
+    });
+  });
+
+  it('degrades to manual-approval (reason "scoped_auth_disabled") when isolated and verified but scoped auth is off', async () => {
+    const task = makeTask({ serverName: 'local-server', unitId: 10, inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
+    const { useCase, logRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [makeUnit({ id: 10 })],
+      projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'allow' },
+      server: isolatedVerifiedServer(),
+      scopedAuthEnabled: false,
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/requires approval/);
+
+    expect(logRepo.append).toHaveBeenCalledWith(1, 10, 'command', {
+      type: 'execution_policy_degraded',
+      requestedPolicy: 'allow',
+      effectivePolicy: 'manual-approval',
+      allowDegradedReason: 'scoped_auth_disabled',
+    });
+  });
+
+  // Issue #29 Step 3a review, Important finding 2 (TOCTOU): the outer
+  // enforceExecutionGate() check runs BEFORE this run ever queues for
+  // serverIsolationMutex — if an isolation doctor run commits a failure
+  // WHILE this call is queued for the lock, the outer 'allow' decision is
+  // already stale by the time the lock is actually acquired.
+  // reverifyGateInLock (wired as createRotatedWindowInLock's `preCheck`)
+  // must catch this and abort BEFORE the window/task-token env is built,
+  // not silently proceed on the outer decision.
+  it('re-verifies the gate INSIDE the isolation lock and blocks execution when a doctor failure commits between the outer check and window creation', async () => {
+    const task = makeTask({ serverName: 'local-server', unitId: 10, inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
+    const { useCase, serverRepo, logRepo, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [makeUnit({ id: 10 })],
+      projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'allow' },
+      server: isolatedVerifiedServer(),
+      scopedAuthEnabled: true,
+    });
+
+    // Simulate a doctor run committing a failure (isolationVerifiedAt
+    // cleared) after the outer enforceExecutionGate() check — and every
+    // pre-lock read (the top-of-execute() server resolution, the
+    // session-bootstrap lock's own refetch) — already read the passing row,
+    // but before this run's window-creation lock actually re-checks the
+    // gate: the first several findByName calls still see the passing row
+    // (isolationVerifiedAt/isolationReport are excluded from
+    // ServerIsolationLock's own snapshot-mismatch check, so switching mid-run
+    // never trips ServerSnapshotMismatchError), then every call from the
+    // window-creation lock's own refetch onward sees the now-degraded row.
+    const degradedServer = makeServer({ isolationIntent: true, isolationVerifiedAt: null, isolationReport: null });
+    let findByNameCalls = 0;
+    (serverRepo.findByName as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      findByNameCalls += 1;
+      return findByNameCalls <= 3 ? isolatedVerifiedServer() : degradedServer;
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/requires approval/);
+
+    // The window must never have been created — the whole point of running
+    // this check as createRotatedWindowInLock's preCheck is that it fires
+    // BEFORE any task-token/secret env is built or `create()` runs.
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(logRepo.append).toHaveBeenCalledWith(1, 10, 'command', {
+      type: 'execution_policy_degraded',
+      requestedPolicy: 'allow',
+      effectivePolicy: 'manual-approval',
+      allowDegradedReason: 'verification_missing',
+      reverifiedInLock: true,
+    });
+    expect(task.pendingOperation).toBe('execute');
+    expect(task.status).toBe('pending_approval');
+  });
+});
+
 describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO監視強化 Phase 1)', () => {
   it('creates a follow_up turn (kind, phase:null) via the real HttpSignalTurnCoordinator, sends the http-signal envelope (not the tmux marker echo), and reconciles the turn as aborted when the run is stopped', async () => {
     const unit = makeUnit({ id: 42, workerExecutionMode: 'http-signal' });
@@ -1021,6 +1292,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
       updateAgentVersion: vi.fn(),
       updateFingerprint: vi.fn(),
       clearFingerprint: vi.fn(),
+      updateIsolationIntent: vi.fn(),
       delete: vi.fn(),
     };
     const project = makeProject({ defaultUnitId: null });
@@ -1122,6 +1394,8 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
       projectSecretRepo as any,
       new EventEmitter(),
       { buildEnvForNewWindow: vi.fn(() => ({ env: {}, tokenId: 1 })), revokeGeneration: vi.fn() } as any,
+      new KeyedMutex(),
+      true,
     );
 
     await useCase.followUp(42, 1, 'please continue');
@@ -1457,6 +1731,50 @@ describe('ExecuteTaskUseCase window-rotation rollback safety (Issue #28 third-pa
     await expect(useCase.followUp(34, 44, 'continue')).rejects.toThrow(/Failed to create tmux window/);
 
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'followup_create_failed');
+  });
+
+  // Issue #29 review, 14th pass, Important finding 1: the per-server
+  // isolation lock + snapshot check now wraps confirmOldWindowGone (the old
+  // window kill) as well as createRotatedWindow, not just the latter. Before
+  // this fix, execute() killed the leftover window using whatever `server`
+  // row it had resolved before ever queuing for the lock, and only reached
+  // the lock+snapshot-check afterwards inside createRotatedWindow — so a
+  // mismatch (e.g. a concurrent isolation PUT committing mid-flight) was
+  // discovered only AFTER the old window was already dead, leaving
+  // task.tmuxWindow pointing at a killed window with no replacement ever
+  // created. This test asserts the corrected ordering: the mismatch aborts
+  // BEFORE killWindow is ever called.
+  it('execute(): aborts BEFORE killing the leftover window when the row read inside the lock disagrees with the session-bootstrap row on a security field', async () => {
+    const unit = makeUnit({ id: 36, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 46, serverName: 'local-server', unitId: 36, tmuxWindow: 'old-window' });
+    const { useCase, tmux, paneEnvService, windowRepo, serverRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: null,
+    });
+    tmux.listSessions.mockResolvedValue([
+      { name: 'azito', windows: [{ name: 'old-window', index: 5 }] },
+    ]);
+    // First findByName call (ensureSessionWithLock's session-bootstrap span)
+    // returns a non-isolated row — execute() reassigns its own `server`
+    // variable to this row and carries it into the kill+create lock span.
+    // Second call (the kill+create span itself) returns a row that
+    // disagrees on isolationIntent, simulating a `PUT /api/servers/:name`
+    // isolation transition committing in the gap between the two lock
+    // spans.
+    let call = 0;
+    (serverRepo.findByName as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      call += 1;
+      return makeServer({ isolationIntent: call >= 2 });
+    });
+
+    await expect(useCase.execute(36, 46)).rejects.toThrow(/設定が実行準備中に変更された/);
+
+    expect(tmux.killWindow).not.toHaveBeenCalled();
+    expect(paneEnvService.buildEnvForNewWindow).not.toHaveBeenCalled();
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(windowRepo.add).not.toHaveBeenCalled();
   });
 });
 
@@ -1822,6 +2140,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       updateAgentVersion: vi.fn(),
       updateFingerprint: vi.fn(),
       clearFingerprint: vi.fn(),
+      updateIsolationIntent: vi.fn(),
       delete: vi.fn(),
     };
     const projectSecretRepo = { findByProjectWithValues: vi.fn(() => []), findByProject: vi.fn(() => []) };
@@ -1884,6 +2203,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       sendKeys: vi.fn(async () => {}),
       checkPaneExists: vi.fn(async () => true),
+      uiTokenEnvForServer: vi.fn(() => ({})),
       startPipePane: vi.fn(async () => {}),
       stopPipePane: vi.fn(async () => {}),
       execCommand: vi.fn(async () => ({ stdout: '' })),
@@ -1949,6 +2269,8 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       projectSecretRepo as any,
       new EventEmitter(),
       { buildEnvForNewWindow: vi.fn(() => ({ env: {}, tokenId: 1 })), revokeGeneration: vi.fn() } as any,
+      new KeyedMutex(),
+      true,
     );
 
     // execute() itself resolves once setup (session/window/worktree

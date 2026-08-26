@@ -5,6 +5,7 @@ import { tmpdir } from 'os';
 import * as path from 'path';
 import { TaskRestoreService, type TaskRestoreDeps } from './TaskRestoreService';
 import type { Task } from './Task';
+import { KeyedMutex } from '../../shared/keyedMutex';
 
 // Containment checks (Issue #27) resolve real paths via fs.realpath, so the
 // working directory / worktree path fixtures below must exist on disk —
@@ -84,12 +85,12 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
     },
     serverRepo: {
       findAll: vi.fn(() => []),
-      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, createdAt: '2026-01-01' })),
+      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
       create: vi.fn(),
       update: vi.fn(),
       updateAgentVersion: vi.fn(),
       updateFingerprint: vi.fn(),
-      clearFingerprint: vi.fn(),
+      clearFingerprint: vi.fn(), updateIsolationIntent: vi.fn(),
       delete: vi.fn(),
     },
     projectRepo: {
@@ -125,6 +126,7 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
       findByTaskIds: vi.fn(() => new Map()),
       findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
       findByServerAndTarget: vi.fn(() => undefined),
+      findByServer: vi.fn(() => []),
       findByServerAndSession: vi.fn(() => []),
       update: vi.fn(),
       updateAgentSessionIdByWindow: vi.fn(),
@@ -141,6 +143,7 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
       resolvePaneId: vi.fn(async () => '%0'),
       sendKeys: vi.fn(async () => {}),
       checkPaneExists: vi.fn(async () => true),
+      uiTokenEnvForServer: vi.fn(() => ({})),
     } as unknown as TaskRestoreDeps['tmux'],
     worktreeServiceFactory: {
       create: vi.fn(() => ({
@@ -206,6 +209,12 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
       revokeGeneration: vi.fn(),
       revokeForDestroyedWindow: vi.fn(),
     } as unknown as TaskRestoreDeps['paneEnvService'],
+    // Issue #29 review (7th pass), Important finding 1: a real KeyedMutex
+    // (not a mock) so createRotatedWindow's `withLock` call actually runs
+    // its callback synchronously-in-sequence like production, rather than
+    // needing every test to special-case a mocked lock.
+    serverIsolationMutex: new KeyedMutex(),
+    scopedAuthEnabled: true,
     ...overrides,
   };
 }
@@ -602,6 +611,64 @@ describe('TaskRestoreService', () => {
       'azito',
       { extraEnv: {} },
     );
+  });
+
+  // Issue #29 review (10th pass): Critical finding 1 (session bootstrap must
+  // run inside the isolation lock, against a freshly re-read server) and
+  // Important finding 3 (the fresh `server` createRotatedWindow returns must
+  // be used for everything downstream, not the `server` argument it was
+  // called with) — this test gives serverRepo.findByName a distinct
+  // ServerConfig object on every call (tagged via `agentVersion`, an
+  // otherwise-unused field here) to prove every server-carrying call this
+  // function makes AFTER a given lock-and-refetch actually received THAT
+  // refetch's object, not an earlier one.
+  it('uses the server row re-read inside each isolation-lock span for every subsequent tmux/transport call, not the server resolved before restore() started', async () => {
+    const task = makeTask({ serverName: 'test-server' });
+    let generation = 0;
+    const findByName = vi.fn(() => {
+      generation += 1;
+      return {
+        name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null,
+        // Tag each returned row with the call count so assertions below can
+        // tell exactly which generation a given tmux/transport call saw.
+        agentVersion: `gen-${generation}`,
+        sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const,
+        isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01',
+      };
+    });
+    deps = makeDeps({
+      ...deps,
+      serverRepo: { ...deps.serverRepo, findByName },
+      tmux: {
+        ...deps.tmux,
+        listSessions: vi.fn(async () => []),
+        createSession: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'azito' })),
+        createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' })),
+      } as unknown as TaskRestoreDeps['tmux'],
+    });
+    service = new TaskRestoreService(deps);
+
+    await service.restore(task, log);
+
+    // findByName is called once at the top of restore() (serverAtStart),
+    // once inside resolveExecutionManifest() for the execution-gate
+    // manifest, then once per lock-and-refetch span below — so
+    // createSession/resolvePaneId/getTransport must each see whichever
+    // generation its OWN span produced, never an earlier one.
+    const createSessionServer = (deps.tmux.createSession as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const resolvePaneIdServer = (deps.tmux.resolvePaneId as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const getTransportServer = (deps.transportFactory.getTransport as ReturnType<typeof vi.fn>).mock.calls[0][0];
+
+    // ensureSessionWithLock's own lock span re-read the server for the
+    // session bootstrap — createSession must see that row, not the one
+    // resolved at the very top of restore() or inside resolveExecutionManifest().
+    expect(createSessionServer.agentVersion).not.toBe('gen-1');
+    // createRotatedWindow's own, LATER lock span re-read the server again
+    // for the real task window — resolvePaneId/getTransport (called after,
+    // with the reassigned `server`) must see that STRICTLY NEWER row, not
+    // the one ensureSessionWithLock's span produced.
+    expect(resolvePaneIdServer.agentVersion).not.toBe(createSessionServer.agentVersion);
+    expect(getTransportServer.agentVersion).toBe(resolvePaneIdServer.agentVersion);
   });
 
   describe('execution gate (Issue #328)', () => {

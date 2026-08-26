@@ -5,7 +5,7 @@ import type { Task } from '../Task';
 import type { IUnitRepository, SubagentConfig, Unit } from '../../units/Unit';
 import type { IProjectRepository, ProjectDetail } from '../../projects/Project';
 import type { IProjectServerRepository, ProjectServer } from '../../projects/ProjectServer';
-import type { IServerRepository } from '../../servers/Server';
+import type { IServerRepository, ServerConfig } from '../../servers/Server';
 import type { SqliteProjectSecretRepository } from '../../projects/SqliteProjectSecretRepository';
 import type { PhaseConfig } from '../../sidekicks/PhaseConfig';
 import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoader';
@@ -623,6 +623,21 @@ export interface ResolvedExecutionManifest {
     host: string | null;
     agentPort: number | null;
     sshHost: string | null;
+    // Issue #29 review, Critical finding 2: whether the resolved target
+    // server is declared isolation_intent=1 — TaskPaneEnvironmentService
+    // withholds ALL project secrets (and, once scoped auth is fully rolled
+    // out, the hub UI/agent tokens) from such a server (see its module doc
+    // comment). Before this field existed, toggling isolation_intent on/off
+    // for an ALREADY-approved task's server changed nothing this fingerprint
+    // covered: approving a task while unisolated, then flipping the server to
+    // isolated (or the reverse — flipping OFF an isolated server post-
+    // approval, silently exposing every project secret to a task a human
+    // approved under the belief no secret would ever reach it) left the
+    // fingerprint unchanged, so the execution gate never re-prompted for
+    // approval. `secrets.namesDigest` below is derived from the set of
+    // secrets ACTUALLY injected (empty when isolated), so the two fields
+    // together make both directions of that toggle visible to the gate.
+    isolationIntent: boolean;
   };
   branches: {
     base: string;
@@ -762,6 +777,21 @@ export interface ExecutionManifestResolution {
   unit: Unit | null;
   serverName: string | null;
   projectServer: ProjectServer | null;
+  /**
+   * The full resolved `servers` row for `serverName` (Issue #29 Step 3a), or
+   * `null` under the same conditions `manifest.server.isolationIntent`
+   * already tolerates (no resolvable `serverName`, or the row was deleted
+   * after being registered). Exists alongside `manifest.server` (which only
+   * carries the fields the approval fingerprint hashes) because
+   * `resolveEffectiveInputPolicy` (projects/ProjectServer.ts) additionally
+   * needs `isolationVerifiedAt` — deliberately NOT part of the manifest/
+   * fingerprint (a doctor re-verification must not self-invalidate an
+   * already-approved manual-approval task; see the manifest's own "server"
+   * field doc comment for the excluded-fields rationale). Every
+   * `checkExecutionGate` call site resolves the effective policy from THIS
+   * field, not by re-querying `serverRepo` a second time.
+   */
+  serverConfig: ServerConfig | null;
 }
 
 export interface ExecutionManifestDeps {
@@ -850,7 +880,18 @@ export function resolveExecutionManifest(
   // Sorted so the digest is independent of DB row insertion order — see
   // `secrets.namesDigest`'s doc comment above. `findByProject` (not
   // `findByProjectWithValues`): only names are read here, never values.
-  const secretNames = deps.projectSecretRepo.findByProject(task.projectId).map((s) => s.name).sort();
+  //
+  // Issue #29 review, Critical finding 2: derived from the set ACTUALLY
+  // injected, not merely "every secret the project has" — TaskPaneEnvironmentService
+  // withholds every AZITO_SECRET_* entirely for an isolation_intent=1 server
+  // (skipped before decrypt, see its own doc comment), so the fingerprint
+  // must reflect an empty set for such a server. Without this, an
+  // already-approved task's fingerprint would not change when its server is
+  // (de)isolated post-approval, even though the set of secrets actually
+  // reaching the pane changes from "every project secret" to "none" or back.
+  const secretNames = serverConfig?.isolationIntent
+    ? []
+    : deps.projectSecretRepo.findByProject(task.projectId).map((s) => s.name).sort();
 
   // Same resolution PhaseLoopRunner.stateMachineLoop uses to pick the phase
   // a run resumes at (resolveCurrentPhaseIndex), then resolvePhaseSidekick
@@ -946,6 +987,7 @@ export function resolveExecutionManifest(
       host: serverConfig?.host ?? null,
       agentPort: serverConfig?.agentPort ?? null,
       sshHost: serverConfig?.sshHost ?? null,
+      isolationIntent: serverConfig?.isolationIntent ?? false,
     },
     branches: {
       base: baseBranch,
@@ -990,7 +1032,7 @@ export function resolveExecutionManifest(
     respawn: respawnInput ?? null,
   };
 
-  return { manifest, project, unit, serverName, projectServer };
+  return { manifest, project, unit, serverName, projectServer, serverConfig };
 }
 
 function normalizeSubagent(cfg: SubagentConfig | null): { enabled: boolean; provider: string; model: string } | null {
@@ -1040,6 +1082,9 @@ export function hashExecutionManifest(manifest: ResolvedExecutionManifest): stri
       // stay distinguishable in the hashed JSON.
       agentPort: manifest.server.agentPort ?? null,
       sshHost: manifest.server.sshHost ?? '',
+      // Issue #29 review, Critical finding 2: see the field's own doc
+      // comment on ResolvedExecutionManifest.server above.
+      isolationIntent: manifest.server.isolationIntent,
     },
     branches: {
       base: manifest.branches.base,

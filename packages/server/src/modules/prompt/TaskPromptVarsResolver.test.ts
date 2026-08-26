@@ -61,6 +61,9 @@ const makeServer = (overrides: Partial<ServerConfig> = {}): ServerConfig => ({
   sshHost: null,
   sshHostFingerprint: null,
   muxRuntime: 'system',
+  isolationIntent: false,
+  isolationVerifiedAt: null,
+  isolationReport: null, isolationCleanupReport: null,
   createdAt: '2024-01-01',
   ...overrides,
 });

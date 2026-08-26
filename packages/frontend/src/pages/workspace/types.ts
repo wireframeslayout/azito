@@ -117,6 +117,8 @@ export interface ExecutionApprovalData {
   inputTrust: 'trusted' | 'untrusted';
   pendingOperation: string | null;
   inputPolicy: 'deny' | 'manual-approval' | 'allow' | null;
+  /** Issue #29 Step 3a: why an `inputPolicy: 'allow'` project server still landed this task on the approval screen — `null` when the requested policy was never 'allow' (nothing to explain), or when 'allow' was actually effective (in which case this task would never have reached pending_approval in the first place). */
+  allowDegradedReason: 'not_isolated' | 'verification_missing' | 'verification_expired' | 'scoped_auth_disabled' | 'verification_failed' | null;
   /** Fingerprint of the manifest this response describes (Issue #328 review
    * fix 1) — must be echoed back unchanged in POST
    * /api/tasks/:id/approve-execution's `approved: true` request. A 409 with
@@ -132,11 +134,21 @@ export interface ExecutionApprovalData {
     branches: { base: string; target: string; work: string };
     phases: Array<{ phase: string; sidekickName: string | null }>;
     repository: { id: number; provider: string; url: string; owner: string | null; repoName: string | null } | null;
+    /** Issue #29 review, Critical finding 2: whether the resolved target server is declared isolation_intent=1 — shown as a one-line notice on the approval screen so a human approver can see that no secrets/UI tokens will reach this run's pane. */
+    isolationIntent: boolean;
   };
   secretNames: string[];
 }
 
-export interface Server { name: string; type: string; host?: string; }
+export interface Server {
+  name: string;
+  type: string;
+  host?: string;
+  /** Issue #29 Step 3a: whether this server has declared isolation intent — GET /api/servers already returns this (only agentToken/isolationReport/isolationCleanupReport are stripped from the list response), used to gate whether 'allow' is selectable for a project_servers row on this server. */
+  isolationIntent?: boolean;
+  /** ISO timestamp of the isolation doctor's last passing verification, or null. Used together with `isolationIntent` for the same UI hint. */
+  isolationVerifiedAt?: string | null;
+}
 export interface Pane { index: number; title: string; command: string; width: number; height: number; active: boolean; }
 export interface TmuxWindow { index: number; name: string; panes: Pane[]; activity?: number; }
 export interface Session { name: string; windows: TmuxWindow[]; }

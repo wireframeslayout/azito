@@ -7,12 +7,14 @@ import { usesHttpSignalPath } from '../../units/Unit';
 import type { IServerRepository } from '../../servers/Server';
 import type { IProjectRepository } from '../../projects/Project';
 import type { IProjectServerRepository } from '../../projects/ProjectServer';
+import { resolveEffectiveInputPolicy } from '../../projects/ProjectServer';
 import type { SqliteProjectSecretRepository } from '../../projects/SqliteProjectSecretRepository';
 import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoader';
 import type { SidekickSyncService } from '../../sidekicks/SidekickSyncService';
 import type { IExecutionLogRepository, LogType } from '../ExecutionLog';
 import type { TmuxClient } from '../../tmux/TmuxClient';
-import { confirmOldWindowGone, createRotatedWindow, rollbackWindowReference, runExclusiveForTask } from './WindowRotation';
+import { confirmOldWindowGone, createRotatedWindow, createRotatedWindowInLock, ensureSessionWithLock, rollbackWindowReference, runExclusiveForTask, ServerSnapshotMismatchError, withServerLock, type ServerIsolationLock } from './WindowRotation';
+import type { KeyedMutex } from '../../../shared/keyedMutex';
 import type { IWorktreeService, WorktreeInfo } from '../../git/IWorktreeService';
 import type { WorktreeServiceFactory } from '../../git/WorktreeServiceFactory';
 import { PathResolverFactory, assertDirectoryContained } from '../../git/PathContainment';
@@ -40,7 +42,7 @@ import { HttpSignalTurnCoordinator } from './HttpSignalTurnCoordinator';
 import type { SupervisorRegistry } from '../../supervisors/SupervisorRegistry';
 import { shouldSupervise } from '../../supervisors/SupervisorLaunch';
 import { ResourceExhaustedError, type ResourceGuard } from '../../servers/resources/ResourceGuard';
-import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError } from './ExecutionGate';
+import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError, reverifyExecutionGateInLock } from './ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionManifest';
 import { TuiWorkerRuntime } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
@@ -127,6 +129,25 @@ export class ExecuteTaskUseCase {
     // former private buildExtraEnv() (removed), which only ever assembled
     // secrets + agent-server env and left AZITO_TASK_TOKEN unissued.
     private paneEnvService: TaskPaneEnvironmentService,
+    // Issue #29 review (7th pass), Important finding 1: the SAME
+    // per-server-name mutex `modules/servers/routes.ts`'s PUT handler and
+    // `modules/tmux/routes/sessions.ts`'s manual window/pane routes already
+    // serialize the isolation false->true transition against (see that
+    // mutex's own doc comment) — required, not optional, so this class can
+    // never construct a window without it. Passed straight through to
+    // `WindowRotation.createRotatedWindow`/`createSecondaryWindow` bundled
+    // with `serverRepo` as a `ServerIsolationLock` (see its own doc comment
+    // in WindowRotation.ts for why env-resolution must be locked+refetched
+    // through this exact key).
+    private serverIsolationMutex: KeyedMutex,
+    // Issue #29 Step 3a: threaded through to enforceExecutionGate() below and
+    // to the PhaseLoopRunner instance this class constructs (its own
+    // per-phase re-verification needs the identical flag) — resolved ONCE at
+    // the composition root (app/wiring.ts, shared/auth/scopedAuthFlag.ts) and
+    // passed down, never re-read from process.env here (Resolve at the
+    // Boundary). Required (not optional) so a caller can never forget to
+    // wire it and silently fall back to treating scoped auth as enabled.
+    private scopedAuthEnabled: boolean,
   ) {
     this.gitInfoCollector = new GitInfoCollector(this.tmux);
     this.pushVerifier = new PushVerifier(this.tmux, this.gitProvider);
@@ -174,7 +195,16 @@ export class ExecuteTaskUseCase {
       this.runtimeRegistry,
       this.serverRepo,
       this.projectSecretRepo,
+      this.scopedAuthEnabled,
     );
+  }
+
+  // Bundled once per call (cheap object literal — `serverRepo`/`serverIsolationMutex`
+  // themselves are the singletons) so createRotatedWindow/createSecondaryWindow
+  // call sites below don't each re-spell the same two-field object. See
+  // ServerIsolationLock's doc comment in WindowRotation.ts.
+  private get serverIsolationLock(): ServerIsolationLock {
+    return { serverIsolationMutex: this.serverIsolationMutex, serverRepo: this.serverRepo };
   }
 
   private getWorktreeService(server: ServerConfig): IWorktreeService {
@@ -276,7 +306,7 @@ export class ExecuteTaskUseCase {
     // fingerprint of RESOLVED execution content instead of raw task columns
     // (see ExecutionManifest.ts). `project`/`projectServer` returned here are
     // reused by execute()'s working-directory logic below, same as before.
-    const { manifest, project, projectServer } = resolveExecutionManifest(task, {
+    const { manifest, project, projectServer, serverConfig } = resolveExecutionManifest(task, {
       unitRepo: this.unitRepo,
       projectRepo: this.projectRepo,
       projectServerRepo: this.projectServerRepo,
@@ -286,7 +316,21 @@ export class ExecuteTaskUseCase {
       sidekickLoader: this.sidekickLoader,
     });
     const manifestHash = hashExecutionManifest(manifest);
-    const gate = checkExecutionGate(task, projectServer, manifestHash);
+    // Issue #29 Step 3a: the 3-point AND gate for 'allow' is re-evaluated on
+    // every entry point, not just resolved once at approval time — see
+    // resolveEffectiveInputPolicy's own doc comment for why (isolation
+    // verification is a live, time-bounded fact, not something a human
+    // approval should freeze).
+    const effective = resolveEffectiveInputPolicy(projectServer, serverConfig, this.scopedAuthEnabled);
+    if (effective.allowDegradedReason) {
+      this.appendLog(task.id, unitId, 'command', {
+        type: 'execution_policy_degraded',
+        requestedPolicy: effective.requestedPolicy,
+        effectivePolicy: effective.effectivePolicy,
+        allowDegradedReason: effective.allowDegradedReason,
+      });
+    }
+    const gate = checkExecutionGate(task, effective.effectivePolicy, manifestHash);
     if (gate.allowed) return { project, projectServer };
 
     this.appendLog(task.id, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
@@ -332,8 +376,70 @@ export class ExecuteTaskUseCase {
     throw new ExecutionGateDeniedError(task.id);
   }
 
+  /**
+   * In-lock counterpart of {@link enforceExecutionGate} (Issue #29 Step 3a
+   * review, Important finding 2): re-resolves the manifest from `currentTask`
+   * (the row re-read inside `runExclusiveForTask`, not the possibly-stale
+   * `task` `enforceExecutionGate` ran against before either lock was queued
+   * for) and re-runs `resolveEffectiveInputPolicy()`/`checkExecutionGate()`
+   * against `freshServer` — the row `withServerLock` already re-read once
+   * the per-server isolation lock was actually acquired. Passed as
+   * `createRotatedWindow`/`createRotatedWindowInLock`'s `preCheck` so it
+   * runs immediately before any task-token/secret env is built, not after.
+   * See `ExecutionGate.reverifyExecutionGateInLock`'s own doc comment for
+   * the TOCTOU this closes.
+   */
+  private reverifyGateInLock(
+    currentTask: Task,
+    unitId: number,
+    operation: NonNullable<Task['pendingOperation']>,
+    freshServer: ServerConfig,
+  ): void {
+    const { manifest, projectServer } = resolveExecutionManifest(currentTask, {
+      unitRepo: this.unitRepo,
+      projectRepo: this.projectRepo,
+      projectServerRepo: this.projectServerRepo,
+      serverRepo: this.serverRepo,
+      projectSecretRepo: this.projectSecretRepo,
+      unitTypeLoader: this.unitTypeLoader,
+      sidekickLoader: this.sidekickLoader,
+    });
+    const manifestHash = hashExecutionManifest(manifest);
+    reverifyExecutionGateInLock(
+      { taskRepo: this.taskRepo, logRepo: this.logRepo, events: this.events },
+      currentTask,
+      unitId,
+      operation,
+      projectServer,
+      freshServer,
+      this.scopedAuthEnabled,
+      manifestHash,
+    );
+  }
+
   private appendLog(taskId: number, unitId: number, type: LogType, content: unknown): void {
     appendLogAndEmit(this.logRepo, this.events, taskId, unitId, type, content);
+  }
+
+  /**
+   * Marks the task `failed` and logs when `err` is a
+   * {@link ServerSnapshotMismatchError} (Issue #29 review, 12th pass,
+   * Critical finding 1) — the server row `ensureSessionWithLock`/
+   * `createRotatedWindow` re-read once the isolation lock was actually held
+   * disagreed with the one this run's execution gate / resource / containment
+   * checks ran against, so continuing would mean acting on an endpoint or
+   * credential set that was never the one approved. Every call site below
+   * that wraps `ensureSessionWithLock`/`createRotatedWindow` checks this
+   * first, before any generic error-wrapping of its own, so the mismatch
+   * error's identity survives for callers/tests that want to distinguish it
+   * — returns whether `err` was in fact a mismatch, purely so call sites can
+   * decide whether to fall through to their own generic handling.
+   */
+  private failOnServerSnapshotMismatch(err: unknown, taskId: number, unitId: number): boolean {
+    if (!(err instanceof ServerSnapshotMismatchError)) return false;
+    this.appendLog(taskId, unitId, 'command', { type: 'server_snapshot_mismatch', message: err.message });
+    this.taskRepo.update(taskId, { status: 'failed' as TaskStatus } as Partial<Task>);
+    return true;
   }
 
   /**
@@ -417,8 +523,17 @@ export class ExecuteTaskUseCase {
     // workerProfileId resolution used, now merged into Unit (Issue #263 Refine B).
     const { serverName, tmuxSession, unit } = this.resolveExecutionEnv(task, unitId);
 
-    const server = this.serverRepo.findByName(serverName);
-    if (!server) throw new Error('Server not found');
+    const serverAtStart = this.serverRepo.findByName(serverName);
+    if (!serverAtStart) throw new Error('Server not found');
+    // `let`, not `const`: reassigned below (ensureSessionWithLock,
+    // createRotatedWindow) to whatever fresher row the isolation lock
+    // re-read — explicitly typed `ServerConfig` (not inferred from
+    // `findByName`'s nullable return) so TS control-flow narrowing isn't
+    // lost the moment this variable is captured by a nested closure below
+    // (createRotatedWindow's `create` callback, runExclusiveForTask's
+    // callback, ...), which would otherwise re-widen every later use back
+    // to `ServerConfig | null`.
+    let server: ServerConfig = serverAtStart;
 
     // Untrusted-input execution gate (Issue #328): must run before the
     // resource guard, before any tmux window, before any worktree, before
@@ -476,13 +591,37 @@ export class ExecuteTaskUseCase {
 
     // Ensure tmux session exists. This bootstrap window (if the session
     // doesn't exist yet) is immediately abandoned in favor of the real task
-    // window created below — it deliberately gets no env at all (no task
-    // token, no UI token) rather than issuing/rotating a token for a window
-    // nobody uses.
-    const existingSessions = await this.tmux.listSessions(server);
-    const sessionExists = existingSessions.some((s) => s.name === tmuxSession);
-    if (!sessionExists) {
-      await this.tmux.createSession(server, tmuxSession, { extraEnv: {} });
+    // window created below — it deliberately gets no task token (issuing/
+    // rotating one for a window nobody uses would be pointless). It IS still
+    // routed through `ensureSessionWithLock`'s `isolationMaskForServer`
+    // (Issue #29 review, 11th pass, Critical finding 1 — not a bare `{}`,
+    // and NOT `uiTokenEnvForServer` either, since this is a TASK session and
+    // must never inject the live operator UI token the way
+    // `uiTokenEnvForServer` does for a non-isolated server): a bare `{}`
+    // injects nothing itself, but does nothing to mask a credential the
+    // pane inherits anyway — either from the tmux SESSION's own leftover
+    // env, or from the tmux SERVER process's own env (the remote agent
+    // process's env, for an `agent`-type server) — so an isolated server
+    // still needs the explicit mask here exactly like every other
+    // window-creation call site does.
+    //
+    // Routed through ensureSessionWithLock (Issue #29 review, 10th pass,
+    // Critical finding 1): the existence check AND the createSession call
+    // both now run inside `serverIsolationLock`, against a `server` row
+    // re-read only once the lock is held — never against the `server`
+    // resolved above, which a concurrent isolation PUT may have already
+    // superseded. `server` is reassigned to the fresh row so every
+    // subsequent use in this function (including the real task-window
+    // creation below) sees it too.
+    let sessionResult: { created: boolean; server: ServerConfig };
+    try {
+      sessionResult = await ensureSessionWithLock(this.tmux, this.serverIsolationLock, server, tmuxSession);
+    } catch (err) {
+      this.failOnServerSnapshotMismatch(err, taskId, unitId);
+      throw err;
+    }
+    server = sessionResult.server;
+    if (sessionResult.created) {
       await sleep(500);
     }
 
@@ -510,8 +649,9 @@ export class ExecuteTaskUseCase {
     // in WindowRotation.ts.
     let windowName: string;
     let tokenId: number;
+    let createdServer: ServerConfig;
     try {
-      ({ windowName, tokenId } = await runExclusiveForTask(taskId, async () => {
+      ({ windowName, tokenId, server: createdServer } = await runExclusiveForTask(taskId, async () => {
         // Task/tmux state is re-read HERE, inside the lock (Issue #28
         // third-party review, TOCTOU finding) — not taken from the `task`
         // captured before this lock was even queued for. Without this, a
@@ -531,37 +671,69 @@ export class ExecuteTaskUseCase {
         // actually persisted.
         const currentTask = this.taskRepo.findById(taskId);
         if (!currentTask) throw new Error(`Task ${taskId} not found`);
-        if (currentTask.tmuxWindow) {
-          const preCheck = await this.tmux.listSessions(server);
-          const preSession = preCheck.find((s) => s.name === tmuxSession);
-          const oldWin = preSession?.windows.find((w) => w.name === currentTask.tmuxWindow);
-          await confirmOldWindowGone(
-            this.tmux,
-            server,
-            oldWin ? { target: `${tmuxSession}:${oldWin.index}`, kind: 'window' } : null,
-            task.id,
+
+        // Issue #29 review, 14th pass, Important finding 1: the per-server
+        // isolation lock is now acquired — and `server`'s snapshot verified
+        // against the freshly re-read row — BEFORE the old window is
+        // killed, not after. This used to kill the old window using the
+        // (possibly stale) `server` argument from before either lock was
+        // even queued for, and only reached the snapshot check afterwards
+        // inside `createRotatedWindow` — so a mismatch aborted AFTER the
+        // kill had already run, leaving `tmuxWindow` pointing at a
+        // now-dead window with no replacement ever created. `withServerLock`
+        // performs the lock+refetch+snapshot-check first; the kill and the
+        // window creation both run inside its callback, against the same
+        // `freshServer` row, so a mismatch now aborts before anything is
+        // killed.
+        const { windowName: newWindowName, tokenId: newTokenId, server: newServer } = await withServerLock(this.serverIsolationLock, server, true, async (freshServer) => {
+          if (currentTask.tmuxWindow) {
+            const preCheck = await this.tmux.listSessions(freshServer);
+            const preSession = preCheck.find((s) => s.name === tmuxSession);
+            const oldWin = preSession?.windows.find((w) => w.name === currentTask.tmuxWindow);
+            await confirmOldWindowGone(
+              this.tmux,
+              freshServer,
+              oldWin ? { target: `${tmuxSession}:${oldWin.index}`, kind: 'window' } : null,
+              task.id,
+            );
+            if (oldWin) await sleep(300);
+          }
+
+          // Create a new tmux window for the task — this call is the actual
+          // window-generation point, so it's the one that rotates the task
+          // token (TaskPaneEnvironmentService.buildEnvForNewWindow; design v3
+          // §2). createRotatedWindowInLock revokes the freshly-issued
+          // generation if creation fails, whether by throwing (local
+          // transport) or resolving with a non-zero exit code (agent
+          // transport — see WindowRotation.ts's doc comment; Issue #28
+          // third-party review finding).
+          return createRotatedWindowInLock(this.paneEnvService, freshServer, currentTask, 'execute_create_failed', (fs, env) =>
+            this.tmux.createWindow(fs, tmuxSession, `task-${task.id}`, { extraEnv: env }),
+            (fs) => this.reverifyGateInLock(currentTask, unitId, 'execute', fs),
           );
-          if (oldWin) await sleep(300);
-        }
+        });
 
-        // Create a new tmux window for the task — this call is the actual
-        // window-generation point, so it's the one that rotates the task
-        // token (TaskPaneEnvironmentService.buildEnvForNewWindow; design v3
-        // §2). createRotatedWindow revokes the freshly-issued generation if
-        // creation fails, whether by throwing (local transport) or
-        // resolving with a non-zero exit code (agent transport — see
-        // WindowRotation.ts's doc comment; Issue #28 third-party review
-        // finding).
-        const created = await createRotatedWindow(this.paneEnvService, server, currentTask, 'execute_create_failed', (env) =>
-          this.tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: env }),
-        );
-
-        this.taskRepo.update(taskId, { status: 'in_progress' as TaskStatus, tmuxWindow: created.windowName });
-        return { windowName: created.windowName, tokenId: created.tokenId };
+        this.taskRepo.update(taskId, { status: 'in_progress' as TaskStatus, tmuxWindow: newWindowName });
+        // `server` is returned too (Issue #29 review, 10th pass, Important
+        // finding 3) — the lock re-read and actually created the window
+        // with this row; everything execute() does past this point
+        // (resolvePaneId, the worktree transport, the rollback's killWindow)
+        // must keep using it, not the (possibly now-stale) `server` this
+        // closure captured from its own outer scope.
+        return { windowName: newWindowName, tokenId: newTokenId, server: newServer };
       }));
     } catch (err) {
+      if (this.failOnServerSnapshotMismatch(err, taskId, unitId)) throw err;
+      // Issue #29 Step 3a review, Important finding 2: reverifyGateInLock
+      // (run as this window creation's `preCheck`, above) throws the SAME
+      // ExecutionGate* errors enforceExecutionGate() throws pre-lock — these
+      // must survive identity-intact for replyToExecutionGateError()
+      // (routes.ts) to translate correctly, not be swallowed into the
+      // generic "Failed to create tmux window" wrap below.
+      if (err instanceof ExecutionGateDeniedError || err instanceof ExecutionGatePendingApprovalError) throw err;
       throw new Error(`Failed to create tmux window: ${err instanceof Error ? err.message : err}`);
     }
+    server = createdServer;
 
     const windowTarget = `${tmuxSession}:${windowName}`;
     const target = await this.tmux.resolvePaneId(server, windowTarget);
@@ -910,8 +1082,11 @@ export class ExecuteTaskUseCase {
 
     const { serverName, tmuxSession, unit } = this.resolveExecutionEnv(task, unitId);
 
-    const server = this.serverRepo.findByName(serverName);
-    if (!server) throw new Error('Server not found');
+    const serverAtStart = this.serverRepo.findByName(serverName);
+    if (!serverAtStart) throw new Error('Server not found');
+    // See the matching comment on execute()'s own `server` declaration for
+    // why this is explicitly typed `ServerConfig` rather than inferred.
+    let server: ServerConfig = serverAtStart;
 
     // Same gate as execute() (Issue #328). A follow-up can resume a worker
     // just as much as a fresh execute() can — e.g. a description edit on an
@@ -926,15 +1101,31 @@ export class ExecuteTaskUseCase {
     this.taskRepo.updateStatus(taskId, 'in_progress');
 
     // Ensure tmux session exists. Same throwaway-bootstrap-window reasoning
-    // as execute() above: no env at all when a session must be created here,
-    // since the real task window (created just below, if it doesn't already
-    // exist) is what actually gets AZITO_TASK_TOKEN. Session creation itself
-    // is not part of the task-token rotation, so it stays outside the
-    // per-task lock below (idempotent/harmless to race).
-    const existingSessions = await this.tmux.listSessions(server);
-    const sessionExists = existingSessions.some((s) => s.name === tmuxSession);
-    if (!sessionExists) {
-      await this.tmux.createSession(server, tmuxSession, { extraEnv: {} });
+    // as execute() above — including the same `isolationMaskForServer`
+    // masking (via `ensureSessionWithLock`), not a bare `{}` and not
+    // `uiTokenEnvForServer` — since the real task window (created just
+    // below, if it doesn't already exist) is what actually gets
+    // AZITO_TASK_TOKEN.
+    //
+    // Routed through ensureSessionWithLock (Issue #29 review, 10th pass,
+    // Critical finding 1) — same fix as execute() above: the existence
+    // check and createSession both now run inside the isolation lock
+    // against a freshly re-read `server`, and `server` is reassigned to
+    // that fresh row for everything followUp() does afterwards. (This is
+    // still logically separate from the per-task rotation lock below —
+    // session bootstrap is idempotent/harmless to race against another
+    // task's window creation on the same server/session — it is now
+    // serialized only against the isolation transition, via the
+    // per-server-name mutex, not against runExclusiveForTask.)
+    let sessionResult: { created: boolean; server: ServerConfig };
+    try {
+      sessionResult = await ensureSessionWithLock(this.tmux, this.serverIsolationLock, server, tmuxSession);
+    } catch (err) {
+      this.failOnServerSnapshotMismatch(err, taskId, unitId);
+      throw err;
+    }
+    server = sessionResult.server;
+    if (sessionResult.created) {
       await sleep(500);
     }
 
@@ -944,6 +1135,7 @@ export class ExecuteTaskUseCase {
     let windowName: string;
     let windowExists: boolean;
     let tokenId: number | null;
+    let createdServer: ServerConfig;
     try {
       // The ENTIRE "read current window state -> decide whether to rotate ->
       // create -> persist" sequence now runs inside runExclusiveForTask, not
@@ -960,7 +1152,7 @@ export class ExecuteTaskUseCase {
       // re-checking tmux for it there too, means the decision is always made
       // against the latest state any prior queued rotation for this task
       // (execute()/followUp()/respawn()) actually persisted.
-      ({ windowName, windowExists, tokenId } = await runExclusiveForTask(taskId, async () => {
+      ({ windowName, windowExists, tokenId, server: createdServer } = await runExclusiveForTask(taskId, async () => {
         const currentTask = this.taskRepo.findById(taskId);
         if (!currentTask) throw new Error(`Task ${taskId} not found`);
         const candidateWindowName = currentTask.tmuxWindow || `task-${task.id}`;
@@ -971,7 +1163,7 @@ export class ExecuteTaskUseCase {
           if (session) exists = session.windows.some((w) => w.name === candidateWindowName);
         } catch {}
         if (exists) {
-          return { windowName: candidateWindowName, windowExists: true, tokenId: null };
+          return { windowName: candidateWindowName, windowExists: true, tokenId: null, server };
         }
 
         // Window generation point for a follow-up that has no window to
@@ -987,15 +1179,27 @@ export class ExecuteTaskUseCase {
         // WindowRotation.ts's doc comment). The DB is only updated with
         // `windowName` once creation is confirmed to have actually
         // succeeded.
-        const created = await createRotatedWindow(this.paneEnvService, server, currentTask, 'followup_create_failed', (env) =>
-          this.tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: env }),
+        const created = await createRotatedWindow(this.paneEnvService, this.serverIsolationLock, server, currentTask, 'followup_create_failed', (freshServer, env) =>
+          this.tmux.createWindow(freshServer, tmuxSession, `task-${task.id}`, { extraEnv: env }),
+          true,
+          (fs) => this.reverifyGateInLock(currentTask, unitId, 'resume', fs),
         );
         this.taskRepo.update(taskId, { tmuxWindow: created.windowName } as Partial<Task>);
-        return { windowName: created.windowName, windowExists: false, tokenId: created.tokenId };
+        return { windowName: created.windowName, windowExists: false, tokenId: created.tokenId, server: created.server };
       }));
     } catch (err) {
+      if (this.failOnServerSnapshotMismatch(err, taskId, unitId)) throw err;
+      // Issue #29 Step 3a review, Important finding 2: see the matching
+      // comment in execute() above — reverifyGateInLock's errors must not be
+      // swallowed into the generic wrap below.
+      if (err instanceof ExecutionGateDeniedError || err instanceof ExecutionGatePendingApprovalError) throw err;
       throw new Error(`Failed to create tmux window: ${err instanceof Error ? err.message : err}`);
     }
+    // Issue #29 review (10th pass), Important finding 3: use the fresh
+    // `server` row the lock actually ran against (either the "window
+    // already exists" branch's own re-check, or createRotatedWindow's
+    // refetch) for everything followUp() does past this point.
+    server = createdServer;
 
     const windowTarget = `${tmuxSession}:${windowName}`;
     const target = await this.tmux.resolvePaneId(server, windowTarget);

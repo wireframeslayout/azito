@@ -143,7 +143,11 @@
     "muxManaged": "AZITO managed tmux",
     "muxMigrationWarning": "Sessions on the previous socket will not be migrated.",
     "displayName": "Display Name",
-    "displayNamePlaceholder": "e.g. dev-server"
+    "displayNamePlaceholder": "e.g. dev-server",
+    "isolationIntent": "Isolated execution",
+    "isolationIntentLabel": "Withhold operator credentials from this server",
+    "isolationIntentHint": "Enabling attempts to clean up any already-distributed operator token. Use \"Verify isolation\" on the server detail page to confirm no credentials remain.",
+    "isolationRequiresScopedAuth": "Enabling isolation requires scoped auth (AZITO_SCOPED_AUTH) to be on. In compat mode, only disabling it is allowed."
   },
   "menu": {
     "windows": "Objects",

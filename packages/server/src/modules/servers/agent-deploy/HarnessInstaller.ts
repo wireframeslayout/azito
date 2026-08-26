@@ -27,6 +27,17 @@ export interface HarnessInstallOptions {
   uiToken?: string;
   serverName?: string;
   prefix?: string;
+  /**
+   * Issue #29 design v2, 層3「遮断」: when the target server has declared
+   * isolation_intent (isolation_intent=1), `--ui-token` is withheld from
+   * setup.sh so the fixed UI token is never distributed to a server meant to
+   * hold no credentials (setup.sh itself already tolerates a missing
+   * `--ui-token` — Issue #28). `--webhook-token` is deliberately still
+   * passed: it authenticates the runtime signal (hook/activity) channel, not
+   * a task credential, so it's correct to distribute at this level
+   * regardless of isolation.
+   */
+  isolationIntent?: boolean;
 }
 
 const VALID_PREFIX = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
@@ -155,14 +166,27 @@ export class HarnessInstaller {
   }
 
   private async runSetup(sshHost: string, options: HarnessInstallOptions): Promise<void> {
-    const { azitoUrl, webhookToken, uiToken, serverName, prefix } = options;
+    const { azitoUrl, webhookToken, uiToken, serverName, prefix, isolationIntent } = options;
     const harnessDir = remoteHarnessDir(prefix);
     let cmd = `bash ${harnessDir}/setup.sh`;
     if (azitoUrl) cmd += ` --azito-url ${shellQuote(azitoUrl)}`;
     if (webhookToken) cmd += ` --webhook-token ${shellQuote(webhookToken)}`;
-    if (uiToken) cmd += ` --ui-token ${shellQuote(uiToken)}`;
+    // Withhold --ui-token for an isolation-intent server (see this option's
+    // doc comment on HarnessInstallOptions.isolationIntent) — the one place
+    // this class distributes it.
+    if (uiToken && !isolationIntent) cmd += ` --ui-token ${shellQuote(uiToken)}`;
     if (serverName) cmd += ` --server-name ${shellQuote(serverName)}`;
     if (prefix) cmd += ` --prefix ${shellQuote(prefix)}`;
+    // Issue #29 review, Critical finding 3: withholding --ui-token above
+    // only stops a NEW token from being distributed — it does not remove an
+    // ALREADY-distributed one from a previous (pre-isolation) setup.sh run.
+    // setup.sh's own default (--ui-token omitted -> keep whatever operator.env
+    // / Claude settings.json / Codex MCP config already has) exists so that
+    // an ordinary re-run without --ui-token doesn't erase a working
+    // configuration — but that same default is exactly wrong for a server
+    // that has just been declared isolated, so --purge-operator-token
+    // overrides it here.
+    if (isolationIntent) cmd += ' --purge-operator-token';
 
     const result = await this.sshClient.execIsolated(sshHost, cmd);
     if (result.code !== 0) {
@@ -176,7 +200,7 @@ export class HarnessInstaller {
       throw new Error(`setup.sh not found: ${setupScript}`);
     }
 
-    const { azitoUrl, webhookToken, uiToken, serverName, prefix } = options;
+    const { azitoUrl, webhookToken, uiToken, serverName, prefix, isolationIntent } = options;
     const { execFile } = await import('child_process');
     const { promisify } = await import('util');
     const execFileAsync = promisify(execFile);
@@ -184,9 +208,23 @@ export class HarnessInstaller {
     const args: string[] = [setupScript];
     if (azitoUrl) args.push('--azito-url', azitoUrl);
     if (webhookToken) args.push('--webhook-token', webhookToken);
-    if (uiToken) args.push('--ui-token', uiToken);
+    // Issue #29 review, Important finding 2: mirrors runSetup()'s handling
+    // above — withhold --ui-token and force --purge-operator-token when the
+    // caller declared isolationIntent. `local`-type servers can never
+    // actually reach isolationIntent: true today (PUT /api/servers/:name
+    // rejects isolationIntent for any effective type other than 'agent', and
+    // installLocal() is only ever invoked for a local-type server's own
+    // harness), so this branch is currently unreachable in production — but
+    // runSetupLocal previously ignored isolationIntent entirely, silently
+    // violating HarnessInstallOptions.isolationIntent's contract for local
+    // installs. Kept in sync defensively so the interface's guarantee holds
+    // regardless of caller, and so a future caller that DOES construct an
+    // isolated local install doesn't quietly leak --ui-token the way the
+    // remote path once could have.
+    if (uiToken && !isolationIntent) args.push('--ui-token', uiToken);
     if (serverName) args.push('--server-name', serverName);
     if (prefix) args.push('--prefix', prefix);
+    if (isolationIntent) args.push('--purge-operator-token');
 
     // Local install: execFile takes an argv array, so no shell-quoting is
     // needed (each arg is passed to the child process verbatim); the CLI

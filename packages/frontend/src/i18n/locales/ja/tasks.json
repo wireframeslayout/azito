@@ -49,12 +49,24 @@
       "branches": "ブランチ",
       "phases": "フェーズ",
       "repository": "PR 宛先",
-      "secrets": "渡されるシークレット"
+      "secrets": "渡されるシークレット",
+      "isolation": "隔離"
     },
     "branchesValue": "base: {{base}} → work: {{work}} → target: {{target}}",
     "unresolved": "（未解決）",
     "noRepository": "（リポジトリ未設定）",
     "noSecrets": "（なし）",
+    "isolatedNotice": "このサーバーは隔離が宣言されています。シークレットおよび UI/エージェントトークンはこの実行に一切渡されません。",
+    "allowDegraded": {
+      "notice": "このプロジェクトサーバーは「承認なしで自動実行」に設定されていますが、以下の理由により今回は手動承認に自動的に降格しました。",
+      "reason": {
+        "not_isolated": "対象サーバーに隔離（isolation）が宣言されていません。",
+        "verification_missing": "対象サーバーの隔離が isolation doctor によって検証されていません。",
+        "verification_expired": "対象サーバーの隔離検証の有効期限が切れています。再検証してください。",
+        "scoped_auth_disabled": "スコープ認証（AZITO_SCOPED_AUTH）が現在無効です。",
+        "verification_failed": "対象サーバーの最新の isolation doctor 実行が検証に失敗しています。再検証してください。"
+      }
+    },
     "reapprovalNote": "承認後にこのタスクのタイトルまたは本文を編集すると、再承認が必要になります。",
     "approve": "承認",
     "deny": "拒否",

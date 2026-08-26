@@ -1,13 +1,15 @@
 import type { ITaskRepository, Task } from './Task';
 import type { TaskStatus } from './TaskStatus';
-import type { IServerRepository } from '../servers/Server';
+import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { IProjectRepository } from '../projects/Project';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
+import { resolveEffectiveInputPolicy } from '../projects/ProjectServer';
 import type { IUnitRepository } from '../units/Unit';
 import type { IWindowRepository } from '../windows/Window';
 import type { SqliteProjectSecretRepository } from '../projects/SqliteProjectSecretRepository';
 import type { TmuxClient } from '../tmux/TmuxClient';
-import { createRotatedWindow, rollbackWindowReference, runExclusiveForTask } from './execution/WindowRotation';
+import { createRotatedWindow, ensureSessionWithLock, rollbackWindowReference, runExclusiveForTask, ServerSnapshotMismatchError, type ServerIsolationLock } from './execution/WindowRotation';
+import type { KeyedMutex } from '../../shared/keyedMutex';
 import type { WorktreeServiceFactory } from '../git/WorktreeServiceFactory';
 import { PathResolverFactory, assertDirectoryContained } from '../git/PathContainment';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
@@ -16,7 +18,7 @@ import type { IExecutionLogRepository } from './ExecutionLog';
 import { resolveTaskServerName, resolveTmuxSession, resolveBaseBranch } from './execution/TaskExecutionEnv';
 import { buildWorkerLaunchCommand } from '../agents/LaunchCommand';
 import { shellQuote } from '../../shared/shellQuote';
-import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError } from './execution/ExecutionGate';
+import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError, reverifyExecutionGateInLock } from './execution/ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest } from './execution/ExecutionManifest';
 import { appendLogAndEmit } from './execution/AppendLog';
 import type { TaskPaneEnvironmentService } from './execution/TaskPaneEnvironmentService';
@@ -59,6 +61,20 @@ export interface TaskRestoreDeps {
   events: EventEmitter;
   /** Issue #28 Phase A後半: the sole task-pane env builder — this is the "TaskRestoreService" entry point design v3 §6 lists explicitly. */
   paneEnvService: TaskPaneEnvironmentService;
+  // Issue #29 review (7th pass), Important finding 1: the SAME
+  // per-server-name mutex `modules/servers/routes.ts`'s PUT handler and
+  // `modules/tmux/routes/sessions.ts`'s manual window/pane routes already
+  // serialize the isolation false->true transition against (see that
+  // mutex's own doc comment) — required here too, so a task restore can
+  // never build env from a `server` object a concurrent transition has
+  // already superseded. See ServerIsolationLock's doc comment in
+  // WindowRotation.ts.
+  serverIsolationMutex: KeyedMutex;
+  // Issue #29 Step 3a: same flag ExecuteTaskUseCase/PhaseLoopRunner are
+  // constructed with — restore()'s own execution-gate re-check below needs
+  // it for resolveEffectiveInputPolicy(), the same as every other entry
+  // point.
+  scopedAuthEnabled: boolean;
 }
 
 export class TaskRestoreService {
@@ -66,18 +82,28 @@ export class TaskRestoreService {
 
   constructor(private deps: TaskRestoreDeps) {}
 
+  private get serverIsolationLock(): ServerIsolationLock {
+    return { serverIsolationMutex: this.deps.serverIsolationMutex, serverRepo: this.deps.serverRepo };
+  }
+
   async restore(task: Task, log: { warn: (msg: string) => void }): Promise<{ tmuxTarget: string; worktreePath: string | null }> {
-    const { taskRepo, serverRepo, projectRepo, projectServerRepo, unitRepo, windowRepo, tmux, worktreeServiceFactory, transportFactory, contentExtractor, logRepo, unitTypeLoader, sidekickLoader, projectSecretRepo, events, paneEnvService } = this.deps;
+    const { taskRepo, serverRepo, projectRepo, projectServerRepo, unitRepo, windowRepo, tmux, worktreeServiceFactory, transportFactory, contentExtractor, logRepo, unitTypeLoader, sidekickLoader, projectSecretRepo, events, paneEnvService, scopedAuthEnabled } = this.deps;
 
     const serverName = resolveTaskServerName(task, projectServerRepo);
     if (!serverName) {
       throw new Error('Cannot resolve server: task has no serverName and its project does not have exactly one project_servers entry');
     }
 
-    const server = serverRepo.findByName(serverName);
-    if (!server) {
+    const serverAtStart = serverRepo.findByName(serverName);
+    if (!serverAtStart) {
       throw new Error(`Server '${serverName}' not found`);
     }
+    // `let`, not `const`: reassigned below (ensureSessionWithLock,
+    // createRotatedWindow) to whatever fresher row the isolation lock
+    // re-read — explicitly typed `ServerConfig` (not inferred from
+    // `findByName`'s nullable return) so TS control-flow narrowing isn't
+    // lost the moment this variable is captured by a nested closure below.
+    let server: ServerConfig = serverAtStart;
 
     const tmuxSession = resolveTmuxSession(task.projectId, serverName, projectServerRepo);
 
@@ -92,7 +118,20 @@ export class TaskRestoreService {
     const { manifest, project, unit, projectServer } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader });
     const unitId = unit?.id ?? null;
     const manifestHash = hashExecutionManifest(manifest);
-    const gate = checkExecutionGate(task, projectServer, manifestHash);
+    // Issue #29 Step 3a: `server` here is the already-resolved ServerConfig
+    // (serverAtStart, re-read fresh under the isolation lock further down) —
+    // same re-check every other entry point runs, see
+    // resolveEffectiveInputPolicy's doc comment.
+    const effective = resolveEffectiveInputPolicy(projectServer, server, scopedAuthEnabled);
+    if (unitId !== null && effective.allowDegradedReason) {
+      appendLogAndEmit(logRepo, events, task.id, unitId, 'command', {
+        type: 'execution_policy_degraded',
+        requestedPolicy: effective.requestedPolicy,
+        effectivePolicy: effective.effectivePolicy,
+        allowDegradedReason: effective.allowDegradedReason,
+      });
+    }
+    const gate = checkExecutionGate(task, effective.effectivePolicy, manifestHash);
     if (!gate.allowed) {
       if (unitId !== null) {
         appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
@@ -155,14 +194,47 @@ export class TaskRestoreService {
       throw new ExecutionGateDeniedError(task.id);
     }
 
-    const existingSessions = await tmux.listSessions(server);
-    const sessionExists = existingSessions.some((s) => s.name === tmuxSession);
-    if (!sessionExists) {
-      // Throwaway bootstrap window — the real task window is created just
-      // below via createWindow, which is what actually gets AZITO_TASK_TOKEN
-      // (see the comment there and TaskPaneEnvironmentService's own doc
-      // comment).
-      await tmux.createSession(server, tmuxSession, { extraEnv: {} });
+    // Throwaway bootstrap window — the real task window is created just
+    // below via createWindow, which is what actually gets AZITO_TASK_TOKEN
+    // (see the comment there and TaskPaneEnvironmentService's own doc
+    // comment). Routed through `ensureSessionWithLock`, which masks (not
+    // injects) via `isolationMaskForServer` (Issue #29 review, 11th pass,
+    // Critical finding 1 — this is a TASK session, so it must never inject
+    // the operator UI token the way `uiTokenEnvForServer` does for a
+    // non-isolated server): an isolated server's tmux SESSION-level env can
+    // already carry a leftover AZITO_UI_TOKEN/AZITO_AGENT_TOKEN from a
+    // prior non-isolated life, and this window's own pane always inherits
+    // whatever process env the tmux SERVER itself runs under (the remote
+    // agent process's env, for an `agent`-type server) regardless of what
+    // `extraEnv` this call passes — an empty object masks nothing.
+    //
+    // Routed through ensureSessionWithLock (Issue #29 review, 10th pass,
+    // Critical finding 1): the existence check AND the createSession call
+    // both now run inside the isolation lock against a `server` row re-read
+    // only once the lock is held — never against the `server` resolved at
+    // the top of restore(), which a concurrent isolation PUT may have
+    // already superseded. `server` is reassigned to the fresh row so
+    // everything this function does afterwards (resolvePaneId, the
+    // transport used for containment checks, worktree creation, sendKeys,
+    // the rollback's killWindow, ...) sees it too.
+    let sessionResult: { created: boolean; server: ServerConfig };
+    try {
+      sessionResult = await ensureSessionWithLock(tmux, this.serverIsolationLock, server, tmuxSession);
+    } catch (err) {
+      // Issue #29 review, 12th pass, Critical finding 1: the server row
+      // ensureSessionWithLock re-read once the isolation lock was actually
+      // held disagreed with the one this run's execution gate check (above)
+      // ran against — mark the task failed (not left at 'archived', which
+      // reads as "never attempted") instead of letting the generic 500
+      // handler in routes.ts leave status untouched.
+      if (err instanceof ServerSnapshotMismatchError) {
+        if (unitId !== null) appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'server_snapshot_mismatch', message: err.message });
+        taskRepo.update(task.id, { status: 'failed' as TaskStatus } as Partial<Task>);
+      }
+      throw err;
+    }
+    server = sessionResult.server;
+    if (sessionResult.created) {
       await sleep(500);
     }
 
@@ -198,11 +270,39 @@ export class TaskRestoreService {
       // rethrowing/throwing in both cases, so `windowName` staying null here
       // on failure is correct — there is nothing left for the outer catch to
       // roll back.
-      const created = await createRotatedWindow(paneEnvService, server, task, 'restore_create_failed', (env) =>
-        tmux.createWindow(server, tmuxSession, `task-${task.id}`, { extraEnv: env }),
+      const created = await createRotatedWindow(paneEnvService, this.serverIsolationLock, server, task, 'restore_create_failed', (freshServer, env) =>
+        tmux.createWindow(freshServer, tmuxSession, `task-${task.id}`, { extraEnv: env }),
+        true,
+        // Issue #29 Step 3a review, Important finding 2: re-verify the
+        // untrusted-execution gate against `freshServer` — the row the lock
+        // above already re-read — immediately before this window's env/task
+        // token is built. See ExecutionGate.reverifyExecutionGateInLock's
+        // doc comment for the TOCTOU this closes.
+        (freshServer) => {
+          const { manifest, projectServer: freshProjectServer } = resolveExecutionManifest(task, {
+            unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader,
+          });
+          reverifyExecutionGateInLock(
+            { taskRepo, logRepo, events },
+            task,
+            unitId,
+            'restore',
+            freshProjectServer,
+            freshServer,
+            scopedAuthEnabled,
+            hashExecutionManifest(manifest),
+          );
+        },
       );
       windowName = created.windowName;
       tokenId = created.tokenId;
+      // Issue #29 review (10th pass), Important finding 3: use the fresh
+      // `server` row createRotatedWindow re-read and actually created the
+      // window with — not the (possibly now-stale) argument passed into it
+      // — for every subsequent tmux/transport call this function makes
+      // (resolvePaneId, the containment-check transport, the worktree
+      // transport, sendKeys, and the rollback's killWindow below).
+      server = created.server;
 
       const windowTarget = `${tmuxSession}:${windowName}`;
       const paneId = await tmux.resolvePaneId(server, windowTarget);
@@ -393,6 +493,14 @@ export class TaskRestoreService {
         } catch (e) {
           log.warn(`[task-restore] Failed to rollback worktree: ${(e as Error).message}`);
         }
+      }
+      // Issue #29 review, 12th pass, Critical finding 1: same as the
+      // ensureSessionWithLock catch above — createRotatedWindow's refetch
+      // disagreed with the server row this run's checks ran against, so mark
+      // the task failed rather than leaving it at 'archived'.
+      if (err instanceof ServerSnapshotMismatchError) {
+        if (unitId !== null) appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'server_snapshot_mismatch', message: err.message });
+        taskRepo.update(task.id, { status: 'failed' as TaskStatus } as Partial<Task>);
       }
       throw err;
     }

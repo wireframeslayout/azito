@@ -139,12 +139,12 @@ function makeOpts(existingTask: Task, opts: { gateAllows: boolean }): { opts: Ta
     } as unknown as TasksRouteOptions['tmux'],
     serverRepo: {
       findAll: vi.fn(() => []),
-      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, createdAt: '' })),
+      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '' })),
       create: vi.fn(),
       update: vi.fn(),
       updateAgentVersion: vi.fn(),
       updateFingerprint: vi.fn(),
-      clearFingerprint: vi.fn(),
+      clearFingerprint: vi.fn(), updateIsolationIntent: vi.fn(),
       delete: vi.fn(),
     },
     worktreeServiceFactory: { create: vi.fn() } as unknown as TasksRouteOptions['worktreeServiceFactory'],
@@ -158,6 +158,7 @@ function makeOpts(existingTask: Task, opts: { gateAllows: boolean }): { opts: Ta
       findByTask: vi.fn(() => []),
       findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
       findByServerAndTarget: vi.fn(() => undefined),
+      findByServer: vi.fn(() => []),
       findByServerAndSession: vi.fn(() => []),
       update: vi.fn(),
       updateAgentSessionIdByWindow: vi.fn(),
@@ -182,6 +183,7 @@ function makeOpts(existingTask: Task, opts: { gateAllows: boolean }): { opts: Ta
       onDestroyed();
       return { success: result.code === 0, alreadyGone: false, result };
     }),
+    scopedAuthEnabled: true,
   };
   return { opts: routeOpts, task };
 }

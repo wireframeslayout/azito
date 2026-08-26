@@ -107,10 +107,10 @@ function buildApp(scopedAuthEnabled: boolean, db: SqliteDatabase, createCalls: R
     executeTaskUseCase: { stopByTaskId: vi.fn(() => false), execute: vi.fn(), followUp: vi.fn(), events: { on: vi.fn(), off: vi.fn(), emit: vi.fn() } } as unknown as TasksRouteOptions['executeTaskUseCase'],
     unitRepo: { findAll: vi.fn(() => []), findById: vi.fn(() => null), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
     tmux: {} as unknown as TasksRouteOptions['tmux'],
-    serverRepo: { findAll: vi.fn(() => []), findByName: vi.fn(() => null), create: vi.fn(), update: vi.fn(), updateAgentVersion: vi.fn(), updateFingerprint: vi.fn(), clearFingerprint: vi.fn(), delete: vi.fn() },
+    serverRepo: { findAll: vi.fn(() => []), findByName: vi.fn(() => null), create: vi.fn(), update: vi.fn(), updateAgentVersion: vi.fn(), updateFingerprint: vi.fn(), clearFingerprint: vi.fn(), updateIsolationIntent: vi.fn(), delete: vi.fn() },
     worktreeServiceFactory: {} as unknown as TasksRouteOptions['worktreeServiceFactory'],
     transportFactory: {} as unknown as TasksRouteOptions['transportFactory'],
-    windowRepo: { findByTaskIds: vi.fn(() => new Map()), add: vi.fn(), findAll: vi.fn(() => []), findById: vi.fn(), findByProject: vi.fn(() => []), findByTask: vi.fn(() => []), findAgentSessionIdsByServer: vi.fn(() => new Set<string>()), findByServerAndTarget: vi.fn(), findByServerAndSession: vi.fn(() => []), update: vi.fn(), updateAgentSessionIdByWindow: vi.fn(), remove: vi.fn(), removeByServerAndTarget: vi.fn(() => 0), updatePaneLayout: vi.fn(), now: vi.fn(() => '2026-01-01 00:00:00') },
+    windowRepo: { findByTaskIds: vi.fn(() => new Map()), add: vi.fn(), findAll: vi.fn(() => []), findById: vi.fn(), findByProject: vi.fn(() => []), findByTask: vi.fn(() => []), findAgentSessionIdsByServer: vi.fn(() => new Set<string>()), findByServer: vi.fn(() => []), findByServerAndTarget: vi.fn(), findByServerAndSession: vi.fn(() => []), update: vi.fn(), updateAgentSessionIdByWindow: vi.fn(), remove: vi.fn(), removeByServerAndTarget: vi.fn(() => 0), updatePaneLayout: vi.fn(), now: vi.fn(() => '2026-01-01 00:00:00') },
     respawnService: {} as unknown as TasksRouteOptions['respawnService'],
     taskRestoreService: {} as unknown as TasksRouteOptions['taskRestoreService'],
     unitTypeLoader: {} as unknown as TasksRouteOptions['unitTypeLoader'],
@@ -124,6 +124,7 @@ function buildApp(scopedAuthEnabled: boolean, db: SqliteDatabase, createCalls: R
       onDestroyed();
       return { success: result.code === 0, alreadyGone: false, result };
     }),
+    scopedAuthEnabled: true,
   };
 
   const app = Fastify();

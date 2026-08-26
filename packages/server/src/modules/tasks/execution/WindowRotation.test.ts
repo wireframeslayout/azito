@@ -1,9 +1,25 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createRotatedWindow, rollbackWindowReference, runExclusiveForTask } from './WindowRotation';
+import { createRotatedWindow, ensureSessionWithLock, rollbackWindowReference, runExclusiveForTask, ServerSnapshotMismatchError, type ServerIsolationLock } from './WindowRotation';
 import { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
 import type { ITaskTokenRepository, IssuedTaskToken } from '../tokens/TaskToken';
 import type { Task } from '../Task';
 import type { ServerConfig } from '../../servers/Server';
+import type { TmuxClient, TmuxSession } from '../../tmux/TmuxClient';
+import { KeyedMutex } from '../../../shared/keyedMutex';
+
+// Issue #29 review (7th pass), Important finding 1: createRotatedWindow now
+// locks+refetches `server` via a ServerIsolationLock instead of trusting the
+// caller's own `server` argument — these tests give it a fresh KeyedMutex
+// plus a `serverRepo` stub that always resolves back to the SAME `server`
+// object the test constructed, so its behavior is unchanged from before this
+// fix (no test here exercises a mid-flight isolation transition; that's
+// covered by servers/routes.isolationIntent.test.ts and sessions.test.ts).
+function makeLock(server: ServerConfig): ServerIsolationLock {
+  return {
+    serverIsolationMutex: new KeyedMutex(),
+    serverRepo: { findByName: () => server },
+  };
+}
 
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {
@@ -59,6 +75,9 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     agentVersion: null,
     sshHost: null,
     sshHostFingerprint: null,
+    isolationIntent: false,
+    isolationVerifiedAt: null,
+    isolationReport: null, isolationCleanupReport: null,
     muxRuntime: 'system',
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -134,6 +153,165 @@ function makeGate<T>(): { promise: Promise<T>; release: (value: T) => void; fail
   return { promise, release, fail };
 }
 
+// Issue #29 review (10th pass), Critical finding 1: session bootstrap
+// (existence check + createSession) must run INSIDE the same isolation lock
+// every other window-(re)creation helper in this file uses, against a
+// server row re-read only once the lock is held.
+describe('ensureSessionWithLock', () => {
+  type MockTmux = Pick<TmuxClient, 'listSessions' | 'createSession'>;
+  function makeTmux(overrides: { listSessions?: MockTmux['listSessions'] } = {}): MockTmux {
+    return {
+      listSessions: overrides.listSessions ?? vi.fn(async (_server: ServerConfig): Promise<TmuxSession[]> => []),
+      createSession: vi.fn(async (_server: ServerConfig, _name: string, _opts?: unknown) => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'azito' })),
+    } as unknown as MockTmux;
+  }
+
+  // Issue #29 review (11th pass), Critical finding 1: `ensureSessionWithLock`
+  // must build extraEnv via the mask-only `isolationMaskForServer`, never
+  // `uiTokenEnvForServer` (which INJECTS the live operator UI token for a
+  // non-isolated server) — this is a task session, and injecting the
+  // operator token here regressed the exact leak Issue #28 closed.
+  it('creates a non-isolated server session with NO extraEnv (never injects the operator UI token), and returns created: true', async () => {
+    const server = makeServer();
+    const tmux = makeTmux();
+    const lock: ServerIsolationLock = { serverIsolationMutex: new KeyedMutex(), serverRepo: { findByName: () => server } };
+
+    const result = await ensureSessionWithLock(tmux, lock, server, 'azito');
+
+    expect(result.created).toBe(true);
+    expect(result.server).toBe(server);
+    expect(tmux.createSession).toHaveBeenCalledWith(server, 'azito', { extraEnv: {} });
+  });
+
+  it('creates an isolated server session with the shared ISOLATION_MASKED_ENV mask', async () => {
+    const server = makeServer({ isolationIntent: true });
+    const tmux = makeTmux();
+    const lock: ServerIsolationLock = { serverIsolationMutex: new KeyedMutex(), serverRepo: { findByName: () => server } };
+
+    const result = await ensureSessionWithLock(tmux, lock, server, 'azito');
+
+    expect(result.created).toBe(true);
+    expect(tmux.createSession).toHaveBeenCalledWith(server, 'azito', { extraEnv: { AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' } });
+  });
+
+  it('does not create a session when one of that name already exists, and returns created: false', async () => {
+    const server = makeServer();
+    const tmux = makeTmux({ listSessions: vi.fn(async () => [{ name: 'azito', windows: [] }]) as unknown as MockTmux['listSessions'] });
+    const lock: ServerIsolationLock = { serverIsolationMutex: new KeyedMutex(), serverRepo: { findByName: () => server } };
+
+    const result = await ensureSessionWithLock(tmux, lock, server, 'azito');
+
+    expect(result.created).toBe(false);
+    expect(tmux.createSession).not.toHaveBeenCalled();
+  });
+
+  it('re-reads the server from serverRepo INSIDE the lock and uses that row for both listSessions and createSession, never the caller-supplied argument', async () => {
+    const staleServer = makeServer({ agentVersion: 'stale' });
+    const freshServer = makeServer({ agentVersion: 'fresh' });
+    const tmux = makeTmux();
+    const lock: ServerIsolationLock = { serverIsolationMutex: new KeyedMutex(), serverRepo: { findByName: () => freshServer } };
+
+    const result = await ensureSessionWithLock(tmux, lock, staleServer, 'azito');
+
+    expect(result.server).toBe(freshServer);
+    expect(tmux.listSessions).toHaveBeenCalledWith(freshServer);
+    expect(tmux.createSession).toHaveBeenCalledWith(freshServer, 'azito', expect.anything());
+    expect(tmux.listSessions).not.toHaveBeenCalledWith(staleServer);
+    expect(tmux.createSession).not.toHaveBeenCalledWith(staleServer, expect.anything(), expect.anything());
+  });
+
+  it('throws (never falls back to the stale argument) when the server was deleted between resolution and lock acquisition', async () => {
+    const server = makeServer();
+    const tmux = makeTmux();
+    const lock: ServerIsolationLock = { serverIsolationMutex: new KeyedMutex(), serverRepo: { findByName: () => null } };
+
+    await expect(ensureSessionWithLock(tmux, lock, server, 'azito')).rejects.toThrow(/was not found/);
+    expect(tmux.createSession).not.toHaveBeenCalled();
+  });
+
+  // Issue #29 review (12th pass), Critical finding 1: a PUT /api/servers/:name
+  // committing between the caller's own approval/resource/containment checks
+  // (which ran against `server`, the argument passed in) and this lock being
+  // acquired must abort instead of silently adopting the newer row.
+  it('throws ServerSnapshotMismatchError (default enforceSnapshot=true) when the refetched row disagrees with the caller-supplied server on a security field', async () => {
+    const expected = makeServer({ isolationIntent: false });
+    const fresh = makeServer({ isolationIntent: true });
+    const tmux = makeTmux();
+    const lock: ServerIsolationLock = { serverIsolationMutex: new KeyedMutex(), serverRepo: { findByName: () => fresh } };
+
+    await expect(ensureSessionWithLock(tmux, lock, expected, 'azito')).rejects.toBeInstanceOf(ServerSnapshotMismatchError);
+    expect(tmux.createSession).not.toHaveBeenCalled();
+  });
+
+  it('does NOT throw on a security-field mismatch when enforceSnapshot is explicitly false (projects/routes.ts bootstrap opt-out)', async () => {
+    const expected = makeServer({ isolationIntent: false });
+    const fresh = makeServer({ isolationIntent: true });
+    const tmux = makeTmux();
+    const lock: ServerIsolationLock = { serverIsolationMutex: new KeyedMutex(), serverRepo: { findByName: () => fresh } };
+
+    const result = await ensureSessionWithLock(tmux, lock, expected, 'azito', false);
+
+    expect(result.created).toBe(true);
+    expect(result.server).toBe(fresh);
+  });
+
+  it('does not throw when the refetched row differs only in non-security fields (e.g. agentVersion, isolationVerifiedAt)', async () => {
+    const expected = makeServer({ agentVersion: 'stale', isolationVerifiedAt: null });
+    const fresh = makeServer({ agentVersion: 'fresh', isolationVerifiedAt: '2026-01-02T00:00:00Z' });
+    const tmux = makeTmux();
+    const lock: ServerIsolationLock = { serverIsolationMutex: new KeyedMutex(), serverRepo: { findByName: () => fresh } };
+
+    const result = await ensureSessionWithLock(tmux, lock, expected, 'azito');
+
+    expect(result.created).toBe(true);
+    expect(result.server).toBe(fresh);
+  });
+
+  it('serializes against a concurrent createRotatedWindow call for the same server name via the shared mutex', async () => {
+    const server = makeServer();
+    const order: string[] = [];
+    const gate = (() => {
+      let release!: () => void;
+      const promise = new Promise<void>((resolve) => { release = resolve; });
+      return { promise, release };
+    })();
+    const tmux = makeTmux({
+      listSessions: vi.fn(async () => {
+        order.push('ensureSession-listSessions');
+        await gate.promise;
+        return [];
+      }),
+    });
+    const paneEnvService = {
+      buildEnvForNewWindow: vi.fn(() => ({ env: {}, tokenId: 1 })),
+      revokeGeneration: vi.fn(),
+    } as unknown as TaskPaneEnvironmentService;
+    const lock: ServerIsolationLock = { serverIsolationMutex: new KeyedMutex(), serverRepo: { findByName: () => server } };
+
+    const sessionPromise = ensureSessionWithLock(tmux, lock, server, 'azito');
+    // Give ensureSessionWithLock a turn to acquire the lock and reach its
+    // (gated) listSessions call before queuing the second lock acquisition.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const rotatedPromise = createRotatedWindow(paneEnvService, lock, server, makeTask(), 'test_failed', async () => {
+      order.push('createRotatedWindow-create');
+      return { result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' };
+    });
+
+    // createRotatedWindow must not have started its own span yet — it's
+    // queued behind ensureSessionWithLock's still-gated listSessions call.
+    await Promise.resolve();
+    expect(order).toEqual(['ensureSession-listSessions']);
+
+    gate.release();
+    await sessionPromise;
+    await rotatedPromise;
+
+    expect(order).toEqual(['ensureSession-listSessions', 'createRotatedWindow-create']);
+  });
+});
+
 describe('runExclusiveForTask', () => {
   it('serializes concurrent operations for the same taskId (second only starts once the first settles)', async () => {
     const order: string[] = [];
@@ -198,6 +376,54 @@ describe('runExclusiveForTask', () => {
   });
 });
 
+// Issue #29 review (12th pass), Critical finding 1: createRotatedWindow's own
+// refetch-and-mismatch-check, mirroring the ensureSessionWithLock coverage
+// above.
+describe('createRotatedWindow: server snapshot mismatch (Issue #29 review, 12th pass, Critical finding 1)', () => {
+  function makeServices() {
+    const tokenRepo = new FakeTaskTokenRepo();
+    const projectSecretRepo = { findByProjectWithValues: vi.fn(() => []) } as any;
+    const paneEnvService = new TaskPaneEnvironmentService(tokenRepo, projectSecretRepo, 'ui-token', true);
+    return { tokenRepo, paneEnvService };
+  }
+
+  it('throws ServerSnapshotMismatchError and never calls create() when the refetched row disagrees on a security field', async () => {
+    const { paneEnvService } = makeServices();
+    const expected = makeServer({ type: 'local', host: null });
+    const fresh = makeServer({ type: 'agent', host: '100.64.0.1', agentPort: 4100, agentToken: 'tok' });
+    const lock: ServerIsolationLock = { serverIsolationMutex: new KeyedMutex(), serverRepo: { findByName: () => fresh } };
+    const create = vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' }));
+
+    await expect(createRotatedWindow(paneEnvService, lock, expected, makeTask(), 'test_failed', create)).rejects.toBeInstanceOf(ServerSnapshotMismatchError);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('does not throw, and proceeds to create(), when enforceSnapshot is explicitly false', async () => {
+    const { paneEnvService } = makeServices();
+    const expected = makeServer({ isolationIntent: false });
+    const fresh = makeServer({ isolationIntent: true });
+    const lock: ServerIsolationLock = { serverIsolationMutex: new KeyedMutex(), serverRepo: { findByName: () => fresh } };
+    const create = vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' }));
+
+    const result = await createRotatedWindow(paneEnvService, lock, expected, makeTask(), 'test_failed', create, false);
+
+    expect(result.server).toBe(fresh);
+    expect(create).toHaveBeenCalledWith(fresh, expect.anything());
+  });
+
+  it('proceeds normally (default enforceSnapshot=true) when the refetched row matches on every security field', async () => {
+    const { paneEnvService } = makeServices();
+    const server = makeServer();
+    const lock = makeLock(server);
+    const create = vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' }));
+
+    const result = await createRotatedWindow(paneEnvService, lock, server, makeTask(), 'test_failed', create);
+
+    expect(result.server).toBe(server);
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+});
+
 // Issue #28 third-party review, Important finding: WindowRotation's kill->
 // issue->create->persist span must be serialized per task, AND a rollback
 // must revoke only the specific generation it issued — never every active
@@ -236,14 +462,14 @@ describe('createRotatedWindow + rollbackWindowReference under runExclusiveForTas
     // the slow one's whole span (including its failure handling) is done.
     const slow = runExclusiveForTask(task.id, async () => {
       order.push('slow-start');
-      const created = await createRotatedWindow(paneEnvService, server, task, 'slow_failed', async () => gateSlow.promise);
+      const created = await createRotatedWindow(paneEnvService, makeLock(server), server, task, 'slow_failed', async () => gateSlow.promise);
       order.push('slow-end');
       return created;
     }).catch((err: unknown) => err as Error);
 
     const fast = runExclusiveForTask(task.id, async () => {
       order.push('fast-start');
-      const created = await createRotatedWindow(paneEnvService, server, task, 'fast_failed', async () => ({
+      const created = await createRotatedWindow(paneEnvService, makeLock(server), server, task, 'fast_failed', async () => ({
         result: { stdout: '', stderr: '', code: 0 },
         windowName: 'fast-window',
       }));
@@ -289,14 +515,14 @@ describe('createRotatedWindow + rollbackWindowReference under runExclusiveForTas
     const task = makeTask({ id: 43 });
 
     // Simulate: rotation A already succeeded and persisted (generation 1)...
-    const a = await createRotatedWindow(paneEnvService, server, task, 'a_failed', async () => ({
+    const a = await createRotatedWindow(paneEnvService, makeLock(server), server, task, 'a_failed', async () => ({
       result: { stdout: '', stderr: '', code: 0 },
       windowName: 'a-window',
     }));
     // ...then a LATER rotation B is issued for the same task (generation 2,
     // which — per issueNextGeneration's contract — revokes generation 1 as
     // part of normal rotation, same as a real follow-up execute() would).
-    const b = await createRotatedWindow(paneEnvService, server, task, 'b_failed', async () => ({
+    const b = await createRotatedWindow(paneEnvService, makeLock(server), server, task, 'b_failed', async () => ({
       result: { stdout: '', stderr: '', code: 0 },
       windowName: 'b-window',
     }));
@@ -339,7 +565,7 @@ describe('rollbackWindowReference: onGone throwing must not skip the revoke', ()
     const server = makeServer();
     const task = makeTask({ id: 50 });
 
-    const created = await createRotatedWindow(paneEnvService, server, task, 'unused', async () => ({
+    const created = await createRotatedWindow(paneEnvService, makeLock(server), server, task, 'unused', async () => ({
       result: { stdout: '', stderr: '', code: 0 },
       windowName: 'w',
     }));
@@ -378,7 +604,7 @@ describe('rollbackWindowReference: onGone throwing must not skip the revoke', ()
     const server = makeServer();
     const task = makeTask({ id: 51 });
 
-    const created = await createRotatedWindow(paneEnvService, server, task, 'unused', async () => ({
+    const created = await createRotatedWindow(paneEnvService, makeLock(server), server, task, 'unused', async () => ({
       result: { stdout: '', stderr: '', code: 0 },
       windowName: 'w',
     }));
@@ -428,7 +654,7 @@ describe('rollbackWindowReference: onGone throwing must not skip the revoke', ()
     const server = makeServer();
     const task = makeTask({ id: 52 });
 
-    const created = await createRotatedWindow(paneEnvService, server, task, 'unused', async () => ({
+    const created = await createRotatedWindow(paneEnvService, makeLock(server), server, task, 'unused', async () => ({
       result: { stdout: '', stderr: '', code: 0 },
       windowName: 'w',
     }));

@@ -4,7 +4,7 @@ import { api } from '../../api/client';
 import { useNotificationChannel } from '../../hooks/useNotificationChannel';
 import { useWindowActions } from '../../hooks/useWindowActions';
 import { StatusDot } from '../StatusBadge';
-import { MiniTabBar, IconButton, Button, PanelHeader, Spinner, WindowActivityIndicator, SecretNamesValue } from '../ui';
+import { MiniTabBar, IconButton, Button, PanelHeader, Spinner, WindowActivityIndicator, SecretNamesValue, Notice, DocsLink } from '../ui';
 import type { MiniTab } from '../ui';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
 import TaskRefBadges from '../TaskRefBadges';
@@ -1778,6 +1778,22 @@ export default function TaskPanel({
 
           {!approvalLoading && approvalData && (
             <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {/* Issue #29 Step 3a: the project server is configured for 'allow'
+                  (unattended execution), but this task still landed here because
+                  the run-time 3-point AND gate downgraded it — explain why, so
+                  this doesn't look like an ordinary manual-approval block. */}
+              {approvalData.allowDegradedReason && (
+                <Notice tone="warning">
+                  {t('executionApproval.allowDegraded.notice')}
+                  <span style={{ display: 'block', marginTop: 2 }}>
+                    {t(`executionApproval.allowDegraded.reason.${approvalData.allowDegradedReason}`)}
+                  </span>
+                  <span style={{ display: 'block', marginTop: 4 }}>
+                    <DocsLink page="isolated-execution" />
+                  </span>
+                </Notice>
+              )}
+
               {/* Untrusted content — plain text, visually distinct from AZITO's own UI chrome. */}
               <div>
                 <div style={{ fontSize: 'var(--font-xs)', color: 'var(--danger)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 }}>
@@ -1845,6 +1861,13 @@ export default function TaskPanel({
 
                   <span style={{ color: 'var(--text-dim)' }}>{t('executionApproval.fields.secrets')}</span>
                   <SecretNamesValue names={approvalData.secretNames} />
+
+                  {approvalData.execution.isolationIntent && (
+                    <>
+                      <span style={{ color: 'var(--text-dim)' }}>{t('executionApproval.fields.isolation')}</span>
+                      <span style={{ color: 'var(--accent)', wordBreak: 'break-word' }}>{t('executionApproval.isolatedNotice')}</span>
+                    </>
+                  )}
                 </div>
               </div>
 

@@ -5,6 +5,7 @@ import type { TasksRouteOptions } from './routes';
 import type { Task } from './Task';
 import { resolveExecutionManifest, hashExecutionManifest } from './execution/ExecutionManifest';
 import { checkExecutionGate } from './execution/ExecutionGate';
+import { resolveInputPolicy } from '../projects/ProjectServer';
 import { buildRespawnManifestInput } from '../windows/WindowRespawnService';
 
 // GET /api/tasks/:id/execution-approval (Issue #51) — the browser-facing
@@ -126,12 +127,13 @@ function makeOpts(existingTask: Task | null): TasksRouteOptions {
     } as unknown as TasksRouteOptions['tmux'],
     serverRepo: {
       findAll: vi.fn(() => []),
-      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, createdAt: '' })),
+      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '' })),
       create: vi.fn(),
       update: vi.fn(),
       updateAgentVersion: vi.fn(),
       updateFingerprint: vi.fn(),
       clearFingerprint: vi.fn(),
+      updateIsolationIntent: vi.fn(),
       delete: vi.fn(),
     },
     worktreeServiceFactory: { create: vi.fn() } as unknown as TasksRouteOptions['worktreeServiceFactory'],
@@ -145,6 +147,7 @@ function makeOpts(existingTask: Task | null): TasksRouteOptions {
       findByTask: vi.fn(() => []),
       findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
       findByServerAndTarget: vi.fn(() => undefined),
+      findByServer: vi.fn(() => []),
       findByServerAndSession: vi.fn(() => []),
       update: vi.fn(),
       updateAgentSessionIdByWindow: vi.fn(),
@@ -187,6 +190,7 @@ function makeOpts(existingTask: Task | null): TasksRouteOptions {
       onDestroyed();
       return { success: result.code === 0, alreadyGone: false, result };
     }),
+    scopedAuthEnabled: true,
   };
 }
 
@@ -302,6 +306,56 @@ describe('GET /api/tasks/:id/execution-approval (Issue #51)', () => {
     // client must echo back on approval — must be a real, non-empty hash.
     expect(typeof body.fingerprint).toBe('string');
     expect(body.fingerprint.length).toBeGreaterThan(0);
+
+    // Issue #29 Step 3a: the requested policy here is 'manual-approval' (see
+    // projectServerRepo.find() above), not 'allow' — nothing to explain.
+    expect(body.allowDegradedReason).toBeNull();
+  });
+
+  // Issue #29 Step 3a: allowDegradedReason on this response must match
+  // resolveEffectiveInputPolicy() exactly — this is what lets the frontend
+  // explain WHY a project server configured for 'allow' still produced a
+  // pending_approval task, instead of looking like an ordinary block.
+  it('surfaces allowDegradedReason when the project server is configured for "allow" but the 3-point gate degraded it', async () => {
+    const opts = makeOpts(makeTask());
+    opts.projectServerRepo.find = vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'allow' as const }));
+    // serverRepo default (from makeOpts) has isolationIntent: false -> 'not_isolated'.
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'GET', url: '/api/tasks/1/execution-approval' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+
+    expect(body.inputPolicy).toBe('allow');
+    expect(body.allowDegradedReason).toBe('not_isolated');
+  });
+
+  it('returns allowDegradedReason: null when "allow" is fully satisfied (isolated, verified, scoped auth enabled)', async () => {
+    const opts = makeOpts(makeTask());
+    opts.projectServerRepo.find = vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'allow' as const }));
+    opts.serverRepo.findByName = vi.fn(() => ({
+      name: 'test-server', type: 'agent' as const, host: '', agentPort: null, agentToken: null, agentVersion: null,
+      sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const,
+      isolationIntent: true, isolationVerifiedAt: new Date().toISOString(),
+      // A current isolationVerifiedAt must be paired with a passing
+      // isolationReport (Issue #29 review Step 3a, Critical finding 1
+      // follow-up defense-in-depth check in resolveEffectiveInputPolicy).
+      isolationReport: JSON.stringify({ kind: 'verification', verified: true, checks: [], probedAt: new Date().toISOString() }),
+      isolationCleanupReport: null, createdAt: '',
+    }));
+    opts.scopedAuthEnabled = true;
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'GET', url: '/api/tasks/1/execution-approval' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+
+    expect(body.inputPolicy).toBe('allow');
+    expect(body.allowDegradedReason).toBeNull();
   });
 });
 
@@ -1133,7 +1187,7 @@ describe('Creation-time pre-approval (task/328 follow-up)', () => {
     await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
 
     const approvedTask = getTask();
-    const gate = checkExecutionGate(approvedTask, { projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' }, fingerprint);
+    const gate = checkExecutionGate(approvedTask, resolveInputPolicy({ inputPolicy: 'manual-approval' }), fingerprint);
     expect(gate).toEqual({ allowed: true });
   });
 

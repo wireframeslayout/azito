@@ -28,7 +28,12 @@ export default function ServerDetailPage({ serverName, section }: ServerDetailPa
   const navigate = useNavigate();
   const { t } = useTranslation('servers');
   const isMobile = useIsMobile();
-  const { server, servers, status, installStatus, sessions, loading, error, refresh } = useServerDetail(serverName);
+  const {
+    server, servers, status, installStatus, sessions,
+    isolationReport, isolationReportUnavailable,
+    isolationCleanupReport, isolationCleanupReportUnavailable,
+    loading, error, refresh,
+  } = useServerDetail(serverName);
   const mgmt = useServerEditForm();
 
   const activeSection: ServerSectionId = section && VALID_SECTIONS.has(section)
@@ -97,6 +102,10 @@ export default function ServerDetailPage({ serverName, section }: ServerDetailPa
               status={status}
               installStatus={installStatus}
               sessions={sessions}
+              isolationReport={isolationReport}
+              isolationReportUnavailable={isolationReportUnavailable}
+              isolationCleanupReport={isolationCleanupReport}
+              isolationCleanupReportUnavailable={isolationCleanupReportUnavailable}
               refresh={refresh}
               onEdit={() => mgmt.openEditModal(server)}
             />
@@ -130,6 +139,8 @@ export default function ServerDetailPage({ serverName, section }: ServerDetailPa
       onTokenChange={mgmt.setEditToken}
       muxRuntime={mgmt.editMuxRuntime}
       onMuxRuntimeChange={mgmt.setEditMuxRuntime}
+      isolationIntent={mgmt.editIsolationIntent}
+      onIsolationIntentChange={mgmt.setEditIsolationIntent}
     />
     </>
   );

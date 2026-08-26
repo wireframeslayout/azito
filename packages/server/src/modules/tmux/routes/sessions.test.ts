@@ -1,10 +1,11 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
-import sessionsRoutes from './sessions';
+import sessionsRoutes, { type SessionsRouteOptions } from './sessions';
 import type { IServerRepository, ServerConfig } from '../../servers/Server';
 import type { TmuxClient } from '../TmuxClient';
 import type { SqliteWindowRepository } from '../../windows/SqliteWindowRepository';
 import { resolveKillOutcome } from '../killOutcome';
+import { KeyedMutex } from '../../../shared/keyedMutex';
 
 function makeServerRepo(srv: ServerConfig): IServerRepository {
   return {
@@ -111,16 +112,36 @@ async function buildApp(opts: {
   destroyPrimaryTaskWindow?: ReturnType<typeof makeDestroyPrimaryTaskWindow>;
   destroySessionWindows?: ReturnType<typeof makeDestroySessionWindows>;
   buildSecondaryWindowEnv?: ReturnType<typeof vi.fn>;
+  // Issue #29 review (5th pass), Critical finding 1: lets tests exercise the
+  // manual session/window/pane creation routes against an isolated server —
+  // these routes now call `tmux.uiTokenEnvForServer(srv)` instead of the
+  // server-blind `tmux.uiTokenEnv()`, so `srv.isolationIntent` has to be
+  // controllable per test.
+  isolationIntent?: boolean;
+  // Issue #29 review, Important finding 2: lets tests supply their own
+  // serverRepo (e.g. one that tracks call count/order, or hands back a
+  // DIFFERENT row on a later call to simulate a concurrent PUT
+  // /api/servers/:name landing) instead of the fixed single-row fake above —
+  // used to confirm the create-session/window/pane routes resolve the
+  // server row exactly once, INSIDE the lock, rather than once before it and
+  // again inside.
+  serverRepo?: IServerRepository;
+  resourceGuard?: { check: ReturnType<typeof vi.fn> };
 }): Promise<FastifyInstance> {
-  const srv: ServerConfig = { name: 'srv1', type: 'local' } as ServerConfig;
+  const srv: ServerConfig = { name: 'srv1', type: 'local', isolationIntent: opts.isolationIntent ?? false } as ServerConfig;
   const app = Fastify();
   await app.register(sessionsRoutes, {
-    serverRepo: makeServerRepo(srv),
+    serverRepo: opts.serverRepo ?? makeServerRepo(srv),
     tmux: opts.tmux as TmuxClient,
     windowRepo: opts.windowRepo,
     destroyPrimaryTaskWindow: opts.destroyPrimaryTaskWindow,
     destroySessionWindows: opts.destroySessionWindows,
     buildSecondaryWindowEnv: opts.buildSecondaryWindowEnv as ((taskId: number, server: ServerConfig) => Record<string, string>) | undefined,
+    resourceGuard: opts.resourceGuard as unknown as SessionsRouteOptions['resourceGuard'],
+    // Issue #29 review (6th pass), Important finding 3: a fresh instance per
+    // app is fine for this file's route-level tests (none exercise
+    // cross-route serialization against servers/routes.ts).
+    serverIsolationMutex: new KeyedMutex(),
   });
   await app.ready();
   return app;
@@ -578,20 +599,202 @@ describe('POST /api/servers/:name/sessions/:session/windows/:window/panes', () =
     expect(splitPane).toHaveBeenCalledWith(expect.objectContaining({ name: 'srv1' }), 'session:2', 'v', maskedEnv);
   });
 
-  it('splits with the legacy uiTokenEnv() for a non-task window', async () => {
+  it('splits with the legacy uiTokenEnvForServer() for a non-task window', async () => {
     const windowRepo = makeWindowRepo();
     const splitPane = vi.fn(async () => ({ stdout: '', stderr: '', code: 0 }));
-    const uiTokenEnv = vi.fn(() => ({ AZITO_UI_TOKEN: 'legacy-ui-token' }));
+    const uiTokenEnvForServer = vi.fn(() => ({ AZITO_UI_TOKEN: 'legacy-ui-token' }));
     const tmux: Partial<TmuxClient> = {
       getWindowIdentity: vi.fn(async () => null),
       splitPane,
-      uiTokenEnv,
+      uiTokenEnvForServer,
     };
     app = await buildApp({ tmux, windowRepo });
 
     const res = await app.inject({ method: 'POST', url: '/api/servers/srv1/sessions/session/windows/2/panes' });
 
     expect(res.statusCode).toBe(200);
+    expect(uiTokenEnvForServer).toHaveBeenCalledWith(expect.objectContaining({ name: 'srv1' }));
     expect(splitPane).toHaveBeenCalledWith(expect.objectContaining({ name: 'srv1' }), 'session:2', 'v', { AZITO_UI_TOKEN: 'legacy-ui-token' });
+  });
+
+  // Issue #29 review (5th pass), Critical finding 1: this generic "add pane"
+  // route must never hand an isolated server's non-task window the hub's UI
+  // token — uiTokenEnvForServer(srv) is the single choke point that masks
+  // it, so this confirms the route actually calls THAT method (not the
+  // server-blind uiTokenEnv()) and forwards whatever it returns unchanged.
+  it('withholds the UI token when splitting a non-task window on an isolation_intent server', async () => {
+    const windowRepo = makeWindowRepo();
+    const splitPane = vi.fn(async () => ({ stdout: '', stderr: '', code: 0 }));
+    const tmux: Partial<TmuxClient> = {
+      getWindowIdentity: vi.fn(async () => null),
+      splitPane,
+      uiTokenEnvForServer: vi.fn((server: ServerConfig) => (server.isolationIntent ? { AZITO_UI_TOKEN: '' } : { AZITO_UI_TOKEN: 'legacy-ui-token' })),
+    };
+    app = await buildApp({ tmux, windowRepo, isolationIntent: true });
+
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv1/sessions/session/windows/2/panes' });
+
+    expect(res.statusCode).toBe(200);
+    expect(splitPane).toHaveBeenCalledWith(expect.objectContaining({ name: 'srv1' }), 'session:2', 'v', { AZITO_UI_TOKEN: '' });
+  });
+
+  // Issue #29 review, Important finding 2: identity resolution and the
+  // primary-task-window classification (which decides the 409) must run
+  // against the SAME server row splitPane eventually uses — resolved exactly
+  // once, INSIDE the lock. A pre-lock classification let a concurrent PUT
+  // /api/servers/:name commit before the lock was acquired, so the
+  // classification ran against a server row the tmux call (inside the lock,
+  // on a re-fetched row) no longer targeted.
+  it('resolves the server exactly once, inside the lock, and resolves identity/splitPane against that row', async () => {
+    const windowRepo = makeWindowRepo();
+    const srvV2: ServerConfig = { name: 'srv1', type: 'local', isolationIntent: false, host: 'host-v2' } as ServerConfig;
+    const findByName = vi.fn(() => srvV2);
+    const serverRepo = { findByName } as unknown as IServerRepository;
+    const getWindowIdentity = vi.fn(async () => null);
+    const splitPane = vi.fn(async () => ({ stdout: '', stderr: '', code: 0 }));
+    const tmux: Partial<TmuxClient> = {
+      getWindowIdentity,
+      splitPane,
+      uiTokenEnvForServer: vi.fn(() => ({ AZITO_UI_TOKEN: 'legacy-ui-token' })),
+    };
+    app = await buildApp({ tmux, windowRepo, serverRepo });
+
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv1/sessions/session/windows/2/panes' });
+
+    expect(res.statusCode).toBe(200);
+    expect(findByName).toHaveBeenCalledTimes(1);
+    expect(getWindowIdentity).toHaveBeenCalledWith(srvV2, 'session:2');
+    expect(splitPane).toHaveBeenCalledWith(srvV2, 'session:2', 'v', expect.anything());
+  });
+});
+
+describe('POST /api/servers/:name/sessions', () => {
+  let app: FastifyInstance;
+
+  afterEach(async () => {
+    await app.close();
+  });
+
+  // Issue #29 review (5th pass), Critical finding 1: manual "New Session"
+  // creation previously injected the hub's AZITO_UI_TOKEN into every
+  // server unconditionally via tmux.uiTokenEnv() — including a server
+  // declared isolation_intent=1, which is meant to hold no credentials.
+  it('withholds the UI token when creating a session on an isolation_intent server', async () => {
+    const windowRepo = makeWindowRepo();
+    const createSession = vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'win' }));
+    const tmux: Partial<TmuxClient> = {
+      createSession,
+      uiTokenEnvForServer: vi.fn((server: ServerConfig) => (server.isolationIntent ? { AZITO_UI_TOKEN: '' } : { AZITO_UI_TOKEN: 'legacy-ui-token' })),
+    };
+    app = await buildApp({ tmux, windowRepo, isolationIntent: true });
+
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv1/sessions', payload: { name: 'newsess' } });
+
+    expect(res.statusCode).toBe(200);
+    expect(createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'srv1' }),
+      'newsess',
+      expect.objectContaining({ extraEnv: { AZITO_UI_TOKEN: '' } }),
+    );
+  });
+
+  it('injects the legacy UI token when the server is not isolated', async () => {
+    const windowRepo = makeWindowRepo();
+    const createSession = vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'win' }));
+    const tmux: Partial<TmuxClient> = {
+      createSession,
+      uiTokenEnvForServer: vi.fn(() => ({ AZITO_UI_TOKEN: 'legacy-ui-token' })),
+    };
+    app = await buildApp({ tmux, windowRepo, isolationIntent: false });
+
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv1/sessions', payload: { name: 'newsess' } });
+
+    expect(res.statusCode).toBe(200);
+    expect(createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'srv1' }),
+      'newsess',
+      expect.objectContaining({ extraEnv: { AZITO_UI_TOKEN: 'legacy-ui-token' } }),
+    );
+  });
+
+  // Issue #29 review, Important finding 2: the resource check and the tmux
+  // create call must both act on the SAME server row, resolved exactly once
+  // INSIDE the per-server-name lock — a pre-lock resourceGuard check let a
+  // concurrent PUT /api/servers/:name commit before the lock was acquired,
+  // so the check ran against a host the create call (inside the lock, on a
+  // re-fetched row) no longer targeted. `findByName` is asserted to be
+  // called exactly once, and resourceGuard.check to receive that same row.
+  it('resolves the server exactly once, inside the lock, and runs the resource check against that row', async () => {
+    const windowRepo = makeWindowRepo();
+    const srvV2: ServerConfig = { name: 'srv1', type: 'local', isolationIntent: false, host: 'host-v2' } as ServerConfig;
+    const findByName = vi.fn(() => srvV2);
+    const serverRepo = { findByName } as unknown as IServerRepository;
+    const resourceGuardCheck = vi.fn(async () => ({ ok: true }));
+    const createSession = vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'win' }));
+    const tmux: Partial<TmuxClient> = {
+      createSession,
+      uiTokenEnvForServer: vi.fn(() => ({ AZITO_UI_TOKEN: 'legacy-ui-token' })),
+    };
+    app = await buildApp({ tmux, windowRepo, serverRepo, resourceGuard: { check: resourceGuardCheck } });
+
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv1/sessions', payload: { name: 'newsess' } });
+
+    expect(res.statusCode).toBe(200);
+    expect(findByName).toHaveBeenCalledTimes(1);
+    expect(resourceGuardCheck).toHaveBeenCalledWith(srvV2);
+    expect(createSession).toHaveBeenCalledWith(srvV2, 'newsess', expect.anything());
+  });
+});
+
+describe('POST /api/servers/:name/sessions/:session/windows', () => {
+  let app: FastifyInstance;
+
+  afterEach(async () => {
+    await app.close();
+  });
+
+  // Issue #29 review (5th pass), Critical finding 1: same masking gap as
+  // POST /sessions above, for the "New Window" manual-creation route.
+  it('withholds the UI token when creating a window on an isolation_intent server', async () => {
+    const windowRepo = makeWindowRepo();
+    const createWindow = vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'win' }));
+    const tmux: Partial<TmuxClient> = {
+      createWindow,
+      uiTokenEnvForServer: vi.fn((server: ServerConfig) => (server.isolationIntent ? { AZITO_UI_TOKEN: '' } : { AZITO_UI_TOKEN: 'legacy-ui-token' })),
+    };
+    app = await buildApp({ tmux, windowRepo, isolationIntent: true });
+
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv1/sessions/session/windows', payload: {} });
+
+    expect(res.statusCode).toBe(200);
+    expect(createWindow).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'srv1' }),
+      'session',
+      undefined,
+      expect.objectContaining({ extraEnv: { AZITO_UI_TOKEN: '' } }),
+    );
+  });
+
+  // Issue #29 review, Important finding 2: same single-fetch/inside-the-lock
+  // guarantee as the analogous POST /sessions test above.
+  it('resolves the server exactly once, inside the lock, and runs the resource check against that row', async () => {
+    const windowRepo = makeWindowRepo();
+    const srvV2: ServerConfig = { name: 'srv1', type: 'local', isolationIntent: false, host: 'host-v2' } as ServerConfig;
+    const findByName = vi.fn(() => srvV2);
+    const serverRepo = { findByName } as unknown as IServerRepository;
+    const resourceGuardCheck = vi.fn(async () => ({ ok: true }));
+    const createWindow = vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'win' }));
+    const tmux: Partial<TmuxClient> = {
+      createWindow,
+      uiTokenEnvForServer: vi.fn(() => ({ AZITO_UI_TOKEN: 'legacy-ui-token' })),
+    };
+    app = await buildApp({ tmux, windowRepo, serverRepo, resourceGuard: { check: resourceGuardCheck } });
+
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv1/sessions/session/windows', payload: {} });
+
+    expect(res.statusCode).toBe(200);
+    expect(findByName).toHaveBeenCalledTimes(1);
+    expect(resourceGuardCheck).toHaveBeenCalledWith(srvV2);
+    expect(createWindow).toHaveBeenCalledWith(srvV2, 'session', undefined, expect.anything());
   });
 });

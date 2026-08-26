@@ -1,0 +1,250 @@
+import { describe, it, expect } from 'vitest';
+import { computeIsolationDoctorState, computeIsolationRowState, isValidVerificationReport } from './isolationDoctorState';
+import type { IsolationReport } from '../../../hooks/useServerDetail';
+
+const TTL = 24 * 60 * 60 * 1000;
+const NOW = new Date('2026-08-16T00:00:00Z').getTime();
+
+function verified(overrides: Partial<IsolationReport> = {}): IsolationReport {
+  return { kind: 'verification', verified: true, checks: [], ...overrides };
+}
+
+describe('isValidVerificationReport', () => {
+  it('accepts a well-formed verification report', () => {
+    expect(isValidVerificationReport(verified())).toBe(true);
+  });
+
+  it('rejects null', () => {
+    expect(isValidVerificationReport(null)).toBe(false);
+  });
+
+  // Follow-up review round, Minor finding 4: the exact scenario the fix
+  // closes — a cleanup-shaped report reaching the verification field must
+  // never be read as if it carried a `verified` boolean.
+  it('rejects a cleanup-kind report even though the union type would allow reading it', () => {
+    const cleanupReport = { kind: 'cleanup', cleanup: 'done' } as unknown as IsolationReport;
+    expect(isValidVerificationReport(cleanupReport)).toBe(false);
+  });
+
+  it('rejects a verification-kind report missing the verified field', () => {
+    const malformed = { kind: 'verification', checks: [] } as unknown as IsolationReport;
+    expect(isValidVerificationReport(malformed)).toBe(false);
+  });
+});
+
+describe('computeIsolationDoctorState', () => {
+  it('returns null when the server does not declare isolationIntent', () => {
+    expect(computeIsolationDoctorState({
+      isolationIntent: false,
+      verificationReport: verified(),
+      isolationVerifiedAt: '2026-08-15T00:00:00Z',
+      ttlMs: TTL,
+      scopedAuthEnabled: true,
+      now: NOW,
+    })).toBeNull();
+  });
+
+  it('returns unverified when there is no report at all', () => {
+    expect(computeIsolationDoctorState({
+      isolationIntent: true,
+      verificationReport: null,
+      isolationVerifiedAt: null,
+      ttlMs: TTL,
+      scopedAuthEnabled: true,
+      now: NOW,
+    })).toBe('unverified');
+  });
+
+  // The core bug this fix closes: a cleanup report landing on the
+  // verification field must degrade to 'unverified', never render as
+  // success just because `verified === false` didn't literally match.
+  it('returns unverified (never verified) when the report is cleanup-shaped, not verification-shaped', () => {
+    const cleanupReport = { kind: 'cleanup', cleanup: 'done' } as unknown as IsolationReport;
+    expect(computeIsolationDoctorState({
+      isolationIntent: true,
+      verificationReport: cleanupReport,
+      isolationVerifiedAt: '2026-08-15T00:00:00Z',
+      ttlMs: TTL,
+      scopedAuthEnabled: true,
+      now: NOW,
+    })).toBe('unverified');
+  });
+
+  it('returns needsAttention when the report is verification-shaped with verified: false', () => {
+    expect(computeIsolationDoctorState({
+      isolationIntent: true,
+      verificationReport: verified({ verified: false }),
+      isolationVerifiedAt: null,
+      ttlMs: TTL,
+      scopedAuthEnabled: true,
+      now: NOW,
+    })).toBe('needsAttention');
+  });
+
+  it('returns verified when the report passes and isolationVerifiedAt is a fresh, valid timestamp', () => {
+    expect(computeIsolationDoctorState({
+      isolationIntent: true,
+      verificationReport: verified(),
+      isolationVerifiedAt: new Date(NOW - 1000).toISOString(),
+      ttlMs: TTL,
+      scopedAuthEnabled: true,
+      now: NOW,
+    })).toBe('verified');
+  });
+
+  it('returns verifiedStale when the report passes but isolationVerifiedAt is older than the TTL', () => {
+    expect(computeIsolationDoctorState({
+      isolationIntent: true,
+      verificationReport: verified(),
+      isolationVerifiedAt: new Date(NOW - TTL - 1000).toISOString(),
+      ttlMs: TTL,
+      scopedAuthEnabled: true,
+      now: NOW,
+    })).toBe('verifiedStale');
+  });
+
+  // Follow-up review round, Minor finding 4: an unparseable isolationVerifiedAt
+  // must not silently read as "verified just now" — Date.now() - NaN
+  // comparisons are always false (never "stale"), which without this guard
+  // would fall through to 'verified'.
+  it('returns unverified when the report passes but isolationVerifiedAt is missing', () => {
+    expect(computeIsolationDoctorState({
+      isolationIntent: true,
+      verificationReport: verified(),
+      isolationVerifiedAt: null,
+      ttlMs: TTL,
+      scopedAuthEnabled: true,
+      now: NOW,
+    })).toBe('unverified');
+  });
+
+  it('returns unverified when the report passes but isolationVerifiedAt is not a parseable timestamp', () => {
+    expect(computeIsolationDoctorState({
+      isolationIntent: true,
+      verificationReport: verified(),
+      isolationVerifiedAt: 'not-a-date',
+      ttlMs: TTL,
+      scopedAuthEnabled: true,
+      now: NOW,
+    })).toBe('unverified');
+  });
+
+  // Issue #29 review (5th pass), Important finding 1: mirrors the backend's
+  // C-1 gate on the doctor route (409 isolation_doctor_requires_scoped_auth
+  // while scopedAuthEnabled is false) — a report that would otherwise read
+  // as a fresh, passing 'verified' must not survive once scoped auth is
+  // confirmed off, since that report no longer describes an enforced
+  // guarantee.
+  it('returns scopedAuthDisabled — overriding an otherwise-fresh verified report — when scopedAuthEnabled is false', () => {
+    expect(computeIsolationDoctorState({
+      isolationIntent: true,
+      verificationReport: verified(),
+      isolationVerifiedAt: new Date(NOW - 1000).toISOString(),
+      ttlMs: TTL,
+      scopedAuthEnabled: false,
+      now: NOW,
+    })).toBe('scopedAuthDisabled');
+  });
+
+  it('returns scopedAuthDisabled even when there is no report at all, as long as isolation is declared', () => {
+    expect(computeIsolationDoctorState({
+      isolationIntent: true,
+      verificationReport: null,
+      isolationVerifiedAt: null,
+      ttlMs: TTL,
+      scopedAuthEnabled: false,
+      now: NOW,
+    })).toBe('scopedAuthDisabled');
+  });
+
+  // Final review round, Important finding 2: scopedAuthEnabled === null
+  // (health fetch not yet resolved / failed) must NOT be treated the same as
+  // scopedAuthEnabled === true — an otherwise-fresh, passing report degrades
+  // to the dedicated 'scopedAuthUnknown' state rather than rendering
+  // 'verified', since a persisted report says nothing about whether scoped
+  // auth is enforced RIGHT NOW when this client cannot even confirm that.
+  it('returns scopedAuthUnknown — not verified, not scopedAuthDisabled — when scopedAuthEnabled is null (health not yet loaded)', () => {
+    expect(computeIsolationDoctorState({
+      isolationIntent: true,
+      verificationReport: verified(),
+      isolationVerifiedAt: new Date(NOW - 1000).toISOString(),
+      ttlMs: TTL,
+      scopedAuthEnabled: null,
+      now: NOW,
+    })).toBe('scopedAuthUnknown');
+  });
+
+  // Also applies to the stale-verification branch — null health must not
+  // let a stale-but-passing report through as 'verifiedStale' either.
+  it('returns scopedAuthUnknown when the report would otherwise be verifiedStale and scopedAuthEnabled is null', () => {
+    expect(computeIsolationDoctorState({
+      isolationIntent: true,
+      verificationReport: verified(),
+      isolationVerifiedAt: new Date(NOW - TTL - 1000).toISOString(),
+      ttlMs: TTL,
+      scopedAuthEnabled: null,
+      now: NOW,
+    })).toBe('scopedAuthUnknown');
+  });
+
+  // A null health state must not upgrade an already-non-success outcome —
+  // 'unverified'/'needsAttention' are unaffected by the scopedAuthEnabled
+  // gate since they never claimed success in the first place.
+  it('still returns needsAttention (not scopedAuthUnknown) when the report fails and scopedAuthEnabled is null', () => {
+    expect(computeIsolationDoctorState({
+      isolationIntent: true,
+      verificationReport: verified({ verified: false }),
+      isolationVerifiedAt: null,
+      ttlMs: TTL,
+      scopedAuthEnabled: null,
+      now: NOW,
+    })).toBe('needsAttention');
+  });
+});
+
+describe('computeIsolationRowState', () => {
+  it('returns notApplicable for a non-agent server, regardless of isolationIntent/scopedAuthEnabled', () => {
+    expect(computeIsolationRowState({
+      serverType: 'local',
+      isolationIntent: true,
+      doctorState: 'verified',
+      scopedAuthEnabled: true,
+    })).toBe('notApplicable');
+  });
+
+  it('defers entirely to doctorState when isolationIntent is true, even when scopedAuthEnabled is false', () => {
+    expect(computeIsolationRowState({
+      serverType: 'agent',
+      isolationIntent: true,
+      doctorState: 'scopedAuthDisabled',
+      scopedAuthEnabled: false,
+    })).toBe('scopedAuthDisabled');
+  });
+
+  it('returns scopedAuthRequired when isolationIntent is false and scopedAuthEnabled is false', () => {
+    expect(computeIsolationRowState({
+      serverType: 'agent',
+      isolationIntent: false,
+      doctorState: null,
+      scopedAuthEnabled: false,
+    })).toBe('scopedAuthRequired');
+  });
+
+  it('returns scopedAuthUnconfirmed when isolationIntent is false and scopedAuthEnabled is null', () => {
+    expect(computeIsolationRowState({
+      serverType: 'agent',
+      isolationIntent: false,
+      doctorState: null,
+      scopedAuthEnabled: null,
+    })).toBe('scopedAuthUnconfirmed');
+  });
+
+  it('returns disabled when isolationIntent is false and scopedAuthEnabled is true', () => {
+    expect(computeIsolationRowState({
+      serverType: 'agent',
+      isolationIntent: false,
+      doctorState: null,
+      scopedAuthEnabled: true,
+    })).toBe('disabled');
+  });
+});

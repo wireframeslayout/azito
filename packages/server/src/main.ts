@@ -11,6 +11,8 @@ import { buildWiring } from './app/wiring';
 import { buildServer } from './app/buildServer';
 import { resolvePublicUrl } from './app/resolvePublicUrl';
 import { RecoverStuckTasksUseCase } from './modules/tasks/recovery/RecoverStuckTasksUseCase';
+import { recoverInterruptedIsolationCleanup } from './modules/servers/recoverInterruptedIsolationCleanup';
+import { writeHubCanary } from './modules/servers/hubCanary';
 import { AgentEventStream } from './modules/servers/transport/AgentEventStream';
 import { invalidateSessionCache } from './modules/tmux/routes/sessions';
 import { tokenCommand } from './cli/tokenCommand';
@@ -73,6 +75,13 @@ async function main(): Promise<void> {
   initSecretBox(paths.masterKey);
   initVapidKeyManager(paths.vapidKeys);
 
+  // Isolation doctor FS-boundary canary (Issue #29 review, Critical finding
+  // 1): best-effort, write failure only warns — never blocks startup. See
+  // hubCanary.ts's own doc comment.
+  if (writeHubCanary(paths.dir) === null) {
+    console.warn('[azito] Failed to write isolation-doctor FS-boundary canary — the FS-boundary check will report "unknown" for every agent server until the hub restarts with a writable data directory');
+  }
+
   const db = openDatabase(paths.db);
   const uiToken = resolveUiToken(paths.uiToken);
 
@@ -116,6 +125,17 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGHUP', () => shutdown('SIGHUP'));
+
+  // ─── Startup: recover a stranded isolation-cleanup pending marker ───
+  // Synchronous/local-only (no remote side effects — see the function's own
+  // doc comment for why it deliberately does not re-run cleanup itself), so
+  // it runs before the loops below rather than fire-and-forget.
+  {
+    const recoveredCount = recoverInterruptedIsolationCleanup(wiring.serverRepo);
+    if (recoveredCount > 0) {
+      app.log.warn(`Startup recovery: marked ${recoveredCount} interrupted isolation-cleanup attempt(s) as failed (retry via a true->true PUT /api/servers/:name)`);
+    }
+  }
 
   // ─── Startup: install tmux hooks + connect agent event streams ───
 
