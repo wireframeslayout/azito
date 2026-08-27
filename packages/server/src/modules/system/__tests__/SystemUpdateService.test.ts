@@ -202,6 +202,68 @@ describe('SystemUpdateService', () => {
     expect(status.commitsBehind).toBe(1);
   });
 
+  it('getProgress returns terminal state within TTL', () => {
+    const state = {
+      status: 'success' as const,
+      step: 'health-check' as const,
+      fromVersion: 'v1.0.0',
+      toVersion: 'v1.1.0',
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+      steps: [],
+    };
+    stateManager.write(state);
+    stateManager.appendLog('Update succeeded');
+
+    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0));
+    const result = service.getProgress();
+
+    expect(result.state).not.toBeNull();
+    expect(result.state!.status).toBe('success');
+    expect(result.log.length).toBeGreaterThan(0);
+  });
+
+  it('getProgress clears terminal state after TTL expires', () => {
+    const elevenMinutesAgo = new Date(Date.now() - 11 * 60 * 1000).toISOString();
+    const state = {
+      status: 'success' as const,
+      step: 'health-check' as const,
+      fromVersion: 'v1.0.0',
+      toVersion: 'v1.1.0',
+      startedAt: elevenMinutesAgo,
+      completedAt: elevenMinutesAgo,
+      steps: [],
+    };
+    stateManager.write(state);
+
+    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0));
+    const result = service.getProgress();
+
+    expect(result.state).toBeNull();
+    expect(result.log).toEqual([]);
+    expect(stateManager.read()).toBeNull();
+  });
+
+  it('getProgress clears terminal state with missing completedAt', () => {
+    const state = {
+      status: 'failed' as const,
+      step: 'download' as const,
+      fromVersion: 'v1.0.0',
+      toVersion: 'v1.1.0',
+      startedAt: new Date().toISOString(),
+      error: 'network error',
+      steps: [],
+    };
+    stateManager.write(state);
+
+    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0));
+    const result = service.getProgress();
+
+    expect(result.state).toBeNull();
+    expect(result.log).toEqual([]);
+    expect(stateManager.read()).toBeNull();
+  });
+
   it('startUpdate refuses when deploy mode does not support updates', async () => {
     const disabledDetector = {
       detect: () => 'source',

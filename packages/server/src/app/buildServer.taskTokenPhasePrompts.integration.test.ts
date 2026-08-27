@@ -212,6 +212,7 @@ describe("task token survives a 'review' transition (Issue #28 review finding 1 
       agentSessionId: null,
       reviewSubagent: null,
       implementSubagent: null,
+    sleepAfterPush: null,
       inputTrust: 'trusted',
       executionApprovedFingerprintHash: null,
       pendingOperation: null,

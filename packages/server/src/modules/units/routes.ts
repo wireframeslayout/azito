@@ -111,6 +111,7 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
       worker_extra_args,
       worker_execution_mode,
       worker_runtime,
+      sleep_after_push,
     } = request.body as Record<string, unknown>;
     if (!name) {
       return reply.status(400).send({ error: 'name required' });
@@ -140,6 +141,7 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
         workerExtraArgs: (worker_extra_args as string) ?? null,
         workerExecutionMode: workerExecutionMode ?? 'tmux-pipe',
         workerRuntime: workerRuntimeVal ?? 'tui',
+        sleepAfterPush: !!sleep_after_push,
       });
       return { ok: true, id };
     } catch (err: unknown) {
@@ -177,6 +179,7 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
         worker_extra_args,
         worker_execution_mode,
         worker_runtime,
+        sleep_after_push,
       } = request.body as Record<string, unknown>;
       try {
         const unitTypeName = (unit_type as string | undefined) ?? existing.unitType;
@@ -211,6 +214,7 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
           workerExtraArgs: worker_extra_args !== undefined ? (worker_extra_args as string) : existing.workerExtraArgs,
           workerExecutionMode: workerExecutionMode ?? existing.workerExecutionMode,
           workerRuntime: workerRuntimeVal ?? existing.workerRuntime,
+          sleepAfterPush: sleep_after_push !== undefined ? !!sleep_after_push : existing.sleepAfterPush,
         });
         return { ok: true };
       } catch (err: unknown) {

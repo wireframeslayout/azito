@@ -217,6 +217,7 @@ export function SystemUpdateProvider({ children }: { children: React.ReactNode }
     const res = await api<{ started?: boolean; error?: string }>('/system/update', { method: 'POST' });
     if (res.started) {
       setOverlayDismissed(false);
+      try { localStorage.removeItem('azito-update-dismissed'); } catch { /* localStorage unavailable */ }
       await fetchProgress();
       pollProgress();
       return { started: true };
@@ -256,6 +257,7 @@ export function SystemUpdateProvider({ children }: { children: React.ReactNode }
     });
     if (res.started) {
       setOverlayDismissed(false);
+      try { localStorage.removeItem('azito-update-dismissed'); } catch { /* localStorage unavailable */ }
       await fetchProgress();
       pollProgress();
       return { started: true };
@@ -265,7 +267,13 @@ export function SystemUpdateProvider({ children }: { children: React.ReactNode }
 
   const dismissOverlay = useCallback(() => {
     setOverlayDismissed(true);
-  }, []);
+    const state = progress?.state;
+    if (state && (state.status === 'success' || state.status === 'failed') && state.completedAt) {
+      try {
+        localStorage.setItem('azito-update-dismissed', `${state.toVersion}:${state.completedAt}`);
+      } catch { /* localStorage unavailable */ }
+    }
+  }, [progress]);
 
   // Initial mount: fetch status, and check progress in case the page was reloaded mid-update
   // (overlay recovery — the update was already running before this session started).
@@ -280,6 +288,13 @@ export function SystemUpdateProvider({ children }: { children: React.ReactNode }
         } else {
           pollProgress();
         }
+      } else if (result.state && (result.state.status === 'success' || result.state.status === 'failed')) {
+        try {
+          const dismissed = localStorage.getItem('azito-update-dismissed');
+          if (dismissed === `${result.state.toVersion}:${result.state.completedAt}`) {
+            setOverlayDismissed(true);
+          }
+        } catch { /* localStorage unavailable */ }
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps

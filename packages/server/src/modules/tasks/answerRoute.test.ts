@@ -49,6 +49,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     pendingOperation: null,
     pendingOperationWindowId: null,
     pendingOperationPriorStatus: null,
+    sleepAfterPush: null,
     createdByKind: 'operator',
     createdById: null,
     createdViaGeneration: null,
@@ -123,7 +124,7 @@ function makeOpts(existingTask: Task, opts: { gateAllows: boolean }): { opts: Ta
     } as unknown as TasksRouteOptions['executeTaskUseCase'],
     unitRepo: {
       findAll: vi.fn(() => []),
-      findById: vi.fn(() => ({ id: 20, name: 'Unit', unitType: 'devops', systemPrompt: null, selfReviewMaxAttempts: 2, reviewSubagent: null, implementSubagent: null, phaseConfig: null, workerType: 'claude', workerModel: 'opus', workerExtraArgs: null, workerExecutionMode: 'tmux-pipe' as const, workerRuntime: 'tui' as const, createdAt: '', updatedAt: '' })),
+      findById: vi.fn(() => ({ id: 20, name: 'Unit', unitType: 'devops', systemPrompt: null, selfReviewMaxAttempts: 2, reviewSubagent: null, implementSubagent: null, phaseConfig: null, workerType: 'claude', workerModel: 'opus', workerExtraArgs: null, workerExecutionMode: 'tmux-pipe' as const, workerRuntime: 'tui' as const, sleepAfterPush: false, createdAt: '', updatedAt: '' })),
       create: vi.fn(() => 20),
       update: vi.fn(),
       delete: vi.fn(),

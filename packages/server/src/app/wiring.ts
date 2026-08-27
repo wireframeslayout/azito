@@ -71,6 +71,7 @@ import { ExecuteTaskUseCase } from '../modules/tasks/execution/ExecuteTaskUseCas
 import { AgentActivityMonitor } from '../modules/operations/AgentActivityMonitor';
 import { InteractionMonitor } from '../modules/notifications/InteractionMonitor';
 import { WindowRespawnService } from '../modules/windows/WindowRespawnService';
+import { WindowSleepService } from '../modules/windows/WindowSleepService';
 import { SessionCaptureService } from '../modules/windows/SessionCaptureService';
 import { WindowActivityStatusService } from '../modules/windows/WindowActivityStatusService';
 import { WindowSessionResolver } from '../modules/transcripts/WindowSessionResolver';
@@ -156,6 +157,7 @@ export interface ApplicationServices {
   windowSessionResolver: WindowSessionResolver;
   windowActivityStatusService: WindowActivityStatusService;
   windowRespawnService: WindowRespawnService;
+  windowSleepService: WindowSleepService;
   taskRestoreService: TaskRestoreService;
   usageService: UsageService;
   agentSignalService: AgentSignalService;
@@ -330,6 +332,7 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
   const originationService = new TaskOriginationService(repos.taskRepo, repos.auditLogService);
   const taskPaneEnvironmentService = new TaskPaneEnvironmentService(repos.taskTokenRepo, repos.projectSecretRepo, uiToken, scopedAuthEnabled, repos.auditLogService);
   const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.tmuxClient, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, repos.serverRepo, repos.projectSecretRepo, taskEvents, taskPaneEnvironmentService, infra.serverIsolationMutex, scopedAuthEnabled, sessionCaptureService);
+  const windowSleepService = new WindowSleepService(repos.windowRepo, infra.tmuxClient, sessionStrategyFactory, repos.serverRepo);
   const taskRestoreService = new TaskRestoreService({
     taskRepo: repos.taskRepo,
     serverRepo: repos.serverRepo,
@@ -360,7 +363,7 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
   const agentSignalService = new AgentSignalService(repos.agentTurnRepo, infra.turnSignalHub, repos.logRepo, repos.auditLogService);
   return {
     sessionStrategyFactory, sessionCaptureService, windowSessionResolver, windowActivityStatusService,
-    windowRespawnService, taskRestoreService, usageService, agentSignalService, taskEvents,
+    windowRespawnService, windowSleepService, taskRestoreService, usageService, agentSignalService, taskEvents,
     originationService, taskPaneEnvironmentService,
   };
 }
@@ -400,6 +403,7 @@ function buildExecuteTaskUseCase(
     appServices.taskPaneEnvironmentService,
     infra.serverIsolationMutex,
     scopedAuthEnabled,
+    (taskId) => appServices.windowSleepService.sleepTaskWindows(taskId),
   );
 }
 

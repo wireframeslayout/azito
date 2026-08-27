@@ -156,6 +156,12 @@
     "targetBranchHint": "PRのマージ先ブランチ。空の場合はデフォルトブランチを使用。",
     "targetBranchPlaceholder": "例: develop"
   },
+  "sleep": {
+    "overrideLabel": "スリープ設定を上書き",
+    "unitDefault": "Unit既定",
+    "enabled": "有効",
+    "disabled": "無効"
+  },
   "subagent": {
     "overrideTitle": "サブエージェントのオーバーライド",
     "overrideHint": "デフォルトではこのタスクはUnitのサブエージェント構成を継承します。",

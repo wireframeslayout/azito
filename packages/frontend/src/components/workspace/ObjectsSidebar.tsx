@@ -22,20 +22,17 @@ import { RUNNING_STATUSES } from '../task/StatusDropdown';
 
 const COLLAPSE_STORAGE_KEY = 'workspace-objects-collapsed-v2';
 
-type SectionId = 'active' | 'idle' | 'offline' | 'browsers';
+type SectionId = 'active' | 'idle' | 'sleeping' | 'offline' | 'browsers';
 
 interface CollapseState {
   active: boolean;
   idle: boolean;
+  sleeping: boolean;
   offline: boolean;
   browsers: boolean;
 }
 
-// オフラインは既定で折りたたむ（旧: windows/operations/browsers はすべて既定展開だった）。
-// ストレージキーをv2に変えているのは、旧 SectionId（windows/operations）のままだと
-// 「offline を既定折りたたみ」という新しい既定値を、旧キーに残っていた
-// `{ windows: false, operations: false }` の残骸で誤って上書きしてしまうため。
-const DEFAULT_COLLAPSE: CollapseState = { active: false, idle: false, offline: true, browsers: false };
+const DEFAULT_COLLAPSE: CollapseState = { active: false, idle: false, sleeping: true, offline: true, browsers: false };
 
 function loadCollapseState(): CollapseState {
   try {
@@ -229,8 +226,11 @@ export default function ObjectsSidebar({
   }, [sessionData, activityStatus]);
 
   const windowsByStatus = useMemo(() => {
-    const buckets: Record<'active' | 'idle' | 'offline', Window[]> = { active: [], idle: [], offline: [] };
-    for (const w of filteredWindows) buckets[classifyStatus(w)].push(w);
+    const buckets: Record<'active' | 'idle' | 'sleeping' | 'offline', Window[]> = { active: [], idle: [], sleeping: [], offline: [] };
+    for (const w of filteredWindows) {
+      if (w.sleeping) { buckets.sleeping.push(w); continue; }
+      buckets[classifyStatus(w)].push(w);
+    }
     return buckets;
   }, [filteredWindows, classifyStatus]);
 
@@ -257,6 +257,7 @@ export default function ObjectsSidebar({
     return {
       active: build(windowsByStatus.active),
       idle: build(windowsByStatus.idle),
+      sleeping: build(windowsByStatus.sleeping),
       offline: build(windowsByStatus.offline),
     };
   }, [windowsByStatus, projectServers]);
@@ -723,6 +724,36 @@ export default function ObjectsSidebar({
                       renderSubtitle={renderOperationSubtitle}
                     />
                   )}
+                </ObjectSection>
+
+                <ObjectSection
+                  id="sleeping"
+                  label={t('objects.sectionSleeping')}
+                  count={windowsByStatus.sleeping.length}
+                  collapsed={collapsed.sleeping}
+                  onToggleCollapse={() => toggle('sleeping')}
+                  empty={emptyMessage('objects.noSleeping')}
+                >
+                  {serverGroupsByStatus.sleeping.names.map((serverName) => (
+                    <ServerGroup
+                      key={serverName}
+                      serverName={serverName}
+                      windows={serverGroupsByStatus.sleeping.map.get(serverName) || []}
+                      sessionData={sessionData}
+                      isActive={checkActive}
+                      quickAddButtons={quickAddButtons}
+                      quickAddIcons={quickAddIcons}
+                      agentDefsLoading={agentDefsLoading}
+                      agentDefsError={agentDefsError}
+                      onPaneClick={handlePaneClick}
+                      onContextMenu={showWindowContextMenu}
+                      onLongPress={showWindowContextMenuAt}
+                      onOpenQuickAdd={onOpenQuickAdd}
+                      extra={renderActivityExtra}
+                      activityClassName={renderActivityClassName}
+                      respawningWindowIds={respawningWindowIds}
+                    />
+                  ))}
                 </ObjectSection>
 
                 <ObjectSection

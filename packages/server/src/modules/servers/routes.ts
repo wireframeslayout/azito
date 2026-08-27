@@ -11,7 +11,7 @@ import type { HarnessInstaller, HarnessInstallProgress, HarnessInstallResult } f
 import type { IProjectRepository } from '../projects/Project';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
 import type { IWindowRepository } from '../windows/SqliteWindowRepository';
-import { parseTmuxVersion, parseNodeVersion, parseHarnessCheck, parseTailscaleCheck, parseChromiumInstall } from './installStatusParsers';
+import { parseTmuxVersion, parseNodeVersion, parseHarnessCheck, parseTailscaleCheck, parseChromiumInstall, buildHarnessCheckCommand } from './installStatusParsers';
 import { findChromiumBinaryCommand } from './agent-deploy/BrowserRuntimeInstaller';
 import { stripTerminalArtifacts } from '../../shared/utils/stripTerminalArtifacts';
 import type { TmuxInstaller } from './agent-deploy/TmuxInstaller';
@@ -1116,7 +1116,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
 
       const checkHarness = async () => {
         try {
-          const r = await transport.exec('ls -d ~/.claude/skills/azt-* 2>/dev/null | head -1');
+          const r = await transport.exec(buildHarnessCheckCommand(harnessPrefix));
           return parseHarnessCheck(stripTerminalArtifacts(r.stdout));
         } catch (err: unknown) {
           return { installed: false, detail: (err as Error).message };

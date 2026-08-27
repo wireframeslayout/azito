@@ -14,6 +14,7 @@ interface TaskFormFieldsProps {
     id: number; name: string; workerType?: string | null;
     reviewSubagent?: { enabled: boolean; provider: string; model: string } | null;
     implementSubagent?: { enabled: boolean; provider: string; model: string } | null;
+    sleepAfterPush?: boolean;
   }[];
   showAdvanced?: boolean;
   projectId?: number;
@@ -39,7 +40,7 @@ const STATUS_KEY_MAP: Record<string, string> = {
 };
 
 export default function TaskFormFields({ value, onChange, mode, projects, units, showAdvanced, projectId: projectIdProp, descriptionRows = 4, projectServers, defaultUnitId }: TaskFormFieldsProps) {
-  const { t } = useTranslation(['tasks', 'common']);
+  const { t } = useTranslation(['tasks', 'common', 'units']);
   const selectedUnit = units.find((s) => String(s.id) === value.unitId);
   const serverName = value.serverName || '';
   const projectId = projectIdProp ?? parseInt(value.projectId, 10);
@@ -276,6 +277,40 @@ export default function TaskFormFields({ value, onChange, mode, projects, units,
               workerType={selectedUnit?.workerType ?? undefined}
             />
           </>
+        )}
+      </div>
+
+      <div style={{ marginTop: 16 }}>
+        <FormField label="">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={value.overrideSleepAfterPush}
+                onChange={(e) => set(value, 'overrideSleepAfterPush', e.target.checked, onChange)}
+              />
+              <span className="toggle-slider" />
+            </label>
+            <span style={{ fontSize: 'var(--font-md)', color: 'var(--text)' }}>{t('sleep.overrideLabel')}</span>
+          </label>
+        </FormField>
+        {!value.overrideSleepAfterPush && selectedUnit && (
+          <div style={{ marginTop: 8, fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
+            {t('sleep.unitDefault')}: {selectedUnit.sleepAfterPush ? t('sleep.enabled') : t('sleep.disabled')}
+          </div>
+        )}
+        {value.overrideSleepAfterPush && (
+          <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={value.sleepAfterPush}
+                onChange={(e) => set(value, 'sleepAfterPush', e.target.checked, onChange)}
+              />
+              <span className="toggle-slider" />
+            </label>
+            <span style={{ fontSize: 'var(--font-sm)' }}>{t('units:fields.sleepAfterPush')}</span>
+          </div>
         )}
       </div>
     </>
