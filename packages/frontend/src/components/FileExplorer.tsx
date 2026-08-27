@@ -109,12 +109,19 @@ export default function FileExplorer({ serverName, rootPath, projectId, onFileSe
     onRefreshRef?.(loadRoot);
   }, [onRefreshRef, loadRoot]);
 
+  const areaLongPressHandlers = bindAreaLongPress((x, y) => showContextMenuAt(x, y, buildAreaMenuItems()));
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
       <div
         style={{ flex: 1, overflowY: 'auto', padding: '4px 0', ...longPressStyle }}
         onContextMenu={(e) => showContextMenu(e, buildAreaMenuItems())}
-        {...bindAreaLongPress((x, y) => showContextMenuAt(x, y, buildAreaMenuItems()))}
+        onTouchStart={(e) => {
+          if ((e.target as HTMLElement).closest('.row-hover')) return;
+          areaLongPressHandlers.onTouchStart(e);
+        }}
+        onTouchEnd={areaLongPressHandlers.onTouchEnd}
+        onTouchMove={areaLongPressHandlers.onTouchMove}
       >
         {loading && <LoadingState />}
         {error && <div style={{ padding: 12, fontSize: 'var(--font-sm)', color: 'var(--danger)' }}>{error}</div>}
