@@ -6,7 +6,8 @@ import { Icon } from './ui/Icon';
 import { LoadingState } from './ui';
 import { useContextMenu } from './ContextMenu';
 import ContextMenu from './ContextMenu';
-import { useLongPress } from '../hooks/useLongPress';
+import type { ContextMenuItem } from './ContextMenu';
+import { useLongPress, longPressStyle } from '../hooks/useLongPress';
 import { useFileTree } from './files/useFileTree';
 import type { TreeNode } from './files/useFileTree';
 import { useFileCrud } from './files/useFileCrud';
@@ -30,10 +31,13 @@ export default function FileExplorer({ serverName, rootPath, projectId, onFileSe
   const { tree, loading, error, loadRoot, toggleDir, expandDir, refreshDir, getSiblingNames } = useFileTree(serverName, rootPath);
   const { menu: contextMenu, show: showContextMenu, showAt: showContextMenuAt, hide: hideContextMenu } = useContextMenu();
   const bindLongPress = useLongPress();
+  const bindAreaLongPress = useLongPress();
 
   const crud = useFileCrud({
     serverName,
     projectId,
+    rootPath,
+    loadRoot,
     expandDir,
     refreshDir,
     onFileCreated: (filePath) => {
@@ -86,6 +90,13 @@ export default function FileExplorer({ serverName, rootPath, projectId, onFileSe
     ];
   }, [t, crud, rootPath, serverName, showToast]);
 
+  const buildAreaMenuItems = useCallback((): ContextMenuItem[] => [
+    { label: t('explorer.newFile'), icon: <Icon name="file-plus" size={14} />, onClick: () => crud.startCreate(rootPath, 'file') },
+    { label: t('explorer.newFolder'), icon: <Icon name="folder-plus" size={14} />, onClick: () => crud.startCreate(rootPath, 'directory') },
+    { separator: true, label: '', onClick: () => {} },
+    { label: t('explorer.refresh'), icon: <Icon name="refresh" size={14} />, onClick: () => loadRoot() },
+  ], [t, crud, rootPath, loadRoot]);
+
   const handleContextMenu = useCallback((node: TreeNode, e: React.MouseEvent) => {
     showContextMenu(e, buildMenuItems(node));
   }, [showContextMenu, buildMenuItems]);
@@ -98,9 +109,20 @@ export default function FileExplorer({ serverName, rootPath, projectId, onFileSe
     onRefreshRef?.(loadRoot);
   }, [onRefreshRef, loadRoot]);
 
+  const areaLongPressHandlers = bindAreaLongPress((x, y) => showContextMenuAt(x, y, buildAreaMenuItems()));
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
-      <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
+      <div
+        style={{ flex: 1, overflowY: 'auto', padding: '4px 0', ...longPressStyle }}
+        onContextMenu={(e) => showContextMenu(e, buildAreaMenuItems())}
+        onTouchStart={(e) => {
+          if ((e.target as HTMLElement).closest('.row-hover')) return;
+          areaLongPressHandlers.onTouchStart(e);
+        }}
+        onTouchEnd={areaLongPressHandlers.onTouchEnd}
+        onTouchMove={areaLongPressHandlers.onTouchMove}
+      >
         {loading && <LoadingState />}
         {error && <div style={{ padding: 12, fontSize: 'var(--font-sm)', color: 'var(--danger)' }}>{error}</div>}
         {!loading && !error && tree.length === 0 && (
