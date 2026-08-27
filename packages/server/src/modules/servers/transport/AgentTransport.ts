@@ -98,9 +98,16 @@ export class AgentTransport implements IServerTransport {
       const url = `${this.wsBaseUrl}/ws?mode=terminal&target=${encodeURIComponent(target)}&cols=${cols}&rows=${rows}&mux=${this.muxRuntime}`;
       const ws = new WebSocket(url, { headers: { authorization: this.authHeader } });
 
-      const onError = (err: Error) => reject(err);
+      const timer = setTimeout(() => {
+        ws.removeAllListeners();
+        ws.terminate();
+        reject(new Error('openTerminal timed out'));
+      }, 15_000);
+
+      const onError = (err: Error) => { clearTimeout(timer); reject(err); };
       ws.on('error', onError);
       ws.on('open', () => {
+        clearTimeout(timer);
         ws.removeListener('error', onError);
         resolve(new AgentTerminalStream(ws));
       });
