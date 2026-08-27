@@ -43,6 +43,7 @@ export interface Unit {
   workerExtraArgs: string | null;
   workerExecutionMode: WorkerExecutionMode;
   workerRuntime: WorkerRuntime;
+  sleepAfterPush: boolean;
   createdAt: string;
   updatedAt: string;
 }

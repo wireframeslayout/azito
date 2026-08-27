@@ -59,6 +59,7 @@ export interface UnitForRun {
   workerExtraArgs: string | null;
   workerExecutionMode: WorkerExecutionMode;
   workerRuntime: WorkerRuntime;
+  sleepAfterPush: boolean;
 }
 
 /**
@@ -105,6 +106,7 @@ export class PhaseLoopRunner {
     // below, so a per-phase re-verification degrades 'allow' exactly the way
     // the run's original entry-point check did.
     private scopedAuthEnabled: boolean,
+    private sleepTaskWindows: (taskId: number) => Promise<number[]>,
   ) {}
 
   private async findPrUrl(task: { projectId: number }, branch: string | null): Promise<string | null> {
@@ -285,7 +287,7 @@ export class PhaseLoopRunner {
   async stateMachineLoop(
     unit: UnitForRun,
     serverName: string,
-    task: { id: number; projectId: number; title: string; description: string | null; status: TaskStatus; currentPhase: string | null },
+    task: { id: number; projectId: number; title: string; description: string | null; status: TaskStatus; currentPhase: string | null; sleepAfterPush: boolean | null },
     server: ServerConfig,
     target: string,
     signal: AbortSignal,
@@ -648,5 +650,17 @@ export class PhaseLoopRunner {
 
     this.appendLog(task.id, unit.id, 'status_change', { status: 'done', summary: 'All phases completed.', ...gitInfo });
     this.taskRepo.updateStatus(task.id, 'review');
+
+    const shouldSleep = (finalTask ?? task).sleepAfterPush ?? unit.sleepAfterPush;
+    if (shouldSleep) {
+      try {
+        const sleptIds = await this.sleepTaskWindows(task.id);
+        if (sleptIds.length > 0) {
+          this.appendLog(task.id, unit.id, 'command', { type: 'window_sleep', windowIds: sleptIds });
+        }
+      } catch {
+        // sleep failure must not block task completion
+      }
+    }
   }
 }

@@ -105,7 +105,7 @@ export class WindowActivityStatusService {
   }
 
   private async compute(): Promise<WindowActivityStatusEntry[]> {
-    const windows = this.windowRepo.findAll().filter(isAgentWindow);
+    const windows = this.windowRepo.findAll().filter(w => isAgentWindow(w) && !w.sleeping);
 
     // Dedup by server+target the same way AgentActivityMonitor does (multiple DB
     // rows — project-owned and task-owned — can point at the same tmux window).

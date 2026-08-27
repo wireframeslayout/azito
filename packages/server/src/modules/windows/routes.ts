@@ -6,6 +6,7 @@ import type { ITaskRepository } from '../tasks/Task';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { IServerRepository } from '../servers/Server';
 import type { WindowRespawnService } from './WindowRespawnService';
+import type { WindowSleepService } from './WindowSleepService';
 import type { ISessionStrategyFactory } from '../agents/SessionStrategy';
 import type { NotificationBus } from '../notifications/NotificationBus';
 import type { ResourceGuard } from '../servers/resources/ResourceGuard';
@@ -23,6 +24,7 @@ export interface WindowsRouteOptions {
   tmux: TmuxClient;
   serverRepo: IServerRepository;
   respawnService: WindowRespawnService;
+  sleepService: WindowSleepService;
   sessionStrategyFactory: ISessionStrategyFactory;
   sessionCaptureService: SessionCaptureService;
   supervisorRegistry: SupervisorRegistry;
@@ -80,6 +82,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         launchCommand: (body['launch_command'] as string) || null,
         workingDirectory,
         paneLayout: null,
+        sleeping: false,
       });
       sessionCaptureService.scheduleInitialScan(winId, workerType, serverName, workingDirectory);
       notifyWindowsChanged(serverName);
@@ -125,6 +128,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
           launchCommand: null,
           workingDirectory: null,
           paneLayout: null,
+          sleeping: false,
         });
         addedIds.push(winId);
       }
@@ -174,6 +178,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         launchCommand: null,
         workingDirectory,
         paneLayout: null,
+        sleeping: false,
       });
       sessionCaptureService.scheduleInitialScan(winId, workerType, serverName as string, workingDirectory);
       notifyWindowsChanged(serverName);
@@ -317,6 +322,23 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       }
       notifyWindowsChanged(srv.name);
       return { ok: true, tmuxTarget: result.tmuxTarget };
+    },
+  );
+
+  // ── POST /api/windows/:id/sleep ──
+  fastify.post<{ Params: { id: string } }>(
+    '/api/windows/:id/sleep',
+    async (request, reply) => {
+      const id = parseInt(request.params.id, 10);
+      const win = windowRepo.findById(id);
+      if (!win) return reply.status(404).send({ error: 'Window not found' });
+
+      if (!opts.sleepService.canSleep(win))
+        return reply.status(400).send({ error: 'Window cannot be put to sleep: requires agent window with captured session ID and session support' });
+
+      await opts.sleepService.sleep(id);
+      notifyWindowsChanged(win.serverName);
+      return { ok: true };
     },
   );
 

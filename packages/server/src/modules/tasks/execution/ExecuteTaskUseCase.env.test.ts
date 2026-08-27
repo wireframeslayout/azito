@@ -51,6 +51,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     pendingOperation: null,
     pendingOperationWindowId: null,
     pendingOperationPriorStatus: null,
+    sleepAfterPush: null,
     createdByKind: 'operator',
     createdById: null,
     createdViaGeneration: null,
@@ -108,12 +109,14 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
     selfReviewMaxAttempts: 2,
     reviewSubagent: null,
     implementSubagent: null,
+    
     phaseConfig: null,
     workerType: null,
     workerModel: null,
     workerExtraArgs: null,
     workerExecutionMode: 'tmux-pipe',
     workerRuntime: 'tui',
+    sleepAfterPush: false,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -391,6 +394,7 @@ function buildUseCase(opts: {
     paneEnvService as any,
     new KeyedMutex(),
     opts.scopedAuthEnabled ?? true,
+      async () => [],
   );
 
   return { useCase, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, transportFactory, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, paneEnvService };
@@ -1396,6 +1400,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITOç›
       { buildEnvForNewWindow: vi.fn(() => ({ env: {}, tokenId: 1 })), revokeGeneration: vi.fn() } as any,
       new KeyedMutex(),
       true,
+      async () => [],
     );
 
     await useCase.followUp(42, 1, 'please continue');
@@ -2271,6 +2276,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       { buildEnvForNewWindow: vi.fn(() => ({ env: {}, tokenId: 1 })), revokeGeneration: vi.fn() } as any,
       new KeyedMutex(),
       true,
+      async () => [],
     );
 
     // execute() itself resolves once setup (session/window/worktree
@@ -2316,6 +2322,7 @@ describe('ExecuteTaskUseCase stale window cleanup', () => {
       label: 'w1', isPrimary: false, windowType: 'agent',
       workerType: 'claude', workerModel: 'opus', agentSessionId: null,
       launchCommand: null, workingDirectory: null, paneLayout: null,
+    sleeping: false,
       createdAt: '2026-01-01T00:00:00Z',
       ...overrides,
     };

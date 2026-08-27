@@ -103,6 +103,7 @@ function makeRunner(overrides: {
   const unitRepo = {
     findById: vi.fn(() => ({
       id: 1, unitType: 'devops', systemPrompt: null, selfReviewMaxAttempts: 2, reviewSubagent: null, implementSubagent: null, phaseConfig: null,
+    sleepAfterPush: false,
       workerType: null, workerModel: null, workerExtraArgs: null,
       workerExecutionMode: 'tmux-pipe', workerRuntime: 'tui',
     })),
@@ -192,17 +193,19 @@ function makeRunner(overrides: {
     serverRepo as any,
     projectSecretRepo as any,
     overrides.scopedAuthEnabled ?? true,
+    vi.fn(async () => []),
   );
 
   return { runner, taskRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitRepo, unitTypeLoader, sidekickLoader, workerInput, workerWaiter, appendLog, getWorktreeService, transportFactory, sidekickSyncService, httpSignalCoordinator, pushVerifier, gitProvider, pullRequestCreator };
 }
 
 const server = { name: 'local', type: 'local' } as any;
-const task = { id: 1, projectId: 10, title: 'Test Task', description: null, status: 'open' as const, currentPhase: 'planning' as string | null };
+const task = { id: 1, projectId: 10, title: 'Test Task', description: null, status: 'open' as const, currentPhase: 'planning' as string | null, sleepAfterPush: null as boolean | null };
 
 function makeUnitForRun(overrides: Record<string, unknown> = {}) {
   return {
     id: 1, unitType: 'devops', systemPrompt: null, selfReviewMaxAttempts: 2, reviewSubagent: null, implementSubagent: null, phaseConfig: null,
+    sleepAfterPush: false,
     workerType: null, workerModel: null, workerExtraArgs: null,
     workerExecutionMode: 'tmux-pipe' as const,
     workerRuntime: 'tui' as const,
@@ -777,6 +780,7 @@ describe('PhaseLoopRunner isolation cutoff (Issue #29 docs review, finding 1)', 
   it('blocks at the gate — never silently skip-to-review — when an untrusted isolated task drifts right before the pushing phase', async () => {
     const originalUnit = {
       id: 1, unitType: 'devops', systemPrompt: 'Be careful.', selfReviewMaxAttempts: 2, reviewSubagent: null, implementSubagent: null, phaseConfig: null,
+    sleepAfterPush: false,
       workerType: null, workerModel: null, workerExtraArgs: null, workerExecutionMode: 'tmux-pipe', workerRuntime: 'tui',
     };
     // Rewritten AFTER approval — only visible once the loop reaches the
@@ -896,6 +900,7 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
   it('an UNTRUSTED task approved against the CURRENT manifest runs all 5 phases without self-invalidating mid-run (top-priority acceptance criterion)', async () => {
     const fixedUnit = {
       id: 1, unitType: 'devops', systemPrompt: 'Be careful.', selfReviewMaxAttempts: 2, reviewSubagent: null, implementSubagent: null, phaseConfig: null,
+    sleepAfterPush: false,
       workerType: null, workerModel: null, workerExtraArgs: null, workerExecutionMode: 'tmux-pipe', workerRuntime: 'tui',
     };
     const unitRepo = { findById: vi.fn(() => fixedUnit) };
@@ -931,6 +936,7 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
   it("an UNTRUSTED task is blocked at the SECOND phase when the Unit's config drifts after approval — the phase's prompt is never sent, and pending_approval/pendingOperation=resume are recorded", async () => {
     const originalUnit = {
       id: 1, unitType: 'devops', systemPrompt: 'Be careful.', selfReviewMaxAttempts: 2, reviewSubagent: null, implementSubagent: null, phaseConfig: null,
+    sleepAfterPush: false,
       workerType: null, workerModel: null, workerExtraArgs: null, workerExecutionMode: 'tmux-pipe', workerRuntime: 'tui',
     };
     // Rewritten AFTER the human approved — same task/server, only the
@@ -993,6 +999,7 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
   it('does not fall back to a dummy unit id (0) when the Unit is deleted mid-run — the task-level gate block is still recorded, but no gate-related log entry is attached to a nonexistent Unit (Issue #328 review round fix 4)', async () => {
     const originalUnit = {
       id: 1, unitType: 'devops', systemPrompt: 'Be careful.', selfReviewMaxAttempts: 2, reviewSubagent: null, implementSubagent: null, phaseConfig: null,
+    sleepAfterPush: false,
       workerType: null, workerModel: null, workerExtraArgs: null, workerExecutionMode: 'tmux-pipe', workerRuntime: 'tui',
     };
     const projectRepo = { findById: vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', defaultUnitId: null })), findRepositoryById: vi.fn(() => null) };

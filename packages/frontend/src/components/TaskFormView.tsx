@@ -85,7 +85,7 @@ export default function TaskFormView({ mode, taskId, initial, projects, units, r
     if (mode !== 'edit' || !taskId || initial?.title) return;
     let cancelled = false;
     setLoadingTask(true);
-    api<{ id: number; title: string; description?: string; status: string; unitId: number | null; serverName?: string | null; priority: number; tmuxWindow?: string; baseBranch?: string; targetBranch?: string; skipPr?: boolean; workingDirectory?: string; branch?: string; source?: string; sourceRef?: string; reviewSubagent?: { enabled: boolean; provider: string; model: string } | null; implementSubagent?: { enabled: boolean; provider: string; model: string } | null }>(`/tasks/${taskId}`)
+    api<{ id: number; title: string; description?: string; status: string; unitId: number | null; serverName?: string | null; priority: number; tmuxWindow?: string; baseBranch?: string; targetBranch?: string; skipPr?: boolean; workingDirectory?: string; branch?: string; source?: string; sourceRef?: string; reviewSubagent?: { enabled: boolean; provider: string; model: string } | null; implementSubagent?: { enabled: boolean; provider: string; model: string } | null; sleepAfterPush?: boolean | null }>(`/tasks/${taskId}`)
       .then((t) => {
         if (cancelled) return;
         const hasOverride = !!(t.reviewSubagent || t.implementSubagent);
@@ -106,6 +106,8 @@ export default function TaskFormView({ mode, taskId, initial, projects, units, r
           overrideSubagents: hasOverride,
           reviewSubagent: t.reviewSubagent ?? null,
           implementSubagent: t.implementSubagent ?? null,
+          overrideSleepAfterPush: t.sleepAfterPush != null,
+          sleepAfterPush: t.sleepAfterPush ?? false,
           source: t.source && t.sourceRef ? { source: t.source, sourceRef: t.sourceRef } : null,
         });
         setForm(loaded);

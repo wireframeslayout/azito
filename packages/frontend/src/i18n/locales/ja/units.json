@@ -88,7 +88,8 @@
     "executionMode": "ワーカー実行モード",
     "executionModeHint": "ワーカーのターン完了をどのように検出するかを決定します。",
     "modePipe": "tmux pipe（従来）",
-    "modeHttpSignal": "HTTPシグナル（新）"
+    "modeHttpSignal": "HTTPシグナル（新）",
+    "sleepAfterPush": "PR作成後にエージェントウィンドウをスリープ"
   },
   "phases": {
     "title": "フェーズ",

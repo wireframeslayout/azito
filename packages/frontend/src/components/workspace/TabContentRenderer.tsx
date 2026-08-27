@@ -273,6 +273,8 @@ export default function TabContentRenderer({
           overrideSubagents: !!(editTask.reviewSubagent || editTask.implementSubagent),
           reviewSubagent: editTask.reviewSubagent ? { enabled: editTask.reviewSubagent.enabled, provider: editTask.reviewSubagent.provider, model: editTask.reviewSubagent.model } : null,
           implementSubagent: editTask.implementSubagent ? { enabled: editTask.implementSubagent.enabled, provider: editTask.implementSubagent.provider, model: editTask.implementSubagent.model } : null,
+          overrideSleepAfterPush: editTask.sleepAfterPush != null,
+          sleepAfterPush: editTask.sleepAfterPush ?? false,
           source: editTask.source && editTask.sourceRef ? { source: editTask.source, sourceRef: editTask.sourceRef } : null,
         } : {
           ...(tfd.presetTitle ? { title: tfd.presetTitle } : {}),

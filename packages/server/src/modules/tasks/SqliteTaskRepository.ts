@@ -91,6 +91,7 @@ interface TaskRow {
   agent_session_id: string | null;
   review_subagent: string | null;
   implement_subagent: string | null;
+  sleep_after_push: number | null;
   created_by_kind: string;
   created_by_id: number | null;
   created_via_generation: number | null;
@@ -138,10 +139,10 @@ export class SqliteTaskRepository implements ITaskRepository {
     this.listByStatusStmt = db.prepare('SELECT * FROM tasks WHERE status = ? ORDER BY priority DESC, created_at DESC');
     this.getStmt = db.prepare('SELECT * FROM tasks WHERE id = ?');
     this.createStmt = db.prepare(
-      'INSERT INTO tasks (project_id, unit_id, server_name, title, description, priority, tmux_window, self_review_max_attempts, require_plan_approval, source, source_ref, worktree_path, worktree_branch, base_branch, target_branch, skip_pr, working_directory, branch, plan_markdown, pending_questions, changed_files, summary_json, pr_url, agent_session_id, review_subagent, implement_subagent, input_trust, execution_approved_fingerprint_hash, pending_operation, pending_operation_window_id, pending_operation_prior_status, created_by_kind, created_by_id, created_via_generation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO tasks (project_id, unit_id, server_name, title, description, priority, tmux_window, self_review_max_attempts, require_plan_approval, source, source_ref, worktree_path, worktree_branch, base_branch, target_branch, skip_pr, working_directory, branch, plan_markdown, pending_questions, changed_files, summary_json, pr_url, agent_session_id, review_subagent, implement_subagent, sleep_after_push, input_trust, execution_approved_fingerprint_hash, pending_operation, pending_operation_window_id, pending_operation_prior_status, created_by_kind, created_by_id, created_via_generation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
     this.updateStmt = db.prepare(
-      "UPDATE tasks SET title = ?, description = ?, status = ?, unit_id = ?, server_name = ?, priority = ?, tmux_window = ?, self_review_max_attempts = ?, require_plan_approval = ?, source = ?, source_ref = ?, worktree_path = ?, worktree_branch = ?, base_branch = ?, target_branch = ?, skip_pr = ?, working_directory = ?, branch = ?, plan_markdown = ?, pending_questions = ?, changed_files = ?, summary_json = ?, pr_url = ?, agent_session_id = ?, review_subagent = ?, implement_subagent = ?, input_trust = ?, execution_approved_fingerprint_hash = ?, pending_operation = ?, pending_operation_window_id = ?, pending_operation_prior_status = ?, updated_at = datetime('now') WHERE id = ?",
+      "UPDATE tasks SET title = ?, description = ?, status = ?, unit_id = ?, server_name = ?, priority = ?, tmux_window = ?, self_review_max_attempts = ?, require_plan_approval = ?, source = ?, source_ref = ?, worktree_path = ?, worktree_branch = ?, base_branch = ?, target_branch = ?, skip_pr = ?, working_directory = ?, branch = ?, plan_markdown = ?, pending_questions = ?, changed_files = ?, summary_json = ?, pr_url = ?, agent_session_id = ?, review_subagent = ?, implement_subagent = ?, sleep_after_push = ?, input_trust = ?, execution_approved_fingerprint_hash = ?, pending_operation = ?, pending_operation_window_id = ?, pending_operation_prior_status = ?, updated_at = datetime('now') WHERE id = ?",
     );
     // Guarded compare-and-clear for consumePendingApproval() (Issue #328
     // ninth-round review finding 4) — see that method's doc comment on
@@ -255,6 +256,7 @@ export class SqliteTaskRepository implements ITaskRepository {
       data.agentSessionId ?? null,
       data.reviewSubagent !== undefined ? (data.reviewSubagent !== null ? JSON.stringify(data.reviewSubagent) : null) : null,
       data.implementSubagent !== undefined ? (data.implementSubagent !== null ? JSON.stringify(data.implementSubagent) : null) : null,
+      data.sleepAfterPush != null ? (data.sleepAfterPush ? 1 : 0) : null,
       data.inputTrust ?? 'trusted',
       data.executionApprovedFingerprintHash ?? null,
       data.pendingOperation ?? null,
@@ -309,6 +311,7 @@ export class SqliteTaskRepository implements ITaskRepository {
       data.agentSessionId !== undefined ? data.agentSessionId : current.agent_session_id,
       data.reviewSubagent !== undefined ? (data.reviewSubagent !== null ? JSON.stringify(data.reviewSubagent) : null) : current.review_subagent,
       data.implementSubagent !== undefined ? (data.implementSubagent !== null ? JSON.stringify(data.implementSubagent) : null) : current.implement_subagent,
+      data.sleepAfterPush !== undefined ? (data.sleepAfterPush != null ? (data.sleepAfterPush ? 1 : 0) : null) : current.sleep_after_push,
       data.inputTrust !== undefined ? data.inputTrust : current.input_trust,
       data.executionApprovedFingerprintHash !== undefined ? data.executionApprovedFingerprintHash : current.execution_approved_fingerprint_hash,
       data.pendingOperation !== undefined ? data.pendingOperation : current.pending_operation,
@@ -453,6 +456,7 @@ export class SqliteTaskRepository implements ITaskRepository {
       agentSessionId: row.agent_session_id ?? null,
       reviewSubagent: parseSubagentConfig(row.review_subagent),
       implementSubagent: parseSubagentConfig(row.implement_subagent),
+      sleepAfterPush: row.sleep_after_push != null ? row.sleep_after_push === 1 : null,
       inputTrust: row.input_trust as 'trusted' | 'untrusted',
       executionApprovedFingerprintHash: row.execution_approved_fingerprint_hash ?? null,
       pendingOperation: (row.pending_operation ?? null) as

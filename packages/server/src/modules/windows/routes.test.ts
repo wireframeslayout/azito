@@ -5,6 +5,7 @@ import type { Window, IWindowRepository } from './Window';
 import type { ServerConfig, IServerRepository } from '../servers/Server';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { WindowRespawnService } from './WindowRespawnService';
+import type { WindowSleepService } from './WindowSleepService';
 import type { ISessionStrategyFactory } from '../agents/SessionStrategy';
 import type { IProjectRepository } from '../projects/Project';
 import type { ITaskRepository } from '../tasks/Task';
@@ -45,6 +46,7 @@ function makeWindow(overrides: Partial<Window> = {}): Window {
     launchCommand: null,
     workingDirectory: null,
     paneLayout: null,
+    sleeping: false,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
@@ -102,6 +104,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
       tmux: tmux as TmuxClient,
       serverRepo: serverRepo as IServerRepository,
       respawnService: {} as WindowRespawnService,
+      sleepService: { canSleep: vi.fn(() => false), sleep: vi.fn() } as unknown as WindowSleepService,
       sessionStrategyFactory: {
         create: () => ({
           supportsSession: true,
@@ -239,6 +242,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
         findByName: (name: string) => (name === server.name ? server : null),
       } as unknown as IServerRepository,
       respawnService: {} as WindowRespawnService,
+      sleepService: { canSleep: vi.fn(() => false), sleep: vi.fn() } as unknown as WindowSleepService,
       sessionStrategyFactory: {
         create: () => ({
           supportsSession: true,
@@ -290,6 +294,7 @@ describe('GET /api/windows/pane-loading-state', () => {
       tmux: {} as TmuxClient,
       serverRepo: { findByName: () => makeServer() } as unknown as IServerRepository,
       respawnService: {} as WindowRespawnService,
+      sleepService: { canSleep: vi.fn(() => false), sleep: vi.fn() } as unknown as WindowSleepService,
       sessionStrategyFactory: {} as ISessionStrategyFactory,
       sessionCaptureService: { scheduleInitialScan: vi.fn() } as unknown as SessionCaptureService,
       supervisorRegistry: makeSupervisorRegistry(supervisorEntries, exitedTargets),
@@ -406,6 +411,7 @@ describe('POST /api/windows/:id/respawn — execution gate (Issue #328 second-ro
       tmux: {} as TmuxClient,
       serverRepo: serverRepo as IServerRepository,
       respawnService: { respawn } as unknown as WindowRespawnService,
+      sleepService: { canSleep: vi.fn(() => false), sleep: vi.fn() } as unknown as WindowSleepService,
       sessionStrategyFactory: {} as ISessionStrategyFactory,
       sessionCaptureService: { scheduleInitialScan: vi.fn() } as unknown as SessionCaptureService,
       supervisorRegistry: makeSupervisorRegistry(),
@@ -471,6 +477,7 @@ describe('GET /api/windows/activity-status (Issue #338 フォロー: process-bas
       tmux: {} as TmuxClient,
       serverRepo: {} as IServerRepository,
       respawnService: {} as WindowRespawnService,
+      sleepService: { canSleep: vi.fn(() => false), sleep: vi.fn() } as unknown as WindowSleepService,
       sessionStrategyFactory: {} as ISessionStrategyFactory,
       sessionCaptureService: { scheduleInitialScan: vi.fn() } as unknown as SessionCaptureService,
       supervisorRegistry: makeSupervisorRegistry(),

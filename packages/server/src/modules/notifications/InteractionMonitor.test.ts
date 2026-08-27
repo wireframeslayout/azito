@@ -19,6 +19,7 @@ function makeWindow(overrides: Partial<Window> = {}): Window {
     launchCommand: null,
     workingDirectory: null,
     paneLayout: null,
+    sleeping: false,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };

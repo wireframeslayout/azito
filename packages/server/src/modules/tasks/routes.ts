@@ -236,6 +236,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       pr_url,
       review_subagent,
       implement_subagent,
+      sleep_after_push,
     } = request.body as Record<string, unknown>;
     const gitError = validateGitFields(request.body as Record<string, unknown>);
     if (gitError) return reply.status(400).send({ error: gitError });
@@ -299,6 +300,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         agentSessionId: null,
         reviewSubagent,
         implementSubagent,
+        sleepAfterPush: sleep_after_push != null ? !!sleep_after_push : null,
         executionApprovedFingerprintHash: null,
         pendingOperation: null,
         pendingOperationWindowId: null,
@@ -576,7 +578,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       const id = parseInt(request.params.id, 10);
       const existing = taskRepo.findById(id);
       if (!existing) return reply.status(404).send({ error: 'Task not found' });
-      const { title, description, status, unit_id, server_name, priority, tmux_window, self_review_max_attempts, require_plan_approval, base_branch, target_branch, skip_pr, working_directory, branch, changed_files, pr_url, source, source_ref, review_subagent, implement_subagent, worktree_path, worktree_branch } =
+      const { title, description, status, unit_id, server_name, priority, tmux_window, self_review_max_attempts, require_plan_approval, base_branch, target_branch, skip_pr, working_directory, branch, changed_files, pr_url, source, source_ref, review_subagent, implement_subagent, sleep_after_push, worktree_path, worktree_branch } =
         request.body as Record<string, unknown>;
       const gitError = validateGitFields(request.body as Record<string, unknown>);
       if (gitError) return reply.status(400).send({ error: gitError });
@@ -673,6 +675,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
           inputTrust: nextInputTrust !== existing.inputTrust ? nextInputTrust : undefined,
           reviewSubagent,
           implementSubagent,
+          sleepAfterPush: sleep_after_push !== undefined ? (sleep_after_push != null ? !!sleep_after_push : null) : undefined,
           worktreePath: worktree_path !== undefined ? (worktree_path as string) : undefined,
           worktreeBranch: worktree_branch !== undefined ? (worktree_branch as string) : undefined,
         } as Partial<import('./Task').Task>);
@@ -808,6 +811,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         agentSessionId: null,
         reviewSubagent: null,
         implementSubagent: null,
+        sleepAfterPush: null,
         executionApprovedFingerprintHash: null,
         pendingOperation: null,
         pendingOperationWindowId: null,

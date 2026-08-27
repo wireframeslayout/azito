@@ -31,6 +31,7 @@ interface WindowRow {
   launch_command: string | null;
   working_directory: string | null;
   pane_layout: string | null;
+  sleeping: number;
   created_at: string;
 }
 
@@ -171,7 +172,7 @@ export class SqliteWindowRepository implements IWindowRepository {
   }
 
   update(id: number, data: Partial<Pick<Window,
-    'tmuxTarget' | 'label' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType'
+    'tmuxTarget' | 'label' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType' | 'sleeping'
   >>): void {
     const fields: string[] = [];
     const values: unknown[] = [];
@@ -185,6 +186,7 @@ export class SqliteWindowRepository implements IWindowRepository {
     if (data.workingDirectory !== undefined) { fields.push('working_directory = ?'); values.push(data.workingDirectory); }
     if (data.windowType !== undefined) { fields.push('window_type = ?'); values.push(data.windowType); }
     if (data.workerType !== undefined) { fields.push('worker_type = ?'); values.push(data.workerType); }
+    if (data.sleeping !== undefined) { fields.push('sleeping = ?'); values.push(data.sleeping ? 1 : 0); }
 
     if (fields.length === 0) return;
     values.push(id);
@@ -241,6 +243,7 @@ export class SqliteWindowRepository implements IWindowRepository {
       launchCommand: row.launch_command,
       workingDirectory: row.working_directory,
       paneLayout,
+      sleeping: row.sleeping === 1,
       createdAt: row.created_at,
     };
   }

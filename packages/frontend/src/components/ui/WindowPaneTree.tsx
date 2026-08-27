@@ -7,7 +7,7 @@ import { useGlobalFocus } from '../../hooks/useGlobalFocus';
 import { useLongPress, longPressStyle } from '../../hooks/useLongPress';
 import type { Session, Window } from '../../pages/workspace/types';
 
-export type WindowItem = Pick<Window, 'id' | 'serverName' | 'tmuxTarget' | 'label' | 'taskId'> & { windowType?: string; workerType?: string; isPrimary?: boolean };
+export type WindowItem = Pick<Window, 'id' | 'serverName' | 'tmuxTarget' | 'label' | 'taskId'> & { windowType?: string; workerType?: string; isPrimary?: boolean; sleeping?: boolean };
 
 type ContextMenuExtra = { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string };
 
@@ -210,6 +210,63 @@ function OfflineRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra,
   );
 }
 
+function SleepingRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra, renderTaskBadge, renderSubtitle, renderTitle }: {
+  w: WindowItem;
+  active?: boolean;
+  onPaneClick?: WindowRowProps['onPaneClick'];
+  onContextMenu?: WindowRowProps['onContextMenu'];
+  onLongPress?: WindowRowProps['onLongPress'];
+  extra?: React.ReactNode;
+  renderTaskBadge?: (w: WindowItem, taskId: number) => React.ReactNode;
+  renderSubtitle?: (w: WindowItem) => React.ReactNode | null | undefined;
+  renderTitle?: (w: WindowItem) => React.ReactNode | null | undefined;
+}) {
+  const { t } = useTranslation('common');
+  const bindLongPress = useLongPress();
+  const clickable = !!onPaneClick;
+  const subtitle = renderSubtitle?.(w);
+  const title = renderTitle?.(w) ?? (w.label || w.tmuxTarget);
+  return (
+    <div
+      onClick={onPaneClick ? () => onPaneClick(w.serverName, w.tmuxTarget, w) : undefined}
+      onContextMenu={onContextMenu ? (e) => onContextMenu(e, w) : undefined}
+      {...(onLongPress ? bindLongPress((x, y) => onLongPress(x, y, w)) : {})}
+      className={clickable ? `row-hover${active ? ' row-selected' : ''}` : undefined}
+      style={{
+        ...((onContextMenu || onLongPress) ? longPressStyle : {}),
+        padding: '6px 12px', fontSize: 'var(--font-md)', borderRadius: 'var(--radius-sm)', margin: '1px 0', display: 'flex', alignItems: 'center', gap: 8,
+        opacity: 0.5, minHeight: 44, cursor: clickable ? 'pointer' : undefined,
+        color: active ? 'var(--accent)' : 'inherit',
+      }}
+    >
+      <span style={{ width: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', flexShrink: 0 }}>
+        <AgentIcon workerType={w.workerType} windowType={w.windowType} size={16} />
+      </span>
+      <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {title}
+          </span>
+          {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
+        </div>
+        {subtitle != null && (
+          <div style={{
+            fontSize: 'var(--font-xs)', color: 'var(--text-dim)', overflow: 'hidden',
+            textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1,
+          }}>
+            {subtitle}
+          </div>
+        )}
+        <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginTop: 1, display: 'flex', alignItems: 'center', gap: 5 }}>
+          {t('windowPaneTree.sleeping')}
+        </div>
+      </div>
+      <Icon name="moon" size={14} style={{ color: 'var(--text-dim)', flexShrink: 0 }} />
+      {extra}
+    </div>
+  );
+}
+
 function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzoom, onPaneClick, onContextMenu, onLongPress, extra, activityClassName, isRespawning, renderTaskBadge, renderSubtitle, renderTitle }: WindowRowProps) {
   const { t } = useTranslation('common');
   const { isFocusedWindow, isFocusedPane } = useGlobalFocus();
@@ -221,6 +278,10 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
   const session = sessions.find((s) => s.name === sessionName);
   const hasLongPress = !!(onContextMenu || onLongPress);
   const offlineActive = isActive?.(w.serverName, w.tmuxTarget, 'window') ?? false;
+
+  if (w.sleeping) {
+    return <SleepingRow w={w} active={offlineActive} onPaneClick={onPaneClick} onContextMenu={onContextMenu} onLongPress={onLongPress} extra={extra} renderTaskBadge={renderTaskBadge} renderSubtitle={renderSubtitle} renderTitle={renderTitle} />;
+  }
 
   if (!session) {
     return <OfflineRow w={w} active={offlineActive} onPaneClick={onPaneClick} onContextMenu={onContextMenu} onLongPress={onLongPress} extra={extra} isRespawning={isRespawning} renderTaskBadge={renderTaskBadge} renderSubtitle={renderSubtitle} renderTitle={renderTitle} />;
