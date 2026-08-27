@@ -327,18 +327,15 @@ const XTermView = forwardRef<XTermViewHandle, XTermViewProps>(function XTermView
           const ws = new WebSocket(buildWsUrl({ server: serverName, target, cols: String(terminal.cols), rows: String(terminal.rows) }));
           wsRef.current = ws;
           let firstMsg = true;
-          // 初回接続に限り、オフライン(＝出力が永久に来ない)ペインを検出する。WS の open 自体は
-          // 成立してしまうため onclose には頼れず、データ到達を独自タイムアウトで見張る。2回目
-          // 以降(バックオフ再接続)は既存の disconnected/reconnecting フローに任せる。
           let connectTimedOut = false;
-          if (reconnectAttempts === 0) {
-            connectDataTimerRef.current = setTimeout(() => {
-              if (disposed || !firstMsg) return;
-              connectTimedOut = true;
+          connectDataTimerRef.current = setTimeout(() => {
+            if (disposed || !firstMsg) return;
+            connectTimedOut = true;
+            if (reconnectAttempts === 0) {
               onConnectTimeout?.();
-              try { ws.close(); } catch { /* already closed */ }
-            }, CONNECT_DATA_TIMEOUT_MS);
-          }
+            }
+            try { ws.close(); } catch { /* already closed */ }
+          }, CONNECT_DATA_TIMEOUT_MS);
           ws.onopen = () => {
             reconnectAttempts = 0;
             firstDisconnect = true;
@@ -355,7 +352,7 @@ const XTermView = forwardRef<XTermViewHandle, XTermViewProps>(function XTermView
           ws.onclose = (e) => {
             clearTimeout(connectDataTimerRef.current);
             if (disposed) return;
-            if (connectTimedOut) return;
+            if (connectTimedOut && reconnectAttempts === 0) return;
             if (e.code === 4404) { onWindowNotFound?.(); return; }
             if (firstDisconnect) {
               firstDisconnect = false;
@@ -380,7 +377,10 @@ const XTermView = forwardRef<XTermViewHandle, XTermViewProps>(function XTermView
     }
 
     let resizeHandler: (() => void) | null = null;
-    init();
+    init().catch((err) => {
+      console.error('terminal init failed', err);
+      onConnectTimeout?.();
+    });
     return () => {
       disposed = true;
       if (terminalContainer && focusHandler) {

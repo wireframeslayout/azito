@@ -388,6 +388,12 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
               >
                 {t('terminal.reconnect')}
               </button>
+              <button
+                className="btn btn-sm"
+                onClick={() => location.reload()}
+              >
+                {t('terminal.reloadPage')}
+              </button>
               {onCloseTab && (
                 <button className="btn btn-sm" onClick={onCloseTab}>
                   {t('terminal.closeTab')}

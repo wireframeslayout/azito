@@ -156,6 +156,7 @@
     "wake": "復帰",
     "connectFailed": "接続に失敗しました",
     "connectFailedTaskHint": "ペイン自体が失われている場合は、タスクパネルのウィンドウ操作から再起動できます。",
+    "reloadPage": "ページを再読み込み",
     "respawn": "再起動",
     "unregisteredWindow": "このウィンドウは AZITO に登録されていないため、再起動できません",
     "launchingClaude": "Claude Code を起動中…",
