@@ -491,3 +491,61 @@ describe('GET /api/windows/activity-status (Issue #338 フォロー: process-bas
     expect(res.json()).toEqual(entries);
   });
 });
+
+describe('POST /api/windows/:id/sleep', () => {
+  function makeApp(opts: { window?: Window | undefined; canSleep?: boolean; sleepFn?: ReturnType<typeof vi.fn> }) {
+    const win = opts.window;
+    const canSleepFn = vi.fn(() => opts.canSleep ?? true);
+    const sleepFn = opts.sleepFn ?? vi.fn(async () => {});
+    const app = Fastify();
+    app.register(windowsRoutes, {
+      windowRepo: {
+        findById: (id: number) => (win && id === win.id ? win : undefined),
+      } as unknown as IWindowRepository,
+      projectRepo: {} as IProjectRepository,
+      taskRepo: {} as ITaskRepository,
+      tmux: {} as TmuxClient,
+      serverRepo: {
+        findByName: () => ({ name: 'local-server', type: 'local' }),
+      } as unknown as IServerRepository,
+      respawnService: {} as WindowRespawnService,
+      sleepService: { canSleep: canSleepFn, sleep: sleepFn } as unknown as WindowSleepService,
+      sessionStrategyFactory: {} as ISessionStrategyFactory,
+      sessionCaptureService: { scheduleInitialScan: vi.fn() } as unknown as SessionCaptureService,
+      supervisorRegistry: makeSupervisorRegistry(),
+      windowActivityStatusService: makeWindowActivityStatusService(),
+    });
+    return { app, canSleepFn, sleepFn };
+  }
+
+  it('returns 200 and calls sleep when the window can be slept', async () => {
+    const win = makeWindow({ id: 5, agentSessionId: 'sess-1' });
+    const { app, sleepFn } = makeApp({ window: win, canSleep: true });
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/windows/5/sleep' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(sleepFn).toHaveBeenCalledWith(5);
+  });
+
+  it('returns 400 when canSleep is false', async () => {
+    const win = makeWindow({ id: 5, windowType: 'terminal', workerType: null });
+    const { app, sleepFn } = makeApp({ window: win, canSleep: false });
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/windows/5/sleep' });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: expect.stringContaining('cannot be put to sleep') });
+    expect(sleepFn).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 when the window does not exist', async () => {
+    const { app, sleepFn } = makeApp({ window: undefined });
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/windows/999/sleep' });
+    expect(res.statusCode).toBe(404);
+    expect(sleepFn).not.toHaveBeenCalled();
+  });
+});
