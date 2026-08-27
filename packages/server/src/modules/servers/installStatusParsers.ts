@@ -37,3 +37,8 @@ export function parseChromiumInstall(stdout: string): InstallStatusItem {
     ? { installed: true, version: `chromium-${match[1]}` }
     : { installed: false, detail: 'Chromium not installed (run Browser runtime install)' };
 }
+
+export function buildHarnessCheckCommand(prefix?: string): string {
+  const harnessDir = `~/.azito/harness${prefix ? `-${prefix}` : ''}`;
+  return `ls -d ${harnessDir}/skills ~/.claude/skills/azt-* 2>/dev/null | head -1`;
+}
