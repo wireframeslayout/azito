@@ -299,10 +299,15 @@ export default function TabContentRenderer({
             repositories={projectRepos}
             projectId={formProjectId}
             projectServers={projectServers.map((ps) => ({ serverName: ps.serverName, workingDirectory: ps.workingDirectory ?? null }))}
-            onSaved={() => {
+            onSaved={(newTaskId, title) => {
               closeTab(tab.id);
               refreshWorkspace();
-              backToTasksList();
+              if (newTaskId != null && tfd.mode === 'create') {
+                const projectId = tab.projectId ?? tfd.projectId ?? currentProjectId;
+                openTaskRaw(newTaskId, title ?? `Task #${newTaskId}`, projectId, 'workspace');
+              } else {
+                backToTasksList();
+              }
             }}
             onCancel={() => {
               closeTab(tab.id);
