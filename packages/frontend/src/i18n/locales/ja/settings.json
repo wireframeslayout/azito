@@ -131,6 +131,8 @@
     "sendTest": "テスト送信",
     "sending": "送信中...",
     "sentTo": "{{count}} 台のデバイスに送信しました",
+    "sentPartial": "{{sent}} 台に送信、{{failed}} 台で失敗",
+    "sendAllFailed": "全 {{failed}} 台で配信に失敗しました",
     "sendFailed": "送信に失敗しました",
     "blocked": "ブラウザの設定で通知がブロックされています。ブラウザの設定から通知を許可してください。",
     "events": "通知イベント:",

@@ -6,6 +6,7 @@
 
 import type { FastifyInstance } from 'fastify';
 import { getPushMessage } from '../modules/notifications/push/pushCatalog';
+import { taskPushUrl, agentPushUrl } from '../modules/notifications/push/pushLinks';
 import websocket from '@fastify/websocket';
 import multipart from '@fastify/multipart';
 import compress from '@fastify/compress';
@@ -129,7 +130,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     const subs = pushSubRepo.findAll();
     pushService.sendToAll(subs, (sub) => ({
       ...getPushMessage(sub.lang, pushKey, { taskTitle: task.title }),
-      data: { url: `/workspace/${task.projectId}`, taskId: task.id },
+      data: { url: taskPushUrl(task.projectId, task.id), taskId: task.id },
     })).catch(() => {});
   });
 
@@ -160,22 +161,33 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // those is exactly the false-completion class this reason field exists to end.
   notificationBus.on((event) => {
     if (event.type !== 'agent:activity') return;
-    const { serverName, target, label, taskId, running, status, reason } = event.payload;
+    const { serverName, target, label, taskId, projectId, running, status, reason } = event.payload;
+
+    const resolveUrl = (): string => {
+      if (projectId != null) return agentPushUrl({ projectId, serverName, target });
+      if (taskId != null) {
+        const found = taskRepo.findById(taskId);
+        if (found) return agentPushUrl({ projectId: found.projectId, serverName, target });
+      }
+      return agentPushUrl({ serverName, target });
+    };
 
     if (running === false && reason === 'completed') {
+      const url = resolveUrl();
       const subs = pushSubRepo.findAll();
       pushService.sendToAll(subs, (sub) => ({
         ...getPushMessage(sub.lang, 'agent.finished', { label: label || target, serverName }),
-        data: { url: '/workspace', serverName, target },
+        data: { url, serverName, target },
       })).catch(() => {});
       return;
     }
 
     if (running === true && status === 'blocked') {
+      const url = resolveUrl();
       const subs = pushSubRepo.findAll();
       pushService.sendToAll(subs, (sub) => ({
         ...getPushMessage(sub.lang, 'agent.approvalRequired', { label: label || target, serverName }),
-        data: { url: '/workspace', serverName, target, taskId },
+        data: { url, serverName, target, taskId },
       })).catch(() => {});
     }
   });

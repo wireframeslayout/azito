@@ -27,6 +27,13 @@ export interface PushPayload {
   data?: Record<string, unknown>;
 }
 
+export interface PushSendResult {
+  attempted: number;
+  sent: number;
+  failed: number;
+  pruned: number;
+}
+
 export class PushNotificationService {
   constructor(
     private vapidKeys: { publicKey: string; privateKey: string },
@@ -39,7 +46,10 @@ export class PushNotificationService {
   async sendToAll(
     subscriptions: PushSubscriptionRecord[],
     payloadOrFn: PushPayload | ((sub: PushSubscriptionRecord) => PushPayload),
-  ): Promise<void> {
+  ): Promise<PushSendResult> {
+    let sent = 0;
+    let failed = 0;
+    let pruned = 0;
     const CONCURRENCY = 10;
     for (let i = 0; i < subscriptions.length; i += CONCURRENCY) {
       const chunk = subscriptions.slice(i, i + CONCURRENCY);
@@ -56,6 +66,7 @@ export class PushNotificationService {
             { timeout: 10_000 },
           );
           console.log(`[Push] Sent to ${sub.endpoint.slice(0, 50)}... status=${result.statusCode}`);
+          sent++;
         } catch (err: unknown) {
           const statusCode = (err as { statusCode?: number }).statusCode;
           const body = (err as { body?: string }).body;
@@ -63,10 +74,14 @@ export class PushNotificationService {
           if (statusCode !== undefined && PRUNE_STATUS_CODES.has(statusCode)) {
             this.subscriptionStore?.deleteByEndpoint(sub.endpoint);
             console.log(`[Push] Pruned dead subscription (status=${statusCode}): ${sub.endpoint.slice(0, 50)}...`);
+            pruned++;
+          } else {
+            failed++;
           }
         }
       });
       await Promise.allSettled(promises);
     }
+    return { attempted: subscriptions.length, sent, failed, pruned };
   }
 }

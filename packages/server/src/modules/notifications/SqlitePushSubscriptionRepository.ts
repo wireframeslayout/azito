@@ -23,8 +23,6 @@ export class SqlitePushSubscriptionRepository {
   private createStmt;
   private deleteStmt;
   private findByEndpointStmt;
-  private countStmt;
-  private deleteOldestStmt;
 
   constructor(private db: SqliteDatabase) {
     this.listStmt = db.prepare('SELECT * FROM push_subscriptions ORDER BY created_at');
@@ -33,8 +31,6 @@ export class SqlitePushSubscriptionRepository {
     );
     this.deleteStmt = db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?');
     this.findByEndpointStmt = db.prepare('SELECT * FROM push_subscriptions WHERE endpoint = ?');
-    this.countStmt = db.prepare('SELECT COUNT(*) as cnt FROM push_subscriptions');
-    this.deleteOldestStmt = db.prepare('DELETE FROM push_subscriptions WHERE id = (SELECT id FROM push_subscriptions ORDER BY created_at ASC LIMIT 1)');
   }
 
   findAll(): PushSubscriptionRecord[] {
@@ -46,14 +42,11 @@ export class SqlitePushSubscriptionRepository {
     return row ? this.toEntity(row) : null;
   }
 
+  // endpoint is UNIQUE + INSERT OR REPLACE (migration 011), so duplicates are
+  // impossible. Rows that 404/410 are pruned by PushNotificationService on send;
+  // rows that persistently 400/403 (e.g. VAPID mismatch) are NOT auto-pruned —
+  // they remain harmless until the client re-subscribes with a fresh endpoint.
   create(endpoint: string, p256dh: string, auth: string, lang = 'en'): void {
-    const existing = this.findByEndpointStmt.get(endpoint) as PushSubscriptionRow | undefined;
-    if (!existing) {
-      const { cnt } = this.countStmt.get() as { cnt: number };
-      if (cnt >= 20) {
-        this.deleteOldestStmt.run();
-      }
-    }
     this.createStmt.run(endpoint, p256dh, auth, lang);
   }
 
