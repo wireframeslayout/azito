@@ -50,7 +50,7 @@ export class FetchDistributionService {
         const verified = await this.remoteBundleOps.verify(transport, remoteTmpPath);
         if (!verified && bundleType === 'incremental') {
           await this.remoteBundleOps.cleanup(transport, remoteTmpPath);
-          fs.unlinkSync(bundleResult.bundlePath);
+          try { fs.unlinkSync(bundleResult.bundlePath); } catch {}
           bundleResult = this.hubRepoCache.createBundle(repoIdentity, branch);
           bundleType = 'full';
           await this.sftpService.upload(sshHost, bundleResult.bundlePath, remoteTmpPath);
