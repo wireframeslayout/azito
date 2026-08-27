@@ -84,11 +84,11 @@ const notificationRoutes: FastifyPluginCallback<NotificationRouteOptions> = (fas
     if (subs.length === 0) {
       return reply.status(400).send({ error: 'No push subscriptions registered' });
     }
-    await pushService.sendToAll(subs, (sub) => ({
+    const result = await pushService.sendToAll(subs, (sub) => ({
       ...getPushMessage(sub.lang, 'test'),
       data: { url: '/' },
     }));
-    return { ok: true, sent: subs.length };
+    return { ok: result.sent > 0, ...result };
   });
 
   // GET /api/agent-watches?endpoint=<url-encoded>
