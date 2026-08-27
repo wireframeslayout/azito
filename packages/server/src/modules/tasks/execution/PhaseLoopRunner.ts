@@ -597,6 +597,8 @@ export class PhaseLoopRunner {
                 });
               } catch { /* best-effort */ }
             }
+          } else {
+            this.appendLog(task.id, unit.id, 'command', { type: 'hub_push_skipped', reason: 'no_worktree_or_branch' });
           }
         } else {
           this.appendLog(task.id, unit.id, 'command', { type: 'hub_push_skipped', reason: 'no_push_credential' });

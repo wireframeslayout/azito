@@ -40,7 +40,7 @@ export class CleanPusher {
       }).trim();
 
       askPassPath = this.writeAskPassScript(token);
-      const pushUrl = identity.httpsUrl;
+      const pushUrl = this.embedUsername(identity.httpsUrl);
       execFileSync('git', [
         '-C', tmpDir,
         '-c', 'core.hooksPath=/dev/null',
@@ -68,6 +68,16 @@ export class CleanPusher {
     const scriptPath = path.join(os.tmpdir(), `azito-askpass-push-${nonce}.sh`);
     fs.writeFileSync(scriptPath, `#!/bin/sh\necho '${token.replace(/'/g, "'\\''")}'`, { mode: 0o700 });
     return scriptPath;
+  }
+
+  private embedUsername(httpsUrl: string): string {
+    try {
+      const url = new URL(httpsUrl);
+      url.username = 'x-access-token';
+      return url.toString();
+    } catch {
+      return httpsUrl;
+    }
   }
 
   private cleanEnv(): NodeJS.ProcessEnv {

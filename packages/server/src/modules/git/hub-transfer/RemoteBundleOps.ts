@@ -36,11 +36,12 @@ export class RemoteBundleOps {
 
   async createFromWorktree(transport: IServerTransport, worktreePath: string, branch: string, baseBranch: string | null): Promise<string> {
     assertSafeBranch(branch, 'branch');
+    if (baseBranch) assertSafeBranch(baseBranch, 'baseBranch');
     const nonce = crypto.randomBytes(8).toString('hex');
     const remoteBundlePath = `/tmp/azito-push-${nonce}.bundle`;
 
     const notClause = baseBranch
-      ? `--not origin/${shellQuote(baseBranch)}`
+      ? `--not ${shellQuote(`origin/${baseBranch}`)}`
       : '';
     const r = await transport.exec(
       `cd ${shellQuote(worktreePath)} && git bundle create ${shellQuote(remoteBundlePath)} ${shellQuote(branch)} ${notClause} 2>&1`,

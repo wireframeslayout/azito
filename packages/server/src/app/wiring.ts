@@ -8,6 +8,13 @@ import { EventEmitter } from 'events';
 import * as path from 'path';
 import type { SqliteDatabase } from '../shared/db/Database';
 import type { DataPaths } from '../shared/dataDir';
+import { SftpService } from '../modules/servers/ssh/SftpService';
+import { HubRepoCache } from '../modules/git/hub-transfer/HubRepoCache';
+import { RemoteBundleOps } from '../modules/git/hub-transfer/RemoteBundleOps';
+import { CleanPusher } from '../modules/git/hub-transfer/CleanPusher';
+import { SqliteDistributionStateRepository } from '../modules/git/hub-transfer/SqliteDistributionStateRepository';
+import { FetchDistributionService } from '../modules/git/hub-transfer/FetchDistributionService';
+import { PushNotaryService } from '../modules/git/hub-transfer/PushNotaryService';
 
 import { SshClient, type FingerprintStore } from '../modules/servers/ssh/SshClient';
 import { TransportFactory } from '../modules/servers/transport/TransportFactory';
@@ -374,13 +381,6 @@ function buildExecuteTaskUseCase(
   dataPaths: DataPaths,
   db: SqliteDatabase,
 ): ExecuteTaskUseCase {
-  const { SftpService } = require('../modules/servers/ssh/SftpService') as typeof import('../modules/servers/ssh/SftpService');
-  const { HubRepoCache } = require('../modules/git/hub-transfer/HubRepoCache') as typeof import('../modules/git/hub-transfer/HubRepoCache');
-  const { RemoteBundleOps } = require('../modules/git/hub-transfer/RemoteBundleOps') as typeof import('../modules/git/hub-transfer/RemoteBundleOps');
-  const { CleanPusher } = require('../modules/git/hub-transfer/CleanPusher') as typeof import('../modules/git/hub-transfer/CleanPusher');
-  const { SqliteDistributionStateRepository } = require('../modules/git/hub-transfer/SqliteDistributionStateRepository') as typeof import('../modules/git/hub-transfer/SqliteDistributionStateRepository');
-  const { FetchDistributionService } = require('../modules/git/hub-transfer/FetchDistributionService') as typeof import('../modules/git/hub-transfer/FetchDistributionService');
-  const { PushNotaryService } = require('../modules/git/hub-transfer/PushNotaryService') as typeof import('../modules/git/hub-transfer/PushNotaryService');
 
   const sftpService = new SftpService(infra.sshClient);
   const hubRepoCache = new HubRepoCache(dataPaths.dir);

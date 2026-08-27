@@ -52,11 +52,22 @@ export class HubRepoCache {
       timeout: 10_000,
       env: this.cleanEnv(),
     });
-    execFileSync('git', ['-C', repoDir, 'remote', 'add', 'origin', httpsUrl], {
+    const urlWithUser = this.embedUsername(httpsUrl);
+    execFileSync('git', ['-C', repoDir, 'remote', 'add', 'origin', urlWithUser], {
       encoding: 'utf-8',
       timeout: 5_000,
       env: this.cleanEnv(),
     });
+  }
+
+  private embedUsername(httpsUrl: string): string {
+    try {
+      const url = new URL(httpsUrl);
+      url.username = 'x-access-token';
+      return url.toString();
+    } catch {
+      return httpsUrl;
+    }
   }
 
   private fetchWithAskPass(repoDir: string, token: string, branch: string): void {
