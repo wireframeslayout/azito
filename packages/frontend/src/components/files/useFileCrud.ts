@@ -16,12 +16,14 @@ export interface PendingRename {
 interface UseFileCrudOptions {
   serverName: string;
   projectId: number | undefined;
+  rootPath: string;
+  loadRoot: () => Promise<void>;
   expandDir: (path: string) => Promise<void>;
   refreshDir: (path: string) => Promise<void>;
   onFileCreated?: (filePath: string) => void;
 }
 
-export function useFileCrud({ serverName, projectId, expandDir, refreshDir, onFileCreated }: UseFileCrudOptions) {
+export function useFileCrud({ serverName, projectId, rootPath, loadRoot, expandDir, refreshDir, onFileCreated }: UseFileCrudOptions) {
   const { t } = useTranslation('files');
   const { showToast } = useToast();
   const [pendingCreate, setPendingCreate] = useState<PendingCreate | null>(null);
@@ -47,14 +49,18 @@ export function useFileCrud({ serverName, projectId, expandDir, refreshDir, onFi
       });
       if (res.error) throw new Error(res.error);
       setPendingCreate(null);
-      await refreshDir(pendingCreate.parentPath);
+      if (pendingCreate.parentPath === rootPath) {
+        await loadRoot();
+      } else {
+        await refreshDir(pendingCreate.parentPath);
+      }
       if (pendingCreate.type === 'file' && onFileCreated) {
         onFileCreated(fullPath);
       }
     } catch {
       showToast(t('explorer.createFailed'));
     }
-  }, [pendingCreate, projectId, serverName, refreshDir, onFileCreated, showToast, t]);
+  }, [pendingCreate, projectId, serverName, rootPath, loadRoot, refreshDir, onFileCreated, showToast, t]);
 
   const cancelCreate = useCallback(() => setPendingCreate(null), []);
 
