@@ -22,17 +22,28 @@ function mockGitProvider(remoteSha: string | null = null) {
   return { getBranchHeadSha: vi.fn(async () => remoteSha) } as any;
 }
 
-const makeServer = (overrides: Record<string, any> = {}) => ({
+const makeServer = (overrides: Record<string, any> = {}): import('../../servers/Server').ServerConfig => ({
   name: 'test-server',
-  type: 'agent' as const,
+  type: 'agent',
+  host: '100.64.0.2',
+  agentPort: 4001,
+  agentToken: 'test-token',
+  agentVersion: null,
   sshHost: 'user@host',
+  muxRuntime: 'system',
+  sshHostFingerprint: null,
   isolationIntent: true,
+  isolationVerifiedAt: null,
+  isolationReport: null,
+  isolationCleanupReport: null,
+  createdAt: '2026-01-01T00:00:00Z',
   ...overrides,
 });
 
-const makeRepo = (overrides: Record<string, any> = {}) => ({
+const makeRepo = (overrides: Record<string, any> = {}): import('../../projects/Project').ProjectRepositoryWithToken => ({
   id: 1,
-  provider: 'github' as const,
+  name: 'origin',
+  provider: 'github',
   url: 'https://github.com/owner/repo.git',
   owner: 'owner',
   repoName: 'repo',

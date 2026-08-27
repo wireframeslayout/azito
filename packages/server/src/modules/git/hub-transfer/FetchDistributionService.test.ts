@@ -44,10 +44,22 @@ function mockDistRepo(state: any = null) {
   } as any;
 }
 
-const makeServer = () => ({
+const makeServer = (overrides: Record<string, any> = {}): import('../../servers/Server').ServerConfig => ({
   name: 'iso-server',
+  type: 'agent',
+  host: '100.64.0.2',
+  agentPort: 4001,
+  agentToken: 'test-token',
+  agentVersion: null,
   sshHost: 'user@host',
+  muxRuntime: 'system',
+  sshHostFingerprint: null,
   isolationIntent: true,
+  isolationVerifiedAt: null,
+  isolationReport: null,
+  isolationCleanupReport: null,
+  createdAt: '2026-01-01T00:00:00Z',
+  ...overrides,
 });
 
 const makeParams = (overrides: Record<string, any> = {}) => ({
@@ -116,7 +128,7 @@ describe('FetchDistributionService', () => {
 
   it('returns failed when sshHost is missing', async () => {
     const service = new FetchDistributionService(mockHubRepoCache(), mockRemoteBundleOps(), mockSftpService(), mockDistRepo());
-    const result = await service.distribute(makeParams({ server: { ...makeServer(), sshHost: null } }));
+    const result = await service.distribute(makeParams({ server: makeServer({ sshHost: null }) }));
     expect(result.status).toBe('failed');
     expect(result.error).toContain('sshHost');
   });
