@@ -96,6 +96,8 @@ const CHECK_CACHE_TTL_MS = 60 * 60 * 1000;
 // a single lost process would permanently block every future update attempt.
 const STALE_RUNNING_MS = 15 * 60 * 1000;
 
+const TERMINAL_STATE_TTL_MS = 10 * 60 * 1000;
+
 /** Changelog line: `- <sha> <message>`. sha is REQUIRED to avoid treating prose bullets as commits. */
 const CHANGELOG_LINE_RE = /^[-*]\s+([0-9a-f]{7,40})\s+(.+)$/;
 
@@ -253,10 +255,15 @@ export class SystemUpdateService {
   }
 
   getProgress(): UpdateProgressResponse {
-    return {
-      state: this.stateManager.read(),
-      log: this.stateManager.readLog(),
-    };
+    const state = this.stateManager.read();
+    if (state && (state.status === 'success' || state.status === 'failed')) {
+      const completedAt = state.completedAt ? Date.parse(state.completedAt) : NaN;
+      if (!Number.isFinite(completedAt) || Date.now() - completedAt > TERMINAL_STATE_TTL_MS) {
+        this.stateManager.clear();
+        return { state: null, log: [] };
+      }
+    }
+    return { state, log: this.stateManager.readLog() };
   }
 
   private countRunningTasks(): number {
