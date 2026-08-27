@@ -190,7 +190,11 @@
     "noSessions": "No sessions (connection failed or no tmux running)"
   },
   "dropZone": {
-    "uploadToStorage": "Drop files to upload to Storage"
+    "uploadToStorage": "Drop files to upload to Storage",
+    "uploadToProject": "Upload to {{name}} storage",
+    "uploadHint": "Drop to upload and copy URL",
+    "noProject": "No upload target",
+    "noProjectHint": "This tab does not belong to a project — cannot drop here"
   },
   "sidebar": {
     "noServerConfigured": "No server environments configured.",

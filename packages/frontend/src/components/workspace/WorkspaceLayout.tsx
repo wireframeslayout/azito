@@ -64,7 +64,6 @@ interface WorkspaceLayoutProps {
   sidebarContent: React.ReactNode;
   activeWindowsSection?: React.ReactNode;
   children: React.ReactNode;
-  globalDrag: boolean;
   dragHandlers: Record<string, any>;
   contextMenu: React.ReactNode;
   confirmDialog: React.ReactNode;
@@ -93,7 +92,6 @@ export default function WorkspaceLayout({
   sidebarContent,
   activeWindowsSection,
   children,
-  globalDrag,
   dragHandlers,
   contextMenu,
   confirmDialog,
@@ -164,20 +162,6 @@ export default function WorkspaceLayout({
 
   return (
     <div style={{ display: 'flex', height: '100%', position: 'relative' }} {...dragHandlers}>
-      {globalDrag && !mobile && (
-        <div style={{
-          position: 'absolute', inset: 0, zIndex: 200,
-          background: 'var(--accent-a08)', border: '3px dashed var(--accent)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          pointerEvents: 'none', borderRadius: 0,
-        }}>
-          <span style={{ background: 'var(--bg-card)', padding: '12px 24px', borderRadius: 'var(--radius-md)', fontSize: 'var(--font-lg)', fontWeight: 600, color: 'var(--accent)', border: '1px solid var(--accent)' }}>
-            {t('workspace:dropZone.uploadToStorage')}
-          </span>
-        </div>
-      )}
-
-
       {!mobile && (() => {
         if (sidebarCollapsedEffective) {
           return (

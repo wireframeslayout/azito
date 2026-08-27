@@ -190,7 +190,11 @@
     "noSessions": "セッションなし（接続失敗または tmux 未起動）"
   },
   "dropZone": {
-    "uploadToStorage": "ファイルをドロップしてStorageにアップロード"
+    "uploadToStorage": "ファイルをドロップしてStorageにアップロード",
+    "uploadToProject": "{{name}} のストレージにアップロード",
+    "uploadHint": "ドロップでアップロードし、URL をコピーします",
+    "noProject": "アップロード先のプロジェクトがありません",
+    "noProjectHint": "このタブはプロジェクトに属していないため、ここにはドロップできません"
   },
   "sidebar": {
     "noServerConfigured": "サーバー環境が設定されていません。",
