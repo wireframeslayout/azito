@@ -23,6 +23,7 @@ interface Task {
   sourceRef?: string | null;
   source?: 'local' | 'github' | 'gitlab';
   prUrl?: string | null;
+  windows?: Array<{ sleeping?: boolean }>;
 }
 
 interface Project {
@@ -190,6 +191,9 @@ export default function TaskListView({
                     <td>
                       <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <TaskRefBadges taskId={task.id} sourceRef={task.sourceRef} source={task.source} prUrl={task.prUrl} />
+                        {task.windows?.some(w => w.sleeping) && !task.windows?.some(w => !w.sleeping) && (
+                          <span style={{ fontSize: 'var(--font-2xs)', color: 'var(--text-dim)', flexShrink: 0 }}>🌙</span>
+                        )}
                         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{task.title}</span>
                       </span>
                     </td>

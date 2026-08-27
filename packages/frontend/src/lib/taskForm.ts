@@ -19,6 +19,8 @@ export interface TaskFormValue {
   overrideSubagents: boolean;
   reviewSubagent: SubagentConfig | null;
   implementSubagent: SubagentConfig | null;
+  overrideSleepAfterPush: boolean;
+  sleepAfterPush: boolean;
   source: { source: string; sourceRef?: string } | null;
 }
 
@@ -42,6 +44,8 @@ export function emptyTaskForm(overrides?: Partial<TaskFormValue>): TaskFormValue
     overrideSubagents: false,
     reviewSubagent: null,
     implementSubagent: null,
+    overrideSleepAfterPush: false,
+    sleepAfterPush: false,
     source: null,
     ...overrides,
   };
@@ -57,6 +61,11 @@ function buildSubagentPayload(v: TaskFormValue): Record<string, unknown> {
       ? { enabled: true, provider: v.implementSubagent.provider, model: v.implementSubagent.model }
       : null,
   };
+}
+
+function buildSleepPayload(v: TaskFormValue): Record<string, unknown> {
+  if (!v.overrideSleepAfterPush) return { sleep_after_push: null };
+  return { sleep_after_push: v.sleepAfterPush };
 }
 
 /**
@@ -79,6 +88,7 @@ export function buildTaskPayload(v: TaskFormValue, mode: 'create' | 'edit', orig
       working_directory: v.workingDirectory.trim() || null,
       branch: v.skipPr ? (v.workingBranch.trim() || null) : null,
       ...buildSubagentPayload(v),
+      ...buildSleepPayload(v),
     };
     if (!original || v.status !== original.status) {
       payload.status = v.status;
@@ -109,6 +119,7 @@ export function buildTaskPayload(v: TaskFormValue, mode: 'create' | 'edit', orig
 
   // subagent override
   Object.assign(base, buildSubagentPayload(v));
+  Object.assign(base, buildSleepPayload(v));
 
   // source
   if (v.source) {

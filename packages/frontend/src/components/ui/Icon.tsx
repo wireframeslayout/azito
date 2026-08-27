@@ -70,6 +70,7 @@ import {
   Home,
   Info,
   CircleCheck,
+  Moon,
   type LucideIcon,
 } from 'lucide-react';
 import { SidekickBot, UnitsSquad } from './custom-icons';
@@ -150,6 +151,7 @@ const ICONS = {
   home: Home,
   info: Info,
   'circle-check': CircleCheck,
+  moon: Moon,
 } satisfies Record<string, LucideIcon>;
 
 export type IconName = keyof typeof ICONS;

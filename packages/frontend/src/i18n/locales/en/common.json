@@ -101,6 +101,7 @@
     "noWindows": "No windows attached",
     "respawning": "respawning...",
     "offline": "(offline)",
+    "sleeping": "(sleeping)",
     "respawningLabel": "Respawning",
     "showAllPanes": "Show all panes (unzoom)",
     "showAllPanesLabel": "Show all panes"
@@ -151,6 +152,8 @@
     "closeTab": "Close tab",
     "disconnected": "Disconnected",
     "windowMissing": "Window not found",
+    "sleeping": "Agent is sleeping (session preserved)",
+    "wake": "Wake",
     "connectFailed": "Connection failed",
     "connectFailedTaskHint": "If the pane itself is gone, you can respawn the window from the task panel.",
     "respawn": "Respawn",

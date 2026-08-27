@@ -32,6 +32,7 @@ export interface Window {
   launchCommand?: string;
   workingDirectory?: string;
   paneLayout?: WindowPaneLayout;
+  sleeping?: boolean;
 }
 export interface Repository { id: number; url: string; name?: string; provider?: string; owner?: string; repoName?: string; }
 export interface Project {
@@ -72,6 +73,7 @@ export interface Unit {
   workerExecutionMode: WorkerExecutionMode;
   workerRuntime: WorkerRuntime;
   workerCommand?: string | null;
+  sleepAfterPush?: boolean;
   createdAt: string; updatedAt: string;
 }
 /** A currently-running execution of a Unit against a Task (formerly the Operation entity; Issue #263 Refine B). */
@@ -105,6 +107,7 @@ export interface Task {
   implementSubagent?: { enabled: boolean; provider: string; model: string } | null;
   source?: 'local' | 'github' | 'gitlab';
   sourceRef?: string | null;
+  sleepAfterPush?: boolean | null;
 }
 /** GET /api/tasks/:id/execution-approval response (Issue #51) — what a human
  * needs to see to approve/deny the untrusted-input execution gate. Mirrors

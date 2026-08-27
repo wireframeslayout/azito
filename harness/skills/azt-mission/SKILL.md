@@ -70,6 +70,10 @@ argument-hint: [--parallel] [--base <branch>] [--project <id|slug>] <taskId | #i
      `reviewSubagent` / `implementSubagent`。null なら「サブエージェントなし」）を提示し、
      「Unitのデフォルトのまま / 上書きする / 無効化する」を確認する。上書き・無効化を選んだ場合は
      provider・model を確認し（`GET /api/providers` があれば選択肢の参考に）、Step 3 で各タスクに反映する
+   - **スリープ方針**: 各タスクの実効スリープ設定（`task.sleepAfterPush ?? unit.sleepAfterPush`）を
+     集計して提示し、「Unit設定に従う / 全タスクをスリープ / スリープしない」を1回確認する。
+     「全タスクをスリープ」の場合は Step 3 で各タスクに `sleep_after_push: true` を設定する。
+     「スリープしない」の場合は `sleep_after_push: false` を設定する。「Unit設定に従う」の場合は上書きしない
    回答が得られてから Step 3 へ進む
 
 ## Step 3: ミッション準備（ブランチとタスク設定）
@@ -107,6 +111,8 @@ argument-hint: [--parallel] [--base <branch>] [--project <id|slug>] <taskId | #i
    {"review_subagent": {"enabled": true, "provider": "codex", "model": "gpt-5.5"},
     "implement_subagent": {"enabled": true, "provider": "codex", "model": "gpt-5.5"}}
    ```
+   Step 2 でスリープ方針の上書きを選んだ場合は、同じ PUT に `"sleep_after_push": true` または
+   `"sleep_after_push": false` を含める（`null` を渡すと Unit デフォルトに戻る）
 
 ## Step 4: 実行ループ（直列モード）
 
@@ -260,7 +266,18 @@ done; echo "last:$S"
    git fetch origin "${MISSION_BRANCH}" -q
    git branch -f "${MISSION_BRANCH}" "origin/${MISSION_BRANCH}"
    ```
-5. このタスクの結果（PR番号・要点）を短く報告して次のタスクへ進む
+5. **スリープ方針の適用**: Step 2 でスリープ方針が「全タスクをスリープ」または「Unit設定に従う」
+   （かつ実効設定が有効）の場合、マージ完了後にタスクのエージェントウィンドウをスリープする:
+   ```bash
+   # タスクの windows を取得し、sleeping でないものを sleep
+   WINDOWS=$(curl -sf -H "Authorization: Bearer ${AZITO_UI_TOKEN}" "${AZITO_URL:-http://localhost:3001}/api/tasks/${TASK_ID}/windows")
+   echo "${WINDOWS}" | jq -r '.[] | select(.sleeping == false and .windowType == "agent" and .agentSessionId != null) | .id' | while read WID; do
+     curl -sf -X POST -H "Authorization: Bearer ${AZITO_UI_TOKEN}" "${AZITO_URL:-http://localhost:3001}/api/windows/${WID}/sleep" || true
+   done
+   ```
+   自動スリープが有効（`sleep_after_push`）なタスクはPR作成時に自動スリープ済みなので、
+   ここでは未スリープのウィンドウのみ対象。スリープ失敗はミッション進行を妨げない
+6. このタスクの結果（PR番号・要点）を短く報告して次のタスクへ進む
 
 ## Step 5: 並列モード（--parallel）
 

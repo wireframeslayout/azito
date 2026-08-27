@@ -16,6 +16,7 @@ interface UnitRow {
   worker_extra_args: string | null;
   worker_execution_mode: string;
   worker_runtime: string;
+  sleep_after_push: number;
   created_at: string;
   updated_at: string;
 }
@@ -55,10 +56,10 @@ export class SqliteUnitRepository implements IUnitRepository {
     this.listStmt = db.prepare('SELECT * FROM units ORDER BY created_at DESC');
     this.getStmt = db.prepare('SELECT * FROM units WHERE id = ?');
     this.createStmt = db.prepare(
-      `INSERT INTO units (name, unit_type, system_prompt, self_review_max_attempts, review_subagent, implement_subagent, phase_config, worker_type, worker_model, worker_extra_args, worker_execution_mode, worker_runtime) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO units (name, unit_type, system_prompt, self_review_max_attempts, review_subagent, implement_subagent, phase_config, worker_type, worker_model, worker_extra_args, worker_execution_mode, worker_runtime, sleep_after_push) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.updateStmt = db.prepare(
-      `UPDATE units SET name = ?, unit_type = ?, system_prompt = ?, self_review_max_attempts = ?, review_subagent = ?, implement_subagent = ?, phase_config = ?, worker_type = ?, worker_model = ?, worker_extra_args = ?, worker_execution_mode = ?, worker_runtime = ?, updated_at = datetime('now') WHERE id = ?`,
+      `UPDATE units SET name = ?, unit_type = ?, system_prompt = ?, self_review_max_attempts = ?, review_subagent = ?, implement_subagent = ?, phase_config = ?, worker_type = ?, worker_model = ?, worker_extra_args = ?, worker_execution_mode = ?, worker_runtime = ?, sleep_after_push = ?, updated_at = datetime('now') WHERE id = ?`,
     );
     this.deleteStmt = db.prepare('DELETE FROM units WHERE id = ?');
   }
@@ -87,6 +88,7 @@ export class SqliteUnitRepository implements IUnitRepository {
       data.workerExtraArgs ?? null,
       data.workerExecutionMode ?? 'tmux-pipe',
       data.workerRuntime ?? 'tui',
+      data.sleepAfterPush ? 1 : 0,
     );
     return Number(result.lastInsertRowid);
   }
@@ -107,6 +109,7 @@ export class SqliteUnitRepository implements IUnitRepository {
       data.workerExtraArgs !== undefined ? data.workerExtraArgs : current.worker_extra_args,
       data.workerExecutionMode ?? current.worker_execution_mode,
       data.workerRuntime ?? current.worker_runtime,
+      data.sleepAfterPush !== undefined ? (data.sleepAfterPush ? 1 : 0) : current.sleep_after_push,
       id,
     );
   }
@@ -130,6 +133,7 @@ export class SqliteUnitRepository implements IUnitRepository {
       workerExtraArgs: row.worker_extra_args,
       workerExecutionMode: (row.worker_execution_mode || 'tmux-pipe') as WorkerExecutionMode,
       workerRuntime: (row.worker_runtime || 'tui') as WorkerRuntime,
+      sleepAfterPush: row.sleep_after_push === 1,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };

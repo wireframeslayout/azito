@@ -514,6 +514,7 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
           agentSessionId: null,
           reviewSubagent: null,
           implementSubagent: null,
+          sleepAfterPush: null,
           executionApprovedFingerprintHash: null,
           pendingOperation: null,
           pendingOperationWindowId: null,

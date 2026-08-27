@@ -18,6 +18,7 @@ interface Task {
   sourceRef?: string | null;
   source?: 'local' | 'github' | 'gitlab';
   prUrl?: string | null;
+  windows?: Array<{ sleeping?: boolean }>;
 }
 
 interface Project {
@@ -160,6 +161,9 @@ export default function TaskKanbanBoard({
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
                       <StatusDot status={task.status} />
                       <TaskRefBadges taskId={task.id} sourceRef={task.sourceRef} source={task.source} prUrl={task.prUrl} />
+                      {task.windows?.some(w => w.sleeping) && !task.windows?.some(w => !w.sleeping) && (
+                        <span style={{ fontSize: 'var(--font-2xs)', color: 'var(--text-dim)', flexShrink: 0 }}>🌙</span>
+                      )}
                     </div>
                     <span style={{
                       fontSize: 'var(--font-md)',

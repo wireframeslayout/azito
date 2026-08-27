@@ -191,6 +191,7 @@ export interface Task {
   summaryJson: string | null;
   prUrl: string | null;
   agentSessionId: string | null;
+  sleepAfterPush: boolean | null;
   reviewSubagent?: SubagentConfig | null;
   implementSubagent?: SubagentConfig | null;
   createdAt: string;

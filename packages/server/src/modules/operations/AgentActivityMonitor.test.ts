@@ -26,6 +26,7 @@ function makeWindow(overrides: Partial<Window>): Window {
     launchCommand: null,
     workingDirectory: null,
     paneLayout: null,
+    sleeping: false,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
@@ -2086,5 +2087,25 @@ describe('AgentActivityMonitor', () => {
         }),
       ]);
     });
+  });
+
+  it('excludes sleeping windows from manual-candidate enumeration', async () => {
+    findAll.mockReturnValue([
+      makeWindow({ id: 1, tmuxTarget: 'azito:agent-1.1', sleeping: true }),
+      makeWindow({ id: 2, tmuxTarget: 'azito:agent-2.1', sleeping: false }),
+    ]);
+    const base = Math.floor(Date.now() / 1000) - 5;
+    listSessions.mockResolvedValue(makeSessions('azito', 'agent-2', 2, base));
+
+    await monitor.tick();
+
+    // The sleeping window must never appear in diagnostics (it's filtered out
+    // before the manual-candidate loop even considers it).
+    const diag = monitor.diagnostics();
+    expect(diag.every((d: { target: string }) => !d.target.includes('agent-1'))).toBe(true);
+    // The non-sleeping window still appears (as idle — it needs debounce ticks
+    // to confirm running, but it must at least be enumerated).
+    const agent2 = diag.find((d: { target: string }) => d.target.includes('agent-2'));
+    expect(agent2).toBeDefined();
   });
 });

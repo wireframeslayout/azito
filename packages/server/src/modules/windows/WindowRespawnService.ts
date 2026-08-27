@@ -468,7 +468,7 @@ export class WindowRespawnService {
         throw err;
       }
 
-      this.windowRepo.update(windowId, { tmuxTarget: dbTarget });
+      this.windowRepo.update(windowId, { tmuxTarget: dbTarget, sleeping: false });
 
       return { tmuxTarget: dbTarget };
     };

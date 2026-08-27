@@ -58,6 +58,7 @@ function makeTask(id: number, overrides: Partial<Task> = {}): Task {
     pendingOperation: null,
     pendingOperationWindowId: null,
     pendingOperationPriorStatus: null,
+  sleepAfterPush: null,
     createdByKind: 'operator',
     createdById: null,
     createdViaGeneration: null,
