@@ -44,8 +44,12 @@ describe('notifyAgentWatchesOnIdle', () => {
     );
 
     expect(sendToAll).toHaveBeenCalledTimes(1);
-    const payloadFn = sendToAll.mock.calls[0][1] as (subscription: PushSubscriptionRecord) => { title: string };
-    expect(payloadFn(sub).title).toBe('AZITO: Agent Idle');
+    const payloadFn = sendToAll.mock.calls[0][1] as (subscription: PushSubscriptionRecord) => { title: string; data: { url: string } };
+    const payload = payloadFn(sub);
+    expect(payload.title).toBe('AZITO: Agent Idle');
+    expect(payload.data.url).toBe('/?server=local&target=session%3A0');
+    expect(payload.data.url).not.toBe('/workspace');
+    expect(payload.data.url).not.toBe('/tasks');
     expect(deleteById).toHaveBeenCalledWith(watch.id);
   });
 
