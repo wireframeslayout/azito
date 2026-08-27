@@ -2,6 +2,7 @@ import type { SqliteAgentWatchRepository } from './SqliteAgentWatchRepository';
 import type { SqlitePushSubscriptionRepository } from './SqlitePushSubscriptionRepository';
 import type { PushNotificationService } from './push/PushNotificationService';
 import { getPushMessage } from './push/pushCatalog';
+import { agentPushUrl } from './push/pushLinks';
 
 export interface AgentActivityBridgePayload {
   serverName: string;
@@ -42,7 +43,7 @@ export async function notifyAgentWatchesOnIdle(
             label: watch.label ?? payload.label ?? payload.target,
             serverName: payload.serverName,
           }),
-          data: { url: '/tasks' },
+          data: { url: agentPushUrl({ serverName: payload.serverName, target: payload.target }) },
         }));
       } catch {
         // ignore — watch is still deleted below (see design decision above)

@@ -620,11 +620,20 @@ function WorkspaceInner() {
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const taskParam = params.get('task');
-    if (!taskParam) return;
-    const taskId = parseInt(taskParam, 10);
-    if (isNaN(taskId)) return;
-    openTask(taskId, t('tasks:detail.taskRef', { id: taskId }), 'global');
-    navigate(location.pathname, { replace: true });
+    if (taskParam) {
+      const taskId = parseInt(taskParam, 10);
+      if (!isNaN(taskId)) {
+        openTask(taskId, t('tasks:detail.taskRef', { id: taskId }), 'global');
+      }
+      navigate(location.pathname, { replace: true });
+      return;
+    }
+    const serverName = params.get('server');
+    const target = params.get('target');
+    if (serverName && target) {
+      connectPane(serverName, target);
+      navigate(location.pathname, { replace: true });
+    }
   }, [location.search]);
 
   const handleFileSelect = useCallback((serverName: string, filePath: string, line?: number) => {

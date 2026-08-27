@@ -2,6 +2,7 @@ import './i18n';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
+import { router } from './router';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -12,6 +13,11 @@ createRoot(document.getElementById('root')!).render(
 // Register service worker for PWA + push notifications
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js').catch(() => {});
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    if (e.data?.type === 'notification-navigate' && typeof e.data.url === 'string') {
+      router.navigate(e.data.url);
+    }
+  });
 }
 
 // react-dom dev ビルドの Component Tracks が発行する performance.measure が
