@@ -14,6 +14,7 @@ export default function NotificationsSection() {
   const [actionLoading, setActionLoading] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
+  const [testSuccess, setTestSuccess] = useState(false);
 
   useEffect(() => {
     const check = async () => {
@@ -62,14 +63,30 @@ export default function NotificationsSection() {
     setTesting(true);
     setTestResult(null);
     try {
-      const res = await api<{ ok?: boolean; sent?: number; error?: string }>('/notifications/test', { method: 'POST' });
-      setTestResult(res.ok ? `Sent to ${res.sent} device(s)` : res.error || 'Failed to send');
+      const res = await api<{ ok?: boolean; sent?: number; failed?: number; error?: string }>('/notifications/test', { method: 'POST' });
+      if (res.error) {
+        setTestSuccess(false);
+        setTestResult(t('notifications.sendFailed'));
+      } else if (res.sent && res.sent > 0 && (!res.failed || res.failed === 0)) {
+        setTestSuccess(true);
+        setTestResult(t('notifications.sentTo', { count: res.sent }));
+      } else if (res.sent && res.sent > 0 && res.failed && res.failed > 0) {
+        setTestSuccess(false);
+        setTestResult(t('notifications.sentPartial', { sent: res.sent, failed: res.failed }));
+      } else if (res.failed && res.failed > 0) {
+        setTestSuccess(false);
+        setTestResult(t('notifications.sendAllFailed', { failed: res.failed }));
+      } else {
+        setTestSuccess(false);
+        setTestResult(t('notifications.sendFailed'));
+      }
     } catch {
-      setTestResult('Failed to send');
+      setTestSuccess(false);
+      setTestResult(t('notifications.sendFailed'));
     } finally {
       setTesting(false);
     }
-  }, []);
+  }, [t]);
 
   if (loading) return <LoadingState />;
   if (!supported) {
@@ -113,7 +130,7 @@ export default function NotificationsSection() {
           </div>
         </div>
         {testResult && (
-          <div style={{ fontSize: 'var(--font-sm)', color: testResult.startsWith('Sent') ? 'var(--success)' : 'var(--danger)', marginTop: 8 }}>
+          <div role="status" style={{ fontSize: 'var(--font-sm)', color: testSuccess ? 'var(--success)' : 'var(--danger)', marginTop: 8 }}>
             {testResult}
           </div>
         )}

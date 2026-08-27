@@ -119,3 +119,18 @@ self.addEventListener('notificationclick', (event) => {
     if (clients.openWindow) await clients.openWindow(dest.href);
   })());
 });
+
+// Re-subscribe when the push service rotates the subscription.
+// Server sync is deferred to the next app open (reconcile in PushReconciler)
+// because the UI token lives in sessionStorage and is inaccessible from SW.
+self.addEventListener('pushsubscriptionchange', (event) => {
+  event.waitUntil((async () => {
+    if (event.newSubscription) return;
+    const oldKey = event.oldSubscription?.options?.applicationServerKey;
+    if (!oldKey) return;
+    await self.registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: oldKey,
+    }).catch(() => {});
+  })());
+});
