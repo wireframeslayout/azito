@@ -12,6 +12,7 @@ import type { IProjectRepository } from '../projects/Project';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
 import type { IWindowRepository } from '../windows/SqliteWindowRepository';
 import { parseTmuxVersion, parseNodeVersion, parseHarnessCheck, parseTailscaleCheck, parseChromiumInstall } from './installStatusParsers';
+import { buildBaseUrlCandidates } from './baseUrlCandidates';
 import { findChromiumBinaryCommand } from './agent-deploy/BrowserRuntimeInstaller';
 import { stripTerminalArtifacts } from '../../shared/utils/stripTerminalArtifacts';
 import type { TmuxInstaller } from './agent-deploy/TmuxInstaller';
@@ -1317,19 +1318,15 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
   // ── GET /api/server-info/base-urls ──
   fastify.get('/api/server-info/base-urls', () => {
     const port = process.env.PORT || '3001';
-    const candidates: { label: string; url: string }[] = [];
-
-    const dnsName = getTailscaleDnsName();
-    const tsIp = getTailscaleIp();
-
-    if (dnsName) candidates.push({ label: 'Tailscale (DNS)', url: `http://${dnsName}:${port}` });
-    if (tsIp) candidates.push({ label: 'Tailscale (IP)', url: `http://${tsIp}:${port}` });
-
-    for (const ip of getLanIps()) {
-      candidates.push({ label: `LAN (${ip})`, url: `http://${ip}:${port}` });
-    }
-
-    return { candidates };
+    return {
+      candidates: buildBaseUrlCandidates(
+        process.env.AZITO_PUBLIC_URL,
+        getTailscaleDnsName(),
+        getTailscaleIp(),
+        getLanIps(),
+        port,
+      ),
+    };
   });
 
   // ── DELETE /api/servers/:name/ssh-fingerprint ──
