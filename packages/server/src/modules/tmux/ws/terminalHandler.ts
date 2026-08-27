@@ -39,6 +39,10 @@ export function handleTerminalConnection(
     .getTransport(server)
     .openTerminal(target, cols, rows);
 
+  openPromise.then((stream) => {
+    if (closed) stream.close();
+  }, () => {});
+
   const timeoutPromise = new Promise<never>((_, reject) => {
     const timer = setTimeout(
       () => reject(new Error('openTerminal timed out')),
