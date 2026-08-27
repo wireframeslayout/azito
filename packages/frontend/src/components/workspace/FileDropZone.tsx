@@ -43,7 +43,7 @@ export default function FileDropZone({
   }, [mobile]);
 
   const onDragLeave = useCallback((e: React.DragEvent) => {
-    if (mobile) return;
+    if (mobile || !isFileDrag(e)) return;
     e.stopPropagation();
     dragCounterRef.current--;
     if (dragCounterRef.current <= 0) {

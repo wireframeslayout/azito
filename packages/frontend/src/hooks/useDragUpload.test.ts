@@ -3,12 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 /**
  * useDragUpload is a React hook, and this workspace runs tests with
  * environment: 'node' (no jsdom / renderHook). We test the underlying
- * logic by exercising the callbacks returned from the hook-like structure
- * directly — simulating what React would do — and by verifying the window-
- * level safety-valve listeners.
- *
- * The hook's logic is small enough that a thin wrapper avoids pulling in
- * a DOM environment just for drag counter arithmetic.
+ * counter logic by exercising a minimal reimplementation — the hook's
+ * real value is (1) calling preventDefault to block browser-default file
+ * navigation, and (2) resetting the counter via a window-level safety
+ * valve. The useEffect registration itself is not covered here.
  */
 
 function createDragEvent(types: string[] = ['Files']): { dataTransfer: { types: string[] }; preventDefault: () => void } {
@@ -16,40 +14,30 @@ function createDragEvent(types: string[] = ['Files']): { dataTransfer: { types: 
 }
 
 function createHookState() {
-  let globalDrag = false;
   let dragCounter = 0;
-  const setGlobalDrag = (v: boolean) => { globalDrag = v; };
-
-  const isTabDrag = (e: { dataTransfer: { types: string[] } }) =>
-    e.dataTransfer.types.includes('application/x-azito-tab');
 
   const onDragEnter = (e: ReturnType<typeof createDragEvent>) => {
     e.preventDefault();
     dragCounter++;
-    if (dragCounter === 1 && !isTabDrag(e)) setGlobalDrag(true);
   };
 
   const onDragLeave = () => {
     dragCounter--;
     if (dragCounter <= 0) {
       dragCounter = 0;
-      setGlobalDrag(false);
     }
   };
 
   const onDrop = (e: ReturnType<typeof createDragEvent>) => {
     e.preventDefault();
     dragCounter = 0;
-    setGlobalDrag(false);
   };
 
   const reset = () => {
     dragCounter = 0;
-    setGlobalDrag(false);
   };
 
   return {
-    get globalDrag() { return globalDrag; },
     get dragCounter() { return dragCounter; },
     onDragEnter,
     onDragLeave,
@@ -58,76 +46,73 @@ function createHookState() {
   };
 }
 
-describe('useDragUpload logic', () => {
-  it('sets globalDrag on first dragenter with Files', () => {
+describe('useDragUpload counter logic', () => {
+  it('increments on dragenter', () => {
     const h = createHookState();
     h.onDragEnter(createDragEvent(['Files']));
-    expect(h.globalDrag).toBe(true);
     expect(h.dragCounter).toBe(1);
   });
 
-  it('does not set globalDrag for tab drags', () => {
+  it('increments for tab drags too (counter is type-agnostic)', () => {
     const h = createHookState();
     h.onDragEnter(createDragEvent(['application/x-azito-tab']));
-    expect(h.globalDrag).toBe(false);
     expect(h.dragCounter).toBe(1);
   });
 
-  it('clears globalDrag when dragCounter returns to 0', () => {
+  it('decrements on dragleave and clears at 0', () => {
     const h = createHookState();
     h.onDragEnter(createDragEvent());
     h.onDragEnter(createDragEvent());
     expect(h.dragCounter).toBe(2);
-    expect(h.globalDrag).toBe(true);
     h.onDragLeave();
-    expect(h.globalDrag).toBe(true);
+    expect(h.dragCounter).toBe(1);
     h.onDragLeave();
-    expect(h.globalDrag).toBe(false);
     expect(h.dragCounter).toBe(0);
   });
 
-  it('resets on drop', () => {
+  it('resets counter on drop', () => {
     const h = createHookState();
     h.onDragEnter(createDragEvent());
     h.onDragEnter(createDragEvent());
-    expect(h.globalDrag).toBe(true);
     h.onDrop(createDragEvent());
-    expect(h.globalDrag).toBe(false);
     expect(h.dragCounter).toBe(0);
   });
 
-  it('safety valve reset clears state', () => {
+  it('calls preventDefault on dragenter and drop', () => {
     const h = createHookState();
-    h.onDragEnter(createDragEvent());
-    h.onDragEnter(createDragEvent());
-    expect(h.globalDrag).toBe(true);
-    h.reset();
-    expect(h.globalDrag).toBe(false);
-    expect(h.dragCounter).toBe(0);
+    const enterEvent = createDragEvent();
+    const dropEvent = createDragEvent();
+    h.onDragEnter(enterEvent);
+    h.onDrop(dropEvent);
+    expect(enterEvent.preventDefault).toHaveBeenCalled();
+    expect(dropEvent.preventDefault).toHaveBeenCalled();
   });
 
-  it('dragCounter never goes negative', () => {
+  it('counter never goes negative', () => {
     const h = createHookState();
     h.onDragLeave();
     h.onDragLeave();
     expect(h.dragCounter).toBe(0);
-    expect(h.globalDrag).toBe(false);
   });
 });
 
-describe('safety valve simulates window-level reset', () => {
-  it('calling reset after partial drag sequence fully clears state', () => {
+describe('safety valve (window-level reset)', () => {
+  it('calling reset after partial drag sequence fully clears counter', () => {
     const h = createHookState();
     h.onDragEnter(createDragEvent());
     h.onDragEnter(createDragEvent());
     h.onDragEnter(createDragEvent());
     expect(h.dragCounter).toBe(3);
-    expect(h.globalDrag).toBe(true);
     h.reset();
     expect(h.dragCounter).toBe(0);
-    expect(h.globalDrag).toBe(false);
+  });
+
+  it('counter works correctly after a reset', () => {
+    const h = createHookState();
+    h.onDragEnter(createDragEvent());
+    h.onDragEnter(createDragEvent());
+    h.reset();
     h.onDragEnter(createDragEvent());
     expect(h.dragCounter).toBe(1);
-    expect(h.globalDrag).toBe(true);
   });
 });
