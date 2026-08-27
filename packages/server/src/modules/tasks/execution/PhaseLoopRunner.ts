@@ -33,6 +33,7 @@ import type { GitInfoCollector } from './GitInfoCollector';
 import type { GitProviderService } from '../../git/providers/GitProviderService';
 import type { HttpSignalTurnCoordinator } from './HttpSignalTurnCoordinator';
 import type { PullRequestCreator } from './PullRequestCreator';
+import type { PushNotaryService } from '../../git/hub-transfer/PushNotaryService';
 import type { AgentTurn } from '../turns/AgentTurn';
 import { checkExecutionGate } from './ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionManifest';
@@ -105,6 +106,7 @@ export class PhaseLoopRunner {
     // below, so a per-phase re-verification degrades 'allow' exactly the way
     // the run's original entry-point check did.
     private scopedAuthEnabled: boolean,
+    private pushNotaryService: PushNotaryService | null,
   ) {}
 
   private async findPrUrl(task: { projectId: number }, branch: string | null): Promise<string | null> {
@@ -352,7 +354,7 @@ export class PhaseLoopRunner {
       // no push-credential injection, per the Issue #29 review scope. Runs
       // only after the gate re-check above has already confirmed the
       // approved manifest/input-policy still holds for this phase.
-      if (server.isolationIntent === true && phaseDef.pushVerify) {
+      if (server.isolationIntent === true && phaseDef.pushVerify && !this.pushNotaryService) {
         this.taskRepo.updateCurrentPhase(task.id, phase);
         this.appendLog(task.id, unit.id, 'command', {
           type: 'pushing_skipped_isolated',
@@ -456,7 +458,7 @@ export class PhaseLoopRunner {
       }
 
       let pushingProbe: (() => Promise<boolean>) | undefined;
-      if (phaseDef.pushVerify) {
+      if (phaseDef.pushVerify && !(server.isolationIntent && this.pushNotaryService)) {
         const currentTaskForProbe = this.taskRepo.findById(task.id);
         const probeDir = await (async () => {
           const wtPath = currentTaskForProbe?.worktreePath;
@@ -551,6 +553,57 @@ export class PhaseLoopRunner {
       }
 
       this.appendLog(task.id, unit.id, 'command', { type: 'phase_completed', phase, summary: phaseSummary ?? null });
+
+      // Hub push notarization for isolated servers (Issue #87 Phase 2)
+      if (server.isolationIntent && phaseDef.pushVerify && this.pushNotaryService
+          && classification.status === 'phase_complete') {
+        const project = this.projectRepo.findById(task.projectId);
+        const probeRepoEntry = project?.repositories?.[0] ?? null;
+        const probeRepo = probeRepoEntry ? this.projectRepo.findRepositoryById(probeRepoEntry.id) : null;
+        if (probeRepo?.token) {
+          this.appendLog(task.id, unit.id, 'command', { type: 'hub_push_start' });
+          const currentTaskForPush = this.taskRepo.findById(task.id);
+          const probeDir = await (async () => {
+            const wtPath = currentTaskForPush?.worktreePath;
+            if (wtPath && await this.getWorktreeService(server).exists(wtPath)) return wtPath;
+            const ps = this.projectServerRepo.find(task.projectId, serverName);
+            return currentTaskForPush?.workingDirectory || ps?.workingDirectory;
+          })();
+          const probeBranch = currentTaskForPush?.worktreeBranch ?? currentTaskForPush?.branch;
+          if (probeDir && probeBranch) {
+            const transport = this.transportFactory.getTransport(server);
+            const notaryResult = await this.pushNotaryService.notarize({
+              taskId: task.id,
+              unitId: unit.id,
+              server,
+              transport,
+              worktreePath: probeDir,
+              branch: probeBranch,
+              baseBranch: currentTaskForPush?.targetBranch ?? null,
+              repo: probeRepo,
+            });
+            if (notaryResult.status === 'failed') {
+              this.appendLog(task.id, unit.id, 'status_change', { status: 'hub_push_failed', error: notaryResult.error });
+              this.taskRepo.updateStatus(task.id, 'failed');
+              return;
+            }
+            this.appendLog(task.id, unit.id, 'command', { type: 'hub_push_completed', sha: notaryResult.sha, status: notaryResult.status });
+            if (!currentTaskForPush?.skipPr) {
+              try {
+                await this.pullRequestCreator.ensureCreated(task.id, unit.id, probeRepo, probeBranch, {
+                  title: currentTaskForPush?.title ?? task.title,
+                  description: currentTaskForPush?.description ?? null,
+                  targetBranch: currentTaskForPush?.targetBranch ?? null,
+                });
+              } catch { /* best-effort */ }
+            }
+          } else {
+            this.appendLog(task.id, unit.id, 'command', { type: 'hub_push_skipped', reason: 'no_worktree_or_branch' });
+          }
+        } else {
+          this.appendLog(task.id, unit.id, 'command', { type: 'hub_push_skipped', reason: 'no_push_credential' });
+        }
+      }
 
       // Plan approval: extract plan markdown and optionally wait for approval
       if (phaseDef.planApproval) {

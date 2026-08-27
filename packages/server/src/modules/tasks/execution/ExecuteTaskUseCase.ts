@@ -22,6 +22,7 @@ import type { GitProviderService } from '../../git/providers/GitProviderService'
 import type { ProjectRepositoryWithToken as ProjectRepository } from '../../projects/Project';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import type { ServerConfig } from '../../servers/Server';
+import { resolveCanonicalRepositoryIdentity } from '../../git/resolveCanonicalRepositoryIdentity';
 import type { PaneClassifier } from '../../llm/PaneClassifier';
 import type { IContentExtractor } from '../../llm/ContentExtractor';
 import type { IWindowRepository } from '../../windows/Window';
@@ -148,6 +149,8 @@ export class ExecuteTaskUseCase {
     // Boundary). Required (not optional) so a caller can never forget to
     // wire it and silently fall back to treating scoped auth as enabled.
     private scopedAuthEnabled: boolean,
+    private pushNotaryService: import('../../git/hub-transfer/PushNotaryService').PushNotaryService | null = null,
+    private fetchDistributionService: import('../../git/hub-transfer/FetchDistributionService').FetchDistributionService | null = null,
   ) {
     this.gitInfoCollector = new GitInfoCollector(this.tmux);
     this.pushVerifier = new PushVerifier(this.tmux, this.gitProvider);
@@ -196,6 +199,7 @@ export class ExecuteTaskUseCase {
       this.serverRepo,
       this.projectSecretRepo,
       this.scopedAuthEnabled,
+      this.pushNotaryService,
     );
   }
 
@@ -739,9 +743,34 @@ export class ExecuteTaskUseCase {
     const target = await this.tmux.resolvePaneId(server, windowTarget);
 
     if (workingDir) {
+      const baseBranch = resolveBaseBranch(task, projectServer, project);
+
+      // Fetch distribution for isolated servers (Issue #87 Phase 1)
+      if (server.isolationIntent && this.fetchDistributionService) {
+        const repoEntry = project?.repositories?.[0];
+        if (repoEntry) {
+          const repo = this.projectRepo.findRepositoryById(repoEntry.id);
+          if (repo?.token) {
+            const identity = resolveCanonicalRepositoryIdentity(repo);
+            if (identity.ok) {
+              const transport = this.transportFactory.getTransport(server);
+              const distResult = await this.fetchDistributionService.distribute({
+                server, transport, repoIdentity: identity.identity,
+                token: repo.token, branch: baseBranch, workingDir,
+                repositoryId: repoEntry.id,
+              });
+              if (distResult.status === 'failed') {
+                this.appendLog(taskId, unitId, 'command', { type: 'fetch_distribution_failed', error: distResult.error });
+                throw new Error(`Fetch distribution failed: ${distResult.error}`);
+              }
+              this.appendLog(taskId, unitId, 'command', { type: 'fetch_distributed', sha: distResult.sha, bundleType: distResult.bundleType });
+            }
+          }
+        }
+      }
+
       // Create worktree for isolated branch/file tracking
       let wt: WorktreeInfo;
-      const baseBranch = resolveBaseBranch(task, projectServer, project);
       try {
         const slug = await this.contentExtractor.generateSlug(task.title);
         wt = await this.getWorktreeService(server).create(workingDir, taskId, slug, baseBranch, task.branch || undefined);

@@ -284,6 +284,19 @@ export class GitHubClient implements IGitProviderClient {
     return raw.default_branch;
   }
 
+  async getBranchHeadSha(ref: RepoRef, branch: string): Promise<string | null> {
+    const { owner, repoName: repo } = ref;
+    const { baseUrl, host } = this.getEndpoint(ref.url);
+    const resolvedToken = this.resolveToken(ref.token, host);
+    try {
+      const raw = await this.request<any>(baseUrl, `/repos/${owner}/${repo}/branches/${encodeURIComponent(branch)}`, resolvedToken);
+      return raw?.commit?.sha ?? null;
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('404')) return null;
+      throw err;
+    }
+  }
+
   async createPullRequest(ref: RepoRef, params: CreatePullRequestParams): Promise<RemotePullRequest> {
     const { owner, repoName: repo } = ref;
     const { baseUrl, host } = this.getEndpoint(ref.url);

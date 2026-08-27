@@ -81,4 +81,6 @@ export interface IGitProviderClient {
   findPullRequestByBranch(ref: RepoRef, branch: string): Promise<RemotePullRequest | null>;
   /** PR/MRを作成して返す */
   createPullRequest(ref: RepoRef, params: CreatePullRequestParams): Promise<RemotePullRequest>;
+  /** ブランチの HEAD SHA を返す。ブランチ不在なら null、リポジトリ不在なら throw */
+  getBranchHeadSha(ref: RepoRef, branch: string): Promise<string | null>;
 }

@@ -290,6 +290,21 @@ export class GitLabClient implements IGitProviderClient {
     return raw.default_branch;
   }
 
+  async getBranchHeadSha(ref: RepoRef, branch: string): Promise<string | null> {
+    const { owner, repoName: repo } = ref;
+    const baseUrl = this.getBaseUrl(ref.url);
+    const projectPath = encodeURIComponent(`${owner}/${repo}`);
+    const host = new URL(baseUrl).host;
+    const resolvedToken = this.resolveToken(ref.token, host);
+    try {
+      const raw = await this.request<any>(baseUrl, `/projects/${projectPath}/repository/branches/${encodeURIComponent(branch)}`, resolvedToken);
+      return raw?.commit?.id ?? null;
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('404')) return null;
+      throw err;
+    }
+  }
+
   async createPullRequest(ref: RepoRef, params: CreatePullRequestParams): Promise<RemotePullRequest> {
     const { owner, repoName: repo } = ref;
     const baseUrl = this.getBaseUrl(ref.url);
