@@ -77,13 +77,17 @@ export function useFileCrud({ serverName, projectId, rootPath, loadRoot, expandD
         body: JSON.stringify({ projectId, path: pendingRename.path, newName }),
       });
       if (res.error) throw new Error(res.error);
-      const parentDir = pendingRename.path.substring(0, pendingRename.path.lastIndexOf('/'));
+      const parentDir = pendingRename.path.substring(0, pendingRename.path.lastIndexOf('/')) || rootPath;
       setPendingRename(null);
-      await refreshDir(parentDir || '/');
+      if (parentDir === rootPath) {
+        await loadRoot();
+      } else {
+        await refreshDir(parentDir);
+      }
     } catch {
       showToast(t('explorer.renameFailed'));
     }
-  }, [pendingRename, projectId, serverName, refreshDir, showToast, t]);
+  }, [pendingRename, projectId, serverName, rootPath, loadRoot, refreshDir, showToast, t]);
 
   const cancelRename = useCallback(() => setPendingRename(null), []);
 
@@ -100,14 +104,18 @@ export function useFileCrud({ serverName, projectId, rootPath, loadRoot, expandD
         body: JSON.stringify({ projectId, path: deleteTarget.path }),
       });
       if (res.error) throw new Error(res.error);
-      const parentDir = deleteTarget.path.substring(0, deleteTarget.path.lastIndexOf('/'));
+      const parentDir = deleteTarget.path.substring(0, deleteTarget.path.lastIndexOf('/')) || rootPath;
       setDeleteTarget(null);
-      await refreshDir(parentDir || '/');
+      if (parentDir === rootPath) {
+        await loadRoot();
+      } else {
+        await refreshDir(parentDir);
+      }
     } catch {
       showToast(t('explorer.deleteFailed'));
     }
     setDeleteLoading(false);
-  }, [deleteTarget, projectId, serverName, refreshDir, showToast, t]);
+  }, [deleteTarget, projectId, serverName, rootPath, loadRoot, refreshDir, showToast, t]);
 
   const cancelDelete = useCallback(() => setDeleteTarget(null), []);
 
