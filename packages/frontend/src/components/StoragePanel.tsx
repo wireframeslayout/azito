@@ -195,8 +195,9 @@ export default function StoragePanel({ projectId, onFilePreview, activeTabId }: 
   return (
     <div
       style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
-      onDragOver={(e) => { if (mobile) return; e.preventDefault(); setDragOver(true); }}
-      onDragLeave={() => { if (mobile) return; setDragOver(false); }}
+      onDragEnter={(e) => { if (mobile) return; e.preventDefault(); e.stopPropagation(); setDragOver(true); }}
+      onDragOver={(e) => { if (mobile) return; e.preventDefault(); e.stopPropagation(); }}
+      onDragLeave={(e) => { if (mobile) return; e.stopPropagation(); setDragOver(false); }}
       onDrop={handleDrop}
     >
       {/* Header */}
