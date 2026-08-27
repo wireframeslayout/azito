@@ -92,7 +92,7 @@ export default function FileDropZone({
           gap: 6, pointerEvents: 'none',
         }}>
           <span style={{
-            background: 'var(--bg-card)', padding: '10px 20px', borderRadius: 'var(--radius-md)',
+            background: 'var(--bg-solid)', padding: '10px 20px', borderRadius: 'var(--radius-md)',
             fontSize: 'var(--font-base)', fontWeight: 600,
             color: hasProject ? 'var(--accent)' : 'var(--orange)',
             border: `1px solid ${hasProject ? 'var(--accent)' : 'var(--orange)'}`,
