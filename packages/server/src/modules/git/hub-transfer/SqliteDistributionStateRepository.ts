@@ -1,23 +1,8 @@
 import type Database from 'better-sqlite3';
-import type { IDistributionStateRepository, DistributionState } from './types';
+import type { IDistributionStateRepository } from './types';
 
 export class SqliteDistributionStateRepository implements IDistributionStateRepository {
   constructor(private db: Database.Database) {}
-
-  findByServerAndRepo(serverName: string, repositoryId: number): DistributionState | null {
-    const row = this.db.prepare(
-      'SELECT id, server_name, repository_id, last_distributed_sha, bundle_type, distributed_at FROM distribution_state WHERE server_name = ? AND repository_id = ?',
-    ).get(serverName, repositoryId) as any;
-    if (!row) return null;
-    return {
-      id: row.id,
-      serverName: row.server_name,
-      repositoryId: row.repository_id,
-      lastDistributedSha: row.last_distributed_sha,
-      bundleType: row.bundle_type,
-      distributedAt: row.distributed_at,
-    };
-  }
 
   upsert(serverName: string, repositoryId: number, sha: string, bundleType: 'full' | 'incremental'): void {
     this.db.prepare(`

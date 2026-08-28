@@ -109,30 +109,130 @@ describe('RemoteBundleOps', () => {
     });
   });
 
-  describe('applyClone', () => {
-    it('clones from bundle and sets dummy origin', async () => {
+  describe('resolveHomeDir', () => {
+    it('returns trimmed $HOME', async () => {
+      const transport = mockTransport({ 'echo $HOME': { stdout: '/home/agent\n', stderr: '', code: 0 } });
+      expect(await ops.resolveHomeDir(transport)).toBe('/home/agent');
+    });
+
+    it('throws when $HOME is empty', async () => {
+      const transport = mockTransport({ 'echo $HOME': { stdout: '', stderr: '', code: 0 } });
+      await expect(ops.resolveHomeDir(transport)).rejects.toThrow('$HOME');
+    });
+  });
+
+  describe('mirrorDir', () => {
+    it('builds the ~/.azito/repos/<hash>.git path', () => {
+      expect(ops.mirrorDir('/home/agent', 'abc123')).toBe('/home/agent/.azito/repos/abc123.git');
+    });
+  });
+
+  describe('mirrorExists', () => {
+    it('returns true when HEAD file exists', async () => {
+      const transport = mockTransport({ 'test -f': { stdout: 'yes', stderr: '', code: 0 } });
+      expect(await ops.mirrorExists(transport, '/mirror')).toBe(true);
+    });
+
+    it('returns false when HEAD file is absent', async () => {
+      const transport = mockTransport({ 'test -f': { stdout: 'no', stderr: '', code: 0 } });
+      expect(await ops.mirrorExists(transport, '/mirror')).toBe(false);
+    });
+  });
+
+  describe('ensureMirror', () => {
+    it('does nothing when the mirror already exists', async () => {
+      const transport = mockTransport({ 'test -f': { stdout: 'yes', stderr: '', code: 0 } });
+      await ops.ensureMirror(transport, '/mirror');
+      expect(transport.exec).toHaveBeenCalledTimes(1);
+    });
+
+    it('runs git init --bare when the mirror is missing', async () => {
       const transport = mockTransport({
-        'git clone': { stdout: '', stderr: '', code: 0 },
-        'git remote set-url': { stdout: '', stderr: '', code: 0 },
+        'test -f': { stdout: 'no', stderr: '', code: 0 },
+        'git -c core.hooksPath=/dev/null init --bare': { stdout: '', stderr: '', code: 0 },
       });
-      await ops.applyClone(transport, '/tmp/dist.bundle', '/repo', 'main');
-      expect(transport.exec).toHaveBeenCalledTimes(2);
-      expect((transport.exec as any).mock.calls[1][0]).toContain(DUMMY_ORIGIN_URL);
+      await ops.ensureMirror(transport, '/mirror');
+      const cmd = (transport.exec as any).mock.calls[1][0] as string;
+      expect(cmd).toContain('mkdir -p');
+      expect(cmd).toContain('init --bare');
+      expect(cmd).toContain('core.hooksPath=/dev/null');
+    });
+
+    it('throws when git init --bare fails', async () => {
+      const transport = mockTransport({
+        'test -f': { stdout: 'no', stderr: '', code: 0 },
+        'init --bare': { stdout: '', stderr: 'fatal: cannot create', code: 128 },
+      });
+      await expect(ops.ensureMirror(transport, '/mirror')).rejects.toThrow('git init --bare for mirror failed');
+    });
+  });
+
+  describe('getMirrorBranchSha', () => {
+    it('returns the sha when the branch exists in the mirror', async () => {
+      const sha = 'a'.repeat(40);
+      const transport = mockTransport({ 'rev-parse --verify': { stdout: sha + '\n', stderr: '', code: 0 } });
+      expect(await ops.getMirrorBranchSha(transport, '/mirror', 'main')).toBe(sha);
+    });
+
+    it('returns null when the branch is not present (never distributed)', async () => {
+      const transport = mockTransport({ 'rev-parse --verify': { stdout: '', stderr: 'fatal: unknown revision', code: 128 } });
+      expect(await ops.getMirrorBranchSha(transport, '/mirror', 'main')).toBeNull();
+    });
+
+    it('rejects unsafe branch names', async () => {
+      const transport = mockTransport({});
+      await expect(ops.getMirrorBranchSha(transport, '/mirror', 'feat; rm -rf /')).rejects.toThrow();
+    });
+  });
+
+  describe('fetchBundleIntoMirror', () => {
+    it('uses a forced refspec and --atomic', async () => {
+      const transport = mockTransport({ 'git -C': { stdout: '', stderr: '', code: 0 } });
+      await ops.fetchBundleIntoMirror(transport, '/mirror', '/tmp/dist.bundle', 'main');
+      const cmd = (transport.exec as any).mock.calls[0][0] as string;
+      expect(cmd).toContain('--atomic');
+      expect(cmd).toContain("'+refs/heads/main:refs/heads/main'");
+      expect(cmd).toContain('core.hooksPath=/dev/null');
+    });
+
+    it('throws on fetch failure (e.g. would otherwise be non-fast-forward)', async () => {
+      const transport = mockTransport({ 'git -C': { stdout: '', stderr: 'fatal: rejected', code: 1 } });
+      await expect(ops.fetchBundleIntoMirror(transport, '/mirror', '/tmp/dist.bundle', 'main'))
+        .rejects.toThrow('git fetch bundle into mirror failed');
+    });
+  });
+
+  describe('cloneWorkingDirFromMirror', () => {
+    it('clones with --no-local from the mirror path', async () => {
+      const transport = mockTransport({ 'git clone': { stdout: '', stderr: '', code: 0 } });
+      await ops.cloneWorkingDirFromMirror(transport, '/mirror', '/repo', 'main');
+      const cmd = (transport.exec as any).mock.calls[0][0] as string;
+      expect(cmd).toContain('--no-local');
+      expect(cmd).toContain("--branch 'main'");
+      expect(cmd).toContain("'/mirror'");
     });
 
     it('throws on clone failure', async () => {
       const transport = mockTransport({ 'git clone': { stdout: '', stderr: 'fatal: not a bundle', code: 128 } });
-      await expect(ops.applyClone(transport, '/tmp/dist.bundle', '/repo', 'main'))
-        .rejects.toThrow('git clone from bundle failed');
+      await expect(ops.cloneWorkingDirFromMirror(transport, '/mirror', '/repo', 'main'))
+        .rejects.toThrow('git clone from mirror failed');
     });
   });
 
-  describe('applyFetch', () => {
-    it('constructs correct refspec', async () => {
-      const transport = mockTransport({ 'git fetch': { stdout: '', stderr: '', code: 0 } });
-      await ops.applyFetch(transport, '/tmp/dist.bundle', '/repo', 'main');
+  describe('fetchWorkingDirFromMirror', () => {
+    it('fetches the mirror path directly (not via origin) with a forced refspec', async () => {
+      const transport = mockTransport({ 'git -c core.hooksPath': { stdout: '', stderr: '', code: 0 } });
+      await ops.fetchWorkingDirFromMirror(transport, '/mirror', '/repo', 'main');
       const cmd = (transport.exec as any).mock.calls[0][0] as string;
-      expect(cmd).toContain("'main:refs/remotes/origin/main'");
+      expect(cmd).toContain('--atomic');
+      expect(cmd).toContain("'/mirror'");
+      expect(cmd).toContain("'+refs/heads/main:refs/remotes/origin/main'");
+    });
+
+    it('throws on fetch failure', async () => {
+      const transport = mockTransport({ 'git -c core.hooksPath': { stdout: '', stderr: 'fatal: rejected', code: 1 } });
+      await expect(ops.fetchWorkingDirFromMirror(transport, '/mirror', '/repo', 'main'))
+        .rejects.toThrow('git fetch from mirror failed');
     });
   });
 });

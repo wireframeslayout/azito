@@ -4,18 +4,15 @@ import type { IServerTransport } from '../../servers/transport/ServerTransport';
 import type { ProjectRepositoryWithToken } from '../../projects/Project';
 
 // ── Distribution state (Phase 1) ──
-
-export interface DistributionState {
-  id: number;
-  serverName: string;
-  repositoryId: number;
-  lastDistributedSha: string;
-  bundleType: 'full' | 'incremental';
-  distributedAt: string;
-}
+//
+// Issue #87 Phase 2 (bare mirror レイアウト): `distribution_state` は
+// correctness の根拠（増分の prerequisite / already-current 判定）から観測用
+// キャッシュへ格下げされた。`FetchDistributionService` はもう `findByServerAndRepo`
+// を読まない — prerequisite もスキップ判定も、サーバー側 mirror の実 refs
+// （`RemoteBundleOps.getMirrorBranchSha`）を都度照会して決める。DB と実体がずれても
+// （mirror が手動で消された、force-push で祖先関係が変わった等）配信は自己修復する。
 
 export interface IDistributionStateRepository {
-  findByServerAndRepo(serverName: string, repositoryId: number): DistributionState | null;
   upsert(serverName: string, repositoryId: number, sha: string, bundleType: 'full' | 'incremental'): void;
   deleteByServer(serverName: string): void;
 }

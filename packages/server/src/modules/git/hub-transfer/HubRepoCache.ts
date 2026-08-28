@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import type { CanonicalRepositoryIdentity } from '../resolveCanonicalRepositoryIdentity';
+import { computeRepoHash } from './repoHash';
 
 export class HubRepoCache {
   private readonly cacheRoot: string;
@@ -39,8 +40,7 @@ export class HubRepoCache {
   }
 
   private repoCacheDir(identity: CanonicalRepositoryIdentity): string {
-    const hash = crypto.createHash('sha256').update(identity.httpsUrl).digest('hex').slice(0, 16);
-    return path.join(this.cacheRoot, hash);
+    return path.join(this.cacheRoot, computeRepoHash(identity));
   }
 
   private ensureBareRepo(repoDir: string, httpsUrl: string): void {

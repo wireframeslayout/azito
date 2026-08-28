@@ -6,6 +6,19 @@ describe('SqliteDistributionStateRepository', () => {
   let db: BetterSqlite3.Database;
   let repo: SqliteDistributionStateRepository;
 
+  // `findByServerAndRepo` was removed from the repository (Issue #87 Phase
+  // 2: `distribution_state` is observation-only now — `FetchDistributionService`
+  // decides prerequisite/already-current from the server's mirror refs, not
+  // this table). These tests verify `upsert`/`deleteByServer` still write the
+  // table correctly by reading it back with raw SQL instead.
+  function readState(serverName: string, repositoryId: number): { lastDistributedSha: string; bundleType: string } | null {
+    const row = db.prepare(
+      'SELECT last_distributed_sha, bundle_type FROM distribution_state WHERE server_name = ? AND repository_id = ?',
+    ).get(serverName, repositoryId) as any;
+    if (!row) return null;
+    return { lastDistributedSha: row.last_distributed_sha, bundleType: row.bundle_type };
+  }
+
   beforeEach(() => {
     db = new BetterSqlite3(':memory:');
     db.exec(`
@@ -29,18 +42,16 @@ describe('SqliteDistributionStateRepository', () => {
   });
 
   it('returns null for non-existent state', () => {
-    expect(repo.findByServerAndRepo('server-a', 1)).toBeNull();
+    expect(readState('server-a', 1)).toBeNull();
   });
 
   it('inserts and retrieves state', () => {
     const sha = 'a'.repeat(40);
     repo.upsert('server-a', 1, sha, 'full');
-    const state = repo.findByServerAndRepo('server-a', 1);
+    const state = readState('server-a', 1);
     expect(state).not.toBeNull();
     expect(state!.lastDistributedSha).toBe(sha);
     expect(state!.bundleType).toBe('full');
-    expect(state!.serverName).toBe('server-a');
-    expect(state!.repositoryId).toBe(1);
   });
 
   it('upserts (updates) existing state', () => {
@@ -48,7 +59,7 @@ describe('SqliteDistributionStateRepository', () => {
     const sha2 = 'b'.repeat(40);
     repo.upsert('server-a', 1, sha1, 'full');
     repo.upsert('server-a', 1, sha2, 'incremental');
-    const state = repo.findByServerAndRepo('server-a', 1);
+    const state = readState('server-a', 1);
     expect(state!.lastDistributedSha).toBe(sha2);
     expect(state!.bundleType).toBe('incremental');
   });
@@ -58,8 +69,8 @@ describe('SqliteDistributionStateRepository', () => {
     const sha2 = 'b'.repeat(40);
     repo.upsert('server-a', 1, sha1, 'full');
     repo.upsert('server-b', 1, sha2, 'full');
-    expect(repo.findByServerAndRepo('server-a', 1)!.lastDistributedSha).toBe(sha1);
-    expect(repo.findByServerAndRepo('server-b', 1)!.lastDistributedSha).toBe(sha2);
+    expect(readState('server-a', 1)!.lastDistributedSha).toBe(sha1);
+    expect(readState('server-b', 1)!.lastDistributedSha).toBe(sha2);
   });
 
   it('deleteByServer removes all state for that server', () => {
@@ -67,8 +78,8 @@ describe('SqliteDistributionStateRepository', () => {
     repo.upsert('server-a', 2, 'b'.repeat(40), 'full');
     repo.upsert('server-b', 1, 'c'.repeat(40), 'full');
     repo.deleteByServer('server-a');
-    expect(repo.findByServerAndRepo('server-a', 1)).toBeNull();
-    expect(repo.findByServerAndRepo('server-a', 2)).toBeNull();
-    expect(repo.findByServerAndRepo('server-b', 1)).not.toBeNull();
+    expect(readState('server-a', 1)).toBeNull();
+    expect(readState('server-a', 2)).toBeNull();
+    expect(readState('server-b', 1)).not.toBeNull();
   });
 });
