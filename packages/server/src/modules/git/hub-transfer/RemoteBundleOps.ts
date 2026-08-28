@@ -22,9 +22,22 @@ export class RemoteBundleOps {
    * `hasGitError`'s doc comment. Without it this always returned `true` on
    * `ssh`, making bundle verification a no-op there (Issue #87 third-party
    * review, third pass, Important finding 1).
+   *
+   * `git bundle verify` requires a repository context to check the bundle's
+   * prerequisite commits against — run without `-C <mirrorDir>` it fails
+   * unconditionally with `error: need a repository to verify a bundle`
+   * (confirmed by hand), which `hasGitError`'s `error:` scan now also
+   * catches, so every verify — full and incremental alike — failed and
+   * distribution was completely broken (Issue #87 third-party review,
+   * fourth pass, Important finding 1). `mirrorDir` is the server-side bare
+   * mirror `FetchDistributionService.ensureMirror()` guarantees exists
+   * before `verify()` is ever called.
    */
-  async verify(transport: IServerTransport, remoteBundlePath: string): Promise<boolean> {
-    const r = await transport.exec(`git bundle verify ${shellQuote(remoteBundlePath)} 2>&1`, 30_000);
+  async verify(transport: IServerTransport, mirrorDir: string, remoteBundlePath: string): Promise<boolean> {
+    const r = await transport.exec(
+      `git -C ${shellQuote(mirrorDir)} bundle verify ${shellQuote(remoteBundlePath)} 2>&1`,
+      30_000,
+    );
     return !hasGitError(r);
   }
 

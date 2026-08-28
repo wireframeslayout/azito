@@ -227,7 +227,7 @@ export class FetchDistributionService {
     try {
       await this.sftpService.upload(sshHost, bundleResult.bundlePath, remoteTmpPath);
 
-      const verified = await this.remoteBundleOps.verify(transport, remoteTmpPath);
+      const verified = await this.remoteBundleOps.verify(transport, mirrorDir, remoteTmpPath);
       if (!verified) {
         throw new Error('Bundle verification failed on remote');
       }

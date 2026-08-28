@@ -18,18 +18,18 @@ describe('RemoteBundleOps', () => {
 
   describe('verify', () => {
     it('returns true when exit code is 0', async () => {
-      const transport = mockTransport({ 'git bundle verify': { stdout: 'ok', stderr: '', code: 0 } });
-      expect(await ops.verify(transport, '/tmp/test.bundle')).toBe(true);
+      const transport = mockTransport({ 'bundle verify': { stdout: 'ok', stderr: '', code: 0 } });
+      expect(await ops.verify(transport, '/tmp/mirror.git', '/tmp/test.bundle')).toBe(true);
     });
 
     it('returns false when exit code is non-zero and stderr carries a git error: line', async () => {
-      const transport = mockTransport({ 'git bundle verify': { stdout: '', stderr: 'error: bundle mismatch', code: 1 } });
-      expect(await ops.verify(transport, '/tmp/test.bundle')).toBe(false);
+      const transport = mockTransport({ 'bundle verify': { stdout: '', stderr: 'error: bundle mismatch', code: 1 } });
+      expect(await ops.verify(transport, '/tmp/mirror.git', '/tmp/test.bundle')).toBe(false);
     });
 
     it('returns false when stderr contains fatal:', async () => {
-      const transport = mockTransport({ 'git bundle verify': { stdout: '', stderr: 'fatal: bad bundle', code: 0 } });
-      expect(await ops.verify(transport, '/tmp/test.bundle')).toBe(false);
+      const transport = mockTransport({ 'bundle verify': { stdout: '', stderr: 'fatal: bad bundle', code: 0 } });
+      expect(await ops.verify(transport, '/tmp/mirror.git', '/tmp/test.bundle')).toBe(false);
     });
 
     // Issue #87 third-party review, third pass, Important finding 1:
@@ -40,16 +40,29 @@ describe('RemoteBundleOps', () => {
     // catch it.
     it('returns false for an SSH-shaped result (code 0, empty stderr, fatal: line merged into stdout)', async () => {
       const transport = mockTransport({
-        'git bundle verify': { stdout: "error: Repository lacks these prerequisite commits:\nfatal: unable to verify bundle", stderr: '', code: 0 },
+        'bundle verify': { stdout: "error: Repository lacks these prerequisite commits:\nfatal: unable to verify bundle", stderr: '', code: 0 },
       });
-      expect(await ops.verify(transport, '/tmp/test.bundle')).toBe(false);
+      expect(await ops.verify(transport, '/tmp/mirror.git', '/tmp/test.bundle')).toBe(false);
     });
 
     it('returns true for an SSH-shaped success result (code 0, empty stderr, ok text in stdout)', async () => {
       const transport = mockTransport({
-        'git bundle verify': { stdout: 'The bundle contains this ref:\n  refs/heads/main\nThe bundle records a complete history.', stderr: '', code: 0 },
+        'bundle verify': { stdout: 'The bundle contains this ref:\n  refs/heads/main\nThe bundle records a complete history.', stderr: '', code: 0 },
       });
-      expect(await ops.verify(transport, '/tmp/test.bundle')).toBe(true);
+      expect(await ops.verify(transport, '/tmp/mirror.git', '/tmp/test.bundle')).toBe(true);
+    });
+
+    // Issue #87 third-party review, fourth pass, Important finding 1:
+    // `git bundle verify` needs a repository context to check the bundle's
+    // prerequisite commits against; run without `-C <mirrorDir>` it fails
+    // unconditionally with `error: need a repository to verify a bundle`,
+    // breaking every distribution. Assert the mirror dir is actually passed
+    // through to the command.
+    it('runs bundle verify with -C <mirrorDir>', async () => {
+      const transport = mockTransport({ 'bundle verify': { stdout: 'ok', stderr: '', code: 0 } });
+      await ops.verify(transport, '/tmp/mirror.git', '/tmp/test.bundle');
+      const cmd = (transport.exec as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+      expect(cmd).toContain("git -C '/tmp/mirror.git' bundle verify '/tmp/test.bundle'");
     });
   });
 

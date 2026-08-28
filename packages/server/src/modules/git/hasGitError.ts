@@ -17,13 +17,27 @@ import type { ExecResult } from '../servers/transport/ServerTransport';
  * `ssh`, but the check must work uniformly across all three transport types
  * since callers don't know which one they're talking to.
  *
- * Instead, this scans the combined stdout+stderr text for a `fatal:` or
- * `error:` line that git itself writes to signal failure — the same
- * approach `RemoteWorktreeService` already uses for worktree operations
- * (extracted here so bundle/mirror operations use the identical, single
- * implementation rather than a second copy that could drift).
+ * So this checks BOTH signals and ORs them together:
+ *
+ * - `result.code !== 0` — covers `local`/`agent` transports, where the exit
+ *   code is real. This also catches failures that never print a `fatal:`/
+ *   `error:` line at all (a shell-level permission error, a missing `git`
+ *   executable, etc.) — detection that was lost when this function was
+ *   extracted as a text-only scan (Issue #87 third-party review, fourth
+ *   pass, Important finding 2). On `ssh`, `code` is always 0, so this half
+ *   is always false there and never produces a false positive.
+ * - a `fatal:`/`error:` line in the combined stdout+stderr text — the same
+ *   approach `RemoteWorktreeService` already uses for worktree operations
+ *   (extracted here so bundle/mirror operations use the identical, single
+ *   implementation rather than a second copy that could drift). This is
+ *   what actually detects failures on `ssh`, where `code` can't be trusted.
+ *
+ * Callers where a non-zero exit is an EXPECTED, non-error outcome (e.g.
+ * `git rev-parse --verify <ref>` used purely to test whether `<ref>`
+ * exists) must not route that "expected no" result through this function
+ * at all — model the check as its own boolean, not as an error.
  */
 export function hasGitError(result: ExecResult): boolean {
   const combined = `${result.stdout}\n${result.stderr}`.trim();
-  return /^fatal:|^error:/m.test(combined);
+  return result.code !== 0 || /^fatal:|^error:/m.test(combined);
 }

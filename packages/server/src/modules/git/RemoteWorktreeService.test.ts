@@ -133,6 +133,61 @@ describe('RemoteWorktreeService', () => {
       expect(calls.some(c => c.includes('git worktree add -b feature/new-branch'))).toBe(true);
     });
 
+    it('reuses the existing local branch when rev-parse --verify succeeds (code 0)', async () => {
+      const calls: string[] = [];
+      const transport = {
+        exec: vi.fn(async (cmd: string) => {
+          calls.push(cmd);
+          if (cmd.includes('test -d') && cmd.includes('echo yes')) return ok('yes\n');
+          if (cmd.includes('test -d')) return ok('no\n');
+          if (cmd.includes('rev-parse --verify')) return ok('a'.repeat(40) + '\n');
+          return ok();
+        }),
+        execTmux: vi.fn(),
+        openTerminal: vi.fn(),
+        createPaneStream: vi.fn(),
+      } as unknown as IServerTransport;
+
+      const svc = new RemoteWorktreeService(transport);
+      const result = await svc.create('/home/user/project', 1, 'slug', 'main', 'feature/existing-branch');
+
+      expect(result.branch).toBe('feature/existing-branch');
+      // Existing-branch path: plain `git worktree add <path> <branch>`, no `-b`.
+      expect(calls.some(c => c.includes('git worktree add /home/user/project/.worktrees/task-1 feature/existing-branch'))).toBe(true);
+      expect(calls.some(c => c.includes('git worktree add -b'))).toBe(false);
+    });
+
+    // Issue #87 third-party review, fourth pass, Important finding 2:
+    // `hasGitError` now also treats a non-zero exit code as an error, on
+    // top of the pre-existing `fatal:`/`error:` text scan. Branch-existence
+    // checks here rely on `!hasGitError(...)`; a real `git rev-parse
+    // --verify` failure always both exits non-zero AND prints a `fatal:`
+    // line, so the two signals never disagree in practice — but this pins
+    // down that a non-zero exit alone (without matching text, an
+    // otherwise-untestable shape with real git) is still correctly treated
+    // as "branch does not exist", not silently ignored.
+    it('treats a non-zero rev-parse exit code as "branch does not exist" even without fatal:/error: text', async () => {
+      const calls: string[] = [];
+      const transport = {
+        exec: vi.fn(async (cmd: string) => {
+          calls.push(cmd);
+          if (cmd.includes('test -d') && cmd.includes('echo yes')) return ok('yes\n');
+          if (cmd.includes('test -d')) return ok('no\n');
+          if (cmd.includes('rev-parse --verify')) return { stdout: '', stderr: '', code: 128 };
+          return ok();
+        }),
+        execTmux: vi.fn(),
+        openTerminal: vi.fn(),
+        createPaneStream: vi.fn(),
+      } as unknown as IServerTransport;
+
+      const svc = new RemoteWorktreeService(transport);
+      const result = await svc.create('/home/user/project', 1, 'slug', 'main', 'feature/missing-branch');
+
+      expect(result.branch).toBe('feature/missing-branch');
+      expect(calls.some(c => c.includes('git worktree add -b feature/missing-branch'))).toBe(true);
+    });
+
     it('throws when git worktree add outputs fatal error', async () => {
       const transport = {
         exec: vi.fn(async (cmd: string) => {

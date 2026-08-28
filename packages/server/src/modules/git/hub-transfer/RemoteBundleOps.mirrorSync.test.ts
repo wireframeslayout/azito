@@ -377,3 +377,130 @@ describe('RemoteBundleOps mirror -> workingDir sync (regression, real local git)
     expect(fs.readFileSync(path.join(linkedWorktreePath, 'file.txt'), 'utf-8')).toBe('v1\n');
   }, 30_000);
 });
+
+// Issue #87 third-party review, fourth pass, Important finding 1
+// (blocker): `git bundle verify <bundle>` requires a repository context to
+// check the bundle's prerequisite commits against. Run without `-C
+// <mirrorDir>`, it fails unconditionally with
+// "error: need a repository to verify a bundle" — confirmed by hand
+// (`cd /tmp/notrepo && git bundle verify ...`) — which, once `hasGitError`
+// started scanning for `error:` lines, made EVERY verify (full and
+// incremental alike) fail and broke distribution completely. These tests
+// run `RemoteBundleOps.verify()` against real local git repos under `/tmp`
+// (never a real remote) to prove the fix (`git -C <mirrorDir> bundle
+// verify`) actually restores working verification, rather than relying on
+// a mock that can't catch a missing repository context.
+describe('RemoteBundleOps.verify (regression, real local git)', () => {
+  const tmpDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of tmpDirs.splice(0)) {
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+    }
+  });
+
+  function makeTmpDir(prefix: string): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    tmpDirs.push(dir);
+    return dir;
+  }
+
+  it('a full bundle verifies successfully against the mirror it was created from', async () => {
+    const ops = new RemoteBundleOps();
+    const transport = localTransport();
+
+    const mirrorDir = makeTmpDir('azito-verify-full-mirror-');
+    runGit(['init', '-q', '--bare', '--initial-branch=main', mirrorDir], mirrorDir);
+
+    const srcDir = makeTmpDir('azito-verify-full-src-');
+    runGit(['init', '-q', '--initial-branch=main', srcDir], srcDir);
+    runGit(['config', 'user.email', 'test@example.com'], srcDir);
+    runGit(['config', 'user.name', 'Test'], srcDir);
+    fs.writeFileSync(path.join(srcDir, 'file.txt'), 'v1\n');
+    runGit(['add', 'file.txt'], srcDir);
+    runGit(['commit', '-q', '-m', 'v1'], srcDir);
+    runGit(['push', mirrorDir, 'main'], srcDir);
+
+    const bundlePath = path.join(makeTmpDir('azito-verify-full-bundle-'), 'full.bundle');
+    runGit(['bundle', 'create', bundlePath, 'main'], srcDir);
+
+    await expect(ops.verify(transport, mirrorDir, bundlePath)).resolves.toBe(true);
+  }, 30_000);
+
+  it('an incremental bundle verifies successfully against a mirror that already has the prerequisite commit', async () => {
+    const ops = new RemoteBundleOps();
+    const transport = localTransport();
+
+    const mirrorDir = makeTmpDir('azito-verify-incr-mirror-');
+    runGit(['init', '-q', '--bare', '--initial-branch=main', mirrorDir], mirrorDir);
+
+    const srcDir = makeTmpDir('azito-verify-incr-src-');
+    runGit(['init', '-q', '--initial-branch=main', srcDir], srcDir);
+    runGit(['config', 'user.email', 'test@example.com'], srcDir);
+    runGit(['config', 'user.name', 'Test'], srcDir);
+    fs.writeFileSync(path.join(srcDir, 'file.txt'), 'v1\n');
+    runGit(['add', 'file.txt'], srcDir);
+    runGit(['commit', '-q', '-m', 'v1'], srcDir);
+    const shaV1 = runGit(['rev-parse', 'HEAD'], srcDir);
+    runGit(['push', mirrorDir, 'main'], srcDir);
+
+    fs.writeFileSync(path.join(srcDir, 'file.txt'), 'v2\n');
+    runGit(['add', 'file.txt'], srcDir);
+    runGit(['commit', '-q', '-m', 'v2'], srcDir);
+
+    const bundlePath = path.join(makeTmpDir('azito-verify-incr-bundle-'), 'incr.bundle');
+    // Incremental bundle: only the v2 commit, with v1 as prerequisite —
+    // exactly the shape `HubRepoCache` produces for a non-first
+    // distribution.
+    runGit(['bundle', 'create', bundlePath, `${shaV1}..main`], srcDir);
+
+    await expect(ops.verify(transport, mirrorDir, bundlePath)).resolves.toBe(true);
+  }, 30_000);
+
+  it('an incremental bundle whose prerequisite commit is missing from the mirror fails verification', async () => {
+    const ops = new RemoteBundleOps();
+    const transport = localTransport();
+
+    // Mirror only has v1 — never receives v2, so it can't supply the
+    // prerequisite the incremental bundle below needs.
+    const mirrorDir = makeTmpDir('azito-verify-missing-prereq-mirror-');
+    runGit(['init', '-q', '--bare', '--initial-branch=main', mirrorDir], mirrorDir);
+
+    const srcDir = makeTmpDir('azito-verify-missing-prereq-src-');
+    runGit(['init', '-q', '--initial-branch=main', srcDir], srcDir);
+    runGit(['config', 'user.email', 'test@example.com'], srcDir);
+    runGit(['config', 'user.name', 'Test'], srcDir);
+    fs.writeFileSync(path.join(srcDir, 'file.txt'), 'v1\n');
+    runGit(['add', 'file.txt'], srcDir);
+    runGit(['commit', '-q', '-m', 'v1'], srcDir);
+    runGit(['push', mirrorDir, 'main'], srcDir);
+
+    fs.writeFileSync(path.join(srcDir, 'file.txt'), 'v2\n');
+    runGit(['add', 'file.txt'], srcDir);
+    runGit(['commit', '-q', '-m', 'v2'], srcDir);
+    const shaV2 = runGit(['rev-parse', 'HEAD'], srcDir);
+
+    fs.writeFileSync(path.join(srcDir, 'file.txt'), 'v3\n');
+    runGit(['add', 'file.txt'], srcDir);
+    runGit(['commit', '-q', '-m', 'v3'], srcDir);
+
+    const bundlePath = path.join(makeTmpDir('azito-verify-missing-prereq-bundle-'), 'incr.bundle');
+    // Prerequisite is v2, which the mirror never received.
+    runGit(['bundle', 'create', bundlePath, `${shaV2}..main`], srcDir);
+
+    await expect(ops.verify(transport, mirrorDir, bundlePath)).resolves.toBe(false);
+  }, 30_000);
+
+  it('a corrupt bundle file fails verification', async () => {
+    const ops = new RemoteBundleOps();
+    const transport = localTransport();
+
+    const mirrorDir = makeTmpDir('azito-verify-corrupt-mirror-');
+    runGit(['init', '-q', '--bare', '--initial-branch=main', mirrorDir], mirrorDir);
+
+    const bundlePath = path.join(makeTmpDir('azito-verify-corrupt-bundle-'), 'corrupt.bundle');
+    fs.writeFileSync(bundlePath, 'this is not a git bundle\n');
+
+    await expect(ops.verify(transport, mirrorDir, bundlePath)).resolves.toBe(false);
+  }, 30_000);
+});
