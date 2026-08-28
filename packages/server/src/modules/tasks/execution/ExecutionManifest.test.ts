@@ -123,6 +123,7 @@ function makeProjectServer(overrides: Partial<ProjectServer> = {}): ProjectServe
     tmuxSession: 'azito',
     inputPolicy: 'manual-approval',
     distributeCode: false,
+    distributionRepositoryId: null,
     ...overrides,
   };
 }
@@ -569,6 +570,69 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
       const hashOff = hashFor(task, fixture(false));
 
       expect(hashOff).not.toBe(hashOn);
+    });
+  });
+
+  // Issue #87 explicit-target follow-up: distributionRepositoryId names
+  // WHICH repository distribute_code/isolation pulls onto the server — same
+  // trust-boundary reasoning as distributeCode itself above (an
+  // already-approved manifest's distribution SOURCE changing is exactly as
+  // material as flipping distributeCode).
+  describe('server.distributionRepositoryId', () => {
+    it('is exposed on the resolved manifest, sourced from the project_servers row', () => {
+      const fixture: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: true, distributionRepositoryId: 7 }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      };
+      const task = makeTask();
+
+      const resolved = resolveExecutionManifest(task, makeDeps(fixture));
+      expect(resolved.manifest.server.distributionRepositoryId).toBe(7);
+    });
+
+    it('is null when the project_servers row has no target configured', () => {
+      const fixture: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer({ distributionRepositoryId: null }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      };
+      const task = makeTask();
+
+      const resolved = resolveExecutionManifest(task, makeDeps(fixture));
+      expect(resolved.manifest.server.distributionRepositoryId).toBeNull();
+    });
+
+    it('changing the target repository alone invalidates a prior approval', () => {
+      const fixture = (distributionRepositoryId: number | null): Fixture => ({
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: true, distributionRepositoryId }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      });
+      const task = makeTask();
+
+      const hashRepoA = hashFor(task, fixture(7));
+      const hashRepoB = hashFor(task, fixture(8));
+
+      expect(hashRepoA).not.toBe(hashRepoB);
+    });
+
+    it('clearing the target repository (back to null) alone also invalidates approval', () => {
+      const fixture = (distributionRepositoryId: number | null): Fixture => ({
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: true, distributionRepositoryId }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      });
+      const task = makeTask();
+
+      const hashSet = hashFor(task, fixture(7));
+      const hashNull = hashFor(task, fixture(null));
+
+      expect(hashSet).not.toBe(hashNull);
     });
   });
 

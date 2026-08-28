@@ -31,8 +31,8 @@ import type { FetchDistributionService } from '../../git/hub-transfer/FetchDistr
 export type DistributionFailureStage =
   | 'service_not_wired'
   | 'no_working_dir'
-  | 'no_repository'
-  | 'multiple_repositories'
+  | 'no_distribution_repository'
+  | 'distribution_repository_not_found'
   | 'no_token'
   | 'identity_unresolvable'
   | 'distribute_failed'
@@ -65,7 +65,7 @@ export function isDistributionRequired(
 
 export interface PerformDistributionParams {
   server: ServerConfig;
-  projectServer: Pick<ProjectServer, 'distributeCode'> | null;
+  projectServer: Pick<ProjectServer, 'distributeCode' | 'distributionRepositoryId'> | null;
   project: Pick<ProjectDetail, 'repositories'> | null;
   workingDir: string | null;
   baseBranch: string;
@@ -108,21 +108,36 @@ export async function performDistribution(params: PerformDistributionParams): Pr
     };
   }
 
-  const repoEntry = project?.repositories?.[0];
-  if (!repoEntry) {
-    return { required: true, ok: false, stage: 'no_repository', message: 'Fetch distribution is required but the project has no repository configured' };
-  }
-
-  // See ExecuteTaskUseCase's original comment on this same guard: `[0]` is
-  // only unambiguous when the project has exactly one repository — with 2+,
-  // there is no mapping from a project server's working directory to a
-  // specific repository, so refuse to guess.
-  if ((project?.repositories?.length ?? 0) > 1) {
+  // Issue #87 explicit-target follow-up: the target repository is resolved
+  // from `projectServer.distributionRepositoryId`, never inferred from
+  // `project.repositories[0]`/"exactly one repository configured" — see
+  // `ProjectServer.distributionRepositoryId`'s doc comment and this
+  // function's own module doc comment. Required even when the project has
+  // exactly one repository (deliberately not defaulted to it): an operator
+  // approving distribution for a project server is approving "code from
+  // THIS repository, on THIS server", and inferring a single-repository
+  // project's implicit repository would let a later-added second repository
+  // silently make a previously-unambiguous choice ambiguous again with no
+  // signal at the project-server row itself — the explicit column is the
+  // one place that choice is recorded and can be reviewed/changed
+  // independently of how many repositories the project happens to have.
+  const distributionRepositoryId = projectServer?.distributionRepositoryId ?? null;
+  if (distributionRepositoryId === null) {
     return {
       required: true,
       ok: false,
-      stage: 'multiple_repositories',
-      message: 'Fetch distribution is required but the project has multiple repositories configured — the distribution target cannot be determined unambiguously. Either reduce this project to a single repository, or disable distribution (server isolation intent / project distribute_code) for this task.',
+      stage: 'no_distribution_repository',
+      message: 'Fetch distribution is required but no distribution target repository is configured for this project server. Select one in Settings → Servers for this project/server pairing.',
+    };
+  }
+
+  const repoEntry = project?.repositories?.find((r) => r.id === distributionRepositoryId);
+  if (!repoEntry) {
+    return {
+      required: true,
+      ok: false,
+      stage: 'distribution_repository_not_found',
+      message: 'Fetch distribution is required but the configured distribution target repository no longer exists on this project',
     };
   }
 

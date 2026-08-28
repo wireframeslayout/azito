@@ -191,9 +191,9 @@ function buildUseCase(opts: {
   task: Task;
   project: ProjectDetail | null;
   units: Unit[];
-  projectServer?: { workingDirectory: string | null; branch: string | null; tmuxSession: string; inputPolicy?: 'deny' | 'manual-approval' | 'allow'; distributeCode?: boolean } | null;
+  projectServer?: { workingDirectory: string | null; branch: string | null; tmuxSession: string; inputPolicy?: 'deny' | 'manual-approval' | 'allow'; distributeCode?: boolean; distributionRepositoryId?: number | null } | null;
   /** When set, overrides findByProject entirely (e.g. to simulate multiple project servers). */
-  projectServersList?: Array<{ projectId: number; serverName: string; workingDirectory: string | null; branch: string | null; tmuxSession: string; inputPolicy?: 'deny' | 'manual-approval' | 'allow'; distributeCode?: boolean }>;
+  projectServersList?: Array<{ projectId: number; serverName: string; workingDirectory: string | null; branch: string | null; tmuxSession: string; inputPolicy?: 'deny' | 'manual-approval' | 'allow'; distributeCode?: boolean; distributionRepositoryId?: number | null }>;
   /** When set, overrides the server returned by serverRepo.findByName (default: makeServer(), type 'local'). */
   server?: ServerConfig;
   /** Issue #87 Phase 2: stubs projectRepo.findRepositoryById — a repository row with a token, for fetch-distribution gate tests. */
@@ -288,9 +288,9 @@ function buildUseCase(opts: {
   };
 
   const projectServerRepo: IProjectServerRepository = {
-    findByProject: vi.fn(() => (opts.projectServersList ?? (opts.projectServer ? [{ projectId: 1, serverName: 'local-server', ...opts.projectServer }] : [])).map((ps) => ({ inputPolicy: 'manual-approval' as const, distributeCode: false, ...ps }))),
+    findByProject: vi.fn(() => (opts.projectServersList ?? (opts.projectServer ? [{ projectId: 1, serverName: 'local-server', ...opts.projectServer }] : [])).map((ps) => ({ inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null, ...ps }))),
     findByServer: vi.fn(() => []),
-    find: vi.fn(() => (opts.projectServer ? { projectId: 1, serverName: 'local-server', inputPolicy: 'manual-approval' as const, distributeCode: false, ...opts.projectServer } : null)),
+    find: vi.fn(() => (opts.projectServer ? { projectId: 1, serverName: 'local-server', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null, ...opts.projectServer } : null)),
     upsert: vi.fn(),
     remove: vi.fn(),
   };
@@ -1335,9 +1335,9 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
       removeRepository: vi.fn(),
     };
     const projectServerRepo: IProjectServerRepository = {
-      findByProject: vi.fn(() => [{ projectId: 1, serverName: 'local-server', workingDirectory: '/work', branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false }]),
+      findByProject: vi.fn(() => [{ projectId: 1, serverName: 'local-server', workingDirectory: '/work', branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null }]),
       findByServer: vi.fn(() => []),
-      find: vi.fn(() => ({ projectId: 1, serverName: 'local-server', workingDirectory: '/work', branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false })),
+      find: vi.fn(() => ({ projectId: 1, serverName: 'local-server', workingDirectory: '/work', branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null })),
       upsert: vi.fn(),
       remove: vi.fn(),
     };
@@ -2576,6 +2576,8 @@ function buildDistributionGateHarness(opts: {
    * use case WITHOUT a fetchDistributionService (mirrors an unwired hub) — for the
    * "required but not wired" fail-fast test. Defaults true (normal gate/rollback tests). */
   serviceWired?: boolean;
+  /** Overrides the project server's `distributionRepositoryId` (default: 5, matching fetchDistributionRepository.id — a normal, resolvable distribution target). Set to `null` for the "no distribution target configured" fail-fast tests. */
+  distributionRepositoryId?: number | null;
 }) {
   const unit = makeUnit({ id: 10, workerType: 'claude', workerModel: 'opus' });
   // task.workingDirectory (not projectServer.workingDirectory) supplies
@@ -2600,7 +2602,7 @@ function buildDistributionGateHarness(opts: {
     task,
     project: opts.project ?? projectWithFetchDistributionRepository(),
     units: [unit],
-    projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', distributeCode: opts.distributeCode },
+    projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', distributeCode: opts.distributeCode, distributionRepositoryId: 'distributionRepositoryId' in opts ? opts.distributionRepositoryId ?? null : 5 },
     server: opts.server,
     repository: 'repository' in opts ? opts.repository : fetchDistributionRepository,
     ...(opts.serviceWired === false ? {} : { fetchDistributionService }),
@@ -2673,7 +2675,7 @@ describe('ExecuteTaskUseCase distribution decides against the in-lock (not pre-l
     projectServerRepo.find = vi.fn(() => {
       calls += 1;
       const distributeCode = calls >= 3 ? distributeCodeFromCall3 : !distributeCodeFromCall3;
-      return { projectId: 1, serverName, workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode };
+      return { projectId: 1, serverName, workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode, distributionRepositoryId: 5 };
     });
   }
 
@@ -2719,10 +2721,26 @@ describe('ExecuteTaskUseCase fetch-distribution failure handling (Issue #87 thir
   });
 
   // 指摘2: 配信が要求されているのに前提条件が欠けている場合は fail fast すること
-  // （プロジェクトにリポジトリ未設定 / リポジトリにトークン無し / identity 解決失敗の
-  // それぞれで、同じロールバック経路を通る）。isolationIntent 経路 と
-  // distributeCode 経路の両方で確認する。
-  it('fails fast (does not distribute) and rolls back the window when distribution is required but the project has no repository configured', async () => {
+  // （配信対象リポジトリ未設定 / 対象リポジトリが消失 / リポジトリにトークン無し /
+  // identity 解決失敗のそれぞれで、同じロールバック経路を通る）。isolationIntent
+  // 経路と distributeCode 経路の両方で確認する。
+  it('fails fast (does not distribute) and rolls back the window when distribution is required but no distribution target repository is configured', async () => {
+    const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
+    const { useCase, taskRepo, tmux, paneEnvService, fetchDistributionService } = buildDistributionGateHarness({
+      server,
+      distributeCode: false,
+      distributionRepositoryId: null,
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/no distribution target repository is configured/);
+
+    expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed', 101);
+    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_prereq_failed_rollback');
+  });
+
+  it('fails fast and rolls back the window when the configured distribution target repository no longer exists on the project', async () => {
     const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
     const { useCase, taskRepo, tmux, paneEnvService, fetchDistributionService } = buildDistributionGateHarness({
       server,
@@ -2730,7 +2748,7 @@ describe('ExecuteTaskUseCase fetch-distribution failure handling (Issue #87 thir
       project: makeProject({ defaultUnitId: null, repositories: [] }),
     });
 
-    await expect(useCase.execute(10, 1)).rejects.toThrow(/no repository configured/);
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/configured distribution target repository no longer exists/);
 
     expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
     expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed', 101);
@@ -2989,7 +3007,15 @@ describe('ExecuteTaskUseCase fetch-distribution required-but-unwired fail-fast (
   });
 });
 
-describe('ExecuteTaskUseCase fetch-distribution ambiguous-repository fail-fast (Issue #87 review, 6th pass, Important finding 2)', () => {
+// Issue #87 explicit-target follow-up: the "exactly one repository" fail-fast
+// stopgap (DistributionHelper used to infer `project.repositories[0]` and
+// refuse to guess with 2+) is gone — the target repository is now always
+// resolved from `projectServer.distributionRepositoryId`, so a project with
+// multiple repositories distributes normally as long as one is explicitly
+// configured, and a project with exactly one repository is NOT inferred
+// automatically (a missing `distributionRepositoryId` fails fast even then —
+// see the "no distribution target repository is configured" test above).
+describe('ExecuteTaskUseCase fetch-distribution explicit-target resolution (Issue #87 explicit-target follow-up, replaces the removed exactly-one-repository fail-fast)', () => {
   function projectWithTwoRepositories(): ProjectDetail {
     return makeProject({
       defaultUnitId: null,
@@ -3000,23 +3026,23 @@ describe('ExecuteTaskUseCase fetch-distribution ambiguous-repository fail-fast (
     });
   }
 
-  it('fails fast when distribution is required and the project has more than one repository configured', async () => {
+  it('distributes from the explicitly configured repository when the project has more than one repository configured', async () => {
     const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
-    const { useCase, taskRepo, tmux, paneEnvService, fetchDistributionService } = buildDistributionGateHarness({
+    const { useCase, taskRepo, fetchDistributionService } = buildDistributionGateHarness({
       server,
       distributeCode: false,
       project: projectWithTwoRepositories(),
+      distributionRepositoryId: 6,
+      repository: { id: 6, url: 'https://github.com/acme/other.git', provider: 'github', owner: 'acme', repoName: 'other', token: 'tok456' },
     });
 
-    await expect(useCase.execute(10, 1)).rejects.toThrow(/multiple repositories configured/);
+    await useCase.execute(10, 1);
 
-    expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
-    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed', 101);
-    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
-    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_prereq_failed_rollback');
+    expect(fetchDistributionService.distribute).toHaveBeenCalledTimes(1);
+    expect(taskRepo.updateStatusIfWindowMatches).not.toHaveBeenCalled();
   });
 
-  it('distributes normally when distribution is required and the project has exactly one repository configured', async () => {
+  it('distributes normally when distribution is required and the project has exactly one repository configured, as long as it is explicitly selected', async () => {
     const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
     const { useCase, taskRepo, fetchDistributionService } = buildDistributionGateHarness({
       server,
@@ -3030,12 +3056,30 @@ describe('ExecuteTaskUseCase fetch-distribution ambiguous-repository fail-fast (
     expect(taskRepo.updateStatusIfWindowMatches).not.toHaveBeenCalled();
   });
 
-  it('does not fail fast on multiple repositories when distribution is not required', async () => {
+  it('fails fast (does not distribute) when the project has exactly one repository but no distribution target was explicitly selected (the old implicit-single-repository inference is gone)', async () => {
+    const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
+    const { useCase, taskRepo, tmux, paneEnvService, fetchDistributionService } = buildDistributionGateHarness({
+      server,
+      distributeCode: false,
+      project: projectWithFetchDistributionRepository(),
+      distributionRepositoryId: null,
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/no distribution target repository is configured/);
+
+    expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed', 101);
+    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_prereq_failed_rollback');
+  });
+
+  it('does not fail fast on multiple repositories or a missing target when distribution is not required', async () => {
     const server = makeServer({ name: 'srv-agent', type: 'agent', isolationIntent: false });
     const { useCase, taskRepo, fetchDistributionService } = buildDistributionGateHarness({
       server,
       distributeCode: false,
       project: projectWithTwoRepositories(),
+      distributionRepositoryId: null,
     });
 
     await useCase.execute(10, 1);

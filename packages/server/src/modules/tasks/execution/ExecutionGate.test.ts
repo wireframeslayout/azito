@@ -66,6 +66,7 @@ const manualApprovalServer: ProjectServer = {
   tmuxSession: 'azito',
   inputPolicy: 'manual-approval',
   distributeCode: false,
+  distributionRepositoryId: null,
 };
 
 const denyServer: ProjectServer = { ...manualApprovalServer, inputPolicy: 'deny' };

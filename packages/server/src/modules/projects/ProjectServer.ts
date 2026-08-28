@@ -26,6 +26,20 @@ export interface ProjectServer {
    * excludes `local` from the gate outright. Defaults off.
    */
   distributeCode: boolean;
+  /**
+   * Which of the project's `project_repositories` rows hub-代行 distribution
+   * pulls onto this server (Issue #87). Required (fail fast, never
+   * inferred) whenever distribution actually runs for this project+server
+   * pairing — i.e. whenever `distributeCode` is set, or the server itself
+   * carries isolation intent (see `DistributionHelper.isDistributionRequired`).
+   * `null` means "no target configured"; a project with more than one
+   * repository has no unambiguous implicit choice, and even a project with
+   * exactly one repository is not inferred automatically — see
+   * `DistributionHelper.ts`'s module doc comment for why an explicit pick is
+   * required even in that case. Cleared back to `null` (never cascades the
+   * row itself) if the referenced `project_repositories` row is deleted.
+   */
+  distributionRepositoryId: number | null;
 }
 
 /** Full row for upsert — tmuxSession is required; callers resolve it at the boundary. */

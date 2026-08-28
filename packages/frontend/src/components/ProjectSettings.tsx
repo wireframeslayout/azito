@@ -28,6 +28,8 @@ interface ProjectServer {
   inputPolicy?: 'deny' | 'manual-approval' | 'allow';
   /** Issue #87 Phase 2: whether the hub distributes this project's code to this server. Meaningless for `local`. Default off. */
   distributeCode?: boolean;
+  /** Issue #87: which of the project's repositories distribution pulls onto this server. Required whenever distribution actually runs (distributeCode on, or an isolated server). `null`/`undefined` means unset. */
+  distributionRepositoryId?: number | null;
 }
 interface Project {
   id: number; name: string; slug: string; description?: string;
@@ -85,6 +87,13 @@ export function useProjectSettings(
   // itself) — the form hides the toggle entirely for that server (see
   // isPsServerLocal below).
   const [psDistributeCode, setPsDistributeCode] = useState(false);
+  // Issue #87 explicit-target follow-up: which of the project's repositories
+  // distribution pulls onto this server — required whenever distribution
+  // actually runs (see `ProjectServer.distributionRepositoryId`'s doc
+  // comment). Stored as a string ('' = unset) to match `FormSelect`'s
+  // string-only value contract; converted to `number | null` only at the
+  // request boundary (`handleSaveServer`).
+  const [psDistributionRepositoryId, setPsDistributionRepositoryId] = useState('');
 
   const [addRepoOpen, setAddRepoOpen] = useState(false);
   const [repoUrl, setRepoUrl] = useState('');
@@ -262,14 +271,15 @@ export function useProjectSettings(
       branch: psBranch.trim() || null,
       tmux_session: psTmuxSession.trim() || null,
       input_policy: psInputPolicy,
+      distribution_repository_id: psDistributionRepositoryId ? parseInt(psDistributionRepositoryId, 10) : null,
     };
     if (resolvedDistributeCode !== undefined) {
       body.distribute_code = resolvedDistributeCode;
     }
     await api(`/projects/${projectId}/servers/${psServer}`, { method: 'PUT', body: JSON.stringify(body) });
-    setAddPsOpen(false); setPsWorkDir(''); setPsBranch(''); setPsTmuxSession(''); setPsInputPolicy('manual-approval'); setPsDistributeCode(false);
+    setAddPsOpen(false); setPsWorkDir(''); setPsBranch(''); setPsTmuxSession(''); setPsInputPolicy('manual-approval'); setPsDistributeCode(false); setPsDistributionRepositoryId('');
     api<ProjectServer[]>(`/projects/${projectId}/servers`).then((res) => setProjectServers(Array.isArray(res) ? res : [])).catch(() => {});
-  }, [projectId, psServer, psWorkDir, psBranch, psTmuxSession, psInputPolicy, psDistributeCode, servers]);
+  }, [projectId, psServer, psWorkDir, psBranch, psTmuxSession, psInputPolicy, psDistributeCode, psDistributionRepositoryId, servers]);
 
   // Opens the add/edit form for `serverName`, pre-filled from its existing
   // project_servers row when one exists (Issue #51 review note: this form's
@@ -285,6 +295,7 @@ export function useProjectSettings(
     setPsTmuxSession(existing?.tmuxSession ?? '');
     setPsInputPolicy(existing?.inputPolicy === 'deny' || existing?.inputPolicy === 'allow' ? existing.inputPolicy : 'manual-approval');
     setPsDistributeCode(existing?.distributeCode ?? false);
+    setPsDistributionRepositoryId(existing?.distributionRepositoryId != null ? String(existing.distributionRepositoryId) : '');
     // (Re)opening the form for `serverName` — the toggle's derivation effect
     // is free to overwrite `psDistributeCode` again until the user touches
     // it, same as every other field here being freshly initialized from
@@ -314,7 +325,9 @@ export function useProjectSettings(
     // Servers
     projectServers, addPsOpen, setAddPsOpen, psServer, setPsServer,
     psWorkDir, setPsWorkDir, psBranch, setPsBranch, psTmuxSession, setPsTmuxSession,
-    psInputPolicy, setPsInputPolicy, psDistributeCode, setPsDistributeCode: handleSetPsDistributeCode, handleSaveServer, handleRemoveServer, handleOpenServerForm,
+    psInputPolicy, setPsInputPolicy, psDistributeCode, setPsDistributeCode: handleSetPsDistributeCode,
+    psDistributionRepositoryId, setPsDistributionRepositoryId,
+    handleSaveServer, handleRemoveServer, handleOpenServerForm,
     // Danger
     handleDelete,
   };
@@ -572,6 +585,16 @@ function RepositoriesSection({ settings: s, addWindowModal }: { settings: Return
 
 function ServersSection({ settings: s }: { settings: ReturnType<typeof useProjectSettings> }) {
   const { t } = useTranslation(['projects', 'common']);
+  const repositories = s.project?.repositories ?? [];
+  // Issue #87 explicit-target follow-up: distribution actually runs for the
+  // form's currently-selected server whenever the toggle is effectively on
+  // (locked-on for an isolated server, or the user's own choice otherwise —
+  // same derivation the toggle's own `checked` prop below uses) — a target
+  // repository is then required (Fail Fast, never inferred), so Save must
+  // be blocked until one is picked.
+  const formIsolated = isDistributeCodeLocked((s.servers || []).find((sv) => sv.name === s.psServer));
+  const formDistributeEffective = formIsolated || s.psDistributeCode;
+  const formDistributionRepoMissing = formDistributeEffective && !s.psDistributionRepositoryId;
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
@@ -615,24 +638,51 @@ function ServersSection({ settings: s }: { settings: ReturnType<typeof useProjec
             // locked server) never persists a phantom opt-in that outlives
             // isolation being turned back off.
             const isolated = isDistributeCodeLocked((s.servers || []).find((sv) => sv.name === s.psServer));
+            const distributeEffective = isolated || s.psDistributeCode;
             return (
-              <FormField
-                label=""
-                hint={isolated ? t('settings.servers.distributeCodeIsolatedHint') : t('settings.servers.distributeCodeHint')}
-              >
-                <span style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: isolated ? 'default' : 'pointer' }}>
-                  <label className="toggle">
-                    <input
-                      type="checkbox"
-                      checked={isolated || s.psDistributeCode}
-                      disabled={isolated}
-                      onChange={(e) => s.setPsDistributeCode(e.target.checked)}
-                    />
-                    <span className="toggle-slider" />
-                  </label>
-                  <span style={{ fontSize: 'var(--font-md)', color: 'var(--text)' }}>{t('settings.servers.distributeCode')}</span>
-                </span>
-              </FormField>
+              <>
+                <FormField
+                  label=""
+                  hint={isolated ? t('settings.servers.distributeCodeIsolatedHint') : t('settings.servers.distributeCodeHint')}
+                >
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: isolated ? 'default' : 'pointer' }}>
+                    <label className="toggle">
+                      <input
+                        type="checkbox"
+                        checked={distributeEffective}
+                        disabled={isolated}
+                        onChange={(e) => s.setPsDistributeCode(e.target.checked)}
+                      />
+                      <span className="toggle-slider" />
+                    </label>
+                    <span style={{ fontSize: 'var(--font-md)', color: 'var(--text)' }}>{t('settings.servers.distributeCode')}</span>
+                  </span>
+                </FormField>
+                {/* Issue #87 explicit-target follow-up: shown only while
+                    distribution is effectively on for this server — hidden
+                    (not merely disabled) when off, matching the toggle
+                    itself being hidden entirely for `local`. Fail Fast: no
+                    implicit fallback even when the project has exactly one
+                    repository — see `ProjectServer.distributionRepositoryId`'s
+                    doc comment for why. */}
+                {distributeEffective && (
+                  <FormField
+                    label={t('settings.servers.distributionRepository')}
+                    hint={t('settings.servers.distributionRepositoryHint')}
+                    error={formDistributionRepoMissing ? t('settings.servers.distributionRepositoryRequired') : undefined}
+                  >
+                    <FormSelect
+                      value={s.psDistributionRepositoryId}
+                      onChange={(e) => s.setPsDistributionRepositoryId(e.target.value)}
+                    >
+                      <option value="">{t('settings.servers.distributionRepositoryPlaceholder')}</option>
+                      {repositories.map((r) => (
+                        <option key={r.id} value={String(r.id)}>{r.name || r.url}</option>
+                      ))}
+                    </FormSelect>
+                  </FormField>
+                )}
+              </>
             );
           })()}
           <FormField label={t('settings.servers.branch')}>
@@ -669,7 +719,7 @@ function ServersSection({ settings: s }: { settings: ReturnType<typeof useProjec
           )}
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
             <Button size="sm" onClick={() => s.setAddPsOpen(false)}>{t('common:actions.cancel')}</Button>
-            <Button variant="primary" size="sm" onClick={s.handleSaveServer}>{t('common:actions.save')}</Button>
+            <Button variant="primary" size="sm" onClick={s.handleSaveServer} disabled={formDistributionRepoMissing}>{t('common:actions.save')}</Button>
           </div>
         </div>
       )}
@@ -694,7 +744,13 @@ function ServersSection({ settings: s }: { settings: ReturnType<typeof useProjec
                   earlier session see a list that wrongly implies nothing is
                   being distributed. */}
               {shouldShowDistributeCodeBadge((s.servers || []).find((sv) => sv.name === ps.serverName), ps.distributeCode) ? (
-                <span style={{ color: 'var(--accent)', marginLeft: 8 }}>{t('settings.servers.distributeCodeBadge')}</span>
+                <span style={{ color: 'var(--accent)', marginLeft: 8 }}>
+                  {t('settings.servers.distributeCodeBadge')}
+                  {ps.distributionRepositoryId != null && (() => {
+                    const repo = repositories.find((r) => r.id === ps.distributionRepositoryId);
+                    return repo ? <span style={{ color: 'var(--text-dim)' }}> ({repo.name || repo.url})</span> : null;
+                  })()}
+                </span>
               ) : null}
             </span>
             <span style={{ display: 'flex', gap: 8 }}>

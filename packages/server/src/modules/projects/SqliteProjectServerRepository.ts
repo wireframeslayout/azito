@@ -9,6 +9,7 @@ interface ProjectServerRow {
   tmux_session: string;
   input_policy: string;
   distribute_code: number;
+  distribution_repository_id: number | null;
 }
 
 const DEFAULT_TMUX_SESSION = 'azito';
@@ -26,10 +27,10 @@ export class SqliteProjectServerRepository implements IProjectServerRepository {
     this.findByServerStmt = db.prepare('SELECT * FROM project_servers WHERE server_name = ?');
     this.findStmt = db.prepare('SELECT * FROM project_servers WHERE project_id = ? AND server_name = ?');
     this.upsertStmt = db.prepare(`
-      INSERT INTO project_servers (project_id, server_name, working_directory, branch, tmux_session, input_policy, distribute_code)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO project_servers (project_id, server_name, working_directory, branch, tmux_session, input_policy, distribute_code, distribution_repository_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(project_id, server_name)
-      DO UPDATE SET working_directory = excluded.working_directory, branch = excluded.branch, tmux_session = excluded.tmux_session, input_policy = excluded.input_policy, distribute_code = excluded.distribute_code
+      DO UPDATE SET working_directory = excluded.working_directory, branch = excluded.branch, tmux_session = excluded.tmux_session, input_policy = excluded.input_policy, distribute_code = excluded.distribute_code, distribution_repository_id = excluded.distribution_repository_id
     `);
     this.removeStmt = db.prepare('DELETE FROM project_servers WHERE project_id = ? AND server_name = ?');
   }
@@ -56,6 +57,7 @@ export class SqliteProjectServerRepository implements IProjectServerRepository {
       data.tmuxSession,
       data.inputPolicy ?? DEFAULT_INPUT_POLICY,
       data.distributeCode ? 1 : 0,
+      data.distributionRepositoryId ?? null,
     );
   }
 
@@ -72,6 +74,7 @@ export class SqliteProjectServerRepository implements IProjectServerRepository {
       tmuxSession: row.tmux_session || DEFAULT_TMUX_SESSION,
       inputPolicy: (row.input_policy || DEFAULT_INPUT_POLICY) as 'deny' | 'manual-approval' | 'allow',
       distributeCode: !!row.distribute_code,
+      distributionRepositoryId: row.distribution_repository_id,
     };
   }
 }

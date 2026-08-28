@@ -94,9 +94,9 @@ function makeOpts(existingTask: Task | null): TasksRouteOptions {
       removeRepository: vi.fn(),
     },
     projectServerRepo: {
-      findByProject: vi.fn(() => [{ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false }]),
+      findByProject: vi.fn(() => [{ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null }]),
       findByServer: vi.fn(() => []),
-      find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false })),
+      find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null })),
       upsert: vi.fn(),
       remove: vi.fn(),
     },
@@ -321,7 +321,7 @@ describe('GET /api/tasks/:id/execution-approval (Issue #51)', () => {
   // pending_approval task, instead of looking like an ordinary block.
   it('surfaces allowDegradedReason when the project server is configured for "allow" but the 3-point gate degraded it', async () => {
     const opts = makeOpts(makeTask());
-    opts.projectServerRepo.find = vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'allow' as const, distributeCode: false }));
+    opts.projectServerRepo.find = vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'allow' as const, distributeCode: false, distributionRepositoryId: null }));
     // serverRepo default (from makeOpts) has isolationIntent: false -> 'not_isolated'.
     const app = Fastify();
     await app.register(tasksRoutes, opts);
@@ -337,7 +337,7 @@ describe('GET /api/tasks/:id/execution-approval (Issue #51)', () => {
 
   it('returns allowDegradedReason: null when "allow" is fully satisfied (isolated, verified, scoped auth enabled)', async () => {
     const opts = makeOpts(makeTask());
-    opts.projectServerRepo.find = vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'allow' as const, distributeCode: false }));
+    opts.projectServerRepo.find = vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'allow' as const, distributeCode: false, distributionRepositoryId: null }));
     opts.serverRepo.findByName = vi.fn(() => ({
       name: 'test-server', type: 'agent' as const, host: '', agentPort: null, agentToken: null, agentVersion: null,
       sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const,

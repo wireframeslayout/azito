@@ -214,7 +214,7 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
         findByProject: vi.fn(() => []),
         findByServer: vi.fn(() => []),
         find: vi.fn(() => ({
-          projectId: 10, serverName: 'test-server', workingDirectory: '/srv/repo', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false,
+          projectId: 10, serverName: 'test-server', workingDirectory: '/srv/repo', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null,
         })),
         upsert: vi.fn(),
         remove: vi.fn(),
@@ -244,7 +244,7 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
         findByProject: vi.fn(() => []),
         findByServer: vi.fn(() => []),
         find: vi.fn(() => ({
-          projectId: 10, serverName: 'test-server', workingDirectory: '/srv/repo', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false,
+          projectId: 10, serverName: 'test-server', workingDirectory: '/srv/repo', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null,
         })),
         upsert: vi.fn(),
         remove: vi.fn(),
@@ -398,7 +398,7 @@ describe('PUT /api/projects/:id/servers/:serverName — distribute_code (Issue #
         findByProject: vi.fn(() => []),
         findByServer: vi.fn(() => []),
         find: vi.fn(() => ({
-          projectId: 10, serverName: 'test-server', workingDirectory: '/srv/repo', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: true,
+          projectId: 10, serverName: 'test-server', workingDirectory: '/srv/repo', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: true, distributionRepositoryId: null,
         })),
         upsert: vi.fn(),
         remove: vi.fn(),
@@ -489,6 +489,124 @@ describe('PUT /api/projects/:id/servers/:serverName — distribute_code (Issue #
 
     expect(res.statusCode).toBe(200);
     expect(opts.projectServerRepo.upsert).toHaveBeenCalledWith(expect.objectContaining({ distributeCode: true }));
+  });
+});
+
+// Issue #87 explicit-target follow-up: distribution_repository_id replaces
+// the removed "exactly one repository configured" fail-fast — the target
+// repository is now an explicit per-project-server column, validated the
+// same way distribute_code/input_policy already are (declared-type
+// rejection, "key absent preserves" semantics) plus a project-ownership
+// check specific to this field (a distribution target must belong to the
+// SAME project as the project server row, since distribution uses the
+// repository's own stored token).
+describe('PUT /api/projects/:id/servers/:serverName — distribution_repository_id (Issue #87 explicit-target follow-up)', () => {
+  function optsWithProjectRepositories(repositories: Array<{ id: number; name: string | null; url: string; provider: 'github' | 'gitlab' | 'other'; owner: string | null; repoName: string | null; hasToken: boolean }>) {
+    return makeOpts({
+      projectRepo: {
+        findAll: vi.fn(() => []),
+        findById: vi.fn(() => ({ id: 10, name: 'P', slug: 'p', description: null, repositoryUrl: null, defaultBranch: 'main', sidekickPrompt: null, icon: null, color: null, defaultUnitId: 20, repositories, windows: [], createdAt: '', updatedAt: '' })),
+        create: vi.fn(() => 10),
+        update: vi.fn(),
+        delete: vi.fn(),
+        addRepository: vi.fn(() => 1),
+        findRepositoryById: vi.fn(() => ({ id: 1, name: 'widgets', url: 'https://github.com/acme/widgets', provider: 'github' as const, owner: 'acme', repoName: 'widgets', token: null })),
+        removeRepository: vi.fn(),
+      },
+    });
+  }
+
+  it('accepts a numeric distribution_repository_id that belongs to this project', async () => {
+    const opts = optsWithProjectRepositories([{ id: 5, name: 'widgets', url: 'https://github.com/acme/widgets', provider: 'github', owner: 'acme', repoName: 'widgets', hasToken: true }]);
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10/servers/test-server',
+      payload: { distribution_repository_id: 5 },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.projectServerRepo.upsert).toHaveBeenCalledWith(expect.objectContaining({ distributionRepositoryId: 5 }));
+  });
+
+  it('accepts an explicit null, clearing any previously configured target', async () => {
+    const opts = optsWithProjectRepositories([{ id: 5, name: 'widgets', url: 'https://github.com/acme/widgets', provider: 'github', owner: 'acme', repoName: 'widgets', hasToken: true }]);
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10/servers/test-server',
+      payload: { distribution_repository_id: null },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.projectServerRepo.upsert).toHaveBeenCalledWith(expect.objectContaining({ distributionRepositoryId: null }));
+  });
+
+  it('rejects a non-numeric, non-null distribution_repository_id with 400', async () => {
+    const opts = optsWithProjectRepositories([{ id: 5, name: 'widgets', url: 'https://github.com/acme/widgets', provider: 'github', owner: 'acme', repoName: 'widgets', hasToken: true }]);
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10/servers/test-server',
+      payload: { distribution_repository_id: '5' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(opts.projectServerRepo.upsert).not.toHaveBeenCalled();
+  });
+
+  it('rejects a distribution_repository_id that belongs to a different project with 400', async () => {
+    // This project (10) has no repository with id 6 — id 6 is a stand-in
+    // for another project's repository row (distribution uses the
+    // repository's own stored token, so accepting it here would let a
+    // caller point distribution at another project's git credentials).
+    const opts = optsWithProjectRepositories([{ id: 5, name: 'widgets', url: 'https://github.com/acme/widgets', provider: 'github', owner: 'acme', repoName: 'widgets', hasToken: true }]);
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10/servers/test-server',
+      payload: { distribution_repository_id: 6 },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(opts.projectServerRepo.upsert).not.toHaveBeenCalled();
+  });
+
+  it('preserves the existing distribution_repository_id when the key is omitted', async () => {
+    const opts = optsWithProjectRepositories([{ id: 5, name: 'widgets', url: 'https://github.com/acme/widgets', provider: 'github', owner: 'acme', repoName: 'widgets', hasToken: true }]);
+    opts.projectServerRepo = {
+      findByProject: vi.fn(() => []),
+      findByServer: vi.fn(() => []),
+      find: vi.fn(() => ({
+        projectId: 10, serverName: 'test-server', workingDirectory: '/srv/repo', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: true, distributionRepositoryId: 5,
+      })),
+      upsert: vi.fn(),
+      remove: vi.fn(),
+    };
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10/servers/test-server',
+      payload: { input_policy: 'deny' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.projectServerRepo.upsert).toHaveBeenCalledWith(expect.objectContaining({ distributionRepositoryId: 5 }));
   });
 });
 

@@ -230,6 +230,7 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
         tmux_session?: string | null;
         input_policy?: string;
         distribute_code?: boolean;
+        distribution_repository_id?: number | null;
       };
       // tmux_session semantics: key present with null/empty resets to the default
       // ('azito'); key present with a value sets it (trimmed); key absent preserves
@@ -329,6 +330,31 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       // distribution.
       const targetServerType = serverRepo.findByName(serverName)?.type;
       const distributeCode = targetServerType === 'local' ? false : requestedDistributeCode;
+      // distribution_repository_id: same "key absent preserves, key present
+      // (incl. explicit null) sets" semantics as working_directory/branch/
+      // distribute_code above — a client that PUTs only { distribute_code }
+      // must not silently wipe an already-configured distribution target.
+      // Validated the same way distribute_code is validated above: a
+      // declared `number | null` contract must reject other JSON types
+      // (e.g. `"5"`, `{}`, `true`) rather than silently coercing them.
+      if (
+        body.distribution_repository_id !== undefined &&
+        body.distribution_repository_id !== null &&
+        typeof body.distribution_repository_id !== 'number'
+      ) {
+        return reply.status(400).send({ error: 'distribution_repository_id must be a number or null' });
+      }
+      const requestedDistributionRepositoryId = 'distribution_repository_id' in body
+        ? (body.distribution_repository_id ?? null)
+        : (existingRow?.distributionRepositoryId ?? null);
+      // A distribution target must belong to THIS project — otherwise a
+      // caller could point distribution at another project's repository
+      // (and, since hub-代行 distribution uses the repository's own stored
+      // token, effectively exfiltrate that other project's git credentials
+      // onto a server it has no relationship to).
+      if (requestedDistributionRepositoryId !== null && !project.repositories.some((r) => r.id === requestedDistributionRepositoryId)) {
+        return reply.status(400).send({ error: 'distribution_repository_id must reference a repository belonging to this project' });
+      }
       projectServerRepo.upsert({
         projectId,
         serverName,
@@ -337,6 +363,7 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
         tmuxSession,
         inputPolicy,
         distributeCode,
+        distributionRepositoryId: requestedDistributionRepositoryId,
       });
 
       let sessionCreated = false;

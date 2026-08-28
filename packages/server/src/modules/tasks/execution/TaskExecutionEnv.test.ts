@@ -24,7 +24,7 @@ describe('resolveTaskServerName', () => {
   it('falls back to the project server when task.serverName is null and exactly one exists', () => {
     const repo = makeProjectServerRepo({
       findByProject: vi.fn(() => [
-        { projectId: 1, serverName: 'server-b', workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false },
+        { projectId: 1, serverName: 'server-b', workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null },
       ]),
     });
     const result = resolveTaskServerName({ projectId: 1, serverName: null }, repo);
@@ -40,8 +40,8 @@ describe('resolveTaskServerName', () => {
   it('returns null (ambiguous) when task.serverName is null and the project has multiple project_servers rows', () => {
     const repo = makeProjectServerRepo({
       findByProject: vi.fn(() => [
-        { projectId: 1, serverName: 'server-b', workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false },
-        { projectId: 1, serverName: 'server-c', workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false },
+        { projectId: 1, serverName: 'server-b', workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null },
+        { projectId: 1, serverName: 'server-c', workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null },
       ]),
     });
     const result = resolveTaskServerName({ projectId: 1, serverName: null }, repo);
@@ -52,7 +52,7 @@ describe('resolveTaskServerName', () => {
 describe('resolveTmuxSession', () => {
   it('returns the project_servers tmux_session when a row exists', () => {
     const repo = makeProjectServerRepo({
-      find: vi.fn(() => ({ projectId: 1, serverName: 'server-a', workingDirectory: null, branch: null, tmuxSession: 'custom-session', inputPolicy: 'manual-approval' as const, distributeCode: false })),
+      find: vi.fn(() => ({ projectId: 1, serverName: 'server-a', workingDirectory: null, branch: null, tmuxSession: 'custom-session', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null })),
     });
     expect(resolveTmuxSession(1, 'server-a', repo)).toBe('custom-session');
   });

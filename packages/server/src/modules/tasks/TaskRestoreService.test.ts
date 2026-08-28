@@ -106,9 +106,9 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
       removeRepository: vi.fn(),
     },
     projectServerRepo: {
-      findByProject: vi.fn(() => [{ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false }]),
+      findByProject: vi.fn(() => [{ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: 1 }]),
       findByServer: vi.fn(() => []),
-      find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false })),
+      find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: 1 })),
       upsert: vi.fn(),
       remove: vi.fn(),
     },
@@ -424,7 +424,7 @@ describe('TaskRestoreService', () => {
       ...deps,
       projectServerRepo: {
         ...deps.projectServerRepo,
-        find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false })),
+        find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null })),
       },
     });
     service = new TaskRestoreService(deps);
@@ -795,7 +795,7 @@ describe('TaskRestoreService', () => {
         },
         projectServerRepo: {
           ...deps.projectServerRepo,
-          find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false })),
+          find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null })),
         },
       });
       service = new TaskRestoreService(deps);
@@ -870,7 +870,7 @@ describe('TaskRestoreService', () => {
           find: vi.fn(() => {
             calls += 1;
             const distributeCode = calls >= 3 ? distributeCodeFromCall3 : !distributeCodeFromCall3;
-            return { projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode };
+            return { projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode, distributionRepositoryId: 1 };
           }),
         };
       }
@@ -960,7 +960,7 @@ describe('TaskRestoreService', () => {
         } as unknown as TaskRestoreDeps['transportFactory'],
         projectServerRepo: {
           ...deps.projectServerRepo,
-          find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false })),
+          find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: 1 })),
         },
       });
       service = new TaskRestoreService(deps);
@@ -1044,7 +1044,7 @@ describe('TaskRestoreService', () => {
         ...deps,
         projectServerRepo: {
           ...deps.projectServerRepo,
-          find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'deny' as const, distributeCode: false })),
+          find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'deny' as const, distributeCode: false, distributionRepositoryId: null })),
         },
       });
       service = new TaskRestoreService(deps);

@@ -651,6 +651,17 @@ export interface ResolvedExecutionManifest {
     // different trust boundary than what was approved. `false` when
     // `projectServer` itself is null (no resolvable project_servers row).
     distributeCode: boolean;
+    // Issue #87 explicit-target follow-up: which repository distribution
+    // pulls onto this server (see `ProjectServer.distributionRepositoryId`'s
+    // doc comment and `DistributionHelper.ts`'s module doc comment for why
+    // this is never inferred). Same trust-boundary reasoning as
+    // `distributeCode` above: an already-approved manifest's distribution
+    // SOURCE changing (e.g. an operator repoints this project server at a
+    // different repository — a different set of git credentials, a
+    // different codebase) is exactly as material a change as flipping
+    // `distributeCode` itself, and must invalidate the same way. `null`
+    // when `projectServer` itself is null or has no target configured.
+    distributionRepositoryId: number | null;
   };
   branches: {
     base: string;
@@ -1016,6 +1027,9 @@ export function resolveExecutionManifest(
       // Issue #87 13th-round review, Important finding 2: see the field's
       // own doc comment on ResolvedExecutionManifest.server above.
       distributeCode: projectServer?.distributeCode ?? false,
+      // Issue #87 explicit-target follow-up: see the field's own doc
+      // comment on ResolvedExecutionManifest.server above.
+      distributionRepositoryId: projectServer?.distributionRepositoryId ?? null,
     },
     branches: {
       base: baseBranch,
@@ -1119,6 +1133,9 @@ export function hashExecutionManifest(manifest: ResolvedExecutionManifest): stri
       // Issue #87 13th-round review, Important finding 2: see the field's
       // own doc comment on ResolvedExecutionManifest.server above.
       distributeCode: manifest.server.distributeCode,
+      // Issue #87 explicit-target follow-up: see the field's own doc
+      // comment on ResolvedExecutionManifest.server above.
+      distributionRepositoryId: manifest.server.distributionRepositoryId,
     },
     branches: {
       base: manifest.branches.base,
