@@ -390,7 +390,10 @@ function buildExecuteTaskUseCase(
   const remoteBundleOps = new RemoteBundleOps();
   const cleanPusher = new CleanPusher();
   const distributionStateRepo = new SqliteDistributionStateRepository(db);
-  const fetchDistributionService = new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService, distributionStateRepo);
+  // sshClient passed to normalize the outer lock key's host identity (Issue
+  // #87 review, 6th pass, Important finding 3) — see FetchDistributionService's
+  // `sshHostResolver` constructor doc comment.
+  const fetchDistributionService = new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService, distributionStateRepo, infra.sshClient);
   const pushNotaryService = new PushNotaryService(remoteBundleOps, sftpService, cleanPusher, infra.gitProvider);
 
   return new ExecuteTaskUseCase(

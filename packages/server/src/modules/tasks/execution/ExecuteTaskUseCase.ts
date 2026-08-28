@@ -826,12 +826,25 @@ export class ExecuteTaskUseCase {
     // missing repository/token/identity a few lines down never even ran, and
     // the task started against whatever was already checked out in the
     // pane's default directory (no code of its own, for an isolated server).
-    // Captured as a local (not `this.fetchDistributionService` re-read at
-    // each use) so both the requiredness check and the later `.distribute()`
-    // call narrow off the SAME null check.
+    //
+    // Issue #87 review, 6th pass, Important finding 1: `distributionRequired`
+    // used to ALSO fold in `fetchDistributionService != null` — so on a hub
+    // where `FetchDistributionService` was never wired (or a future call site
+    // that omits it), an isolated server or a `distribute_code` project
+    // silently downgraded to "distribution not required" and the task ran
+    // with no code, or stale/old code, on the target. Whether distribution is
+    // required must be decided from server/project configuration ALONE; a
+    // required-but-unwired service is a missing-dependency failure, not a
+    // reason to skip distribution.
     const fetchDistributionService = this.fetchDistributionService;
-    const distributionRequired =
-      server.type !== 'local' && (server.isolationIntent || projectServer?.distributeCode) && fetchDistributionService != null;
+    const distributionRequired = server.type !== 'local' && (server.isolationIntent || projectServer?.distributeCode);
+
+    if (distributionRequired && fetchDistributionService == null) {
+      const message = 'Fetch distribution is required (server isolation intent or project distribute_code) but FetchDistributionService is not wired into ExecuteTaskUseCase';
+      this.appendLog(taskId, unitId, 'command', { type: 'fetch_distribution_failed', error: message });
+      await this.rollbackWindowAfterPostCreationFailure(taskId, server, tmuxSession, windowName, tokenId, 'fetch_distribution_prereq_failed_rollback');
+      throw new Error(message);
+    }
 
     if (distributionRequired && !workingDir) {
       const message = 'Fetch distribution is required (server isolation intent or project distribute_code) but no working directory is configured for this task/server';
@@ -858,6 +871,17 @@ export class ExecuteTaskUseCase {
       // target. `local` is always excluded — that server IS the hub, so
       // "distributing" to it is meaningless.)
       if (distributionRequired) {
+        if (!fetchDistributionService) {
+          // Unreachable in practice — `distributionRequired && fetchDistributionService
+          // == null` already fails fast above. Re-checked here so
+          // TypeScript's control-flow analysis (which can't correlate the
+          // separately-bound `distributionRequired` and
+          // `fetchDistributionService` consts across the two guard clauses
+          // above) narrows `fetchDistributionService` to non-null for the
+          // `.distribute()` call below.
+          throw new Error('Fetch distribution is required but FetchDistributionService is not wired into ExecuteTaskUseCase');
+        }
+
         // Fail fast (review finding, Issue #87 third-party review, Important
         // 2): distribution was requested — via the server's own isolation
         // intent (which cannot clone for itself; skipping distribution here
@@ -877,6 +901,24 @@ export class ExecuteTaskUseCase {
         const repoEntry = project?.repositories?.[0];
         if (!repoEntry) {
           const message = 'Fetch distribution is required but the project has no repository configured';
+          this.appendLog(taskId, unitId, 'command', { type: 'fetch_distribution_failed', error: message });
+          await this.rollbackWindowAfterPostCreationFailure(taskId, server, tmuxSession, windowName, tokenId, 'fetch_distribution_prereq_failed_rollback');
+          throw new Error(message);
+        }
+
+        // Fail fast (Issue #87 review, 6th pass, Important finding 2):
+        // `repositories[0]` is a stand-in for "the project's repository", and
+        // that's only unambiguous when the project has EXACTLY one. There is
+        // no ordering guarantee on `project.repositories` and no mapping from
+        // a project server's working directory to a specific repository, so
+        // with 2+ repositories `[0]` may distribute a repository unrelated to
+        // `workingDir` (wrong code, or a failure because that repository
+        // happens to have no token). The correct permanent fix is to let each
+        // project server declare which repository it distributes (an explicit
+        // `repositoryId`), but that requires new persisted config and is out
+        // of scope here — this is the interim guard: refuse to guess.
+        if ((project?.repositories?.length ?? 0) > 1) {
+          const message = 'Fetch distribution is required but the project has multiple repositories configured — the distribution target cannot be determined unambiguously. Either reduce this project to a single repository, or disable distribution (server isolation intent / project distribute_code) for this task.';
           this.appendLog(taskId, unitId, 'command', { type: 'fetch_distribution_failed', error: message });
           await this.rollbackWindowAfterPostCreationFailure(taskId, server, tmuxSession, windowName, tokenId, 'fetch_distribution_prereq_failed_rollback');
           throw new Error(message);

@@ -39,7 +39,7 @@ export class BundleTransferError extends Error {
 }
 
 export class FetchDistributionService {
-  // Serializes `distribute()` runs per `${sshHost}:${homeDir}:${computeRepoHash(repoIdentity)}`
+  // Serializes `distribute()` runs per `${resolvedHostIdentity}:${homeDir}:${computeRepoHash(repoIdentity)}`
   // so two concurrent distributions that write the same shared mirror can't
   // race against each other (both would query its refs, build a bundle off
   // the same prerequisite, and could interleave their `fetch --atomic` into
@@ -61,6 +61,14 @@ export class FetchDistributionService {
   // and two rows that don't never contend for it. `homeDir` must therefore
   // be resolved BEFORE this lock is acquired (`distribute()` does this,
   // ahead of calling `distributeUnlocked()`), not inside the locked section.
+  //
+  // `resolvedHostIdentity` (not the raw `sshHost` string) is what actually
+  // goes into the key, via `resolveHostIdentityForLockKey()` below — see its
+  // doc comment (Issue #87 review, 6th pass, Important finding 3) for why
+  // the raw string alone under-serializes: SFTP resolves `sshHost` through
+  // SSH config/aliasing before connecting, so `host` and `host:22`, or two
+  // differently-spelled aliases for the same account, can share this exact
+  // mirror path while taking different raw-string lock keys.
   //
   // The hub runs as a single process, so an in-memory promise chain (no
   // DB-level lock needed) is sufficient — same pattern as
@@ -109,7 +117,39 @@ export class FetchDistributionService {
     private remoteBundleOps: RemoteBundleOps,
     private sftpService: SftpService,
     private distributionStateRepo: IDistributionStateRepository,
+    // Issue #87 review, 6th pass, Important finding 3: optional — resolves
+    // `sshHost` to its actual connection identity (host/port/username) for
+    // the lock key below, the same identity SFTP itself connects through
+    // (`SshClient.resolveHost`, via `~/.ssh/config` aliasing). Without this,
+    // the lock key was the RAW `sshHost` string, so `host` and `host:22`, or
+    // two differently-named `~/.ssh/config` aliases that resolve to the same
+    // host/port/user, took DIFFERENT lock keys while writing the SAME
+    // `<homeDir>/.azito/repos/<repoHash>.git` mirror — two concurrent forced
+    // fetches into that mirror could interleave and let an older delivery
+    // overwrite a newer one. Typed structurally (not `SshClient` itself) so
+    // this module doesn't need to construct or mock the real SSH stack;
+    // `wiring.ts` passes the hub's actual `SshClient`. `null` (e.g. in
+    // tests that don't care about alias collapsing) falls back to the raw
+    // string — see `resolveHostIdentityForLockKey()`.
+    private sshHostResolver: { resolveHost(hostStr: string): { host: string; port: number; username: string } } | null = null,
   ) {}
+
+  // Falls back to the raw `sshHost` string (prefixed so it can never collide
+  // with a resolved `host:port:username` triple) when no resolver is wired,
+  // or when resolution itself throws (e.g. an unparseable host spec) — the
+  // lock still behaves correctly for that single unresolved alias, it just
+  // won't collapse with an equivalent alias spelled differently. Keeping the
+  // same `<key>:<homeDir>:<repoHash>` shape either way is what the caller
+  // relies on (Issue #87 review, 6th pass, Important finding 3).
+  private resolveHostIdentityForLockKey(sshHost: string): string {
+    if (!this.sshHostResolver) return `raw:${sshHost}`;
+    try {
+      const resolved = this.sshHostResolver.resolveHost(sshHost);
+      return `${resolved.host}:${resolved.port}:${resolved.username}`;
+    } catch {
+      return `raw:${sshHost}`;
+    }
+  }
 
   async distribute(params: FetchDistributionParams): Promise<FetchDistributionResult> {
     const { server, transport, repoIdentity } = params;
@@ -120,7 +160,9 @@ export class FetchDistributionService {
 
     // Resolved BEFORE the outer lock is acquired — see `this.mutex`'s doc
     // comment above for why the lock key must be built from `sshHost` +
-    // `homeDir` + `repoHash` rather than `server.name`.
+    // `homeDir` + `repoHash` rather than `server.name`, and
+    // `resolveHostIdentityForLockKey`'s doc comment for why `sshHost` itself
+    // is normalized first.
     let homeDir: string;
     try {
       homeDir = await this.remoteBundleOps.resolveHomeDir(transport);
@@ -129,7 +171,8 @@ export class FetchDistributionService {
     }
 
     const repoHash = computeRepoHash(repoIdentity);
-    return this.mutex.withLock(`${sshHost}:${homeDir}:${repoHash}`, () =>
+    const hostIdentity = this.resolveHostIdentityForLockKey(sshHost);
+    return this.mutex.withLock(`${hostIdentity}:${homeDir}:${repoHash}`, () =>
       this.distributeUnlocked(params, sshHost, homeDir, repoHash));
   }
 

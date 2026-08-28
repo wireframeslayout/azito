@@ -2560,6 +2560,10 @@ function buildDistributionGateHarness(opts: {
   taskBranch?: string | null;
   /** Overrides task.baseBranch (default null, which resolveBaseBranch falls back to 'main' for). */
   taskBaseBranch?: string | null;
+  /** Issue #87 review, 6th pass, Important finding 1: set false to construct the
+   * use case WITHOUT a fetchDistributionService (mirrors an unwired hub) — for the
+   * "required but not wired" fail-fast test. Defaults true (normal gate/rollback tests). */
+  serviceWired?: boolean;
 }) {
   const unit = makeUnit({ id: 10, workerType: 'claude', workerModel: 'opus' });
   // task.workingDirectory (not projectServer.workingDirectory) supplies
@@ -2587,7 +2591,7 @@ function buildDistributionGateHarness(opts: {
     projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', distributeCode: opts.distributeCode },
     server: opts.server,
     repository: 'repository' in opts ? opts.repository : fetchDistributionRepository,
-    fetchDistributionService,
+    ...(opts.serviceWired === false ? {} : { fetchDistributionService }),
   });
   harness.worktreeServiceFactory.create.mockReturnValue({
     create: vi.fn(async () => ({ path: '/srv/repo/.worktrees/task-1', branch: 'task/1-slug' })),
@@ -2831,6 +2835,122 @@ describe('ExecuteTaskUseCase fetch-distribution required but no workingDir fail-
       server,
       distributeCode: false,
       taskWorkingDirectory: null,
+    });
+
+    await useCase.execute(10, 1);
+
+    expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+    expect(taskRepo.updateStatusIfWindowMatches).not.toHaveBeenCalled();
+  });
+});
+
+describe('ExecuteTaskUseCase fetch-distribution required-but-unwired fail-fast (Issue #87 review, 6th pass, Important finding 1)', () => {
+  it('fails fast when distribution is required (isolated server) but FetchDistributionService is not wired', async () => {
+    const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
+    const { useCase, taskRepo, tmux, paneEnvService, fetchDistributionService } = buildDistributionGateHarness({
+      server,
+      distributeCode: false,
+      serviceWired: false,
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/FetchDistributionService is not wired/);
+
+    expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed', 101);
+    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_prereq_failed_rollback');
+  });
+
+  it('fails fast when distribution is required (project distribute_code opt-in) but FetchDistributionService is not wired', async () => {
+    const server = makeServer({ name: 'srv-agent', type: 'agent', isolationIntent: false, sshHost: 'agent-host' });
+    const { useCase, taskRepo, fetchDistributionService } = buildDistributionGateHarness({
+      server,
+      distributeCode: true,
+      serviceWired: false,
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/FetchDistributionService is not wired/);
+
+    expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed', 101);
+  });
+
+  it('continues normally (no fail-fast, no distribute call) on a server where distribution is not required, even with FetchDistributionService unwired', async () => {
+    const server = makeServer({ name: 'srv-agent', type: 'agent', isolationIntent: false });
+    const { useCase, taskRepo, fetchDistributionService } = buildDistributionGateHarness({
+      server,
+      distributeCode: false,
+      serviceWired: false,
+    });
+
+    await useCase.execute(10, 1);
+
+    expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+    expect(taskRepo.updateStatusIfWindowMatches).not.toHaveBeenCalled();
+  });
+
+  it('continues normally on a local server even with FetchDistributionService unwired (local is never a distribution target)', async () => {
+    const server = makeServer({ name: 'local-server', type: 'local', isolationIntent: false });
+    const { useCase, taskRepo, fetchDistributionService } = buildDistributionGateHarness({
+      server,
+      distributeCode: true,
+      serviceWired: false,
+    });
+
+    await useCase.execute(10, 1);
+
+    expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+    expect(taskRepo.updateStatusIfWindowMatches).not.toHaveBeenCalled();
+  });
+});
+
+describe('ExecuteTaskUseCase fetch-distribution ambiguous-repository fail-fast (Issue #87 review, 6th pass, Important finding 2)', () => {
+  function projectWithTwoRepositories(): ProjectDetail {
+    return makeProject({
+      defaultUnitId: null,
+      repositories: [
+        { id: 5, name: null, url: fetchDistributionRepository.url, provider: 'github', owner: 'acme', repoName: 'widget', hasToken: true },
+        { id: 6, name: null, url: 'https://github.com/acme/other.git', provider: 'github', owner: 'acme', repoName: 'other', hasToken: true },
+      ],
+    });
+  }
+
+  it('fails fast when distribution is required and the project has more than one repository configured', async () => {
+    const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
+    const { useCase, taskRepo, tmux, paneEnvService, fetchDistributionService } = buildDistributionGateHarness({
+      server,
+      distributeCode: false,
+      project: projectWithTwoRepositories(),
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/multiple repositories configured/);
+
+    expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed', 101);
+    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_prereq_failed_rollback');
+  });
+
+  it('distributes normally when distribution is required and the project has exactly one repository configured', async () => {
+    const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
+    const { useCase, taskRepo, fetchDistributionService } = buildDistributionGateHarness({
+      server,
+      distributeCode: false,
+      project: projectWithFetchDistributionRepository(),
+    });
+
+    await useCase.execute(10, 1);
+
+    expect(fetchDistributionService.distribute).toHaveBeenCalledTimes(1);
+    expect(taskRepo.updateStatusIfWindowMatches).not.toHaveBeenCalled();
+  });
+
+  it('does not fail fast on multiple repositories when distribution is not required', async () => {
+    const server = makeServer({ name: 'srv-agent', type: 'agent', isolationIntent: false });
+    const { useCase, taskRepo, fetchDistributionService } = buildDistributionGateHarness({
+      server,
+      distributeCode: false,
+      project: projectWithTwoRepositories(),
     });
 
     await useCase.execute(10, 1);

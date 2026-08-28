@@ -766,3 +766,142 @@ describe('FetchDistributionService', () => {
     });
   });
 });
+
+// Issue #87 review, 6th pass, Important finding 3: the outer lock's key
+// used to be built from the RAW `sshHost` string. SFTP resolves `sshHost`
+// through SSH config/aliasing before connecting, so two spellings that
+// resolve to the exact same host/port/username connect to (and write) the
+// exact same on-disk mirror while taking DIFFERENT raw-string lock keys —
+// letting two forced `fetch --atomic` calls race the same mirror. Passing a
+// `sshHostResolver` (the optional 5th constructor arg) normalizes the key
+// through resolution first.
+describe('FetchDistributionService lock key host normalization (Issue #87 review, 6th pass, Important finding 3)', () => {
+  // Minimal stand-in for SshClient.resolveHost: parses `user@host[:port]`,
+  // defaulting the port to 22 when omitted — enough to prove `host` and
+  // `host:22` collapse to the same identity without pulling in the real
+  // SSH/config-file stack.
+  function fakeResolveHost(hostStr: string): { host: string; port: number; username: string } {
+    const [username, rest] = hostStr.split('@');
+    const [host, portStr] = rest.split(':');
+    return { host, port: portStr ? parseInt(portStr, 10) : 22, username };
+  }
+  const sshHostResolver = { resolveHost: vi.fn(fakeResolveHost) };
+
+  it('serializes two distribute() calls whose sshHost strings differ but resolve to the same host/port/username', async () => {
+    const order: string[] = [];
+    let releaseA!: () => void;
+    const gateA = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+
+    let call = 0;
+    const sftpService = {
+      upload: vi.fn(async () => {
+        call += 1;
+        if (call === 1) {
+          order.push('a-start');
+          await gateA;
+          order.push('a-end');
+        } else {
+          order.push('b-start');
+        }
+      }),
+    };
+
+    const service = new FetchDistributionService(
+      mockHubRepoCache(), mockRemoteBundleOps(), sftpService as any, mockDistRepo(), sshHostResolver,
+    );
+
+    // 'user@host' (implicit port 22) and 'user@host:22' (explicit) resolve
+    // to the identical { host: 'host', port: 22, username: 'user' } triple.
+    const a = service.distribute(makeParams({ server: makeServer({ name: 'alias-a', sshHost: 'user@host' }) }));
+    await flushAsync();
+
+    const b = service.distribute(makeParams({ server: makeServer({ name: 'alias-b', sshHost: 'user@host:22' }) }));
+    await flushAsync();
+
+    // `b` must not have started yet — it is queued behind `a` because both
+    // resolve to the same normalized host identity.
+    expect(order).toEqual(['a-start']);
+
+    releaseA();
+    await Promise.all([a, b]);
+    expect(order).toEqual(['a-start', 'a-end', 'b-start']);
+  });
+
+  it('does not serialize two distribute() calls whose sshHost strings resolve to different hosts', async () => {
+    const order: string[] = [];
+    let releaseA!: () => void;
+    const gateA = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+
+    let call = 0;
+    const sftpService = {
+      upload: vi.fn(async () => {
+        call += 1;
+        if (call === 1) {
+          order.push('a-start');
+          await gateA;
+          order.push('a-end');
+        } else {
+          order.push('b-start');
+        }
+      }),
+    };
+
+    const service = new FetchDistributionService(
+      mockHubRepoCache(), mockRemoteBundleOps(), sftpService as any, mockDistRepo(), sshHostResolver,
+    );
+
+    const a = service.distribute(makeParams({ server: makeServer({ name: 'server-a', sshHost: 'user@host-a' }) }));
+    await flushAsync();
+
+    const b = service.distribute(makeParams({ server: makeServer({ name: 'server-b', sshHost: 'user@host-b' }) }));
+    await b;
+
+    expect(order).toEqual(['a-start', 'b-start']);
+
+    releaseA();
+    await a;
+    expect(order).toEqual(['a-start', 'b-start', 'a-end']);
+  });
+
+  it('falls back to the raw sshHost string (still serializing same-spelling calls) when no resolver is provided', async () => {
+    const order: string[] = [];
+    let releaseA!: () => void;
+    const gateA = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+
+    let call = 0;
+    const sftpService = {
+      upload: vi.fn(async () => {
+        call += 1;
+        if (call === 1) {
+          order.push('a-start');
+          await gateA;
+          order.push('a-end');
+        } else {
+          order.push('b-start');
+        }
+      }),
+    };
+
+    // No 5th constructor arg — mirrors the pre-fix behavior / any caller
+    // (e.g. a test) that doesn't care about alias collapsing.
+    const service = new FetchDistributionService(mockHubRepoCache(), mockRemoteBundleOps(), sftpService as any, mockDistRepo());
+
+    const a = service.distribute(makeParams({ server: makeServer({ name: 'server-a', sshHost: 'user@same-host' }) }));
+    await flushAsync();
+
+    const b = service.distribute(makeParams({ server: makeServer({ name: 'server-b', sshHost: 'user@same-host' }) }));
+    await flushAsync();
+
+    expect(order).toEqual(['a-start']);
+
+    releaseA();
+    await Promise.all([a, b]);
+    expect(order).toEqual(['a-start', 'a-end', 'b-start']);
+  });
+});
