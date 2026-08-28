@@ -2763,6 +2763,30 @@ describe('ExecuteTaskUseCase fetch-distribution stale-local-branch fail-fast (Is
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_stale_local_branch_rollback');
   });
 
+  // Issue #87 third-party review, 9th round, Important finding 1: the API
+  // boundary (tasks/routes.ts validateGitFields) now rejects newly-submitted
+  // `refs/heads/...` branch names, but this guard must ALSO normalize before
+  // comparing (defense in depth) so a fully-qualified ref that reaches it
+  // through some other path — pre-existing data, a call site the boundary
+  // doesn't cover — cannot evade the fail-fast the same way the raw
+  // `task.branch === baseBranch` string comparison used to.
+  it('fails fast when localBranchSynced is false and task.branch is the fully-qualified ref form of the distributed baseBranch (refs/heads/main vs main)', async () => {
+    const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
+    const { useCase, taskRepo, tmux, paneEnvService, fetchDistributionService } = buildDistributionGateHarness({
+      server,
+      distributeCode: false,
+      taskBranch: 'refs/heads/main',
+      distributeResult: { status: 'distributed', sha: 'abc123', bundleType: 'full', localBranchSynced: false },
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/could not be updated to the distributed content/);
+
+    expect(fetchDistributionService.distribute).toHaveBeenCalledTimes(1);
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed', 101);
+    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_stale_local_branch_rollback');
+  });
+
   it('does NOT fail fast when localBranchSynced is false but task.branch names a different (user work) branch', async () => {
     const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
     const { useCase, taskRepo, fetchDistributionService } = buildDistributionGateHarness({

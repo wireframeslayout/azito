@@ -18,6 +18,7 @@ import type { KeyedMutex } from '../../../shared/keyedMutex';
 import type { IWorktreeService, WorktreeInfo } from '../../git/IWorktreeService';
 import type { WorktreeServiceFactory } from '../../git/WorktreeServiceFactory';
 import { PathResolverFactory, assertDirectoryContained } from '../../git/PathContainment';
+import { normalizeBranchRef } from '../../git/assertSafeGitArgs';
 import type { GitProviderService } from '../../git/providers/GitProviderService';
 import type { ProjectRepositoryWithToken as ProjectRepository } from '../../projects/Project';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
@@ -989,7 +990,19 @@ export class ExecuteTaskUseCase {
         // the stale local ref (verified: `git worktree add <path> main`
         // fails with "already used by worktree" while `git worktree add
         // --force <path> main` succeeds against the same stale ref).
-        if (distResult.localBranchSynced === false && task.branch && task.branch === baseBranch) {
+        // Compare via normalizeBranchRef, not raw string equality: the API
+        // boundary (tasks/routes.ts validateGitFields) now rejects new
+        // fully-qualified refs (e.g. `refs/heads/main`), but this is a
+        // second, independent layer against that same evasion — pre-existing
+        // data or another write path could still put a full ref in
+        // task.branch, and `refs/heads/main` is semantically the same branch
+        // as `main` for this guard's purposes either way (Issue #87
+        // third-party review, 9th round, Important finding 1).
+        if (
+          distResult.localBranchSynced === false &&
+          task.branch &&
+          normalizeBranchRef(task.branch) === normalizeBranchRef(baseBranch)
+        ) {
           const message = `Fetch distribution succeeded but the local branch "${task.branch}" in ${workingDir} could not be updated to the distributed content — it is likely checked out in another worktree on the server. Remove or update that worktree, or specify a different branch name for this task, and retry.`;
           this.appendLog(taskId, unitId, 'command', { type: 'fetch_distribution_failed', error: message });
           await this.rollbackWindowAfterPostCreationFailure(taskId, server, tmuxSession, windowName, tokenId, 'fetch_distribution_stale_local_branch_rollback');

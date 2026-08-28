@@ -25,9 +25,10 @@ Whether distribution runs for a given task is decided per-server at execution ti
 
 The distribution option for non-isolated servers is a toggle in Settings -> Project -> Servers, in
 the add/edit form for a project server, right below the working directory field (default off).
-This is meant for setups where the hub itself carries no dev environment (no git credentials, no
-cloned code) — development happens entirely on the agent server, and the hub is used only for its
-own functions (task execution, monitoring, etc.).
+This is meant for setups where the hub itself carries no dev environment — no working checkout, no
+local dev toolchain — even though it still holds the project's git credentials (it needs them to
+fetch on the repository's behalf). Development happens entirely on the agent server, and the hub is
+used only for its own functions (task execution, monitoring, etc.).
 
 Either way, distribution requires SSH. Even for an `agent`-type server, distribution needs SSH
 connection details (`sshHost`, etc.) configured for SFTP transfer. Distributing to a server that

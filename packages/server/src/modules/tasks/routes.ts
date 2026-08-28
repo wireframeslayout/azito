@@ -16,7 +16,7 @@ import type { IWindowRepository } from '../windows/Window';
 import type { WindowRespawnService } from '../windows/WindowRespawnService';
 import type { TaskRestoreService } from './TaskRestoreService';
 import { TaskCleanupService } from './TaskCleanupService';
-import { SAFE_PATH_PATTERN, SAFE_BRANCH_PATTERN } from '../git/assertSafeGitArgs';
+import { SAFE_PATH_PATTERN, SAFE_BRANCH_PATTERN, isFullyQualifiedRef } from '../git/assertSafeGitArgs';
 import { resolveTaskServerName, resolveTmuxSession, resolveUnitId } from './execution/TaskExecutionEnv';
 import type { KillOutcome } from '../tmux/killOutcome';
 import type { ExecResult } from '../servers/transport/ServerTransport';
@@ -47,10 +47,18 @@ function parseSubagentConfigInput(raw: unknown, fieldName: string): SubagentConf
   return { enabled: obj['enabled'], provider: obj['provider'], model: obj['model'] };
 }
 
-function validateGitFields(body: Record<string, unknown>): string | null {
+export function validateGitFields(body: Record<string, unknown>): string | null {
   for (const key of ['base_branch', 'branch', 'target_branch'] as const) {
     const v = body[key];
-    if (v != null && v !== '' && (typeof v !== 'string' || !SAFE_BRANCH_PATTERN.test(v))) return `Invalid ${key}`;
+    if (v == null || v === '') continue;
+    if (typeof v !== 'string' || !SAFE_BRANCH_PATTERN.test(v)) return `Invalid ${key}`;
+    // Reject fully-qualified refs (e.g. `refs/heads/main`): SAFE_BRANCH_PATTERN
+    // allows them (slashes are legitimate in branch names like `feature/x`),
+    // but a full ref bypasses branch-name equality checks downstream (e.g.
+    // ExecuteTaskUseCase's stale-local-branch guard) and resolves differently
+    // in `git worktree add` than a plain branch name (Issue #87 third-party
+    // review, 9th round, Important finding 1).
+    if (isFullyQualifiedRef(v)) return `Invalid ${key}: fully-qualified ref names (refs/...) are not allowed, specify a plain branch name`;
   }
   for (const key of ['working_directory', 'worktree_path'] as const) {
     const v = body[key];
