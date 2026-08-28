@@ -334,31 +334,73 @@ export class TaskRestoreService {
       let effectiveDir = workingDir;
 
       let worktreeBranch: string | null = null;
-      let baseBranch: string | null = null;
+
+      if (task.workingDirectory && allowedRoot) {
+        const transportForCheck = transportFactory.getTransport(server);
+        // Resolved (symlink-free) path is what gets used below, not the
+        // original task.workingDirectory — closes the same TOCTOU window
+        // ExecuteTaskUseCase closes (Issue #27 review finding 2).
+        workingDir = await assertDirectoryContained(
+          this.pathResolverFactory, server.type, transportForCheck, { target: task.workingDirectory, allowedRoot }, 'task working directory',
+        );
+        effectiveDir = workingDir;
+      }
+
+      // Canonicalized the same way ExecuteTaskUseCase.execute() and
+      // resolveExecutionManifest() both do (see `canonicalizeBaseBranch`'s
+      // doc comment in TaskExecutionEnv.ts) — restore resolves
+      // `baseBranch` independently of the manifest it builds above (for
+      // the actual worktree creation call below, not for hashing), so
+      // without this it could still create the worktree from an
+      // `origin/`- or `refs/heads/`-qualified value even though the
+      // approved manifest's `branches.base` (ExecutionManifest.ts) records
+      // the canonicalized one (Issue #87 third-party review, 12th round,
+      // Important finding 3).
+      const baseBranch: string = canonicalizeBaseBranch(resolveBaseBranch(task, projectServer, project));
+
+      // Fetch distribution (Issue #87 13th-round review, Important finding 1;
+      // 14th-round review, Important finding 1): restoring an archived task
+      // recreates its worktree from `workingDir` exactly like execute() does,
+      // so it needs the SAME pre-worktree-creation distribution check — and,
+      // like ExecuteTaskUseCase.execute(), that check must run
+      // UNCONDITIONALLY, not only when `workingDir` happens to be set.
+      // performDistribution() itself fails fast with stage `no_working_dir`
+      // when distribution is required (isolated server / distribute_code)
+      // but no working directory is configured — nesting this call inside
+      // `if (workingDir)` skipped that fail-fast entirely and opened the
+      // task window anyway on a server/project that should never run a task
+      // without distributing code first. Rollback here follows this
+      // function's own existing convention (the outer try/catch below
+      // already rolls back the tmux window/token; `worktreePath`+`repoDir`
+      // are not set yet at this point, so throwing is sufficient).
+      const distOutcome: DistributionOutcome = await performDistribution({
+        server,
+        projectServer,
+        project,
+        workingDir,
+        baseBranch,
+        taskBranch: task.branch,
+        transportFactory,
+        projectRepo,
+        fetchDistributionService,
+      });
+      if (distOutcome.required && !distOutcome.ok) {
+        if (unitId !== null) {
+          appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'fetch_distribution_failed', error: distOutcome.message });
+        }
+        throw new Error(`Fetch distribution failed: ${distOutcome.message}`);
+      }
+      if (distOutcome.required) {
+        if (unitId !== null) {
+          appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'fetch_distributed', sha: distOutcome.sha, bundleType: distOutcome.bundleType });
+        }
+      }
+      const distStatus: 'distributed' | 'already_current' | null = distOutcome.required ? distOutcome.distStatus : null;
 
       if (workingDir) {
-        if (task.workingDirectory && allowedRoot) {
-          const transportForCheck = transportFactory.getTransport(server);
-          // Resolved (symlink-free) path is what gets used below, not the
-          // original task.workingDirectory — closes the same TOCTOU window
-          // ExecuteTaskUseCase closes (Issue #27 review finding 2).
-          workingDir = await assertDirectoryContained(
-            this.pathResolverFactory, server.type, transportForCheck, { target: task.workingDirectory, allowedRoot }, 'task working directory',
-          );
-        }
-
         repoDir = workingDir;
-        // Canonicalized the same way ExecuteTaskUseCase.execute() and
-        // resolveExecutionManifest() both do (see `canonicalizeBaseBranch`'s
-        // doc comment in TaskExecutionEnv.ts) — restore resolves
-        // `baseBranch` independently of the manifest it builds above (for
-        // the actual worktree creation call below, not for hashing), so
-        // without this it could still create the worktree from an
-        // `origin/`- or `refs/heads/`-qualified value even though the
-        // approved manifest's `branches.base` (ExecutionManifest.ts) records
-        // the canonicalized one (Issue #87 third-party review, 12th round,
-        // Important finding 3).
-        baseBranch = canonicalizeBaseBranch(resolveBaseBranch(task, projectServer, project));
+        const worktreeCreateBaseBranch = resolveWorktreeCreateBaseBranch(baseBranch, distStatus);
+
         // task.branch first (Issue #328 review round, fix 1): the approval
         // manifest's `branches.work` field (ExecutionManifest.ts) hashes
         // `task.branch` — the client-specified value — not `worktreeBranch`.
@@ -385,44 +427,6 @@ export class TaskRestoreService {
         const rawBranch = task.branch || task.worktreeBranch || undefined;
         const branch = rawBranch ? normalizeBranchRef(rawBranch) : undefined;
         const slug = branch ? `task-${task.id}` : await contentExtractor.generateSlug(task.title);
-
-        // Fetch distribution (Issue #87 13th-round review, Important finding
-        // 1): restoring an archived task recreates its worktree from
-        // `workingDir` exactly like execute() does, so it needs the SAME
-        // pre-worktree-creation distribution check — without this, an
-        // isolated server or a distribute_code project server restored a
-        // task's worktree from whatever local content already happened to be
-        // at `workingDir`, which could be old/stale code (or none at all).
-        // Shared prerequisite-check-and-distribute logic lives in
-        // performDistribution() (DistributionHelper.ts); rollback here
-        // follows this function's own existing convention (the outer
-        // try/catch below already rolls back the tmux window/token and, once
-        // `worktreePath`+`repoDir` are set, the worktree itself — neither is
-        // set yet at this point, so throwing is sufficient).
-        const distOutcome: DistributionOutcome = await performDistribution({
-          server,
-          projectServer,
-          project,
-          workingDir,
-          baseBranch,
-          taskBranch: task.branch,
-          transportFactory,
-          projectRepo,
-          fetchDistributionService,
-        });
-        if (distOutcome.required && !distOutcome.ok) {
-          if (unitId !== null) {
-            appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'fetch_distribution_failed', error: distOutcome.message });
-          }
-          throw new Error(`Fetch distribution failed: ${distOutcome.message}`);
-        }
-        if (distOutcome.required) {
-          if (unitId !== null) {
-            appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'fetch_distributed', sha: distOutcome.sha, bundleType: distOutcome.bundleType });
-          }
-        }
-        const distStatus: 'distributed' | 'already_current' | null = distOutcome.required ? distOutcome.distStatus : null;
-        const worktreeCreateBaseBranch = resolveWorktreeCreateBaseBranch(baseBranch, distStatus);
 
         const transport = transportFactory.getTransport(server);
         const worktreeService = worktreeServiceFactory.create(server.type, transport);

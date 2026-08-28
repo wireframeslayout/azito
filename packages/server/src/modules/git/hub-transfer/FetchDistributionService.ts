@@ -552,6 +552,21 @@ export class FetchDistributionService {
       await this.remoteBundleOps.fetchWorkingDirFromMirror(transport, mirrorDir, workingDir, branch);
     } else {
       await this.remoteBundleOps.cloneWorkingDirFromMirror(transport, mirrorDir, workingDir, branch);
+      // Dummy origin is set BEFORE stamping (Issue #87 14th-round review,
+      // Important finding 2): `git clone` leaves `origin` pointed at the
+      // local `mirrorDir` path. If `stampRepoHash` below fails partway
+      // through post-clone init, a naive clone-then-stamp order left
+      // `workingDir` permanently unrecoverable — unstamped, with `origin`
+      // reading as neither `DUMMY_ORIGIN_URL` nor a real upstream URL, so
+      // every future retry's `verifyUnstampedIdentity` (outcome 3 in this
+      // method's doc comment) fails closed forever and requires manual
+      // cleanup. Setting the dummy origin FIRST means that even if stamping
+      // then fails, the next retry's `verifyUnstampedIdentity` sees outcome
+      // 1 (`origin` already the dummy sentinel), stamps, and proceeds
+      // normally — no manual intervention needed. `setDummyOrigin` is
+      // idempotent, so calling it again at the end of this method (below)
+      // for the already-set case is harmless.
+      await this.remoteBundleOps.setDummyOrigin(transport, workingDir);
       // Brand-new clone: nothing to verify, nothing pre-existing to protect.
       await this.remoteBundleOps.stampRepoHash(transport, workingDir, repoHash);
     }

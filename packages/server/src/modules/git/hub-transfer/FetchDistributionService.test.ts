@@ -1219,6 +1219,62 @@ describe('FetchDistributionService workingDir repoHash stamp verification (Issue
     expect(remoteBundleOps.getStampedRepoHash).not.toHaveBeenCalled();
     expect(remoteBundleOps.stampRepoHash).toHaveBeenCalledWith({}, '/home/agent/repo', repoHash);
   });
+
+  // Issue #87 14th-round review, Important finding 2: a brand-new clone used
+  // to stamp BEFORE setting the dummy origin. If stampRepoHash then failed
+  // (transient error), workingDir was left unstamped with origin still
+  // pointing at the local mirror path — neither the dummy sentinel nor a
+  // real upstream URL — so every future retry's verifyUnstampedIdentity
+  // failed closed forever. Fix: set the dummy origin FIRST.
+  it('sets the dummy origin BEFORE stamping a brand-new clone', async () => {
+    const remoteBundleOps = mockRemoteBundleOps({
+      getMirrorBranchSha: vi.fn(async () => null),
+      repoExists: vi.fn(async () => false),
+    });
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    await service.distribute(makeParams());
+
+    expect(remoteBundleOps.setDummyOrigin).toHaveBeenCalled();
+    expect(remoteBundleOps.stampRepoHash).toHaveBeenCalled();
+    const dummyOriginOrder = remoteBundleOps.setDummyOrigin.mock.invocationCallOrder[0];
+    const stampOrder = remoteBundleOps.stampRepoHash.mock.invocationCallOrder[0];
+    expect(dummyOriginOrder).toBeLessThan(stampOrder);
+  });
+
+  // Counterpart: if post-clone stamping fails partway through, the NEXT
+  // distribute() attempt (workingDir now `repoExists`, unstamped) must be
+  // recoverable — because setDummyOrigin already ran on the failed attempt,
+  // origin already reads as the dummy sentinel, so verifyUnstampedIdentity's
+  // outcome-1 branch accepts it and the retry proceeds/re-stamps normally,
+  // instead of failing closed forever.
+  it('is recoverable on retry when post-clone stamping fails: origin already reads as the dummy sentinel', async () => {
+    const remoteBundleOps = mockRemoteBundleOps({
+      getMirrorBranchSha: vi.fn(async () => null),
+      repoExists: vi.fn(async () => false),
+      stampRepoHash: vi.fn(async () => { throw new Error('transient stamp failure'); }),
+    });
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+
+    const failedResult = await service.distribute(makeParams());
+    expect(failedResult.status).toBe('failed');
+    // setDummyOrigin already ran before the failing stamp call — origin is
+    // left as the dummy sentinel, not the local mirror path.
+    expect(remoteBundleOps.setDummyOrigin).toHaveBeenCalled();
+
+    // Retry: workingDir now exists, unstamped, origin === DUMMY_ORIGIN_URL.
+    const retryOps = mockRemoteBundleOps({
+      getMirrorBranchSha: vi.fn(async () => sha),
+      repoExists: vi.fn(async () => true),
+      getStampedRepoHash: vi.fn(async () => null),
+      getOriginUrl: vi.fn(async () => DUMMY_ORIGIN_URL),
+    });
+    const retryService = new FetchDistributionService(mockHubRepoCache(), retryOps, mockSftpService(), mockDistRepo());
+    const retryResult = await retryService.distribute(makeParams());
+
+    expect(retryResult.status).toBe('already_current');
+    expect(retryOps.stampRepoHash).toHaveBeenCalledWith({}, '/home/agent/repo', repoHash);
+    expect(retryOps.fetchWorkingDirFromMirror).toHaveBeenCalled();
+  });
 });
 
 describe('FetchDistributionService unstamped-workingDir identity verification (Issue #87 third-party review, 11th round, Important finding 2)', () => {

@@ -121,6 +121,18 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       // (Issue #87 third-party review, 11th round, Important finding 1).
       // Empty string clears the field (falls back to 'main' downstream) and
       // is intentionally exempt, same as the task-side check.
+      // Issue #87 14th-round review, Minor finding 3: the destructured
+      // `default_branch?: string` annotation above is a compile-time
+      // assertion only — a JSON body can still send a non-string (e.g.
+      // `123` or `true`), which is truthy and reaches
+      // `rejectQualifiedBranchInput`'s `value.startsWith(...)` call
+      // uncaught, turning a validation failure into a 500. Reject
+      // non-string, non-nullish values with 400 before that call, matching
+      // `validateGitFields`'s `typeof v !== 'string'` guard in
+      // tasks/routes.ts.
+      if (default_branch !== undefined && default_branch !== null && typeof default_branch !== 'string') {
+        return reply.status(400).send({ error: 'Invalid default_branch: must be a string' });
+      }
       if (default_branch) {
         const reason = rejectQualifiedBranchInput(default_branch);
         if (reason) return reply.status(400).send({ error: `Invalid default_branch: ${reason}` });
@@ -248,6 +260,14 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       // when the key is present AND non-empty (matches the "key absent
       // preserves, explicit null/'' clears" semantics this handler already
       // uses for this field).
+      // Issue #87 14th-round review, Minor finding 3: `body.branch` above is
+      // typed `string | null` only at compile time — a JSON body can still
+      // send e.g. `true`, which is truthy and would otherwise reach
+      // `rejectQualifiedBranchInput`'s `value.startsWith(...)` call
+      // uncaught, turning a validation failure into a 500.
+      if ('branch' in body && body.branch !== undefined && body.branch !== null && typeof body.branch !== 'string') {
+        return reply.status(400).send({ error: 'Invalid branch: must be a string' });
+      }
       if ('branch' in body && body.branch) {
         const reason = rejectQualifiedBranchInput(body.branch);
         if (reason) return reply.status(400).send({ error: `Invalid branch: ${reason}` });

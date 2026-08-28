@@ -151,6 +151,23 @@ describe('PUT /api/projects/:id — default_branch input validation (Issue #87 t
     expect(res.statusCode).toBe(200);
   });
 
+  it('rejects a non-string default_branch (400, not a 500 crash) — Issue #87 14th-round review, Minor finding 3', async () => {
+    const opts = makeOpts();
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10',
+      payload: { default_branch: 123 },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/default_branch/);
+    expect(opts.projectRepo.update).not.toHaveBeenCalled();
+  });
+
   it('does not run this new check against an already-stored value when default_branch is omitted from the request', async () => {
     // Pre-existing data saved before this check existed (e.g. 'origin/main')
     // must keep working — this is an input-boundary check only.
@@ -245,5 +262,22 @@ describe('PUT /api/projects/:id/servers/:serverName — branch input validation 
     });
 
     expect(res.statusCode).toBe(200);
+  });
+
+  it('rejects a non-string branch (400, not a 500 crash) — Issue #87 14th-round review, Minor finding 3', async () => {
+    const opts = makeOpts();
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10/servers/test-server',
+      payload: { branch: true },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/branch/);
+    expect(opts.projectServerRepo.upsert).not.toHaveBeenCalled();
   });
 });
