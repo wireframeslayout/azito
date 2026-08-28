@@ -113,6 +113,7 @@ npm run dev
 | [インストールとアップデート](./install-and-update.md) | リリース版の導入手順、設定ファイルの場所、Tailscale 経由のアクセス、更新とロールバック |
 | [セキュリティ設定・環境構築ガイド](./security-setup.md) | 必須の環境変数、既存環境の移行手順、新規環境の構築手順、Tailscale 設定、トラブルシューティング |
 | [隔離実行プロファイル](./isolated-execution.md) | 外部入力タスクを資格情報の無いサーバーで実行する隔離実行（3層モデル、isolation doctor、allow ポリシー、ネットワーク隔離） |
+| [コード配信](./code-distribution.md) | hub 代行によるコード配信（bare mirror・bundle 転送・増分配信）、隔離サーバー以外への適用 |
 | [ワークスペースガイド](./workspace.md) | レイアウト、サイドバー、タブ管理、ナビゲーション |
 | [プッシュ通知セットアップ](./push-notifications.md) | Tailscale を使った PWA プッシュ通知の有効化 |
 | [ファイルストレージガイド](./storage.md) | MinIO のセットアップとファイル管理 |

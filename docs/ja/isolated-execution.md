@@ -329,7 +329,14 @@ IPv6）のホストファイアウォールが別途必要です。Tailscale 使
    への DNS。ここを塞ぐと隔離サーバーは tailnet に接続できなくなり、hub からの inbound 制御経路
    自体も失われます）
 
-inbound は hub からの `agentPort` のみを許可します。
+inbound は hub からの `agentPort` に加えて、hub からの SSH（既定 22 番、またはそのサーバーに
+実際に設定しているポート）を許可します。後者は隔離サーバー自体には push 資格情報を置かない
+一方で、**hub → サーバーへのコード配信（[コード配信](./code-distribution.md)、SFTP による
+bundle 転送）が動作するために必須**です。SFTP は SSH のサブシステムであり、SSH デーモンへの
+inbound 到達なしには機能しません。この行を追加しても、outbound を絞る（横移動の踏み台にしない）
+という隔離の趣旨は変わりません — 許可するのは「hub からサーバーへの一方向の SSH」だけで、
+サーバーから他ノードへの SSH（横移動の主経路）は前項の tailnet ACL・本項の要件表いずれでも
+引き続き遮断対象です。
 
 **Tailscale が管理する netfilter チェーンを壊さないこと**: Linux 版 `tailscaled` は自身の
 netfilter チェーン（`ts-input`/`ts-forward` 等）を作成し、`INPUT`/`FORWARD` チェインの先頭に
@@ -359,6 +366,7 @@ netfilter チェーン（`ts-input`/`ts-forward` 等）を作成し、`INPUT`/`F
 | OUTPUT | 自ホスト（loopback） | any | 許可 | 同上 |
 | INPUT/OUTPUT | - | established/related | 許可 | 応答パケットを通すため両方向に必要 |
 | INPUT | hub の tailscale IP | TCP `<agent-port>` | 許可 | hub がコマンド実行・ターミナル・doctor プローブのために接続してくる経路 |
+| INPUT | hub の tailscale IP | TCP `<ssh-port>`（既定22） | 許可 | hub がコード配信（SFTP による bundle 転送）のために接続してくる経路。[コード配信](./code-distribution.md)参照 |
 | OUTPUT | hub の tailscale IP | TCP `<hub-webhook-port>` | 許可 | hook スクリプトが agent-done/agent-activity を POST する経路 |
 | OUTPUT | coordination server / DERP | TCP 443 | 許可 | `tailscaled` の underlay。公式要件を参照 |
 | OUTPUT | DERP/STUN | UDP（公式要件のポート） | 許可 | `tailscaled` の direct connection 確立・DERP リレー |
@@ -438,19 +446,28 @@ curl -v <hub-webhook-url>             # 隔離サーバー -> hub の webhook �
 現時点ではいずれも手動運用です。isolation doctor の9 check（3節）には tailnet ACL・ホスト
 ファイアウォールいずれの検証も含まれていません。
 
-## 7. 隔離タスクの pushing は当面 operator 責務
+## 7. 隔離タスクの pushing は hub 代行 push（#87）
 
 隔離サーバーには push 資格情報（gh 認証、SSH 鍵、git credential helper）を一切配置しない
-構成が前提のため、`PhaseLoopRunner` は `isolationIntent: true` のサーバー上で実行される
-タスクについて、Unit の `phaseConfig` に `pushing` フェーズ（`pushVerify` フラグを持つフェーズ）
-が含まれていても**自動的にスキップ**します。実行ログに `pushing_skipped_isolated` として
-記録され、他の全フェーズが正常完了していれば testing 終端と同じ扱いでタスクは `review` へ
-遷移します。コミット・プッシュ・PR 作成は operator が手動で行ってください。
+構成が前提です。Issue #87 でこの制約を維持したまま push を成立させる **hub 代行 push（push
+notarization）** が実装されました: `PhaseLoopRunner` は `pushing` フェーズ（`pushVerify` フラグ
+を持つフェーズ）に到達すると、通常どおりワーカーにコミットまで行わせますが、実際の `git push`
+はワーカーにやらせず、`PushNotaryService` がワーカーの worktree から bundle を作成して SFTP で
+ハブへ取得し、ハブ側で hub が保持する当該リポジトリの `project_repositories.token`（プロジェクト
+設定の資格情報）を使って push します。push 後にプロバイダ API 経由で反映を検証し（期待した SHA
+と一致するか）、PR 未作成なら続けて作成します。隔離サーバー自身は push 用の SHA/bundle 以外の
+何も持ち出さず、gh 認証や SSH 鍵に相当するものを一度も受け取りません。
 
-ハブが隔離タスクに代わって push を代行する正式サポートは **#87** で計画中です（隔離サーバーへ
-push 専用の限定資格情報を配布する設計を検討中）。それまでは、隔離サーバー上のタスクに
-`pushing` フェーズを含む Unit を割り当てても安全側にスキップされますが、意図が明確になるよう
-`pushing` を含まない Unit を割り当てることを推奨します。
+hub 代行 push が成立しない場合（`PushNotaryService` が配線されていない、または対象リポジトリに
+push 用トークンが設定されていない）は、`pushing` フェーズは**自動的にスキップ**されます。実行
+ログに `pushing_skipped_isolated`（サービス未配線）または `hub_push_skipped`（トークン未設定・
+worktree/branch 不明）として記録され、他の全フェーズが正常完了していれば testing 終端と同じ扱い
+でタスクは `review` へ遷移します。この場合はコミット・プッシュ・PR 作成を operator が手動で
+行ってください。
+
+これは隔離サーバー限定の挙動です — 非隔離サーバー向けの `distribute_code` opt-in（[コード配信](
+./code-distribution.md)参照）は、コードを**取得する**ための仕組みであり、pushing フェーズの
+動作は変えません。
 
 また、browser-ops など operator 権限を要する機能（CDP ブラウザ経由の操作など）についても、
 隔離サーバー上のタスクからの利用は現状のアーキテクチャ上想定されていません（operator 相当の
@@ -460,3 +477,4 @@ push 専用の限定資格情報を配布する設計を検討中）。それま
 
 - [セキュリティ設定・環境構築ガイド](./security-setup.md) -- 主体分離（operator/task）、scoped auth の有効化手順
 - [タスク管理ガイド](./tasks.md) -- タスクの実行フロー、フェーズループ
+- [コード配信](./code-distribution.md) -- hub 代行によるコード配信の仕組み（bare mirror・bundle 転送・増分配信）、隔離サーバー以外への適用

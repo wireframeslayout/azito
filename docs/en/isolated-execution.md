@@ -340,7 +340,15 @@ tcp/22 — along with any unrelated egress. "Bare minimum" means exactly these t
    and DNS to a configured resolver. Blocking this cuts the isolated server off from the tailnet
    entirely, which also destroys the hub's inbound control path)
 
-Inbound should allow only the hub reaching this server's `agentPort`.
+Inbound should allow the hub reaching this server's `agentPort`, plus the hub reaching this
+server's SSH port (default 22, or whatever port it is actually configured on). The isolated server
+still holds no push credentials of its own, but that inbound SSH is **required for the hub to
+distribute code to it** ([Code Distribution](./code-distribution.md): SFTP-based bundle transfer).
+SFTP is an SSH subsystem, so it cannot work without inbound reachability to the SSH daemon. Adding
+this line does not weaken the isolation intent (limiting outbound so the server can't be used as a
+lateral-movement stepping stone) — it only opens one-way SSH from the hub to the server; SSH from
+the server to any other node (the main lateral-movement path) is still blocked by both the tailnet
+ACL above and this firewall's requirement table below.
 
 **Do not break the netfilter chains Tailscale manages**: on Linux, `tailscaled` creates its own
 netfilter chains (`ts-input`, `ts-forward`, etc.) and inserts jump rules at the top of the
@@ -373,6 +381,7 @@ documentation for exact port numbers.
 | OUTPUT | this host (loopback) | any | allow | same |
 | INPUT/OUTPUT | - | established/related | allow | needed in both directions for replies |
 | INPUT | hub's tailscale IP | TCP `<agent-port>` | allow | path the hub uses to dial in for exec/terminal/doctor probes |
+| INPUT | hub's tailscale IP | TCP `<ssh-port>` (default 22) | allow | path the hub uses to dial in for code distribution (SFTP bundle transfer); see [Code Distribution](./code-distribution.md) |
 | OUTPUT | hub's tailscale IP | TCP `<hub-webhook-port>` | allow | path hook scripts use to POST agent-done/agent-activity |
 | OUTPUT | coordination server / DERP | TCP 443 | allow | `tailscaled`'s underlay — see the official requirements |
 | OUTPUT | DERP/STUN | UDP (ports per official requirements) | allow | `tailscaled` direct-connection establishment / DERP relay |
@@ -452,21 +461,29 @@ curl -v <hub-webhook-url>             # isolated -> hub webhook path (OUTBOUND d
 Both are manual operational procedures today. The isolation doctor's nine checks (section 3) do
 not include verification of either the tailnet ACL or the host firewall.
 
-## 7. Pushing from isolated tasks is the operator's responsibility for now
+## 7. Pushing from isolated tasks: hub-proxied push (#87)
 
-Because an isolated server is assumed to hold no push credentials at all (no `gh` auth, SSH key,
-or git credential helper), `PhaseLoopRunner` **automatically skips the pushing phase** (any phase
-carrying the `pushVerify` flag) for a task running on a server with `isolationIntent: true`, even
-if the Unit's `phaseConfig` includes it. The skip is recorded in the execution log as
-`pushing_skipped_isolated`; once every other phase has completed normally, the task transitions to
-`review` the same way a testing-terminated run would. Commit, push, and PR creation must be done
-manually by the operator.
+An isolated server is assumed to hold no push credentials at all (no `gh` auth, SSH key, or git
+credential helper). Issue #87 adds **hub-proxied push (push notarization)**, which makes pushing
+work without weakening that assumption: when `PhaseLoopRunner` reaches the `pushing` phase (any
+phase carrying the `pushVerify` flag), the worker still commits as normal, but the actual `git
+push` is never delegated to the worker. Instead `PushNotaryService` builds a bundle from the
+worker's worktree, pulls it to the hub over SFTP, and pushes it from the hub using the hub's own
+stored credential for that repository (`project_repositories.token`, configured in project
+settings). It then verifies the push landed via the provider API (the resulting SHA matches) and
+creates the PR if one is still missing. The isolated server never receives anything resembling
+`gh` auth or an SSH deploy key — the only thing that leaves it is the bundle/SHA needed to push.
 
-Official support for the hub pushing on behalf of an isolated task is planned in **#87** (a design
-for distributing a push-only, scoped credential to isolated servers is under consideration). Until
-then, assigning a Unit whose phase config includes `pushing` to tasks running on an isolated server
-is safe (it is skipped automatically), but assigning a Unit without a `pushing` phase is still
-recommended so the intent stays explicit.
+When hub-proxied push cannot go through (`PushNotaryService` isn't wired, or the target repository
+has no push token configured), the `pushing` phase is **skipped automatically**, exactly as
+before. The skip is recorded in the execution log as `pushing_skipped_isolated` (service not
+wired) or `hub_push_skipped` (no token, or worktree/branch unresolved); once every other phase has
+completed normally, the task transitions to `review` the same way a testing-terminated run would.
+In that case, commit, push, and PR creation must be done manually by the operator.
+
+This behavior is specific to isolated servers — the `distribute_code` opt-in for non-isolated
+servers ([Code Distribution](./code-distribution.md)) is about *fetching* code onto a server and
+does not change how the pushing phase behaves.
 
 Similarly, features that require operator-level privilege (e.g. operations via the CDP browser
 / "browser-ops") are not reachable from tasks on an isolated server under the current
@@ -477,3 +494,4 @@ in the first place.
 
 - [Security Configuration & Environment Setup Guide](./security-setup.md) -- Principal separation (operator/task), enabling scoped auth
 - [Task Management Guide](./tasks.md) -- Task execution flow, the phase loop
+- [Code Distribution](./code-distribution.md) -- How hub-proxied code distribution works (bare mirror, bundle transfer, incremental delivery), and where it applies beyond isolated servers
