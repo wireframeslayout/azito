@@ -15,17 +15,55 @@ type PrepResult =
   | { kind: 'current'; headSha: string }
   | { kind: 'bundle'; attemptType: BundleType; bundleResult: BundleResult };
 
+/**
+ * Marks a failure that occurred in the SFTP transfer layer itself (upload
+ * connect/auth/timeout) rather than in the content of the bundle being
+ * delivered. `deliverToMirror()`'s incremental->full fallback exists to
+ * route around a bundle whose PREREQUISITE the remote mirror rejected (verify
+ * failure) or whose apply the remote mirror rejected (fetch-into-mirror
+ * failure) — a full bundle has no prerequisite, so it can succeed where an
+ * incremental one didn't. A transfer-layer failure has nothing to do with
+ * which bundle was being sent: a server that's unreachable or rejecting auth
+ * will fail the SAME way for a full bundle, so falling back just repeats the
+ * failure after paying the SFTP client's full timeout a second time (Issue
+ * #87 review, fifth pass, Important finding 2). Callers must not
+ * string-match error messages to tell the two apart — that's what this type
+ * exists to make unnecessary — and must preserve `cause` so the original
+ * transfer failure is never lost.
+ */
+export class BundleTransferError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'BundleTransferError';
+  }
+}
+
 export class FetchDistributionService {
-  // Serializes `distribute()` runs per `${server.name}:${computeRepoHash(repoIdentity)}`
+  // Serializes `distribute()` runs per `${sshHost}:${homeDir}:${computeRepoHash(repoIdentity)}`
   // so two concurrent distributions that write the same shared mirror can't
   // race against each other (both would query its refs, build a bundle off
   // the same prerequisite, and could interleave their `fetch --atomic` into
-  // the mirror). The key must match the mirror's own identity — the mirror
-  // path is derived from `computeRepoHash(repoIdentity)`, not from
-  // `repositoryId` (a `project_repositories` row id), and distinct
-  // repositoryId rows can point at the same canonical repository (Issue #87
-  // review finding). The hub runs as a single process, so an in-memory
-  // promise chain (no DB-level lock needed) is sufficient — same pattern as
+  // the mirror). The key must match the mirror's own identity.
+  //
+  // It is intentionally NOT `server.name`: a `Server` row is just a logical
+  // registration a user created, and nothing stops two different rows from
+  // pointing at the same SSH host + account — in which case they resolve to
+  // the exact same `~/.azito/repos/<repoHash>.git` mirror on that machine
+  // (Issue #87 review, fifth pass, Important finding 1). Keying the lock by
+  // `server.name` would let those two rows distribute concurrently, each
+  // building off the mirror ref it read before the other's forced-refspec
+  // fetch landed — and because the mirror fetch is forced, a bundle that
+  // started from a now-stale prerequisite can overwrite the mirror's ref
+  // with older content than what's already there. `sshHost` + `homeDir` +
+  // `repoHash` is what actually determines the mirror's on-disk path
+  // (`RemoteBundleOps.mirrorDir(homeDir, repoHash)`, reached over `sshHost`),
+  // so two rows that resolve to the same path always share this lock key,
+  // and two rows that don't never contend for it. `homeDir` must therefore
+  // be resolved BEFORE this lock is acquired (`distribute()` does this,
+  // ahead of calling `distributeUnlocked()`), not inside the locked section.
+  //
+  // The hub runs as a single process, so an in-memory promise chain (no
+  // DB-level lock needed) is sufficient — same pattern as
   // `WindowRotation.ts`'s `runExclusiveForTask`.
   private readonly mutex = new KeyedMutex();
 
@@ -59,7 +97,7 @@ export class FetchDistributionService {
   // two acquisitions, which is the part that actually needs the lock.
   //
   // Lock acquisition order is always OUTER (`this.mutex`, keyed
-  // `${server.name}:${repoHash}`, taken by `distribute()`) then INNER
+  // `${sshHost}:${homeDir}:${repoHash}`, taken by `distribute()`) then INNER
   // (`this.hubCacheMutex`, keyed `repoHash`, taken inside
   // `distributeUnlocked()`) — never the reverse. Nothing in this class ever
   // holds the inner lock while trying to acquire the outer one, so the two
@@ -74,20 +112,36 @@ export class FetchDistributionService {
   ) {}
 
   async distribute(params: FetchDistributionParams): Promise<FetchDistributionResult> {
-    const { server, repoIdentity } = params;
-    return this.mutex.withLock(`${server.name}:${computeRepoHash(repoIdentity)}`, () => this.distributeUnlocked(params));
-  }
-
-  private async distributeUnlocked(params: FetchDistributionParams): Promise<FetchDistributionResult> {
-    const { server, transport, repoIdentity, token, branch, workingDir, repositoryId } = params;
+    const { server, transport, repoIdentity } = params;
     const sshHost = server.sshHost;
     if (!sshHost) {
       return { status: 'failed', error: 'Server has no sshHost configured for SFTP transfer' };
     }
 
+    // Resolved BEFORE the outer lock is acquired — see `this.mutex`'s doc
+    // comment above for why the lock key must be built from `sshHost` +
+    // `homeDir` + `repoHash` rather than `server.name`.
+    let homeDir: string;
     try {
-      const repoHash = computeRepoHash(repoIdentity);
-      const homeDir = await this.remoteBundleOps.resolveHomeDir(transport);
+      homeDir = await this.remoteBundleOps.resolveHomeDir(transport);
+    } catch (err) {
+      return { status: 'failed', error: err instanceof Error ? err.message : String(err) };
+    }
+
+    const repoHash = computeRepoHash(repoIdentity);
+    return this.mutex.withLock(`${sshHost}:${homeDir}:${repoHash}`, () =>
+      this.distributeUnlocked(params, sshHost, homeDir, repoHash));
+  }
+
+  private async distributeUnlocked(
+    params: FetchDistributionParams,
+    sshHost: string,
+    homeDir: string,
+    repoHash: string,
+  ): Promise<FetchDistributionResult> {
+    const { server, transport, repoIdentity, token, branch, workingDir, repositoryId } = params;
+
+    try {
       const mirrorDir = this.remoteBundleOps.mirrorDir(homeDir, repoHash);
       await this.remoteBundleOps.ensureMirror(transport, mirrorDir);
 
@@ -183,6 +237,18 @@ export class FetchDistributionService {
    * this returns always describes the bundle actually delivered — never the
    * earlier, possibly now-superseded incremental attempt (Issue #87
    * third-party review, Important finding 3).
+   *
+   * Falls back to full ONLY when the failure indicates something about the
+   * INCREMENTAL BUNDLE'S CONTENT was rejected — the remote couldn't verify
+   * it (its prerequisite commit is missing/invalid on that mirror) or
+   * couldn't apply it — because a full bundle (no prerequisite) can succeed
+   * where those fail. A `BundleTransferError` (SFTP connect/auth/timeout)
+   * is propagated immediately instead: the transfer layer failed, not the
+   * bundle's content, so a full bundle would fail identically, and retrying
+   * only spends a second multi-minute SFTP timeout waiting on an
+   * unreachable/rejecting server (Issue #87 review, fifth pass, Important
+   * finding 2). See `BundleTransferError`'s own doc comment for the full
+   * rationale.
    */
   private async deliverToMirror(
     transport: IServerTransport,
@@ -200,6 +266,10 @@ export class FetchDistributionService {
       return { headSha: bundleResult.headSha, bundleType: attemptType };
     } catch (err) {
       if (attemptType === 'full') throw err; // already the last attempt — no further fallback
+      // Transfer-layer failure (SFTP connect/auth/timeout): switching bundle
+      // type would not help and would only cost a second SFTP timeout — see
+      // this method's doc comment.
+      if (err instanceof BundleTransferError) throw err;
     } finally {
       try { fs.unlinkSync(bundleResult.bundlePath); } catch {}
     }
@@ -225,7 +295,20 @@ export class FetchDistributionService {
     const nonce = crypto.randomBytes(8).toString('hex');
     const remoteTmpPath = `/tmp/azito-dist-${nonce}.bundle`;
     try {
-      await this.sftpService.upload(sshHost, bundleResult.bundlePath, remoteTmpPath);
+      // Wrapped in `BundleTransferError` so `deliverToMirror()` can tell a
+      // transfer-layer failure (connect/auth/timeout — retrying with a
+      // different bundle type would not help) apart from a failure caused
+      // by the bundle's own content (verify/apply below, which a full
+      // bundle CAN route around) without string-matching the error message.
+      // `cause` preserves the original failure for logging/debugging.
+      try {
+        await this.sftpService.upload(sshHost, bundleResult.bundlePath, remoteTmpPath);
+      } catch (err) {
+        throw new BundleTransferError(
+          `SFTP upload to ${sshHost} failed: ${err instanceof Error ? err.message : String(err)}`,
+          { cause: err },
+        );
+      }
 
       const verified = await this.remoteBundleOps.verify(transport, mirrorDir, remoteTmpPath);
       if (!verified) {

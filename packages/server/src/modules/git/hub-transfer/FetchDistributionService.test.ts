@@ -238,6 +238,30 @@ describe('FetchDistributionService', () => {
     expect(sftpService.upload).toHaveBeenCalledTimes(2);
   });
 
+  // Issue #87 review, fifth pass, Important finding 2: an SFTP upload
+  // failure (connect/auth/timeout) is a transfer-layer failure, not a
+  // problem with the incremental bundle's content — switching to a full
+  // bundle would not help and would only cost a second multi-minute SFTP
+  // timeout against an unreachable/rejecting server. It must propagate
+  // immediately instead of triggering the incremental->full fallback.
+  it('fails immediately (no full-bundle fallback) when the SFTP upload itself fails', async () => {
+    const prevSha = 'b'.repeat(40);
+    const remoteBundleOps = mockRemoteBundleOps({
+      getMirrorBranchSha: vi.fn(async () => prevSha),
+      repoExists: vi.fn(async () => true),
+    });
+    const hubRepoCache = mockHubRepoCache();
+    const sftpService = { upload: vi.fn(async () => { throw new Error('ECONNREFUSED'); }) };
+    const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService as any, mockDistRepo());
+    const result = await service.distribute(makeParams());
+    expect(result.status).toBe('failed');
+    expect(result.error).toContain('ECONNREFUSED');
+    // Only the one (incremental) upload attempt — no fallback full bundle
+    // was built or uploaded.
+    expect(sftpService.upload).toHaveBeenCalledTimes(1);
+    expect(hubRepoCache.createBundle).toHaveBeenCalledTimes(1);
+  });
+
   it('does not retry (fails outright) when the full-bundle delivery itself fails', async () => {
     const remoteBundleOps = mockRemoteBundleOps({
       getMirrorBranchSha: vi.fn(async () => null), // no prerequisite -> starts at 'full' directly
@@ -441,6 +465,90 @@ describe('FetchDistributionService', () => {
       expect(order).toEqual(['a-start', 'b-start', 'a-end']);
     });
 
+    // Issue #87 review, fifth pass, Important finding 1: `server.name` is a
+    // logical registration a user created — two DIFFERENT server rows can
+    // resolve to the SAME `sshHost` + `homeDir`, in which case they point at
+    // the exact same on-disk mirror. The outer lock key must therefore be
+    // built from `sshHost` + `homeDir` + `repoHash`, not `server.name`, so
+    // such rows still serialize against each other.
+    it('serializes calls for two differently-named servers that resolve to the same sshHost and homeDir', async () => {
+      const order: string[] = [];
+      let releaseA!: () => void;
+      const gateA = new Promise<void>((resolve) => {
+        releaseA = resolve;
+      });
+
+      let call = 0;
+      const sftpService = {
+        upload: vi.fn(async () => {
+          call += 1;
+          if (call === 1) {
+            order.push('a-start');
+            await gateA;
+            order.push('a-end');
+          } else {
+            order.push('b-start');
+          }
+        }),
+      };
+
+      // Same sshHost + same resolved homeDir for both rows (mockRemoteBundleOps
+      // resolves homeDir to a fixed value regardless of the transport passed
+      // in), but distinct server names — the two rows are registered
+      // separately in the DB, yet describe the same physical machine/account.
+      const service = new FetchDistributionService(mockHubRepoCache(), mockRemoteBundleOps(), sftpService as any, mockDistRepo());
+
+      const a = service.distribute(makeParams({ server: makeServer({ name: 'alias-a', sshHost: 'user@shared-host' }) }));
+      await flushAsync();
+
+      const b = service.distribute(makeParams({ server: makeServer({ name: 'alias-b', sshHost: 'user@shared-host' }) }));
+      await flushAsync();
+
+      // `b` must not have started yet — it is queued behind `a` because both
+      // resolve to the same sshHost+homeDir mirror, regardless of server name.
+      expect(order).toEqual(['a-start']);
+
+      releaseA();
+      await Promise.all([a, b]);
+      expect(order).toEqual(['a-start', 'a-end', 'b-start']);
+    });
+
+    it('does not serialize two servers with different sshHost (distinct mirrors, even with the same resolved homeDir)', async () => {
+      const order: string[] = [];
+      let releaseA!: () => void;
+      const gateA = new Promise<void>((resolve) => {
+        releaseA = resolve;
+      });
+
+      let call = 0;
+      const sftpService = {
+        upload: vi.fn(async () => {
+          call += 1;
+          if (call === 1) {
+            order.push('a-start');
+            await gateA;
+            order.push('a-end');
+          } else {
+            order.push('b-start');
+          }
+        }),
+      };
+
+      const service = new FetchDistributionService(mockHubRepoCache(), mockRemoteBundleOps(), sftpService as any, mockDistRepo());
+
+      const a = service.distribute(makeParams({ server: makeServer({ name: 'server-a', sshHost: 'user@host-a' }) }));
+      await flushAsync();
+
+      const b = service.distribute(makeParams({ server: makeServer({ name: 'server-b', sshHost: 'user@host-b' }) }));
+      await b;
+
+      expect(order).toEqual(['a-start', 'b-start']);
+
+      releaseA();
+      await a;
+      expect(order).toEqual(['a-start', 'b-start', 'a-end']);
+    });
+
     // Issue #87 review finding (Important 1, forge/87-mirror follow-up):
     // `this.mutex` (outer) is keyed `${server.name}:${repoHash}`, so it
     // does NOT serialize two DIFFERENT servers distributing the SAME repo
@@ -492,10 +600,10 @@ describe('FetchDistributionService', () => {
 
       const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService as any, mockDistRepo());
 
-      const a = service.distribute(makeParams({ server: makeServer({ name: 'server-a' }) }));
+      const a = service.distribute(makeParams({ server: makeServer({ name: 'server-a', sshHost: 'user@host-a' }) }));
       await flushAsync();
 
-      const b = service.distribute(makeParams({ server: makeServer({ name: 'server-b' }) }));
+      const b = service.distribute(makeParams({ server: makeServer({ name: 'server-b', sshHost: 'user@host-b' }) }));
       await flushAsync();
 
       // server-b's ensureFetched/createBundle pair has ALREADY run by now,
@@ -579,10 +687,10 @@ describe('FetchDistributionService', () => {
 
       const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService as any, mockDistRepo());
 
-      const a = service.distribute(makeParams({ server: makeServer({ name: 'server-a' }) }));
+      const a = service.distribute(makeParams({ server: makeServer({ name: 'server-a', sshHost: 'user@host-a' }) }));
       await flushAsync();
 
-      const b = service.distribute(makeParams({ server: makeServer({ name: 'server-b' }) }));
+      const b = service.distribute(makeParams({ server: makeServer({ name: 'server-b', sshHost: 'user@host-b' }) }));
       await flushAsync();
 
       // server-b's mirror read, hub-cache read, bundle build, AND upload
