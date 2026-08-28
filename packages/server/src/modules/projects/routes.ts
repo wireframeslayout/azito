@@ -258,8 +258,15 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       // Meaningless for a `local` server (hub itself; ExecuteTaskUseCase
       // excludes `local` from the distribution gate outright), but that
       // exclusion lives there, not here — this endpoint just stores the flag.
+      // Validated (not `!!body.distribute_code`) the same way input_policy
+      // is validated above: a declared boolean contract must reject
+      // non-boolean JSON (e.g. `"false"`, `{}`, `1`) rather than silently
+      // coercing it (review finding, Issue #87).
+      if (body.distribute_code !== undefined && typeof body.distribute_code !== 'boolean') {
+        return reply.status(400).send({ error: 'distribute_code must be a boolean' });
+      }
       const distributeCode = 'distribute_code' in body
-        ? !!body.distribute_code
+        ? (body.distribute_code as boolean)
         : (existingRow?.distributeCode ?? false);
       projectServerRepo.upsert({
         projectId,

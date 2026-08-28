@@ -2407,6 +2407,12 @@ describe('ExecuteTaskUseCase fetch-distribution gate (Issue #87 Phase 2: general
   function buildDistributionGateHarness(opts: {
     server: ServerConfig;
     distributeCode: boolean;
+    /** Overrides the project returned by projectRepo.findById — for the fail-fast-on-missing-repository test. */
+    project?: ProjectDetail;
+    /** Overrides the repository row returned by projectRepo.findRepositoryById — for the fail-fast-on-missing-token/bad-identity tests. */
+    repository?: { id: number; url: string; provider: 'github' | 'gitlab'; owner: string | null; repoName: string | null; token: string | null };
+    /** Lets a caller make distribute() fail (or throw) instead of the default success — for the failed-distribution rollback test. */
+    distributeResult?: { status: 'distributed' | 'already_current' | 'failed'; sha?: string; bundleType?: 'full' | 'incremental'; error?: string };
   }) {
     const unit = makeUnit({ id: 10, workerType: 'claude', workerModel: 'opus' });
     // task.workingDirectory (not projectServer.workingDirectory) supplies
@@ -2417,14 +2423,16 @@ describe('ExecuteTaskUseCase fetch-distribution gate (Issue #87 Phase 2: general
     // gate's own concern (whether distribute() got called) and not worth
     // faking a transport or a real worktree directory for.
     const task = makeTask({ id: 1, serverName: opts.server.name, unitId: 10, workingDirectory: '/srv/repo' });
-    const fetchDistributionService = { distribute: vi.fn(async () => ({ status: 'distributed' as const, sha: 'abc123', bundleType: 'full' as const })) };
+    const fetchDistributionService = {
+      distribute: vi.fn(async () => opts.distributeResult ?? { status: 'distributed' as const, sha: 'abc123', bundleType: 'full' as const }),
+    };
     const harness = buildUseCase({
       task,
-      project: projectWithRepository(),
+      project: opts.project ?? projectWithRepository(),
       units: [unit],
       projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', distributeCode: opts.distributeCode },
       server: opts.server,
-      repository,
+      repository: 'repository' in opts ? opts.repository : repository,
       fetchDistributionService,
     });
     harness.worktreeServiceFactory.create.mockReturnValue({
@@ -2467,5 +2475,137 @@ describe('ExecuteTaskUseCase fetch-distribution gate (Issue #87 Phase 2: general
     await useCase.execute(10, 1);
 
     expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+  });
+});
+
+describe('ExecuteTaskUseCase fetch-distribution failure handling (Issue #87 third-party review)', () => {
+  const repository = {
+    id: 5,
+    url: 'https://github.com/acme/widget.git',
+    provider: 'github' as const,
+    owner: 'acme',
+    repoName: 'widget',
+    token: 'tok123',
+  };
+
+  function projectWithRepository(): ProjectDetail {
+    return makeProject({
+      defaultUnitId: null,
+      repositories: [{ id: 5, name: null, url: repository.url, provider: 'github', owner: 'acme', repoName: 'widget', hasToken: true }],
+    });
+  }
+
+  function buildDistributionGateHarness(opts: {
+    server: ServerConfig;
+    distributeCode: boolean;
+    project?: ProjectDetail;
+    repository?: { id: number; url: string; provider: 'github' | 'gitlab'; owner: string | null; repoName: string | null; token: string | null };
+    distributeResult?: { status: 'distributed' | 'already_current' | 'failed'; sha?: string; bundleType?: 'full' | 'incremental'; error?: string };
+  }) {
+    const unit = makeUnit({ id: 10, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 1, serverName: opts.server.name, unitId: 10, workingDirectory: '/srv/repo' });
+    const fetchDistributionService = {
+      distribute: vi.fn(async () => opts.distributeResult ?? { status: 'distributed' as const, sha: 'abc123', bundleType: 'full' as const }),
+    };
+    const harness = buildUseCase({
+      task,
+      project: opts.project ?? projectWithRepository(),
+      units: [unit],
+      projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', distributeCode: opts.distributeCode },
+      server: opts.server,
+      repository: 'repository' in opts ? opts.repository : repository,
+      fetchDistributionService,
+    });
+    harness.worktreeServiceFactory.create.mockReturnValue({
+      create: vi.fn(async () => ({ path: '/srv/repo/.worktrees/task-1', branch: 'task/1-slug' })),
+    });
+    return { ...harness, fetchDistributionService };
+  }
+
+  // 指摘1: 配信が失敗したとき、タスク status が failed になり、ウィンドウ kill・
+  // トークン revoke・tmuxWindow クリアが行われること。
+  it('rolls back the just-created window/token and marks the task failed when distribute() reports status "failed"', async () => {
+    const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
+    const { useCase, taskRepo, tmux, paneEnvService, fetchDistributionService } = buildDistributionGateHarness({
+      server,
+      distributeCode: false,
+      distributeResult: { status: 'failed', error: 'network unreachable' },
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/Fetch distribution failed/);
+
+    expect(fetchDistributionService.distribute).toHaveBeenCalledTimes(1);
+    expect(taskRepo.update).toHaveBeenCalledWith(1, expect.objectContaining({ status: 'failed' }));
+    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_failed_rollback');
+    expect(taskRepo.clearTmuxWindowIfMatches).toHaveBeenCalledWith(1, 'w1');
+  });
+
+  // 指摘2: 配信が要求されているのに前提条件が欠けている場合は fail fast すること
+  // （プロジェクトにリポジトリ未設定 / リポジトリにトークン無し / identity 解決失敗の
+  // それぞれで、同じロールバック経路を通る）。isolationIntent 経路 と
+  // distributeCode 経路の両方で確認する。
+  it('fails fast (does not distribute) and rolls back the window when distribution is required but the project has no repository configured', async () => {
+    const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
+    const { useCase, taskRepo, tmux, paneEnvService, fetchDistributionService } = buildDistributionGateHarness({
+      server,
+      distributeCode: false,
+      project: makeProject({ defaultUnitId: null, repositories: [] }),
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/no repository configured/);
+
+    expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+    expect(taskRepo.update).toHaveBeenCalledWith(1, expect.objectContaining({ status: 'failed' }));
+    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_prereq_failed_rollback');
+  });
+
+  it('fails fast and rolls back the window when distribution is required (distribute_code opt-in on a non-isolated server) but the repository has no token', async () => {
+    const server = makeServer({ name: 'srv-agent', type: 'agent', isolationIntent: false, sshHost: 'agent-host' });
+    const { useCase, taskRepo, tmux, paneEnvService, fetchDistributionService } = buildDistributionGateHarness({
+      server,
+      distributeCode: true,
+      repository: { ...repository, token: null },
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/no token configured/);
+
+    expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+    expect(taskRepo.update).toHaveBeenCalledWith(1, expect.objectContaining({ status: 'failed' }));
+    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_prereq_failed_rollback');
+  });
+
+  it('fails fast and rolls back the window when the repository URL cannot be resolved to a canonical identity', async () => {
+    const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
+    const { useCase, taskRepo, tmux, paneEnvService, fetchDistributionService } = buildDistributionGateHarness({
+      server,
+      distributeCode: false,
+      // http:// (plaintext) is rejected by normalizeRepositoryUrlToHttps —
+      // resolveCanonicalRepositoryIdentity returns { ok: false }.
+      repository: { ...repository, url: 'http://github.com/acme/widget.git' },
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/could not be normalized/);
+
+    expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+    expect(taskRepo.update).toHaveBeenCalledWith(1, expect.objectContaining({ status: 'failed' }));
+    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_prereq_failed_rollback');
+  });
+
+  it('does not fail fast when distribution is not requested, even with no repository/token configured (isolationIntent off, distribute_code off)', async () => {
+    const server = makeServer({ name: 'srv-agent', type: 'agent', isolationIntent: false });
+    const { useCase, taskRepo, fetchDistributionService } = buildDistributionGateHarness({
+      server,
+      distributeCode: false,
+      project: makeProject({ defaultUnitId: null, repositories: [] }),
+    });
+
+    await useCase.execute(10, 1);
+
+    expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+    expect(taskRepo.update).not.toHaveBeenCalledWith(1, expect.objectContaining({ status: 'failed' }));
   });
 });

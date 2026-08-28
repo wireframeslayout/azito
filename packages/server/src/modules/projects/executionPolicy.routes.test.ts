@@ -323,6 +323,101 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
   });
 });
 
+describe('PUT /api/projects/:id/servers/:serverName — distribute_code (Issue #87 third-party review, Minor finding)', () => {
+  it('rejects a non-boolean distribute_code (e.g. a string "false") with 400 and does not persist it', async () => {
+    const opts = makeOpts();
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10/servers/test-server',
+      payload: { distribute_code: 'false' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('distribute_code must be a boolean');
+    expect(opts.projectServerRepo.upsert).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-boolean distribute_code (an object) with 400', async () => {
+    const opts = makeOpts();
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10/servers/test-server',
+      payload: { distribute_code: {} },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('distribute_code must be a boolean');
+    expect(opts.projectServerRepo.upsert).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-boolean distribute_code (the number 1) with 400', async () => {
+    const opts = makeOpts();
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10/servers/test-server',
+      payload: { distribute_code: 1 },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('distribute_code must be a boolean');
+    expect(opts.projectServerRepo.upsert).not.toHaveBeenCalled();
+  });
+
+  it('accepts a real boolean distribute_code and persists it', async () => {
+    const opts = makeOpts();
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10/servers/test-server',
+      payload: { distribute_code: true },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.projectServerRepo.upsert).toHaveBeenCalledWith(expect.objectContaining({ distributeCode: true }));
+  });
+
+  it('preserves the existing distribute_code value when the key is omitted', async () => {
+    const opts = makeOpts({
+      projectServerRepo: {
+        findByProject: vi.fn(() => []),
+        findByServer: vi.fn(() => []),
+        find: vi.fn(() => ({
+          projectId: 10, serverName: 'test-server', workingDirectory: '/srv/repo', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: true,
+        })),
+        upsert: vi.fn(),
+        remove: vi.fn(),
+      },
+    });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10/servers/test-server',
+      payload: { input_policy: 'deny' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.projectServerRepo.upsert).toHaveBeenCalledWith(expect.objectContaining({ distributeCode: true }));
+  });
+});
+
 describe('POST /api/projects/:id/import-issue — marks the created task untrusted (Issue #328)', () => {
   it('creates the task with inputTrust: untrusted regardless of provider', async () => {
     const opts = makeOpts();

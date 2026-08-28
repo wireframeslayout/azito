@@ -428,6 +428,58 @@ export class ExecuteTaskUseCase {
   }
 
   /**
+   * Shared cleanup for a failure that happens AFTER the task window was
+   * already created and the task marked `in_progress` (execute()'s
+   * post-window-creation span: fetch distribution, worktree creation,
+   * worktree path containment) — review finding (Issue #87 third-party
+   * review, Important 1): the fetch-distribution failure branch used to only
+   * `throw`, leaving the task `in_progress` with a live, still-authenticated
+   * window and an un-revoked token. This factors out exactly the rollback
+   * the pre-existing worktree-failure branches already performed (marks the
+   * task `failed`, then kills the window and revokes ITS OWN generation's
+   * token via {@link rollbackWindowReference}) so a THIRD failure branch
+   * doesn't reimplement it a third time.
+   *
+   * `extraTaskUpdate` lets a caller merge in fields beyond `status: 'failed'`
+   * (e.g. `worktreePath: null, worktreeBranch: null` for the path-rejected
+   * branch) in the SAME `taskRepo.update` call, not a second one.
+   *
+   * Scoped to `tokenId` (the generation `createRotatedWindow` issued for
+   * THIS execute() call, inside `runExclusiveForTask`), not the whole task —
+   * a blanket revoke here could otherwise clobber a newer generation a
+   * concurrent rotation for this task already persisted. `tmuxWindow` is
+   * cleared only once the kill is CONFIRMED gone, via
+   * `clearTmuxWindowIfMatches(taskId, windowName)` (gated on this call's own
+   * `windowName`) — never an unconditional null-out, for the same reason
+   * (see the original worktree_failed/worktree_path_rejected comments this
+   * replaces for the full Issue #28 third-party review history behind these
+   * two properties). Errors from the rollback itself are swallowed (best
+   * effort) — same as the two call sites this replaces — since surfacing
+   * them here would replace the caller's own actual failure message.
+   */
+  private async rollbackWindowAfterPostCreationFailure(
+    taskId: number,
+    server: ServerConfig,
+    tmuxSession: string,
+    windowName: string,
+    tokenId: number,
+    revokeReason: string,
+    extraTaskUpdate?: Partial<Task>,
+  ): Promise<void> {
+    this.taskRepo.update(taskId, { status: 'failed' as TaskStatus, ...extraTaskUpdate } as Partial<Task>);
+    try {
+      await rollbackWindowReference(
+        this.tmux.killWindow(server, `${tmuxSession}:${windowName}`),
+        this.paneEnvService,
+        tokenId,
+        revokeReason,
+        () => this.taskRepo.clearTmuxWindowIfMatches(taskId, windowName),
+        () => {},
+      );
+    } catch {}
+  }
+
+  /**
    * Marks the task `failed` and logs when `err` is a
    * {@link ServerSnapshotMismatchError} (Issue #29 review, 12th pass,
    * Critical finding 1) — the server row `ensureSessionWithLock`/
@@ -762,27 +814,64 @@ export class ExecuteTaskUseCase {
       // target. `local` is always excluded — that server IS the hub, so
       // "distributing" to it is meaningless.)
       if (server.type !== 'local' && (server.isolationIntent || projectServer?.distributeCode) && this.fetchDistributionService) {
+        // Fail fast (review finding, Issue #87 third-party review, Important
+        // 2): distribution was requested — via the server's own isolation
+        // intent (which cannot clone for itself; skipping distribution here
+        // would leave it with no code at all) or the project's explicit
+        // `distribute_code` opt-in — so a missing repository / token /
+        // resolvable identity is treated as MISSING REQUIRED DATA, not a
+        // silent "don't distribute" fallback. The old nested-`if` shape fell
+        // through all three of these the same way: `distStatus` stayed
+        // `null`, worktree creation below resolved the plain (stale,
+        // server-local) `baseBranch` instead of `origin/<baseBranch>`, and
+        // the task proceeded to run against out-of-date code — exactly the
+        // staleness distribution exists to prevent. Each branch below runs
+        // the SAME post-window-creation rollback
+        // (rollbackWindowAfterPostCreationFailure) the fetch-distribution
+        // and worktree failure branches use, since the task window/token
+        // already exist by this point.
         const repoEntry = project?.repositories?.[0];
-        if (repoEntry) {
-          const repo = this.projectRepo.findRepositoryById(repoEntry.id);
-          if (repo?.token) {
-            const identity = resolveCanonicalRepositoryIdentity(repo);
-            if (identity.ok) {
-              const transport = this.transportFactory.getTransport(server);
-              const distResult = await this.fetchDistributionService.distribute({
-                server, transport, repoIdentity: identity.identity,
-                token: repo.token, branch: baseBranch, workingDir,
-                repositoryId: repoEntry.id,
-              });
-              distStatus = distResult.status;
-              if (distResult.status === 'failed') {
-                this.appendLog(taskId, unitId, 'command', { type: 'fetch_distribution_failed', error: distResult.error });
-                throw new Error(`Fetch distribution failed: ${distResult.error}`);
-              }
-              this.appendLog(taskId, unitId, 'command', { type: 'fetch_distributed', sha: distResult.sha, bundleType: distResult.bundleType });
-            }
-          }
+        if (!repoEntry) {
+          const message = 'Fetch distribution is required but the project has no repository configured';
+          this.appendLog(taskId, unitId, 'command', { type: 'fetch_distribution_failed', error: message });
+          await this.rollbackWindowAfterPostCreationFailure(taskId, server, tmuxSession, windowName, tokenId, 'fetch_distribution_prereq_failed_rollback');
+          throw new Error(message);
         }
+
+        const repo = this.projectRepo.findRepositoryById(repoEntry.id);
+        if (!repo?.token) {
+          const message = 'Fetch distribution is required but the repository has no token configured';
+          this.appendLog(taskId, unitId, 'command', { type: 'fetch_distribution_failed', error: message });
+          await this.rollbackWindowAfterPostCreationFailure(taskId, server, tmuxSession, windowName, tokenId, 'fetch_distribution_prereq_failed_rollback');
+          throw new Error(message);
+        }
+
+        const identity = resolveCanonicalRepositoryIdentity(repo);
+        if (!identity.ok) {
+          const message = `Fetch distribution is required but the repository URL could not be normalized to a canonical identity: ${identity.reason}`;
+          this.appendLog(taskId, unitId, 'command', { type: 'fetch_distribution_failed', error: message });
+          await this.rollbackWindowAfterPostCreationFailure(taskId, server, tmuxSession, windowName, tokenId, 'fetch_distribution_prereq_failed_rollback');
+          throw new Error(message);
+        }
+
+        const transport = this.transportFactory.getTransport(server);
+        const distResult = await this.fetchDistributionService.distribute({
+          server, transport, repoIdentity: identity.identity,
+          token: repo.token, branch: baseBranch, workingDir,
+          repositoryId: repoEntry.id,
+        });
+        distStatus = distResult.status;
+        if (distResult.status === 'failed') {
+          this.appendLog(taskId, unitId, 'command', { type: 'fetch_distribution_failed', error: distResult.error });
+          // Review finding (Issue #87 third-party review, Important 1): this
+          // used to only throw, leaving the already-created task window and
+          // token live and the task stuck `in_progress` — see
+          // rollbackWindowAfterPostCreationFailure's doc comment for what it
+          // now performs (mirrors the pre-existing worktree-failure cleanup).
+          await this.rollbackWindowAfterPostCreationFailure(taskId, server, tmuxSession, windowName, tokenId, 'fetch_distribution_failed_rollback');
+          throw new Error(`Fetch distribution failed: ${distResult.error}`);
+        }
+        this.appendLog(taskId, unitId, 'command', { type: 'fetch_distributed', sha: distResult.sha, bundleType: distResult.bundleType });
       }
 
       const worktreeCreateBaseBranch = resolveWorktreeCreateBaseBranch(baseBranch, distStatus);
@@ -798,7 +887,6 @@ export class ExecuteTaskUseCase {
           type: 'worktree_failed',
           message,
         });
-        this.taskRepo.update(taskId, { status: 'failed' as TaskStatus } as Partial<Task>);
         // 'failed' is deliberately NOT in TOKEN_REVOKING_STATUSES (a failed
         // task is resumable via follow-up onto a later window), so the
         // window-generation token this createWindow() just issued would
@@ -826,16 +914,12 @@ export class ExecuteTaskUseCase {
         // reference. Gating on `windowName` (this call's own generation)
         // makes the clear a no-op when the row has already moved on — see
         // ITaskRepository.clearTmuxWindowIfMatches's doc comment.
-        try {
-          await rollbackWindowReference(
-            this.tmux.killWindow(server, `${tmuxSession}:${windowName}`),
-            this.paneEnvService,
-            tokenId,
-            'worktree_creation_failed_rollback',
-            () => this.taskRepo.clearTmuxWindowIfMatches(taskId, windowName),
-            () => {},
-          );
-        } catch {}
+        //
+        // Both the status update and the rollback are now
+        // rollbackWindowAfterPostCreationFailure() (see its own doc comment)
+        // — shared with the worktree_path_rejected branch below and with the
+        // fetch-distribution failure branch above.
+        await this.rollbackWindowAfterPostCreationFailure(taskId, server, tmuxSession, windowName, tokenId, 'worktree_creation_failed_rollback');
         throw new Error(`Worktree creation failed: ${message}`);
       }
 
@@ -865,11 +949,6 @@ export class ExecuteTaskUseCase {
               message: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
             });
           }
-          this.taskRepo.update(taskId, {
-            status: 'failed' as TaskStatus,
-            worktreePath: null,
-            worktreeBranch: null,
-          } as Partial<Task>);
           // Same generation-leak fix as the worktree_failed branch above —
           // see that branch's comment. `tmuxWindow` is cleared inside
           // rollbackWindowReference's onGone callback, not unconditionally
@@ -878,16 +957,10 @@ export class ExecuteTaskUseCase {
           // Fix 3: same clearTmuxWindowIfMatches reasoning as the
           // worktree_failed branch above — this span also runs outside
           // runExclusiveForTask.
-          try {
-            await rollbackWindowReference(
-              this.tmux.killWindow(server, `${tmuxSession}:${windowName}`),
-              this.paneEnvService,
-              tokenId,
-              'worktree_path_rejected_rollback',
-              () => this.taskRepo.clearTmuxWindowIfMatches(taskId, windowName),
-              () => {},
-            );
-          } catch {}
+          await this.rollbackWindowAfterPostCreationFailure(taskId, server, tmuxSession, windowName, tokenId, 'worktree_path_rejected_rollback', {
+            worktreePath: null,
+            worktreeBranch: null,
+          });
           throw new Error(`Worktree path rejected: ${message}`);
         }
       }
