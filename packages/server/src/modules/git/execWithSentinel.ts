@@ -86,13 +86,42 @@ function parseSentinel(result: ExecResult): SentinelExecOutcome {
   return { ok: exitCode === 0, sentinelFound: true, exitCode, stdout, stderr: result.stderr };
 }
 
-/** Runs `command` with the exit-status sentinel appended and parses the result. */
+/**
+ * Runs `command` with the exit-status sentinel appended and parses the
+ * result.
+ *
+ * Issue #87 review, 8th pass, Minor finding 3: `transport.exec()` itself can
+ * REJECT — an agent-transport HTTP failure, a dropped SSH connection, a
+ * thrown timeout — distinct from the "ran to completion but the sentinel
+ * line never showed up in stdout" case `parseSentinel()` already classifies
+ * as a transport failure. Before this, a rejection here propagated as
+ * whatever raw error `transport.exec()` threw, which every caller of
+ * `execGitOrThrow()`/`verify()` (see `RemoteBundleOps.verify()` and
+ * `FetchDistributionService.deliverToMirror()`) checks via
+ * `err instanceof RemoteGitCommandError && err.transportFailure` — a raw
+ * error fails that check, so a plainly unreachable server got misclassified
+ * as "git ran and rejected the bundle's content," triggering a pointless
+ * (and, against an unreachable server, expensive) incremental->full
+ * fallback. Catching the rejection here and re-throwing it as a
+ * `RemoteGitCommandError({ transportFailure: true, cause: err })` folds it
+ * into the exact same classification as the missing-sentinel case, for
+ * every caller of this function at once, and preserves the original error
+ * via `cause` so nothing about the actual failure is lost.
+ */
 export async function execWithSentinel(
   transport: IServerTransport,
   command: string,
   timeoutMs?: number,
 ): Promise<SentinelExecOutcome> {
-  const result = await transport.exec(appendSentinel(command), timeoutMs);
+  let result: ExecResult;
+  try {
+    result = await transport.exec(appendSentinel(command), timeoutMs);
+  } catch (err) {
+    throw new RemoteGitCommandError(
+      `transport.exec() failed: ${err instanceof Error ? err.message : String(err)}`,
+      { transportFailure: true, cause: err },
+    );
+  }
   return parseSentinel(result);
 }
 

@@ -17,7 +17,7 @@ import { FormInput, FormSelect, LoadingState, baseInputStyle, Button } from './u
 import type { Window, Unit, Server } from '../pages/workspace/types';
 import { parseRepoUrl as parseGitRepoUrl } from '../lib/gitProvider';
 import { notifyProjectsChanged } from '../lib/projectsChanged';
-import { isDistributeCodeLocked, shouldShowDistributeCodeBadge } from '../lib/distributeCodePolicy';
+import { isDistributeCodeLocked, resolveDistributeCodeForSave, shouldShowDistributeCodeBadge } from '../lib/distributeCodePolicy';
 import { useToast } from '../hooks/useToast';
 import { useConfirm } from '../hooks/useConfirm';
 
@@ -116,18 +116,17 @@ export function useProjectSettings(
       setPsDistributeCode(false);
       return;
     }
-    // Issue #87 third-party review, seventh pass, Minor finding 3: an
-    // isolated server has no git credentials of its own, so the backend
-    // ALWAYS distributes code to it via `isolationIntent` regardless of
-    // this saved flag — the toggle in the form below is locked to reflect
-    // that (see its `disabled` condition). Force the state to match here
-    // too, so an isolated target never shows the toggle unchecked (which
-    // would misrepresent what actually happens on save) even before the
-    // user opens the (disabled) toggle.
-    if (isDistributeCodeLocked(targetServer)) {
-      setPsDistributeCode(true);
-      return;
-    }
+    // Issue #87 review, eighth pass, Important finding 1: an isolated
+    // server's toggle is always shown checked/disabled in the JSX below
+    // (via `isDistributeCodeLocked` at the render call site) — that's a
+    // pure display derivation, not something this state needs to carry.
+    // Forcing `psDistributeCode` itself to `true` here used to get
+    // persisted verbatim by `handleSaveServer` (see its own `locked` guard
+    // now omitting the field), which meant opting a server INTO isolation
+    // silently wrote a `distribute_code: true` row that outlived isolation
+    // being turned back off. Keep this state equal to the actual saved
+    // value regardless of lock status, so Save never has anything to send
+    // beyond what the user actually chose.
     const existing = projectServers.find((ps) => ps.serverName === psServer);
     setPsDistributeCode(existing?.distributeCode ?? false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -212,18 +211,26 @@ export function useProjectSettings(
   }, [projectId, project, tabs, closeTab, refresh]);
 
   const handleSaveServer = useCallback(async () => {
-    await api(`/projects/${projectId}/servers/${psServer}`, {
-      method: 'PUT', body: JSON.stringify({
-        working_directory: psWorkDir.trim() || null,
-        branch: psBranch.trim() || null,
-        tmux_session: psTmuxSession.trim() || null,
-        input_policy: psInputPolicy,
-        distribute_code: psDistributeCode,
-      }),
-    });
+    const targetServer = (servers || []).find((sv) => sv.name === psServer);
+    // Issue #87 review, eighth pass, Important finding 1: for a locked
+    // (isolated) server, `resolveDistributeCodeForSave` returns `undefined`
+    // so the key is omitted below — the PUT handler's "key absent ->
+    // preserve existing value" semantics (routes.ts) then keep whatever was
+    // actually saved before, instead of persisting a forced/display value.
+    const resolvedDistributeCode = resolveDistributeCodeForSave(targetServer, psDistributeCode);
+    const body: Record<string, unknown> = {
+      working_directory: psWorkDir.trim() || null,
+      branch: psBranch.trim() || null,
+      tmux_session: psTmuxSession.trim() || null,
+      input_policy: psInputPolicy,
+    };
+    if (resolvedDistributeCode !== undefined) {
+      body.distribute_code = resolvedDistributeCode;
+    }
+    await api(`/projects/${projectId}/servers/${psServer}`, { method: 'PUT', body: JSON.stringify(body) });
     setAddPsOpen(false); setPsWorkDir(''); setPsBranch(''); setPsTmuxSession(''); setPsInputPolicy('manual-approval'); setPsDistributeCode(false);
     api<ProjectServer[]>(`/projects/${projectId}/servers`).then((res) => setProjectServers(Array.isArray(res) ? res : [])).catch(() => {});
-  }, [projectId, psServer, psWorkDir, psBranch, psTmuxSession, psInputPolicy, psDistributeCode]);
+  }, [projectId, psServer, psWorkDir, psBranch, psTmuxSession, psInputPolicy, psDistributeCode, servers]);
 
   // Opens the add/edit form for `serverName`, pre-filled from its existing
   // project_servers row when one exists (Issue #51 review note: this form's
@@ -554,10 +561,15 @@ function ServersSection({ settings: s }: { settings: ReturnType<typeof useProjec
             // (see `distributeCode` docs) regardless of this saved flag —
             // toggling it off here would silently do nothing, and the list
             // badge below would then wrongly claim "not distributed". Lock
-            // the toggle on (disabled, checked, `psDistributeCode` is forced
-            // `true` for this target by the `useEffect` above) and explain
-            // why via the hint, instead of letting the operator believe
-            // they can turn it off.
+            // the toggle on (disabled, checked) and explain why via the
+            // hint, instead of letting the operator believe they can turn
+            // it off. Issue #87 review, eighth pass, Important finding 1:
+            // `checked` is derived here (`isolated || psDistributeCode`)
+            // rather than by forcing `psDistributeCode` itself to `true` —
+            // the underlying state stays equal to the actual saved value,
+            // so Save (see `handleSaveServer`, which omits the field for a
+            // locked server) never persists a phantom opt-in that outlives
+            // isolation being turned back off.
             const isolated = isDistributeCodeLocked((s.servers || []).find((sv) => sv.name === s.psServer));
             return (
               <FormField
@@ -568,7 +580,7 @@ function ServersSection({ settings: s }: { settings: ReturnType<typeof useProjec
                   <label className="toggle">
                     <input
                       type="checkbox"
-                      checked={s.psDistributeCode}
+                      checked={isolated || s.psDistributeCode}
                       disabled={isolated}
                       onChange={(e) => s.setPsDistributeCode(e.target.checked)}
                     />

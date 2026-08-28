@@ -92,6 +92,22 @@ describe('RemoteBundleOps', () => {
       expect(err.transportFailure).toBe(true);
     });
 
+    // Issue #87 review, 8th pass, Minor finding 3: `transport.exec()`
+    // rejecting outright (agent HTTP failure, dropped connection, thrown
+    // timeout) is a different failure mode than resolving without the
+    // sentinel line, but must be classified the same way —
+    // `RemoteGitCommandError({ transportFailure: true })` — so
+    // `FetchDistributionService.deliverToMirror()`'s incremental->full
+    // fallback still skips it instead of retrying a bundle for a failure
+    // that has nothing to do with the bundle's content.
+    it('throws RemoteGitCommandError with transportFailure: true when transport.exec() itself rejects', async () => {
+      const transport = { exec: vi.fn(async () => { throw new Error('agent unreachable: 502'); }) } as any;
+      const err: any = await ops.verify(transport, '/tmp/mirror.git', '/tmp/test.bundle').catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect(err.name).toBe('RemoteGitCommandError');
+      expect(err.transportFailure).toBe(true);
+    });
+
     // Issue #87 third-party review, fourth pass, Important finding 1:
     // `git bundle verify` needs a repository context to check the bundle's
     // prerequisite commits against; run without `-C <mirrorDir>` it fails

@@ -1,5 +1,6 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
+import * as path from 'path';
 import type { IServerTransport } from '../../servers/transport/ServerTransport';
 import type { CanonicalRepositoryIdentity } from '../resolveCanonicalRepositoryIdentity';
 import type { SftpService } from '../../servers/ssh/SftpService';
@@ -105,13 +106,54 @@ export class FetchDistributionService {
   // snapshot without ever splitting a single "read then build" step across
   // two acquisitions, which is the part that actually needs the lock.
   //
-  // Lock acquisition order is always OUTER (`this.mutex`, keyed
-  // `${sshHost}:${homeDir}:${repoHash}`, taken by `distribute()`) then INNER
-  // (`this.hubCacheMutex`, keyed `repoHash`, taken inside
-  // `distributeUnlocked()`) — never the reverse. Nothing in this class ever
-  // holds the inner lock while trying to acquire the outer one, so the two
-  // can never deadlock against each other.
   private readonly hubCacheMutex = new KeyedMutex();
+
+  // Third mutex, keyed by `${hostIdentity}:${normalizedWorkingDir}` —
+  // serializes `ensureWorkingDir()` (Issue #87 review, 8th pass, Important
+  // finding 2). `this.mutex` above protects the shared MIRROR
+  // (`<homeDir>/.azito/repos/<repoHash>.git`) by a key derived from
+  // `repoHash`, but `ensureWorkingDir()` also clones/fetches/detaches/
+  // updates refs in `workingDir` — a DIFFERENT path that is not
+  // 1:1 with the mirror. Two `project_servers` rows (or two projects) can
+  // legitimately point different `repositoryId`s at the SAME `workingDir`
+  // (operator misconfiguration, or two registrations that happen to share
+  // a filesystem path), in which case they'd take DIFFERENT `this.mutex`
+  // keys (different `repoHash`) but need to run their clone/fetch/detach/
+  // ref-update sequence against that one checkout serially, or one call's
+  // half-finished clone/detach can be interleaved with the other's,
+  // corrupting the checkout. Keyed by the same `hostIdentity` as `this.mutex`
+  // (see `resolveHostIdentityForLockKey()`) plus the normalized `workingDir`
+  // path (see `normalizeWorkingDirForLockKey()`) so aliased hosts and
+  // trailing-slash path spelling still collapse to one key.
+  private readonly workingDirMutex = new KeyedMutex();
+
+  // ── Lock ordering (all three mutexes in this class) ──
+  // Always acquired OUTER -> INNER in this fixed order, never the reverse,
+  // and never held concurrently with an attempt to acquire an earlier one
+  // in the list:
+  //   1. `this.mutex`        — keyed `${hostIdentity}:${homeDir}:${repoHash}`,
+  //                            taken by `distribute()`, held for the whole
+  //                            `distributeUnlocked()` call.
+  //   2. `this.workingDirMutex` — keyed `${hostIdentity}:${normalizedWorkingDir}`,
+  //                            taken only around `ensureWorkingDir()` calls
+  //                            inside `distributeUnlocked()` (i.e. always
+  //                            while (1) is held, never while (3) is held —
+  //                            both call sites run after `prepareBundle()`'s
+  //                            `hubCacheMutex.withLock()` has already
+  //                            resolved).
+  //   3. `this.hubCacheMutex` — keyed `repoHash` alone, taken inside
+  //                            `distributeUnlocked()` (`prepareBundle()`)
+  //                            and inside `deliverToMirror()`'s fallback
+  //                            branch, both while (1) is held.
+  // Nothing in this class ever holds (2) or (3) while trying to acquire (1),
+  // and nothing ever holds (3) while trying to acquire (2) (they are never
+  // nested against each other — see the call sites above), so no pair here
+  // can deadlock against another.
+  //
+  // Out of scope: this only serializes concurrent distributions within THIS
+  // hub process. It does not take any lock on the remote filesystem itself,
+  // so a second hub process (or an operator/script touching the same
+  // `workingDir` or mirror directly, out of band) is not protected against.
 
   constructor(
     private hubRepoCache: HubRepoCache,
@@ -152,6 +194,16 @@ export class FetchDistributionService {
     }
   }
 
+  // Issue #87 review, 8th pass, Important finding 2: normalizes `workingDir`
+  // for `workingDirMutex`'s key so two spellings of the same remote path
+  // (trailing slash, repeated slashes) collapse to one lock. Remote
+  // `ServerTransport` targets (ssh/agent) are POSIX hosts, so POSIX
+  // normalization is correct here — this class never operates on `local`.
+  private normalizeWorkingDirForLockKey(workingDir: string): string {
+    const normalized = path.posix.normalize(workingDir);
+    return normalized.length > 1 ? normalized.replace(/\/+$/, '') : normalized;
+  }
+
   async distribute(params: FetchDistributionParams): Promise<FetchDistributionResult> {
     const { server, transport, repoIdentity } = params;
     const sshHost = server.sshHost;
@@ -174,7 +226,7 @@ export class FetchDistributionService {
     const repoHash = computeRepoHash(repoIdentity);
     const hostIdentity = this.resolveHostIdentityForLockKey(sshHost);
     return this.mutex.withLock(`${hostIdentity}:${homeDir}:${repoHash}`, () =>
-      this.distributeUnlocked(params, sshHost, homeDir, repoHash));
+      this.distributeUnlocked(params, sshHost, homeDir, repoHash, hostIdentity));
   }
 
   private async distributeUnlocked(
@@ -182,6 +234,7 @@ export class FetchDistributionService {
     sshHost: string,
     homeDir: string,
     repoHash: string,
+    hostIdentity: string,
   ): Promise<FetchDistributionResult> {
     const { server, transport, repoIdentity, token, branch, workingDir, repositoryId } = params;
 
@@ -208,11 +261,21 @@ export class FetchDistributionService {
       const prep = await this.hubCacheMutex.withLock(repoHash, () =>
         this.prepareBundle(repoIdentity, token, branch, mirrorSha));
 
+      // Issue #87 review, 8th pass, Important finding 2: `ensureWorkingDir()`
+      // clones/fetches/detaches/updates refs in `workingDir` — a path not
+      // 1:1 with the mirror lock key above (see `workingDirMutex`'s doc
+      // comment for why a second lock, keyed by the actual path, is needed).
+      // Both call sites below acquire it, always while `this.mutex` (the
+      // outer mirror lock) is already held and never while `hubCacheMutex`
+      // is held — see the class-level "Lock ordering" comment.
+      const workingDirLockKey = `${hostIdentity}:${this.normalizeWorkingDirForLockKey(workingDir)}`;
+
       if (prep.kind === 'current') {
         // workingDir may still be missing or stale (e.g. it was deleted
         // separately from the mirror), so it's ensured even when the
         // transfer itself was skipped.
-        const localBranchSynced = await this.ensureWorkingDir(transport, mirrorDir, workingDir, branch);
+        const localBranchSynced = await this.workingDirMutex.withLock(workingDirLockKey, () =>
+          this.ensureWorkingDir(transport, mirrorDir, workingDir, branch));
         return { status: 'already_current', sha: prep.headSha, localBranchSynced };
       }
 
@@ -220,7 +283,8 @@ export class FetchDistributionService {
       // doc comment above for why.
       const delivered = await this.deliverToMirror(transport, sshHost, repoHash, repoIdentity, branch, mirrorDir, prep);
 
-      const localBranchSynced = await this.ensureWorkingDir(transport, mirrorDir, workingDir, branch);
+      const localBranchSynced = await this.workingDirMutex.withLock(workingDirLockKey, () =>
+        this.ensureWorkingDir(transport, mirrorDir, workingDir, branch));
 
       this.distributionStateRepo.upsert(server.name, repositoryId, delivered.headSha, delivered.bundleType);
 

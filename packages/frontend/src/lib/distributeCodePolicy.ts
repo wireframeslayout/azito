@@ -36,3 +36,21 @@ export function shouldShowDistributeCodeBadge(
 ): boolean {
   return isDistributeCodeLocked(server) || !!distributeCode;
 }
+
+/**
+ * Issue #87 review, eighth pass, Important finding 1: what to send as
+ * `distribute_code` in the project-server save request. For a locked
+ * (isolated) server the flag is not actually user-controlled — distribution
+ * happens unconditionally regardless of what gets saved — so persisting the
+ * form's (possibly display-forced) value would leave a stale opt-in behind
+ * once isolation is later turned off. Returning `undefined` here tells the
+ * caller to omit the key; the PUT handler's "key absent -> preserve existing
+ * value" semantics then keep whatever was actually saved before, instead of
+ * silently overwriting it with `true`.
+ */
+export function resolveDistributeCodeForSave(
+  server: DistributeCodePolicyServer | undefined,
+  distributeCode: boolean,
+): boolean | undefined {
+  return isDistributeCodeLocked(server) ? undefined : distributeCode;
+}

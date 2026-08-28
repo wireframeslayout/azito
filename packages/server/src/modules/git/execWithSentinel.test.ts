@@ -57,6 +57,28 @@ describe('execWithSentinel', () => {
     expect(outcome.sentinelFound).toBe(true);
     expect(outcome.exitCode).toBe(0);
   });
+
+  // Issue #87 review, 8th pass, Minor finding 3: `transport.exec()` itself
+  // can REJECT (agent-transport HTTP failure, dropped SSH connection,
+  // thrown timeout) — distinct from resolving with a missing sentinel line.
+  // Before this fix that rejection propagated as whatever raw error
+  // `transport.exec()` threw, which fails `err instanceof
+  // RemoteGitCommandError && err.transportFailure` at every call site that
+  // checks it (`RemoteBundleOps.verify()`,
+  // `FetchDistributionService.deliverToMirror()`), so an unreachable server
+  // got misclassified as "git ran and rejected the bundle's content" and
+  // triggered a pointless incremental->full retry.
+  it('wraps a transport.exec() rejection in RemoteGitCommandError(transportFailure: true), preserving the original error as cause', async () => {
+    const originalError = new Error('ECONNREFUSED: connect failed');
+    const transport = { exec: vi.fn(async () => { throw originalError; }) } as unknown as IServerTransport;
+
+    const err: unknown = await execWithSentinel(transport, 'git status', 5_000).catch((e) => e);
+
+    expect(err).toBeInstanceOf(RemoteGitCommandError);
+    expect((err as RemoteGitCommandError).transportFailure).toBe(true);
+    expect((err as Error).cause).toBe(originalError);
+    expect((err as Error).message).toContain('ECONNREFUSED');
+  });
 });
 
 describe('execGitOrThrow', () => {
@@ -76,6 +98,14 @@ describe('execGitOrThrow', () => {
 
   it('throws RemoteGitCommandError(transportFailure: true) when the sentinel is missing', async () => {
     const transport = sshShapedTransport('connection reset by peer');
+    const err: unknown = await execGitOrThrow(transport, 'git fetch', 5_000, 'git fetch failed').catch((e) => e);
+    expect(err).toBeInstanceOf(RemoteGitCommandError);
+    expect((err as RemoteGitCommandError).transportFailure).toBe(true);
+  });
+
+  // Issue #87 review, 8th pass, Minor finding 3.
+  it('throws RemoteGitCommandError(transportFailure: true) when transport.exec() itself rejects', async () => {
+    const transport = { exec: vi.fn(async () => { throw new Error('agent unreachable: 502'); }) } as unknown as IServerTransport;
     const err: unknown = await execGitOrThrow(transport, 'git fetch', 5_000, 'git fetch failed').catch((e) => e);
     expect(err).toBeInstanceOf(RemoteGitCommandError);
     expect((err as RemoteGitCommandError).transportFailure).toBe(true);

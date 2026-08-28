@@ -850,6 +850,157 @@ describe('FetchDistributionService', () => {
   });
 });
 
+// Issue #87 review, 8th pass, Important finding 2: `this.mutex` (outer)
+// serializes by mirror identity (`hostIdentity:homeDir:repoHash`), but
+// `ensureWorkingDir()` also clones/fetches/detaches/updates refs in
+// `workingDir` — a path not 1:1 with the mirror. Two distributions for
+// DIFFERENT repos (different repoHash, so different outer-mutex keys, so
+// they run concurrently up to that point) can still target the SAME
+// `workingDir` (operator misconfiguration, or two registrations sharing a
+// filesystem path) — without a second lock keyed by the actual working
+// directory, their clone/fetch/detach/ref-update sequences could interleave
+// and corrupt the checkout.
+describe('FetchDistributionService workingDir serialization (Issue #87 review, 8th pass, Important finding 2)', () => {
+  it('serializes ensureWorkingDir for two distributions that target the same workingDir, even though they use different repositories (different mirrors)', async () => {
+    const order: string[] = [];
+    let releaseA!: () => void;
+    const gateA = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+
+    let call = 0;
+    const remoteBundleOps = mockRemoteBundleOps({
+      // Mirror already at the hub cache's head, so both calls take the
+      // `already_current` path and go straight into `ensureWorkingDir()`
+      // without ever touching SFTP — isolating the assertion to the
+      // workingDir lock alone.
+      getMirrorBranchSha: vi.fn(async () => sha),
+      repoExists: vi.fn(async () => true),
+      fetchWorkingDirFromMirror: vi.fn(async () => {
+        call += 1;
+        if (call === 1) {
+          order.push('a-start');
+          await gateA;
+          order.push('a-end');
+        } else {
+          order.push('b-start');
+        }
+      }),
+    });
+
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const otherIdentity: CanonicalRepositoryIdentity = {
+      ...identity,
+      repo: 'other-repo',
+      httpsUrl: 'https://github.com/owner/other-repo.git',
+    };
+    const sharedWorkingDir = '/home/agent/shared-checkout';
+
+    const a = service.distribute(makeParams({ repositoryId: 1, repoIdentity: identity, workingDir: sharedWorkingDir }));
+    await flushAsync();
+
+    // Different repoIdentity -> different repoHash -> different outer
+    // mutex key, so `b` is NOT queued behind `a` by the mirror lock. It
+    // must still be blocked from starting its own `ensureWorkingDir()`
+    // step until `a`'s finishes, because both target the same workingDir.
+    const b = service.distribute(makeParams({ repositoryId: 2, repoIdentity: otherIdentity, workingDir: sharedWorkingDir }));
+    await flushAsync();
+
+    expect(order).toEqual(['a-start']);
+
+    releaseA();
+    await Promise.all([a, b]);
+    expect(order).toEqual(['a-start', 'a-end', 'b-start']);
+  });
+
+  it('does not serialize ensureWorkingDir for two distributions that target different workingDirs', async () => {
+    const order: string[] = [];
+    let releaseA!: () => void;
+    const gateA = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+
+    let call = 0;
+    const remoteBundleOps = mockRemoteBundleOps({
+      getMirrorBranchSha: vi.fn(async () => sha),
+      repoExists: vi.fn(async () => true),
+      fetchWorkingDirFromMirror: vi.fn(async () => {
+        call += 1;
+        if (call === 1) {
+          order.push('a-start');
+          await gateA;
+          order.push('a-end');
+        } else {
+          order.push('b-start');
+        }
+      }),
+    });
+
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const otherIdentity: CanonicalRepositoryIdentity = {
+      ...identity,
+      repo: 'other-repo',
+      httpsUrl: 'https://github.com/owner/other-repo.git',
+    };
+
+    const a = service.distribute(makeParams({ repositoryId: 1, repoIdentity: identity, workingDir: '/home/agent/checkout-a' }));
+    await flushAsync();
+
+    const b = service.distribute(makeParams({ repositoryId: 2, repoIdentity: otherIdentity, workingDir: '/home/agent/checkout-b' }));
+    await b;
+
+    // `b` must have proceeded immediately, without waiting for `a`.
+    expect(order).toEqual(['a-start', 'b-start']);
+
+    releaseA();
+    await a;
+    expect(order).toEqual(['a-start', 'b-start', 'a-end']);
+  });
+
+  it('treats a trailing-slash spelling of the same workingDir as the same lock key', async () => {
+    const order: string[] = [];
+    let releaseA!: () => void;
+    const gateA = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+
+    let call = 0;
+    const remoteBundleOps = mockRemoteBundleOps({
+      getMirrorBranchSha: vi.fn(async () => sha),
+      repoExists: vi.fn(async () => true),
+      fetchWorkingDirFromMirror: vi.fn(async () => {
+        call += 1;
+        if (call === 1) {
+          order.push('a-start');
+          await gateA;
+          order.push('a-end');
+        } else {
+          order.push('b-start');
+        }
+      }),
+    });
+
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const otherIdentity: CanonicalRepositoryIdentity = {
+      ...identity,
+      repo: 'other-repo',
+      httpsUrl: 'https://github.com/owner/other-repo.git',
+    };
+
+    const a = service.distribute(makeParams({ repositoryId: 1, repoIdentity: identity, workingDir: '/home/agent/shared-checkout' }));
+    await flushAsync();
+
+    const b = service.distribute(makeParams({ repositoryId: 2, repoIdentity: otherIdentity, workingDir: '/home/agent/shared-checkout/' }));
+    await flushAsync();
+
+    expect(order).toEqual(['a-start']);
+
+    releaseA();
+    await Promise.all([a, b]);
+    expect(order).toEqual(['a-start', 'a-end', 'b-start']);
+  });
+});
+
 // Issue #87 review, 6th pass, Important finding 3: the outer lock's key
 // used to be built from the RAW `sshHost` string. SFTP resolves `sshHost`
 // through SSH config/aliasing before connecting, so two spellings that
