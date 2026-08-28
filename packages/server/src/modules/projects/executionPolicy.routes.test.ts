@@ -213,7 +213,7 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
         findByProject: vi.fn(() => []),
         findByServer: vi.fn(() => []),
         find: vi.fn(() => ({
-          projectId: 10, serverName: 'test-server', workingDirectory: '/srv/repo', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const,
+          projectId: 10, serverName: 'test-server', workingDirectory: '/srv/repo', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false,
         })),
         upsert: vi.fn(),
         remove: vi.fn(),
@@ -243,7 +243,7 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
         findByProject: vi.fn(() => []),
         findByServer: vi.fn(() => []),
         find: vi.fn(() => ({
-          projectId: 10, serverName: 'test-server', workingDirectory: '/srv/repo', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const,
+          projectId: 10, serverName: 'test-server', workingDirectory: '/srv/repo', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false,
         })),
         upsert: vi.fn(),
         remove: vi.fn(),

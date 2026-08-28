@@ -192,7 +192,7 @@ function makeRepos(overrides: {
   const projectServerRepo: IProjectServerRepository = {
     findByProject: vi.fn(() => []),
     findByServer: vi.fn(() => []),
-    find: vi.fn(() => ({ projectId: 10, serverName: 'local', workingDirectory: '/work', branch: 'feat', tmuxSession: 'sess', inputPolicy: 'manual-approval' as const })),
+    find: vi.fn(() => ({ projectId: 10, serverName: 'local', workingDirectory: '/work', branch: 'feat', tmuxSession: 'sess', inputPolicy: 'manual-approval' as const, distributeCode: false })),
     upsert: vi.fn(),
     remove: vi.fn(),
     ...overrides.projectServer,

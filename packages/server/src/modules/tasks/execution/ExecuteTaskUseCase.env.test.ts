@@ -191,11 +191,15 @@ function buildUseCase(opts: {
   task: Task;
   project: ProjectDetail | null;
   units: Unit[];
-  projectServer?: { workingDirectory: string | null; branch: string | null; tmuxSession: string; inputPolicy?: 'deny' | 'manual-approval' | 'allow' } | null;
+  projectServer?: { workingDirectory: string | null; branch: string | null; tmuxSession: string; inputPolicy?: 'deny' | 'manual-approval' | 'allow'; distributeCode?: boolean } | null;
   /** When set, overrides findByProject entirely (e.g. to simulate multiple project servers). */
-  projectServersList?: Array<{ projectId: number; serverName: string; workingDirectory: string | null; branch: string | null; tmuxSession: string; inputPolicy?: 'deny' | 'manual-approval' | 'allow' }>;
+  projectServersList?: Array<{ projectId: number; serverName: string; workingDirectory: string | null; branch: string | null; tmuxSession: string; inputPolicy?: 'deny' | 'manual-approval' | 'allow'; distributeCode?: boolean }>;
   /** When set, overrides the server returned by serverRepo.findByName (default: makeServer(), type 'local'). */
   server?: ServerConfig;
+  /** Issue #87 Phase 2: stubs projectRepo.findRepositoryById — a repository row with a token, for fetch-distribution gate tests. */
+  repository?: { id: number; url: string; provider: 'github' | 'gitlab'; owner: string | null; repoName: string | null; token: string | null };
+  /** Issue #87 Phase 2: injected as the constructor's fetchDistributionService param — when set, the fetch-distribution gate can actually run. */
+  fetchDistributionService?: { distribute: ReturnType<typeof vi.fn> };
   /** Issue #29 Step 3a: defaults to true so pre-existing tests (all predating 'allow') are unaffected. */
   scopedAuthEnabled?: boolean;
 }) {
@@ -266,14 +270,14 @@ function buildUseCase(opts: {
     update: vi.fn(),
     delete: vi.fn(),
     addRepository: vi.fn(() => 1),
-    findRepositoryById: vi.fn(() => null),
+    findRepositoryById: vi.fn(() => opts.repository ? { ...opts.repository, name: null } : null),
     removeRepository: vi.fn(),
   };
 
   const projectServerRepo: IProjectServerRepository = {
-    findByProject: vi.fn(() => (opts.projectServersList ?? (opts.projectServer ? [{ projectId: 1, serverName: 'local-server', ...opts.projectServer }] : [])).map((ps) => ({ inputPolicy: 'manual-approval' as const, ...ps }))),
+    findByProject: vi.fn(() => (opts.projectServersList ?? (opts.projectServer ? [{ projectId: 1, serverName: 'local-server', ...opts.projectServer }] : [])).map((ps) => ({ inputPolicy: 'manual-approval' as const, distributeCode: false, ...ps }))),
     findByServer: vi.fn(() => []),
-    find: vi.fn(() => (opts.projectServer ? { projectId: 1, serverName: 'local-server', inputPolicy: 'manual-approval' as const, ...opts.projectServer } : null)),
+    find: vi.fn(() => (opts.projectServer ? { projectId: 1, serverName: 'local-server', inputPolicy: 'manual-approval' as const, distributeCode: false, ...opts.projectServer } : null)),
     upsert: vi.fn(),
     remove: vi.fn(),
   };
@@ -395,6 +399,8 @@ function buildUseCase(opts: {
     new KeyedMutex(),
     opts.scopedAuthEnabled ?? true,
       async () => [],
+    null,
+    (opts.fetchDistributionService as any) ?? null,
   );
 
   return { useCase, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, transportFactory, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, paneEnvService };
@@ -1311,9 +1317,9 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
       removeRepository: vi.fn(),
     };
     const projectServerRepo: IProjectServerRepository = {
-      findByProject: vi.fn(() => [{ projectId: 1, serverName: 'local-server', workingDirectory: '/work', branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const }]),
+      findByProject: vi.fn(() => [{ projectId: 1, serverName: 'local-server', workingDirectory: '/work', branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false }]),
       findByServer: vi.fn(() => []),
-      find: vi.fn(() => ({ projectId: 1, serverName: 'local-server', workingDirectory: '/work', branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const })),
+      find: vi.fn(() => ({ projectId: 1, serverName: 'local-server', workingDirectory: '/work', branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false })),
       upsert: vi.fn(),
       remove: vi.fn(),
     };
@@ -2378,5 +2384,88 @@ describe('ExecuteTaskUseCase stale window cleanup', () => {
 
     expect(windowRepo.remove).toHaveBeenCalledWith(104);
     expect(tmux.checkPaneExists).not.toHaveBeenCalled();
+  });
+});
+
+describe('ExecuteTaskUseCase fetch-distribution gate (Issue #87 Phase 2: generalized beyond isolated servers via project_servers.distribute_code)', () => {
+  const repository = {
+    id: 5,
+    url: 'https://github.com/acme/widget.git',
+    provider: 'github' as const,
+    owner: 'acme',
+    repoName: 'widget',
+    token: 'tok123',
+  };
+
+  function projectWithRepository(): ProjectDetail {
+    return makeProject({
+      defaultUnitId: null,
+      repositories: [{ id: 5, name: null, url: repository.url, provider: 'github', owner: 'acme', repoName: 'widget', hasToken: true }],
+    });
+  }
+
+  function buildDistributionGateHarness(opts: {
+    server: ServerConfig;
+    distributeCode: boolean;
+  }) {
+    const unit = makeUnit({ id: 10, workerType: 'claude', workerModel: 'opus' });
+    // task.workingDirectory (not projectServer.workingDirectory) supplies
+    // `workingDir` here deliberately: a non-null projectServer.workingDirectory
+    // would set `allowedRoot`, which forces ExecuteTaskUseCase through
+    // assertDirectoryContained's real filesystem/transport-backed path
+    // verification (Issue #27 containment) — irrelevant plumbing for this
+    // gate's own concern (whether distribute() got called) and not worth
+    // faking a transport or a real worktree directory for.
+    const task = makeTask({ id: 1, serverName: opts.server.name, unitId: 10, workingDirectory: '/srv/repo' });
+    const fetchDistributionService = { distribute: vi.fn(async () => ({ status: 'distributed' as const, sha: 'abc123', bundleType: 'full' as const })) };
+    const harness = buildUseCase({
+      task,
+      project: projectWithRepository(),
+      units: [unit],
+      projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', distributeCode: opts.distributeCode },
+      server: opts.server,
+      repository,
+      fetchDistributionService,
+    });
+    harness.worktreeServiceFactory.create.mockReturnValue({
+      create: vi.fn(async () => ({ path: '/srv/repo/.worktrees/task-1', branch: 'task/1-slug' })),
+    });
+    return { ...harness, fetchDistributionService };
+  }
+
+  it('distributes for an isolated server even when distribute_code is off (isolation makes distribution mandatory, not opt-in)', async () => {
+    const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
+    const { useCase, fetchDistributionService } = buildDistributionGateHarness({ server, distributeCode: false });
+
+    await useCase.execute(10, 1);
+
+    expect(fetchDistributionService.distribute).toHaveBeenCalledTimes(1);
+  });
+
+  it('distributes for a non-isolated agent/ssh server when the project has opted in via distribute_code', async () => {
+    const server = makeServer({ name: 'srv-agent', type: 'agent', isolationIntent: false, sshHost: 'agent-host' });
+    const { useCase, fetchDistributionService } = buildDistributionGateHarness({ server, distributeCode: true });
+
+    await useCase.execute(10, 1);
+
+    expect(fetchDistributionService.distribute).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not distribute for a non-isolated server when distribute_code is off', async () => {
+    const server = makeServer({ name: 'srv-agent', type: 'agent', isolationIntent: false });
+    const { useCase, fetchDistributionService } = buildDistributionGateHarness({ server, distributeCode: false });
+
+    await useCase.execute(10, 1);
+
+    expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+  });
+
+  it('never distributes to a local server, even when distribute_code is on (that server IS the hub)', async () => {
+    const server = makeServer({ name: 'local-server', type: 'local', isolationIntent: false });
+    const { useCase, fetchDistributionService } = buildDistributionGateHarness({ server, distributeCode: true });
+
+    await useCase.execute(10, 1);
+
+    expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
   });
 });

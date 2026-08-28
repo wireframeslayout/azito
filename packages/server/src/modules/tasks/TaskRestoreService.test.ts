@@ -105,9 +105,9 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
       removeRepository: vi.fn(),
     },
     projectServerRepo: {
-      findByProject: vi.fn(() => [{ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const }]),
+      findByProject: vi.fn(() => [{ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false }]),
       findByServer: vi.fn(() => []),
-      find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const })),
+      find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false })),
       upsert: vi.fn(),
       remove: vi.fn(),
     },
@@ -418,7 +418,7 @@ describe('TaskRestoreService', () => {
       ...deps,
       projectServerRepo: {
         ...deps.projectServerRepo,
-        find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const })),
+        find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false })),
       },
     });
     service = new TaskRestoreService(deps);
@@ -737,7 +737,7 @@ describe('TaskRestoreService', () => {
         ...deps,
         projectServerRepo: {
           ...deps.projectServerRepo,
-          find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'deny' as const })),
+          find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'deny' as const, distributeCode: false })),
         },
       });
       service = new TaskRestoreService(deps);

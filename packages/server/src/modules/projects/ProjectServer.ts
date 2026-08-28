@@ -14,6 +14,18 @@ export interface ProjectServer {
    * #29 Step 3a). Has no effect on trusted-origin tasks.
    */
   inputPolicy: 'deny' | 'manual-approval' | 'allow';
+  /**
+   * Whether the hub should distribute this project's code to this server on
+   * the hub's own git credentials (Issue #87 Phase 2 — generalizes the
+   * isolated-server-only distribution path in ExecuteTaskUseCase to any
+   * agent/ssh server). An isolated server has no git credentials of its own,
+   * so distribution is mandatory there regardless of this flag; a normal
+   * agent/ssh server can opt into the same mechanism for instant dev
+   * environment provisioning without ever holding hub-side credentials.
+   * Meaningless for a `local` server (that IS the hub) — ExecuteTaskUseCase
+   * excludes `local` from the gate outright. Defaults off.
+   */
+  distributeCode: boolean;
 }
 
 /** Full row for upsert — tmuxSession is required; callers resolve it at the boundary. */

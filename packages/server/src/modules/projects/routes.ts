@@ -204,6 +204,7 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
         branch?: string | null;
         tmux_session?: string | null;
         input_policy?: string;
+        distribute_code?: boolean;
       };
       // tmux_session semantics: key present with null/empty resets to the default
       // ('azito'); key present with a value sets it (trimmed); key absent preserves
@@ -251,6 +252,15 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       // 0 — this used to be a second, independently-hardcoded copy of the
       // same literal).
       const inputPolicy = (body.input_policy as 'deny' | 'manual-approval' | 'allow' | undefined) ?? resolveInputPolicy(existingRow);
+      // distribute_code: same "key absent preserves, key present sets"
+      // semantics as working_directory/branch/tmux_session above — a client
+      // that PUTs only { input_policy } must not silently reset this too.
+      // Meaningless for a `local` server (hub itself; ExecuteTaskUseCase
+      // excludes `local` from the distribution gate outright), but that
+      // exclusion lives there, not here — this endpoint just stores the flag.
+      const distributeCode = 'distribute_code' in body
+        ? !!body.distribute_code
+        : (existingRow?.distributeCode ?? false);
       projectServerRepo.upsert({
         projectId,
         serverName,
@@ -258,6 +268,7 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
         branch,
         tmuxSession,
         inputPolicy,
+        distributeCode,
       });
 
       let sessionCreated = false;

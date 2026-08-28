@@ -25,6 +25,8 @@ interface ProjectServer {
   projectId: number; serverName: string; workingDirectory?: string; branch?: string; tmuxSession: string;
   /** Issue #29 Step 3a: 'allow' is now selectable, but only ever effective for a verified-isolated server — the server degrades it to 'manual-approval' at run time otherwise (see routes.ts's PUT validation and ProjectServer.resolveEffectiveInputPolicy). */
   inputPolicy?: 'deny' | 'manual-approval' | 'allow';
+  /** Issue #87 Phase 2: whether the hub distributes this project's code to this server. Meaningless for `local`. Default off. */
+  distributeCode?: boolean;
 }
 interface Project {
   id: number; name: string; slug: string; description?: string;
@@ -74,6 +76,14 @@ export function useProjectSettings(
   // TIME from live verification/scoped-auth state, degrading back to
   // 'manual-approval' whenever any of that isn't currently true.
   const [psInputPolicy, setPsInputPolicy] = useState<'deny' | 'manual-approval' | 'allow'>('manual-approval');
+  // Issue #87 Phase 2: opt-in hub-代行 code distribution to this server, on
+  // the hub's own git credentials — generalizes the isolated-server-only
+  // distribution path (mandatory there, since an isolated server holds no
+  // credentials of its own) to any agent/ssh server, for instant dev
+  // environment provisioning. Default off, meaningless for `local` (the hub
+  // itself) — the form hides the toggle entirely for that server (see
+  // isPsServerLocal below).
+  const [psDistributeCode, setPsDistributeCode] = useState(false);
 
   const [addRepoOpen, setAddRepoOpen] = useState(false);
   const [repoUrl, setRepoUrl] = useState('');
@@ -173,11 +183,12 @@ export function useProjectSettings(
         branch: psBranch.trim() || null,
         tmux_session: psTmuxSession.trim() || null,
         input_policy: psInputPolicy,
+        distribute_code: psDistributeCode,
       }),
     });
-    setAddPsOpen(false); setPsWorkDir(''); setPsBranch(''); setPsTmuxSession(''); setPsInputPolicy('manual-approval');
+    setAddPsOpen(false); setPsWorkDir(''); setPsBranch(''); setPsTmuxSession(''); setPsInputPolicy('manual-approval'); setPsDistributeCode(false);
     api<ProjectServer[]>(`/projects/${projectId}/servers`).then((res) => setProjectServers(Array.isArray(res) ? res : [])).catch(() => {});
-  }, [projectId, psServer, psWorkDir, psBranch, psTmuxSession, psInputPolicy]);
+  }, [projectId, psServer, psWorkDir, psBranch, psTmuxSession, psInputPolicy, psDistributeCode]);
 
   // Opens the add/edit form for `serverName`, pre-filled from its existing
   // project_servers row when one exists (Issue #51 review note: this form's
@@ -192,6 +203,7 @@ export function useProjectSettings(
     setPsBranch(existing?.branch ?? '');
     setPsTmuxSession(existing?.tmuxSession ?? '');
     setPsInputPolicy(existing?.inputPolicy === 'deny' || existing?.inputPolicy === 'allow' ? existing.inputPolicy : 'manual-approval');
+    setPsDistributeCode(existing?.distributeCode ?? false);
     setAddPsOpen(true);
   }, [projectServers]);
 
@@ -216,7 +228,7 @@ export function useProjectSettings(
     // Servers
     projectServers, addPsOpen, setAddPsOpen, psServer, setPsServer,
     psWorkDir, setPsWorkDir, psBranch, setPsBranch, psTmuxSession, setPsTmuxSession,
-    psInputPolicy, setPsInputPolicy, handleSaveServer, handleRemoveServer, handleOpenServerForm,
+    psInputPolicy, setPsInputPolicy, psDistributeCode, setPsDistributeCode, handleSaveServer, handleRemoveServer, handleOpenServerForm,
     // Danger
     handleDelete,
   };
@@ -496,6 +508,25 @@ function ServersSection({ settings: s }: { settings: ReturnType<typeof useProjec
           <FormField label={t('settings.servers.workingDirectory')}>
             <DirectoryInput value={s.psWorkDir} onChange={s.setPsWorkDir} serverName={s.psServer} placeholder={t('settings.servers.workingDirectoryPlaceholder')} style={baseInputStyle} />
           </FormField>
+          {/* Issue #87 Phase 2: meaningless for `local` (that server IS the
+              hub, so "distributing" to it has no effect) — hidden rather than
+              disabled, since the reason is structural, not a transient state
+              a user could resolve from this form. */}
+          {(s.servers || []).find((sv) => sv.name === s.psServer)?.type !== 'local' && (
+            <FormField label="" hint={t('settings.servers.distributeCodeHint')}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                <label className="toggle">
+                  <input
+                    type="checkbox"
+                    checked={s.psDistributeCode}
+                    onChange={(e) => s.setPsDistributeCode(e.target.checked)}
+                  />
+                  <span className="toggle-slider" />
+                </label>
+                <span style={{ fontSize: 'var(--font-md)', color: 'var(--text)' }}>{t('settings.servers.distributeCode')}</span>
+              </label>
+            </FormField>
+          )}
           <FormField label={t('settings.servers.branch')}>
             <FormInput value={s.psBranch} onChange={(e) => s.setPsBranch(e.target.value)} placeholder={t('settings.servers.branchPlaceholder')} />
           </FormField>
@@ -547,6 +578,9 @@ function ServersSection({ settings: s }: { settings: ReturnType<typeof useProjec
               <span style={{ color: ps.inputPolicy === 'deny' ? 'var(--danger)' : ps.inputPolicy === 'allow' ? 'var(--accent)' : 'var(--text-dim)', marginLeft: 8 }}>
                 {ps.inputPolicy === 'deny' ? t('settings.servers.inputPolicyDeny') : ps.inputPolicy === 'allow' ? t('settings.servers.inputPolicyAllow') : t('settings.servers.inputPolicyManualApproval')}
               </span>
+              {ps.distributeCode && (
+                <span style={{ color: 'var(--accent)', marginLeft: 8 }}>{t('settings.servers.distributeCodeBadge')}</span>
+              )}
             </span>
             <span style={{ display: 'flex', gap: 8 }}>
               <Button size="sm" onClick={() => s.handleOpenServerForm(ps.serverName)}>{t('common:actions.edit')}</Button>

@@ -747,14 +747,21 @@ export class ExecuteTaskUseCase {
     if (workingDir) {
       const baseBranch = resolveBaseBranch(task, projectServer, project);
       // Tracks fetch distribution's outcome this call (null when
-      // distribution did not run, e.g. local/ssh servers) — see
+      // distribution did not run, e.g. a `local` server, or an agent/ssh
+      // server whose project_servers row has distribute_code off) — see
       // resolveWorktreeCreateBaseBranch's doc comment for why this decides
       // whether worktree creation below resolves `origin/<baseBranch>`
       // instead of the plain `baseBranch`.
       let distStatus: 'distributed' | 'already_current' | 'failed' | null = null;
 
-      // Fetch distribution for isolated servers (Issue #87 Phase 1)
-      if (server.isolationIntent && this.fetchDistributionService) {
+      // Fetch distribution (Issue #87 Phase 1: isolated servers, unconditionally
+      // — they hold no git credentials of their own, so distribution is not
+      // optional there. Issue #87 Phase 2: generalized to any non-`local`
+      // server via the project's own `distribute_code` opt-in, for instant
+      // dev-environment provisioning without hub-side credentials on the
+      // target. `local` is always excluded — that server IS the hub, so
+      // "distributing" to it is meaningless.)
+      if (server.type !== 'local' && (server.isolationIntent || projectServer?.distributeCode) && this.fetchDistributionService) {
         const repoEntry = project?.repositories?.[0];
         if (repoEntry) {
           const repo = this.projectRepo.findRepositoryById(repoEntry.id);
