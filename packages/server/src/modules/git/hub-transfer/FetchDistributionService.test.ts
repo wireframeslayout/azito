@@ -41,6 +41,7 @@ function mockRemoteBundleOps(overrides: Record<string, any> = {}) {
     cleanup: vi.fn(async () => {}),
     getStampedRepoHash: vi.fn(async () => null),
     stampRepoHash: vi.fn(async () => {}),
+    getOriginUrl: vi.fn(async () => null),
     ...overrides,
   } as any;
 }
@@ -1208,5 +1209,90 @@ describe('FetchDistributionService workingDir repoHash stamp verification (Issue
     expect(remoteBundleOps.cloneWorkingDirFromMirror).toHaveBeenCalled();
     expect(remoteBundleOps.getStampedRepoHash).not.toHaveBeenCalled();
     expect(remoteBundleOps.stampRepoHash).toHaveBeenCalledWith({}, '/home/agent/repo', repoHash);
+  });
+});
+
+describe('FetchDistributionService unstamped-workingDir identity verification (Issue #87 third-party review, 11th round, Important finding 2)', () => {
+  const repoHash = computeRepoHash(identity);
+
+  it('origin matches the distributed repository: stamps BEFORE mutating, then proceeds normally', async () => {
+    const remoteBundleOps = mockRemoteBundleOps({
+      getMirrorBranchSha: vi.fn(async () => sha),
+      repoExists: vi.fn(async () => true),
+      getStampedRepoHash: vi.fn(async () => null),
+      getOriginUrl: vi.fn(async () => identity.httpsUrl),
+    });
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const result = await service.distribute(makeParams());
+
+    expect(result.status).toBe('already_current');
+    expect(remoteBundleOps.stampRepoHash).toHaveBeenCalledWith({}, '/home/agent/repo', repoHash);
+    expect(remoteBundleOps.fetchWorkingDirFromMirror).toHaveBeenCalled();
+
+    // Stamp must be written BEFORE the fetch that mutates the checkout —
+    // not merely called at all.
+    const stampOrder = remoteBundleOps.stampRepoHash.mock.invocationCallOrder[0];
+    const fetchOrder = remoteBundleOps.fetchWorkingDirFromMirror.mock.invocationCallOrder[0];
+    expect(stampOrder).toBeLessThan(fetchOrder);
+  });
+
+  it('origin identifies a DIFFERENT real repository: fails fast and leaves workingDir untouched', async () => {
+    const remoteBundleOps = mockRemoteBundleOps({
+      getMirrorBranchSha: vi.fn(async () => sha),
+      repoExists: vi.fn(async () => true),
+      getStampedRepoHash: vi.fn(async () => null),
+      getOriginUrl: vi.fn(async () => 'https://github.com/someone-else/other-repo.git'),
+    });
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const result = await service.distribute(makeParams());
+
+    expect(result.status).toBe('failed');
+    expect((result as any).error).toMatch(/different repository/);
+    // No mutation of any kind happened.
+    expect(remoteBundleOps.fetchWorkingDirFromMirror).not.toHaveBeenCalled();
+    expect(remoteBundleOps.stampRepoHash).not.toHaveBeenCalled();
+    expect(remoteBundleOps.setDummyOrigin).not.toHaveBeenCalled();
+  });
+
+  it('origin is the dummy sentinel (pre-existing AZITO-managed checkout): adopts it with a warning', async () => {
+    const remoteBundleOps = mockRemoteBundleOps({
+      getMirrorBranchSha: vi.fn(async () => sha),
+      repoExists: vi.fn(async () => true),
+      getStampedRepoHash: vi.fn(async () => null),
+      getOriginUrl: vi.fn(async () => 'https://azito-isolated-no-direct-access.invalid/repo.git'),
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+      const result = await service.distribute(makeParams());
+
+      expect(result.status).toBe('already_current');
+      expect(remoteBundleOps.stampRepoHash).toHaveBeenCalledWith({}, '/home/agent/repo', repoHash);
+      expect(remoteBundleOps.fetchWorkingDirFromMirror).toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('origin is unset (pre-existing AZITO-managed checkout): adopts it with a warning', async () => {
+    const remoteBundleOps = mockRemoteBundleOps({
+      getMirrorBranchSha: vi.fn(async () => sha),
+      repoExists: vi.fn(async () => true),
+      getStampedRepoHash: vi.fn(async () => null),
+      getOriginUrl: vi.fn(async () => null),
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+      const result = await service.distribute(makeParams());
+
+      expect(result.status).toBe('already_current');
+      expect(remoteBundleOps.stampRepoHash).toHaveBeenCalledWith({}, '/home/agent/repo', repoHash);
+      expect(remoteBundleOps.fetchWorkingDirFromMirror).toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });

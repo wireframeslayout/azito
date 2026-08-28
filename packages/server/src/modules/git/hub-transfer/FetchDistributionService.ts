@@ -9,7 +9,8 @@ import type { HubRepoCache } from './HubRepoCache';
 import type { RemoteBundleOps } from './RemoteBundleOps';
 import { computeRepoHash } from './repoHash';
 import { RemoteGitCommandError } from '../execWithSentinel';
-import type { IDistributionStateRepository, FetchDistributionParams, FetchDistributionResult } from './types';
+import { normalizeRepositoryUrlToHttps } from '../normalizeRepositoryUrl';
+import { DUMMY_ORIGIN_URL, type IDistributionStateRepository, type FetchDistributionParams, type FetchDistributionResult } from './types';
 
 type BundleType = 'full' | 'incremental';
 type BundleResult = { bundlePath: string; headSha: string };
@@ -278,7 +279,7 @@ export class FetchDistributionService {
         // separately from the mirror), so it's ensured even when the
         // transfer itself was skipped.
         const localBranchSynced = await this.workingDirMutex.withLock(workingDirLockKey, () =>
-          this.ensureWorkingDir(transport, mirrorDir, workingDir, branch, repoHash));
+          this.ensureWorkingDir(transport, mirrorDir, workingDir, branch, repoHash, repoIdentity));
         return { status: 'already_current', sha: prep.headSha, localBranchSynced };
       }
 
@@ -287,7 +288,7 @@ export class FetchDistributionService {
       const delivered = await this.deliverToMirror(transport, sshHost, repoHash, repoIdentity, branch, mirrorDir, prep);
 
       const localBranchSynced = await this.workingDirMutex.withLock(workingDirLockKey, () =>
-        this.ensureWorkingDir(transport, mirrorDir, workingDir, branch, repoHash));
+        this.ensureWorkingDir(transport, mirrorDir, workingDir, branch, repoHash, repoIdentity));
 
       this.distributionStateRepo.upsert(server.name, repositoryId, delivered.headSha, delivered.bundleType);
 
@@ -489,34 +490,56 @@ export class FetchDistributionService {
    * `workingDirMutex` this method is always called under only serializes
    * concurrent access to the SAME path — it does nothing to stop two
    * DIFFERENT repositories from being configured to use that same path in
-   * the first place, which is what this stamp check catches. A `workingDir`
-   * created before this stamping existed carries no stamp at all
-   * (`getStampedRepoHash` returns `null`) — verification is skipped for
-   * that case (back-compat: an operator's already-working setup must not
-   * start failing because of a check that didn't exist when it was set up)
-   * and the stamp is back-filled below so the NEXT distribution to that
-   * path is protected.
+   * the first place, which is what this stamp check catches.
+   *
+   * A `workingDir` created before this stamping existed carries no stamp at
+   * all (`getStampedRepoHash` returns `null`). Issue #87 third-party review,
+   * 11th round, Important finding 2: it used to be treated as unconditionally
+   * trustworthy for that case — fetched from the mirror, ref force-updated,
+   * origin replaced — with the stamp back-filled only AFTER all of that
+   * mutation. A misconfigured project server (pointed at some unrelated
+   * existing checkout) would silently rewrite that checkout before the new
+   * mismatch detection ever got a chance to run once. `verifyUnstampedIdentity`
+   * below now runs BEFORE any mutation and resolves that case into exactly
+   * one of three outcomes:
+   *  1. `origin` is a real upstream URL whose identity matches `repoHash` —
+   *     a legitimate pre-stamping checkout. Stamped, then treated the same
+   *     as an already-stamped match.
+   *  2. `origin` is a real upstream URL whose identity does NOT match —
+   *     fail fast, `workingDir` is left untouched.
+   *  3. `origin` is unset, the dummy sentinel this class itself sets
+   *     (`DUMMY_ORIGIN_URL`), or not a URL this method can confidently
+   *     parse — identity cannot be confirmed either way. Treated as
+   *     "probably AZITO's own pre-stamping checkout" (this class always
+   *     replaces `origin` with the dummy URL below, so a dummy origin is
+   *     exactly what an un-migrated AZITO-managed workingDir looks like) and
+   *     stamped with a warning logged. This is a deliberate back-compat
+   *     concession, not a certainty: an operator could point `distribute_code`
+   *     at an unrelated directory that also happens to have no/dummy origin
+   *     and it would be silently adopted. Failing closed here instead would
+   *     stop distribution to every already-configured isolated server the
+   *     moment they upgrade past this fix, which is worse in practice — see
+   *     branch 2 above for the case this CAN actually detect.
    */
-  private async ensureWorkingDir(transport: IServerTransport, mirrorDir: string, workingDir: string, branch: string, repoHash: string): Promise<boolean> {
+  private async ensureWorkingDir(transport: IServerTransport, mirrorDir: string, workingDir: string, branch: string, repoHash: string, repoIdentity: CanonicalRepositoryIdentity): Promise<boolean> {
     const exists = await this.remoteBundleOps.repoExists(transport, workingDir);
-    let stampedRepoHash: string | null = null;
     if (exists) {
-      stampedRepoHash = await this.remoteBundleOps.getStampedRepoHash(transport, workingDir);
+      const stampedRepoHash = await this.remoteBundleOps.getStampedRepoHash(transport, workingDir);
       if (stampedRepoHash !== null && stampedRepoHash !== repoHash) {
         throw new Error(
           `workingDir "${workingDir}" is stamped for a different repository (repoHash ${stampedRepoHash}) than the one being distributed (repoHash ${repoHash}). ` +
           'Two project/server registrations appear to target the same working directory — point them at separate working directories, or review this server\'s project configuration.',
         );
       }
+      if (stampedRepoHash === null) {
+        // Confirms identity (or accepts back-compat ambiguity) and stamps
+        // BEFORE any mutation below — see this method's doc comment.
+        await this.verifyUnstampedIdentity(transport, workingDir, repoHash, repoIdentity);
+      }
       await this.remoteBundleOps.fetchWorkingDirFromMirror(transport, mirrorDir, workingDir, branch);
     } else {
       await this.remoteBundleOps.cloneWorkingDirFromMirror(transport, mirrorDir, workingDir, branch);
-    }
-    // Stamp when there was no stamp to verify: a brand-new clone (exists was
-    // false) or a pre-existing, never-stamped workingDir being back-filled
-    // (exists was true, stampedRepoHash was null) — see this method's doc
-    // comment above.
-    if (stampedRepoHash === null) {
+      // Brand-new clone: nothing to verify, nothing pre-existing to protect.
       await this.remoteBundleOps.stampRepoHash(transport, workingDir, repoHash);
     }
     // Detach is applied every time, on both the clone and the fetch path —
@@ -545,6 +568,45 @@ export class FetchDistributionService {
     // separate from the mirror-path update route above.
     await this.remoteBundleOps.setDummyOrigin(transport, workingDir);
     return branchSynced;
+  }
+
+  /**
+   * Establishes the identity of an UNSTAMPED, pre-existing `workingDir`
+   * before `ensureWorkingDir` mutates it in any way (fetch/ref-force-update/
+   * origin replace) — see `ensureWorkingDir`'s doc comment for the three
+   * outcomes this resolves into. Stamps on the two outcomes that proceed;
+   * throws (leaving `workingDir` untouched) on the one that doesn't.
+   */
+  private async verifyUnstampedIdentity(transport: IServerTransport, workingDir: string, repoHash: string, repoIdentity: CanonicalRepositoryIdentity): Promise<void> {
+    const originUrl = await this.remoteBundleOps.getOriginUrl(transport, workingDir);
+    const normalizedOrigin = originUrl ? normalizeRepositoryUrlToHttps(originUrl) : null;
+
+    // No origin, the dummy sentinel this class itself sets, or an origin
+    // value we can't confidently parse into a real URL — identity cannot be
+    // confirmed either way. See branch 3 of `ensureWorkingDir`'s doc comment
+    // for why this is accepted (with a warning) rather than rejected.
+    if (!originUrl || originUrl === DUMMY_ORIGIN_URL || !normalizedOrigin) {
+      console.warn(
+        `[FetchDistributionService] workingDir "${workingDir}" has no repoHash stamp and its origin (${originUrl ?? '(unset)'}) does not identify a repository. ` +
+        `Assuming it is a pre-existing AZITO-managed checkout from before repoHash stamping (repoHash ${repoHash}) and adopting it. ` +
+        'If this working directory actually belongs to a different repository, distribution will silently overwrite it — verify this server\'s project configuration.',
+      );
+      await this.remoteBundleOps.stampRepoHash(transport, workingDir, repoHash);
+      return;
+    }
+
+    // Origin identifies a real upstream repository — it MUST match the one
+    // being distributed. Case-insensitive, same convention
+    // `resolveCanonicalRepositoryIdentity` uses for owner/repo comparison.
+    if (normalizedOrigin.toLowerCase() !== repoIdentity.httpsUrl.toLowerCase()) {
+      throw new Error(
+        `workingDir "${workingDir}" is not stamped for any repository, and its origin ("${originUrl}") identifies a DIFFERENT repository than the one being distributed ("${repoIdentity.httpsUrl}"). ` +
+        'This working directory appears to belong to a different repository — point this server\'s project configuration at a separate working directory, or verify the configured repository.',
+      );
+    }
+
+    // Origin matches: a legitimate pre-stamping checkout of this repository.
+    await this.remoteBundleOps.stampRepoHash(transport, workingDir, repoHash);
   }
 
   private tryCreateBundle(

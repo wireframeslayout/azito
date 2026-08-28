@@ -286,6 +286,27 @@ export class RemoteBundleOps {
   }
 
   /**
+   * Reads `workingDir`'s current `origin` remote URL, or `null` when there
+   * is no `origin` remote (e.g. a bare directory that isn't even a git repo
+   * yet, or a checkout someone `remote remove origin`'d). Used by
+   * `FetchDistributionService.ensureWorkingDir` to establish the identity of
+   * an UNSTAMPED pre-existing `workingDir` before mutating it — never mutates
+   * anything itself (Issue #87 third-party review, 11th round, Important
+   * finding 2). Same "missing key and transport hiccup both collapse to
+   * null" reasoning as `getStampedRepoHash` above: `git remote get-url`
+   * exits non-zero with nothing on stdout when the remote is absent, and
+   * stderr is redirected away.
+   */
+  async getOriginUrl(transport: IServerTransport, workingDir: string): Promise<string | null> {
+    const r = await transport.exec(
+      `git -C ${shellQuote(workingDir)} remote get-url origin 2>/dev/null`,
+      5_000,
+    );
+    const url = r.stdout?.trim();
+    return url || null;
+  }
+
+  /**
    * "No HEAD yet" (empty/missing dir) is a normal branch here, not a
    * failure — so this deliberately does not use `hasGitError`/throw. Same
    * `2>/dev/null` real-redirection + sha-regex-validates-success approach

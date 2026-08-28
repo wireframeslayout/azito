@@ -16,7 +16,7 @@ import type { IWindowRepository } from '../windows/Window';
 import type { WindowRespawnService } from '../windows/WindowRespawnService';
 import type { TaskRestoreService } from './TaskRestoreService';
 import { TaskCleanupService } from './TaskCleanupService';
-import { SAFE_PATH_PATTERN, SAFE_BRANCH_PATTERN, isFullyQualifiedRef } from '../git/assertSafeGitArgs';
+import { SAFE_PATH_PATTERN, rejectQualifiedBranchInput } from '../git/assertSafeGitArgs';
 import { resolveTaskServerName, resolveTmuxSession, resolveUnitId } from './execution/TaskExecutionEnv';
 import type { KillOutcome } from '../tmux/killOutcome';
 import type { ExecResult } from '../servers/transport/ServerTransport';
@@ -51,25 +51,22 @@ export function validateGitFields(body: Record<string, unknown>): string | null 
   for (const key of ['base_branch', 'branch', 'target_branch'] as const) {
     const v = body[key];
     if (v == null || v === '') continue;
-    if (typeof v !== 'string' || !SAFE_BRANCH_PATTERN.test(v)) return `Invalid ${key}`;
-    // Reject fully-qualified refs (e.g. `refs/heads/main`): SAFE_BRANCH_PATTERN
-    // allows them (slashes are legitimate in branch names like `feature/x`),
-    // but a full ref bypasses branch-name equality checks downstream (e.g.
-    // ExecuteTaskUseCase's stale-local-branch guard) and resolves differently
-    // in `git worktree add` than a plain branch name (Issue #87 third-party
-    // review, 9th round, Important finding 1).
-    if (isFullyQualifiedRef(v)) return `Invalid ${key}: fully-qualified ref names (refs/...) are not allowed, specify a plain branch name`;
-    // Reject remote-qualified branch names (e.g. `origin/main`) for NEW
-    // input: `resolveWorktreeCreateBaseBranch` (TaskExecutionEnv.ts)
-    // unconditionally prepends `origin/` once fetch distribution has landed
-    // content, so accepting an already-`origin/`-prefixed value here used to
-    // resolve to the nonexistent ref `origin/origin/main` the moment
-    // distribution succeeded (Issue #87 third-party review, 10th round,
-    // Important finding 1). This is an input-boundary check only — it does
-    // not run against already-stored task values, so a task saved before
-    // this check existed keeps executing (TaskExecutionEnv.
-    // stripOriginPrefix normalizes those at resolve time instead).
-    if (v.startsWith('origin/')) return `Invalid ${key}: remote-qualified branch names (origin/...) are not allowed, specify a plain branch name`;
+    if (typeof v !== 'string') return `Invalid ${key}`;
+    // `rejectQualifiedBranchInput` (assertSafeGitArgs.ts) covers the branch
+    // pattern itself plus the two qualifiers that must never reach a new
+    // branch-shaped field: a fully-qualified ref (`refs/heads/main` bypasses
+    // branch-name equality checks downstream, e.g. ExecuteTaskUseCase's
+    // stale-local-branch guard, and resolves differently in `git worktree
+    // add` than a plain branch name — Issue #87 third-party review, 9th
+    // round, Important finding 1) and a remote-qualified name (`origin/main`
+    // used to resolve to the nonexistent ref `origin/origin/main` once fetch
+    // distribution prepended `origin/` again — Issue #87 third-party review,
+    // 10th round, Important finding 1). This is an input-boundary check
+    // only — it does not run against already-stored task values, so a task
+    // saved before this check existed keeps executing (TaskExecutionEnv.
+    // canonicalizeBaseBranch normalizes those at resolve time instead).
+    const reason = rejectQualifiedBranchInput(v);
+    if (reason) return `Invalid ${key}: ${reason}`;
   }
   for (const key of ['working_directory', 'worktree_path'] as const) {
     const v = body[key];

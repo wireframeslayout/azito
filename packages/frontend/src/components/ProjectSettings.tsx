@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
@@ -17,7 +17,7 @@ import { FormInput, FormSelect, LoadingState, baseInputStyle, Button } from './u
 import type { Window, Unit, Server } from '../pages/workspace/types';
 import { parseRepoUrl as parseGitRepoUrl } from '../lib/gitProvider';
 import { notifyProjectsChanged } from '../lib/projectsChanged';
-import { isDistributeCodeLocked, resolveDistributeCodeForSave, resolveDistributeCodeToggleValue, shouldShowDistributeCodeBadge } from '../lib/distributeCodePolicy';
+import { isDistributeCodeLocked, resolveDistributeCodeForSave, resolveDistributeCodeToggleOnProjectServersChange, shouldShowDistributeCodeBadge } from '../lib/distributeCodePolicy';
 import { useToast } from '../hooks/useToast';
 import { useConfirm } from '../hooks/useConfirm';
 
@@ -122,6 +122,22 @@ export function useProjectSettings(
   // true` row with `false`. Including `projectServers` here means the
   // effect re-derives the toggle the moment the fetch lands, matching
   // whatever server is currently selected in the form.
+  //
+  // Issue #87 third-party review, 11th round, Minor finding 3: that same
+  // `projectServers` dependency also means ANY later refetch (e.g. this
+  // same async request landing late — dependent on network timing, not
+  // just "before the form ever opened" — or a refetch triggered by an
+  // unrelated save/remove elsewhere in this component while this form is
+  // still open) re-runs this effect and clobbers a toggle the user has
+  // since edited by hand. `psDistributeCodeTouchedRef` tracks whether the
+  // user has touched the toggle since the form was last (re)opened for the
+  // current `psServer` (reset in `handleOpenServerForm`, matching how every
+  // other field in this form is (re)initialized only there); once touched,
+  // this effect stops overwriting it until the next open. This mirrors the
+  // "user edit wins over a late server response" contract the other form
+  // fields already get for free by only ever being set from
+  // `handleOpenServerForm`.
+  const psDistributeCodeTouchedRef = useRef(false);
   useEffect(() => {
     const targetServer = (servers || []).find((sv) => sv.name === psServer);
     // Issue #87 review, eighth pass, Important finding 1: an isolated
@@ -135,8 +151,25 @@ export function useProjectSettings(
     // being turned back off. Keep this state equal to the actual saved
     // value regardless of lock status, so Save never has anything to send
     // beyond what the user actually chose.
-    setPsDistributeCode(resolveDistributeCodeToggleValue(targetServer?.type, projectServers, psServer));
+    //
+    // `resolveDistributeCodeToggleOnProjectServersChange` (distributeCodePolicy.ts)
+    // is the single tested place encoding the "touched user edit wins over a
+    // late server response" rule described above — functional `setState` so
+    // it sees the current value without adding `psDistributeCode` itself as
+    // an effect dependency (which would re-run this on every toggle, not just
+    // on a real `projectServers`/`servers`/`psServer` change).
+    setPsDistributeCode((prev) => resolveDistributeCodeToggleOnProjectServersChange(
+      prev, psDistributeCodeTouchedRef.current, targetServer?.type, projectServers, psServer,
+    ));
   }, [psServer, servers, projectServers]);
+
+  // Wraps the raw `setPsDistributeCode` state setter for the toggle's own
+  // `onChange` (the only manual-edit call site) so a user interaction marks
+  // the field dirty — see `psDistributeCodeTouchedRef`'s doc comment above.
+  const handleSetPsDistributeCode = useCallback((value: boolean) => {
+    psDistributeCodeTouchedRef.current = true;
+    setPsDistributeCode(value);
+  }, []);
 
   useEffect(() => {
     if (project) {
@@ -252,6 +285,11 @@ export function useProjectSettings(
     setPsTmuxSession(existing?.tmuxSession ?? '');
     setPsInputPolicy(existing?.inputPolicy === 'deny' || existing?.inputPolicy === 'allow' ? existing.inputPolicy : 'manual-approval');
     setPsDistributeCode(existing?.distributeCode ?? false);
+    // (Re)opening the form for `serverName` — the toggle's derivation effect
+    // is free to overwrite `psDistributeCode` again until the user touches
+    // it, same as every other field here being freshly initialized from
+    // `existing`. See `psDistributeCodeTouchedRef`'s doc comment above.
+    psDistributeCodeTouchedRef.current = false;
     setAddPsOpen(true);
   }, [projectServers]);
 
@@ -276,7 +314,7 @@ export function useProjectSettings(
     // Servers
     projectServers, addPsOpen, setAddPsOpen, psServer, setPsServer,
     psWorkDir, setPsWorkDir, psBranch, setPsBranch, psTmuxSession, setPsTmuxSession,
-    psInputPolicy, setPsInputPolicy, psDistributeCode, setPsDistributeCode, handleSaveServer, handleRemoveServer, handleOpenServerForm,
+    psInputPolicy, setPsInputPolicy, psDistributeCode, setPsDistributeCode: handleSetPsDistributeCode, handleSaveServer, handleRemoveServer, handleOpenServerForm,
     // Danger
     handleDelete,
   };

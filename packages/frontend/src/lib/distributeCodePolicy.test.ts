@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isDistributeCodeLocked, resolveDistributeCodeForSave, resolveDistributeCodeToggleValue, shouldShowDistributeCodeBadge } from './distributeCodePolicy';
+import { isDistributeCodeLocked, resolveDistributeCodeForSave, resolveDistributeCodeToggleValue, resolveDistributeCodeToggleOnProjectServersChange, shouldShowDistributeCodeBadge } from './distributeCodePolicy';
 
 // Issue #87 third-party review, seventh pass, Minor finding 3: an isolated
 // server distributes code unconditionally on the backend (`isolationIntent`),
@@ -98,5 +98,42 @@ describe('resolveDistributeCodeToggleValue', () => {
   it('is unconditionally false for a local server, even if a stale row says otherwise', () => {
     const projectServers = [{ serverName: 'server-a', distributeCode: true }];
     expect(resolveDistributeCodeToggleValue('local', projectServers, 'server-a')).toBe(false);
+  });
+});
+
+describe('resolveDistributeCodeToggleOnProjectServersChange (Issue #87 third-party review, 11th round, Minor finding 3)', () => {
+  it('re-derives from the freshly-arrived projectServers when the user has not touched the toggle', () => {
+    const projectServers = [{ serverName: 'server-a', distributeCode: true }];
+    expect(
+      resolveDistributeCodeToggleOnProjectServersChange(false, false, 'agent', projectServers, 'server-a'),
+    ).toBe(true);
+  });
+
+  it('keeps the user\'s own value when touched, even though a late projectServers response disagrees', () => {
+    // User opened the form (initial value false), manually flipped the
+    // toggle on (currentValue: true, touched: true), and THEN the slow
+    // initial fetch resolved with the server's old saved value (false).
+    const projectServers = [{ serverName: 'server-a', distributeCode: false }];
+    expect(
+      resolveDistributeCodeToggleOnProjectServersChange(true, true, 'agent', projectServers, 'server-a'),
+    ).toBe(true);
+  });
+
+  it('keeps the user\'s edit across an unrelated later refetch while the form stays open', () => {
+    // Simulates: user toggles off (currentValue: false, touched: true) after
+    // the form already had the saved `true` row, then something else in the
+    // component (e.g. removing a different server) triggers a projectServers
+    // refetch that still reports this row as `true`.
+    const projectServers = [{ serverName: 'server-a', distributeCode: true }];
+    expect(
+      resolveDistributeCodeToggleOnProjectServersChange(false, true, 'agent', projectServers, 'server-a'),
+    ).toBe(false);
+  });
+
+  it('re-derives again once touched resets to false (form reopened for the server)', () => {
+    const projectServers = [{ serverName: 'server-a', distributeCode: true }];
+    expect(
+      resolveDistributeCodeToggleOnProjectServersChange(false, false, 'agent', projectServers, 'server-a'),
+    ).toBe(true);
   });
 });

@@ -87,3 +87,30 @@ export function resolveDistributeCodeToggleValue(
   const existing = projectServers.find((ps) => ps.serverName === serverName);
   return existing?.distributeCode ?? false;
 }
+
+/**
+ * Guards `resolveDistributeCodeToggleValue`'s re-derivation against
+ * clobbering an in-progress user edit (Issue #87 third-party review, 11th
+ * round, Minor finding 3). `ProjectSettings.tsx`'s effect re-runs this
+ * whenever `projectServers` changes — which includes a late-arriving
+ * response to the initial fetch, but ALSO any later refetch triggered by an
+ * unrelated save/remove while this form is still open. Once the user has
+ * touched the toggle by hand since the form was (re)opened for the current
+ * server (`touched`), any such re-run must return the user's own
+ * `currentValue` unchanged rather than overwrite it with whatever the
+ * fetched rows now say — the user's own most recent choice always wins over
+ * a server response, no matter when that response happens to land.
+ * `touched` resets to `false` only when the form is (re)opened for a
+ * server (`handleOpenServerForm`), which is also where every other field in
+ * this form gets freshly initialized from `projectServers`.
+ */
+export function resolveDistributeCodeToggleOnProjectServersChange(
+  currentValue: boolean,
+  touched: boolean,
+  targetServerType: string | undefined,
+  projectServers: DistributeCodeToggleProjectServer[],
+  serverName: string,
+): boolean {
+  if (touched) return currentValue;
+  return resolveDistributeCodeToggleValue(targetServerType, projectServers, serverName);
+}

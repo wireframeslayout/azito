@@ -6,6 +6,7 @@ import {
   SAFE_BRANCH_PATTERN,
   isFullyQualifiedRef,
   normalizeBranchRef,
+  rejectQualifiedBranchInput,
 } from './assertSafeGitArgs';
 
 describe('assertSafePath', () => {
@@ -102,5 +103,24 @@ describe('normalizeBranchRef', () => {
 
   it('makes refs/heads/main and main compare equal (guard normalization)', () => {
     expect(normalizeBranchRef('refs/heads/main')).toBe(normalizeBranchRef('main'));
+  });
+});
+
+describe('rejectQualifiedBranchInput (Issue #87 third-party review, 11th round, Important finding 1)', () => {
+  it('accepts plain branch names', () => {
+    expect(rejectQualifiedBranchInput('main')).toBeNull();
+    expect(rejectQualifiedBranchInput('feature/x')).toBeNull();
+  });
+
+  it('rejects fully-qualified refs', () => {
+    expect(rejectQualifiedBranchInput('refs/heads/main')).toMatch(/fully-qualified ref/);
+  });
+
+  it('rejects remote-qualified branch names', () => {
+    expect(rejectQualifiedBranchInput('origin/main')).toMatch(/remote-qualified/);
+  });
+
+  it('rejects unsafe characters', () => {
+    expect(rejectQualifiedBranchInput('main; touch x')).toMatch(/invalid branch name/);
   });
 });

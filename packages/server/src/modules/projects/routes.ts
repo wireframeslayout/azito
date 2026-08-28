@@ -23,6 +23,7 @@ import type { SqliteProjectSecretRepository } from './SqliteProjectSecretReposit
 // reasoning behind the move.
 import { ensureSessionWithLock, type ServerIsolationLock } from '../servers/ServerIsolationLock';
 import type { KeyedMutex } from '../../shared/keyedMutex';
+import { rejectQualifiedBranchInput } from '../git/assertSafeGitArgs';
 
 // ─── Types ───
 
@@ -111,6 +112,18 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
         const trimmed = slug.trim();
         if (!trimmed || !/^[a-z0-9][a-z0-9-]*$/.test(trimmed))
           return reply.status(400).send({ error: 'Slug must contain only lowercase letters, numbers, and hyphens' });
+      }
+      // Same input-boundary guard task base_branch/branch/target_branch get
+      // (`validateGitFields` in tasks/routes.ts): a project's `default_branch`
+      // feeds the exact same `resolveBaseBranch`/`canonicalizeBaseBranch`
+      // chain (TaskExecutionEnv.ts) whenever a task doesn't override it, so
+      // it needs the same rejection of new `refs/...`/`origin/...` input
+      // (Issue #87 third-party review, 11th round, Important finding 1).
+      // Empty string clears the field (falls back to 'main' downstream) and
+      // is intentionally exempt, same as the task-side check.
+      if (default_branch) {
+        const reason = rejectQualifiedBranchInput(default_branch);
+        if (reason) return reply.status(400).send({ error: `Invalid default_branch: ${reason}` });
       }
       try {
         projectRepo.update(id, {
@@ -227,6 +240,18 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       const branch = 'branch' in body
         ? (body.branch ?? null)
         : (existingRow?.branch ?? null);
+      // Same input-boundary guard as the project's own `default_branch`
+      // above and task base_branch/branch/target_branch (validateGitFields
+      // in tasks/routes.ts) — this row's `branch` feeds the same
+      // `resolveBaseBranch`/`canonicalizeBaseBranch` chain (Issue #87
+      // third-party review, 11th round, Important finding 1). Only checked
+      // when the key is present AND non-empty (matches the "key absent
+      // preserves, explicit null/'' clears" semantics this handler already
+      // uses for this field).
+      if ('branch' in body && body.branch) {
+        const reason = rejectQualifiedBranchInput(body.branch);
+        if (reason) return reply.status(400).send({ error: `Invalid branch: ${reason}` });
+      }
       // Issue #29 Step 3a: 'allow' is now selectable, but ONLY declaratively
       // for a server that has declared isolation intent — the real safety
       // property (verified, time-bounded, scoped-auth-gated) is enforced at

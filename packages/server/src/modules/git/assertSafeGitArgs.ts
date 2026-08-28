@@ -24,6 +24,29 @@ export function assertSafeBranch(value: string, label: string): void {
   }
 }
 
+/**
+ * API-boundary validation for a NEW branch-name input: `null` when `value`
+ * is safe to store as a plain branch name, otherwise a human-readable reason
+ * suitable for a 400 response. Rejects the same two qualifiers
+ * `TaskExecutionEnv.canonicalizeBaseBranch` normalizes away downstream —
+ * fully-qualified refs (`refs/...`) and remote-qualified names
+ * (`origin/...`) — so a value this rejects can never reach the
+ * unnormalized-branch failure mode `canonicalizeBaseBranch` exists to fix.
+ * Shared by every route that persists a new branch-shaped field (task
+ * base_branch/branch/target_branch, project default_branch, project_server
+ * branch — Issue #87 third-party review, 11th round, Important finding 1)
+ * so the same rule can't drift between them. This is an input-boundary
+ * check only — callers must not run it against already-stored values (a
+ * value saved before this check existed must keep working; normalization at
+ * resolve time, not rejection, handles that case).
+ */
+export function rejectQualifiedBranchInput(value: string): string | null {
+  if (!SAFE_BRANCH_PATTERN.test(value)) return 'invalid branch name';
+  if (isFullyQualifiedRef(value)) return 'fully-qualified ref names (refs/...) are not allowed, specify a plain branch name';
+  if (value.startsWith('origin/')) return 'remote-qualified branch names (origin/...) are not allowed, specify a plain branch name';
+  return null;
+}
+
 // Strips a `refs/heads/` prefix so full-ref and plain-name spellings of the
 // same branch compare equal. Used as a defense-in-depth normalization layer
 // wherever a branch name is compared for equality — API-boundary validation

@@ -2995,3 +2995,36 @@ describe('ExecuteTaskUseCase fetch-distribution ambiguous-repository fail-fast (
     expect(taskRepo.updateStatusIfWindowMatches).not.toHaveBeenCalled();
   });
 });
+
+describe('ExecuteTaskUseCase base-branch canonicalization before distribution (Issue #87 third-party review, 11th round, Important finding 1)', () => {
+  it.each([
+    ['origin/main'],
+    ['refs/heads/main'],
+  ])('normalizes baseBranch %s to "main" for distribute(), and resolves the worktree base to "origin/main"', async (taskBaseBranch) => {
+    const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
+    const { useCase, fetchDistributionService, worktreeServiceFactory } = buildDistributionGateHarness({
+      server,
+      distributeCode: false,
+      taskBaseBranch,
+    });
+    const worktreeCreate = vi.fn(async () => ({ path: '/srv/repo/.worktrees/task-1', branch: 'task/1-slug' }));
+    worktreeServiceFactory.create.mockReturnValue({ create: worktreeCreate });
+
+    await useCase.execute(10, 1);
+
+    // distribute() must receive the canonicalized, plain branch name — an
+    // `origin/`- or `refs/heads/`-qualified value used to reach `distribute()`
+    // unnormalized and fail the fetch against the nonexistent ref
+    // `refs/heads/origin/main`.
+    expect(fetchDistributionService.distribute).toHaveBeenCalledWith(
+      expect.objectContaining({ branch: 'main' }),
+    );
+
+    // Worktree creation resolves from `origin/<canonicalized baseBranch>`
+    // (distStatus is 'distributed' by default in this harness), never
+    // `origin/origin/main` or `origin/refs/heads/main`.
+    expect(worktreeCreate).toHaveBeenCalledWith(
+      '/srv/repo', 1, expect.any(String), 'origin/main', undefined,
+    );
+  });
+});

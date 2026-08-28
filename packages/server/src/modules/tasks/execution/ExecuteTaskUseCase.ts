@@ -48,7 +48,7 @@ import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingAppro
 import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionManifest';
 import { TuiWorkerRuntime } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
-import { resolveTaskServerName, resolveTmuxSession, resolveUnitId, resolveBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
+import { resolveTaskServerName, resolveTmuxSession, resolveUnitId, resolveBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
 import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
 import type { SqliteAgentTurnRepository } from '../turns/SqliteAgentTurnRepository';
 import type { TurnSignalHub } from '../turns/TurnSignalHub';
@@ -864,7 +864,17 @@ export class ExecuteTaskUseCase {
     }
 
     if (workingDir) {
-      const baseBranch = resolveBaseBranch(task, projectServer, project);
+      // Canonicalized ONCE, immediately after resolution (Issue #87
+      // third-party review, 11th round, Important finding 1) — see
+      // `canonicalizeBaseBranch`'s doc comment in TaskExecutionEnv.ts. Every
+      // downstream use of `baseBranch` in this function (fetch distribution's
+      // `distribute()` call, worktree creation via
+      // `resolveWorktreeCreateBaseBranch`, and the `baseBranch` value
+      // persisted/logged below) now consistently sees the same plain,
+      // unqualified branch name — an `origin/`- or `refs/heads/`-qualified
+      // pre-existing task value no longer reaches `distribute()` and makes
+      // it try to fetch the nonexistent ref `refs/heads/origin/<branch>`.
+      const baseBranch = canonicalizeBaseBranch(resolveBaseBranch(task, projectServer, project));
       // Tracks fetch distribution's outcome this call (null when
       // distribution did not run, e.g. a `local` server, or an agent/ssh
       // server whose project_servers row has distribute_code off) — see

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { resolveTaskServerName, resolveTmuxSession, resolveUnitId, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
+import { resolveTaskServerName, resolveTmuxSession, resolveUnitId, resolveWorktreeCreateBaseBranch, canonicalizeBaseBranch } from './TaskExecutionEnv';
 import type { IProjectServerRepository } from '../../projects/ProjectServer';
 import type { ProjectDetail } from '../../projects/Project';
 
@@ -119,5 +119,29 @@ describe('resolveWorktreeCreateBaseBranch', () => {
 
   it('leaves an origin/-qualified baseBranch untouched when distribution did not run', () => {
     expect(resolveWorktreeCreateBaseBranch('origin/main', null)).toBe('origin/main');
+  });
+});
+
+describe('canonicalizeBaseBranch (Issue #87 third-party review, 11th round, Important finding 1)', () => {
+  it('leaves a plain branch name unchanged', () => {
+    expect(canonicalizeBaseBranch('main')).toBe('main');
+    expect(canonicalizeBaseBranch('feature/x')).toBe('feature/x');
+  });
+
+  it('strips an origin/ remote qualifier', () => {
+    expect(canonicalizeBaseBranch('origin/main')).toBe('main');
+  });
+
+  it('strips a refs/heads/ fully-qualified ref prefix', () => {
+    expect(canonicalizeBaseBranch('refs/heads/main')).toBe('main');
+  });
+
+  it('strips refs/heads/ before origin/ for the pathological refs/heads/origin/main form', () => {
+    expect(canonicalizeBaseBranch('refs/heads/origin/main')).toBe('main');
+  });
+
+  it('is idempotent — re-applying to an already-canonical value is a no-op', () => {
+    const once = canonicalizeBaseBranch('origin/main');
+    expect(canonicalizeBaseBranch(once)).toBe(once);
   });
 });
