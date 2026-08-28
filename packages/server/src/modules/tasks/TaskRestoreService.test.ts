@@ -848,6 +848,135 @@ describe('TaskRestoreService', () => {
       expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
       expect(result.worktreePath).toBe(worktreeDir);
     });
+
+    // Issue #87 16th-round review, Important finding 2: the pre-lock
+    // projectServer (resolved before runExclusiveForTask/the isolation lock
+    // is even acquired) must never be what decides whether distribution
+    // runs — only the row the in-lock gate reverification just re-resolved
+    // and validated against may decide that, exactly like the gate decision
+    // itself.
+    describe('uses the in-lock (not pre-lock) projectServer snapshot to decide distribution (Issue #87 16th-round review, Important finding 2)', () => {
+      // `find` is called 3 times over one restore() run: (1) resolveTmuxSession
+      // at the very top, (2) resolveExecutionManifest's pre-lock gate check,
+      // (3) resolveExecutionManifest inside createRotatedWindow's in-lock
+      // preCheck. `distributeCodeFromCall3` flips ONLY from the 3rd call
+      // onward, so calls 1-2 always see the OTHER value — modeling a
+      // `distribute_code` toggle landing in the window between the pre-lock
+      // gate check and the in-lock reverification.
+      function projectServerRepoWithToggle(distributeCodeFromCall3: boolean): TaskRestoreDeps['projectServerRepo'] {
+        let calls = 0;
+        return {
+          ...deps.projectServerRepo,
+          find: vi.fn(() => {
+            calls += 1;
+            const distributeCode = calls >= 3 ? distributeCodeFromCall3 : !distributeCodeFromCall3;
+            return { projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode };
+          }),
+        };
+      }
+
+      it('distributes when the pre-lock row said false but the in-lock row says true', async () => {
+        const fetchDistributionService = mockFetchDistributionService();
+        withRepository(deps.projectRepo);
+        deps = makeDeps({
+          ...deps,
+          fetchDistributionService,
+          transportFactory: agentTransportFactory(),
+          serverRepo: {
+            ...deps.serverRepo,
+            findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
+          },
+          projectServerRepo: projectServerRepoWithToggle(true),
+        });
+        service = new TaskRestoreService(deps);
+        const task = makeTask({ serverName: 'test-server' });
+
+        const result = await service.restore(task, log);
+
+        expect(fetchDistributionService.distribute).toHaveBeenCalled();
+        expect(result.worktreePath).toBe(worktreeDir);
+      });
+
+      it('does NOT distribute when the pre-lock row said true but the in-lock row says false', async () => {
+        const fetchDistributionService = mockFetchDistributionService();
+        withRepository(deps.projectRepo);
+        deps = makeDeps({
+          ...deps,
+          fetchDistributionService,
+          transportFactory: agentTransportFactory(),
+          serverRepo: {
+            ...deps.serverRepo,
+            findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
+          },
+          projectServerRepo: projectServerRepoWithToggle(false),
+        });
+        service = new TaskRestoreService(deps);
+        const task = makeTask({ serverName: 'test-server' });
+
+        const result = await service.restore(task, log);
+
+        expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+        expect(result.worktreePath).toBe(worktreeDir);
+      });
+    });
+  });
+
+  // Issue #87 16th-round review, Important finding 1: the stale-old-branch
+  // guard inside performDistribution() must see the SAME branch worktree
+  // creation is about to (force-)restore into — `task.branch` alone
+  // under-covers a task whose `worktreeBranch` (not `task.branch`) names the
+  // branch actually being restored, letting a stale local ref slip past the
+  // guard and into `git worktree add --force`.
+  describe('stale-local-branch guard covers task.worktreeBranch, not just task.branch (Issue #87 16th-round review, Important finding 1)', () => {
+    it('fails fast — does not force-restore from a stale local ref — when task.branch is unset but task.worktreeBranch names the branch fetch distribution could not sync', async () => {
+      const fetchDistributionService = {
+        distribute: vi.fn(async () => ({ status: 'distributed' as const, sha: 'a'.repeat(40), bundleType: 'full' as const, localBranchSynced: false })),
+      } as unknown as NonNullable<TaskRestoreDeps['fetchDistributionService']>;
+      (deps.projectRepo.findById as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 10, name: 'Project', slug: 'project', description: null, repositoryUrl: null, defaultBranch: 'main',
+        sidekickPrompt: null, icon: null, color: null, defaultUnitId: 20,
+        repositories: [{ id: 1, name: 'repo', url: 'https://github.com/acme/repo.git', provider: 'github' as const, owner: 'acme', repoName: 'repo', hasToken: true }],
+        windows: [], createdAt: '2026-01-01', updatedAt: '2026-01-01',
+      });
+      (deps.projectRepo.findRepositoryById as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 1, name: 'repo', url: 'https://github.com/acme/repo.git', provider: 'github' as const, owner: 'acme', repoName: 'repo', token: 'dummy-token',
+      });
+      deps = makeDeps({
+        ...deps,
+        fetchDistributionService,
+        serverRepo: {
+          ...deps.serverRepo,
+          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
+        },
+        transportFactory: {
+          getTransport: vi.fn(() => ({
+            exec: vi.fn(async (cmd: string) => {
+              const match = /^cd -- (.+) && pwd -P$/.exec(cmd);
+              const rawPath = match ? match[1] : worktreeDir;
+              const unquoted = rawPath.startsWith("'") ? rawPath.slice(1, -1).replace(/'\\''/g, "'") : rawPath;
+              return { stdout: `${unquoted}\n`, stderr: '', code: 0 };
+            }),
+          })),
+        } as unknown as TaskRestoreDeps['transportFactory'],
+        projectServerRepo: {
+          ...deps.projectServerRepo,
+          find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false })),
+        },
+      });
+      service = new TaskRestoreService(deps);
+      // task.branch unset (null) — task.worktreeBranch is the ONLY thing
+      // naming 'main', the same branch baseBranch resolves to (both from
+      // task.baseBranch here) — so performDistribution's guard compares
+      // worktreeBranch against baseBranch, not an empty task.branch.
+      const task = makeTask({ serverName: 'test-server', branch: null, worktreeBranch: 'main', baseBranch: 'main' });
+
+      await expect(service.restore(task, log)).rejects.toThrow(/could not be updated to the distributed content/);
+
+      // The guard must have fired BEFORE worktree creation — never allowed
+      // to fall through to `git worktree add --force` against the stale ref.
+      expect(deps.worktreeServiceFactory.create).not.toHaveBeenCalled();
+      expect(deps.tmux.killWindow).toHaveBeenCalled();
+    });
   });
 
   describe('execution gate (Issue #328)', () => {

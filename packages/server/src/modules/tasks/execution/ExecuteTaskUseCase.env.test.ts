@@ -2649,6 +2649,55 @@ describe('ExecuteTaskUseCase fetch-distribution gate (Issue #87 Phase 2: general
   });
 });
 
+// Issue #87 16th-round review, Important finding 2: the pre-lock projectServer
+// (resolved by enforceExecutionGate, before the resource guard/window
+// creation/runExclusiveForTask even start) must never be what decides whether
+// distribution runs — only the row the in-lock gate reverification
+// (reverifyGateInLock, running as createRotatedWindowInLock's preCheck) just
+// re-resolved and validated against may decide that, exactly like the gate
+// decision itself already does.
+describe('ExecuteTaskUseCase distribution decides against the in-lock (not pre-lock) projectServer snapshot (Issue #87 16th-round review, Important finding 2)', () => {
+  // projectServerRepo.find() is called 3 times over one execute() run: (1)
+  // resolveExecutionEnv's resolveTmuxSession, (2) enforceExecutionGate's
+  // pre-lock resolveExecutionManifest, (3) reverifyGateInLock's in-lock
+  // resolveExecutionManifest. `distributeCodeFromCall3` flips ONLY from the
+  // 3rd call onward, so calls 1-2 always see the OTHER value — modeling a
+  // distribute_code toggle landing in the window between the pre-lock gate
+  // check and the in-lock reverification.
+  function toggleProjectServerFind(
+    projectServerRepo: ReturnType<typeof buildDistributionGateHarness>['projectServerRepo'],
+    serverName: string,
+    distributeCodeFromCall3: boolean,
+  ) {
+    let calls = 0;
+    projectServerRepo.find = vi.fn(() => {
+      calls += 1;
+      const distributeCode = calls >= 3 ? distributeCodeFromCall3 : !distributeCodeFromCall3;
+      return { projectId: 1, serverName, workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode };
+    });
+  }
+
+  it('distributes when the pre-lock row said false but the in-lock row says true', async () => {
+    const server = makeServer({ name: 'srv-agent', type: 'agent', isolationIntent: false });
+    const harness = buildDistributionGateHarness({ server, distributeCode: false });
+    toggleProjectServerFind(harness.projectServerRepo, server.name, true);
+
+    await harness.useCase.execute(10, 1);
+
+    expect(harness.fetchDistributionService.distribute).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT distribute when the pre-lock row said true but the in-lock row says false', async () => {
+    const server = makeServer({ name: 'srv-agent', type: 'agent', isolationIntent: false });
+    const harness = buildDistributionGateHarness({ server, distributeCode: true });
+    toggleProjectServerFind(harness.projectServerRepo, server.name, false);
+
+    await harness.useCase.execute(10, 1);
+
+    expect(harness.fetchDistributionService.distribute).not.toHaveBeenCalled();
+  });
+});
+
 describe('ExecuteTaskUseCase fetch-distribution failure handling (Issue #87 third-party review)', () => {
   // 指摘1: 配信が失敗したとき、タスク status が failed になり、ウィンドウ kill・
   // トークン revoke・tmuxWindow クリアが行われること。

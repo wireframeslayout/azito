@@ -396,14 +396,26 @@ export class ExecuteTaskUseCase {
    * runs immediately before any task-token/secret env is built, not after.
    * See `ExecutionGate.reverifyExecutionGateInLock`'s own doc comment for
    * the TOCTOU this closes.
+   *
+   * Returns the `project`/`projectServer` snapshot this in-lock resolution
+   * actually gated against (Issue #87 16th-round review, Important finding
+   * 2): the caller's own `projectServer`/`project` were resolved by
+   * `enforceExecutionGate` BEFORE the resource guard, workingDir
+   * containment, and window creation — none of which hold any lock — so a
+   * `distribute_code` toggle landing in that window would leave
+   * `performDistribution` (called after this preCheck returns) deciding
+   * against a snapshot older than the one the gate itself just re-verified
+   * with. Returning it here lets the caller re-point `performDistribution`
+   * and the base-branch resolution feeding it at the SAME snapshot the gate
+   * passed, without re-querying a third time.
    */
   private reverifyGateInLock(
     currentTask: Task,
     unitId: number,
     operation: NonNullable<Task['pendingOperation']>,
     freshServer: ServerConfig,
-  ): void {
-    const { manifest, projectServer } = resolveExecutionManifest(currentTask, {
+  ): { project: ReturnType<typeof resolveExecutionManifest>['project']; projectServer: ReturnType<typeof resolveExecutionManifest>['projectServer'] } {
+    const { manifest, project, projectServer } = resolveExecutionManifest(currentTask, {
       unitRepo: this.unitRepo,
       projectRepo: this.projectRepo,
       projectServerRepo: this.projectServerRepo,
@@ -423,6 +435,7 @@ export class ExecuteTaskUseCase {
       this.scopedAuthEnabled,
       manifestHash,
     );
+    return { project, projectServer };
   }
 
   private appendLog(taskId: number, unitId: number, type: LogType, content: unknown): void {
@@ -739,6 +752,16 @@ export class ExecuteTaskUseCase {
     let windowName: string;
     let tokenId: number;
     let createdServer: ServerConfig;
+    // Reassigned by reverifyGateInLock's preCheck below with the
+    // project/projectServer snapshot the in-lock gate re-verification
+    // actually ran against (Issue #87 16th-round review, Important finding
+    // 2) — falls back to the pre-lock `project`/`projectServer` (from
+    // `enforceExecutionGate` above) only if the lock is somehow never
+    // acquired (e.g. `runExclusiveForTask`/`withServerLock` throwing before
+    // reaching `reverifyGateInLock`, in which case execute() never reaches
+    // the distribution call below anyway).
+    let lockedProject = project;
+    let lockedProjectServer = projectServer;
     try {
       ({ windowName, tokenId, server: createdServer } = await runExclusiveForTask(taskId, async () => {
         // Task/tmux state is re-read HERE, inside the lock (Issue #28
@@ -798,7 +821,11 @@ export class ExecuteTaskUseCase {
           // third-party review finding).
           return createRotatedWindowInLock(this.paneEnvService, freshServer, currentTask, 'execute_create_failed', (fs, env) =>
             this.tmux.createWindow(fs, tmuxSession, `task-${task.id}`, { extraEnv: env }),
-            (fs) => this.reverifyGateInLock(currentTask, unitId, 'execute', fs),
+            (fs) => {
+              const locked = this.reverifyGateInLock(currentTask, unitId, 'execute', fs);
+              lockedProject = locked.project;
+              lockedProjectServer = locked.projectServer;
+            },
           );
         });
 
@@ -833,7 +860,10 @@ export class ExecuteTaskUseCase {
     // unconditionally (not only when `workingDir` is set) because fetch
     // distribution's own prerequisite checks (via performDistribution) need
     // it regardless of whether a working directory happens to be configured.
-    const baseBranch = canonicalizeBaseBranch(resolveBaseBranch(task, projectServer, project));
+    // Resolved from `lockedProjectServer`/`lockedProject` (Issue #87
+    // 16th-round review, Important finding 2), not the pre-lock
+    // `projectServer`/`project` — see reverifyGateInLock's doc comment.
+    const baseBranch = canonicalizeBaseBranch(resolveBaseBranch(task, lockedProjectServer, lockedProject));
 
     // Fetch distribution (Issue #87 Phase 1: isolated servers, unconditionally
     // — they hold no git credentials of their own, so distribution is not
@@ -856,8 +886,8 @@ export class ExecuteTaskUseCase {
     // force restore() to adopt a rollback shape it doesn't have.
     const distOutcome: DistributionOutcome = await performDistribution({
       server,
-      projectServer,
-      project,
+      projectServer: lockedProjectServer,
+      project: lockedProject,
       workingDir,
       baseBranch,
       taskBranch: task.branch,

@@ -262,6 +262,19 @@ export class TaskRestoreService {
     // rotation for this task already persisted).
     let tokenId: number | null = null;
 
+    // Reassigned by the reverifyExecutionGateInLock preCheck below with the
+    // project/projectServer snapshot the in-lock gate re-verification
+    // actually ran against (Issue #87 16th-round review, Important finding
+    // 2): `project`/`projectServer` above were resolved BEFORE
+    // `runExclusiveForTask`/the per-server isolation lock — a concurrent
+    // `distribute_code` toggle landing in that window would otherwise leave
+    // `performDistribution` below deciding against a snapshot older than the
+    // one the gate itself just re-verified with. Falls back to the pre-lock
+    // values only if the lock is somehow never acquired (in which case this
+    // function never reaches performDistribution below anyway).
+    let lockedProject = project;
+    let lockedProjectServer = projectServer;
+
     // The whole issue->create->persist span this function performs (plus its
     // own rollback below) runs under a per-task lock (design v3 §2 — see
     // runExclusiveForTask's doc comment in WindowRotation.ts): without it, a
@@ -292,7 +305,7 @@ export class TaskRestoreService {
         // token is built. See ExecutionGate.reverifyExecutionGateInLock's
         // doc comment for the TOCTOU this closes.
         (freshServer) => {
-          const { manifest, projectServer: freshProjectServer } = resolveExecutionManifest(task, {
+          const { manifest, project: freshProject, projectServer: freshProjectServer } = resolveExecutionManifest(task, {
             unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader,
           });
           reverifyExecutionGateInLock(
@@ -305,6 +318,11 @@ export class TaskRestoreService {
             scopedAuthEnabled,
             hashExecutionManifest(manifest),
           );
+          // Captured for reuse below (Issue #87 16th-round review, Important
+          // finding 2) — see the `lockedProject`/`lockedProjectServer`
+          // declaration above this call for why.
+          lockedProject = freshProject;
+          lockedProjectServer = freshProjectServer;
         },
       );
       windowName = created.windowName;
@@ -320,8 +338,11 @@ export class TaskRestoreService {
       const windowTarget = `${tmuxSession}:${windowName}`;
       const paneId = await tmux.resolvePaneId(server, windowTarget);
       const dbTarget = `${windowTarget}.1`;
-      // projectServer was already resolved above (by resolveExecutionManifest,
-      // for the gate check) — reused here rather than re-querying.
+      // `lockedProjectServer` (Issue #87 16th-round review, Important finding
+      // 2), not the pre-lock `projectServer` — this line runs AFTER
+      // createRotatedWindow's preCheck has already re-resolved and captured
+      // it (see the `lockedProject`/`lockedProjectServer` declaration
+      // above), so using the fresher snapshot here costs nothing extra.
       // allowedRoot mirrors ExecuteTaskUseCase.execute()'s containment boundary
       // (Issue #27): this restore path also launches a worker into
       // task.workingDirectory, which is settable via PUT /api/tasks/:id, so
@@ -329,7 +350,7 @@ export class TaskRestoreService {
       // it, startup task recovery was a way to bypass the boundary entirely
       // (Issue #27 review finding 1). No configured working directory means
       // no boundary to enforce, so containment is skipped (legacy behavior).
-      const allowedRoot = projectServer?.workingDirectory || null;
+      const allowedRoot = lockedProjectServer?.workingDirectory || null;
       let workingDir = task.workingDirectory || allowedRoot;
       let effectiveDir = workingDir;
 
@@ -355,8 +376,10 @@ export class TaskRestoreService {
       // `origin/`- or `refs/heads/`-qualified value even though the
       // approved manifest's `branches.base` (ExecutionManifest.ts) records
       // the canonicalized one (Issue #87 third-party review, 12th round,
-      // Important finding 3).
-      const baseBranch: string = canonicalizeBaseBranch(resolveBaseBranch(task, projectServer, project));
+      // Important finding 3). Resolved from `lockedProjectServer`/
+      // `lockedProject` (Issue #87 16th-round review, Important finding 2),
+      // not the pre-lock `projectServer`/`project`.
+      const baseBranch: string = canonicalizeBaseBranch(resolveBaseBranch(task, lockedProjectServer, lockedProject));
 
       // Fetch distribution (Issue #87 13th-round review, Important finding 1;
       // 14th-round review, Important finding 1): restoring an archived task
@@ -373,13 +396,29 @@ export class TaskRestoreService {
       // function's own existing convention (the outer try/catch below
       // already rolls back the tmux window/token; `worktreePath`+`repoDir`
       // are not set yet at this point, so throwing is sufficient).
+      // Resolved ONCE, here, and reused for both this guard's `taskBranch`
+      // and the worktree-creation call below (Issue #87 16th-round review,
+      // Important finding 1): performDistribution's stale-local-branch guard
+      // used to see only `task.branch`, while worktree creation resolves
+      // `task.branch || task.worktreeBranch` — a task with an empty
+      // `task.branch` and a `worktreeBranch` naming the SAME branch fetch
+      // distribution just tried to advance could sail past the guard (which
+      // saw no `taskBranch` to compare against `baseBranch`) and still hit
+      // `git worktree add --force` against that stale local ref below.
+      // Normalized the same way the worktree-creation call already did
+      // (Issue #87 third-party review, 12th round, Important finding 2) — a
+      // persisted `task.branch`/`task.worktreeBranch` can still be a
+      // fully-qualified ref from before the API boundary rejected new ones.
+      const rawRestoreBranch = task.branch || task.worktreeBranch || undefined;
+      const restoreBranch = rawRestoreBranch ? normalizeBranchRef(rawRestoreBranch) : undefined;
+
       const distOutcome: DistributionOutcome = await performDistribution({
         server,
-        projectServer,
-        project,
+        projectServer: lockedProjectServer,
+        project: lockedProject,
         workingDir,
         baseBranch,
-        taskBranch: task.branch,
+        taskBranch: restoreBranch ?? null,
         transportFactory,
         projectRepo,
         fetchDistributionService,
@@ -418,14 +457,14 @@ export class TaskRestoreService {
         // `worktreeBranch` below (never back to `task.branch`), so this
         // change does not reintroduce the fingerprint self-invalidation bug
         // the removed comment described.
-        // Normalized the same way ExecuteTaskUseCase.execute() normalizes
-        // `task.branch` before this same worktree-creation call (Issue #87
-        // third-party review, 12th round, Important finding 2) — a
-        // persisted `task.branch`/`task.worktreeBranch` can still be a
-        // fully-qualified ref from before the API boundary rejected new
-        // ones.
-        const rawBranch = task.branch || task.worktreeBranch || undefined;
-        const branch = rawBranch ? normalizeBranchRef(rawBranch) : undefined;
+        // Same resolved-and-normalized value the stale-local-branch guard
+        // above already checked against `baseBranch` (Issue #87 16th-round
+        // review, Important finding 1) — recomputing a second, potentially
+        // divergent value here is exactly what let a stale local ref slip
+        // past that guard and into `git worktree add --force`. See
+        // `restoreBranch`'s own comment above for the resolution precedence
+        // (task.branch first, worktreeBranch fallback) and normalization.
+        const branch = restoreBranch;
         const slug = branch ? `task-${task.id}` : await contentExtractor.generateSlug(task.title);
 
         const transport = transportFactory.getTransport(server);
