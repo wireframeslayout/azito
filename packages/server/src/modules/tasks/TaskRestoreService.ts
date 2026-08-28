@@ -15,7 +15,8 @@ import { PathResolverFactory, assertDirectoryContained } from '../git/PathContai
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { IContentExtractor } from '../llm/ContentExtractor';
 import type { IExecutionLogRepository } from './ExecutionLog';
-import { resolveTaskServerName, resolveTmuxSession, resolveBaseBranch, canonicalizeBaseBranch } from './execution/TaskExecutionEnv';
+import { resolveTaskServerName, resolveTmuxSession, resolveBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './execution/TaskExecutionEnv';
+import { performDistribution, type DistributionOutcome } from './execution/DistributionHelper';
 import { normalizeBranchRef } from '../git/assertSafeGitArgs';
 import { buildWorkerLaunchCommand } from '../agents/LaunchCommand';
 import { shellQuote } from '../../shared/shellQuote';
@@ -76,6 +77,17 @@ export interface TaskRestoreDeps {
   // it for resolveEffectiveInputPolicy(), the same as every other entry
   // point.
   scopedAuthEnabled: boolean;
+  // Issue #87 13th-round review, Important finding 1: the SAME instance
+  // ExecuteTaskUseCase is constructed with (see wiring.ts's
+  // buildFetchDistributionService doc comment for why it must be shared, not
+  // a second instance) — restore() runs the same performDistribution() check
+  // execute() does, so an archived task restored onto an isolated or
+  // distribute_code server gets its worktree recreated from freshly
+  // distributed content instead of whatever stale local state happens to
+  // already be at workingDir. Nullable only because some test fixtures don't
+  // wire it; a restore that actually needs distribution and finds this null
+  // fails via performDistribution's own 'service_not_wired' outcome.
+  fetchDistributionService: import('../git/hub-transfer/FetchDistributionService').FetchDistributionService | null;
 }
 
 export class TaskRestoreService {
@@ -88,7 +100,7 @@ export class TaskRestoreService {
   }
 
   async restore(task: Task, log: { warn: (msg: string) => void }): Promise<{ tmuxTarget: string; worktreePath: string | null }> {
-    const { taskRepo, serverRepo, projectRepo, projectServerRepo, unitRepo, windowRepo, tmux, worktreeServiceFactory, transportFactory, contentExtractor, logRepo, unitTypeLoader, sidekickLoader, projectSecretRepo, events, paneEnvService, scopedAuthEnabled } = this.deps;
+    const { taskRepo, serverRepo, projectRepo, projectServerRepo, unitRepo, windowRepo, tmux, worktreeServiceFactory, transportFactory, contentExtractor, logRepo, unitTypeLoader, sidekickLoader, projectSecretRepo, events, paneEnvService, scopedAuthEnabled, fetchDistributionService } = this.deps;
 
     const serverName = resolveTaskServerName(task, projectServerRepo);
     if (!serverName) {
@@ -374,9 +386,47 @@ export class TaskRestoreService {
         const branch = rawBranch ? normalizeBranchRef(rawBranch) : undefined;
         const slug = branch ? `task-${task.id}` : await contentExtractor.generateSlug(task.title);
 
+        // Fetch distribution (Issue #87 13th-round review, Important finding
+        // 1): restoring an archived task recreates its worktree from
+        // `workingDir` exactly like execute() does, so it needs the SAME
+        // pre-worktree-creation distribution check — without this, an
+        // isolated server or a distribute_code project server restored a
+        // task's worktree from whatever local content already happened to be
+        // at `workingDir`, which could be old/stale code (or none at all).
+        // Shared prerequisite-check-and-distribute logic lives in
+        // performDistribution() (DistributionHelper.ts); rollback here
+        // follows this function's own existing convention (the outer
+        // try/catch below already rolls back the tmux window/token and, once
+        // `worktreePath`+`repoDir` are set, the worktree itself — neither is
+        // set yet at this point, so throwing is sufficient).
+        const distOutcome: DistributionOutcome = await performDistribution({
+          server,
+          projectServer,
+          project,
+          workingDir,
+          baseBranch,
+          taskBranch: task.branch,
+          transportFactory,
+          projectRepo,
+          fetchDistributionService,
+        });
+        if (distOutcome.required && !distOutcome.ok) {
+          if (unitId !== null) {
+            appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'fetch_distribution_failed', error: distOutcome.message });
+          }
+          throw new Error(`Fetch distribution failed: ${distOutcome.message}`);
+        }
+        if (distOutcome.required) {
+          if (unitId !== null) {
+            appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'fetch_distributed', sha: distOutcome.sha, bundleType: distOutcome.bundleType });
+          }
+        }
+        const distStatus: 'distributed' | 'already_current' | null = distOutcome.required ? distOutcome.distStatus : null;
+        const worktreeCreateBaseBranch = resolveWorktreeCreateBaseBranch(baseBranch, distStatus);
+
         const transport = transportFactory.getTransport(server);
         const worktreeService = worktreeServiceFactory.create(server.type, transport);
-        const wt = await worktreeService.create(workingDir, task.id, slug, baseBranch, branch);
+        const wt = await worktreeService.create(workingDir, task.id, slug, worktreeCreateBaseBranch, branch);
         worktreePath = wt.path;
         worktreeBranch = wt.branch;
         effectiveDir = wt.path;

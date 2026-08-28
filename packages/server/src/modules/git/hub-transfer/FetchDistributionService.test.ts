@@ -3,6 +3,7 @@ import { FetchDistributionService } from './FetchDistributionService';
 import { RemoteGitCommandError } from '../execWithSentinel';
 import { computeRepoHash } from './repoHash';
 import type { CanonicalRepositoryIdentity } from '../resolveCanonicalRepositoryIdentity';
+import { DUMMY_ORIGIN_URL } from './types';
 
 const identity: CanonicalRepositoryIdentity = {
   provider: 'github',
@@ -41,7 +42,15 @@ function mockRemoteBundleOps(overrides: Record<string, any> = {}) {
     cleanup: vi.fn(async () => {}),
     getStampedRepoHash: vi.fn(async () => null),
     stampRepoHash: vi.fn(async () => {}),
-    getOriginUrl: vi.fn(async () => null),
+    // Defaults to the dummy sentinel (Issue #87 13th-round review, Important
+    // finding 3 follow-up): most tests in this file exercise bundle-fetch
+    // logic, not identity verification, and don't care which of the
+    // (now fail-closed) "unstamped" branches they take — DUMMY_ORIGIN_URL is
+    // the one that still adopts (a normal already-AZITO-managed workingDir),
+    // matching this suite's pre-existing behavior everywhere except the
+    // identity-verification describe block below, which overrides this
+    // explicitly per test.
+    getOriginUrl: vi.fn(async () => DUMMY_ORIGIN_URL),
     ...overrides,
   } as any;
 }
@@ -1254,46 +1263,66 @@ describe('FetchDistributionService unstamped-workingDir identity verification (I
     expect(remoteBundleOps.setDummyOrigin).not.toHaveBeenCalled();
   });
 
-  it('origin is the dummy sentinel (pre-existing AZITO-managed checkout): adopts it with a warning', async () => {
+  it('origin is EXACTLY the dummy sentinel (pre-existing AZITO-managed checkout): adopts it', async () => {
     const remoteBundleOps = mockRemoteBundleOps({
       getMirrorBranchSha: vi.fn(async () => sha),
       repoExists: vi.fn(async () => true),
       getStampedRepoHash: vi.fn(async () => null),
       getOriginUrl: vi.fn(async () => 'https://azito-isolated-no-direct-access.invalid/repo.git'),
     });
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
-      const result = await service.distribute(makeParams());
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const result = await service.distribute(makeParams());
 
-      expect(result.status).toBe('already_current');
-      expect(remoteBundleOps.stampRepoHash).toHaveBeenCalledWith({}, '/home/agent/repo', repoHash);
-      expect(remoteBundleOps.fetchWorkingDirFromMirror).toHaveBeenCalled();
-      expect(warnSpy).toHaveBeenCalled();
-    } finally {
-      warnSpy.mockRestore();
-    }
+    expect(result.status).toBe('already_current');
+    expect(remoteBundleOps.stampRepoHash).toHaveBeenCalledWith({}, '/home/agent/repo', repoHash);
+    expect(remoteBundleOps.fetchWorkingDirFromMirror).toHaveBeenCalled();
   });
 
-  it('origin is unset (pre-existing AZITO-managed checkout): adopts it with a warning', async () => {
+  // Issue #87 13th-round review, Important finding 3: an unstamped
+  // workingDir with NO origin configured is an entirely ordinary thing for
+  // an unrelated, pre-existing local repository to have — it must NOT be
+  // silently adopted (fetched into, HEAD-detached, branches force-moved,
+  // origin overwritten) just because it doesn't already carry AZITO's own
+  // dummy sentinel. Distribution now fails closed instead.
+  it('origin is unset: fails closed and leaves workingDir untouched (does NOT adopt an unrelated local repository)', async () => {
     const remoteBundleOps = mockRemoteBundleOps({
       getMirrorBranchSha: vi.fn(async () => sha),
       repoExists: vi.fn(async () => true),
       getStampedRepoHash: vi.fn(async () => null),
       getOriginUrl: vi.fn(async () => null),
     });
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
-      const result = await service.distribute(makeParams());
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const result = await service.distribute(makeParams());
 
-      expect(result.status).toBe('already_current');
-      expect(remoteBundleOps.stampRepoHash).toHaveBeenCalledWith({}, '/home/agent/repo', repoHash);
-      expect(remoteBundleOps.fetchWorkingDirFromMirror).toHaveBeenCalled();
-      expect(warnSpy).toHaveBeenCalled();
-    } finally {
-      warnSpy.mockRestore();
-    }
+    expect(result.status).toBe('failed');
+    expect((result as any).error).toMatch(/cannot be identified as an AZITO distribution target/);
+    // No mutation of any kind happened.
+    expect(remoteBundleOps.fetchWorkingDirFromMirror).not.toHaveBeenCalled();
+    expect(remoteBundleOps.stampRepoHash).not.toHaveBeenCalled();
+    expect(remoteBundleOps.setDummyOrigin).not.toHaveBeenCalled();
+  });
+
+  // Issue #87 13th-round review, Important finding 4: a `.git` suffix
+  // difference from the configured repository URL must NOT be treated as a
+  // different repository.
+  it('origin differs from the configured repository only by a trailing ".git": treated as the SAME repository', async () => {
+    // `identity.httpsUrl` (from the top-level `identity` fixture) already
+    // ends in `.git` (resolveCanonicalRepositoryIdentity's canonical form) —
+    // use the non-`.git` form as the origin to exercise the reverse
+    // direction (configured URL has `.git`, origin does not).
+    const originWithoutGitSuffix = identity.httpsUrl.replace(/\.git$/, '');
+    expect(originWithoutGitSuffix).not.toBe(identity.httpsUrl);
+    const remoteBundleOps = mockRemoteBundleOps({
+      getMirrorBranchSha: vi.fn(async () => sha),
+      repoExists: vi.fn(async () => true),
+      getStampedRepoHash: vi.fn(async () => null),
+      getOriginUrl: vi.fn(async () => originWithoutGitSuffix),
+    });
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const result = await service.distribute(makeParams());
+
+    expect(result.status).toBe('already_current');
+    expect(remoteBundleOps.stampRepoHash).toHaveBeenCalledWith({}, '/home/agent/repo', repoHash);
   });
 
   // Issue #87 third-party review, 12th round, Important finding 1: origin
@@ -1319,7 +1348,7 @@ describe('FetchDistributionService unstamped-workingDir identity verification (I
     expect(error).toContain('github.com/someone-else/other-repo.git');
   });
 
-  it('origin is an unrecognizable value WITH embedded credentials (adoption path): the warning never contains the credential', async () => {
+  it('origin is an unrecognizable value WITH embedded credentials: fails closed and the error never contains the credential', async () => {
     const originWithCreds = 'https://user:dummy-secret-value-456@internal-git-mirror.example/repo';
     const remoteBundleOps = mockRemoteBundleOps({
       getMirrorBranchSha: vi.fn(async () => sha),
@@ -1327,18 +1356,15 @@ describe('FetchDistributionService unstamped-workingDir identity verification (I
       getStampedRepoHash: vi.fn(async () => null),
       getOriginUrl: vi.fn(async () => originWithCreds),
     });
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
-      const result = await service.distribute(makeParams());
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const result = await service.distribute(makeParams());
 
-      expect(result.status).toBe('already_current');
-      expect(warnSpy).toHaveBeenCalled();
-      const loggedMessages = warnSpy.mock.calls.map((call) => call.join(' ')).join('\n');
-      expect(loggedMessages).not.toContain('dummy-secret-value-456');
-      expect(loggedMessages).not.toContain('user:dummy-secret-value-456');
-    } finally {
-      warnSpy.mockRestore();
-    }
+    expect(result.status).toBe('failed');
+    const error = (result as any).error as string;
+    expect(error).not.toContain('dummy-secret-value-456');
+    expect(error).not.toContain('user:dummy-secret-value-456');
+    // No mutation of any kind happened.
+    expect(remoteBundleOps.fetchWorkingDirFromMirror).not.toHaveBeenCalled();
+    expect(remoteBundleOps.stampRepoHash).not.toHaveBeenCalled();
   });
 });

@@ -638,6 +638,19 @@ export interface ResolvedExecutionManifest {
     // secrets ACTUALLY injected (empty when isolated), so the two fields
     // together make both directions of that toggle visible to the gate.
     isolationIntent: boolean;
+    // Issue #87 13th-round review, Important finding 2: the project_servers
+    // row's own `distribute_code` opt-in — whether ExecuteTaskUseCase (and,
+    // since this same review round, TaskRestoreService) fetches code from
+    // the hub's own git credentials onto this server before the task runs
+    // (see DistributionHelper.ts's `isDistributionRequired`). An operator
+    // approving a manifest with this off is approving "this task runs
+    // against whatever is already on the target machine" — turning it on
+    // afterwards, without invalidating that approval, would let an
+    // already-approved untrusted-input task start pulling hub-credentialed
+    // code onto the server the very next run, which is a materially
+    // different trust boundary than what was approved. `false` when
+    // `projectServer` itself is null (no resolvable project_servers row).
+    distributeCode: boolean;
   };
   branches: {
     base: string;
@@ -1000,6 +1013,9 @@ export function resolveExecutionManifest(
       agentPort: serverConfig?.agentPort ?? null,
       sshHost: serverConfig?.sshHost ?? null,
       isolationIntent: serverConfig?.isolationIntent ?? false,
+      // Issue #87 13th-round review, Important finding 2: see the field's
+      // own doc comment on ResolvedExecutionManifest.server above.
+      distributeCode: projectServer?.distributeCode ?? false,
     },
     branches: {
       base: baseBranch,
@@ -1100,6 +1116,9 @@ export function hashExecutionManifest(manifest: ResolvedExecutionManifest): stri
       // Issue #29 review, Critical finding 2: see the field's own doc
       // comment on ResolvedExecutionManifest.server above.
       isolationIntent: manifest.server.isolationIntent,
+      // Issue #87 13th-round review, Important finding 2: see the field's
+      // own doc comment on ResolvedExecutionManifest.server above.
+      distributeCode: manifest.server.distributeCode,
     },
     branches: {
       base: manifest.branches.base,

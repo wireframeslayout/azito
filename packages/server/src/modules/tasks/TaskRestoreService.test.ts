@@ -217,6 +217,11 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
     // needing every test to special-case a mocked lock.
     serverIsolationMutex: new KeyedMutex(),
     scopedAuthEnabled: true,
+    // Distribution not required by default (server.type is 'local' and
+    // projectServerRepo's fixture has distributeCode: false) — null exercises
+    // performDistribution()'s `{ required: false }` fast path. Tests below
+    // that need distribution override this with a real mock.
+    fetchDistributionService: null,
     ...overrides,
   };
 }
@@ -671,6 +676,116 @@ describe('TaskRestoreService', () => {
     // the one ensureSessionWithLock's span produced.
     expect(resolvePaneIdServer.agentVersion).not.toBe(createSessionServer.agentVersion);
     expect(getTransportServer.agentVersion).toBe(resolvePaneIdServer.agentVersion);
+  });
+
+  // Issue #87 13th-round review, Important finding 1: restore() must run
+  // the same fetch-distribution check execute() does before recreating a
+  // task's worktree — an isolated server or a distribute_code project
+  // server restored from an archived task must not silently rebuild its
+  // worktree from whatever stale local content happens to already be at
+  // workingDir.
+  describe('fetch distribution (Issue #87 13th-round review, Important finding 1)', () => {
+    function mockFetchDistributionService(overrides: Record<string, any> = {}) {
+      return {
+        distribute: vi.fn(async () => ({ status: 'distributed', sha: 'a'.repeat(40), bundleType: 'full', localBranchSynced: true })),
+        ...overrides,
+      } as unknown as NonNullable<TaskRestoreDeps['fetchDistributionService']>;
+    }
+
+    // agent/ssh servers route worktree-path containment through
+    // PathResolverFactory's RemotePathResolver, which shells out via
+    // `transport.exec('cd -- <path> && pwd -P')` — echo the requested path
+    // straight back (it's already a real, existing directory: `worktreeDir`)
+    // so the containment check these tests don't otherwise care about
+    // doesn't throw.
+    function agentTransportFactory(): TaskRestoreDeps['transportFactory'] {
+      return {
+        getTransport: vi.fn(() => ({
+          exec: vi.fn(async (cmd: string) => {
+            const match = /^cd -- (.+) && pwd -P$/.exec(cmd);
+            const rawPath = match ? match[1] : worktreeDir;
+            const unquoted = rawPath.startsWith("'") ? rawPath.slice(1, -1).replace(/'\\''/g, "'") : rawPath;
+            return { stdout: `${unquoted}\n`, stderr: '', code: 0 };
+          }),
+        })),
+      } as unknown as TaskRestoreDeps['transportFactory'];
+    }
+
+    function withRepository(projectRepo: TaskRestoreDeps['projectRepo']) {
+      (projectRepo.findById as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 10, name: 'Project', slug: 'project', description: null, repositoryUrl: null, defaultBranch: 'main',
+        sidekickPrompt: null, icon: null, color: null, defaultUnitId: 20,
+        repositories: [{ id: 1, name: 'repo', url: 'https://github.com/acme/repo.git', provider: 'github' as const, owner: 'acme', repoName: 'repo', hasToken: true }],
+        windows: [], createdAt: '2026-01-01', updatedAt: '2026-01-01',
+      });
+      (projectRepo.findRepositoryById as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 1, name: 'repo', url: 'https://github.com/acme/repo.git', provider: 'github' as const, owner: 'acme', repoName: 'repo', token: 'dummy-token',
+      });
+    }
+
+    it('runs fetch distribution before worktree creation on an isolated server, and fails the restore when it fails', async () => {
+      const fetchDistributionService = mockFetchDistributionService({
+        distribute: vi.fn(async () => ({ status: 'failed', error: 'dummy distribution failure' })),
+      });
+      withRepository(deps.projectRepo);
+      deps = makeDeps({
+        ...deps,
+        fetchDistributionService,
+        transportFactory: agentTransportFactory(),
+        serverRepo: {
+          ...deps.serverRepo,
+          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
+        },
+      });
+      service = new TaskRestoreService(deps);
+      const task = makeTask({ serverName: 'test-server' });
+
+      await expect(service.restore(task, log)).rejects.toThrow(/Fetch distribution failed/);
+
+      expect(fetchDistributionService.distribute).toHaveBeenCalled();
+      // Distribution failed before worktree creation was ever reached — the
+      // worktree service factory itself was never invoked.
+      expect(deps.worktreeServiceFactory.create).not.toHaveBeenCalled();
+      // The tmux window this run created is rolled back, same as this
+      // function's existing failure-handling convention for worktree
+      // creation failures.
+      expect(deps.tmux.killWindow).toHaveBeenCalled();
+    });
+
+    it('succeeds and creates the worktree once distribution succeeds on an isolated server', async () => {
+      const fetchDistributionService = mockFetchDistributionService();
+      withRepository(deps.projectRepo);
+      deps = makeDeps({
+        ...deps,
+        fetchDistributionService,
+        transportFactory: agentTransportFactory(),
+        serverRepo: {
+          ...deps.serverRepo,
+          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
+        },
+      });
+      service = new TaskRestoreService(deps);
+      const task = makeTask({ serverName: 'test-server' });
+
+      const result = await service.restore(task, log);
+
+      expect(fetchDistributionService.distribute).toHaveBeenCalled();
+      expect(result.worktreePath).toBe(worktreeDir);
+      const worktreeService = (deps.worktreeServiceFactory.create as ReturnType<typeof vi.fn>).mock.results[0]?.value;
+      expect(worktreeService?.create).toHaveBeenCalled();
+    });
+
+    it('does NOT run fetch distribution for a plain local, non-distribute_code server', async () => {
+      const fetchDistributionService = mockFetchDistributionService();
+      deps = makeDeps({ ...deps, fetchDistributionService });
+      service = new TaskRestoreService(deps);
+      const task = makeTask({ serverName: 'test-server' });
+
+      const result = await service.restore(task, log);
+
+      expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+      expect(result.worktreePath).toBe(worktreeDir);
+    });
   });
 
   describe('execution gate (Issue #328)', () => {

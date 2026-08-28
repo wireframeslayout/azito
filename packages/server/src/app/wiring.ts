@@ -329,7 +329,24 @@ function buildAgentUpdater(agentBundler: AgentBundler, infra: SharedInfra, repos
   return new AgentUpdater(agentBundler, infra.agentInstaller, repos.serverRepo, repos.taskRepo);
 }
 
-function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiToken: string, scopedAuthEnabled: boolean): ApplicationServices {
+// Constructed ONCE and shared between TaskRestoreService and
+// ExecuteTaskUseCase (Issue #87 13th-round review, Important finding 1) —
+// FetchDistributionService's own per-repo KeyedMutex only actually serializes
+// concurrent distributions to the same mirror when both call sites share the
+// SAME instance; two separately-constructed instances would each hold their
+// own mutex and could race the same mirror.
+function buildFetchDistributionService(infra: SharedInfra, dataPaths: DataPaths, db: SqliteDatabase): FetchDistributionService {
+  const sftpService = new SftpService(infra.sshClient);
+  const hubRepoCache = new HubRepoCache(dataPaths.dir);
+  const remoteBundleOps = new RemoteBundleOps();
+  const distributionStateRepo = new SqliteDistributionStateRepository(db);
+  // sshClient passed to normalize the outer lock key's host identity (Issue
+  // #87 review, 6th pass, Important finding 3) — see FetchDistributionService's
+  // `sshHostResolver` constructor doc comment.
+  return new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService, distributionStateRepo, infra.sshClient);
+}
+
+function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiToken: string, scopedAuthEnabled: boolean, fetchDistributionService: FetchDistributionService): ApplicationServices {
   const sessionStrategyFactory = new SessionStrategyFactory(infra.agentRegistry, infra.transportFactory);
   const sessionCaptureService = new SessionCaptureService(repos.windowRepo, repos.taskRepo, repos.serverRepo, sessionStrategyFactory);
   // Constructed here (ahead of ExecuteTaskUseCase, built later in
@@ -359,6 +376,7 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
     paneEnvService: taskPaneEnvironmentService,
     serverIsolationMutex: infra.serverIsolationMutex,
     scopedAuthEnabled,
+    fetchDistributionService,
   });
   // windowSessionResolver / windowActivityStatusService: shared by transcriptsRoutes
   // (session resolution), windowsRoutes (GET /api/windows/activity-status, diagnostics)
@@ -381,19 +399,12 @@ function buildExecuteTaskUseCase(
   appServices: ApplicationServices,
   resourceGuard: ResourceGuard,
   scopedAuthEnabled: boolean,
-  dataPaths: DataPaths,
-  db: SqliteDatabase,
+  fetchDistributionService: FetchDistributionService,
 ): ExecuteTaskUseCase {
 
   const sftpService = new SftpService(infra.sshClient);
-  const hubRepoCache = new HubRepoCache(dataPaths.dir);
   const remoteBundleOps = new RemoteBundleOps();
   const cleanPusher = new CleanPusher();
-  const distributionStateRepo = new SqliteDistributionStateRepository(db);
-  // sshClient passed to normalize the outer lock key's host identity (Issue
-  // #87 review, 6th pass, Important finding 3) — see FetchDistributionService's
-  // `sshHostResolver` constructor doc comment.
-  const fetchDistributionService = new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService, distributionStateRepo, infra.sshClient);
   const pushNotaryService = new PushNotaryService(remoteBundleOps, sftpService, cleanPusher, infra.gitProvider);
 
   return new ExecuteTaskUseCase(
@@ -516,9 +527,10 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, db, fingerprintStore, repos.auditLogService, scopedAuthEnabled);
   const pushNotification = buildPushNotificationModule(repos.pushSubRepo);
   const agentUpdater = buildAgentUpdater(agentBundler, infra, repos);
-  const appServices = buildApplicationServices(infra, repos, uiToken, scopedAuthEnabled);
+  const fetchDistributionService = buildFetchDistributionService(infra, dataPaths, db);
+  const appServices = buildApplicationServices(infra, repos, uiToken, scopedAuthEnabled, fetchDistributionService);
   const resourceGuard = new ResourceGuard(infra.transportFactory, repos.resourceGuardSettingsRepo);
-  const executeTaskUseCase = buildExecuteTaskUseCase(infra, repos, appServices, resourceGuard, scopedAuthEnabled, dataPaths, db);
+  const executeTaskUseCase = buildExecuteTaskUseCase(infra, repos, appServices, resourceGuard, scopedAuthEnabled, fetchDistributionService);
   const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService, appServices.windowActivityStatusService);
   const interactionMonitor = new InteractionMonitor(repos.windowRepo);
   const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos);

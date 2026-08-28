@@ -521,6 +521,57 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     });
   });
 
+  // Issue #87 13th-round review, Important finding 2: project_servers'
+  // distribute_code opt-in must be covered by the fingerprint — otherwise an
+  // operator approving a task while distribution is off could have
+  // distribution flipped on afterwards without invalidating that approval,
+  // silently changing where the task's code comes from (hub-credentialed
+  // fetch distribution instead of whatever was already on the target).
+  describe('server.distributeCode', () => {
+    it('is exposed on the resolved manifest, sourced from the project_servers row', () => {
+      const fixture: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: true }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      };
+      const task = makeTask();
+
+      const resolved = resolveExecutionManifest(task, makeDeps(fixture));
+      expect(resolved.manifest.server.distributeCode).toBe(true);
+    });
+
+    it('turning distribute_code on for the project server alone invalidates a prior approval, WITHOUT touching the task row', () => {
+      const fixture = (distributeCode: boolean): Fixture => ({
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      });
+      const task = makeTask();
+
+      const hashOff = hashFor(task, fixture(false));
+      const hashOn = hashFor(task, fixture(true));
+
+      expect(hashOn).not.toBe(hashOff);
+    });
+
+    it('turning distribute_code back off alone also invalidates approval (the reverse direction)', () => {
+      const fixture = (distributeCode: boolean): Fixture => ({
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      });
+      const task = makeTask();
+
+      const hashOn = hashFor(task, fixture(true));
+      const hashOff = hashFor(task, fixture(false));
+
+      expect(hashOff).not.toBe(hashOn);
+    });
+  });
+
   it('editing task.unitId alone invalidates a prior approval (retargets the Unit)', () => {
     const fixture: Fixture = {
       units: { 20: makeUnit({ id: 20 }), 999: makeUnit({ id: 999, systemPrompt: 'A different unit' }) },

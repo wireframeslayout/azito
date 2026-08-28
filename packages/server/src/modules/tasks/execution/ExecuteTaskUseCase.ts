@@ -49,6 +49,7 @@ import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionMani
 import { TuiWorkerRuntime } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
 import { resolveTaskServerName, resolveTmuxSession, resolveUnitId, resolveBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
+import { performDistribution, type DistributionOutcome } from './DistributionHelper';
 import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
 import type { SqliteAgentTurnRepository } from '../turns/SqliteAgentTurnRepository';
 import type { TurnSignalHub } from '../turns/TurnSignalHub';
@@ -826,200 +827,66 @@ export class ExecuteTaskUseCase {
     const windowTarget = `${tmuxSession}:${windowName}`;
     const target = await this.tmux.resolvePaneId(server, windowTarget);
 
-    // Fetch distribution's necessity is a property of the SERVER/PROJECT
-    // (isolation intent, or the project's `distribute_code` opt-in) — it does
-    // NOT depend on whether `workingDir` happens to be set (Issue #87 review,
-    // forge/87-mirror follow-up, Important finding 2). The check used to live
-    // entirely inside `if (workingDir)` below, so a task on an isolated
-    // server (or one with `distribute_code` on) that had no working directory
-    // configured skipped distribution SILENTLY — the fail-fast added for a
-    // missing repository/token/identity a few lines down never even ran, and
-    // the task started against whatever was already checked out in the
-    // pane's default directory (no code of its own, for an isolated server).
+    // Canonicalized ONCE, immediately after resolution (Issue #87
+    // third-party review, 11th round, Important finding 1) — see
+    // `canonicalizeBaseBranch`'s doc comment in TaskExecutionEnv.ts. Computed
+    // unconditionally (not only when `workingDir` is set) because fetch
+    // distribution's own prerequisite checks (via performDistribution) need
+    // it regardless of whether a working directory happens to be configured.
+    const baseBranch = canonicalizeBaseBranch(resolveBaseBranch(task, projectServer, project));
+
+    // Fetch distribution (Issue #87 Phase 1: isolated servers, unconditionally
+    // — they hold no git credentials of their own, so distribution is not
+    // optional there. Issue #87 Phase 2: generalized to any non-`local`
+    // server via the project's own `distribute_code` opt-in, for instant
+    // dev-environment provisioning without hub-side credentials on the
+    // target. `local` is always excluded — that server IS the hub, so
+    // "distributing" to it is meaningless.)
     //
-    // Issue #87 review, 6th pass, Important finding 1: `distributionRequired`
-    // used to ALSO fold in `fetchDistributionService != null` — so on a hub
-    // where `FetchDistributionService` was never wired (or a future call site
-    // that omits it), an isolated server or a `distribute_code` project
-    // silently downgraded to "distribution not required" and the task ran
-    // with no code, or stale/old code, on the target. Whether distribution is
-    // required must be decided from server/project configuration ALONE; a
-    // required-but-unwired service is a missing-dependency failure, not a
-    // reason to skip distribution.
-    const fetchDistributionService = this.fetchDistributionService;
-    const distributionRequired = server.type !== 'local' && (server.isolationIntent || projectServer?.distributeCode);
-
-    if (distributionRequired && fetchDistributionService == null) {
-      const message = 'Fetch distribution is required (server isolation intent or project distribute_code) but FetchDistributionService is not wired into ExecuteTaskUseCase';
-      this.appendLog(taskId, unitId, 'command', { type: 'fetch_distribution_failed', error: message });
-      await this.rollbackWindowAfterPostCreationFailure(taskId, server, tmuxSession, windowName, tokenId, 'fetch_distribution_prereq_failed_rollback');
-      throw new Error(message);
+    // Extracted into performDistribution() (Issue #87 13th-round review,
+    // Important finding 1): TaskRestoreService.restore() shares this exact
+    // prerequisite-check-and-distribute sequence, so a task restored on an
+    // isolated/distribute_code server goes through the same distribution a
+    // fresh execute() would, instead of silently recreating its worktree
+    // from whatever stale content happens to already be at `workingDir`.
+    // Rollback (window/token teardown) and task-status handling stay HERE —
+    // restore()'s own failure handling differs enough (a single outer
+    // try/catch spanning window+worktree creation) that folding it into the
+    // shared helper would either lose information this call site uses or
+    // force restore() to adopt a rollback shape it doesn't have.
+    const distOutcome: DistributionOutcome = await performDistribution({
+      server,
+      projectServer,
+      project,
+      workingDir,
+      baseBranch,
+      taskBranch: task.branch,
+      transportFactory: this.transportFactory,
+      projectRepo: this.projectRepo,
+      fetchDistributionService: this.fetchDistributionService,
+    });
+    if (distOutcome.required && !distOutcome.ok) {
+      this.appendLog(taskId, unitId, 'command', { type: 'fetch_distribution_failed', error: distOutcome.message });
+      const rollbackReason = distOutcome.stage === 'distribute_failed'
+        ? 'fetch_distribution_failed_rollback'
+        : distOutcome.stage === 'stale_local_branch'
+          ? 'fetch_distribution_stale_local_branch_rollback'
+          : 'fetch_distribution_prereq_failed_rollback';
+      await this.rollbackWindowAfterPostCreationFailure(taskId, server, tmuxSession, windowName, tokenId, rollbackReason);
+      throw new Error(distOutcome.message);
     }
-
-    if (distributionRequired && !workingDir) {
-      const message = 'Fetch distribution is required (server isolation intent or project distribute_code) but no working directory is configured for this task/server';
-      this.appendLog(taskId, unitId, 'command', { type: 'fetch_distribution_failed', error: message });
-      await this.rollbackWindowAfterPostCreationFailure(taskId, server, tmuxSession, windowName, tokenId, 'fetch_distribution_prereq_failed_rollback');
-      throw new Error(message);
+    if (distOutcome.required) {
+      this.appendLog(taskId, unitId, 'command', { type: 'fetch_distributed', sha: distOutcome.sha, bundleType: distOutcome.bundleType });
     }
+    // Tracks fetch distribution's outcome this call (null when distribution
+    // did not run, e.g. a `local` server, or an agent/ssh server whose
+    // project_servers row has distribute_code off) — see
+    // resolveWorktreeCreateBaseBranch's doc comment for why this decides
+    // whether worktree creation below resolves `origin/<baseBranch>` instead
+    // of the plain `baseBranch`.
+    const distStatus: 'distributed' | 'already_current' | null = distOutcome.required ? distOutcome.distStatus : null;
 
     if (workingDir) {
-      // Canonicalized ONCE, immediately after resolution (Issue #87
-      // third-party review, 11th round, Important finding 1) — see
-      // `canonicalizeBaseBranch`'s doc comment in TaskExecutionEnv.ts. Every
-      // downstream use of `baseBranch` in this function (fetch distribution's
-      // `distribute()` call, worktree creation via
-      // `resolveWorktreeCreateBaseBranch`, and the `baseBranch` value
-      // persisted/logged below) now consistently sees the same plain,
-      // unqualified branch name — an `origin/`- or `refs/heads/`-qualified
-      // pre-existing task value no longer reaches `distribute()` and makes
-      // it try to fetch the nonexistent ref `refs/heads/origin/<branch>`.
-      const baseBranch = canonicalizeBaseBranch(resolveBaseBranch(task, projectServer, project));
-      // Tracks fetch distribution's outcome this call (null when
-      // distribution did not run, e.g. a `local` server, or an agent/ssh
-      // server whose project_servers row has distribute_code off) — see
-      // resolveWorktreeCreateBaseBranch's doc comment for why this decides
-      // whether worktree creation below resolves `origin/<baseBranch>`
-      // instead of the plain `baseBranch`.
-      let distStatus: 'distributed' | 'already_current' | 'failed' | null = null;
-
-      // Fetch distribution (Issue #87 Phase 1: isolated servers, unconditionally
-      // — they hold no git credentials of their own, so distribution is not
-      // optional there. Issue #87 Phase 2: generalized to any non-`local`
-      // server via the project's own `distribute_code` opt-in, for instant
-      // dev-environment provisioning without hub-side credentials on the
-      // target. `local` is always excluded — that server IS the hub, so
-      // "distributing" to it is meaningless.)
-      if (distributionRequired) {
-        if (!fetchDistributionService) {
-          // Unreachable in practice — `distributionRequired && fetchDistributionService
-          // == null` already fails fast above. Re-checked here so
-          // TypeScript's control-flow analysis (which can't correlate the
-          // separately-bound `distributionRequired` and
-          // `fetchDistributionService` consts across the two guard clauses
-          // above) narrows `fetchDistributionService` to non-null for the
-          // `.distribute()` call below.
-          throw new Error('Fetch distribution is required but FetchDistributionService is not wired into ExecuteTaskUseCase');
-        }
-
-        // Fail fast (review finding, Issue #87 third-party review, Important
-        // 2): distribution was requested — via the server's own isolation
-        // intent (which cannot clone for itself; skipping distribution here
-        // would leave it with no code at all) or the project's explicit
-        // `distribute_code` opt-in — so a missing repository / token /
-        // resolvable identity is treated as MISSING REQUIRED DATA, not a
-        // silent "don't distribute" fallback. The old nested-`if` shape fell
-        // through all three of these the same way: `distStatus` stayed
-        // `null`, worktree creation below resolved the plain (stale,
-        // server-local) `baseBranch` instead of `origin/<baseBranch>`, and
-        // the task proceeded to run against out-of-date code — exactly the
-        // staleness distribution exists to prevent. Each branch below runs
-        // the SAME post-window-creation rollback
-        // (rollbackWindowAfterPostCreationFailure) the fetch-distribution
-        // and worktree failure branches use, since the task window/token
-        // already exist by this point.
-        const repoEntry = project?.repositories?.[0];
-        if (!repoEntry) {
-          const message = 'Fetch distribution is required but the project has no repository configured';
-          this.appendLog(taskId, unitId, 'command', { type: 'fetch_distribution_failed', error: message });
-          await this.rollbackWindowAfterPostCreationFailure(taskId, server, tmuxSession, windowName, tokenId, 'fetch_distribution_prereq_failed_rollback');
-          throw new Error(message);
-        }
-
-        // Fail fast (Issue #87 review, 6th pass, Important finding 2):
-        // `repositories[0]` is a stand-in for "the project's repository", and
-        // that's only unambiguous when the project has EXACTLY one. There is
-        // no ordering guarantee on `project.repositories` and no mapping from
-        // a project server's working directory to a specific repository, so
-        // with 2+ repositories `[0]` may distribute a repository unrelated to
-        // `workingDir` (wrong code, or a failure because that repository
-        // happens to have no token). The correct permanent fix is to let each
-        // project server declare which repository it distributes (an explicit
-        // `repositoryId`), but that requires new persisted config and is out
-        // of scope here — this is the interim guard: refuse to guess.
-        if ((project?.repositories?.length ?? 0) > 1) {
-          const message = 'Fetch distribution is required but the project has multiple repositories configured — the distribution target cannot be determined unambiguously. Either reduce this project to a single repository, or disable distribution (server isolation intent / project distribute_code) for this task.';
-          this.appendLog(taskId, unitId, 'command', { type: 'fetch_distribution_failed', error: message });
-          await this.rollbackWindowAfterPostCreationFailure(taskId, server, tmuxSession, windowName, tokenId, 'fetch_distribution_prereq_failed_rollback');
-          throw new Error(message);
-        }
-
-        const repo = this.projectRepo.findRepositoryById(repoEntry.id);
-        if (!repo?.token) {
-          const message = 'Fetch distribution is required but the repository has no token configured';
-          this.appendLog(taskId, unitId, 'command', { type: 'fetch_distribution_failed', error: message });
-          await this.rollbackWindowAfterPostCreationFailure(taskId, server, tmuxSession, windowName, tokenId, 'fetch_distribution_prereq_failed_rollback');
-          throw new Error(message);
-        }
-
-        const identity = resolveCanonicalRepositoryIdentity(repo);
-        if (!identity.ok) {
-          const message = `Fetch distribution is required but the repository URL could not be normalized to a canonical identity: ${identity.reason}`;
-          this.appendLog(taskId, unitId, 'command', { type: 'fetch_distribution_failed', error: message });
-          await this.rollbackWindowAfterPostCreationFailure(taskId, server, tmuxSession, windowName, tokenId, 'fetch_distribution_prereq_failed_rollback');
-          throw new Error(message);
-        }
-
-        const transport = this.transportFactory.getTransport(server);
-        const distResult = await fetchDistributionService.distribute({
-          server, transport, repoIdentity: identity.identity,
-          token: repo.token, branch: baseBranch, workingDir,
-          repositoryId: repoEntry.id,
-        });
-        distStatus = distResult.status;
-        if (distResult.status === 'failed') {
-          this.appendLog(taskId, unitId, 'command', { type: 'fetch_distribution_failed', error: distResult.error });
-          // Review finding (Issue #87 third-party review, Important 1): this
-          // used to only throw, leaving the already-created task window and
-          // token live and the task stuck `in_progress` — see
-          // rollbackWindowAfterPostCreationFailure's doc comment for what it
-          // now performs (mirrors the pre-existing worktree-failure cleanup).
-          await this.rollbackWindowAfterPostCreationFailure(taskId, server, tmuxSession, windowName, tokenId, 'fetch_distribution_failed_rollback');
-          throw new Error(`Fetch distribution failed: ${distResult.error}`);
-        }
-        this.appendLog(taskId, unitId, 'command', { type: 'fetch_distributed', sha: distResult.sha, bundleType: distResult.bundleType });
-
-        // Fail fast (Issue #87 review, forge/87-mirror follow-up, Important
-        // finding 1) when distribution succeeded but the workingDir's LOCAL
-        // branch ref could not be advanced to the freshly distributed
-        // tracking ref, in the ONE case that gap can actually reach stale
-        // content: `task.branch` set to the SAME name as the distributed
-        // `baseBranch`. RemoteWorktreeService.create() only takes its "reuse
-        // existing local branch" path (`git worktree add <path> <branch>`,
-        // which bypasses baseBranch resolution entirely) when `task.branch`
-        // is provided; any OTHER `task.branch` (the user's own work branch)
-        // or no `task.branch` at all makes worktree creation resolve
-        // `worktreeCreateBaseBranch` (origin/<baseBranch>) itself and never
-        // touches this possibly-stale local ref. The "a failed sync always
-        // makes the subsequent worktree-add fail too, so no silent stale
-        // path exists" reasoning `syncLocalBranchToTracking`'s doc comment
-        // used to rely on as a backstop does NOT hold — RemoteWorktreeService
-        // retries a failed `git worktree add` with `--force`
-        // (RemoteWorktreeService.ts:64), which succeeds even though the
-        // branch could not be advanced, silently building the worktree from
-        // the stale local ref (verified: `git worktree add <path> main`
-        // fails with "already used by worktree" while `git worktree add
-        // --force <path> main` succeeds against the same stale ref).
-        // Compare via normalizeBranchRef, not raw string equality: the API
-        // boundary (tasks/routes.ts validateGitFields) now rejects new
-        // fully-qualified refs (e.g. `refs/heads/main`), but this is a
-        // second, independent layer against that same evasion — pre-existing
-        // data or another write path could still put a full ref in
-        // task.branch, and `refs/heads/main` is semantically the same branch
-        // as `main` for this guard's purposes either way (Issue #87
-        // third-party review, 9th round, Important finding 1).
-        if (
-          distResult.localBranchSynced === false &&
-          task.branch &&
-          normalizeBranchRef(task.branch) === normalizeBranchRef(baseBranch)
-        ) {
-          const message = `Fetch distribution succeeded but the local branch "${task.branch}" in ${workingDir} could not be updated to the distributed content — it is likely checked out in another worktree on the server. Remove or update that worktree, or specify a different branch name for this task, and retry.`;
-          this.appendLog(taskId, unitId, 'command', { type: 'fetch_distribution_failed', error: message });
-          await this.rollbackWindowAfterPostCreationFailure(taskId, server, tmuxSession, windowName, tokenId, 'fetch_distribution_stale_local_branch_rollback');
-          throw new Error(message);
-        }
-      }
-
       const worktreeCreateBaseBranch = resolveWorktreeCreateBaseBranch(baseBranch, distStatus);
 
       // Create worktree for isolated branch/file tracking

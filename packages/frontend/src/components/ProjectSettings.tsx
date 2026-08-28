@@ -620,7 +620,7 @@ function ServersSection({ settings: s }: { settings: ReturnType<typeof useProjec
                 label=""
                 hint={isolated ? t('settings.servers.distributeCodeIsolatedHint') : t('settings.servers.distributeCodeHint')}
               >
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: isolated ? 'default' : 'pointer' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: isolated ? 'default' : 'pointer' }}>
                   <label className="toggle">
                     <input
                       type="checkbox"
@@ -631,7 +631,7 @@ function ServersSection({ settings: s }: { settings: ReturnType<typeof useProjec
                     <span className="toggle-slider" />
                   </label>
                   <span style={{ fontSize: 'var(--font-md)', color: 'var(--text)' }}>{t('settings.servers.distributeCode')}</span>
-                </label>
+                </span>
               </FormField>
             );
           })()}

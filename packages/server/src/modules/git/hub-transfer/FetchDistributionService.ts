@@ -9,8 +9,8 @@ import type { HubRepoCache } from './HubRepoCache';
 import type { RemoteBundleOps } from './RemoteBundleOps';
 import { computeRepoHash } from './repoHash';
 import { RemoteGitCommandError } from '../execWithSentinel';
-import { normalizeRepositoryUrlToHttps } from '../normalizeRepositoryUrl';
 import { redactGitUrlCredentials } from '../redactGitUrlCredentials';
+import { resolveCanonicalRepositoryIdentity } from '../resolveCanonicalRepositoryIdentity';
 import { DUMMY_ORIGIN_URL, type IDistributionStateRepository, type FetchDistributionParams, type FetchDistributionResult } from './types';
 
 type BundleType = 'full' | 'incremental';
@@ -503,24 +503,36 @@ export class FetchDistributionService {
    * mismatch detection ever got a chance to run once. `verifyUnstampedIdentity`
    * below now runs BEFORE any mutation and resolves that case into exactly
    * one of three outcomes:
-   *  1. `origin` is a real upstream URL whose identity matches `repoHash` —
-   *     a legitimate pre-stamping checkout. Stamped, then treated the same
-   *     as an already-stamped match.
-   *  2. `origin` is a real upstream URL whose identity does NOT match —
-   *     fail fast, `workingDir` is left untouched.
-   *  3. `origin` is unset, the dummy sentinel this class itself sets
-   *     (`DUMMY_ORIGIN_URL`), or not a URL this method can confidently
-   *     parse — identity cannot be confirmed either way. Treated as
-   *     "probably AZITO's own pre-stamping checkout" (this class always
-   *     replaces `origin` with the dummy URL below, so a dummy origin is
-   *     exactly what an un-migrated AZITO-managed workingDir looks like) and
-   *     stamped with a warning logged. This is a deliberate back-compat
-   *     concession, not a certainty: an operator could point `distribute_code`
-   *     at an unrelated directory that also happens to have no/dummy origin
-   *     and it would be silently adopted. Failing closed here instead would
-   *     stop distribution to every already-configured isolated server the
-   *     moment they upgrade past this fix, which is worse in practice — see
-   *     branch 2 above for the case this CAN actually detect.
+   *  1. `origin` is EXACTLY the dummy sentinel this class itself sets
+   *     (`DUMMY_ORIGIN_URL`) — the only signal that reliably means "this
+   *     workingDir was itself created by a prior AZITO distribution, before
+   *     repoHash stamping existed" (this class always replaces `origin`
+   *     with the dummy URL, so that's exactly what an un-migrated
+   *     AZITO-managed workingDir looks like). Stamped, then treated the
+   *     same as an already-stamped match.
+   *  2. `origin` is a real upstream URL whose identity matches `repoHash`
+   *     (compared via `resolveCanonicalRepositoryIdentity`'s parsed
+   *     host/owner/repo, not a raw string compare — Issue #87 13th-round
+   *     review, Important finding 4: a plain string compare treats
+   *     `https://github.com/acme/repo` and `.../repo.git` as different
+   *     repositories) — a legitimate pre-stamping checkout. Stamped, then
+   *     treated the same as an already-stamped match.
+   *  3. Anything else — `origin` unset, unparseable, or a real upstream URL
+   *     whose identity does NOT match — FAILS CLOSED, `workingDir` is left
+   *     untouched. Issue #87 13th-round review, Important finding 3: this
+   *     used to also accept outcome 3 with a warning, on the theory that a
+   *     workingDir with no identifiable origin was "probably" AZITO's own.
+   *     That is not a safe assumption — an ordinary, unrelated local
+   *     repository with no origin configured (or one this method just can't
+   *     parse) is common, and adopting it means fetching foreign objects
+   *     into it, detaching its HEAD, force-moving its local branches, and
+   *     overwriting its origin: destroying a repository AZITO never created
+   *     and has no business touching. Narrowing outcome 1 to an EXACT
+   *     `DUMMY_ORIGIN_URL` match and failing everything else closed trades
+   *     "distribution to a genuinely un-migrated AZITO checkout might need a
+   *     one-time manual fix" for "distribution can no longer silently
+   *     destroy an unrelated repository" — the latter is the only
+   *     acceptable default here.
    */
   private async ensureWorkingDir(transport: IServerTransport, mirrorDir: string, workingDir: string, branch: string, repoHash: string, repoIdentity: CanonicalRepositoryIdentity): Promise<boolean> {
     const exists = await this.remoteBundleOps.repoExists(transport, workingDir);
@@ -580,13 +592,26 @@ export class FetchDistributionService {
    */
   private async verifyUnstampedIdentity(transport: IServerTransport, workingDir: string, repoHash: string, repoIdentity: CanonicalRepositoryIdentity): Promise<void> {
     const originUrl = await this.remoteBundleOps.getOriginUrl(transport, workingDir);
-    const normalizedOrigin = originUrl ? normalizeRepositoryUrlToHttps(originUrl) : null;
 
-    // No origin, the dummy sentinel this class itself sets, or an origin
-    // value we can't confidently parse into a real URL — identity cannot be
-    // confirmed either way. See branch 3 of `ensureWorkingDir`'s doc comment
-    // for why this is accepted (with a warning) rather than rejected.
-    //
+    // Issue #87 13th-round review, Important finding 3: adopting an
+    // unstamped workingDir is ONLY safe when its origin is AZITO's own
+    // dummy sentinel — i.e. this directory was itself created by a PRIOR
+    // distribution (before repoHash stamping existed), never touched since.
+    // A real, unrelated local repository with no origin configured (or with
+    // an origin this method can't confidently parse) is an entirely
+    // ordinary thing for a developer to have lying around; the previous
+    // "no identifiable origin -> assume it's ours and adopt it" rule would
+    // fetch foreign objects into it, detach its HEAD, force-move its local
+    // branches, and overwrite its origin the moment fetch distribution ran
+    // against that server — destroying a repository AZITO never created and
+    // has no business touching. Narrowing this to an EXACT DUMMY_ORIGIN_URL
+    // match closes that: everything else now fails closed instead of being
+    // silently adopted.
+    if (originUrl === DUMMY_ORIGIN_URL) {
+      await this.remoteBundleOps.stampRepoHash(transport, workingDir, repoHash);
+      return;
+    }
+
     // `originUrl` (read from the remote's own git config, not from this
     // codebase's own repository configuration) is NEVER embedded raw in a
     // log or error message here — it commonly carries embedded credentials
@@ -596,20 +621,42 @@ export class FetchDistributionService {
     // which is visible to whoever can see the task (Issue #87 third-party
     // review, 12th round, Important finding 1). `redactGitUrlCredentials`
     // strips any userinfo before either message is built.
-    if (!originUrl || originUrl === DUMMY_ORIGIN_URL || !normalizedOrigin) {
-      console.warn(
-        `[FetchDistributionService] workingDir "${workingDir}" has no repoHash stamp and its origin (${originUrl ? redactGitUrlCredentials(originUrl) : '(unset)'}) does not identify a repository. ` +
-        `Assuming it is a pre-existing AZITO-managed checkout from before repoHash stamping (repoHash ${repoHash}) and adopting it. ` +
-        'If this working directory actually belongs to a different repository, distribution will silently overwrite it — verify this server\'s project configuration.',
+    if (!originUrl) {
+      throw new Error(
+        `workingDir "${workingDir}" is not stamped for any repository and has no origin configured, so it cannot be identified as an AZITO distribution target (repoHash ${repoHash}). ` +
+        'Point this server\'s project configuration at a different working directory, or manually verify/clear this one before distributing to it.',
       );
-      await this.remoteBundleOps.stampRepoHash(transport, workingDir, repoHash);
-      return;
+    }
+
+    // Compare via resolveCanonicalRepositoryIdentity (reused, not
+    // reimplemented — Issue #87 13th-round review, Important finding 4):
+    // the plain normalized-URL string comparison this used to do treats
+    // `https://github.com/acme/repo` and `https://github.com/acme/repo.git`
+    // as different repositories, which blocks every distribution to a
+    // working directory whose origin happens to carry (or lack) the `.git`
+    // suffix. Comparing the parsed host/owner/repo instead makes those
+    // equivalent while still rejecting a genuinely different repository.
+    const originIdentity = resolveCanonicalRepositoryIdentity({
+      url: originUrl,
+      provider: repoIdentity.provider,
+      owner: null,
+      repoName: null,
+    });
+    if (!originIdentity.ok) {
+      throw new Error(
+        `workingDir "${workingDir}" is not stamped for any repository, and its origin ("${redactGitUrlCredentials(originUrl)}") could not be normalized to a canonical identity, so it cannot be identified as an AZITO distribution target (repoHash ${repoHash}). ` +
+        'Point this server\'s project configuration at a different working directory, or manually verify/clear this one before distributing to it.',
+      );
     }
 
     // Origin identifies a real upstream repository — it MUST match the one
     // being distributed. Case-insensitive, same convention
     // `resolveCanonicalRepositoryIdentity` uses for owner/repo comparison.
-    if (normalizedOrigin.toLowerCase() !== repoIdentity.httpsUrl.toLowerCase()) {
+    const matches =
+      originIdentity.identity.host.toLowerCase() === repoIdentity.host.toLowerCase() &&
+      originIdentity.identity.owner.toLowerCase() === repoIdentity.owner.toLowerCase() &&
+      originIdentity.identity.repo.toLowerCase() === repoIdentity.repo.toLowerCase();
+    if (!matches) {
       throw new Error(
         `workingDir "${workingDir}" is not stamped for any repository, and its origin ("${redactGitUrlCredentials(originUrl)}") identifies a DIFFERENT repository than the one being distributed ("${repoIdentity.httpsUrl}"). ` +
         'This working directory appears to belong to a different repository — point this server\'s project configuration at a separate working directory, or verify the configured repository.',
