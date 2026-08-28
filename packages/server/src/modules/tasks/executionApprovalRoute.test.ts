@@ -81,6 +81,7 @@ function makeOpts(existingTask: Task | null): TasksRouteOptions {
       countChildren: vi.fn(() => 0),
       countChildrenInGeneration: vi.fn(() => 0),
       clearTmuxWindowIfMatches: vi.fn(() => true),
+      updateStatusIfWindowMatches: vi.fn(() => true),
     },
     projectRepo: {
       findAll: vi.fn(() => []),

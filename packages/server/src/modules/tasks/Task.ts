@@ -514,4 +514,23 @@ export interface ITaskRepository {
    * specific call created.
    */
   clearTmuxWindowIfMatches(id: number, expectedWindowName: string): boolean;
+
+  /**
+   * Atomically writes `status` — but ONLY if `tmuxWindow` still equals
+   * `expectedWindowName` — and reports whether it did (Issue #87 third-party
+   * review, Important 1). `rollbackWindowAfterPostCreationFailure()` in
+   * ExecuteTaskUseCase runs OUTSIDE `runExclusiveForTask` (same gap
+   * documented on {@link clearTmuxWindowIfMatches} above), so a concurrent
+   * execute()/followUp() for the SAME task can already have created its OWN
+   * newer window generation and moved the task to `in_progress` while THIS
+   * call's post-window-creation step (fetch distribution, worktree creation)
+   * is still failing and about to roll back. An unconditional
+   * `update(id, { status: 'failed' })` at that point would stomp the newer
+   * generation's live, still-running execution back to `failed`. This
+   * method's WHERE-guarded UPDATE makes that write a no-op instead whenever
+   * the row has already moved on to a different window — mirroring exactly
+   * why `clearTmuxWindowIfMatches` guards the window reference on the same
+   * generation check, just applied to `status` instead.
+   */
+  updateStatusIfWindowMatches(id: number, expectedWindowName: string, status: TaskStatus): boolean;
 }

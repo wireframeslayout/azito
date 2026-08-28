@@ -736,3 +736,84 @@ describe('SqliteTaskRepository.clearTmuxWindowIfMatches (Issue #28 third-party r
     expect(repo.clearTmuxWindowIfMatches(999999, 'w1')).toBe(false);
   });
 });
+
+// updateStatusIfWindowMatches() (Issue #87 third-party review, Important
+// finding 1): backs the same rollback in ExecuteTaskUseCase — the status
+// write ('failed') that follows a post-window-creation failure (fetch
+// distribution, worktree creation, worktree path containment) must be
+// guarded the same way clearTmuxWindowIfMatches guards the window reference
+// above, or a concurrent execution that already created a NEWER window
+// generation and moved the task to 'in_progress' gets its status stomped
+// back to 'failed' by the FIRST (stale) execution's rollback.
+describe('SqliteTaskRepository.updateStatusIfWindowMatches (Issue #87 third-party review, Important finding 1)', () => {
+  let db: SqliteDatabase;
+  let repo: SqliteTaskRepository;
+  let taskId: number;
+
+  beforeEach(() => {
+    db = openDatabase(':memory:');
+    repo = new SqliteTaskRepository(db, new SqliteTaskTokenRepository(db));
+    db.prepare("INSERT INTO projects (id, name, slug, default_branch) VALUES (1, 'P', 'p', 'main')").run();
+    taskId = repo.create({
+      projectId: 1,
+      unitId: null,
+      serverName: null,
+      title: 'Test task',
+      description: null,
+      status: 'in_progress',
+      currentPhase: null,
+      selfReviewCount: 0,
+      priority: 0,
+      tmuxWindow: 'w1',
+      selfReviewMaxAttempts: null,
+      requirePlanApproval: true,
+      source: 'local',
+      sourceRef: null,
+      worktreePath: null,
+      worktreeBranch: null,
+      baseBranch: null,
+      targetBranch: null,
+      skipPr: false,
+      workingDirectory: null,
+      branch: null,
+      planMarkdown: null,
+      pendingQuestions: null,
+      changedFiles: null,
+      summaryJson: null,
+      prUrl: null,
+      agentSessionId: null,
+      reviewSubagent: null,
+      implementSubagent: null,
+    sleepAfterPush: null,
+      inputTrust: 'trusted',
+      executionApprovedFingerprintHash: null,
+      pendingOperation: null,
+      pendingOperationWindowId: null,
+      pendingOperationPriorStatus: null,
+      createdByKind: 'operator',
+      createdById: null,
+      createdViaGeneration: null,
+    });
+  });
+
+  it('writes status and returns true when tmux_window still matches the expected window name', () => {
+    expect(repo.updateStatusIfWindowMatches(taskId, 'w1', 'failed')).toBe(true);
+    expect(repo.findById(taskId)!.status).toBe('failed');
+  });
+
+  it('leaves status untouched and returns false when a newer generation has already replaced tmux_window (regression: a stale rollback must not clobber a live concurrent execution)', () => {
+    // Simulates a concurrent execute()/followUp() for the same task having
+    // already rotated to a new window AND advanced the task to in_progress,
+    // between this caller's window creation and its (failed) downstream
+    // setup — exactly the race the fix closes.
+    repo.update(taskId, { tmuxWindow: 'w2', status: 'in_progress' });
+
+    expect(repo.updateStatusIfWindowMatches(taskId, 'w1', 'failed')).toBe(false);
+    expect(repo.findById(taskId)!.status).toBe('in_progress');
+    expect(repo.findById(taskId)!.tmuxWindow).toBe('w2');
+  });
+
+  it('returns false and does nothing for an unknown task id', () => {
+    expect(repo.updateStatusIfWindowMatches(999999, 'w1', 'failed')).toBe(false);
+  });
+});

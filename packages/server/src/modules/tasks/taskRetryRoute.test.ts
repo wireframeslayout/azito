@@ -3,6 +3,7 @@ import Fastify from 'fastify';
 import tasksRoutes from './routes';
 import type { TasksRouteOptions } from './routes';
 import type { Task } from './Task';
+import type { TaskStatus } from './TaskStatus';
 import { destroyPrimaryTaskWindow } from './execution/TaskWindowDestruction';
 import type { TaskPaneEnvironmentService } from './execution/TaskPaneEnvironmentService';
 
@@ -98,6 +99,11 @@ function makeOpts(
     clearTmuxWindowIfMatches: vi.fn((id: number, expectedWindowName: string) => {
       if (id !== task.id || task.tmuxWindow !== expectedWindowName) return false;
       task.tmuxWindow = null;
+      return true;
+    }),
+    updateStatusIfWindowMatches: vi.fn((id: number, expectedWindowName: string, status: TaskStatus) => {
+      if (id !== task.id || task.tmuxWindow !== expectedWindowName) return false;
+      task.status = status;
       return true;
     }),
   };

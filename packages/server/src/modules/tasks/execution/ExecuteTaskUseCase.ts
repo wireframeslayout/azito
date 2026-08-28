@@ -456,6 +456,23 @@ export class ExecuteTaskUseCase {
    * two properties). Errors from the rollback itself are swallowed (best
    * effort) — same as the two call sites this replaces — since surfacing
    * them here would replace the caller's own actual failure message.
+   *
+   * Issue #87 third-party review, Important finding 1: this whole span runs
+   * OUTSIDE `runExclusiveForTask` (same gap as the window-reference clear
+   * above), so a concurrent execute()/followUp() for the SAME task can
+   * already have created its OWN newer window generation and moved the task
+   * to `in_progress` while THIS call's post-window-creation step is still
+   * failing and about to roll back. An unconditional `update(taskId, {
+   * status: 'failed' })` would stomp that newer, still-live execution's
+   * status. The status write now goes through
+   * `updateStatusIfWindowMatches(taskId, windowName, 'failed')` — gated on
+   * this call's own `windowName`, exactly like `clearTmuxWindowIfMatches`
+   * above — so it becomes a no-op once the row has moved on to a different
+   * generation. `extraTaskUpdate` (worktreePath/worktreeBranch on the
+   * worktree_path_rejected branch) is still applied unconditionally, as
+   * before this fix — those fields describe THIS call's own worktree, not a
+   * status a concurrent execution could also be writing, so there is no
+   * cross-generation clobber risk to guard there.
    */
   private async rollbackWindowAfterPostCreationFailure(
     taskId: number,
@@ -466,7 +483,10 @@ export class ExecuteTaskUseCase {
     revokeReason: string,
     extraTaskUpdate?: Partial<Task>,
   ): Promise<void> {
-    this.taskRepo.update(taskId, { status: 'failed' as TaskStatus, ...extraTaskUpdate } as Partial<Task>);
+    this.taskRepo.updateStatusIfWindowMatches(taskId, windowName, 'failed' as TaskStatus);
+    if (extraTaskUpdate) {
+      this.taskRepo.update(taskId, extraTaskUpdate);
+    }
     try {
       await rollbackWindowReference(
         this.tmux.killWindow(server, `${tmuxSession}:${windowName}`),

@@ -132,6 +132,7 @@ export class SqliteTaskRepository implements ITaskRepository {
   private countChildrenStmt;
   private countChildrenInGenerationStmt;
   private clearTmuxWindowIfMatchesStmt;
+  private updateStatusIfWindowMatchesStmt;
   constructor(private db: SqliteDatabase, private taskTokenRepo: ITaskTokenRepository) {
     this.listStmt = db.prepare('SELECT * FROM tasks ORDER BY priority DESC, created_at DESC');
     this.listByProjectStmt = db.prepare('SELECT * FROM tasks WHERE project_id = ? ORDER BY priority DESC, created_at DESC');
@@ -199,6 +200,13 @@ export class SqliteTaskRepository implements ITaskRepository {
     // already replaced it with a newer window leaves this a no-op.
     this.clearTmuxWindowIfMatchesStmt = db.prepare(
       "UPDATE tasks SET tmux_window = NULL, updated_at = datetime('now') WHERE id = ? AND tmux_window = ?",
+    );
+    // Guarded compare-and-swap for updateStatusIfWindowMatches() — see that
+    // method's doc comment on ITaskRepository (Issue #87 third-party review,
+    // Important 1). Same generation guard as clearTmuxWindowIfMatchesStmt
+    // above, applied to `status` instead of `tmux_window`.
+    this.updateStatusIfWindowMatchesStmt = db.prepare(
+      "UPDATE tasks SET status = ?, updated_at = datetime('now') WHERE id = ? AND tmux_window = ?",
     );
   }
 
@@ -422,6 +430,15 @@ export class SqliteTaskRepository implements ITaskRepository {
   clearTmuxWindowIfMatches(id: number, expectedWindowName: string): boolean {
     const result = this.clearTmuxWindowIfMatchesStmt.run(id, expectedWindowName);
     return result.changes > 0;
+  }
+
+  updateStatusIfWindowMatches(id: number, expectedWindowName: string, status: TaskStatus): boolean {
+    const run = this.db.transaction(() => {
+      const result = this.updateStatusIfWindowMatchesStmt.run(status, id, expectedWindowName);
+      if (result.changes > 0) this.revokeIfTokenRevokingStatus(id, status);
+      return result.changes > 0;
+    });
+    return run();
   }
 
   private toEntity(row: TaskRow): Task {

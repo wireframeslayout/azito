@@ -241,6 +241,15 @@ function buildUseCase(opts: {
       opts.task.tmuxWindow = null;
       return true;
     }),
+    // Issue #87 third-party review, Important finding 1: mirrors
+    // SqliteTaskRepository's guarded UPDATE — only writes `status` when the
+    // current tmuxWindow still matches the caller's own generation's window
+    // name, same CAS shape as clearTmuxWindowIfMatches above.
+    updateStatusIfWindowMatches: vi.fn((_id: number, expectedWindowName: string, status: Task['status']) => {
+      if (opts.task.tmuxWindow !== expectedWindowName) return false;
+      opts.task.status = status;
+      return true;
+    }),
   };
 
   const unitRepo: IUnitRepository = {
@@ -1286,6 +1295,11 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
         task.tmuxWindow = null;
         return true;
       }),
+      updateStatusIfWindowMatches: vi.fn((_id: number, expectedWindowName: string, status: Task['status']) => {
+        if (task.tmuxWindow !== expectedWindowName) return false;
+        task.status = status;
+        return true;
+      }),
     };
     const unitRepo: IUnitRepository = {
       findAll: vi.fn(() => [unit]),
@@ -1560,7 +1574,7 @@ describe('ExecuteTaskUseCase working-directory containment (Issue #27)', () => {
 
     await expect(useCase.execute(13, 4)).rejects.toThrow(/Worktree path rejected/);
 
-    expect(taskRepo.update).toHaveBeenCalledWith(4, expect.objectContaining({ status: 'failed' }));
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(4, 'w1', 'failed');
     expect(windowRepo.add).not.toHaveBeenCalled();
     expect(logRepo.append).toHaveBeenCalledWith(4, 13, 'command', expect.objectContaining({ type: 'worktree_path_rejected' }));
     // Issue #28 third-party review fix: 'failed' doesn't auto-revoke (see
@@ -1610,11 +1624,11 @@ describe('ExecuteTaskUseCase working-directory containment (Issue #27)', () => {
     await expect(useCase.execute(15, 6)).rejects.toThrow(/Worktree path rejected/);
 
     expect(worktreeRemove).toHaveBeenCalledWith(allowedRoot, outsideDir);
-    expect(taskRepo.update).toHaveBeenCalledWith(6, expect.objectContaining({
-      status: 'failed',
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(6, 'w1', 'failed');
+    expect(taskRepo.update).toHaveBeenCalledWith(6, {
       worktreePath: null,
       worktreeBranch: null,
-    }));
+    });
     expect(windowRepo.add).not.toHaveBeenCalled();
   });
 });
@@ -1962,6 +1976,78 @@ describe('ExecuteTaskUseCase rollback does not clobber a newer window generation
     } finally {
       rmSync(outsideDir, { recursive: true, force: true });
     }
+  });
+
+  // Issue #87 third-party review, Important finding 1: the status write in
+  // rollbackWindowAfterPostCreationFailure() used to be an unconditional
+  // `update(taskId, { status: 'failed' })`, so it stomped a newer window
+  // generation's status the same way the (already-fixed) unconditional
+  // tmuxWindow null-out above did. Same race shape as the first test in this
+  // describe block, but asserting the STATUS side this time.
+  it('execute(): a worktree-creation failure does not mark the task failed when a concurrent execution has already advanced it to in_progress on a newer window generation', async () => {
+    const unit = makeUnit({ id: 72, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 72, serverName: 'local-server', unitId: 72 });
+    const { useCase, taskRepo, paneEnvService, worktreeServiceFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: { workingDirectory: allowedRoot, branch: null, tmuxSession: 'azito' },
+    });
+    worktreeServiceFactory.create.mockReturnValue({
+      // Simulates a concurrent execute()/followUp() for the SAME task
+      // acquiring the lock, creating window 'w2', and persisting BOTH its
+      // own tmuxWindow AND status: 'in_progress' — exactly what
+      // ExecuteTaskUseCase.execute() itself does at window-creation time
+      // (see the real `this.taskRepo.update(taskId, { status: 'in_progress',
+      // tmuxWindow: newWindowName })` call) — before THIS call's worktree
+      // creation fails and tries to roll back its own ('w1') generation.
+      create: vi.fn(async () => {
+        task.tmuxWindow = 'w2';
+        task.status = 'in_progress' as Task['status'];
+        throw new Error('worktree failed');
+      }),
+    });
+
+    await expect(useCase.execute(72, 72)).rejects.toThrow(/Worktree creation failed/);
+
+    // The rollback attempted to fail ITS OWN generation ('w1')...
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(72, 'w1', 'failed');
+    // ...but since the row had already moved on to 'w2', the guarded write
+    // must be a no-op — the newer generation's in-flight status survives.
+    expect(task.status).toBe('in_progress');
+    expect(task.tmuxWindow).toBe('w2');
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'worktree_creation_failed_rollback');
+  });
+
+  it('execute(): a worktree-creation failure DOES mark the task failed when no concurrent execution has replaced its window generation', async () => {
+    const unit = makeUnit({ id: 73, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 73, serverName: 'local-server', unitId: 73 });
+    const { useCase, taskRepo, paneEnvService, worktreeServiceFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: { workingDirectory: allowedRoot, branch: null, tmuxSession: 'azito' },
+    });
+    worktreeServiceFactory.create.mockReturnValue({
+      // The real `this.taskRepo.update(taskId, { status: 'in_progress',
+      // tmuxWindow: newWindowName })` call at window-creation time (see the
+      // race test above) is what actually persists `tmuxWindow: 'w1'` on the
+      // task row — this harness's `update` mock is a bare `vi.fn()` with no
+      // side effect, so the same persistence is modeled here explicitly, to
+      // isolate this test to ONLY the "no concurrent generation change"
+      // case (unlike the race test, nothing else touches `task.tmuxWindow`
+      // before the rollback runs).
+      create: vi.fn(async () => {
+        task.tmuxWindow = 'w1';
+        throw new Error('worktree failed');
+      }),
+    });
+
+    await expect(useCase.execute(73, 73)).rejects.toThrow(/Worktree creation failed/);
+
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(73, 'w1', 'failed');
+    expect(task.status).toBe('failed');
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'worktree_creation_failed_rollback');
   });
 });
 
@@ -2387,60 +2473,72 @@ describe('ExecuteTaskUseCase stale window cleanup', () => {
   });
 });
 
-describe('ExecuteTaskUseCase fetch-distribution gate (Issue #87 Phase 2: generalized beyond isolated servers via project_servers.distribute_code)', () => {
-  const repository = {
-    id: 5,
-    url: 'https://github.com/acme/widget.git',
-    provider: 'github' as const,
-    owner: 'acme',
-    repoName: 'widget',
-    token: 'tok123',
+// ─── Shared fixtures for the two fetch-distribution describe blocks below
+// (gate behavior + failure-rollback behavior) ───
+//
+// Reviewer note (Issue #87 third-party review, Minor finding 2): these two
+// describe blocks used to each define their own copy of `repository`,
+// `projectWithRepository()`, and `buildDistributionGateHarness()` — a future
+// fixture change (e.g. a new required ServerConfig/ProjectDetail field) could
+// then silently drift between the gate tests and the failure tests, each
+// exercising a different environment without either describe block noticing.
+// Lifted out here so both blocks share exactly one harness.
+const fetchDistributionRepository = {
+  id: 5,
+  url: 'https://github.com/acme/widget.git',
+  provider: 'github' as const,
+  owner: 'acme',
+  repoName: 'widget',
+  token: 'tok123',
+};
+
+function projectWithFetchDistributionRepository(): ProjectDetail {
+  return makeProject({
+    defaultUnitId: null,
+    repositories: [
+      { id: 5, name: null, url: fetchDistributionRepository.url, provider: 'github', owner: 'acme', repoName: 'widget', hasToken: true },
+    ],
+  });
+}
+
+function buildDistributionGateHarness(opts: {
+  server: ServerConfig;
+  distributeCode: boolean;
+  /** Overrides the project returned by projectRepo.findById — for the fail-fast-on-missing-repository test. */
+  project?: ProjectDetail;
+  /** Overrides the repository row returned by projectRepo.findRepositoryById — for the fail-fast-on-missing-token/bad-identity tests. */
+  repository?: { id: number; url: string; provider: 'github' | 'gitlab'; owner: string | null; repoName: string | null; token: string | null };
+  /** Lets a caller make distribute() fail (or throw) instead of the default success — for the failed-distribution rollback test. */
+  distributeResult?: { status: 'distributed' | 'already_current' | 'failed'; sha?: string; bundleType?: 'full' | 'incremental'; error?: string };
+}) {
+  const unit = makeUnit({ id: 10, workerType: 'claude', workerModel: 'opus' });
+  // task.workingDirectory (not projectServer.workingDirectory) supplies
+  // `workingDir` here deliberately: a non-null projectServer.workingDirectory
+  // would set `allowedRoot`, which forces ExecuteTaskUseCase through
+  // assertDirectoryContained's real filesystem/transport-backed path
+  // verification (Issue #27 containment) — irrelevant plumbing for this
+  // gate's own concern (whether distribute() got called) and not worth
+  // faking a transport or a real worktree directory for.
+  const task = makeTask({ id: 1, serverName: opts.server.name, unitId: 10, workingDirectory: '/srv/repo' });
+  const fetchDistributionService = {
+    distribute: vi.fn(async () => opts.distributeResult ?? { status: 'distributed' as const, sha: 'abc123', bundleType: 'full' as const }),
   };
+  const harness = buildUseCase({
+    task,
+    project: opts.project ?? projectWithFetchDistributionRepository(),
+    units: [unit],
+    projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', distributeCode: opts.distributeCode },
+    server: opts.server,
+    repository: 'repository' in opts ? opts.repository : fetchDistributionRepository,
+    fetchDistributionService,
+  });
+  harness.worktreeServiceFactory.create.mockReturnValue({
+    create: vi.fn(async () => ({ path: '/srv/repo/.worktrees/task-1', branch: 'task/1-slug' })),
+  });
+  return { ...harness, fetchDistributionService };
+}
 
-  function projectWithRepository(): ProjectDetail {
-    return makeProject({
-      defaultUnitId: null,
-      repositories: [{ id: 5, name: null, url: repository.url, provider: 'github', owner: 'acme', repoName: 'widget', hasToken: true }],
-    });
-  }
-
-  function buildDistributionGateHarness(opts: {
-    server: ServerConfig;
-    distributeCode: boolean;
-    /** Overrides the project returned by projectRepo.findById — for the fail-fast-on-missing-repository test. */
-    project?: ProjectDetail;
-    /** Overrides the repository row returned by projectRepo.findRepositoryById — for the fail-fast-on-missing-token/bad-identity tests. */
-    repository?: { id: number; url: string; provider: 'github' | 'gitlab'; owner: string | null; repoName: string | null; token: string | null };
-    /** Lets a caller make distribute() fail (or throw) instead of the default success — for the failed-distribution rollback test. */
-    distributeResult?: { status: 'distributed' | 'already_current' | 'failed'; sha?: string; bundleType?: 'full' | 'incremental'; error?: string };
-  }) {
-    const unit = makeUnit({ id: 10, workerType: 'claude', workerModel: 'opus' });
-    // task.workingDirectory (not projectServer.workingDirectory) supplies
-    // `workingDir` here deliberately: a non-null projectServer.workingDirectory
-    // would set `allowedRoot`, which forces ExecuteTaskUseCase through
-    // assertDirectoryContained's real filesystem/transport-backed path
-    // verification (Issue #27 containment) — irrelevant plumbing for this
-    // gate's own concern (whether distribute() got called) and not worth
-    // faking a transport or a real worktree directory for.
-    const task = makeTask({ id: 1, serverName: opts.server.name, unitId: 10, workingDirectory: '/srv/repo' });
-    const fetchDistributionService = {
-      distribute: vi.fn(async () => opts.distributeResult ?? { status: 'distributed' as const, sha: 'abc123', bundleType: 'full' as const }),
-    };
-    const harness = buildUseCase({
-      task,
-      project: opts.project ?? projectWithRepository(),
-      units: [unit],
-      projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', distributeCode: opts.distributeCode },
-      server: opts.server,
-      repository: 'repository' in opts ? opts.repository : repository,
-      fetchDistributionService,
-    });
-    harness.worktreeServiceFactory.create.mockReturnValue({
-      create: vi.fn(async () => ({ path: '/srv/repo/.worktrees/task-1', branch: 'task/1-slug' })),
-    });
-    return { ...harness, fetchDistributionService };
-  }
-
+describe('ExecuteTaskUseCase fetch-distribution gate (Issue #87 Phase 2: generalized beyond isolated servers via project_servers.distribute_code)', () => {
   it('distributes for an isolated server even when distribute_code is off (isolation makes distribution mandatory, not opt-in)', async () => {
     const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
     const { useCase, fetchDistributionService } = buildDistributionGateHarness({ server, distributeCode: false });
@@ -2479,49 +2577,6 @@ describe('ExecuteTaskUseCase fetch-distribution gate (Issue #87 Phase 2: general
 });
 
 describe('ExecuteTaskUseCase fetch-distribution failure handling (Issue #87 third-party review)', () => {
-  const repository = {
-    id: 5,
-    url: 'https://github.com/acme/widget.git',
-    provider: 'github' as const,
-    owner: 'acme',
-    repoName: 'widget',
-    token: 'tok123',
-  };
-
-  function projectWithRepository(): ProjectDetail {
-    return makeProject({
-      defaultUnitId: null,
-      repositories: [{ id: 5, name: null, url: repository.url, provider: 'github', owner: 'acme', repoName: 'widget', hasToken: true }],
-    });
-  }
-
-  function buildDistributionGateHarness(opts: {
-    server: ServerConfig;
-    distributeCode: boolean;
-    project?: ProjectDetail;
-    repository?: { id: number; url: string; provider: 'github' | 'gitlab'; owner: string | null; repoName: string | null; token: string | null };
-    distributeResult?: { status: 'distributed' | 'already_current' | 'failed'; sha?: string; bundleType?: 'full' | 'incremental'; error?: string };
-  }) {
-    const unit = makeUnit({ id: 10, workerType: 'claude', workerModel: 'opus' });
-    const task = makeTask({ id: 1, serverName: opts.server.name, unitId: 10, workingDirectory: '/srv/repo' });
-    const fetchDistributionService = {
-      distribute: vi.fn(async () => opts.distributeResult ?? { status: 'distributed' as const, sha: 'abc123', bundleType: 'full' as const }),
-    };
-    const harness = buildUseCase({
-      task,
-      project: opts.project ?? projectWithRepository(),
-      units: [unit],
-      projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', distributeCode: opts.distributeCode },
-      server: opts.server,
-      repository: 'repository' in opts ? opts.repository : repository,
-      fetchDistributionService,
-    });
-    harness.worktreeServiceFactory.create.mockReturnValue({
-      create: vi.fn(async () => ({ path: '/srv/repo/.worktrees/task-1', branch: 'task/1-slug' })),
-    });
-    return { ...harness, fetchDistributionService };
-  }
-
   // 指摘1: 配信が失敗したとき、タスク status が failed になり、ウィンドウ kill・
   // トークン revoke・tmuxWindow クリアが行われること。
   it('rolls back the just-created window/token and marks the task failed when distribute() reports status "failed"', async () => {
@@ -2535,7 +2590,7 @@ describe('ExecuteTaskUseCase fetch-distribution failure handling (Issue #87 thir
     await expect(useCase.execute(10, 1)).rejects.toThrow(/Fetch distribution failed/);
 
     expect(fetchDistributionService.distribute).toHaveBeenCalledTimes(1);
-    expect(taskRepo.update).toHaveBeenCalledWith(1, expect.objectContaining({ status: 'failed' }));
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed');
     expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_failed_rollback');
     expect(taskRepo.clearTmuxWindowIfMatches).toHaveBeenCalledWith(1, 'w1');
@@ -2556,7 +2611,7 @@ describe('ExecuteTaskUseCase fetch-distribution failure handling (Issue #87 thir
     await expect(useCase.execute(10, 1)).rejects.toThrow(/no repository configured/);
 
     expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
-    expect(taskRepo.update).toHaveBeenCalledWith(1, expect.objectContaining({ status: 'failed' }));
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed');
     expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_prereq_failed_rollback');
   });
@@ -2566,13 +2621,13 @@ describe('ExecuteTaskUseCase fetch-distribution failure handling (Issue #87 thir
     const { useCase, taskRepo, tmux, paneEnvService, fetchDistributionService } = buildDistributionGateHarness({
       server,
       distributeCode: true,
-      repository: { ...repository, token: null },
+      repository: { ...fetchDistributionRepository, token: null },
     });
 
     await expect(useCase.execute(10, 1)).rejects.toThrow(/no token configured/);
 
     expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
-    expect(taskRepo.update).toHaveBeenCalledWith(1, expect.objectContaining({ status: 'failed' }));
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed');
     expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_prereq_failed_rollback');
   });
@@ -2584,13 +2639,13 @@ describe('ExecuteTaskUseCase fetch-distribution failure handling (Issue #87 thir
       distributeCode: false,
       // http:// (plaintext) is rejected by normalizeRepositoryUrlToHttps —
       // resolveCanonicalRepositoryIdentity returns { ok: false }.
-      repository: { ...repository, url: 'http://github.com/acme/widget.git' },
+      repository: { ...fetchDistributionRepository, url: 'http://github.com/acme/widget.git' },
     });
 
     await expect(useCase.execute(10, 1)).rejects.toThrow(/could not be normalized/);
 
     expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
-    expect(taskRepo.update).toHaveBeenCalledWith(1, expect.objectContaining({ status: 'failed' }));
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed');
     expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_prereq_failed_rollback');
   });
@@ -2606,6 +2661,6 @@ describe('ExecuteTaskUseCase fetch-distribution failure handling (Issue #87 thir
     await useCase.execute(10, 1);
 
     expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
-    expect(taskRepo.update).not.toHaveBeenCalledWith(1, expect.objectContaining({ status: 'failed' }));
+    expect(taskRepo.updateStatusIfWindowMatches).not.toHaveBeenCalled();
   });
 });

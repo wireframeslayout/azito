@@ -77,6 +77,7 @@ function makeOpts(existingTask: Task): { opts: TasksRouteOptions; createCalls: R
     countChildren: vi.fn(() => 0),
     countChildrenInGeneration: vi.fn(() => 0),
     clearTmuxWindowIfMatches: vi.fn(() => true),
+    updateStatusIfWindowMatches: vi.fn(() => true),
   };
   // A real TaskOriginationService wrapping the mock taskRepo above, so this
   // file's "what did taskRepo.create() actually receive" assertions

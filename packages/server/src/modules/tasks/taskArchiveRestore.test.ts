@@ -71,6 +71,7 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
       countChildren: vi.fn(() => 0),
       countChildrenInGeneration: vi.fn(() => 0),
       clearTmuxWindowIfMatches: vi.fn(() => true),
+      updateStatusIfWindowMatches: vi.fn(() => true),
     },
     projectRepo: {
       findAll: vi.fn(() => []),
