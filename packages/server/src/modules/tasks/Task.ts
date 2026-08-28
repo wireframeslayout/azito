@@ -517,20 +517,31 @@ export interface ITaskRepository {
 
   /**
    * Atomically writes `status` — but ONLY if `tmuxWindow` still equals
-   * `expectedWindowName` — and reports whether it did (Issue #87 third-party
-   * review, Important 1). `rollbackWindowAfterPostCreationFailure()` in
-   * ExecuteTaskUseCase runs OUTSIDE `runExclusiveForTask` (same gap
-   * documented on {@link clearTmuxWindowIfMatches} above), so a concurrent
+   * `expectedWindowName` OR is already `NULL` — and reports whether it did
+   * (Issue #87 third-party review, Important 1; refined per second review
+   * pass). `rollbackWindowAfterPostCreationFailure()` in ExecuteTaskUseCase
+   * runs OUTSIDE `runExclusiveForTask` (same gap documented on
+   * {@link clearTmuxWindowIfMatches} above), so a concurrent
    * execute()/followUp() for the SAME task can already have created its OWN
    * newer window generation and moved the task to `in_progress` while THIS
    * call's post-window-creation step (fetch distribution, worktree creation)
    * is still failing and about to roll back. An unconditional
    * `update(id, { status: 'failed' })` at that point would stomp the newer
    * generation's live, still-running execution back to `failed`. This
-   * method's WHERE-guarded UPDATE makes that write a no-op instead whenever
-   * the row has already moved on to a different window — mirroring exactly
+   * method's WHERE-guarded UPDATE makes that write a no-op whenever the row
+   * has already moved on to a DIFFERENT, non-NULL window — mirroring exactly
    * why `clearTmuxWindowIfMatches` guards the window reference on the same
    * generation check, just applied to `status` instead.
+   *
+   * The NULL case is deliberately NOT treated as "a newer generation took
+   * over": a newer execution always writes its own window name into
+   * `tmuxWindow` before doing anything else, so it never leaves the column
+   * NULL. `tmuxWindow` reading NULL instead means the ordinary
+   * window-destruction path cleared THIS SAME generation's window reference
+   * while this call's distribution/worktree await was still in flight.
+   * Treating that as a no-op would leave the task stuck `in_progress` with
+   * no window forever; matching `expectedWindowName OR NULL` keeps recording
+   * `failed` in that case, same as the unconditional update this replaced.
    */
   updateStatusIfWindowMatches(id: number, expectedWindowName: string, status: TaskStatus): boolean;
 }

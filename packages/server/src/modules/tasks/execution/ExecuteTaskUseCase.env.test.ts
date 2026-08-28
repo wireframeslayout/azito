@@ -241,12 +241,16 @@ function buildUseCase(opts: {
       opts.task.tmuxWindow = null;
       return true;
     }),
-    // Issue #87 third-party review, Important finding 1: mirrors
-    // SqliteTaskRepository's guarded UPDATE — only writes `status` when the
-    // current tmuxWindow still matches the caller's own generation's window
-    // name, same CAS shape as clearTmuxWindowIfMatches above.
+    // Issue #87 third-party review, Important finding 1 (refined per second
+    // review pass): mirrors SqliteTaskRepository's guarded UPDATE — writes
+    // `status` when the current tmuxWindow still matches the caller's own
+    // generation's window name, OR when it has already been cleared to
+    // NULL by the ordinary window-destruction path for this SAME
+    // generation (a newer generation always writes its own window name
+    // first, so NULL is never evidence of a takeover). Same CAS shape as
+    // clearTmuxWindowIfMatches above, plus the NULL branch.
     updateStatusIfWindowMatches: vi.fn((_id: number, expectedWindowName: string, status: Task['status']) => {
-      if (opts.task.tmuxWindow !== expectedWindowName) return false;
+      if (opts.task.tmuxWindow !== expectedWindowName && opts.task.tmuxWindow !== null) return false;
       opts.task.status = status;
       return true;
     }),
@@ -1296,7 +1300,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
         return true;
       }),
       updateStatusIfWindowMatches: vi.fn((_id: number, expectedWindowName: string, status: Task['status']) => {
-        if (task.tmuxWindow !== expectedWindowName) return false;
+        if (task.tmuxWindow !== expectedWindowName && task.tmuxWindow !== null) return false;
         task.status = status;
         return true;
       }),
@@ -2046,6 +2050,46 @@ describe('ExecuteTaskUseCase rollback does not clobber a newer window generation
     await expect(useCase.execute(73, 73)).rejects.toThrow(/Worktree creation failed/);
 
     expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(73, 'w1', 'failed');
+    expect(task.status).toBe('failed');
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'worktree_creation_failed_rollback');
+  });
+
+  // Issue #87 third-party review, second pass: the previous fix guarded the
+  // status write with `tmux_window = expectedWindowName`, which treated ANY
+  // mismatch — including tmuxWindow having been cleared to NULL — as "a
+  // newer generation took over" and skipped the write. But the ordinary
+  // window-destruction path (e.g. TaskWindowDestruction) can clear THIS
+  // SAME generation's tmuxWindow to NULL while this call's own
+  // distribution/worktree-creation await is still in flight, before that
+  // await goes on to fail. Unlike the 'w2' race above, no concurrent
+  // execution ever ran here — task.status stays whatever it was
+  // (in_progress) the whole time. The fix must still record `failed` in
+  // this case, or the task is stuck in_progress with no window forever.
+  it('execute(): a worktree-creation failure DOES mark the task failed when tmuxWindow was cleared to NULL by ordinary window destruction mid-await (not replaced by a newer generation)', async () => {
+    const unit = makeUnit({ id: 74, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 74, serverName: 'local-server', unitId: 74 });
+    const { useCase, taskRepo, paneEnvService, worktreeServiceFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: { workingDirectory: allowedRoot, branch: null, tmuxSession: 'azito' },
+    });
+    worktreeServiceFactory.create.mockReturnValue({
+      // Simulates the ordinary window-destruction path clearing THIS SAME
+      // generation's tmuxWindow to NULL (mirrors clearTmuxWindowIfMatches's
+      // own NULL-out) while this worktree-creation await is still pending,
+      // before it fails. No concurrent execution's tmuxWindow or status
+      // is written here — task.status is never touched before the
+      // rollback runs.
+      create: vi.fn(async () => {
+        task.tmuxWindow = null;
+        throw new Error('worktree failed');
+      }),
+    });
+
+    await expect(useCase.execute(74, 74)).rejects.toThrow(/Worktree creation failed/);
+
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(74, 'w1', 'failed');
     expect(task.status).toBe('failed');
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'worktree_creation_failed_rollback');
   });

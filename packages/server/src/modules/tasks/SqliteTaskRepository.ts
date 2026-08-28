@@ -203,10 +203,23 @@ export class SqliteTaskRepository implements ITaskRepository {
     );
     // Guarded compare-and-swap for updateStatusIfWindowMatches() — see that
     // method's doc comment on ITaskRepository (Issue #87 third-party review,
-    // Important 1). Same generation guard as clearTmuxWindowIfMatchesStmt
-    // above, applied to `status` instead of `tmux_window`.
+    // Important 1; refined per second review pass). Same generation guard as
+    // clearTmuxWindowIfMatchesStmt above, applied to `status` instead of
+    // `tmux_window` — but ALSO matches when `tmux_window IS NULL`. A newer
+    // execution always writes its OWN window name into `tmux_window` before
+    // it does anything else, so `tmux_window` holding a DIFFERENT non-NULL
+    // name is real evidence of a newer generation and must stay a no-op.
+    // `tmux_window IS NULL`, however, is not that evidence: the ordinary
+    // window-destruction path (e.g. TaskWindowDestruction) can clear
+    // `tmux_window` to NULL for THIS SAME generation while a distribution or
+    // worktree-creation await is still in flight, before that await goes on
+    // to fail. Excluding NULL here would turn this into a no-op for that
+    // case too, leaving the task stuck `in_progress` with no window forever
+    // — worse than the unconditional update this guard replaced. Matching
+    // NULL keeps that "this generation's window is already gone" case
+    // recording `failed`, exactly as the unconditional update used to.
     this.updateStatusIfWindowMatchesStmt = db.prepare(
-      "UPDATE tasks SET status = ?, updated_at = datetime('now') WHERE id = ? AND tmux_window = ?",
+      "UPDATE tasks SET status = ?, updated_at = datetime('now') WHERE id = ? AND (tmux_window = ? OR tmux_window IS NULL)",
     );
   }
 

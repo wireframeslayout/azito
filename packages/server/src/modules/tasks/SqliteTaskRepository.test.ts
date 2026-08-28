@@ -816,4 +816,19 @@ describe('SqliteTaskRepository.updateStatusIfWindowMatches (Issue #87 third-part
   it('returns false and does nothing for an unknown task id', () => {
     expect(repo.updateStatusIfWindowMatches(999999, 'w1', 'failed')).toBe(false);
   });
+
+  it('writes status and returns true when tmux_window has been cleared to NULL by the same generation (regression: ordinary window destruction, not a newer generation, must not block recording failure)', () => {
+    // Simulates the ordinary window-destruction path (e.g.
+    // TaskWindowDestruction) clearing THIS SAME generation's tmux_window to
+    // NULL while this call's own distribution/worktree-creation await is
+    // still in flight and about to fail. A newer generation always writes
+    // its OWN window name before doing anything else, so it never leaves
+    // tmux_window NULL — meaning NULL here is NOT evidence of a takeover,
+    // and must not block the failed-status write the way a different
+    // non-NULL window name does.
+    repo.update(taskId, { tmuxWindow: null });
+
+    expect(repo.updateStatusIfWindowMatches(taskId, 'w1', 'failed')).toBe(true);
+    expect(repo.findById(taskId)!.status).toBe('failed');
+  });
 });
