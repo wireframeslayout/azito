@@ -72,32 +72,41 @@ export function isDistributionRequired(
  *
  * Deliberately mirrors `isDistributionRequired`'s condition rather than
  * re-deriving it: whenever fetch distribution is (or would be) active for
- * this server/project-server pairing AND an explicit
- * `distributionRepositoryId` is configured, that is the repository whose
- * code actually landed on the server, so every downstream consumer must
- * agree with `performDistribution`'s own choice (DistributionHelper's
- * module doc comment) — never fall back to `project.repositories[0]` in
- * that case, or a project with a second repository could have its code
- * distributed from B while push/PR/notarization silently target A.
+ * this server/project-server pairing, the ONLY repository this function may
+ * return is the one named by `distributionRepositoryId` — that is the
+ * repository whose code actually landed on the server, so every downstream
+ * consumer must agree with `performDistribution`'s own choice
+ * (DistributionHelper's module doc comment).
  *
- * Falls back to `project.repositories[0]` in every other case — no
- * distribution active (local server, or an agent/ssh server with neither
+ * Issue #87 review (14th round), Important finding: this function used to
+ * fall through to `project.repositories[0]` whenever
+ * `distributionRepositoryId` was unset OR named a repository that no longer
+ * exists on the project — i.e. exactly the two situations where the
+ * distributed repository is unknown or gone. That reintroduced the
+ * distribution/push mismatch this function exists to prevent: delete
+ * repository B after code was distributed from it, and every downstream
+ * consumer (push verification, PR creation, hub notarization, the approval
+ * manifest) would silently retarget repository A. When distribution is
+ * required, this function now returns the resolved entry or `null` —
+ * NEVER `project.repositories[0]` — so a caller that receives `null` here
+ * knows the distributed repository could not be identified and must decide
+ * for itself whether that is safe to proceed without (e.g. read-only PR
+ * lookup) or must hard-fail (e.g. an actual push/notarization write).
+ *
+ * Falls back to `project.repositories[0]` ONLY when distribution is not
+ * required at all (local server, or an agent/ssh server with neither
  * `isolationIntent` nor `distributeCode`) — so every project that has never
  * touched hub-代行 distribution keeps its pre-existing behavior unchanged.
- * That is deliberate, not a placeholder: this function's job is to pick the
- * ONE repository whose distribution and downstream targeting must agree,
- * not to give every project an implicit single-repository default outside
- * that case (see `performDistribution`'s own comment on why the distribution
- * target itself is never inferred that way).
  */
 export function resolveExecutionRepositoryEntry(
   server: Pick<ServerConfig, 'type' | 'isolationIntent'> | null,
   projectServer: Pick<ProjectServer, 'distributeCode' | 'distributionRepositoryId'> | null,
   project: Pick<ProjectDetail, 'repositories'> | null,
 ): ProjectRepository | null {
-  if (server && isDistributionRequired(server, projectServer) && projectServer?.distributionRepositoryId != null) {
-    const distributed = project?.repositories?.find((r) => r.id === projectServer.distributionRepositoryId);
-    if (distributed) return distributed;
+  if (server && isDistributionRequired(server, projectServer)) {
+    const distributionRepositoryId = projectServer?.distributionRepositoryId ?? null;
+    if (distributionRepositoryId == null) return null;
+    return project?.repositories?.find((r) => r.id === distributionRepositoryId) ?? null;
   }
   return project?.repositories?.[0] ?? null;
 }

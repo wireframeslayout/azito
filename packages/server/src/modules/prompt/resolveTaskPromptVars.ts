@@ -17,20 +17,32 @@ import { resolveTaskServerName } from '../tasks/execution/TaskExecutionEnv';
  * by the caller as explicit overrides on top of this result, never by
  * re-implementing the vars.
  *
- * `gitProvider` below is deliberately still `project.repositories[0]`, NOT
- * `resolveExecutionRepositoryEntry` (Issue #87 13th-round review) — that
- * resolver lives in `tasks/execution/DistributionHelper.ts`, one layer above
- * this module in the dependency direction (`prompt` is mid-tier,
- * `tasks/execution` is upper-tier; see AGENTS.md's "Module Structure
- * Rules" — importing it here would invert the direction depcruise enforces).
- * This is a real, narrower gap than the push/PR/notary one that review
- * fixed: `gitProvider` only selects prompt WORDING (e.g. "github" vs
- * "gitlab" phrasing hints for the agent), never an actual push/PR
- * destination — those are all resolved independently downstream via the
- * corrected resolver. Left as a known, low-severity inconsistency rather
- * than moving the resolver to a lower layer, which this fix's scope
- * (agreeing push/PR/notary targeting, not restructuring module layering)
- * does not call for.
+ * `resolvedGitProvider` (optional): the git provider ("github"/"gitlab") of
+ * whichever repository the CALLER already resolved as THE repository for
+ * this run — i.e. `resolveExecutionRepositoryEntry`'s result
+ * (`tasks/execution/DistributionHelper.ts`). That resolver lives one layer
+ * above this module (`prompt` is mid-tier, `tasks/execution` is upper-tier;
+ * see AGENTS.md's "Module Structure Rules"), so this module must not import
+ * it — importing it here would invert the direction depcruise enforces.
+ * Instead, upper-tier callers that already resolve the repository (right
+ * now: `PhaseLoopRunner`) pass the provider value down as a plain string,
+ * which is a normal upper-to-lower argument, not a dependency-direction
+ * violation (Issue #87 review, 14th round — this replaces the previous
+ * "known, low-severity inconsistency, deliberately left as-is" comment that
+ * used to live here; that comment described choosing not to fix the mid/
+ * upper layering conflict at all, which is no longer accurate now that the
+ * conflict is resolved via this parameter).
+ *
+ * Callers that do NOT resolve a distribution-aware repository themselves —
+ * `RenderSkillPromptUseCase` (the `/api/phase-prompts` render path) and
+ * `TaskPromptVarsResolver` (the standalone `/api/sidekicks/:name?render=1`
+ * adapter) — omit this argument, and `gitProvider` keeps its long-standing
+ * `project.repositories[0]` default. Both are outside `tasks/execution`
+ * (one is `prompt` itself, the other is `sidekicks`'s port), so neither can
+ * resolve `resolveExecutionRepositoryEntry` without the same layering
+ * problem this parameter exists to avoid; wiring them would need either a
+ * new port passed into `prompt`/`sidekicks` or moving the resolver down a
+ * layer, both out of this fix's scope.
  */
 export function resolveTaskPromptVars(
   taskRepo: ITaskRepository,
@@ -38,6 +50,7 @@ export function resolveTaskPromptVars(
   unitRepo: IUnitRepository,
   projectServerRepo: IProjectServerRepository,
   taskId: number,
+  resolvedGitProvider?: string,
 ): TaskPromptVars {
   const task = taskRepo.findById(taskId);
   if (!task) {
@@ -72,9 +85,10 @@ export function resolveTaskPromptVars(
       pushOutput: task.skipPr
         ? 'Report the branch name that was pushed.'
         : 'Report the PR URL.',
-      // See this function's doc comment above (Issue #87 13th-round review)
-      // for why this deliberately stays `repositories[0]`.
-      gitProvider: project.repositories?.[0]?.provider ?? 'github',
+      // See this function's doc comment above for `resolvedGitProvider`
+      // (the distribution-aware value an upper-tier caller may pass in) —
+      // falls back to `repositories[0]` for callers that can't resolve it.
+      gitProvider: resolvedGitProvider ?? project.repositories?.[0]?.provider ?? 'github',
     },
     project: {
       sidekickPrompt: [project.sidekickPrompt, unit?.systemPrompt].filter(Boolean).join('\n\n'),

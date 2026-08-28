@@ -379,7 +379,14 @@ export class PhaseLoopRunner {
       const sidekick = resolvePhaseSidekick(this.sidekickLoader, phase, unit.phaseConfig, phaseDef);
       const sidekickDir = resolveSidekickDir(sidekick, server);
       const promptModules = loadPromptModules();
-      const vars = resolveTaskPromptVars(this.taskRepo, this.projectRepo, this.unitRepo, this.projectServerRepo, task.id);
+      // Issue #87 review (14th round), Minor finding: pass the SAME
+      // distribution-aware repository this phase's own push/PR/notary
+      // logic uses (below) down into the prompt vars, so `AZITO_GIT_PROVIDER`
+      // names the actual provider the worker is pushing to (`gh`/`glab`)
+      // instead of always `project.repositories[0]`'s — see
+      // `resolveTaskPromptVars`'s doc comment on `resolvedGitProvider`.
+      const promptRepoEntry = resolveExecutionRepositoryEntry(server, projectServer, project);
+      const vars = resolveTaskPromptVars(this.taskRepo, this.projectRepo, this.unitRepo, this.projectServerRepo, task.id, promptRepoEntry?.provider);
       const expandedPrompt = renderSidekickBody(sidekick, {
         ...vars,
         selfReview: {
@@ -576,7 +583,28 @@ export class PhaseLoopRunner {
         // here is the outer stateMachineLoop resolution (same task/server
         // pairing this notary block itself operates on).
         const probeRepoEntry = resolveExecutionRepositoryEntry(server, projectServer, notaryProject);
-        const probeRepo = probeRepoEntry ? this.projectRepo.findRepositoryById(probeRepoEntry.id) : null;
+        if (!probeRepoEntry) {
+          // `server.isolationIntent` gates this whole block, so
+          // `isDistributionRequired` is true here and
+          // `resolveExecutionRepositoryEntry` NEVER falls back to
+          // `project.repositories[0]` for it (see that function's doc
+          // comment, Issue #87 14th-round review) — a `null` here means the
+          // distributed repository is unset or was deleted, i.e. the one
+          // fact hub push notarization exists to agree with is unknown.
+          // Notarizing against `repositories[0]` would silently push this
+          // isolated server's code to the WRONG repository; silently
+          // skipping notarization (the old `no_push_credential` path this
+          // fell through to) would instead let the phase advance as if the
+          // push had happened when nothing was ever pushed. Neither is
+          // acceptable for a write-capable operation — fail the task.
+          this.appendLog(task.id, unit.id, 'status_change', {
+            status: 'hub_push_failed',
+            error: 'Fetch distribution repository could not be resolved for hub push notarization (unset or deleted distribution target repository)',
+          });
+          this.taskRepo.updateStatus(task.id, 'failed');
+          return;
+        }
+        const probeRepo = this.projectRepo.findRepositoryById(probeRepoEntry.id);
         if (probeRepo?.token) {
           this.appendLog(task.id, unit.id, 'command', { type: 'hub_push_start' });
           const currentTaskForPush = this.taskRepo.findById(task.id);

@@ -853,6 +853,70 @@ describe('PhaseLoopRunner repository selection agrees with distribution target (
 
     expect(pushVerifier.verifyPushCompleted).toHaveBeenCalledWith(server, '/work', 'task/1-slug', false, repoA);
   });
+
+  // Issue #87 14th-round review, Important finding: hub push notarization is
+  // a WRITE (it actually pushes the isolated server's code out via the
+  // provider API) — when the distribution target repository cannot be
+  // resolved (unset or deleted), it must fail the task hard, never silently
+  // skip notarization (which would let the phase advance to 'review' as if
+  // the push had happened when nothing was ever pushed).
+  it('hub push notarization fails the task hard (never silently skips) when the distribution target repository is unresolved', async () => {
+    const notarize = vi.fn(async () => ({ status: 'pushed' as const, sha: 'abc123' }));
+    const { runner, taskRepo, projectRepo, projectServerRepo } = makeRunner({
+      pushNotaryService: { notarize },
+    });
+    projectRepo.findById = vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', defaultUnitId: null, repositories: [repoA, repoB] }));
+    projectServerRepo.find = vi.fn(() => ({
+      projectId: 10, serverName: 'isolated-1', workingDirectory: '/work', branch: null, tmuxSession: 'azito',
+      inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null,
+    })) as any;
+    taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: false, worktreePath: null,
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+    } as any));
+    const unit = makePushingUnit();
+    const isolatedServer = { name: 'isolated-1', type: 'agent', isolationIntent: true } as any;
+
+    await runner.stateMachineLoop(unit, 'isolated-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    expect(notarize).not.toHaveBeenCalled();
+    expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'failed');
+    expect(taskRepo.updateStatus).not.toHaveBeenCalledWith(1, 'review');
+  });
+
+  // Issue #87 14th-round review, Minor finding: the pushing prompt's
+  // AZITO_GIT_PROVIDER var must reflect the CONFIGURED DISTRIBUTION TARGET
+  // (repository B, on GitLab) rather than always `project.repositories[0]`
+  // (repository A, on GitHub) — otherwise the worker is told to use `gh`
+  // against a project whose actual configured repository is on GitLab.
+  it('pushing prompt AZITO_GIT_PROVIDER reflects repository B (gitlab), not A (github, repositories[0]), when B is the configured distribution target', async () => {
+    const repoAGithub = { ...repoA, provider: 'github' as const };
+    const repoBGitlab = { ...repoB, provider: 'gitlab' as const };
+    const { runner, taskRepo, projectRepo, projectServerRepo, workerInput, sidekickLoader } = makeRunner({
+      sidekickLoader: { findDefaultForTag: vi.fn(() => makeSidekick({ name: 'pushing-default', body: 'Provider: {{task.gitProvider}}' })) },
+    });
+    projectRepo.findById = vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', defaultUnitId: null, repositories: [repoAGithub, repoBGitlab] }));
+    projectRepo.findRepositoryById = vi.fn((id: number) => (id === repoBGitlab.id ? repoBGitlab : repoAGithub)) as any;
+    projectServerRepo.find = vi.fn(() => ({
+      projectId: 10, serverName: 'agent-1', workingDirectory: '/work', branch: null, tmuxSession: 'azito',
+      inputPolicy: 'manual-approval' as const, distributeCode: true, distributionRepositoryId: repoBGitlab.id,
+    })) as any;
+    taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: false, worktreePath: null,
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+    } as any));
+    const unit = makePushingUnit();
+    const distributionServer = { name: 'agent-1', type: 'agent', isolationIntent: false } as any;
+
+    await runner.stateMachineLoop(unit, 'agent-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, distributionServer, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    expect(sidekickLoader.findDefaultForTag).toHaveBeenCalledWith('pushing');
+    const sentPrompt = workerInput.sendPrompt.mock.calls[0][2] as string;
+    expect(sentPrompt).toContain('Provider: gitlab');
+    expect(sentPrompt).not.toContain('Provider: github');
+  });
 });
 
 // Issue #29 docs review, Important finding 1: isolated agent servers hold no

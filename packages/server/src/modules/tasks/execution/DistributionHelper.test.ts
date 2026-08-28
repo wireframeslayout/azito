@@ -64,22 +64,36 @@ describe('resolveExecutionRepositoryEntry', () => {
     expect(result?.id).toBe(repoA.id);
   });
 
-  it('falls back to repositories[0] (A) when distribution is active but no distributionRepositoryId is configured', () => {
+  // Issue #87 14th-round review, Important finding: these two cases used to
+  // fall back to repositories[0] (A) even though distribution IS required —
+  // reintroducing the exact push/PR/notary-target mismatch this function
+  // exists to prevent. Both must now return null instead.
+
+  it('returns null (does NOT fall back to repositories[0]) when distribution is active but no distributionRepositoryId is configured', () => {
     const result = resolveExecutionRepositoryEntry(
       makeAgentServer({ isolationIntent: true }),
       makeProjectServer({ distributeCode: false, distributionRepositoryId: null }),
       makeProject([repoA, repoB]),
     );
-    expect(result?.id).toBe(repoA.id);
+    expect(result).toBeNull();
   });
 
-  it('falls back to repositories[0] (A) when distribution is active but the configured distributionRepositoryId no longer exists on the project', () => {
+  it('returns null (does NOT fall back to repositories[0]) when distribution is active but the configured distributionRepositoryId no longer exists on the project', () => {
     const result = resolveExecutionRepositoryEntry(
       makeAgentServer({ isolationIntent: true }),
       makeProjectServer({ distributeCode: false, distributionRepositoryId: 999 }),
       makeProject([repoA, repoB]),
     );
-    expect(result?.id).toBe(repoA.id);
+    expect(result).toBeNull();
+  });
+
+  it('returns null when distribute_code is on (no isolationIntent) but no distributionRepositoryId is configured', () => {
+    const result = resolveExecutionRepositoryEntry(
+      makeAgentServer(),
+      makeProjectServer({ distributeCode: true, distributionRepositoryId: null }),
+      makeProject([repoA, repoB]),
+    );
+    expect(result).toBeNull();
   });
 
   it('returns null when the project has no registered repository at all', () => {
