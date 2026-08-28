@@ -88,7 +88,8 @@
     "executionMode": "Worker Execution Mode",
     "executionModeHint": "Determines how the worker's turn completion is detected.",
     "modePipe": "tmux pipe (legacy)",
-    "modeHttpSignal": "HTTP signal (new)"
+    "modeHttpSignal": "HTTP signal (new)",
+    "sleepAfterPush": "Sleep agent windows after PR creation"
   },
   "phases": {
     "title": "Phases",

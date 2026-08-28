@@ -661,6 +661,7 @@ export class AgentActivityMonitor {
 
     for (const w of this.windowRepo.findAll()) {
       if (!isAgentWindow(w)) continue;
+      if (w.sleeping) continue;
       if (w.serverName !== signal.serverName) continue;
 
       const { sessionName, windowSpec } = parseWindowTarget(w.tmuxTarget);
@@ -897,7 +898,7 @@ export class AgentActivityMonitor {
     // is absent from `next` but must still not fall through to the manual
     // hook/heuristic path — its state is owned by the operation+Tier 0 logic
     // above.
-    const allAgentWindows = this.windowRepo.findAll().filter(isAgentWindow);
+    const allAgentWindows = this.windowRepo.findAll().filter((w): w is AgentWindow => isAgentWindow(w) && !w.sleeping);
 
     // Dedup: same server + same window (pane suffix stripped) → keep taskId row.
     // Multiple DB rows can point at the same tmux window (project-owned vs task-owned).

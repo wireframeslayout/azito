@@ -46,6 +46,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     pendingOperation: null,
     pendingOperationWindowId: null,
     pendingOperationPriorStatus: null,
+  sleepAfterPush: null,
     createdByKind: 'operator',
     createdById: null,
     createdViaGeneration: null,
@@ -611,7 +612,7 @@ describe('POST /api/tasks/:id/recover-session — execution gate (Issue #328)', 
   it('translates WindowRespawnService gate errors into the same HTTP shape as /execute (window-record path)', async () => {
     const { opts } = makeOpts(makeTask({ inputTrust: 'untrusted', status: 'pending_approval' }));
     opts.windowRepo.findByTask = vi.fn(() => [
-      { id: 1, ownerType: 'task' as const, projectId: null, taskId: 1, serverName: 'test-server', tmuxTarget: 'azito:task-1.1', label: 'task-1', isPrimary: true, windowType: 'agent' as const, workerType: 'claude', workerModel: 'opus', agentSessionId: null, launchCommand: null, workingDirectory: null, paneLayout: null, createdAt: '' },
+      { id: 1, ownerType: 'task' as const, projectId: null, taskId: 1, serverName: 'test-server', tmuxTarget: 'azito:task-1.1', label: 'task-1', isPrimary: true, windowType: 'agent' as const, workerType: 'claude', workerModel: 'opus', agentSessionId: null, launchCommand: null, workingDirectory: null, paneLayout: null, sleeping: false, createdAt: '' },
     ]);
     opts.respawnService = {
       respawn: vi.fn(async () => { throw new ExecutionGateDeniedError(1); }),

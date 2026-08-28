@@ -4,6 +4,7 @@ import type { TransportFactory } from '../../servers/transport/TransportFactory'
 import type { ITerminalStream } from '../../servers/transport/ServerTransport';
 
 const PING_INTERVAL_MS = 15_000;
+const OPEN_TERMINAL_TIMEOUT_MS = 30_000;
 
 export function handleTerminalConnection(
   ws: WebSocket,
@@ -34,9 +35,23 @@ export function handleTerminalConnection(
 
   ws.on('close', cleanup);
 
-  transportFactory
+  const openPromise = transportFactory
     .getTransport(server)
-    .openTerminal(target, cols, rows)
+    .openTerminal(target, cols, rows);
+
+  openPromise.then((stream) => {
+    if (closed) stream.close();
+  }, () => {});
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error('openTerminal timed out')),
+      OPEN_TERMINAL_TIMEOUT_MS,
+    );
+    ws.on('close', () => clearTimeout(timer));
+  });
+
+  Promise.race([openPromise, timeoutPromise])
     .then((stream) => {
       if (closed) { stream.close(); return; }
       activeStream = stream;

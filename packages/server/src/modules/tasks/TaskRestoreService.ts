@@ -407,6 +407,7 @@ export class TaskRestoreService {
         launchCommand: unit ? buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs) : null,
         workingDirectory: effectiveDir || null,
         paneLayout: null,
+        sleeping: false,
       });
 
       // task.branch is deliberately NOT written here (Issue #328 review,

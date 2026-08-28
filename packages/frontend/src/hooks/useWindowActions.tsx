@@ -160,6 +160,15 @@ export function useWindowActions(
     }
   }, [refreshWorkspace, refreshSessions, connectPane, showToast]);
 
+  const handleSleepWindow = useCallback(async (windowId: number) => {
+    try {
+      await api(`/windows/${windowId}/sleep`, { method: 'POST' });
+      refreshWorkspace();
+    } catch (e) {
+      showToast(t('windows.sleepFailed') + ': ' + (e as Error).message);
+    }
+  }, [refreshWorkspace, showToast]);
+
   const handleCapturePanes = useCallback(async (windowId: number) => {
     try {
       await api(`/windows/${windowId}/capture-panes`, { method: 'POST' });
@@ -167,7 +176,7 @@ export function useWindowActions(
     } catch { /* best-effort */ }
   }, [refreshWorkspace]);
 
-  const getWindowMenuItems = useCallback((w: { id: number; serverName: string; tmuxTarget: string; label?: string }, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }): ContextMenuItem[] => {
+  const getWindowMenuItems = useCallback((w: { id: number; serverName: string; tmuxTarget: string; label?: string; windowType?: string; agentSessionId?: string; sleeping?: boolean }, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }): ContextMenuItem[] => {
     const items: ContextMenuItem[] = [
       { label: t('windows.renameLabel'), icon: <Icon name="edit" size={16} />, onClick: () => handleRenameLabel(w) },
     ];
@@ -180,8 +189,12 @@ export function useWindowActions(
     if (extra?.online) {
       items.push({ label: t('windows.capturePanes'), icon: <Icon name="camera" size={16} />, onClick: () => handleCapturePanes(w.id) });
     }
+    if (extra?.online && w.windowType === 'agent' && w.agentSessionId && !w.sleeping) {
+      items.push({ label: t('windows.sleep'), icon: <Icon name="moon" size={16} />, onClick: () => handleSleepWindow(w.id) });
+    }
     if (!extra?.online) {
-      items.push({ label: t('windows.respawn'), icon: <Icon name="refresh" size={16} />, onClick: () => handleRespawnWindow(w.id, w.serverName) });
+      const respawnLabel = w.sleeping ? t('terminal.wake', { ns: 'common' }) : t('windows.respawn');
+      items.push({ label: respawnLabel, icon: <Icon name="refresh" size={16} />, onClick: () => handleRespawnWindow(w.id, w.serverName) });
     }
     const linkedTask = findTaskByTarget(w.tmuxTarget);
     if (linkedTask) {
@@ -192,7 +205,7 @@ export function useWindowActions(
       { label: t('windows.deleteWindow'), icon: <Icon name="trash" size={16} />, danger: true, onClick: () => handleDeleteWindow(w.serverName, w.tmuxTarget, w.id) },
     );
     return items;
-  }, [handleRenameLabel, handleRenameWindow, handleRenamePane, handleDetachWindow, handleDeleteWindow, handleRespawnWindow, handleCapturePanes, findTaskByTarget, openTask]);
+  }, [handleRenameLabel, handleRenameWindow, handleRenamePane, handleDetachWindow, handleDeleteWindow, handleRespawnWindow, handleSleepWindow, handleCapturePanes, findTaskByTarget, openTask]);
 
   const showWindowContextMenu = useCallback((e: React.MouseEvent, w: { id: number; serverName: string; tmuxTarget: string; label?: string }, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => {
     showContextMenu(e, getWindowMenuItems(w, extra));
@@ -246,6 +259,7 @@ export function useWindowActions(
     handleRenameWindow,
     handleRenamePane,
     handleRespawnWindow,
+    handleSleepWindow,
     handleCapturePanes,
     getWindowMenuItems,
     showWindowContextMenu,

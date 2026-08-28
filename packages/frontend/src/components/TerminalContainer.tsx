@@ -388,6 +388,12 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
               >
                 {t('terminal.reconnect')}
               </button>
+              <button
+                className="btn btn-sm"
+                onClick={() => location.reload()}
+              >
+                {t('terminal.reloadPage')}
+              </button>
               {onCloseTab && (
                 <button className="btn btn-sm" onClick={onCloseTab}>
                   {t('terminal.closeTab')}
@@ -430,7 +436,58 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
             </div>
           </div>
         )}
-        {windowMissing && (
+        {dbWindow?.sleeping && (
+          <div
+            role="status"
+            aria-live="polite"
+            style={{
+              position: 'absolute',
+              inset: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: 'var(--bg)',
+              zIndex: 6,
+              gap: 16,
+            }}
+          >
+            <div style={{ color: 'var(--text-dim)', fontSize: 'var(--font-base)', marginBottom: 4 }}>
+              {t('terminal.sleeping')}
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={() => handleRespawn()}
+                disabled={respawning}
+                style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+              >
+                {respawning && (
+                  <span
+                    role="status"
+                    aria-label="Waking"
+                    style={{
+                      display: 'inline-block',
+                      width: 12,
+                      height: 12,
+                      border: '2px solid rgba(255,255,255,0.3)',
+                      borderTopColor: '#fff',
+                      borderRadius: '50%',
+                      animation: 'spin 0.6s linear infinite',
+                    }}
+                  />
+                )}
+                {respawning ? t('terminal.respawning') : t('terminal.wake')}
+              </button>
+              {onCloseTab && (
+                <button className="btn btn-sm" onClick={onCloseTab}>
+                  {t('terminal.closeTab')}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+        {windowMissing && !dbWindow?.sleeping && (
           <div
             role="status"
             aria-live="polite"

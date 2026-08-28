@@ -17,6 +17,7 @@ export interface Window {
   launchCommand: string | null;
   workingDirectory: string | null;
   paneLayout: PaneLayout | null;
+  sleeping: boolean;
   createdAt: string;
 }
 
@@ -117,7 +118,7 @@ export interface IWindowRepository {
    */
   now(): string;
   update(id: number, data: Partial<Pick<Window,
-    'tmuxTarget' | 'label' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType'
+    'tmuxTarget' | 'label' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType' | 'sleeping'
   >>): void;
   updateAgentSessionIdByWindow(serverName: string, tmuxTarget: string, sessionId: string): void;
   remove(id: number): void;

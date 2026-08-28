@@ -58,7 +58,10 @@ export function SplitLayoutPane({
   };
 
   const handleDragOver = (e: React.DragEvent) => {
-    if (!drag) return;
+    if (!drag) {
+      if (e.dataTransfer.types.includes('Files')) e.preventDefault();
+      return;
+    }
     e.preventDefault();
     e.stopPropagation();
     setHoverZone(computeZone(e));
