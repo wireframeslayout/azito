@@ -417,6 +417,79 @@ describe('PUT /api/projects/:id/servers/:serverName — distribute_code (Issue #
     expect(res.statusCode).toBe(200);
     expect(opts.projectServerRepo.upsert).toHaveBeenCalledWith(expect.objectContaining({ distributeCode: true }));
   });
+
+  // Issue #87 review finding (Minor 3, forge/87-mirror follow-up): the
+  // frontend form hides the toggle for a `local` target server but its
+  // underlying state can still survive a stale/anomalous save (or a direct
+  // API caller bypassing the form entirely) and reach this endpoint as
+  // `distribute_code: true`. `local` IS the hub itself, so distribution is
+  // structurally meaningless there (ExecuteTaskUseCase already excludes it
+  // outright) — normalized to `false` rather than rejected with 400, so an
+  // otherwise-valid save isn't blocked by a field the caller may not even
+  // know is wrong.
+  it('normalizes distribute_code to false when the target server type is local, even if the caller sent true', async () => {
+    const opts = makeOpts({
+      serverRepo: {
+        findAll: vi.fn(() => []),
+        findByName: vi.fn(() => ({
+          name: 'test-server', type: 'local' as const, host: null, agentPort: null, agentToken: null, agentVersion: null,
+          sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const,
+          isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01',
+        })),
+        create: vi.fn(),
+        update: vi.fn(),
+        updateAgentVersion: vi.fn(),
+        updateFingerprint: vi.fn(),
+        clearFingerprint: vi.fn(),
+        updateIsolationIntent: vi.fn(),
+        delete: vi.fn(),
+      },
+    });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10/servers/test-server',
+      payload: { distribute_code: true },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.projectServerRepo.upsert).toHaveBeenCalledWith(expect.objectContaining({ distributeCode: false }));
+  });
+
+  it('does not normalize distribute_code for a non-local (agent) target server', async () => {
+    const opts = makeOpts({
+      serverRepo: {
+        findAll: vi.fn(() => []),
+        findByName: vi.fn(() => ({
+          name: 'test-server', type: 'agent' as const, host: null, agentPort: null, agentToken: null, agentVersion: null,
+          sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const,
+          isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01',
+        })),
+        create: vi.fn(),
+        update: vi.fn(),
+        updateAgentVersion: vi.fn(),
+        updateFingerprint: vi.fn(),
+        clearFingerprint: vi.fn(),
+        updateIsolationIntent: vi.fn(),
+        delete: vi.fn(),
+      },
+    });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10/servers/test-server',
+      payload: { distribute_code: true },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.projectServerRepo.upsert).toHaveBeenCalledWith(expect.objectContaining({ distributeCode: true }));
+  });
 });
 
 describe('POST /api/projects/:id/import-issue — marks the created task untrusted (Issue #328)', () => {

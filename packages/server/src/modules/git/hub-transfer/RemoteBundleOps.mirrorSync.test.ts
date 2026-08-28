@@ -254,4 +254,122 @@ describe('RemoteBundleOps mirror -> workingDir sync (regression, real local git)
     // 5. Re-applying ensureDetachedHead is idempotent (already detached).
     await expect(ops.ensureDetachedHead(transport, workingDir)).resolves.not.toThrow();
   }, 30_000);
+
+  // Issue #87 review finding (Important 2, forge/87-mirror follow-up):
+  // `fetchWorkingDirFromMirror` deliberately only updates the tracking ref
+  // (`refs/remotes/origin/<branch>`) — see its own doc comment. That means
+  // `RemoteWorktreeService.create()`'s "reuse an existing LOCAL branch"
+  // path (`git worktree add <path> <branch>`, taken whenever `task.branch`
+  // names a branch that already exists locally — typically the base branch
+  // itself) completely bypasses the freshly distributed content, because it
+  // never resolves `origin/<branch>`. `syncLocalBranchToTracking` closes
+  // that gap by force-moving the LOCAL branch ref to match the tracking ref
+  // right after a distribution.
+  it('syncLocalBranchToTracking moves the local branch ref to match the freshly updated tracking ref', async () => {
+    const ops = new RemoteBundleOps();
+    const transport = localTransport();
+
+    const mirrorDir = makeTmpDir('azito-mirror-localsync-mirror-');
+    runGit(['init', '-q', '--bare', '--initial-branch=main', mirrorDir], mirrorDir);
+
+    const srcDir = makeTmpDir('azito-mirror-localsync-src-');
+    runGit(['init', '-q', '--initial-branch=main', srcDir], srcDir);
+    runGit(['config', 'user.email', 'test@example.com'], srcDir);
+    runGit(['config', 'user.name', 'Test'], srcDir);
+    fs.writeFileSync(path.join(srcDir, 'file.txt'), 'v1\n');
+    runGit(['add', 'file.txt'], srcDir);
+    runGit(['commit', '-q', '-m', 'v1'], srcDir);
+    const shaV1 = runGit(['rev-parse', 'HEAD'], srcDir);
+    runGit(['push', mirrorDir, 'main'], srcDir);
+
+    // First distribution: clone -> local `main` and tracking `origin/main`
+    // both start at v1. `ensureDetachedHead` runs before
+    // `syncLocalBranchToTracking` in the real `ensureWorkingDir` flow (see
+    // FetchDistributionService) — required here too, since `git branch -f`
+    // itself refuses to move whichever branch is currently checked out in
+    // the PRIMARY worktree, not just one held by a linked worktree.
+    const workingDir = path.join(makeTmpDir('azito-mirror-localsync-wd-parent-'), 'repo');
+    await ops.cloneWorkingDirFromMirror(transport, mirrorDir, workingDir, 'main');
+    await ops.ensureDetachedHead(transport, workingDir);
+    expect(await ops.syncLocalBranchToTracking(transport, workingDir, 'main')).toBe(true);
+    expect(runGit(['rev-parse', 'refs/heads/main'], workingDir)).toBe(shaV1);
+
+    // Second distribution's content lands in the mirror.
+    fs.writeFileSync(path.join(srcDir, 'file.txt'), 'v2\n');
+    runGit(['add', 'file.txt'], srcDir);
+    runGit(['commit', '-q', '-m', 'v2'], srcDir);
+    const shaV2 = runGit(['rev-parse', 'HEAD'], srcDir);
+    runGit(['push', mirrorDir, 'main'], srcDir);
+    await ops.fetchWorkingDirFromMirror(transport, mirrorDir, workingDir, 'main');
+    await ops.ensureDetachedHead(transport, workingDir);
+
+    // Before the sync: local `main` is still stale (matches the
+    // `fetchWorkingDirFromMirror` contract — it never touches local refs).
+    expect(runGit(['rev-parse', 'refs/heads/main'], workingDir)).not.toBe(shaV2);
+    expect(runGit(['rev-parse', 'refs/remotes/origin/main'], workingDir)).toBe(shaV2);
+
+    // After the sync: local `main` now matches the tracking ref too, so
+    // RemoteWorktreeService's "reuse existing local branch" path
+    // (`git worktree add <path> main`) would now get v2, not v1.
+    expect(await ops.syncLocalBranchToTracking(transport, workingDir, 'main')).toBe(true);
+    expect(runGit(['rev-parse', 'refs/heads/main'], workingDir)).toBe(shaV2);
+
+    const worktreePath = path.join(makeTmpDir('azito-mirror-localsync-wt-parent-'), 'task-1');
+    runGit(['worktree', 'add', worktreePath, 'main'], workingDir);
+    expect(fs.readFileSync(path.join(worktreePath, 'file.txt'), 'utf-8')).toBe('v2\n');
+  }, 30_000);
+
+  // The failure-tolerance half of the same finding: when the distributed
+  // branch is ALREADY checked out in a linked worktree, `git branch -f`
+  // refuses to move it and `syncLocalBranchToTracking` must return `false`
+  // rather than throw — the overall distribution must still succeed,
+  // because `RemoteWorktreeService`'s own `git worktree add <path> <branch>`
+  // would fail with `already used by worktree` in that same situation
+  // regardless (see syncLocalBranchToTracking's doc comment), so tolerating
+  // this failure never produces a silent stale-content path.
+  it('syncLocalBranchToTracking returns false (not throw) when the branch is checked out in a linked worktree, and the rest of the distribution still succeeds', async () => {
+    const ops = new RemoteBundleOps();
+    const transport = localTransport();
+
+    const mirrorDir = makeTmpDir('azito-mirror-localsync-linked-mirror-');
+    runGit(['init', '-q', '--bare', '--initial-branch=trunk', mirrorDir], mirrorDir);
+
+    const srcDir = makeTmpDir('azito-mirror-localsync-linked-src-');
+    runGit(['init', '-q', '--initial-branch=trunk', srcDir], srcDir);
+    runGit(['config', 'user.email', 'test@example.com'], srcDir);
+    runGit(['config', 'user.name', 'Test'], srcDir);
+    fs.writeFileSync(path.join(srcDir, 'trunk.txt'), 'trunk\n');
+    runGit(['add', 'trunk.txt'], srcDir);
+    runGit(['commit', '-q', '-m', 'trunk'], srcDir);
+    runGit(['push', mirrorDir, 'trunk'], srcDir);
+
+    runGit(['checkout', '-q', '-b', 'main'], srcDir);
+    fs.writeFileSync(path.join(srcDir, 'file.txt'), 'v1\n');
+    runGit(['add', 'file.txt'], srcDir);
+    runGit(['commit', '-q', '-m', 'v1'], srcDir);
+    runGit(['push', mirrorDir, 'main'], srcDir);
+
+    // workingDir's own primary checkout is `trunk`; `main` gets checked out
+    // in a LINKED worktree (mirrors a task whose branch input names the
+    // base branch itself).
+    const workingDir = path.join(makeTmpDir('azito-mirror-localsync-linked-wd-parent-'), 'repo');
+    await ops.cloneWorkingDirFromMirror(transport, mirrorDir, workingDir, 'trunk');
+    const linkedWorktreePath = path.join(makeTmpDir('azito-mirror-localsync-linked-wt-parent-'), 'task-main');
+    runGit(['worktree', 'add', linkedWorktreePath, 'main'], workingDir);
+
+    // New content for `main` lands in the mirror; the tracking ref updates
+    // fine (only `fetchWorkingDirFromMirror`'s own tracking-ref refspec is
+    // used, exactly as the fix for finding 1 requires).
+    fs.writeFileSync(path.join(srcDir, 'file.txt'), 'v2\n');
+    runGit(['add', 'file.txt'], srcDir);
+    runGit(['commit', '-q', '-m', 'v2'], srcDir);
+    runGit(['push', mirrorDir, 'main'], srcDir);
+    await expect(ops.fetchWorkingDirFromMirror(transport, mirrorDir, workingDir, 'main')).resolves.not.toThrow();
+
+    // syncLocalBranchToTracking must not throw, must report false, and must
+    // leave the linked worktree's checkout untouched (still v1 — nothing
+    // silently swapped its content out from under a possibly-running task).
+    await expect(ops.syncLocalBranchToTracking(transport, workingDir, 'main')).resolves.toBe(false);
+    expect(fs.readFileSync(path.join(linkedWorktreePath, 'file.txt'), 'utf-8')).toBe('v1\n');
+  }, 30_000);
 });

@@ -98,6 +98,28 @@ export function useProjectSettings(
   const confirm = useConfirm();
   const { t } = useTranslation(['projects', 'common']);
 
+  // Issue #87 review finding (Minor 3): `handleOpenServerForm` already
+  // re-derives `psDistributeCode` whenever it's called, but the server
+  // `<select>`'s own onChange is the only call site that re-invokes it —
+  // if `psServer` ever changes any other way, the toggle's underlying
+  // state would keep whatever value it last held even after switching to
+  // (or landing on) a `local` server, where the toggle is hidden but the
+  // value is still sent on Save. Re-deriving here on every `psServer`
+  // change, independent of how it changed, and forcing `false` outright
+  // for a `local` target (`distribute_code` is structurally meaningless
+  // there — see the toggle's hidden-for-local condition below) closes that
+  // gap without relying on a single call site staying in sync.
+  useEffect(() => {
+    const targetServer = (servers || []).find((sv) => sv.name === psServer);
+    if (targetServer?.type === 'local') {
+      setPsDistributeCode(false);
+      return;
+    }
+    const existing = projectServers.find((ps) => ps.serverName === psServer);
+    setPsDistributeCode(existing?.distributeCode ?? false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [psServer, servers]);
+
   useEffect(() => {
     if (project) {
       setName(project.name);

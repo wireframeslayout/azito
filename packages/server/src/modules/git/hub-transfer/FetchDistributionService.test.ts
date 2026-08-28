@@ -33,6 +33,7 @@ function mockRemoteBundleOps(overrides: Record<string, any> = {}) {
     cloneWorkingDirFromMirror: vi.fn(async () => {}),
     fetchWorkingDirFromMirror: vi.fn(async () => {}),
     ensureDetachedHead: vi.fn(async () => {}),
+    syncLocalBranchToTracking: vi.fn(async () => true),
     setDummyOrigin: vi.fn(async () => {}),
     repoExists: vi.fn(async () => false),
     cleanup: vi.fn(async () => {}),
@@ -344,7 +345,13 @@ describe('FetchDistributionService', () => {
       const service = new FetchDistributionService(mockHubRepoCache(), mockRemoteBundleOps(), sftpService as any, mockDistRepo());
 
       // Same repoIdentity (same mirror), different repositoryId rows.
+      // (The inner repoHash-keyed lock added for Issue #87 review finding 1
+      // adds a couple of extra microtask hops via KeyedMutex's own promise
+      // chaining before `a` reaches its upload call, hence more ticks than
+      // the bare number of `await` statements in the production code path.)
       const a = service.distribute(makeParams({ repositoryId: 1 }));
+      await Promise.resolve();
+      await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
@@ -407,6 +414,89 @@ describe('FetchDistributionService', () => {
       releaseA();
       await a;
       expect(order).toEqual(['a-start', 'b-start', 'a-end']);
+    });
+
+    // Issue #87 review finding (Important 1, forge/87-mirror follow-up):
+    // `this.mutex` (outer) is keyed `${server.name}:${repoHash}`, so it
+    // does NOT serialize two DIFFERENT servers distributing the SAME repo
+    // — but `HubRepoCache` (the resource `ensureFetched`/`createBundle`
+    // actually touch) is shared across every server, keyed by repoHash
+    // alone. Without the inner `hubCacheMutex`, server-b's `ensureFetched`
+    // could run (and advance the shared cache's ref) while server-a's own
+    // distribution is mid-flight, so server-a's later `createBundle` would
+    // read content that doesn't match the sha server-a already captured
+    // and is about to report/record.
+    it('serializes hub-cache access (ensureFetched + createBundle) across two different servers distributing the same repo', async () => {
+      const order: string[] = [];
+      let releaseFirst!: () => void;
+      const firstGate = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+
+      const hubRepoCache = {
+        ensureFetched: vi.fn(() => {
+          order.push('ensureFetched');
+          return sha;
+        }),
+        createBundle: vi.fn(() => {
+          order.push('createBundle');
+          return { bundlePath: '/tmp/test.bundle', headSha: sha };
+        }),
+      } as any;
+
+      const remoteBundleOps = mockRemoteBundleOps({
+        // No prerequisite for either server -> both always deliver a full
+        // bundle (never `already_current`), so both reach `createBundle`.
+        getMirrorBranchSha: vi.fn(async () => null),
+        repoExists: vi.fn(async () => false),
+      });
+
+      let uploadCount = 0;
+      const sftpService = {
+        upload: vi.fn(async () => {
+          uploadCount += 1;
+          if (uploadCount === 1) {
+            order.push('server-a-upload-start');
+            await firstGate;
+            order.push('server-a-upload-end');
+          } else {
+            order.push('server-b-upload-start');
+          }
+        }),
+      };
+
+      const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService as any, mockDistRepo());
+
+      const a = service.distribute(makeParams({ server: makeServer({ name: 'server-a' }) }));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const b = service.distribute(makeParams({ server: makeServer({ name: 'server-b' }) }));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // server-b must not have reached its own ensureFetched/createBundle
+      // yet: even though it's a different server (different OUTER lock
+      // key), it shares the same hub-cache mirror (same repoIdentity), so
+      // the INNER repoHash-keyed lock queues it behind server-a's
+      // still-in-flight critical section.
+      expect(order).toEqual(['ensureFetched', 'createBundle', 'server-a-upload-start']);
+
+      releaseFirst();
+      const [ra, rb] = await Promise.all([a, b]);
+
+      // The two servers' hub-cache operations never interleave — each
+      // server's ensureFetched+createBundle pair completes as one unit
+      // before the other server's pair begins.
+      expect(order).toEqual([
+        'ensureFetched', 'createBundle', 'server-a-upload-start', 'server-a-upload-end',
+        'ensureFetched', 'createBundle', 'server-b-upload-start',
+      ]);
+      expect(ra.status).toBe('distributed');
+      expect(rb.status).toBe('distributed');
     });
   });
 });

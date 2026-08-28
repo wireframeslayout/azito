@@ -161,6 +161,44 @@ export class RemoteBundleOps {
     }
   }
 
+  /**
+   * 配信直後、workingDir の**ローカル** branch ref を追跡 ref
+   * （`refs/remotes/origin/<branch>`）に追随させる（Issue #87 レビュー指摘2）。
+   *
+   * `fetchWorkingDirFromMirror` は上のコメントの通り、意図的に追跡 ref のみを
+   * 更新し、ローカル branch には一切触れない。そのため、タスクが
+   * `task.branch` に既存のローカル branch 名（典型的にはベースブランチ名その
+   * もの）を指定した場合、`RemoteWorktreeService.create()` の「既存 branch
+   * を割り当てる」経路（`git worktree add <path> <branch>`）は baseBranch
+   * 解決を完全にバイパスし、配信が成功していても更新されない古いローカル
+   * branch から worktree を作ってしまう。このメソッドはその隙間を埋めるため、
+   * 配信直後に限りローカル branch を追跡 ref の位置まで強制的に進める。
+   *
+   * **失敗しても例外にせず false を返す** — 対象 branch が既に別のリンク
+   * worktree でチェックアウトされている場合、`git branch -f` はそれを拒否し
+   * て失敗する。しかしその状況では、この直後に呼ばれる
+   * `RemoteWorktreeService.create()` の「既存 branch を割り当てる」経路
+   * （`git worktree add <path> <branch>`）も必ず `already used by worktree`
+   * で失敗するため、古い内容のまま静かに worktree 作成が成功してしまう経路は
+   * 存在しない — 失敗を許容しても「黙って古いコードを使い続ける」結果には
+   * ならない。
+   *
+   * 逆に、この更新を独立したコマンドとして切り出さず
+   * `fetchWorkingDirFromMirror` の fetch refspec 側に混ぜてしまうと、その
+   * fetch 全体が対象 branch のチェックアウト状態次第で
+   * "refusing to fetch into branch ... checked out" により失敗し、配信自体
+   * が完全に止まってしまう（`fetchWorkingDirFromMirror` のコメント参照、
+   * 既知の再発バグ）。そのため意図的に独立したコマンドとして分離している。
+   */
+  async syncLocalBranchToTracking(transport: IServerTransport, workingDir: string, branch: string): Promise<boolean> {
+    assertSafeBranch(branch, 'branch');
+    const r = await transport.exec(
+      `git -C ${shellQuote(workingDir)} -c core.hooksPath=/dev/null branch -f ${shellQuote(branch)} ${shellQuote(`refs/remotes/origin/${branch}`)} 2>&1`,
+      15_000,
+    );
+    return r.code === 0 && !(r.stderr && r.stderr.includes('fatal:'));
+  }
+
   async createFromWorktree(transport: IServerTransport, worktreePath: string, branch: string, baseBranch: string | null): Promise<string> {
     assertSafeBranch(branch, 'branch');
     if (baseBranch) assertSafeBranch(baseBranch, 'baseBranch');

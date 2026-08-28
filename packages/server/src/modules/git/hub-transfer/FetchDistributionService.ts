@@ -26,6 +26,37 @@ export class FetchDistributionService {
   // `WindowRotation.ts`'s `runExclusiveForTask`.
   private readonly mutex = new KeyedMutex();
 
+  // Second mutex, keyed by `computeRepoHash(repoIdentity)` ALONE (no server
+  // name) — serializes access to the resources `HubRepoCache` actually
+  // shares across every server: the one bare repo-cache directory at
+  // `repo-cache/<repoHash>` on the hub itself. `this.mutex` above only
+  // prevents the SAME server from racing itself; it does nothing for two
+  // DIFFERENT servers distributing the SAME repository, which both read
+  // and mutate that one shared cache directory. Without this second lock:
+  // call A (-> server1) calls `ensureFetched()` and captures headSha=A;
+  // call B (-> server2) then runs `ensureFetched()` entirely, advancing the
+  // cache's `refs/heads/<branch>` to B; call A then reaches
+  // `deliverToMirror()`, whose `createBundle()` reads the NOW-current ref
+  // and bundles B's content — while A still reports/records sha A. The
+  // bundle actually delivered and the sha recorded for it silently
+  // diverge (Issue #87 third-party review, Important finding).
+  //
+  // Held continuously across `ensureFetched()` AND the whole of
+  // `deliverToMirror()` (which is where every `createBundle()` call for
+  // this distribution happens, including the incremental->full fallback
+  // retry) so the headSha captured up front and the bundle(s) actually
+  // built from the cache are always the exact same snapshot — never split
+  // across two separate `withLock()` acquisitions, which would reopen the
+  // same race for just the fallback path.
+  //
+  // Lock acquisition order is always OUTER (`this.mutex`, keyed
+  // `${server.name}:${repoHash}`, taken by `distribute()`) then INNER
+  // (`this.hubCacheMutex`, keyed `repoHash`, taken inside
+  // `distributeUnlocked()`) — never the reverse. Nothing in this class ever
+  // holds the inner lock while trying to acquire the outer one, so the two
+  // can never deadlock against each other.
+  private readonly hubCacheMutex = new KeyedMutex();
+
   constructor(
     private hubRepoCache: HubRepoCache,
     private remoteBundleOps: RemoteBundleOps,
@@ -46,27 +77,42 @@ export class FetchDistributionService {
     }
 
     try {
-      const headSha = this.hubRepoCache.ensureFetched(repoIdentity, token, branch);
-
+      const repoHash = computeRepoHash(repoIdentity);
       const homeDir = await this.remoteBundleOps.resolveHomeDir(transport);
-      const mirrorDir = this.remoteBundleOps.mirrorDir(homeDir, computeRepoHash(repoIdentity));
+      const mirrorDir = this.remoteBundleOps.mirrorDir(homeDir, repoHash);
       await this.remoteBundleOps.ensureMirror(transport, mirrorDir);
 
-      // The mirror's actual refs are the only source of truth for the
-      // incremental prerequisite and the already-current check — never the
-      // DB's `last_distributed_sha` (Issue #87: DB and mirror can drift,
-      // e.g. after a force-push or a manually-wiped mirror, and a DB-derived
-      // prerequisite made that drift permanent).
-      const mirrorSha = await this.remoteBundleOps.getMirrorBranchSha(transport, mirrorDir, branch);
+      // See `hubCacheMutex`'s doc comment above for why `ensureFetched()`
+      // and `deliverToMirror()` (which is where the `createBundle()` calls
+      // live) must be one uninterrupted critical section keyed by
+      // `repoHash` alone.
+      const { headSha, bundleType } = await this.hubCacheMutex.withLock(repoHash, async () => {
+        const headSha = this.hubRepoCache.ensureFetched(repoIdentity, token, branch);
 
-      if (mirrorSha === headSha) {
-        // Transfer can be skipped, but workingDir may still be missing or
-        // stale (e.g. it was deleted separately from the mirror).
+        // The mirror's actual refs are the only source of truth for the
+        // incremental prerequisite and the already-current check — never the
+        // DB's `last_distributed_sha` (Issue #87: DB and mirror can drift,
+        // e.g. after a force-push or a manually-wiped mirror, and a DB-derived
+        // prerequisite made that drift permanent).
+        const mirrorSha = await this.remoteBundleOps.getMirrorBranchSha(transport, mirrorDir, branch);
+
+        if (mirrorSha === headSha) {
+          // Transfer can be skipped — nothing further touches the hub cache.
+          return { headSha, bundleType: null };
+        }
+
+        const bundleType = await this.deliverToMirror(transport, sshHost, repoIdentity, branch, mirrorDir, mirrorSha);
+        return { headSha, bundleType };
+      });
+
+      if (bundleType === null) {
+        // workingDir may still be missing or stale (e.g. it was deleted
+        // separately from the mirror), so it's ensured even when the
+        // transfer itself was skipped.
         await this.ensureWorkingDir(transport, mirrorDir, workingDir, branch);
         return { status: 'already_current', sha: headSha };
       }
 
-      const bundleType = await this.deliverToMirror(transport, sshHost, repoIdentity, branch, mirrorDir, mirrorSha);
       await this.ensureWorkingDir(transport, mirrorDir, workingDir, branch);
 
       this.distributionStateRepo.upsert(server.name, repositoryId, headSha, bundleType);
@@ -151,6 +197,22 @@ export class FetchDistributionService {
     // review finding). Idempotent, so re-running it on an already-detached
     // workingDir is a no-op.
     await this.remoteBundleOps.ensureDetachedHead(transport, workingDir);
+    // Issue #87 review finding 2: keep workingDir's LOCAL branch ref caught
+    // up with the freshly distributed tracking ref, on both the clone and
+    // fetch path (same "applied every time, idempotent" reasoning as
+    // `ensureDetachedHead` above) — otherwise a task whose `task.branch`
+    // names an EXISTING local branch (RemoteWorktreeService's "reuse local
+    // branch" path, which never consults baseBranch at all) would silently
+    // build from stale content even though distribution just succeeded.
+    // Failure is tolerated by design (see syncLocalBranchToTracking's own
+    // doc comment for why that can never leave a silent stale-content
+    // path), but still surfaced here rather than discarded, so an operator
+    // investigating a "distribution succeeded but worktree still stale"
+    // report has a lead.
+    const branchSynced = await this.remoteBundleOps.syncLocalBranchToTracking(transport, workingDir, branch);
+    if (!branchSynced) {
+      console.warn(`[FetchDistributionService] syncLocalBranchToTracking failed for branch "${branch}" in ${workingDir} (tolerated — see RemoteBundleOps.syncLocalBranchToTracking's doc comment)`);
+    }
     // origin policy is unchanged by this refactor — still a dummy URL, kept
     // separate from the mirror-path update route above.
     await this.remoteBundleOps.setDummyOrigin(transport, workingDir);

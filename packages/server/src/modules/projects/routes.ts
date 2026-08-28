@@ -265,9 +265,25 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       if (body.distribute_code !== undefined && typeof body.distribute_code !== 'boolean') {
         return reply.status(400).send({ error: 'distribute_code must be a boolean' });
       }
-      const distributeCode = 'distribute_code' in body
+      const requestedDistributeCode = 'distribute_code' in body
         ? (body.distribute_code as boolean)
         : (existingRow?.distributeCode ?? false);
+      // Normalize (not reject) `distribute_code: true` against a `local`
+      // target server (Issue #87 review finding, Minor 3): the frontend
+      // form is expected to keep this client-side-consistent already, but
+      // a stale/anomalous DB row (e.g. saved before this normalization
+      // existed) or a direct API caller could still send `true` for
+      // `local`. `local` IS the hub itself — "distributing" to it is
+      // structurally meaningless — so rejecting with 400 would just make
+      // an otherwise-valid PUT (working_directory/branch/etc.) fail for a
+      // field the caller may not even know is wrong; silently coercing to
+      // `false` here keeps the save that already-existing "unsaid fields
+      // preserve" contract elsewhere in this handler and prevents the
+      // "配信対象" badge from ever showing for a server that
+      // ExecuteTaskUseCase already unconditionally excludes from
+      // distribution.
+      const targetServerType = serverRepo.findByName(serverName)?.type;
+      const distributeCode = targetServerType === 'local' ? false : requestedDistributeCode;
       projectServerRepo.upsert({
         projectId,
         serverName,
