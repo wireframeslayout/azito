@@ -530,6 +530,83 @@ describe('FetchDistributionService', () => {
       expect(rb.status).toBe('distributed');
     });
 
+    // Issue #87 third-party review, third pass, Minor finding: reading the
+    // mirror's branch sha (`RemoteBundleOps.getMirrorBranchSha`) is a
+    // remote round trip to a SPECIFIC server, not a hub-cache operation —
+    // it must NOT be made while holding `hubCacheMutex`, or a slow/
+    // unreachable server-a would block server-b's distribution of the SAME
+    // repository even though the two servers' mirrors are entirely
+    // independent and don't share anything `hubCacheMutex` protects.
+    it('does not hold hubCacheMutex while reading a mirror branch sha, so a slow getMirrorBranchSha on one server does not block another server distributing the same repo', async () => {
+      const order: string[] = [];
+      let releaseFirst!: () => void;
+      const firstGate = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+
+      const hubRepoCache = mockHubRepoCache({
+        ensureFetched: vi.fn(() => {
+          order.push('ensureFetched');
+          return sha;
+        }),
+        createBundle: vi.fn(() => {
+          order.push('createBundle');
+          return { bundlePath: '/tmp/test.bundle', headSha: sha };
+        }),
+      });
+
+      let readCount = 0;
+      const remoteBundleOps = mockRemoteBundleOps({
+        getMirrorBranchSha: vi.fn(async () => {
+          readCount += 1;
+          if (readCount === 1) {
+            order.push('server-a-mirror-read-start');
+            await firstGate;
+            order.push('server-a-mirror-read-end');
+          } else {
+            order.push('server-b-mirror-read');
+          }
+          return null;
+        }),
+        repoExists: vi.fn(async () => false),
+      });
+
+      const sftpService = {
+        upload: vi.fn(async () => {
+          order.push('upload');
+        }),
+      };
+
+      const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService as any, mockDistRepo());
+
+      const a = service.distribute(makeParams({ server: makeServer({ name: 'server-a' }) }));
+      await flushAsync();
+
+      const b = service.distribute(makeParams({ server: makeServer({ name: 'server-b' }) }));
+      await flushAsync();
+
+      // server-b's mirror read, hub-cache read, bundle build, AND upload
+      // have all already completed while server-a is still stuck reading
+      // its own mirror's sha — proving that read is not gated by
+      // hubCacheMutex (nor by the outer per-server mutex, which only
+      // serializes calls for the SAME server).
+      expect(order).toEqual([
+        'server-a-mirror-read-start',
+        'server-b-mirror-read', 'ensureFetched', 'createBundle', 'upload',
+      ]);
+
+      releaseFirst();
+      const [ra, rb] = await Promise.all([a, b]);
+
+      expect(order).toEqual([
+        'server-a-mirror-read-start',
+        'server-b-mirror-read', 'ensureFetched', 'createBundle', 'upload',
+        'server-a-mirror-read-end', 'ensureFetched', 'createBundle', 'upload',
+      ]);
+      expect(ra.status).toBe('distributed');
+      expect(rb.status).toBe('distributed');
+    });
+
     // Issue #87 review finding (Important 3, forge/87-mirror follow-up):
     // when the incremental transfer fails and delivery falls back to a full
     // bundle, the fallback must re-read the hub cache's CURRENT head (which

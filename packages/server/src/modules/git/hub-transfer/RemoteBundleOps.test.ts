@@ -22,14 +22,34 @@ describe('RemoteBundleOps', () => {
       expect(await ops.verify(transport, '/tmp/test.bundle')).toBe(true);
     });
 
-    it('returns false when exit code is non-zero', async () => {
-      const transport = mockTransport({ 'git bundle verify': { stdout: '', stderr: 'error', code: 1 } });
+    it('returns false when exit code is non-zero and stderr carries a git error: line', async () => {
+      const transport = mockTransport({ 'git bundle verify': { stdout: '', stderr: 'error: bundle mismatch', code: 1 } });
       expect(await ops.verify(transport, '/tmp/test.bundle')).toBe(false);
     });
 
     it('returns false when stderr contains fatal:', async () => {
       const transport = mockTransport({ 'git bundle verify': { stdout: '', stderr: 'fatal: bad bundle', code: 0 } });
       expect(await ops.verify(transport, '/tmp/test.bundle')).toBe(false);
+    });
+
+    // Issue #87 third-party review, third pass, Important finding 1:
+    // `SshClient.execRemote()` always returns `code: 0` / `stderr: ''` and
+    // every command here is run with `2>&1`, so on an `ssh` server a git
+    // failure surfaces ONLY as a `fatal:`/`error:` line merged into stdout
+    // — never as a non-zero code or non-empty stderr. `verify()` must still
+    // catch it.
+    it('returns false for an SSH-shaped result (code 0, empty stderr, fatal: line merged into stdout)', async () => {
+      const transport = mockTransport({
+        'git bundle verify': { stdout: "error: Repository lacks these prerequisite commits:\nfatal: unable to verify bundle", stderr: '', code: 0 },
+      });
+      expect(await ops.verify(transport, '/tmp/test.bundle')).toBe(false);
+    });
+
+    it('returns true for an SSH-shaped success result (code 0, empty stderr, ok text in stdout)', async () => {
+      const transport = mockTransport({
+        'git bundle verify': { stdout: 'The bundle contains this ref:\n  refs/heads/main\nThe bundle records a complete history.', stderr: '', code: 0 },
+      });
+      expect(await ops.verify(transport, '/tmp/test.bundle')).toBe(true);
     });
   });
 
@@ -200,6 +220,18 @@ describe('RemoteBundleOps', () => {
       await expect(ops.fetchBundleIntoMirror(transport, '/mirror', '/tmp/dist.bundle', 'main'))
         .rejects.toThrow('git fetch bundle into mirror failed');
     });
+
+    // Issue #87 third-party review, third pass, Important finding 1: an
+    // `ssh` server's transport reports the failure ONLY as a `fatal:` line
+    // merged into stdout by this command's own `2>&1` — code 0, empty
+    // stderr, exactly like `SshClient.execRemote()` always returns.
+    it('throws on an SSH-shaped fetch failure (code 0, empty stderr, fatal: line in stdout)', async () => {
+      const transport = mockTransport({
+        'git -C': { stdout: 'fatal: not a bundle file', stderr: '', code: 0 },
+      });
+      await expect(ops.fetchBundleIntoMirror(transport, '/mirror', '/tmp/dist.bundle', 'main'))
+        .rejects.toThrow('git fetch bundle into mirror failed');
+    });
   });
 
   describe('cloneWorkingDirFromMirror', () => {
@@ -219,6 +251,14 @@ describe('RemoteBundleOps', () => {
 
     it('throws on clone failure', async () => {
       const transport = mockTransport({ 'git -c core.hooksPath=/dev/null clone': { stdout: '', stderr: 'fatal: not a bundle', code: 128 } });
+      await expect(ops.cloneWorkingDirFromMirror(transport, '/mirror', '/repo', 'main'))
+        .rejects.toThrow('git clone from mirror failed');
+    });
+
+    it('throws on an SSH-shaped clone failure (code 0, empty stderr, fatal: line in stdout)', async () => {
+      const transport = mockTransport({
+        'git -c core.hooksPath=/dev/null clone': { stdout: "fatal: repository '/mirror' does not exist", stderr: '', code: 0 },
+      });
       await expect(ops.cloneWorkingDirFromMirror(transport, '/mirror', '/repo', 'main'))
         .rejects.toThrow('git clone from mirror failed');
     });

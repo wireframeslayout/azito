@@ -2,6 +2,7 @@ import * as crypto from 'crypto';
 import type { IServerTransport } from '../../servers/transport/ServerTransport';
 import { shellQuote } from '../../../shared/shellQuote';
 import { assertSafeBranch } from '../assertSafeGitArgs';
+import { hasGitError } from '../hasGitError';
 import { DUMMY_ORIGIN_URL } from './types';
 
 /**
@@ -16,9 +17,15 @@ import { DUMMY_ORIGIN_URL } from './types';
  * 実行に `-c core.hooksPath=/dev/null` を付けることで hook 実行だけは防ぐに留める。
  */
 export class RemoteBundleOps {
+  /**
+   * `code`/`stderr` are not trustworthy on `ssh` servers — see
+   * `hasGitError`'s doc comment. Without it this always returned `true` on
+   * `ssh`, making bundle verification a no-op there (Issue #87 third-party
+   * review, third pass, Important finding 1).
+   */
   async verify(transport: IServerTransport, remoteBundlePath: string): Promise<boolean> {
     const r = await transport.exec(`git bundle verify ${shellQuote(remoteBundlePath)} 2>&1`, 30_000);
-    return r.code === 0 && !r.stderr?.includes('fatal:');
+    return !hasGitError(r);
   }
 
   /** サーバーのホームディレクトリを解決する（`TmuxInstaller` と同じ `$HOME` 規約）。 */
@@ -48,7 +55,7 @@ export class RemoteBundleOps {
       `mkdir -p ${shellQuote(mirrorDir)} && git -c core.hooksPath=/dev/null init --bare ${shellQuote(mirrorDir)} 2>&1`,
       15_000,
     );
-    if (r.code !== 0 || (r.stderr && r.stderr.includes('fatal:'))) {
+    if (hasGitError(r)) {
       throw new Error(`git init --bare for mirror failed: ${r.stderr || r.stdout}`);
     }
   }
@@ -61,12 +68,22 @@ export class RemoteBundleOps {
    */
   async getMirrorBranchSha(transport: IServerTransport, mirrorDir: string, branch: string): Promise<string | null> {
     assertSafeBranch(branch, 'branch');
+    // Intentionally NOT `hasGitError` here: "the branch doesn't exist in the
+    // mirror yet" is a NORMAL outcome (first-ever distribution), not a
+    // failure to detect — it must return `null`, not throw. `r.code` is
+    // also not trustworthy on `ssh` (see `hasGitError`'s doc comment), but
+    // that doesn't matter here: stderr is redirected to `/dev/null` on the
+    // REMOTE shell (real redirection, applied before the transport ever
+    // sees the output — unlike the `2>&1` used elsewhere in this file,
+    // which only merges streams that the transport itself may then discard
+    // stderr from). The result is decided purely by whether stdout is a
+    // well-formed 40-hex sha.
     const r = await transport.exec(
       `git -C ${shellQuote(mirrorDir)} rev-parse --verify ${shellQuote(`refs/heads/${branch}`)} 2>/dev/null`,
       10_000,
     );
     const sha = r.stdout?.trim();
-    return r.code === 0 && !!sha && /^[0-9a-f]{40}$/.test(sha) ? sha : null;
+    return sha && /^[0-9a-f]{40}$/.test(sha) ? sha : null;
   }
 
   /**
@@ -80,7 +97,7 @@ export class RemoteBundleOps {
       `git -C ${shellQuote(mirrorDir)} -c core.hooksPath=/dev/null fetch --atomic ${shellQuote(remoteBundlePath)} ${shellQuote(refspec)} 2>&1`,
       120_000,
     );
-    if (r.code !== 0 || (r.stderr && r.stderr.includes('fatal:'))) {
+    if (hasGitError(r)) {
       throw new Error(`git fetch bundle into mirror failed: ${r.stderr || r.stdout}`);
     }
   }
@@ -102,7 +119,7 @@ export class RemoteBundleOps {
       `git -c core.hooksPath=/dev/null clone --no-local --branch ${shellQuote(branch)} ${shellQuote(mirrorDir)} ${shellQuote(workingDir)} 2>&1`,
       120_000,
     );
-    if (r.code !== 0 || (r.stderr && r.stderr.includes('fatal:'))) {
+    if (hasGitError(r)) {
       throw new Error(`git clone from mirror failed: ${r.stderr || r.stdout}`);
     }
   }
@@ -128,7 +145,7 @@ export class RemoteBundleOps {
       `git -C ${shellQuote(workingDir)} -c core.hooksPath=/dev/null checkout --detach 2>&1`,
       15_000,
     );
-    if (r.code !== 0 || (r.stderr && r.stderr.includes('fatal:'))) {
+    if (hasGitError(r)) {
       throw new Error(`git checkout --detach failed: ${r.stderr || r.stdout}`);
     }
   }
@@ -156,7 +173,7 @@ export class RemoteBundleOps {
       `cd ${shellQuote(workingDir)} && git -c core.hooksPath=/dev/null fetch --atomic ${shellQuote(mirrorDir)} ${shellQuote(trackingRefspec)} 2>&1`,
       120_000,
     );
-    if (r.code !== 0 || (r.stderr && r.stderr.includes('fatal:'))) {
+    if (hasGitError(r)) {
       throw new Error(`git fetch from mirror failed: ${r.stderr || r.stdout}`);
     }
   }
@@ -211,7 +228,7 @@ export class RemoteBundleOps {
       `git -C ${shellQuote(workingDir)} -c core.hooksPath=/dev/null branch -f ${shellQuote(branch)} ${shellQuote(`refs/remotes/origin/${branch}`)} 2>&1`,
       15_000,
     );
-    return r.code === 0 && !(r.stderr && r.stderr.includes('fatal:'));
+    return !hasGitError(r);
   }
 
   async createFromWorktree(transport: IServerTransport, worktreePath: string, branch: string, baseBranch: string | null): Promise<string> {
@@ -227,7 +244,7 @@ export class RemoteBundleOps {
       `cd ${shellQuote(worktreePath)} && git bundle create ${shellQuote(remoteBundlePath)} ${shellQuote(branch)} ${notClause} 2>&1`,
       120_000,
     );
-    if (r.code !== 0 || (r.stderr && r.stderr.includes('fatal:'))) {
+    if (hasGitError(r)) {
       throw new Error(`git bundle create failed: ${r.stderr || r.stdout}`);
     }
     return remoteBundlePath;
@@ -240,12 +257,26 @@ export class RemoteBundleOps {
     );
   }
 
+  /**
+   * "No HEAD yet" (empty/missing dir) is a normal branch here, not a
+   * failure — so this deliberately does not use `hasGitError`/throw. Same
+   * `2>/dev/null` real-redirection + sha-regex-validates-success approach
+   * as `getMirrorBranchSha` above (see that method's comment); `r.code` is
+   * never consulted.
+   */
   async getHeadSha(transport: IServerTransport, dir: string): Promise<string | null> {
     const r = await transport.exec(`cd ${shellQuote(dir)} && git rev-parse HEAD 2>/dev/null`, 10_000);
     const sha = r.stdout?.trim();
     return sha && /^[0-9a-f]{40}$/.test(sha) ? sha : null;
   }
 
+  /**
+   * "Not a repo yet" is a normal branch (decides clone vs. fetch in
+   * `FetchDistributionService.ensureWorkingDir`), not a failure. The
+   * `echo yes || echo no` shell construct encodes the answer directly into
+   * stdout, so — like `getMirrorBranchSha`/`getHeadSha` above — this never
+   * needs to consult `r.code` at all.
+   */
   async repoExists(transport: IServerTransport, dir: string): Promise<boolean> {
     const r = await transport.exec(`test -d ${shellQuote(dir + '/.git')} && echo yes || echo no`, 5_000);
     return r.stdout?.trim() === 'yes';

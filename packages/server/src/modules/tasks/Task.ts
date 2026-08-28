@@ -516,32 +516,49 @@ export interface ITaskRepository {
   clearTmuxWindowIfMatches(id: number, expectedWindowName: string): boolean;
 
   /**
-   * Atomically writes `status` — but ONLY if `tmuxWindow` still equals
-   * `expectedWindowName` OR is already `NULL` — and reports whether it did
-   * (Issue #87 third-party review, Important 1; refined per second review
-   * pass). `rollbackWindowAfterPostCreationFailure()` in ExecuteTaskUseCase
-   * runs OUTSIDE `runExclusiveForTask` (same gap documented on
+   * Atomically writes `status` — but ONLY if the row's generation still
+   * matches the CALLER's own generation — and reports whether it did
+   * (Issue #87 third-party review, Important 1; third pass fixes a NULL
+   * over-match bug found in the second pass — see below).
+   * `rollbackWindowAfterPostCreationFailure()` in ExecuteTaskUseCase runs
+   * OUTSIDE `runExclusiveForTask` (same gap documented on
    * {@link clearTmuxWindowIfMatches} above), so a concurrent
    * execute()/followUp() for the SAME task can already have created its OWN
    * newer window generation and moved the task to `in_progress` while THIS
    * call's post-window-creation step (fetch distribution, worktree creation)
    * is still failing and about to roll back. An unconditional
    * `update(id, { status: 'failed' })` at that point would stomp the newer
-   * generation's live, still-running execution back to `failed`. This
-   * method's WHERE-guarded UPDATE makes that write a no-op whenever the row
-   * has already moved on to a DIFFERENT, non-NULL window — mirroring exactly
-   * why `clearTmuxWindowIfMatches` guards the window reference on the same
-   * generation check, just applied to `status` instead.
+   * generation's live, still-running execution back to `failed`.
    *
-   * The NULL case is deliberately NOT treated as "a newer generation took
-   * over": a newer execution always writes its own window name into
-   * `tmuxWindow` before doing anything else, so it never leaves the column
-   * NULL. `tmuxWindow` reading NULL instead means the ordinary
-   * window-destruction path cleared THIS SAME generation's window reference
-   * while this call's distribution/worktree await was still in flight.
-   * Treating that as a no-op would leave the task stuck `in_progress` with
-   * no window forever; matching `expectedWindowName OR NULL` keeps recording
-   * `failed` in that case, same as the unconditional update this replaced.
+   * `tokenId` is the id of the `task_tokens` row the CALLER's own
+   * `createRotatedWindow` issued for its generation — the caller already
+   * holds it (see `rollbackWindowAfterPostCreationFailure`'s `tokenId`
+   * parameter). The write applies when:
+   * - `tmuxWindow` still equals `expectedWindowName` (the caller's own
+   *   generation is still the one on the row), OR
+   * - `tmuxWindow` is `NULL` **and no `task_tokens` row for this task has a
+   *   `window_generation` newer than the caller's own token's** (the NULL
+   *   was left by the ordinary window-destruction path clearing THIS SAME
+   *   generation's reference, not by a newer generation taking over).
+   *
+   * The write is a no-op when `tmuxWindow` names a DIFFERENT window, or when
+   * `tmuxWindow` is `NULL` but a strictly newer generation has already been
+   * issued for this task (that newer execution just hasn't written its
+   * window name yet, or already destroyed and cleared its own window too —
+   * either way it, not this stale rollback, owns the row's status now).
+   *
+   * History of the two failure modes this generation check has to balance:
+   * first pass matched `tmuxWindow = expectedWindowName` only, which left a
+   * task stuck `in_progress` forever once the ordinary window-destruction
+   * path cleared `tmuxWindow` to NULL for the SAME still-active generation
+   * (no newer generation ever came along to advance it). Second pass
+   * "fixed" that by also matching bare `tmuxWindow IS NULL` unconditionally
+   * — but that over-matches: it lets a stale rollback for an OLD generation
+   * overwrite the status of a genuinely NEWER generation whenever that newer
+   * generation's own window later gets destroyed and NULLs `tmuxWindow` too.
+   * This third pass replaces the bare NULL check with the `task_tokens`
+   * generation lookup above so NULL is only treated as "my own generation's
+   * window is gone", never as blanket permission.
    */
-  updateStatusIfWindowMatches(id: number, expectedWindowName: string, status: TaskStatus): boolean;
+  updateStatusIfWindowMatches(id: number, expectedWindowName: string, status: TaskStatus, tokenId: number): boolean;
 }

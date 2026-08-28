@@ -483,7 +483,7 @@ export class ExecuteTaskUseCase {
     revokeReason: string,
     extraTaskUpdate?: Partial<Task>,
   ): Promise<void> {
-    this.taskRepo.updateStatusIfWindowMatches(taskId, windowName, 'failed' as TaskStatus);
+    this.taskRepo.updateStatusIfWindowMatches(taskId, windowName, 'failed' as TaskStatus, tokenId);
     if (extraTaskUpdate) {
       this.taskRepo.update(taskId, extraTaskUpdate);
     }

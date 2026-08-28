@@ -1578,7 +1578,7 @@ describe('ExecuteTaskUseCase working-directory containment (Issue #27)', () => {
 
     await expect(useCase.execute(13, 4)).rejects.toThrow(/Worktree path rejected/);
 
-    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(4, 'w1', 'failed');
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(4, 'w1', 'failed', 101);
     expect(windowRepo.add).not.toHaveBeenCalled();
     expect(logRepo.append).toHaveBeenCalledWith(4, 13, 'command', expect.objectContaining({ type: 'worktree_path_rejected' }));
     // Issue #28 third-party review fix: 'failed' doesn't auto-revoke (see
@@ -1628,7 +1628,7 @@ describe('ExecuteTaskUseCase working-directory containment (Issue #27)', () => {
     await expect(useCase.execute(15, 6)).rejects.toThrow(/Worktree path rejected/);
 
     expect(worktreeRemove).toHaveBeenCalledWith(allowedRoot, outsideDir);
-    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(6, 'w1', 'failed');
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(6, 'w1', 'failed', 101);
     expect(taskRepo.update).toHaveBeenCalledWith(6, {
       worktreePath: null,
       worktreeBranch: null,
@@ -2015,7 +2015,7 @@ describe('ExecuteTaskUseCase rollback does not clobber a newer window generation
     await expect(useCase.execute(72, 72)).rejects.toThrow(/Worktree creation failed/);
 
     // The rollback attempted to fail ITS OWN generation ('w1')...
-    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(72, 'w1', 'failed');
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(72, 'w1', 'failed', 101);
     // ...but since the row had already moved on to 'w2', the guarded write
     // must be a no-op — the newer generation's in-flight status survives.
     expect(task.status).toBe('in_progress');
@@ -2049,7 +2049,7 @@ describe('ExecuteTaskUseCase rollback does not clobber a newer window generation
 
     await expect(useCase.execute(73, 73)).rejects.toThrow(/Worktree creation failed/);
 
-    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(73, 'w1', 'failed');
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(73, 'w1', 'failed', 101);
     expect(task.status).toBe('failed');
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'worktree_creation_failed_rollback');
   });
@@ -2089,7 +2089,7 @@ describe('ExecuteTaskUseCase rollback does not clobber a newer window generation
 
     await expect(useCase.execute(74, 74)).rejects.toThrow(/Worktree creation failed/);
 
-    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(74, 'w1', 'failed');
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(74, 'w1', 'failed', 101);
     expect(task.status).toBe('failed');
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'worktree_creation_failed_rollback');
   });
@@ -2647,7 +2647,7 @@ describe('ExecuteTaskUseCase fetch-distribution failure handling (Issue #87 thir
     await expect(useCase.execute(10, 1)).rejects.toThrow(/Fetch distribution failed/);
 
     expect(fetchDistributionService.distribute).toHaveBeenCalledTimes(1);
-    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed');
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed', 101);
     expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_failed_rollback');
     expect(taskRepo.clearTmuxWindowIfMatches).toHaveBeenCalledWith(1, 'w1');
@@ -2668,7 +2668,7 @@ describe('ExecuteTaskUseCase fetch-distribution failure handling (Issue #87 thir
     await expect(useCase.execute(10, 1)).rejects.toThrow(/no repository configured/);
 
     expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
-    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed');
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed', 101);
     expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_prereq_failed_rollback');
   });
@@ -2684,7 +2684,7 @@ describe('ExecuteTaskUseCase fetch-distribution failure handling (Issue #87 thir
     await expect(useCase.execute(10, 1)).rejects.toThrow(/no token configured/);
 
     expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
-    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed');
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed', 101);
     expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_prereq_failed_rollback');
   });
@@ -2702,7 +2702,7 @@ describe('ExecuteTaskUseCase fetch-distribution failure handling (Issue #87 thir
     await expect(useCase.execute(10, 1)).rejects.toThrow(/could not be normalized/);
 
     expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
-    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed');
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed', 101);
     expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_prereq_failed_rollback');
   });
@@ -2742,7 +2742,7 @@ describe('ExecuteTaskUseCase fetch-distribution stale-local-branch fail-fast (Is
     await expect(useCase.execute(10, 1)).rejects.toThrow(/could not be updated to the distributed content/);
 
     expect(fetchDistributionService.distribute).toHaveBeenCalledTimes(1);
-    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed');
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed', 101);
     expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_stale_local_branch_rollback');
   });
@@ -2804,7 +2804,7 @@ describe('ExecuteTaskUseCase fetch-distribution required but no workingDir fail-
     await expect(useCase.execute(10, 1)).rejects.toThrow(/no working directory is configured/);
 
     expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
-    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed');
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed', 101);
     expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_prereq_failed_rollback');
   });
@@ -2820,7 +2820,7 @@ describe('ExecuteTaskUseCase fetch-distribution required but no workingDir fail-
     await expect(useCase.execute(10, 1)).rejects.toThrow(/no working directory is configured/);
 
     expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
-    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed');
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed', 101);
     expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_prereq_failed_rollback');
   });

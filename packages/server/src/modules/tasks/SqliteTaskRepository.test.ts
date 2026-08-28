@@ -748,11 +748,13 @@ describe('SqliteTaskRepository.clearTmuxWindowIfMatches (Issue #28 third-party r
 describe('SqliteTaskRepository.updateStatusIfWindowMatches (Issue #87 third-party review, Important finding 1)', () => {
   let db: SqliteDatabase;
   let repo: SqliteTaskRepository;
+  let tokenRepo: SqliteTaskTokenRepository;
   let taskId: number;
 
   beforeEach(() => {
     db = openDatabase(':memory:');
-    repo = new SqliteTaskRepository(db, new SqliteTaskTokenRepository(db));
+    tokenRepo = new SqliteTaskTokenRepository(db);
+    repo = new SqliteTaskRepository(db, tokenRepo);
     db.prepare("INSERT INTO projects (id, name, slug, default_branch) VALUES (1, 'P', 'p', 'main')").run();
     taskId = repo.create({
       projectId: 1,
@@ -797,7 +799,9 @@ describe('SqliteTaskRepository.updateStatusIfWindowMatches (Issue #87 third-part
   });
 
   it('writes status and returns true when tmux_window still matches the expected window name', () => {
-    expect(repo.updateStatusIfWindowMatches(taskId, 'w1', 'failed')).toBe(true);
+    const token = tokenRepo.issue(taskId, 1);
+
+    expect(repo.updateStatusIfWindowMatches(taskId, 'w1', 'failed', token.id)).toBe(true);
     expect(repo.findById(taskId)!.status).toBe('failed');
   });
 
@@ -806,29 +810,58 @@ describe('SqliteTaskRepository.updateStatusIfWindowMatches (Issue #87 third-part
     // already rotated to a new window AND advanced the task to in_progress,
     // between this caller's window creation and its (failed) downstream
     // setup — exactly the race the fix closes.
+    const token = tokenRepo.issue(taskId, 1);
     repo.update(taskId, { tmuxWindow: 'w2', status: 'in_progress' });
 
-    expect(repo.updateStatusIfWindowMatches(taskId, 'w1', 'failed')).toBe(false);
+    expect(repo.updateStatusIfWindowMatches(taskId, 'w1', 'failed', token.id)).toBe(false);
     expect(repo.findById(taskId)!.status).toBe('in_progress');
     expect(repo.findById(taskId)!.tmuxWindow).toBe('w2');
   });
 
   it('returns false and does nothing for an unknown task id', () => {
-    expect(repo.updateStatusIfWindowMatches(999999, 'w1', 'failed')).toBe(false);
+    const token = tokenRepo.issue(taskId, 1);
+    expect(repo.updateStatusIfWindowMatches(999999, 'w1', 'failed', token.id)).toBe(false);
   });
 
-  it('writes status and returns true when tmux_window has been cleared to NULL by the same generation (regression: ordinary window destruction, not a newer generation, must not block recording failure)', () => {
+  it('writes status and returns true when tmux_window has been cleared to NULL by the same generation and no newer generation has been issued (regression: ordinary window destruction, not a newer generation, must not block recording failure)', () => {
     // Simulates the ordinary window-destruction path (e.g.
     // TaskWindowDestruction) clearing THIS SAME generation's tmux_window to
     // NULL while this call's own distribution/worktree-creation await is
-    // still in flight and about to fail. A newer generation always writes
-    // its OWN window name before doing anything else, so it never leaves
-    // tmux_window NULL — meaning NULL here is NOT evidence of a takeover,
-    // and must not block the failed-status write the way a different
-    // non-NULL window name does.
-    repo.update(taskId, { tmuxWindow: null });
+    // still in flight and about to fail. No newer task_tokens generation
+    // has been issued for this task, so NULL here is NOT evidence of a
+    // takeover, and must not block the failed-status write the way a
+    // different non-NULL window name does.
+    const token = tokenRepo.issue(taskId, 1);
+    // `repo.update()`'s object-spread merge uses `??`, which treats an
+    // explicit `null` the same as "field omitted" and falls back to the
+    // CURRENT value — it cannot actually null out tmux_window (pre-existing
+    // behavior, unrelated to this fix). `clearTmuxWindowIfMatches` performs
+    // a real SQL `SET tmux_window = NULL` and is what the ordinary
+    // window-destruction path this test simulates actually calls.
+    expect(repo.clearTmuxWindowIfMatches(taskId, 'w1')).toBe(true);
+    expect(repo.findById(taskId)!.tmuxWindow).toBeNull();
 
-    expect(repo.updateStatusIfWindowMatches(taskId, 'w1', 'failed')).toBe(true);
+    expect(repo.updateStatusIfWindowMatches(taskId, 'w1', 'failed', token.id)).toBe(true);
     expect(repo.findById(taskId)!.status).toBe('failed');
+  });
+
+  it('leaves status untouched and returns false when tmux_window is NULL but a NEWER generation has already been issued for this task (regression: a stale rollback must not clobber a newer generation whose own window was later destroyed too)', () => {
+    // First pass matched `tmux_window = expected` only (stuck-in-progress
+    // bug). Second pass matched bare `tmux_window IS NULL` unconditionally
+    // (this over-match bug: a NEWER generation's window can also end up
+    // destroyed and NULLed, and a stale rollback for the OLD generation must
+    // not then win the race and overwrite the newer generation's status).
+    const oldToken = tokenRepo.issue(taskId, 1);
+    tokenRepo.issue(taskId, 2); // newer generation, issued for this same task
+    // `repo.create()` ignores `data.status` (defaults to 'open' at the DB
+    // level), so status is set explicitly here via `update()`.
+    // `clearTmuxWindowIfMatches` (not `repo.update`) is used for
+    // tmux_window — see the previous test's comment for why.
+    repo.update(taskId, { status: 'in_progress' });
+    expect(repo.clearTmuxWindowIfMatches(taskId, 'w1')).toBe(true);
+    expect(repo.findById(taskId)!.tmuxWindow).toBeNull();
+
+    expect(repo.updateStatusIfWindowMatches(taskId, 'w1', 'failed', oldToken.id)).toBe(false);
+    expect(repo.findById(taskId)!.status).toBe('in_progress');
   });
 });

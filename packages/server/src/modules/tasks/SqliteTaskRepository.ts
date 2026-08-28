@@ -203,24 +203,32 @@ export class SqliteTaskRepository implements ITaskRepository {
     );
     // Guarded compare-and-swap for updateStatusIfWindowMatches() — see that
     // method's doc comment on ITaskRepository (Issue #87 third-party review,
-    // Important 1; refined per second review pass). Same generation guard as
-    // clearTmuxWindowIfMatchesStmt above, applied to `status` instead of
-    // `tmux_window` — but ALSO matches when `tmux_window IS NULL`. A newer
-    // execution always writes its OWN window name into `tmux_window` before
-    // it does anything else, so `tmux_window` holding a DIFFERENT non-NULL
-    // name is real evidence of a newer generation and must stay a no-op.
-    // `tmux_window IS NULL`, however, is not that evidence: the ordinary
-    // window-destruction path (e.g. TaskWindowDestruction) can clear
-    // `tmux_window` to NULL for THIS SAME generation while a distribution or
-    // worktree-creation await is still in flight, before that await goes on
-    // to fail. Excluding NULL here would turn this into a no-op for that
-    // case too, leaving the task stuck `in_progress` with no window forever
-    // — worse than the unconditional update this guard replaced. Matching
-    // NULL keeps that "this generation's window is already gone" case
-    // recording `failed`, exactly as the unconditional update used to.
-    this.updateStatusIfWindowMatchesStmt = db.prepare(
-      "UPDATE tasks SET status = ?, updated_at = datetime('now') WHERE id = ? AND (tmux_window = ? OR tmux_window IS NULL)",
-    );
+    // Important 1; third pass). `tmux_window = ?` covers the case where the
+    // caller's own generation's window name is still on the row. The second
+    // arm covers `tmux_window IS NULL` — but, unlike the second review pass,
+    // does NOT match that unconditionally: a NULL left by a NEWER generation
+    // whose own window was later destroyed is NOT evidence that this stale
+    // caller may still write. Instead it correlates against `task_tokens` —
+    // matching only when no OTHER row for this task_id has a
+    // `window_generation` strictly greater than the caller's own token's
+    // (`?` = tokenId). That is a single UPDATE with a correlated NOT EXISTS
+    // subquery (no read-then-write) so the check and the write stay
+    // atomic under WAL/SQLite's single-writer model.
+    this.updateStatusIfWindowMatchesStmt = db.prepare(`
+      UPDATE tasks SET status = ?, updated_at = datetime('now')
+      WHERE id = ?
+        AND (
+          tmux_window = ?
+          OR (
+            tmux_window IS NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM task_tokens nt
+              WHERE nt.task_id = tasks.id
+                AND nt.window_generation > (SELECT window_generation FROM task_tokens WHERE id = ?)
+            )
+          )
+        )
+    `);
   }
 
   findAll(): Task[] {
@@ -445,9 +453,9 @@ export class SqliteTaskRepository implements ITaskRepository {
     return result.changes > 0;
   }
 
-  updateStatusIfWindowMatches(id: number, expectedWindowName: string, status: TaskStatus): boolean {
+  updateStatusIfWindowMatches(id: number, expectedWindowName: string, status: TaskStatus, tokenId: number): boolean {
     const run = this.db.transaction(() => {
-      const result = this.updateStatusIfWindowMatchesStmt.run(status, id, expectedWindowName);
+      const result = this.updateStatusIfWindowMatchesStmt.run(status, id, expectedWindowName, tokenId);
       if (result.changes > 0) this.revokeIfTokenRevokingStatus(id, status);
       return result.changes > 0;
     });

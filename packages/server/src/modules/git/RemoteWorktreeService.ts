@@ -3,6 +3,7 @@ import type { IServerTransport, ExecResult } from '../servers/transport/ServerTr
 
 import { assertSafePath, assertSafeBranch } from './assertSafeGitArgs';
 import { parseWorktreePorcelain } from './parseWorktreePorcelain';
+import { hasGitError } from './hasGitError';
 
 export class RemoteWorktreeService implements IWorktreeService {
   constructor(private transport: IServerTransport) {}
@@ -10,7 +11,7 @@ export class RemoteWorktreeService implements IWorktreeService {
   async list(workingDir: string): Promise<WorktreeEntry[]> {
     assertSafePath(workingDir, 'workingDir');
     const result = await this.exec(`cd ${workingDir} && git worktree list --porcelain`);
-    if (this.hasGitError(result)) {
+    if (hasGitError(result)) {
       if (`${result.stdout}\n${result.stderr}`.includes('not a git repository')) {
         return [];
       }
@@ -44,23 +45,23 @@ export class RemoteWorktreeService implements IWorktreeService {
       let branchExists = false;
       try {
         const localCheck = await this.exec(`cd ${workingDir} && git rev-parse --verify ${branch}`);
-        branchExists = !this.hasGitError(localCheck);
+        branchExists = !hasGitError(localCheck);
       } catch {}
       if (!branchExists) {
         try {
           const remoteCheck = await this.exec(`cd ${workingDir} && git rev-parse --verify origin/${branch}`);
-          branchExists = !this.hasGitError(remoteCheck);
+          branchExists = !hasGitError(remoteCheck);
         } catch {}
       }
 
       if (branchExists) {
         const result = await this.exec(`cd ${workingDir} && git worktree add ${worktreePath} ${branch}`);
-        if (this.hasGitError(result)) {
+        if (hasGitError(result)) {
           const combined = `${result.stdout}\n${result.stderr}`.trim();
           if (combined.includes('already used by worktree')) {
             try { await this.exec(`cd ${workingDir} && git worktree prune`); } catch {}
             const retry = await this.exec(`cd ${workingDir} && git worktree add ${worktreePath} ${branch}`);
-            if (this.hasGitError(retry)) {
+            if (hasGitError(retry)) {
               const forceRetry = await this.exec(`cd ${workingDir} && git worktree add --force ${worktreePath} ${branch}`);
               this.assertWorktreeSuccess(forceRetry);
             }
@@ -145,13 +146,8 @@ export class RemoteWorktreeService implements IWorktreeService {
     }
   }
 
-  private hasGitError(result: ExecResult): boolean {
-    const combined = `${result.stdout}\n${result.stderr}`.trim();
-    return /^fatal:|^error:/m.test(combined);
-  }
-
   private assertWorktreeSuccess(result: ExecResult): void {
-    if (this.hasGitError(result)) {
+    if (hasGitError(result)) {
       const combined = `${result.stdout}\n${result.stderr}`.trim();
       throw new Error(`git worktree add failed: ${combined}`);
     }

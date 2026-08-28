@@ -91,11 +91,24 @@ export class FetchDistributionService {
       const mirrorDir = this.remoteBundleOps.mirrorDir(homeDir, repoHash);
       await this.remoteBundleOps.ensureMirror(transport, mirrorDir);
 
+      // Deliberately read OUTSIDE `hubCacheMutex` (Issue #87 third-party
+      // review, third pass, Minor finding): this is a remote round trip to
+      // THIS server (can be slow or hang on an unreachable/laggy server),
+      // while the mutex's whole purpose (see its doc comment above) is to
+      // protect the hub's own local repo-cache directory, which every OTHER
+      // server's distribution of the SAME repository also needs. Holding
+      // the lock across this remote call would let one slow server block
+      // every other server's distribution of the same repo. The mirror's
+      // SHA is independent of the hub cache's state — it only describes
+      // what THIS server's mirror has already received — so it's safe to
+      // read before acquiring the lock and hand the snapshot in.
+      const mirrorSha = await this.remoteBundleOps.getMirrorBranchSha(transport, mirrorDir, branch);
+
       // See `hubCacheMutex`'s doc comment above for why the head-read and
       // the first bundle build must be one uninterrupted critical section
       // keyed by `repoHash` alone.
       const prep = await this.hubCacheMutex.withLock(repoHash, () =>
-        this.prepareBundle(repoIdentity, token, branch, transport, mirrorDir));
+        this.prepareBundle(repoIdentity, token, branch, mirrorSha));
 
       if (prep.kind === 'current') {
         // workingDir may still be missing or stale (e.g. it was deleted
@@ -121,24 +134,30 @@ export class FetchDistributionService {
 
   /**
    * Reads the hub cache's current head for `branch` and compares it against
-   * the mirror's ACTUAL ref (never the DB's `last_distributed_sha` — Issue
-   * #87: DB and mirror can drift, e.g. after a force-push or a manually-
-   * wiped mirror, and a DB-derived prerequisite made that drift permanent).
-   * When they already match, no bundle is built. Otherwise builds the FIRST
-   * bundle attempt (incremental off the mirror's sha when it has one, full
-   * otherwise) from that exact same cache snapshot. Must always be called
-   * under `hubCacheMutex` — see its doc comment for why the read and the
-   * build cannot be split across two separate lock acquisitions.
+   * `mirrorSha` — the mirror's ACTUAL ref, read by the caller BEFORE this
+   * method was called (never the DB's `last_distributed_sha` — Issue #87:
+   * DB and mirror can drift, e.g. after a force-push or a manually-wiped
+   * mirror, and a DB-derived prerequisite made that drift permanent).
+   * `mirrorSha` itself is a snapshot taken outside `hubCacheMutex` (see the
+   * lock-acquisition comment at this method's call site) — it describes a
+   * different server's independent state, not anything this lock protects,
+   * so reading it earlier/outside is safe; the only thing that MUST stay
+   * inside one uninterrupted critical section keyed by `repoHash` is the
+   * hub-cache head-read (`ensureFetched` below) together with the first
+   * bundle build off of it (see `hubCacheMutex`'s doc comment for why THAT
+   * pair cannot be split across two separate lock acquisitions). When
+   * `mirrorSha` already matches the freshly-read hub-cache head, no bundle
+   * is built. Otherwise builds the FIRST bundle attempt (incremental off
+   * `mirrorSha` when non-null, full otherwise) from that exact same cache
+   * snapshot.
    */
   private async prepareBundle(
     repoIdentity: CanonicalRepositoryIdentity,
     token: string,
     branch: string,
-    transport: IServerTransport,
-    mirrorDir: string,
+    mirrorSha: string | null,
   ): Promise<PrepResult> {
     const headSha = this.hubRepoCache.ensureFetched(repoIdentity, token, branch);
-    const mirrorSha = await this.remoteBundleOps.getMirrorBranchSha(transport, mirrorDir, branch);
 
     if (mirrorSha === headSha) {
       return { kind: 'current', headSha };
