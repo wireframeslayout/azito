@@ -203,34 +203,72 @@ describe('RemoteBundleOps', () => {
   });
 
   describe('cloneWorkingDirFromMirror', () => {
-    it('clones with --no-local from the mirror path', async () => {
-      const transport = mockTransport({ 'git clone': { stdout: '', stderr: '', code: 0 } });
+    it('clones with --no-local from the mirror path, with hooks disabled, then detaches HEAD', async () => {
+      const transport = mockTransport({
+        'git -c core.hooksPath=/dev/null clone': { stdout: '', stderr: '', code: 0 },
+        'checkout --detach': { stdout: '', stderr: '', code: 0 },
+      });
       await ops.cloneWorkingDirFromMirror(transport, '/mirror', '/repo', 'main');
-      const cmd = (transport.exec as any).mock.calls[0][0] as string;
-      expect(cmd).toContain('--no-local');
-      expect(cmd).toContain("--branch 'main'");
-      expect(cmd).toContain("'/mirror'");
+      const cloneCmd = (transport.exec as any).mock.calls[0][0] as string;
+      expect(cloneCmd).toContain('--no-local');
+      expect(cloneCmd).toContain("--branch 'main'");
+      expect(cloneCmd).toContain("'/mirror'");
+      expect(cloneCmd).toContain('core.hooksPath=/dev/null');
+
+      const detachCmd = (transport.exec as any).mock.calls[1][0] as string;
+      expect(detachCmd).toContain("git -C '/repo'");
+      expect(detachCmd).toContain('checkout --detach');
+      expect(detachCmd).toContain('core.hooksPath=/dev/null');
     });
 
     it('throws on clone failure', async () => {
-      const transport = mockTransport({ 'git clone': { stdout: '', stderr: 'fatal: not a bundle', code: 128 } });
+      const transport = mockTransport({ 'git -c core.hooksPath=/dev/null clone': { stdout: '', stderr: 'fatal: not a bundle', code: 128 } });
       await expect(ops.cloneWorkingDirFromMirror(transport, '/mirror', '/repo', 'main'))
         .rejects.toThrow('git clone from mirror failed');
+    });
+
+    it('throws when the post-clone detach fails', async () => {
+      const transport = mockTransport({
+        'git -c core.hooksPath=/dev/null clone': { stdout: '', stderr: '', code: 0 },
+        'checkout --detach': { stdout: '', stderr: 'fatal: could not detach', code: 128 },
+      });
+      await expect(ops.cloneWorkingDirFromMirror(transport, '/mirror', '/repo', 'main'))
+        .rejects.toThrow('git checkout --detach after clone failed');
     });
   });
 
   describe('fetchWorkingDirFromMirror', () => {
-    it('fetches the mirror path directly (not via origin) with a forced refspec', async () => {
-      const transport = mockTransport({ 'git -c core.hooksPath': { stdout: '', stderr: '', code: 0 } });
+    it('detaches HEAD idempotently, then fetches the mirror path directly (not via origin) updating both the local branch and the remote-tracking ref with forced refspecs', async () => {
+      const transport = mockTransport({
+        'checkout --detach': { stdout: '', stderr: '', code: 0 },
+        'fetch --atomic': { stdout: '', stderr: '', code: 0 },
+      });
       await ops.fetchWorkingDirFromMirror(transport, '/mirror', '/repo', 'main');
-      const cmd = (transport.exec as any).mock.calls[0][0] as string;
-      expect(cmd).toContain('--atomic');
-      expect(cmd).toContain("'/mirror'");
-      expect(cmd).toContain("'+refs/heads/main:refs/remotes/origin/main'");
+
+      const detachCmd = (transport.exec as any).mock.calls[0][0] as string;
+      expect(detachCmd).toContain("git -C '/repo'");
+      expect(detachCmd).toContain('checkout --detach');
+
+      const fetchCmd = (transport.exec as any).mock.calls[1][0] as string;
+      expect(fetchCmd).toContain('--atomic');
+      expect(fetchCmd).toContain("'/mirror'");
+      expect(fetchCmd).toContain("'+refs/heads/main:refs/heads/main'");
+      expect(fetchCmd).toContain("'+refs/heads/main:refs/remotes/origin/main'");
+    });
+
+    it('throws when the pre-fetch detach fails', async () => {
+      const transport = mockTransport({
+        'checkout --detach': { stdout: '', stderr: 'fatal: could not detach', code: 128 },
+      });
+      await expect(ops.fetchWorkingDirFromMirror(transport, '/mirror', '/repo', 'main'))
+        .rejects.toThrow('git checkout --detach before fetch failed');
     });
 
     it('throws on fetch failure', async () => {
-      const transport = mockTransport({ 'git -c core.hooksPath': { stdout: '', stderr: 'fatal: rejected', code: 1 } });
+      const transport = mockTransport({
+        'checkout --detach': { stdout: '', stderr: '', code: 0 },
+        'fetch --atomic': { stdout: '', stderr: 'fatal: rejected', code: 1 },
+      });
       await expect(ops.fetchWorkingDirFromMirror(transport, '/mirror', '/repo', 'main'))
         .rejects.toThrow('git fetch from mirror failed');
     });

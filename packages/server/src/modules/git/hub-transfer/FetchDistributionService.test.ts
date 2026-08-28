@@ -304,7 +304,13 @@ describe('FetchDistributionService', () => {
       expect(secondResult.status).toBe('already_current');
     });
 
-    it('does not serialize calls for different server/repository keys', async () => {
+    // Issue #87 review finding (gpt-5.6-sol): distinct `project_repositories`
+    // rows (distinct `repositoryId`) can point at the same canonical
+    // repository, which shares the same server-side mirror
+    // (`computeRepoHash(repoIdentity)`-keyed). The mutex key must therefore
+    // be derived from the repo identity, not the DB row id, or two such
+    // rows can concurrently `fetch --atomic` the same mirror unserialized.
+    it('serializes calls for the same identity even when repositoryId differs', async () => {
       const order: string[] = [];
       let releaseA!: () => void;
       const gateA = new Promise<void>((resolve) => {
@@ -327,14 +333,64 @@ describe('FetchDistributionService', () => {
 
       const service = new FetchDistributionService(mockHubRepoCache(), mockRemoteBundleOps(), sftpService as any, mockDistRepo());
 
+      // Same repoIdentity (same mirror), different repositoryId rows.
       const a = service.distribute(makeParams({ repositoryId: 1 }));
       await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
 
-      // A call for a different repositoryId (different mutex key) must
-      // proceed immediately, without waiting for `a` to finish.
       const b = service.distribute(makeParams({ repositoryId: 2 }));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // `b` must not have started yet — it is queued behind `a` because
+      // both share the same mirror (same repoIdentity), regardless of
+      // repositoryId.
+      expect(order).toEqual(['a-start']);
+
+      releaseA();
+      await Promise.all([a, b]);
+      expect(order).toEqual(['a-start', 'a-end', 'b-start']);
+    });
+
+    it('does not serialize calls with different repoHash (distinct mirrors)', async () => {
+      const order: string[] = [];
+      let releaseA!: () => void;
+      const gateA = new Promise<void>((resolve) => {
+        releaseA = resolve;
+      });
+
+      let call = 0;
+      const sftpService = {
+        upload: vi.fn(async () => {
+          call += 1;
+          if (call === 1) {
+            order.push('a-start');
+            await gateA;
+            order.push('a-end');
+          } else {
+            order.push('b-start');
+          }
+        }),
+      };
+
+      const service = new FetchDistributionService(mockHubRepoCache(), mockRemoteBundleOps(), sftpService as any, mockDistRepo());
+      const otherIdentity: CanonicalRepositoryIdentity = {
+        ...identity,
+        repo: 'other-repo',
+        httpsUrl: 'https://github.com/owner/other-repo.git',
+      };
+
+      const a = service.distribute(makeParams({ repositoryId: 1, repoIdentity: identity }));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // A call for a different repoIdentity (different mirror, different
+      // mutex key) must proceed immediately, without waiting for `a` to
+      // finish, even though repositoryId also happens to differ here.
+      const b = service.distribute(makeParams({ repositoryId: 2, repoIdentity: otherIdentity }));
       await b;
       expect(order).toEqual(['a-start', 'b-start']);
 

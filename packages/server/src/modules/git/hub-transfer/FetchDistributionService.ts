@@ -13,12 +13,16 @@ type BundleType = 'full' | 'incremental';
 type BundleResult = { bundlePath: string; headSha: string };
 
 export class FetchDistributionService {
-  // Serializes `distribute()` runs per `${server.name}:${repositoryId}` so
-  // two concurrent distributions to the same server+repo can't race against
-  // the shared mirror (both would query its refs, build a bundle off the
-  // same prerequisite, and could interleave their `fetch --atomic` into the
-  // mirror). The hub runs as a single process, so an in-memory promise chain
-  // (no DB-level lock needed) is sufficient — same pattern as
+  // Serializes `distribute()` runs per `${server.name}:${computeRepoHash(repoIdentity)}`
+  // so two concurrent distributions that write the same shared mirror can't
+  // race against each other (both would query its refs, build a bundle off
+  // the same prerequisite, and could interleave their `fetch --atomic` into
+  // the mirror). The key must match the mirror's own identity — the mirror
+  // path is derived from `computeRepoHash(repoIdentity)`, not from
+  // `repositoryId` (a `project_repositories` row id), and distinct
+  // repositoryId rows can point at the same canonical repository (Issue #87
+  // review finding). The hub runs as a single process, so an in-memory
+  // promise chain (no DB-level lock needed) is sufficient — same pattern as
   // `WindowRotation.ts`'s `runExclusiveForTask`.
   private readonly mutex = new KeyedMutex();
 
@@ -30,8 +34,8 @@ export class FetchDistributionService {
   ) {}
 
   async distribute(params: FetchDistributionParams): Promise<FetchDistributionResult> {
-    const { server, repositoryId } = params;
-    return this.mutex.withLock(`${server.name}:${repositoryId}`, () => this.distributeUnlocked(params));
+    const { server, repoIdentity } = params;
+    return this.mutex.withLock(`${server.name}:${computeRepoHash(repoIdentity)}`, () => this.distributeUnlocked(params));
   }
 
   private async distributeUnlocked(params: FetchDistributionParams): Promise<FetchDistributionResult> {
