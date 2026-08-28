@@ -2553,7 +2553,13 @@ function buildDistributionGateHarness(opts: {
   /** Overrides the repository row returned by projectRepo.findRepositoryById — for the fail-fast-on-missing-token/bad-identity tests. */
   repository?: { id: number; url: string; provider: 'github' | 'gitlab'; owner: string | null; repoName: string | null; token: string | null };
   /** Lets a caller make distribute() fail (or throw) instead of the default success — for the failed-distribution rollback test. */
-  distributeResult?: { status: 'distributed' | 'already_current' | 'failed'; sha?: string; bundleType?: 'full' | 'incremental'; error?: string };
+  distributeResult?: { status: 'distributed' | 'already_current' | 'failed'; sha?: string; bundleType?: 'full' | 'incremental'; error?: string; localBranchSynced?: boolean };
+  /** Overrides task.workingDirectory (default '/srv/repo') — set to null for the "distribution required but no workingDir" fail-fast tests (Important finding 2). */
+  taskWorkingDirectory?: string | null;
+  /** Overrides task.branch (default null) — for the localBranchSynced fail-fast tests (Important finding 1). */
+  taskBranch?: string | null;
+  /** Overrides task.baseBranch (default null, which resolveBaseBranch falls back to 'main' for). */
+  taskBaseBranch?: string | null;
 }) {
   const unit = makeUnit({ id: 10, workerType: 'claude', workerModel: 'opus' });
   // task.workingDirectory (not projectServer.workingDirectory) supplies
@@ -2563,9 +2569,16 @@ function buildDistributionGateHarness(opts: {
   // verification (Issue #27 containment) — irrelevant plumbing for this
   // gate's own concern (whether distribute() got called) and not worth
   // faking a transport or a real worktree directory for.
-  const task = makeTask({ id: 1, serverName: opts.server.name, unitId: 10, workingDirectory: '/srv/repo' });
+  const task = makeTask({
+    id: 1,
+    serverName: opts.server.name,
+    unitId: 10,
+    workingDirectory: ('taskWorkingDirectory' in opts ? opts.taskWorkingDirectory : '/srv/repo') as string | null,
+    branch: (opts.taskBranch ?? null) as string | null,
+    baseBranch: (opts.taskBaseBranch ?? null) as string | null,
+  });
   const fetchDistributionService = {
-    distribute: vi.fn(async () => opts.distributeResult ?? { status: 'distributed' as const, sha: 'abc123', bundleType: 'full' as const }),
+    distribute: vi.fn(async () => opts.distributeResult ?? { status: 'distributed' as const, sha: 'abc123', bundleType: 'full' as const, localBranchSynced: true }),
   };
   const harness = buildUseCase({
     task,
@@ -2700,6 +2713,124 @@ describe('ExecuteTaskUseCase fetch-distribution failure handling (Issue #87 thir
       server,
       distributeCode: false,
       project: makeProject({ defaultUnitId: null, repositories: [] }),
+    });
+
+    await useCase.execute(10, 1);
+
+    expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+    expect(taskRepo.updateStatusIfWindowMatches).not.toHaveBeenCalled();
+  });
+});
+
+describe('ExecuteTaskUseCase fetch-distribution stale-local-branch fail-fast (Issue #87 review, forge/87-mirror follow-up, Important finding 1)', () => {
+  // RemoteWorktreeService.create() only takes the "reuse existing local
+  // branch" path (bypassing baseBranch resolution) when task.branch is set
+  // AND names an existing local branch. That path is only actually reached
+  // with STALE content when task.branch equals the distributed baseBranch
+  // (here: 'main', from project.defaultBranch) — so only that combination,
+  // together with distribute() reporting localBranchSynced: false, must
+  // fail fast.
+  it('fails fast when localBranchSynced is false and task.branch equals the distributed baseBranch', async () => {
+    const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
+    const { useCase, taskRepo, tmux, paneEnvService, fetchDistributionService } = buildDistributionGateHarness({
+      server,
+      distributeCode: false,
+      taskBranch: 'main',
+      distributeResult: { status: 'distributed', sha: 'abc123', bundleType: 'full', localBranchSynced: false },
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/could not be updated to the distributed content/);
+
+    expect(fetchDistributionService.distribute).toHaveBeenCalledTimes(1);
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed');
+    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_stale_local_branch_rollback');
+  });
+
+  it('does NOT fail fast when localBranchSynced is false but task.branch names a different (user work) branch', async () => {
+    const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
+    const { useCase, taskRepo, fetchDistributionService } = buildDistributionGateHarness({
+      server,
+      distributeCode: false,
+      taskBranch: 'feature/my-work',
+      distributeResult: { status: 'distributed', sha: 'abc123', bundleType: 'full', localBranchSynced: false },
+    });
+
+    await useCase.execute(10, 1);
+
+    expect(fetchDistributionService.distribute).toHaveBeenCalledTimes(1);
+    expect(taskRepo.updateStatusIfWindowMatches).not.toHaveBeenCalled();
+  });
+
+  it('does NOT fail fast when localBranchSynced is false and task.branch is unset', async () => {
+    const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
+    const { useCase, taskRepo, fetchDistributionService } = buildDistributionGateHarness({
+      server,
+      distributeCode: false,
+      distributeResult: { status: 'distributed', sha: 'abc123', bundleType: 'full', localBranchSynced: false },
+    });
+
+    await useCase.execute(10, 1);
+
+    expect(fetchDistributionService.distribute).toHaveBeenCalledTimes(1);
+    expect(taskRepo.updateStatusIfWindowMatches).not.toHaveBeenCalled();
+  });
+
+  it('does NOT fail fast when localBranchSynced is true, even when task.branch equals the distributed baseBranch', async () => {
+    const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
+    const { useCase, taskRepo, fetchDistributionService } = buildDistributionGateHarness({
+      server,
+      distributeCode: false,
+      taskBranch: 'main',
+      distributeResult: { status: 'distributed', sha: 'abc123', bundleType: 'full', localBranchSynced: true },
+    });
+
+    await useCase.execute(10, 1);
+
+    expect(fetchDistributionService.distribute).toHaveBeenCalledTimes(1);
+    expect(taskRepo.updateStatusIfWindowMatches).not.toHaveBeenCalled();
+  });
+});
+
+describe('ExecuteTaskUseCase fetch-distribution required but no workingDir fail-fast (Issue #87 review, forge/87-mirror follow-up, Important finding 2)', () => {
+  it('fails fast when distribution is required by server isolation intent but no working directory is configured', async () => {
+    const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
+    const { useCase, taskRepo, tmux, paneEnvService, fetchDistributionService } = buildDistributionGateHarness({
+      server,
+      distributeCode: false,
+      taskWorkingDirectory: null,
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/no working directory is configured/);
+
+    expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed');
+    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_prereq_failed_rollback');
+  });
+
+  it('fails fast when distribution is required by project distribute_code opt-in but no working directory is configured', async () => {
+    const server = makeServer({ name: 'srv-agent', type: 'agent', isolationIntent: false, sshHost: 'agent-host' });
+    const { useCase, taskRepo, tmux, paneEnvService, fetchDistributionService } = buildDistributionGateHarness({
+      server,
+      distributeCode: true,
+      taskWorkingDirectory: null,
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/no working directory is configured/);
+
+    expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed');
+    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
+    expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_prereq_failed_rollback');
+  });
+
+  it('does NOT fail fast (and does not distribute) when distribution is not required and no working directory is configured', async () => {
+    const server = makeServer({ name: 'srv-agent', type: 'agent', isolationIntent: false });
+    const { useCase, taskRepo, fetchDistributionService } = buildDistributionGateHarness({
+      server,
+      distributeCode: false,
+      taskWorkingDirectory: null,
     });
 
     await useCase.execute(10, 1);

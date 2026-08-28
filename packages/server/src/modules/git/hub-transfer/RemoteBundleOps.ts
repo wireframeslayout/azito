@@ -176,12 +176,27 @@ export class RemoteBundleOps {
    *
    * **失敗しても例外にせず false を返す** — 対象 branch が既に別のリンク
    * worktree でチェックアウトされている場合、`git branch -f` はそれを拒否し
-   * て失敗する。しかしその状況では、この直後に呼ばれる
-   * `RemoteWorktreeService.create()` の「既存 branch を割り当てる」経路
-   * （`git worktree add <path> <branch>`）も必ず `already used by worktree`
-   * で失敗するため、古い内容のまま静かに worktree 作成が成功してしまう経路は
-   * 存在しない — 失敗を許容しても「黙って古いコードを使い続ける」結果には
-   * ならない。
+   * て失敗する。
+   *
+   * （訂正 — Issue #87 review, forge/87-mirror follow-up, Important finding
+   * 1）当初はここで「この直後に呼ばれる `RemoteWorktreeService.create()` の
+   * 『既存 branch を割り当てる』経路（`git worktree add <path> <branch>`）
+   * も必ず `already used by worktree` で失敗するため、古い内容のまま静かに
+   * worktree 作成が成功してしまう経路は存在しない」と説明していたが、これは
+   * **誤り**だった。`RemoteWorktreeService.create()`（RemoteWorktreeService.ts
+   * 64行目付近）は `git worktree add` が `already used by worktree` で失敗
+   * すると `git worktree prune` を挟んで再試行し、それでも失敗した場合は
+   * **`git worktree add --force`** で再々試行する。この force 経路は同期が
+   * 進まなかった古いローカル ref に対しても成功してしまうため、「失敗を許容
+   * しても黙って古いコードを使い続ける結果にはならない」という前提は成り立
+   * たない（実地検証: `git worktree add <path> main` は `already used by
+   * worktree` で失敗するが `git worktree add --force <path> main` は同じ古い
+   * ref に対して成功する）。したがって、この関数自体は引き続き例外を投げず
+   * `boolean` を返す設計のままとするが、**戻り値の意味づけは呼び出し側の
+   * 責務**になる — `FetchDistributionService`/`ExecuteTaskUseCase` 側で、
+   * この false が実害（`task.branch` が配信対象 baseBranch と同名で
+   * force 経路により古い ref から worktree が作られ得る場合）に繋がるかを
+   * 判定し、繋がる場合のみ fail fast する。
    *
    * 逆に、この更新を独立したコマンドとして切り出さず
    * `fetchWorkingDirFromMirror` の fetch refspec 側に混ぜてしまうと、その

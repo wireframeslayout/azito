@@ -52,6 +52,23 @@ function mockDistRepo() {
   } as any;
 }
 
+/**
+ * Flushes the microtask queue completely (a macrotask boundary drains every
+ * chained `.then()`/`await` scheduled up to this point) — used instead of a
+ * fixed count of `await Promise.resolve()` calls in the concurrency tests
+ * below. A fixed count is brittle to internal microtask-hop changes (Issue
+ * #87 review, forge/87-mirror follow-up: splitting `hubCacheMutex`'s
+ * critical section into a separate `prepareBundle()` step changed exactly
+ * how many hops precede the SFTP upload, which broke exact-tick-count
+ * assertions here even though the actual serialization behavior being
+ * tested was unaffected). Safe to over-flush: a call genuinely blocked on
+ * an unresolved gate Promise (e.g. `firstGate` below) cannot be advanced
+ * past that gate no matter how many microtasks are flushed.
+ */
+function flushAsync(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 const makeServer = (overrides: Record<string, any> = {}): import('../../servers/Server').ServerConfig => ({
   name: 'iso-server',
   type: 'agent',
@@ -91,6 +108,10 @@ describe('FetchDistributionService', () => {
     const result = await service.distribute(makeParams());
     expect(result.status).toBe('already_current');
     expect(result.sha).toBe(sha);
+    // localBranchSynced is populated even on the already_current path (Issue
+    // #87 review, forge/87-mirror follow-up, Important finding 1) — it still
+    // calls ensureWorkingDir(), which still attempts the sync.
+    expect(result.localBranchSynced).toBe(true);
     // Transfer is skipped...
     expect(remoteBundleOps.fetchBundleIntoMirror).not.toHaveBeenCalled();
     // ...but workingDir is still (re-)ensured from the mirror.
@@ -123,6 +144,21 @@ describe('FetchDistributionService', () => {
     expect(remoteBundleOps.ensureDetachedHead).toHaveBeenCalledWith({}, '/home/agent/repo');
     expect(remoteBundleOps.setDummyOrigin).toHaveBeenCalled();
     expect(distRepo.upsert).toHaveBeenCalledWith('iso-server', 1, sha, 'full');
+    expect(result.localBranchSynced).toBe(true);
+  });
+
+  it('reports localBranchSynced=false when the workingDir local branch could not be advanced', async () => {
+    const remoteBundleOps = mockRemoteBundleOps({
+      getMirrorBranchSha: vi.fn(async () => sha),
+      repoExists: vi.fn(async () => true),
+      // e.g. the branch is checked out in another linked worktree on the
+      // server, so `git branch -f` refuses.
+      syncLocalBranchToTracking: vi.fn(async () => false),
+    });
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const result = await service.distribute(makeParams());
+    expect(result.status).toBe('already_current');
+    expect(result.localBranchSynced).toBe(false);
   });
 
   it('uses an incremental bundle keyed off the mirror ref, and forced-fetches an existing workingDir', async () => {
@@ -284,15 +320,10 @@ describe('FetchDistributionService', () => {
 
       const first = service.distribute(makeParams());
       // Give the first call a chance to actually start before queuing the second.
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushAsync();
 
       const second = service.distribute(makeParams());
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushAsync();
 
       // The second call must not have started (and thus must not have done
       // its own mirror-ref read) yet — it is queued behind the first.
@@ -350,16 +381,10 @@ describe('FetchDistributionService', () => {
       // chaining before `a` reaches its upload call, hence more ticks than
       // the bare number of `await` statements in the production code path.)
       const a = service.distribute(makeParams({ repositoryId: 1 }));
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushAsync();
 
       const b = service.distribute(makeParams({ repositoryId: 2 }));
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushAsync();
 
       // `b` must not have started yet — it is queued behind `a` because
       // both share the same mirror (same repoIdentity), regardless of
@@ -423,7 +448,7 @@ describe('FetchDistributionService', () => {
     // actually touch) is shared across every server, keyed by repoHash
     // alone. Without the inner `hubCacheMutex`, server-b's `ensureFetched`
     // could run (and advance the shared cache's ref) while server-a's own
-    // distribution is mid-flight, so server-a's later `createBundle` would
+    // bundle build is mid-flight, so server-a's later `createBundle` would
     // read content that doesn't match the sha server-a already captured
     // and is about to report/record.
     it('serializes hub-cache access (ensureFetched + createBundle) across two different servers distributing the same repo', async () => {
@@ -468,35 +493,91 @@ describe('FetchDistributionService', () => {
       const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService as any, mockDistRepo());
 
       const a = service.distribute(makeParams({ server: makeServer({ name: 'server-a' }) }));
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushAsync();
 
       const b = service.distribute(makeParams({ server: makeServer({ name: 'server-b' }) }));
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushAsync();
 
-      // server-b must not have reached its own ensureFetched/createBundle
-      // yet: even though it's a different server (different OUTER lock
-      // key), it shares the same hub-cache mirror (same repoIdentity), so
-      // the INNER repoHash-keyed lock queues it behind server-a's
-      // still-in-flight critical section.
-      expect(order).toEqual(['ensureFetched', 'createBundle', 'server-a-upload-start']);
+      // server-b's ensureFetched/createBundle pair has ALREADY run by now,
+      // even though server-a's SFTP upload is still blocked on `firstGate`
+      // (Issue #87 third-party review, Important finding 3, second pass):
+      // the hub-cache lock is only held across the read-head+build-bundle
+      // step, not across the transfer, so it was free again the moment
+      // server-a's own `createBundle` returned — long before server-a's
+      // upload (and thus its whole `distribute()` call) finishes. Server-b's
+      // upload has also already run to completion (the mock does not block
+      // the second caller), proving a slow/unreachable server-a transfer
+      // does NOT block server-b's distribution of the same repository.
+      expect(order).toEqual([
+        'ensureFetched', 'createBundle', 'server-a-upload-start',
+        'ensureFetched', 'createBundle', 'server-b-upload-start',
+      ]);
 
       releaseFirst();
       const [ra, rb] = await Promise.all([a, b]);
 
-      // The two servers' hub-cache operations never interleave — each
-      // server's ensureFetched+createBundle pair completes as one unit
-      // before the other server's pair begins.
+      // The two servers' hub-cache BUILD steps never interleave with each
+      // other — each server's ensureFetched+createBundle pair still
+      // completes as one unit before the other server's pair begins — but
+      // server-a's upload finishing is the LAST thing in the order, after
+      // both servers' hub-cache work and server-b's own upload.
       expect(order).toEqual([
-        'ensureFetched', 'createBundle', 'server-a-upload-start', 'server-a-upload-end',
+        'ensureFetched', 'createBundle', 'server-a-upload-start',
         'ensureFetched', 'createBundle', 'server-b-upload-start',
+        'server-a-upload-end',
       ]);
       expect(ra.status).toBe('distributed');
       expect(rb.status).toBe('distributed');
+    });
+
+    // Issue #87 review finding (Important 3, forge/87-mirror follow-up):
+    // when the incremental transfer fails and delivery falls back to a full
+    // bundle, the fallback must re-read the hub cache's CURRENT head (which
+    // may have moved since the incremental attempt was built) rather than
+    // reusing the earlier, possibly now-stale head — and the sha reported
+    // back must correspond to the bundle actually delivered (the fallback's
+    // head), never the original incremental attempt's head.
+    it('reports the fallback full bundle\'s own head sha, not the original incremental attempt\'s, when the cache head moved in between', async () => {
+      const prevSha = 'b'.repeat(40);
+      const incrementalHeadSha = sha;
+      const advancedHeadSha = 'd'.repeat(40);
+
+      let ensureFetchedCalls = 0;
+      const hubRepoCache = {
+        ensureFetched: vi.fn(() => {
+          ensureFetchedCalls += 1;
+          // Simulate another distribution advancing the shared cache between
+          // the incremental attempt and the full-bundle fallback.
+          return ensureFetchedCalls === 1 ? incrementalHeadSha : advancedHeadSha;
+        }),
+        createBundle: vi.fn((_identity: unknown, _branch: string, sinceCommit?: string) => {
+          if (sinceCommit) {
+            return { bundlePath: '/tmp/incremental.bundle', headSha: incrementalHeadSha };
+          }
+          // Full bundle (no sinceCommit): reflects whatever head was current
+          // at the time it was actually built — the fallback rebuilds AFTER
+          // the second `ensureFetched()` above, so it must carry the
+          // advanced head, not the original incremental one.
+          return { bundlePath: '/tmp/full.bundle', headSha: advancedHeadSha };
+        }),
+      } as any;
+
+      const remoteBundleOps = mockRemoteBundleOps({
+        getMirrorBranchSha: vi.fn(async () => prevSha),
+        repoExists: vi.fn(async () => true),
+        fetchBundleIntoMirror: vi.fn()
+          .mockRejectedValueOnce(new Error('git fetch bundle into mirror failed: fatal: rejected'))
+          .mockResolvedValueOnce(undefined),
+      });
+      const distRepo = mockDistRepo();
+      const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, mockSftpService(), distRepo);
+
+      const result = await service.distribute(makeParams());
+
+      expect(result.status).toBe('distributed');
+      expect(result.bundleType).toBe('full');
+      expect(result.sha).toBe(advancedHeadSha);
+      expect(distRepo.upsert).toHaveBeenCalledWith('iso-server', 1, advancedHeadSha, 'full');
     });
   });
 });

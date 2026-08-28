@@ -34,6 +34,17 @@ export interface FetchDistributionResult {
   sha?: string;
   bundleType?: 'full' | 'incremental';
   error?: string;
+  // Whether `workingDir`'s LOCAL branch ref was successfully advanced to the
+  // distributed tracking ref (see `RemoteBundleOps.syncLocalBranchToTracking`).
+  // Set for both `distributed` and `already_current` — `already_current`
+  // still calls `ensureWorkingDir()`, which still attempts the sync, so it
+  // can still fail even when no bundle transfer happened this call. Absent
+  // for `failed` (no working directory step ran at all). Callers use this,
+  // together with whether `task.branch` names the distributed branch, to
+  // decide whether the gap this leaves behind can actually be reached by
+  // stale content (see ExecuteTaskUseCase's use of it, Issue #87 review,
+  // forge/87-mirror follow-up, Important finding 1).
+  localBranchSynced?: boolean;
 }
 
 // ── Push notarization (Phase 2) ──

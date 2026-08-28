@@ -816,6 +816,30 @@ export class ExecuteTaskUseCase {
     const windowTarget = `${tmuxSession}:${windowName}`;
     const target = await this.tmux.resolvePaneId(server, windowTarget);
 
+    // Fetch distribution's necessity is a property of the SERVER/PROJECT
+    // (isolation intent, or the project's `distribute_code` opt-in) — it does
+    // NOT depend on whether `workingDir` happens to be set (Issue #87 review,
+    // forge/87-mirror follow-up, Important finding 2). The check used to live
+    // entirely inside `if (workingDir)` below, so a task on an isolated
+    // server (or one with `distribute_code` on) that had no working directory
+    // configured skipped distribution SILENTLY — the fail-fast added for a
+    // missing repository/token/identity a few lines down never even ran, and
+    // the task started against whatever was already checked out in the
+    // pane's default directory (no code of its own, for an isolated server).
+    // Captured as a local (not `this.fetchDistributionService` re-read at
+    // each use) so both the requiredness check and the later `.distribute()`
+    // call narrow off the SAME null check.
+    const fetchDistributionService = this.fetchDistributionService;
+    const distributionRequired =
+      server.type !== 'local' && (server.isolationIntent || projectServer?.distributeCode) && fetchDistributionService != null;
+
+    if (distributionRequired && !workingDir) {
+      const message = 'Fetch distribution is required (server isolation intent or project distribute_code) but no working directory is configured for this task/server';
+      this.appendLog(taskId, unitId, 'command', { type: 'fetch_distribution_failed', error: message });
+      await this.rollbackWindowAfterPostCreationFailure(taskId, server, tmuxSession, windowName, tokenId, 'fetch_distribution_prereq_failed_rollback');
+      throw new Error(message);
+    }
+
     if (workingDir) {
       const baseBranch = resolveBaseBranch(task, projectServer, project);
       // Tracks fetch distribution's outcome this call (null when
@@ -833,7 +857,7 @@ export class ExecuteTaskUseCase {
       // dev-environment provisioning without hub-side credentials on the
       // target. `local` is always excluded — that server IS the hub, so
       // "distributing" to it is meaningless.)
-      if (server.type !== 'local' && (server.isolationIntent || projectServer?.distributeCode) && this.fetchDistributionService) {
+      if (distributionRequired) {
         // Fail fast (review finding, Issue #87 third-party review, Important
         // 2): distribution was requested — via the server's own isolation
         // intent (which cannot clone for itself; skipping distribution here
@@ -875,7 +899,7 @@ export class ExecuteTaskUseCase {
         }
 
         const transport = this.transportFactory.getTransport(server);
-        const distResult = await this.fetchDistributionService.distribute({
+        const distResult = await fetchDistributionService.distribute({
           server, transport, repoIdentity: identity.identity,
           token: repo.token, branch: baseBranch, workingDir,
           repositoryId: repoEntry.id,
@@ -892,6 +916,34 @@ export class ExecuteTaskUseCase {
           throw new Error(`Fetch distribution failed: ${distResult.error}`);
         }
         this.appendLog(taskId, unitId, 'command', { type: 'fetch_distributed', sha: distResult.sha, bundleType: distResult.bundleType });
+
+        // Fail fast (Issue #87 review, forge/87-mirror follow-up, Important
+        // finding 1) when distribution succeeded but the workingDir's LOCAL
+        // branch ref could not be advanced to the freshly distributed
+        // tracking ref, in the ONE case that gap can actually reach stale
+        // content: `task.branch` set to the SAME name as the distributed
+        // `baseBranch`. RemoteWorktreeService.create() only takes its "reuse
+        // existing local branch" path (`git worktree add <path> <branch>`,
+        // which bypasses baseBranch resolution entirely) when `task.branch`
+        // is provided; any OTHER `task.branch` (the user's own work branch)
+        // or no `task.branch` at all makes worktree creation resolve
+        // `worktreeCreateBaseBranch` (origin/<baseBranch>) itself and never
+        // touches this possibly-stale local ref. The "a failed sync always
+        // makes the subsequent worktree-add fail too, so no silent stale
+        // path exists" reasoning `syncLocalBranchToTracking`'s doc comment
+        // used to rely on as a backstop does NOT hold — RemoteWorktreeService
+        // retries a failed `git worktree add` with `--force`
+        // (RemoteWorktreeService.ts:64), which succeeds even though the
+        // branch could not be advanced, silently building the worktree from
+        // the stale local ref (verified: `git worktree add <path> main`
+        // fails with "already used by worktree" while `git worktree add
+        // --force <path> main` succeeds against the same stale ref).
+        if (distResult.localBranchSynced === false && task.branch && task.branch === baseBranch) {
+          const message = `Fetch distribution succeeded but the local branch "${task.branch}" in ${workingDir} could not be updated to the distributed content — it is likely checked out in another worktree on the server. Remove or update that worktree, or specify a different branch name for this task, and retry.`;
+          this.appendLog(taskId, unitId, 'command', { type: 'fetch_distribution_failed', error: message });
+          await this.rollbackWindowAfterPostCreationFailure(taskId, server, tmuxSession, windowName, tokenId, 'fetch_distribution_stale_local_branch_rollback');
+          throw new Error(message);
+        }
       }
 
       const worktreeCreateBaseBranch = resolveWorktreeCreateBaseBranch(baseBranch, distStatus);

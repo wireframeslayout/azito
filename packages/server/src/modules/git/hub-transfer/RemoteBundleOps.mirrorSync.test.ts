@@ -322,11 +322,15 @@ describe('RemoteBundleOps mirror -> workingDir sync (regression, real local git)
   // The failure-tolerance half of the same finding: when the distributed
   // branch is ALREADY checked out in a linked worktree, `git branch -f`
   // refuses to move it and `syncLocalBranchToTracking` must return `false`
-  // rather than throw — the overall distribution must still succeed,
-  // because `RemoteWorktreeService`'s own `git worktree add <path> <branch>`
-  // would fail with `already used by worktree` in that same situation
-  // regardless (see syncLocalBranchToTracking's doc comment), so tolerating
-  // this failure never produces a silent stale-content path.
+  // rather than throw. Unlike this method's original doc comment claimed,
+  // that `false` is NOT always harmless — `RemoteWorktreeService.create()`
+  // retries a failed `git worktree add <path> <branch>` with `--force`,
+  // which can succeed against the stale local ref this sync failed to
+  // advance (RemoteWorktreeService.ts:64; see the corrected reasoning in
+  // `syncLocalBranchToTracking`'s doc comment). This method itself still
+  // just reports `false` rather than throwing — deciding whether that
+  // matters for a given call is the caller's job
+  // (`FetchDistributionService`/`ExecuteTaskUseCase`), not this method's.
   it('syncLocalBranchToTracking returns false (not throw) when the branch is checked out in a linked worktree, and the rest of the distribution still succeeds', async () => {
     const ops = new RemoteBundleOps();
     const transport = localTransport();

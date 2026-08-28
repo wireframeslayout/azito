@@ -11,6 +11,9 @@ import type { IDistributionStateRepository, FetchDistributionParams, FetchDistri
 
 type BundleType = 'full' | 'incremental';
 type BundleResult = { bundlePath: string; headSha: string };
+type PrepResult =
+  | { kind: 'current'; headSha: string }
+  | { kind: 'bundle'; attemptType: BundleType; bundleResult: BundleResult };
 
 export class FetchDistributionService {
   // Serializes `distribute()` runs per `${server.name}:${computeRepoHash(repoIdentity)}`
@@ -35,19 +38,25 @@ export class FetchDistributionService {
   // and mutate that one shared cache directory. Without this second lock:
   // call A (-> server1) calls `ensureFetched()` and captures headSha=A;
   // call B (-> server2) then runs `ensureFetched()` entirely, advancing the
-  // cache's `refs/heads/<branch>` to B; call A then reaches
-  // `deliverToMirror()`, whose `createBundle()` reads the NOW-current ref
-  // and bundles B's content — while A still reports/records sha A. The
+  // cache's `refs/heads/<branch>` to B; call A then reads the NOW-current
+  // ref and bundles B's content — while A still reports/records sha A. The
   // bundle actually delivered and the sha recorded for it silently
   // diverge (Issue #87 third-party review, Important finding).
   //
-  // Held continuously across `ensureFetched()` AND the whole of
-  // `deliverToMirror()` (which is where every `createBundle()` call for
-  // this distribution happens, including the incremental->full fallback
-  // retry) so the headSha captured up front and the bundle(s) actually
-  // built from the cache are always the exact same snapshot — never split
-  // across two separate `withLock()` acquisitions, which would reopen the
-  // same race for just the fallback path.
+  // Held ONLY across the read-head + build-first-bundle step
+  // (`prepareBundle()`, called from `distributeUnlocked()`) and, on the
+  // incremental->full fallback path, across re-reading the head and
+  // building the fallback full bundle (`deliverToMirror()`'s fallback
+  // branch) — never across the SFTP upload / remote verify / remote fetch
+  // that follows (Issue #87 third-party review, Important finding 3, second
+  // pass: a slow/unreachable server used to hold this lock for the whole
+  // transfer, blocking every OTHER server's distribution of the same
+  // repository for however long that transfer took, even though each
+  // server's mirror is independent and the bundle file itself is already
+  // complete and immutable by the time the transfer starts). Each critical
+  // section still reads the head and builds its bundle from that exact same
+  // snapshot without ever splitting a single "read then build" step across
+  // two acquisitions, which is the part that actually needs the lock.
   //
   // Lock acquisition order is always OUTER (`this.mutex`, keyed
   // `${server.name}:${repoHash}`, taken by `distribute()`) then INNER
@@ -82,79 +91,109 @@ export class FetchDistributionService {
       const mirrorDir = this.remoteBundleOps.mirrorDir(homeDir, repoHash);
       await this.remoteBundleOps.ensureMirror(transport, mirrorDir);
 
-      // See `hubCacheMutex`'s doc comment above for why `ensureFetched()`
-      // and `deliverToMirror()` (which is where the `createBundle()` calls
-      // live) must be one uninterrupted critical section keyed by
-      // `repoHash` alone.
-      const { headSha, bundleType } = await this.hubCacheMutex.withLock(repoHash, async () => {
-        const headSha = this.hubRepoCache.ensureFetched(repoIdentity, token, branch);
+      // See `hubCacheMutex`'s doc comment above for why the head-read and
+      // the first bundle build must be one uninterrupted critical section
+      // keyed by `repoHash` alone.
+      const prep = await this.hubCacheMutex.withLock(repoHash, () =>
+        this.prepareBundle(repoIdentity, token, branch, transport, mirrorDir));
 
-        // The mirror's actual refs are the only source of truth for the
-        // incremental prerequisite and the already-current check — never the
-        // DB's `last_distributed_sha` (Issue #87: DB and mirror can drift,
-        // e.g. after a force-push or a manually-wiped mirror, and a DB-derived
-        // prerequisite made that drift permanent).
-        const mirrorSha = await this.remoteBundleOps.getMirrorBranchSha(transport, mirrorDir, branch);
-
-        if (mirrorSha === headSha) {
-          // Transfer can be skipped — nothing further touches the hub cache.
-          return { headSha, bundleType: null };
-        }
-
-        const bundleType = await this.deliverToMirror(transport, sshHost, repoIdentity, branch, mirrorDir, mirrorSha);
-        return { headSha, bundleType };
-      });
-
-      if (bundleType === null) {
+      if (prep.kind === 'current') {
         // workingDir may still be missing or stale (e.g. it was deleted
         // separately from the mirror), so it's ensured even when the
         // transfer itself was skipped.
-        await this.ensureWorkingDir(transport, mirrorDir, workingDir, branch);
-        return { status: 'already_current', sha: headSha };
+        const localBranchSynced = await this.ensureWorkingDir(transport, mirrorDir, workingDir, branch);
+        return { status: 'already_current', sha: prep.headSha, localBranchSynced };
       }
 
-      await this.ensureWorkingDir(transport, mirrorDir, workingDir, branch);
+      // Upload/verify/apply runs OUTSIDE `hubCacheMutex` — see the lock's
+      // doc comment above for why.
+      const delivered = await this.deliverToMirror(transport, sshHost, repoHash, repoIdentity, branch, mirrorDir, prep);
 
-      this.distributionStateRepo.upsert(server.name, repositoryId, headSha, bundleType);
+      const localBranchSynced = await this.ensureWorkingDir(transport, mirrorDir, workingDir, branch);
 
-      return { status: 'distributed', sha: headSha, bundleType };
+      this.distributionStateRepo.upsert(server.name, repositoryId, delivered.headSha, delivered.bundleType);
+
+      return { status: 'distributed', sha: delivered.headSha, bundleType: delivered.bundleType, localBranchSynced };
     } catch (err) {
       return { status: 'failed', error: err instanceof Error ? err.message : String(err) };
     }
   }
 
   /**
-   * bundle を作成して mirror へ届ける。`mirrorSha` があれば増分を試み、増分の
-   * verify/fetch が失敗した場合に限り全量へ切り替えて 1 回だけ再試行する
-   * （無限ループにはしない）。`mirrorSha` が無ければ最初から全量。
+   * Reads the hub cache's current head for `branch` and compares it against
+   * the mirror's ACTUAL ref (never the DB's `last_distributed_sha` — Issue
+   * #87: DB and mirror can drift, e.g. after a force-push or a manually-
+   * wiped mirror, and a DB-derived prerequisite made that drift permanent).
+   * When they already match, no bundle is built. Otherwise builds the FIRST
+   * bundle attempt (incremental off the mirror's sha when it has one, full
+   * otherwise) from that exact same cache snapshot. Must always be called
+   * under `hubCacheMutex` — see its doc comment for why the read and the
+   * build cannot be split across two separate lock acquisitions.
+   */
+  private async prepareBundle(
+    repoIdentity: CanonicalRepositoryIdentity,
+    token: string,
+    branch: string,
+    transport: IServerTransport,
+    mirrorDir: string,
+  ): Promise<PrepResult> {
+    const headSha = this.hubRepoCache.ensureFetched(repoIdentity, token, branch);
+    const mirrorSha = await this.remoteBundleOps.getMirrorBranchSha(transport, mirrorDir, branch);
+
+    if (mirrorSha === headSha) {
+      return { kind: 'current', headSha };
+    }
+
+    const incremental = mirrorSha ? this.tryCreateBundle(repoIdentity, branch, mirrorSha) : null;
+    if (incremental) {
+      return { kind: 'bundle', attemptType: 'incremental', bundleResult: incremental };
+    }
+    return { kind: 'bundle', attemptType: 'full', bundleResult: this.hubRepoCache.createBundle(repoIdentity, branch) };
+  }
+
+  /**
+   * Transfers the bundle `prepareBundle()` already built (SFTP upload +
+   * remote verify + remote fetch into the mirror), deliberately outside any
+   * lock — see `hubCacheMutex`'s doc comment for why. If that transfer fails
+   * and the attempt was incremental, falls back to full exactly once: the
+   * fallback re-acquires `hubCacheMutex`, re-reads the hub cache's CURRENT
+   * head (which may have advanced since `prepareBundle` ran — a concurrent
+   * distribution for a different server could have moved it while this
+   * transfer was in flight) and builds a full bundle from THAT head, then
+   * retries the transfer with it, again outside the lock. The sha/bundleType
+   * this returns always describes the bundle actually delivered — never the
+   * earlier, possibly now-superseded incremental attempt (Issue #87
+   * third-party review, Important finding 3).
    */
   private async deliverToMirror(
     transport: IServerTransport,
     sshHost: string,
+    repoHash: string,
     repoIdentity: CanonicalRepositoryIdentity,
     branch: string,
     mirrorDir: string,
-    mirrorSha: string | null,
-  ): Promise<BundleType> {
-    const attempts: BundleType[] = mirrorSha ? ['incremental', 'full'] : ['full'];
+    prep: { attemptType: BundleType; bundleResult: BundleResult },
+  ): Promise<{ headSha: string; bundleType: BundleType }> {
+    const { attemptType, bundleResult } = prep;
 
-    let lastErr: unknown;
-    for (const attemptType of attempts) {
-      const bundleResult = attemptType === 'incremental'
-        ? this.tryCreateBundle(repoIdentity, branch, mirrorSha as string)
-        : this.hubRepoCache.createBundle(repoIdentity, branch);
-      if (!bundleResult) continue; // incremental bundle creation failed locally; fall through to full
-
-      try {
-        await this.uploadVerifyApply(transport, sshHost, mirrorDir, branch, bundleResult);
-        return attemptType;
-      } catch (err) {
-        lastErr = err;
-      } finally {
-        try { fs.unlinkSync(bundleResult.bundlePath); } catch {}
-      }
+    try {
+      await this.uploadVerifyApply(transport, sshHost, mirrorDir, branch, bundleResult);
+      return { headSha: bundleResult.headSha, bundleType: attemptType };
+    } catch (err) {
+      if (attemptType === 'full') throw err; // already the last attempt — no further fallback
+    } finally {
+      try { fs.unlinkSync(bundleResult.bundlePath); } catch {}
     }
-    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+
+    // Incremental transfer failed — fall back to full, off a freshly
+    // re-read cache head (see this method's doc comment).
+    const fullBundle = await this.hubCacheMutex.withLock(repoHash, async () => this.hubRepoCache.createBundle(repoIdentity, branch));
+    try {
+      await this.uploadVerifyApply(transport, sshHost, mirrorDir, branch, fullBundle);
+      return { headSha: fullBundle.headSha, bundleType: 'full' };
+    } finally {
+      try { fs.unlinkSync(fullBundle.bundlePath); } catch {}
+    }
   }
 
   private async uploadVerifyApply(
@@ -183,7 +222,17 @@ export class FetchDistributionService {
     }
   }
 
-  private async ensureWorkingDir(transport: IServerTransport, mirrorDir: string, workingDir: string, branch: string): Promise<void> {
+  /**
+   * Returns whether `workingDir`'s LOCAL branch ref was successfully synced
+   * to the freshly distributed tracking ref (see
+   * `RemoteBundleOps.syncLocalBranchToTracking`'s doc comment) — callers use
+   * this, together with whether `task.branch` names the distributed branch,
+   * to decide whether a sync failure here can actually be reached by stale
+   * content (Issue #87 review, forge/87-mirror follow-up, Important finding
+   * 1). `false` is returned rather than thrown; the caller decides whether
+   * it matters.
+   */
+  private async ensureWorkingDir(transport: IServerTransport, mirrorDir: string, workingDir: string, branch: string): Promise<boolean> {
     const exists = await this.remoteBundleOps.repoExists(transport, workingDir);
     if (exists) {
       await this.remoteBundleOps.fetchWorkingDirFromMirror(transport, mirrorDir, workingDir, branch);
@@ -205,17 +254,17 @@ export class FetchDistributionService {
     // branch" path, which never consults baseBranch at all) would silently
     // build from stale content even though distribution just succeeded.
     // Failure is tolerated by design (see syncLocalBranchToTracking's own
-    // doc comment for why that can never leave a silent stale-content
-    // path), but still surfaced here rather than discarded, so an operator
-    // investigating a "distribution succeeded but worktree still stale"
-    // report has a lead.
+    // doc comment for the corrected reasoning — it is NOT a universal
+    // backstop, so the boolean result is surfaced to the caller, which
+    // decides whether this specific failure needs to fail the whole task).
     const branchSynced = await this.remoteBundleOps.syncLocalBranchToTracking(transport, workingDir, branch);
     if (!branchSynced) {
-      console.warn(`[FetchDistributionService] syncLocalBranchToTracking failed for branch "${branch}" in ${workingDir} (tolerated — see RemoteBundleOps.syncLocalBranchToTracking's doc comment)`);
+      console.warn(`[FetchDistributionService] syncLocalBranchToTracking failed for branch "${branch}" in ${workingDir} (see RemoteBundleOps.syncLocalBranchToTracking's doc comment; caller decides whether this is fatal)`);
     }
     // origin policy is unchanged by this refactor — still a dummy URL, kept
     // separate from the mirror-path update route above.
     await this.remoteBundleOps.setDummyOrigin(transport, workingDir);
+    return branchSynced;
   }
 
   private tryCreateBundle(
