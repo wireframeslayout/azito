@@ -152,6 +152,34 @@ describe('RemoteBundleOps', () => {
     });
   });
 
+  // Issue #87 third-party review, 10th round, Important finding 2.
+  describe('getStampedRepoHash', () => {
+    it('returns the stamped value when git config has it set', async () => {
+      const transport = mockTransport({ 'config --get azito.repoHash': { stdout: 'abc123', stderr: '', code: 0 } });
+      expect(await ops.getStampedRepoHash(transport, '/repo')).toBe('abc123');
+    });
+
+    it('returns null when the key is unset (never stamped)', async () => {
+      const transport = mockTransport({ 'config --get azito.repoHash': { stdout: '', stderr: '', code: 1 } });
+      expect(await ops.getStampedRepoHash(transport, '/repo')).toBeNull();
+    });
+  });
+
+  describe('stampRepoHash', () => {
+    it('writes the repoHash into git config', async () => {
+      const transport = mockTransport({ 'config azito.repoHash': { stdout: '', stderr: '', code: 0 } });
+      await ops.stampRepoHash(transport, '/repo', 'abc123');
+      const cmd = (transport.exec as any).mock.calls[0][0] as string;
+      expect(cmd).toContain('azito.repoHash');
+      expect(cmd).toContain("'abc123'");
+    });
+
+    it('throws when the remote git config command fails', async () => {
+      const transport = mockTransport({ 'config azito.repoHash': { stdout: '', stderr: 'error: could not lock config file', code: 1 } });
+      await expect(ops.stampRepoHash(transport, '/repo', 'abc123')).rejects.toThrow();
+    });
+  });
+
   describe('setDummyOrigin', () => {
     it('sets origin to the .invalid dummy URL', async () => {
       const transport = mockTransport({ 'git remote set-url': { stdout: '', stderr: '', code: 0 } });

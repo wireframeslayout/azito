@@ -17,7 +17,7 @@ import { FormInput, FormSelect, LoadingState, baseInputStyle, Button } from './u
 import type { Window, Unit, Server } from '../pages/workspace/types';
 import { parseRepoUrl as parseGitRepoUrl } from '../lib/gitProvider';
 import { notifyProjectsChanged } from '../lib/projectsChanged';
-import { isDistributeCodeLocked, resolveDistributeCodeForSave, shouldShowDistributeCodeBadge } from '../lib/distributeCodePolicy';
+import { isDistributeCodeLocked, resolveDistributeCodeForSave, resolveDistributeCodeToggleValue, shouldShowDistributeCodeBadge } from '../lib/distributeCodePolicy';
 import { useToast } from '../hooks/useToast';
 import { useConfirm } from '../hooks/useConfirm';
 
@@ -110,12 +110,20 @@ export function useProjectSettings(
   // for a `local` target (`distribute_code` is structurally meaningless
   // there — see the toggle's hidden-for-local condition below) closes that
   // gap without relying on a single call site staying in sync.
+  //
+  // `projectServers` is a real dependency (Issue #87 third-party review,
+  // 10th round, Minor finding 3): the `[project]` effect below fetches it
+  // asynchronously, so opening this form before that fetch resolves used to
+  // read an empty `projectServers` here, initialize the toggle to `false`,
+  // and never correct it once the real rows arrived — because this effect
+  // was previously keyed only on `[psServer, servers]`, it never re-ran
+  // when `projectServers` changed out from under it. A save made in that
+  // window would then silently overwrite an existing `distribute_code:
+  // true` row with `false`. Including `projectServers` here means the
+  // effect re-derives the toggle the moment the fetch lands, matching
+  // whatever server is currently selected in the form.
   useEffect(() => {
     const targetServer = (servers || []).find((sv) => sv.name === psServer);
-    if (targetServer?.type === 'local') {
-      setPsDistributeCode(false);
-      return;
-    }
     // Issue #87 review, eighth pass, Important finding 1: an isolated
     // server's toggle is always shown checked/disabled in the JSX below
     // (via `isDistributeCodeLocked` at the render call site) — that's a
@@ -127,10 +135,8 @@ export function useProjectSettings(
     // being turned back off. Keep this state equal to the actual saved
     // value regardless of lock status, so Save never has anything to send
     // beyond what the user actually chose.
-    const existing = projectServers.find((ps) => ps.serverName === psServer);
-    setPsDistributeCode(existing?.distributeCode ?? false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [psServer, servers]);
+    setPsDistributeCode(resolveDistributeCodeToggleValue(targetServer?.type, projectServers, psServer));
+  }, [psServer, servers, projectServers]);
 
   useEffect(() => {
     if (project) {

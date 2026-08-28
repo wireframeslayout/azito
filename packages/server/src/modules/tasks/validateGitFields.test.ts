@@ -28,4 +28,20 @@ describe('validateGitFields', () => {
   it('ignores null/empty branch fields', () => {
     expect(validateGitFields({ branch: null, base_branch: '', target_branch: undefined })).toBeNull();
   });
+
+  // Issue #87 third-party review, 10th round, Important finding 1: origin/-prefixed
+  // input must be rejected at creation time, since resolveWorktreeCreateBaseBranch
+  // unconditionally prepends origin/ once distribution has run, which would
+  // otherwise resolve to the nonexistent ref origin/origin/main.
+  it('rejects a remote-qualified branch in base_branch', () => {
+    expect(validateGitFields({ base_branch: 'origin/main' })).toMatch(/base_branch/);
+  });
+
+  it('rejects a remote-qualified branch in branch', () => {
+    expect(validateGitFields({ branch: 'origin/feature-x' })).toMatch(/branch/);
+  });
+
+  it('rejects a remote-qualified branch in target_branch', () => {
+    expect(validateGitFields({ target_branch: 'origin/main' })).toMatch(/target_branch/);
+  });
 });

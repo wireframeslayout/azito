@@ -54,3 +54,36 @@ export function resolveDistributeCodeForSave(
 ): boolean | undefined {
   return isDistributeCodeLocked(server) ? undefined : distributeCode;
 }
+
+/** The subset of a project-server row this policy actually depends on. */
+export interface DistributeCodeToggleProjectServer {
+  serverName: string;
+  distributeCode?: boolean;
+}
+
+/**
+ * Derives the distribute-code toggle's initial/re-derived value for
+ * `serverName` — extracted as a pure function (Issue #87 third-party
+ * review, 10th round, Minor finding 3) so `ProjectSettings.tsx`'s
+ * `useEffect` can depend on `projectServers` directly instead of reading it
+ * out of a stale closure. Before this fix, that effect intentionally
+ * excluded `projectServers` from its dependency array (to avoid clobbering
+ * an in-progress edit whenever the list happened to refetch); the actual
+ * cost of that exclusion was that opening the form BEFORE the project's
+ * `project_servers` GET resolved computed this off an empty list — `false`
+ * — and never got a chance to correct itself once the real rows arrived,
+ * because nothing re-ran once `projectServers` updated out from under it. A
+ * save made in that window silently overwrote an existing
+ * `distribute_code: true` row with `false`. `false` for `local` (or any
+ * server whose type is not being distributed to) mirrors the same
+ * short-circuit `ProjectSettings.tsx` already applied inline.
+ */
+export function resolveDistributeCodeToggleValue(
+  targetServerType: string | undefined,
+  projectServers: DistributeCodeToggleProjectServer[],
+  serverName: string,
+): boolean {
+  if (targetServerType === 'local') return false;
+  const existing = projectServers.find((ps) => ps.serverName === serverName);
+  return existing?.distributeCode ?? false;
+}

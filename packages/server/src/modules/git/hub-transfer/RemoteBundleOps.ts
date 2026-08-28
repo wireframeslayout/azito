@@ -313,4 +313,51 @@ export class RemoteBundleOps {
   async cleanup(transport: IServerTransport, remotePath: string): Promise<void> {
     await transport.exec(`rm -f ${shellQuote(remotePath)}`, 5_000);
   }
+
+  // Git config key `workingDir` is stamped with, recording which repository
+  // (`computeRepoHash(repoIdentity)`) that checkout was cloned for (Issue
+  // #87 third-party review, 10th round, Important finding 2). See
+  // `getStampedRepoHash`/`stampRepoHash` below.
+  private static readonly REPO_HASH_CONFIG_KEY = 'azito.repoHash';
+
+  /**
+   * Reads the repoHash previously stamped into `workingDir`'s git config by
+   * `stampRepoHash()`. Returns `null` when unset — either `workingDir` was
+   * never stamped (created before this stamping existed) or the directory
+   * has no git config at all yet. `FetchDistributionService.ensureWorkingDir`
+   * treats `null` as "skip verification, back-compat" rather than a
+   * mismatch, so this must not throw for the missing-key case; `git config
+   * --get` already exits non-zero for a missing key without writing
+   * anything to stdout, and stderr is redirected away, so a missing key and
+   * a transport hiccup both collapse to `null` here — the caller only acts
+   * on an actual VALUE mismatch, never on the mere absence of one.
+   */
+  async getStampedRepoHash(transport: IServerTransport, workingDir: string): Promise<string | null> {
+    const r = await transport.exec(
+      `git -C ${shellQuote(workingDir)} config --get ${RemoteBundleOps.REPO_HASH_CONFIG_KEY} 2>/dev/null`,
+      5_000,
+    );
+    const value = r.stdout?.trim();
+    return value || null;
+  }
+
+  /**
+   * Stamps `workingDir`'s git config with `repoHash`, so a later
+   * distribution to the same path can detect whether it is now being asked
+   * to update a checkout that actually belongs to a DIFFERENT repository
+   * (two project/server registrations pointed at the same filesystem path —
+   * Issue #87 third-party review, 10th round, Important finding 2). Called
+   * once right after clone, and once (back-fill) the first time an
+   * unstamped pre-existing `workingDir` is safely verified to still belong
+   * to `repoHash` (see `ensureWorkingDir`'s doc comment in
+   * `FetchDistributionService`).
+   */
+  async stampRepoHash(transport: IServerTransport, workingDir: string, repoHash: string): Promise<void> {
+    await execGitOrThrow(
+      transport,
+      `git -C ${shellQuote(workingDir)} config ${RemoteBundleOps.REPO_HASH_CONFIG_KEY} ${shellQuote(repoHash)} 2>&1`,
+      5_000,
+      'git config (repoHash stamp) failed',
+    );
+  }
 }

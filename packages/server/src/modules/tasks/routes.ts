@@ -59,6 +59,17 @@ export function validateGitFields(body: Record<string, unknown>): string | null 
     // in `git worktree add` than a plain branch name (Issue #87 third-party
     // review, 9th round, Important finding 1).
     if (isFullyQualifiedRef(v)) return `Invalid ${key}: fully-qualified ref names (refs/...) are not allowed, specify a plain branch name`;
+    // Reject remote-qualified branch names (e.g. `origin/main`) for NEW
+    // input: `resolveWorktreeCreateBaseBranch` (TaskExecutionEnv.ts)
+    // unconditionally prepends `origin/` once fetch distribution has landed
+    // content, so accepting an already-`origin/`-prefixed value here used to
+    // resolve to the nonexistent ref `origin/origin/main` the moment
+    // distribution succeeded (Issue #87 third-party review, 10th round,
+    // Important finding 1). This is an input-boundary check only — it does
+    // not run against already-stored task values, so a task saved before
+    // this check existed keeps executing (TaskExecutionEnv.
+    // stripOriginPrefix normalizes those at resolve time instead).
+    if (v.startsWith('origin/')) return `Invalid ${key}: remote-qualified branch names (origin/...) are not allowed, specify a plain branch name`;
   }
   for (const key of ['working_directory', 'worktree_path'] as const) {
     const v = body[key];

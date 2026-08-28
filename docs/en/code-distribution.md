@@ -19,9 +19,13 @@ Whether distribution runs for a given task is decided per-server at execution ti
 
 | Server | Distribution |
 |---|---|
-| `local` (the hub itself) | Never — "distributing" to the hub's own server is meaningless |
-| Isolated server (`isolationIntent: true`) | **Always** — an isolated server has no credentials of its own to clone with, so there's no opt-in choice to make |
-| Any other `ssh`/`agent` server | Only if the project's distribution option (default off) is enabled for that server |
+| `local` (the hub itself) | Never — "distributing" to the hub's own server is meaningless, and it is not the target of distribution in the first place |
+| Isolated server (`isolationIntent: true`, always `agent`-type) | **Always** — an isolated server has no credentials of its own to clone with, so there's no opt-in choice to make |
+| Any other `agent`-type server | Only if the project's distribution option (default off) is enabled for that server |
+
+(`ServerConfig.type` is only `'local' \| 'agent'` — the old `ssh` server type has been retired;
+existing `ssh` rows were disabled by migration `058_disable_ssh_servers`. Distribution is therefore
+never a concern for `ssh` servers.)
 
 The distribution option for non-isolated servers is a toggle in Settings -> Project -> Servers, in
 the add/edit form for a project server, right below the working directory field (default off).
@@ -30,9 +34,10 @@ local dev toolchain — even though it still holds the project's git credentials
 fetch on the repository's behalf). Development happens entirely on the agent server, and the hub is
 used only for its own functions (task execution, monitoring, etc.).
 
-Either way, distribution requires SSH. Even for an `agent`-type server, distribution needs SSH
-connection details (`sshHost`, etc.) configured for SFTP transfer. Distributing to a server that
-has no usable SSH fails loudly (it is not silently skipped).
+Either way, distribution requires SSH: even though the server is `agent`-type (HTTP/WebSocket for
+its normal command/terminal traffic), the bundle transfer itself goes over SFTP, so that agent
+server must also have SSH connection details (`sshHost`, etc.) configured. Distributing to an agent
+server that has no usable SSH fails loudly (it is not silently skipped).
 
 ## 2. How it works
 

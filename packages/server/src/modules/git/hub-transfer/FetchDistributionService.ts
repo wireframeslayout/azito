@@ -196,9 +196,12 @@ export class FetchDistributionService {
 
   // Issue #87 review, 8th pass, Important finding 2: normalizes `workingDir`
   // for `workingDirMutex`'s key so two spellings of the same remote path
-  // (trailing slash, repeated slashes) collapse to one lock. Remote
-  // `ServerTransport` targets (ssh/agent) are POSIX hosts, so POSIX
-  // normalization is correct here — this class never operates on `local`.
+  // (trailing slash, repeated slashes) collapse to one lock. Distribution
+  // only ever targets `agent`-type servers (`ServerConfig.type` is `'local'
+  // | 'agent'`; the retired `ssh` server type is disabled by migration
+  // `058_disable_ssh_servers` — see docs/{en,ja}/code-distribution.md), and
+  // an agent server is always a remote POSIX host, so POSIX normalization
+  // is correct here — this class never operates on `local`.
   private normalizeWorkingDirForLockKey(workingDir: string): string {
     const normalized = path.posix.normalize(workingDir);
     return normalized.length > 1 ? normalized.replace(/\/+$/, '') : normalized;
@@ -275,7 +278,7 @@ export class FetchDistributionService {
         // separately from the mirror), so it's ensured even when the
         // transfer itself was skipped.
         const localBranchSynced = await this.workingDirMutex.withLock(workingDirLockKey, () =>
-          this.ensureWorkingDir(transport, mirrorDir, workingDir, branch));
+          this.ensureWorkingDir(transport, mirrorDir, workingDir, branch, repoHash));
         return { status: 'already_current', sha: prep.headSha, localBranchSynced };
       }
 
@@ -284,7 +287,7 @@ export class FetchDistributionService {
       const delivered = await this.deliverToMirror(transport, sshHost, repoHash, repoIdentity, branch, mirrorDir, prep);
 
       const localBranchSynced = await this.workingDirMutex.withLock(workingDirLockKey, () =>
-        this.ensureWorkingDir(transport, mirrorDir, workingDir, branch));
+        this.ensureWorkingDir(transport, mirrorDir, workingDir, branch, repoHash));
 
       this.distributionStateRepo.upsert(server.name, repositoryId, delivered.headSha, delivered.bundleType);
 
@@ -475,13 +478,46 @@ export class FetchDistributionService {
    * content (Issue #87 review, forge/87-mirror follow-up, Important finding
    * 1). `false` is returned rather than thrown; the caller decides whether
    * it matters.
+   *
+   * Before touching an EXISTING `workingDir` (`repoExists` true), verifies
+   * it is actually a checkout of `repoHash`'s repository, not a different
+   * one that happens to share this filesystem path (Issue #87 third-party
+   * review, 10th round, Important finding 2: two project/server
+   * registrations pointing at the same `workingDir` used to let the second
+   * one's distribution silently fetch an unrelated mirror into the first
+   * one's checkout and force-update its `origin/<branch>`). The
+   * `workingDirMutex` this method is always called under only serializes
+   * concurrent access to the SAME path — it does nothing to stop two
+   * DIFFERENT repositories from being configured to use that same path in
+   * the first place, which is what this stamp check catches. A `workingDir`
+   * created before this stamping existed carries no stamp at all
+   * (`getStampedRepoHash` returns `null`) — verification is skipped for
+   * that case (back-compat: an operator's already-working setup must not
+   * start failing because of a check that didn't exist when it was set up)
+   * and the stamp is back-filled below so the NEXT distribution to that
+   * path is protected.
    */
-  private async ensureWorkingDir(transport: IServerTransport, mirrorDir: string, workingDir: string, branch: string): Promise<boolean> {
+  private async ensureWorkingDir(transport: IServerTransport, mirrorDir: string, workingDir: string, branch: string, repoHash: string): Promise<boolean> {
     const exists = await this.remoteBundleOps.repoExists(transport, workingDir);
+    let stampedRepoHash: string | null = null;
     if (exists) {
+      stampedRepoHash = await this.remoteBundleOps.getStampedRepoHash(transport, workingDir);
+      if (stampedRepoHash !== null && stampedRepoHash !== repoHash) {
+        throw new Error(
+          `workingDir "${workingDir}" is stamped for a different repository (repoHash ${stampedRepoHash}) than the one being distributed (repoHash ${repoHash}). ` +
+          'Two project/server registrations appear to target the same working directory — point them at separate working directories, or review this server\'s project configuration.',
+        );
+      }
       await this.remoteBundleOps.fetchWorkingDirFromMirror(transport, mirrorDir, workingDir, branch);
     } else {
       await this.remoteBundleOps.cloneWorkingDirFromMirror(transport, mirrorDir, workingDir, branch);
+    }
+    // Stamp when there was no stamp to verify: a brand-new clone (exists was
+    // false) or a pre-existing, never-stamped workingDir being back-filled
+    // (exists was true, stampedRepoHash was null) — see this method's doc
+    // comment above.
+    if (stampedRepoHash === null) {
+      await this.remoteBundleOps.stampRepoHash(transport, workingDir, repoHash);
     }
     // Detach is applied every time, on both the clone and the fetch path —
     // not just once after clone. If detach alone fails, workingDir/.git

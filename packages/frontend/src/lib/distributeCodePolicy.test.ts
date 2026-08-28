@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isDistributeCodeLocked, resolveDistributeCodeForSave, shouldShowDistributeCodeBadge } from './distributeCodePolicy';
+import { isDistributeCodeLocked, resolveDistributeCodeForSave, resolveDistributeCodeToggleValue, shouldShowDistributeCodeBadge } from './distributeCodePolicy';
 
 // Issue #87 third-party review, seventh pass, Minor finding 3: an isolated
 // server distributes code unconditionally on the backend (`isolationIntent`),
@@ -64,5 +64,39 @@ describe('resolveDistributeCodeForSave', () => {
 
   it('passes through the user-chosen value when the server is unknown', () => {
     expect(resolveDistributeCodeForSave(undefined, true)).toBe(true);
+  });
+});
+
+// Issue #87 third-party review, 10th round, Minor finding 3: opening the
+// project-server form before `GET /projects/:id/servers` resolves used to
+// compute the toggle off an empty `projectServers` list and never correct
+// itself once the real rows arrived, because ProjectSettings.tsx's effect
+// deliberately excluded `projectServers` from its dependency array. Saving
+// in that window silently overwrote a saved `distribute_code: true` row
+// with `false`. This pure function is now the effect's single source of
+// truth, and is depended on via `projectServers` directly.
+describe('resolveDistributeCodeToggleValue', () => {
+  it('returns false when the project-server rows have not arrived yet (empty list)', () => {
+    expect(resolveDistributeCodeToggleValue('agent', [], 'server-a')).toBe(false);
+  });
+
+  it('resolves to the saved value once the matching row arrives (simulating the late fetch)', () => {
+    const projectServers = [{ serverName: 'server-a', distributeCode: true }];
+    expect(resolveDistributeCodeToggleValue('agent', projectServers, 'server-a')).toBe(true);
+  });
+
+  it('resolves to false when the matching row is saved with distributeCode false', () => {
+    const projectServers = [{ serverName: 'server-a', distributeCode: false }];
+    expect(resolveDistributeCodeToggleValue('agent', projectServers, 'server-a')).toBe(false);
+  });
+
+  it('resolves to false when no row exists for this server yet (new project-server)', () => {
+    const projectServers = [{ serverName: 'server-b', distributeCode: true }];
+    expect(resolveDistributeCodeToggleValue('agent', projectServers, 'server-a')).toBe(false);
+  });
+
+  it('is unconditionally false for a local server, even if a stale row says otherwise', () => {
+    const projectServers = [{ serverName: 'server-a', distributeCode: true }];
+    expect(resolveDistributeCodeToggleValue('local', projectServers, 'server-a')).toBe(false);
   });
 });

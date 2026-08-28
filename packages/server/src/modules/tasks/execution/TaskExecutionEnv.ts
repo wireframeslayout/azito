@@ -68,6 +68,23 @@ export function resolveBaseBranch(
 }
 
 /**
+ * Strips a leading `origin/` remote qualifier from a branch name, so a value
+ * that is already remote-qualified (e.g. an existing task's `baseBranch:
+ * 'origin/main'`, saved back when `origin/`-prefixed values were still
+ * accepted at the API boundary — see `validateGitFields` in `routes.ts`)
+ * does not get double-prefixed into the nonexistent ref `origin/origin/main`
+ * (Issue #87 third-party review, 10th round, Important finding 1). Only a
+ * single leading `origin/` is stripped: this is a normalization of the
+ * remote qualifier, not a general path-segment strip, so a branch that
+ * itself starts with `origin/origin/` (a legitimate branch name someone
+ * chose) is left with one `origin/` removed, matching how `git` itself
+ * treats `origin/` as the remote prefix only at the start of the ref.
+ */
+export function stripOriginPrefix(branch: string): string {
+  return branch.startsWith('origin/') ? branch.slice('origin/'.length) : branch;
+}
+
+/**
  * Resolves the base branch to pass to worktree creation, given whether a
  * fetch distribution ran (and, if so, its outcome) for this server (Issue
  * #87 review, forge/87-mirror follow-up). `RemoteBundleOps.
@@ -83,10 +100,18 @@ export function resolveBaseBranch(
  * possibly-stale local `<baseBranch>`. Local/ssh servers, or isolated
  * servers where distribution did not run this call (`distStatus` is null),
  * keep resolving the plain `baseBranch` as before.
+ *
+ * `baseBranch` is normalized via `stripOriginPrefix()` before the `origin/`
+ * prefix is applied, so an already-qualified value (pre-existing task data
+ * from before `validateGitFields` rejected new `origin/`-prefixed input)
+ * resolves to `origin/main`, not `origin/origin/main` (Issue #87 third-party
+ * review, 10th round, Important finding 1).
  */
 export function resolveWorktreeCreateBaseBranch(
   baseBranch: string,
   distStatus: 'distributed' | 'already_current' | 'failed' | null,
 ): string {
-  return distStatus === 'distributed' || distStatus === 'already_current' ? `origin/${baseBranch}` : baseBranch;
+  return distStatus === 'distributed' || distStatus === 'already_current'
+    ? `origin/${stripOriginPrefix(baseBranch)}`
+    : baseBranch;
 }

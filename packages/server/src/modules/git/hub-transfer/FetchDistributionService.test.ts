@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { FetchDistributionService } from './FetchDistributionService';
 import { RemoteGitCommandError } from '../execWithSentinel';
+import { computeRepoHash } from './repoHash';
 import type { CanonicalRepositoryIdentity } from '../resolveCanonicalRepositoryIdentity';
 
 const identity: CanonicalRepositoryIdentity = {
@@ -38,6 +39,8 @@ function mockRemoteBundleOps(overrides: Record<string, any> = {}) {
     setDummyOrigin: vi.fn(async () => {}),
     repoExists: vi.fn(async () => false),
     cleanup: vi.fn(async () => {}),
+    getStampedRepoHash: vi.fn(async () => null),
+    stampRepoHash: vi.fn(async () => {}),
     ...overrides,
   } as any;
 }
@@ -1137,5 +1140,73 @@ describe('FetchDistributionService lock key host normalization (Issue #87 review
     releaseA();
     await Promise.all([a, b]);
     expect(order).toEqual(['a-start', 'a-end', 'b-start']);
+  });
+});
+
+describe('FetchDistributionService workingDir repoHash stamp verification (Issue #87 third-party review, 10th round, Important finding 2)', () => {
+  const repoHash = computeRepoHash(identity);
+  const otherIdentity: CanonicalRepositoryIdentity = {
+    provider: 'github',
+    host: 'github.com',
+    owner: 'someone-else',
+    repo: 'other-repo',
+    httpsUrl: 'https://github.com/someone-else/other-repo.git',
+  };
+
+  it('fails fast when the existing workingDir is stamped for a different repository', async () => {
+    const remoteBundleOps = mockRemoteBundleOps({
+      getMirrorBranchSha: vi.fn(async () => sha),
+      repoExists: vi.fn(async () => true),
+      getStampedRepoHash: vi.fn(async () => computeRepoHash(otherIdentity)),
+    });
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const result = await service.distribute(makeParams());
+    expect(result.status).toBe('failed');
+    expect((result as any).error).toMatch(/different repository/);
+    // Must fail BEFORE mutating the mismatched checkout.
+    expect(remoteBundleOps.fetchWorkingDirFromMirror).not.toHaveBeenCalled();
+    expect(remoteBundleOps.stampRepoHash).not.toHaveBeenCalled();
+  });
+
+  it('skips verification and back-fills the stamp for a pre-existing, never-stamped workingDir', async () => {
+    const remoteBundleOps = mockRemoteBundleOps({
+      getMirrorBranchSha: vi.fn(async () => sha),
+      repoExists: vi.fn(async () => true),
+      getStampedRepoHash: vi.fn(async () => null),
+    });
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const result = await service.distribute(makeParams());
+    expect(result.status).toBe('already_current');
+    // Back-compat: no stamp existed, so distribution still proceeds normally...
+    expect(remoteBundleOps.fetchWorkingDirFromMirror).toHaveBeenCalled();
+    // ...and the stamp is written so the NEXT distribution is protected.
+    expect(remoteBundleOps.stampRepoHash).toHaveBeenCalledWith({}, '/home/agent/repo', repoHash);
+  });
+
+  it('proceeds normally when the existing workingDir is stamped for the same repository', async () => {
+    const remoteBundleOps = mockRemoteBundleOps({
+      getMirrorBranchSha: vi.fn(async () => sha),
+      repoExists: vi.fn(async () => true),
+      getStampedRepoHash: vi.fn(async () => repoHash),
+    });
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const result = await service.distribute(makeParams());
+    expect(result.status).toBe('already_current');
+    expect(remoteBundleOps.fetchWorkingDirFromMirror).toHaveBeenCalled();
+    // Already stamped correctly — no need to re-write it.
+    expect(remoteBundleOps.stampRepoHash).not.toHaveBeenCalled();
+  });
+
+  it('stamps a brand-new clone (workingDir did not exist)', async () => {
+    const remoteBundleOps = mockRemoteBundleOps({
+      getMirrorBranchSha: vi.fn(async () => null),
+      repoExists: vi.fn(async () => false),
+    });
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const result = await service.distribute(makeParams());
+    expect(result.status).toBe('distributed');
+    expect(remoteBundleOps.cloneWorkingDirFromMirror).toHaveBeenCalled();
+    expect(remoteBundleOps.getStampedRepoHash).not.toHaveBeenCalled();
+    expect(remoteBundleOps.stampRepoHash).toHaveBeenCalledWith({}, '/home/agent/repo', repoHash);
   });
 });

@@ -105,4 +105,19 @@ describe('resolveWorktreeCreateBaseBranch', () => {
   it('does not get called with a failed distStatus (execute() throws before reaching worktree creation), but returns the plain branch defensively', () => {
     expect(resolveWorktreeCreateBaseBranch('main', 'failed')).toBe('main');
   });
+
+  // Issue #87 third-party review, 10th round, Important finding 1: a
+  // pre-existing task saved with an already `origin/`-qualified baseBranch
+  // must not be double-prefixed into the nonexistent `origin/origin/main`.
+  it('does not double-prefix an already origin/-qualified baseBranch when distribution succeeded', () => {
+    expect(resolveWorktreeCreateBaseBranch('origin/main', 'distributed')).toBe('origin/main');
+  });
+
+  it('does not double-prefix an already origin/-qualified baseBranch when the mirror was already current', () => {
+    expect(resolveWorktreeCreateBaseBranch('origin/main', 'already_current')).toBe('origin/main');
+  });
+
+  it('leaves an origin/-qualified baseBranch untouched when distribution did not run', () => {
+    expect(resolveWorktreeCreateBaseBranch('origin/main', null)).toBe('origin/main');
+  });
 });
