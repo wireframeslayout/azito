@@ -144,6 +144,13 @@ export class FetchDistributionService {
     } else {
       await this.remoteBundleOps.cloneWorkingDirFromMirror(transport, mirrorDir, workingDir, branch);
     }
+    // Detach is applied every time, on both the clone and the fetch path —
+    // not just once after clone. If detach alone fails, workingDir/.git
+    // already exists, so the next distribution takes the fetch path (via
+    // `repoExists` above) and would never retry it otherwise (Issue #87
+    // review finding). Idempotent, so re-running it on an already-detached
+    // workingDir is a no-op.
+    await this.remoteBundleOps.ensureDetachedHead(transport, workingDir);
     // origin policy is unchanged by this refactor — still a dummy URL, kept
     // separate from the mirror-path update route above.
     await this.remoteBundleOps.setDummyOrigin(transport, workingDir);

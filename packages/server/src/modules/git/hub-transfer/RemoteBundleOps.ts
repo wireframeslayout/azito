@@ -92,13 +92,7 @@ export class RemoteBundleOps {
    * （下記参照）。workingDir はリンク worktree の起点として使われるだけであり、
    * 更新後の内容が必要な呼び出し側は `origin/<branch>` を参照すること。
    *
-   * clone 直後に HEAD を detach する。`git clone --branch <branch>` は主
-   * チェックアウト（workingDir）にその branch をチェックアウトしたまま残す
-   * ため、taskのブランチ指定がベースブランチと同じ場合に
-   * `RemoteWorktreeService` の `git worktree add <path> <branch>`（既存
-   * ローカル branch を割り当てる分岐）が
-   * `fatal: '<branch>' is already used by worktree` で失敗する
-   * （新規 workingDir への初回タスク実行で再現。Issue #87 レビュー指摘）。
+   * HEAD の detach はここでは行わない。`ensureDetachedHead()` を参照。
    */
   async cloneWorkingDirFromMirror(transport: IServerTransport, mirrorDir: string, workingDir: string, branch: string): Promise<void> {
     assertSafeBranch(branch, 'branch');
@@ -111,12 +105,31 @@ export class RemoteBundleOps {
     if (r.code !== 0 || (r.stderr && r.stderr.includes('fatal:'))) {
       throw new Error(`git clone from mirror failed: ${r.stderr || r.stdout}`);
     }
-    const detach = await transport.exec(
+  }
+
+  /**
+   * workingDir の HEAD を detach する（既に detach 済みでも成功する冪等操作）。
+   *
+   * workingDir は配信先であり人が作業する場所ではない（タスクは worktree で
+   * 作業する）。主チェックアウトが branch を掴んだままだと、タスクのブランチ
+   * 指定がベースブランチと同じ場合に `RemoteWorktreeService` の
+   * `git worktree add <path> <branch>`（既存ローカル branch を割り当てる
+   * 分岐）が `fatal: '<branch>' is already used by worktree` で失敗する。
+   *
+   * clone 手順の一部として一度だけ実行すると、detach だけが失敗したケースで
+   * `workingDir/.git` は既に存在するため、次回配信は `repoExists` により
+   * 「既存」と判定されて fetch 経路へ入り、detach は二度と試みられなくなる
+   * （Issue #87 レビュー指摘）。この対策として、`FetchDistributionService`
+   * の `ensureWorkingDir()` は clone 経路・fetch 経路のどちらでも毎回このメ
+   * ソッドを呼ぶ。冪等に適用することで、一度失敗しても次回の配信で回復する。
+   */
+  async ensureDetachedHead(transport: IServerTransport, workingDir: string): Promise<void> {
+    const r = await transport.exec(
       `git -C ${shellQuote(workingDir)} -c core.hooksPath=/dev/null checkout --detach 2>&1`,
       15_000,
     );
-    if (detach.code !== 0 || (detach.stderr && detach.stderr.includes('fatal:'))) {
-      throw new Error(`git checkout --detach after clone failed: ${detach.stderr || detach.stdout}`);
+    if (r.code !== 0 || (r.stderr && r.stderr.includes('fatal:'))) {
+      throw new Error(`git checkout --detach failed: ${r.stderr || r.stdout}`);
     }
   }
 

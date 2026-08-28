@@ -32,6 +32,7 @@ function mockRemoteBundleOps(overrides: Record<string, any> = {}) {
     fetchBundleIntoMirror: vi.fn(async () => {}),
     cloneWorkingDirFromMirror: vi.fn(async () => {}),
     fetchWorkingDirFromMirror: vi.fn(async () => {}),
+    ensureDetachedHead: vi.fn(async () => {}),
     setDummyOrigin: vi.fn(async () => {}),
     repoExists: vi.fn(async () => false),
     cleanup: vi.fn(async () => {}),
@@ -93,6 +94,11 @@ describe('FetchDistributionService', () => {
     expect(remoteBundleOps.fetchBundleIntoMirror).not.toHaveBeenCalled();
     // ...but workingDir is still (re-)ensured from the mirror.
     expect(remoteBundleOps.fetchWorkingDirFromMirror).toHaveBeenCalled();
+    // Detach is applied unconditionally on the fetch (existing workingDir)
+    // path too — not just after a fresh clone (Issue #87 review finding:
+    // without this, a workingDir whose detach failed on a past distribution
+    // could never be recovered, since it is never re-cloned).
+    expect(remoteBundleOps.ensureDetachedHead).toHaveBeenCalledWith({}, '/home/agent/repo');
   });
 
   it('distributes full bundle for first-time distribution (no mirror branch yet) and --no-local clones workingDir', async () => {
@@ -110,6 +116,10 @@ describe('FetchDistributionService', () => {
     expect(sftpService.upload).toHaveBeenCalled();
     expect(remoteBundleOps.fetchBundleIntoMirror).toHaveBeenCalled();
     expect(remoteBundleOps.cloneWorkingDirFromMirror).toHaveBeenCalled();
+    // Detach is applied on the clone path too, as its own step after clone
+    // returns — not fused into cloneWorkingDirFromMirror itself (Issue #87
+    // review finding).
+    expect(remoteBundleOps.ensureDetachedHead).toHaveBeenCalledWith({}, '/home/agent/repo');
     expect(remoteBundleOps.setDummyOrigin).toHaveBeenCalled();
     expect(distRepo.upsert).toHaveBeenCalledWith('iso-server', 1, sha, 'full');
   });

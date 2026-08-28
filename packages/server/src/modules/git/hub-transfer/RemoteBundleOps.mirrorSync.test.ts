@@ -196,17 +196,62 @@ describe('RemoteBundleOps mirror -> workingDir sync (regression, real local git)
 
     // 2. First-ever distribution for this server x repo -> clone
     //    `--branch main`. `git clone --branch` leaves `main` checked out
-    //    in the PRIMARY checkout (workingDir) unless the clone step
-    //    detaches HEAD afterwards.
+    //    in the PRIMARY checkout (workingDir) unless `ensureDetachedHead`
+    //    is applied afterwards (as `FetchDistributionService.ensureWorkingDir`
+    //    now always does, on both the clone and fetch path).
     const workingDir = path.join(makeTmpDir('azito-mirror-clone-detach-wd-parent-'), 'repo');
     await ops.cloneWorkingDirFromMirror(transport, mirrorDir, workingDir, 'main');
+    await ops.ensureDetachedHead(transport, workingDir);
 
-    // 3. Without the post-clone detach, this reproduces:
+    // 3. Without the detach, this reproduces:
     //    "fatal: 'main' is already used by worktree at '<workingDir>'"
     //    — a task whose branch input names the base branch itself, on its
     //    very first execution against this workingDir.
     const worktreePath = path.join(makeTmpDir('azito-mirror-clone-detach-wt-parent-'), 'task-1');
     expect(() => runGit(['worktree', 'add', worktreePath, 'main'], workingDir)).not.toThrow();
     expect(fs.readFileSync(path.join(worktreePath, 'file.txt'), 'utf-8')).toBe('v1\n');
+  }, 30_000);
+
+  it('a workingDir that was left with HEAD attached (e.g. detach failed on a previous distribution) recovers on the next distribution via ensureDetachedHead', async () => {
+    const ops = new RemoteBundleOps();
+    const transport = localTransport();
+
+    // 1. Server-side bare mirror with a single branch `main`.
+    const mirrorDir = makeTmpDir('azito-mirror-recover-mirror-');
+    runGit(['init', '-q', '--bare', '--initial-branch=main', mirrorDir], mirrorDir);
+
+    const srcDir = makeTmpDir('azito-mirror-recover-src-');
+    runGit(['init', '-q', '--initial-branch=main', srcDir], srcDir);
+    runGit(['config', 'user.email', 'test@example.com'], srcDir);
+    runGit(['config', 'user.name', 'Test'], srcDir);
+    fs.writeFileSync(path.join(srcDir, 'file.txt'), 'v1\n');
+    runGit(['add', 'file.txt'], srcDir);
+    runGit(['commit', '-q', '-m', 'v1'], srcDir);
+    runGit(['push', mirrorDir, 'main'], srcDir);
+
+    // 2. Simulate a workingDir that a PAST clone left with `main` still
+    //    attached (i.e. `ensureDetachedHead` was never applied, or failed) —
+    //    the exact state the review finding warns is otherwise unrecoverable.
+    const workingDir = path.join(makeTmpDir('azito-mirror-recover-wd-parent-'), 'repo');
+    await ops.cloneWorkingDirFromMirror(transport, mirrorDir, workingDir, 'main');
+    expect(runGit(['symbolic-ref', '-q', 'HEAD'], workingDir)).toBe('refs/heads/main');
+
+    // 3. A LATER distribution to this same workingDir takes the "existing
+    //    workingDir" path in `FetchDistributionService.ensureWorkingDir`:
+    //    fetch (not clone), then `ensureDetachedHead` unconditionally.
+    fs.writeFileSync(path.join(srcDir, 'file.txt'), 'v2\n');
+    runGit(['add', 'file.txt'], srcDir);
+    runGit(['commit', '-q', '-m', 'v2'], srcDir);
+    runGit(['push', mirrorDir, 'main'], srcDir);
+    await ops.fetchWorkingDirFromMirror(transport, mirrorDir, workingDir, 'main');
+    await ops.ensureDetachedHead(transport, workingDir);
+
+    // 4. HEAD is now detached, so a worktree can be added for `main`
+    //    without hitting "already used by worktree".
+    const worktreePath = path.join(makeTmpDir('azito-mirror-recover-wt-parent-'), 'task-1');
+    expect(() => runGit(['worktree', 'add', worktreePath, 'main'], workingDir)).not.toThrow();
+
+    // 5. Re-applying ensureDetachedHead is idempotent (already detached).
+    await expect(ops.ensureDetachedHead(transport, workingDir)).resolves.not.toThrow();
   }, 30_000);
 });
