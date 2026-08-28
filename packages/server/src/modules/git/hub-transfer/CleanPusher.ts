@@ -20,14 +20,26 @@ export class CleanPusher {
 
       const env = this.cleanEnv();
 
-      execFileSync('git', ['init', '--bare', tmpDir], {
+      execFileSync('git', [
+        '-c', 'core.hooksPath=/dev/null',
+        'init', '--bare', tmpDir,
+      ], {
         encoding: 'utf-8',
         timeout: 10_000,
         env,
       });
 
+      // The bundle originates from an untrusted server-side worktree, so
+      // reject malformed/oversized objects instead of trusting git's
+      // fsck-disabled default before they reach the hub's bare repo.
       const refSpec = `refs/heads/${branch}:refs/heads/${branch}`;
-      execFileSync('git', ['-C', tmpDir, 'fetch', bundlePath, refSpec], {
+      execFileSync('git', [
+        '-C', tmpDir,
+        '-c', 'fetch.fsckObjects=true',
+        '-c', 'transfer.fsckObjects=true',
+        '-c', 'core.hooksPath=/dev/null',
+        'fetch', bundlePath, refSpec,
+      ], {
         encoding: 'utf-8',
         timeout: 60_000,
         env,

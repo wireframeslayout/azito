@@ -1,11 +1,21 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import type { SftpService } from '../../servers/ssh/SftpService';
+import { KeyedMutex } from '../../../shared/keyedMutex';
 import type { HubRepoCache } from './HubRepoCache';
 import type { RemoteBundleOps } from './RemoteBundleOps';
 import type { IDistributionStateRepository, FetchDistributionParams, FetchDistributionResult } from './types';
 
 export class FetchDistributionService {
+  // Serializes `distribute()` runs per `${server.name}:${repositoryId}` so
+  // two concurrent distributions to the same server+repo can't race: each
+  // reads the DB's `lastDistributedSha`, builds its own bundle off it, and
+  // whichever `upsert()` lands last would silently win even if it applied
+  // stale content. The hub runs as a single process, so an in-memory
+  // promise chain (no DB-level lock needed) is sufficient — same pattern as
+  // `WindowRotation.ts`'s `runExclusiveForTask`.
+  private readonly mutex = new KeyedMutex();
+
   constructor(
     private hubRepoCache: HubRepoCache,
     private remoteBundleOps: RemoteBundleOps,
@@ -14,6 +24,11 @@ export class FetchDistributionService {
   ) {}
 
   async distribute(params: FetchDistributionParams): Promise<FetchDistributionResult> {
+    const { server, repositoryId } = params;
+    return this.mutex.withLock(`${server.name}:${repositoryId}`, () => this.distributeUnlocked(params));
+  }
+
+  private async distributeUnlocked(params: FetchDistributionParams): Promise<FetchDistributionResult> {
     const { server, transport, repoIdentity, token, branch, workingDir } = params;
     const sshHost = server.sshHost;
     if (!sshHost) {
