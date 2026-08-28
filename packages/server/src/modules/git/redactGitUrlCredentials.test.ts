@@ -52,4 +52,28 @@ describe('redactGitUrlCredentials', () => {
   it('never throws for arbitrary unparseable input', () => {
     expect(() => redactGitUrlCredentials('not a url at all $(rm -rf /)')).not.toThrow();
   });
+
+  it('strips a query string that carries a token, in addition to userinfo', () => {
+    const result = redactGitUrlCredentials('https://user:token@host/owner/repo.git?token=ghp_DUMMYTOKENVALUE1234&foo=bar');
+    expect(result).toBe('https://host/owner/repo.git');
+    expect(result).not.toContain('ghp_DUMMYTOKENVALUE1234');
+    expect(result).not.toContain('token=');
+  });
+
+  it('strips a query string with no embedded userinfo', () => {
+    expect(redactGitUrlCredentials('https://github.com/owner/repo.git?token=ghp_DUMMYTOKENVALUE1234'))
+      .toBe('https://github.com/owner/repo.git');
+  });
+
+  it('strips a fragment that could carry credential-shaped data', () => {
+    expect(redactGitUrlCredentials('https://user:token@host/owner/repo.git#access_token=ghp_DUMMYTOKENVALUE1234'))
+      .toBe('https://host/owner/repo.git');
+  });
+
+  it('strips both query and fragment together', () => {
+    const result = redactGitUrlCredentials('https://user:token@host/owner/repo.git?token=ghp_DUMMYTOKENVALUE1234#frag=1');
+    expect(result).toBe('https://host/owner/repo.git');
+    expect(result).not.toContain('ghp_DUMMYTOKENVALUE1234');
+    expect(result).not.toContain('frag');
+  });
 });

@@ -1423,4 +1423,43 @@ describe('FetchDistributionService unstamped-workingDir identity verification (I
     expect(remoteBundleOps.fetchWorkingDirFromMirror).not.toHaveBeenCalled();
     expect(remoteBundleOps.stampRepoHash).not.toHaveBeenCalled();
   });
+
+  // Issue #87 third-party review, 15th round, Important finding 1: the
+  // mismatch error also embeds `repoIdentity.httpsUrl` (the URL of the
+  // repository being distributed, not the workingDir's origin) — that value
+  // must be redacted too, including any credentials carried in its query
+  // string (some hosting providers accept a token there instead of as
+  // userinfo).
+  it('origin mismatch: neither URL in the error retains credentials, query string, or fragment', async () => {
+    const originWithCreds = 'https://x-access-token:dummy-secret-value-789@github.com/someone-else/other-repo.git?foo=bar#frag';
+    const targetWithCreds = {
+      ...identity,
+      httpsUrl: 'https://user:dummy-secret-value-000@github.com/owner/repo.git?token=dummy-secret-query-abc#section',
+    };
+    const remoteBundleOps = mockRemoteBundleOps({
+      getMirrorBranchSha: vi.fn(async () => sha),
+      repoExists: vi.fn(async () => true),
+      getStampedRepoHash: vi.fn(async () => null),
+      getOriginUrl: vi.fn(async () => originWithCreds),
+    });
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const result = await service.distribute(makeParams({ repoIdentity: targetWithCreds }));
+
+    expect(result.status).toBe('failed');
+    const error = (result as any).error as string;
+    expect(error).toMatch(/different repository/);
+    // Neither URL's credentials, query string, or fragment survive.
+    expect(error).not.toContain('dummy-secret-value-789');
+    expect(error).not.toContain('x-access-token');
+    expect(error).not.toContain('foo=bar');
+    expect(error).not.toContain('frag');
+    expect(error).not.toContain('dummy-secret-value-000');
+    expect(error).not.toContain('dummy-secret-query-abc');
+    expect(error).not.toContain('token=');
+    expect(error).not.toContain('section');
+    // The redacted host/path form of both URLs is still present, so the
+    // error remains actionable.
+    expect(error).toContain('github.com/someone-else/other-repo.git');
+    expect(error).toContain('github.com/owner/repo.git');
+  });
 });

@@ -22,6 +22,12 @@
  * inputs this codebase's own `normalizeRepositoryUrlToHttps` rejects (an
  * unparseable value, or a scheme it doesn't recognize) — so a caller can
  * log the result unconditionally, with no second guard needed.
+ *
+ * Also strips the query string and fragment (Issue #87 15th-round review,
+ * Important finding 1): a normalized URL's `toString()` preserves both, and
+ * some hosting providers accept a token in the query string (e.g.
+ * `?token=...`) rather than as userinfo — leaving those in place would
+ * defeat the redaction this function exists to provide.
  */
 export function redactGitUrlCredentials(rawUrl: string): string {
   const trimmed = rawUrl.trim();
@@ -32,7 +38,8 @@ export function redactGitUrlCredentials(rawUrl: string): string {
   // WHATWG URL — handle it before `new URL()`, which would either throw or
   // misparse `host:path` as some unrelated scheme-like structure. This
   // syntax carries no password (only a `user@` prefix, conventionally
-  // `git`), so stripping that prefix is enough.
+  // `git`), so stripping that prefix is enough. It also has no query
+  // string or fragment syntax to worry about.
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) {
     const scpMatch = trimmed.match(/^[^@/]+@(.+)$/);
     return scpMatch ? scpMatch[1] : trimmed;
@@ -42,6 +49,8 @@ export function redactGitUrlCredentials(rawUrl: string): string {
     const url = new URL(trimmed);
     url.username = '';
     url.password = '';
+    url.search = '';
+    url.hash = '';
     return url.toString();
   } catch {
     // Has a scheme prefix but does not parse as a URL — do not fall through

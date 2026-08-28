@@ -908,4 +908,30 @@ describe('SqliteTaskRepository.updateStatusIfWindowMatches (Issue #87 third-part
     expect(task.worktreePath).toBe('/srv/worktrees/new-gen');
     expect(task.worktreeBranch).toBe('task/new-gen');
   });
+
+  // Issue #87 third-party review, 15th round, Important finding 2 (fourth
+  // pass): a newer generation can have already issued its own token BEFORE
+  // it has actually created its own tmux window — the row still carries the
+  // OLD generation's `tmux_window` value during that gap. The third pass's
+  // guard only applied the "no newer generation" NOT EXISTS check to the
+  // `tmux_window IS NULL` arm, so the `tmux_window = ?` arm alone would
+  // still match here and let the stale (old) generation's rollback win.
+  it('leaves status untouched and returns false when tmux_window still holds the OLD window name but a NEWER generation has already been issued (regression: a stale rollback must not win a mid-handoff race before the new window is created)', () => {
+    const oldToken = tokenRepo.issue(taskId, 1);
+    // Newer generation's token is issued, but its own window has not been
+    // created yet — the row still shows the OLD generation's tmux_window.
+    tokenRepo.issue(taskId, 2);
+    repo.update(taskId, { status: 'in_progress' });
+
+    expect(repo.updateStatusIfWindowMatches(taskId, 'w1', 'failed', oldToken.id)).toBe(false);
+    expect(repo.findById(taskId)!.status).toBe('in_progress');
+    expect(repo.findById(taskId)!.tmuxWindow).toBe('w1');
+  });
+
+  it('writes status and returns true via the tmux_window = ? arm when no newer generation has been issued (regression guard: the ordinary same-generation case must keep working)', () => {
+    const token = tokenRepo.issue(taskId, 1);
+
+    expect(repo.updateStatusIfWindowMatches(taskId, 'w1', 'failed', token.id)).toBe(true);
+    expect(repo.findById(taskId)!.status).toBe('failed');
+  });
 });

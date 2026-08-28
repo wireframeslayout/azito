@@ -204,30 +204,31 @@ export class SqliteTaskRepository implements ITaskRepository {
     );
     // Guarded compare-and-swap for updateStatusIfWindowMatches() — see that
     // method's doc comment on ITaskRepository (Issue #87 third-party review,
-    // Important 1; third pass). `tmux_window = ?` covers the case where the
-    // caller's own generation's window name is still on the row. The second
-    // arm covers `tmux_window IS NULL` — but, unlike the second review pass,
-    // does NOT match that unconditionally: a NULL left by a NEWER generation
-    // whose own window was later destroyed is NOT evidence that this stale
-    // caller may still write. Instead it correlates against `task_tokens` —
-    // matching only when no OTHER row for this task_id has a
-    // `window_generation` strictly greater than the caller's own token's
-    // (`?` = tokenId). That is a single UPDATE with a correlated NOT EXISTS
-    // subquery (no read-then-write) so the check and the write stay
-    // atomic under WAL/SQLite's single-writer model.
+    // Important 1; fourth pass). `tmux_window = ? OR tmux_window IS NULL`
+    // covers the two shapes the row can be in when the caller's generation
+    // is still the latest: its own window name still on the row, or no
+    // window recorded yet (before this generation's own window was
+    // created). Both arms are ALSO gated by the same "no newer generation"
+    // NOT EXISTS check — the third review pass only applied that gate to
+    // the NULL arm, which left a gap: if a newer execution has already
+    // issued its own token (and thus its own, different, tmux_window) but
+    // has not yet actually created that window, the row still carries the
+    // OLD `tmux_window` value, so the `tmux_window = ?` arm alone would
+    // match a stale caller and let it roll the task back mid-handoff. The
+    // gate correlates against `task_tokens`, matching only when no OTHER
+    // row for this task_id has a `window_generation` strictly greater than
+    // the caller's own token's (`?` = tokenId). That is a single UPDATE
+    // with a correlated NOT EXISTS subquery (no read-then-write) so the
+    // check and the write stay atomic under WAL/SQLite's single-writer
+    // model.
     this.updateStatusIfWindowMatchesStmt = db.prepare(`
       UPDATE tasks SET status = ?, updated_at = datetime('now')
       WHERE id = ?
-        AND (
-          tmux_window = ?
-          OR (
-            tmux_window IS NULL
-            AND NOT EXISTS (
-              SELECT 1 FROM task_tokens nt
-              WHERE nt.task_id = tasks.id
-                AND nt.window_generation > (SELECT window_generation FROM task_tokens WHERE id = ?)
-            )
-          )
+        AND (tmux_window = ? OR tmux_window IS NULL)
+        AND NOT EXISTS (
+          SELECT 1 FROM task_tokens nt
+          WHERE nt.task_id = tasks.id
+            AND nt.window_generation > (SELECT window_generation FROM task_tokens WHERE id = ?)
         )
     `);
     // Same guard as updateStatusIfWindowMatchesStmt above, extended to also
@@ -239,16 +240,11 @@ export class SqliteTaskRepository implements ITaskRepository {
     this.updateStatusIfWindowMatchesWithWorktreeStmt = db.prepare(`
       UPDATE tasks SET status = ?, worktree_path = ?, worktree_branch = ?, updated_at = datetime('now')
       WHERE id = ?
-        AND (
-          tmux_window = ?
-          OR (
-            tmux_window IS NULL
-            AND NOT EXISTS (
-              SELECT 1 FROM task_tokens nt
-              WHERE nt.task_id = tasks.id
-                AND nt.window_generation > (SELECT window_generation FROM task_tokens WHERE id = ?)
-            )
-          )
+        AND (tmux_window = ? OR tmux_window IS NULL)
+        AND NOT EXISTS (
+          SELECT 1 FROM task_tokens nt
+          WHERE nt.task_id = tasks.id
+            AND nt.window_generation > (SELECT window_generation FROM task_tokens WHERE id = ?)
         )
     `);
   }

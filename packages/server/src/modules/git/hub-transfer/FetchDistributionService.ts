@@ -156,6 +156,18 @@ export class FetchDistributionService {
   // hub process. It does not take any lock on the remote filesystem itself,
   // so a second hub process (or an operator/script touching the same
   // `workingDir` or mirror directly, out of band) is not protected against.
+  // Symlink aliases are the same kind of gap (Issue #87 review, 15th pass):
+  // `normalizeWorkingDirForLockKey()` below is purely lexical, so two
+  // DIFFERENT `workingDir` strings that a symlink (or bind mount) makes
+  // resolve to the SAME actual checkout — e.g. `/srv/current/repo` and
+  // `/opt/repos/repo` — take different lock keys and can race each other.
+  // Left unfixed: closing it needs an extra remote round trip per
+  // distribution to resolve the physical path (readlink/realpath on the
+  // remote host) before the lock key can be built, and this class already
+  // resolves `homeDir` remotely once per call — a second remote resolution
+  // just for lock-key purposes is not worth it for the deployment shapes
+  // this project actually targets (a project server's working directory is
+  // configured once and not normally symlink-aliased across distributions).
 
   constructor(
     private hubRepoCache: HubRepoCache,
@@ -628,14 +640,19 @@ export class FetchDistributionService {
     }
 
     // `originUrl` (read from the remote's own git config, not from this
-    // codebase's own repository configuration) is NEVER embedded raw in a
-    // log or error message here — it commonly carries embedded credentials
-    // (`https://user:token@host/repo.git`, a standard way to configure git
-    // push/fetch auth outside this codebase's own `GIT_ASKPASS` flow), and
-    // both this warning and the error below reach a task's execution log,
-    // which is visible to whoever can see the task (Issue #87 third-party
-    // review, 12th round, Important finding 1). `redactGitUrlCredentials`
-    // strips any userinfo before either message is built.
+    // codebase's own repository configuration) and `repoIdentity.httpsUrl`
+    // (the URL being distributed, which can itself carry query-string
+    // credentials some hosting providers accept in place of userinfo) are
+    // NEVER embedded raw in a log or error message here — both commonly
+    // carry embedded credentials (`https://user:token@host/repo.git`, a
+    // standard way to configure git push/fetch auth outside this
+    // codebase's own `GIT_ASKPASS` flow), and both this warning and the
+    // errors below reach a task's execution log, which is visible to
+    // whoever can see the task (Issue #87 third-party review, 12th round,
+    // Important finding 1; 15th round, Important finding 1 extended this
+    // to `repoIdentity.httpsUrl` and to query/fragment stripping).
+    // `redactGitUrlCredentials` strips userinfo, query string, and
+    // fragment before any of these messages are built.
     if (!originUrl) {
       throw new Error(
         `workingDir "${workingDir}" is not stamped for any repository and has no origin configured, so it cannot be identified as an AZITO distribution target (repoHash ${repoHash}). ` +
@@ -673,7 +690,7 @@ export class FetchDistributionService {
       originIdentity.identity.repo.toLowerCase() === repoIdentity.repo.toLowerCase();
     if (!matches) {
       throw new Error(
-        `workingDir "${workingDir}" is not stamped for any repository, and its origin ("${redactGitUrlCredentials(originUrl)}") identifies a DIFFERENT repository than the one being distributed ("${repoIdentity.httpsUrl}"). ` +
+        `workingDir "${workingDir}" is not stamped for any repository, and its origin ("${redactGitUrlCredentials(originUrl)}") identifies a DIFFERENT repository than the one being distributed ("${redactGitUrlCredentials(repoIdentity.httpsUrl)}"). ` +
         'This working directory appears to belong to a different repository — point this server\'s project configuration at a separate working directory, or verify the configured repository.',
       );
     }
