@@ -10,6 +10,7 @@ import type { RemoteBundleOps } from './RemoteBundleOps';
 import { computeRepoHash } from './repoHash';
 import { RemoteGitCommandError } from '../execWithSentinel';
 import { normalizeRepositoryUrlToHttps } from '../normalizeRepositoryUrl';
+import { redactGitUrlCredentials } from '../redactGitUrlCredentials';
 import { DUMMY_ORIGIN_URL, type IDistributionStateRepository, type FetchDistributionParams, type FetchDistributionResult } from './types';
 
 type BundleType = 'full' | 'incremental';
@@ -585,9 +586,19 @@ export class FetchDistributionService {
     // value we can't confidently parse into a real URL — identity cannot be
     // confirmed either way. See branch 3 of `ensureWorkingDir`'s doc comment
     // for why this is accepted (with a warning) rather than rejected.
+    //
+    // `originUrl` (read from the remote's own git config, not from this
+    // codebase's own repository configuration) is NEVER embedded raw in a
+    // log or error message here — it commonly carries embedded credentials
+    // (`https://user:token@host/repo.git`, a standard way to configure git
+    // push/fetch auth outside this codebase's own `GIT_ASKPASS` flow), and
+    // both this warning and the error below reach a task's execution log,
+    // which is visible to whoever can see the task (Issue #87 third-party
+    // review, 12th round, Important finding 1). `redactGitUrlCredentials`
+    // strips any userinfo before either message is built.
     if (!originUrl || originUrl === DUMMY_ORIGIN_URL || !normalizedOrigin) {
       console.warn(
-        `[FetchDistributionService] workingDir "${workingDir}" has no repoHash stamp and its origin (${originUrl ?? '(unset)'}) does not identify a repository. ` +
+        `[FetchDistributionService] workingDir "${workingDir}" has no repoHash stamp and its origin (${originUrl ? redactGitUrlCredentials(originUrl) : '(unset)'}) does not identify a repository. ` +
         `Assuming it is a pre-existing AZITO-managed checkout from before repoHash stamping (repoHash ${repoHash}) and adopting it. ` +
         'If this working directory actually belongs to a different repository, distribution will silently overwrite it — verify this server\'s project configuration.',
       );
@@ -600,7 +611,7 @@ export class FetchDistributionService {
     // `resolveCanonicalRepositoryIdentity` uses for owner/repo comparison.
     if (normalizedOrigin.toLowerCase() !== repoIdentity.httpsUrl.toLowerCase()) {
       throw new Error(
-        `workingDir "${workingDir}" is not stamped for any repository, and its origin ("${originUrl}") identifies a DIFFERENT repository than the one being distributed ("${repoIdentity.httpsUrl}"). ` +
+        `workingDir "${workingDir}" is not stamped for any repository, and its origin ("${redactGitUrlCredentials(originUrl)}") identifies a DIFFERENT repository than the one being distributed ("${repoIdentity.httpsUrl}"). ` +
         'This working directory appears to belong to a different repository — point this server\'s project configuration at a separate working directory, or verify the configured repository.',
       );
     }

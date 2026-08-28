@@ -1026,7 +1026,19 @@ export class ExecuteTaskUseCase {
       let wt: WorktreeInfo;
       try {
         const slug = await this.contentExtractor.generateSlug(task.title);
-        wt = await this.getWorktreeService(server).create(workingDir, taskId, slug, worktreeCreateBaseBranch, task.branch || undefined);
+        // `task.branch` is a PERSISTED value, not fresh API input — a task
+        // saved before `rejectQualifiedBranchInput` rejected new
+        // fully-qualified refs at the API boundary can still have
+        // `branch: 'refs/heads/main'` sitting in the database (Issue #87
+        // third-party review, 12th round, Important finding 2). Normalize
+        // it the same way `baseBranch` above is normalized, rather than
+        // passing it through raw — `assertSafeBranch` inside
+        // `WorktreeService.create()` no longer rejects a fully-qualified
+        // ref (same review round), so this is about keeping the branch this
+        // worktree actually uses/reuses in its plain, unqualified form, not
+        // about avoiding a thrown error.
+        const branchName = task.branch ? normalizeBranchRef(task.branch) : undefined;
+        wt = await this.getWorktreeService(server).create(workingDir, taskId, slug, worktreeCreateBaseBranch, branchName);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         this.appendLog(taskId, unitId, 'command', {

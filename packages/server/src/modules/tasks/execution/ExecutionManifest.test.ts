@@ -1295,3 +1295,61 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     });
   });
 });
+
+// Issue #87 third-party review, 12th round, Important finding 3: the
+// approval manifest used to hash the RAW resolved base branch
+// (resolveBaseBranch's result), while ExecuteTaskUseCase.execute()
+// canonicalizes that same value (canonicalizeBaseBranch — strips a
+// `refs/heads/` prefix and/or a remote `origin/` qualifier) before actually
+// using it. For a pre-existing task whose resolved base branch is
+// `origin/main` or `refs/heads/main`, that meant the operator approved and
+// fingerprinted `origin/main`, but the task actually ran against `main` —
+// an execution-gate contract violation. `resolveExecutionManifest` must
+// apply the exact same canonicalization, so `branches.base` in the manifest
+// always equals what execution actually uses.
+describe('resolveExecutionManifest base branch canonicalization (Issue #87 third-party review, 12th round, Important finding 3)', () => {
+  it('records the CANONICALIZED base branch, not the raw remote-qualified value, when the task base branch is "origin/main"', () => {
+    const fixture: Fixture = {
+      units: { 20: makeUnit() },
+      project: makeProject(),
+      projectServers: { 'test-server': makeProjectServer() },
+    };
+    const task = makeTask({ baseBranch: 'origin/main' });
+
+    const { manifest } = resolveExecutionManifest(task, makeDeps(fixture));
+
+    expect(manifest.branches.base).toBe('main');
+  });
+
+  it('records the CANONICALIZED base branch when the task base branch is a fully-qualified ref "refs/heads/main"', () => {
+    const fixture: Fixture = {
+      units: { 20: makeUnit() },
+      project: makeProject(),
+      projectServers: { 'test-server': makeProjectServer() },
+    };
+    const task = makeTask({ baseBranch: 'refs/heads/main' });
+
+    const { manifest } = resolveExecutionManifest(task, makeDeps(fixture));
+
+    expect(manifest.branches.base).toBe('main');
+  });
+
+  it('a task previously approved with a raw "origin/main" baseBranch still passes the execution gate at run time (both sides now canonicalize identically)', () => {
+    const fixture: Fixture = {
+      units: { 20: makeUnit() },
+      project: makeProject(),
+      projectServers: { 'test-server': makeProjectServer() },
+    };
+    const task = makeTask({ baseBranch: 'origin/main' });
+    const deps = makeDeps(fixture);
+
+    const { manifest, projectServer } = resolveExecutionManifest(task, deps);
+    const approvedHash = hashExecutionManifest(manifest);
+    const approvedTask = { ...task, executionApprovedFingerprintHash: approvedHash };
+
+    const { manifest: manifestAtRunTime } = resolveExecutionManifest(approvedTask, deps);
+    const gate = checkExecutionGate(approvedTask, resolveInputPolicy(projectServer), hashExecutionManifest(manifestAtRunTime));
+
+    expect(gate).toEqual({ allowed: true });
+  });
+});

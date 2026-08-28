@@ -15,7 +15,8 @@ import { PathResolverFactory, assertDirectoryContained } from '../git/PathContai
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { IContentExtractor } from '../llm/ContentExtractor';
 import type { IExecutionLogRepository } from './ExecutionLog';
-import { resolveTaskServerName, resolveTmuxSession, resolveBaseBranch } from './execution/TaskExecutionEnv';
+import { resolveTaskServerName, resolveTmuxSession, resolveBaseBranch, canonicalizeBaseBranch } from './execution/TaskExecutionEnv';
+import { normalizeBranchRef } from '../git/assertSafeGitArgs';
 import { buildWorkerLaunchCommand } from '../agents/LaunchCommand';
 import { shellQuote } from '../../shared/shellQuote';
 import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError, reverifyExecutionGateInLock } from './execution/ExecutionGate';
@@ -335,7 +336,17 @@ export class TaskRestoreService {
         }
 
         repoDir = workingDir;
-        baseBranch = resolveBaseBranch(task, projectServer, project);
+        // Canonicalized the same way ExecuteTaskUseCase.execute() and
+        // resolveExecutionManifest() both do (see `canonicalizeBaseBranch`'s
+        // doc comment in TaskExecutionEnv.ts) — restore resolves
+        // `baseBranch` independently of the manifest it builds above (for
+        // the actual worktree creation call below, not for hashing), so
+        // without this it could still create the worktree from an
+        // `origin/`- or `refs/heads/`-qualified value even though the
+        // approved manifest's `branches.base` (ExecutionManifest.ts) records
+        // the canonicalized one (Issue #87 third-party review, 12th round,
+        // Important finding 3).
+        baseBranch = canonicalizeBaseBranch(resolveBaseBranch(task, projectServer, project));
         // task.branch first (Issue #328 review round, fix 1): the approval
         // manifest's `branches.work` field (ExecutionManifest.ts) hashes
         // `task.branch` — the client-specified value — not `worktreeBranch`.
@@ -353,7 +364,14 @@ export class TaskRestoreService {
         // `worktreeBranch` below (never back to `task.branch`), so this
         // change does not reintroduce the fingerprint self-invalidation bug
         // the removed comment described.
-        const branch = task.branch || task.worktreeBranch || undefined;
+        // Normalized the same way ExecuteTaskUseCase.execute() normalizes
+        // `task.branch` before this same worktree-creation call (Issue #87
+        // third-party review, 12th round, Important finding 2) — a
+        // persisted `task.branch`/`task.worktreeBranch` can still be a
+        // fully-qualified ref from before the API boundary rejected new
+        // ones.
+        const rawBranch = task.branch || task.worktreeBranch || undefined;
+        const branch = rawBranch ? normalizeBranchRef(rawBranch) : undefined;
         const slug = branch ? `task-${task.id}` : await contentExtractor.generateSlug(task.title);
 
         const transport = transportFactory.getTransport(server);

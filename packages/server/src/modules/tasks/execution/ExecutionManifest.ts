@@ -11,7 +11,7 @@ import type { PhaseConfig } from '../../sidekicks/PhaseConfig';
 import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoader';
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import { resolvePhaseSidekick, resolveEnabledPhases } from '../../sidekicks/resolvePhaseSidekick';
-import { resolveUnitId, resolveTaskServerName, resolveBaseBranch } from './TaskExecutionEnv';
+import { resolveUnitId, resolveTaskServerName, resolveBaseBranch, canonicalizeBaseBranch } from './TaskExecutionEnv';
 
 /**
  * Execution manifest (Issue #328 fifth-round review).
@@ -869,7 +869,18 @@ export function resolveExecutionManifest(
   const unit = unitId !== null ? deps.unitRepo.findById(unitId) : null;
   const serverName = serverNameOverride ?? resolveTaskServerName(task, deps.projectServerRepo);
   const projectServer = serverName ? deps.projectServerRepo.find(task.projectId, serverName) : null;
-  const baseBranch = resolveBaseBranch(task, projectServer, project);
+  // Canonicalized the same way, and at the same point in the resolution
+  // chain, as ExecuteTaskUseCase.execute() (see `canonicalizeBaseBranch`'s
+  // doc comment in TaskExecutionEnv.ts) — otherwise a pre-existing task
+  // whose resolved base branch is `origin/main` or `refs/heads/main` would
+  // have its APPROVED/fingerprinted manifest record that raw value while
+  // execution actually normalizes and runs against `main`, silently
+  // breaking the execution gate's "what was approved is what runs"
+  // guarantee (Issue #87 third-party review, 12th round, Important finding
+  // 3). Every manifest consumer (approval, restore's own gate check,
+  // respawn) resolves through this one function, so applying it here is
+  // sufficient — no other resolveBaseBranch() call site feeds a manifest.
+  const baseBranch = canonicalizeBaseBranch(resolveBaseBranch(task, projectServer, project));
   // Resolved via the same `serverRepo.findByName()` TransportFactory's
   // callers use at run time to pick local/SSH/agent — see the `server`
   // manifest field's doc comment above (Issue #328 tenth-round review).

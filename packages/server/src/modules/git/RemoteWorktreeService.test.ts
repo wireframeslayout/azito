@@ -405,5 +405,55 @@ describe('RemoteWorktreeService', () => {
       const svc = new RemoteWorktreeService(transport);
       expect(await svc.getBranch('/home/user/project')).toBeNull();
     });
+
+    // Issue #87 third-party review, 12th round, Important finding 2:
+    // `assertSafeBranch` used to also reject any fully-qualified ref
+    // (`refs/...`), but it runs against PERSISTED values here — a task
+    // saved before the API boundary rejected new `refs/...` input can still
+    // have `task.branch: 'refs/heads/main'` in the database. That must not
+    // make every future run of that task fail before worktree creation even
+    // starts.
+    it('does not reject a fully-qualified ref (refs/heads/main) as baseBranch — back-compat for pre-existing persisted values', async () => {
+      const transport = {
+        exec: vi.fn(async (cmd: string) => {
+          if (cmd.startsWith('test -d') && cmd.includes('exists')) return ok('no\n');
+          if (cmd.startsWith('test -d') && cmd.includes('yes')) return ok('yes\n');
+          return ok('');
+        }),
+        execTmux: vi.fn(),
+        openTerminal: vi.fn(),
+        createPaneStream: vi.fn(),
+      } as unknown as IServerTransport;
+      const svc = new RemoteWorktreeService(transport);
+      await expect(svc.create('/home/user/project', 1, 'slug', 'refs/heads/main')).resolves.toBeDefined();
+    });
+
+    it('does not reject a fully-qualified ref (refs/heads/main) as branchName — back-compat for pre-existing persisted task.branch values', async () => {
+      const calls: string[] = [];
+      const transport = {
+        exec: vi.fn(async (cmd: string) => {
+          calls.push(cmd);
+          if (cmd.includes('test -d') && cmd.includes('echo yes')) return ok('yes\n');
+          if (cmd.includes('test -d')) return ok('no\n');
+          if (cmd.includes('rev-parse --verify')) return ok('fatal: Needed a single revision\n');
+          return ok();
+        }),
+        execTmux: vi.fn(),
+        openTerminal: vi.fn(),
+        createPaneStream: vi.fn(),
+      } as unknown as IServerTransport;
+
+      const svc = new RemoteWorktreeService(transport);
+      const result = await svc.create('/home/user/project', 1, 'slug', 'main', 'refs/heads/main');
+
+      expect(result.branch).toBe('refs/heads/main');
+      expect(calls.some(c => c.includes('Unsafe'))).toBe(false);
+    });
+
+    it('still rejects a baseBranch containing shell metacharacters, refs/-qualified or not', async () => {
+      const transport = mockTransport([]);
+      const svc = new RemoteWorktreeService(transport);
+      await expect(svc.create('/home/user/project', 1, 'slug', 'refs/heads/main; rm -rf /')).rejects.toThrow('Unsafe baseBranch');
+    });
   });
 });

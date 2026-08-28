@@ -32,6 +32,30 @@ describe('LocalWorktreeService', () => {
     it('rejects branchName with backticks', async () => {
       await expect(svc.create('/tmp/repo', 1, 'slug', 'main', '`id`')).rejects.toThrow('Unsafe');
     });
+
+    // Issue #87 third-party review, 12th round, Important finding 2:
+    // assertSafeBranch used to also reject any fully-qualified ref
+    // (refs/...), but a pre-existing task's persisted baseBranch/branch can
+    // already be one (from before the API boundary rejected new refs/...
+    // input) — it must not be rejected as "Unsafe" here. `/tmp/repo` is not
+    // a git repository, so this still throws, but NOT the "Unsafe"/
+    // "fully-qualified ref" validation error — it must get past validation
+    // and fail later, on the actual git operation.
+    it('does not reject baseBranch "refs/heads/main" as Unsafe (back-compat for pre-existing persisted values)', async () => {
+      try {
+        await svc.create('/tmp/repo', 1, 'slug', 'refs/heads/main');
+      } catch (err) {
+        expect(String(err instanceof Error ? err.message : err)).not.toMatch(/Unsafe|fully-qualified/);
+      }
+    });
+
+    it('does not reject branchName "refs/heads/main" as Unsafe (back-compat for pre-existing persisted task.branch values)', async () => {
+      try {
+        await svc.create('/tmp/repo', 1, 'slug', 'main', 'refs/heads/main');
+      } catch (err) {
+        expect(String(err instanceof Error ? err.message : err)).not.toMatch(/Unsafe|fully-qualified/);
+      }
+    });
   });
 
   describe('remove() input validation', () => {

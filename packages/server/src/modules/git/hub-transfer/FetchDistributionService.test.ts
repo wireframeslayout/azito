@@ -1295,4 +1295,50 @@ describe('FetchDistributionService unstamped-workingDir identity verification (I
       warnSpy.mockRestore();
     }
   });
+
+  // Issue #87 third-party review, 12th round, Important finding 1: origin
+  // URLs commonly carry embedded credentials, and both the mismatch error
+  // and the adoption warning below reach a task's execution log — neither
+  // may ever contain the raw, unredacted origin URL.
+  it('origin identifies a DIFFERENT repository WITH embedded credentials: the error never contains the credential', async () => {
+    const originWithCreds = 'https://x-access-token:dummy-secret-value-123@github.com/someone-else/other-repo.git';
+    const remoteBundleOps = mockRemoteBundleOps({
+      getMirrorBranchSha: vi.fn(async () => sha),
+      repoExists: vi.fn(async () => true),
+      getStampedRepoHash: vi.fn(async () => null),
+      getOriginUrl: vi.fn(async () => originWithCreds),
+    });
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const result = await service.distribute(makeParams());
+
+    expect(result.status).toBe('failed');
+    const error = (result as any).error as string;
+    expect(error).toMatch(/different repository/);
+    expect(error).not.toContain('dummy-secret-value-123');
+    expect(error).not.toContain('x-access-token');
+    expect(error).toContain('github.com/someone-else/other-repo.git');
+  });
+
+  it('origin is an unrecognizable value WITH embedded credentials (adoption path): the warning never contains the credential', async () => {
+    const originWithCreds = 'https://user:dummy-secret-value-456@internal-git-mirror.example/repo';
+    const remoteBundleOps = mockRemoteBundleOps({
+      getMirrorBranchSha: vi.fn(async () => sha),
+      repoExists: vi.fn(async () => true),
+      getStampedRepoHash: vi.fn(async () => null),
+      getOriginUrl: vi.fn(async () => originWithCreds),
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+      const result = await service.distribute(makeParams());
+
+      expect(result.status).toBe('already_current');
+      expect(warnSpy).toHaveBeenCalled();
+      const loggedMessages = warnSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+      expect(loggedMessages).not.toContain('dummy-secret-value-456');
+      expect(loggedMessages).not.toContain('user:dummy-secret-value-456');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
 });

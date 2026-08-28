@@ -69,8 +69,8 @@ describe('assertSafeBranch', () => {
     expect(() => assertSafeBranch('my branch', 'test')).toThrow('Unsafe');
   });
 
-  it('rejects fully-qualified refs (Issue #87 9th round, Important 1)', () => {
-    expect(() => assertSafeBranch('refs/heads/main', 'test')).toThrow(/fully-qualified ref/);
+  it('accepts fully-qualified refs — shell-safety only, back-compat for pre-existing persisted task.branch values (Issue #87 12th round, Important 2)', () => {
+    expect(() => assertSafeBranch('refs/heads/main', 'test')).not.toThrow();
   });
 
   it('still accepts branch names that merely contain "refs" as a path segment', () => {

@@ -17,11 +17,23 @@ export function assertSafePath(value: string, label: string): void {
   if (!SAFE_PATH_PATTERN.test(value)) throw new Error(`Unsafe ${label}: ${value}`);
 }
 
+// Shell-safety validation ONLY. This function is called against values that
+// are already persisted (task.branch, baseBranch resolved from a stored
+// task/project row, ...), not just against fresh API input — Local/Remote
+// WorktreeService and RemoteBundleOps call it with whatever a pre-existing
+// task already has saved. It used to also reject fully-qualified refs
+// (`refs/...`), but that rejection ran against those SAME persisted values:
+// a task saved before `rejectQualifiedBranchInput` existed at the API
+// boundary (see below) could have `branch: 'refs/heads/main'` sitting in the
+// database already, and every attempt to run it would throw here, forever
+// (Issue #87 third-party review, 12th round, Important finding 2 — this
+// broke backward compatibility for exactly the tasks the API-boundary check
+// was designed not to touch). Rejecting a fully-qualified ref belongs ONLY
+// at the API boundary for NEW input (`rejectQualifiedBranchInput`); a
+// value that already reached this function is normalized at resolve time
+// instead (`canonicalizeBaseBranch` / `normalizeBranchRef`), never rejected.
 export function assertSafeBranch(value: string, label: string): void {
   if (!SAFE_BRANCH_PATTERN.test(value)) throw new Error(`Unsafe ${label}: ${value}`);
-  if (isFullyQualifiedRef(value)) {
-    throw new Error(`${label} must not be a fully-qualified ref (refs/...); specify a plain branch name instead: ${value}`);
-  }
 }
 
 /**
