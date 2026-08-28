@@ -559,6 +559,25 @@ export interface ITaskRepository {
    * This third pass replaces the bare NULL check with the `task_tokens`
    * generation lookup above so NULL is only treated as "my own generation's
    * window is gone", never as blanket permission.
+   *
+   * `extraFields` (Issue #87 third-party review, seventh pass, Important
+   * finding 2) lets a caller clear `worktreePath`/`worktreeBranch` in the
+   * SAME guarded, generation-checked UPDATE as the status write, instead of
+   * a second unconditional `update()` call afterwards. Before this fix, the
+   * rollback for a path-containment failure wrote `status: 'failed'`
+   * through this guarded method (correctly refusing to stomp a newer
+   * generation) but then unconditionally overwrote `worktreePath`/
+   * `worktreeBranch` via `update()` regardless of the guard's outcome — so a
+   * stale (old-generation) rollback could still erase the worktree fields a
+   * newer, live generation had already persisted for its own execution. When
+   * the guard doesn't match (stale caller), NEITHER the status NOR
+   * `extraFields` are written.
    */
-  updateStatusIfWindowMatches(id: number, expectedWindowName: string, status: TaskStatus, tokenId: number): boolean;
+  updateStatusIfWindowMatches(
+    id: number,
+    expectedWindowName: string,
+    status: TaskStatus,
+    tokenId: number,
+    extraFields?: { worktreePath: string | null; worktreeBranch: string | null },
+  ): boolean;
 }

@@ -864,4 +864,48 @@ describe('SqliteTaskRepository.updateStatusIfWindowMatches (Issue #87 third-part
     expect(repo.updateStatusIfWindowMatches(taskId, 'w1', 'failed', oldToken.id)).toBe(false);
     expect(repo.findById(taskId)!.status).toBe('in_progress');
   });
+
+  // Issue #87 third-party review, seventh pass, Important finding 2: a
+  // stale rollback's `extraFields` (worktreePath/worktreeBranch) must go
+  // through the SAME generation guard as the status write — previously they
+  // were applied via a separate unconditional `update()` call regardless of
+  // whether the guard matched, so a stale rollback could erase a NEWER,
+  // live generation's already-persisted worktree info.
+  it('writes both status and extraFields (worktreePath/worktreeBranch) together when the generation guard matches', () => {
+    const token = tokenRepo.issue(taskId, 1);
+    expect(
+      repo.updateStatusIfWindowMatches(taskId, 'w1', 'failed', token.id, {
+        worktreePath: null,
+        worktreeBranch: null,
+      }),
+    ).toBe(true);
+    const task = repo.findById(taskId)!;
+    expect(task.status).toBe('failed');
+    expect(task.worktreePath).toBeNull();
+    expect(task.worktreeBranch).toBeNull();
+  });
+
+  it('leaves BOTH status and extraFields (worktreePath/worktreeBranch) untouched when a newer generation has already persisted its own worktree (regression: a stale rollback must not erase a live concurrent execution\'s worktree info)', () => {
+    const staleToken = tokenRepo.issue(taskId, 1);
+    // Simulate a concurrent execute() for the same task that rotated to a
+    // new window generation and already persisted ITS OWN worktree fields.
+    repo.update(taskId, {
+      tmuxWindow: 'w2',
+      status: 'in_progress',
+      worktreePath: '/srv/worktrees/new-gen',
+      worktreeBranch: 'task/new-gen',
+    });
+
+    expect(
+      repo.updateStatusIfWindowMatches(taskId, 'w1', 'failed', staleToken.id, {
+        worktreePath: null,
+        worktreeBranch: null,
+      }),
+    ).toBe(false);
+
+    const task = repo.findById(taskId)!;
+    expect(task.status).toBe('in_progress');
+    expect(task.worktreePath).toBe('/srv/worktrees/new-gen');
+    expect(task.worktreeBranch).toBe('task/new-gen');
+  });
 });

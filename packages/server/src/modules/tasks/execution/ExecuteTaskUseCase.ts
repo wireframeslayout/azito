@@ -440,9 +440,17 @@ export class ExecuteTaskUseCase {
    * token via {@link rollbackWindowReference}) so a THIRD failure branch
    * doesn't reimplement it a third time.
    *
-   * `extraTaskUpdate` lets a caller merge in fields beyond `status: 'failed'`
-   * (e.g. `worktreePath: null, worktreeBranch: null` for the path-rejected
-   * branch) in the SAME `taskRepo.update` call, not a second one.
+   * `extraTaskUpdate` lets a caller merge in `worktreePath`/`worktreeBranch`
+   * (e.g. `null, null` for the path-rejected branch) into the SAME
+   * generation-guarded `updateStatusIfWindowMatches` UPDATE as the status
+   * write — not a separate, unconditional `taskRepo.update()` call. Issue
+   * #87 third-party review, seventh pass, Important finding 2: a second
+   * unconditional `update()` after the guarded status write clobbered
+   * `worktreePath`/`worktreeBranch` even when the guard had just refused the
+   * status write because a NEWER generation had already persisted its own
+   * worktree for this same task — the stale rollback erased a live
+   * execution's worktree info. Routing both through one guarded statement
+   * means the guard not matching now blocks BOTH fields, not just status.
    *
    * Scoped to `tokenId` (the generation `createRotatedWindow` issued for
    * THIS execute() call, inside `runExclusiveForTask`), not the whole task —
@@ -469,10 +477,10 @@ export class ExecuteTaskUseCase {
    * this call's own `windowName`, exactly like `clearTmuxWindowIfMatches`
    * above — so it becomes a no-op once the row has moved on to a different
    * generation. `extraTaskUpdate` (worktreePath/worktreeBranch on the
-   * worktree_path_rejected branch) is still applied unconditionally, as
-   * before this fix — those fields describe THIS call's own worktree, not a
-   * status a concurrent execution could also be writing, so there is no
-   * cross-generation clobber risk to guard there.
+   * worktree_path_rejected branch) is passed through to the SAME guarded
+   * call (seventh pass, Important finding 2) instead of a second
+   * unconditional `taskRepo.update()` — see that method's own doc comment
+   * for the clobber this closes.
    */
   private async rollbackWindowAfterPostCreationFailure(
     taskId: number,
@@ -481,11 +489,12 @@ export class ExecuteTaskUseCase {
     windowName: string,
     tokenId: number,
     revokeReason: string,
-    extraTaskUpdate?: Partial<Task>,
+    extraTaskUpdate?: { worktreePath: string | null; worktreeBranch: string | null },
   ): Promise<void> {
-    this.taskRepo.updateStatusIfWindowMatches(taskId, windowName, 'failed' as TaskStatus, tokenId);
     if (extraTaskUpdate) {
-      this.taskRepo.update(taskId, extraTaskUpdate);
+      this.taskRepo.updateStatusIfWindowMatches(taskId, windowName, 'failed' as TaskStatus, tokenId, extraTaskUpdate);
+    } else {
+      this.taskRepo.updateStatusIfWindowMatches(taskId, windowName, 'failed' as TaskStatus, tokenId);
     }
     try {
       await rollbackWindowReference(

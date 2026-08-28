@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { FetchDistributionService } from './FetchDistributionService';
+import { RemoteGitCommandError } from '../execWithSentinel';
 import type { CanonicalRepositoryIdentity } from '../resolveCanonicalRepositoryIdentity';
 
 const identity: CanonicalRepositoryIdentity = {
@@ -260,6 +261,88 @@ describe('FetchDistributionService', () => {
     // was built or uploaded.
     expect(sftpService.upload).toHaveBeenCalledTimes(1);
     expect(hubRepoCache.createBundle).toHaveBeenCalledTimes(1);
+  });
+
+  // Issue #87 third-party review, seventh pass, Important finding 4: a
+  // `RemoteGitCommandError` with `transportFailure: true` means the remote
+  // command never completed at all (connection drop, command timeout) — the
+  // exit-status sentinel never arrived. Retrying with a different bundle
+  // (full instead of incremental) cannot fix a transfer/execution-layer
+  // anomaly, and doing so pays the full remote command timeout a second
+  // time for nothing. This must be classified the same way an SFTP upload
+  // failure already is: fail immediately, no fallback.
+  it('fails immediately (no full-bundle fallback) when fetchBundleIntoMirror reports a transport-layer failure (sentinel missing)', async () => {
+    const prevSha = 'b'.repeat(40);
+    const remoteBundleOps = mockRemoteBundleOps({
+      getMirrorBranchSha: vi.fn(async () => prevSha),
+      repoExists: vi.fn(async () => true),
+      fetchBundleIntoMirror: vi.fn(async () => {
+        throw new RemoteGitCommandError('git fetch bundle into mirror did not complete (transport/execution failure)', {
+          transportFailure: true,
+        });
+      }),
+    });
+    const hubRepoCache = mockHubRepoCache();
+    const sftpService = mockSftpService();
+    const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService, mockDistRepo());
+    const result = await service.distribute(makeParams());
+    expect(result.status).toBe('failed');
+    // Only the one (incremental) attempt — no fallback full bundle was
+    // built or uploaded.
+    expect(sftpService.upload).toHaveBeenCalledTimes(1);
+    expect(hubRepoCache.createBundle).toHaveBeenCalledTimes(1);
+    expect(remoteBundleOps.fetchBundleIntoMirror).toHaveBeenCalledTimes(1);
+  });
+
+  // The mirror image of the test above: when the sentinel DOES arrive and
+  // reports a genuine non-zero exit (`transportFailure: false` — git
+  // actually ran and rejected THIS bundle's content, e.g. a missing
+  // prerequisite commit), the existing incremental->full fallback must
+  // still kick in, unchanged from before this fix.
+  it('still falls back to full bundle when fetchBundleIntoMirror reports a genuine git rejection (sentinel present, non-zero exit)', async () => {
+    const prevSha = 'b'.repeat(40);
+    const remoteBundleOps = mockRemoteBundleOps({
+      getMirrorBranchSha: vi.fn(async () => prevSha),
+      repoExists: vi.fn(async () => true),
+      fetchBundleIntoMirror: vi.fn()
+        .mockRejectedValueOnce(new RemoteGitCommandError('git fetch bundle into mirror failed: fatal: no prerequisite', {
+          transportFailure: false,
+        }))
+        .mockResolvedValueOnce(undefined),
+    });
+    const hubRepoCache = mockHubRepoCache();
+    const sftpService = mockSftpService();
+    const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService, mockDistRepo());
+    const result = await service.distribute(makeParams());
+    expect(result.status).toBe('distributed');
+    expect(result.bundleType).toBe('full');
+    expect(sftpService.upload).toHaveBeenCalledTimes(2);
+    expect(remoteBundleOps.fetchBundleIntoMirror).toHaveBeenCalledTimes(2);
+  });
+
+  // Cleanup running in a `finally` block must never replace the classified
+  // error above with whatever `cleanup()` itself throws (Issue #87
+  // third-party review, seventh pass, Important finding 4) — best-effort
+  // only.
+  it('reports the original transport-layer failure, not a cleanup error, when remote cleanup also fails', async () => {
+    const prevSha = 'b'.repeat(40);
+    const remoteBundleOps = mockRemoteBundleOps({
+      getMirrorBranchSha: vi.fn(async () => prevSha),
+      repoExists: vi.fn(async () => true),
+      fetchBundleIntoMirror: vi.fn(async () => {
+        throw new RemoteGitCommandError('git fetch bundle into mirror did not complete (transport/execution failure)', {
+          transportFailure: true,
+        });
+      }),
+      cleanup: vi.fn(async () => {
+        throw new Error('rm -f: connection lost');
+      }),
+    });
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const result = await service.distribute(makeParams());
+    expect(result.status).toBe('failed');
+    expect(result.error).toContain('transport/execution failure');
+    expect(result.error).not.toContain('rm -f');
   });
 
   it('does not retry (fails outright) when the full-bundle delivery itself fails', async () => {

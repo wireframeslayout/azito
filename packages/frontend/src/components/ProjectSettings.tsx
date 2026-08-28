@@ -17,6 +17,7 @@ import { FormInput, FormSelect, LoadingState, baseInputStyle, Button } from './u
 import type { Window, Unit, Server } from '../pages/workspace/types';
 import { parseRepoUrl as parseGitRepoUrl } from '../lib/gitProvider';
 import { notifyProjectsChanged } from '../lib/projectsChanged';
+import { isDistributeCodeLocked, shouldShowDistributeCodeBadge } from '../lib/distributeCodePolicy';
 import { useToast } from '../hooks/useToast';
 import { useConfirm } from '../hooks/useConfirm';
 
@@ -113,6 +114,18 @@ export function useProjectSettings(
     const targetServer = (servers || []).find((sv) => sv.name === psServer);
     if (targetServer?.type === 'local') {
       setPsDistributeCode(false);
+      return;
+    }
+    // Issue #87 third-party review, seventh pass, Minor finding 3: an
+    // isolated server has no git credentials of its own, so the backend
+    // ALWAYS distributes code to it via `isolationIntent` regardless of
+    // this saved flag — the toggle in the form below is locked to reflect
+    // that (see its `disabled` condition). Force the state to match here
+    // too, so an isolated target never shows the toggle unchecked (which
+    // would misrepresent what actually happens on save) even before the
+    // user opens the (disabled) toggle.
+    if (isDistributeCodeLocked(targetServer)) {
+      setPsDistributeCode(true);
       return;
     }
     const existing = projectServers.find((ps) => ps.serverName === psServer);
@@ -534,21 +547,38 @@ function ServersSection({ settings: s }: { settings: ReturnType<typeof useProjec
               hub, so "distributing" to it has no effect) — hidden rather than
               disabled, since the reason is structural, not a transient state
               a user could resolve from this form. */}
-          {(s.servers || []).find((sv) => sv.name === s.psServer)?.type !== 'local' && (
-            <FormField label="" hint={t('settings.servers.distributeCodeHint')}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={s.psDistributeCode}
-                    onChange={(e) => s.setPsDistributeCode(e.target.checked)}
-                  />
-                  <span className="toggle-slider" />
+          {(s.servers || []).find((sv) => sv.name === s.psServer)?.type !== 'local' && (() => {
+            // Issue #87 third-party review, seventh pass, Minor finding 3:
+            // an isolated server holds no git credentials of its own, so the
+            // backend ALWAYS distributes code to it via `isolationIntent`
+            // (see `distributeCode` docs) regardless of this saved flag —
+            // toggling it off here would silently do nothing, and the list
+            // badge below would then wrongly claim "not distributed". Lock
+            // the toggle on (disabled, checked, `psDistributeCode` is forced
+            // `true` for this target by the `useEffect` above) and explain
+            // why via the hint, instead of letting the operator believe
+            // they can turn it off.
+            const isolated = isDistributeCodeLocked((s.servers || []).find((sv) => sv.name === s.psServer));
+            return (
+              <FormField
+                label=""
+                hint={isolated ? t('settings.servers.distributeCodeIsolatedHint') : t('settings.servers.distributeCodeHint')}
+              >
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: isolated ? 'default' : 'pointer' }}>
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={s.psDistributeCode}
+                      disabled={isolated}
+                      onChange={(e) => s.setPsDistributeCode(e.target.checked)}
+                    />
+                    <span className="toggle-slider" />
+                  </label>
+                  <span style={{ fontSize: 'var(--font-md)', color: 'var(--text)' }}>{t('settings.servers.distributeCode')}</span>
                 </label>
-                <span style={{ fontSize: 'var(--font-md)', color: 'var(--text)' }}>{t('settings.servers.distributeCode')}</span>
-              </label>
-            </FormField>
-          )}
+              </FormField>
+            );
+          })()}
           <FormField label={t('settings.servers.branch')}>
             <FormInput value={s.psBranch} onChange={(e) => s.setPsBranch(e.target.value)} placeholder={t('settings.servers.branchPlaceholder')} />
           </FormField>
@@ -600,9 +630,16 @@ function ServersSection({ settings: s }: { settings: ReturnType<typeof useProjec
               <span style={{ color: ps.inputPolicy === 'deny' ? 'var(--danger)' : ps.inputPolicy === 'allow' ? 'var(--accent)' : 'var(--text-dim)', marginLeft: 8 }}>
                 {ps.inputPolicy === 'deny' ? t('settings.servers.inputPolicyDeny') : ps.inputPolicy === 'allow' ? t('settings.servers.inputPolicyAllow') : t('settings.servers.inputPolicyManualApproval')}
               </span>
-              {ps.distributeCode && (
+              {/* Issue #87 third-party review, seventh pass, Minor finding 3:
+                  an isolated server distributes ALWAYS (`isolationIntent`),
+                  regardless of what `ps.distributeCode` was last saved as —
+                  showing the badge only on `distributeCode` let an operator
+                  who turned the (now-locked, always-on) toggle off in an
+                  earlier session see a list that wrongly implies nothing is
+                  being distributed. */}
+              {shouldShowDistributeCodeBadge((s.servers || []).find((sv) => sv.name === ps.serverName), ps.distributeCode) ? (
                 <span style={{ color: 'var(--accent)', marginLeft: 8 }}>{t('settings.servers.distributeCodeBadge')}</span>
-              )}
+              ) : null}
             </span>
             <span style={{ display: 'flex', gap: 8 }}>
               <Button size="sm" onClick={() => s.handleOpenServerForm(ps.serverName)}>{t('common:actions.edit')}</Button>

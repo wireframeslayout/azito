@@ -834,6 +834,7 @@ button:focus-within .diff-open-btn {
 .toggle-slider::before { content: ''; position: absolute; height: 16px; width: 16px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: .2s; }
 .toggle input:checked + .toggle-slider { background: var(--accent); }
 .toggle input:checked + .toggle-slider::before { transform: translateX(16px); }
+.toggle input:disabled + .toggle-slider { cursor: not-allowed; opacity: .55; }
 
 /* ---- Theme: workspace-scope backdrop ----
    ワークスペースエリアのクローム面（サイドバー/タブバー）専用のサーフェス変数。

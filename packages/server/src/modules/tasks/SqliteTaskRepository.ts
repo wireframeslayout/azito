@@ -133,6 +133,7 @@ export class SqliteTaskRepository implements ITaskRepository {
   private countChildrenInGenerationStmt;
   private clearTmuxWindowIfMatchesStmt;
   private updateStatusIfWindowMatchesStmt;
+  private updateStatusIfWindowMatchesWithWorktreeStmt;
   constructor(private db: SqliteDatabase, private taskTokenRepo: ITaskTokenRepository) {
     this.listStmt = db.prepare('SELECT * FROM tasks ORDER BY priority DESC, created_at DESC');
     this.listByProjectStmt = db.prepare('SELECT * FROM tasks WHERE project_id = ? ORDER BY priority DESC, created_at DESC');
@@ -216,6 +217,27 @@ export class SqliteTaskRepository implements ITaskRepository {
     // atomic under WAL/SQLite's single-writer model.
     this.updateStatusIfWindowMatchesStmt = db.prepare(`
       UPDATE tasks SET status = ?, updated_at = datetime('now')
+      WHERE id = ?
+        AND (
+          tmux_window = ?
+          OR (
+            tmux_window IS NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM task_tokens nt
+              WHERE nt.task_id = tasks.id
+                AND nt.window_generation > (SELECT window_generation FROM task_tokens WHERE id = ?)
+            )
+          )
+        )
+    `);
+    // Same guard as updateStatusIfWindowMatchesStmt above, extended to also
+    // clear worktree_path/worktree_branch in the SAME statement (Issue #87
+    // third-party review, seventh pass, Important finding 2) — a stale
+    // rollback that fails the guard must not clear these fields either, and
+    // a second unconditional `update()` call after the guarded status write
+    // could not express that.
+    this.updateStatusIfWindowMatchesWithWorktreeStmt = db.prepare(`
+      UPDATE tasks SET status = ?, worktree_path = ?, worktree_branch = ?, updated_at = datetime('now')
       WHERE id = ?
         AND (
           tmux_window = ?
@@ -453,9 +475,24 @@ export class SqliteTaskRepository implements ITaskRepository {
     return result.changes > 0;
   }
 
-  updateStatusIfWindowMatches(id: number, expectedWindowName: string, status: TaskStatus, tokenId: number): boolean {
+  updateStatusIfWindowMatches(
+    id: number,
+    expectedWindowName: string,
+    status: TaskStatus,
+    tokenId: number,
+    extraFields?: { worktreePath: string | null; worktreeBranch: string | null },
+  ): boolean {
     const run = this.db.transaction(() => {
-      const result = this.updateStatusIfWindowMatchesStmt.run(status, id, expectedWindowName, tokenId);
+      const result = extraFields
+        ? this.updateStatusIfWindowMatchesWithWorktreeStmt.run(
+            status,
+            extraFields.worktreePath,
+            extraFields.worktreeBranch,
+            id,
+            expectedWindowName,
+            tokenId,
+          )
+        : this.updateStatusIfWindowMatchesStmt.run(status, id, expectedWindowName, tokenId);
       if (result.changes > 0) this.revokeIfTokenRevokingStatus(id, status);
       return result.changes > 0;
     });

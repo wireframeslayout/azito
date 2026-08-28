@@ -2,13 +2,32 @@ import { describe, it, expect, vi } from 'vitest';
 import { RemoteBundleOps } from './RemoteBundleOps';
 import { DUMMY_ORIGIN_URL } from './types';
 
+// Issue #87 third-party review, seventh pass, Important finding 1: most of
+// RemoteBundleOps's remote git calls now run through `execWithSentinel`,
+// which appends `; echo "AZITO_RC:$?"` to the command and reads the REAL
+// remote exit status back out of stdout — the only signal that survives an
+// `ssh` transport's `code`/`stderr` masking unchanged (see
+// `execWithSentinel`'s doc comment). This mock models that faithfully: when
+// (and only when) the command under test actually carries the sentinel
+// echo, `code` here is the REAL remote exit status the sentinel line would
+// report — not the transport-level `code`/`stderr` an `ssh` transport
+// returns (which this mock deliberately leaves untouched otherwise, so
+// callers that don't use the sentinel — `getHeadSha`/`repoExists`/
+// `getMirrorBranchSha`/etc. — are unaffected).
 function mockTransport(responses: Record<string, { stdout: string; stderr: string; code: number }>) {
   return {
     exec: vi.fn(async (cmd: string) => {
-      for (const [pattern, result] of Object.entries(responses)) {
-        if (cmd.includes(pattern)) return result;
+      let result = { stdout: '', stderr: '', code: 0 };
+      for (const [pattern, candidate] of Object.entries(responses)) {
+        if (cmd.includes(pattern)) {
+          result = candidate;
+          break;
+        }
       }
-      return { stdout: '', stderr: '', code: 0 };
+      if (cmd.includes('AZITO_RC:$?')) {
+        return { ...result, stdout: `${result.stdout}\nAZITO_RC:${result.code}` };
+      }
+      return result;
     }),
   } as any;
 }
@@ -27,20 +46,21 @@ describe('RemoteBundleOps', () => {
       expect(await ops.verify(transport, '/tmp/mirror.git', '/tmp/test.bundle')).toBe(false);
     });
 
-    it('returns false when stderr contains fatal:', async () => {
-      const transport = mockTransport({ 'bundle verify': { stdout: '', stderr: 'fatal: bad bundle', code: 0 } });
+    it('returns false when the sentinel reports a non-zero exit even though stderr also carries fatal:', async () => {
+      const transport = mockTransport({ 'bundle verify': { stdout: '', stderr: 'fatal: bad bundle', code: 128 } });
       expect(await ops.verify(transport, '/tmp/mirror.git', '/tmp/test.bundle')).toBe(false);
     });
 
-    // Issue #87 third-party review, third pass, Important finding 1:
-    // `SshClient.execRemote()` always returns `code: 0` / `stderr: ''` and
-    // every command here is run with `2>&1`, so on an `ssh` server a git
-    // failure surfaces ONLY as a `fatal:`/`error:` line merged into stdout
-    // — never as a non-zero code or non-empty stderr. `verify()` must still
-    // catch it.
-    it('returns false for an SSH-shaped result (code 0, empty stderr, fatal: line merged into stdout)', async () => {
+    // Issue #87 third-party review, seventh pass, Important finding 1: the
+    // exit-status sentinel decides purely on the REAL remote exit code it
+    // captures — not on `fatal:`/`error:` text — so this now also catches a
+    // failure that never prints in git's own message format at all (e.g.
+    // `sh: git: command not found`, `Permission denied`), which the old
+    // text-only scan on an `ssh`-shaped transport (`code: 0`, `stderr: ''`)
+    // used to miss entirely.
+    it('returns false for an SSH-shaped transport (code 0, empty stderr) when the sentinel reports a non-git-formatted failure', async () => {
       const transport = mockTransport({
-        'bundle verify': { stdout: "error: Repository lacks these prerequisite commits:\nfatal: unable to verify bundle", stderr: '', code: 0 },
+        'bundle verify': { stdout: 'sh: git: command not found', stderr: '', code: 127 },
       });
       expect(await ops.verify(transport, '/tmp/mirror.git', '/tmp/test.bundle')).toBe(false);
     });
@@ -50,6 +70,26 @@ describe('RemoteBundleOps', () => {
         'bundle verify': { stdout: 'The bundle contains this ref:\n  refs/heads/main\nThe bundle records a complete history.', stderr: '', code: 0 },
       });
       expect(await ops.verify(transport, '/tmp/mirror.git', '/tmp/test.bundle')).toBe(true);
+    });
+
+    // Issue #87 third-party review, seventh pass, Important finding 1: when
+    // the sentinel line never arrives at all (connection drop, command
+    // timeout — the command never ran to completion), `verify()` must throw
+    // `RemoteGitCommandError` with `transportFailure: true` rather than
+    // silently treating the command as having succeeded or failed on text
+    // content it doesn't have.
+    it('throws RemoteGitCommandError with transportFailure: true when the sentinel is missing', async () => {
+      const transport = mockTransport({ 'bundle verify': { stdout: 'connection reset by peer', stderr: '', code: 0 } });
+      // NOTE: this mock intentionally does NOT get the sentinel appended,
+      // even though the real command carries `; echo "AZITO_RC:$?"` — the
+      // scenario under test is exactly that the shell never reached that
+      // echo. mockTransport only appends the sentinel line automatically
+      // for the happy path; simulate its absence by responding without it.
+      transport.exec = vi.fn(async () => ({ stdout: 'connection reset by peer', stderr: '', code: 0 }));
+      const err: any = await ops.verify(transport, '/tmp/mirror.git', '/tmp/test.bundle').catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect(err.name).toBe('RemoteGitCommandError');
+      expect(err.transportFailure).toBe(true);
     });
 
     // Issue #87 third-party review, fourth pass, Important finding 1:
@@ -234,16 +274,24 @@ describe('RemoteBundleOps', () => {
         .rejects.toThrow('git fetch bundle into mirror failed');
     });
 
-    // Issue #87 third-party review, third pass, Important finding 1: an
-    // `ssh` server's transport reports the failure ONLY as a `fatal:` line
-    // merged into stdout by this command's own `2>&1` — code 0, empty
-    // stderr, exactly like `SshClient.execRemote()` always returns.
-    it('throws on an SSH-shaped fetch failure (code 0, empty stderr, fatal: line in stdout)', async () => {
+    // Issue #87 third-party review, seventh pass, Important finding 1: the
+    // exit-status sentinel decides on the REAL remote exit code, so this
+    // catches the failure even on an `ssh`-shaped transport (`code: 0`,
+    // `stderr: ''`) and even when the remote failure text doesn't follow
+    // git's own `fatal:`/`error:` format.
+    it('throws on an SSH-shaped fetch failure (code 0, empty stderr, non-git-formatted failure text)', async () => {
       const transport = mockTransport({
-        'git -C': { stdout: 'fatal: not a bundle file', stderr: '', code: 0 },
+        'git -C': { stdout: 'sh: git: command not found', stderr: '', code: 127 },
       });
       await expect(ops.fetchBundleIntoMirror(transport, '/mirror', '/tmp/dist.bundle', 'main'))
         .rejects.toThrow('git fetch bundle into mirror failed');
+    });
+
+    it('throws RemoteGitCommandError with transportFailure: true when the sentinel is missing', async () => {
+      const transport = { exec: vi.fn(async () => ({ stdout: 'connection reset by peer', stderr: '', code: 0 })) } as any;
+      const err: any = await ops.fetchBundleIntoMirror(transport, '/mirror', '/tmp/dist.bundle', 'main').catch((e: unknown) => e);
+      expect(err.name).toBe('RemoteGitCommandError');
+      expect(err.transportFailure).toBe(true);
     });
   });
 
@@ -268,9 +316,9 @@ describe('RemoteBundleOps', () => {
         .rejects.toThrow('git clone from mirror failed');
     });
 
-    it('throws on an SSH-shaped clone failure (code 0, empty stderr, fatal: line in stdout)', async () => {
+    it('throws on an SSH-shaped clone failure (code 0, empty stderr, non-git-formatted failure text)', async () => {
       const transport = mockTransport({
-        'git -c core.hooksPath=/dev/null clone': { stdout: "fatal: repository '/mirror' does not exist", stderr: '', code: 0 },
+        'git -c core.hooksPath=/dev/null clone': { stdout: 'sh: git: command not found', stderr: '', code: 127 },
       });
       await expect(ops.cloneWorkingDirFromMirror(transport, '/mirror', '/repo', 'main'))
         .rejects.toThrow('git clone from mirror failed');

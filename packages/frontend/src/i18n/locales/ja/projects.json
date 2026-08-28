@@ -107,6 +107,7 @@
       "workingDirectoryPlaceholder": "/path/to/project",
       "distributeCode": "コードをこのサーバーへ配信する",
       "distributeCodeHint": "hub がこのプロジェクトのコードをこのサーバーへ代行配信します。サーバー側に git 資格情報が無くても開発環境がすぐに用意できます。既定はオフです。",
+      "distributeCodeIsolatedHint": "隔離サーバーは git 資格情報を持たないため、コード配信は常に有効です。オフにすることはできません。",
       "distributeCodeBadge": "配信対象",
       "branch": "ブランチ（任意）",
       "branchPlaceholder": "例: feat/my-feature",

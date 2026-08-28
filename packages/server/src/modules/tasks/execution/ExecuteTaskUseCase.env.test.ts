@@ -1578,7 +1578,15 @@ describe('ExecuteTaskUseCase working-directory containment (Issue #27)', () => {
 
     await expect(useCase.execute(13, 4)).rejects.toThrow(/Worktree path rejected/);
 
-    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(4, 'w1', 'failed', 101);
+    // Issue #87 seventh-pass review fix: the worktree_path_rejected branch
+    // passes worktreePath/worktreeBranch-clearing extra fields through to
+    // the SAME generation-guarded updateStatusIfWindowMatches() call (not a
+    // second unconditional taskRepo.update()), so this call now carries a
+    // 5th argument that clears both fields atomically with the status write.
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(4, 'w1', 'failed', 101, {
+      worktreePath: null,
+      worktreeBranch: null,
+    });
     expect(windowRepo.add).not.toHaveBeenCalled();
     expect(logRepo.append).toHaveBeenCalledWith(4, 13, 'command', expect.objectContaining({ type: 'worktree_path_rejected' }));
     // Issue #28 third-party review fix: 'failed' doesn't auto-revoke (see
@@ -1628,8 +1636,12 @@ describe('ExecuteTaskUseCase working-directory containment (Issue #27)', () => {
     await expect(useCase.execute(15, 6)).rejects.toThrow(/Worktree path rejected/);
 
     expect(worktreeRemove).toHaveBeenCalledWith(allowedRoot, outsideDir);
-    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(6, 'w1', 'failed', 101);
-    expect(taskRepo.update).toHaveBeenCalledWith(6, {
+    // Issue #87 seventh-pass review fix: worktreePath/worktreeBranch are now
+    // cleared inside the SAME generation-guarded updateStatusIfWindowMatches()
+    // call as the status write (a stale rollback that fails the window guard
+    // must not clear these fields either) — no second unconditional
+    // taskRepo.update() call exists anymore for this path.
+    expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(6, 'w1', 'failed', 101, {
       worktreePath: null,
       worktreeBranch: null,
     });

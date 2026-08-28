@@ -7,6 +7,7 @@ import { KeyedMutex } from '../../../shared/keyedMutex';
 import type { HubRepoCache } from './HubRepoCache';
 import type { RemoteBundleOps } from './RemoteBundleOps';
 import { computeRepoHash } from './repoHash';
+import { RemoteGitCommandError } from '../execWithSentinel';
 import type { IDistributionStateRepository, FetchDistributionParams, FetchDistributionResult } from './types';
 
 type BundleType = 'full' | 'incremental';
@@ -353,17 +354,51 @@ export class FetchDistributionService {
         );
       }
 
-      const verified = await this.remoteBundleOps.verify(transport, mirrorDir, remoteTmpPath);
-      if (!verified) {
-        throw new Error('Bundle verification failed on remote');
-      }
+      // `verify()`/`fetchBundleIntoMirror()` throw `RemoteGitCommandError`
+      // now (Issue #87 third-party review, seventh pass, Important finding
+      // 1: the exit-status sentinel). `transportFailure: true` means the
+      // remote command never completed at all (connection drop, command
+      // timeout) — that's a transfer/execution-layer anomaly, not git
+      // rejecting the bundle's content, so it's re-classified as
+      // `BundleTransferError` here for the exact same reason the SFTP
+      // upload failure above already is: `deliverToMirror()`'s
+      // incremental->full fallback must not retry a different bundle for a
+      // failure that has nothing to do with which bundle was sent (Issue
+      // #87 third-party review, seventh pass, Important finding 4). A
+      // `transportFailure: false` error means git actually ran and
+      // rejected the content (e.g. a missing prerequisite commit) — that
+      // one falls through unwrapped so the existing fallback-to-full logic
+      // still applies to it, unchanged from before this fix.
+      try {
+        const verified = await this.remoteBundleOps.verify(transport, mirrorDir, remoteTmpPath);
+        if (!verified) {
+          throw new Error('Bundle verification failed on remote');
+        }
 
-      // Forced refspec + --atomic: tolerates the mirror's branch having
-      // diverged from this bundle's prerequisite (e.g. a concurrent
-      // force-push upstream) instead of failing non-fast-forward forever.
-      await this.remoteBundleOps.fetchBundleIntoMirror(transport, mirrorDir, remoteTmpPath, branch);
+        // Forced refspec + --atomic: tolerates the mirror's branch having
+        // diverged from this bundle's prerequisite (e.g. a concurrent
+        // force-push upstream) instead of failing non-fast-forward forever.
+        await this.remoteBundleOps.fetchBundleIntoMirror(transport, mirrorDir, remoteTmpPath, branch);
+      } catch (err) {
+        if (err instanceof RemoteGitCommandError && err.transportFailure) {
+          throw new BundleTransferError(
+            `Remote git command on ${sshHost} did not complete (transport/execution failure): ${err.message}`,
+            { cause: err },
+          );
+        }
+        throw err;
+      }
     } finally {
-      await this.remoteBundleOps.cleanup(transport, remoteTmpPath);
+      // Best-effort: an exception raised while cleaning up the remote temp
+      // bundle must never replace the original try-block error (Issue #87
+      // third-party review, seventh pass, Important finding 4) — the
+      // caller's fallback/failure classification above is based on THAT
+      // error, not on whatever `rm -f` happened to do afterwards.
+      try {
+        await this.remoteBundleOps.cleanup(transport, remoteTmpPath);
+      } catch {
+        // best-effort cleanup only
+      }
     }
   }
 

@@ -107,6 +107,7 @@
       "workingDirectoryPlaceholder": "/path/to/project",
       "distributeCode": "Distribute code to this server",
       "distributeCodeHint": "The hub distributes this project's code to this server on the hub's own credentials, so a dev environment is ready even without git credentials on the server. Defaults off.",
+      "distributeCodeIsolatedHint": "Isolated servers hold no git credentials of their own, so code distribution is always on and cannot be turned off.",
       "distributeCodeBadge": "Distributed",
       "branch": "Branch (optional)",
       "branchPlaceholder": "e.g. feat/my-feature",

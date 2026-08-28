@@ -2,7 +2,7 @@ import * as crypto from 'crypto';
 import type { IServerTransport } from '../../servers/transport/ServerTransport';
 import { shellQuote } from '../../../shared/shellQuote';
 import { assertSafeBranch } from '../assertSafeGitArgs';
-import { hasGitError } from '../hasGitError';
+import { execGitOrThrow, execWithSentinel, RemoteGitCommandError } from '../execWithSentinel';
 import { DUMMY_ORIGIN_URL } from './types';
 
 /**
@@ -19,26 +19,40 @@ import { DUMMY_ORIGIN_URL } from './types';
 export class RemoteBundleOps {
   /**
    * `code`/`stderr` are not trustworthy on `ssh` servers — see
-   * `hasGitError`'s doc comment. Without it this always returned `true` on
-   * `ssh`, making bundle verification a no-op there (Issue #87 third-party
-   * review, third pass, Important finding 1).
+   * `execWithSentinel`'s doc comment. Uses the exit-status sentinel
+   * (Issue #87 third-party review, seventh pass, Important finding 1)
+   * instead of the earlier `hasGitError` text scan, which missed any
+   * failure that didn't print in git's own `fatal:`/`error:` format.
    *
    * `git bundle verify` requires a repository context to check the bundle's
    * prerequisite commits against — run without `-C <mirrorDir>` it fails
    * unconditionally with `error: need a repository to verify a bundle`
-   * (confirmed by hand), which `hasGitError`'s `error:` scan now also
-   * catches, so every verify — full and incremental alike — failed and
-   * distribution was completely broken (Issue #87 third-party review,
-   * fourth pass, Important finding 1). `mirrorDir` is the server-side bare
-   * mirror `FetchDistributionService.ensureMirror()` guarantees exists
-   * before `verify()` is ever called.
+   * (confirmed by hand), so every verify — full and incremental alike —
+   * failed and distribution was completely broken (Issue #87 third-party
+   * review, fourth pass, Important finding 1). `mirrorDir` is the
+   * server-side bare mirror `FetchDistributionService.ensureMirror()`
+   * guarantees exists before `verify()` is ever called.
+   *
+   * Throws `RemoteGitCommandError` with `transportFailure: true` when the
+   * sentinel never arrives — the caller (`FetchDistributionService`'s
+   * `uploadVerifyApply`) translates that into a `BundleTransferError` so a
+   * transport-layer anomaly doesn't trigger a pointless full-bundle
+   * fallback (Issue #87 third-party review, seventh pass, Important
+   * finding 2). A GENUINE verify rejection (sentinel present, non-zero
+   * exit) still returns `false`, unchanged from before.
    */
   async verify(transport: IServerTransport, mirrorDir: string, remoteBundlePath: string): Promise<boolean> {
-    const r = await transport.exec(
+    const outcome = await execWithSentinel(
+      transport,
       `git -C ${shellQuote(mirrorDir)} bundle verify ${shellQuote(remoteBundlePath)} 2>&1`,
       30_000,
     );
-    return !hasGitError(r);
+    if (!outcome.sentinelFound) {
+      throw new RemoteGitCommandError('git bundle verify did not complete (transport/execution failure)', {
+        transportFailure: true,
+      });
+    }
+    return outcome.ok;
   }
 
   /** サーバーのホームディレクトリを解決する（`TmuxInstaller` と同じ `$HOME` 規約）。 */
@@ -64,13 +78,12 @@ export class RemoteBundleOps {
   async ensureMirror(transport: IServerTransport, mirrorDir: string): Promise<void> {
     const exists = await this.mirrorExists(transport, mirrorDir);
     if (exists) return;
-    const r = await transport.exec(
+    await execGitOrThrow(
+      transport,
       `mkdir -p ${shellQuote(mirrorDir)} && git -c core.hooksPath=/dev/null init --bare ${shellQuote(mirrorDir)} 2>&1`,
       15_000,
+      'git init --bare for mirror failed',
     );
-    if (hasGitError(r)) {
-      throw new Error(`git init --bare for mirror failed: ${r.stderr || r.stdout}`);
-    }
   }
 
   /**
@@ -106,13 +119,12 @@ export class RemoteBundleOps {
   async fetchBundleIntoMirror(transport: IServerTransport, mirrorDir: string, remoteBundlePath: string, branch: string): Promise<void> {
     assertSafeBranch(branch, 'branch');
     const refspec = `+refs/heads/${branch}:refs/heads/${branch}`;
-    const r = await transport.exec(
+    await execGitOrThrow(
+      transport,
       `git -C ${shellQuote(mirrorDir)} -c core.hooksPath=/dev/null fetch --atomic ${shellQuote(remoteBundlePath)} ${shellQuote(refspec)} 2>&1`,
       120_000,
+      'git fetch bundle into mirror failed',
     );
-    if (hasGitError(r)) {
-      throw new Error(`git fetch bundle into mirror failed: ${r.stderr || r.stdout}`);
-    }
   }
 
   /**
@@ -128,13 +140,12 @@ export class RemoteBundleOps {
     assertSafeBranch(branch, 'branch');
     // `--no-local` 必須: ローカル clone の hardlink 最適化は source（mirror）の
     // 並行更新と race する既知の git-clone の性質のため。
-    const r = await transport.exec(
+    await execGitOrThrow(
+      transport,
       `git -c core.hooksPath=/dev/null clone --no-local --branch ${shellQuote(branch)} ${shellQuote(mirrorDir)} ${shellQuote(workingDir)} 2>&1`,
       120_000,
+      'git clone from mirror failed',
     );
-    if (hasGitError(r)) {
-      throw new Error(`git clone from mirror failed: ${r.stderr || r.stdout}`);
-    }
   }
 
   /**
@@ -154,13 +165,12 @@ export class RemoteBundleOps {
    * ソッドを呼ぶ。冪等に適用することで、一度失敗しても次回の配信で回復する。
    */
   async ensureDetachedHead(transport: IServerTransport, workingDir: string): Promise<void> {
-    const r = await transport.exec(
+    await execGitOrThrow(
+      transport,
       `git -C ${shellQuote(workingDir)} -c core.hooksPath=/dev/null checkout --detach 2>&1`,
       15_000,
+      'git checkout --detach failed',
     );
-    if (hasGitError(r)) {
-      throw new Error(`git checkout --detach failed: ${r.stderr || r.stdout}`);
-    }
   }
 
   /**
@@ -182,13 +192,12 @@ export class RemoteBundleOps {
   async fetchWorkingDirFromMirror(transport: IServerTransport, mirrorDir: string, workingDir: string, branch: string): Promise<void> {
     assertSafeBranch(branch, 'branch');
     const trackingRefspec = `+refs/heads/${branch}:refs/remotes/origin/${branch}`;
-    const r = await transport.exec(
+    await execGitOrThrow(
+      transport,
       `cd ${shellQuote(workingDir)} && git -c core.hooksPath=/dev/null fetch --atomic ${shellQuote(mirrorDir)} ${shellQuote(trackingRefspec)} 2>&1`,
       120_000,
+      'git fetch from mirror failed',
     );
-    if (hasGitError(r)) {
-      throw new Error(`git fetch from mirror failed: ${r.stderr || r.stdout}`);
-    }
   }
 
   /**
@@ -237,11 +246,18 @@ export class RemoteBundleOps {
    */
   async syncLocalBranchToTracking(transport: IServerTransport, workingDir: string, branch: string): Promise<boolean> {
     assertSafeBranch(branch, 'branch');
-    const r = await transport.exec(
+    // A transport-layer anomaly (sentinel missing) is folded into the same
+    // `false` this method already returns for a genuine `git branch -f`
+    // rejection — see this method's doc comment above: callers already
+    // treat `false` as "may not have synced, decide fail-fast at the
+    // boundary if it matters", so there is no separate signal to plumb
+    // through here.
+    const outcome = await execWithSentinel(
+      transport,
       `git -C ${shellQuote(workingDir)} -c core.hooksPath=/dev/null branch -f ${shellQuote(branch)} ${shellQuote(`refs/remotes/origin/${branch}`)} 2>&1`,
       15_000,
     );
-    return !hasGitError(r);
+    return outcome.ok;
   }
 
   async createFromWorktree(transport: IServerTransport, worktreePath: string, branch: string, baseBranch: string | null): Promise<string> {
@@ -253,13 +269,12 @@ export class RemoteBundleOps {
     const notClause = baseBranch
       ? `--not ${shellQuote(`origin/${baseBranch}`)}`
       : '';
-    const r = await transport.exec(
+    await execGitOrThrow(
+      transport,
       `cd ${shellQuote(worktreePath)} && git bundle create ${shellQuote(remoteBundlePath)} ${shellQuote(branch)} ${notClause} 2>&1`,
       120_000,
+      'git bundle create failed',
     );
-    if (hasGitError(r)) {
-      throw new Error(`git bundle create failed: ${r.stderr || r.stdout}`);
-    }
     return remoteBundlePath;
   }
 
