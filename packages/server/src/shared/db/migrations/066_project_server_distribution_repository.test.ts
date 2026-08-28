@@ -190,6 +190,42 @@ describe('migration 066: project_server_distribution_repository', () => {
     expect(row.distribution_repository_id).toBeNull();
   });
 
+  it('backfills distribution_repository_id for an isolated server even when distribute_code is off', () => {
+    const db = buildSeededDb();
+    db.prepare(`UPDATE servers SET isolation_intent = 1 WHERE name = 'srv-agent'`).run();
+    const repoId = db.prepare(`INSERT INTO project_repositories (project_id, url, provider) VALUES (1, 'https://github.com/acme/widget.git', 'github')`).run().lastInsertRowid as number;
+    db.prepare(`INSERT INTO project_servers (project_id, server_name, tmux_session, distribute_code) VALUES (1, 'srv-agent', 'azito', 0)`).run();
+
+    runM066(db);
+
+    const row = db.prepare(`SELECT distribution_repository_id FROM project_servers WHERE project_id = 1 AND server_name = 'srv-agent'`).get() as { distribution_repository_id: number | null };
+    expect(row.distribution_repository_id).toBe(repoId);
+  });
+
+  it('leaves distribution_repository_id NULL for a non-isolated server when distribute_code is off', () => {
+    const db = buildSeededDb();
+    db.prepare(`INSERT INTO project_repositories (project_id, url, provider) VALUES (1, 'https://github.com/acme/widget.git', 'github')`).run();
+    db.prepare(`INSERT INTO project_servers (project_id, server_name, tmux_session, distribute_code) VALUES (1, 'srv-agent', 'azito', 0)`).run();
+
+    runM066(db);
+
+    const row = db.prepare(`SELECT distribution_repository_id FROM project_servers WHERE project_id = 1 AND server_name = 'srv-agent'`).get() as { distribution_repository_id: number | null };
+    expect(row.distribution_repository_id).toBeNull();
+  });
+
+  it('leaves distribution_repository_id NULL for an isolated server when the project has multiple repositories', () => {
+    const db = buildSeededDb();
+    db.prepare(`UPDATE servers SET isolation_intent = 1 WHERE name = 'srv-agent'`).run();
+    db.prepare(`INSERT INTO project_repositories (project_id, url, provider) VALUES (1, 'https://github.com/acme/widget.git', 'github')`).run();
+    db.prepare(`INSERT INTO project_repositories (project_id, url, provider) VALUES (1, 'https://github.com/acme/other.git', 'github')`).run();
+    db.prepare(`INSERT INTO project_servers (project_id, server_name, tmux_session, distribute_code) VALUES (1, 'srv-agent', 'azito', 0)`).run();
+
+    runM066(db);
+
+    const row = db.prepare(`SELECT distribution_repository_id FROM project_servers WHERE project_id = 1 AND server_name = 'srv-agent'`).get() as { distribution_repository_id: number | null };
+    expect(row.distribution_repository_id).toBeNull();
+  });
+
   it('accepts an explicitly-set distribution_repository_id pointing at any of the project\'s repositories after the migration runs', () => {
     const db = buildSeededDb();
     db.prepare(`INSERT INTO project_repositories (project_id, url, provider) VALUES (1, 'https://github.com/acme/widget.git', 'github')`).run();

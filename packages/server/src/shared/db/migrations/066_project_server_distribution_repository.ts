@@ -65,8 +65,23 @@ export function up(db: Database.Database): void {
   // fail fast today, and they will keep failing fast (now for "no
   // distribution target configured") until an operator explicitly picks one
   // in project settings.
+  //
+  // The same implicit-single-repository resolution ALSO applied to isolated
+  // servers regardless of `distribute_code`: DistributionHelper's
+  // requirement check is `server.type !== 'local' && (server.isolationIntent
+  // || projectServer?.distributeCode)`, so a `servers.isolation_intent = 1`
+  // row (isolated servers carry no git credentials of their own) needed
+  // distribution just as much as a `distribute_code = 1` row, and relied on
+  // the very same "project has exactly one repository" implicit resolution.
+  // A `distribute_code = 0` isolated-server row must therefore be backfilled
+  // too, or the upgrade silently breaks distribution for every existing
+  // isolated-server configuration that depended on that implicit
+  // resolution.
   const rows = db.prepare(`
-    SELECT project_id, server_name FROM project_servers WHERE distribute_code = 1
+    SELECT ps.project_id AS project_id, ps.server_name AS server_name
+    FROM project_servers ps
+    JOIN servers s ON s.name = ps.server_name
+    WHERE ps.distribute_code = 1 OR s.isolation_intent = 1
   `).all() as Array<{ project_id: number; server_name: string }>;
 
   const findSingleRepositoryId = db.prepare(`
