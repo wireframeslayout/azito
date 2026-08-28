@@ -114,3 +114,30 @@ export function resolveDistributeCodeToggleOnProjectServersChange(
   if (touched) return currentValue;
   return resolveDistributeCodeToggleValue(targetServerType, projectServers, serverName);
 }
+
+/** The subset of a `Repository` this policy actually depends on. */
+export interface DistributionRepositoryPolicyRepo {
+  id: number;
+}
+
+/**
+ * Issue #87 review (Minor finding): whether `distributionRepositoryId` (the
+ * form's selected value, `''` when unset) is actually usable — i.e. it names
+ * a repository that still exists in `repositories`. Presence of a non-empty
+ * string used to be treated as "selected" on its own, but a repository can
+ * be deleted (`handleRemoveRepo`) while the project-server form is open with
+ * it selected: the DB row's `distribution_repository_id` foreign key is set
+ * to NULL (`ON DELETE SET NULL`), yet the form's local
+ * `psDistributionRepositoryId` state and the stale `projectServers` list it
+ * was seeded from keep the deleted id around, letting the user Save with an
+ * id the server will reject (400). Checking membership in the live
+ * `repositories` list (not just non-emptiness) is what the caller must
+ * gate both the inline validation error and Save's `disabled` state on.
+ */
+export function isDistributionRepositorySelected(
+  repositories: DistributionRepositoryPolicyRepo[] | undefined,
+  distributionRepositoryId: string,
+): boolean {
+  if (!distributionRepositoryId) return false;
+  return (repositories ?? []).some((r) => String(r.id) === distributionRepositoryId);
+}

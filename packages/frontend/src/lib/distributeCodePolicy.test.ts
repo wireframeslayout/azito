@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isDistributeCodeLocked, resolveDistributeCodeForSave, resolveDistributeCodeToggleValue, resolveDistributeCodeToggleOnProjectServersChange, shouldShowDistributeCodeBadge } from './distributeCodePolicy';
+import { isDistributeCodeLocked, isDistributionRepositorySelected, resolveDistributeCodeForSave, resolveDistributeCodeToggleValue, resolveDistributeCodeToggleOnProjectServersChange, shouldShowDistributeCodeBadge } from './distributeCodePolicy';
 
 // Issue #87 third-party review, seventh pass, Minor finding 3: an isolated
 // server distributes code unconditionally on the backend (`isolationIntent`),
@@ -135,5 +135,36 @@ describe('resolveDistributeCodeToggleOnProjectServersChange (Issue #87 third-par
     expect(
       resolveDistributeCodeToggleOnProjectServersChange(false, false, 'agent', projectServers, 'server-a'),
     ).toBe(true);
+  });
+});
+
+// Issue #87 review (Minor finding): a repository that was selected for
+// distribution can be deleted while the project-server form is still open
+// with it selected (the DB FK is set to NULL on delete, but the form's own
+// local state and the stale `projectServers` list it was seeded from don't
+// know that). Non-emptiness of the selected id alone used to be treated as
+// "selected", which let Save submit a dangling, no-longer-existing id and
+// get rejected with a 400 from the server. `isDistributionRepositorySelected`
+// is the single place that now checks the id actually names a live
+// repository, not just that it's non-empty.
+describe('isDistributionRepositorySelected', () => {
+  it('is true when the selected id names an existing repository', () => {
+    expect(isDistributionRepositorySelected([{ id: 1 }, { id: 2 }], '2')).toBe(true);
+  });
+
+  it('is false when nothing is selected (empty string)', () => {
+    expect(isDistributionRepositorySelected([{ id: 1 }, { id: 2 }], '')).toBe(false);
+  });
+
+  it('is false when the selected id no longer exists in repositories (deleted)', () => {
+    expect(isDistributionRepositorySelected([{ id: 1 }], '2')).toBe(false);
+  });
+
+  it('is false when repositories is empty', () => {
+    expect(isDistributionRepositorySelected([], '1')).toBe(false);
+  });
+
+  it('is false when repositories is undefined', () => {
+    expect(isDistributionRepositorySelected(undefined, '1')).toBe(false);
   });
 });

@@ -17,7 +17,7 @@ import { FormInput, FormSelect, LoadingState, baseInputStyle, Button } from './u
 import type { Window, Unit, Server } from '../pages/workspace/types';
 import { parseRepoUrl as parseGitRepoUrl } from '../lib/gitProvider';
 import { notifyProjectsChanged } from '../lib/projectsChanged';
-import { isDistributeCodeLocked, resolveDistributeCodeForSave, resolveDistributeCodeToggleOnProjectServersChange, shouldShowDistributeCodeBadge } from '../lib/distributeCodePolicy';
+import { isDistributeCodeLocked, isDistributionRepositorySelected, resolveDistributeCodeForSave, resolveDistributeCodeToggleOnProjectServersChange, shouldShowDistributeCodeBadge } from '../lib/distributeCodePolicy';
 import { useToast } from '../hooks/useToast';
 import { useConfirm } from '../hooks/useConfirm';
 
@@ -244,7 +244,21 @@ export function useProjectSettings(
   }, [projectId, repoUrl, repoName, repoProvider, repoOwner, repoRepoName, repoToken, refresh, showToast, t]);
 
   const handleRemoveRepo = useCallback(async (rid: number) => {
-    await api(`/projects/${projectId}/repositories/${rid}`, { method: 'DELETE' }); refresh();
+    await api(`/projects/${projectId}/repositories/${rid}`, { method: 'DELETE' });
+    refresh();
+    // Issue #87 review (Minor finding): a deleted repository is removed from
+    // FK-referencing project_servers rows via `ON DELETE SET NULL` on the
+    // backend, but that alone leaves this form's own state stale — the
+    // `[project]` effect above only refetches `projectServers` when
+    // `project` itself changes, not on a standalone repository delete, and
+    // the currently-open server form's `psDistributionRepositoryId` would
+    // still hold the now-deleted id. Refetch `projectServers` so the list
+    // badge and any later form (re)open reflect the NULLed value, and clear
+    // the open form's own selection immediately if it pointed at the
+    // repository just removed — the id is derived purely from server state,
+    // not user-typed, so clearing it here can't discard unsaved input.
+    api<ProjectServer[]>(`/projects/${projectId}/servers`).then((res) => setProjectServers(Array.isArray(res) ? res : [])).catch(() => {});
+    setPsDistributionRepositoryId((prev) => (prev === String(rid) ? '' : prev));
   }, [projectId, refresh]);
 
   const handleRemoveWindow = useCallback(async (wid: number) => {
@@ -594,7 +608,14 @@ function ServersSection({ settings: s }: { settings: ReturnType<typeof useProjec
   // be blocked until one is picked.
   const formIsolated = isDistributeCodeLocked((s.servers || []).find((sv) => sv.name === s.psServer));
   const formDistributeEffective = formIsolated || s.psDistributeCode;
-  const formDistributionRepoMissing = formDistributeEffective && !s.psDistributionRepositoryId;
+  // Issue #87 review (Minor finding): checking for a selected id alone
+  // (`!s.psDistributionRepositoryId`) missed the case where the selected
+  // repository was since deleted — its id is no longer empty, but it no
+  // longer names a real repository in `repositories` either, so Save would
+  // still submit a dangling id the server rejects with 400. See
+  // `isDistributionRepositorySelected`'s doc comment.
+  const formDistributionRepoMissing = formDistributeEffective
+    && !isDistributionRepositorySelected(repositories, s.psDistributionRepositoryId);
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
