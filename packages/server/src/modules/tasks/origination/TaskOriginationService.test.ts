@@ -34,6 +34,7 @@ function baseFields(overrides: Partial<TaskOriginationFields> = {}): TaskOrigina
     agentSessionId: null,
     reviewSubagent: null,
     implementSubagent: null,
+    sleepAfterPush: null,
     executionApprovedFingerprintHash: null,
     pendingOperation: null,
     pendingOperationWindowId: null,

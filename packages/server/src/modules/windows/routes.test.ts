@@ -5,6 +5,7 @@ import type { Window, IWindowRepository } from './Window';
 import type { ServerConfig, IServerRepository } from '../servers/Server';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { WindowRespawnService } from './WindowRespawnService';
+import type { WindowSleepService } from './WindowSleepService';
 import type { ISessionStrategyFactory } from '../agents/SessionStrategy';
 import type { IProjectRepository } from '../projects/Project';
 import type { ITaskRepository } from '../tasks/Task';
@@ -45,6 +46,7 @@ function makeWindow(overrides: Partial<Window> = {}): Window {
     launchCommand: null,
     workingDirectory: null,
     paneLayout: null,
+    sleeping: false,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
@@ -102,6 +104,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
       tmux: tmux as TmuxClient,
       serverRepo: serverRepo as IServerRepository,
       respawnService: {} as WindowRespawnService,
+      sleepService: { canSleep: vi.fn(() => false), sleep: vi.fn() } as unknown as WindowSleepService,
       sessionStrategyFactory: {
         create: () => ({
           supportsSession: true,
@@ -239,6 +242,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
         findByName: (name: string) => (name === server.name ? server : null),
       } as unknown as IServerRepository,
       respawnService: {} as WindowRespawnService,
+      sleepService: { canSleep: vi.fn(() => false), sleep: vi.fn() } as unknown as WindowSleepService,
       sessionStrategyFactory: {
         create: () => ({
           supportsSession: true,
@@ -290,6 +294,7 @@ describe('GET /api/windows/pane-loading-state', () => {
       tmux: {} as TmuxClient,
       serverRepo: { findByName: () => makeServer() } as unknown as IServerRepository,
       respawnService: {} as WindowRespawnService,
+      sleepService: { canSleep: vi.fn(() => false), sleep: vi.fn() } as unknown as WindowSleepService,
       sessionStrategyFactory: {} as ISessionStrategyFactory,
       sessionCaptureService: { scheduleInitialScan: vi.fn() } as unknown as SessionCaptureService,
       supervisorRegistry: makeSupervisorRegistry(supervisorEntries, exitedTargets),
@@ -406,6 +411,7 @@ describe('POST /api/windows/:id/respawn — execution gate (Issue #328 second-ro
       tmux: {} as TmuxClient,
       serverRepo: serverRepo as IServerRepository,
       respawnService: { respawn } as unknown as WindowRespawnService,
+      sleepService: { canSleep: vi.fn(() => false), sleep: vi.fn() } as unknown as WindowSleepService,
       sessionStrategyFactory: {} as ISessionStrategyFactory,
       sessionCaptureService: { scheduleInitialScan: vi.fn() } as unknown as SessionCaptureService,
       supervisorRegistry: makeSupervisorRegistry(),
@@ -471,6 +477,7 @@ describe('GET /api/windows/activity-status (Issue #338 フォロー: process-bas
       tmux: {} as TmuxClient,
       serverRepo: {} as IServerRepository,
       respawnService: {} as WindowRespawnService,
+      sleepService: { canSleep: vi.fn(() => false), sleep: vi.fn() } as unknown as WindowSleepService,
       sessionStrategyFactory: {} as ISessionStrategyFactory,
       sessionCaptureService: { scheduleInitialScan: vi.fn() } as unknown as SessionCaptureService,
       supervisorRegistry: makeSupervisorRegistry(),
@@ -482,5 +489,63 @@ describe('GET /api/windows/activity-status (Issue #338 フォロー: process-bas
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual(entries);
+  });
+});
+
+describe('POST /api/windows/:id/sleep', () => {
+  function makeApp(opts: { window?: Window | undefined; canSleep?: boolean; sleepFn?: ReturnType<typeof vi.fn> }) {
+    const win = opts.window;
+    const canSleepFn = vi.fn(() => opts.canSleep ?? true);
+    const sleepFn = opts.sleepFn ?? vi.fn(async () => {});
+    const app = Fastify();
+    app.register(windowsRoutes, {
+      windowRepo: {
+        findById: (id: number) => (win && id === win.id ? win : undefined),
+      } as unknown as IWindowRepository,
+      projectRepo: {} as IProjectRepository,
+      taskRepo: {} as ITaskRepository,
+      tmux: {} as TmuxClient,
+      serverRepo: {
+        findByName: () => ({ name: 'local-server', type: 'local' }),
+      } as unknown as IServerRepository,
+      respawnService: {} as WindowRespawnService,
+      sleepService: { canSleep: canSleepFn, sleep: sleepFn } as unknown as WindowSleepService,
+      sessionStrategyFactory: {} as ISessionStrategyFactory,
+      sessionCaptureService: { scheduleInitialScan: vi.fn() } as unknown as SessionCaptureService,
+      supervisorRegistry: makeSupervisorRegistry(),
+      windowActivityStatusService: makeWindowActivityStatusService(),
+    });
+    return { app, canSleepFn, sleepFn };
+  }
+
+  it('returns 200 and calls sleep when the window can be slept', async () => {
+    const win = makeWindow({ id: 5, agentSessionId: 'sess-1' });
+    const { app, sleepFn } = makeApp({ window: win, canSleep: true });
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/windows/5/sleep' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(sleepFn).toHaveBeenCalledWith(5);
+  });
+
+  it('returns 400 when canSleep is false', async () => {
+    const win = makeWindow({ id: 5, windowType: 'terminal', workerType: null });
+    const { app, sleepFn } = makeApp({ window: win, canSleep: false });
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/windows/5/sleep' });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: expect.stringContaining('cannot be put to sleep') });
+    expect(sleepFn).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 when the window does not exist', async () => {
+    const { app, sleepFn } = makeApp({ window: undefined });
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/windows/999/sleep' });
+    expect(res.statusCode).toBe(404);
+    expect(sleepFn).not.toHaveBeenCalled();
   });
 });

@@ -64,6 +64,8 @@
     "capturePanes": "Capture panes",
     "respawn": "Respawn",
     "respawnFailed": "Respawn failed",
+    "sleep": "Sleep",
+    "sleepFailed": "Sleep failed",
     "showTask": "Show Task",
     "pinTab": "Pin tab",
     "unpinTab": "Unpin tab",
@@ -188,7 +190,11 @@
     "noSessions": "No sessions (connection failed or no tmux running)"
   },
   "dropZone": {
-    "uploadToStorage": "Drop files to upload to Storage"
+    "uploadToStorage": "Drop files to upload to Storage",
+    "uploadToProject": "Upload to {{name}} storage",
+    "uploadHint": "Drop to upload and copy URL",
+    "noProject": "No upload target",
+    "noProjectHint": "This tab does not belong to a project — cannot drop here"
   },
   "sidebar": {
     "noServerConfigured": "No server environments configured.",
@@ -233,12 +239,14 @@
     "sectionOperations": "Operation Windows",
     "sectionActive": "Active",
     "sectionIdle": "Idle",
+    "sectionSleeping": "Sleeping",
     "sectionOffline": "Offline",
     "sectionBrowsers": "Browsers",
     "noObjects": "No objects in this project yet",
     "noOperations": "No running operations",
     "noActive": "Nothing active right now",
     "noIdle": "Nothing idle right now",
+    "noSleeping": "No sleeping windows",
     "noOffline": "No offline windows",
     "noBrowsers": "No browsers open",
     "searchPlaceholder": "Search title, ID, branch…",

@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 
-export const version = 63;
+export const version = 64;
 export const description = 'distribution_state — tracks last-distributed SHA per server×repository for hub-transfer incremental bundles (Issue #87)';
 
 export function up(db: Database.Database): void {

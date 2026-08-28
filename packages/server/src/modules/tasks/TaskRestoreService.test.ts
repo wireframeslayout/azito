@@ -52,6 +52,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     pendingOperation: null,
     pendingOperationWindowId: null,
     pendingOperationPriorStatus: null,
+    sleepAfterPush: null,
     createdByKind: 'operator',
     createdById: null,
     createdViaGeneration: null,
@@ -112,7 +113,7 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
     },
     unitRepo: {
       findAll: vi.fn(() => []),
-      findById: vi.fn(() => ({ id: 20, name: 'Unit', unitType: 'devops', systemPrompt: null, selfReviewMaxAttempts: 0, reviewSubagent: null, implementSubagent: null, workerType: 'claude', workerModel: 'claude-opus-4-5', workerExtraArgs: null, workerExecutionMode: 'tmux-pipe' as const, workerRuntime: 'tui' as const, phaseConfig: null, createdAt: '2026-01-01', updatedAt: '2026-01-01' })),
+      findById: vi.fn(() => ({ id: 20, name: 'Unit', unitType: 'devops', systemPrompt: null, selfReviewMaxAttempts: 0, reviewSubagent: null, implementSubagent: null, workerType: 'claude', workerModel: 'claude-opus-4-5', workerExtraArgs: null, workerExecutionMode: 'tmux-pipe' as const, workerRuntime: 'tui' as const, sleepAfterPush: false, phaseConfig: null, createdAt: '2026-01-01', updatedAt: '2026-01-01' })),
       create: vi.fn(() => 20),
       update: vi.fn(),
       delete: vi.fn(),

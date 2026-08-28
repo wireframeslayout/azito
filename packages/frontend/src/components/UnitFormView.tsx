@@ -74,6 +74,7 @@ export default function UnitFormView({ mode, unitId, onSaved, onCancel, backLabe
   const [workerModel, setWorkerModel] = useState('');
   const [workerExecutionMode, setWorkerExecutionMode] = useState('tmux-pipe');
   const [workerRuntime, setWorkerRuntime] = useState('tui');
+  const [sleepAfterPush, setSleepAfterPush] = useState(false);
   const [workerTypes, setWorkerTypes] = useState<string[]>([]);
   const [modelOptions, setModelOptions] = useState<{ id: string; label: string }[]>([]);
 
@@ -98,6 +99,7 @@ export default function UnitFormView({ mode, unitId, onSaved, onCancel, backLabe
       setWorkerModel(unit.workerModel || '');
       setWorkerExecutionMode(unit.workerExecutionMode || 'tmux-pipe');
       setWorkerRuntime(unit.workerRuntime || 'tui');
+      setSleepAfterPush(unit.sleepAfterPush ?? false);
     }
   }, [unit]);
 
@@ -175,6 +177,7 @@ export default function UnitFormView({ mode, unitId, onSaved, onCancel, backLabe
         worker_model: workerModel || null,
         worker_execution_mode: workerExecutionMode,
         worker_runtime: workerRuntime,
+        sleep_after_push: sleepAfterPush,
       };
       if (isEdit) {
         await api(`/units/${unitId}`, { method: 'PUT', body: JSON.stringify(payload) });
@@ -328,6 +331,14 @@ export default function UnitFormView({ mode, unitId, onSaved, onCancel, backLabe
         onChange={setImplementSubagent}
         workerType={workerType || undefined}
       />
+
+      <div style={{ margin: '16px 0', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <label className="toggle" style={{ flexShrink: 0 }}>
+          <input type="checkbox" checked={sleepAfterPush} onChange={(e) => setSleepAfterPush(e.target.checked)} />
+          <span className="toggle-slider" />
+        </label>
+        <span style={{ fontSize: 'var(--font-sm)' }}>{t('units:fields.sleepAfterPush')}</span>
+      </div>
 
       <h3 style={sectionHeaderStyle}>{t('advanced.title')}</h3>
       <FormField label={t('advanced.selfReviewMax')} hint={t('advanced.selfReviewHint')}>

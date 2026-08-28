@@ -38,6 +38,7 @@ import { MobileTabChipRow } from '../components/workspace/MobileTabChipRow';
 import { MobileTabSwitcherSheet } from '../components/workspace/MobileTabSwitcherSheet';
 import ActiveWindowsSection from '../components/workspace/ActiveWindowsSection';
 import WorkspaceLayout from '../components/workspace/WorkspaceLayout';
+import FileDropZone from '../components/workspace/FileDropZone';
 import AddWindowModal from '../components/workspace/AddWindowModal';
 import QuickAddWindowModal from '../components/workspace/QuickAddWindowModal';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -620,11 +621,20 @@ function WorkspaceInner() {
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const taskParam = params.get('task');
-    if (!taskParam) return;
-    const taskId = parseInt(taskParam, 10);
-    if (isNaN(taskId)) return;
-    openTask(taskId, t('tasks:detail.taskRef', { id: taskId }), 'global');
-    navigate(location.pathname, { replace: true });
+    if (taskParam) {
+      const taskId = parseInt(taskParam, 10);
+      if (!isNaN(taskId)) {
+        openTask(taskId, t('tasks:detail.taskRef', { id: taskId }), 'global');
+      }
+      navigate(location.pathname, { replace: true });
+      return;
+    }
+    const serverName = params.get('server');
+    const target = params.get('target');
+    if (serverName && target) {
+      connectPane(serverName, target);
+      navigate(location.pathname, { replace: true });
+    }
   }, [location.search]);
 
   const handleFileSelect = useCallback((serverName: string, filePath: string, line?: number) => {
@@ -734,7 +744,16 @@ function WorkspaceInner() {
     addWindowModal.openAddWindow(forTask ?? false, undefined, taskId);
   }, [id, addWindowModal, showToast]);
 
-  const { globalDrag, dragHandlers } = useDragUpload(currentProjectId || null, sidebarMode, showToast, mobile);
+  const { dragHandlers } = useDragUpload(mobile);
+
+  const resolveTabProjectInfo = useCallback((tab: PersistedTab): { projectId: number | null; projectName: string | null } => {
+    const pid = tab.projectId
+      ?? (tab.type === 'task' && tab.entityId ? allTasks.find(t => t.id === tab.entityId)?.projectId : undefined)
+      ?? null;
+    if (!pid) return { projectId: null, projectName: null };
+    const proj = allProjects.find(p => p.id === pid);
+    return { projectId: pid, projectName: proj?.name ?? null };
+  }, [allTasks, allProjects]);
 
   const getTerminalTabLabel = useCallback((serverName: string, target: string): string => {
     const m = target.match(/^(.+):(\d+)\.(\d+)$/);
@@ -1057,7 +1076,6 @@ function WorkspaceInner() {
       allProjects={allProjects}
       sidebarContent={sidebarContent}
       activeWindowsSection={activeWindowsSection}
-      globalDrag={globalDrag}
       dragHandlers={dragHandlers}
       contextMenu={contextMenu ? <ContextMenu menu={contextMenu} onClose={hideContextMenu} /> : null}
       confirmDialog={confirmDialogNode}
@@ -1185,8 +1203,17 @@ function WorkspaceInner() {
         selectPaneTab(pane.id, tab.id);
       }
       : undefined;
+    const { projectId: dropProjectId, projectName: dropProjectName } = resolveTabProjectInfo(tab);
     return (
-      <div key={tab.id} style={style} onPointerDownCapture={handlePointerDownCapture}>
+      <FileDropZone
+        key={tab.id}
+        style={style}
+        onPointerDownCapture={handlePointerDownCapture}
+        projectId={dropProjectId}
+        projectName={dropProjectName}
+        showToast={showToast}
+        mobile={mobile}
+      >
         <TabContentRenderer
           tab={tab}
           isPaneFocused={isPaneFocused}
@@ -1225,7 +1252,7 @@ function WorkspaceInner() {
           refreshBrowserGroups={refreshBrowserGroups}
           togglePin={togglePin}
         />
-      </div>
+      </FileDropZone>
     );
   }
 }

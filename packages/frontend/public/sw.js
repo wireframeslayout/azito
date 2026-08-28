@@ -83,6 +83,7 @@ self.addEventListener('push', (event) => {
   const title = data.title || 'AZITO';
   const options = {
     body: data.body || 'AZITO',
+    icon: '/icon-192.png',
     data: data.data || {},
   };
   event.waitUntil(self.registration.showNotification(title, options));
@@ -90,25 +91,46 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  // Agent completed/blocked pushes (see buildServer.ts) attach
-  // { url: '/workspace', serverName, target[, taskId] } as `data`. No
-  // per-server/target deep link exists yet, so we just navigate to the
-  // plain `/workspace` url below — the existing url-based logic already
-  // covers this case without any special-casing.
-  const url = event.notification.data?.url || '/';
-  event.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
-      const baseUrl = url.split('?')[0];
-      for (const client of windowClients) {
-        const clientBase = client.url.split('?')[0];
-        if (clientBase.endsWith(baseUrl) && 'focus' in client) {
-          if (client.url !== new URL(url, client.url).href) {
-            client.navigate(url);
-          }
-          return client.focus();
-        }
-      }
-      if (clients.openWindow) return clients.openWindow(url);
-    })
-  );
+  const raw = event.notification.data?.url || '/';
+  event.waitUntil((async () => {
+    const dest = new URL(raw, self.location.origin);
+    if (dest.origin !== self.location.origin) return;
+
+    // 1) Controlled client: SPA navigate via postMessage (preserves WebSocket)
+    const controlled = await clients.matchAll({ type: 'window' });
+    const client = controlled.find((c) => c.focused) || controlled[0];
+    if (client) {
+      client.postMessage({ type: 'notification-navigate', url: dest.pathname + dest.search });
+      await client.focus();
+      return;
+    }
+
+    // 2) Uncontrolled client: navigate + focus
+    const all = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+    if (all[0]) {
+      try {
+        const navigated = await all[0].navigate(dest.href);
+        if (navigated) { await navigated.focus(); return; }
+      } catch { /* navigate throws on uncontrolled clients */ }
+      if ('focus' in all[0]) { await all[0].focus(); return; }
+    }
+
+    // 3) No window: open new
+    if (clients.openWindow) await clients.openWindow(dest.href);
+  })());
+});
+
+// Re-subscribe when the push service rotates the subscription.
+// Server sync is deferred to the next app open (reconcile in PushReconciler)
+// because the UI token lives in sessionStorage and is inaccessible from SW.
+self.addEventListener('pushsubscriptionchange', (event) => {
+  event.waitUntil((async () => {
+    if (event.newSubscription) return;
+    const oldKey = event.oldSubscription?.options?.applicationServerKey;
+    if (!oldKey) return;
+    await self.registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: oldKey,
+    }).catch(() => {});
+  })());
 });

@@ -45,6 +45,7 @@ function buildWindow(overrides: Partial<Window> = {}): Window {
     launchCommand: null,
     workingDirectory: null,
     paneLayout: null,
+    sleeping: false,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
@@ -72,6 +73,7 @@ function buildTask(overrides: Partial<Task> = {}): Task {
     pendingOperation: null,
     pendingOperationWindowId: null,
     pendingOperationPriorStatus: null,
+  sleepAfterPush: null,
     worktreePath: null,
     worktreeBranch: null,
     baseBranch: null,

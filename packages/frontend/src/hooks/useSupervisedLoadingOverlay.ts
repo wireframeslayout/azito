@@ -110,18 +110,11 @@ export function useSupervisedLoadingOverlay(serverName: string, target: string):
 
   const fireTimeout = () => {
     if (resolvedRef.current) return;
-    if (phaseRef.current !== 'launching') {
-      // The 10s mark hit before we ever reached the "launching" phase — either the
-      // pane-loading-state fetch never settled (hung, so decisionRef stayed 'pending')
-      // or connectedRef never flipped true. If the WS's first byte already arrived
-      // (connectedRef true), the pane itself is fine — only our own supervised-wait
-      // bookkeeping is stuck — so fade out silently rather than holding the overlay
-      // forever (this used to always resolve on first byte; don't regress that).
-      // If the WS hasn't connected at all yet, keep showing "connecting" as before.
-      if (connectedRef.current) fadeOut();
+    if (phaseRef.current === 'launching') {
+      enterTimeoutState();
       return;
     }
-    enterTimeoutState();
+    fadeOut();
   };
 
   /** (Re)schedules the single launch timer for `ms` from now, clearing any previous one first

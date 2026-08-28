@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseNodeVersion, parseTmuxVersion, parseHarnessCheck, parseTailscaleCheck, parseChromiumInstall } from './installStatusParsers';
+import { parseNodeVersion, parseTmuxVersion, parseHarnessCheck, parseTailscaleCheck, parseChromiumInstall, buildHarnessCheckCommand } from './installStatusParsers';
 
 describe('install-status parsing', () => {
   describe('node version', () => {
@@ -47,6 +47,25 @@ describe('install-status parsing', () => {
 
     it('detects missing tailscale', () => {
       expect(parseTailscaleCheck('')).toEqual({ installed: false, detail: 'tailscale not configured' });
+    });
+  });
+
+  describe('harness check command', () => {
+    it('includes prefix harness dir when prefix is set', () => {
+      const cmd = buildHarnessCheckCommand('dev');
+      expect(cmd).toContain('~/.azito/harness-dev/skills');
+      expect(cmd).toContain('~/.claude/skills/azt-*');
+    });
+
+    it('uses default harness dir when no prefix', () => {
+      const cmd = buildHarnessCheckCommand();
+      expect(cmd).toContain('~/.azito/harness/skills');
+      expect(cmd).toContain('~/.claude/skills/azt-*');
+    });
+
+    it('uses default harness dir when prefix is empty string', () => {
+      const cmd = buildHarnessCheckCommand('');
+      expect(cmd).toContain('~/.azito/harness/skills');
     });
   });
 

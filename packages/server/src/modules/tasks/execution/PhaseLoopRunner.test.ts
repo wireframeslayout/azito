@@ -56,6 +56,7 @@ function makeRunner(overrides: {
   projectServerRepo?: Record<string, unknown>;
   unitTypeLoader?: Record<string, unknown>;
   scopedAuthEnabled?: boolean;
+  sleepTaskWindows?: (...args: unknown[]) => Promise<number[]>;
 } = {}) {
   const taskRepo = {
     findById: vi.fn(() => ({
@@ -103,6 +104,7 @@ function makeRunner(overrides: {
   const unitRepo = {
     findById: vi.fn(() => ({
       id: 1, unitType: 'devops', systemPrompt: null, selfReviewMaxAttempts: 2, reviewSubagent: null, implementSubagent: null, phaseConfig: null,
+    sleepAfterPush: false,
       workerType: null, workerModel: null, workerExtraArgs: null,
       workerExecutionMode: 'tmux-pipe', workerRuntime: 'tui',
     })),
@@ -164,6 +166,7 @@ function makeRunner(overrides: {
     rejectInferredCompletion: vi.fn(),
     ...overrides.httpSignalCoordinator,
   };
+  const sleepTaskWindows = overrides.sleepTaskWindows ?? vi.fn(async () => []);
 
   const runner = new PhaseLoopRunner(
     taskRepo as any,
@@ -193,17 +196,19 @@ function makeRunner(overrides: {
     projectSecretRepo as any,
     overrides.scopedAuthEnabled ?? true,
     null,
+    sleepTaskWindows,
   );
 
-  return { runner, taskRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitRepo, unitTypeLoader, sidekickLoader, workerInput, workerWaiter, appendLog, getWorktreeService, transportFactory, sidekickSyncService, httpSignalCoordinator, pushVerifier, gitProvider, pullRequestCreator };
+  return { runner, taskRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitRepo, unitTypeLoader, sidekickLoader, workerInput, workerWaiter, appendLog, getWorktreeService, transportFactory, sidekickSyncService, httpSignalCoordinator, pushVerifier, gitProvider, pullRequestCreator, sleepTaskWindows };
 }
 
 const server = { name: 'local', type: 'local' } as any;
-const task = { id: 1, projectId: 10, title: 'Test Task', description: null, status: 'open' as const, currentPhase: 'planning' as string | null };
+const task = { id: 1, projectId: 10, title: 'Test Task', description: null, status: 'open' as const, currentPhase: 'planning' as string | null, sleepAfterPush: null as boolean | null };
 
 function makeUnitForRun(overrides: Record<string, unknown> = {}) {
   return {
     id: 1, unitType: 'devops', systemPrompt: null, selfReviewMaxAttempts: 2, reviewSubagent: null, implementSubagent: null, phaseConfig: null,
+    sleepAfterPush: false,
     workerType: null, workerModel: null, workerExtraArgs: null,
     workerExecutionMode: 'tmux-pipe' as const,
     workerRuntime: 'tui' as const,
@@ -778,6 +783,7 @@ describe('PhaseLoopRunner isolation cutoff (Issue #29 docs review, finding 1)', 
   it('blocks at the gate — never silently skip-to-review — when an untrusted isolated task drifts right before the pushing phase', async () => {
     const originalUnit = {
       id: 1, unitType: 'devops', systemPrompt: 'Be careful.', selfReviewMaxAttempts: 2, reviewSubagent: null, implementSubagent: null, phaseConfig: null,
+    sleepAfterPush: false,
       workerType: null, workerModel: null, workerExtraArgs: null, workerExecutionMode: 'tmux-pipe', workerRuntime: 'tui',
     };
     // Rewritten AFTER approval — only visible once the loop reaches the
@@ -897,6 +903,7 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
   it('an UNTRUSTED task approved against the CURRENT manifest runs all 5 phases without self-invalidating mid-run (top-priority acceptance criterion)', async () => {
     const fixedUnit = {
       id: 1, unitType: 'devops', systemPrompt: 'Be careful.', selfReviewMaxAttempts: 2, reviewSubagent: null, implementSubagent: null, phaseConfig: null,
+    sleepAfterPush: false,
       workerType: null, workerModel: null, workerExtraArgs: null, workerExecutionMode: 'tmux-pipe', workerRuntime: 'tui',
     };
     const unitRepo = { findById: vi.fn(() => fixedUnit) };
@@ -932,6 +939,7 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
   it("an UNTRUSTED task is blocked at the SECOND phase when the Unit's config drifts after approval — the phase's prompt is never sent, and pending_approval/pendingOperation=resume are recorded", async () => {
     const originalUnit = {
       id: 1, unitType: 'devops', systemPrompt: 'Be careful.', selfReviewMaxAttempts: 2, reviewSubagent: null, implementSubagent: null, phaseConfig: null,
+    sleepAfterPush: false,
       workerType: null, workerModel: null, workerExtraArgs: null, workerExecutionMode: 'tmux-pipe', workerRuntime: 'tui',
     };
     // Rewritten AFTER the human approved — same task/server, only the
@@ -994,6 +1002,7 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
   it('does not fall back to a dummy unit id (0) when the Unit is deleted mid-run — the task-level gate block is still recorded, but no gate-related log entry is attached to a nonexistent Unit (Issue #328 review round fix 4)', async () => {
     const originalUnit = {
       id: 1, unitType: 'devops', systemPrompt: 'Be careful.', selfReviewMaxAttempts: 2, reviewSubagent: null, implementSubagent: null, phaseConfig: null,
+    sleepAfterPush: false,
       workerType: null, workerModel: null, workerExtraArgs: null, workerExecutionMode: 'tmux-pipe', workerRuntime: 'tui',
     };
     const projectRepo = { findById: vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', defaultUnitId: null })), findRepositoryById: vi.fn(() => null) };
@@ -1067,5 +1076,73 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
         || (type === 'status_change' && content?.status === 'pending_approval');
     });
     expect(gateRelatedCalls).toHaveLength(0);
+  });
+});
+
+describe('PhaseLoopRunner auto-sleep after push completion', () => {
+  it('sleeps task windows when unit.sleepAfterPush is true and task has no override', async () => {
+    const sleepFn = vi.fn(async () => [10, 11]);
+    const { runner, taskRepo, appendLog } = makeRunner({ sleepTaskWindows: sleepFn });
+    taskRepo.findById.mockReturnValue({
+      id: 1, projectId: 10, unitId: 1, serverName: 'local', title: 'Test Task', description: null,
+      status: 'running', currentPhase: 'planning', planMarkdown: null, targetBranch: null, baseBranch: null,
+      skipPr: false, selfReviewCount: 0, worktreePath: null, workingDirectory: '/work', summaryJson: null,
+      inputTrust: 'trusted', executionApprovedFingerprintHash: null, pendingOperation: null,
+      pendingOperationWindowId: null, pendingOperationPriorStatus: null, sleepAfterPush: null,
+    } as any);
+    const unit = makeUnitForRun({ sleepAfterPush: true });
+
+    await runner.stateMachineLoop(unit, 'local', { ...task, sleepAfterPush: null }, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'review');
+    expect(sleepFn).toHaveBeenCalledWith(1);
+    expect(appendLog).toHaveBeenCalledWith(1, 1, 'command', { type: 'window_sleep', windowIds: [10, 11] });
+  });
+
+  it('does not sleep when unit.sleepAfterPush is true but task overrides to false', async () => {
+    const sleepFn = vi.fn(async () => [10]);
+    const { runner, taskRepo } = makeRunner({ sleepTaskWindows: sleepFn });
+    taskRepo.findById.mockReturnValue({
+      id: 1, projectId: 10, unitId: 1, serverName: 'local', title: 'Test Task', description: null,
+      status: 'running', currentPhase: 'planning', planMarkdown: null, targetBranch: null, baseBranch: null,
+      skipPr: false, selfReviewCount: 0, worktreePath: null, workingDirectory: '/work', summaryJson: null,
+      inputTrust: 'trusted', executionApprovedFingerprintHash: null, pendingOperation: null,
+      pendingOperationWindowId: null, pendingOperationPriorStatus: null, sleepAfterPush: false,
+    } as any);
+    const unit = makeUnitForRun({ sleepAfterPush: true });
+
+    await runner.stateMachineLoop(unit, 'local', { ...task, sleepAfterPush: false }, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'review');
+    expect(sleepFn).not.toHaveBeenCalled();
+  });
+
+  it('does not sleep when unit.sleepAfterPush is false and task has no override', async () => {
+    const sleepFn = vi.fn(async () => [10]);
+    const { runner, taskRepo } = makeRunner({ sleepTaskWindows: sleepFn });
+    const unit = makeUnitForRun({ sleepAfterPush: false });
+
+    await runner.stateMachineLoop(unit, 'local', { ...task, sleepAfterPush: null }, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'review');
+    expect(sleepFn).not.toHaveBeenCalled();
+  });
+
+  it('does not block task completion when sleepTaskWindows rejects', async () => {
+    const sleepFn = vi.fn(async () => { throw new Error('tmux not reachable'); });
+    const { runner, taskRepo } = makeRunner({ sleepTaskWindows: sleepFn });
+    taskRepo.findById.mockReturnValue({
+      id: 1, projectId: 10, unitId: 1, serverName: 'local', title: 'Test Task', description: null,
+      status: 'running', currentPhase: 'planning', planMarkdown: null, targetBranch: null, baseBranch: null,
+      skipPr: false, selfReviewCount: 0, worktreePath: null, workingDirectory: '/work', summaryJson: null,
+      inputTrust: 'trusted', executionApprovedFingerprintHash: null, pendingOperation: null,
+      pendingOperationWindowId: null, pendingOperationPriorStatus: null, sleepAfterPush: true,
+    } as any);
+    const unit = makeUnitForRun({ sleepAfterPush: true });
+
+    await runner.stateMachineLoop(unit, 'local', { ...task, sleepAfterPush: null }, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    expect(sleepFn).toHaveBeenCalledWith(1);
+    expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'review');
   });
 });

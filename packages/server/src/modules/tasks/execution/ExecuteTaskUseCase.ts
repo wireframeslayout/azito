@@ -149,6 +149,7 @@ export class ExecuteTaskUseCase {
     // Boundary). Required (not optional) so a caller can never forget to
     // wire it and silently fall back to treating scoped auth as enabled.
     private scopedAuthEnabled: boolean,
+    private sleepTaskWindows: (taskId: number) => Promise<number[]>,
     private pushNotaryService: import('../../git/hub-transfer/PushNotaryService').PushNotaryService | null = null,
     private fetchDistributionService: import('../../git/hub-transfer/FetchDistributionService').FetchDistributionService | null = null,
   ) {
@@ -200,6 +201,7 @@ export class ExecuteTaskUseCase {
       this.projectSecretRepo,
       this.scopedAuthEnabled,
       this.pushNotaryService,
+      this.sleepTaskWindows,
     );
   }
 
@@ -931,6 +933,7 @@ export class ExecuteTaskUseCase {
         this.windowRepo.remove(w.id);
         continue;
       }
+      if (w.sleeping) continue;
       try {
         const alive = await this.tmux.checkPaneExists(server, w.tmuxTarget);
         if (!alive) this.windowRepo.remove(w.id);
@@ -956,6 +959,7 @@ export class ExecuteTaskUseCase {
       launchCommand: buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs),
       workingDirectory: effectiveDir || null,
       paneLayout: null,
+      sleeping: false,
     });
 
     // Launch worker command

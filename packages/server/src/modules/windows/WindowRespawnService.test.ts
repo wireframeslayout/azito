@@ -31,6 +31,7 @@ function makeWindow(overrides: Partial<Window> = {}): Window {
     launchCommand: null,
     workingDirectory: null,
     paneLayout: null,
+    sleeping: false,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
@@ -90,6 +91,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     pendingOperation: null,
     pendingOperationWindowId: null,
     pendingOperationPriorStatus: null,
+    sleepAfterPush: null,
     createdByKind: 'operator',
     createdById: null,
     createdViaGeneration: null,
@@ -108,12 +110,14 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
     selfReviewMaxAttempts: 2,
     reviewSubagent: null,
     implementSubagent: null,
+    
     phaseConfig: null,
     workerType: 'claude',
     workerModel: 'opus',
     workerExtraArgs: null,
     workerExecutionMode: 'tmux-pipe',
     workerRuntime: 'tui',
+    sleepAfterPush: false,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -633,7 +637,7 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
     const result = await service.respawn(1, makeServer());
 
     expect(result.tmuxTarget).toBe('azito:task-1--ab12.1');
-    expect(windowRepo.update).toHaveBeenCalledWith(1, { tmuxTarget: 'azito:task-1--ab12.1' });
+    expect(windowRepo.update).toHaveBeenCalledWith(1, { tmuxTarget: 'azito:task-1--ab12.1', sleeping: false });
   });
 
   it('kills an existing window with the same name before recreating', async () => {

@@ -156,6 +156,12 @@
     "targetBranchHint": "Branch to merge the PR into. Leave empty to use the default branch.",
     "targetBranchPlaceholder": "e.g. develop"
   },
+  "sleep": {
+    "overrideLabel": "Override sleep setting",
+    "unitDefault": "Unit default",
+    "enabled": "Enabled",
+    "disabled": "Disabled"
+  },
   "subagent": {
     "overrideTitle": "Subagent Override",
     "overrideHint": "By default this task inherits the Unit's subagent configuration.",
