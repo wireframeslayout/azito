@@ -91,6 +91,14 @@ export class RemoteBundleOps {
    * `fetchWorkingDirFromMirror` はこのローカル branch を一切更新しない
    * （下記参照）。workingDir はリンク worktree の起点として使われるだけであり、
    * 更新後の内容が必要な呼び出し側は `origin/<branch>` を参照すること。
+   *
+   * clone 直後に HEAD を detach する。`git clone --branch <branch>` は主
+   * チェックアウト（workingDir）にその branch をチェックアウトしたまま残す
+   * ため、taskのブランチ指定がベースブランチと同じ場合に
+   * `RemoteWorktreeService` の `git worktree add <path> <branch>`（既存
+   * ローカル branch を割り当てる分岐）が
+   * `fatal: '<branch>' is already used by worktree` で失敗する
+   * （新規 workingDir への初回タスク実行で再現。Issue #87 レビュー指摘）。
    */
   async cloneWorkingDirFromMirror(transport: IServerTransport, mirrorDir: string, workingDir: string, branch: string): Promise<void> {
     assertSafeBranch(branch, 'branch');
@@ -102,6 +110,13 @@ export class RemoteBundleOps {
     );
     if (r.code !== 0 || (r.stderr && r.stderr.includes('fatal:'))) {
       throw new Error(`git clone from mirror failed: ${r.stderr || r.stdout}`);
+    }
+    const detach = await transport.exec(
+      `git -C ${shellQuote(workingDir)} -c core.hooksPath=/dev/null checkout --detach 2>&1`,
+      15_000,
+    );
+    if (detach.code !== 0 || (detach.stderr && detach.stderr.includes('fatal:'))) {
+      throw new Error(`git checkout --detach after clone failed: ${detach.stderr || detach.stdout}`);
     }
   }
 
