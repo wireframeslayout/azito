@@ -66,3 +66,27 @@ export function resolveBaseBranch(
 ): string {
   return task.baseBranch || projectServer?.branch || project?.defaultBranch || 'main';
 }
+
+/**
+ * Resolves the base branch to pass to worktree creation, given whether a
+ * fetch distribution ran (and, if so, its outcome) for this server (Issue
+ * #87 review, forge/87-mirror follow-up). `RemoteBundleOps.
+ * fetchWorkingDirFromMirror` only ever force-updates the remote-tracking ref
+ * `refs/remotes/origin/<branch>` on the distributed workingDir — it
+ * deliberately never touches the local branch ref, because doing so used to
+ * break the moment that branch was checked out in a linked worktree (e.g. a
+ * task whose branch input names the base branch itself), causing every
+ * later distribution to that server x repo to fail permanently. So whenever
+ * distribution actually landed new content (`'distributed'` or
+ * `'already_current'` — both mean the tracking ref is now known-good),
+ * worktree creation must resolve from `origin/<baseBranch>`, not the
+ * possibly-stale local `<baseBranch>`. Local/ssh servers, or isolated
+ * servers where distribution did not run this call (`distStatus` is null),
+ * keep resolving the plain `baseBranch` as before.
+ */
+export function resolveWorktreeCreateBaseBranch(
+  baseBranch: string,
+  distStatus: 'distributed' | 'already_current' | 'failed' | null,
+): string {
+  return distStatus === 'distributed' || distStatus === 'already_current' ? `origin/${baseBranch}` : baseBranch;
+}

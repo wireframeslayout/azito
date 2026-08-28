@@ -6,10 +6,22 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { RemoteBundleOps } from './RemoteBundleOps';
 import type { IServerTransport } from '../../servers/transport/ServerTransport';
 
-// Regression coverage for Issue #87 review finding 1 (Important, confirmed
-// via real git): a second (and later) distribution to the same workingDir
-// must actually update it — not silently leave it pinned to the commit it
-// was first cloned at.
+// Regression coverage for Issue #87 review findings (confirmed via real
+// git):
+//
+// - Finding 1 (original, 3cdfaf1a): a second (and later) distribution to
+//   the same workingDir must actually update it, not silently leave it
+//   pinned to the commit it was first cloned at.
+// - Finding 2 (this task): 3cdfaf1a fixed finding 1 by force-updating the
+//   workingDir's LOCAL branch ref via a forced refspec, which breaks the
+//   moment that branch is checked out in a linked worktree (e.g.
+//   `git worktree add <path> main`, which is exactly what happens when a
+//   task's user-specified branch input names the base branch itself) — git
+//   refuses the fetch with "refusing to fetch into branch ... checked out",
+//   and every later distribution to that server x repo then fails forever.
+//   The fix reverts to updating ONLY the tracking ref
+//   (`refs/remotes/origin/<branch>`); callers that need the freshly
+//   distributed content must resolve `origin/<branch>` themselves.
 //
 // Everything here runs against real local filesystem repos under `/tmp`
 // (never a real remote): a bare repo standing in for the server-side
@@ -57,7 +69,7 @@ describe('RemoteBundleOps mirror -> workingDir sync (regression, real local git)
     return dir;
   }
 
-  it('a second distribution updates the workingDir local branch to the new SHA (not just refs/remotes/origin)', async () => {
+  it('a second distribution updates refs/remotes/origin/<branch> to the new SHA, and a worktree created from it gets the new content', async () => {
     const ops = new RemoteBundleOps();
     const transport = localTransport();
 
@@ -81,6 +93,7 @@ describe('RemoteBundleOps mirror -> workingDir sync (regression, real local git)
     const workingDir = path.join(makeTmpDir('azito-mirror-sync-wd-parent-'), 'repo');
     await ops.cloneWorkingDirFromMirror(transport, mirrorDir, workingDir, 'main');
     expect(runGit(['rev-parse', 'refs/heads/main'], workingDir)).toBe(shaV1);
+    expect(runGit(['rev-parse', 'refs/remotes/origin/main'], workingDir)).toBe(shaV1);
 
     // 4. Second distribution's content lands in the mirror (e.g. after
     //    ordinary further commits on the source branch).
@@ -94,58 +107,73 @@ describe('RemoteBundleOps mirror -> workingDir sync (regression, real local git)
     // 5. Second distribution's workingDir update path.
     await ops.fetchWorkingDirFromMirror(transport, mirrorDir, workingDir, 'main');
 
-    // The bug: the old implementation only updated refs/remotes/origin/main,
-    // leaving refs/heads/main (what `git worktree add -b <t> <p> main`
-    // actually resolves) pinned at v1.
-    expect(runGit(['rev-parse', 'refs/heads/main'], workingDir)).toBe(shaV2);
+    // The current design: only the tracking ref is updated. The local
+    // branch is intentionally left untouched (still v1) — callers that need
+    // the newly distributed content must resolve `origin/<branch>`.
+    expect(runGit(['rev-parse', 'refs/heads/main'], workingDir)).toBe(shaV1);
     expect(runGit(['rev-parse', 'refs/remotes/origin/main'], workingDir)).toBe(shaV2);
 
-    // 6. End-to-end: a worktree created off workingDir's `main` (exactly
-    //    what `RemoteWorktreeService.create()` does for a task) must now
-    //    get v2, not v1.
+    // 6. End-to-end: a worktree created off workingDir's `origin/main`
+    //    (exactly what ExecuteTaskUseCase now passes as the worktree
+    //    creation base branch whenever distribution ran) must get v2.
     const worktreePath = path.join(makeTmpDir('azito-mirror-sync-wt-parent-'), 'task-1');
-    runGit(['worktree', 'add', '-b', 'task/1-regression', worktreePath, 'main'], workingDir);
+    runGit(['worktree', 'add', '-b', 'task/1-regression', worktreePath, 'origin/main'], workingDir);
     expect(fs.readFileSync(path.join(worktreePath, 'file.txt'), 'utf-8')).toBe('v2\n');
   }, 30_000);
 
-  it('workingDir HEAD is detached after clone, so a later fetch does not hit "checked out" refusal', async () => {
+  it('a second distribution succeeds even when the distributed branch is checked out in a linked worktree (Issue #87 review finding)', async () => {
     const ops = new RemoteBundleOps();
     const transport = localTransport();
 
-    const mirrorDir = makeTmpDir('azito-mirror-detach-mirror-');
-    runGit(['init', '-q', '--bare', '--initial-branch=main', mirrorDir], mirrorDir);
+    // 1. Server-side bare mirror with two branches: `trunk` (workingDir's
+    //    own primary checkout below) and `main` (the branch this test
+    //    distributes and checks out in a LINKED worktree, reproducing a
+    //    task whose branch input names the base branch itself).
+    const mirrorDir = makeTmpDir('azito-mirror-linked-mirror-');
+    runGit(['init', '-q', '--bare', '--initial-branch=trunk', mirrorDir], mirrorDir);
 
-    const srcDir = makeTmpDir('azito-mirror-detach-src-');
-    runGit(['init', '-q', '--initial-branch=main', srcDir], srcDir);
+    const srcDir = makeTmpDir('azito-mirror-linked-src-');
+    runGit(['init', '-q', '--initial-branch=trunk', srcDir], srcDir);
     runGit(['config', 'user.email', 'test@example.com'], srcDir);
     runGit(['config', 'user.name', 'Test'], srcDir);
+    fs.writeFileSync(path.join(srcDir, 'trunk.txt'), 'trunk\n');
+    runGit(['add', 'trunk.txt'], srcDir);
+    runGit(['commit', '-q', '-m', 'trunk'], srcDir);
+    runGit(['push', mirrorDir, 'trunk'], srcDir);
+
+    runGit(['checkout', '-q', '-b', 'main'], srcDir);
     fs.writeFileSync(path.join(srcDir, 'file.txt'), 'v1\n');
     runGit(['add', 'file.txt'], srcDir);
     runGit(['commit', '-q', '-m', 'v1'], srcDir);
     runGit(['push', mirrorDir, 'main'], srcDir);
 
-    const workingDir = path.join(makeTmpDir('azito-mirror-detach-wd-parent-'), 'repo');
-    await ops.cloneWorkingDirFromMirror(transport, mirrorDir, workingDir, 'main');
+    // 2. workingDir's own primary checkout is `trunk`, not `main` —
+    //    matching how a real workingDir is cloned once per repo and reused
+    //    across tasks whose branches vary.
+    const workingDir = path.join(makeTmpDir('azito-mirror-linked-wd-parent-'), 'repo');
+    await ops.cloneWorkingDirFromMirror(transport, mirrorDir, workingDir, 'trunk');
 
-    // `git symbolic-ref HEAD` exits non-zero (and this helper throws) when
-    // HEAD is detached, so a thrown error is exactly what a detached HEAD
-    // looks like here.
-    let detached = false;
-    try {
-      runGit(['symbolic-ref', '-q', 'HEAD'], workingDir);
-    } catch {
-      detached = true;
-    }
-    expect(detached).toBe(true);
+    // 3. Reproduce the review-report scenario: a task specifies the base
+    //    branch name itself as its branch input, so
+    //    `RemoteWorktreeService.create()` calls
+    //    `git worktree add <path> <branch>` and `main` ends up checked out
+    //    in a LINKED worktree.
+    const linkedWorktreePath = path.join(makeTmpDir('azito-mirror-linked-wt-parent-'), 'task-main');
+    runGit(['worktree', 'add', linkedWorktreePath, 'main'], workingDir);
 
-    // The regression this guards against: a still-checked-out branch makes
-    // the local-branch-updating refspec in `fetchWorkingDirFromMirror` fail
-    // with "refusing to fetch into branch ... checked out". Confirm the
-    // second-distribution fetch succeeds without throwing.
+    // 4. Second distribution's content for `main` lands in the mirror.
     fs.writeFileSync(path.join(srcDir, 'file.txt'), 'v2\n');
     runGit(['add', 'file.txt'], srcDir);
     runGit(['commit', '-q', '-m', 'v2'], srcDir);
+    const shaV2 = runGit(['rev-parse', 'HEAD'], srcDir);
     runGit(['push', mirrorDir, 'main'], srcDir);
+
+    // 5. The regression this guards against: with `main` checked out in a
+    //    linked worktree, a refspec that force-updates `refs/heads/main`
+    //    fails with "refusing to fetch into branch ... checked out". The
+    //    fixed implementation never touches refs/heads/main, so this must
+    //    succeed.
     await expect(ops.fetchWorkingDirFromMirror(transport, mirrorDir, workingDir, 'main')).resolves.not.toThrow();
+    expect(runGit(['rev-parse', 'refs/remotes/origin/main'], workingDir)).toBe(shaV2);
   }, 30_000);
 });

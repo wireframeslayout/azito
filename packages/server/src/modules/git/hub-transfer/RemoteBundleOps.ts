@@ -86,11 +86,11 @@ export class RemoteBundleOps {
   }
 
   /**
-   * workingDir が未作成のとき、mirror から新規作成する。clone 直後に HEAD を
-   * detach する — workingDir は配信先であり人が作業する場所ではない（タスクは
-   * worktree で作業する）。ブランチをチェックアウトしたままだと、次回配信の
-   * `fetchWorkingDirFromMirror` が local branch を forced refspec で更新できず
-   * 古いコードのまま worktree が作られる（Issue #87 レビュー指摘）。
+   * workingDir が未作成のとき、mirror から新規作成する。`--branch <branch>` で
+   * clone した時点のローカル branch はその時点の内容を指すが、以後
+   * `fetchWorkingDirFromMirror` はこのローカル branch を一切更新しない
+   * （下記参照）。workingDir はリンク worktree の起点として使われるだけであり、
+   * 更新後の内容が必要な呼び出し側は `origin/<branch>` を参照すること。
    */
   async cloneWorkingDirFromMirror(transport: IServerTransport, mirrorDir: string, workingDir: string, branch: string): Promise<void> {
     assertSafeBranch(branch, 'branch');
@@ -103,13 +103,6 @@ export class RemoteBundleOps {
     if (r.code !== 0 || (r.stderr && r.stderr.includes('fatal:'))) {
       throw new Error(`git clone from mirror failed: ${r.stderr || r.stdout}`);
     }
-    const detach = await transport.exec(
-      `git -C ${shellQuote(workingDir)} -c core.hooksPath=/dev/null checkout --detach 2>&1`,
-      15_000,
-    );
-    if (detach.code !== 0 || (detach.stderr && detach.stderr.includes('fatal:'))) {
-      throw new Error(`git checkout --detach after clone failed: ${detach.stderr || detach.stdout}`);
-    }
   }
 
   /**
@@ -117,31 +110,22 @@ export class RemoteBundleOps {
    * パスを source に明示指定する（`origin` の URL は別ポリシーの `setDummyOrigin`
    * が管理しており、更新経路とは分離するため）。
    *
-   * fetch 前に HEAD を冪等に detach する。workingDir 上で `<branch>` が
-   * チェックアウトされたままだと、ローカル branch ref 自体を更新する refspec
-   * （下記2本目）が `refusing to fetch into branch ... checked out` で失敗する
-   * ため（旧実装が作った既存 workingDir にも対応するために必須）。既に detached
-   * な状態で `checkout --detach` を実行しても成功する（冪等）。
-   *
-   * refspec を2本指定し、local branch と `refs/remotes/origin/<branch>` の
-   * 両方を forced 更新する。local branch を更新しないと `RemoteWorktreeService`
-   * の `git worktree add -b <task branch> <path> <baseBranch>` がローカル
-   * branch を優先解決してしまい、2回目以降の配信内容が worktree に届かない
-   * （Issue #87 レビュー指摘）。
+   * **ローカル branch ref は更新しない** — 追跡 ref
+   * （`refs/remotes/origin/<branch>`）のみを forced 更新する1本の refspec。
+   * ローカル branch を forced refspec で書き換える方式は、その branch がどこかの
+   * リンク worktree（`git worktree add <path> <branch>`。タスクがベースブランチ名
+   * をそのまま指定した場合など）でチェックアウトされていると
+   * `refusing to fetch into branch ... checked out` で fetch 自体が失敗し、以後
+   * その サーバー×リポジトリ への配信が全て失敗し続ける（Issue #87 レビュー
+   * 指摘）。workingDir のローカル branch は clone 時点のまま更新されなくなるため、
+   * 更新後の内容が必要な呼び出し側（worktree 作成など）は境界側で
+   * `origin/<branch>` を明示的に指定すること。
    */
   async fetchWorkingDirFromMirror(transport: IServerTransport, mirrorDir: string, workingDir: string, branch: string): Promise<void> {
     assertSafeBranch(branch, 'branch');
-    const detach = await transport.exec(
-      `git -C ${shellQuote(workingDir)} -c core.hooksPath=/dev/null checkout --detach 2>&1`,
-      15_000,
-    );
-    if (detach.code !== 0 || (detach.stderr && detach.stderr.includes('fatal:'))) {
-      throw new Error(`git checkout --detach before fetch failed: ${detach.stderr || detach.stdout}`);
-    }
-    const localRefspec = `+refs/heads/${branch}:refs/heads/${branch}`;
     const trackingRefspec = `+refs/heads/${branch}:refs/remotes/origin/${branch}`;
     const r = await transport.exec(
-      `cd ${shellQuote(workingDir)} && git -c core.hooksPath=/dev/null fetch --atomic ${shellQuote(mirrorDir)} ${shellQuote(localRefspec)} ${shellQuote(trackingRefspec)} 2>&1`,
+      `cd ${shellQuote(workingDir)} && git -c core.hooksPath=/dev/null fetch --atomic ${shellQuote(mirrorDir)} ${shellQuote(trackingRefspec)} 2>&1`,
       120_000,
     );
     if (r.code !== 0 || (r.stderr && r.stderr.includes('fatal:'))) {

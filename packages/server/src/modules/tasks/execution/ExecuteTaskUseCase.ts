@@ -47,7 +47,7 @@ import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingAppro
 import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionManifest';
 import { TuiWorkerRuntime } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
-import { resolveTaskServerName, resolveTmuxSession, resolveUnitId, resolveBaseBranch } from './TaskExecutionEnv';
+import { resolveTaskServerName, resolveTmuxSession, resolveUnitId, resolveBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
 import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
 import type { SqliteAgentTurnRepository } from '../turns/SqliteAgentTurnRepository';
 import type { TurnSignalHub } from '../turns/TurnSignalHub';
@@ -746,6 +746,12 @@ export class ExecuteTaskUseCase {
 
     if (workingDir) {
       const baseBranch = resolveBaseBranch(task, projectServer, project);
+      // Tracks fetch distribution's outcome this call (null when
+      // distribution did not run, e.g. local/ssh servers) — see
+      // resolveWorktreeCreateBaseBranch's doc comment for why this decides
+      // whether worktree creation below resolves `origin/<baseBranch>`
+      // instead of the plain `baseBranch`.
+      let distStatus: 'distributed' | 'already_current' | 'failed' | null = null;
 
       // Fetch distribution for isolated servers (Issue #87 Phase 1)
       if (server.isolationIntent && this.fetchDistributionService) {
@@ -761,6 +767,7 @@ export class ExecuteTaskUseCase {
                 token: repo.token, branch: baseBranch, workingDir,
                 repositoryId: repoEntry.id,
               });
+              distStatus = distResult.status;
               if (distResult.status === 'failed') {
                 this.appendLog(taskId, unitId, 'command', { type: 'fetch_distribution_failed', error: distResult.error });
                 throw new Error(`Fetch distribution failed: ${distResult.error}`);
@@ -771,11 +778,13 @@ export class ExecuteTaskUseCase {
         }
       }
 
+      const worktreeCreateBaseBranch = resolveWorktreeCreateBaseBranch(baseBranch, distStatus);
+
       // Create worktree for isolated branch/file tracking
       let wt: WorktreeInfo;
       try {
         const slug = await this.contentExtractor.generateSlug(task.title);
-        wt = await this.getWorktreeService(server).create(workingDir, taskId, slug, baseBranch, task.branch || undefined);
+        wt = await this.getWorktreeService(server).create(workingDir, taskId, slug, worktreeCreateBaseBranch, task.branch || undefined);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         this.appendLog(taskId, unitId, 'command', {
