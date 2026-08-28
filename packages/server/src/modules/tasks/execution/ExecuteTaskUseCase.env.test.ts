@@ -416,7 +416,7 @@ function buildUseCase(opts: {
     (opts.fetchDistributionService as any) ?? null,
   );
 
-  return { useCase, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, transportFactory, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, paneEnvService };
+  return { useCase, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, transportFactory, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, paneEnvService, gitProvider };
 }
 
 describe('ExecuteTaskUseCase execution-env resolution', () => {
@@ -3119,5 +3119,62 @@ describe('ExecuteTaskUseCase base-branch canonicalization before distribution (I
     expect(worktreeCreate).toHaveBeenCalledWith(
       '/srv/repo', 1, expect.any(String), 'origin/main', undefined,
     );
+  });
+});
+
+// Issue #87 13th-round review, Important finding: isPushCompleted() (the
+// startup-recovery fallback for a task stuck mid-pushing, see
+// RecoverStuckTasksUseCase) must resolve the SAME repository fetch
+// distribution actually pulled onto the server, not always
+// `project.repositories[0]` — otherwise a project with a second repository
+// choosing repository B as its distribution target would have B's PR
+// existence checked/created against A.
+describe('ExecuteTaskUseCase.isPushCompleted repository selection agrees with distribution target (Issue #87 13th-round review)', () => {
+  const repoA = { id: 1, name: null, url: 'https://github.com/acme/repo-a.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-a', hasToken: true };
+  const repoB = { id: 2, name: null, url: 'https://github.com/acme/repo-b.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-b', hasToken: true };
+  const repoAWithToken = { ...repoA, token: 'tok-a' };
+  const repoBWithToken = { ...repoB, token: 'tok-b' };
+
+  it('resolves repository B (the configured distribution target), not A (repositories[0]), for PR creation', async () => {
+    const task = makeTask({
+      id: 1, unitId: 10, serverName: 'agent-1',
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', skipPr: false,
+    });
+    const server = makeServer({ name: 'agent-1', type: 'agent', isolationIntent: false });
+    const project = makeProject({ defaultUnitId: null, repositories: [repoA, repoB] });
+    const unit = makeUnit({ id: 10 });
+    const harness = buildUseCase({
+      task, project, units: [unit], server,
+      projectServer: { workingDirectory: '/work', branch: null, tmuxSession: 'azito', distributeCode: true, distributionRepositoryId: repoB.id },
+    });
+    harness.projectRepo.findRepositoryById = vi.fn((id: number) => (id === repoB.id ? repoBWithToken : repoAWithToken));
+
+    await harness.useCase.isPushCompleted(1);
+
+    expect(harness.gitProvider.findPullRequestByBranch).toHaveBeenCalledWith(repoBWithToken, 'task/1-slug');
+    expect(harness.gitProvider.findPullRequestByBranch).not.toHaveBeenCalledWith(repoAWithToken, expect.anything());
+  });
+
+  it('falls back to repository A (repositories[0]) when distribution is not active for this project/server', async () => {
+    const task = makeTask({
+      id: 1, unitId: 10, serverName: 'agent-1',
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', skipPr: false,
+    });
+    const server = makeServer({ name: 'agent-1', type: 'agent', isolationIntent: false });
+    const project = makeProject({ defaultUnitId: null, repositories: [repoA, repoB] });
+    const unit = makeUnit({ id: 10 });
+    const harness = buildUseCase({
+      task, project, units: [unit], server,
+      // distributionRepositoryId set, but distribute_code is off and the
+      // server isn't isolated — distribution is not active for this
+      // pairing, so this must keep resolving repositories[0] the way every
+      // project not using hub-代行 distribution always has.
+      projectServer: { workingDirectory: '/work', branch: null, tmuxSession: 'azito', distributeCode: false, distributionRepositoryId: repoB.id },
+    });
+    harness.projectRepo.findRepositoryById = vi.fn((id: number) => (id === repoB.id ? repoBWithToken : repoAWithToken));
+
+    await harness.useCase.isPushCompleted(1);
+
+    expect(harness.gitProvider.findPullRequestByBranch).toHaveBeenCalledWith(repoAWithToken, 'task/1-slug');
   });
 });

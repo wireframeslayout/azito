@@ -37,6 +37,8 @@ import type { PushNotaryService } from '../../git/hub-transfer/PushNotaryService
 import type { AgentTurn } from '../turns/AgentTurn';
 import { checkExecutionGate } from './ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionManifest';
+import { resolveExecutionRepositoryEntry } from './DistributionHelper';
+import type { ProjectRepository } from '../../projects/Project';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -111,11 +113,14 @@ export class PhaseLoopRunner {
     private sleepTaskWindows: (taskId: number) => Promise<number[]>,
   ) {}
 
-  private async findPrUrl(task: { projectId: number }, branch: string | null): Promise<string | null> {
-    if (!branch) return null;
-    const project = this.projectRepo.findById(task.projectId);
-    const repoEntry = project?.repositories?.[0];
-    if (!repoEntry) return null;
+  // Takes the already-resolved repository entry rather than re-deriving it
+  // from `task.projectId` (Issue #87 13th-round review, Important finding):
+  // the caller resolves it via `resolveExecutionRepositoryEntry` — the same
+  // repository the pushing phase's PR/push verification/notarization
+  // target — so this must never make its own separate `repositories[0]`
+  // choice that could disagree with theirs.
+  private async findPrUrl(repoEntry: ProjectRepository | null, branch: string | null): Promise<string | null> {
+    if (!branch || !repoEntry) return null;
     const repo = this.projectRepo.findRepositoryById(repoEntry.id);
     if (!repo || !repo.owner || !repo.repoName) return null;
     try {
@@ -469,7 +474,11 @@ export class PhaseLoopRunner {
         })();
         const probeBranch = currentTaskForProbe?.worktreeBranch ?? currentTaskForProbe?.branch;
         if (probeDir && probeBranch) {
-          const probeRepoEntry = project?.repositories?.[0] ?? null;
+          // Issue #87 13th-round review, Important finding: must agree with
+          // whichever repository distribution actually pulled onto this
+          // server, not always `repositories[0]` — see
+          // `resolveExecutionRepositoryEntry`'s doc comment.
+          const probeRepoEntry = resolveExecutionRepositoryEntry(server, projectServer, project);
           const probeRepo = probeRepoEntry ? this.projectRepo.findRepositoryById(probeRepoEntry.id) : null;
           pushingProbe = async () => {
             // Create the PR (if due) before verifying — verifyPushCompleted's own
@@ -559,8 +568,14 @@ export class PhaseLoopRunner {
       // Hub push notarization for isolated servers (Issue #87 Phase 2)
       if (server.isolationIntent && phaseDef.pushVerify && this.pushNotaryService
           && classification.status === 'phase_complete') {
-        const project = this.projectRepo.findById(task.projectId);
-        const probeRepoEntry = project?.repositories?.[0] ?? null;
+        const notaryProject = this.projectRepo.findById(task.projectId);
+        // Issue #87 13th-round review, Important finding: the hub push
+        // notary must target the SAME repository fetch distribution pulled
+        // onto this isolated server — see
+        // `resolveExecutionRepositoryEntry`'s doc comment. `projectServer`
+        // here is the outer stateMachineLoop resolution (same task/server
+        // pairing this notary block itself operates on).
+        const probeRepoEntry = resolveExecutionRepositoryEntry(server, projectServer, notaryProject);
         const probeRepo = probeRepoEntry ? this.projectRepo.findRepositoryById(probeRepoEntry.id) : null;
         if (probeRepo?.token) {
           this.appendLog(task.id, unit.id, 'command', { type: 'hub_push_start' });
@@ -665,7 +680,8 @@ export class PhaseLoopRunner {
     const gitInfo = server.type === 'local'
       ? this.gitInfoCollector.collectGitInfoSync(workingDir, baseBranchForDiff)
       : await this.gitInfoCollector.collectGitInfoRemote(server, workingDir, baseBranchForDiff);
-    const prUrl = await this.findPrUrl(task, gitInfo.branch);
+    const finalRepoEntry = resolveExecutionRepositoryEntry(server, projectServer, project);
+    const prUrl = await this.findPrUrl(finalRepoEntry, gitInfo.branch);
     const updateFields: Record<string, unknown> = {};
     if (prUrl) updateFields.prUrl = prUrl;
     if (gitInfo.changedFiles) updateFields.changedFiles = gitInfo.changedFiles;

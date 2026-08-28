@@ -57,6 +57,8 @@ function makeRunner(overrides: {
   unitTypeLoader?: Record<string, unknown>;
   scopedAuthEnabled?: boolean;
   sleepTaskWindows?: (...args: unknown[]) => Promise<number[]>;
+  pushNotaryService?: Record<string, unknown> | null;
+  transportFactory?: Record<string, unknown>;
 } = {}) {
   const taskRepo = {
     findById: vi.fn(() => ({
@@ -153,7 +155,7 @@ function makeRunner(overrides: {
   const pullRequestCreator = { ensureCreated: vi.fn(async () => {}), ...overrides.pullRequestCreator };
   const getWorktreeService = vi.fn(() => ({ exists: vi.fn(async () => false) }));
   const appendLog = vi.fn();
-  const transportFactory = { getTransport: vi.fn(() => ({ exec: vi.fn() })), invalidate: vi.fn() };
+  const transportFactory = { getTransport: vi.fn(() => ({ exec: vi.fn() })), invalidate: vi.fn(), ...overrides.transportFactory };
   const sidekickSyncService = { sync: vi.fn(async () => {}), ...overrides.sidekickSyncService };
   const httpSignalCoordinator = {
     start: vi.fn(() => ({
@@ -195,7 +197,7 @@ function makeRunner(overrides: {
     serverRepo as any,
     projectSecretRepo as any,
     overrides.scopedAuthEnabled ?? true,
-    null,
+    (overrides.pushNotaryService ?? null) as any,
     sleepTaskWindows,
   );
 
@@ -737,6 +739,119 @@ describe('PhaseLoopRunner pushing-phase PR auto-creation (git provider abstracti
     expect(pushVerifier.verifyPushCompleted).toHaveBeenCalled();
     expect(taskRepo.updateStatus).not.toHaveBeenCalledWith(1, 'failed');
     expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'review');
+  });
+});
+
+// Issue #87 13th-round review, Important finding: the repository fetch
+// distribution actually pulled onto the server must be the SAME repository
+// push verification / PR creation / hub push notarization target — a
+// project with two repositories choosing repository B as its distribution
+// target must never have B distributed while push/PR/notary keep silently
+// targeting A (`project.repositories[0]`).
+describe('PhaseLoopRunner repository selection agrees with distribution target (Issue #87 13th-round review)', () => {
+  const repoA = { id: 1, name: 'A', url: 'https://github.com/acme/repo-a.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-a', token: 'token-a', hasToken: true };
+  const repoB = { id: 2, name: 'B', url: 'https://github.com/acme/repo-b.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-b', token: 'token-b', hasToken: true };
+
+  function makePushingUnit(overrides: Record<string, unknown> = {}) {
+    return makeUnitForRun({
+      phaseConfig: {
+        planning: { enabled: false }, implementing: { enabled: false },
+        reviewing: { enabled: false }, testing: { enabled: false },
+      },
+      ...overrides,
+    });
+  }
+
+  it('pushing-phase probe (verifyPushCompleted / PR creation) receives repository B, not A, when B is the configured distribution target', async () => {
+    let capturedProbe: (() => Promise<boolean>) | undefined;
+    const { runner, taskRepo, projectRepo, projectServerRepo, workerWaiter, pushVerifier, pullRequestCreator } = makeRunner();
+    workerWaiter.waitForWorker = vi.fn(async (...args: unknown[]) => {
+      capturedProbe = args[8] as (() => Promise<boolean>) | undefined;
+      return { output: 'PHASE_COMPLETE', classification: { status: 'phase_complete' } };
+    });
+    projectRepo.findById = vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', defaultUnitId: null, repositories: [repoA, repoB] }));
+    projectRepo.findRepositoryById = vi.fn((id: number) => (id === repoB.id ? repoB : repoA)) as any;
+    projectServerRepo.find = vi.fn(() => ({
+      projectId: 10, serverName: 'agent-1', workingDirectory: '/work', branch: null, tmuxSession: 'azito',
+      inputPolicy: 'manual-approval' as const, distributeCode: true, distributionRepositoryId: repoB.id,
+    })) as any;
+    taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: false, worktreePath: null,
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+    } as any));
+    const unit = makePushingUnit();
+    const distributionServer = { name: 'agent-1', type: 'agent', isolationIntent: false } as any;
+
+    await runner.stateMachineLoop(unit, 'agent-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, distributionServer, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    expect(capturedProbe).toBeDefined();
+    await capturedProbe!();
+
+    expect(pullRequestCreator.ensureCreated).toHaveBeenCalledWith(1, 1, repoB, 'task/1-slug', expect.anything());
+    expect(pullRequestCreator.ensureCreated).not.toHaveBeenCalledWith(1, 1, repoA, expect.anything(), expect.anything());
+    expect(pushVerifier.verifyPushCompleted).toHaveBeenCalledWith(distributionServer, '/work', 'task/1-slug', false, repoB);
+  });
+
+  it('hub push notarization (isolated server) notarizes against repository B, not A, when B is the configured distribution target', async () => {
+    const notarize = vi.fn(async () => ({ status: 'pushed' as const, sha: 'abc123' }));
+    const { runner, taskRepo, projectRepo, projectServerRepo, pullRequestCreator } = makeRunner({
+      pushNotaryService: { notarize },
+    });
+    projectRepo.findById = vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', defaultUnitId: null, repositories: [repoA, repoB] }));
+    projectRepo.findRepositoryById = vi.fn((id: number) => (id === repoB.id ? repoB : repoA)) as any;
+    projectServerRepo.find = vi.fn(() => ({
+      projectId: 10, serverName: 'isolated-1', workingDirectory: '/work', branch: null, tmuxSession: 'azito',
+      inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: repoB.id,
+    })) as any;
+    taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: false, worktreePath: null,
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+    } as any));
+    const unit = makePushingUnit();
+    // isolationIntent alone (Issue #87 isDistributionRequired) is enough to
+    // require distribution — distributeCode above is deliberately false to
+    // also exercise that half of the OR.
+    const isolatedServer = { name: 'isolated-1', type: 'agent', isolationIntent: true } as any;
+
+    await runner.stateMachineLoop(unit, 'isolated-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    expect(notarize).toHaveBeenCalledWith(expect.objectContaining({ repo: repoB }));
+    expect(notarize).not.toHaveBeenCalledWith(expect.objectContaining({ repo: repoA }));
+    expect(pullRequestCreator.ensureCreated).toHaveBeenCalledWith(1, 1, repoB, 'task/1-slug', expect.anything());
+  });
+
+  it('falls back to repositories[0] (A) when distribution is not active for this project/server', async () => {
+    let capturedProbe: (() => Promise<boolean>) | undefined;
+    const { runner, taskRepo, projectRepo, projectServerRepo, workerWaiter, pushVerifier } = makeRunner();
+    workerWaiter.waitForWorker = vi.fn(async (...args: unknown[]) => {
+      capturedProbe = args[8] as (() => Promise<boolean>) | undefined;
+      return { output: 'PHASE_COMPLETE', classification: { status: 'phase_complete' } };
+    });
+    projectRepo.findById = vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', defaultUnitId: null, repositories: [repoA, repoB] }));
+    projectRepo.findRepositoryById = vi.fn((id: number) => (id === repoB.id ? repoB : repoA)) as any;
+    // distributionRepositoryId set, but distribution is NOT active for this
+    // server (distributeCode false, server not isolated) — must keep the
+    // pre-existing `repositories[0]` behavior every non-distribution project
+    // already relies on.
+    projectServerRepo.find = vi.fn(() => ({
+      projectId: 10, serverName: 'local', workingDirectory: '/work', branch: null, tmuxSession: 'azito',
+      inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: repoB.id,
+    })) as any;
+    taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: false, worktreePath: null,
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+    } as any));
+    const unit = makePushingUnit();
+
+    await runner.stateMachineLoop(unit, 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+
+    expect(capturedProbe).toBeDefined();
+    await capturedProbe!();
+
+    expect(pushVerifier.verifyPushCompleted).toHaveBeenCalledWith(server, '/work', 'task/1-slug', false, repoA);
   });
 });
 

@@ -49,7 +49,7 @@ import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionMani
 import { TuiWorkerRuntime } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
 import { resolveTaskServerName, resolveTmuxSession, resolveUnitId, resolveBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
-import { performDistribution, type DistributionOutcome } from './DistributionHelper';
+import { performDistribution, resolveExecutionRepositoryEntry, type DistributionOutcome } from './DistributionHelper';
 import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
 import type { SqliteAgentTurnRepository } from '../turns/SqliteAgentTurnRepository';
 import type { TurnSignalHub } from '../turns/TurnSignalHub';
@@ -1198,7 +1198,10 @@ export class ExecuteTaskUseCase {
           this.runningExecutions.delete(unitId);
         }
 
-        const repoEntry = project?.repositories?.[0];
+        // Issue #87 13th-round review, Important finding: must agree with
+        // whichever repository distribution actually pulled onto this
+        // server — see `resolveExecutionRepositoryEntry`'s doc comment.
+        const repoEntry = resolveExecutionRepositoryEntry(server, lockedProjectServer, project);
         const repo = repoEntry ? this.projectRepo.findRepositoryById(repoEntry.id) : undefined;
 
         // Collect final git info (changed files + PR URL)
@@ -1754,7 +1757,10 @@ export class ExecuteTaskUseCase {
     if (!workingDir) return false;
     const branch = task.worktreeBranch || task.branch || '';
     if (!branch) return false;
-    const repoEntry2 = project?.repositories?.[0];
+    // Issue #87 13th-round review, Important finding: must agree with
+    // whichever repository distribution actually pulled onto this server —
+    // see `resolveExecutionRepositoryEntry`'s doc comment.
+    const repoEntry2 = resolveExecutionRepositoryEntry(server, ps, project);
     const repo = repoEntry2 ? this.projectRepo.findRepositoryById(repoEntry2.id) : null;
     if (!task.skipPr) {
       await this.pullRequestCreator.ensureCreated(task.id, resolvedUnitId, repo, branch, {

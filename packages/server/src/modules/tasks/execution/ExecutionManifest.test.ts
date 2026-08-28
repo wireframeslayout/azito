@@ -634,6 +634,48 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
 
       expect(hashSet).not.toBe(hashNull);
     });
+
+    // Issue #87 13th-round review, Important finding: the approval
+    // fingerprint's `repository` field must reflect the SAME repository
+    // push/PR/notarization will actually target — previously it always
+    // resolved `project.repositories[0]`, disagreeing with a
+    // `distributionRepositoryId` pointing at a different (later) entry.
+    it("manifest.repository reflects the distribution target repository (B), not repositories[0] (A), when distribution is active for this project/server", () => {
+      const repoA = { id: 1, name: 'A', url: 'https://github.com/acme/repo-a.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-a', hasToken: false };
+      const repoB = { id: 2, name: 'B', url: 'https://github.com/acme/repo-b.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-b', hasToken: false };
+      const fixture: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject({ repositories: [repoA, repoB] }),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: true, distributionRepositoryId: repoB.id }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      };
+      const task = makeTask();
+
+      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture));
+
+      expect(manifest.repository?.id).toBe(repoB.id);
+      expect(manifest.repository?.repoName).toBe('repo-b');
+    });
+
+    it('manifest.repository falls back to repositories[0] (A) when distribution is not active for this project/server (no distributeCode, no isolationIntent)', () => {
+      const repoA = { id: 1, name: 'A', url: 'https://github.com/acme/repo-a.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-a', hasToken: false };
+      const repoB = { id: 2, name: 'B', url: 'https://github.com/acme/repo-b.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-b', hasToken: false };
+      const fixture: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject({ repositories: [repoA, repoB] }),
+        // distributionRepositoryId set but distribution is NOT active for
+        // this pairing (distributeCode false, server not isolated) — same
+        // pre-existing behavior every project not using hub-代行
+        // distribution must keep.
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: false, distributionRepositoryId: repoB.id }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      };
+      const task = makeTask();
+
+      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture));
+
+      expect(manifest.repository?.id).toBe(repoA.id);
+    });
   });
 
   it('editing task.unitId alone invalidates a prior approval (retargets the Unit)', () => {

@@ -16,6 +16,21 @@ import { resolveTaskServerName } from '../tasks/execution/TaskExecutionEnv';
  * (e.g. the execution loop's in-memory selfReview attempt counter) are applied
  * by the caller as explicit overrides on top of this result, never by
  * re-implementing the vars.
+ *
+ * `gitProvider` below is deliberately still `project.repositories[0]`, NOT
+ * `resolveExecutionRepositoryEntry` (Issue #87 13th-round review) — that
+ * resolver lives in `tasks/execution/DistributionHelper.ts`, one layer above
+ * this module in the dependency direction (`prompt` is mid-tier,
+ * `tasks/execution` is upper-tier; see AGENTS.md's "Module Structure
+ * Rules" — importing it here would invert the direction depcruise enforces).
+ * This is a real, narrower gap than the push/PR/notary one that review
+ * fixed: `gitProvider` only selects prompt WORDING (e.g. "github" vs
+ * "gitlab" phrasing hints for the agent), never an actual push/PR
+ * destination — those are all resolved independently downstream via the
+ * corrected resolver. Left as a known, low-severity inconsistency rather
+ * than moving the resolver to a lower layer, which this fix's scope
+ * (agreeing push/PR/notary targeting, not restructuring module layering)
+ * does not call for.
  */
 export function resolveTaskPromptVars(
   taskRepo: ITaskRepository,
@@ -57,6 +72,8 @@ export function resolveTaskPromptVars(
       pushOutput: task.skipPr
         ? 'Report the branch name that was pushed.'
         : 'Report the PR URL.',
+      // See this function's doc comment above (Issue #87 13th-round review)
+      // for why this deliberately stays `repositories[0]`.
       gitProvider: project.repositories?.[0]?.provider ?? 'github',
     },
     project: {

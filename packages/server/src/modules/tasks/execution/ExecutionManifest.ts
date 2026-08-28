@@ -12,6 +12,7 @@ import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoade
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import { resolvePhaseSidekick, resolveEnabledPhases } from '../../sidekicks/resolvePhaseSidekick';
 import { resolveUnitId, resolveTaskServerName, resolveBaseBranch, canonicalizeBaseBranch } from './TaskExecutionEnv';
+import { resolveExecutionRepositoryEntry } from './DistributionHelper';
 
 /**
  * Execution manifest (Issue #328 fifth-round review).
@@ -100,11 +101,14 @@ import { resolveUnitId, resolveTaskServerName, resolveBaseBranch, canonicalizeBa
  *   resolveTaskPromptVars.ts (`[project.sidekickPrompt, unit.systemPrompt]`) —
  *   editing it changes what the worker is told exactly like editing
  *   unit.systemPrompt does, so it must invalidate approval the same way.
- * - repository: identity (id/provider/url/owner/repoName) of
- *   `project.repositories[0]` — the PR DESTINATION the pushing phase's
+ * - repository: identity (id/provider/url/owner/repoName) of the repository
+ *   `resolveExecutionRepositoryEntry` resolves (DistributionHelper.ts —
+ *   `project.repositories[0]`, unless fetch distribution is active for this
+ *   project/server, in which case the project-server's
+ *   `distributionRepositoryId`) — the PR DESTINATION the pushing phase's
  *   PullRequestCreator/PushVerifier target (PhaseLoopRunner.ts ~367-384;
- *   Issue #328 twelfth-round review, fix 2). Project repositories can be
- *   added/removed independently of the task or Unit via
+ *   Issue #328 twelfth-round review, fix 2; Issue #87 13th-round review,
+ *   Important finding). Project repositories can be
  *   `POST`/`DELETE /api/projects/:id/repositories`, so without this field an
  *   already-approved task's PR could be silently redirected to a different
  *   repository post-approval — the same "changes WHERE output goes" class of
@@ -279,9 +283,10 @@ import { resolveUnitId, resolveTaskServerName, resolveBaseBranch, canonicalizeBa
  * - project_servers: workingDirectory, branch.
  * - ServerConfig (the `servers` row): type, host, agentPort, sshHost — which
  *   machine a run targets.
- * - repository: id, provider, url, owner, repoName of `project.repositories[0]`
- *   — which repository the pushing phase's PR targets (Issue #328
- *   twelfth-round review, fix 2).
+ * - repository: id, provider, url, owner, repoName of the repository
+ *   `resolveExecutionRepositoryEntry` resolves — which repository the
+ *   pushing phase's PR targets (Issue #328 twelfth-round review, fix 2;
+ *   Issue #87 13th-round review, Important finding).
  * - secrets: the SORTED SET of project secret NAMES (not values — see
  *   "known limitations" below).
  *
@@ -692,10 +697,13 @@ export interface ResolvedExecutionManifest {
   };
   /**
    * Identity of the repository the pushing phase will target — `id`,
-   * `provider`, `url`, `owner`, `repoName` of `project.repositories[0]`
-   * (Issue #328 twelfth-round review, fix 2). Resolved via the exact same
-   * selection PhaseLoopRunner's pushing-phase probe uses
-   * (`project?.repositories?.[0] ?? null`, PhaseLoopRunner.ts ~367) — not a
+   * `provider`, `url`, `owner`, `repoName` of the repository
+   * `resolveExecutionRepositoryEntry` resolves (Issue #328 twelfth-round
+   * review, fix 2; Issue #87 13th-round review, Important finding — picks
+   * the project-server's `distributionRepositoryId` when fetch distribution
+   * is active for this server, `project.repositories[0]` otherwise).
+   * Resolved via the exact same selection PhaseLoopRunner's pushing-phase
+   * probe/notary and ExecuteTaskUseCase's push-completion paths use — not a
    * second, separately-written selection rule; see this file's own
    * `resolveExecutionManifest` for why a second resolution path is exactly
    * how earlier review rounds' holes opened up. `null` when the project has
@@ -1056,12 +1064,16 @@ export function resolveExecutionManifest(
     project: {
       sidekickPrompt: project?.sidekickPrompt ?? null,
     },
-    // Same selection PhaseLoopRunner's pushing-phase probe uses
-    // (`project?.repositories?.[0] ?? null`) — see the field's doc comment
-    // on ResolvedExecutionManifest above (Issue #328 twelfth-round review,
-    // fix 2).
+    // Same selection PhaseLoopRunner's pushing-phase probe/notary and
+    // ExecuteTaskUseCase's final-git-info/isPushCompleted paths all use —
+    // `resolveExecutionRepositoryEntry` (DistributionHelper.ts), which picks
+    // the project-server's `distributionRepositoryId` when fetch
+    // distribution is active for this server, falling back to
+    // `project.repositories[0]` otherwise — see the field's doc comment on
+    // ResolvedExecutionManifest above (Issue #328 twelfth-round review, fix
+    // 2; Issue #87 13th-round review, Important finding).
     repository: (() => {
-      const repo = project?.repositories?.[0] ?? null;
+      const repo = resolveExecutionRepositoryEntry(serverConfig, projectServer, project);
       if (!repo) return null;
       const repoWithToken = deps.projectRepo.findRepositoryById(repo.id);
       const tokenDigest = repoWithToken?.token
