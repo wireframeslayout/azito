@@ -28,6 +28,21 @@
  * some hosting providers accept a token in the query string (e.g.
  * `?token=...`) rather than as userinfo — leaving those in place would
  * defeat the redaction this function exists to provide.
+ *
+ * Fail safe on the scheme-less branch (Issue #87 later review round,
+ * Important finding): a scheme-less value that is NOT structurally a valid
+ * scp-like remote (`[user@]host:path`) is no longer echoed back verbatim.
+ * Git only ever emits a `git remote get-url` value shaped like one of the
+ * forms `resolveCanonicalRepositoryIdentity` already recognizes
+ * (`https://`/`ssh://` etc., or scp-like); anything else reaching this
+ * function — a local filesystem path, or arbitrary unparseable text — is not
+ * a legitimate remote URL shape at all, so there is no valid parse that
+ * could tell credential material apart from the rest of the string. Rather
+ * than guess (and risk echoing a token embedded in that unrecognized text,
+ * as `?token=...` suffixes on a local path or garbage input previously
+ * did), this function returns a fixed placeholder for anything it cannot
+ * structurally recognize. Log usefulness is intentionally sacrificed here:
+ * a vague log line is a minor annoyance, a leaked credential is not.
  */
 export function redactGitUrlCredentials(rawUrl: string): string {
   const trimmed = rawUrl.trim();
@@ -38,11 +53,28 @@ export function redactGitUrlCredentials(rawUrl: string): string {
   // WHATWG URL — handle it before `new URL()`, which would either throw or
   // misparse `host:path` as some unrelated scheme-like structure. This
   // syntax carries no password (only a `user@` prefix, conventionally
-  // `git`), so stripping that prefix is enough. It also has no query
-  // string or fragment syntax to worry about.
+  // `git`), so stripping that prefix is enough.
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) {
-    const scpMatch = trimmed.match(/^[^@/]+@(.+)$/);
-    return scpMatch ? scpMatch[1] : trimmed;
+    // Query string / fragment suffixes are not part of scp-like syntax at
+    // all, but some inputs that reach this branch carry one anyway (e.g. a
+    // credential smuggled onto a bare `host:path?token=...` or a local
+    // path); strip it before validating the structural shape below so a
+    // structurally valid scp remote with a bogus suffix is still redacted
+    // rather than falling through to the placeholder.
+    const suffixIndex = trimmed.search(/[?#]/);
+    const core = suffixIndex === -1 ? trimmed : trimmed.slice(0, suffixIndex);
+
+    // Require the strict `[user@]host:path` shape — a bare hostname-like
+    // token, an alnum host, then `:`, then a non-empty path. A local
+    // filesystem path (`/local/path`), a bare host with no path, or
+    // anything without this shape does NOT match and falls through to the
+    // safe placeholder below.
+    const scpMatch = core.match(
+      /^(?:[a-zA-Z0-9_.-]+@)?([a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?):(.+)$/
+    );
+    if (!scpMatch) return '(unrecognized origin url)';
+    const [, host, path] = scpMatch;
+    return `${host}:${path}`;
   }
 
   try {

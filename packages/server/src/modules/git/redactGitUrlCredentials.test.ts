@@ -76,4 +76,53 @@ describe('redactGitUrlCredentials', () => {
     expect(result).not.toContain('ghp_DUMMYTOKENVALUE1234');
     expect(result).not.toContain('frag');
   });
+
+  describe('scheme-less inputs that previously leaked credentials (Issue #87)', () => {
+    it('strips a query-string token from a bare scp-like host:path', () => {
+      const result = redactGitUrlCredentials('github.com:owner/repo.git?token=ghp_DUMMYSECRET1');
+      expect(result).not.toContain('ghp_DUMMYSECRET1');
+      expect(result).not.toContain('SECRET1');
+      expect(result).toBe('github.com:owner/repo.git');
+    });
+
+    it('strips a query-string token from a user@ scp-like remote', () => {
+      const result = redactGitUrlCredentials('git@github.com:o/r.git?token=ghp_DUMMYSECRET2');
+      expect(result).not.toContain('ghp_DUMMYSECRET2');
+      expect(result).not.toContain('SECRET2');
+      expect(result).toBe('github.com:o/r.git');
+    });
+
+    it('returns a safe placeholder instead of echoing unstructured garbage', () => {
+      const result = redactGitUrlCredentials('some-garbage token=ghp_DUMMYSECRET3');
+      expect(result).not.toContain('ghp_DUMMYSECRET3');
+      expect(result).not.toContain('SECRET3');
+      expect(result).toBe('(unrecognized origin url)');
+    });
+
+    it('returns a safe placeholder instead of echoing a local path with a token suffix', () => {
+      const result = redactGitUrlCredentials('/local/path?token=ghp_DUMMYSECRET4');
+      expect(result).not.toContain('ghp_DUMMYSECRET4');
+      expect(result).not.toContain('SECRET4');
+      expect(result).toBe('(unrecognized origin url)');
+    });
+  });
+
+  describe('normal-path outputs remain unchanged (Issue #87 regression guard)', () => {
+    it('leaves a plain https URL unchanged', () => {
+      expect(redactGitUrlCredentials('https://github.com/o/r.git')).toBe('https://github.com/o/r.git');
+    });
+
+    it('leaves a plain ssh:// URL unchanged', () => {
+      expect(redactGitUrlCredentials('ssh://github.com:22/o/r.git')).toBe('ssh://github.com:22/o/r.git');
+    });
+
+    it('leaves a plain scp-like remote unchanged', () => {
+      expect(redactGitUrlCredentials('github.com:o/r.git')).toBe('github.com:o/r.git');
+    });
+
+    it('still redacts an https URL carrying credentials', () => {
+      expect(redactGitUrlCredentials('https://user:ghp_DUMMYSECRET5@github.com/o/r.git'))
+        .toBe('https://github.com/o/r.git');
+    });
+  });
 });
