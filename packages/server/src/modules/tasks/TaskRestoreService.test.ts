@@ -1076,20 +1076,109 @@ describe('TaskRestoreService', () => {
       expect(received.some((e) => e.type === 'command')).toBe(true);
     });
 
-    it('allows an untrusted task whose approval hash matches the current fingerprint', async () => {
+    it('allows an untrusted task whose approval hash matches the current fingerprint (config unchanged since approval)', async () => {
       const { resolveExecutionManifest, hashExecutionManifest } = await import('./execution/ExecutionManifest.js');
       const task = makeTask({
         serverName: 'test-server',
         inputTrust: 'untrusted',
         description: 'do the thing',
       });
-      const { manifest } = resolveExecutionManifest(task, deps, 'continuation');
+      // 'redistribute', not 'continuation' (Issue #87 review, forge/87-mirror
+      // follow-up round 2, Important finding): this is the SAME kind
+      // restore() itself now resolves its gate manifest with — see
+      // TaskRestoreService.restore()'s own resolveExecutionManifest() call.
+      const { manifest } = resolveExecutionManifest(task, deps, 'redistribute');
       task.executionApprovedFingerprintHash = hashExecutionManifest(manifest);
 
       const result = await service.restore(task, log);
 
       expect(result.tmuxTarget).toBe('azito:task-1.1');
       expect(deps.tmux.createWindow).toHaveBeenCalled();
+    });
+
+    // Issue #87 review (forge/87-mirror follow-up round 2), Important
+    // finding: restore()'s gate used to resolve its manifest as
+    // 'continuation' (task.distributionRepositoryId — repository A,
+    // recorded from a past run), while performDistribution() actually pulls
+    // from the CURRENT projectServer.distributionRepositoryId (repository
+    // B once the project server is re-pointed). An approval given while the
+    // fingerprint hashed A stayed valid forever, even after the project
+    // server moved to B — the gate never re-hashed the value
+    // performDistribution() was about to act on, so a restore approved for
+    // A silently authorized distributing B. Fixed by resolving restore()'s
+    // gate manifest with 'redistribute' (current config), which agrees with
+    // performDistribution().
+    it('invalidates a restore approval given for repository A once the project server is re-pointed to repository B — performDistribution() must never run under a stale A-approval', async () => {
+      const { resolveExecutionManifest, hashExecutionManifest } = await import('./execution/ExecutionManifest.js');
+      const fetchDistributionService = {
+        distribute: vi.fn(async () => ({ status: 'distributed', sha: 'a'.repeat(40), bundleType: 'full', localBranchSynced: true })),
+      } as unknown as NonNullable<TaskRestoreDeps['fetchDistributionService']>;
+      const repoA = { id: 1, name: 'repo-a', url: 'https://github.com/acme/repo-a.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-a', hasToken: true };
+      const repoB = { id: 2, name: 'repo-b', url: 'https://github.com/acme/repo-b.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-b', hasToken: true };
+      const projectWithRepos = {
+        id: 10, name: 'Project', slug: 'project', description: null, repositoryUrl: null, defaultBranch: 'main',
+        sidekickPrompt: null, icon: null, color: null, defaultUnitId: 20,
+        repositories: [repoA, repoB], windows: [], createdAt: '2026-01-01', updatedAt: '2026-01-01',
+      };
+      // Distribution required (isolated agent server) so `repository` (not
+      // just the scalar distributionRepositoryId) also differs between A
+      // and B — the full identity a human actually reviews on the approval
+      // screen.
+      const isolatedServer = { name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' };
+      const projectServerAtA = { projectId: 10, serverName: 'test-server', workingDirectory: worktreeDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: true, distributionRepositoryId: 1 };
+      const projectServerAtB = { ...projectServerAtA, distributionRepositoryId: 2 };
+
+      deps = makeDeps({
+        ...deps,
+        fetchDistributionService,
+        transportFactory: {
+          getTransport: vi.fn(() => ({
+            exec: vi.fn(async (cmd: string) => {
+              const match = /^cd -- (.+) && pwd -P$/.exec(cmd);
+              const rawPath = match ? match[1] : worktreeDir;
+              const unquoted = rawPath.startsWith("'") ? rawPath.slice(1, -1).replace(/'\\''/g, "'") : rawPath;
+              return { stdout: `${unquoted}\n`, stderr: '', code: 0 };
+            }),
+          })),
+        } as unknown as TaskRestoreDeps['transportFactory'],
+        serverRepo: { ...deps.serverRepo, findByName: vi.fn(() => isolatedServer) },
+        projectRepo: {
+          ...deps.projectRepo,
+          findById: vi.fn(() => projectWithRepos),
+          findRepositoryById: vi.fn((id: number) => (id === 1 ? { ...repoA, token: 'token-a' } : { ...repoB, token: 'token-b' })),
+        },
+        // Approval time: project server still points at repository A.
+        projectServerRepo: { ...deps.projectServerRepo, find: vi.fn(() => projectServerAtA), findByProject: vi.fn(() => [projectServerAtA]) },
+      });
+      service = new TaskRestoreService(deps);
+
+      // A task that already distributed from repository A on a past run
+      // (recorded), and was approved for restore while the project server
+      // still named A too.
+      const task = makeTask({ serverName: 'test-server', inputTrust: 'untrusted', description: 'do the thing', distributionRepositoryId: 1 });
+      const { manifest: manifestAtA } = resolveExecutionManifest(task, deps, 'redistribute');
+      task.executionApprovedFingerprintHash = hashExecutionManifest(manifestAtA);
+
+      // The operator re-points the project server at repository B AFTER
+      // approval — task.distributionRepositoryId (the recorded PAST value)
+      // is untouched.
+      deps.projectServerRepo.find = vi.fn(() => projectServerAtB);
+      deps.projectServerRepo.findByProject = vi.fn(() => [projectServerAtB]);
+
+      await expect(service.restore(task, log)).rejects.toThrow(/requires approval/);
+
+      // The gate blocked BEFORE performDistribution() ran — fetch
+      // distribution (which would have pulled repository B under an
+      // approval only ever given for A) was never invoked, and no
+      // window/worktree was created either.
+      expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+      expect(deps.tmux.createWindow).not.toHaveBeenCalled();
+      expect(deps.worktreeServiceFactory.create).not.toHaveBeenCalled();
+      expect(deps.taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(task.id, {
+        pendingOperation: 'restore',
+        priorStatus: 'archived',
+        manifestHash: expect.any(String),
+      });
     });
 
     it('denies an untrusted task outright under a "deny" project server policy, without changing status', async () => {

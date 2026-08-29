@@ -128,13 +128,20 @@ export class TaskRestoreService {
     // project/unit/projectServer are resolved here and reused below
     // (unit may be null: restore() has always tolerated a task whose Unit
     // was deleted or was never set on either the task or its project).
-    // 'continuation': restore() recreates a task's window/worktree from a
-    // working directory a PAST execute()/restore() already populated (or,
-    // if never distributed, one this restore is about to populate from
-    // current config via the fallback inside resolveRecordedDistributionRepositoryEntry
-    // — same as every other continuation entry point). It is never the
-    // FRESH first distribution execute() performs.
-    const { manifest, project, unit, projectServer } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader }, 'continuation');
+    // 'redistribute', not 'continuation' (Issue #87 review, forge/87-mirror
+    // follow-up round 2, Important finding): restore() always tears down
+    // and recreates the task's window AND working directory from scratch,
+    // and its own performDistribution() call below (`lockedProjectServer`)
+    // pulls from the CURRENT `projectServer.distributionRepositoryId`, not
+    // from `task.distributionRepositoryId` — so the gate this manifest
+    // feeds must hash what restore is ABOUT TO distribute (current config),
+    // exactly like a fresh execute(), not a past run's recorded value.
+    // Using 'continuation' here let an approval given for repository A
+    // (recorded) silently authorize distributing repository B (current
+    // config) the moment the project server was re-pointed. See
+    // `ExecutionOperationKind`'s own doc comment (ExecutionManifest.ts) for
+    // the full rationale.
+    const { manifest, project, unit, projectServer } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader }, 'redistribute');
     const unitId = unit?.id ?? null;
     const manifestHash = hashExecutionManifest(manifest);
     // Issue #29 Step 3a: `server` here is the already-resolved ServerConfig
@@ -311,11 +318,14 @@ export class TaskRestoreService {
         // token is built. See ExecutionGate.reverifyExecutionGateInLock's
         // doc comment for the TOCTOU this closes.
         (freshServer) => {
-          // 'continuation': same reasoning as the outer resolveExecutionManifest()
-          // call above — this in-lock re-verification is for the same restore().
+          // 'redistribute': same reasoning as the outer resolveExecutionManifest()
+          // call above — this in-lock re-verification is for the same
+          // restore(), which is about to (re)distribute from whatever
+          // `freshServer`'s locked project-server config names, not from
+          // `task.distributionRepositoryId`.
           const { manifest, project: freshProject, projectServer: freshProjectServer } = resolveExecutionManifest(task, {
             unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader,
-          }, 'continuation');
+          }, 'redistribute');
           reverifyExecutionGateInLock(
             { taskRepo, logRepo, events },
             task,

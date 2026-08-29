@@ -19,13 +19,29 @@ import { resolveRecordedDistributionRepositoryEntry, resolveExecutionRepositoryE
  * from for its `repository` field and `server.distributionRepositoryId`
  * field — see `resolveExecutionManifest()`'s own doc comment (Issue #87
  * review, forge/87-mirror follow-up, Important finding) for the full
- * rationale. `'execute'` = current project/project-server configuration
- * only (what a FRESH run is about to distribute from); `'continuation'` =
- * `task.distributionRepositoryId` once recorded, falling back to current
- * config only when nothing has been recorded yet (what a resumed/continued
- * run's working directory already holds).
+ * rationale.
+ *
+ * - `'execute'` = current project/project-server configuration only (what a
+ *   FRESH run is about to distribute from).
+ * - `'redistribute'` = same current-config resolution as `'execute'` (Issue
+ *   #87 review, forge/87-mirror follow-up round 2, Important finding):
+ *   `TaskRestoreService.restore()` tears down and recreates a task's
+ *   working directory from scratch on every call, and its
+ *   `performDistribution()` call pulls from the CURRENT
+ *   `projectServer.distributionRepositoryId` exactly like a fresh
+ *   `execute()` does — never from `task.distributionRepositoryId`. A
+ *   restore is therefore, for repository-resolution purposes, "about to
+ *   distribute" the same way `execute()` is, not "continuing" a working
+ *   directory that already holds fixed content. Kept as a separate literal
+ *   from `'execute'` (rather than reusing it) purely for readability at
+ *   call sites and in logs/tests — `resolveExecutionManifest()` treats the
+ *   two identically wherever this distinction matters.
+ * - `'continuation'` = `task.distributionRepositoryId` once recorded,
+ *   falling back to current config only when nothing has been recorded yet
+ *   (what a resumed/continued run's working directory already holds,
+ *   without tearing it down and repopulating it).
  */
-export type ExecutionOperationKind = 'execute' | 'continuation';
+export type ExecutionOperationKind = 'execute' | 'continuation' | 'redistribute';
 
 /**
  * Execution manifest (Issue #328 fifth-round review).
@@ -944,14 +960,30 @@ export interface ExecutionManifestDeps {
  *   `performDistribution` is about to read from. `task.distributionRepositoryId`
  *   is not consulted at all here, deliberately — it describes a PAST run,
  *   not the one about to start.
+ * - `'redistribute'`: this manifest is being resolved for
+ *   `TaskRestoreService.restore()` (Issue #87 review, forge/87-mirror
+ *   follow-up round 2, Important finding) — resolves identically to
+ *   `'execute'`, NOT to `'continuation'`, even though a restore operates on
+ *   a pre-existing task. restore() always tears down and recreates the
+ *   task's window AND working directory from scratch, and its own
+ *   `performDistribution()` call reads the CURRENT
+ *   `projectServer.distributionRepositoryId`, never the task's recorded
+ *   one — so the gate this manifest feeds must hash what restore() is
+ *   ABOUT TO distribute, exactly like a fresh `execute()`, not what a past
+ *   run recorded. Before this kind existed, restore() resolved its gate
+ *   manifest as `'continuation'`, which hashed `task.distributionRepositoryId`
+ *   (repository A) while `performDistribution()` actually pulled from the
+ *   current `projectServer.distributionRepositoryId` (repository B) — an
+ *   approval given for A silently authorized distributing B.
  * - `'continuation'`: this manifest is being resolved for a resume/
- *   follow-up/respawn/legacy-recover/restore, or for a per-phase
- *   re-verification mid-run — every one of these either reuses a working
- *   directory a past execute()/restore() already populated, or is
- *   re-checking a run that is already past its own execute()-time gate.
- *   `task.distributionRepositoryId`, once recorded, is authoritative (see
- *   `resolveRecordedDistributionRepositoryEntry`'s doc comment) — this is
- *   the pre-existing behavior, unchanged.
+ *   follow-up/respawn/legacy-recover, or for a per-phase re-verification
+ *   mid-run — every one of these reuses a working directory a past
+ *   execute()/restore() already populated WITHOUT tearing it down and
+ *   repopulating it, or is re-checking a run that is already past its own
+ *   execute()-time gate. `task.distributionRepositoryId`, once recorded, is
+ *   authoritative (see `resolveRecordedDistributionRepositoryEntry`'s doc
+ *   comment) — this is the pre-existing behavior, unchanged. `restore()` no
+ *   longer uses this kind — see `'redistribute'` above.
  *
  * Required, not optional: an omitted/defaulted value here is exactly how
  * this class of hole reopens the moment a new call site is added without
@@ -1077,6 +1109,14 @@ export function resolveExecutionManifest(
     }
   }
 
+  // `'execute'` and `'redistribute'` resolve `repository`/
+  // `server.distributionRepositoryId` identically — both are "about to
+  // (re)distribute from the CURRENT project/project-server configuration"
+  // operations; only `'continuation'` treats `task.distributionRepositoryId`
+  // as authoritative. See `ExecutionOperationKind`'s own doc comment above
+  // for the full rationale, especially the `'redistribute'` bullet.
+  const usesCurrentConfigRepository = operationKind !== 'continuation';
+
   const manifest: ResolvedExecutionManifest = {
     unit: unit
       ? {
@@ -1120,15 +1160,18 @@ export function resolveExecutionManifest(
       // (never distributed yet), matching `repository` below.
       //
       // Issue #87 review (forge/87-mirror follow-up), Important finding on
-      // top of finding 3: for `'execute'`, the recorded value is NEVER
-      // consulted — `performDistribution` is about to (re)distribute from
-      // the CURRENT `projectServer.distributionRepositoryId` regardless of
-      // what any past run recorded, so the gate for a fresh execute() must
-      // hash that same current value, not a stale recorded one. See
+      // top of finding 3: for `'execute'`/`'redistribute'`, the recorded
+      // value is NEVER consulted — `performDistribution` is about to
+      // (re)distribute from the CURRENT `projectServer.distributionRepositoryId`
+      // regardless of what any past run recorded, so the gate for a fresh
+      // execute() OR a restore() (which recreates the working directory and
+      // redistributes exactly like a fresh execute(), see `'redistribute'`'s
+      // own doc comment on `ExecutionOperationKind`) must hash that same
+      // current value, not a stale recorded one. See
       // `resolveExecutionManifest`'s own doc comment for the full
       // `operationKind` rationale.
       distributionRepositoryId:
-        operationKind === 'execute'
+        usesCurrentConfigRepository
           ? projectServer?.distributionRepositoryId ?? null
           : task.distributionRepositoryId ?? projectServer?.distributionRepositoryId ?? null,
     },
@@ -1179,21 +1222,24 @@ export function resolveExecutionManifest(
     //
     // Issue #87 review (forge/87-mirror follow-up), Important finding on top
     // of finding 1 (this file's own module doc comment, "承認境界の迂回"):
-    // for `'execute'`, `task.distributionRepositoryId` is NEVER consulted —
-    // a fresh execute() has not distributed anything yet THIS run, and
-    // `performDistribution` is about to pull from the CURRENT
-    // `projectServer.distributionRepositoryId` regardless of what a PAST
-    // run recorded. Hashing the recorded value here would let an approval
-    // given for repository A silently authorize execute() distributing
-    // repository B's code onto the server the moment the project server is
-    // re-pointed — the gate would keep accepting the old A-fingerprint right
-    // up until `performDistribution` (locked, current-config) already ran
-    // against B. `resolveExecutionRepositoryEntry` is the exact same
-    // current-config resolver `performDistribution`/`isDistributionRequired`
-    // read from, so this can never drift from what execute() is about to do.
+    // for `'execute'`/`'redistribute'`, `task.distributionRepositoryId` is
+    // NEVER consulted — a fresh execute() has not distributed anything yet
+    // THIS run, and a restore() (`'redistribute'`, see that literal's own
+    // doc comment on `ExecutionOperationKind`) tears down and repopulates
+    // the working directory exactly like execute() does — both are about to
+    // pull from the CURRENT `projectServer.distributionRepositoryId`
+    // regardless of what a PAST run recorded. Hashing the recorded value
+    // here would let an approval given for repository A silently authorize
+    // distributing repository B's code onto the server the moment the
+    // project server is re-pointed — the gate would keep accepting the old
+    // A-fingerprint right up until `performDistribution` (locked,
+    // current-config) already ran against B. `resolveExecutionRepositoryEntry`
+    // is the exact same current-config resolver
+    // `performDistribution`/`isDistributionRequired` read from, so this can
+    // never drift from what execute()/restore() are about to do.
     repository: (() => {
       const repo =
-        operationKind === 'execute'
+        usesCurrentConfigRepository
           ? resolveExecutionRepositoryEntry(serverConfig, projectServer, project)
           : (() => {
               const resolution = resolveRecordedDistributionRepositoryEntry(task.distributionRepositoryId ?? null, serverConfig, projectServer, project);

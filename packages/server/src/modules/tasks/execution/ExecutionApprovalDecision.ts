@@ -73,19 +73,43 @@ export function resolvePendingApprovalManifest(
   // operationKind: derived from `task.pendingOperation` itself — the gate
   // that blocked this task already recorded WHICH entry point it was (see
   // Task.pendingOperation's doc comment). `null` also maps to 'execute'
-  // (not 'continuation'): this function is also called for the
-  // creation-time pre-approvable case (GET's `isPreApprovable`, mirroring
-  // decideExecutionPreApproval's own eligibility check) — status 'open'
-  // with pendingOperation still null, i.e. strictly BEFORE the task's
-  // first execute() has ever run, so the current project-server
+  // (not 'continuation'/'redistribute'): this function is also called for
+  // the creation-time pre-approvable case (GET's `isPreApprovable`,
+  // mirroring decideExecutionPreApproval's own eligibility check) — status
+  // 'open' with pendingOperation still null, i.e. strictly BEFORE the
+  // task's first execute() has ever run, so the current project-server
   // configuration is exactly what that first execute() is about to
-  // distribute from. Every OTHER blocked operation
-  // ('resume'/'resume_await_answer'/'resume_await_plan_review'/'restore'/
-  // 'respawn'/'recover_session_legacy') resumes a task whose working
-  // directory a past execute()/restore() already populated. See
-  // resolveExecutionManifest's own doc comment for the full rationale
-  // (Issue #87 review, forge/87-mirror follow-up, Important finding).
-  const operationKind = task.pendingOperation === 'execute' || task.pendingOperation === null ? 'execute' : 'continuation';
+  // distribute from.
+  //
+  // 'restore' maps to 'redistribute', NOT 'continuation' (Issue #87 review,
+  // forge/87-mirror follow-up round 2, Important finding): a blocked
+  // restore is, like a fresh execute(), about to tear down and repopulate
+  // the task's working directory from the CURRENT project-server
+  // configuration (TaskRestoreService.restore()'s own performDistribution()
+  // call never reads `task.distributionRepositoryId`) — so the manifest
+  // this handler displays/re-checks for approval must agree with what
+  // restore() is actually about to distribute, not with a past run's
+  // recorded repository. Using 'continuation' here let the approval UI
+  // show (and decideExecutionApproval accept) repository A's fingerprint
+  // while restore()'s own gate resolution (TaskRestoreService.ts) — once
+  // fixed to also use 'redistribute' — and its actual
+  // performDistribution() call both target repository B, defeating the
+  // "what was approved is what runs" guarantee.
+  //
+  // Every OTHER blocked operation
+  // ('resume'/'resume_await_answer'/'resume_await_plan_review'/'respawn'/
+  // 'recover_session_legacy') resumes a task whose working directory a past
+  // execute()/restore() already populated WITHOUT tearing it down again, so
+  // those keep resolving as 'continuation'. See resolveExecutionManifest's
+  // own doc comment (`ExecutionOperationKind`, ExecutionManifest.ts) for
+  // the full rationale (Issue #87 review, forge/87-mirror follow-up,
+  // Important finding).
+  const operationKind =
+    task.pendingOperation === 'execute' || task.pendingOperation === null
+      ? 'execute'
+      : task.pendingOperation === 'restore'
+        ? 'redistribute'
+        : 'continuation';
   if (task.pendingOperation === 'respawn') {
     const windowId = task.pendingOperationWindowId;
     const win = windowId !== null ? deps.windowRepo.findById(windowId) : null;
