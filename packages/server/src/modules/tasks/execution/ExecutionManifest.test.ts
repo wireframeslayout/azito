@@ -571,6 +571,60 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
 
       expect(hashOff).not.toBe(hashOn);
     });
+
+    // Issue #87 review follow-up (Minor finding 2): for 'continuation', once
+    // task.distributionRepositoryId is recorded, distributeCode must hash
+    // the EFFECTIVE "is distribution required" value
+    // (isDistributionRequiredForContinuation), which is `true`
+    // unconditionally once a repository is recorded — not the raw toggle.
+    // Disabling distribution after a task already distributed must NOT
+    // invalidate the approval: resumeStateMachine()/followUp()/
+    // isPushCompleted() all keep treating the recorded repository as
+    // authoritative regardless of the current toggle.
+    it("does NOT invalidate a 'continuation' approval when distribute_code is turned off after the task already recorded a distributionRepositoryId", () => {
+      const fixture = (distributeCode: boolean): Fixture => ({
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode, distributionRepositoryId: 7 }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      });
+      const task = makeTask({ distributionRepositoryId: 7 });
+
+      const hashOn = hashFor(task, fixture(true), 'continuation');
+      const hashOff = hashFor(task, fixture(false), 'continuation');
+
+      expect(hashOn).toBe(hashOff);
+    });
+
+    it("still invalidates an 'execute' approval when distribute_code changes, even for a task that recorded a PAST distributionRepositoryId ('redistribute' resolves identically — see ExecutionOperationKind's doc comment) — a fresh distribution run is genuinely governed by the current toggle", () => {
+      const fixture = (distributeCode: boolean): Fixture => ({
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode, distributionRepositoryId: 7 }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      });
+      const task = makeTask({ distributionRepositoryId: 7 });
+
+      const hashOn = hashFor(task, fixture(true), 'execute');
+      const hashOff = hashFor(task, fixture(false), 'execute');
+
+      expect(hashOn).not.toBe(hashOff);
+    });
+
+    it("still invalidates a 'continuation' approval when distribute_code changes for a task that has NEVER recorded a distributionRepositoryId (unchanged pre-existing behavior)", () => {
+      const fixture = (distributeCode: boolean): Fixture => ({
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode, distributionRepositoryId: null }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      });
+      const task = makeTask({ distributionRepositoryId: null });
+
+      const hashOn = hashFor(task, fixture(true), 'continuation');
+      const hashOff = hashFor(task, fixture(false), 'continuation');
+
+      expect(hashOn).not.toBe(hashOff);
+    });
   });
 
   // Issue #87 explicit-target follow-up: distributionRepositoryId names

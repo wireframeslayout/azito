@@ -829,6 +829,63 @@ describe('TaskRestoreService', () => {
       expect(deps.taskRepo.update).toHaveBeenCalledWith(task.id, expect.objectContaining({ distributionRepositoryId: 1 }));
     });
 
+    // Issue #87 review follow-up (Important finding 1, second round): the
+    // record must be written BEFORE performDistribution() may mutate the
+    // remote working directory, not only after it returns successfully —
+    // mirrors ExecuteTaskUseCase.execute()'s matching test.
+    it('persists distributionRepositoryId BEFORE fetch distribution actually runs, not only after it succeeds', async () => {
+      const fetchDistributionService = mockFetchDistributionService();
+      withRepository(deps.projectRepo);
+      deps = makeDeps({
+        ...deps,
+        fetchDistributionService,
+        transportFactory: agentTransportFactory(),
+        serverRepo: {
+          ...deps.serverRepo,
+          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
+        },
+      });
+      service = new TaskRestoreService(deps);
+      const task = makeTask({ serverName: 'test-server' });
+
+      await service.restore(task, log);
+
+      const updateFn = deps.taskRepo.update as ReturnType<typeof vi.fn>;
+      const updateCallIndex = updateFn.mock.calls.findIndex(
+        ([, patch]) => (patch as Record<string, unknown>).distributionRepositoryId === 1,
+      );
+      expect(updateCallIndex).toBeGreaterThanOrEqual(0);
+      const updateCallOrder = updateFn.mock.invocationCallOrder[updateCallIndex];
+      const distributeCallOrder = (fetchDistributionService.distribute as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+      expect(updateCallOrder).toBeLessThan(distributeCallOrder);
+    });
+
+    // Issue #87 review follow-up (Important finding 1, second round): when
+    // fetch distribution itself fails partway through, the record must
+    // still name the target THIS run attempted to distribute.
+    it('still records the attempted distributionRepositoryId even when fetch distribution fails', async () => {
+      const fetchDistributionService = mockFetchDistributionService({
+        distribute: vi.fn(async () => ({ status: 'failed', error: 'dummy distribution failure' })),
+      });
+      withRepository(deps.projectRepo);
+      deps = makeDeps({
+        ...deps,
+        fetchDistributionService,
+        transportFactory: agentTransportFactory(),
+        serverRepo: {
+          ...deps.serverRepo,
+          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
+        },
+      });
+      service = new TaskRestoreService(deps);
+      const task = makeTask({ serverName: 'test-server' });
+
+      await expect(service.restore(task, log)).rejects.toThrow(/Fetch distribution failed/);
+
+      expect(fetchDistributionService.distribute).toHaveBeenCalled();
+      expect(deps.taskRepo.update).toHaveBeenCalledWith(task.id, expect.objectContaining({ distributionRepositoryId: 1 }));
+    });
+
     // Issue #87 14th-round review, Important finding 1: performDistribution()
     // (and its own `no_working_dir` fail-fast) used to run inside
     // `if (workingDir)` — so an isolated server / distribute_code task

@@ -901,6 +901,35 @@ export class ExecuteTaskUseCase {
     // try/catch spanning window+worktree creation) that folding it into the
     // shared helper would either lose information this call site uses or
     // force restore() to adopt a rollback shape it doesn't have.
+    // Issue #87 review follow-up (Important finding 1): persist the
+    // distribution TARGET before performDistribution() may mutate the
+    // remote working directory, not only after it returns successfully.
+    // Writing only on success (the old code below) left a window — a crash,
+    // or a thrown error, between a successful distribute() and that write —
+    // where `distributionRepositoryId` still held whatever a PRIOR run
+    // recorded (or null). A later resume/restore that trusts this column
+    // (resolveRecordedDistributionRepositoryEntry) could then validate/push
+    // a working tree THIS run actually populated from target B against a
+    // stale recorded target A. Resolved the same way `performDistribution`
+    // itself resolves it (`projectServer.distributionRepositoryId`,
+    // DistributionHelper.ts) — duplicated as a plain field read rather than
+    // threaded through a callback, since it needs no validation to be worth
+    // recording: if the configured ID doesn't actually resolve to a
+    // repository, `performDistribution` fails closed on
+    // `distribution_repository_not_found`, and the SAME "target attempted,
+    // target unresolved" state is exactly what
+    // `resolveRecordedDistributionRepositoryEntry` already expects to see
+    // and fail closed on. Deliberately not a pending/applied distribution
+    // state machine (out of scope here) — this only removes the "record
+    // older than reality" gap around a single success write. `TaskRestoreService.restore()`
+    // mirrors this same ordering.
+    if (isDistributionRequired(server, lockedProjectServer)) {
+      const distributionTargetId = lockedProjectServer?.distributionRepositoryId ?? null;
+      if (distributionTargetId != null) {
+        this.taskRepo.update(taskId, { distributionRepositoryId: distributionTargetId } as Partial<Task>);
+      }
+    }
+
     const distOutcome: DistributionOutcome = await performDistribution({
       server,
       projectServer: lockedProjectServer,
@@ -920,16 +949,20 @@ export class ExecuteTaskUseCase {
           ? 'fetch_distribution_stale_local_branch_rollback'
           : 'fetch_distribution_prereq_failed_rollback';
       await this.rollbackWindowAfterPostCreationFailure(taskId, server, tmuxSession, windowName, tokenId, rollbackReason);
+      // The distribution target is already recorded above (before
+      // performDistribution() ran) — it names what THIS run attempted to
+      // distribute, which is either what's actually on disk now or a broken
+      // worktree that must be re-validated/failed-closed against that SAME
+      // repository. No further write here.
       throw new Error(distOutcome.message);
     }
     if (distOutcome.required) {
       this.appendLog(taskId, unitId, 'command', { type: 'fetch_distributed', sha: distOutcome.sha, bundleType: distOutcome.bundleType });
-      // Issue #87 review follow-up, Important finding 1: persist the
-      // repository distribution ACTUALLY pulled from, once, right here —
-      // see `Task.distributionRepositoryId`'s doc comment for why
-      // `resumeStateMachine()` must read this back instead of re-resolving
-      // from the (possibly since-changed) project/project-server config.
-      this.taskRepo.update(taskId, { distributionRepositoryId: distOutcome.repositoryId } as Partial<Task>);
+      // Already persisted before performDistribution() ran (see above) —
+      // `distOutcome.repositoryId` is always the same id resolved there, so
+      // writing it again here would only be a redundant, idempotent
+      // duplicate of the SAME record. Not repeated, to keep this a single
+      // source of truth rather than two write sites that could drift.
     } else {
       // Issue #87 review follow-up, Important finding 4: this run did NOT
       // distribute — explicitly clear any distribution repository a PRIOR

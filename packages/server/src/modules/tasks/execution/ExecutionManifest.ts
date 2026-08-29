@@ -12,7 +12,7 @@ import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoade
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import { resolvePhaseSidekick, resolveEnabledPhases } from '../../sidekicks/resolvePhaseSidekick';
 import { resolveUnitId, resolveTaskServerName, resolveBaseBranch, canonicalizeBaseBranch } from './TaskExecutionEnv';
-import { resolveRecordedDistributionRepositoryEntry, resolveExecutionRepositoryEntry } from './DistributionHelper';
+import { resolveRecordedDistributionRepositoryEntry, resolveExecutionRepositoryEntry, isDistributionRequiredForContinuation } from './DistributionHelper';
 
 /**
  * Which repository source `resolveExecutionManifest()` is allowed to read
@@ -691,6 +691,14 @@ export interface ResolvedExecutionManifest {
     // code onto the server the very next run, which is a materially
     // different trust boundary than what was approved. `false` when
     // `projectServer` itself is null (no resolvable project_servers row).
+    //
+    // Issue #87 review follow-up (Minor finding 2): for a `'continuation'`
+    // operationKind with a recorded `task.distributionRepositoryId`, this is
+    // the EFFECTIVE value `isDistributionRequiredForContinuation`
+    // (DistributionHelper.ts) actually keys off — always `true` once a
+    // repository is recorded, regardless of the current `distributeCode`
+    // toggle — not the raw, still-mutable toggle itself. See the field's
+    // assignment below for why.
     distributeCode: boolean;
     // Issue #87 explicit-target follow-up: which repository distribution
     // pulls onto this server (see `ProjectServer.distributionRepositoryId`'s
@@ -1142,7 +1150,36 @@ export function resolveExecutionManifest(
       isolationIntent: serverConfig?.isolationIntent ?? false,
       // Issue #87 13th-round review, Important finding 2: see the field's
       // own doc comment on ResolvedExecutionManifest.server above.
-      distributeCode: projectServer?.distributeCode ?? false,
+      //
+      // Issue #87 review follow-up (Minor finding 2): for `'continuation'`
+      // with a recorded `task.distributionRepositoryId`, hash the EFFECTIVE
+      // "is distribution required" value (`isDistributionRequiredForContinuation`,
+      // DistributionHelper.ts) instead of the raw, still-mutable toggle.
+      // That function treats a non-null recorded repository id as
+      // authoritative unconditionally — an `||` whose first operand is
+      // already `true` never even evaluates the current-config check — so
+      // this task's working directory holds distributed code regardless of
+      // what an operator later flips `distributeCode` to, and every runtime
+      // consumer of that same function (resumeStateMachine/followUp/
+      // isPushCompleted) already agrees. Hashing the raw toggle disagreed:
+      // disabling distribution after a task already distributed invalidated
+      // this fingerprint even though the continuation's own behavior never
+      // changed. `'execute'`/`'redistribute'`, and a `'continuation'` with no
+      // recorded repository yet, are unaffected — they still hash the
+      // current config, matching `distributionRepositoryId` below and the
+      // current-config resolution those operations actually run against.
+      // The fallback server object passed when `serverConfig` is null is
+      // inert: `isDistributionRequiredForContinuation` never evaluates its
+      // `server`/`projectServer` argument once `recordedRepositoryId` is
+      // non-null, which is the only branch that reaches this call.
+      distributeCode:
+        operationKind === 'continuation' && task.distributionRepositoryId != null
+          ? isDistributionRequiredForContinuation(
+              task.distributionRepositoryId,
+              serverConfig ?? { type: 'agent', isolationIntent: false },
+              projectServer,
+            )
+          : projectServer?.distributeCode ?? false,
       // Issue #87 explicit-target follow-up: see the field's own doc
       // comment on ResolvedExecutionManifest.server above. Issue #87 review
       // (forge/87-mirror follow-up), Important finding 3: for a

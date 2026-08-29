@@ -86,7 +86,7 @@ const migrations: Migration[] = [m001, m002, m003, m004, m005, m006, m007, m008,
 // fires the configured ON DELETE action against every row as soon as the original table is
 // renamed away. Both pragmas are no-ops if toggled inside an active transaction, so they must
 // be set before `db.transaction()` begins.
-const MIGRATIONS_REQUIRING_TABLE_REBUILD = new Set([36, 37, 42, 46, 67]);
+const MIGRATIONS_REQUIRING_TABLE_REBUILD = new Set([36, 37, 42, 46]);
 
 function runMigrations(db: import('better-sqlite3').Database): void {
   db.exec(`

@@ -3,9 +3,9 @@ import { openDatabase, type SqliteDatabase } from '../Database';
 
 // openDatabase(':memory:') runs the full migration chain (001->067) against
 // a fresh in-memory DB — same as production — so this test exercises the
-// real rebuilt `tasks` table (see 067_task_distribution_repository.ts's own
-// doc comment for why a full rename/create/copy/drop rebuild was needed
-// instead of a plain ALTER TABLE ADD COLUMN).
+// real `tasks` table after the plain `ALTER TABLE ... ADD COLUMN` this
+// migration runs (see 067_task_distribution_repository.ts's own doc comment
+// for why no table rebuild is needed here, unlike 066's `project_servers`).
 describe('migration 067: task_distribution_repository', () => {
   let db: SqliteDatabase;
 
@@ -73,7 +73,7 @@ describe('migration 067: task_distribution_repository', () => {
     expect(afterProjectDelete).toBeUndefined();
   });
 
-  it('preserves the created_by index (idx_tasks_created_by) rebuilt after the table rename', () => {
+  it('preserves the created_by index (idx_tasks_created_by), untouched by an ADD COLUMN migration', () => {
     const indexes = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'tasks'`).all() as Array<{ name: string }>;
     expect(indexes.map((i) => i.name)).toContain('idx_tasks_created_by');
   });

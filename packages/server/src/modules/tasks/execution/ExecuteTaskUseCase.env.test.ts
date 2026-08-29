@@ -3281,6 +3281,48 @@ describe('ExecuteTaskUseCase persists task.distributionRepositoryId when distrib
 
     expect(taskRepo.update).toHaveBeenCalledWith(1, expect.objectContaining({ distributionRepositoryId: null }));
   });
+
+  // Issue #87 review follow-up (Important finding 1, second round): the
+  // record must be written BEFORE performDistribution() may mutate the
+  // remote working directory, not only after it returns successfully — a
+  // crash/thrown error between a successful distribute() and a post-hoc
+  // write would otherwise leave `distributionRepositoryId` pointing at
+  // whatever a PRIOR run recorded (or null).
+  it('persists distributionRepositoryId BEFORE fetch distribution actually runs, not only after it succeeds', async () => {
+    const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
+    const { useCase, taskRepo, fetchDistributionService } = buildDistributionGateHarness({ server, distributeCode: false });
+
+    await useCase.execute(10, 1);
+
+    const updateFn = taskRepo.update as ReturnType<typeof vi.fn>;
+    const updateCallIndex = updateFn.mock.calls.findIndex(
+      (args: unknown[]) => (args[1] as Record<string, unknown>).distributionRepositoryId === 5,
+    );
+    expect(updateCallIndex).toBeGreaterThanOrEqual(0);
+    const updateCallOrder = updateFn.mock.invocationCallOrder[updateCallIndex];
+    const distributeCallOrder = (fetchDistributionService.distribute as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+    expect(updateCallOrder).toBeLessThan(distributeCallOrder);
+  });
+
+  // Issue #87 review follow-up (Important finding 1, second round): when
+  // fetch distribution itself fails partway through, the record must still
+  // name the target THIS run attempted to distribute — it is either what's
+  // actually on disk now or a broken worktree, and either way must be
+  // validated/failed-closed against that SAME repository, never a stale
+  // prior one.
+  it('still records the attempted distributionRepositoryId even when fetch distribution fails', async () => {
+    const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
+    const { useCase, taskRepo, fetchDistributionService } = buildDistributionGateHarness({
+      server,
+      distributeCode: false,
+      distributeResult: { status: 'failed', error: 'network boom' },
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/network boom/);
+
+    expect(fetchDistributionService.distribute).toHaveBeenCalledTimes(1);
+    expect(taskRepo.update).toHaveBeenCalledWith(1, expect.objectContaining({ distributionRepositoryId: 5 }));
+  });
 });
 
 describe('ExecuteTaskUseCase.resumeStateMachine uses the task-recorded distribution repository, never the current config (Issue #87 review follow-up, Important finding 1)', () => {
