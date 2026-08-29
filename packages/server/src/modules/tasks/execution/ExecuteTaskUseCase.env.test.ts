@@ -2665,6 +2665,8 @@ function buildDistributionGateHarness(opts: {
   serviceWired?: boolean;
   /** Overrides the project server's `distributionRepositoryId` (default: 5, matching fetchDistributionRepository.id — a normal, resolvable distribution target). Set to `null` for the "no distribution target configured" fail-fast tests. */
   distributionRepositoryId?: number | null;
+  /** Overrides task.distributionRepositoryId (default null) — set to model a PRIOR run's recorded target, for the "prerequisite failure preserves the previous record" tests (Issue #87 review follow-up, second round, Important finding 1). */
+  taskDistributionRepositoryId?: number | null;
 }) {
   const unit = makeUnit({ id: 10, workerType: 'claude', workerModel: 'opus' });
   // task.workingDirectory (not projectServer.workingDirectory) supplies
@@ -2681,6 +2683,7 @@ function buildDistributionGateHarness(opts: {
     workingDirectory: ('taskWorkingDirectory' in opts ? opts.taskWorkingDirectory : '/srv/repo') as string | null,
     branch: (opts.taskBranch ?? null) as string | null,
     baseBranch: (opts.taskBaseBranch ?? null) as string | null,
+    distributionRepositoryId: (opts.taskDistributionRepositoryId ?? null) as number | null,
   });
   const fetchDistributionService = {
     distribute: vi.fn(async () => opts.distributeResult ?? { status: 'distributed' as const, sha: 'abc123', bundleType: 'full' as const, localBranchSynced: true }),
@@ -3322,6 +3325,89 @@ describe('ExecuteTaskUseCase persists task.distributionRepositoryId when distrib
 
     expect(fetchDistributionService.distribute).toHaveBeenCalledTimes(1);
     expect(taskRepo.update).toHaveBeenCalledWith(1, expect.objectContaining({ distributionRepositoryId: 5 }));
+  });
+
+  // Issue #87 review follow-up (second round, Important finding 1): a
+  // prerequisite check failure (none of which ever touch the remote) must
+  // NOT overwrite a PRIOR run's recorded target — the working directory
+  // still holds whatever that prior run actually distributed, so the
+  // record naming it must survive untouched. `onBeforeDistribute` is never
+  // invoked when `performDistribution` returns before its point of no
+  // return, so no write happens at all — the earlier `taskRepo.update`
+  // call (from the record's actual prior run) stands unchallenged.
+  it('does NOT overwrite a previously recorded distributionRepositoryId when a prerequisite check fails (no distribution target configured)', async () => {
+    const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
+    const { useCase, taskRepo, fetchDistributionService } = buildDistributionGateHarness({
+      server,
+      distributeCode: false,
+      distributionRepositoryId: null,
+      taskDistributionRepositoryId: 7,
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/no distribution target repository is configured/);
+
+    expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+    expect(taskRepo.update).not.toHaveBeenCalledWith(1, expect.objectContaining({ distributionRepositoryId: expect.anything() }));
+  });
+
+  it('does NOT overwrite a previously recorded distributionRepositoryId when a prerequisite check fails (no token configured)', async () => {
+    const server = makeServer({ name: 'srv-agent', type: 'agent', isolationIntent: false, sshHost: 'agent-host' });
+    const { useCase, taskRepo, fetchDistributionService } = buildDistributionGateHarness({
+      server,
+      distributeCode: true,
+      repository: { ...fetchDistributionRepository, token: null },
+      taskDistributionRepositoryId: 7,
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/no token configured/);
+
+    expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+    expect(taskRepo.update).not.toHaveBeenCalledWith(1, expect.objectContaining({ distributionRepositoryId: expect.anything() }));
+  });
+
+  it('does NOT overwrite a previously recorded distributionRepositoryId when a prerequisite check fails (identity unresolvable)', async () => {
+    const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
+    const { useCase, taskRepo, fetchDistributionService } = buildDistributionGateHarness({
+      server,
+      distributeCode: false,
+      repository: { ...fetchDistributionRepository, url: 'http://github.com/acme/widget.git' },
+      taskDistributionRepositoryId: 7,
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/could not be normalized/);
+
+    expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+    expect(taskRepo.update).not.toHaveBeenCalledWith(1, expect.objectContaining({ distributionRepositoryId: expect.anything() }));
+  });
+
+  it('does NOT overwrite a previously recorded distributionRepositoryId when a prerequisite check fails (no working directory configured)', async () => {
+    const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
+    const { useCase, taskRepo, fetchDistributionService } = buildDistributionGateHarness({
+      server,
+      distributeCode: false,
+      taskWorkingDirectory: null,
+      taskDistributionRepositoryId: 7,
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/no working directory is configured/);
+
+    expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+    expect(taskRepo.update).not.toHaveBeenCalledWith(1, expect.objectContaining({ distributionRepositoryId: expect.anything() }));
+  });
+
+  it('does NOT overwrite a previously recorded distributionRepositoryId when a prerequisite check fails (FetchDistributionService not wired)', async () => {
+    const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
+    const { useCase, taskRepo, fetchDistributionService } = buildDistributionGateHarness({
+      server,
+      distributeCode: false,
+      serviceWired: false,
+      taskDistributionRepositoryId: 7,
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/FetchDistributionService is not wired/);
+
+    expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+    expect(taskRepo.update).not.toHaveBeenCalledWith(1, expect.objectContaining({ distributionRepositoryId: expect.anything() }));
   });
 });
 

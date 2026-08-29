@@ -886,6 +886,67 @@ describe('TaskRestoreService', () => {
       expect(deps.taskRepo.update).toHaveBeenCalledWith(task.id, expect.objectContaining({ distributionRepositoryId: 1 }));
     });
 
+    // Issue #87 review follow-up (second round, Important finding 1): a
+    // prerequisite check failure (none of which ever touch the remote) must
+    // NOT overwrite a PRIOR run's recorded target — the working directory
+    // still holds whatever that prior run actually distributed. Mirrors
+    // ExecuteTaskUseCase.execute()'s matching test.
+    it('does NOT overwrite a previously recorded distributionRepositoryId when a prerequisite check fails (no working directory configured)', async () => {
+      const fetchDistributionService = mockFetchDistributionService();
+      withRepository(deps.projectRepo);
+      deps = makeDeps({
+        ...deps,
+        fetchDistributionService,
+        transportFactory: agentTransportFactory(),
+        serverRepo: {
+          ...deps.serverRepo,
+          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
+        },
+        projectServerRepo: {
+          ...deps.projectServerRepo,
+          find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: 1 })),
+        },
+      });
+      service = new TaskRestoreService(deps);
+      // Task previously distributed from repo 1 (a PRIOR run's recorded
+      // value) — this restore has no working directory configured anywhere,
+      // so `performDistribution` must fail on its `no_working_dir` stage
+      // before ever reaching `onBeforeDistribute`.
+      const task = makeTask({ serverName: 'test-server', workingDirectory: null, distributionRepositoryId: 1 });
+
+      await expect(service.restore(task, log)).rejects.toThrow(/Fetch distribution failed/);
+
+      expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+      expect(deps.taskRepo.update).not.toHaveBeenCalledWith(task.id, expect.objectContaining({ distributionRepositoryId: expect.anything() }));
+    });
+
+    // Same prerequisite-failure-preserves-record guarantee, this time via
+    // the `no_token` stage (repository resolved but has no token
+    // configured) — a different prerequisite check, same rule.
+    it('does NOT overwrite a previously recorded distributionRepositoryId when a prerequisite check fails (no token configured)', async () => {
+      const fetchDistributionService = mockFetchDistributionService();
+      withRepository(deps.projectRepo);
+      (deps.projectRepo.findRepositoryById as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 1, name: 'repo', url: 'https://github.com/acme/repo.git', provider: 'github' as const, owner: 'acme', repoName: 'repo', token: null,
+      });
+      deps = makeDeps({
+        ...deps,
+        fetchDistributionService,
+        transportFactory: agentTransportFactory(),
+        serverRepo: {
+          ...deps.serverRepo,
+          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
+        },
+      });
+      service = new TaskRestoreService(deps);
+      const task = makeTask({ serverName: 'test-server', distributionRepositoryId: 1 });
+
+      await expect(service.restore(task, log)).rejects.toThrow(/Fetch distribution failed/);
+
+      expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+      expect(deps.taskRepo.update).not.toHaveBeenCalledWith(task.id, expect.objectContaining({ distributionRepositoryId: expect.anything() }));
+    });
+
     // Issue #87 14th-round review, Important finding 1: performDistribution()
     // (and its own `no_working_dir` fail-fast) used to run inside
     // `if (workingDir)` — so an isolated server / distribute_code task

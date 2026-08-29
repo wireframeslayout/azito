@@ -16,7 +16,7 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { IContentExtractor } from '../llm/ContentExtractor';
 import type { IExecutionLogRepository } from './ExecutionLog';
 import { resolveTaskServerName, resolveTmuxSession, resolveBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './execution/TaskExecutionEnv';
-import { performDistribution, isDistributionRequired, type DistributionOutcome } from './execution/DistributionHelper';
+import { performDistribution, type DistributionOutcome } from './execution/DistributionHelper';
 import { normalizeBranchRef } from '../git/assertSafeGitArgs';
 import { buildWorkerLaunchCommand } from '../agents/LaunchCommand';
 import { shellQuote } from '../../shared/shellQuote';
@@ -439,25 +439,30 @@ export class TaskRestoreService {
       // execute()/restore() recorded (or null). A later resume/restore that
       // trusts this column (resolveRecordedDistributionRepositoryEntry) could
       // then validate/push a working tree THIS run actually populated from
-      // target B against a stale recorded target A. Resolved the same way
-      // `performDistribution` itself resolves it
-      // (`projectServer.distributionRepositoryId`, DistributionHelper.ts) —
-      // duplicated as a plain field read rather than threaded through a
-      // callback, since it needs no validation to be worth recording: if the
-      // ID configured doesn't actually resolve to a repository,
-      // `performDistribution` fails closed on `distribution_repository_not_found`
-      // and the SAME "target attempted, target unresolved" state is exactly
-      // what `resolveRecordedDistributionRepositoryEntry` already expects to
-      // see and fail closed on. Deliberately not a pending/applied
-      // distribution state machine (out of scope here) — this only removes
-      // the "record older than reality" gap around a single success write.
-      if (isDistributionRequired(server, lockedProjectServer)) {
-        const distributionTargetId = lockedProjectServer?.distributionRepositoryId ?? null;
-        if (distributionTargetId != null) {
-          taskRepo.update(task.id, { distributionRepositoryId: distributionTargetId } as Partial<Task>);
-        }
-      }
-
+      // target B against a stale recorded target A.
+      //
+      // Issue #87 review follow-up (second round, Important finding 1): that
+      // first fix wrote this record BEFORE `performDistribution()` even
+      // ran — too early. `performDistribution()` itself starts with several
+      // prerequisite checks (`service_not_wired`/`no_working_dir`/
+      // `no_distribution_repository`/`distribution_repository_not_found`/
+      // `no_token`/`identity_unresolvable`, DistributionHelper.ts) that
+      // never touch the remote. If a re-restore targets a DIFFERENT
+      // repository than the one a prior execute()/restore() actually
+      // distributed, and this run then fails one of those checks, the
+      // working directory is left exactly as the prior run left it
+      // (repository A) while the record above would already have been
+      // overwritten to name the new target (repository B) — the record
+      // would point at a repository the working directory was never
+      // populated from, and a later resume/push could validate/push A's
+      // content against B. So the write is now done via
+      // `onBeforeDistribute`, a callback `performDistribution()` invokes
+      // itself, exactly once, immediately before the one call that can
+      // actually mutate the remote — i.e. only after every prerequisite
+      // check has passed. A prerequisite failure therefore leaves the
+      // previous record untouched. See `onBeforeDistribute`'s doc comment
+      // in DistributionHelper.ts. `ExecuteTaskUseCase.execute()` mirrors
+      // this same ordering.
       const distOutcome: DistributionOutcome = await performDistribution({
         server,
         projectServer: lockedProjectServer,
@@ -468,27 +473,42 @@ export class TaskRestoreService {
         transportFactory,
         projectRepo,
         fetchDistributionService,
+        onBeforeDistribute: (repositoryId) => {
+          taskRepo.update(task.id, { distributionRepositoryId: repositoryId } as Partial<Task>);
+        },
       });
       if (distOutcome.required && !distOutcome.ok) {
         if (unitId !== null) {
           appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'fetch_distribution_failed', error: distOutcome.message });
         }
-        // The distribution target is already recorded above (before this
-        // call ran) — it names what THIS run attempted to distribute, which
-        // is either what's actually on disk now or a broken worktree that
-        // must be re-validated/failed-closed against that SAME repository.
-        // No further write here; see the pre-write's comment above.
+        // No write here — and whether one already happened depends on
+        // which stage failed. `onBeforeDistribute` (passed to
+        // `performDistribution` above) only fires once every prerequisite
+        // check has passed, right before the actual `distribute()` call:
+        // - A pure prerequisite failure (`service_not_wired`/
+        //   `no_working_dir`/`no_distribution_repository`/
+        //   `distribution_repository_not_found`/`no_token`/
+        //   `identity_unresolvable`) never reached that point —
+        //   `onBeforeDistribute` did NOT fire, so whatever a PRIOR run
+        //   recorded is still there, untouched, correctly describing the
+        //   working directory's actual (unchanged-by-this-run) content.
+        // - `distribute_failed`/`stale_local_branch` fail AFTER
+        //   `onBeforeDistribute` already fired — the record already names
+        //   what THIS run attempted to distribute, which is either what's
+        //   actually on disk now or a broken worktree that must be
+        //   re-validated/failed-closed against that SAME repository.
         throw new Error(`Fetch distribution failed: ${distOutcome.message}`);
       }
       if (distOutcome.required) {
         if (unitId !== null) {
           appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'fetch_distributed', sha: distOutcome.sha, bundleType: distOutcome.bundleType });
         }
-        // Already persisted before performDistribution() ran (see above) —
-        // `distOutcome.repositoryId` is always the same id resolved there,
-        // so writing it again here would only be a redundant, idempotent
-        // duplicate of the SAME record. Not repeated, to keep this a single
-        // source of truth rather than two write sites that could drift.
+        // Already persisted via `onBeforeDistribute` inside
+        // `performDistribution()` (see above) — `distOutcome.repositoryId`
+        // is always the same id resolved there, so writing it again here
+        // would only be a redundant, idempotent duplicate of the SAME
+        // record. Not repeated, to keep this a single source of truth
+        // rather than two write sites that could drift.
       } else {
         // Issue #87 review follow-up, Important finding 4: same "write the
         // current run's truth every time" fix as ExecuteTaskUseCase.execute()

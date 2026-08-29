@@ -279,6 +279,28 @@ export interface PerformDistributionParams {
   transportFactory: TransportFactory;
   projectRepo: IProjectRepository;
   fetchDistributionService: FetchDistributionService | null;
+  /**
+   * Called once, synchronously, immediately before the ONE call in this
+   * function that can actually mutate the remote (`fetchDistributionService.
+   * distribute()`) — i.e. only after every prerequisite check above it
+   * (`service_not_wired`/`no_working_dir`/`no_distribution_repository`/
+   * `distribution_repository_not_found`/`no_token`/`identity_unresolvable`)
+   * has already passed (Issue #87 review follow-up, second round, Important
+   * finding 1). Those checks never touch the remote, so a caller that wrote
+   * `task.distributionRepositoryId` before invoking `performDistribution()`
+   * at all (the previous fix) could still overwrite a PRIOR run's accurate
+   * record with THIS run's target while THIS run then failed a prerequisite
+   * check and never touched the working directory — leaving the record
+   * naming a repository the working directory was never actually
+   * (re)populated from. Moving the write to right before the mutating call
+   * means a prerequisite failure leaves the previous record untouched, and a
+   * record is written if and only if this run is about to change what's on
+   * disk. Callers use this to persist `task.distributionRepositoryId` with
+   * `repositoryId`; not called at all when `performDistribution` returns
+   * before reaching this point (distribution not required, or any
+   * prerequisite check failed).
+   */
+  onBeforeDistribute?: (repositoryId: number) => void;
 }
 
 /**
@@ -290,7 +312,7 @@ export interface PerformDistributionParams {
  * logging/rollback/task-status convention around a failure.
  */
 export async function performDistribution(params: PerformDistributionParams): Promise<DistributionOutcome> {
-  const { server, projectServer, project, workingDir, baseBranch, taskBranch, transportFactory, projectRepo, fetchDistributionService } = params;
+  const { server, projectServer, project, workingDir, baseBranch, taskBranch, transportFactory, projectRepo, fetchDistributionService, onBeforeDistribute } = params;
 
   if (!isDistributionRequired(server, projectServer)) {
     return { required: false };
@@ -363,6 +385,14 @@ export async function performDistribution(params: PerformDistributionParams): Pr
   }
 
   const transport = transportFactory.getTransport(server);
+
+  // Every prerequisite check above has now passed — this is the point of
+  // no return before the one call below that can actually change the
+  // remote. See `onBeforeDistribute`'s doc comment on
+  // `PerformDistributionParams` for why the record write belongs exactly
+  // here rather than before `performDistribution()` is called at all.
+  onBeforeDistribute?.(repoEntry.id);
+
   const distResult = await fetchDistributionService.distribute({
     server,
     transport,
