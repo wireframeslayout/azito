@@ -164,6 +164,10 @@ export class PhaseLoopRunner {
   private reverifyExecutionGateForPhase(taskId: number, currentTask: Task, loopUnitId: number): boolean {
     if (currentTask.inputTrust !== 'untrusted') return true;
 
+    // 'continuation': this is a per-phase re-check mid-run — the run's own
+    // execute()/resumeStateMachine() entry already passed its own
+    // 'execute'/'continuation' gate before this loop started, so code (if
+    // any) has already been distributed for THIS run under that decision.
     const { manifest, projectServer, serverConfig } = resolveExecutionManifest(currentTask, {
       unitRepo: this.unitRepo,
       projectRepo: this.projectRepo,
@@ -172,7 +176,7 @@ export class PhaseLoopRunner {
       projectSecretRepo: this.projectSecretRepo,
       unitTypeLoader: this.unitTypeLoader,
       sidekickLoader: this.sidekickLoader,
-    });
+    }, 'continuation');
     const manifestHash = hashExecutionManifest(manifest);
     // Issue #29 Step 3a: same re-check as ExecuteTaskUseCase.enforceExecutionGate
     // — see resolveEffectiveInputPolicy's doc comment.

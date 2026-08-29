@@ -977,12 +977,98 @@ describe('ExecuteTaskUseCase execution gate (Issue #328)', () => {
       units: [makeUnit({ id: 10 })],
       projectServer: gateProjectServer,
     });
-    const { manifest } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo: projectSecretRepo as any, unitTypeLoader: unitTypeLoader as any, sidekickLoader: sidekickLoader as any });
+    const { manifest } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo: projectSecretRepo as any, unitTypeLoader: unitTypeLoader as any, sidekickLoader: sidekickLoader as any }, 'execute');
     task.executionApprovedFingerprintHash = hashExecutionManifest(manifest);
 
     await useCase.execute(10, 1);
 
     expect(tmux.createWindow).toHaveBeenCalled();
+  });
+
+  // Issue #87 review, forge/87-mirror follow-up, Important finding
+  // (approval-boundary bypass): a task previously distributed from
+  // repository A, then the project server re-pointed to repository B — a
+  // FRESH execute() must re-hash against the CURRENT config (B), not the
+  // recorded A, so the stale A-approval does not let B's code distribute
+  // unapproved.
+  it("execute(): a task approved while its project server distributed from repo A, then re-pointed to repo B, is BLOCKED again on the next execute() — the stale A-fingerprint does not authorize distributing B", async () => {
+    const { resolveExecutionManifest, hashExecutionManifest } = await import('./ExecutionManifest.js');
+    const repoA = { id: 1, url: 'https://github.com/acme/repo-a.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-a', token: 'tok' };
+    const repoB = { id: 2, url: 'https://github.com/acme/repo-b.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-b', token: 'tok' };
+    const task = makeTask({
+      serverName: 'local-server',
+      unitId: 10,
+      inputTrust: 'untrusted',
+      // This task's own distribution already ran against repo A.
+      distributionRepositoryId: repoA.id,
+    });
+    const projectServerAtA = { workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: true, distributionRepositoryId: repoA.id };
+    const project = makeProject({ defaultUnitId: null, repositories: [{ id: repoA.id, name: 'A', url: repoA.url, provider: repoA.provider, owner: repoA.owner, repoName: repoA.repoName, hasToken: true }, { id: repoB.id, name: 'B', url: repoB.url, provider: repoB.provider, owner: repoB.owner, repoName: repoB.repoName, hasToken: true }] });
+
+    // Approve the task the way GET .../execution-approval + POST
+    // approve-execution actually would: hash the manifest AT EXECUTE TIME
+    // ('execute' operationKind) against the config as it stood at approval
+    // (still pointed at A).
+    const { useCase: approvalUseCase } = buildUseCase({
+      task, project, units: [makeUnit({ id: 10 })], projectServer: projectServerAtA, repository: repoA,
+    });
+    const { manifest: manifestAtApproval } = resolveExecutionManifest(task, {
+      unitRepo: (approvalUseCase as any).unitRepo, projectRepo: (approvalUseCase as any).projectRepo,
+      projectServerRepo: (approvalUseCase as any).projectServerRepo, serverRepo: (approvalUseCase as any).serverRepo,
+      projectSecretRepo: (approvalUseCase as any).projectSecretRepo, unitTypeLoader: (approvalUseCase as any).unitTypeLoader,
+      sidekickLoader: (approvalUseCase as any).sidekickLoader,
+    }, 'execute');
+    task.executionApprovedFingerprintHash = hashExecutionManifest(manifestAtApproval);
+
+    // The project server is re-pointed at repo B before the next execute().
+    const projectServerAtB = { ...projectServerAtA, distributionRepositoryId: repoB.id };
+    const { useCase, taskRepo, tmux } = buildUseCase({
+      task, project, units: [makeUnit({ id: 10 })], projectServer: projectServerAtB, repository: repoB,
+    });
+
+    await expect(useCase.execute(10, 1)).rejects.toThrow(/requires approval/);
+
+    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(1, { pendingOperation: 'execute', priorStatus: 'open', manifestHash: expect.any(String) });
+  });
+
+  // Companion to the test above: the SAME re-point must NOT block a
+  // resumeStateMachine()/followUp() continuation of a task whose working
+  // directory already holds repo A's code — the recorded repository stays
+  // authoritative for a continuation, so approval is not spuriously
+  // invalidated by a config change the continuation never acts on.
+  it("resumeStateMachine(): the SAME project-server re-point (A -> B) that blocks a fresh execute() does NOT block resuming a task that already recorded repo A", async () => {
+    const { resolveExecutionManifest, hashExecutionManifest } = await import('./ExecutionManifest.js');
+    const repoA = { id: 1, url: 'https://github.com/acme/repo-a.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-a', token: 'tok' };
+    const repoB = { id: 2, url: 'https://github.com/acme/repo-b.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-b', token: 'tok' };
+    const task = makeTask({
+      serverName: 'local-server',
+      unitId: 10,
+      tmuxWindow: 'task-1',
+      currentPhase: null,
+      inputTrust: 'untrusted',
+      distributionRepositoryId: repoA.id,
+    });
+    const project = makeProject({ defaultUnitId: null, repositories: [{ id: repoA.id, name: 'A', url: repoA.url, provider: repoA.provider, owner: repoA.owner, repoName: repoA.repoName, hasToken: true }, { id: repoB.id, name: 'B', url: repoB.url, provider: repoB.provider, owner: repoB.owner, repoName: repoB.repoName, hasToken: true }] });
+    // Project server now points at B — but the task's own working directory
+    // still holds A's code, recorded on task.distributionRepositoryId.
+    const projectServerAtB = { workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: true, distributionRepositoryId: repoB.id };
+    const { useCase, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader } = buildUseCase({
+      task, project, units: [makeUnit({ id: 10 })], projectServer: projectServerAtB, repository: repoB,
+    });
+    // Approve against the CONTINUATION resolution (recorded A) — the same
+    // resolution resumeStateMachine()'s own gate re-check performs.
+    const { manifest } = resolveExecutionManifest(task, {
+      unitRepo, projectRepo, projectServerRepo, serverRepo,
+      projectSecretRepo: projectSecretRepo as any, unitTypeLoader: unitTypeLoader as any, sidekickLoader: sidekickLoader as any,
+    }, 'continuation');
+    task.executionApprovedFingerprintHash = hashExecutionManifest(manifest);
+
+    // Calls enforceExecutionGate() directly (not the full resumeStateMachine(),
+    // which continues on into real worker-wait machinery this harness does
+    // not mock) — this is the exact same gate call resumeStateMachine()
+    // itself makes before doing anything else.
+    expect(() => useCase.enforceExecutionGate(task, 10, 'resume')).not.toThrow();
   });
 
   it('execute(): denies outright under a "deny" project server policy, without changing task status', async () => {
@@ -2322,7 +2408,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
     const { manifest } = resolveExecutionManifest(approvedTask, {
       unitRepo, projectRepo, projectServerRepo, serverRepo,
       projectSecretRepo: projectSecretRepo as any, unitTypeLoader: unitTypeLoader as any, sidekickLoader: sidekickLoader as any,
-    });
+    }, 'execute');
     approvedTask.executionApprovedFingerprintHash = hashExecutionManifest(manifest);
 
     const taskRepo = new FakeTaskRepo(approvedTask);

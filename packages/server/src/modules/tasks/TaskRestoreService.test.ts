@@ -314,7 +314,7 @@ describe('TaskRestoreService', () => {
       worktreeBranch: 'feat/stale-prior-run-branch',
     });
 
-    const { manifest } = resolveExecutionManifest(task, deps);
+    const { manifest } = resolveExecutionManifest(task, deps, 'continuation');
     await service.restore(task, log);
 
     const worktreeService = (deps.worktreeServiceFactory.create as ReturnType<typeof vi.fn>).mock.results[0].value;
@@ -352,7 +352,7 @@ describe('TaskRestoreService', () => {
     const { resolveExecutionManifest, hashExecutionManifest } = await import('./execution/ExecutionManifest.js');
     const task = makeTask({ serverName: 'test-server', branch: null, worktreeBranch: null });
 
-    const hashBefore = hashExecutionManifest(resolveExecutionManifest(task, deps).manifest);
+    const hashBefore = hashExecutionManifest(resolveExecutionManifest(task, deps, 'continuation').manifest);
 
     await service.restore(task, log);
 
@@ -364,7 +364,7 @@ describe('TaskRestoreService', () => {
     // manifest off the post-restore row hashes identically.
     const updateCalls = (deps.taskRepo.update as ReturnType<typeof vi.fn>).mock.calls;
     const restoredTask: Task = updateCalls.reduce((acc, c) => ({ ...acc, ...(c[1] as Partial<Task>) }), task);
-    const hashAfter = hashExecutionManifest(resolveExecutionManifest(restoredTask, deps).manifest);
+    const hashAfter = hashExecutionManifest(resolveExecutionManifest(restoredTask, deps, 'continuation').manifest);
 
     expect(hashAfter).toBe(hashBefore);
   });
@@ -1083,7 +1083,7 @@ describe('TaskRestoreService', () => {
         inputTrust: 'untrusted',
         description: 'do the thing',
       });
-      const { manifest } = resolveExecutionManifest(task, deps);
+      const { manifest } = resolveExecutionManifest(task, deps, 'continuation');
       task.executionApprovedFingerprintHash = hashExecutionManifest(manifest);
 
       const result = await service.restore(task, log);

@@ -251,7 +251,7 @@ function currentFingerprintFor(opts: TasksRouteOptions, task: Task): string {
     projectSecretRepo: opts.projectSecretRepo,
     unitTypeLoader: opts.unitTypeLoader,
     sidekickLoader: opts.sidekickLoader,
-  });
+  }, 'execute');
   return hashExecutionManifest(manifest);
 }
 
@@ -378,6 +378,11 @@ describe('POST /api/tasks/:id/approve-execution (Issue #328 review)', () => {
    * matches what the handler recomputes at approval time.
    */
   function currentFingerprint(opts: TasksRouteOptions, task: Task, respawnWindow?: { serverName: string; workerModel: string | null; workerType: string | null; paneLayout: null }): string {
+    // Mirrors resolvePendingApprovalManifest()'s own operationKind
+    // derivation (ExecutionApprovalDecision.ts): only 'execute' is a FRESH
+    // run; every other blocked pendingOperation resumes a run whose working
+    // directory a past execute()/restore() already populated.
+    const operationKind = task.pendingOperation === 'execute' || task.pendingOperation === null ? 'execute' : 'continuation';
     const { manifest } = resolveExecutionManifest(
       task,
       {
@@ -389,6 +394,7 @@ describe('POST /api/tasks/:id/approve-execution (Issue #328 review)', () => {
         unitTypeLoader: opts.unitTypeLoader,
         sidekickLoader: opts.sidekickLoader,
       },
+      operationKind,
       respawnWindow ? buildRespawnManifestInput(respawnWindow) : undefined,
       respawnWindow?.serverName,
     );

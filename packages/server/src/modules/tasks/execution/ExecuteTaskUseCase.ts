@@ -314,6 +314,18 @@ export class ExecuteTaskUseCase {
     // fingerprint of RESOLVED execution content instead of raw task columns
     // (see ExecutionManifest.ts). `project`/`projectServer` returned here are
     // reused by execute()'s working-directory logic below, same as before.
+    //
+    // operationKind: only `operation === 'execute'` is a FRESH run that has
+    // not distributed anything yet this time — `performDistribution` is
+    // about to read the CURRENT `projectServer.distributionRepositoryId`
+    // regardless of what a past run recorded, so the gate must hash that
+    // same current value ('execute'). Every other `operation` value here
+    // ('resume'/'resume_await_answer'/'resume_await_plan_review') is
+    // resuming a run whose working directory a past execute() already
+    // populated — the recorded repository is authoritative for those
+    // ('continuation'). See resolveExecutionManifest's own doc comment for
+    // the full rationale (Issue #87 review, forge/87-mirror follow-up,
+    // Important finding).
     const { manifest, project, projectServer, serverConfig } = resolveExecutionManifest(task, {
       unitRepo: this.unitRepo,
       projectRepo: this.projectRepo,
@@ -322,7 +334,7 @@ export class ExecuteTaskUseCase {
       projectSecretRepo: this.projectSecretRepo,
       unitTypeLoader: this.unitTypeLoader,
       sidekickLoader: this.sidekickLoader,
-    });
+    }, operation === 'execute' ? 'execute' : 'continuation');
     const manifestHash = hashExecutionManifest(manifest);
     // Issue #29 Step 3a: the 3-point AND gate for 'allow' is re-evaluated on
     // every entry point, not just resolved once at approval time — see
@@ -415,6 +427,11 @@ export class ExecuteTaskUseCase {
     operation: NonNullable<Task['pendingOperation']>,
     freshServer: ServerConfig,
   ): { project: ReturnType<typeof resolveExecutionManifest>['project']; projectServer: ReturnType<typeof resolveExecutionManifest>['projectServer'] } {
+    // Same 'execute' vs 'continuation' mapping as enforceExecutionGate()
+    // above — only a FRESH execute() (never distributed anything this run)
+    // may hash the CURRENT project-server repository config; every other
+    // `operation` value re-verifies a run that is already resuming/
+    // continuing past distribution.
     const { manifest, project, projectServer } = resolveExecutionManifest(currentTask, {
       unitRepo: this.unitRepo,
       projectRepo: this.projectRepo,
@@ -423,7 +440,7 @@ export class ExecuteTaskUseCase {
       projectSecretRepo: this.projectSecretRepo,
       unitTypeLoader: this.unitTypeLoader,
       sidekickLoader: this.sidekickLoader,
-    });
+    }, operation === 'execute' ? 'execute' : 'continuation');
     const manifestHash = hashExecutionManifest(manifest);
     reverifyExecutionGateInLock(
       { taskRepo: this.taskRepo, logRepo: this.logRepo, events: this.events },

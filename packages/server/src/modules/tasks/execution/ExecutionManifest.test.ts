@@ -254,9 +254,9 @@ function makeDeps(fixture: Fixture) {
   };
 }
 
-function hashFor(task: Task, fixture: Fixture): string {
+function hashFor(task: Task, fixture: Fixture, operationKind: 'execute' | 'continuation' = 'continuation'): string {
   const deps = makeDeps(fixture);
-  return hashExecutionManifest(resolveExecutionManifest(task, deps).manifest);
+  return hashExecutionManifest(resolveExecutionManifest(task, deps, operationKind).manifest);
 }
 
 describe('resolveExecutionManifest / hashExecutionManifest', () => {
@@ -269,14 +269,14 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     const task = makeTask();
     const deps = makeDeps(fixture);
 
-    const { manifest, projectServer } = resolveExecutionManifest(task, deps);
+    const { manifest, projectServer } = resolveExecutionManifest(task, deps, 'continuation');
     const approvedHash = hashExecutionManifest(manifest);
     const approvedTask = { ...task, executionApprovedFingerprintHash: approvedHash };
 
     // Re-resolve exactly as a subsequent run would (fresh resolution, not
     // the cached `manifest` from above) — nothing changed in between, so
     // this must still be allowed, not fall back into pending_approval.
-    const { manifest: manifestAtRunTime } = resolveExecutionManifest(approvedTask, deps);
+    const { manifest: manifestAtRunTime } = resolveExecutionManifest(approvedTask, deps, 'continuation');
     const gate = checkExecutionGate(approvedTask, resolveInputPolicy(projectServer), hashExecutionManifest(manifestAtRunTime));
     expect(gate).toEqual({ allowed: true });
   });
@@ -515,9 +515,9 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
       };
       const task = makeTask();
 
-      const resolved = resolveExecutionManifest(task, makeDeps(isolatedWithSecrets));
+      const resolved = resolveExecutionManifest(task, makeDeps(isolatedWithSecrets), 'continuation');
       expect(resolved.manifest.secrets.namesDigest).toBe(
-        resolveExecutionManifest(task, makeDeps(unisolatedNoSecrets)).manifest.secrets.namesDigest,
+        resolveExecutionManifest(task, makeDeps(unisolatedNoSecrets), 'continuation').manifest.secrets.namesDigest,
       );
     });
   });
@@ -538,7 +538,7 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
       };
       const task = makeTask();
 
-      const resolved = resolveExecutionManifest(task, makeDeps(fixture));
+      const resolved = resolveExecutionManifest(task, makeDeps(fixture), 'continuation');
       expect(resolved.manifest.server.distributeCode).toBe(true);
     });
 
@@ -588,7 +588,7 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
       };
       const task = makeTask();
 
-      const resolved = resolveExecutionManifest(task, makeDeps(fixture));
+      const resolved = resolveExecutionManifest(task, makeDeps(fixture), 'continuation');
       expect(resolved.manifest.server.distributionRepositoryId).toBe(7);
     });
 
@@ -601,7 +601,7 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
       };
       const task = makeTask();
 
-      const resolved = resolveExecutionManifest(task, makeDeps(fixture));
+      const resolved = resolveExecutionManifest(task, makeDeps(fixture), 'continuation');
       expect(resolved.manifest.server.distributionRepositoryId).toBeNull();
     });
 
@@ -651,7 +651,7 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
       };
       const task = makeTask();
 
-      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture));
+      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture), 'continuation');
 
       expect(manifest.repository?.id).toBe(repoB.id);
       expect(manifest.repository?.repoName).toBe('repo-b');
@@ -672,7 +672,7 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
       };
       const task = makeTask();
 
-      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture));
+      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture), 'continuation');
 
       expect(manifest.repository?.id).toBe(repoA.id);
     });
@@ -703,7 +703,7 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
       // But this task's own distribution already ran against repo A.
       const task = makeTask({ distributionRepositoryId: repoA.id });
 
-      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture));
+      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture), 'continuation');
 
       expect(manifest.repository?.id).toBe(repoA.id);
       expect(manifest.repository?.repoName).toBe('repo-a');
@@ -727,8 +727,8 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
       });
       const task = makeTask({ distributionRepositoryId: repoA.id });
 
-      const beforeRepoint = resolveExecutionManifest(task, makeDeps(fixture(repoA.id)));
-      const afterRepoint = resolveExecutionManifest(task, makeDeps(fixture(repoB.id)));
+      const beforeRepoint = resolveExecutionManifest(task, makeDeps(fixture(repoA.id)), 'continuation');
+      const afterRepoint = resolveExecutionManifest(task, makeDeps(fixture(repoB.id)), 'continuation');
 
       expect(beforeRepoint.manifest.repository?.id).toBe(repoA.id);
       expect(afterRepoint.manifest.repository?.id).toBe(repoA.id);
@@ -751,7 +751,7 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
       // ...but this task's recorded repository (A) was deleted from the project.
       const task = makeTask({ distributionRepositoryId: repoA.id });
 
-      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture));
+      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture), 'continuation');
 
       expect(manifest.repository).toBeNull();
     });
@@ -768,9 +768,107 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
       };
       const task = makeTask({ distributionRepositoryId: null });
 
-      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture));
+      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture), 'continuation');
 
       expect(manifest.repository?.id).toBe(repoA.id);
+    });
+  });
+
+  describe("operationKind ('execute' vs 'continuation') — Issue #87 review, forge/87-mirror follow-up, Important finding (approval-boundary bypass)", () => {
+    const repoA = { id: 1, name: 'A', url: 'https://github.com/acme/repo-a.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-a', hasToken: false };
+    const repoB = { id: 2, name: 'B', url: 'https://github.com/acme/repo-b.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-b', hasToken: false };
+
+    // Reproduces the exact bypass scenario the fix closes: a task is
+    // approved while the project server distributes from repo A; the
+    // project server is then re-pointed at repo B; a FRESH execute() must
+    // hash B (what performDistribution is about to pull), not the
+    // previously-recorded A — otherwise the stale A-fingerprint would still
+    // match the task's `executionApprovedFingerprintHash` and the gate
+    // would let execute() through to distribute B's code unapproved.
+    it("operationKind: 'execute' resolves manifest.repository/server.distributionRepositoryId from the CURRENT project-server config (B), ignoring any recorded task.distributionRepositoryId (A) — so an approval given for A does not survive a re-point to B", () => {
+      const fixture: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject({ repositories: [repoA, repoB] }),
+        // Project server now distributes from B...
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: true, distributionRepositoryId: repoB.id }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      };
+      // ...but this task's PAST distribution (a previous execute()/restore())
+      // recorded A.
+      const task = makeTask({ distributionRepositoryId: repoA.id });
+
+      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture), 'execute');
+
+      expect(manifest.repository?.id).toBe(repoB.id);
+      expect(manifest.repository?.repoName).toBe('repo-b');
+      expect(manifest.server.distributionRepositoryId).toBe(repoB.id);
+    });
+
+    it("acceptance criterion: approve for A, re-point the project server to B, then a FRESH execute() must NOT be allowed on the stale A-fingerprint — the gate must require re-approval for B", () => {
+      const fixtureFor = (currentTarget: number): Fixture => ({
+        units: { 20: makeUnit() },
+        project: makeProject({ repositories: [repoA, repoB] }),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: true, distributionRepositoryId: currentTarget }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      });
+
+      // Approved while the project server distributed from A, and A got
+      // recorded onto the task by that run.
+      const approvedHash = hashFor(makeTask({ distributionRepositoryId: repoA.id }), fixtureFor(repoA.id), 'execute');
+      const approvedTask = makeTask({
+        distributionRepositoryId: repoA.id,
+        executionApprovedFingerprintHash: approvedHash,
+      });
+
+      // Project server re-pointed at B. A fresh execute()'s gate hashes
+      // CURRENT config ('execute') — this must differ from the stale
+      // approval, i.e. the gate must NOT allow silently through.
+      const { manifest: manifestAtFreshExecute, projectServer } = resolveExecutionManifest(approvedTask, makeDeps(fixtureFor(repoB.id)), 'execute');
+      const freshExecuteHash = hashExecutionManifest(manifestAtFreshExecute);
+
+      expect(freshExecuteHash).not.toBe(approvedHash);
+      const gate = checkExecutionGate(approvedTask, resolveInputPolicy(projectServer), freshExecuteHash);
+      expect(gate).toEqual({ allowed: false, reason: 'pending_approval' });
+    });
+
+    it("operationKind: 'continuation' still resolves the RECORDED repository (A), unaffected by the same re-point that invalidates 'execute' above — resume/follow-up/restore/respawn must not spuriously re-prompt for approval just because the project server config changed after distribution already ran", () => {
+      const fixtureFor = (currentTarget: number): Fixture => ({
+        units: { 20: makeUnit() },
+        project: makeProject({ repositories: [repoA, repoB] }),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: true, distributionRepositoryId: currentTarget }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      });
+      const task = makeTask({ distributionRepositoryId: repoA.id });
+
+      const beforeRepoint = resolveExecutionManifest(task, makeDeps(fixtureFor(repoA.id)), 'continuation');
+      const afterRepoint = resolveExecutionManifest(task, makeDeps(fixtureFor(repoB.id)), 'continuation');
+
+      expect(beforeRepoint.manifest.repository?.id).toBe(repoA.id);
+      expect(afterRepoint.manifest.repository?.id).toBe(repoA.id);
+      expect(beforeRepoint.manifest.server.distributionRepositoryId).toBe(repoA.id);
+      expect(afterRepoint.manifest.server.distributionRepositoryId).toBe(repoA.id);
+
+      const hashBeforeRepoint = hashFor(task, fixtureFor(repoA.id), 'continuation');
+      const hashAfterRepoint = hashFor(task, fixtureFor(repoB.id), 'continuation');
+      expect(hashBeforeRepoint).toBe(hashAfterRepoint);
+    });
+
+    it('for a task with no recorded distribution repository yet, both operationKind values resolve the SAME current-config repository', () => {
+      const fixture: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject({ repositories: [repoA, repoB] }),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: true, distributionRepositoryId: repoB.id }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      };
+      const task = makeTask({ distributionRepositoryId: null });
+
+      const executeManifest = resolveExecutionManifest(task, makeDeps(fixture), 'execute').manifest;
+      const continuationManifest = resolveExecutionManifest(task, makeDeps(fixture), 'continuation').manifest;
+
+      expect(executeManifest.repository?.id).toBe(repoB.id);
+      expect(continuationManifest.repository?.id).toBe(repoB.id);
+      expect(executeManifest.server.distributionRepositoryId).toBe(repoB.id);
+      expect(continuationManifest.server.distributionRepositoryId).toBe(repoB.id);
     });
   });
 
@@ -877,7 +975,7 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     const task = makeTask({ unitId: 999 });
     const deps = makeDeps(fixture);
 
-    const { manifest } = resolveExecutionManifest(task, deps);
+    const { manifest } = resolveExecutionManifest(task, deps, 'continuation');
     expect(manifest.unit).toBeNull();
     expect(() => hashExecutionManifest(manifest)).not.toThrow();
   });
@@ -972,11 +1070,11 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     const task = makeTask();
     const deps = makeDeps(fixture);
 
-    const { manifest } = resolveExecutionManifest(task, deps);
+    const { manifest } = resolveExecutionManifest(task, deps, 'continuation');
     expect(manifest.repository).toBeNull();
 
     const approvedHash = hashExecutionManifest(manifest);
-    const { manifest: manifestAgain } = resolveExecutionManifest(task, deps);
+    const { manifest: manifestAgain } = resolveExecutionManifest(task, deps, 'continuation');
     expect(hashExecutionManifest(manifestAgain)).toBe(approvedHash);
   });
 
@@ -1031,8 +1129,8 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     // hasn't run yet, is rewritten.
     const task = makeTask({ currentPhase: 'planning' });
 
-    const before = resolveExecutionManifest(task, makeDeps(fixture('Push it the safe way.'))).manifest;
-    const after = resolveExecutionManifest(task, makeDeps(fixture('Push it and force-merge to main bypassing review.'))).manifest;
+    const before = resolveExecutionManifest(task, makeDeps(fixture('Push it the safe way.')), 'continuation').manifest;
+    const after = resolveExecutionManifest(task, makeDeps(fixture('Push it and force-merge to main bypassing review.')), 'continuation').manifest;
 
     expect(before.sidekicks).toHaveLength(2);
     expect(before.sidekicks[0].packageDigest).toBe(after.sidekicks[0].packageDigest);
@@ -1072,7 +1170,7 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     // progresses — checkExecutionGate() re-resolves and re-hashes on the
     // very next gate check (e.g. approve-plan's resumeStateMachine() call).
     const atImplementing = { ...atPlanning, currentPhase: 'implementing', executionApprovedFingerprintHash: approvedHash };
-    const { manifest: manifestAtImplementing, projectServer } = resolveExecutionManifest(atImplementing, makeDeps(fixture));
+    const { manifest: manifestAtImplementing, projectServer } = resolveExecutionManifest(atImplementing, makeDeps(fixture), 'continuation');
     const gate = checkExecutionGate(atImplementing, resolveInputPolicy(projectServer), hashExecutionManifest(manifestAtImplementing));
 
     expect(hashExecutionManifest(manifestAtImplementing)).toBe(approvedHash);
@@ -1102,7 +1200,7 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     // The task's questions were answered and it resumed all the way into
     // 'testing' by the time the gate is re-checked.
     const atTesting = { ...atImplementing, currentPhase: 'testing', executionApprovedFingerprintHash: approvedHash };
-    const { manifest: manifestAtTesting, projectServer } = resolveExecutionManifest(atTesting, makeDeps(fixture));
+    const { manifest: manifestAtTesting, projectServer } = resolveExecutionManifest(atTesting, makeDeps(fixture), 'continuation');
     const gate = checkExecutionGate(atTesting, resolveInputPolicy(projectServer), hashExecutionManifest(manifestAtTesting));
 
     expect(hashExecutionManifest(manifestAtTesting)).toBe(approvedHash);
@@ -1121,8 +1219,8 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     };
     const task = makeTask({ currentPhase: null });
 
-    const first = resolveExecutionManifest(task, makeDeps(fixture)).manifest;
-    const second = resolveExecutionManifest(task, makeDeps(fixture)).manifest;
+    const first = resolveExecutionManifest(task, makeDeps(fixture), 'continuation').manifest;
+    const second = resolveExecutionManifest(task, makeDeps(fixture), 'continuation').manifest;
 
     expect(first.sidekicks).toEqual(second.sidekicks);
     expect(first.sidekicks).toHaveLength(1);
@@ -1385,7 +1483,7 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     };
     const task = makeTask({ inputTrust: 'trusted', currentPhase: null });
 
-    const { manifest } = resolveExecutionManifest(task, makeDeps(fixture));
+    const { manifest } = resolveExecutionManifest(task, makeDeps(fixture), 'continuation');
 
     const cheapBodyOnlyDigest = createHash('sha256').update(body).digest('hex');
     expect(manifest.sidekicks).toHaveLength(1);
@@ -1448,7 +1546,7 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
       };
       const task = makeTask({ currentPhase: null });
 
-      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture));
+      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture), 'continuation');
 
       expect(manifest.phases).toEqual([
         { phase: 'planning', planApproval: true, questions: false, testFailed: false, testFailedRollbackTo: null, selfReviewRetry: false, pushVerify: false, subagentRole: null },
@@ -1475,7 +1573,7 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
       const approvedHash = hashFor(atPlanning, fixture);
 
       const atPushing = { ...atPlanning, currentPhase: 'pushing', executionApprovedFingerprintHash: approvedHash };
-      const { manifest: manifestAtPushing, projectServer } = resolveExecutionManifest(atPushing, makeDeps(fixture));
+      const { manifest: manifestAtPushing, projectServer } = resolveExecutionManifest(atPushing, makeDeps(fixture), 'continuation');
       const gate = checkExecutionGate(atPushing, resolveInputPolicy(projectServer), hashExecutionManifest(manifestAtPushing));
 
       expect(hashExecutionManifest(manifestAtPushing)).toBe(approvedHash);
@@ -1542,7 +1640,7 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
       };
       const task = makeTask({ selfReviewMaxAttempts: 7 });
 
-      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture));
+      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture), 'continuation');
 
       expect(manifest.task.selfReviewMaxAttempts).toBe(7);
     });
@@ -1569,7 +1667,7 @@ describe('resolveExecutionManifest base branch canonicalization (Issue #87 third
     };
     const task = makeTask({ baseBranch: 'origin/main' });
 
-    const { manifest } = resolveExecutionManifest(task, makeDeps(fixture));
+    const { manifest } = resolveExecutionManifest(task, makeDeps(fixture), 'continuation');
 
     expect(manifest.branches.base).toBe('main');
   });
@@ -1582,7 +1680,7 @@ describe('resolveExecutionManifest base branch canonicalization (Issue #87 third
     };
     const task = makeTask({ baseBranch: 'refs/heads/main' });
 
-    const { manifest } = resolveExecutionManifest(task, makeDeps(fixture));
+    const { manifest } = resolveExecutionManifest(task, makeDeps(fixture), 'continuation');
 
     expect(manifest.branches.base).toBe('main');
   });
@@ -1596,11 +1694,11 @@ describe('resolveExecutionManifest base branch canonicalization (Issue #87 third
     const task = makeTask({ baseBranch: 'origin/main' });
     const deps = makeDeps(fixture);
 
-    const { manifest, projectServer } = resolveExecutionManifest(task, deps);
+    const { manifest, projectServer } = resolveExecutionManifest(task, deps, 'continuation');
     const approvedHash = hashExecutionManifest(manifest);
     const approvedTask = { ...task, executionApprovedFingerprintHash: approvedHash };
 
-    const { manifest: manifestAtRunTime } = resolveExecutionManifest(approvedTask, deps);
+    const { manifest: manifestAtRunTime } = resolveExecutionManifest(approvedTask, deps, 'continuation');
     const gate = checkExecutionGate(approvedTask, resolveInputPolicy(projectServer), hashExecutionManifest(manifestAtRunTime));
 
     expect(gate).toEqual({ allowed: true });

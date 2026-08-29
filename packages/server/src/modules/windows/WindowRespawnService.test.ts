@@ -1179,7 +1179,7 @@ describe('WindowRespawnService.respawn — respawn config fingerprint (Issue #32
     // (win.serverName), not whatever resolveTaskServerName alone would
     // produce from the task — respawn() computes its live gate check the
     // same way, via the `server.name` it's actually called with below.
-    const { manifest } = resolveExecutionManifest(task, manifestDeps(unit), buildRespawnManifestInput(win), win.serverName);
+    const { manifest } = resolveExecutionManifest(task, manifestDeps(unit), 'continuation', buildRespawnManifestInput(win), win.serverName);
     const approvedHash = hashExecutionManifest(manifest);
     const approvedTask = { ...task, executionApprovedFingerprintHash: approvedHash };
 
@@ -1195,7 +1195,7 @@ describe('WindowRespawnService.respawn — respawn config fingerprint (Issue #32
     const unit = makeUnit({ id: 10 });
     const approvedWin = makeWindow({ id: 1, taskId: 6, windowType: 'agent', workerType: 'claude', workerModel: 'opus' });
 
-    const { manifest } = resolveExecutionManifest(task, manifestDeps(unit), buildRespawnManifestInput(approvedWin), approvedWin.serverName);
+    const { manifest } = resolveExecutionManifest(task, manifestDeps(unit), 'continuation', buildRespawnManifestInput(approvedWin), approvedWin.serverName);
     const approvedHash = hashExecutionManifest(manifest);
     const approvedTask = { ...task, executionApprovedFingerprintHash: approvedHash };
 
@@ -1221,7 +1221,7 @@ describe('WindowRespawnService.respawn — respawn config fingerprint (Issue #32
     const unit = makeUnit({ id: 10 });
     const approvedWin = makeWindow({ id: 1, taskId: 7, windowType: 'agent', workerType: 'claude', workerModel: 'opus', serverName: 'local-server' });
 
-    const { manifest } = resolveExecutionManifest(task, manifestDeps(unit), buildRespawnManifestInput(approvedWin), approvedWin.serverName);
+    const { manifest } = resolveExecutionManifest(task, manifestDeps(unit), 'continuation', buildRespawnManifestInput(approvedWin), approvedWin.serverName);
     const approvedHash = hashExecutionManifest(manifest);
     const approvedTask = { ...task, executionApprovedFingerprintHash: approvedHash };
 

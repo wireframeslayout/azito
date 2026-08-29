@@ -128,7 +128,13 @@ export class TaskRestoreService {
     // project/unit/projectServer are resolved here and reused below
     // (unit may be null: restore() has always tolerated a task whose Unit
     // was deleted or was never set on either the task or its project).
-    const { manifest, project, unit, projectServer } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader });
+    // 'continuation': restore() recreates a task's window/worktree from a
+    // working directory a PAST execute()/restore() already populated (or,
+    // if never distributed, one this restore is about to populate from
+    // current config via the fallback inside resolveRecordedDistributionRepositoryEntry
+    // — same as every other continuation entry point). It is never the
+    // FRESH first distribution execute() performs.
+    const { manifest, project, unit, projectServer } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader }, 'continuation');
     const unitId = unit?.id ?? null;
     const manifestHash = hashExecutionManifest(manifest);
     // Issue #29 Step 3a: `server` here is the already-resolved ServerConfig
@@ -305,9 +311,11 @@ export class TaskRestoreService {
         // token is built. See ExecutionGate.reverifyExecutionGateInLock's
         // doc comment for the TOCTOU this closes.
         (freshServer) => {
+          // 'continuation': same reasoning as the outer resolveExecutionManifest()
+          // call above — this in-lock re-verification is for the same restore().
           const { manifest, project: freshProject, projectServer: freshProjectServer } = resolveExecutionManifest(task, {
             unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader,
-          });
+          }, 'continuation');
           reverifyExecutionGateInLock(
             { taskRepo, logRepo, events },
             task,

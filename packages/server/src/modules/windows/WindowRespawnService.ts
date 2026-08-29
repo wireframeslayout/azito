@@ -332,6 +332,9 @@ export class WindowRespawnService {
         // untouched. Moving the same check here means a downgrade aborts
         // before anything is torn down.
         if (isPrimary) {
+          // 'continuation': a respawn resumes a task whose working
+          // directory a past execute()/restore() already populated — it
+          // never distributes anything itself.
           const { manifest, projectServer: freshProjectServer } = resolveExecutionManifest(task!, {
             unitRepo: this.unitRepo,
             projectRepo: this.projectRepo,
@@ -340,7 +343,7 @@ export class WindowRespawnService {
             projectSecretRepo: this.projectSecretRepo,
             unitTypeLoader: this.unitTypeLoader,
             sidekickLoader: this.sidekickLoader,
-          }, buildRespawnManifestInput(currentWin), freshServer.name);
+          }, 'continuation', buildRespawnManifestInput(currentWin), freshServer.name);
           reverifyExecutionGateInLock(
             { taskRepo: this.taskRepo, logRepo: this.logRepo, events: this.events },
             task!,
@@ -531,6 +534,10 @@ export class WindowRespawnService {
     // the two can diverge and what happens if this override is dropped).
     // Passing it through is what makes checkExecutionGate below read the
     // input policy for the server respawn will really touch.
+    // 'continuation': both `operation` values here ('respawn' and
+    // 'recover_session_legacy') resume a task whose working directory a
+    // past execute()/restore() already populated — neither distributes
+    // anything itself.
     const { manifest, unit, projectServer } = resolveExecutionManifest(task, {
       unitRepo: this.unitRepo,
       projectRepo: this.projectRepo,
@@ -539,7 +546,7 @@ export class WindowRespawnService {
       projectSecretRepo: this.projectSecretRepo,
       unitTypeLoader: this.unitTypeLoader,
       sidekickLoader: this.sidekickLoader,
-    }, respawnInput, server.name);
+    }, 'continuation', respawnInput, server.name);
     const unitId = unit?.id ?? null;
     const manifestHash = hashExecutionManifest(manifest);
     // Issue #29 Step 3a: `server` is the caller-resolved ACTUAL target
@@ -660,6 +667,9 @@ export class WindowRespawnService {
         // enforceExecutionGate's own doc comment: this operation has no
         // Window row to diverge from).
         (freshServer) => {
+          // 'continuation': legacy session recovery resumes a task whose
+          // working directory a past execute()/restore() already
+          // populated.
           const { manifest, projectServer: freshProjectServer } = resolveExecutionManifest(task, {
             unitRepo: this.unitRepo,
             projectRepo: this.projectRepo,
@@ -668,7 +678,7 @@ export class WindowRespawnService {
             projectSecretRepo: this.projectSecretRepo,
             unitTypeLoader: this.unitTypeLoader,
             sidekickLoader: this.sidekickLoader,
-          }, undefined, freshServer.name);
+          }, 'continuation', undefined, freshServer.name);
           reverifyExecutionGateInLock(
             { taskRepo: this.taskRepo, logRepo: this.logRepo, events: this.events },
             task,

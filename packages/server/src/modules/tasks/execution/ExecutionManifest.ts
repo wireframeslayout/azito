@@ -12,7 +12,20 @@ import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoade
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import { resolvePhaseSidekick, resolveEnabledPhases } from '../../sidekicks/resolvePhaseSidekick';
 import { resolveUnitId, resolveTaskServerName, resolveBaseBranch, canonicalizeBaseBranch } from './TaskExecutionEnv';
-import { resolveRecordedDistributionRepositoryEntry } from './DistributionHelper';
+import { resolveRecordedDistributionRepositoryEntry, resolveExecutionRepositoryEntry } from './DistributionHelper';
+
+/**
+ * Which repository source `resolveExecutionManifest()` is allowed to read
+ * from for its `repository` field and `server.distributionRepositoryId`
+ * field — see `resolveExecutionManifest()`'s own doc comment (Issue #87
+ * review, forge/87-mirror follow-up, Important finding) for the full
+ * rationale. `'execute'` = current project/project-server configuration
+ * only (what a FRESH run is about to distribute from); `'continuation'` =
+ * `task.distributionRepositoryId` once recorded, falling back to current
+ * config only when nothing has been recorded yet (what a resumed/continued
+ * run's working directory already holds).
+ */
+export type ExecutionOperationKind = 'execute' | 'continuation';
 
 /**
  * Execution manifest (Issue #328 fifth-round review).
@@ -905,10 +918,49 @@ export interface ExecutionManifestDeps {
  * server A's more permissive one. Every other call site (ExecuteTaskUseCase,
  * TaskRestoreService, the approve-execution handler for non-respawn
  * operations) omits it and keeps the task-resolved server, unchanged.
+ *
+ * `operationKind` (Issue #87 review, forge/87-mirror follow-up, Important
+ * finding on top of finding 1 above) picks which repository source the
+ * manifest's `repository` field and `server.distributionRepositoryId` are
+ * allowed to resolve from — the "recorded value is authoritative once set"
+ * rule those two fields' own doc comments describe is correct for a
+ * RESUMED/CONTINUED run (the task's working directory already holds
+ * whatever `task.distributionRepositoryId` names, and never changes just
+ * because config changed later) but is WRONG for a FRESH `execute()` run
+ * that has not distributed anything yet THIS time: `performDistribution`
+ * (DistributionHelper.ts) always pulls from the CURRENT
+ * `projectServer.distributionRepositoryId`, never from
+ * `task.distributionRepositoryId` — so a stale execute()-time gate that
+ * hashed the OLD recorded repository would accept an approval that no
+ * longer matches what is about to be distributed, letting a project-server
+ * re-point (A -> B) slip a fresh execute() through on an approval that was
+ * only ever given for A.
+ *
+ * - `'execute'`: this manifest is being resolved for a FRESH `execute()`
+ *   run (no window/worktree from a past run of this call is being
+ *   continued) — `repository`/`server.distributionRepositoryId` resolve
+ *   from the CURRENT `projectServer`/`project` configuration only
+ *   (`resolveExecutionRepositoryEntry`), the exact same source
+ *   `performDistribution` is about to read from. `task.distributionRepositoryId`
+ *   is not consulted at all here, deliberately — it describes a PAST run,
+ *   not the one about to start.
+ * - `'continuation'`: this manifest is being resolved for a resume/
+ *   follow-up/respawn/legacy-recover/restore, or for a per-phase
+ *   re-verification mid-run — every one of these either reuses a working
+ *   directory a past execute()/restore() already populated, or is
+ *   re-checking a run that is already past its own execute()-time gate.
+ *   `task.distributionRepositoryId`, once recorded, is authoritative (see
+ *   `resolveRecordedDistributionRepositoryEntry`'s doc comment) — this is
+ *   the pre-existing behavior, unchanged.
+ *
+ * Required, not optional: an omitted/defaulted value here is exactly how
+ * this class of hole reopens the moment a new call site is added without
+ * anyone having to think about which source is correct for it.
  */
 export function resolveExecutionManifest(
   task: Task,
   deps: ExecutionManifestDeps,
+  operationKind: ExecutionOperationKind,
   respawnInput?: RespawnManifestInput,
   serverNameOverride?: string,
 ): ExecutionManifestResolution {
@@ -1053,11 +1105,11 @@ export function resolveExecutionManifest(
       distributeCode: projectServer?.distributeCode ?? false,
       // Issue #87 explicit-target follow-up: see the field's own doc
       // comment on ResolvedExecutionManifest.server above. Issue #87 review
-      // (forge/87-mirror follow-up), Important finding 3: once
-      // `task.distributionRepositoryId` is recorded, it — not the CURRENT
-      // `projectServer.distributionRepositoryId` — is the effective
-      // repository id (same "recorded value is authoritative" rule
-      // `repository` below already applies via
+      // (forge/87-mirror follow-up), Important finding 3: for a
+      // `'continuation'` operationKind, once `task.distributionRepositoryId`
+      // is recorded, it — not the CURRENT `projectServer.distributionRepositoryId`
+      // — is the effective repository id (same "recorded value is
+      // authoritative" rule `repository` below already applies via
       // `resolveRecordedDistributionRepositoryEntry`). Before this fix, this
       // scalar field always read the live config, so re-pointing the
       // project server at a different repository changed this fingerprint
@@ -1066,7 +1118,19 @@ export function resolveExecutionManifest(
       // actual execution disagreeing about what changed. Falls back to the
       // current config only for a task that has never recorded a value
       // (never distributed yet), matching `repository` below.
-      distributionRepositoryId: task.distributionRepositoryId ?? projectServer?.distributionRepositoryId ?? null,
+      //
+      // Issue #87 review (forge/87-mirror follow-up), Important finding on
+      // top of finding 3: for `'execute'`, the recorded value is NEVER
+      // consulted — `performDistribution` is about to (re)distribute from
+      // the CURRENT `projectServer.distributionRepositoryId` regardless of
+      // what any past run recorded, so the gate for a fresh execute() must
+      // hash that same current value, not a stale recorded one. See
+      // `resolveExecutionManifest`'s own doc comment for the full
+      // `operationKind` rationale.
+      distributionRepositoryId:
+        operationKind === 'execute'
+          ? projectServer?.distributionRepositoryId ?? null
+          : task.distributionRepositoryId ?? projectServer?.distributionRepositoryId ?? null,
     },
     branches: {
       base: baseBranch,
@@ -1094,7 +1158,8 @@ export function resolveExecutionManifest(
       sidekickPrompt: project?.sidekickPrompt ?? null,
     },
     // Issue #87 review (forge/87-mirror follow-up), Important finding 1:
-    // must agree with `ExecuteTaskUseCase.resumeStateMachine()`/`followUp()`/
+    // for a `'continuation'` operationKind, must agree with
+    // `ExecuteTaskUseCase.resumeStateMachine()`/`followUp()`/
     // `isPushCompleted()`, which all treat `task.distributionRepositoryId`
     // (once recorded) as authoritative and NEVER re-resolve from the
     // project/project-server's CURRENT configuration — see
@@ -1111,9 +1176,29 @@ export function resolveExecutionManifest(
     // closed to `null` here — same as `resolveExecutionRepositoryEntry`'s
     // own "required but unresolved never falls back" rule — rather than
     // falling back to whatever current config would resolve.
+    //
+    // Issue #87 review (forge/87-mirror follow-up), Important finding on top
+    // of finding 1 (this file's own module doc comment, "承認境界の迂回"):
+    // for `'execute'`, `task.distributionRepositoryId` is NEVER consulted —
+    // a fresh execute() has not distributed anything yet THIS run, and
+    // `performDistribution` is about to pull from the CURRENT
+    // `projectServer.distributionRepositoryId` regardless of what a PAST
+    // run recorded. Hashing the recorded value here would let an approval
+    // given for repository A silently authorize execute() distributing
+    // repository B's code onto the server the moment the project server is
+    // re-pointed — the gate would keep accepting the old A-fingerprint right
+    // up until `performDistribution` (locked, current-config) already ran
+    // against B. `resolveExecutionRepositoryEntry` is the exact same
+    // current-config resolver `performDistribution`/`isDistributionRequired`
+    // read from, so this can never drift from what execute() is about to do.
     repository: (() => {
-      const resolution = resolveRecordedDistributionRepositoryEntry(task.distributionRepositoryId ?? null, serverConfig, projectServer, project);
-      const repo = resolution.ok ? resolution.entry : null;
+      const repo =
+        operationKind === 'execute'
+          ? resolveExecutionRepositoryEntry(serverConfig, projectServer, project)
+          : (() => {
+              const resolution = resolveRecordedDistributionRepositoryEntry(task.distributionRepositoryId ?? null, serverConfig, projectServer, project);
+              return resolution.ok ? resolution.entry : null;
+            })();
       if (!repo) return null;
       const repoWithToken = deps.projectRepo.findRepositoryById(repo.id);
       const tokenDigest = repoWithToken?.token

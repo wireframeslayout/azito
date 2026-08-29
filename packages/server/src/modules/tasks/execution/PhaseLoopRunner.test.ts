@@ -1321,7 +1321,7 @@ describe('PhaseLoopRunner isolation cutoff (Issue #29 docs review, finding 1)', 
         unitTypeLoader: unitTypeLoader as any,
         sidekickLoader: sidekickLoader as any,
       },
-    );
+      'continuation',);
     fixedTask.executionApprovedFingerprintHash = hashExecutionManifest(manifest);
 
     // Gate re-check runs once per phase (planning/implementing/reviewing/
@@ -1430,7 +1430,7 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
     const { manifest } = resolveExecutionManifest(
       fixedTask as any,
       makeManifestDeps(null, unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader),
-    );
+      'continuation',);
     fixedTask.executionApprovedFingerprintHash = hashExecutionManifest(manifest);
 
     const taskRepo = { findById: vi.fn(() => fixedTask), update: vi.fn(), updateStatus: vi.fn(), updateCurrentPhase: vi.fn() };
@@ -1470,7 +1470,7 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
     const { manifest } = resolveExecutionManifest(
       fixedTask as any,
       makeManifestDeps(null, approvedUnitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader),
-    );
+      'continuation',);
     fixedTask.executionApprovedFingerprintHash = hashExecutionManifest(manifest);
 
     // unitRepo.findById returns the ORIGINAL config for the first gate check
@@ -1530,7 +1530,7 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
     const { manifest } = resolveExecutionManifest(
       fixedTask as any,
       makeManifestDeps(null, approvedUnitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader),
-    );
+      'continuation',);
     fixedTask.executionApprovedFingerprintHash = hashExecutionManifest(manifest);
 
     // The Unit is gone by the time the loop re-checks the gate for this
