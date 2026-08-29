@@ -20,7 +20,7 @@ import type { WorktreeServiceFactory } from '../../git/WorktreeServiceFactory';
 import { PathResolverFactory, assertDirectoryContained } from '../../git/PathContainment';
 import { normalizeBranchRef } from '../../git/assertSafeGitArgs';
 import type { GitProviderService } from '../../git/providers/GitProviderService';
-import type { ProjectRepositoryWithToken as ProjectRepository } from '../../projects/Project';
+import type { ProjectRepositoryWithToken as ProjectRepository, ProjectRepository as ProjectRepositoryEntry } from '../../projects/Project';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import type { ServerConfig } from '../../servers/Server';
 import { resolveCanonicalRepositoryIdentity } from '../../git/resolveCanonicalRepositoryIdentity';
@@ -907,6 +907,12 @@ export class ExecuteTaskUseCase {
     }
     if (distOutcome.required) {
       this.appendLog(taskId, unitId, 'command', { type: 'fetch_distributed', sha: distOutcome.sha, bundleType: distOutcome.bundleType });
+      // Issue #87 review follow-up, Important finding 1: persist the
+      // repository distribution ACTUALLY pulled from, once, right here —
+      // see `Task.distributionRepositoryId`'s doc comment for why
+      // `resumeStateMachine()` must read this back instead of re-resolving
+      // from the (possibly since-changed) project/project-server config.
+      this.taskRepo.update(taskId, { distributionRepositoryId: distOutcome.repositoryId } as Partial<Task>);
     }
     // Tracks fetch distribution's outcome this call (null when distribution
     // did not run, e.g. a `local` server, or an agent/ssh server whose
@@ -1700,17 +1706,48 @@ export class ExecuteTaskUseCase {
 
     const effectiveSelfReviewMax = task.selfReviewMaxAttempts ?? unit.selfReviewMaxAttempts;
 
-    // Issue #87 review (forge/87-mirror follow-up), Important finding 1:
-    // resolve once here (this method never runs distribution itself — only
-    // execute() does — so there is no `lockedProject`/`lockedProjectServer`
-    // to reuse, but the same read-once-and-pass-down discipline applies:
-    // resolve exactly once, before the loop starts, and let every phase of
-    // this resumed run agree with it) — see
-    // `PhaseLoopRunner.stateMachineLoop`'s `distributionRepoEntry` parameter
-    // doc comment.
+    // Issue #87 review follow-up, Important finding 1: a resumed run must
+    // NEVER re-resolve the distribution target from the project/project-
+    // server's CURRENT configuration — the task's working directory already
+    // holds code from whichever repository distribution actually pulled it
+    // from at execute() time (or restore() time), and that can differ from
+    // `projectServer.distributionRepositoryId` by the time a plan-approval
+    // wait, or a startup recovery, gets around to calling resumeStateMachine
+    // (an operator can repoint the project server's distribution target at
+    // repository B while a task's worktree still holds repository A's code
+    // mid-run). See `Task.distributionRepositoryId`'s doc comment.
     const resumeProject = this.projectRepo.findById(task.projectId);
     const resumeProjectServer = resumeProject ? this.projectServerRepo.find(task.projectId, serverName) : null;
-    const resumeDistributionRepoEntry = resolveExecutionRepositoryEntry(server, resumeProjectServer, resumeProject);
+    let resumeDistributionRepoEntry: ProjectRepositoryEntry | null;
+    if (task.distributionRepositoryId != null) {
+      // A recorded value exists — it is authoritative and MUST be used
+      // as-is. If it can no longer be resolved (the repository row was
+      // deleted since distribution ran), fail closed rather than falling
+      // back to the project's current configuration: that fallback is
+      // exactly the bug this column exists to close (notarizing/pushing
+      // repository A's code against repository B).
+      const resolved = resumeProject?.repositories?.find((r) => r.id === task.distributionRepositoryId) ?? null;
+      if (!resolved) {
+        this.appendLog(taskId, unitId, 'status_change', {
+          status: 'error',
+          message: `This task's recorded distribution repository (id ${task.distributionRepositoryId}) no longer exists — refusing to resume with a different repository`,
+        });
+        this.taskRepo.updateStatus(taskId, 'failed');
+        return;
+      }
+      resumeDistributionRepoEntry = resolved;
+    } else {
+      // No recorded value: either this task predates the column, or its
+      // execute()/restore() run never went through distribution at all.
+      // `resolveExecutionRepositoryEntry` already fails closed (returns
+      // null, never `repositories[0]`) when THIS server currently requires
+      // distribution — the same fail-closed handling PhaseLoopRunner and
+      // `isPushCompleted()` already apply to a null entry. When
+      // distribution is not required, it resolves `repositories[0]` exactly
+      // as it always has, so an ordinary (non-distribution) project/task is
+      // unaffected by this column's introduction.
+      resumeDistributionRepoEntry = resolveExecutionRepositoryEntry(server, resumeProjectServer, resumeProject);
+    }
 
     this.phaseLoopRunner.stateMachineLoop(
       { ...unit, selfReviewMaxAttempts: effectiveSelfReviewMax },

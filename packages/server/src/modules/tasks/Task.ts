@@ -190,6 +190,29 @@ export interface Task {
   changedFiles: string | null;
   summaryJson: string | null;
   prUrl: string | null;
+  /**
+   * The `project_repositories` id fetch distribution actually pulled this
+   * task's working-directory code from (migration 067; Issue #87 review
+   * follow-up, Important finding 1) — set once, when `performDistribution`
+   * distributes successfully (ExecuteTaskUseCase.execute() /
+   * TaskRestoreService.restore()), never re-derived afterward.
+   *
+   * `ExecuteTaskUseCase.resumeStateMachine()` MUST use this value (fail
+   * closed if it is non-null but no longer resolves — the repository was
+   * deleted — rather than falling back to the project's current
+   * configuration) instead of re-resolving the distribution target from
+   * `project`/`projectServer` at resume time: the task's working directory
+   * already holds code from THE repository distribution used, which can
+   * differ from whatever `projectServer.distributionRepositoryId` points at
+   * by the time a plan-approval wait or a startup recovery gets around to
+   * resuming — an isolated server would otherwise notarize/push code from
+   * repository A against repository B. NULL for a task that never went
+   * through distribution (a `local` server, or an agent/ssh server with
+   * neither `isolationIntent` nor `distributeCode`) — including every task
+   * that predates this column, which is safe because such a task never
+   * required distribution's fail-closed handling in the first place.
+   */
+  distributionRepositoryId?: number | null;
   agentSessionId: string | null;
   sleepAfterPush: boolean | null;
   reviewSubagent?: SubagentConfig | null;

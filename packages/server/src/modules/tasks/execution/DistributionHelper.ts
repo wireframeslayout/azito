@@ -47,6 +47,16 @@ export type DistributionOutcome =
       sha?: string;
       bundleType?: 'full' | 'incremental';
       localBranchSynced?: boolean;
+      // The `project_repositories` id distribution actually pulled code
+      // from (Issue #87 review follow-up, Important finding 1) — the
+      // caller persists this onto `task.distributionRepositoryId` so a
+      // LATER resume (which must never re-resolve the distribution target
+      // from the project/project-server's THEN-current configuration —
+      // the task's working directory already holds code from THIS
+      // repository, not whatever the config points at by the time resume
+      // runs) can use the value that was actually true at distribution
+      // time.
+      repositoryId: number;
     }
   | { required: true; ok: false; stage: DistributionFailureStage; message: string };
 
@@ -285,5 +295,6 @@ export async function performDistribution(params: PerformDistributionParams): Pr
     sha: distResult.sha,
     bundleType: distResult.bundleType,
     localBranchSynced: distResult.localBranchSynced,
+    repositoryId: repoEntry.id,
   };
 }

@@ -433,6 +433,10 @@ export class TaskRestoreService {
         if (unitId !== null) {
           appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'fetch_distributed', sha: distOutcome.sha, bundleType: distOutcome.bundleType });
         }
+        // Issue #87 review follow-up, Important finding 1: same persist as
+        // ExecuteTaskUseCase.execute() — see Task.distributionRepositoryId's
+        // doc comment.
+        taskRepo.update(task.id, { distributionRepositoryId: distOutcome.repositoryId } as Partial<Task>);
       }
       const distStatus: 'distributed' | 'already_current' | null = distOutcome.required ? distOutcome.distStatus : null;
 

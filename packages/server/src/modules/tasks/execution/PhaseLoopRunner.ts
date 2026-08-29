@@ -637,7 +637,29 @@ export class PhaseLoopRunner {
           return;
         }
         const probeRepo = this.projectRepo.findRepositoryById(distributionRepoEntry.id);
-        if (probeRepo?.token) {
+        if (probeRepo === null) {
+          // Issue #87 review follow-up, Important finding 2: `distributionRepoEntry`
+          // was resolved once when this run started/resumed and stays non-null
+          // for the rest of the (possibly hours-long) loop — but the actual
+          // `project_repositories` row it points at can be deleted mid-run.
+          // The OLD code folded this into the `probeRepo?.token` falsy check
+          // below and fell through to `no_push_credential`, which only LOGS
+          // a skip and lets the phase advance as `phase_complete` — silently
+          // completing the task without ever pushing/notarizing anything.
+          // A deleted target repository is not "no credential configured"
+          // (an accepted, intentionally-tolerated configuration state); it
+          // is "the repository this run must notarize against no longer
+          // exists" — the same hard-fail this method already applies above
+          // when `distributionRepoEntry` itself is null. Treat it the same
+          // way: fail the task, never silently skip.
+          this.appendLog(task.id, unit.id, 'status_change', {
+            status: 'hub_push_failed',
+            error: 'Fetch distribution repository was removed during execution and could not be resolved for hub push notarization',
+          });
+          this.taskRepo.updateStatus(task.id, 'failed');
+          return;
+        }
+        if (probeRepo.token) {
           this.appendLog(task.id, unit.id, 'command', { type: 'hub_push_start' });
           const currentTaskForPush = this.taskRepo.findById(task.id);
           const probeDir = await (async () => {

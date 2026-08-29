@@ -775,6 +775,32 @@ describe('TaskRestoreService', () => {
       expect(worktreeService?.create).toHaveBeenCalled();
     });
 
+    // Issue #87 review follow-up, Important finding 1: restore() must
+    // persist the repository distribution actually pulled from, the same
+    // way execute() does — see Task.distributionRepositoryId's doc comment.
+    // A later resumeStateMachine() call must use this recorded value
+    // instead of re-resolving from the project/project-server's THEN-
+    // current configuration.
+    it('records the resolved repository id onto the task once distribution succeeds', async () => {
+      const fetchDistributionService = mockFetchDistributionService();
+      withRepository(deps.projectRepo);
+      deps = makeDeps({
+        ...deps,
+        fetchDistributionService,
+        transportFactory: agentTransportFactory(),
+        serverRepo: {
+          ...deps.serverRepo,
+          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
+        },
+      });
+      service = new TaskRestoreService(deps);
+      const task = makeTask({ serverName: 'test-server' });
+
+      await service.restore(task, log);
+
+      expect(deps.taskRepo.update).toHaveBeenCalledWith(task.id, expect.objectContaining({ distributionRepositoryId: 1 }));
+    });
+
     // Issue #87 14th-round review, Important finding 1: performDistribution()
     // (and its own `no_working_dir` fail-fast) used to run inside
     // `if (workingDir)` — so an isolated server / distribute_code task

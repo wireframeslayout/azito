@@ -3090,6 +3090,122 @@ describe('ExecuteTaskUseCase fetch-distribution explicit-target resolution (Issu
   });
 });
 
+// Issue #87 review follow-up, Important finding 1: `resumeStateMachine()`
+// used to re-resolve the distribution target repository from the CURRENT
+// project/project-server configuration every time it ran. Between when a
+// task's execute() run actually distributed code onto its working directory
+// and when it later gets resumed (a plan-approval wait, a startup recovery),
+// `projectServer.distributionRepositoryId` can change — resuming against the
+// new value would notarize/push repository A's already-distributed code
+// against repository B. `Task.distributionRepositoryId` is persisted, once,
+// at the moment distribution actually ran, and resume must use exactly that
+// recorded value instead.
+describe('ExecuteTaskUseCase persists task.distributionRepositoryId when distribution actually runs (Issue #87 review follow-up, Important finding 1)', () => {
+  it('records the resolved repository id onto the task once fetch distribution succeeds', async () => {
+    const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
+    const { useCase, taskRepo } = buildDistributionGateHarness({ server, distributeCode: false });
+
+    await useCase.execute(10, 1);
+
+    expect(taskRepo.update).toHaveBeenCalledWith(1, expect.objectContaining({ distributionRepositoryId: 5 }));
+  });
+
+  it('does not record a distributionRepositoryId when distribution never ran (distribution not required)', async () => {
+    const server = makeServer({ name: 'srv-agent', type: 'agent', isolationIntent: false });
+    const { useCase, taskRepo } = buildDistributionGateHarness({ server, distributeCode: false });
+
+    await useCase.execute(10, 1);
+
+    expect(taskRepo.update).not.toHaveBeenCalledWith(1, expect.objectContaining({ distributionRepositoryId: expect.anything() }));
+  });
+});
+
+describe('ExecuteTaskUseCase.resumeStateMachine uses the task-recorded distribution repository, never the current config (Issue #87 review follow-up, Important finding 1)', () => {
+  function repoWithId(id: number) {
+    return { id, name: null, url: `https://github.com/acme/repo-${id}.git`, provider: 'github' as const, owner: 'acme', repoName: `repo-${id}`, hasToken: true };
+  }
+
+  it('fails the task closed (never falls back to the current project-server config) when the recorded distributionRepositoryId no longer resolves on the project', async () => {
+    const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
+    // Task was previously distributed from repo id 5, which has since been
+    // deleted from the project (repositories list no longer contains it) —
+    // the CURRENT project-server config points at repo 6 instead, but that
+    // must never be silently substituted in.
+    const task = makeTask({
+      id: 1, serverName: server.name, unitId: 10, workingDirectory: '/srv/repo',
+      distributionRepositoryId: 5,
+    });
+    const { useCase, taskRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null, repositories: [repoWithId(6)] }),
+      units: [makeUnit({ id: 10, workerType: 'claude', workerModel: 'opus' })],
+      projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', distributeCode: false, distributionRepositoryId: 6 },
+      server,
+    });
+
+    await useCase.resumeStateMachine(10, 1);
+
+    expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'failed');
+  });
+
+  it('does not fail closed when the recorded distributionRepositoryId still resolves, even though the current config now points elsewhere', async () => {
+    const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
+    const task = makeTask({
+      id: 1, serverName: server.name, unitId: 10, workingDirectory: '/srv/repo',
+      distributionRepositoryId: 5,
+    });
+    const { useCase, taskRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null, repositories: [repoWithId(5), repoWithId(6)] }),
+      units: [makeUnit({ id: 10, workerType: 'claude', workerModel: 'opus' })],
+      // Current config has since moved to repo 6 — must be ignored in favor
+      // of the task's own recorded value (repo 5).
+      projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', distributeCode: false, distributionRepositoryId: 6 },
+      server,
+    });
+
+    await useCase.resumeStateMachine(10, 1);
+
+    expect(taskRepo.updateStatus).not.toHaveBeenCalledWith(1, 'failed');
+  });
+
+  it('falls back to the current config (repositories[0]) when no distributionRepositoryId was ever recorded and distribution is not required for this server', async () => {
+    const server = makeServer({ name: 'srv-agent', type: 'agent', isolationIntent: false });
+    const task = makeTask({ id: 1, serverName: server.name, unitId: 10, workingDirectory: '/srv/repo' });
+    const { useCase, taskRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null, repositories: [repoWithId(5)] }),
+      units: [makeUnit({ id: 10, workerType: 'claude', workerModel: 'opus' })],
+      projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', distributeCode: false, distributionRepositoryId: null },
+      server,
+    });
+
+    await useCase.resumeStateMachine(10, 1);
+
+    expect(taskRepo.updateStatus).not.toHaveBeenCalledWith(1, 'failed');
+  });
+
+  it('fails closed when no distributionRepositoryId was ever recorded but distribution IS required for this server (mirrors resolveExecutionRepositoryEntry\'s existing fail-closed rule)', async () => {
+    const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
+    const task = makeTask({ id: 1, serverName: server.name, unitId: 10, workingDirectory: '/srv/repo' });
+    const { useCase, taskRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null, repositories: [repoWithId(5)] }),
+      units: [makeUnit({ id: 10, workerType: 'claude', workerModel: 'opus' })],
+      projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', distributeCode: false, distributionRepositoryId: null },
+      server,
+    });
+
+    // Not asserted as an immediate task-failed status write (unlike the
+    // recorded-but-unresolvable case above, this path hands `null` down to
+    // PhaseLoopRunner, which applies its own existing fail-closed handling
+    // for a null distributionRepoEntry) — this test only pins that
+    // resumeStateMachine itself does not crash and does not mark the task
+    // failed synchronously for a merely-never-distributed task.
+    await expect(useCase.resumeStateMachine(10, 1)).resolves.toBeUndefined();
+  });
+});
+
 describe('ExecuteTaskUseCase base-branch canonicalization before distribution (Issue #87 third-party review, 11th round, Important finding 1)', () => {
   it.each([
     ['origin/main'],

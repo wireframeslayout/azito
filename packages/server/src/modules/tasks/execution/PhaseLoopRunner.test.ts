@@ -1030,6 +1030,91 @@ describe('PhaseLoopRunner uses the caller-locked distributionRepoEntry, not a fr
   });
 });
 
+// Issue #87 review (forge/87-mirror follow-up), Important finding 2: hub
+// push notarization's hard-fail check used to look only at whether
+// `distributionRepoEntry` (the caller-locked value, resolved once when this
+// run started/resumed) was null — but the ACTUAL `project_repositories` row
+// it points at can be deleted mid-run, while `distributionRepoEntry` itself
+// stays non-null for the rest of this (potentially hours-long) loop. That
+// case used to fall through to the `probeRepo?.token` check below and land
+// on `no_push_credential`, which only LOGS a skip and lets the phase
+// advance as `phase_complete` — silently completing the task without ever
+// pushing/notarizing anything. These tests pin the fix: a deleted target
+// repository must hard-fail the task (`hub_push_failed`), while a resolved
+// repository that simply has no token keeps the pre-existing
+// `no_push_credential` skip-not-fail behavior.
+describe('PhaseLoopRunner hub push notarization fails closed when the locked repository is deleted mid-run (Issue #87 review follow-up, Important finding 2)', () => {
+  const repoA = { id: 1, name: 'A', url: 'https://github.com/acme/repo-a.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-a', token: 'token-a', hasToken: true };
+
+  function makePushingUnit(overrides: Record<string, unknown> = {}) {
+    return makeUnitForRun({
+      phaseConfig: {
+        planning: { enabled: false }, implementing: { enabled: false },
+        reviewing: { enabled: false }, testing: { enabled: false },
+      },
+      ...overrides,
+    });
+  }
+
+  it('fails the task as hub_push_failed instead of silently skipping notarization when the locked repository id no longer resolves', async () => {
+    const notarize = vi.fn(async () => ({ status: 'pushed' as const, sha: 'abc123' }));
+    const { runner, taskRepo, projectRepo, projectServerRepo, pullRequestCreator, appendLog } = makeRunner({
+      pushNotaryService: { notarize },
+    });
+    // Simulates the project_repositories row (repoA) being deleted AFTER
+    // this run's `distributionRepoEntry` was locked in by the caller —
+    // findRepositoryById(repoA.id) now returns null for the same id.
+    projectRepo.findById = vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', defaultUnitId: null, repositories: [] }));
+    projectRepo.findRepositoryById = vi.fn(() => null) as any;
+    projectServerRepo.find = vi.fn(() => ({
+      projectId: 10, serverName: 'isolated-1', workingDirectory: '/work', branch: null, tmuxSession: 'azito',
+      inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null,
+    })) as any;
+    taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: false, worktreePath: null,
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+    } as any));
+    const unit = makePushingUnit();
+    const isolatedServer = { name: 'isolated-1', type: 'agent', isolationIntent: true } as any;
+
+    await runner.stateMachineLoop(unit, 'isolated-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1', repoA);
+
+    expect(notarize).not.toHaveBeenCalled();
+    expect(pullRequestCreator.ensureCreated).not.toHaveBeenCalled();
+    expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'failed');
+    expect(appendLog).toHaveBeenCalledWith(1, 1, 'status_change', expect.objectContaining({ status: 'hub_push_failed' }));
+  });
+
+  it('keeps the pre-existing no_push_credential skip (not a hard failure) when the locked repository resolves but has no token', async () => {
+    const notarize = vi.fn(async () => ({ status: 'pushed' as const, sha: 'abc123' }));
+    const repoNoToken = { ...repoA, token: null, hasToken: false };
+    const { runner, taskRepo, projectRepo, projectServerRepo, pullRequestCreator, appendLog } = makeRunner({
+      pushNotaryService: { notarize },
+    });
+    projectRepo.findById = vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', defaultUnitId: null, repositories: [repoNoToken] }));
+    projectRepo.findRepositoryById = vi.fn(() => repoNoToken) as any;
+    projectServerRepo.find = vi.fn(() => ({
+      projectId: 10, serverName: 'isolated-1', workingDirectory: '/work', branch: null, tmuxSession: 'azito',
+      inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: repoNoToken.id,
+    })) as any;
+    taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: false, worktreePath: null,
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+    } as any));
+    const unit = makePushingUnit();
+    const isolatedServer = { name: 'isolated-1', type: 'agent', isolationIntent: true } as any;
+
+    await runner.stateMachineLoop(unit, 'isolated-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1', repoNoToken);
+
+    expect(notarize).not.toHaveBeenCalled();
+    expect(pullRequestCreator.ensureCreated).not.toHaveBeenCalled();
+    expect(taskRepo.updateStatus).not.toHaveBeenCalledWith(1, 'failed');
+    expect(appendLog).toHaveBeenCalledWith(1, 1, 'command', expect.objectContaining({ type: 'hub_push_skipped', reason: 'no_push_credential' }));
+  });
+});
+
 // Issue #87 review (forge/87-mirror follow-up), Important finding 2: the
 // pushing-phase completion probe must fail closed the SAME way
 // ExecuteTaskUseCase.isPushCompleted() does — via the shared
