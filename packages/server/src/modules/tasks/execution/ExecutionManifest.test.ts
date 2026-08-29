@@ -709,7 +709,16 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
       expect(manifest.repository?.repoName).toBe('repo-a');
     });
 
-    it('a config change after distribution (repository re-pointed) does NOT change the fingerprint when the recorded repository is unaffected', () => {
+    // `manifest.server.distributionRepositoryId` (Issue #87 review,
+    // forge/87-mirror follow-up, Important finding 3) must apply the SAME
+    // "recorded value is authoritative" rule as `manifest.repository` above —
+    // a re-point of the project server's CURRENT config after this task's
+    // repository was already recorded must change NEITHER field, and
+    // therefore must not change the overall fingerprint either. Approval and
+    // actual execution (resumeStateMachine()/followUp()/isPushCompleted(),
+    // which all keep running against the recorded repository) must agree
+    // about what changed.
+    it("neither manifest.repository nor manifest.server.distributionRepositoryId (nor therefore the fingerprint) changes across a config re-point, once a repository is recorded", () => {
       const fixture = (currentTarget: number): Fixture => ({
         units: { 20: makeUnit() },
         project: makeProject({ repositories: [repoA, repoB] }),
@@ -718,9 +727,16 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
       });
       const task = makeTask({ distributionRepositoryId: repoA.id });
 
+      const beforeRepoint = resolveExecutionManifest(task, makeDeps(fixture(repoA.id)));
+      const afterRepoint = resolveExecutionManifest(task, makeDeps(fixture(repoB.id)));
+
+      expect(beforeRepoint.manifest.repository?.id).toBe(repoA.id);
+      expect(afterRepoint.manifest.repository?.id).toBe(repoA.id);
+      expect(beforeRepoint.manifest.server.distributionRepositoryId).toBe(repoA.id);
+      expect(afterRepoint.manifest.server.distributionRepositoryId).toBe(repoA.id);
+
       const hashBeforeRepoint = hashFor(task, fixture(repoA.id));
       const hashAfterRepoint = hashFor(task, fixture(repoB.id));
-
       expect(hashBeforeRepoint).toBe(hashAfterRepoint);
     });
 

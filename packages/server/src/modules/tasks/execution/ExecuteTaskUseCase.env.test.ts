@@ -2701,6 +2701,69 @@ describe('ExecuteTaskUseCase distribution decides against the in-lock (not pre-l
   });
 });
 
+// Issue #87 review (forge/87-mirror follow-up), Minor finding 3: the final
+// PR reference (collected in execute()'s post-run async tail) must reuse the
+// SAME `distributionRepoEntry` already resolved against the fully-locked
+// `lockedProject`/`lockedProjectServer` snapshot — not re-derive it by
+// mixing `lockedProjectServer` with the pre-lock `project` snapshot (from
+// before `reverifyGateInLock` ran). Mirrors the "16th-round review" harness
+// above: `projectRepo.findById` returns a DIFFERENT project snapshot for the
+// pre-lock calls (repository A only) than the in-lock reverification call
+// (repository A AND B) — modeling repository B being registered on the
+// project in the window between the pre-lock gate check and the in-lock
+// reverification, with `distributionRepositoryId` already pointing at B.
+describe('ExecuteTaskUseCase final PR reference reuses the locked distributionRepoEntry, not the pre-lock project snapshot (Issue #87 review, forge/87-mirror follow-up, Minor finding 3)', () => {
+  const repoA = { id: 1, name: null, url: 'https://github.com/acme/repo-a.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-a', hasToken: true };
+  const repoB = { id: 2, name: null, url: 'https://github.com/acme/repo-b.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-b', hasToken: true };
+  const repoAWithToken = { ...repoA, token: 'tok-a' };
+  const repoBWithToken = { ...repoB, token: 'tok-b' };
+
+  it('resolves the final PR reference against the locked repository (B), even though the pre-lock project snapshot only had repository A registered', async () => {
+    const server = makeServer({ name: 'agent-1', type: 'agent', isolationIntent: false });
+    const task = makeTask({
+      id: 1, projectId: 1, unitId: 10, serverName: 'agent-1',
+      workingDirectory: '/work', worktreePath: null, baseBranch: null,
+    });
+    const unit = makeUnit({ id: 10, workerType: 'claude', workerModel: 'opus', workerExecutionMode: 'tmux-pipe' });
+
+    const projectPreLock = makeProject({ defaultUnitId: null, repositories: [repoA] });
+    const projectInLock = makeProject({ defaultUnitId: null, repositories: [repoA, repoB] });
+
+    const harness = buildUseCase({
+      task,
+      project: projectPreLock,
+      units: [unit],
+      projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', distributeCode: true, distributionRepositoryId: repoB.id },
+      server,
+      fetchDistributionService: { distribute: vi.fn(async () => ({ status: 'distributed' as const, sha: 'abc123', bundleType: 'full' as const, localBranchSynced: true })) },
+    } as any);
+
+    let findByIdCalls = 0;
+    harness.projectRepo.findById = vi.fn(() => {
+      findByIdCalls += 1;
+      // Calls 1-2: resolveExecutionEnv + enforceExecutionGate (pre-lock,
+      // repository A only). Call 3+: reverifyGateInLock (in-lock,
+      // repository B now present) — the snapshot `lockedProject` must use.
+      return findByIdCalls <= 2 ? projectPreLock : projectInLock;
+    });
+    harness.projectRepo.findRepositoryById = vi.fn((id: number) => (id === repoB.id ? repoBWithToken : repoAWithToken));
+    harness.worktreeServiceFactory.create.mockReturnValue({
+      create: vi.fn(async () => ({ path: '/srv/repo/.worktrees/task-1', branch: 'task/1-slug' })),
+    });
+    harness.tmux.execCommand = vi.fn(async (_server: unknown, cmd: string) => {
+      if (cmd.includes('branch --show-current')) return { stdout: 'task/1-slug\n', stderr: '', code: 0 };
+      return { stdout: '', stderr: '', code: 0 };
+    });
+    (harness.useCase as any).phaseLoopRunner.stateMachineLoop = vi.fn(async () => {});
+
+    await harness.useCase.execute(10, 1);
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+
+    expect(harness.gitProvider.findPullRequestByBranch).toHaveBeenCalledWith(repoBWithToken, 'task/1-slug');
+    expect(harness.gitProvider.findPullRequestByBranch).not.toHaveBeenCalledWith(repoAWithToken, expect.anything());
+  });
+});
+
 describe('ExecuteTaskUseCase fetch-distribution failure handling (Issue #87 third-party review)', () => {
   // 指摘1: 配信が失敗したとき、タスク status が failed になり、ウィンドウ kill・
   // トークン revoke・tmuxWindow クリアが行われること。
@@ -3218,6 +3281,51 @@ describe('ExecuteTaskUseCase.resumeStateMachine uses the task-recorded distribut
     // failed synchronously for a merely-never-distributed task.
     await expect(useCase.resumeStateMachine(10, 1)).resolves.toBeUndefined();
   });
+
+  // Issue #87 review (forge/87-mirror follow-up), Important finding 2
+  // (third round): reproduces the "disable distribution, then resume, then
+  // delete the recorded repository before pushing" flow. `distributeCode`
+  // has been turned OFF (and the server isn't isolation_intent) by the time
+  // resume runs — a fresh `isDistributionRequired(server, projectServer)`
+  // read would say `false` — but this task's own `distributionRepositoryId`
+  // is still recorded (a PAST run of this same task actually distributed
+  // code from it), which is proof this run's working directory content came
+  // from that repository and must still be verified against it. The
+  // `distributionRequired` flag passed to `stateMachineLoop` must therefore
+  // stay `true`: PhaseLoopRunner locks this flag for the entire run (see
+  // PhaseLoopRunner.test.ts's "stays fail-closed on the caller-locked
+  // distributionRequired=true" test), so a WRONG `false` computed here would
+  // let the pushing-phase probe silently accept a bare SHA match if the
+  // recorded repository is deleted at any point before pushing — reviving
+  // exactly the bypass this column was added to close.
+  it('keeps distributionRequired=true for the pushing-phase probe when distribution has been disabled in the CURRENT config but this task recorded a distribution repository from a past run', async () => {
+    const server = makeServer({ name: 'srv-agent', type: 'agent', isolationIntent: false });
+    const task = makeTask({
+      id: 1, serverName: server.name, unitId: 10, workingDirectory: '/srv/repo',
+      distributionRepositoryId: 5,
+    });
+    const { useCase, taskRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null, repositories: [repoWithId(5)] }),
+      units: [makeUnit({ id: 10, workerType: 'claude', workerModel: 'opus' })],
+      // distribute_code has since been turned OFF, and the server was never
+      // isolation_intent — a fresh read of THIS row alone would say
+      // distribution is no longer required.
+      projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', distributeCode: false, distributionRepositoryId: null },
+      server,
+    });
+    const stateMachineLoop = vi.fn(async () => {});
+    (useCase as any).phaseLoopRunner.stateMachineLoop = stateMachineLoop;
+
+    await useCase.resumeStateMachine(10, 1);
+
+    expect(stateMachineLoop).toHaveBeenCalledWith(
+      expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(),
+      expect.objectContaining({ id: 5 }),
+      true,
+    );
+    expect(taskRepo.updateStatus).not.toHaveBeenCalledWith(1, 'failed');
+  });
 });
 
 // Issue #87 review follow-up, Important finding 2: followUp()'s
@@ -3326,6 +3434,43 @@ describe('ExecuteTaskUseCase.followUp state-machine continuation uses the task-r
 
     expect(stateMachineLoop).not.toHaveBeenCalled();
     expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'failed');
+  });
+
+  // Issue #87 review (forge/87-mirror follow-up), Important finding 2
+  // (third round) — same "disable distribution, then resume/follow-up, then
+  // delete the recorded repository before pushing" flow as
+  // resumeStateMachine's own test of the same name, but for follow-up's
+  // state-machine continuation.
+  it('keeps distributionRequired=true for the pushing-phase probe when distribution has been disabled in the CURRENT config but this task recorded a distribution repository from a past run', async () => {
+    const server = makeServer({ name: 'srv-agent', type: 'agent', isolationIntent: false });
+    const task = makeTask({
+      id: 1, serverName: server.name, unitId: 10, currentPhase: 'implementing',
+      tmuxWindow: 'task-1', workingDirectory: '/srv/repo',
+      distributionRepositoryId: 5,
+    });
+    const { useCase, taskRepo, tmux, unitTypeLoader } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null, repositories: [repoWithId(5)] }),
+      units: [makeUnit({ id: 10, workerType: 'claude', workerModel: 'opus', workerExecutionMode: 'tmux-pipe' })],
+      // distribute_code has since been turned OFF, and the server was never
+      // isolation_intent — a fresh read of THIS row alone would say
+      // distribution is no longer required.
+      projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', distributeCode: false, distributionRepositoryId: null },
+      server,
+    });
+    (unitTypeLoader.get as ReturnType<typeof vi.fn>).mockReturnValue(makeUnitTypeWithImplementingPhase());
+    (tmux.listSessions as ReturnType<typeof vi.fn>).mockResolvedValue([{ name: 'azito', windows: [{ name: 'task-1', index: 1 }] }]);
+    const stateMachineLoop = stubWorkerPlumbing(useCase);
+
+    await useCase.followUp(10, 1, 'please continue');
+    await flushMicrotasks();
+
+    expect(stateMachineLoop).toHaveBeenCalledWith(
+      expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(),
+      expect.objectContaining({ id: 5 }),
+      true,
+    );
+    expect(taskRepo.updateStatus).not.toHaveBeenCalledWith(1, 'failed');
   });
 });
 
@@ -3471,6 +3616,42 @@ describe('ExecuteTaskUseCase.isPushCompleted fails closed when a required distri
     const result = await harness.useCase.isPushCompleted(1);
 
     expect(result).toBe(true);
+  });
+
+  // Issue #87 review (forge/87-mirror follow-up), Important finding 2
+  // (third round): the "disable distribution, then resume, then delete the
+  // recorded repository before pushing" flow, for isPushCompleted()
+  // specifically. `distribute_code` is OFF and the server isn't
+  // isolation_intent (a fresh `isDistributionRequired` read would say
+  // `false`), but this task recorded a distribution repository from a past
+  // run and that repository has since been removed (simulated here via
+  // `findRepositoryById` returning nothing for the recorded id, the same
+  // observable effect a deleted repository row has) — must fail closed
+  // (return false, never call PR creation/verification with a null repo,
+  // which would let PushVerifier fall back to its bare-SHA-match path).
+  it('fails closed (never falls back to SHA-only verification) when the recorded distribution repository can no longer be resolved and distribution is disabled in the CURRENT config', async () => {
+    const task = makeTask({
+      id: 1, unitId: 10, serverName: 'agent-1',
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', skipPr: false,
+      distributionRepositoryId: 5,
+    });
+    const server = makeServer({ name: 'agent-1', type: 'agent', isolationIntent: false });
+    const project = makeProject({ defaultUnitId: null, repositories: [{ id: 5, name: null, url: 'https://github.com/acme/repo-e.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-e', hasToken: true }] });
+    const unit = makeUnit({ id: 10 });
+    const harness = buildUseCase({
+      task, project, units: [unit], server,
+      projectServer: { workingDirectory: '/work', branch: null, tmuxSession: 'azito', distributeCode: false, distributionRepositoryId: null },
+    });
+    // Simulates the recorded repository row having been removed between the
+    // project listing and this lookup — the entry still appears in
+    // `project.repositories` above, but the full row (with token) is gone.
+    harness.projectRepo.findRepositoryById = vi.fn(() => null);
+
+    const result = await harness.useCase.isPushCompleted(1);
+
+    expect(result).toBe(false);
+    expect(harness.gitProvider.findPullRequestByBranch).not.toHaveBeenCalled();
+    expect(harness.tmux.execCommand).not.toHaveBeenCalled();
   });
 });
 

@@ -49,7 +49,7 @@ import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionMani
 import { TuiWorkerRuntime } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
 import { resolveTaskServerName, resolveTmuxSession, resolveUnitId, resolveBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
-import { performDistribution, resolveExecutionRepositoryEntry, resolveRecordedDistributionRepositoryEntry, isDistributionRequired, isDistributionRequiredButRepositoryUnresolved, type DistributionOutcome } from './DistributionHelper';
+import { performDistribution, resolveExecutionRepositoryEntry, resolveRecordedDistributionRepositoryEntry, isDistributionRequired, isDistributionRequiredForContinuation, isDistributionRequiredButRepositoryUnresolved, type DistributionOutcome } from './DistributionHelper';
 import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
 import type { SqliteAgentTurnRepository } from '../turns/SqliteAgentTurnRepository';
 import type { TurnSignalHub } from '../turns/TurnSignalHub';
@@ -1681,13 +1681,17 @@ export class ExecuteTaskUseCase {
           }
           const followUpDistributionRepoEntry = followUpResolution.entry;
           // Issue #87 review (forge/87-mirror follow-up), Important finding
-          // 2 (second round): computed against the SAME `followUpProjectServer`
-          // snapshot used to resolve `followUpResolution` above, so
-          // PhaseLoopRunner's fail-closed pushing-probe check agrees with
-          // what this follow-up continuation actually resolved — see
+          // 2 (third round): a recorded `task.distributionRepositoryId` is
+          // itself proof this task was distributed, regardless of what the
+          // CURRENT `followUpProjectServer` configuration now says — see
+          // `isDistributionRequiredForContinuation`'s doc comment. Computed
+          // against the SAME `followUpProjectServer` snapshot used to
+          // resolve `followUpResolution` above, so PhaseLoopRunner's
+          // fail-closed pushing-probe check agrees with what this follow-up
+          // continuation actually resolved — see
           // `PhaseLoopRunner.stateMachineLoop`'s `distributionRequired`
           // parameter doc comment.
-          const followUpDistributionRequired = isDistributionRequired(server, followUpProjectServer);
+          const followUpDistributionRequired = isDistributionRequiredForContinuation(task.distributionRepositoryId, server, followUpProjectServer);
           await this.phaseLoopRunner.stateMachineLoop({ ...unit, selfReviewMaxAttempts: effectiveSelfReviewMax }, serverName, { ...task, currentPhase: origCurrentPhase }, server, target, abortController.signal, windowTarget, followUpDistributionRepoEntry, followUpDistributionRequired);
           return;
         }
@@ -1780,12 +1784,16 @@ export class ExecuteTaskUseCase {
     }
     const resumeDistributionRepoEntry: ProjectRepositoryEntry | null = resumeResolution.entry;
     // Issue #87 review (forge/87-mirror follow-up), Important finding 2
-    // (second round): computed against the SAME `resumeProjectServer`
-    // snapshot used to resolve `resumeResolution` above, so PhaseLoopRunner's
-    // fail-closed pushing-probe check agrees with what this resume actually
-    // resolved — see `PhaseLoopRunner.stateMachineLoop`'s
-    // `distributionRequired` parameter doc comment.
-    const resumeDistributionRequired = isDistributionRequired(server, resumeProjectServer);
+    // (third round): a recorded `task.distributionRepositoryId` is itself
+    // proof this task was distributed, regardless of what the CURRENT
+    // `resumeProjectServer` configuration now says — see
+    // `isDistributionRequiredForContinuation`'s doc comment. Computed
+    // against the SAME `resumeProjectServer` snapshot used to resolve
+    // `resumeResolution` above, so PhaseLoopRunner's fail-closed
+    // pushing-probe check agrees with what this resume actually resolved —
+    // see `PhaseLoopRunner.stateMachineLoop`'s `distributionRequired`
+    // parameter doc comment.
+    const resumeDistributionRequired = isDistributionRequiredForContinuation(task.distributionRepositoryId, server, resumeProjectServer);
 
     this.phaseLoopRunner.stateMachineLoop(
       { ...unit, selfReviewMaxAttempts: effectiveSelfReviewMax },
@@ -1883,11 +1891,14 @@ export class ExecuteTaskUseCase {
     // pushing-phase probe via `isDistributionRequiredButRepositoryUnresolved`
     // (see its doc comment for the full fail-closed rationale) — must fail
     // fast here too, never fall through into `PushVerifier`'s
-    // no-repo-info-registered fallback. Computed against the SAME `ps`
-    // snapshot used to resolve `repoResolution` above (Issue #87 review,
-    // forge/87-mirror follow-up, Important finding 2, second round) so this
-    // check can never disagree with what this call actually resolved.
-    if (isDistributionRequiredButRepositoryUnresolved(isDistributionRequired(server, ps), repo)) return false;
+    // no-repo-info-registered fallback. Uses `isDistributionRequiredForContinuation`
+    // (Issue #87 review, forge/87-mirror follow-up, Important finding 2,
+    // third round) so a recorded `task.distributionRepositoryId` alone still
+    // forces this closed even if the CURRENT `ps` configuration no longer
+    // calls for distribution. Computed against the SAME `ps` snapshot used
+    // to resolve `repoResolution` above so this check can never disagree
+    // with what this call actually resolved.
+    if (isDistributionRequiredButRepositoryUnresolved(isDistributionRequiredForContinuation(task.distributionRepositoryId, server, ps), repo)) return false;
     if (!task.skipPr) {
       await this.pullRequestCreator.ensureCreated(task.id, resolvedUnitId, repo, branch, {
         title: task.title,

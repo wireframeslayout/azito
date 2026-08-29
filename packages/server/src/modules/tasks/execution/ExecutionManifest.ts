@@ -671,8 +671,14 @@ export interface ResolvedExecutionManifest {
     // SOURCE changing (e.g. an operator repoints this project server at a
     // different repository — a different set of git credentials, a
     // different codebase) is exactly as material a change as flipping
-    // `distributeCode` itself, and must invalidate the same way. `null`
-    // when `projectServer` itself is null or has no target configured.
+    // `distributeCode` itself, and must invalidate the same way. Issue #87
+    // review (forge/87-mirror follow-up), Important finding 3: this is the
+    // EFFECTIVE id, not always the live config's — once
+    // `task.distributionRepositoryId` is recorded (this task has actually
+    // been distributed), that recorded id is authoritative here too, same as
+    // `repository` below; only a task that has never recorded a value falls
+    // back to the current `projectServer.distributionRepositoryId`. `null`
+    // when neither a recorded value nor `projectServer` resolves to one.
     distributionRepositoryId: number | null;
   };
   branches: {
@@ -1046,8 +1052,21 @@ export function resolveExecutionManifest(
       // own doc comment on ResolvedExecutionManifest.server above.
       distributeCode: projectServer?.distributeCode ?? false,
       // Issue #87 explicit-target follow-up: see the field's own doc
-      // comment on ResolvedExecutionManifest.server above.
-      distributionRepositoryId: projectServer?.distributionRepositoryId ?? null,
+      // comment on ResolvedExecutionManifest.server above. Issue #87 review
+      // (forge/87-mirror follow-up), Important finding 3: once
+      // `task.distributionRepositoryId` is recorded, it — not the CURRENT
+      // `projectServer.distributionRepositoryId` — is the effective
+      // repository id (same "recorded value is authoritative" rule
+      // `repository` below already applies via
+      // `resolveRecordedDistributionRepositoryEntry`). Before this fix, this
+      // scalar field always read the live config, so re-pointing the
+      // project server at a different repository changed this fingerprint
+      // even though `resumeStateMachine()`/`followUp()`/`isPushCompleted()`
+      // all keep running against the recorded repository — approval UI and
+      // actual execution disagreeing about what changed. Falls back to the
+      // current config only for a task that has never recorded a value
+      // (never distributed yet), matching `repository` below.
+      distributionRepositoryId: task.distributionRepositoryId ?? projectServer?.distributionRepositoryId ?? null,
     },
     branches: {
       base: baseBranch,

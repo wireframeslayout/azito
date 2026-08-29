@@ -6,6 +6,7 @@ import type { SidekickPackage } from '../../sidekicks/SidekickPackage';
 import { resolveTaskPromptVars } from '../../prompt/resolveTaskPromptVars';
 import { renderSidekickBody } from '../../sidekicks/renderSidekickBody';
 import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionManifest';
+import { isDistributionRequired } from './DistributionHelper';
 
 // ─── Minimal mock harness ───
 //
@@ -1231,7 +1232,6 @@ describe('PhaseLoopRunner pushing probe fails closed when distribution is requir
 
     // Sanity check: a fresh read against `distributionServer` would indeed
     // compute `false` — the exact drift this test guards against.
-    const { isDistributionRequired } = await import('./DistributionHelper');
     expect(isDistributionRequired(distributionServer, freshProjectServer)).toBe(false);
 
     // `distributionRequired: true` (locked at the caller when distribution

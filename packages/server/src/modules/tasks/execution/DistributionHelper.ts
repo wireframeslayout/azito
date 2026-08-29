@@ -74,6 +74,43 @@ export function isDistributionRequired(
 }
 
 /**
+ * Whether distribution must be treated as required for a RESUMED/CONTINUED
+ * run — resumeStateMachine(), followUp()'s state-machine continuation, and
+ * isPushCompleted() (Issue #87 review, forge/87-mirror follow-up, Important
+ * finding 2, third round). `isDistributionRequired` alone answers "does the
+ * CURRENT server/project-server configuration call for distribution" — the
+ * right question for a FRESH execute() run deciding whether to distribute in
+ * the first place, but the wrong one for a run that is only continuing/
+ * verifying work a PAST execute()/restore() already did.
+ *
+ * A non-null `recordedRepositoryId` (`task.distributionRepositoryId`) is
+ * itself proof that this task's working directory was populated by fetch
+ * distribution, independent of whatever the project-server's `distributeCode`
+ * toggle (or the server's `isolationIntent`) reads by the time the run
+ * resumes: the working directory's actual contents don't change when an
+ * operator flips that toggle or deletes the recorded repository, so
+ * verification of what is ALREADY on disk must still be performed against
+ * the repository distribution actually used — never silently downgraded to
+ * a SHA-only match just because the current configuration no longer asks for
+ * distribution. See `resolveRecordedDistributionRepositoryEntry`'s doc
+ * comment for the matching rule on WHICH repository to resolve; this
+ * function answers the companion question of WHETHER a repository must
+ * resolve at all before the pushing phase may proceed.
+ *
+ * When `recordedRepositoryId` is null (the task predates this column, or its
+ * originating run never went through distribution), this falls back to
+ * `isDistributionRequired` unchanged — a live-config read is the only signal
+ * available, exactly as before this column existed.
+ */
+export function isDistributionRequiredForContinuation(
+  recordedRepositoryId: number | null | undefined,
+  server: Pick<ServerConfig, 'type' | 'isolationIntent'>,
+  projectServer: Pick<ProjectServer, 'distributeCode'> | null,
+): boolean {
+  return recordedRepositoryId != null || isDistributionRequired(server, projectServer);
+}
+
+/**
  * Resolves which `project.repositories` entry an actual run should treat as
  * THE repository — used for every downstream decision that follows from
  * "which repository did this run's code come from/go to" (push
