@@ -49,7 +49,7 @@ import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionMani
 import { TuiWorkerRuntime } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
 import { resolveTaskServerName, resolveTmuxSession, resolveUnitId, resolveBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
-import { performDistribution, resolveExecutionRepositoryEntry, resolveRecordedDistributionRepositoryEntry, isDistributionRequiredButRepositoryUnresolved, type DistributionOutcome } from './DistributionHelper';
+import { performDistribution, resolveExecutionRepositoryEntry, resolveRecordedDistributionRepositoryEntry, isDistributionRequired, isDistributionRequiredButRepositoryUnresolved, type DistributionOutcome } from './DistributionHelper';
 import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
 import type { SqliteAgentTurnRepository } from '../turns/SqliteAgentTurnRepository';
 import type { TurnSignalHub } from '../turns/TurnSignalHub';
@@ -1202,6 +1202,14 @@ export class ExecuteTaskUseCase {
     // `PhaseLoopRunner.stateMachineLoop`'s `distributionRepoEntry` parameter
     // doc comment for the full rationale.
     const distributionRepoEntry = resolveExecutionRepositoryEntry(server, lockedProjectServer, lockedProject);
+    // Issue #87 review (forge/87-mirror follow-up), Important finding 2
+    // (second round): computed against the SAME locked `lockedProjectServer`
+    // snapshot as `distributionRepoEntry` above, so PhaseLoopRunner's
+    // fail-closed pushing-probe check can never disagree with what was
+    // actually true when this run's distribution ran — see
+    // `PhaseLoopRunner.stateMachineLoop`'s `distributionRequired` parameter
+    // doc comment.
+    const distributionRequired = isDistributionRequired(server, lockedProjectServer);
 
     const runLoop = this.phaseLoopRunner.stateMachineLoop(
       { ...unit, selfReviewMaxAttempts: effectiveSelfReviewMax },
@@ -1212,6 +1220,7 @@ export class ExecuteTaskUseCase {
       abortController.signal,
       windowTarget,
       distributionRepoEntry,
+      distributionRequired,
     );
 
     runLoop
@@ -1227,11 +1236,16 @@ export class ExecuteTaskUseCase {
           this.runningExecutions.delete(unitId);
         }
 
-        // Issue #87 13th-round review, Important finding: must agree with
-        // whichever repository distribution actually pulled onto this
-        // server — see `resolveExecutionRepositoryEntry`'s doc comment.
-        const repoEntry = resolveExecutionRepositoryEntry(server, lockedProjectServer, project);
-        const repo = repoEntry ? this.projectRepo.findRepositoryById(repoEntry.id) : undefined;
+        // Issue #87 review (forge/87-mirror follow-up), Minor finding 3:
+        // reuse the SAME `distributionRepoEntry` already resolved above
+        // against the fully-locked `lockedProject`/`lockedProjectServer`
+        // snapshot, instead of re-deriving it here by mixing
+        // `lockedProjectServer` with the pre-lock `project` — a
+        // pre-lock/post-lock mismatch could otherwise resolve the final PR
+        // reference against a different repository than the one this run
+        // actually distributed/pushed to. See `resolveExecutionRepositoryEntry`'s
+        // doc comment.
+        const repo = distributionRepoEntry ? this.projectRepo.findRepositoryById(distributionRepoEntry.id) : undefined;
 
         // Collect final git info (changed files + PR URL)
         void (async () => {
@@ -1666,7 +1680,15 @@ export class ExecuteTaskUseCase {
             return;
           }
           const followUpDistributionRepoEntry = followUpResolution.entry;
-          await this.phaseLoopRunner.stateMachineLoop({ ...unit, selfReviewMaxAttempts: effectiveSelfReviewMax }, serverName, { ...task, currentPhase: origCurrentPhase }, server, target, abortController.signal, windowTarget, followUpDistributionRepoEntry);
+          // Issue #87 review (forge/87-mirror follow-up), Important finding
+          // 2 (second round): computed against the SAME `followUpProjectServer`
+          // snapshot used to resolve `followUpResolution` above, so
+          // PhaseLoopRunner's fail-closed pushing-probe check agrees with
+          // what this follow-up continuation actually resolved — see
+          // `PhaseLoopRunner.stateMachineLoop`'s `distributionRequired`
+          // parameter doc comment.
+          const followUpDistributionRequired = isDistributionRequired(server, followUpProjectServer);
+          await this.phaseLoopRunner.stateMachineLoop({ ...unit, selfReviewMaxAttempts: effectiveSelfReviewMax }, serverName, { ...task, currentPhase: origCurrentPhase }, server, target, abortController.signal, windowTarget, followUpDistributionRepoEntry, followUpDistributionRequired);
           return;
         }
       }
@@ -1757,6 +1779,13 @@ export class ExecuteTaskUseCase {
       return;
     }
     const resumeDistributionRepoEntry: ProjectRepositoryEntry | null = resumeResolution.entry;
+    // Issue #87 review (forge/87-mirror follow-up), Important finding 2
+    // (second round): computed against the SAME `resumeProjectServer`
+    // snapshot used to resolve `resumeResolution` above, so PhaseLoopRunner's
+    // fail-closed pushing-probe check agrees with what this resume actually
+    // resolved — see `PhaseLoopRunner.stateMachineLoop`'s
+    // `distributionRequired` parameter doc comment.
+    const resumeDistributionRequired = isDistributionRequired(server, resumeProjectServer);
 
     this.phaseLoopRunner.stateMachineLoop(
       { ...unit, selfReviewMaxAttempts: effectiveSelfReviewMax },
@@ -1767,6 +1796,7 @@ export class ExecuteTaskUseCase {
       abortController.signal,
       windowTarget,
       resumeDistributionRepoEntry,
+      resumeDistributionRequired,
     )
       .catch((err: Error) => {
         this.appendLog(taskId, unitId, 'status_change', { status: 'error', message: err.message });
@@ -1853,8 +1883,11 @@ export class ExecuteTaskUseCase {
     // pushing-phase probe via `isDistributionRequiredButRepositoryUnresolved`
     // (see its doc comment for the full fail-closed rationale) — must fail
     // fast here too, never fall through into `PushVerifier`'s
-    // no-repo-info-registered fallback.
-    if (isDistributionRequiredButRepositoryUnresolved(server, ps, repo)) return false;
+    // no-repo-info-registered fallback. Computed against the SAME `ps`
+    // snapshot used to resolve `repoResolution` above (Issue #87 review,
+    // forge/87-mirror follow-up, Important finding 2, second round) so this
+    // check can never disagree with what this call actually resolved.
+    if (isDistributionRequiredButRepositoryUnresolved(isDistributionRequired(server, ps), repo)) return false;
     if (!task.skipPr) {
       await this.pullRequestCreator.ensureCreated(task.id, resolvedUnitId, repo, branch, {
         title: task.title,

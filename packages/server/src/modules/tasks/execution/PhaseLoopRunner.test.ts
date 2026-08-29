@@ -223,7 +223,7 @@ describe('PhaseLoopRunner phase-resolution (Issue #263 Phase 5)', () => {
     const { runner, sidekickLoader } = makeRunner();
     const unit = makeUnitForRun();
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(sidekickLoader.findDefaultForTag).toHaveBeenCalledWith('planning');
   });
@@ -235,7 +235,7 @@ describe('PhaseLoopRunner phase-resolution (Issue #263 Phase 5)', () => {
     });
     const unit = makeUnitForRun({ phaseConfig: { planning: { sidekick: 'planning-custom' } } });
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(sidekickLoader.findByName).toHaveBeenCalledWith('planning-custom');
     expect(sidekickLoader.findDefaultForTag).not.toHaveBeenCalledWith('planning');
@@ -248,7 +248,7 @@ describe('PhaseLoopRunner phase-resolution (Issue #263 Phase 5)', () => {
     const unit = makeUnitForRun({ phaseConfig: { planning: { sidekick: 'missing' } } });
 
     await expect(
-      runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null),
+      runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false),
     ).rejects.toThrow('Sidekick "missing" configured for phase "planning" was not found');
   });
 
@@ -261,7 +261,7 @@ describe('PhaseLoopRunner phase-resolution (Issue #263 Phase 5)', () => {
       },
     });
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(sidekickLoader.findDefaultForTag).not.toHaveBeenCalled();
     expect(workerInput.sendPrompt).not.toHaveBeenCalled();
@@ -278,7 +278,7 @@ describe('PhaseLoopRunner phase-resolution (Issue #263 Phase 5)', () => {
     });
     const unit = makeUnitForRun();
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     const expected = renderSidekickBody(pkg, {
       ...resolveTaskPromptVars(taskRepo as any, projectRepo as any, unitRepo as any, projectServerRepo as any, 1),
@@ -299,7 +299,7 @@ describe('PhaseLoopRunner remote sidekick sync + dir resolution (Issue #263 Phas
     const { runner, sidekickSyncService } = makeRunner();
     const unit = makeUnitForRun();
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(sidekickSyncService.sync).not.toHaveBeenCalled();
   });
@@ -312,7 +312,7 @@ describe('PhaseLoopRunner remote sidekick sync + dir resolution (Issue #263 Phas
     });
     const unit = makeUnitForRun();
 
-    await runner.stateMachineLoop(unit, 'staging', task, remoteServer, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'staging', task, remoteServer, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(transportFactory.getTransport).toHaveBeenCalledWith(remoteServer);
     expect(sidekickSyncService.sync).toHaveBeenCalledWith('staging', expect.anything(), [pkg, otherPkg]);
@@ -327,7 +327,7 @@ describe('PhaseLoopRunner remote sidekick sync + dir resolution (Issue #263 Phas
     const unit = makeUnitForRun();
 
     await expect(
-      runner.stateMachineLoop(unit, 'staging', task, remoteServer, 'sess:1.1', new AbortController().signal, 'sess:1', null),
+      runner.stateMachineLoop(unit, 'staging', task, remoteServer, 'sess:1.1', new AbortController().signal, 'sess:1', null, false),
     ).rejects.toThrow('sync failed: disk full');
     expect(workerInput.sendPrompt).not.toHaveBeenCalled();
   });
@@ -338,7 +338,7 @@ describe('PhaseLoopRunner phase:completed lifecycle log (#263)', () => {
     const { runner, appendLog } = makeRunner();
     const unit = makeUnitForRun();
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     const entries = appendLog.mock.calls.filter(
       ([, , type, content]) => type === 'command' && (content as { type?: string }).type === 'phase_completed',
@@ -354,7 +354,7 @@ describe('PhaseLoopRunner phase:completed lifecycle log (#263)', () => {
     // readPhaseOutputFile はデフォルト null。summary 付き出力を返すよう差し替える
     (runner as any).workerWaiter.readPhaseOutputFile = vi.fn(async () => `plan body\n\n${summaryLine}\n`);
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     const entry = appendLog.mock.calls.find(
       ([, , type, content]) =>
@@ -385,7 +385,7 @@ describe('PhaseLoopRunner http-signal execution mode (Issue: AZITO監視強化 P
     const { runner, workerInput, workerWaiter, httpSignalCoordinator } = makeRunner();
     const unit = makeUnitForRun({ workerExecutionMode: 'http-signal' });
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(httpSignalCoordinator.start).toHaveBeenCalledWith(expect.objectContaining({
       taskId: 1, unitId: 1, kind: 'phase', phase: 'planning', server, target: 'sess:1.1',
@@ -414,7 +414,7 @@ describe('PhaseLoopRunner http-signal execution mode (Issue: AZITO監視強化 P
     });
     const unit = makeUnitForRun({ workerExecutionMode: 'http-signal' });
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     // All 5 phases run to completion (loop exits normally) — resolveEnabledPhases default.
     expect(sidekickLoader.findDefaultForTag).toHaveBeenCalledWith('pushing');
@@ -442,7 +442,7 @@ describe('PhaseLoopRunner http-signal execution mode (Issue: AZITO監視強化 P
     });
     const unit = makeUnitForRun({ workerExecutionMode: 'http-signal' });
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(httpSignalCoordinator.rejectInferredCompletion).toHaveBeenCalledWith(1);
     expect(appendLog).toHaveBeenCalledWith(1, 1, 'command', expect.objectContaining({
@@ -469,7 +469,7 @@ describe('PhaseLoopRunner http-signal execution mode (Issue: AZITO監視強化 P
     });
     const unit = makeUnitForRun({ workerExecutionMode: 'http-signal' });
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(sidekickLoader.findDefaultForTag).toHaveBeenCalledWith('pushing');
     expect(httpSignalCoordinator.rejectInferredCompletion).not.toHaveBeenCalled();
@@ -506,7 +506,7 @@ describe('PhaseLoopRunner http-signal execution mode (Issue: AZITO監視強化 P
       },
     });
 
-    await runner.stateMachineLoop(unit, 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, server, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(httpSignalCoordinator.rejectInferredCompletion).not.toHaveBeenCalled();
     expect(taskRepo.updateStatus).not.toHaveBeenCalledWith(1, 'failed');
@@ -536,7 +536,7 @@ describe('PhaseLoopRunner http-signal execution mode (Issue: AZITO監視強化 P
       },
     });
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     // Retried reviewing at least once after the testing turn reported test_failed
     // (selfReviewMaxAttempts default 2 on the mock unit's task fixture).
@@ -562,7 +562,7 @@ describe('PhaseLoopRunner http-signal execution mode (Issue: AZITO監視強化 P
     });
     const unit = makeUnitForRun({ workerExecutionMode: 'http-signal' });
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'waiting_input');
   });
@@ -584,7 +584,7 @@ describe('PhaseLoopRunner http-signal execution mode (Issue: AZITO監視強化 P
     });
     const unit = makeUnitForRun({ workerExecutionMode: 'http-signal' });
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'failed');
   });
@@ -603,7 +603,7 @@ describe('PhaseLoopRunner http-signal execution mode (Issue: AZITO監視強化 P
     });
     const unit = makeUnitForRun({ workerExecutionMode: 'http-signal' });
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(workerWaiter.readPhaseOutputFile).not.toHaveBeenCalled();
   });
@@ -620,7 +620,7 @@ describe('PhaseLoopRunner prompt delivery verification (Issue #447)', () => {
     });
     const unit = makeUnitForRun();
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(workerInput.sendPrompt).toHaveBeenCalledTimes(6);
     const retryLog = appendLog.mock.calls.find(
@@ -633,7 +633,7 @@ describe('PhaseLoopRunner prompt delivery verification (Issue #447)', () => {
     const { runner, workerInput, appendLog } = makeRunner();
     const unit = makeUnitForRun();
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(workerInput.sendPrompt).toHaveBeenCalledTimes(5);
     const retryLog = appendLog.mock.calls.find(
@@ -672,7 +672,7 @@ describe('PhaseLoopRunner pushing-phase PR auto-creation (git provider abstracti
     } as any));
     const unit = makePushingUnit();
 
-    await runner.stateMachineLoop(unit, 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, server, 'sess:1.1', new AbortController().signal, 'sess:1', repo);
+    await runner.stateMachineLoop(unit, 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, server, 'sess:1.1', new AbortController().signal, 'sess:1', repo, false);
 
     expect(capturedProbe).toBeDefined();
     await capturedProbe!();
@@ -702,7 +702,7 @@ describe('PhaseLoopRunner pushing-phase PR auto-creation (git provider abstracti
     } as any));
     const unit = makePushingUnit();
 
-    await runner.stateMachineLoop(unit, 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, server, 'sess:1.1', new AbortController().signal, 'sess:1', repo);
+    await runner.stateMachineLoop(unit, 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, server, 'sess:1.1', new AbortController().signal, 'sess:1', repo, false);
 
     expect(capturedProbe).toBeDefined();
     await capturedProbe!();
@@ -728,7 +728,7 @@ describe('PhaseLoopRunner pushing-phase PR auto-creation (git provider abstracti
     } as any));
     const unit = makePushingUnit();
 
-    await runner.stateMachineLoop(unit, 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, server, 'sess:1.1', new AbortController().signal, 'sess:1', repo);
+    await runner.stateMachineLoop(unit, 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, server, 'sess:1.1', new AbortController().signal, 'sess:1', repo, false);
 
     expect(capturedProbe).toBeDefined();
     // The probe itself must not reject even though ensureCreated does — a
@@ -783,7 +783,7 @@ describe('PhaseLoopRunner repository selection agrees with distribution target (
     const unit = makePushingUnit();
     const distributionServer = { name: 'agent-1', type: 'agent', isolationIntent: false } as any;
 
-    await runner.stateMachineLoop(unit, 'agent-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, distributionServer, 'sess:1.1', new AbortController().signal, 'sess:1', repoB);
+    await runner.stateMachineLoop(unit, 'agent-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, distributionServer, 'sess:1.1', new AbortController().signal, 'sess:1', repoB, true);
 
     expect(capturedProbe).toBeDefined();
     await capturedProbe!();
@@ -815,7 +815,7 @@ describe('PhaseLoopRunner repository selection agrees with distribution target (
     // also exercise that half of the OR.
     const isolatedServer = { name: 'isolated-1', type: 'agent', isolationIntent: true } as any;
 
-    await runner.stateMachineLoop(unit, 'isolated-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1', repoB);
+    await runner.stateMachineLoop(unit, 'isolated-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1', repoB, true);
 
     expect(notarize).toHaveBeenCalledWith(expect.objectContaining({ repo: repoB }));
     expect(notarize).not.toHaveBeenCalledWith(expect.objectContaining({ repo: repoA }));
@@ -846,7 +846,7 @@ describe('PhaseLoopRunner repository selection agrees with distribution target (
     } as any));
     const unit = makePushingUnit();
 
-    await runner.stateMachineLoop(unit, 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, server, 'sess:1.1', new AbortController().signal, 'sess:1', repoA);
+    await runner.stateMachineLoop(unit, 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, server, 'sess:1.1', new AbortController().signal, 'sess:1', repoA, false);
 
     expect(capturedProbe).toBeDefined();
     await capturedProbe!();
@@ -878,7 +878,7 @@ describe('PhaseLoopRunner repository selection agrees with distribution target (
     const unit = makePushingUnit();
     const isolatedServer = { name: 'isolated-1', type: 'agent', isolationIntent: true } as any;
 
-    await runner.stateMachineLoop(unit, 'isolated-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'isolated-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1', null, true);
 
     expect(notarize).not.toHaveBeenCalled();
     expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'failed');
@@ -910,7 +910,7 @@ describe('PhaseLoopRunner repository selection agrees with distribution target (
     const unit = makePushingUnit();
     const distributionServer = { name: 'agent-1', type: 'agent', isolationIntent: false } as any;
 
-    await runner.stateMachineLoop(unit, 'agent-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, distributionServer, 'sess:1.1', new AbortController().signal, 'sess:1', repoBGitlab);
+    await runner.stateMachineLoop(unit, 'agent-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, distributionServer, 'sess:1.1', new AbortController().signal, 'sess:1', repoBGitlab, true);
 
     expect(sidekickLoader.findDefaultForTag).toHaveBeenCalledWith('pushing');
     const sentPrompt = workerInput.sendPrompt.mock.calls[0][2] as string;
@@ -966,7 +966,7 @@ describe('PhaseLoopRunner uses the caller-locked distributionRepoEntry, not a fr
     const unit = makePushingUnit();
     const distributionServer = { name: 'agent-1', type: 'agent', isolationIntent: false } as any;
 
-    await runner.stateMachineLoop(unit, 'agent-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, distributionServer, 'sess:1.1', new AbortController().signal, 'sess:1', repoA);
+    await runner.stateMachineLoop(unit, 'agent-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, distributionServer, 'sess:1.1', new AbortController().signal, 'sess:1', repoA, true);
 
     expect(capturedProbe).toBeDefined();
     await capturedProbe!();
@@ -995,7 +995,7 @@ describe('PhaseLoopRunner uses the caller-locked distributionRepoEntry, not a fr
     const unit = makePushingUnit();
     const isolatedServer = { name: 'isolated-1', type: 'agent', isolationIntent: true } as any;
 
-    await runner.stateMachineLoop(unit, 'isolated-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1', repoA);
+    await runner.stateMachineLoop(unit, 'isolated-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1', repoA, true);
 
     expect(notarize).toHaveBeenCalledWith(expect.objectContaining({ repo: repoA }));
     expect(notarize).not.toHaveBeenCalledWith(expect.objectContaining({ repo: repoB }));
@@ -1022,7 +1022,7 @@ describe('PhaseLoopRunner uses the caller-locked distributionRepoEntry, not a fr
     const unit = makePushingUnit();
     const distributionServer = { name: 'agent-1', type: 'agent', isolationIntent: false } as any;
 
-    await runner.stateMachineLoop(unit, 'agent-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, distributionServer, 'sess:1.1', new AbortController().signal, 'sess:1', repoAGithub);
+    await runner.stateMachineLoop(unit, 'agent-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, distributionServer, 'sess:1.1', new AbortController().signal, 'sess:1', repoAGithub, true);
 
     const sentPrompt = workerInput.sendPrompt.mock.calls[0][2] as string;
     expect(sentPrompt).toContain('Provider: github');
@@ -1078,7 +1078,7 @@ describe('PhaseLoopRunner hub push notarization fails closed when the locked rep
     const unit = makePushingUnit();
     const isolatedServer = { name: 'isolated-1', type: 'agent', isolationIntent: true } as any;
 
-    await runner.stateMachineLoop(unit, 'isolated-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1', repoA);
+    await runner.stateMachineLoop(unit, 'isolated-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1', repoA, true);
 
     expect(notarize).not.toHaveBeenCalled();
     expect(pullRequestCreator.ensureCreated).not.toHaveBeenCalled();
@@ -1106,7 +1106,7 @@ describe('PhaseLoopRunner hub push notarization fails closed when the locked rep
     const unit = makePushingUnit();
     const isolatedServer = { name: 'isolated-1', type: 'agent', isolationIntent: true } as any;
 
-    await runner.stateMachineLoop(unit, 'isolated-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1', repoNoToken);
+    await runner.stateMachineLoop(unit, 'isolated-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1', repoNoToken, true);
 
     expect(notarize).not.toHaveBeenCalled();
     expect(pullRequestCreator.ensureCreated).not.toHaveBeenCalled();
@@ -1157,7 +1157,7 @@ describe('PhaseLoopRunner pushing probe fails closed when distribution is requir
     const unit = makePushingUnit();
     const distributionServer = { name: 'agent-1', type: 'agent', isolationIntent: false } as any;
 
-    await runner.stateMachineLoop(unit, 'agent-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, distributionServer, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'agent-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, distributionServer, 'sess:1.1', new AbortController().signal, 'sess:1', null, true);
 
     expect(capturedProbe).toBeDefined();
     await expect(capturedProbe!()).resolves.toBe(false);
@@ -1184,12 +1184,67 @@ describe('PhaseLoopRunner pushing probe fails closed when distribution is requir
     // no `distributionRepoEntry` was resolved (`null`), matching a project
     // that never registered a repository at all: the pre-existing
     // SHA-only-verification fallback must still apply.
-    await runner.stateMachineLoop(unit, 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, server, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(capturedProbe).toBeDefined();
     await capturedProbe!();
     expect(pullRequestCreator.ensureCreated).toHaveBeenCalled();
     expect(pushVerifier.verifyPushCompleted).toHaveBeenCalledWith(server, '/work', 'task/1-slug', false, null);
+  });
+
+  // Issue #87 review (forge/87-mirror follow-up), Important finding 2
+  // (second round): the fail-closed check must trust the CALLER-LOCKED
+  // `distributionRequired` flag, not re-derive it from a fresh
+  // `projectServerRepo.find()` read performed inside this method. Simulates
+  // exactly the exploit scenario the finding describes: a run started with
+  // distribution required (distributeCode on) and its target repository
+  // locked; mid-run, an operator toggles distributeCode off AND deletes the
+  // locked repository. A stale/fresh internal re-read of `projectServer`
+  // would now report `distributeCode: false` (proven by the sanity
+  // assertion below) — if the probe's fail-closed check used that fresh
+  // read instead of the caller-locked flag, it would wrongly conclude
+  // distribution is no longer required and let `null` reach PR creation/
+  // push verification, reviving the SHA-only-match bypass.
+  it('stays fail-closed on the caller-locked distributionRequired=true even though a fresh projectServer read would now say distribution is not required', async () => {
+    let capturedProbe: (() => Promise<boolean>) | undefined;
+    const { runner, taskRepo, projectServerRepo, workerWaiter, pushVerifier, pullRequestCreator, appendLog } = makeRunner();
+    workerWaiter.waitForWorker = vi.fn(async (...args: unknown[]) => {
+      capturedProbe = args[8] as (() => Promise<boolean>) | undefined;
+      return { output: 'PHASE_COMPLETE', classification: { status: 'phase_complete' } };
+    });
+    // The toggle has since been flipped off (distributeCode: false) and the
+    // locked repository's id was cleared from the project-server row too —
+    // this is what a FRESH internal read would see if this method still
+    // re-derived `distributionRequired` from it.
+    const freshProjectServer = {
+      projectId: 10, serverName: 'agent-1', workingDirectory: '/work', branch: null, tmuxSession: 'azito',
+      inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null,
+    };
+    projectServerRepo.find = vi.fn(() => freshProjectServer) as any;
+    taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: false, worktreePath: null,
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+    } as any));
+    const unit = makePushingUnit();
+    const distributionServer = { name: 'agent-1', type: 'agent', isolationIntent: false } as any;
+
+    // Sanity check: a fresh read against `distributionServer` would indeed
+    // compute `false` — the exact drift this test guards against.
+    const { isDistributionRequired } = await import('./DistributionHelper');
+    expect(isDistributionRequired(distributionServer, freshProjectServer)).toBe(false);
+
+    // `distributionRequired: true` (locked at the caller when distribution
+    // actually ran) and `distributionRepoEntry: null` (the locked
+    // repository was deleted mid-run) — the caller-computed truth, not what
+    // a fresh internal read of `projectServer` would now say.
+    await runner.stateMachineLoop(unit, 'agent-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, distributionServer, 'sess:1.1', new AbortController().signal, 'sess:1', null, true);
+
+    expect(capturedProbe).toBeDefined();
+    await expect(capturedProbe!()).resolves.toBe(false);
+    expect(pullRequestCreator.ensureCreated).not.toHaveBeenCalled();
+    expect(pushVerifier.verifyPushCompleted).not.toHaveBeenCalled();
+    expect(appendLog).toHaveBeenCalledWith(1, 1, 'command', expect.objectContaining({ type: 'pushing_probe_blocked_unresolved_repository' }));
   });
 });
 
@@ -1204,7 +1259,7 @@ describe('PhaseLoopRunner isolation cutoff (Issue #29 docs review, finding 1)', 
     const { runner, taskRepo, workerWaiter, appendLog } = makeRunner();
     const unit = makeUnitForRun();
 
-    await runner.stateMachineLoop(unit, 'local', task, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'local', task, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     // 4 phases (planning/implementing/reviewing/testing) actually run the
     // worker; pushing is skipped without ever calling waitForWorker for it.
@@ -1221,7 +1276,7 @@ describe('PhaseLoopRunner isolation cutoff (Issue #29 docs review, finding 1)', 
     const { runner, workerWaiter } = makeRunner();
     const unit = makeUnitForRun();
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(workerWaiter.waitForWorker).toHaveBeenCalledTimes(5);
   });
@@ -1297,7 +1352,7 @@ describe('PhaseLoopRunner isolation cutoff (Issue #29 docs review, finding 1)', 
     const isolatedServer = { ...server, isolationIntent: true };
     const unit = makeUnitForRun();
 
-    await runner.stateMachineLoop(unit, 'local', task, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'local', task, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     // Only the first 4 phases sent prompts; pushing was neither skipped
     // silently nor sent — it was blocked at the gate.
@@ -1346,7 +1401,7 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
     // Default fixture taskRepo.findById() already returns inputTrust: 'trusted'.
     const unit = makeUnitForRun();
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(workerInput.sendPrompt).toHaveBeenCalledTimes(5); // planning, implementing, reviewing, testing, pushing
     expect(taskRepo.update).not.toHaveBeenCalledWith(1, expect.objectContaining({ status: 'pending_approval' }));
@@ -1382,7 +1437,7 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
     const { runner, workerInput } = makeRunner({ taskRepo, unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader });
     const unit = makeUnitForRun();
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(workerInput.sendPrompt).toHaveBeenCalledTimes(5);
     expect(taskRepo.update).not.toHaveBeenCalledWith(1, expect.objectContaining({ status: 'pending_approval' }));
@@ -1432,7 +1487,7 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
     const { runner, workerInput, appendLog } = makeRunner({ taskRepo, unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader });
     const unit = makeUnitForRun();
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     // Only planning's prompt went out — implementing's must never have been
     // built or sent.
@@ -1497,7 +1552,7 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
     const { runner, workerInput, appendLog } = makeRunner({ taskRepo, unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader });
     const unit = makeUnitForRun();
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     // Blocked before any prompt was built or sent.
     expect(workerInput.sendPrompt).not.toHaveBeenCalled();
@@ -1545,7 +1600,7 @@ describe('PhaseLoopRunner auto-sleep after push completion', () => {
     } as any);
     const unit = makeUnitForRun({ sleepAfterPush: true });
 
-    await runner.stateMachineLoop(unit, 'local', { ...task, sleepAfterPush: null }, server, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'local', { ...task, sleepAfterPush: null }, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'review');
     expect(sleepFn).toHaveBeenCalledWith(1);
@@ -1564,7 +1619,7 @@ describe('PhaseLoopRunner auto-sleep after push completion', () => {
     } as any);
     const unit = makeUnitForRun({ sleepAfterPush: true });
 
-    await runner.stateMachineLoop(unit, 'local', { ...task, sleepAfterPush: false }, server, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'local', { ...task, sleepAfterPush: false }, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'review');
     expect(sleepFn).not.toHaveBeenCalled();
@@ -1575,7 +1630,7 @@ describe('PhaseLoopRunner auto-sleep after push completion', () => {
     const { runner, taskRepo } = makeRunner({ sleepTaskWindows: sleepFn });
     const unit = makeUnitForRun({ sleepAfterPush: false });
 
-    await runner.stateMachineLoop(unit, 'local', { ...task, sleepAfterPush: null }, server, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'local', { ...task, sleepAfterPush: null }, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'review');
     expect(sleepFn).not.toHaveBeenCalled();
@@ -1593,7 +1648,7 @@ describe('PhaseLoopRunner auto-sleep after push completion', () => {
     } as any);
     const unit = makeUnitForRun({ sleepAfterPush: true });
 
-    await runner.stateMachineLoop(unit, 'local', { ...task, sleepAfterPush: null }, server, 'sess:1.1', new AbortController().signal, 'sess:1', null);
+    await runner.stateMachineLoop(unit, 'local', { ...task, sleepAfterPush: null }, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(sleepFn).toHaveBeenCalledWith(1);
     expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'review');

@@ -316,6 +316,26 @@ export class PhaseLoopRunner {
     // `projectServer` (still read below, but only for non-repository fields
     // like `workingDirectory` fallbacks).
     distributionRepoEntry: ProjectRepository | null,
+    // Issue #87 review (forge/87-mirror follow-up), Important finding 2
+    // (second round): whether distribution was required for this run,
+    // decided by the CALLER at the exact same moment (against the exact same
+    // locked project/projectServer snapshot) it resolved
+    // `distributionRepoEntry` above — never re-derived inside this method
+    // from a fresh `projectServerRepo.find()` read. This method used to
+    // recompute "is distribution required" itself via
+    // `isDistributionRequiredButRepositoryUnresolved(server, projectServer,
+    // ...)`, reading `projectServer` from its OWN `projectServerRepo.find()`
+    // call below — a `distributeCode` toggle flipped between when the caller
+    // locked `distributionRepoEntry` and whenever that fresh read happened
+    // (a run spans many phases, potentially over minutes to hours, and
+    // resumes/follow-ups each re-enter this method) could make the fresh
+    // read see `distributeCode: false` even though the run's locked
+    // repository had since been deleted — silently turning the pushing
+    // probe's fail-closed check off and letting `null` reach PR creation/
+    // push verification, reviving the SHA-only-match bypass that check
+    // exists to prevent. See `isDistributionRequiredButRepositoryUnresolved`'s
+    // doc comment (DistributionHelper.ts) for the full rationale.
+    distributionRequired: boolean,
   ): Promise<void> {
     const project = this.projectRepo.findById(task.projectId);
     const projectServer = project ? this.projectServerRepo.find(task.projectId, serverName) : null;
@@ -516,8 +536,12 @@ export class PhaseLoopRunner {
             // repository could not be resolved, never call PR creation or
             // push verification (which would otherwise accept a SHA-only
             // match against nothing in particular); treat the phase as
-            // not-yet-completed instead.
-            if (isDistributionRequiredButRepositoryUnresolved(server, projectServer, probeRepo)) {
+            // not-yet-completed instead. Uses the caller-locked
+            // `distributionRequired` parameter (second-round fix), not a
+            // fresh `isDistributionRequired(server, projectServer)`
+            // re-derivation — see this method's `distributionRequired`
+            // parameter doc comment.
+            if (isDistributionRequiredButRepositoryUnresolved(distributionRequired, probeRepo)) {
               this.appendLog(task.id, unit.id, 'command', { type: 'pushing_probe_blocked_unresolved_repository' });
               return false;
             }

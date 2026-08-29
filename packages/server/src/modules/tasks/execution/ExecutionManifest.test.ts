@@ -678,6 +678,86 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     });
   });
 
+  // Issue #87 review (forge/87-mirror follow-up), Important finding 1: the
+  // approval manifest must agree with what a resumed run actually executes
+  // against — `ExecuteTaskUseCase.resumeStateMachine()`/`followUp()`/
+  // `isPushCompleted()` all treat `task.distributionRepositoryId` (once
+  // recorded) as authoritative and never re-resolve from the project/
+  // project-server's CURRENT configuration. Before this fix,
+  // `resolveExecutionManifest` always called `resolveExecutionRepositoryEntry`
+  // (current config only), so a config change after a task's first
+  // distribution made the approval UI/fingerprint show a DIFFERENT
+  // repository than the one execution actually resumes against.
+  describe('task.distributionRepositoryId (Issue #87 review, forge/87-mirror follow-up, Important finding 1)', () => {
+    const repoA = { id: 1, name: 'A', url: 'https://github.com/acme/repo-a.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-a', hasToken: false };
+    const repoB = { id: 2, name: 'B', url: 'https://github.com/acme/repo-b.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-b', hasToken: false };
+
+    it("manifest.repository reflects the task's RECORDED repository (A), not the project-server's CURRENT distribution target (B)", () => {
+      const fixture: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject({ repositories: [repoA, repoB] }),
+        // Current config has since moved to repo B.
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: true, distributionRepositoryId: repoB.id }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      };
+      // But this task's own distribution already ran against repo A.
+      const task = makeTask({ distributionRepositoryId: repoA.id });
+
+      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture));
+
+      expect(manifest.repository?.id).toBe(repoA.id);
+      expect(manifest.repository?.repoName).toBe('repo-a');
+    });
+
+    it('a config change after distribution (repository re-pointed) does NOT change the fingerprint when the recorded repository is unaffected', () => {
+      const fixture = (currentTarget: number): Fixture => ({
+        units: { 20: makeUnit() },
+        project: makeProject({ repositories: [repoA, repoB] }),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: true, distributionRepositoryId: currentTarget }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      });
+      const task = makeTask({ distributionRepositoryId: repoA.id });
+
+      const hashBeforeRepoint = hashFor(task, fixture(repoA.id));
+      const hashAfterRepoint = hashFor(task, fixture(repoB.id));
+
+      expect(hashBeforeRepoint).toBe(hashAfterRepoint);
+    });
+
+    it('resolves manifest.repository to null (fails closed, never falls back to current config) when the recorded repository no longer exists on the project', () => {
+      const fixture: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject({ repositories: [repoB] }),
+        // Current config would resolve repo B just fine...
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: true, distributionRepositoryId: repoB.id }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      };
+      // ...but this task's recorded repository (A) was deleted from the project.
+      const task = makeTask({ distributionRepositoryId: repoA.id });
+
+      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture));
+
+      expect(manifest.repository).toBeNull();
+    });
+
+    it('falls back to current-config resolution (repositories[0]) when the task has never recorded a distribution repository', () => {
+      const fixture: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject({ repositories: [repoA, repoB] }),
+        // distribution not active for this pairing — current-config
+        // resolution falls back to repositories[0] (A), same as the
+        // pre-existing behavior every non-distribution project relies on.
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: false, distributionRepositoryId: null }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      };
+      const task = makeTask({ distributionRepositoryId: null });
+
+      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture));
+
+      expect(manifest.repository?.id).toBe(repoA.id);
+    });
+  });
+
   it('editing task.unitId alone invalidates a prior approval (retargets the Unit)', () => {
     const fixture: Fixture = {
       units: { 20: makeUnit({ id: 20 }), 999: makeUnit({ id: 999, systemPrompt: 'A different unit' }) },

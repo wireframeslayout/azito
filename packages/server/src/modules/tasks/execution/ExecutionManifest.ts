@@ -12,7 +12,7 @@ import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoade
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import { resolvePhaseSidekick, resolveEnabledPhases } from '../../sidekicks/resolvePhaseSidekick';
 import { resolveUnitId, resolveTaskServerName, resolveBaseBranch, canonicalizeBaseBranch } from './TaskExecutionEnv';
-import { resolveExecutionRepositoryEntry } from './DistributionHelper';
+import { resolveRecordedDistributionRepositoryEntry } from './DistributionHelper';
 
 /**
  * Execution manifest (Issue #328 fifth-round review).
@@ -102,19 +102,25 @@ import { resolveExecutionRepositoryEntry } from './DistributionHelper';
  *   editing it changes what the worker is told exactly like editing
  *   unit.systemPrompt does, so it must invalidate approval the same way.
  * - repository: identity (id/provider/url/owner/repoName) of the repository
- *   `resolveExecutionRepositoryEntry` resolves (DistributionHelper.ts —
+ *   `resolveRecordedDistributionRepositoryEntry` resolves (DistributionHelper.ts
+ *   — `task.distributionRepositoryId` once recorded, else
+ *   `resolveExecutionRepositoryEntry`'s current-config resolution:
  *   `project.repositories[0]`, unless fetch distribution is active for this
  *   project/server, in which case the project-server's
  *   `distributionRepositoryId`) — the PR DESTINATION the pushing phase's
  *   PullRequestCreator/PushVerifier target (PhaseLoopRunner.ts ~367-384;
  *   Issue #328 twelfth-round review, fix 2; Issue #87 13th-round review,
- *   Important finding). Project repositories can be
+ *   Important finding; Issue #87 review, forge/87-mirror follow-up,
+ *   Important finding 1). Project repositories can be
  *   `POST`/`DELETE /api/projects/:id/repositories`, so without this field an
  *   already-approved task's PR could be silently redirected to a different
  *   repository post-approval — the same "changes WHERE output goes" class of
  *   targeting decision `server` above already covers for WHERE a task runs.
  *   `null` when the project has no registered repository (pushing then skips
- *   PR creation the same way it always has for a repository-less project).
+ *   PR creation the same way it always has for a repository-less project),
+ *   OR when `task.distributionRepositoryId` is recorded but no longer
+ *   resolves (fails closed — never falls back to a possibly-different
+ *   current-config repository).
  * - secrets.namesDigest: a sha256 digest of the SORTED set of project
  *   secret NAMES (ExecuteTaskUseCase.buildExtraEnv injects every
  *   `project_secrets` row for task.projectId as `AZITO_SECRET_<name>` env
@@ -284,9 +290,10 @@ import { resolveExecutionRepositoryEntry } from './DistributionHelper';
  * - ServerConfig (the `servers` row): type, host, agentPort, sshHost — which
  *   machine a run targets.
  * - repository: id, provider, url, owner, repoName of the repository
- *   `resolveExecutionRepositoryEntry` resolves — which repository the
- *   pushing phase's PR targets (Issue #328 twelfth-round review, fix 2;
- *   Issue #87 13th-round review, Important finding).
+ *   `resolveRecordedDistributionRepositoryEntry` resolves — which repository
+ *   the pushing phase's PR targets (Issue #328 twelfth-round review, fix 2;
+ *   Issue #87 13th-round review, Important finding; Issue #87 review,
+ *   forge/87-mirror follow-up, Important finding 1).
  * - secrets: the SORTED SET of project secret NAMES (not values — see
  *   "known limitations" below).
  *
@@ -698,22 +705,25 @@ export interface ResolvedExecutionManifest {
   /**
    * Identity of the repository the pushing phase will target — `id`,
    * `provider`, `url`, `owner`, `repoName` of the repository
-   * `resolveExecutionRepositoryEntry` resolves (Issue #328 twelfth-round
-   * review, fix 2; Issue #87 13th-round review, Important finding — picks
-   * the project-server's `distributionRepositoryId` when fetch distribution
-   * is active for this server, `project.repositories[0]` otherwise).
-   * Resolved via the exact same selection PhaseLoopRunner's pushing-phase
-   * probe/notary and ExecuteTaskUseCase's push-completion paths use — not a
-   * second, separately-written selection rule; see this file's own
-   * `resolveExecutionManifest` for why a second resolution path is exactly
-   * how earlier review rounds' holes opened up. `null` when the project has
-   * no registered repository, or no resolvable project at all (mirrors the
-   * `unit: null` tolerance elsewhere in this manifest). `token` is
-   * deliberately never read here (`findRepositoryById` is not called) —
-   * same "credential rotation must not self-invalidate approval" reasoning
-   * as `server.agentToken` in the "deliberately excluded" section above; a
-   * repository's URL/owner/name is a targeting decision a human reviews,
-   * its access token is not.
+   * `resolveRecordedDistributionRepositoryEntry` resolves (Issue #328
+   * twelfth-round review, fix 2; Issue #87 13th-round review, Important
+   * finding; Issue #87 review, forge/87-mirror follow-up, Important finding
+   * 1 — treats `task.distributionRepositoryId` as authoritative once
+   * recorded, falling back to `resolveExecutionRepositoryEntry`'s
+   * current-config resolution only for a task that has never gone through
+   * distribution). Resolved via the exact same selection PhaseLoopRunner's
+   * pushing-phase probe/notary and ExecuteTaskUseCase's push-completion
+   * paths use — not a second, separately-written selection rule; see this
+   * file's own `resolveExecutionManifest` for why a second resolution path
+   * is exactly how earlier review rounds' holes opened up. `null` when the
+   * project has no registered repository, no resolvable project at all
+   * (mirrors the `unit: null` tolerance elsewhere in this manifest), or the
+   * recorded `distributionRepositoryId` no longer resolves (fails closed —
+   * never falls back to current config). `token` is deliberately never read
+   * here (`findRepositoryById` is not called) — same "credential rotation
+   * must not self-invalidate approval" reasoning as `server.agentToken` in
+   * the "deliberately excluded" section above; a repository's URL/owner/name
+   * is a targeting decision a human reviews, its access token is not.
    */
   repository: {
     id: number;
@@ -1064,16 +1074,27 @@ export function resolveExecutionManifest(
     project: {
       sidekickPrompt: project?.sidekickPrompt ?? null,
     },
-    // Same selection PhaseLoopRunner's pushing-phase probe/notary and
-    // ExecuteTaskUseCase's final-git-info/isPushCompleted paths all use —
-    // `resolveExecutionRepositoryEntry` (DistributionHelper.ts), which picks
-    // the project-server's `distributionRepositoryId` when fetch
-    // distribution is active for this server, falling back to
-    // `project.repositories[0]` otherwise — see the field's doc comment on
-    // ResolvedExecutionManifest above (Issue #328 twelfth-round review, fix
-    // 2; Issue #87 13th-round review, Important finding).
+    // Issue #87 review (forge/87-mirror follow-up), Important finding 1:
+    // must agree with `ExecuteTaskUseCase.resumeStateMachine()`/`followUp()`/
+    // `isPushCompleted()`, which all treat `task.distributionRepositoryId`
+    // (once recorded) as authoritative and NEVER re-resolve from the
+    // project/project-server's CURRENT configuration — see
+    // `resolveRecordedDistributionRepositoryEntry`'s doc comment
+    // (DistributionHelper.ts). Before this fix, the approval manifest always
+    // called `resolveExecutionRepositoryEntry` (current config only), so a
+    // config change after a task's first distribution could make the
+    // approval UI / fingerprint show a DIFFERENT repository than the one
+    // `resumeStateMachine()` actually runs against — breaking the "what was
+    // approved is what runs" guarantee this manifest exists to uphold. A
+    // task with no recorded value yet (first execution, never distributed)
+    // still resolves from current config, same as every other manifest
+    // field. `ok: false` (the recorded repository was deleted) fails
+    // closed to `null` here — same as `resolveExecutionRepositoryEntry`'s
+    // own "required but unresolved never falls back" rule — rather than
+    // falling back to whatever current config would resolve.
     repository: (() => {
-      const repo = resolveExecutionRepositoryEntry(serverConfig, projectServer, project);
+      const resolution = resolveRecordedDistributionRepositoryEntry(task.distributionRepositoryId ?? null, serverConfig, projectServer, project);
+      const repo = resolution.ok ? resolution.entry : null;
       if (!repo) return null;
       const repoWithToken = deps.projectRepo.findRepositoryById(repo.id);
       const tokenDigest = repoWithToken?.token

@@ -123,8 +123,8 @@ export function resolveExecutionRepositoryEntry(
 
 /**
  * Whether push verification (and PR creation/verification/notarization) must
- * fail closed because distribution is required for this server/project-server
- * pairing but the distributed repository could not be resolved (unset
+ * fail closed because distribution is required for this run but the
+ * distributed repository could not be resolved (unset
  * `distributionRepositoryId`, or it names a repository that no longer exists
  * — see `resolveExecutionRepositoryEntry`'s doc comment for why that resolver
  * returns `null` rather than falling back to `project.repositories[0]` in
@@ -145,17 +145,32 @@ export function resolveExecutionRepositoryEntry(
  * creation/verification at all when it's true, treating the probe as
  * not-yet-completed instead.
  *
- * Distribution-not-required callers are unaffected: `isDistributionRequired`
- * is false there, so this always returns `false` regardless of `repo`,
+ * Takes the ALREADY-DECIDED `distributionRequired` flag (Issue #87 review,
+ * forge/87-mirror follow-up, Important finding 2 — second round) rather than
+ * a `server`/`projectServer` pair to re-derive it from: the caller must
+ * compute this flag at the SAME moment (against the SAME locked
+ * project/projectServer snapshot) it resolves `distributionRepoEntry` —
+ * `PhaseLoopRunner.stateMachineLoop` used to accept only the resolved
+ * repository from its caller and then re-derive "was distribution required"
+ * itself via a fresh `projectServerRepo.find()` read inside the loop. A
+ * `distributeCode` toggle flipped mid-run (between when the run
+ * started/resumed and locked its repository, and whenever that fresh read
+ * happened) made the fresh read disagree with what was actually true when
+ * distribution ran — turning this check `false` (and the pushing probe/hub
+ * notary permissive again) even though the locked repository had since been
+ * deleted. Passing the flag itself closes that gap the same way passing the
+ * resolved repository itself already did.
+ *
+ * Distribution-not-required callers are unaffected: `distributionRequired`
+ * is `false` there, so this always returns `false` regardless of `repo`,
  * preserving the pre-existing SHA-only verification behavior for projects
  * that have never touched distribution.
  */
 export function isDistributionRequiredButRepositoryUnresolved(
-  server: Pick<ServerConfig, 'type' | 'isolationIntent'>,
-  projectServer: Pick<ProjectServer, 'distributeCode'> | null,
+  distributionRequired: boolean,
   repo: unknown | null | undefined,
 ): boolean {
-  return isDistributionRequired(server, projectServer) && !repo;
+  return distributionRequired && !repo;
 }
 
 /**

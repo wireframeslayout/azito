@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveExecutionRepositoryEntry, isDistributionRequiredButRepositoryUnresolved } from './DistributionHelper';
+import { resolveExecutionRepositoryEntry, isDistributionRequired, isDistributionRequiredButRepositoryUnresolved } from './DistributionHelper';
 import type { ServerConfig } from '../../servers/Server';
 import type { ProjectDetail, ProjectRepository } from '../../projects/Project';
 import type { ProjectServer } from '../../projects/ProjectServer';
@@ -130,22 +130,43 @@ describe('resolveExecutionRepositoryEntry', () => {
 // automatically covers both.
 describe('isDistributionRequiredButRepositoryUnresolved', () => {
   it('is true when distribution is required (distributeCode on) and no repository was resolved', () => {
-    expect(isDistributionRequiredButRepositoryUnresolved(makeAgentServer({ isolationIntent: false }), makeProjectServer({ distributeCode: true }), null)).toBe(true);
+    const distributionRequired = isDistributionRequired(makeAgentServer({ isolationIntent: false }), makeProjectServer({ distributeCode: true }));
+    expect(isDistributionRequiredButRepositoryUnresolved(distributionRequired, null)).toBe(true);
   });
 
   it('is true when distribution is required (isolationIntent) and no repository was resolved', () => {
-    expect(isDistributionRequiredButRepositoryUnresolved(makeAgentServer({ isolationIntent: true }), makeProjectServer({ distributeCode: false }), null)).toBe(true);
+    const distributionRequired = isDistributionRequired(makeAgentServer({ isolationIntent: true }), makeProjectServer({ distributeCode: false }));
+    expect(isDistributionRequiredButRepositoryUnresolved(distributionRequired, null)).toBe(true);
   });
 
   it('is false when distribution is required but a repository WAS resolved', () => {
-    expect(isDistributionRequiredButRepositoryUnresolved(makeAgentServer({ isolationIntent: true }), makeProjectServer({ distributeCode: false }), repoB)).toBe(false);
+    const distributionRequired = isDistributionRequired(makeAgentServer({ isolationIntent: true }), makeProjectServer({ distributeCode: false }));
+    expect(isDistributionRequiredButRepositoryUnresolved(distributionRequired, repoB)).toBe(false);
   });
 
   it('is false when distribution is not required, even with no repository resolved (never-registered-a-repository fallback stays intact)', () => {
-    expect(isDistributionRequiredButRepositoryUnresolved(makeAgentServer({ isolationIntent: false }), makeProjectServer({ distributeCode: false }), null)).toBe(false);
+    const distributionRequired = isDistributionRequired(makeAgentServer({ isolationIntent: false }), makeProjectServer({ distributeCode: false }));
+    expect(isDistributionRequiredButRepositoryUnresolved(distributionRequired, null)).toBe(false);
   });
 
   it('is false for a local server regardless of projectServer/repo (local is never a distribution target)', () => {
-    expect(isDistributionRequiredButRepositoryUnresolved({ type: 'local', isolationIntent: false }, makeProjectServer({ distributeCode: true }), null)).toBe(false);
+    const distributionRequired = isDistributionRequired({ type: 'local', isolationIntent: false }, makeProjectServer({ distributeCode: true }));
+    expect(isDistributionRequiredButRepositoryUnresolved(distributionRequired, null)).toBe(false);
+  });
+
+  // Issue #87 review (forge/87-mirror follow-up), Important finding 2 (second
+  // round): this function must trust the caller-computed flag, never
+  // re-derive it — so a stale `distributionRequired=true` locked from BEFORE
+  // a `distributeCode` toggle was flipped off must still fail closed here,
+  // exactly like a stale locked `distributionRepoEntry` still targets the
+  // repository it was locked to (DistributionHelper's module doc comment).
+  it('stays fail-closed on a locked distributionRequired=true even when the CURRENT projectServer would now compute false', () => {
+    // Simulates: run started with distributeCode=true (distributionRequired
+    // locked true), then the toggle was flipped off AND the locked
+    // repository deleted (repo=null) before this check runs.
+    const distributionRequired = true;
+    const currentlyComputedFresh = isDistributionRequired(makeAgentServer({ isolationIntent: false }), makeProjectServer({ distributeCode: false }));
+    expect(currentlyComputedFresh).toBe(false); // sanity: the drift this test guards against
+    expect(isDistributionRequiredButRepositoryUnresolved(distributionRequired, null)).toBe(true);
   });
 });
