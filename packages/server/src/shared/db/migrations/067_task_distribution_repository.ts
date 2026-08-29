@@ -21,17 +21,28 @@ export const description = 'tasks.distribution_repository_id — persists which 
  * `tasks_old_067` name, or fires every configured ON DELETE action against
  * every row the instant the original table is renamed away).
  *
- * `ON DELETE SET NULL` (not CASCADE, and not RESTRICT): deleting a
- * `project_repositories` row must only clear the pointer to it, never touch
- * the task itself — the task and its worktree/branch/etc. remain valid and
- * inspectable; only the "which repository did this code come from" fact
- * becomes unknown. `ExecuteTaskUseCase.resumeStateMachine()` treats a
- * non-null-but-unresolvable `distributionRepositoryId` as fail-closed (see
- * `Task.distributionRepositoryId`'s own doc comment) — exactly the same
- * "repository is gone, refuse to guess" handling `resolveExecutionRepositoryEntry`
- * already applies to `project_servers.distribution_repository_id`, applied
- * here to the per-task recorded value instead of the live per-project-server
- * config.
+ * `distribution_repository_id` carries deliberately NO `FOREIGN KEY`
+ * constraint at all (Issue #87 review follow-up, Important finding 1 —
+ * corrected from an earlier `ON DELETE SET NULL` draft, which was wrong):
+ * this column is a PROVENANCE record — "which repository did this task's
+ * working-directory code actually come from at distribution time" — not a
+ * referential-integrity pointer. A `SET NULL`/CASCADE action fires the
+ * instant the referenced `project_repositories` row is deleted, which is
+ * exactly the normal, unremarkable operation of removing a repository from
+ * a project — and it would silently erase the one fact this column exists
+ * to preserve. Once erased, `ExecuteTaskUseCase.resumeStateMachine()` (and
+ * the shared `resolveRecordedDistributionRepositoryEntry()` helper) can no
+ * longer tell "this task recorded repository X, which is now gone — fail
+ * closed" apart from "this task never went through distribution — fall back
+ * to the project's current config", and silently takes the second, wrong
+ * branch. A plain `INTEGER` column with no FK preserves a deleted
+ * repository's id indefinitely: `resolveRecordedDistributionRepositoryEntry()`
+ * looks it up against `project.repositories` itself and treats "id set but
+ * not found" as fail-closed — the correct behavior, and the reason this
+ * column exists in the first place. (RESTRICT was also considered and
+ * rejected: it would make deleting a repository fail outright for as long
+ * as any task, however old or finished, still references it, which is worse
+ * than either alternative.)
  *
  * Existing tasks are backfilled to NULL (not derived from
  * `project_servers.distribution_repository_id`): a task that ran before this
@@ -93,8 +104,7 @@ export function up(db: Database.Database): void {
       sleep_after_push INTEGER,
       distribution_repository_id INTEGER,
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
-      FOREIGN KEY (unit_id) REFERENCES units(id) ON DELETE SET NULL,
-      FOREIGN KEY (distribution_repository_id) REFERENCES project_repositories(id) ON DELETE SET NULL
+      FOREIGN KEY (unit_id) REFERENCES units(id) ON DELETE SET NULL
     )
   `);
 

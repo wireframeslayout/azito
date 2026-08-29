@@ -30,7 +30,7 @@ describe('migration 067: task_distribution_repository', () => {
     expect(row.distribution_repository_id).toBe(repoId);
   });
 
-  it('SETs NULL the task\'s distribution_repository_id when the referenced repository is deleted', () => {
+  it('preserves the task\'s distribution_repository_id (no FK, no ON DELETE action) when the referenced repository is deleted', () => {
     const repoId = db.prepare(`INSERT INTO project_repositories (project_id, url, provider) VALUES (1, 'https://github.com/acme/widget.git', 'github')`).run().lastInsertRowid as number;
     db.prepare(`INSERT INTO tasks (id, project_id, title, server_name, distribution_repository_id) VALUES (1, 1, 'Task 1', 'srv-agent', ?)`).run(repoId);
 
@@ -39,8 +39,15 @@ describe('migration 067: task_distribution_repository', () => {
 
     db.prepare(`DELETE FROM project_repositories WHERE id = ?`).run(repoId);
 
+    // Issue #87 review follow-up, Important finding 1: this column is a
+    // provenance record, not a referential-integrity pointer — it carries
+    // NO FOREIGN KEY at all, so deleting the referenced repository leaves
+    // the recorded id in place. `resolveRecordedDistributionRepositoryEntry()`
+    // then looks it up against the project's current repositories and, not
+    // finding it, treats resume as fail-closed (unresolvable) rather than
+    // silently falling back to the project's current distribution target.
     row = db.prepare(`SELECT distribution_repository_id FROM tasks WHERE id = 1`).get() as { distribution_repository_id: number | null };
-    expect(row.distribution_repository_id).toBeNull();
+    expect(row.distribution_repository_id).toBe(repoId);
   });
 
   it('does not delete or otherwise disturb the task itself when the referenced repository is deleted', () => {

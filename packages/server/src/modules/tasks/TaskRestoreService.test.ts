@@ -336,9 +336,16 @@ describe('TaskRestoreService', () => {
 
     await service.restore(task, log);
 
-    const updateCall = (deps.taskRepo.update as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(updateCall[1]).not.toHaveProperty('branch');
-    expect(updateCall[1]).toMatchObject({ worktreeBranch: 'feat/test-task' });
+    // Issue #87 review follow-up, Important finding 4: restore() now ALSO
+    // writes an earlier taskRepo.update({ distributionRepositoryId: null })
+    // call (this task's server is local, so distribution never runs) —
+    // locate the success-path update by its own distinctive field instead of
+    // assuming it is the first (or any fixed-index) call.
+    const updateCalls = (deps.taskRepo.update as ReturnType<typeof vi.fn>).mock.calls;
+    const updateCall = updateCalls.find((c) => (c[1] as Record<string, unknown>).worktreeBranch !== undefined);
+    expect(updateCall).toBeDefined();
+    expect(updateCall![1]).not.toHaveProperty('branch');
+    expect(updateCall![1]).toMatchObject({ worktreeBranch: 'feat/test-task' });
   });
 
   it('restoring an approved, branch-unspecified task does not change the execution-manifest fingerprint (Issue #328 regression) — re-approval must not be required immediately after a successful restore', async () => {
@@ -349,11 +356,14 @@ describe('TaskRestoreService', () => {
 
     await service.restore(task, log);
 
-    // Simulate the DB row after restore() by applying the exact same fields
-    // taskRepo.update() was called with — task.branch must be untouched, so
-    // re-resolving the manifest off the post-restore row hashes identically.
-    const updateCall = (deps.taskRepo.update as ReturnType<typeof vi.fn>).mock.calls[0];
-    const restoredTask: Task = { ...task, ...(updateCall[1] as Partial<Task>) };
+    // Simulate the DB row after restore() by applying every taskRepo.update()
+    // call's fields, in order (restore() now issues two: the Issue #87
+    // review follow-up Important finding 4 distributionRepositoryId:null
+    // write, then the success-path status/worktreePath/worktreeBranch write)
+    // — task.branch must be untouched throughout, so re-resolving the
+    // manifest off the post-restore row hashes identically.
+    const updateCalls = (deps.taskRepo.update as ReturnType<typeof vi.fn>).mock.calls;
+    const restoredTask: Task = updateCalls.reduce((acc, c) => ({ ...acc, ...(c[1] as Partial<Task>) }), task);
     const hashAfter = hashExecutionManifest(resolveExecutionManifest(restoredTask, deps).manifest);
 
     expect(hashAfter).toBe(hashBefore);
@@ -551,7 +561,16 @@ describe('TaskRestoreService', () => {
         // Forces restore()'s final success-path taskRepo.update (after
         // windowRepo.add has already run) to throw, so the outer catch runs
         // with windowRowId already set — the scenario the fix targets.
-        update: vi.fn(() => { throw new Error('db write failed'); }),
+        update: vi.fn((_id: number, fields: Record<string, unknown>) => {
+          // Issue #87 review follow-up, Important finding 4: restore() now
+          // ALSO writes distributionRepositoryId:null unconditionally right
+          // after performDistribution (this task's server is local, so
+          // distribution never runs) — that earlier write must succeed so
+          // this mock can still target the LATER success-path update this
+          // test actually exercises.
+          if ('distributionRepositoryId' in fields) return;
+          throw new Error('db write failed');
+        }),
       },
       tmux: {
         ...deps.tmux,
@@ -573,7 +592,16 @@ describe('TaskRestoreService', () => {
       ...deps,
       taskRepo: {
         ...deps.taskRepo,
-        update: vi.fn(() => { throw new Error('db write failed'); }),
+        update: vi.fn((_id: number, fields: Record<string, unknown>) => {
+          // Issue #87 review follow-up, Important finding 4: restore() now
+          // ALSO writes distributionRepositoryId:null unconditionally right
+          // after performDistribution (this task's server is local, so
+          // distribution never runs) — that earlier write must succeed so
+          // this mock can still target the LATER success-path update this
+          // test actually exercises.
+          if ('distributionRepositoryId' in fields) return;
+          throw new Error('db write failed');
+        }),
       },
     });
     service = new TaskRestoreService(deps);

@@ -158,6 +158,65 @@ export function isDistributionRequiredButRepositoryUnresolved(
   return isDistributionRequired(server, projectServer) && !repo;
 }
 
+/**
+ * Result of resolving the repository a resumed/continued run (follow-up,
+ * resumeStateMachine, isPushCompleted) must treat as THE repository, given a
+ * task's recorded `distributionRepositoryId` (Issue #87 review follow-up,
+ * Important findings 2 & 3).
+ *
+ * `ok: false` means the task has a recorded value that no longer resolves —
+ * the repository row was deleted since distribution ran. The caller MUST
+ * fail closed (never fall back to `resolveExecutionRepositoryEntry`'s
+ * current-config resolution) — see `resolveRecordedDistributionRepositoryEntry`'s
+ * doc comment for why.
+ */
+export type RecordedDistributionRepositoryResolution =
+  | { ok: true; entry: ProjectRepository | null }
+  | { ok: false; recordedRepositoryId: number };
+
+/**
+ * Single source of truth for "which repository must this task's resumed/
+ * continued execution treat as THE repository", shared by
+ * `ExecuteTaskUseCase.resumeStateMachine()`, `followUp()`'s state-machine
+ * continuation, and `isPushCompleted()` (Issue #87 review follow-up,
+ * Important findings 2 & 3 — those three call sites used to each hand-roll
+ * this same rule, and two of them had drifted to re-resolving from the
+ * project/project-server's CURRENT configuration instead).
+ *
+ * A task's working directory holds code from whichever repository fetch
+ * distribution actually pulled it from at execute()/restore() time
+ * (`task.distributionRepositoryId`, migration 067) — that fact never changes
+ * for the life of the task's working directory, even if an operator later
+ * repoints the project server's `distributionRepositoryId` at a different
+ * repository, or deletes the recorded one outright. So:
+ *
+ * - A non-null recorded value is authoritative and MUST be used as-is. If it
+ *   no longer resolves (the repository row was deleted), this returns
+ *   `{ ok: false }` and the caller must refuse to proceed with a different
+ *   repository (fail closed) — falling back to the live config here is
+ *   exactly the "notarize/push repository A's code against repository B"
+ *   bug this column exists to prevent.
+ * - A null recorded value means either the task predates this column, or its
+ *   execute()/restore() run never went through distribution at all — in
+ *   that case this falls back to `resolveExecutionRepositoryEntry`'s live
+ *   resolution exactly as every call site did before this column existed
+ *   (itself already fail-closed when distribution is currently required but
+ *   unresolved, and a plain `repositories[0]` lookup otherwise).
+ */
+export function resolveRecordedDistributionRepositoryEntry(
+  recordedRepositoryId: number | null | undefined,
+  server: Pick<ServerConfig, 'type' | 'isolationIntent'> | null,
+  projectServer: Pick<ProjectServer, 'distributeCode' | 'distributionRepositoryId'> | null,
+  project: Pick<ProjectDetail, 'repositories'> | null,
+): RecordedDistributionRepositoryResolution {
+  if (recordedRepositoryId != null) {
+    const resolved = project?.repositories?.find((r) => r.id === recordedRepositoryId) ?? null;
+    if (!resolved) return { ok: false, recordedRepositoryId };
+    return { ok: true, entry: resolved };
+  }
+  return { ok: true, entry: resolveExecutionRepositoryEntry(server, projectServer, project) };
+}
+
 export interface PerformDistributionParams {
   server: ServerConfig;
   projectServer: Pick<ProjectServer, 'distributeCode' | 'distributionRepositoryId'> | null;

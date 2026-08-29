@@ -49,7 +49,7 @@ import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionMani
 import { TuiWorkerRuntime } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
 import { resolveTaskServerName, resolveTmuxSession, resolveUnitId, resolveBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
-import { performDistribution, resolveExecutionRepositoryEntry, isDistributionRequiredButRepositoryUnresolved, type DistributionOutcome } from './DistributionHelper';
+import { performDistribution, resolveExecutionRepositoryEntry, resolveRecordedDistributionRepositoryEntry, isDistributionRequiredButRepositoryUnresolved, type DistributionOutcome } from './DistributionHelper';
 import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
 import type { SqliteAgentTurnRepository } from '../turns/SqliteAgentTurnRepository';
 import type { TurnSignalHub } from '../turns/TurnSignalHub';
@@ -913,6 +913,18 @@ export class ExecuteTaskUseCase {
       // `resumeStateMachine()` must read this back instead of re-resolving
       // from the (possibly since-changed) project/project-server config.
       this.taskRepo.update(taskId, { distributionRepositoryId: distOutcome.repositoryId } as Partial<Task>);
+    } else {
+      // Issue #87 review follow-up, Important finding 4: this run did NOT
+      // distribute — explicitly clear any distribution repository a PRIOR
+      // execution of this same task recorded (e.g. the task's server was
+      // switched from an isolated/distribute_code server to `local`). Never
+      // leave the old value in place: a later resume would otherwise read
+      // that stale id as "authoritative" (resolveRecordedDistributionRepositoryEntry)
+      // and fail closed or target the wrong repository for a working
+      // directory that no longer came from distribution at all. Written
+      // unconditionally on every run — "the current run's truth", not
+      // "write only when there's something to write".
+      this.taskRepo.update(taskId, { distributionRepositoryId: null } as Partial<Task>);
     }
     // Tracks fetch distribution's outcome this call (null when distribution
     // did not run, e.g. a `local` server, or an agent/ssh server whose
@@ -1635,13 +1647,25 @@ export class ExecuteTaskUseCase {
         const phaseNames = ut ? ut.phases.map((p) => p.name) : [];
         if (phaseNames.includes(origCurrentPhase)) {
           const effectiveSelfReviewMax = task.selfReviewMaxAttempts ?? unit.selfReviewMaxAttempts;
-          // Issue #87 review (forge/87-mirror follow-up), Important finding 1:
-          // resolve once from this follow-up's own `followUpProject`/
-          // `followUpProjectServer` (already read above for `followUpVars`),
-          // not a further re-read inside the loop — see
-          // `PhaseLoopRunner.stateMachineLoop`'s `distributionRepoEntry`
-          // parameter doc comment.
-          const followUpDistributionRepoEntry = resolveExecutionRepositoryEntry(server, followUpProjectServer, followUpProject);
+          // Issue #87 review follow-up, Important finding 2: must apply the
+          // SAME "recorded distribution repository is authoritative, fail
+          // closed if it no longer resolves" rule resumeStateMachine() does
+          // — this follow-up continuation resumes the exact same
+          // already-distributed working directory a plan-approval wait or a
+          // startup recovery would resume via resumeStateMachine(), so it
+          // cannot re-resolve from `followUpProject`/`followUpProjectServer`'s
+          // CURRENT configuration either. See
+          // `resolveRecordedDistributionRepositoryEntry`'s doc comment.
+          const followUpResolution = resolveRecordedDistributionRepositoryEntry(task.distributionRepositoryId, server, followUpProjectServer, followUpProject);
+          if (!followUpResolution.ok) {
+            this.appendLog(taskId, unitId, 'status_change', {
+              status: 'error',
+              message: `This task's recorded distribution repository (id ${followUpResolution.recordedRepositoryId}) no longer exists — refusing to resume with a different repository`,
+            });
+            this.taskRepo.updateStatus(taskId, 'failed');
+            return;
+          }
+          const followUpDistributionRepoEntry = followUpResolution.entry;
           await this.phaseLoopRunner.stateMachineLoop({ ...unit, selfReviewMaxAttempts: effectiveSelfReviewMax }, serverName, { ...task, currentPhase: origCurrentPhase }, server, target, abortController.signal, windowTarget, followUpDistributionRepoEntry);
           return;
         }
@@ -1718,36 +1742,21 @@ export class ExecuteTaskUseCase {
     // mid-run). See `Task.distributionRepositoryId`'s doc comment.
     const resumeProject = this.projectRepo.findById(task.projectId);
     const resumeProjectServer = resumeProject ? this.projectServerRepo.find(task.projectId, serverName) : null;
-    let resumeDistributionRepoEntry: ProjectRepositoryEntry | null;
-    if (task.distributionRepositoryId != null) {
-      // A recorded value exists — it is authoritative and MUST be used
-      // as-is. If it can no longer be resolved (the repository row was
-      // deleted since distribution ran), fail closed rather than falling
-      // back to the project's current configuration: that fallback is
-      // exactly the bug this column exists to close (notarizing/pushing
-      // repository A's code against repository B).
-      const resolved = resumeProject?.repositories?.find((r) => r.id === task.distributionRepositoryId) ?? null;
-      if (!resolved) {
-        this.appendLog(taskId, unitId, 'status_change', {
-          status: 'error',
-          message: `This task's recorded distribution repository (id ${task.distributionRepositoryId}) no longer exists — refusing to resume with a different repository`,
-        });
-        this.taskRepo.updateStatus(taskId, 'failed');
-        return;
-      }
-      resumeDistributionRepoEntry = resolved;
-    } else {
-      // No recorded value: either this task predates the column, or its
-      // execute()/restore() run never went through distribution at all.
-      // `resolveExecutionRepositoryEntry` already fails closed (returns
-      // null, never `repositories[0]`) when THIS server currently requires
-      // distribution — the same fail-closed handling PhaseLoopRunner and
-      // `isPushCompleted()` already apply to a null entry. When
-      // distribution is not required, it resolves `repositories[0]` exactly
-      // as it always has, so an ordinary (non-distribution) project/task is
-      // unaffected by this column's introduction.
-      resumeDistributionRepoEntry = resolveExecutionRepositoryEntry(server, resumeProjectServer, resumeProject);
+    // Shared with followUp()'s state-machine continuation and
+    // isPushCompleted() (Issue #87 review follow-up, Important findings 2 &
+    // 3) — see `resolveRecordedDistributionRepositoryEntry`'s doc comment
+    // for the full "recorded value is authoritative, fail closed if it no
+    // longer resolves" rule.
+    const resumeResolution = resolveRecordedDistributionRepositoryEntry(task.distributionRepositoryId, server, resumeProjectServer, resumeProject);
+    if (!resumeResolution.ok) {
+      this.appendLog(taskId, unitId, 'status_change', {
+        status: 'error',
+        message: `This task's recorded distribution repository (id ${resumeResolution.recordedRepositoryId}) no longer exists — refusing to resume with a different repository`,
+      });
+      this.taskRepo.updateStatus(taskId, 'failed');
+      return;
     }
+    const resumeDistributionRepoEntry: ProjectRepositoryEntry | null = resumeResolution.entry;
 
     this.phaseLoopRunner.stateMachineLoop(
       { ...unit, selfReviewMaxAttempts: effectiveSelfReviewMax },
@@ -1825,10 +1834,20 @@ export class ExecuteTaskUseCase {
     if (!workingDir) return false;
     const branch = task.worktreeBranch || task.branch || '';
     if (!branch) return false;
-    // Issue #87 13th-round review, Important finding: must agree with
-    // whichever repository distribution actually pulled onto this server —
-    // see `resolveExecutionRepositoryEntry`'s doc comment.
-    const repoEntry2 = resolveExecutionRepositoryEntry(server, ps, project);
+    // Issue #87 review follow-up, Important finding 3: must use the task's
+    // RECORDED distribution repository when one exists (same rule
+    // resumeStateMachine()/followUp() apply), not re-resolve from `ps`/
+    // `project`'s current configuration — a working tree distributed from
+    // repository A must never have its push/PR verified against repository
+    // B just because the project server's config changed while the task was
+    // pushing. Fails closed (never calls PR creation/verification) when the
+    // recorded value no longer resolves. A task with no recorded value
+    // (predates this column, or never went through distribution) falls back
+    // to `resolveExecutionRepositoryEntry`'s live resolution unchanged. See
+    // `resolveRecordedDistributionRepositoryEntry`'s doc comment.
+    const repoResolution = resolveRecordedDistributionRepositoryEntry(task.distributionRepositoryId, server, ps, project);
+    if (!repoResolution.ok) return false;
+    const repoEntry2 = repoResolution.entry;
     const repo = repoEntry2 ? this.projectRepo.findRepositoryById(repoEntry2.id) : null;
     // Issue #87 review finding (Important), shared with PhaseLoopRunner's
     // pushing-phase probe via `isDistributionRequiredButRepositoryUnresolved`

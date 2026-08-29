@@ -437,6 +437,13 @@ export class TaskRestoreService {
         // ExecuteTaskUseCase.execute() — see Task.distributionRepositoryId's
         // doc comment.
         taskRepo.update(task.id, { distributionRepositoryId: distOutcome.repositoryId } as Partial<Task>);
+      } else {
+        // Issue #87 review follow-up, Important finding 4: same "write the
+        // current run's truth every time" fix as ExecuteTaskUseCase.execute()
+        // — a restore that did NOT distribute must clear any stale value a
+        // prior execution recorded, not leave it in place for a later resume
+        // to misread as still-authoritative. See execute()'s matching branch.
+        taskRepo.update(task.id, { distributionRepositoryId: null } as Partial<Task>);
       }
       const distStatus: 'distributed' | 'already_current' | null = distOutcome.required ? distOutcome.distStatus : null;
 
