@@ -49,7 +49,7 @@ import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionMani
 import { TuiWorkerRuntime } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
 import { resolveTaskServerName, resolveTmuxSession, resolveUnitId, resolveBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
-import { performDistribution, resolveExecutionRepositoryEntry, type DistributionOutcome } from './DistributionHelper';
+import { performDistribution, resolveExecutionRepositoryEntry, isDistributionRequired, type DistributionOutcome } from './DistributionHelper';
 import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
 import type { SqliteAgentTurnRepository } from '../turns/SqliteAgentTurnRepository';
 import type { TurnSignalHub } from '../turns/TurnSignalHub';
@@ -1762,6 +1762,22 @@ export class ExecuteTaskUseCase {
     // see `resolveExecutionRepositoryEntry`'s doc comment.
     const repoEntry2 = resolveExecutionRepositoryEntry(server, ps, project);
     const repo = repoEntry2 ? this.projectRepo.findRepositoryById(repoEntry2.id) : null;
+    // Issue #87 review finding (Important): when distribution is required for
+    // this server/project-server pairing, `resolveExecutionRepositoryEntry`
+    // can legitimately return `null` (distribution target unset or the
+    // repository row was deleted — see its doc comment). `PushVerifier`
+    // treats a missing `repo` as "no repository info to check against, skip
+    // PR verification" — a fallback that only makes sense for the
+    // never-registered-a-repository case that fallback exists for. Reusing
+    // it here for the required-but-unresolved case would silently accept
+    // "push completed" from a SHA match alone even though the run's actual
+    // target repository/PR could not be identified. So fail fast (treat as
+    // not-yet-completed, never call PR creation/verification) instead of
+    // falling through into that fallback. Distribution-not-required runs are
+    // unaffected: `repo` there falls back to `project.repositories[0]` (or
+    // stays `null` for a project with no registered repository at all),
+    // preserving the pre-existing SHA-only verification behavior.
+    if (isDistributionRequired(server, ps) && !repo) return false;
     if (!task.skipPr) {
       await this.pullRequestCreator.ensureCreated(task.id, resolvedUnitId, repo, branch, {
         title: task.title,

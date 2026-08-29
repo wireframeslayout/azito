@@ -141,3 +141,47 @@ export function isDistributionRepositorySelected(
   if (!distributionRepositoryId) return false;
   return (repositories ?? []).some((r) => String(r.id) === distributionRepositoryId);
 }
+
+/** The subset of a project-server row `resolveDistributionRepositoryIdToggleValue` depends on. */
+export interface DistributionRepositoryIdToggleProjectServer {
+  serverName: string;
+  distributionRepositoryId?: number | null;
+}
+
+/**
+ * Issue #87 review (Minor finding): the distribution-target-repository
+ * `<select>` sits right next to the distribute-code toggle in
+ * `ProjectSettings.tsx` and shares the exact same "opened before
+ * `projectServers` resolved" hazard `resolveDistributeCodeToggleValue` was
+ * introduced for — but it was never given the same fix. Derives the form's
+ * `psDistributionRepositoryId` string value (`''` when unset, matching
+ * `FormSelect`'s string-only contract) from the live `projectServers` list
+ * for `serverName`, so the caller's effect can depend on `projectServers`
+ * directly instead of only reading it once at form-open time.
+ */
+export function resolveDistributionRepositoryIdToggleValue(
+  projectServers: DistributionRepositoryIdToggleProjectServer[],
+  serverName: string,
+): string {
+  const existing = projectServers.find((ps) => ps.serverName === serverName);
+  return existing?.distributionRepositoryId != null ? String(existing.distributionRepositoryId) : '';
+}
+
+/**
+ * Guards `resolveDistributionRepositoryIdToggleValue`'s re-derivation
+ * against clobbering an in-progress user edit — the same
+ * touched-wins-over-late-response rule
+ * `resolveDistributeCodeToggleOnProjectServersChange` already applies to the
+ * neighboring distribute-code toggle (see its doc comment). `touched` resets
+ * to `false` only when the form is (re)opened for a server
+ * (`handleOpenServerForm`), same as every other field in that form.
+ */
+export function resolveDistributionRepositoryIdOnProjectServersChange(
+  currentValue: string,
+  touched: boolean,
+  projectServers: DistributionRepositoryIdToggleProjectServer[],
+  serverName: string,
+): string {
+  if (touched) return currentValue;
+  return resolveDistributionRepositoryIdToggleValue(projectServers, serverName);
+}

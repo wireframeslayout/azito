@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isDistributeCodeLocked, isDistributionRepositorySelected, resolveDistributeCodeForSave, resolveDistributeCodeToggleValue, resolveDistributeCodeToggleOnProjectServersChange, shouldShowDistributeCodeBadge } from './distributeCodePolicy';
+import { isDistributeCodeLocked, isDistributionRepositorySelected, resolveDistributeCodeForSave, resolveDistributeCodeToggleValue, resolveDistributeCodeToggleOnProjectServersChange, resolveDistributionRepositoryIdToggleValue, resolveDistributionRepositoryIdOnProjectServersChange, shouldShowDistributeCodeBadge } from './distributeCodePolicy';
 
 // Issue #87 third-party review, seventh pass, Minor finding 3: an isolated
 // server distributes code unconditionally on the backend (`isolationIntent`),
@@ -166,5 +166,59 @@ describe('isDistributionRepositorySelected', () => {
 
   it('is false when repositories is undefined', () => {
     expect(isDistributionRepositorySelected(undefined, '1')).toBe(false);
+  });
+});
+
+// 指摘2 (Issue #87 review, forge/87-mirror follow-up): the
+// distribution-target-repository select shares the same "form opened before
+// projectServers resolved" hazard `resolveDistributeCodeToggleValue`/
+// `resolveDistributeCodeToggleOnProjectServersChange` were introduced for,
+// but had not been fixed the same way.
+describe('resolveDistributionRepositoryIdToggleValue', () => {
+  it('resolves to the saved id (as a string) for the matching project-server row', () => {
+    const projectServers = [{ serverName: 'server-a', distributionRepositoryId: 2 }];
+    expect(resolveDistributionRepositoryIdToggleValue(projectServers, 'server-a')).toBe('2');
+  });
+
+  it('resolves to empty string when no row exists for this server yet', () => {
+    const projectServers = [{ serverName: 'server-b', distributionRepositoryId: 2 }];
+    expect(resolveDistributionRepositoryIdToggleValue(projectServers, 'server-a')).toBe('');
+  });
+
+  it('resolves to empty string when the row exists but distributionRepositoryId is null', () => {
+    const projectServers = [{ serverName: 'server-a', distributionRepositoryId: null }];
+    expect(resolveDistributionRepositoryIdToggleValue(projectServers, 'server-a')).toBe('');
+  });
+});
+
+describe('resolveDistributionRepositoryIdOnProjectServersChange', () => {
+  it('re-derives from the freshly-arrived projectServers when the user has not touched the field', () => {
+    // Form opened before the projectServers fetch resolved (initial value
+    // ''), then the response arrives with the saved repository id.
+    const projectServers = [{ serverName: 'server-a', distributionRepositoryId: 3 }];
+    expect(
+      resolveDistributionRepositoryIdOnProjectServersChange('', false, projectServers, 'server-a'),
+    ).toBe('3');
+  });
+
+  it('keeps the user\'s own selection when touched, even though a late projectServers response disagrees', () => {
+    const projectServers = [{ serverName: 'server-a', distributionRepositoryId: 1 }];
+    expect(
+      resolveDistributionRepositoryIdOnProjectServersChange('3', true, projectServers, 'server-a'),
+    ).toBe('3');
+  });
+
+  it('keeps the user\'s edit across an unrelated later refetch while the form stays open', () => {
+    const projectServers = [{ serverName: 'server-a', distributionRepositoryId: 1 }];
+    expect(
+      resolveDistributionRepositoryIdOnProjectServersChange('', true, projectServers, 'server-a'),
+    ).toBe('');
+  });
+
+  it('re-derives again once touched resets to false (form reopened for the server)', () => {
+    const projectServers = [{ serverName: 'server-a', distributionRepositoryId: 4 }];
+    expect(
+      resolveDistributionRepositoryIdOnProjectServersChange('', false, projectServers, 'server-a'),
+    ).toBe('4');
   });
 });

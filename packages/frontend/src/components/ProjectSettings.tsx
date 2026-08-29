@@ -17,7 +17,7 @@ import { FormInput, FormSelect, LoadingState, baseInputStyle, Button } from './u
 import type { Window, Unit, Server } from '../pages/workspace/types';
 import { parseRepoUrl as parseGitRepoUrl } from '../lib/gitProvider';
 import { notifyProjectsChanged } from '../lib/projectsChanged';
-import { isDistributeCodeLocked, isDistributionRepositorySelected, resolveDistributeCodeForSave, resolveDistributeCodeToggleOnProjectServersChange, shouldShowDistributeCodeBadge } from '../lib/distributeCodePolicy';
+import { isDistributeCodeLocked, isDistributionRepositorySelected, resolveDistributeCodeForSave, resolveDistributeCodeToggleOnProjectServersChange, resolveDistributionRepositoryIdOnProjectServersChange, shouldShowDistributeCodeBadge } from '../lib/distributeCodePolicy';
 import { useToast } from '../hooks/useToast';
 import { useConfirm } from '../hooks/useConfirm';
 
@@ -94,6 +94,12 @@ export function useProjectSettings(
   // string-only value contract; converted to `number | null` only at the
   // request boundary (`handleSaveServer`).
   const [psDistributionRepositoryId, setPsDistributionRepositoryId] = useState('');
+  // Issue #87 review (Minor finding): mirrors `psDistributeCodeTouchedRef` —
+  // tracks whether the user has edited the distribution-target-repository
+  // select since the form was last (re)opened for the current `psServer`, so
+  // the re-derivation effect below can stop overwriting it once touched. See
+  // `resolveDistributionRepositoryIdOnProjectServersChange`'s doc comment.
+  const psDistributionRepositoryIdTouchedRef = useRef(false);
 
   const [addRepoOpen, setAddRepoOpen] = useState(false);
   const [repoUrl, setRepoUrl] = useState('');
@@ -178,6 +184,27 @@ export function useProjectSettings(
   const handleSetPsDistributeCode = useCallback((value: boolean) => {
     psDistributeCodeTouchedRef.current = true;
     setPsDistributeCode(value);
+  }, []);
+
+  // Issue #87 review (Minor finding): the distribution-target-repository
+  // select had the same "form opened before `projectServers` resolved" bug
+  // `psDistributeCode`'s effect above was already fixed for — re-derive it
+  // whenever `projectServers` (or `psServer`) changes, unless the user has
+  // touched the field since the form was (re)opened. See
+  // `resolveDistributionRepositoryIdOnProjectServersChange`'s doc comment.
+  useEffect(() => {
+    setPsDistributionRepositoryId((prev) => resolveDistributionRepositoryIdOnProjectServersChange(
+      prev, psDistributionRepositoryIdTouchedRef.current, projectServers, psServer,
+    ));
+  }, [psServer, projectServers]);
+
+  // Wraps the raw `setPsDistributionRepositoryId` state setter for the
+  // select's own `onChange` (the only manual-edit call site) so a user
+  // interaction marks the field dirty — see
+  // `psDistributionRepositoryIdTouchedRef`'s doc comment above.
+  const handleSetPsDistributionRepositoryId = useCallback((value: string) => {
+    psDistributionRepositoryIdTouchedRef.current = true;
+    setPsDistributionRepositoryId(value);
   }, []);
 
   useEffect(() => {
@@ -315,6 +342,9 @@ export function useProjectSettings(
     // it, same as every other field here being freshly initialized from
     // `existing`. See `psDistributeCodeTouchedRef`'s doc comment above.
     psDistributeCodeTouchedRef.current = false;
+    // Same reset as `psDistributeCodeTouchedRef` above, for the
+    // distribution-target-repository select.
+    psDistributionRepositoryIdTouchedRef.current = false;
     setAddPsOpen(true);
   }, [projectServers]);
 
@@ -340,7 +370,7 @@ export function useProjectSettings(
     projectServers, addPsOpen, setAddPsOpen, psServer, setPsServer,
     psWorkDir, setPsWorkDir, psBranch, setPsBranch, psTmuxSession, setPsTmuxSession,
     psInputPolicy, setPsInputPolicy, psDistributeCode, setPsDistributeCode: handleSetPsDistributeCode,
-    psDistributionRepositoryId, setPsDistributionRepositoryId,
+    psDistributionRepositoryId, setPsDistributionRepositoryId: handleSetPsDistributionRepositoryId,
     handleSaveServer, handleRemoveServer, handleOpenServerForm,
     // Danger
     handleDelete,

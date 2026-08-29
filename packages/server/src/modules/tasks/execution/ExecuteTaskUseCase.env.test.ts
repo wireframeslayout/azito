@@ -323,6 +323,7 @@ function buildUseCase(opts: {
     sendKeys: vi.fn(async () => {}),
     checkPaneExists: vi.fn(async () => true),
     uiTokenEnvForServer: vi.fn(() => ({})),
+    execCommand: vi.fn(async (_server: unknown, _cmd: string) => ({ stdout: '', stderr: '', code: 0 })),
   };
 
   const worktreeServiceFactory = { create: vi.fn() };
@@ -3176,5 +3177,60 @@ describe('ExecuteTaskUseCase.isPushCompleted repository selection agrees with di
     await harness.useCase.isPushCompleted(1);
 
     expect(harness.gitProvider.findPullRequestByBranch).toHaveBeenCalledWith(repoAWithToken, 'task/1-slug');
+  });
+});
+
+// 指摘1 (Issue #87 review): when distribution is required but
+// `resolveExecutionRepositoryEntry` cannot identify the distributed
+// repository (distributionRepositoryId unset, or the repository row was
+// deleted), `isPushCompleted()` must treat the run as not-yet-completed —
+// never fall into `PushVerifier`'s "no repo info, skip PR check" fallback,
+// which would accept a bare SHA match as "push completed" even though the
+// required repository/PR could not be identified.
+describe('ExecuteTaskUseCase.isPushCompleted fails closed when a required distribution repository is unresolved (Issue #87 review)', () => {
+  const repoA = { id: 1, name: null, url: 'https://github.com/acme/repo-a.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-a', hasToken: true };
+
+  it('returns false and calls neither PR creation nor push verification when distribution is required but distributionRepositoryId is unset', async () => {
+    const task = makeTask({
+      id: 1, unitId: 10, serverName: 'agent-1',
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', skipPr: false,
+    });
+    const server = makeServer({ name: 'agent-1', type: 'agent', isolationIntent: true });
+    const project = makeProject({ defaultUnitId: null, repositories: [repoA] });
+    const unit = makeUnit({ id: 10 });
+    const harness = buildUseCase({
+      task, project, units: [unit], server,
+      projectServer: { workingDirectory: '/work', branch: null, tmuxSession: 'azito', distributeCode: false, distributionRepositoryId: null },
+    });
+
+    const result = await harness.useCase.isPushCompleted(1);
+
+    expect(result).toBe(false);
+    expect(harness.gitProvider.findPullRequestByBranch).not.toHaveBeenCalled();
+    expect(harness.tmux.execCommand).not.toHaveBeenCalled();
+  });
+
+  it('keeps SHA-only verification when distribution is not required, even with no repositories registered', async () => {
+    const task = makeTask({
+      id: 1, unitId: 10, serverName: 'agent-1',
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', skipPr: true,
+    });
+    const server = makeServer({ name: 'agent-1', type: 'agent', isolationIntent: false });
+    const project = makeProject({ defaultUnitId: null, repositories: [] });
+    const unit = makeUnit({ id: 10 });
+    const harness = buildUseCase({
+      task, project, units: [unit], server,
+      projectServer: { workingDirectory: '/work', branch: null, tmuxSession: 'azito', distributeCode: false, distributionRepositoryId: null },
+    });
+    const fakeSha = 'a'.repeat(40);
+    harness.tmux.execCommand = vi.fn(async (_server: unknown, cmd: string) => {
+      if (cmd.includes('rev-parse HEAD')) return { stdout: `${fakeSha}\n`, stderr: '', code: 0 };
+      if (cmd.includes('ls-remote')) return { stdout: `${fakeSha}\trefs/heads/task/1-slug\n`, stderr: '', code: 0 };
+      return { stdout: '', stderr: '', code: 0 };
+    });
+
+    const result = await harness.useCase.isPushCompleted(1);
+
+    expect(result).toBe(true);
   });
 });
