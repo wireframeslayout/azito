@@ -37,7 +37,7 @@ import type { PushNotaryService } from '../../git/hub-transfer/PushNotaryService
 import type { AgentTurn } from '../turns/AgentTurn';
 import { checkExecutionGate } from './ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionManifest';
-import { resolveExecutionRepositoryEntry } from './DistributionHelper';
+import { isDistributionRequiredButRepositoryUnresolved } from './DistributionHelper';
 import type { ProjectRepository } from '../../projects/Project';
 
 function sleep(ms: number): Promise<void> {
@@ -299,6 +299,23 @@ export class PhaseLoopRunner {
     target: string,
     signal: AbortSignal,
     supervisorTarget: string,
+    // Issue #87 review (forge/87-mirror follow-up), Important finding 1: the
+    // repository this run treats as THE distribution target, resolved by the
+    // CALLER once against whichever project/projectServer snapshot it locked
+    // when it started/resumed this run (ExecuteTaskUseCase.execute() resolves
+    // it from `lockedProject`/`lockedProjectServer`, the exact snapshot
+    // `performDistribution()` itself distributed against). This method used
+    // to re-derive it here via a fresh `projectRepo.findById()`/
+    // `projectServerRepo.find()` read — a run can span many phases over
+    // minutes to hours, so a `distributionRepositoryId` edit mid-run could
+    // make that fresh read disagree with what was actually distributed onto
+    // the server, silently retargeting prompt/PR-creation/push-verification/
+    // hub-notarization/final-PR-URL-lookup at a DIFFERENT repository than the
+    // one the code came from. Every downstream repository decision below
+    // MUST use this parameter directly, never re-resolve it from `project`/
+    // `projectServer` (still read below, but only for non-repository fields
+    // like `workingDirectory` fallbacks).
+    distributionRepoEntry: ProjectRepository | null,
   ): Promise<void> {
     const project = this.projectRepo.findById(task.projectId);
     const projectServer = project ? this.projectServerRepo.find(task.projectId, serverName) : null;
@@ -385,8 +402,10 @@ export class PhaseLoopRunner {
       // names the actual provider the worker is pushing to (`gh`/`glab`)
       // instead of always `project.repositories[0]`'s — see
       // `resolveTaskPromptVars`'s doc comment on `resolvedGitProvider`.
-      const promptRepoEntry = resolveExecutionRepositoryEntry(server, projectServer, project);
-      const vars = resolveTaskPromptVars(this.taskRepo, this.projectRepo, this.unitRepo, this.projectServerRepo, task.id, promptRepoEntry?.provider);
+      // Uses the caller-locked `distributionRepoEntry` (Issue #87 review,
+      // forge/87-mirror follow-up, Important finding 1), not a fresh
+      // re-resolution — see this method's parameter doc comment.
+      const vars = resolveTaskPromptVars(this.taskRepo, this.projectRepo, this.unitRepo, this.projectServerRepo, task.id, distributionRepoEntry?.provider);
       const expandedPrompt = renderSidekickBody(sidekick, {
         ...vars,
         selfReview: {
@@ -483,11 +502,25 @@ export class PhaseLoopRunner {
         if (probeDir && probeBranch) {
           // Issue #87 13th-round review, Important finding: must agree with
           // whichever repository distribution actually pulled onto this
-          // server, not always `repositories[0]` — see
-          // `resolveExecutionRepositoryEntry`'s doc comment.
-          const probeRepoEntry = resolveExecutionRepositoryEntry(server, projectServer, project);
-          const probeRepo = probeRepoEntry ? this.projectRepo.findRepositoryById(probeRepoEntry.id) : null;
+          // server, not always `repositories[0]` — uses the caller-locked
+          // `distributionRepoEntry` (Issue #87 review, forge/87-mirror
+          // follow-up, Important finding 1), never a fresh re-resolution —
+          // see this method's parameter doc comment.
+          const probeRepo = distributionRepoEntry ? this.projectRepo.findRepositoryById(distributionRepoEntry.id) : null;
           pushingProbe = async () => {
+            // Issue #87 review (forge/87-mirror follow-up), Important
+            // finding 2: fail closed — same rule as
+            // ExecuteTaskUseCase.isPushCompleted(), shared via
+            // `isDistributionRequiredButRepositoryUnresolved` (see its doc
+            // comment) — when distribution is required but the target
+            // repository could not be resolved, never call PR creation or
+            // push verification (which would otherwise accept a SHA-only
+            // match against nothing in particular); treat the phase as
+            // not-yet-completed instead.
+            if (isDistributionRequiredButRepositoryUnresolved(server, projectServer, probeRepo)) {
+              this.appendLog(task.id, unit.id, 'command', { type: 'pushing_probe_blocked_unresolved_repository' });
+              return false;
+            }
             // Create the PR (if due) before verifying — verifyPushCompleted's own
             // PR-existence check then sees what this call just created.
             // PullRequestCreator itself never rejects (best-effort, self-contained
@@ -575,15 +608,14 @@ export class PhaseLoopRunner {
       // Hub push notarization for isolated servers (Issue #87 Phase 2)
       if (server.isolationIntent && phaseDef.pushVerify && this.pushNotaryService
           && classification.status === 'phase_complete') {
-        const notaryProject = this.projectRepo.findById(task.projectId);
         // Issue #87 13th-round review, Important finding: the hub push
         // notary must target the SAME repository fetch distribution pulled
-        // onto this isolated server — see
-        // `resolveExecutionRepositoryEntry`'s doc comment. `projectServer`
-        // here is the outer stateMachineLoop resolution (same task/server
-        // pairing this notary block itself operates on).
-        const probeRepoEntry = resolveExecutionRepositoryEntry(server, projectServer, notaryProject);
-        if (!probeRepoEntry) {
+        // onto this isolated server. Uses the caller-locked
+        // `distributionRepoEntry` (Issue #87 review, forge/87-mirror
+        // follow-up, Important finding 1), not a fresh
+        // `projectRepo.findById()`/`resolveExecutionRepositoryEntry()`
+        // re-resolution — see this method's parameter doc comment.
+        if (!distributionRepoEntry) {
           // `server.isolationIntent` gates this whole block, so
           // `isDistributionRequired` is true here and
           // `resolveExecutionRepositoryEntry` NEVER falls back to
@@ -604,7 +636,7 @@ export class PhaseLoopRunner {
           this.taskRepo.updateStatus(task.id, 'failed');
           return;
         }
-        const probeRepo = this.projectRepo.findRepositoryById(probeRepoEntry.id);
+        const probeRepo = this.projectRepo.findRepositoryById(distributionRepoEntry.id);
         if (probeRepo?.token) {
           this.appendLog(task.id, unit.id, 'command', { type: 'hub_push_start' });
           const currentTaskForPush = this.taskRepo.findById(task.id);
@@ -708,8 +740,10 @@ export class PhaseLoopRunner {
     const gitInfo = server.type === 'local'
       ? this.gitInfoCollector.collectGitInfoSync(workingDir, baseBranchForDiff)
       : await this.gitInfoCollector.collectGitInfoRemote(server, workingDir, baseBranchForDiff);
-    const finalRepoEntry = resolveExecutionRepositoryEntry(server, projectServer, project);
-    const prUrl = await this.findPrUrl(finalRepoEntry, gitInfo.branch);
+    // Uses the caller-locked `distributionRepoEntry` (Issue #87 review,
+    // forge/87-mirror follow-up, Important finding 1), not a fresh
+    // re-resolution — see this method's parameter doc comment.
+    const prUrl = await this.findPrUrl(distributionRepoEntry, gitInfo.branch);
     const updateFields: Record<string, unknown> = {};
     if (prUrl) updateFields.prUrl = prUrl;
     if (gitInfo.changedFiles) updateFields.changedFiles = gitInfo.changedFiles;

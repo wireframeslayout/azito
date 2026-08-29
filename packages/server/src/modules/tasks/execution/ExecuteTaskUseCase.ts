@@ -49,7 +49,7 @@ import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionMani
 import { TuiWorkerRuntime } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
 import { resolveTaskServerName, resolveTmuxSession, resolveUnitId, resolveBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
-import { performDistribution, resolveExecutionRepositoryEntry, isDistributionRequired, type DistributionOutcome } from './DistributionHelper';
+import { performDistribution, resolveExecutionRepositoryEntry, isDistributionRequiredButRepositoryUnresolved, type DistributionOutcome } from './DistributionHelper';
 import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
 import type { SqliteAgentTurnRepository } from '../turns/SqliteAgentTurnRepository';
 import type { TurnSignalHub } from '../turns/TurnSignalHub';
@@ -1175,6 +1175,16 @@ export class ExecuteTaskUseCase {
 
     const effectiveSelfReviewMax = task.selfReviewMaxAttempts ?? unit.selfReviewMaxAttempts;
 
+    // Issue #87 review (forge/87-mirror follow-up), Important finding 1:
+    // resolve the distribution repository ONCE here, against the LOCKED
+    // `lockedProject`/`lockedProjectServer` snapshot `performDistribution()`
+    // itself distributed against (see their declaration comment above), and
+    // pass it into the state machine loop instead of letting it re-derive
+    // its own (possibly-since-changed) project/projectServer read — see
+    // `PhaseLoopRunner.stateMachineLoop`'s `distributionRepoEntry` parameter
+    // doc comment for the full rationale.
+    const distributionRepoEntry = resolveExecutionRepositoryEntry(server, lockedProjectServer, lockedProject);
+
     const runLoop = this.phaseLoopRunner.stateMachineLoop(
       { ...unit, selfReviewMaxAttempts: effectiveSelfReviewMax },
       serverName,
@@ -1183,6 +1193,7 @@ export class ExecuteTaskUseCase {
       target,
       abortController.signal,
       windowTarget,
+      distributionRepoEntry,
     );
 
     runLoop
@@ -1618,7 +1629,14 @@ export class ExecuteTaskUseCase {
         const phaseNames = ut ? ut.phases.map((p) => p.name) : [];
         if (phaseNames.includes(origCurrentPhase)) {
           const effectiveSelfReviewMax = task.selfReviewMaxAttempts ?? unit.selfReviewMaxAttempts;
-          await this.phaseLoopRunner.stateMachineLoop({ ...unit, selfReviewMaxAttempts: effectiveSelfReviewMax }, serverName, { ...task, currentPhase: origCurrentPhase }, server, target, abortController.signal, windowTarget);
+          // Issue #87 review (forge/87-mirror follow-up), Important finding 1:
+          // resolve once from this follow-up's own `followUpProject`/
+          // `followUpProjectServer` (already read above for `followUpVars`),
+          // not a further re-read inside the loop — see
+          // `PhaseLoopRunner.stateMachineLoop`'s `distributionRepoEntry`
+          // parameter doc comment.
+          const followUpDistributionRepoEntry = resolveExecutionRepositoryEntry(server, followUpProjectServer, followUpProject);
+          await this.phaseLoopRunner.stateMachineLoop({ ...unit, selfReviewMaxAttempts: effectiveSelfReviewMax }, serverName, { ...task, currentPhase: origCurrentPhase }, server, target, abortController.signal, windowTarget, followUpDistributionRepoEntry);
           return;
         }
       }
@@ -1682,6 +1700,18 @@ export class ExecuteTaskUseCase {
 
     const effectiveSelfReviewMax = task.selfReviewMaxAttempts ?? unit.selfReviewMaxAttempts;
 
+    // Issue #87 review (forge/87-mirror follow-up), Important finding 1:
+    // resolve once here (this method never runs distribution itself — only
+    // execute() does — so there is no `lockedProject`/`lockedProjectServer`
+    // to reuse, but the same read-once-and-pass-down discipline applies:
+    // resolve exactly once, before the loop starts, and let every phase of
+    // this resumed run agree with it) — see
+    // `PhaseLoopRunner.stateMachineLoop`'s `distributionRepoEntry` parameter
+    // doc comment.
+    const resumeProject = this.projectRepo.findById(task.projectId);
+    const resumeProjectServer = resumeProject ? this.projectServerRepo.find(task.projectId, serverName) : null;
+    const resumeDistributionRepoEntry = resolveExecutionRepositoryEntry(server, resumeProjectServer, resumeProject);
+
     this.phaseLoopRunner.stateMachineLoop(
       { ...unit, selfReviewMaxAttempts: effectiveSelfReviewMax },
       serverName,
@@ -1690,6 +1720,7 @@ export class ExecuteTaskUseCase {
       target,
       abortController.signal,
       windowTarget,
+      resumeDistributionRepoEntry,
     )
       .catch((err: Error) => {
         this.appendLog(taskId, unitId, 'status_change', { status: 'error', message: err.message });
@@ -1762,22 +1793,12 @@ export class ExecuteTaskUseCase {
     // see `resolveExecutionRepositoryEntry`'s doc comment.
     const repoEntry2 = resolveExecutionRepositoryEntry(server, ps, project);
     const repo = repoEntry2 ? this.projectRepo.findRepositoryById(repoEntry2.id) : null;
-    // Issue #87 review finding (Important): when distribution is required for
-    // this server/project-server pairing, `resolveExecutionRepositoryEntry`
-    // can legitimately return `null` (distribution target unset or the
-    // repository row was deleted — see its doc comment). `PushVerifier`
-    // treats a missing `repo` as "no repository info to check against, skip
-    // PR verification" — a fallback that only makes sense for the
-    // never-registered-a-repository case that fallback exists for. Reusing
-    // it here for the required-but-unresolved case would silently accept
-    // "push completed" from a SHA match alone even though the run's actual
-    // target repository/PR could not be identified. So fail fast (treat as
-    // not-yet-completed, never call PR creation/verification) instead of
-    // falling through into that fallback. Distribution-not-required runs are
-    // unaffected: `repo` there falls back to `project.repositories[0]` (or
-    // stays `null` for a project with no registered repository at all),
-    // preserving the pre-existing SHA-only verification behavior.
-    if (isDistributionRequired(server, ps) && !repo) return false;
+    // Issue #87 review finding (Important), shared with PhaseLoopRunner's
+    // pushing-phase probe via `isDistributionRequiredButRepositoryUnresolved`
+    // (see its doc comment for the full fail-closed rationale) — must fail
+    // fast here too, never fall through into `PushVerifier`'s
+    // no-repo-info-registered fallback.
+    if (isDistributionRequiredButRepositoryUnresolved(server, ps, repo)) return false;
     if (!task.skipPr) {
       await this.pullRequestCreator.ensureCreated(task.id, resolvedUnitId, repo, branch, {
         title: task.title,

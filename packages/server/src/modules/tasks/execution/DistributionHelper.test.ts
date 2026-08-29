@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveExecutionRepositoryEntry } from './DistributionHelper';
+import { resolveExecutionRepositoryEntry, isDistributionRequiredButRepositoryUnresolved } from './DistributionHelper';
 import type { ServerConfig } from '../../servers/Server';
 import type { ProjectDetail, ProjectRepository } from '../../projects/Project';
 import type { ProjectServer } from '../../projects/ProjectServer';
@@ -118,5 +118,34 @@ describe('resolveExecutionRepositoryEntry', () => {
   it('returns null when projectServer is null and distribution is not otherwise required', () => {
     const result = resolveExecutionRepositoryEntry(makeAgentServer(), null, makeProject([]));
     expect(result).toBeNull();
+  });
+});
+
+// Issue #87 review (forge/87-mirror follow-up), Important finding 2: the
+// previous fix (ExecuteTaskUseCase.isPushCompleted's fail-closed check) was
+// applied on only one of the two push-completion paths — PhaseLoopRunner's
+// pushing-phase probe kept the old behavior, silently accepting a SHA-only
+// match when the distributed repository could not be resolved. This
+// function is now the single source both paths call, so a future fix here
+// automatically covers both.
+describe('isDistributionRequiredButRepositoryUnresolved', () => {
+  it('is true when distribution is required (distributeCode on) and no repository was resolved', () => {
+    expect(isDistributionRequiredButRepositoryUnresolved(makeAgentServer({ isolationIntent: false }), makeProjectServer({ distributeCode: true }), null)).toBe(true);
+  });
+
+  it('is true when distribution is required (isolationIntent) and no repository was resolved', () => {
+    expect(isDistributionRequiredButRepositoryUnresolved(makeAgentServer({ isolationIntent: true }), makeProjectServer({ distributeCode: false }), null)).toBe(true);
+  });
+
+  it('is false when distribution is required but a repository WAS resolved', () => {
+    expect(isDistributionRequiredButRepositoryUnresolved(makeAgentServer({ isolationIntent: true }), makeProjectServer({ distributeCode: false }), repoB)).toBe(false);
+  });
+
+  it('is false when distribution is not required, even with no repository resolved (never-registered-a-repository fallback stays intact)', () => {
+    expect(isDistributionRequiredButRepositoryUnresolved(makeAgentServer({ isolationIntent: false }), makeProjectServer({ distributeCode: false }), null)).toBe(false);
+  });
+
+  it('is false for a local server regardless of projectServer/repo (local is never a distribution target)', () => {
+    expect(isDistributionRequiredButRepositoryUnresolved({ type: 'local', isolationIntent: false }, makeProjectServer({ distributeCode: true }), null)).toBe(false);
   });
 });

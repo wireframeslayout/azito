@@ -111,6 +111,43 @@ export function resolveExecutionRepositoryEntry(
   return project?.repositories?.[0] ?? null;
 }
 
+/**
+ * Whether push verification (and PR creation/verification/notarization) must
+ * fail closed because distribution is required for this server/project-server
+ * pairing but the distributed repository could not be resolved (unset
+ * `distributionRepositoryId`, or it names a repository that no longer exists
+ * — see `resolveExecutionRepositoryEntry`'s doc comment for why that resolver
+ * returns `null` rather than falling back to `project.repositories[0]` in
+ * this exact situation).
+ *
+ * Extracted (Issue #87 review, forge/87-mirror follow-up, Important finding
+ * 2) so `ExecuteTaskUseCase.isPushCompleted()` and `PhaseLoopRunner`'s
+ * pushing-phase completion probe apply the SAME rule instead of each
+ * hand-rolling their own copy — that duplication is exactly how the probe
+ * side drifted out of sync with `isPushCompleted()`'s fix in the first
+ * place. `PushVerifier.verifyPushCompleted()` treats a missing `repo` as "no
+ * repository info to check against, skip PR verification, trust the SHA
+ * match alone" — a fallback that only makes sense for a project that never
+ * registered a repository at all. Reusing that fallback here (distribution
+ * required but the target repository is unresolved) would silently accept
+ * "push completed" without ever having checked the actual target repository
+ * or its PR — so both callers must check this FIRST and refuse to call PR
+ * creation/verification at all when it's true, treating the probe as
+ * not-yet-completed instead.
+ *
+ * Distribution-not-required callers are unaffected: `isDistributionRequired`
+ * is false there, so this always returns `false` regardless of `repo`,
+ * preserving the pre-existing SHA-only verification behavior for projects
+ * that have never touched distribution.
+ */
+export function isDistributionRequiredButRepositoryUnresolved(
+  server: Pick<ServerConfig, 'type' | 'isolationIntent'>,
+  projectServer: Pick<ProjectServer, 'distributeCode'> | null,
+  repo: unknown | null | undefined,
+): boolean {
+  return isDistributionRequired(server, projectServer) && !repo;
+}
+
 export interface PerformDistributionParams {
   server: ServerConfig;
   projectServer: Pick<ProjectServer, 'distributeCode' | 'distributionRepositoryId'> | null;
