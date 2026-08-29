@@ -202,6 +202,17 @@ function buildUseCase(opts: {
   fetchDistributionService?: { distribute: ReturnType<typeof vi.fn> };
   /** Issue #29 Step 3a: defaults to true so pre-existing tests (all predating 'allow') are unaffected. */
   scopedAuthEnabled?: boolean;
+  /**
+   * Issue #87 review (forge/87-mirror follow-up), Important finding 3:
+   * injected as the constructor's `distributionStateRepo` param — used by
+   * `shouldClearRecordedDistributionRepository` to decide whether a
+   * not-required-this-run execute() may clear `task.distributionRepositoryId`.
+   * Defaults to `null` (not wired), matching the pre-existing default for
+   * every test that doesn't care — per this fix's own "insufficient
+   * information fails toward keeping the record" rule, that means the
+   * record is left untouched when distribution is not required this run.
+   */
+  distributionStateRepo?: { find: ReturnType<typeof vi.fn> } | null;
 }) {
   const taskRepo: ITaskRepository = {
     findAll: vi.fn(() => []),
@@ -415,6 +426,7 @@ function buildUseCase(opts: {
       async () => [],
     null,
     (opts.fetchDistributionService as any) ?? null,
+    (opts.distributionStateRepo as any) ?? null,
   );
 
   return { useCase, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, transportFactory, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, paneEnvService, gitProvider };
@@ -2667,6 +2679,8 @@ function buildDistributionGateHarness(opts: {
   distributionRepositoryId?: number | null;
   /** Overrides task.distributionRepositoryId (default null) — set to model a PRIOR run's recorded target, for the "prerequisite failure preserves the previous record" tests (Issue #87 review follow-up, second round, Important finding 1). */
   taskDistributionRepositoryId?: number | null;
+  /** Issue #87 review (forge/87-mirror follow-up), Important finding 3: threaded through to buildUseCase's `distributionStateRepo` — see its own doc comment. Defaults null (not wired). */
+  distributionStateRepo?: { find: ReturnType<typeof vi.fn> } | null;
 }) {
   const unit = makeUnit({ id: 10, workerType: 'claude', workerModel: 'opus' });
   // task.workingDirectory (not projectServer.workingDirectory) supplies
@@ -2685,8 +2699,25 @@ function buildDistributionGateHarness(opts: {
     baseBranch: (opts.taskBaseBranch ?? null) as string | null,
     distributionRepositoryId: (opts.taskDistributionRepositoryId ?? null) as number | null,
   });
+  // Issue #87 review (forge/87-mirror follow-up), Important finding 2
+  // (third round): the record-write callback now fires from INSIDE
+  // distribute() (threaded through as `onBeforeWorkingDirChange`), not by
+  // performDistribution() before distribute() is even called — see
+  // DistributionHelper.ts's `onBeforeDistribute` doc comment. This fake
+  // must call it too, mirroring the real FetchDistributionService, or every
+  // test below asserting `taskRepo.update({ distributionRepositoryId })`
+  // was written would falsely fail on a "distributed"/"already_current"
+  // result. Deliberately NOT called for a `distributeResult` explicitly
+  // modeling a failure the real service would hit BEFORE touching the
+  // working directory (`status: 'failed'`) — see the "prerequisite failure
+  // preserves the previous record" tests, which rely on this callback never
+  // firing for that case.
   const fetchDistributionService = {
-    distribute: vi.fn(async () => opts.distributeResult ?? { status: 'distributed' as const, sha: 'abc123', bundleType: 'full' as const, localBranchSynced: true }),
+    distribute: vi.fn(async (params: { onBeforeWorkingDirChange?: () => void }) => {
+      const result = opts.distributeResult ?? { status: 'distributed' as const, sha: 'abc123', bundleType: 'full' as const, localBranchSynced: true };
+      if (result.status !== 'failed') params.onBeforeWorkingDirChange?.();
+      return result;
+    }),
   };
   const harness = buildUseCase({
     task,
@@ -2695,6 +2726,7 @@ function buildDistributionGateHarness(opts: {
     projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', distributeCode: opts.distributeCode, distributionRepositoryId: 'distributionRepositoryId' in opts ? opts.distributionRepositoryId ?? null : 5 },
     server: opts.server,
     repository: 'repository' in opts ? opts.repository : fetchDistributionRepository,
+    distributionStateRepo: opts.distributionStateRepo ?? null,
     ...(opts.serviceWired === false ? {} : { fetchDistributionService }),
   });
   harness.worktreeServiceFactory.create.mockReturnValue({
@@ -3271,49 +3303,110 @@ describe('ExecuteTaskUseCase persists task.distributionRepositoryId when distrib
     expect(taskRepo.update).not.toHaveBeenCalledWith(1, expect.objectContaining({ distributionRepositoryId: expect.anything() }));
   });
 
-  // Issue #87 review follow-up, Important finding 4: a run that did NOT
-  // distribute must explicitly clear any distributionRepositoryId a PRIOR
-  // execution of this same task recorded (e.g. moved off an isolated server
-  // back onto `local`) — never leave the stale id in place for a later
-  // resume to misread as still-authoritative.
-  it('explicitly writes distributionRepositoryId: null when distribution does not run this call (clearing any stale value from a prior run)', async () => {
+  // Issue #87 review follow-up, Important finding 4, superseded by Issue #87
+  // review (forge/87-mirror follow-up), Important finding 3: a run that did
+  // NOT distribute may clear a PRIOR run's recorded distributionRepositoryId
+  // ONLY when there is positive evidence (a distribution_state row) that
+  // the CURRENT server does not hold that repository's content — e.g. the
+  // task moved off an isolated server back onto `local`. Modeled here via a
+  // distributionStateRepo whose `find` returns null for this server/repo
+  // pairing (no evidence this server ever received it).
+  it('clears distributionRepositoryId when distribution does not run this call AND distribution_state proves this server does not hold the recorded repository', async () => {
     const server = makeServer({ name: 'srv-agent', type: 'agent', isolationIntent: false });
-    const { useCase, taskRepo } = buildDistributionGateHarness({ server, distributeCode: false });
+    const distributionStateRepo = { find: vi.fn(() => null) };
+    const { useCase, taskRepo } = buildDistributionGateHarness({
+      server,
+      distributeCode: false,
+      taskDistributionRepositoryId: 5,
+      distributionStateRepo,
+    });
 
     await useCase.execute(10, 1);
 
+    expect(distributionStateRepo.find).toHaveBeenCalledWith('srv-agent', 5);
     expect(taskRepo.update).toHaveBeenCalledWith(1, expect.objectContaining({ distributionRepositoryId: null }));
   });
 
-  // Issue #87 review follow-up (Important finding 1, second round): the
-  // record must be written BEFORE performDistribution() may mutate the
-  // remote working directory, not only after it returns successfully — a
-  // crash/thrown error between a successful distribute() and a post-hoc
-  // write would otherwise leave `distributionRepositoryId` pointing at
-  // whatever a PRIOR run recorded (or null).
-  it('persists distributionRepositoryId BEFORE fetch distribution actually runs, not only after it succeeds', async () => {
+  // Issue #87 review (forge/87-mirror follow-up), Important finding 3: the
+  // counterpart to the test above — a distribution_state row proving this
+  // SAME server already holds the recorded repository's content (e.g.
+  // distribute_code was toggled off after a prior successful distribution
+  // on this exact server) must NOT be cleared. Clearing it would fall the
+  // downstream repository resolution back to `project.repositories[0]`,
+  // silently retargeting push/PR verification at a different repository
+  // than what is actually checked out on disk.
+  it('keeps distributionRepositoryId when distribution does not run this call BUT distribution_state proves this SAME server already holds the recorded repository', async () => {
+    const server = makeServer({ name: 'srv-agent', type: 'agent', isolationIntent: false });
+    const distributionStateRepo = {
+      find: vi.fn((serverName: string, repositoryId: number) =>
+        serverName === 'srv-agent' && repositoryId === 5
+          ? { lastDistributedSha: 'a'.repeat(40), bundleType: 'full', distributedAt: '2026-01-01T00:00:00Z' }
+          : null),
+    };
+    const { useCase, taskRepo } = buildDistributionGateHarness({
+      server,
+      distributeCode: false,
+      taskDistributionRepositoryId: 5,
+      distributionStateRepo,
+    });
+
+    await useCase.execute(10, 1);
+
+    expect(distributionStateRepo.find).toHaveBeenCalledWith('srv-agent', 5);
+    expect(taskRepo.update).not.toHaveBeenCalledWith(1, expect.objectContaining({ distributionRepositoryId: null }));
+  });
+
+  // Issue #87 review (forge/87-mirror follow-up), Important finding 3: when
+  // distributionStateRepo is not wired at all (the pre-existing default for
+  // every other test in this file), there is no way to corroborate whether
+  // the current server holds the recorded repository's content — the record
+  // must be left untouched rather than cleared ("insufficient information
+  // fails toward keeping the record", not toward clearing it).
+  it('keeps distributionRepositoryId when distribution does not run this call and distributionStateRepo is not wired', async () => {
+    const server = makeServer({ name: 'srv-agent', type: 'agent', isolationIntent: false });
+    const { useCase, taskRepo } = buildDistributionGateHarness({
+      server,
+      distributeCode: false,
+      taskDistributionRepositoryId: 5,
+    });
+
+    await useCase.execute(10, 1);
+
+    expect(taskRepo.update).not.toHaveBeenCalledWith(1, expect.objectContaining({ distributionRepositoryId: null }));
+  });
+
+  // Issue #87 review (forge/87-mirror follow-up), Important finding 2
+  // (third round): the record-write callback is threaded through
+  // `performDistribution()` -> `fetchDistributionService.distribute()` as
+  // `onBeforeWorkingDirChange`, NOT invoked by `performDistribution()`
+  // itself before `distribute()` is even called (the previous round's fix,
+  // superseded here — see DistributionHelper.ts's `onBeforeDistribute` doc
+  // comment). This asserts the wiring: `distribute()` is called WITH the
+  // callback.
+  it('threads the record-write callback into distribute() as onBeforeWorkingDirChange, rather than firing it before distribute() is even called', async () => {
     const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
     const { useCase, taskRepo, fetchDistributionService } = buildDistributionGateHarness({ server, distributeCode: false });
 
     await useCase.execute(10, 1);
 
-    const updateFn = taskRepo.update as ReturnType<typeof vi.fn>;
-    const updateCallIndex = updateFn.mock.calls.findIndex(
-      (args: unknown[]) => (args[1] as Record<string, unknown>).distributionRepositoryId === 5,
+    expect(fetchDistributionService.distribute).toHaveBeenCalledWith(
+      expect.objectContaining({ onBeforeWorkingDirChange: expect.any(Function) }),
     );
-    expect(updateCallIndex).toBeGreaterThanOrEqual(0);
-    const updateCallOrder = updateFn.mock.invocationCallOrder[updateCallIndex];
-    const distributeCallOrder = (fetchDistributionService.distribute as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
-    expect(updateCallOrder).toBeLessThan(distributeCallOrder);
+    expect(taskRepo.update).toHaveBeenCalledWith(1, expect.objectContaining({ distributionRepositoryId: 5 }));
   });
 
-  // Issue #87 review follow-up (Important finding 1, second round): when
-  // fetch distribution itself fails partway through, the record must still
-  // name the target THIS run attempted to distribute — it is either what's
-  // actually on disk now or a broken worktree, and either way must be
-  // validated/failed-closed against that SAME repository, never a stale
-  // prior one.
-  it('still records the attempted distributionRepositoryId even when fetch distribution fails', async () => {
+  // Issue #87 review (forge/87-mirror follow-up), Important finding 2
+  // (third round), superseding the prior "still records the attempted
+  // distributionRepositoryId even when fetch distribution fails" test:
+  // `distribute()` can fail BEFORE ever reaching the working-directory
+  // mutation step (resolving sshHost's home directory, preparing the hub's
+  // repo cache, transferring the bundle onto the remote mirror). A failure
+  // at any of those stages means `onBeforeWorkingDirChange` never fires, so
+  // the record must NOT be written — the working directory was never
+  // touched this run. `buildDistributionGateHarness`'s fake `distribute()`
+  // deliberately skips calling `onBeforeWorkingDirChange` for a
+  // `distributeResult.status === 'failed'`, modeling exactly that.
+  it('does NOT record a distributionRepositoryId when fetch distribution fails before ever calling onBeforeWorkingDirChange (i.e. before touching the working directory)', async () => {
     const server = makeServer({ name: 'srv-isolated', type: 'agent', isolationIntent: true });
     const { useCase, taskRepo, fetchDistributionService } = buildDistributionGateHarness({
       server,
@@ -3324,7 +3417,7 @@ describe('ExecuteTaskUseCase persists task.distributionRepositoryId when distrib
     await expect(useCase.execute(10, 1)).rejects.toThrow(/network boom/);
 
     expect(fetchDistributionService.distribute).toHaveBeenCalledTimes(1);
-    expect(taskRepo.update).toHaveBeenCalledWith(1, expect.objectContaining({ distributionRepositoryId: 5 }));
+    expect(taskRepo.update).not.toHaveBeenCalledWith(1, expect.objectContaining({ distributionRepositoryId: expect.anything() }));
   });
 
   // Issue #87 review follow-up (second round, Important finding 1): a

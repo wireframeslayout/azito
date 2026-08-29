@@ -222,6 +222,11 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
     // performDistribution()'s `{ required: false }` fast path. Tests below
     // that need distribution override this with a real mock.
     fetchDistributionService: null,
+    // Issue #87 review (forge/87-mirror follow-up), Important finding 3:
+    // null by default (same rationale as `fetchDistributionService` above) —
+    // tests exercising `shouldClearRecordedDistributionRepository` wire a
+    // real/mocked repo via `overrides`.
+    distributionStateRepo: null,
     ...overrides,
   };
 }
@@ -715,7 +720,20 @@ describe('TaskRestoreService', () => {
   describe('fetch distribution (Issue #87 13th-round review, Important finding 1)', () => {
     function mockFetchDistributionService(overrides: Record<string, any> = {}) {
       return {
-        distribute: vi.fn(async () => ({ status: 'distributed', sha: 'a'.repeat(40), bundleType: 'full', localBranchSynced: true })),
+        // Issue #87 review (forge/87-mirror follow-up), Important finding 2
+        // (third round): the record-write callback (`onBeforeDistribute`,
+        // threaded through as `params.onBeforeWorkingDirChange`) now fires
+        // from INSIDE `distribute()`, immediately before the local working
+        // directory is touched — not by `performDistribution()` itself
+        // before calling `distribute()` at all. This fake must call it too,
+        // exactly like the real `FetchDistributionService.distributeUnlocked()`
+        // does right before its `ensureWorkingDir()` calls, or every test
+        // below that asserts `taskRepo.update({ distributionRepositoryId })`
+        // was written would falsely fail.
+        distribute: vi.fn(async (params: { onBeforeWorkingDirChange?: () => void }) => {
+          params.onBeforeWorkingDirChange?.();
+          return { status: 'distributed', sha: 'a'.repeat(40), bundleType: 'full', localBranchSynced: true };
+        }),
         ...overrides,
       } as unknown as NonNullable<TaskRestoreDeps['fetchDistributionService']>;
     }
@@ -829,11 +847,17 @@ describe('TaskRestoreService', () => {
       expect(deps.taskRepo.update).toHaveBeenCalledWith(task.id, expect.objectContaining({ distributionRepositoryId: 1 }));
     });
 
-    // Issue #87 review follow-up (Important finding 1, second round): the
-    // record must be written BEFORE performDistribution() may mutate the
-    // remote working directory, not only after it returns successfully —
-    // mirrors ExecuteTaskUseCase.execute()'s matching test.
-    it('persists distributionRepositoryId BEFORE fetch distribution actually runs, not only after it succeeds', async () => {
+    // Issue #87 review (forge/87-mirror follow-up), Important finding 2
+    // (third round): the record-write callback is threaded through
+    // `performDistribution()` -> `fetchDistributionService.distribute()` as
+    // `onBeforeWorkingDirChange`, NOT invoked by `performDistribution()`
+    // itself before `distribute()` is even called (the previous round's
+    // fix, which this one supersedes — see DistributionHelper.ts's
+    // `onBeforeDistribute` doc comment). This asserts the wiring:
+    // `distribute()` is called WITH the callback, and invoking it (as the
+    // mock does, right before it "succeeds") is what actually produces the
+    // taskRepo write.
+    it('threads the record-write callback into distribute() as onBeforeWorkingDirChange, rather than firing it before distribute() is even called', async () => {
       const fetchDistributionService = mockFetchDistributionService();
       withRepository(deps.projectRepo);
       deps = makeDeps({
@@ -850,20 +874,25 @@ describe('TaskRestoreService', () => {
 
       await service.restore(task, log);
 
-      const updateFn = deps.taskRepo.update as ReturnType<typeof vi.fn>;
-      const updateCallIndex = updateFn.mock.calls.findIndex(
-        ([, patch]) => (patch as Record<string, unknown>).distributionRepositoryId === 1,
+      expect(fetchDistributionService.distribute).toHaveBeenCalledWith(
+        expect.objectContaining({ onBeforeWorkingDirChange: expect.any(Function) }),
       );
-      expect(updateCallIndex).toBeGreaterThanOrEqual(0);
-      const updateCallOrder = updateFn.mock.invocationCallOrder[updateCallIndex];
-      const distributeCallOrder = (fetchDistributionService.distribute as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
-      expect(updateCallOrder).toBeLessThan(distributeCallOrder);
+      expect(deps.taskRepo.update).toHaveBeenCalledWith(task.id, expect.objectContaining({ distributionRepositoryId: 1 }));
     });
 
-    // Issue #87 review follow-up (Important finding 1, second round): when
-    // fetch distribution itself fails partway through, the record must
-    // still name the target THIS run attempted to distribute.
-    it('still records the attempted distributionRepositoryId even when fetch distribution fails', async () => {
+    // Issue #87 review (forge/87-mirror follow-up), Important finding 2
+    // (third round), superseding the prior "still records the attempted
+    // distributionRepositoryId even when fetch distribution fails" test:
+    // `distribute()` can fail BEFORE ever reaching the working-directory
+    // mutation step (resolving sshHost's home directory, preparing the
+    // hub's repo cache, transferring the bundle onto the remote mirror —
+    // see FetchDistributionService.distribute()/distributeUnlocked()). A
+    // failure at any of those stages means `onBeforeWorkingDirChange` never
+    // fires, so the record must NOT be written — the working directory was
+    // never touched this run, so a PRIOR run's accurate record (if any)
+    // must survive untouched. This fake models exactly that: `distribute()`
+    // fails without ever calling `onBeforeWorkingDirChange`.
+    it('does NOT record a distributionRepositoryId when fetch distribution fails before ever calling onBeforeWorkingDirChange (i.e. before touching the working directory)', async () => {
       const fetchDistributionService = mockFetchDistributionService({
         distribute: vi.fn(async () => ({ status: 'failed', error: 'dummy distribution failure' })),
       });
@@ -883,7 +912,7 @@ describe('TaskRestoreService', () => {
       await expect(service.restore(task, log)).rejects.toThrow(/Fetch distribution failed/);
 
       expect(fetchDistributionService.distribute).toHaveBeenCalled();
-      expect(deps.taskRepo.update).toHaveBeenCalledWith(task.id, expect.objectContaining({ distributionRepositoryId: 1 }));
+      expect(deps.taskRepo.update).not.toHaveBeenCalledWith(task.id, expect.objectContaining({ distributionRepositoryId: expect.anything() }));
     });
 
     // Issue #87 review follow-up (second round, Important finding 1): a
@@ -1019,6 +1048,65 @@ describe('TaskRestoreService', () => {
 
       expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
       expect(result.worktreePath).toBe(worktreeDir);
+    });
+
+    // Issue #87 review (forge/87-mirror follow-up), Important finding 3: a
+    // restore whose OWN run does not require distribution must not
+    // unconditionally clear a PRIOR run's recorded distributionRepositoryId
+    // — the checkout that recorded id came from can still be sitting on
+    // disk (e.g. distribute_code was toggled off on the SAME server after a
+    // prior run already distributed). Only clear when there is positive
+    // evidence (a distribution_state row) that the CURRENT server does NOT
+    // hold that repository's content.
+    describe('distributionRepositoryId retention when this run does not require distribution', () => {
+      it('keeps a previously recorded distributionRepositoryId when distribution_state proves this SAME server already holds that repository (distribute_code toggled off after a prior distribution)', async () => {
+        const fetchDistributionService = mockFetchDistributionService();
+        const distributionStateRepo = {
+          upsert: vi.fn(),
+          deleteByServer: vi.fn(),
+          find: vi.fn((serverName: string, repositoryId: number) =>
+            serverName === 'test-server' && repositoryId === 5
+              ? { lastDistributedSha: 'a'.repeat(40), bundleType: 'full' as const, distributedAt: '2026-01-01T00:00:00Z' }
+              : null),
+        };
+        deps = makeDeps({ ...deps, fetchDistributionService, distributionStateRepo });
+        service = new TaskRestoreService(deps);
+        const task = makeTask({ serverName: 'test-server', distributionRepositoryId: 5 });
+
+        await service.restore(task, log);
+
+        expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+        expect(distributionStateRepo.find).toHaveBeenCalledWith('test-server', 5);
+        expect(deps.taskRepo.update).not.toHaveBeenCalledWith(task.id, expect.objectContaining({ distributionRepositoryId: null }));
+      });
+
+      it('clears a previously recorded distributionRepositoryId when distribution_state shows this server does NOT hold that repository (e.g. the task moved to a different server)', async () => {
+        const fetchDistributionService = mockFetchDistributionService();
+        const distributionStateRepo = {
+          upsert: vi.fn(),
+          deleteByServer: vi.fn(),
+          find: vi.fn(() => null),
+        };
+        deps = makeDeps({ ...deps, fetchDistributionService, distributionStateRepo });
+        service = new TaskRestoreService(deps);
+        const task = makeTask({ serverName: 'test-server', distributionRepositoryId: 5 });
+
+        await service.restore(task, log);
+
+        expect(distributionStateRepo.find).toHaveBeenCalledWith('test-server', 5);
+        expect(deps.taskRepo.update).toHaveBeenCalledWith(task.id, expect.objectContaining({ distributionRepositoryId: null }));
+      });
+
+      it('keeps (never clears) a previously recorded distributionRepositoryId when distributionStateRepo is not wired — insufficient information fails toward keeping the record', async () => {
+        const fetchDistributionService = mockFetchDistributionService();
+        deps = makeDeps({ ...deps, fetchDistributionService, distributionStateRepo: null });
+        service = new TaskRestoreService(deps);
+        const task = makeTask({ serverName: 'test-server', distributionRepositoryId: 5 });
+
+        await service.restore(task, log);
+
+        expect(deps.taskRepo.update).not.toHaveBeenCalledWith(task.id, expect.objectContaining({ distributionRepositoryId: null }));
+      });
     });
 
     // Issue #87 16th-round review, Important finding 2: the pre-lock

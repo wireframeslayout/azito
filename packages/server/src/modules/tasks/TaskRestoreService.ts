@@ -16,7 +16,8 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { IContentExtractor } from '../llm/ContentExtractor';
 import type { IExecutionLogRepository } from './ExecutionLog';
 import { resolveTaskServerName, resolveTmuxSession, resolveBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './execution/TaskExecutionEnv';
-import { performDistribution, type DistributionOutcome } from './execution/DistributionHelper';
+import { performDistribution, shouldClearRecordedDistributionRepository, type DistributionOutcome } from './execution/DistributionHelper';
+import type { IDistributionStateRepository } from '../git/hub-transfer/types';
 import { normalizeBranchRef } from '../git/assertSafeGitArgs';
 import { buildWorkerLaunchCommand } from '../agents/LaunchCommand';
 import { shellQuote } from '../../shared/shellQuote';
@@ -88,6 +89,16 @@ export interface TaskRestoreDeps {
   // wire it; a restore that actually needs distribution and finds this null
   // fails via performDistribution's own 'service_not_wired' outcome.
   fetchDistributionService: import('../git/hub-transfer/FetchDistributionService').FetchDistributionService | null;
+  // Issue #87 review (forge/87-mirror follow-up), Important finding 3: the
+  // SAME instance `fetchDistributionService` writes to on every successful
+  // distribution (see wiring.ts's `buildFetchDistributionService`) — used by
+  // `shouldClearRecordedDistributionRepository` to decide whether a
+  // not-required-this-run restore() may clear `task.distributionRepositoryId`.
+  // Nullable for the same reason `fetchDistributionService` is; when null,
+  // the record is left untouched (fails toward keeping it) — see the call
+  // site below and ExecuteTaskUseCase's matching field for the full
+  // rationale.
+  distributionStateRepo: IDistributionStateRepository | null;
 }
 
 export class TaskRestoreService {
@@ -100,7 +111,7 @@ export class TaskRestoreService {
   }
 
   async restore(task: Task, log: { warn: (msg: string) => void }): Promise<{ tmuxTarget: string; worktreePath: string | null }> {
-    const { taskRepo, serverRepo, projectRepo, projectServerRepo, unitRepo, windowRepo, tmux, worktreeServiceFactory, transportFactory, contentExtractor, logRepo, unitTypeLoader, sidekickLoader, projectSecretRepo, events, paneEnvService, scopedAuthEnabled, fetchDistributionService } = this.deps;
+    const { taskRepo, serverRepo, projectRepo, projectServerRepo, unitRepo, windowRepo, tmux, worktreeServiceFactory, transportFactory, contentExtractor, logRepo, unitTypeLoader, sidekickLoader, projectSecretRepo, events, paneEnvService, scopedAuthEnabled, fetchDistributionService, distributionStateRepo } = this.deps;
 
     const serverName = resolveTaskServerName(task, projectServerRepo);
     if (!serverName) {
@@ -510,12 +521,22 @@ export class TaskRestoreService {
         // record. Not repeated, to keep this a single source of truth
         // rather than two write sites that could drift.
       } else {
-        // Issue #87 review follow-up, Important finding 4: same "write the
-        // current run's truth every time" fix as ExecuteTaskUseCase.execute()
-        // — a restore that did NOT distribute must clear any stale value a
-        // prior execution recorded, not leave it in place for a later resume
-        // to misread as still-authoritative. See execute()'s matching branch.
-        taskRepo.update(task.id, { distributionRepositoryId: null } as Partial<Task>);
+        // Issue #87 review follow-up, Important finding 4, superseded by
+        // Issue #87 review (forge/87-mirror follow-up), Important finding 3:
+        // a restore that did NOT distribute this run must NOT unconditionally
+        // clear a prior recording — `required: false` says nothing about
+        // whether the working directory this restore is about to recreate a
+        // worktree from still holds a PAST distribution's content (e.g.
+        // `distributeCode` was toggled off on the SAME server). Only clear
+        // when `shouldClearRecordedDistributionRepository` finds positive
+        // evidence the CURRENT server does not hold the recorded repository's
+        // content; when it cannot tell (`distributionStateRepo` not wired),
+        // the record is left untouched. See execute()'s matching branch and
+        // `shouldClearRecordedDistributionRepository`'s own doc comment
+        // (DistributionHelper.ts) for the full rationale.
+        if (distributionStateRepo && shouldClearRecordedDistributionRepository(distributionStateRepo, server.name, task.distributionRepositoryId)) {
+          taskRepo.update(task.id, { distributionRepositoryId: null } as Partial<Task>);
+        }
       }
       const distStatus: 'distributed' | 'already_current' | null = distOutcome.required ? distOutcome.distStatus : null;
 

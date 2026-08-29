@@ -1463,3 +1463,80 @@ describe('FetchDistributionService unstamped-workingDir identity verification (I
     expect(error).toContain('github.com/owner/repo.git');
   });
 });
+
+describe('FetchDistributionService onBeforeWorkingDirChange (Issue #87 review, forge/87-mirror follow-up, Important finding 2, third round)', () => {
+  it('fires once, right before ensureWorkingDir, on the already_current path', async () => {
+    const remoteBundleOps = mockRemoteBundleOps({
+      getMirrorBranchSha: vi.fn(async () => sha),
+      repoExists: vi.fn(async () => true),
+    });
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const calls: string[] = [];
+    const onBeforeWorkingDirChange = vi.fn(() => calls.push('onBeforeWorkingDirChange'));
+    remoteBundleOps.ensureDetachedHead = vi.fn(async () => { calls.push('ensureWorkingDir'); });
+
+    const result = await service.distribute(makeParams({ onBeforeWorkingDirChange }));
+
+    expect(result.status).toBe('already_current');
+    expect(onBeforeWorkingDirChange).toHaveBeenCalledTimes(1);
+    // Fired BEFORE ensureWorkingDir's own remote calls, not after.
+    expect(calls[0]).toBe('onBeforeWorkingDirChange');
+  });
+
+  it('fires once, right before ensureWorkingDir, on the distributed (bundle-transfer) path', async () => {
+    const remoteBundleOps = mockRemoteBundleOps({
+      getMirrorBranchSha: vi.fn(async () => null),
+      repoExists: vi.fn(async () => true),
+    });
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const calls: string[] = [];
+    const onBeforeWorkingDirChange = vi.fn(() => calls.push('onBeforeWorkingDirChange'));
+    remoteBundleOps.ensureDetachedHead = vi.fn(async () => { calls.push('ensureWorkingDir'); });
+
+    const result = await service.distribute(makeParams({ onBeforeWorkingDirChange }));
+
+    expect(result.status).toBe('distributed');
+    expect(onBeforeWorkingDirChange).toHaveBeenCalledTimes(1);
+    expect(calls[0]).toBe('onBeforeWorkingDirChange');
+  });
+
+  it('does NOT fire when distribute() fails before ever touching workingDir (e.g. no sshHost configured)', async () => {
+    const remoteBundleOps = mockRemoteBundleOps();
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const onBeforeWorkingDirChange = vi.fn();
+
+    const result = await service.distribute(makeParams({ server: makeServer({ sshHost: null }), onBeforeWorkingDirChange }));
+
+    expect(result.status).toBe('failed');
+    expect(onBeforeWorkingDirChange).not.toHaveBeenCalled();
+  });
+
+  it('does NOT fire when resolveHomeDir() itself fails before touching workingDir', async () => {
+    const remoteBundleOps = mockRemoteBundleOps({
+      resolveHomeDir: vi.fn(async () => { throw new Error('ssh connection refused'); }),
+    });
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const onBeforeWorkingDirChange = vi.fn();
+
+    const result = await service.distribute(makeParams({ onBeforeWorkingDirChange }));
+
+    expect(result.status).toBe('failed');
+    expect(onBeforeWorkingDirChange).not.toHaveBeenCalled();
+  });
+
+  it('does NOT fire when the hub-side bundle preparation fails before the mirror transfer/workingDir step', async () => {
+    const hubRepoCache = mockHubRepoCache({
+      ensureFetched: vi.fn(() => { throw new Error('git fetch failed'); }),
+    });
+    const remoteBundleOps = mockRemoteBundleOps({
+      getMirrorBranchSha: vi.fn(async () => null),
+    });
+    const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, mockSftpService(), mockDistRepo());
+    const onBeforeWorkingDirChange = vi.fn();
+
+    const result = await service.distribute(makeParams({ onBeforeWorkingDirChange }));
+
+    expect(result.status).toBe('failed');
+    expect(onBeforeWorkingDirChange).not.toHaveBeenCalled();
+  });
+});

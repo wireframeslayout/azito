@@ -12,7 +12,7 @@ import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoade
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import { resolvePhaseSidekick, resolveEnabledPhases } from '../../sidekicks/resolvePhaseSidekick';
 import { resolveUnitId, resolveTaskServerName, resolveBaseBranch, canonicalizeBaseBranch } from './TaskExecutionEnv';
-import { resolveRecordedDistributionRepositoryEntry, resolveExecutionRepositoryEntry, isDistributionRequiredForContinuation } from './DistributionHelper';
+import { resolveRecordedDistributionRepositoryEntry, resolveExecutionRepositoryEntry, isDistributionRequired, isDistributionRequiredForContinuation } from './DistributionHelper';
 
 /**
  * Which repository source `resolveExecutionManifest()` is allowed to read
@@ -1151,35 +1151,47 @@ export function resolveExecutionManifest(
       // Issue #87 13th-round review, Important finding 2: see the field's
       // own doc comment on ResolvedExecutionManifest.server above.
       //
-      // Issue #87 review follow-up (Minor finding 2): for `'continuation'`
-      // with a recorded `task.distributionRepositoryId`, hash the EFFECTIVE
-      // "is distribution required" value (`isDistributionRequiredForContinuation`,
-      // DistributionHelper.ts) instead of the raw, still-mutable toggle.
-      // That function treats a non-null recorded repository id as
-      // authoritative unconditionally — an `||` whose first operand is
-      // already `true` never even evaluates the current-config check — so
-      // this task's working directory holds distributed code regardless of
-      // what an operator later flips `distributeCode` to, and every runtime
-      // consumer of that same function (resumeStateMachine/followUp/
-      // isPushCompleted) already agrees. Hashing the raw toggle disagreed:
-      // disabling distribution after a task already distributed invalidated
-      // this fingerprint even though the continuation's own behavior never
-      // changed. `'execute'`/`'redistribute'`, and a `'continuation'` with no
-      // recorded repository yet, are unaffected — they still hash the
-      // current config, matching `distributionRepositoryId` below and the
-      // current-config resolution those operations actually run against.
-      // The fallback server object passed when `serverConfig` is null is
-      // inert: `isDistributionRequiredForContinuation` never evaluates its
-      // `server`/`projectServer` argument once `recordedRepositoryId` is
-      // non-null, which is the only branch that reaches this call.
+      // Issue #87 review follow-up (Minor finding 2), superseded by Issue #87
+      // review (forge/87-mirror follow-up), Important finding 1: this field
+      // now ALWAYS hashes the EFFECTIVE "is distribution required" value —
+      // never the raw, still-mutable `projectServer.distributeCode` toggle —
+      // for EVERY operationKind, not only `'continuation'`.
+      //
+      // The previous version hashed the raw toggle for `'execute'`/
+      // `'redistribute'` (only `'continuation'` with a recorded id used the
+      // effective value). That mismatch broke exactly the case an isolated
+      // server (`isolationIntent: true`, `distributeCode: false` — a normal,
+      // standard configuration, since isolated servers distribute
+      // unconditionally, see `isDistributionRequired`) hits on every run: the
+      // FIRST `'execute'` manifest hashed the raw toggle (`false`), then
+      // distribution ran anyway (isolationIntent alone requires it) and
+      // recorded `task.distributionRepositoryId`. The very next
+      // phase-boundary `'continuation'` re-check then hashed the EFFECTIVE
+      // value (`isDistributionRequiredForContinuation`, `true`, since a
+      // repository is now recorded) — a different value for the SAME
+      // underlying configuration, so the fingerprint changed and an
+      // already-approved, successfully-distributed task fell back to
+      // `pending_approval` immediately after distributing (Issue #87 review,
+      // forge/87-mirror follow-up, Important finding 1).
+      //
+      // Using `isDistributionRequired`/`isDistributionRequiredForContinuation`
+      // consistently for every `operationKind` closes that gap:
+      // `isDistributionRequiredForContinuation` with no recorded id falls
+      // back to `isDistributionRequired` unchanged (its own doc comment,
+      // DistributionHelper.ts), so an `'execute'` manifest and a
+      // `'continuation'` manifest for the SAME not-yet-distributed task
+      // already agreed before this fix — the bug was only that `'execute'`/
+      // `'redistribute'` never called `isDistributionRequired` at all, hashing
+      // the raw toggle instead. The `serverConfig` fallback mirrors the
+      // `'continuation'` branch's own fallback object.
       distributeCode:
-        operationKind === 'continuation' && task.distributionRepositoryId != null
+        operationKind === 'continuation'
           ? isDistributionRequiredForContinuation(
-              task.distributionRepositoryId,
+              task.distributionRepositoryId ?? null,
               serverConfig ?? { type: 'agent', isolationIntent: false },
               projectServer,
             )
-          : projectServer?.distributeCode ?? false,
+          : isDistributionRequired(serverConfig ?? { type: 'agent', isolationIntent: false }, projectServer),
       // Issue #87 explicit-target follow-up: see the field's own doc
       // comment on ResolvedExecutionManifest.server above. Issue #87 review
       // (forge/87-mirror follow-up), Important finding 3: for a

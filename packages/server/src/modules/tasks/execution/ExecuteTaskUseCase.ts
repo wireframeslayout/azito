@@ -49,7 +49,8 @@ import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionMani
 import { TuiWorkerRuntime } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
 import { resolveTaskServerName, resolveTmuxSession, resolveUnitId, resolveBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
-import { performDistribution, resolveExecutionRepositoryEntry, resolveRecordedDistributionRepositoryEntry, isDistributionRequired, isDistributionRequiredForContinuation, isDistributionRequiredButRepositoryUnresolved, type DistributionOutcome } from './DistributionHelper';
+import { performDistribution, resolveExecutionRepositoryEntry, resolveRecordedDistributionRepositoryEntry, isDistributionRequired, isDistributionRequiredForContinuation, isDistributionRequiredButRepositoryUnresolved, shouldClearRecordedDistributionRepository, type DistributionOutcome } from './DistributionHelper';
+import type { IDistributionStateRepository } from '../../git/hub-transfer/types';
 import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
 import type { SqliteAgentTurnRepository } from '../turns/SqliteAgentTurnRepository';
 import type { TurnSignalHub } from '../turns/TurnSignalHub';
@@ -154,6 +155,17 @@ export class ExecuteTaskUseCase {
     private sleepTaskWindows: (taskId: number) => Promise<number[]>,
     private pushNotaryService: import('../../git/hub-transfer/PushNotaryService').PushNotaryService | null = null,
     private fetchDistributionService: import('../../git/hub-transfer/FetchDistributionService').FetchDistributionService | null = null,
+    // Issue #87 review (forge/87-mirror follow-up), Important finding 3: the
+    // SAME instance `fetchDistributionService` itself writes to on every
+    // successful distribution (see wiring.ts's `buildFetchDistributionService`)
+    // — used by `shouldClearRecordedDistributionRepository` to decide whether
+    // a not-required-this-run execute() may clear `task.distributionRepositoryId`.
+    // Nullable only because some test fixtures don't wire it; when null,
+    // there is no way to corroborate whether the current server still holds
+    // the recorded repository's content, so — per this fix's "insufficient
+    // information must fail toward keeping the record" rule — the record is
+    // left untouched rather than cleared. See the field's use below.
+    private distributionStateRepo: IDistributionStateRepository | null = null,
   ) {
     this.gitInfoCollector = new GitInfoCollector(this.tmux);
     this.pushVerifier = new PushVerifier(this.tmux, this.gitProvider);
@@ -981,17 +993,30 @@ export class ExecuteTaskUseCase {
       // repeated, to keep this a single source of truth rather than two
       // write sites that could drift.
     } else {
-      // Issue #87 review follow-up, Important finding 4: this run did NOT
-      // distribute — explicitly clear any distribution repository a PRIOR
-      // execution of this same task recorded (e.g. the task's server was
-      // switched from an isolated/distribute_code server to `local`). Never
-      // leave the old value in place: a later resume would otherwise read
-      // that stale id as "authoritative" (resolveRecordedDistributionRepositoryEntry)
-      // and fail closed or target the wrong repository for a working
-      // directory that no longer came from distribution at all. Written
-      // unconditionally on every run — "the current run's truth", not
-      // "write only when there's something to write".
-      this.taskRepo.update(taskId, { distributionRepositoryId: null } as Partial<Task>);
+      // Issue #87 review follow-up, Important finding 4, superseded by Issue
+      // #87 review (forge/87-mirror follow-up), Important finding 3: this run
+      // did NOT distribute — but `required: false` only means "not required
+      // THIS run", not "the working directory holds nothing from a past
+      // distribution". Unconditionally clearing here (the previous fix) broke
+      // exactly the common case of disabling `distributeCode` on a server that
+      // had already distributed: the checkout stays on disk, the worktree
+      // created right below still comes from it, but every downstream
+      // consumer of `task.distributionRepositoryId`
+      // (`resolveRecordedDistributionRepositoryEntry`) fell back to
+      // `project.repositories[0]` — silently retargeting push/PR verification
+      // at a different repository than what's actually checked out.
+      //
+      // `shouldClearRecordedDistributionRepository` (DistributionHelper.ts)
+      // only returns `true` when it has positive evidence this run's server
+      // does NOT hold the recorded repository's distributed content (no
+      // matching `distribution_state` row) — the case Important finding 4
+      // above was actually guarding against (server switched away from
+      // isolated/distribute_code). When it cannot tell (`distributionStateRepo`
+      // not wired), the record is left untouched — "insufficient information
+      // fails toward keeping the record", not toward clearing it.
+      if (this.distributionStateRepo && shouldClearRecordedDistributionRepository(this.distributionStateRepo, server.name, task.distributionRepositoryId)) {
+        this.taskRepo.update(taskId, { distributionRepositoryId: null } as Partial<Task>);
+      }
     }
     // Tracks fetch distribution's outcome this call (null when distribution
     // did not run, e.g. a `local` server, or an agent/ssh server whose

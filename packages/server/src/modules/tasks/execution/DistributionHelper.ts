@@ -6,6 +6,7 @@ import type { TransportFactory } from '../../servers/transport/TransportFactory'
 import { resolveCanonicalRepositoryIdentity } from '../../git/resolveCanonicalRepositoryIdentity';
 import { normalizeBranchRef } from '../../git/assertSafeGitArgs';
 import type { FetchDistributionService } from '../../git/hub-transfer/FetchDistributionService';
+import type { IDistributionStateRepository } from '../../git/hub-transfer/types';
 
 /**
  * Shared by ExecuteTaskUseCase and TaskRestoreService (Issue #87 13th-round
@@ -269,6 +270,54 @@ export function resolveRecordedDistributionRepositoryEntry(
   return { ok: true, entry: resolveExecutionRepositoryEntry(server, projectServer, project) };
 }
 
+/**
+ * Whether a run whose own `performDistribution()` call returned
+ * `{ required: false }` (this run did NOT need to distribute) may clear
+ * `task.distributionRepositoryId` (Issue #87 review, forge/87-mirror
+ * follow-up, Important finding 3).
+ *
+ * `required: false` only means "this run did not distribute THIS time" — it
+ * says nothing about whether a PAST run's checkout is still sitting on disk.
+ * Toggling `distributeCode` off on the SAME server the task already
+ * distributed onto does not erase that checkout, and the worktree
+ * execute()/restore() (re)creates right after this check still comes from
+ * it. Clearing the record unconditionally (the previous behavior) made every
+ * downstream consumer that trusts it
+ * (`resolveRecordedDistributionRepositoryEntry`) fall back to
+ * `project.repositories[0]` — silently retargeting push/PR verification at a
+ * DIFFERENT repository than the one actually checked out.
+ *
+ * The record may be cleared ONLY when this function can point to positive
+ * evidence that a DIFFERENT source was established — never merely because
+ * distribution happened not to run this time. The only such evidence
+ * available without a schema change is `distribution_state`
+ * (`IDistributionStateRepository`, already written by
+ * `FetchDistributionService.distributeUnlocked()` on every successful
+ * distribution, keyed by `(serverName, repositoryId)`): a row existing for
+ * THIS run's resolved server and the recorded repository id is direct proof
+ * that server actually received that repository's content — the record is
+ * accurate for the server this run is about to (re)use, so it is kept. No
+ * row existing means either the recorded distribution ran against a
+ * DIFFERENT server (the task's server/project-server config changed since),
+ * or no distribution state was ever recorded for this pairing — in both
+ * cases the record no longer describably matches what THIS run's server
+ * holds, so it is cleared rather than kept "just in case", matching this
+ * task's existing "explicit id or nothing" fail-closed convention (see
+ * `resolveExecutionRepositoryEntry`'s doc comment) over silently trusting a
+ * value this function cannot corroborate.
+ *
+ * `recordedRepositoryId` null (nothing recorded yet) always returns `false`
+ * — there is nothing to clear.
+ */
+export function shouldClearRecordedDistributionRepository(
+  distributionStateRepo: IDistributionStateRepository,
+  serverName: string,
+  recordedRepositoryId: number | null | undefined,
+): boolean {
+  if (recordedRepositoryId == null) return false;
+  return distributionStateRepo.find(serverName, recordedRepositoryId) == null;
+}
+
 export interface PerformDistributionParams {
   server: ServerConfig;
   projectServer: Pick<ProjectServer, 'distributeCode' | 'distributionRepositoryId'> | null;
@@ -280,25 +329,38 @@ export interface PerformDistributionParams {
   projectRepo: IProjectRepository;
   fetchDistributionService: FetchDistributionService | null;
   /**
-   * Called once, synchronously, immediately before the ONE call in this
-   * function that can actually mutate the remote (`fetchDistributionService.
-   * distribute()`) — i.e. only after every prerequisite check above it
+   * Called exactly once per `performDistribution()` call that reaches it,
+   * synchronously, immediately before the point INSIDE
+   * `fetchDistributionService.distribute()` where the LOCAL working
+   * directory is actually about to change (`ensureWorkingDir()` — see
+   * `FetchDistributionParams.onBeforeWorkingDirChange`'s doc comment in
+   * `hub-transfer/types.ts`), not merely before `distribute()` is called at
+   * all (Issue #87 review, forge/87-mirror follow-up, Important finding 2,
+   * third round).
+   *
+   * Every prerequisite check in THIS function
    * (`service_not_wired`/`no_working_dir`/`no_distribution_repository`/
    * `distribution_repository_not_found`/`no_token`/`identity_unresolvable`)
-   * has already passed (Issue #87 review follow-up, second round, Important
-   * finding 1). Those checks never touch the remote, so a caller that wrote
-   * `task.distributionRepositoryId` before invoking `performDistribution()`
-   * at all (the previous fix) could still overwrite a PRIOR run's accurate
-   * record with THIS run's target while THIS run then failed a prerequisite
-   * check and never touched the working directory — leaving the record
-   * naming a repository the working directory was never actually
-   * (re)populated from. Moving the write to right before the mutating call
-   * means a prerequisite failure leaves the previous record untouched, and a
-   * record is written if and only if this run is about to change what's on
-   * disk. Callers use this to persist `task.distributionRepositoryId` with
-   * `repositoryId`; not called at all when `performDistribution` returns
-   * before reaching this point (distribution not required, or any
-   * prerequisite check failed).
+   * has already passed by the time `distribute()` is even called — but
+   * `distribute()` itself can still fail before touching `workingDir`:
+   * resolving `sshHost` to a home directory, preparing the hub's own repo
+   * cache, and transferring the bundle onto the remote mirror all run BEFORE
+   * `ensureWorkingDir()` and can all fail on their own (see
+   * `FetchDistributionService.distribute()`/`distributeUnlocked()`). Firing
+   * this callback right after `performDistribution()`'s own checks (the
+   * previous fix, Issue #87 review follow-up second round) but before
+   * calling `distribute()` fired it too early for those failures too — the
+   * record would already claim this run's target repository even though the
+   * working directory was never touched, exactly the bug the previous round
+   * meant to close. Threading the callback one layer deeper, to fire from
+   * inside `distributeUnlocked()` itself, closes that remaining gap: a
+   * record write happens if and only if this run is actually about to
+   * change what's on `workingDir`'s disk. Callers use this to persist
+   * `task.distributionRepositoryId` with `repositoryId`; never invoked at
+   * all when `performDistribution`/`distribute()` returns before reaching
+   * that point (distribution not required, any of this function's own
+   * prerequisite checks failed, or `distribute()` itself fails before
+   * `ensureWorkingDir()`).
    */
   onBeforeDistribute?: (repositoryId: number) => void;
 }
@@ -386,13 +448,15 @@ export async function performDistribution(params: PerformDistributionParams): Pr
 
   const transport = transportFactory.getTransport(server);
 
-  // Every prerequisite check above has now passed — this is the point of
-  // no return before the one call below that can actually change the
-  // remote. See `onBeforeDistribute`'s doc comment on
-  // `PerformDistributionParams` for why the record write belongs exactly
-  // here rather than before `performDistribution()` is called at all.
-  onBeforeDistribute?.(repoEntry.id);
-
+  // Every prerequisite check THIS function runs has now passed — but
+  // `distribute()` below can still fail before ever touching `workingDir`
+  // (resolving `sshHost`'s home directory, preparing the hub's own repo
+  // cache, transferring the bundle onto the remote mirror). So the callback
+  // is NOT fired here; it is threaded through as
+  // `onBeforeWorkingDirChange` and fired by `distribute()` itself, exactly
+  // once, immediately before the one step INSIDE it that actually mutates
+  // `workingDir` (`ensureWorkingDir()`). See `onBeforeDistribute`'s doc
+  // comment on `PerformDistributionParams` above for the full rationale.
   const distResult = await fetchDistributionService.distribute({
     server,
     transport,
@@ -401,6 +465,7 @@ export async function performDistribution(params: PerformDistributionParams): Pr
     branch: baseBranch,
     workingDir,
     repositoryId: repoEntry.id,
+    onBeforeWorkingDirChange: onBeforeDistribute ? () => onBeforeDistribute(repoEntry.id) : undefined,
   });
 
   if (distResult.status === 'failed') {

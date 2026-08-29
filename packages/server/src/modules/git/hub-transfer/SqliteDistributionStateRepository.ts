@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import type { IDistributionStateRepository } from './types';
+import type { DistributionStateRecord, IDistributionStateRepository } from './types';
 
 export class SqliteDistributionStateRepository implements IDistributionStateRepository {
   constructor(private db: Database.Database) {}
@@ -17,5 +17,14 @@ export class SqliteDistributionStateRepository implements IDistributionStateRepo
 
   deleteByServer(serverName: string): void {
     this.db.prepare('DELETE FROM distribution_state WHERE server_name = ?').run(serverName);
+  }
+
+  find(serverName: string, repositoryId: number): DistributionStateRecord | null {
+    const row = this.db.prepare(`
+      SELECT last_distributed_sha AS lastDistributedSha, bundle_type AS bundleType, distributed_at AS distributedAt
+      FROM distribution_state
+      WHERE server_name = ? AND repository_id = ?
+    `).get(serverName, repositoryId) as DistributionStateRecord | undefined;
+    return row ?? null;
   }
 }

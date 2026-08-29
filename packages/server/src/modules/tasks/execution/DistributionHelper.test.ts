@@ -1,8 +1,9 @@
-import { describe, it, expect } from 'vitest';
-import { resolveExecutionRepositoryEntry, isDistributionRequired, isDistributionRequiredButRepositoryUnresolved } from './DistributionHelper';
+import { describe, it, expect, vi } from 'vitest';
+import { resolveExecutionRepositoryEntry, isDistributionRequired, isDistributionRequiredButRepositoryUnresolved, shouldClearRecordedDistributionRepository } from './DistributionHelper';
 import type { ServerConfig } from '../../servers/Server';
 import type { ProjectDetail, ProjectRepository } from '../../projects/Project';
 import type { ProjectServer } from '../../projects/ProjectServer';
+import type { IDistributionStateRepository } from '../../git/hub-transfer/types';
 
 // Issue #87 13th-round review, Important finding: the distribution target
 // (`projectServer.distributionRepositoryId`) and the repository push/PR/
@@ -168,5 +169,44 @@ describe('isDistributionRequiredButRepositoryUnresolved', () => {
     const currentlyComputedFresh = isDistributionRequired(makeAgentServer({ isolationIntent: false }), makeProjectServer({ distributeCode: false }));
     expect(currentlyComputedFresh).toBe(false); // sanity: the drift this test guards against
     expect(isDistributionRequiredButRepositoryUnresolved(distributionRequired, null)).toBe(true);
+  });
+});
+
+describe('shouldClearRecordedDistributionRepository (Issue #87 review, forge/87-mirror follow-up, Important finding 3)', () => {
+  function mockDistributionStateRepo(overrides: Partial<IDistributionStateRepository> = {}): IDistributionStateRepository {
+    return {
+      upsert: vi.fn(),
+      deleteByServer: vi.fn(),
+      find: vi.fn(() => null),
+      ...overrides,
+    };
+  }
+
+  it('returns false (keep the record) when nothing is recorded yet', () => {
+    const repo = mockDistributionStateRepo();
+    expect(shouldClearRecordedDistributionRepository(repo, 'server-a', null)).toBe(false);
+    expect(repo.find).not.toHaveBeenCalled();
+  });
+
+  it('returns false (keep the record) when a distribution_state row exists for this server and the recorded repository — same server, same source reused', () => {
+    const repo = mockDistributionStateRepo({
+      find: vi.fn((serverName: string, repositoryId: number) =>
+        serverName === 'server-a' && repositoryId === 7
+          ? { lastDistributedSha: 'a'.repeat(40), bundleType: 'full' as const, distributedAt: '2026-01-01T00:00:00Z' }
+          : null),
+    });
+    expect(shouldClearRecordedDistributionRepository(repo, 'server-a', 7)).toBe(false);
+  });
+
+  it('returns true (clear the record) when no distribution_state row exists for this server and the recorded repository — e.g. the task moved to a different server', () => {
+    const repo = mockDistributionStateRepo({ find: vi.fn(() => null) });
+    expect(shouldClearRecordedDistributionRepository(repo, 'server-b', 7)).toBe(true);
+  });
+
+  it('queries by the CURRENT run\'s server name, not some other value', () => {
+    const find = vi.fn(() => null);
+    const repo = mockDistributionStateRepo({ find });
+    shouldClearRecordedDistributionRepository(repo, 'server-a', 7);
+    expect(find).toHaveBeenCalledWith('server-a', 7);
   });
 });

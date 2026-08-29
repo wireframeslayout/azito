@@ -625,6 +625,64 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
 
       expect(hashOn).not.toBe(hashOff);
     });
+
+    // Issue #87 review (forge/87-mirror follow-up), Important finding 1:
+    // isolated servers (isolation_intent=1) distribute unconditionally,
+    // regardless of the project server's own distribute_code toggle — a
+    // standard, common configuration (isolation_intent=1, distribute_code=0).
+    // The FIRST 'execute' manifest for such a task used to hash the RAW
+    // distributeCode toggle (`false`) while the very next 'continuation'
+    // phase-boundary re-check (run right after distribution recorded
+    // task.distributionRepositoryId) hashed the EFFECTIVE value (`true`,
+    // via isDistributionRequiredForContinuation) — a mismatch that threw an
+    // already-approved, successfully-distributed task straight back to
+    // pending_approval. Both operationKinds must now hash the SAME EFFECTIVE
+    // value for this exact server/project-server pairing.
+    it("'execute' and the immediately-following 'continuation' agree on manifest.server.distributeCode for an isolated server with distribute_code off (Issue #87 review, forge/87-mirror follow-up, Important finding 1)", () => {
+      // Realistic configuration: the project server's own distribution
+      // target (7) is set once and does not change across this run —
+      // `performDistribution` always records `task.distributionRepositoryId`
+      // from `projectServer.distributionRepositoryId`, so after a successful
+      // distribution the two agree (see `performDistribution`'s own
+      // `distributionRepositoryId` resolution, DistributionHelper.ts).
+      const isolatedFixture: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject({ repositories: [{ id: 7, name: null, provider: 'github', url: 'https://github.com/o/r.git', owner: 'o', repoName: 'r', hasToken: false }] }),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: false, distributionRepositoryId: 7 }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021, isolationIntent: true }) },
+      };
+      // Before a run of this task has ever distributed anything —
+      // task.distributionRepositoryId is still null.
+      const taskBeforeDistribution = makeTask({ distributionRepositoryId: null });
+      const resolvedExecute = resolveExecutionManifest(taskBeforeDistribution, makeDeps(isolatedFixture), 'execute');
+
+      // Immediately after execute() ran: fetch distribution succeeded
+      // (isolationIntent alone required it) and recorded
+      // task.distributionRepositoryId — the project-server's own
+      // distribute_code is still off throughout, unchanged.
+      const taskAfterDistribution = makeTask({ distributionRepositoryId: 7 });
+      const resolvedContinuation = resolveExecutionManifest(taskAfterDistribution, makeDeps(isolatedFixture), 'continuation');
+
+      expect(resolvedExecute.manifest.server.distributeCode).toBe(true);
+      expect(resolvedContinuation.manifest.server.distributeCode).toBe(true);
+      expect(hashExecutionManifest(resolvedContinuation.manifest)).toBe(hashExecutionManifest(resolvedExecute.manifest));
+    });
+
+    it("manifest.server.distributeCode reflects the EFFECTIVE isDistributionRequired value (not the raw toggle) for 'execute'/'redistribute' on an isolated server with distribute_code off", () => {
+      const fixture: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: false }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021, isolationIntent: true }) },
+      };
+      const task = makeTask();
+
+      const resolvedExecute = resolveExecutionManifest(task, makeDeps(fixture), 'execute');
+      expect(resolvedExecute.manifest.server.distributeCode).toBe(true);
+
+      const resolvedRedistribute = resolveExecutionManifest(task, makeDeps(fixture), 'redistribute');
+      expect(resolvedRedistribute.manifest.server.distributeCode).toBe(true);
+    });
   });
 
   // Issue #87 explicit-target follow-up: distributionRepositoryId names

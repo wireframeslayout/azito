@@ -253,7 +253,7 @@ export class FetchDistributionService {
     repoHash: string,
     hostIdentity: string,
   ): Promise<FetchDistributionResult> {
-    const { server, transport, repoIdentity, token, branch, workingDir, repositoryId } = params;
+    const { server, transport, repoIdentity, token, branch, workingDir, repositoryId, onBeforeWorkingDirChange } = params;
 
     try {
       const mirrorDir = this.remoteBundleOps.mirrorDir(homeDir, repoHash);
@@ -290,7 +290,12 @@ export class FetchDistributionService {
       if (prep.kind === 'current') {
         // workingDir may still be missing or stale (e.g. it was deleted
         // separately from the mirror), so it's ensured even when the
-        // transfer itself was skipped.
+        // transfer itself was skipped. Everything above this point
+        // (`ensureMirror`/`getMirrorBranchSha`/`prepareBundle`) has already
+        // succeeded, so this is the point of no return before `workingDir`
+        // itself is touched — see `onBeforeWorkingDirChange`'s doc comment
+        // on `FetchDistributionParams`.
+        onBeforeWorkingDirChange?.();
         const localBranchSynced = await this.workingDirMutex.withLock(workingDirLockKey, () =>
           this.ensureWorkingDir(transport, mirrorDir, workingDir, branch, repoHash, repoIdentity));
         return { status: 'already_current', sha: prep.headSha, localBranchSynced };
@@ -300,6 +305,11 @@ export class FetchDistributionService {
       // doc comment above for why.
       const delivered = await this.deliverToMirror(transport, sshHost, repoHash, repoIdentity, branch, mirrorDir, prep);
 
+      // Same point-of-no-return rationale as the `already_current` branch
+      // above — `deliverToMirror()` has now succeeded (or thrown, caught
+      // below without ever reaching here), so `workingDir` is about to
+      // change.
+      onBeforeWorkingDirChange?.();
       const localBranchSynced = await this.workingDirMutex.withLock(workingDirLockKey, () =>
         this.ensureWorkingDir(transport, mirrorDir, workingDir, branch, repoHash, repoIdentity));
 
