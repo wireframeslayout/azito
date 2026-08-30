@@ -101,19 +101,97 @@ describe('RepoDiscoveryService', () => {
     await expect(service.discover(makeServer(), '/work')).rejects.toThrow(/ssh connection lost/);
   });
 
-  it('propagates a nonzero batch (remote lookup) exit code as an error instead of an empty result (Issue #19 review round 2, Important finding 1)', async () => {
+  it('propagates a nonzero `git --version` precheck as an error instead of an empty result (Issue #19 review round 2/3, Important finding 1)', async () => {
     const tmux = makeTmux(async (cmd) => {
       if (cmd.startsWith('find')) {
         return { stdout: '/work/repo/.git\n', stderr: '', code: 0 };
       }
-      // Simulates e.g. `git` being unavailable on the target: the batch
-      // command's final step fails with a nonzero exit even though its
-      // stdout looks like a well-formed (empty) result.
-      return { stdout: '', stderr: 'bash: git: command not found', code: 127 };
+      if (cmd.startsWith('git --version')) {
+        // Simulates `git` being unavailable on the target. This is now
+        // checked as its own independent command specifically so the
+        // failure is unconditional (not dependent on which candidate the
+        // batch happened to run last — see the position-independence
+        // test below).
+        return { stdout: '', stderr: 'bash: git: command not found', code: 127 };
+      }
+      throw new Error('should not reach the batch step once the git precheck failed');
     });
 
     const service = new RepoDiscoveryService(tmux);
     await expect(service.discover(makeServer(), '/work')).rejects.toThrow(/remote lookup failed/i);
+  });
+
+  it('propagates a nonzero batch exit code (transport-level failure) as an error instead of an empty result', async () => {
+    const tmux = makeTmux(async (cmd) => {
+      if (cmd.startsWith('find')) {
+        return { stdout: '/work/repo/.git\n', stderr: '', code: 0 };
+      }
+      if (cmd.startsWith('git --version')) {
+        return { stdout: 'git version 2.43.0', stderr: '', code: 0 };
+      }
+      // The batched rev-parse+remote-v command itself failed to run at
+      // the transport level (every per-candidate group now ends in
+      // `|| true`, so this can no longer be caused by an individual
+      // candidate's git failure).
+      return { stdout: '', stderr: 'transport error', code: 1 };
+    });
+
+    const service = new RepoDiscoveryService(tmux);
+    await expect(service.discover(makeServer(), '/work')).rejects.toThrow(/remote lookup failed/i);
+  });
+
+  describe('a broken candidate within the batch does not depend on its position (Issue #19 review round 3, Important finding 1)', () => {
+    // Chosen semantics: a single broken/unreadable candidate is dropped
+    // from the result (its `rev-parse` produces no absolute path, so
+    // `parseBatchOutput` skips it) while every other candidate is still
+    // returned normally — the scan as a whole does not fail. This must
+    // hold no matter where in the batch the broken candidate falls,
+    // since `find`'s output order is filesystem-dependent.
+
+    function makeBrokenBatchTmux(brokenPosition: 'first' | 'last') {
+      const goodSection = [
+        '---AZITO_REPO_SECTION---',
+        '/work/good-repo',
+        'origin\thttps://github.com/acme/widgets.git (fetch)',
+      ].join('\n');
+      // A broken candidate: `rev-parse` fails (2>/dev/null swallows
+      // stderr), so its section has no leading absolute path line.
+      const brokenSection = '---AZITO_REPO_SECTION---\n';
+
+      const batchStdout =
+        brokenPosition === 'first' ? brokenSection + goodSection : goodSection + brokenSection;
+
+      return makeTmux(async (cmd) => {
+        if (cmd.startsWith('find')) {
+          const paths =
+            brokenPosition === 'first'
+              ? '/work/broken-repo/.git\n/work/good-repo/.git\n'
+              : '/work/good-repo/.git\n/work/broken-repo/.git\n';
+          return { stdout: paths, stderr: '', code: 0 };
+        }
+        if (cmd.startsWith('git --version')) {
+          return { stdout: 'git version 2.43.0', stderr: '', code: 0 };
+        }
+        // Every per-candidate group in the real command ends with
+        // `|| true`, so the aggregate exit code is always 0 regardless
+        // of which candidate is broken or where it sits in the chain.
+        return { stdout: batchStdout, stderr: '', code: 0 };
+      });
+    }
+
+    it('drops only the broken candidate when it is FIRST in the batch', async () => {
+      const service = new RepoDiscoveryService(makeBrokenBatchTmux('first'));
+      const repos = await service.discover(makeServer(), '/work');
+      expect(repos).toHaveLength(1);
+      expect(repos[0].absolutePath).toBe('/work/good-repo');
+    });
+
+    it('drops only the broken candidate when it is LAST in the batch', async () => {
+      const service = new RepoDiscoveryService(makeBrokenBatchTmux('last'));
+      const repos = await service.discover(makeServer(), '/work');
+      expect(repos).toHaveLength(1);
+      expect(repos[0].absolutePath).toBe('/work/good-repo');
+    });
   });
 
   it('returns an empty list when no .git entries are found', async () => {

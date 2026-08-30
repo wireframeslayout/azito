@@ -73,8 +73,16 @@ const DEFAULT_PORT_BY_SCHEME: Record<string, string> = {
  *   "already registered" and excluded from bulk registration). Cross-
  *   protocol unification (https/ssh pointing at the same repo) is applied
  *   only for hosts that are known to be a single hosting service reachable
- *   over multiple protocols — currently just `github.com` — never as a
- *   general rule.
+ *   over multiple protocols — `github.com` and `gitlab.com` (exact
+ *   hostname match only) — never as a general rule. Self-hosted GitLab
+ *   instances (e.g. `gitlab.example.com`) are NOT in this set, so they
+ *   keep the scheme-preserving behavior above: AZITO cannot assume a
+ *   self-hosted install answers on every protocol the same way a managed
+ *   SaaS host does (Issue #19 third-party review round 3, Important
+ *   finding 2 — `gitlab.com` was missing from this list even though
+ *   GitLab is a first-class provider, so `https://gitlab.com/...` and
+ *   `git@gitlab.com:...` for the same repo were treated as different
+ *   identities and could be double-registered during bulk discovery).
  *
  * Issue #19 third-party review, Important finding 4: the previous
  * implementation lowercased the entire URL and unconditionally dropped the
@@ -82,7 +90,7 @@ const DEFAULT_PORT_BY_SCHEME: Record<string, string> = {
  * paths on a case-sensitive host, or different services on different
  * ports).
  */
-const KNOWN_CROSS_PROTOCOL_HOSTS = new Set(['github.com']);
+const KNOWN_CROSS_PROTOCOL_HOSTS = new Set(['github.com', 'gitlab.com']);
 
 function isKnownCrossProtocolHost(host: string): boolean {
   return KNOWN_CROSS_PROTOCOL_HOSTS.has(host);

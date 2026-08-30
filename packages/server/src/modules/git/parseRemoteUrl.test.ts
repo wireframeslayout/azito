@@ -141,4 +141,26 @@ describe('normalizeRemoteUrl', () => {
       expect(https).not.toBe(ssh);
     });
   });
+
+  describe('provider-specific cross-protocol unification (gitlab.com) (Issue #19 review round 3, Important finding 2)', () => {
+    it('unifies https, explicit ssh://, and scp-style forms for gitlab.com into the same identity', () => {
+      const https = normalizeRemoteUrl('https://gitlab.com/group/repo.git');
+      const sshProto = normalizeRemoteUrl('ssh://git@gitlab.com/group/repo.git');
+      const scp = normalizeRemoteUrl('git@gitlab.com:group/repo.git');
+      expect(https).toBe('gitlab.com/group/repo');
+      expect(https).toBe(sshProto);
+      expect(https).toBe(scp);
+    });
+
+    it('keeps a self-hosted GitLab-style host (e.g. gitlab.example.jp) scheme-distinct', () => {
+      const https = normalizeRemoteUrl('https://gitlab.example.jp/group/repo.git');
+      const ssh = normalizeRemoteUrl('ssh://git@gitlab.example.jp/group/repo.git');
+      const scp = normalizeRemoteUrl('git@gitlab.example.jp:group/repo.git');
+      expect(https).not.toBe(ssh);
+      // scp-like syntax is always ssh, so it still folds into the ssh://
+      // identity for a general (non-cross-protocol) host — it just isn't
+      // unified with https, unlike gitlab.com itself above.
+      expect(scp).toBe(ssh);
+    });
+  });
 });

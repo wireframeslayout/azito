@@ -61,30 +61,58 @@ export class RepoDiscoveryService {
 
     if (candidateDirs.length === 0) return [];
 
+    // Verify `git` itself is runnable BEFORE batching, as an independent,
+    // single command. The batch below joins one shell group per candidate
+    // with `;`, so its aggregate exit code previously reflected only the
+    // LAST group in the chain — a broken/unreadable repo (or a missing
+    // `git` binary) was only caught when it happened to be the final
+    // candidate `find` returned, and `find`'s order is filesystem-
+    // dependent (unstable across runs). The same input could therefore
+    // either abort the whole scan or silently drop a candidate, depending
+    // on unrelated ordering (Issue #19 third-party review round 3,
+    // Important finding 1). Checking `git`'s availability here, on its
+    // own command, makes that specific failure mode (git missing/
+    // unusable on the target) unconditional — it is a command-level
+    // failure and the whole scan is intentionally failed rather than
+    // silently degraded.
+    const gitCheckResult = await this.tmux.execCommand(server, 'git --version');
+    if (gitCheckResult.code !== 0) {
+      throw new Error(
+        `Repository remote lookup failed: 'git' is not usable on '${workingDirectory}' (exit code ${gitCheckResult.code})`,
+      );
+    }
+
     // Resolve each candidate to its actual repository root via
     // `git rev-parse --show-toplevel` (this is what correctly turns a
     // worktree's `.git` *file* location into that worktree's own root,
     // rather than the main checkout's), then fetch its remotes. Both run
     // in the same batched command to avoid one round-trip per candidate.
+    //
+    // Chosen semantics for a broken/unreadable candidate found WITHIN the
+    // batch (as opposed to `git` being unusable at all, handled above):
+    // that single candidate is dropped from the result, and every other
+    // candidate is still returned — the scan as a whole does not fail.
+    // Each candidate's shell group ends with `|| true` specifically so
+    // that its own failure can never determine the batch command's
+    // aggregate exit code (which previously only reflected whichever
+    // candidate happened to run last). `rev-parse` failing for a
+    // candidate still shows up in its own section as empty output, which
+    // `parseBatchOutput` already treats as "skip this candidate" — so a
+    // broken candidate at the FIRST position and one at the LAST position
+    // now behave identically (see the position-independence test).
     const batchCmd = candidateDirs
       .map((d) => {
         const safe = shellQuote(d);
-        return `echo '${SECTION_MARKER}' && (git -C ${safe} rev-parse --show-toplevel 2>/dev/null; git -C ${safe} remote -v 2>/dev/null)`;
+        return `echo '${SECTION_MARKER}' && (git -C ${safe} rev-parse --show-toplevel 2>/dev/null; git -C ${safe} remote -v 2>/dev/null; true)`;
       })
       .join(' ; ');
 
     const batchResult = await this.tmux.execCommand(server, batchCmd);
-    // The trailing command in the chain (the last candidate's `git remote
-    // -v`) still runs even when e.g. `git` itself is missing on the
-    // target — a missing executable fails that final command with a
-    // nonzero exit rather than silently producing empty output, so
-    // checking `batchResult.code` here does catch a command-level failure
-    // (missing git binary, permission denied, etc.) instead of reporting
-    // it as "found 0 remotes" (Issue #19 third-party review round 2,
-    // Important finding 1). A single unreadable/broken repo *within* the
-    // batch still resolves with no remotes for that repo only, via its
-    // own per-candidate `2>/dev/null` — that per-candidate tolerance is
-    // unaffected by this check.
+    // With `git` confirmed usable above and every per-candidate group
+    // forced to exit 0, a nonzero code here can only mean the transport
+    // itself failed to run the batched command (not any single
+    // candidate's git failure) — still propagated as a command-level
+    // failure rather than an empty/success result.
     if (batchResult.code !== 0) {
       throw new Error(
         `Repository remote lookup failed while searching '${workingDirectory}' (exit code ${batchResult.code})`,
