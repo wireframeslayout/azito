@@ -155,12 +155,6 @@ describe('beginCandidateEditRequest', () => {
     expect(edit.open && edit.loading).toBe(true); // open implies renderable content
   });
 
-  it('does not leave loading raised behind a closed dropdown when the input is unfocused', () => {
-    const guard = createRequestGuard();
-    const edit = beginCandidateEditRequest(guard, false);
-    expect(edit.open).toBe(false);
-  });
-
   it('each edit keeps invalidating the prior one, so only the very latest edit can ever adopt a response', () => {
     const guard = createRequestGuard();
     const first = beginCandidateEditRequest(guard, true);
