@@ -1,4 +1,4 @@
-import { Fragment, useState, type CSSProperties, type ReactNode } from 'react';
+import { Fragment, type CSSProperties, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Badge, Chip, FormInput, InstallSteps, Spinner, baseInputStyle, type InstallStep } from './ui';
 import FormField from './FormField';
@@ -95,26 +95,25 @@ const hiddenRadioStyle: CSSProperties = {
  * standard clip-rect technique, not `display:none`) so the option remains
  * keyboard-focusable/operable and participates in the browser's native
  * radio-group arrow-key navigation; the label wraps the whole card so a
- * click anywhere on it toggles the input. Focus state is tracked locally
- * (rather than a CSS `:focus-visible` rule) because the selected/unselected
- * ring is itself computed inline per row — see EnvironmentStep/CodeStep.
+ * click anywhere on it toggles the input. The selected-state ring (inline
+ * `box-shadow`) and the keyboard-focus indicator (`.wizard-option-card`
+ * CSS `outline`, see global.css) use different box-model layers so they
+ * never fight over specificity, and the outline only appears for
+ * `:focus-visible` (keyboard), not on mouse click.
  */
 function OptionCard({ id, name, checked, onChange, disabled, title, description }: {
   id: string; name: string; checked: boolean; onChange: () => void; disabled?: boolean;
   title: ReactNode; description?: ReactNode;
 }) {
-  const [focused, setFocused] = useState(false);
   return (
     <label
       htmlFor={id}
+      className="wizard-option-card"
       style={{
         display: 'grid', gridTemplateColumns: '18px 1fr', gap: 'var(--space-3)', alignItems: 'start',
         padding: 'var(--space-3)', borderRadius: 'var(--radius-md)', marginBottom: 8,
         background: checked ? 'var(--selected-bg)' : 'var(--bg-card)',
-        boxShadow: [
-          checked ? 'inset 0 0 0 1px var(--accent-a35)' : '',
-          focused ? '0 0 0 2px var(--accent-a35)' : '',
-        ].filter(Boolean).join(', ') || 'none',
+        boxShadow: checked ? 'inset 0 0 0 1px var(--accent-a35)' : 'none',
         cursor: disabled ? 'not-allowed' : 'pointer',
         opacity: disabled ? 0.5 : 1,
       }}
@@ -126,8 +125,6 @@ function OptionCard({ id, name, checked, onChange, disabled, title, description 
         checked={checked}
         onChange={disabled ? undefined : onChange}
         disabled={disabled}
-        onFocus={() => setFocused(true)}
-        onBlur={() => setFocused(false)}
         style={hiddenRadioStyle}
       />
       <span aria-hidden="true" style={{

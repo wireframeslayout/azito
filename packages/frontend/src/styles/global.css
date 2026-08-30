@@ -318,6 +318,14 @@ a:hover {
   }
 }
 
+/* ---- Project wizard: option card keyboard-focus indicator (opaque --accent, 3:1+ contrast) ----
+   Keyboard-only (:focus-visible), separate from the selected-state ring (inline inset box-shadow
+   on the same element) so the two never compete on specificity. */
+.wizard-option-card:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
