@@ -81,6 +81,13 @@ describe('LocalRepoCloneService concurrency', () => {
 
   it('does not serialize clones into DIFFERENT target directories — they run concurrently', async () => {
     vi.resetModules();
+    // Instead of inferring concurrency from elapsed wall-clock time (flaky
+    // under load — see the real-time regression this test itself replaced),
+    // directly observe overlap: track how many mocked `git clone` calls are
+    // in flight at once. A truly concurrent run must, at some point, have
+    // two in flight simultaneously; a serialized run never would.
+    let inFlight = 0;
+    let maxInFlight = 0;
     vi.doMock('child_process', async (importOriginal) => {
       const actual = await importOriginal<typeof import('child_process')>();
       return {
@@ -89,8 +96,13 @@ describe('LocalRepoCloneService concurrency', () => {
           const cb = args[args.length - 1];
           if (typeof cb === 'function') {
             const patchedArgs = args.slice(0, -1);
+            inFlight += 1;
+            maxInFlight = Math.max(maxInFlight, inFlight);
             patchedArgs.push((...cbArgs: unknown[]) => {
-              setTimeout(() => (cb as (...a: unknown[]) => void)(...cbArgs), 200);
+              setTimeout(() => {
+                inFlight -= 1;
+                (cb as (...a: unknown[]) => void)(...cbArgs);
+              }, 50);
             });
             return (actual.execFile as (...a: unknown[]) => unknown)(...patchedArgs);
           }
@@ -107,17 +119,14 @@ describe('LocalRepoCloneService concurrency', () => {
     const targetDirB = path.join(targetRoot, 'project-b');
 
     const service = new LocalRepoCloneService();
-    const start = Date.now();
     await Promise.all([
       service.clone(makeIdentity(origin), null, 'main', targetDirA),
       service.clone(makeIdentity(origin), null, 'main', targetDirB),
     ]);
-    const elapsedMs = Date.now() - start;
 
-    // Each mocked `git clone` takes ~200ms. Serialized (one target's lock
-    // blocking the other), the pair would take ~400ms+; run concurrently,
-    // it takes ~200ms. Assert well under the serialized bound.
-    expect(elapsedMs).toBeLessThan(350);
+    // Two different targets must have overlapped in flight — proof they ran
+    // concurrently rather than being serialized by a shared lock.
+    expect(maxInFlight).toBeGreaterThanOrEqual(2);
     expect(fs.existsSync(path.join(targetDirA, '.git'))).toBe(true);
     expect(fs.existsSync(path.join(targetDirB, '.git'))).toBe(true);
 
