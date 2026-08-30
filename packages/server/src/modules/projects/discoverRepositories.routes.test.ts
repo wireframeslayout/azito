@@ -832,6 +832,81 @@ describe('POST /api/projects/:id/repositories (reuse-aware)', () => {
     expect(res.json()).toEqual({ ok: true, id: 42, reused: true });
     expect(opts.projectRepo.updateRepositoryToken).not.toHaveBeenCalled();
   });
+
+  // Whitespace-only token must not clobber an existing, working credential
+  // (Issue #87 review, Important finding — API boundary trims before
+  // deciding whether a token was actually supplied).
+  it('does not overwrite an existing credential when a whitespace-only token is supplied on reuse', async () => {
+    const opts = makeOpts({
+      projectRepo: {
+        findAll: vi.fn(() => []),
+        findById: vi.fn(() => ({
+          id: 10, name: 'P', slug: 'p', description: null, repositoryUrl: null, defaultBranch: 'main',
+          sidekickPrompt: null, icon: null, color: null, defaultUnitId: null, servers: [], windows: [],
+          createdAt: '', updatedAt: '',
+          repositories: [{ id: 42, name: null, url: 'https://github.com/acme/widgets.git', provider: 'github' as const, owner: 'acme', repoName: 'widgets', hasToken: true }],
+        })),
+        create: vi.fn(() => 10),
+        update: vi.fn(),
+        delete: vi.fn(),
+        addRepository: vi.fn(() => 999),
+        findRepositoryById: vi.fn(() => null),
+        updateRepositoryToken: vi.fn(),
+        removeRepository: vi.fn(),
+      },
+    });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/projects/10/repositories',
+      payload: { url: 'https://github.com/acme/widgets.git', provider: 'github', token: '   ' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, id: 42, reused: true });
+    expect(opts.projectRepo.updateRepositoryToken).not.toHaveBeenCalled();
+  });
+
+  // Same protection on the brand-new-registration path: a whitespace-only
+  // token must not be persisted as if it were a real credential.
+  it('does not persist a whitespace-only token when registering a new repository', async () => {
+    const opts = makeOpts({
+      projectRepo: {
+        findAll: vi.fn(() => []),
+        findById: vi.fn(() => ({
+          id: 10, name: 'P', slug: 'p', description: null, repositoryUrl: null, defaultBranch: 'main',
+          sidekickPrompt: null, icon: null, color: null, defaultUnitId: null, servers: [], windows: [],
+          createdAt: '', updatedAt: '',
+          repositories: [],
+        })),
+        create: vi.fn(() => 10),
+        update: vi.fn(),
+        delete: vi.fn(),
+        addRepository: vi.fn(() => 999),
+        findRepositoryById: vi.fn(() => null),
+        updateRepositoryToken: vi.fn(),
+        removeRepository: vi.fn(),
+      },
+    });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/projects/10/repositories',
+      payload: { url: 'https://github.com/acme/widgets.git', provider: 'github', token: '   ' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, id: 999, reused: false });
+    expect(opts.projectRepo.addRepository).toHaveBeenCalledWith(
+      10, 'https://github.com/acme/widgets.git', undefined, 'github', undefined, undefined, undefined,
+    );
+  });
 });
 
 describe('POST clone-local', () => {

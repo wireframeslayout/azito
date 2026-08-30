@@ -194,6 +194,14 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       };
       if (!url) return reply.status(400).send({ error: 'URL required' });
 
+      // Trim and treat a whitespace-only token as absent at the API
+      // boundary: the frontend already trims, but this endpoint can be
+      // called directly, and `if (token)` alone would let a
+      // whitespace-only string overwrite an existing, working credential
+      // (Issue #87 review, Important finding — whitespace-only token can
+      // clobber an existing credential).
+      const normalizedToken = typeof token === 'string' ? token.trim() : '';
+
       // Reuse an already-registered repository row for the same remote
       // (compared via normalizeRemoteUrl, the same identity check the bulk
       // endpoint's dedup already uses) instead of appending a duplicate.
@@ -226,8 +234,8 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
         // true (Issue #87 review, Important finding — token correction
         // not reflected). A missing/empty token never touches the
         // existing credential (no accidental erasure).
-        if (token) {
-          projectRepo.updateRepositoryToken(existing.id, token);
+        if (normalizedToken) {
+          projectRepo.updateRepositoryToken(existing.id, normalizedToken);
         }
         return { ok: true, id: existing.id, reused: true };
       }
@@ -235,7 +243,7 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       const repoId = projectRepo.addRepository(
         id, url, name,
         (provider as RepositoryProvider) || 'github',
-        owner, repo_name, token,
+        owner, repo_name, normalizedToken || undefined,
       );
       return { ok: true, id: repoId, reused: false };
     },
