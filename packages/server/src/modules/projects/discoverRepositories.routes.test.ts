@@ -211,6 +211,66 @@ describe('GET discover-repositories', () => {
     expect(res.json().repositories[0].remotes[0].url).toBe('/srv/repos/widgets.git');
   });
 
+  it('strips a credential carried only in the query string of a discovered remote URL', async () => {
+    const opts = makeOpts({
+      repoDiscovery: {
+        discover: vi.fn(async () => [
+          {
+            relativePath: 'widgets',
+            absolutePath: '/work/widgets',
+            remotes: [
+              {
+                name: 'origin',
+                url: 'https://github.com/acme/widgets.git?token=dummy-token',
+                parsed: { provider: 'github' as const, owner: 'acme', repoName: 'widgets', host: 'github.com' },
+              },
+            ],
+          },
+        ]),
+      } as unknown as ProjectsRouteOptions['repoDiscovery'],
+    });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'GET', url: '/api/projects/10/servers/local/discover-repositories' });
+
+    expect(res.statusCode).toBe(200);
+    const url: string = res.json().repositories[0].remotes[0].url;
+    expect(url).not.toContain('dummy-token');
+    expect(url).toBe('https://github.com/acme/widgets.git');
+  });
+
+  it('strips a credential carried only in the fragment of a discovered remote URL', async () => {
+    const opts = makeOpts({
+      repoDiscovery: {
+        discover: vi.fn(async () => [
+          {
+            relativePath: 'widgets',
+            absolutePath: '/work/widgets',
+            remotes: [
+              {
+                name: 'origin',
+                url: 'https://github.com/acme/widgets.git#access_token=dummy-token',
+                parsed: { provider: 'github' as const, owner: 'acme', repoName: 'widgets', host: 'github.com' },
+              },
+            ],
+          },
+        ]),
+      } as unknown as ProjectsRouteOptions['repoDiscovery'],
+    });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'GET', url: '/api/projects/10/servers/local/discover-repositories' });
+
+    expect(res.statusCode).toBe(200);
+    const url: string = res.json().repositories[0].remotes[0].url;
+    expect(url).not.toContain('dummy-token');
+    expect(url).toBe('https://github.com/acme/widgets.git');
+  });
+
   it('returns an error (not an empty success) when the scan fails', async () => {
     const opts = makeOpts({
       repoDiscovery: {
@@ -244,6 +304,44 @@ describe('POST /api/projects/:id/repositories/bulk', () => {
 
     expect(res.statusCode).toBe(400);
     expect(opts.projectRepo.addRepository).not.toHaveBeenCalled();
+  });
+
+  it('strips a credential carried only in the query string before storing it', async () => {
+    const opts = makeOpts();
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/projects/10/repositories/bulk',
+      payload: { repositories: [{ url: 'https://github.com/acme/widgets.git?token=dummy-token', provider: 'github' }] },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().added).toBe(1);
+    const storedUrl = (opts.projectRepo.addRepository as ReturnType<typeof vi.fn>).mock.calls[0][1];
+    expect(storedUrl).not.toContain('dummy-token');
+    expect(storedUrl).toBe('https://github.com/acme/widgets.git');
+  });
+
+  it('strips a credential carried only in the fragment before storing it', async () => {
+    const opts = makeOpts();
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/projects/10/repositories/bulk',
+      payload: { repositories: [{ url: 'https://github.com/acme/widgets.git#access_token=dummy-token', provider: 'github' }] },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().added).toBe(1);
+    const storedUrl = (opts.projectRepo.addRepository as ReturnType<typeof vi.fn>).mock.calls[0][1];
+    expect(storedUrl).not.toContain('dummy-token');
+    expect(storedUrl).toBe('https://github.com/acme/widgets.git');
   });
 
   it('accepts a batch of plain URLs', async () => {

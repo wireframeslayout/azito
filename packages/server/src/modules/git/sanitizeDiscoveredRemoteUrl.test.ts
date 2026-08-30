@@ -39,4 +39,45 @@ describe('sanitizeDiscoveredRemoteUrl', () => {
       'https://github.com/acme/widgets.git',
     );
   });
+
+  it('strips a credential carried only in the query string of an https URL', () => {
+    expect(
+      sanitizeDiscoveredRemoteUrl('https://github.com/acme/widgets.git?token=dummy-token'),
+    ).toBe('https://github.com/acme/widgets.git');
+  });
+
+  it('strips a credential carried only in the fragment of an https URL', () => {
+    expect(
+      sanitizeDiscoveredRemoteUrl('https://github.com/acme/widgets.git#access_token=dummy-token'),
+    ).toBe('https://github.com/acme/widgets.git');
+  });
+
+  it('strips userinfo, query, and fragment together from an https URL', () => {
+    expect(
+      sanitizeDiscoveredRemoteUrl(
+        'https://user:dummy-token@github.com/acme/widgets.git?x=1#y=2',
+      ),
+    ).toBe('https://github.com/acme/widgets.git');
+  });
+
+  it('drops a harmless query string even with no credential present', () => {
+    expect(sanitizeDiscoveredRemoteUrl('https://github.com/acme/widgets.git?ref=main')).toBe(
+      'https://github.com/acme/widgets.git',
+    );
+  });
+
+  it('does not mistake a scp-like SSH remote for having a query string', () => {
+    // Regression guard: `git@host:owner/repo.git?x=1` has no URL scheme, so
+    // the `?x=1` here is part of the (unusual but valid) SCP-like path, not
+    // a query string to strip.
+    expect(sanitizeDiscoveredRemoteUrl('git@github.com:acme/widgets.git?x=1')).toBe(
+      'git@github.com:acme/widgets.git?x=1',
+    );
+  });
+
+  it('treats a structurally malformed http(s)-scheme value conservatively instead of returning it as-is', () => {
+    const result = sanitizeDiscoveredRemoteUrl('https://');
+    expect(result).not.toBe('https://');
+    expect(result).not.toContain('dummy-token');
+  });
 });

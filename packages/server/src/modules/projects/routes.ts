@@ -770,8 +770,14 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       let added = 0;
       let skipped = 0;
       for (const repo of repositories) {
-        const url = typeof repo?.url === 'string' ? repo.url.trim() : '';
-        if (!url) { skipped++; continue; }
+        const rawUrl = typeof repo?.url === 'string' ? repo.url.trim() : '';
+        if (!rawUrl) { skipped++; continue; }
+        // Query-string/fragment credentials (`?token=...`, `#access_token=...`)
+        // are not caught by the urlHasEmbeddedCredentials() rejection above
+        // (it only inspects userinfo) — route every URL through the same
+        // sanitizer used for discovered remotes before it reaches this
+        // plaintext column (Issue #19 later review round, Important finding 1).
+        const url = sanitizeDiscoveredRemoteUrl(rawUrl);
         if (existingUrls.has(normalizeRemoteUrl(url))) { skipped++; continue; }
         const name = typeof repo.name === 'string' ? repo.name : undefined;
         const provider = typeof repo.provider === 'string' ? repo.provider : undefined;

@@ -1,5 +1,3 @@
-import { urlHasEmbeddedCredentials } from './urlHasEmbeddedCredentials';
-
 /**
  * Sanitizes a git remote URL discovered on disk (`git remote -v` output) so
  * it can be safely shown to the user and, if they add it, written into the
@@ -19,34 +17,70 @@ import { urlHasEmbeddedCredentials } from './urlHasEmbeddedCredentials';
  * `(unrecognized origin url)`).
  *
  * Behavior:
- * - SSH SCP-like (`git@host:owner/repo.git`) and `ssh://` URLs: returned
+ * - SSH SCP-like (`git@host:owner/repo.git`) syntax: has no URL scheme at
+ *   all (git parses the `host:path` form itself), so it is returned
  *   unchanged. The `user@` portion is a conventional account name (`git`,
- *   `forge`, ...), not a secret — `urlHasEmbeddedCredentials` never flags
- *   these (SSH URLs have no password field), so there is nothing to strip.
- * - Local/relative paths, or anything else `urlHasEmbeddedCredentials`
- *   does not recognize as carrying real credential material: returned
+ *   `forge`, ...), not a secret, and there is no query/fragment concept in
+ *   this syntax to carry one either.
+ * - Local absolute paths (`/srv/repos/x.git`) and relative paths
+ *   (`../x.git`): also have no URL scheme, so they fall into the same
+ *   "return unchanged" bucket as SCP-like syntax above — distinguished
+ *   from it only by the absence of a leading `user@host:` prefix, which
+ *   doesn't matter for how they're handled.
+ * - `ssh://` URLs: the userinfo is a conventional account name, not a
+ *   secret, and git ignores any query/fragment on an ssh URL. Returned
  *   unchanged.
- * - HTTP(S) URLs that DO carry embedded credentials
- *   (`https://user:token@host/x.git` or `https://token@host/x.git`): the
- *   userinfo is stripped, yielding a clone-able credential-less URL
- *   (`https://host/x.git`). Query string and fragment are left untouched —
- *   unlike `redactGitUrlCredentials`, this function's contract is "keep it
- *   a working clone URL," and an arbitrary query string is not itself
- *   credential material (`urlHasEmbeddedCredentials` doesn't inspect it).
+ * - Any other URL with a recognized `scheme://` prefix (`http://`,
+ *   `https://`, `git://`, `ftp://`, `file://`, ...) that parses
+ *   successfully: userinfo (username/password), the query string, AND the
+ *   fragment are ALL stripped unconditionally — regardless of whether
+ *   `urlHasEmbeddedCredentials()` flags this specific URL as carrying a
+ *   credential. A clone URL never needs a query string or fragment, and
+ *   credentials can be smuggled into either
+ *   (`https://host/repo.git?token=secret`,
+ *   `https://host/repo.git#access_token=secret`) just as easily as into
+ *   userinfo — so this function no longer gates its cleanup on
+ *   `urlHasEmbeddedCredentials()` (Issue #19 later review round, Important
+ *   finding 1: a userinfo-only check let query/fragment credentials pass
+ *   through untouched into the discovery response and the plaintext
+ *   `project_repositories.url` column).
+ * - A value that has a recognized `scheme://` prefix but still fails to
+ *   parse as a URL (structurally malformed): treated conservatively, NOT
+ *   returned as-is, since it cannot be inspected or cleaned and may still
+ *   carry credential material. This is different from the local/relative
+ *   path case above, which is recognized by the ABSENCE of a scheme, not
+ *   by a failed parse.
  */
+const SCP_LIKE_SSH = /^[^@\s/]+@[^:\s]+:(?!\/\/)/;
+const URL_SCHEME = /^([a-z][a-z0-9+.-]*):\/\//i;
+const UNPARSEABLE_URL_PLACEHOLDER = '(unparseable remote url redacted)';
+
 export function sanitizeDiscoveredRemoteUrl(rawUrl: string): string {
   const trimmed = rawUrl.trim();
-  if (!urlHasEmbeddedCredentials(trimmed)) return trimmed;
+
+  if (SCP_LIKE_SSH.test(trimmed)) return trimmed;
+
+  const schemeMatch = URL_SCHEME.exec(trimmed);
+  if (!schemeMatch) {
+    // No recognizable URL scheme and not SCP-like syntax: a local
+    // absolute path or a relative path. Neither has a userinfo, query, or
+    // fragment field for git to smuggle a credential into.
+    return trimmed;
+  }
+
+  const scheme = schemeMatch[1].toLowerCase();
+  if (scheme === 'ssh') return trimmed;
 
   try {
     const url = new URL(trimmed);
     url.username = '';
     url.password = '';
+    url.search = '';
+    url.hash = '';
     return url.toString();
   } catch {
-    // urlHasEmbeddedCredentials() already confirmed this parses as a URL
-    // with a password or an http(s) username, so this branch is
-    // unreachable in practice; keep it fail-safe rather than throwing.
-    return trimmed;
+    // Had a `scheme://` prefix but is not a structurally valid URL — we
+    // cannot inspect or clean it, so refuse to pass it through unchanged.
+    return UNPARSEABLE_URL_PLACEHOLDER;
   }
 }

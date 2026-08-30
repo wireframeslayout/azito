@@ -184,7 +184,10 @@ export default function RepoDiscoveryDialog({ open, onClose, projectId, serverNa
         <div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
             <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
-              {t('settings.repositories.discover.summary', { repoCount: repos.length, remoteCount: totalRemotes })}
+              {t('settings.repositories.discover.summary', {
+                repos: t('settings.repositories.discover.repoCount', { count: repos.length }),
+                remotes: t('settings.repositories.discover.remoteCount', { count: totalRemotes }),
+              })}
             </span>
             {selectableRemotes.length > 0 && (
               <label style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
