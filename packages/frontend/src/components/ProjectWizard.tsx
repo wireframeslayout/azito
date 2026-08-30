@@ -8,7 +8,7 @@ import ProjectGeneralFields, { generateSlug } from './ProjectGeneralFields';
 import { notifyProjectsChanged } from '../lib/projectsChanged';
 import { createRequestGuard, dedupeSelectableUrls } from './repoDiscoveryDialogLogic';
 import {
-  getVisibleSteps, canAdvanceFromStep, stepIndex, nextStep, deriveCloneDirectoryName,
+  getVisibleSteps, canAdvanceFromStep, stepIndex, nextStep, deriveCloneDirectoryName, deriveDefaultBranch,
   type WizardStepId, type CodeMode, type WizardValidationState,
 } from '../lib/projectWizardLogic';
 import {
@@ -66,8 +66,6 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
   const [description, setDescription] = useState('');
   const [icon, setIcon] = useState('');
   const [color, setColor] = useState('');
-  const [projectRepoUrl, setProjectRepoUrl] = useState('');
-  const [defaultBranch, setDefaultBranch] = useState('main');
   const [sidekickPrompt, setSidekickPrompt] = useState('');
 
   // ── Step 2: environment ──
@@ -204,7 +202,7 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
             method: 'POST',
             body: JSON.stringify({
               name: name.trim(), slug: slug.trim(), description: description.trim(),
-              repository_url: projectRepoUrl.trim() || null, default_branch: defaultBranch.trim() || 'main',
+              default_branch: deriveDefaultBranch(codeMode, cloneBranch),
               sidekick_prompt: sidekickPrompt.trim(), icon: icon.trim() || null, color: color.trim() || null,
             }),
           });
@@ -298,7 +296,7 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
       setRunning(false);
     }
   }, [
-    mode, createdProjectId, name, slug, description, projectRepoUrl, defaultBranch, sidekickPrompt, icon, color,
+    mode, createdProjectId, name, slug, description, sidekickPrompt, icon, color,
     selectedServer, codeMode, existingPath, cloneDirectory, cloneBranch, cloneUrl, envDone, repoDone,
     repositoriesToRegister, onDone, setStep, t,
   ]);
@@ -380,8 +378,6 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
               slug={slug} setSlug={setSlug} slugManuallyEdited={slugManuallyEdited} setSlugManuallyEdited={setSlugManuallyEdited}
               description={description} setDescription={setDescription}
               icon={icon} setIcon={setIcon} color={color} setColor={setColor}
-              projectRepoUrl={projectRepoUrl} setProjectRepoUrl={setProjectRepoUrl}
-              defaultBranch={defaultBranch} setDefaultBranch={setDefaultBranch}
               sidekickPrompt={sidekickPrompt} setSidekickPrompt={setSidekickPrompt}
             />
           )}

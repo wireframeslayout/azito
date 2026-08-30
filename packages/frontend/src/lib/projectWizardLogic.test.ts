@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getVisibleSteps, canAdvanceFromStep, stepIndex, nextStep, deriveCloneDirectoryName, type WizardValidationState } from './projectWizardLogic';
+import { getVisibleSteps, canAdvanceFromStep, stepIndex, nextStep, deriveCloneDirectoryName, deriveDefaultBranch, type WizardValidationState } from './projectWizardLogic';
 
 function makeState(overrides: Partial<WizardValidationState> = {}): WizardValidationState {
   return {
@@ -104,5 +104,28 @@ describe('deriveCloneDirectoryName', () => {
 
   it('returns an empty string for an empty URL', () => {
     expect(deriveCloneDirectoryName('')).toBe('');
+  });
+});
+
+describe('deriveDefaultBranch', () => {
+  it('uses the clone branch when codeMode is "clone"', () => {
+    expect(deriveDefaultBranch('clone', 'develop')).toBe('develop');
+  });
+
+  it('falls back to "main" when codeMode is "clone" but no branch was entered', () => {
+    expect(deriveDefaultBranch('clone', '')).toBe('main');
+    expect(deriveDefaultBranch('clone', '   ')).toBe('main');
+  });
+
+  it('trims whitespace around the clone branch', () => {
+    expect(deriveDefaultBranch('clone', '  develop  ')).toBe('develop');
+  });
+
+  it('falls back to "main" when codeMode is "existing" (discovery reports no branch info)', () => {
+    expect(deriveDefaultBranch('existing', 'develop')).toBe('main');
+  });
+
+  it('falls back to "main" when codeMode is "later" (no repository at all)', () => {
+    expect(deriveDefaultBranch('later', 'develop')).toBe('main');
   });
 });

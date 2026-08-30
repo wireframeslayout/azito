@@ -87,3 +87,18 @@ export function deriveCloneDirectoryName(cloneUrl: string): string {
   const match = trimmed.match(/([^/:]+?)(?:\.git)?$/);
   return match ? match[1] : '';
 }
+
+/**
+ * Derives the project's `default_branch` (task base-branch fallback, see
+ * `TaskExecutionEnv.resolveBaseBranch`) from the wizard's "code" step
+ * instead of a dedicated step-1 field — repository choice, and therefore
+ * its branch, is now decided in that step. Only the "clone" mode supplies
+ * an explicit branch (the one the clone will check out); repository
+ * discovery (`existing` mode) does not report a remote's default branch,
+ * and "later" has no repository at all — both fall back to 'main', same
+ * as the server-side fallback chain's own final default.
+ */
+export function deriveDefaultBranch(codeMode: CodeMode, cloneBranch: string): string {
+  if (codeMode === 'clone') return cloneBranch.trim() || 'main';
+  return 'main';
+}
