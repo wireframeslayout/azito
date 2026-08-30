@@ -5,6 +5,7 @@ import {
   resolveCloneDeliveryMode, repoStepSignature, envStepSignature, cloneStepSignature,
   repoIdsToCleanup, reconcileDeletedRepositoryIds, cleanupStaleRepositoryIds,
   isAbsoluteWizardPath, normalizeRepoUrlForWizard, findReusableRepositoryWithToken, needsDirectoryCreation,
+  trackCreatedRepositoryId,
   type WizardValidationState,
 } from './projectWizardLogic';
 
@@ -348,6 +349,44 @@ describe('repoStepSignature (review finding: completion flags must invalidate wh
     const a = repoStepSignature({ codeMode: 'existing', cloneUrl: '', selectedRemoteUrls: ['a'] });
     const b = repoStepSignature({ codeMode: 'existing', cloneUrl: '', selectedRemoteUrls: ['a', 'b'] });
     expect(a).not.toBe(b);
+  });
+
+  // Issue #87 review, Important finding 3: `cloneToken` is an input to the
+  // clone-mode repository registration call (sent as `token`) but was
+  // missing from this signature, so `repoDone` stayed true after the
+  // repository step succeeded even when the operator later corrected the
+  // token (e.g. after a subsequent step failed) — the corrected token was
+  // never re-sent/persisted.
+  it('changes when the clone token changes in "clone" mode', () => {
+    const a = repoStepSignature({ codeMode: 'clone', cloneUrl: 'https://github.com/acme/widgets', cloneToken: 'old-dummy-token', selectedRemoteUrls: [] });
+    const b = repoStepSignature({ codeMode: 'clone', cloneUrl: 'https://github.com/acme/widgets', cloneToken: 'new-dummy-token', selectedRemoteUrls: [] });
+    expect(a).not.toBe(b);
+  });
+
+  it('trims the clone token before comparing, matching how it is sent to the server', () => {
+    const a = repoStepSignature({ codeMode: 'clone', cloneUrl: 'https://github.com/acme/widgets', cloneToken: 'dummy-token', selectedRemoteUrls: [] });
+    const b = repoStepSignature({ codeMode: 'clone', cloneUrl: 'https://github.com/acme/widgets', cloneToken: '  dummy-token  ', selectedRemoteUrls: [] });
+    expect(a).toBe(b);
+  });
+
+  it('ignores the clone token in "existing" mode (not a relevant input there)', () => {
+    const a = repoStepSignature({ codeMode: 'existing', cloneUrl: '', cloneToken: 'token-a', selectedRemoteUrls: ['a'] });
+    const b = repoStepSignature({ codeMode: 'existing', cloneUrl: '', cloneToken: 'token-b', selectedRemoteUrls: ['a'] });
+    expect(a).toBe(b);
+  });
+});
+
+describe('trackCreatedRepositoryId (Issue #87 review, Important finding 2: a reused row must never be tracked for cleanup)', () => {
+  it('adds the id when the registration call created a new row (reused: false)', () => {
+    expect(trackCreatedRepositoryId([], 42, false)).toEqual([42]);
+    expect(trackCreatedRepositoryId([1, 2], 42, false)).toEqual([1, 2, 42]);
+  });
+
+  it('does NOT add the id when the registration call reused an existing row (reused: true)', () => {
+    expect(trackCreatedRepositoryId([], 42, true)).toEqual([]);
+    // Any ids already tracked from a previous created row must survive
+    // untouched — reusing a row on a later call must not drop prior state.
+    expect(trackCreatedRepositoryId([1, 2], 42, true)).toEqual([1, 2]);
   });
 });
 

@@ -206,8 +206,24 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       // just the wizard (ProjectSettings' manual "add repository" form uses
       // the same endpoint and gets the same protection).
       const normalized = normalizeRemoteUrl(url);
-      const existing = project.repositories.find((r) => normalizeRemoteUrl(r.url) === normalized);
-      if (existing) {
+      const matches = project.repositories.filter((r) => normalizeRemoteUrl(r.url) === normalized);
+      if (matches.length > 0) {
+        // When more than one existing row matches the same remote (a
+        // pre-existing duplicate), prefer a row that already carries a
+        // credential over one that doesn't — `.find()`'s "first match"
+        // used to pick whichever row happened to come first, which could
+        // be the token-less one even though a usable, credentialed row
+        // existed alongside it (Issue #87 review, Important finding 1).
+        const existing = matches.find((r) => r.hasToken) ?? matches[0];
+        // A credential-less matching row combined with a token THIS call
+        // was given (the wizard collects one specifically because the
+        // matched row had none) must persist that token, not just return
+        // the still-useless row as-is — otherwise distribution keeps
+        // referencing a repository with no credential (Issue #87 review,
+        // Important finding 1).
+        if (!existing.hasToken && token) {
+          projectRepo.updateRepositoryToken(existing.id, token);
+        }
         return { ok: true, id: existing.id, reused: true };
       }
 

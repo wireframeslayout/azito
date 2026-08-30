@@ -295,6 +295,7 @@ function buildUseCase(opts: {
     delete: vi.fn(),
     addRepository: vi.fn(() => 1),
     findRepositoryById: vi.fn(() => opts.repository ? { ...opts.repository, name: null } : null),
+    updateRepositoryToken: vi.fn(),
     removeRepository: vi.fn(),
   };
 
@@ -1431,6 +1432,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITOç›
       delete: vi.fn(),
       addRepository: vi.fn(() => 1),
       findRepositoryById: vi.fn(() => null),
+      updateRepositoryToken: vi.fn(),
       removeRepository: vi.fn(),
     };
     const projectServerRepo: IProjectServerRepository = {
@@ -2374,6 +2376,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       delete: vi.fn(),
       addRepository: vi.fn(() => 1),
       findRepositoryById: vi.fn(() => null),
+      updateRepositoryToken: vi.fn(),
       removeRepository: vi.fn(),
     };
     const projectServerRepo: IProjectServerRepository = {

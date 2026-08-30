@@ -81,6 +81,7 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
       delete: vi.fn(),
       addRepository: vi.fn(() => 1),
       findRepositoryById: vi.fn(() => null),
+      updateRepositoryToken: vi.fn(),
       removeRepository: vi.fn(),
     },
     projectServerRepo: {

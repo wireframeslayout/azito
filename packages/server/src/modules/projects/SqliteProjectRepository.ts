@@ -44,6 +44,7 @@ export class SqliteProjectRepository implements IProjectRepository {
   private listReposStmt;
   private getRepoStmt;
   private addRepoStmt;
+  private updateRepoTokenStmt;
   private deleteRepoStmt;
 
   constructor(private db: SqliteDatabase, private windowRepo: IWindowRepository) {
@@ -56,6 +57,7 @@ export class SqliteProjectRepository implements IProjectRepository {
     this.listReposStmt = db.prepare('SELECT * FROM project_repositories WHERE project_id = ?');
     this.getRepoStmt = db.prepare('SELECT * FROM project_repositories WHERE id = ?');
     this.addRepoStmt = db.prepare('INSERT INTO project_repositories (project_id, url, name, provider, owner, repo_name, token) VALUES (?, ?, ?, ?, ?, ?, ?)');
+    this.updateRepoTokenStmt = db.prepare('UPDATE project_repositories SET token = ? WHERE id = ?');
     this.deleteRepoStmt = db.prepare('DELETE FROM project_repositories WHERE id = ? AND project_id = ?');
   }
 
@@ -98,6 +100,10 @@ export class SqliteProjectRepository implements IProjectRepository {
   addRepository(projectId: number, url: string, name?: string, provider?: RepositoryProvider, owner?: string, repoName?: string, token?: string): number {
     const result = this.addRepoStmt.run(projectId, url, name ?? null, provider ?? 'github', owner ?? null, repoName ?? null, seal(token ?? null));
     return Number(result.lastInsertRowid);
+  }
+
+  updateRepositoryToken(id: number, token: string): void {
+    this.updateRepoTokenStmt.run(seal(token), id);
   }
 
   removeRepository(id: number, projectId: number): void {

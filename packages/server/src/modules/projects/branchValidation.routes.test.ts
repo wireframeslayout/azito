@@ -48,6 +48,7 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
       delete: vi.fn(),
       addRepository: vi.fn(() => 1),
       findRepositoryById: vi.fn(() => ({ id: 1, name: 'widgets', url: 'https://github.com/acme/widgets', provider: 'github' as const, owner: 'acme', repoName: 'widgets', token: null })),
+      updateRepositoryToken: vi.fn(),
       removeRepository: vi.fn(),
     },
     projectServerRepo: {
@@ -182,6 +183,7 @@ describe('PUT /api/projects/:id — default_branch input validation (Issue #87 t
         delete: vi.fn(),
         addRepository: vi.fn(() => 1),
         findRepositoryById: vi.fn(() => ({ id: 1, name: 'widgets', url: 'https://github.com/acme/widgets', provider: 'github' as const, owner: 'acme', repoName: 'widgets', token: null })),
+        updateRepositoryToken: vi.fn(),
         removeRepository: vi.fn(),
       },
     });

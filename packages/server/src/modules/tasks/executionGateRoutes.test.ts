@@ -95,6 +95,7 @@ function makeOpts(existingTask: Task): { opts: TasksRouteOptions; createCalls: R
       delete: vi.fn(),
       addRepository: vi.fn(() => 1),
       findRepositoryById: vi.fn(() => null),
+      updateRepositoryToken: vi.fn(),
       removeRepository: vi.fn(),
     },
     projectServerRepo: {

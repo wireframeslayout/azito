@@ -53,6 +53,7 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
       delete: vi.fn(),
       addRepository: vi.fn(() => 1),
       findRepositoryById: vi.fn(() => null),
+      updateRepositoryToken: vi.fn(),
       removeRepository: vi.fn(),
     },
     projectServerRepo: {
@@ -561,6 +562,7 @@ describe('POST /api/projects/:id/repositories (reuse-aware)', () => {
         delete: vi.fn(),
         addRepository: vi.fn(() => 999),
         findRepositoryById: vi.fn(() => null),
+        updateRepositoryToken: vi.fn(),
         removeRepository: vi.fn(),
       },
     });
@@ -596,6 +598,7 @@ describe('POST /api/projects/:id/repositories (reuse-aware)', () => {
         delete: vi.fn(),
         addRepository: vi.fn(() => 999),
         findRepositoryById: vi.fn(() => null),
+        updateRepositoryToken: vi.fn(),
         removeRepository: vi.fn(),
       },
     });
@@ -614,6 +617,120 @@ describe('POST /api/projects/:id/repositories (reuse-aware)', () => {
     expect(opts.projectRepo.addRepository).toHaveBeenCalledWith(
       10, 'https://github.com/acme/widgets.git', undefined, 'github', undefined, undefined, 'dummy-token',
     );
+  });
+
+  // Issue #87 review, Important finding 1a: when several existing rows
+  // match the same remote (a pre-existing duplicate), the credentialed row
+  // must win over a token-less one, regardless of array order.
+  it('prefers a credentialed matching row over a token-less one when both exist', async () => {
+    const opts = makeOpts({
+      projectRepo: {
+        findAll: vi.fn(() => []),
+        findById: vi.fn(() => ({
+          id: 10, name: 'P', slug: 'p', description: null, repositoryUrl: null, defaultBranch: 'main',
+          sidekickPrompt: null, icon: null, color: null, defaultUnitId: null, servers: [], windows: [],
+          createdAt: '', updatedAt: '',
+          repositories: [
+            { id: 41, name: null, url: 'https://github.com/acme/widgets.git', provider: 'github' as const, owner: 'acme', repoName: 'widgets', hasToken: false },
+            { id: 42, name: null, url: 'https://github.com/acme/widgets.git', provider: 'github' as const, owner: 'acme', repoName: 'widgets', hasToken: true },
+          ],
+        })),
+        create: vi.fn(() => 10),
+        update: vi.fn(),
+        delete: vi.fn(),
+        addRepository: vi.fn(() => 999),
+        findRepositoryById: vi.fn(() => null),
+        updateRepositoryToken: vi.fn(),
+        removeRepository: vi.fn(),
+      },
+    });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/projects/10/repositories',
+      payload: { url: 'https://github.com/acme/widgets.git', provider: 'github' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, id: 42, reused: true });
+    expect(opts.projectRepo.addRepository).not.toHaveBeenCalled();
+    // The picked row already has a token — nothing to persist.
+    expect(opts.projectRepo.updateRepositoryToken).not.toHaveBeenCalled();
+  });
+
+  // Issue #87 review, Important finding 1b: reusing a token-less matching
+  // row while a token is supplied must persist that token onto the row,
+  // not just return the still-credential-less row as-is.
+  it('persists a supplied token onto a reused row that had none', async () => {
+    const opts = makeOpts({
+      projectRepo: {
+        findAll: vi.fn(() => []),
+        findById: vi.fn(() => ({
+          id: 10, name: 'P', slug: 'p', description: null, repositoryUrl: null, defaultBranch: 'main',
+          sidekickPrompt: null, icon: null, color: null, defaultUnitId: null, servers: [], windows: [],
+          createdAt: '', updatedAt: '',
+          repositories: [{ id: 42, name: null, url: 'https://github.com/acme/widgets.git', provider: 'github' as const, owner: 'acme', repoName: 'widgets', hasToken: false }],
+        })),
+        create: vi.fn(() => 10),
+        update: vi.fn(),
+        delete: vi.fn(),
+        addRepository: vi.fn(() => 999),
+        findRepositoryById: vi.fn(() => null),
+        updateRepositoryToken: vi.fn(),
+        removeRepository: vi.fn(),
+      },
+    });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/projects/10/repositories',
+      payload: { url: 'https://github.com/acme/widgets.git', provider: 'github', token: 'new-dummy-token' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, id: 42, reused: true });
+    expect(opts.projectRepo.addRepository).not.toHaveBeenCalled();
+    expect(opts.projectRepo.updateRepositoryToken).toHaveBeenCalledWith(42, 'new-dummy-token');
+  });
+
+  it('does not attempt to persist a token when reusing a token-less row and none was supplied', async () => {
+    const opts = makeOpts({
+      projectRepo: {
+        findAll: vi.fn(() => []),
+        findById: vi.fn(() => ({
+          id: 10, name: 'P', slug: 'p', description: null, repositoryUrl: null, defaultBranch: 'main',
+          sidekickPrompt: null, icon: null, color: null, defaultUnitId: null, servers: [], windows: [],
+          createdAt: '', updatedAt: '',
+          repositories: [{ id: 42, name: null, url: 'https://github.com/acme/widgets.git', provider: 'github' as const, owner: 'acme', repoName: 'widgets', hasToken: false }],
+        })),
+        create: vi.fn(() => 10),
+        update: vi.fn(),
+        delete: vi.fn(),
+        addRepository: vi.fn(() => 999),
+        findRepositoryById: vi.fn(() => null),
+        updateRepositoryToken: vi.fn(),
+        removeRepository: vi.fn(),
+      },
+    });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/projects/10/repositories',
+      payload: { url: 'https://github.com/acme/widgets.git', provider: 'github' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, id: 42, reused: true });
+    expect(opts.projectRepo.updateRepositoryToken).not.toHaveBeenCalled();
   });
 });
 
@@ -635,6 +752,7 @@ describe('POST clone-local', () => {
         findRepositoryById: vi.fn((id: number) => id === 5 ? {
           id: 5, name: null, url: 'https://github.com/acme/widgets.git', provider: 'github' as const, owner: 'acme', repoName: 'widgets', token: 'dummy-token',
         } : null),
+        updateRepositoryToken: vi.fn(),
         removeRepository: vi.fn(),
       },
       ...overrides,

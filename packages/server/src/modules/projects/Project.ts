@@ -42,6 +42,7 @@ export interface IProjectRepository {
   update(id: number, data: Partial<Pick<Project, 'name' | 'slug' | 'description' | 'repositoryUrl' | 'defaultBranch' | 'sidekickPrompt' | 'icon' | 'color' | 'defaultUnitId'>>): void;
   delete(id: number): void;
   addRepository(projectId: number, url: string, name?: string, provider?: RepositoryProvider, owner?: string, repoName?: string, token?: string): number;
+  updateRepositoryToken(id: number, token: string): void;
   findRepositoryById(id: number): ProjectRepositoryWithToken | null;
   removeRepository(id: number, projectId: number): void;
 }

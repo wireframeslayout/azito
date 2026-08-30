@@ -349,10 +349,17 @@ export function resolveCloneDeliveryMode(
  * discovered-remote-url selection (a Set), since selection order carries
  * no meaning.
  */
-export function repoStepSignature(input: { codeMode: CodeMode; cloneUrl: string; selectedRemoteUrls: Iterable<string> }): string {
+export function repoStepSignature(input: { codeMode: CodeMode; cloneUrl: string; cloneToken?: string; selectedRemoteUrls: Iterable<string> }): string {
   return JSON.stringify({
     codeMode: input.codeMode,
     cloneUrl: input.codeMode === 'clone' ? input.cloneUrl.trim() : '',
+    // `cloneToken` is an input to the clone-mode repository step (it is
+    // sent as `token` in the POST /repositories body) but was missing from
+    // this signature — so `repoDone` stayed true after a successful
+    // registration even when the operator corrected the token following a
+    // LATER step's failure, and the corrected token was never persisted
+    // (Issue #87 review, Important finding 3).
+    cloneToken: input.codeMode === 'clone' ? (input.cloneToken ?? '').trim() : '',
     remoteUrls: input.codeMode === 'existing' ? [...input.selectedRemoteUrls].sort() : [],
   });
 }
@@ -392,6 +399,25 @@ export function cloneStepSignature(input: {
   repositoryId: number | null;
 }): string {
   return JSON.stringify(input);
+}
+
+/**
+ * Whether a repository id the "clone" mode registration call returned
+ * should be added to the wizard's own "rows this run created" tracking
+ * list (the list a later signature-change cleans up — see
+ * `repoIdsToCleanup`).
+ *
+ * `reused` comes straight from the server's `POST /repositories` response
+ * (Issue #87 review, Important finding 2): when the server matched an
+ * already-registered repository row by remote URL and returned that
+ * EXISTING row (`reused: true`), the row was not created by this wizard
+ * run and may still be in use by other environments/projects — tracking
+ * it would let a later cleanup pass (triggered by editing the clone
+ * URL/token and re-running) delete someone else's still-in-use row. Only
+ * a genuinely new row (`reused: false`) belongs in the cleanup list.
+ */
+export function trackCreatedRepositoryId(createdRepositoryIds: number[], repoId: number, reused: boolean): number[] {
+  return reused ? createdRepositoryIds : [...createdRepositoryIds, repoId];
 }
 
 /**

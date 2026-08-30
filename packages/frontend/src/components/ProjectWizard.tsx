@@ -11,7 +11,7 @@ import {
   getVisibleSteps, canAdvanceFromStep, stepIndex, nextStep, deriveDefaultBranch,
   pickAvailableServer, isDiscoveryCurrent, resolveCloneDeliveryMode,
   repoStepSignature, envStepSignature, cloneStepSignature, repoIdsToCleanup, cleanupStaleRepositoryIds,
-  findReusableRepositoryWithToken, needsDirectoryCreation,
+  findReusableRepositoryWithToken, needsDirectoryCreation, trackCreatedRepositoryId,
   type WizardStepId, type CodeMode, type WizardValidationState, type DiscoveryKey, type ReusableRepoCandidate,
 } from '../lib/projectWizardLogic';
 import {
@@ -279,7 +279,7 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
   // inputs. A step that already succeeded AND whose inputs are unchanged is
   // deliberately left alone, preserving "resume after a failed step"
   // without re-running work that is still valid. ──
-  const repoSignature = repoStepSignature({ codeMode, cloneUrl, selectedRemoteUrls });
+  const repoSignature = repoStepSignature({ codeMode, cloneUrl, cloneToken, selectedRemoteUrls });
   const repoSignatureRef = useRef(repoSignature);
   useEffect(() => {
     const signatureChanged = repoSignatureRef.current !== repoSignature;
@@ -488,7 +488,7 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
           setStep('repository', 'running', t('wizard.confirm.stepRepository'));
           try {
             const parsed = parseCloneUrlForRegistration(cloneUrl.trim());
-            const { status, body } = await apiWithStatus<{ id: number } | { error: string }>(
+            const { status, body } = await apiWithStatus<{ id: number; reused: boolean } | { error: string }>(
               `/projects/${pid}/repositories`,
               {
                 method: 'POST',
@@ -504,9 +504,14 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
             }
             repoId = body.id;
             setCreatedRepositoryId(repoId);
-            // Union with any still-orphaned id from a previous failed
-            // cleanup, same reasoning as the bulk-registration branch above.
-            createdRepositoryIdsRef.current = [...createdRepositoryIdsRef.current, repoId];
+            // Only track ids this wizard run actually CREATED — a `reused`
+            // row (an existing repository the server matched by remote
+            // URL, possibly used by other environments too) must never
+            // enter the cleanup-on-signature-change list, or a later step's
+            // failure followed by editing the clone URL/token would delete
+            // someone else's still-in-use repository row (Issue #87
+            // review, Important finding 2).
+            createdRepositoryIdsRef.current = trackCreatedRepositoryId(createdRepositoryIdsRef.current, repoId, body.reused);
             setRepoDone(true);
             setStep('repository', 'ok', t('wizard.confirm.stepRepository'));
           } catch (err) {
