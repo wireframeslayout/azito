@@ -26,6 +26,8 @@ import type { KeyedMutex } from '../../shared/keyedMutex';
 import { rejectQualifiedBranchInput } from '../git/assertSafeGitArgs';
 import type { RepoDiscoveryService } from '../git/RepoDiscoveryService';
 import { normalizeRemoteUrl } from '../git/parseRemoteUrl';
+import { redactGitUrlCredentials } from '../git/redactGitUrlCredentials';
+import { urlHasEmbeddedCredentials } from '../git/urlHasEmbeddedCredentials';
 
 // ─── Types ───
 
@@ -685,23 +687,44 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       const srv = serverRepo.findByName(request.params.serverName);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
 
-      const discovered = await repoDiscovery.discover(srv, ps.workingDirectory);
+      let discovered;
+      try {
+        discovered = await repoDiscovery.discover(srv, ps.workingDirectory);
+      } catch (err) {
+        // A scan that could not run must never be reported the same way as
+        // a scan that found nothing (Issue #19 review, Important finding 5)
+        // — surface it as an error, not an empty `repositories: []` list.
+        // The thrown message may embed the raw working directory path but
+        // never a remote URL (discover() fails before any `git remote -v`
+        // output is read), so it is safe to log/return as-is.
+        fastify.log.warn({ err, serverName: request.params.serverName }, 'repository discovery scan failed');
+        return reply.status(502).send({ error: 'Failed to scan the working directory for git repositories' });
+      }
 
       const existingUrls = new Set(
-        (project.repositories || []).map((r) => normalizeRemoteUrl(r.url)),
+        (project.repositories || []).map((r) => normalizeRemoteUrl(redactGitUrlCredentials(r.url))),
       );
 
+      // Discovered remote URLs come straight from the server's git config
+      // and may embed credentials (`https://user:token@host/repo.git`) —
+      // strip them before this ever reaches the browser or the (plaintext)
+      // `project_repositories.url` column (Important finding 1). Dedup
+      // against `existingUrls` uses the same redacted form so a
+      // credentialed vs. redacted URL for the same repo still matches.
       const repositories = discovered.map((repo) => ({
         relativePath: repo.relativePath,
         absolutePath: repo.absolutePath,
-        remotes: repo.remotes.map((remote) => ({
-          name: remote.name,
-          url: remote.url,
-          provider: remote.parsed.provider,
-          owner: remote.parsed.owner,
-          repoName: remote.parsed.repoName,
-          alreadyRegistered: existingUrls.has(normalizeRemoteUrl(remote.url)),
-        })),
+        remotes: repo.remotes.map((remote) => {
+          const safeUrl = redactGitUrlCredentials(remote.url);
+          return {
+            name: remote.name,
+            url: safeUrl,
+            provider: remote.parsed.provider,
+            owner: remote.parsed.owner,
+            repoName: remote.parsed.repoName,
+            alreadyRegistered: existingUrls.has(normalizeRemoteUrl(safeUrl)),
+          };
+        }),
       }));
 
       return { repositories };
@@ -722,8 +745,19 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
         return reply.status(400).send({ error: 'repositories array required' });
       }
 
+      // Reject the whole batch outright if any entry carries embedded
+      // credentials — this endpoint writes into the plaintext
+      // `project_repositories.url` column, and credentials belong only in
+      // the existing encrypted `token` column (Important finding 1).
+      for (const repo of repositories) {
+        const url = typeof (repo as { url?: unknown })?.url === 'string' ? (repo as { url: string }).url.trim() : '';
+        if (url && urlHasEmbeddedCredentials(url)) {
+          return reply.status(400).send({ error: 'Repository URLs must not contain embedded credentials; use the token field instead' });
+        }
+      }
+
       const existingUrls = new Set(
-        (project.repositories || []).map((r) => normalizeRemoteUrl(r.url)),
+        (project.repositories || []).map((r) => normalizeRemoteUrl(redactGitUrlCredentials(r.url))),
       );
 
       let added = 0;

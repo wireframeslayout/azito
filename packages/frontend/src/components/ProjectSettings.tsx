@@ -116,6 +116,16 @@ export function useProjectSettings(
   const { t } = useTranslation(['projects', 'common']);
   const [discoverOpen, setDiscoverOpen] = useState(false);
   const [discoverSuggestion, setDiscoverSuggestion] = useState<{ serverName: string; count: number } | null>(null);
+  // Holds the server the discovery dialog should scan — set explicitly
+  // whenever the dialog is opened (from the suggestion banner or the
+  // manual "Discover" button), independent of `discoverSuggestion` (which
+  // is cleared as soon as the dialog opens). Deriving the dialog's server
+  // from `discoverSuggestion` alone meant that clearing it on open, then
+  // falling back to "the first server with a working directory" on the
+  // next render, could scan a different server than the one the user just
+  // reviewed a suggestion for (Issue #19 third-party review, Important
+  // finding 2).
+  const [discoverServerName, setDiscoverServerName] = useState<string | null>(null);
 
   // Issue #87 review finding (Minor 3): `handleOpenServerForm` already
   // re-derives `psDistributeCode` whenever it's called, but the server
@@ -382,6 +392,7 @@ export function useProjectSettings(
     repoProvider, setRepoProvider, repoOwner, setRepoOwner, repoRepoName, setRepoRepoName,
     repoToken, setRepoToken, parseRepoUrl, handleAddRepo, handleRemoveRepo,
     discoverOpen, setDiscoverOpen, discoverSuggestion, setDiscoverSuggestion,
+    discoverServerName, setDiscoverServerName,
     // Windows
     handleRemoveWindow,
     // Servers
@@ -576,22 +587,27 @@ function RepositoriesSection({ settings: s, addWindowModal }: { settings: Return
       {s.discoverSuggestion && (
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
-          marginBottom: 12, padding: '10px 14px', borderRadius: 8,
+          marginBottom: 12, padding: '10px 14px', borderRadius: 'var(--radius-md)',
           background: 'var(--accent-a08)', border: '1px solid var(--accent-a35)',
-          fontSize: 13,
+          fontSize: 'var(--font-md)',
         }}>
           <span style={{ color: 'var(--accent)' }}>
-            {s.discoverSuggestion.count} unregistered {s.discoverSuggestion.count === 1 ? 'repository' : 'repositories'} found
+            {t('settings.repositories.discover.suggestionFound', { count: s.discoverSuggestion.count })}
           </span>
           <span style={{ display: 'flex', gap: 6 }}>
             <Button size="sm" variant="primary" onClick={() => {
+              // Capture the suggestion's server name into its own state
+              // BEFORE clearing the suggestion — React batches these two
+              // updates into one render, so the dialog never sees a null
+              // `discoverSuggestion` without an already-set server name.
+              s.setDiscoverServerName(s.discoverSuggestion!.serverName);
               s.setDiscoverOpen(true);
               s.setDiscoverSuggestion(null);
-            }}>Review</Button>
+            }}>{t('settings.repositories.discover.review')}</Button>
             <button
               onClick={() => s.setDiscoverSuggestion(null)}
-              aria-label="Dismiss"
-              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, color: 'var(--text-dim)', fontSize: 14 }}
+              aria-label={t('settings.repositories.discover.dismiss')}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, color: 'var(--text-dim)', fontSize: 'var(--font-sm)' }}
             >&times;</button>
           </span>
         </div>
@@ -601,7 +617,11 @@ function RepositoriesSection({ settings: s, addWindowModal }: { settings: Return
         <span style={{ fontSize: 'var(--font-md)', color: 'var(--text-dim)' }}>{t('settings.repositories.count', { count: s.project.repositories.length })}</span>
         <span style={{ display: 'flex', gap: 6 }}>
           {hasServerWithWorkDir && (
-            <Button size="sm" onClick={() => s.setDiscoverOpen(true)}>Discover</Button>
+            <Button size="sm" onClick={() => {
+              const defaultServer = s.projectServers.find((ps) => ps.workingDirectory)?.serverName ?? null;
+              s.setDiscoverServerName(defaultServer);
+              s.setDiscoverOpen(true);
+            }}>{t('settings.repositories.discoverButton')}</Button>
           )}
           <Button size="sm" onClick={() => s.setAddRepoOpen(!s.addRepoOpen)}>+ {t('common:actions.add')}</Button>
         </span>
@@ -652,19 +672,15 @@ function RepositoriesSection({ settings: s, addWindowModal }: { settings: Return
         ))
       )}
 
-      {s.project && (() => {
-        const discoverServer = s.discoverSuggestion?.serverName
-          || s.projectServers.find((ps) => ps.workingDirectory)?.serverName;
-        return discoverServer ? (
-          <RepoDiscoveryDialog
-            open={s.discoverOpen}
-            onClose={() => s.setDiscoverOpen(false)}
-            projectId={s.project.id}
-            serverName={discoverServer}
-            onRegistered={s.refresh}
-          />
-        ) : null;
-      })()}
+      {s.project && s.discoverServerName ? (
+        <RepoDiscoveryDialog
+          open={s.discoverOpen}
+          onClose={() => s.setDiscoverOpen(false)}
+          projectId={s.project.id}
+          serverName={s.discoverServerName}
+          onRegistered={s.refresh}
+        />
+      ) : null}
 
       {/* Windows sub-section */}
       <div style={{ marginTop: 32, paddingTop: 20, borderTop: '1px solid var(--border)' }}>

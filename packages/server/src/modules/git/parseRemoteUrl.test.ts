@@ -63,12 +63,41 @@ describe('normalizeRemoteUrl', () => {
     expect(normalizeRemoteUrl('https://github.com/owner/repo.git')).toBe('github.com/owner/repo');
   });
 
-  it('is case-insensitive', () => {
-    expect(normalizeRemoteUrl('https://GitHub.com/Owner/Repo')).toBe('github.com/owner/repo');
+  it('lowercases only the hostname, not the path', () => {
+    expect(normalizeRemoteUrl('https://GitHub.com/Owner/Repo')).toBe('github.com/Owner/Repo');
   });
 
-  it('handles ssh:// with port', () => {
+  it('preserves a non-default port', () => {
     const result = normalizeRemoteUrl('ssh://git@example.com:2222/owner/repo.git');
-    expect(result).toBe('example.com/owner/repo');
+    expect(result).toBe('example.com:2222/owner/repo');
+  });
+
+  it('drops the default port for the scheme', () => {
+    expect(normalizeRemoteUrl('https://github.com:443/owner/repo.git')).toBe('github.com/owner/repo');
+    expect(normalizeRemoteUrl('ssh://git@example.com:22/owner/repo.git')).toBe('example.com/owner/repo');
+  });
+
+  it('treats different ports as different identities', () => {
+    const a = normalizeRemoteUrl('ssh://git@example.com:2222/owner/repo.git');
+    const b = normalizeRemoteUrl('ssh://git@example.com:2223/owner/repo.git');
+    expect(a).not.toBe(b);
+  });
+
+  it('treats different path casing as different identities on a case-sensitive host', () => {
+    const a = normalizeRemoteUrl('https://example.com/Owner/Repo.git');
+    const b = normalizeRemoteUrl('https://example.com/owner/repo.git');
+    expect(a).not.toBe(b);
+  });
+
+  it('normalizes trailing .git and trailing slash to the same identity', () => {
+    const withGit = normalizeRemoteUrl('https://github.com/owner/repo.git');
+    const withSlash = normalizeRemoteUrl('https://github.com/owner/repo/');
+    expect(withGit).toBe(withSlash);
+  });
+
+  it('normalizes scp-like and https forms to the same identity, case-sensitive path preserved', () => {
+    const https = normalizeRemoteUrl('https://github.com/owner/Repo.git');
+    const scp = normalizeRemoteUrl('git@github.com:owner/Repo.git');
+    expect(https).toBe(scp);
   });
 });

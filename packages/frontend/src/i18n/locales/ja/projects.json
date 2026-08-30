@@ -94,7 +94,27 @@
       "tokenHint": "空の場合はgh CLI認証を使用",
       "tokenPlaceholder": "ghp_xxxx...",
       "addRepository": "リポジトリを追加",
-      "noRepositories": "リポジトリが設定されていません"
+      "noRepositories": "リポジトリが設定されていません",
+      "discoverButton": "検出",
+      "discover": {
+        "title": "リポジトリを検出",
+        "suggestionFound_one": "未登録のリポジトリが{{count}}件見つかりました",
+        "suggestionFound_other": "未登録のリポジトリが{{count}}件見つかりました",
+        "review": "確認",
+        "dismiss": "閉じる",
+        "scanning": "gitリポジトリをスキャンしています...",
+        "failed": "リポジトリの検出に失敗しました",
+        "retry": "再試行",
+        "empty": "作業ディレクトリにリモート付きのgitリポジトリが見つかりませんでした。",
+        "selectAll": "すべて選択",
+        "summary_one": "{{repoCount}}件のリポジトリ、{{remoteCount}}件のリモート",
+        "summary_other": "{{repoCount}}件のリポジトリ、{{remoteCount}}件のリモート",
+        "registered": "登録済み",
+        "register_one": "{{count}}件のリポジトリを登録",
+        "register_other": "{{count}}件のリポジトリを登録",
+        "registering": "登録しています...",
+        "registerFailed": "リポジトリの登録に失敗しました"
+      }
     },
     "windows": {
       "title": "ウィンドウ",

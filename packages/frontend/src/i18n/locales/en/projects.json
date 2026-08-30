@@ -94,7 +94,27 @@
       "tokenHint": "Leave empty to use gh CLI authentication",
       "tokenPlaceholder": "ghp_xxxx...",
       "addRepository": "Add Repository",
-      "noRepositories": "No repositories configured"
+      "noRepositories": "No repositories configured",
+      "discoverButton": "Discover",
+      "discover": {
+        "title": "Discover Repositories",
+        "suggestionFound_one": "{{count}} unregistered repository found",
+        "suggestionFound_other": "{{count}} unregistered repositories found",
+        "review": "Review",
+        "dismiss": "Dismiss",
+        "scanning": "Scanning for git repositories...",
+        "failed": "Failed to discover repositories",
+        "retry": "Retry",
+        "empty": "No git repositories with remotes were found in the working directory.",
+        "selectAll": "Select all",
+        "summary_one": "{{repoCount}} repository, {{remoteCount}} remote",
+        "summary_other": "{{repoCount}} repositories, {{remoteCount}} remotes",
+        "registered": "Registered",
+        "register_one": "Register {{count}} repository",
+        "register_other": "Register {{count}} repositories",
+        "registering": "Registering...",
+        "registerFailed": "Failed to register repositories"
+      }
     },
     "windows": {
       "title": "Windows",
