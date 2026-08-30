@@ -1,5 +1,6 @@
+import { Fragment, useState, type CSSProperties, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Badge, FormInput, FormSelect, InstallSteps, baseInputStyle, SegmentedToggle, type InstallStep } from './ui';
+import { Badge, Chip, FormInput, InstallSteps, Spinner, baseInputStyle, type InstallStep } from './ui';
 import FormField from './FormField';
 import DirectoryInput from './DirectoryInput';
 import { stepIndex, isAbsoluteWizardPath, type WizardStepId, type CodeMode, type ReusableRepoCandidate } from '../lib/projectWizardLogic';
@@ -33,6 +34,8 @@ export type DiscoveryStatus = 'idle' | 'checking' | 'error' | { repos: Discovere
 
 export type TFunc = ReturnType<typeof useTranslation>['t'];
 
+const NUMERIC_FONT = "'JetBrainsMono Nerd Font', 'JetBrains Mono', monospace";
+
 /** Local mirror of the frontend's `parseRepoUrl` (lib/gitProvider.ts) shaped for the repository-registration payload — that helper only recognizes github/gitlab and returns a stricter shape; this always returns a provider (falling back to 'other') so an unrecognized clone URL can still be registered. */
 export function parseCloneUrlForRegistration(url: string): { provider: 'github' | 'gitlab' | 'other'; owner: string | null; repoName: string | null } {
   const ghMatch = url.match(/github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?$/);
@@ -46,41 +49,125 @@ export function StepIndicator({ visibleSteps, currentStep, isMobile, t }: { visi
   const idx = stepIndex(visibleSteps, currentStep);
   if (isMobile) {
     return (
-      <div style={{ padding: '8px var(--space-4)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', borderBottom: '1px solid var(--border)' }}>
-        {t('wizard.stepOf', { current: idx + 1, total: visibleSteps.length })} · {t(`wizard.steps.${currentStep}`)}
+      <div style={{ padding: '8px var(--space-4)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', borderBottom: '1px solid var(--hairline)' }}>
+        <span style={{ fontFamily: NUMERIC_FONT }}>{t('wizard.stepOf', { current: idx + 1, total: visibleSteps.length })}</span>
+        {' · '}
+        {t(`wizard.steps.${currentStep}`)}
       </div>
     );
   }
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px var(--space-4)', borderBottom: '1px solid var(--border)', overflowX: 'auto' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px var(--space-4)', borderBottom: '1px solid var(--hairline)', overflowX: 'auto' }}>
       {visibleSteps.map((step, i) => {
         const state = i < idx ? 'done' : i === idx ? 'current' : 'upcoming';
         return (
-          <div key={step} style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-            <span style={{
-              display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20,
-              borderRadius: 'var(--radius-full)', fontSize: 'var(--font-2xs)', fontWeight: 600,
-              background: state === 'upcoming' ? 'var(--bg-hover)' : 'var(--accent)',
-              color: state === 'upcoming' ? 'var(--text-dim)' : '#fff' /* lint-allow: hex - on-color text over solid accent fill */,
-            }}>
-              {state === 'done' ? '✓' : i + 1}
-            </span>
-            <span style={{ fontSize: 'var(--font-sm)', color: state === 'current' ? 'var(--text)' : 'var(--text-dim)', fontWeight: state === 'current' ? 600 : 400, whiteSpace: 'nowrap' }}>
-              {t(`wizard.steps.${step}`)}
-            </span>
-            {i < visibleSteps.length - 1 && <span style={{ width: 20, height: 1, background: 'var(--border)' }} />}
-          </div>
+          <Fragment key={step}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22,
+                borderRadius: 'var(--radius-full)', fontSize: 'var(--font-2xs)', fontWeight: 600,
+                background: state === 'done' ? 'var(--success-a08)' : state === 'current' ? 'var(--accent)' : 'var(--bg-card)',
+                color: state === 'done' ? 'var(--success)' : state === 'current' ? 'var(--surface-base)' : 'var(--text-dim)',
+                boxShadow: state === 'done' ? 'inset 0 0 0 1px var(--success-a35)' : 'none',
+              }}>
+                {state === 'done' ? '✓' : i + 1}
+              </span>
+              <span style={{ fontSize: 'var(--font-sm)', color: state === 'current' ? 'var(--text)' : 'var(--text-dim)', fontWeight: state === 'current' ? 600 : 400, whiteSpace: 'nowrap' }}>
+                {t(`wizard.steps.${step}`)}
+              </span>
+            </div>
+            {i < visibleSteps.length - 1 && <span style={{ flex: 1, height: 1, background: 'var(--hairline)', minWidth: 10 }} />}
+          </Fragment>
         );
       })}
     </div>
   );
 }
 
+const hiddenRadioStyle: CSSProperties = {
+  position: 'absolute', width: 1, height: 1, padding: 0, margin: -1,
+  overflow: 'hidden', clip: 'rect(0,0,0,0)', whiteSpace: 'nowrap', border: 0,
+};
+
+/**
+ * Radio-button "option card" — the mockup's `.opt` pattern. A native
+ * `<input type="radio">` is kept in the DOM (visually hidden via the
+ * standard clip-rect technique, not `display:none`) so the option remains
+ * keyboard-focusable/operable and participates in the browser's native
+ * radio-group arrow-key navigation; the label wraps the whole card so a
+ * click anywhere on it toggles the input. Focus state is tracked locally
+ * (rather than a CSS `:focus-visible` rule) because the selected/unselected
+ * ring is itself computed inline per row — see EnvironmentStep/CodeStep.
+ */
+function OptionCard({ id, name, checked, onChange, disabled, title, description }: {
+  id: string; name: string; checked: boolean; onChange: () => void; disabled?: boolean;
+  title: ReactNode; description?: ReactNode;
+}) {
+  const [focused, setFocused] = useState(false);
+  return (
+    <label
+      htmlFor={id}
+      style={{
+        display: 'grid', gridTemplateColumns: '18px 1fr', gap: 'var(--space-3)', alignItems: 'start',
+        padding: 'var(--space-3)', borderRadius: 'var(--radius-md)', marginBottom: 8,
+        background: checked ? 'var(--selected-bg)' : 'var(--bg-card)',
+        boxShadow: [
+          checked ? 'inset 0 0 0 1px var(--accent-a35)' : '',
+          focused ? '0 0 0 2px var(--accent-a35)' : '',
+        ].filter(Boolean).join(', ') || 'none',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.5 : 1,
+      }}
+    >
+      <input
+        type="radio"
+        id={id}
+        name={name}
+        checked={checked}
+        onChange={disabled ? undefined : onChange}
+        disabled={disabled}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        style={hiddenRadioStyle}
+      />
+      <span aria-hidden="true" style={{
+        display: 'block', width: 16, height: 16, borderRadius: 'var(--radius-full)', marginTop: 2, flexShrink: 0,
+        boxShadow: checked ? 'inset 0 0 0 5px var(--accent)' : 'inset 0 0 0 1px var(--text-dim)',
+      }}
+      />
+      <div style={{ minWidth: 0 }}>
+        <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap', alignItems: 'center', fontSize: 'var(--font-base)', color: 'var(--text)' }}>
+          {title}
+        </div>
+        {description && (
+          <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', lineHeight: 1.55, marginTop: 2 }}>{description}</div>
+        )}
+      </div>
+    </label>
+  );
+}
+
+/** The mockup's isolation chip: a purple pill with a leading solid dot (never a left border) marking a server with no stored credentials. */
+function IsolationChip({ t }: { t: TFunc }) {
+  return (
+    <Chip tone="purple" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+      <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: 'var(--radius-full)', background: 'currentColor', flexShrink: 0 }} />
+      {t('wizard.environment.isolatedBadge')}
+    </Chip>
+  );
+}
+
+function serverTypeDescription(t: TFunc, type: string): string {
+  if (type === 'local') return t('wizard.environment.serverTypeLocal');
+  if (type === 'ssh') return t('wizard.environment.serverTypeSsh');
+  if (type === 'agent') return t('wizard.environment.serverTypeAgent');
+  return type;
+}
+
 export function EnvironmentStep({ t, serverList, selectedServer, setSelectedServer, existingServerNames, showValidation, noServersAvailable }: {
   t: TFunc; serverList: ServerListItem[]; selectedServer: string; setSelectedServer: (v: string) => void;
   existingServerNames?: string[]; showValidation: boolean; noServersAvailable?: boolean;
 }) {
-  const selected = serverList.find((sv) => sv.name === selectedServer);
   // No server left to add (every one is already configured for this
   // project) — the operator cannot complete this step at all, so say so
   // instead of showing a select with nothing valid in it (Issue #87
@@ -102,23 +189,34 @@ export function EnvironmentStep({ t, serverList, selectedServer, setSelectedServ
     <>
       <p style={{ fontSize: 'var(--font-md)', color: 'var(--text-dim)', marginTop: 0 }}>{t('wizard.environment.description')}</p>
       <FormField label={t('wizard.environment.serverLabel')} error={showValidation ? t('wizard.environment.serverRequired') : undefined}>
-        <FormSelect value={selectedServer} onChange={(e) => setSelectedServer(e.target.value)}>
+        <div role="radiogroup" aria-label={t('wizard.environment.serverLabel')}>
           {serverList.map((sv) => {
             const already = existingServerNames?.includes(sv.name);
+            const description = [
+              serverTypeDescription(t, sv.type),
+              sv.isolationIntent ? t('wizard.environment.isolatedHint') : '',
+            ].filter(Boolean).join(' ');
             return (
-              <option key={sv.name} value={sv.name} disabled={already}>
-                {sv.name}{sv.isolationIntent ? ` · ${t('wizard.environment.isolatedBadge')}` : ''}{already ? ` (${t('wizard.environment.alreadyAdded')})` : ''}
-              </option>
+              <OptionCard
+                key={sv.name}
+                id={`wizard-env-server-${sv.name}`}
+                name="wizard-env-server"
+                checked={selectedServer === sv.name}
+                onChange={() => setSelectedServer(sv.name)}
+                disabled={already}
+                title={(
+                  <>
+                    <span>{sv.name}</span>
+                    {sv.isolationIntent && <IsolationChip t={t} />}
+                    {already && <Badge tone="neutral">{t('wizard.environment.alreadyAdded')}</Badge>}
+                  </>
+                )}
+                description={description}
+              />
             );
           })}
-        </FormSelect>
-      </FormField>
-      {selected?.isolationIntent && (
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--accent-a08)' }}>
-          <Badge tone="accent">{t('wizard.environment.isolatedBadge')}</Badge>
-          <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{t('wizard.environment.isolatedHint')}</span>
         </div>
-      )}
+      </FormField>
     </>
   );
 }
@@ -149,19 +247,27 @@ export function CodeStep({
   // already-registered repository for this URL already carries one (Issue
   // #87 review, Important finding 3).
   const needsToken = !clonesNow && reusableRepo === null;
+  const codeModeOptions: { value: CodeMode; label: string; description: string }[] = [
+    { value: 'existing', label: t('wizard.code.modeExisting'), description: t('wizard.code.modeExistingDescription') },
+    { value: 'clone', label: t('wizard.code.modeClone'), description: t('wizard.code.modeCloneDescription') },
+    { value: 'later', label: t('wizard.code.modeLater'), description: t('wizard.code.modeLaterDescription') },
+  ];
   return (
     <>
       <FormField label="">
-        <SegmentedToggle
-          size="md"
-          value={codeMode}
-          onChange={setCodeMode}
-          options={[
-            { value: 'existing', label: t('wizard.code.modeExisting') },
-            { value: 'clone', label: t('wizard.code.modeClone') },
-            { value: 'later', label: t('wizard.code.modeLater') },
-          ]}
-        />
+        <div role="radiogroup" aria-label={t('wizard.steps.code')}>
+          {codeModeOptions.map((opt) => (
+            <OptionCard
+              key={opt.value}
+              id={`wizard-code-mode-${opt.value}`}
+              name="wizard-code-mode"
+              checked={codeMode === opt.value}
+              onChange={() => setCodeMode(opt.value)}
+              title={<span>{opt.label}</span>}
+              description={opt.description}
+            />
+          ))}
+        </div>
       </FormField>
 
       {codeMode === 'existing' && (
@@ -223,38 +329,63 @@ export function CodeStep({
   );
 }
 
+function ProbeStatus({ chip, title, sub }: { chip: ReactNode; title: ReactNode; sub?: ReactNode }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'flex-start', gap: 'var(--space-2)', marginTop: 6,
+      padding: 'var(--space-3)', borderRadius: 'var(--radius-md)', background: 'var(--bg-card)', fontSize: 'var(--font-sm)',
+    }}
+    >
+      <span style={{ flexShrink: 0, marginTop: 1 }}>{chip}</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 500, color: 'var(--text)' }}>{title}</div>
+        {sub && <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginTop: 2 }}>{sub}</div>}
+      </div>
+    </div>
+  );
+}
+
 function DiscoveryResult({ t, discovery, selectedRemoteUrls, toggleRemoteSelected }: {
   t: TFunc; discovery: DiscoveryStatus; selectedRemoteUrls: Set<string>; toggleRemoteSelected: (url: string) => void;
 }) {
   if (discovery === 'idle') return null;
   if (discovery === 'checking') {
-    return <div style={{ marginTop: 6, fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{t('wizard.code.checking')}</div>;
+    return <ProbeStatus chip={<Spinner size={13} trackColor="var(--accent-a35)" />} title={t('wizard.code.checking')} />;
   }
   if (discovery === 'error') {
-    return <div style={{ marginTop: 6, fontSize: 'var(--font-sm)', color: 'var(--danger)' }}>{t('wizard.code.pathCheckFailed')}</div>;
+    return <ProbeStatus chip={<Chip tone="red">!</Chip>} title={t('wizard.code.pathCheckFailed')} />;
   }
   if (!discovery.exists) {
-    return <div style={{ marginTop: 6, fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{t('wizard.code.pathWillBeCreated')}</div>;
+    return <ProbeStatus chip={<Chip tone="accent">+</Chip>} title={t('wizard.code.pathWillBeCreated')} />;
   }
   const remotes = discovery.repos.flatMap((r) => r.remotes.map((remote) => ({ repo: r, remote })));
   if (remotes.length === 0) {
     return (
-      <div style={{ marginTop: 6, fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
-        {discovery.isGitRepository ? t('wizard.code.pathIsGitRepo') : ''} {t('wizard.code.pathNoRepo')}
-      </div>
+      <ProbeStatus
+        chip={<Chip tone="default">–</Chip>}
+        title={[discovery.isGitRepository ? t('wizard.code.pathIsGitRepo') : '', t('wizard.code.pathNoRepo')].filter(Boolean).join(' ')}
+      />
     );
   }
+  const multi = discovery.repos.length > 1;
   return (
-    <div style={{ marginTop: 8 }}>
-      <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginBottom: 6 }}>
-        {discovery.repos.length === 1 && discovery.repos[0].relativePath === '.'
+    <>
+      <ProbeStatus
+        chip={<Chip tone={multi ? 'accent' : 'green'}>{discovery.repos.length}</Chip>}
+        title={discovery.repos.length === 1 && discovery.repos[0].relativePath === '.'
           ? t('wizard.code.pathIsGitRepo')
           : t('wizard.code.pathMultipleRepos', { count: discovery.repos.length })}
-        {' — '}{t('wizard.code.selectRepos')}
-      </div>
-      <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', maxHeight: 260, overflowY: 'auto' }}>
-        {remotes.map(({ repo, remote }) => (
-          <label key={`${repo.absolutePath}:${remote.name}`} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', fontSize: 'var(--font-sm)', borderBottom: '1px solid var(--border)', cursor: 'pointer' }}>
+        sub={t('wizard.code.selectRepos')}
+      />
+      <div style={{ marginTop: 6, border: '1px solid var(--hairline)', borderRadius: 'var(--radius-md)', maxHeight: 260, overflowY: 'auto' }}>
+        {remotes.map(({ repo, remote }, i) => (
+          <label
+            key={`${repo.absolutePath}:${remote.name}`}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', fontSize: 'var(--font-sm)', cursor: 'pointer',
+              boxShadow: i < remotes.length - 1 ? '0 1px 0 var(--hairline)' : 'none',
+            }}
+          >
             <input type="checkbox" checked={selectedRemoteUrls.has(remote.url)} onChange={() => toggleRemoteSelected(remote.url)} style={{ margin: 0 }} />
             <Badge tone={remote.provider === 'github' ? 'accent' : remote.provider === 'gitlab' ? 'orange' : 'neutral'} style={{ fontSize: 'var(--font-2xs)' }}>{remote.provider}</Badge>
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
@@ -263,7 +394,7 @@ function DiscoveryResult({ t, discovery, selectedRemoteUrls, toggleRemoteSelecte
           </label>
         ))}
       </div>
-    </div>
+    </>
   );
 }
 
@@ -276,27 +407,33 @@ export function ConfirmStep({
 }) {
   return (
     <>
-      {mode === 'create' && (
-        <FormField label={t('wizard.confirm.projectLabel')}>
-          <div style={{ fontSize: 'var(--font-md)' }}>{name}</div>
-        </FormField>
-      )}
-      {showEnvironmentStep && (
-        <FormField label={t('wizard.confirm.environmentLabel')}>
-          <div style={{ fontSize: 'var(--font-md)' }}>{selectedServer}</div>
-        </FormField>
-      )}
-      <FormField label={t('wizard.confirm.codeLabel')}>
-        <div style={{ fontSize: 'var(--font-md)' }}>
-          {codeMode === 'existing' && t('wizard.confirm.codeExisting', { path: existingPath })}
-          {codeMode === 'clone' && t('wizard.confirm.codeClone', { url: cloneUrl, dir: cloneDirectory })}
-          {codeMode === 'later' && t('wizard.confirm.codeLater')}
-        </div>
-      </FormField>
+      {mode === 'create' && <SummaryRow label={t('wizard.confirm.projectLabel')} value={name} />}
+      {showEnvironmentStep && <SummaryRow label={t('wizard.confirm.environmentLabel')} value={selectedServer} />}
+      <SummaryRow
+        label={t('wizard.confirm.codeLabel')}
+        value={
+          codeMode === 'existing' ? t('wizard.confirm.codeExisting', { path: existingPath })
+            : codeMode === 'clone' ? t('wizard.confirm.codeClone', { url: cloneUrl, dir: cloneDirectory })
+              : t('wizard.confirm.codeLater')
+        }
+      />
       {alreadyCreated && (steps.some((s) => s.status === 'error')) && (
         <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginBottom: 8 }}>{t('wizard.confirm.alreadyCreatedNotice')}</div>
       )}
       {(running || steps.length > 0) && <InstallSteps steps={steps} />}
     </>
+  );
+}
+
+/** The mockup's `.sum-r` confirm-step summary row: a fixed label column next to a wrapping value column, collapsing to one column under ~30rem. */
+function SummaryRow({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div
+      className="wizard-sum-row"
+      style={{ display: 'grid', gridTemplateColumns: '6rem 1fr', gap: 'var(--space-3)', alignItems: 'start', marginBottom: 10 }}
+    >
+      <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{label}</div>
+      <div style={{ fontSize: 'var(--font-md)', wordBreak: 'break-all' }}>{value}</div>
+    </div>
   );
 }

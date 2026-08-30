@@ -310,6 +310,14 @@ a:hover {
   }
 }
 
+/* ---- Project wizard: confirm-step summary row (label col + wrapping value col) ---- */
+@media (max-width: 480px) {
+  .wizard-sum-row {
+    grid-template-columns: 1fr !important;
+    gap: var(--space-1) !important;
+  }
+}
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
