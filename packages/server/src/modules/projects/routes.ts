@@ -215,13 +215,18 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
         // be the token-less one even though a usable, credentialed row
         // existed alongside it (Issue #87 review, Important finding 1).
         const existing = matches.find((r) => r.hasToken) ?? matches[0];
-        // A credential-less matching row combined with a token THIS call
-        // was given (the wizard collects one specifically because the
-        // matched row had none) must persist that token, not just return
-        // the still-useless row as-is — otherwise distribution keeps
-        // referencing a repository with no credential (Issue #87 review,
-        // Important finding 1).
-        if (!existing.hasToken && token) {
+        // A matching row combined with a token THIS call was given must
+        // persist that token, not just return the row as-is — otherwise
+        // distribution keeps referencing a repository with no credential
+        // (Issue #87 review, Important finding 1). This must apply
+        // whenever a non-empty token is explicitly passed, not only when
+        // the matched row had none: an operator who corrects a wrong
+        // token and re-runs must have the correction actually persisted,
+        // not silently dropped because `existing.hasToken` was already
+        // true (Issue #87 review, Important finding — token correction
+        // not reflected). A missing/empty token never touches the
+        // existing credential (no accidental erasure).
+        if (token) {
           projectRepo.updateRepositoryToken(existing.id, token);
         }
         return { ok: true, id: existing.id, reused: true };

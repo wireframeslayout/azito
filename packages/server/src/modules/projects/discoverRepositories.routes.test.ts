@@ -699,6 +699,106 @@ describe('POST /api/projects/:id/repositories (reuse-aware)', () => {
     expect(opts.projectRepo.updateRepositoryToken).toHaveBeenCalledWith(42, 'new-dummy-token');
   });
 
+  // Issue #87 review, Important finding (token correction): a matching row
+  // that already carries a token must still have a newly-supplied,
+  // non-empty token persisted onto it — otherwise an operator who corrects
+  // a wrong token and re-runs the wizard has the correction silently
+  // dropped because `existing.hasToken` was already true.
+  it('persists a corrected token onto a reused row even when it already has a token', async () => {
+    const opts = makeOpts({
+      projectRepo: {
+        findAll: vi.fn(() => []),
+        findById: vi.fn(() => ({
+          id: 10, name: 'P', slug: 'p', description: null, repositoryUrl: null, defaultBranch: 'main',
+          sidekickPrompt: null, icon: null, color: null, defaultUnitId: null, servers: [], windows: [],
+          createdAt: '', updatedAt: '',
+          repositories: [{ id: 42, name: null, url: 'https://github.com/acme/widgets.git', provider: 'github' as const, owner: 'acme', repoName: 'widgets', hasToken: true }],
+        })),
+        create: vi.fn(() => 10),
+        update: vi.fn(),
+        delete: vi.fn(),
+        addRepository: vi.fn(() => 999),
+        findRepositoryById: vi.fn(() => null),
+        updateRepositoryToken: vi.fn(),
+        removeRepository: vi.fn(),
+      },
+    });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/projects/10/repositories',
+      payload: { url: 'https://github.com/acme/widgets.git', provider: 'github', token: 'corrected-dummy-token' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, id: 42, reused: true });
+    expect(opts.projectRepo.addRepository).not.toHaveBeenCalled();
+    expect(opts.projectRepo.updateRepositoryToken).toHaveBeenCalledWith(42, 'corrected-dummy-token');
+  });
+
+  // Same scenario driven end-to-end across two consecutive requests against
+  // the same reused row: the second, different token must overwrite the
+  // first, and a follow-up request with no token must leave it untouched.
+  it('persists the second token when the same row is reused twice with different tokens, and leaves it alone when a later call omits one', async () => {
+    let currentToken: string | undefined = undefined;
+    const opts = makeOpts({
+      projectRepo: {
+        findAll: vi.fn(() => []),
+        findById: vi.fn(() => ({
+          id: 10, name: 'P', slug: 'p', description: null, repositoryUrl: null, defaultBranch: 'main',
+          sidekickPrompt: null, icon: null, color: null, defaultUnitId: null, servers: [], windows: [],
+          createdAt: '', updatedAt: '',
+          repositories: [{ id: 42, name: null, url: 'https://github.com/acme/widgets.git', provider: 'github' as const, owner: 'acme', repoName: 'widgets', hasToken: currentToken !== undefined }],
+        })),
+        create: vi.fn(() => 10),
+        update: vi.fn(),
+        delete: vi.fn(),
+        addRepository: vi.fn(() => 999),
+        findRepositoryById: vi.fn(() => null),
+        updateRepositoryToken: vi.fn((_id: number, token: string) => { currentToken = token; }),
+        removeRepository: vi.fn(),
+      },
+    });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    // 1st call: token-less row, wrong token supplied — gets persisted.
+    const res1 = await app.inject({
+      method: 'POST',
+      url: '/api/projects/10/repositories',
+      payload: { url: 'https://github.com/acme/widgets.git', provider: 'github', token: 'wrong-dummy-token' },
+    });
+    expect(res1.statusCode).toBe(200);
+    expect(currentToken).toBe('wrong-dummy-token');
+
+    // 2nd call: row now has a (wrong) token, operator supplies the
+    // corrected one — must overwrite, not be skipped due to hasToken.
+    const res2 = await app.inject({
+      method: 'POST',
+      url: '/api/projects/10/repositories',
+      payload: { url: 'https://github.com/acme/widgets.git', provider: 'github', token: 'corrected-dummy-token' },
+    });
+    expect(res2.statusCode).toBe(200);
+    expect(currentToken).toBe('corrected-dummy-token');
+    expect(opts.projectRepo.updateRepositoryToken).toHaveBeenNthCalledWith(2, 42, 'corrected-dummy-token');
+
+    // 3rd call: no token supplied — the existing (corrected) token must
+    // not be cleared or otherwise touched.
+    const callCountBefore = (opts.projectRepo.updateRepositoryToken as ReturnType<typeof vi.fn>).mock.calls.length;
+    const res3 = await app.inject({
+      method: 'POST',
+      url: '/api/projects/10/repositories',
+      payload: { url: 'https://github.com/acme/widgets.git', provider: 'github' },
+    });
+    expect(res3.statusCode).toBe(200);
+    expect(currentToken).toBe('corrected-dummy-token');
+    expect((opts.projectRepo.updateRepositoryToken as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callCountBefore);
+  });
+
   it('does not attempt to persist a token when reusing a token-less row and none was supplied', async () => {
     const opts = makeOpts({
       projectRepo: {
