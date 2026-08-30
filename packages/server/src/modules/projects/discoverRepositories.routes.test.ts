@@ -271,6 +271,97 @@ describe('GET discover-repositories', () => {
     expect(url).toBe('https://github.com/acme/widgets.git');
   });
 
+  it('strips password but keeps the username from an ssh:// remote with a password', async () => {
+    const opts = makeOpts({
+      repoDiscovery: {
+        discover: vi.fn(async () => [
+          {
+            relativePath: 'widgets',
+            absolutePath: '/work/widgets',
+            remotes: [
+              {
+                name: 'origin',
+                url: 'ssh://user:dummy-secret@example.com:22/acme/widgets.git',
+                parsed: { provider: 'other' as const, owner: 'acme', repoName: 'widgets', host: 'example.com' },
+              },
+            ],
+          },
+        ]),
+      } as unknown as ProjectsRouteOptions['repoDiscovery'],
+    });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'GET', url: '/api/projects/10/servers/local/discover-repositories' });
+
+    expect(res.statusCode).toBe(200);
+    const url: string = res.json().repositories[0].remotes[0].url;
+    expect(url).not.toContain('dummy-secret');
+    expect(url).toBe('ssh://user@example.com:22/acme/widgets.git');
+  });
+
+  it('strips password but keeps the username from a password-carrying scp-like remote', async () => {
+    const opts = makeOpts({
+      repoDiscovery: {
+        discover: vi.fn(async () => [
+          {
+            relativePath: 'widgets',
+            absolutePath: '/work/widgets',
+            remotes: [
+              {
+                name: 'origin',
+                url: 'user:dummy-secret@example.com:acme/widgets.git',
+                parsed: { provider: 'other' as const, owner: 'acme', repoName: 'widgets', host: 'example.com' },
+              },
+            ],
+          },
+        ]),
+      } as unknown as ProjectsRouteOptions['repoDiscovery'],
+    });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'GET', url: '/api/projects/10/servers/local/discover-repositories' });
+
+    expect(res.statusCode).toBe(200);
+    const url: string = res.json().repositories[0].remotes[0].url;
+    expect(url).not.toContain('dummy-secret');
+    expect(url).toBe('user@example.com:acme/widgets.git');
+  });
+
+  it('drops an unparseable remote instead of returning a placeholder string (Nit finding 2)', async () => {
+    const opts = makeOpts({
+      repoDiscovery: {
+        discover: vi.fn(async () => [
+          {
+            relativePath: 'widgets',
+            absolutePath: '/work/widgets',
+            remotes: [
+              {
+                name: 'origin',
+                url: 'https://[bad',
+                parsed: { provider: 'other' as const, owner: null, repoName: null, host: null },
+              },
+            ],
+          },
+        ]),
+      } as unknown as ProjectsRouteOptions['repoDiscovery'],
+    });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'GET', url: '/api/projects/10/servers/local/discover-repositories' });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.repositories[0].remotes).toEqual([]);
+    const raw = JSON.stringify(body);
+    expect(raw).not.toContain('unparseable remote url redacted');
+  });
+
   it('returns an error (not an empty success) when the scan fails', async () => {
     const opts = makeOpts({
       repoDiscovery: {
@@ -342,6 +433,43 @@ describe('POST /api/projects/:id/repositories/bulk', () => {
     const storedUrl = (opts.projectRepo.addRepository as ReturnType<typeof vi.fn>).mock.calls[0][1];
     expect(storedUrl).not.toContain('dummy-token');
     expect(storedUrl).toBe('https://github.com/acme/widgets.git');
+  });
+
+  it('rejects an unparseable scheme:// URL instead of storing a placeholder as "added" (Nit finding 2)', async () => {
+    const opts = makeOpts();
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/projects/10/repositories/bulk',
+      payload: { repositories: [{ url: 'https://[bad', provider: 'other' }] },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().added).toBe(0);
+    expect(res.json().skipped).toBe(1);
+    expect(opts.projectRepo.addRepository).not.toHaveBeenCalled();
+  });
+
+  it('strips the password but keeps the username when storing a scp-like remote with a password', async () => {
+    const opts = makeOpts();
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/projects/10/repositories/bulk',
+      payload: { repositories: [{ url: 'user:dummy-secret@example.com:acme/widgets.git', provider: 'other' }] },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().added).toBe(1);
+    const storedUrl = (opts.projectRepo.addRepository as ReturnType<typeof vi.fn>).mock.calls[0][1];
+    expect(storedUrl).not.toContain('dummy-secret');
+    expect(storedUrl).toBe('user@example.com:acme/widgets.git');
   });
 
   it('accepts a batch of plain URLs', async () => {

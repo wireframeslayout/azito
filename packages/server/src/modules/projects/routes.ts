@@ -702,7 +702,10 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       }
 
       const existingUrls = new Set(
-        (project.repositories || []).map((r) => normalizeRemoteUrl(sanitizeDiscoveredRemoteUrl(r.url))),
+        (project.repositories || [])
+          .map((r) => sanitizeDiscoveredRemoteUrl(r.url))
+          .filter((u): u is string => u !== null)
+          .map(normalizeRemoteUrl),
       );
 
       // Discovered remote URLs come straight from the server's git config
@@ -717,21 +720,27 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       // remote, with a fixed placeholder — Issue #19 later review round,
       // Important finding 1). Dedup against `existingUrls` uses the same
       // sanitized form so a credentialed vs. sanitized URL for the same
-      // repo still matches.
+      // repo still matches. A remote that `sanitizeDiscoveredRemoteUrl`
+      // cannot clean (structurally malformed) comes back as `null` and is
+      // dropped from the response entirely rather than shown as a
+      // placeholder string (Issue #19 3rd review round, Nit finding 2).
       const repositories = discovered.map((repo) => ({
         relativePath: repo.relativePath,
         absolutePath: repo.absolutePath,
-        remotes: repo.remotes.map((remote) => {
-          const safeUrl = sanitizeDiscoveredRemoteUrl(remote.url);
-          return {
-            name: remote.name,
-            url: safeUrl,
-            provider: remote.parsed.provider,
-            owner: remote.parsed.owner,
-            repoName: remote.parsed.repoName,
-            alreadyRegistered: existingUrls.has(normalizeRemoteUrl(safeUrl)),
-          };
-        }),
+        remotes: repo.remotes
+          .map((remote) => {
+            const safeUrl = sanitizeDiscoveredRemoteUrl(remote.url);
+            if (safeUrl === null) return null;
+            return {
+              name: remote.name,
+              url: safeUrl,
+              provider: remote.parsed.provider,
+              owner: remote.parsed.owner,
+              repoName: remote.parsed.repoName,
+              alreadyRegistered: existingUrls.has(normalizeRemoteUrl(safeUrl)),
+            };
+          })
+          .filter((r): r is NonNullable<typeof r> => r !== null),
       }));
 
       return { repositories };
@@ -764,7 +773,10 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       }
 
       const existingUrls = new Set(
-        (project.repositories || []).map((r) => normalizeRemoteUrl(sanitizeDiscoveredRemoteUrl(r.url))),
+        (project.repositories || [])
+          .map((r) => sanitizeDiscoveredRemoteUrl(r.url))
+          .filter((u): u is string => u !== null)
+          .map(normalizeRemoteUrl),
       );
 
       let added = 0;
@@ -778,6 +790,13 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
         // sanitizer used for discovered remotes before it reaches this
         // plaintext column (Issue #19 later review round, Important finding 1).
         const url = sanitizeDiscoveredRemoteUrl(rawUrl);
+        // A structurally malformed scheme:// value cannot be sanitized and
+        // comes back as `null` — reject just this entry (via the existing
+        // `skipped` counter, matching how an empty url is already handled
+        // above) rather than failing the whole batch or storing a
+        // placeholder string as if it were a real, added repository
+        // (Issue #19 3rd review round, Nit finding 2).
+        if (url === null) { skipped++; continue; }
         if (existingUrls.has(normalizeRemoteUrl(url))) { skipped++; continue; }
         const name = typeof repo.name === 'string' ? repo.name : undefined;
         const provider = typeof repo.provider === 'string' ? repo.provider : undefined;

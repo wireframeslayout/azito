@@ -16,24 +16,39 @@
  * unparseable/local-path remote into the literal string
  * `(unrecognized origin url)`).
  *
- * Behavior:
+ * Username policy (why `http(s)` drops it but `ssh`/SCP keep it):
+ * - For `http(s)://`, the "username" slot is routinely abused to carry a
+ *   bearer token or PAT (`https://ghp_xxx@github.com/...`,
+ *   `https://oauth2:token@gitlab.com/...`) — i.e. it is frequently itself
+ *   the secret, so it is always dropped, along with the password slot.
+ * - For `ssh://` and SCP-like (`user@host:path`) syntax, the username is
+ *   the *connection account* (`git`, `forge`, ...), which git needs to
+ *   even attempt the connection and which is not itself a credential —
+ *   authentication happens via the SSH key, not the username. So it is
+ *   kept. Only an explicit `user:password@host` form (uncommon, but valid
+ *   SCP-like syntax) carries an actual secret in that slot, and only the
+ *   password portion of it is stripped.
+ *
+ * Behavior by input shape:
  * - SSH SCP-like (`git@host:owner/repo.git`) syntax: has no URL scheme at
- *   all (git parses the `host:path` form itself), so it is returned
- *   unchanged. The `user@` portion is a conventional account name (`git`,
- *   `forge`, ...), not a secret, and there is no query/fragment concept in
- *   this syntax to carry one either.
+ *   all (git parses the `host:path` form itself). The `user@` prefix is
+ *   kept unchanged (see username policy above). If the prefix is instead
+ *   `user:password@host:...`, the password portion is stripped, leaving
+ *   `user@host:...` — there is no query/fragment concept in this syntax to
+ *   carry a credential either.
  * - Local absolute paths (`/srv/repos/x.git`) and relative paths
  *   (`../x.git`): also have no URL scheme, so they fall into the same
- *   "return unchanged" bucket as SCP-like syntax above — distinguished
- *   from it only by the absence of a leading `user@host:` prefix, which
- *   doesn't matter for how they're handled.
- * - `ssh://` URLs: the userinfo is a conventional account name, not a
- *   secret, and git ignores any query/fragment on an ssh URL. Returned
- *   unchanged.
- * - Any other URL with a recognized `scheme://` prefix (`http://`,
- *   `https://`, `git://`, `ftp://`, `file://`, ...) that parses
- *   successfully: userinfo (username/password), the query string, AND the
- *   fragment are ALL stripped unconditionally — regardless of whether
+ *   "return unchanged" bucket as SCP-like syntax above (minus any
+ *   `user[:pass]@` prefix, which they don't have).
+ * - `ssh://` URLs, and any other `scheme://` URL that isn't `http(s)`
+ *   (`git://`, `ftp://`, `file://`, ...): username is kept (see policy
+ *   above), but password, query string, and fragment are all stripped —
+ *   git ignores query/fragment on these schemes, and either can smuggle a
+ *   credential (`ssh://host/repo.git?x=secret`) just as easily as
+ *   userinfo can.
+ * - `http://` / `https://` URLs that parse successfully: userinfo
+ *   (username AND password), the query string, and the fragment are ALL
+ *   stripped unconditionally — regardless of whether
  *   `urlHasEmbeddedCredentials()` flags this specific URL as carrying a
  *   credential. A clone URL never needs a query string or fragment, and
  *   credentials can be smuggled into either
@@ -45,20 +60,32 @@
  *   through untouched into the discovery response and the plaintext
  *   `project_repositories.url` column).
  * - A value that has a recognized `scheme://` prefix but still fails to
- *   parse as a URL (structurally malformed): treated conservatively, NOT
- *   returned as-is, since it cannot be inspected or cleaned and may still
- *   carry credential material. This is different from the local/relative
- *   path case above, which is recognized by the ABSENCE of a scheme, not
- *   by a failed parse.
+ *   parse as a URL (structurally malformed): returns `null`. It cannot be
+ *   inspected or cleaned and may still carry credential material, so it
+ *   must not be passed through unchanged — but it must also not be
+ *   replaced with a fixed placeholder string, because a placeholder is
+ *   still a value: callers were storing it into `project_repositories.url`
+ *   and reporting the repository as "added", and two unrelated unparseable
+ *   inputs would collide on the same placeholder and be treated as
+ *   duplicates of each other (Issue #19 3rd review round, Nit finding 2).
+ *   Callers must treat `null` as "this remote/URL is unusable" and drop it
+ *   rather than substitute a display string.
  */
-const SCP_LIKE_SSH = /^[^@\s/]+@[^:\s]+:(?!\/\/)/;
+const SCP_LIKE_SSH = /^([^@\s/]+)@([^:\s]+):(?!\/\/)/;
 const URL_SCHEME = /^([a-z][a-z0-9+.-]*):\/\//i;
-const UNPARSEABLE_URL_PLACEHOLDER = '(unparseable remote url redacted)';
 
-export function sanitizeDiscoveredRemoteUrl(rawUrl: string): string {
+export function sanitizeDiscoveredRemoteUrl(rawUrl: string): string | null {
   const trimmed = rawUrl.trim();
 
-  if (SCP_LIKE_SSH.test(trimmed)) return trimmed;
+  const scpMatch = SCP_LIKE_SSH.exec(trimmed);
+  if (scpMatch) {
+    const userinfo = scpMatch[1];
+    const colonIndex = userinfo.indexOf(':');
+    if (colonIndex === -1) return trimmed; // plain `user@host:path`, nothing to strip
+    // `user:password@host:path` — keep the account name, drop the password.
+    const username = userinfo.slice(0, colonIndex);
+    return username + trimmed.slice(userinfo.length);
+  }
 
   const schemeMatch = URL_SCHEME.exec(trimmed);
   if (!schemeMatch) {
@@ -69,18 +96,21 @@ export function sanitizeDiscoveredRemoteUrl(rawUrl: string): string {
   }
 
   const scheme = schemeMatch[1].toLowerCase();
-  if (scheme === 'ssh') return trimmed;
 
   try {
     const url = new URL(trimmed);
-    url.username = '';
+    if (scheme === 'http' || scheme === 'https') {
+      // http(s) username slot doubles as a token carrier — see policy note above.
+      url.username = '';
+    }
     url.password = '';
     url.search = '';
     url.hash = '';
     return url.toString();
   } catch {
     // Had a `scheme://` prefix but is not a structurally valid URL — we
-    // cannot inspect or clean it, so refuse to pass it through unchanged.
-    return UNPARSEABLE_URL_PLACEHOLDER;
+    // cannot inspect or clean it, so refuse to pass it through unchanged
+    // or substitute a placeholder. Callers must drop this entry.
+    return null;
   }
 }

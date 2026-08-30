@@ -8,10 +8,22 @@ describe('sanitizeDiscoveredRemoteUrl', () => {
     );
   });
 
-  it('keeps ssh:// URLs unchanged, including the conventional git user', () => {
+  it('strips only the password from a password-carrying scp-like remote, keeping the username', () => {
+    expect(sanitizeDiscoveredRemoteUrl('user:dummy-secret@example.com:acme/widgets.git')).toBe(
+      'user@example.com:acme/widgets.git',
+    );
+  });
+
+  it('keeps ssh:// URLs with only a username unchanged', () => {
     expect(sanitizeDiscoveredRemoteUrl('ssh://git@example.com:2222/acme/widgets.git')).toBe(
       'ssh://git@example.com:2222/acme/widgets.git',
     );
+  });
+
+  it('strips password/query/fragment from an ssh:// URL but keeps the username', () => {
+    expect(
+      sanitizeDiscoveredRemoteUrl('ssh://user:dummy-secret@example.com:22/acme/widgets.git?x=1#y=2'),
+    ).toBe('ssh://user@example.com:22/acme/widgets.git');
   });
 
   it('keeps a local filesystem path remote unchanged', () => {
@@ -75,9 +87,13 @@ describe('sanitizeDiscoveredRemoteUrl', () => {
     );
   });
 
-  it('treats a structurally malformed http(s)-scheme value conservatively instead of returning it as-is', () => {
-    const result = sanitizeDiscoveredRemoteUrl('https://');
-    expect(result).not.toBe('https://');
-    expect(result).not.toContain('dummy-token');
+  it('returns null (not a placeholder string) for a structurally malformed http(s)-scheme value', () => {
+    const result = sanitizeDiscoveredRemoteUrl('https://[bad');
+    expect(result).toBeNull();
+  });
+
+  it('returns null for a structurally malformed scheme:// value that is not http(s)', () => {
+    const result = sanitizeDiscoveredRemoteUrl('ssh://[bad');
+    expect(result).toBeNull();
   });
 });
