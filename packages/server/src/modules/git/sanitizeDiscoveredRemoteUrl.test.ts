@@ -96,4 +96,22 @@ describe('sanitizeDiscoveredRemoteUrl', () => {
     const result = sanitizeDiscoveredRemoteUrl('ssh://[bad');
     expect(result).toBeNull();
   });
+
+  it('strips a token-as-username credential from a git:// URL', () => {
+    expect(sanitizeDiscoveredRemoteUrl('git://dummy-token@example.com/acme/widgets.git')).toBe(
+      'git://example.com/acme/widgets.git',
+    );
+  });
+
+  it('strips a token-as-username credential from an ftp:// URL', () => {
+    expect(sanitizeDiscoveredRemoteUrl('ftp://dummy-token@example.com/acme/widgets.git')).toBe(
+      'ftp://example.com/acme/widgets.git',
+    );
+  });
+
+  it('keeps the username on an ssh:// URL unchanged (regression: only ssh keeps it)', () => {
+    expect(sanitizeDiscoveredRemoteUrl('ssh://git@example.com/acme/widgets.git')).toBe(
+      'ssh://git@example.com/acme/widgets.git',
+    );
+  });
 });

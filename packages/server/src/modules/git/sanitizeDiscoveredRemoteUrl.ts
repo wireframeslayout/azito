@@ -16,11 +16,8 @@
  * unparseable/local-path remote into the literal string
  * `(unrecognized origin url)`).
  *
- * Username policy (why `http(s)` drops it but `ssh`/SCP keep it):
- * - For `http(s)://`, the "username" slot is routinely abused to carry a
- *   bearer token or PAT (`https://ghp_xxx@github.com/...`,
- *   `https://oauth2:token@gitlab.com/...`) — i.e. it is frequently itself
- *   the secret, so it is always dropped, along with the password slot.
+ * Username policy (why only `ssh://`/SCP keep it, and every other scheme
+ * drops it):
  * - For `ssh://` and SCP-like (`user@host:path`) syntax, the username is
  *   the *connection account* (`git`, `forge`, ...), which git needs to
  *   even attempt the connection and which is not itself a credential —
@@ -28,6 +25,17 @@
  *   kept. Only an explicit `user:password@host` form (uncommon, but valid
  *   SCP-like syntax) carries an actual secret in that slot, and only the
  *   password portion of it is stripped.
+ * - For every other scheme — `http(s)://` and any non-SSH `scheme://`
+ *   alike (`git://`, `ftp://`, `file://`, ...) — the "username" slot is
+ *   routinely abused to carry a bearer token or PAT
+ *   (`https://ghp_xxx@github.com/...`, `git://token@example.com/...`) —
+ *   i.e. it is frequently itself the secret, so it is always dropped,
+ *   along with the password slot. Restricting the keep-list to `ssh://`
+ *   only (instead of "any scheme that isn't http(s)") closes a gap where
+ *   `git://`/`ftp://` username credentials were passed through unchanged
+ *   (Issue #87 review round, Important finding: "ssh://`/`git://` etc. →
+ *   keep username" was too broad — only `ssh://` username is actually
+ *   safe to keep).
  *
  * Behavior by input shape:
  * - SSH SCP-like (`git@host:owner/repo.git`) syntax: has no URL scheme at
@@ -40,15 +48,14 @@
  *   (`../x.git`): also have no URL scheme, so they fall into the same
  *   "return unchanged" bucket as SCP-like syntax above (minus any
  *   `user[:pass]@` prefix, which they don't have).
- * - `ssh://` URLs, and any other `scheme://` URL that isn't `http(s)`
- *   (`git://`, `ftp://`, `file://`, ...): username is kept (see policy
- *   above), but password, query string, and fragment are all stripped —
- *   git ignores query/fragment on these schemes, and either can smuggle a
- *   credential (`ssh://host/repo.git?x=secret`) just as easily as
- *   userinfo can.
- * - `http://` / `https://` URLs that parse successfully: userinfo
- *   (username AND password), the query string, and the fragment are ALL
- *   stripped unconditionally — regardless of whether
+ * - `ssh://` URLs: username is kept (see policy above), but password,
+ *   query string, and fragment are all stripped — git ignores
+ *   query/fragment on this scheme, and either can smuggle a credential
+ *   (`ssh://host/repo.git?x=secret`) just as easily as userinfo can.
+ * - `http://` / `https://` URLs, and any other non-SSH `scheme://` URL
+ *   (`git://`, `ftp://`, `file://`, ...) that parses successfully:
+ *   userinfo (username AND password), the query string, and the fragment
+ *   are ALL stripped unconditionally — regardless of whether
  *   `urlHasEmbeddedCredentials()` flags this specific URL as carrying a
  *   credential. A clone URL never needs a query string or fragment, and
  *   credentials can be smuggled into either
@@ -99,8 +106,11 @@ export function sanitizeDiscoveredRemoteUrl(rawUrl: string): string | null {
 
   try {
     const url = new URL(trimmed);
-    if (scheme === 'http' || scheme === 'https') {
-      // http(s) username slot doubles as a token carrier — see policy note above.
+    if (scheme !== 'ssh') {
+      // Only `ssh://` username is the non-secret connection account (`git`,
+      // `forge`, ...) — see policy note above. Every other scheme
+      // (`http(s)://`, `git://`, `ftp://`, `file://`, ...) routinely uses
+      // the username slot as a token carrier, so it is always dropped.
       url.username = '';
     }
     url.password = '';
