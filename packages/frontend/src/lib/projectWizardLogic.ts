@@ -265,26 +265,66 @@ export function cloneStepSignature(input: {
 }
 
 /**
- * Decides which repository rows a stale-signature invalidation must delete
- * before the repository step is allowed to re-run (Issue #87 review,
- * Important finding 1: "やり直しでリポジトリ行が重複して増える").
- * `/projects/:id/repositories` and its `/bulk` sibling are append-only —
- * retrying the repository step after editing an input that changed
- * `repoStepSignature` used to just reset `repoDone`/`createdRepositoryId`
- * and re-POST, leaving the PREVIOUS run's already-persisted row(s) orphaned
- * (an unused repository still attached to the project, and — since
- * `local` execution picks the first repository row — sometimes the one a
- * later task actually resolves against).
+ * Ids to attempt deleting when the repo-step signature changes ("やり直しで
+ * リポジトリ行が重複して増える" — `/projects/:id/repositories`(`/bulk`) is
+ * append-only, so retrying the repository step after editing an input that
+ * changed `repoStepSignature` must clean up the PREVIOUS run's row(s)
+ * first). Returns `[]` when the signature hasn't changed — nothing to
+ * clean up, and a resume-after-a-later-step-failure run keeps its
+ * still-valid tracked ids.
  *
- * `createdRepositoryIds` is every repository id created by THIS wizard run
- * (single id for 'clone' mode, one or more for a bulk 'existing'-mode
- * registration). When the signature hasn't changed, nothing is deleted and
- * the ids are kept (so a resume-after-a-later-step-failure run doesn't
- * re-create a still-valid repository row). When it has changed, every id
- * from the stale run must be deleted and the tracked list cleared so the
- * next run starts from zero rows again.
+ * Unlike the ids actually still tracked afterward (see
+ * `reconcileDeletedRepositoryIds`), this list is NOT the new tracked
+ * state — the caller must keep `createdRepositoryIds` unchanged until the
+ * deletes this returns have actually settled, and only reconcile after
+ * (Issue #87 review, Important finding: 削除の完了を待たずに再登録する
+ * ため、リポジトリが失われる — clearing the tracked list synchronously,
+ * before the DELETE requests resolve, both let registration race ahead of
+ * cleanup and dropped the ids needed to retry a failed delete).
  */
-export function invalidateRepoStepIds(createdRepositoryIds: number[], signatureChanged: boolean): { idsToDelete: number[]; nextIds: number[] } {
-  if (!signatureChanged) return { idsToDelete: [], nextIds: createdRepositoryIds };
-  return { idsToDelete: createdRepositoryIds, nextIds: [] };
+export function repoIdsToCleanup(createdRepositoryIds: number[], signatureChanged: boolean): number[] {
+  return signatureChanged ? createdRepositoryIds : [];
+}
+
+export interface RepoDeleteResult {
+  id: number;
+  status: number;
+}
+
+/**
+ * Which of the ids a cleanup pass attempted to delete are still orphaned
+ * (and must stay tracked for a future retry) — i.e. whose DELETE did NOT
+ * come back 2xx. `apiWithStatus` resolves normally even for HTTP error
+ * responses, so the caller must check `status` explicitly rather than
+ * relying on the promise rejecting (Issue #87 review, Important finding:
+ * エラー状態が無視され、後始末に必要な ID が恒久的に失われる — the
+ * previous code fired every DELETE with `.catch(() => {})` and cleared the
+ * whole tracked list regardless of the response, so a failed delete's row
+ * was never retried and its id was gone for good).
+ */
+export function reconcileDeletedRepositoryIds(results: RepoDeleteResult[]): number[] {
+  return results.filter((r) => r.status < 200 || r.status >= 300).map((r) => r.id);
+}
+
+/**
+ * Runs a stale-signature cleanup pass: attempts to delete every id in
+ * `idsToDelete` (independently — one failure never blocks the others) and
+ * returns the ids that must stay tracked afterward (the ones whose delete
+ * did not succeed). A thrown/rejected delete call is treated the same as a
+ * non-2xx response (network failure — the row's existence is unknown, so
+ * it is kept tracked rather than assumed gone).
+ */
+export async function cleanupStaleRepositoryIds(
+  idsToDelete: number[],
+  deleteFn: (id: number) => Promise<{ status: number }>,
+): Promise<number[]> {
+  const results = await Promise.all(idsToDelete.map(async (id): Promise<RepoDeleteResult> => {
+    try {
+      const { status } = await deleteFn(id);
+      return { id, status };
+    } catch {
+      return { id, status: 0 };
+    }
+  }));
+  return reconcileDeletedRepositoryIds(results);
 }

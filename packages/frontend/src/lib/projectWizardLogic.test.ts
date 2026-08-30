@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   getVisibleSteps, canAdvanceFromStep, stepIndex, nextStep, deriveCloneDirectoryName, deriveDefaultBranch,
   pickAvailableServer, isDiscoveryCurrent, clonesDirectlyOnServer,
-  resolveCloneDeliveryMode, repoStepSignature, envStepSignature, cloneStepSignature, invalidateRepoStepIds,
+  resolveCloneDeliveryMode, repoStepSignature, envStepSignature, cloneStepSignature,
+  repoIdsToCleanup, reconcileDeletedRepositoryIds, cleanupStaleRepositoryIds,
   type WizardValidationState,
 } from './projectWizardLogic';
 
@@ -294,28 +295,128 @@ describe('envStepSignature / cloneStepSignature (review finding: completion flag
   });
 });
 
-describe('invalidateRepoStepIds (review finding: retrying the repository step must not duplicate rows — /repositories is append-only)', () => {
-  it('deletes every previously-created id and clears the tracked list when the signature changed', () => {
-    const result = invalidateRepoStepIds([1, 2, 3], true);
-    expect(result.idsToDelete).toEqual([1, 2, 3]);
-    expect(result.nextIds).toEqual([]);
+describe('repoIdsToCleanup (review finding: retrying the repository step must not duplicate rows — /repositories is append-only)', () => {
+  it('returns every previously-created id to delete when the signature changed', () => {
+    expect(repoIdsToCleanup([1, 2, 3], true)).toEqual([1, 2, 3]);
   });
 
-  it('deletes nothing and keeps the tracked ids when the signature did not change (resume-after-a-later-step-failure)', () => {
-    const result = invalidateRepoStepIds([1, 2, 3], false);
-    expect(result.idsToDelete).toEqual([]);
-    expect(result.nextIds).toEqual([1, 2, 3]);
+  it('deletes nothing when the signature did not change (resume-after-a-later-step-failure)', () => {
+    expect(repoIdsToCleanup([1, 2, 3], false)).toEqual([]);
   });
 
   it('is a no-op when nothing had been created yet', () => {
-    const result = invalidateRepoStepIds([], true);
-    expect(result.idsToDelete).toEqual([]);
-    expect(result.nextIds).toEqual([]);
+    expect(repoIdsToCleanup([], true)).toEqual([]);
   });
 
   it('handles a single tracked id (the "clone" mode single-repository registration path)', () => {
-    const result = invalidateRepoStepIds([42], true);
-    expect(result.idsToDelete).toEqual([42]);
-    expect(result.nextIds).toEqual([]);
+    expect(repoIdsToCleanup([42], true)).toEqual([42]);
+  });
+});
+
+describe('reconcileDeletedRepositoryIds (Issue #87 review, Important: a non-2xx DELETE response must not drop the id from tracking)', () => {
+  it('keeps ids whose DELETE did not come back 2xx', () => {
+    const kept = reconcileDeletedRepositoryIds([
+      { id: 1, status: 200 },
+      { id: 2, status: 500 },
+      { id: 3, status: 404 },
+    ]);
+    expect(kept).toEqual([2, 3]);
+  });
+
+  it('drops ids whose DELETE succeeded', () => {
+    expect(reconcileDeletedRepositoryIds([{ id: 1, status: 200 }, { id: 2, status: 204 }])).toEqual([]);
+  });
+
+  it('is empty when there was nothing to reconcile', () => {
+    expect(reconcileDeletedRepositoryIds([])).toEqual([]);
+  });
+});
+
+describe('cleanupStaleRepositoryIds (Issue #87 review, Important: deletes must be validated and failures must stay tracked for retry)', () => {
+  it('drops an id whose DELETE succeeds', async () => {
+    const survivors = await cleanupStaleRepositoryIds([1], async () => ({ status: 200 }));
+    expect(survivors).toEqual([]);
+  });
+
+  it('keeps an id whose DELETE returns a non-2xx status — apiWithStatus resolves normally on HTTP errors, so a naive .catch()-only caller would silently lose it', async () => {
+    const survivors = await cleanupStaleRepositoryIds([1], async () => ({ status: 500 }));
+    expect(survivors).toEqual([1]);
+  });
+
+  it('keeps an id whose DELETE call rejects outright (network failure)', async () => {
+    const survivors = await cleanupStaleRepositoryIds([1], async () => { throw new Error('network down'); });
+    expect(survivors).toEqual([1]);
+  });
+
+  it('resolves each id independently — one failure does not affect the others', async () => {
+    const survivors = await cleanupStaleRepositoryIds([1, 2, 3], async (id) => ({ status: id === 2 ? 500 : 200 }));
+    expect(survivors).toEqual([2]);
+  });
+});
+
+describe('repository cleanup-before-registration ordering (Issue #87 review, Important: 削除の完了を待たずに再登録するため、リポジトリが失われる)', () => {
+  // Mirrors the actual wiring in ProjectWizard.tsx: the repo-step effect
+  // starts `cleanupStaleRepositoryIds` for the ids from the OLD selection
+  // and stashes the promise; `handleRun`'s repository step must await that
+  // exact promise before registering the NEW selection. This test drives
+  // that same two-phase sequence with an artificially slow delete to prove
+  // registration genuinely waits rather than merely being called after in
+  // source order.
+  it('never starts registration before the cleanup delete for stale ids has resolved', async () => {
+    const events: string[] = [];
+    let resolveDelete!: (v: { status: number }) => void;
+    const deletePromise = new Promise<{ status: number }>((resolve) => { resolveDelete = resolve; });
+
+    const cleanup = cleanupStaleRepositoryIds([1], async () => {
+      events.push('delete:start');
+      const result = await deletePromise;
+      events.push('delete:end');
+      return result;
+    });
+
+    const register = (async () => {
+      await cleanup; // same gating handleRun performs via pendingRepoCleanupRef
+      events.push('register:start');
+      return [99];
+    })();
+
+    // The delete has started but not resolved — registration must not have
+    // run yet.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(events).toEqual(['delete:start']);
+
+    resolveDelete({ status: 200 });
+    const registered = await register;
+
+    expect(events).toEqual(['delete:start', 'delete:end', 'register:start']);
+    expect(registered).toEqual([99]);
+  });
+
+  it('changing the selection from {A,B} to {A,C} ends with exactly A and C tracked, never losing A', async () => {
+    // Old selection {A,B} -> ids [idA, idB]. User changes to {A,C}: the
+    // signature changes, so a cleanup pass attempts to delete [idA, idB].
+    // The bulk-discovery endpoint skips A (still present, delete not yet
+    // landed for it in real timing — modeled here as A's delete failing)
+    // and registers only C.
+    const idA = 1;
+    const idB = 2;
+    const idC = 3;
+
+    const deleteFn = async (id: number) => {
+      if (id === idA) return { status: 500 }; // A's delete fails — A survives
+      return { status: 200 }; // B's delete succeeds — B is gone
+    };
+
+    const survivors = await cleanupStaleRepositoryIds([idA, idB], deleteFn);
+    // Registration (bulk /repositories/bulk) only ever happens after the
+    // cleanup above has settled (enforced by handleRun awaiting
+    // pendingRepoCleanupRef) and only creates a row for C, since A already
+    // exists.
+    const registeredIds = [idC];
+    const finalTracked = [...survivors, ...registeredIds];
+
+    expect(finalTracked).toEqual([idA, idC]);
+    expect(finalTracked).not.toContain(idB);
   });
 });

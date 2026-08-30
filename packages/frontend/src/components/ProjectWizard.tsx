@@ -10,7 +10,7 @@ import { createRequestGuard, dedupeSelectableUrls } from './repoDiscoveryDialogL
 import {
   getVisibleSteps, canAdvanceFromStep, stepIndex, nextStep, deriveCloneDirectoryName, deriveDefaultBranch,
   pickAvailableServer, isDiscoveryCurrent, resolveCloneDeliveryMode,
-  repoStepSignature, envStepSignature, cloneStepSignature, invalidateRepoStepIds,
+  repoStepSignature, envStepSignature, cloneStepSignature, repoIdsToCleanup, cleanupStaleRepositoryIds,
   type WizardStepId, type CodeMode, type WizardValidationState, type DiscoveryKey,
 } from '../lib/projectWizardLogic';
 import {
@@ -95,9 +95,17 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
   // Every repository row id created by THIS wizard run's repository step
   // (single id for 'clone' mode, one or more for a bulk 'existing'-mode
   // registration) — tracked purely for cleanup, so a ref rather than state
-  // (see `invalidateRepoStepIds` / the repo-signature invalidation effect
-  // below; Issue #87 review, Important finding 1).
+  // (see `repoIdsToCleanup`/`cleanupStaleRepositoryIds` / the repo-signature
+  // invalidation effect below; Issue #87 review, Important finding 1).
   const createdRepositoryIdsRef = useRef<number[]>([]);
+  // The in-flight (or already-settled) cleanup delete(s) for the PREVIOUS
+  // repo-step signature, chained so overlapping signature changes never
+  // fire overlapping DELETE batches for the same ids. `handleRun` awaits
+  // this before ever registering a repository, so a new registration can
+  // never race ahead of the cleanup it depends on (Issue #87 review,
+  // Important finding: 削除の完了を待たずに再登録するため、リポジトリが
+  // 失われる).
+  const pendingRepoCleanupRef = useRef<Promise<void>>(Promise.resolve());
   const [envDone, setEnvDone] = useState(false);
   const [repoDone, setRepoDone] = useState(false);
   const [localCloneDone, setLocalCloneDone] = useState(false);
@@ -252,17 +260,30 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
     // step before letting it re-run — `/repositories`(`/bulk`) is
     // append-only, so re-registering without cleanup left the previous
     // run's row(s) as orphaned duplicates (Issue #87 review, Important
-    // finding 1). Only reachable once a project exists (repoDone can only
-    // have been true after a project was created), and best-effort: this is
-    // orphan cleanup, not a step the user is blocked on — a failed delete
-    // just leaves an unused row behind, same as today.
-    const { idsToDelete, nextIds } = invalidateRepoStepIds(createdRepositoryIdsRef.current, true);
-    createdRepositoryIdsRef.current = nextIds;
-    if (createdProjectId !== null) {
-      for (const rid of idsToDelete) {
-        apiWithStatus(`/projects/${createdProjectId}/repositories/${rid}`, { method: 'DELETE' }).catch(() => {});
-      }
-    }
+    // finding 1). The ids stay tracked (NOT cleared here) until the delete
+    // requests actually settle — `handleRun` awaits `pendingRepoCleanupRef`
+    // before registering anything, so a fast re-registration can never run
+    // ahead of this cleanup and end up re-adding a row whose delete hadn't
+    // landed yet (Issue #87 review, Important finding: 削除の完了を待たず
+    // に再登録するため、リポジトリが失われる). Chained onto any previous
+    // pending cleanup so overlapping signature changes never issue
+    // overlapping DELETE batches for the same ids.
+    const idsToDelete = repoIdsToCleanup(createdRepositoryIdsRef.current, true);
+    if (idsToDelete.length === 0 || createdProjectId === null) return;
+    const pid = createdProjectId;
+    const previousCleanup = pendingRepoCleanupRef.current;
+    pendingRepoCleanupRef.current = (async () => {
+      await previousCleanup;
+      // Ids whose DELETE did not come back 2xx stay tracked so a later
+      // cleanup pass retries them instead of the id being silently lost
+      // (Issue #87 review, Important finding: エラー状態が無視され、後始
+      // 末に必要な ID が恒久的に失われる).
+      const stillOrphaned = await cleanupStaleRepositoryIds(
+        idsToDelete,
+        (id) => apiWithStatus(`/projects/${pid}/repositories/${id}`, { method: 'DELETE' }),
+      );
+      createdRepositoryIdsRef.current = stillOrphaned;
+    })();
   }, [repoSignature, createdProjectId]);
 
   const envSignature = envStepSignature({
@@ -349,6 +370,14 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
       // target needs the repository's own id to set distribution_repository_id.
       let repoId = createdRepositoryId;
       if (pid !== null && !repoDone) {
+        // Never register a new/updated repository set while a stale-signature
+        // cleanup from a previous selection is still deleting rows — doing so
+        // let the bulk-registration call run ahead of the delete, see it as
+        // "already exists", skip re-adding it, and then have the in-flight
+        // delete remove it out from under the just-registered set (Issue #87
+        // review, Important finding: 削除の完了を待たずに再登録するため、
+        // リポジトリが失われる).
+        await pendingRepoCleanupRef.current;
         if (codeMode === 'existing' && repositoriesToRegister.length > 0) {
           setStep('repository', 'running', t('wizard.confirm.stepRepository'));
           try {
@@ -359,11 +388,18 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
             if (status < 200 || status >= 300) {
               throw new Error(('error' in body && body.error) || t('wizard.errors.repositoryFailed'));
             }
-            // Track every row this call created (Issue #87 review, Important
-            // finding 1) so a later retry can delete exactly these rows
-            // instead of accumulating duplicates — see the repo-signature
+            // Track every row this call created, UNIONED with any id a
+            // previous cleanup pass still failed to delete (Issue #87
+            // review, Important finding 1 + エラー状態が無視され後始末に
+            // 必要な ID が失われる) — overwriting instead of merging would
+            // silently drop those still-orphaned ids from tracking, the
+            // same "lost id" bug for a different reason. A later retry
+            // then attempts all of them again — see the repo-signature
             // invalidation effect above.
-            createdRepositoryIdsRef.current = 'ids' in body && Array.isArray(body.ids) ? body.ids : [];
+            createdRepositoryIdsRef.current = [
+              ...createdRepositoryIdsRef.current,
+              ...('ids' in body && Array.isArray(body.ids) ? body.ids : []),
+            ];
             setRepoDone(true);
             setStep('repository', 'ok', t('wizard.confirm.stepRepository'));
           } catch (err) {
@@ -389,7 +425,9 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
             }
             repoId = body.id;
             setCreatedRepositoryId(repoId);
-            createdRepositoryIdsRef.current = [repoId];
+            // Union with any still-orphaned id from a previous failed
+            // cleanup, same reasoning as the bulk-registration branch above.
+            createdRepositoryIdsRef.current = [...createdRepositoryIdsRef.current, repoId];
             setRepoDone(true);
             setStep('repository', 'ok', t('wizard.confirm.stepRepository'));
           } catch (err) {
