@@ -1,4 +1,4 @@
-import { Fragment, type CSSProperties, type ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Badge, Chip, FormInput, InstallSteps, Spinner, baseInputStyle, type InstallStep } from './ui';
 import FormField from './FormField';
@@ -57,27 +57,24 @@ export function StepIndicator({ visibleSteps, currentStep, isMobile, t }: { visi
     );
   }
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px var(--space-4)', borderBottom: '1px solid var(--border)', background: 'var(--bg-card)', overflowX: 'auto' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-5)', padding: '10px var(--space-4)', borderBottom: '1px solid var(--border)', background: 'var(--bg-card)', overflowX: 'auto' }}>
       {visibleSteps.map((step, i) => {
         const state = i < idx ? 'done' : i === idx ? 'current' : 'upcoming';
         return (
-          <Fragment key={step}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-              <span style={{
-                display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22,
-                borderRadius: 'var(--radius-full)', fontSize: 'var(--font-2xs)', fontWeight: 600,
-                background: state === 'done' ? 'var(--success-a08)' : state === 'current' ? 'var(--accent)' : 'var(--bg-card)',
-                color: state === 'done' ? 'var(--success)' : state === 'current' ? 'var(--surface-base)' : 'var(--text-dim)',
-                boxShadow: state === 'done' ? 'inset 0 0 0 1px var(--success-a35)' : 'none',
-              }}>
-                {state === 'done' ? '✓' : i + 1}
-              </span>
-              <span style={{ fontSize: 'var(--font-sm)', color: state === 'current' ? 'var(--text)' : 'var(--text-dim)', fontWeight: state === 'current' ? 600 : 400, whiteSpace: 'nowrap' }}>
-                {t(`wizard.steps.${step}`)}
-              </span>
-            </div>
-            {i < visibleSteps.length - 1 && <span style={{ flex: 1, height: 1, background: 'var(--border)', minWidth: 10 }} />}
-          </Fragment>
+          <div key={step} style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22,
+              borderRadius: 'var(--radius-full)', fontSize: 'var(--font-2xs)', fontWeight: 600,
+              background: state === 'done' ? 'var(--success-a08)' : state === 'current' ? 'var(--accent)' : 'var(--bg-card)',
+              color: state === 'done' ? 'var(--success)' : state === 'current' ? 'var(--surface-base)' : 'var(--text-dim)',
+              boxShadow: state === 'done' ? 'inset 0 0 0 1px var(--success-a35)' : 'none',
+            }}>
+              {state === 'done' ? '✓' : i + 1}
+            </span>
+            <span style={{ fontSize: 'var(--font-sm)', color: state === 'current' ? 'var(--text)' : 'var(--text-dim)', fontWeight: state === 'current' ? 600 : 400, whiteSpace: 'nowrap' }}>
+              {t(`wizard.steps.${step}`)}
+            </span>
+          </div>
         );
       })}
     </div>
@@ -374,13 +371,16 @@ function DiscoveryResult({ t, discovery, selectedRemoteUrls, toggleRemoteSelecte
           : t('wizard.code.pathMultipleRepos', { count: discovery.repos.length })}
         sub={t('wizard.code.selectRepos')}
       />
-      <div style={{ marginTop: 6, border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', background: 'var(--bg-card)', maxHeight: 260, overflowY: 'auto' }}>
-        {remotes.map(({ repo, remote }, i) => (
+      <div style={{
+        marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 260, overflowY: 'auto',
+        padding: 4, borderRadius: 'var(--radius-md)', background: 'var(--bg-card)',
+      }}>
+        {remotes.map(({ repo, remote }) => (
           <label
             key={`${repo.absolutePath}:${remote.name}`}
             style={{
               display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', fontSize: 'var(--font-sm)', cursor: 'pointer',
-              boxShadow: i < remotes.length - 1 ? '0 1px 0 var(--border)' : 'none',
+              borderRadius: 'var(--radius-sm)', background: 'var(--bg)',
             }}
           >
             <input type="checkbox" checked={selectedRemoteUrls.has(remote.url)} onChange={() => toggleRemoteSelected(remote.url)} style={{ margin: 0 }} />
