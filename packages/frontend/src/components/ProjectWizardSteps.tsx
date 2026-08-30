@@ -65,7 +65,7 @@ export function StepIndicator({ visibleSteps, currentStep, isMobile, t }: { visi
             <span style={{
               display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22,
               borderRadius: 'var(--radius-full)', fontSize: 'var(--font-2xs)', fontWeight: 600,
-              background: state === 'done' ? 'var(--success-a08)' : state === 'current' ? 'var(--accent)' : 'var(--bg-card)',
+              background: state === 'done' ? 'var(--success-a08)' : state === 'current' ? 'var(--accent)' : 'var(--input-bg)',
               color: state === 'done' ? 'var(--success)' : state === 'current' ? 'var(--surface-base)' : 'var(--text-dim)',
               boxShadow: state === 'done' ? 'inset 0 0 0 1px var(--success-a35)' : 'none',
             }}>
