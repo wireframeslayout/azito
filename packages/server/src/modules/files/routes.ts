@@ -391,6 +391,33 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
     },
   );
 
+  // ── POST /api/servers/:name/directories (create a directory, idempotent) ──
+  // Project-independent (no `projectId`/containment check) — same reasoning
+  // as `GET /api/servers/:name/directories`/`discover-repositories`: this
+  // must work BEFORE a `project_servers` row exists, since the project
+  // wizard uses it to actually create the working-directory root it is
+  // about to save (Issue #87 review, Important finding 1). `path` must be
+  // absolute; recursion + idempotency live in `FileBrowseService.ensureDirectory`.
+  fastify.post<{ Params: { name: string }; Body: { path?: string } }>(
+    '/api/servers/:name/directories',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const targetPath = typeof request.body?.path === 'string' ? request.body.path.trim() : '';
+      if (!targetPath) return reply.status(400).send({ error: 'path is required' });
+      if (/[\x00-\x1f]/.test(targetPath)) return reply.status(400).send({ error: 'Invalid path' });
+      if (!path.isAbsolute(targetPath)) return reply.status(400).send({ error: 'path must be absolute' });
+
+      try {
+        const result = await fileBrowseService.ensureDirectory(srv, targetPath);
+        return { ok: true, created: result.created };
+      } catch (err: unknown) {
+        if (err instanceof FileBrowseError) return reply.status(err.status).send({ error: err.message });
+        return reply.status(500).send({ error: (err as Error).message });
+      }
+    },
+  );
+
   // ── POST /api/servers/:name/files (create file/directory) ──
   fastify.post<{ Params: { name: string }; Body: { projectId: number; path: string; type: 'file' | 'directory' } }>(
     '/api/servers/:name/files',

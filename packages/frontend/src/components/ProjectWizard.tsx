@@ -8,10 +8,11 @@ import ProjectGeneralFields, { generateSlug } from './ProjectGeneralFields';
 import { notifyProjectsChanged } from '../lib/projectsChanged';
 import { createRequestGuard, dedupeSelectableUrls } from './repoDiscoveryDialogLogic';
 import {
-  getVisibleSteps, canAdvanceFromStep, stepIndex, nextStep, deriveCloneDirectoryName, deriveDefaultBranch,
+  getVisibleSteps, canAdvanceFromStep, stepIndex, nextStep, deriveDefaultBranch,
   pickAvailableServer, isDiscoveryCurrent, resolveCloneDeliveryMode,
   repoStepSignature, envStepSignature, cloneStepSignature, repoIdsToCleanup, cleanupStaleRepositoryIds,
-  type WizardStepId, type CodeMode, type WizardValidationState, type DiscoveryKey,
+  findReusableRepositoryWithToken, needsDirectoryCreation,
+  type WizardStepId, type CodeMode, type WizardValidationState, type DiscoveryKey, type ReusableRepoCandidate,
 } from '../lib/projectWizardLogic';
 import {
   StepIndicator, EnvironmentStep, CodeStep, ConfirmStep, parseCloneUrlForRegistration,
@@ -83,8 +84,13 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
   const discoveryGuardRef = useRef(createRequestGuard());
 
   const [cloneUrl, setCloneUrl] = useState('');
+  // No auto-derived default (Issue #87 review, Important finding 2): a
+  // bare basename like `widgets` used to be filled in and accepted as-is,
+  // then resolved against the HUB PROCESS's cwd at actual clone time —
+  // wrong under a daemon/release deployment. The operator must pick an
+  // absolute path explicitly via DirectoryInput.
   const [cloneDirectory, setCloneDirectory] = useState('');
-  const cloneDirectoryTouchedRef = useRef(false);
+  const [cloneToken, setCloneToken] = useState('');
   const [cloneBranch, setCloneBranch] = useState('main');
 
   // ── Step 4: confirm / execution ──
@@ -109,7 +115,23 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
   const [envDone, setEnvDone] = useState(false);
   const [repoDone, setRepoDone] = useState(false);
   const [localCloneDone, setLocalCloneDone] = useState(false);
+  // Whether the wizard has already created the "existing directory" step's
+  // root on the target server (Issue #87 review, Important finding 1: the
+  // UI used to say "このパスを作成します" for a path discovery reported
+  // missing, but nothing ever created it — task execution's containment
+  // resolution then failed against a root that never existed).
+  const [directoryCreated, setDirectoryCreated] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
+
+  // Project repositories already registered — used to detect a clone URL
+  // that matches an existing, already-credentialed repository (Issue #87
+  // review, Important finding 3), so the wizard can skip asking for a
+  // token it doesn't need. Only fetched once a project id is known (either
+  // 'addEnvironment' mode from the start, or 'create' mode after step 1).
+  const { data: projectDetail } = useApi<{ repositories: ReusableRepoCandidate[] }>(
+    createdProjectId !== null ? `/projects/${createdProjectId}` : null,
+  );
+  const existingRepositories = useMemo(() => projectDetail?.repositories ?? [], [projectDetail]);
 
   const existingServerList = useMemo(() => existingServerNames ?? [], [existingServerNames]);
   // 'addEnvironment' always shows the environment step — choosing which
@@ -141,11 +163,6 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
   useEffect(() => {
     if (!visibleSteps.includes(currentStep)) setCurrentStep(visibleSteps[0]);
   }, [visibleSteps, currentStep]);
-
-  // Auto-derive the clone target directory from the URL until the user edits it directly.
-  useEffect(() => {
-    if (!cloneDirectoryTouchedRef.current) setCloneDirectory(deriveCloneDirectoryName(cloneUrl));
-  }, [cloneUrl]);
 
   const runDiscovery = useCallback(async (path: string, server: string) => {
     const requestId = discoveryGuardRef.current.start();
@@ -195,9 +212,32 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
 
   const discoveryReady = typeof discovery === 'object' && isDiscoveryCurrent(discoveryKey, selectedServer, existingPath);
 
+  // Whether "clone" mode clones directly on the selected server (local) or
+  // relies on the hub's existing distribution path — kept as a 3-way result
+  // ('local' | 'distributed' | 'unresolved') rather than folding "the
+  // server record hasn't loaded yet" into "distributed" (review finding:
+  // "サーバー種別が未解決のとき「リモート扱い」になる"). `serverList` starts
+  // empty until `GET /servers` resolves, so a fast wizard run can otherwise
+  // reach execute() before the selected server's type is known.
+  const cloneDeliveryMode = useMemo(
+    () => resolveCloneDeliveryMode(codeMode, selectedServer, serverList),
+    [codeMode, selectedServer, serverList],
+  );
+  const cloningLocally = cloneDeliveryMode === 'local';
+  const serverTypeUnresolvedForClone = cloneDeliveryMode === 'unresolved';
+
+  // An already-registered, already-credentialed repository for this same
+  // URL (Issue #87 review, Important finding 3) — when found, the wizard
+  // can proceed on a non-local target without collecting a new token.
+  const reusableRepo = useMemo(
+    () => (codeMode === 'clone' ? findReusableRepositoryWithToken(cloneUrl, existingRepositories) : null),
+    [codeMode, cloneUrl, existingRepositories],
+  );
+
   const validationState: WizardValidationState = {
     projectName: name, projectSlug: slug, selectedServer, codeMode, existingPath, cloneUrl, cloneDirectory,
     existingServerNames: existingServerList, discoveryReady,
+    cloneTargetIsLocal: cloningLocally, cloneToken, cloneRepoReusableWithToken: reusableRepo !== null,
   };
   const canAdvance = canAdvanceFromStep(currentStep, validationState);
   const availableServerCount = serverList.filter((sv) => !existingServerList.includes(sv.name)).length;
@@ -217,19 +257,10 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
       .map((r) => ({ url: r.url, provider: r.provider, owner: r.owner ?? undefined, repoName: r.repoName ?? undefined }));
   }, [codeMode, discovery, selectedRemoteUrls]);
 
-  // Whether "clone" mode clones directly on the selected server (local) or
-  // relies on the hub's existing distribution path — kept as a 3-way result
-  // ('local' | 'distributed' | 'unresolved') rather than folding "the
-  // server record hasn't loaded yet" into "distributed" (review finding:
-  // "サーバー種別が未解決のとき「リモート扱い」になる"). `serverList` starts
-  // empty until `GET /servers` resolves, so a fast wizard run can otherwise
-  // reach execute() before the selected server's type is known.
-  const cloneDeliveryMode = useMemo(
-    () => resolveCloneDeliveryMode(codeMode, selectedServer, serverList),
-    [codeMode, selectedServer, serverList],
-  );
-  const cloningLocally = cloneDeliveryMode === 'local';
-  const serverTypeUnresolvedForClone = cloneDeliveryMode === 'unresolved';
+  // "existing directory" mode where discovery reported the path missing —
+  // the wizard must actually create it (Issue #87 review, Important
+  // finding 1) rather than just saving it as `working_directory`.
+  const pathNeedsCreation = needsDirectoryCreation(codeMode, typeof discovery === 'object' ? discovery.exists : null);
 
   const environmentWorkingDirectory = codeMode === 'existing' ? existingPath.trim()
     : codeMode === 'clone' ? cloneDirectory.trim()
@@ -309,6 +340,20 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
     }
   }, [cloneSignature]);
 
+  // Directory-creation completion flag (Issue #87 review, Important
+  // finding 1), same invalidation pattern as the other confirm-step flags
+  // above: a directory already created for one server+path combination
+  // must not be treated as "done" once the operator goes back and picks a
+  // different server or path.
+  const directorySignature = codeMode === 'existing' ? `${selectedServer}::${existingPath.trim()}` : '';
+  const directorySignatureRef = useRef(directorySignature);
+  useEffect(() => {
+    if (directorySignatureRef.current !== directorySignature) {
+      directorySignatureRef.current = directorySignature;
+      setDirectoryCreated(false);
+    }
+  }, [directorySignature]);
+
   const setStep = useCallback((stepName: string, status: InstallStep['status'], message: string) => {
     setSteps((prev) => {
       const idx = prev.findIndex((s) => s.step === stepName);
@@ -365,6 +410,39 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
         throw new Error(t('wizard.environment.alreadyAddedError', { server: selectedServer }));
       }
 
+      // Defense in depth (Issue #87 review, Important finding 3): the code
+      // step already blocks advancing while a non-local clone target has
+      // no token and no reusable credentialed repository — but re-verify
+      // here in case the operator changed the server/URL after already
+      // passing that step once.
+      if (codeMode === 'clone' && !cloningLocally && !serverTypeUnresolvedForClone && reusableRepo === null && !cloneToken.trim()) {
+        throw new Error(t('wizard.errors.cloneTokenRequired'));
+      }
+
+      // Step: directory. "既存のディレクトリを使う" with a path discovery
+      // reported missing means the wizard told the operator "このパスを
+      // 作成します" — it must actually create it before saving it as the
+      // environment's working_directory, or task execution's containment
+      // resolution later fails against a root that was never created
+      // (Issue #87 review, Important finding 1).
+      if (pid !== null && pathNeedsCreation && !directoryCreated) {
+        setStep('directory', 'running', t('wizard.confirm.stepDirectory'));
+        try {
+          const { status, body } = await apiWithStatus<{ ok: true } | { error: string }>(
+            `/servers/${encodeURIComponent(selectedServer)}/directories`,
+            { method: 'POST', body: JSON.stringify({ path: existingPath.trim() }) },
+          );
+          if (status < 200 || status >= 300) {
+            throw new Error(('error' in body && body.error) || t('wizard.errors.directoryFailed'));
+          }
+          setDirectoryCreated(true);
+          setStep('directory', 'ok', t('wizard.confirm.stepDirectory'));
+        } catch (err) {
+          setStep('directory', 'error', (err as Error).message);
+          throw err;
+        }
+      }
+
       // Step: repository. Registered BEFORE environment (Issue #87 review,
       // Important finding 4) — the environment PUT for a non-local "clone"
       // target needs the repository's own id to set distribution_repository_id.
@@ -417,6 +495,7 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
                 body: JSON.stringify({
                   url: cloneUrl.trim(), provider: parsed.provider,
                   owner: parsed.owner ?? undefined, repo_name: parsed.repoName ?? undefined,
+                  token: cloneToken.trim() || undefined,
                 }),
               },
             );
@@ -525,8 +604,8 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
     }
   }, [
     mode, createdProjectId, createdRepositoryId, name, slug, description, sidekickPrompt, icon, color,
-    selectedServer, existingServerList, codeMode, existingPath, cloneDirectory, cloneBranch, cloneUrl,
-    envDone, repoDone, localCloneDone, repositoriesToRegister, onDone, setStep, t,
+    selectedServer, existingServerList, codeMode, existingPath, cloneDirectory, cloneBranch, cloneUrl, cloneToken,
+    envDone, repoDone, localCloneDone, directoryCreated, pathNeedsCreation, reusableRepo, repositoriesToRegister, onDone, setStep, t,
     cloningLocally, serverTypeUnresolvedForClone, environmentWorkingDirectory,
   ]);
 
@@ -543,7 +622,14 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
   // configured (review finding: "サーバー種別が未解決のとき「リモート扱
   // い」になる"). handleRun also throws on this as defense in depth, for
   // any other path that reaches it.
-  const primaryDisabled = isLastStep ? (noServersAvailable || serverTypeUnresolvedForClone) : !canAdvance;
+  // cloneTokenRequired mirrors the same defense-in-depth as the other two:
+  // canAdvanceFromStep('code', ...) already blocks leaving that step
+  // without a token/reusable credentialed repository for a non-local clone
+  // target, but the operator could reach 'confirm', go back, change the
+  // server or URL, and jump forward without re-triggering that check
+  // (Issue #87 review, Important finding 3).
+  const cloneTokenRequired = codeMode === 'clone' && !cloningLocally && !serverTypeUnresolvedForClone && reusableRepo === null && !cloneToken.trim();
+  const primaryDisabled = isLastStep ? (noServersAvailable || serverTypeUnresolvedForClone || cloneTokenRequired) : !canAdvance;
 
   // 'addEnvironment' is only ever mounted inline inside ProjectSettings's
   // servers section (spec: "別画面を作らないこと" — no separate screen) —
@@ -642,8 +728,10 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
               selectedRemoteUrls={selectedRemoteUrls} toggleRemoteSelected={toggleRemoteSelected}
               cloneUrl={cloneUrl} setCloneUrl={setCloneUrl}
               cloneDirectory={cloneDirectory}
-              setCloneDirectory={(v) => { cloneDirectoryTouchedRef.current = true; setCloneDirectory(v); }}
+              setCloneDirectory={setCloneDirectory}
               cloneBranch={cloneBranch} setCloneBranch={setCloneBranch}
+              cloneToken={cloneToken} setCloneToken={setCloneToken}
+              reusableRepo={reusableRepo}
               showValidation={!canAdvance}
             />
           )}

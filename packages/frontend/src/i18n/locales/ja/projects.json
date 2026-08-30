@@ -79,10 +79,18 @@
       "cloneUrlPlaceholder": "https://github.com/owner/repo",
       "cloneUrlRequired": "リポジトリURLを入力してください",
       "cloneDirectoryLabel": "配置先ディレクトリ",
+      "cloneDirectoryPlaceholder": "/path/to/target",
       "cloneDirectoryRequired": "配置先ディレクトリを入力してください",
+      "cloneDirectoryMustBeAbsolute": "絶対パス（/ から始まるパス）を入力してください。",
       "cloneBranchLabel": "ブランチ",
       "cloneNote": "このサーバーで最初にタスクを実行するときに、配信でこのリポジトリを用意します。ここではクローンを実行しません。",
       "cloneNoteLocal": "このリポジトリを、いまここでハブ上の配置先ディレクトリへ直接クローンします。",
+      "repoReusedBadge": "既存リポジトリを再利用",
+      "repoReusedHint": "このプロジェクトには、このURLに対応する資格情報付きのリポジトリが既に登録されています。それを再利用するため、新しいトークンの入力は不要です。",
+      "cloneTokenLabel": "アクセストークン",
+      "cloneTokenHint": "配信先サーバーはgit資格情報を持たないため、このリポジトリを配信するにはトークンが必要です。",
+      "cloneTokenPlaceholder": "ghp_xxxx...",
+      "cloneTokenRequired": "リポジトリをローカル以外のサーバーへ配信するには、アクセストークンが必要です。",
       "laterNote": "環境（サーバー・ルート）のみ作成し、リポジトリは登録しません。"
     },
     "confirm": {
@@ -95,6 +103,7 @@
       "stepProject": "プロジェクト",
       "stepEnvironment": "環境",
       "stepRepository": "リポジトリ",
+      "stepDirectory": "ディレクトリ",
       "stepClone": "クローン",
       "alreadyCreatedNotice": "すでに作成済みの手順は保持されます。失敗した手順から再実行できます。",
       "retry": "再試行"
@@ -106,7 +115,9 @@
       "projectFailed": "プロジェクトの作成に失敗しました。",
       "repositoryFailed": "リポジトリの登録に失敗しました。",
       "environmentFailed": "環境の保存に失敗しました。",
+      "directoryFailed": "ディレクトリの作成に失敗しました。",
       "cloneFailed": "リポジトリのクローンに失敗しました。",
+      "cloneTokenRequired": "リポジトリをローカル以外のサーバーへ配信するには、アクセストークンが必要です。",
       "serverTypeUnresolved": "サーバー「{{server}}」の種別がまだ解決できていません。少し待ってからもう一度お試しください。"
     }
   },

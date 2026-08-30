@@ -41,6 +41,23 @@ export interface WizardValidationState {
    * previous path's discovery result.
    */
   discoveryReady?: boolean;
+  /**
+   * Whether the selected server clones directly on the hub (i.e. is
+   * `local`) — `clonesDirectlyOnServer(selectedServerType)`. Only
+   * meaningful for `codeMode === 'clone'`; a non-local target relies on the
+   * hub's 代行配信 path, which requires the repository to actually carry a
+   * credential (Issue #87 review, Important finding 3).
+   */
+  cloneTargetIsLocal?: boolean;
+  /** The clone-step token field's current (trimmed) value. */
+  cloneToken?: string;
+  /**
+   * Whether the clone URL already matches a repository this project has
+   * registered WITH a token — see `findReusableRepository`. When true, the
+   * wizard can proceed without the operator entering a new token (the
+   * reused row's own credential covers delivery).
+   */
+  cloneRepoReusableWithToken?: boolean;
 }
 
 /**
@@ -74,7 +91,23 @@ export function canAdvanceFromStep(stepId: WizardStepId, state: WizardValidation
       return state.selectedServer.trim().length > 0 && !(state.existingServerNames ?? []).includes(state.selectedServer);
     case 'code':
       if (state.codeMode === 'existing') return state.existingPath.trim().length > 0 && state.discoveryReady === true;
-      if (state.codeMode === 'clone') return state.cloneUrl.trim().length > 0 && state.cloneDirectory.trim().length > 0;
+      if (state.codeMode === 'clone') {
+        if (!state.cloneUrl.trim() || !state.cloneDirectory.trim()) return false;
+        // The clone target must be an absolute path — an auto-derived
+        // basename (e.g. `widgets`) used to be accepted and later resolved
+        // against the HUB PROCESS's cwd (which may not even be this
+        // project's directory, or may be unwritable, under a daemon/
+        // release deployment) — see `isAbsoluteWizardPath` (Issue #87
+        // review, Important finding 2).
+        if (!isAbsoluteWizardPath(state.cloneDirectory)) return false;
+        // A non-local clone target relies on the hub's 代行配信 path, which
+        // refuses a repository with no credential outright — the wizard
+        // must collect a token before letting the operator finish, unless
+        // an already-registered repository for this URL already carries
+        // one (Issue #87 review, Important finding 3).
+        if (!state.cloneTargetIsLocal && !state.cloneRepoReusableWithToken && !(state.cloneToken ?? '').trim()) return false;
+        return true;
+      }
       return true; // 'later': nothing required
     case 'confirm':
       return true;
@@ -88,6 +121,23 @@ export function canAdvanceFromStep(stepId: WizardStepId, state: WizardValidation
  */
 export function stepIndex(visibleSteps: WizardStepId[], currentStep: WizardStepId): number {
   return visibleSteps.indexOf(currentStep);
+}
+
+/**
+ * Whether the wizard must create the "existing directory" step's root on
+ * the target server before saving it as the environment's
+ * `working_directory` — i.e. `codeMode === 'existing'` AND the discovery
+ * scan for the current path reported it missing (`exists: false`).
+ *
+ * Before this fix, a `false` here (or rather, the absence of ANY such
+ * check) meant the UI told the operator "このパスは存在しません。作成し
+ * ます。" (`wizard.code.pathWillBeCreated`) but `handleRun` just persisted
+ * the never-created path as `working_directory` — later task execution's
+ * containment resolution then failed against a root that was never
+ * created (Issue #87 review, Important finding 1).
+ */
+export function needsDirectoryCreation(codeMode: CodeMode, discoveryExists: boolean | null): boolean {
+  return codeMode === 'existing' && discoveryExists === false;
 }
 
 /** The step to land on after moving forward/back from `currentStep`, clamped to the visible range. */
@@ -138,11 +188,91 @@ export function isDiscoveryCurrent(key: DiscoveryKey | null, currentServer: stri
   return key !== null && key.server === currentServer && key.path === currentPath.trim();
 }
 
-/** Derives a default clone-target directory name from a repository URL, e.g. `git@github.com:acme/widgets.git` -> `widgets`. Editable afterward by the user; returns '' when no name can be derived. */
-export function deriveCloneDirectoryName(cloneUrl: string): string {
-  const trimmed = cloneUrl.trim().replace(/\/+$/, '');
-  const match = trimmed.match(/([^/:]+?)(?:\.git)?$/);
-  return match ? match[1] : '';
+/**
+ * Whether `p` is an absolute path, i.e. safe to pass straight to `git
+ * clone`/store as `working_directory` without resolving it against
+ * something else's current directory first.
+ *
+ * The wizard used to auto-derive the clone target as a bare basename (e.g.
+ * `widgets` from `git@github.com:acme/widgets.git`) and let the operator
+ * "accept" that as-is. A relative clone target resolves against the HUB
+ * PROCESS's cwd when `git clone` actually runs — under a daemon/release
+ * deployment that may be `/`, an unrelated directory, or simply
+ * unwritable — producing a permission error or, worse, a clone landing
+ * somewhere unintended (Issue #87 review, Important finding 2). The fix is
+ * to require an absolute path outright rather than trying to guess a safe
+ * relative-to base; `CodeStep` no longer auto-fills this field at all (see
+ * the removed auto-derivation effect in `ProjectWizard.tsx`) — the operator
+ * picks it explicitly via `DirectoryInput`, which lists real paths on the
+ * selected server.
+ */
+export function isAbsoluteWizardPath(p: string): boolean {
+  return p.trim().startsWith('/');
+}
+
+/**
+ * Frontend mirror of the server's `normalizeRemoteUrl`
+ * (`packages/server/src/modules/git/parseRemoteUrl.ts`) — kept in sync by
+ * hand, same convention this file already follows for `parseRepoUrl`/
+ * `parseCloneUrlForRegistration` (see that function's doc comment). Used
+ * ONLY to decide whether the clone wizard step can skip asking for a
+ * token (an already-registered, already-credentialed repository covers the
+ * same remote) — the actual dedup-and-reuse decision is still made
+ * server-side, in `POST /api/projects/:id/repositories`, using the real
+ * `normalizeRemoteUrl`. A false negative here (two equivalent URLs judged
+ * different) only means the operator is asked for a token that turns out
+ * to be unnecessary — never lets the wizard skip past a step it shouldn't
+ * (Issue #87 review, Important finding 3).
+ */
+export function normalizeRepoUrlForWizard(url: string): string {
+  const trimmed = url.trim();
+  const knownCrossProtocolHosts = new Set(['github.com', 'gitlab.com']);
+
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) {
+    try {
+      const parsed = new URL(trimmed);
+      const scheme = parsed.protocol.replace(/:$/, '').toLowerCase();
+      const host = parsed.hostname.toLowerCase();
+      const defaultPort: Record<string, string> = { https: '443', http: '80', ssh: '22' };
+      const port = parsed.port && parsed.port !== defaultPort[scheme] ? `:${parsed.port}` : '';
+      const path = parsed.pathname.replace(/^\/+/, '').replace(/\.git$/, '').replace(/\/+$/, '');
+      const schemePrefix = knownCrossProtocolHosts.has(host) ? '' : `${scheme}://`;
+      return `${schemePrefix}${host}${port}/${path}`;
+    } catch {
+      // Fall through to scp-like/plain handling below.
+    }
+  }
+
+  const scpMatch = trimmed.match(/^(?:[a-zA-Z0-9_.-]+@)?([a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?):(.+)$/);
+  if (scpMatch) {
+    const [, rawHost, rawPath] = scpMatch;
+    const host = rawHost.toLowerCase();
+    const path = rawPath.replace(/\.git$/, '').replace(/\/+$/, '').replace(/^\/+/, '');
+    const schemePrefix = knownCrossProtocolHosts.has(host) ? '' : 'ssh://';
+    return `${schemePrefix}${host}/${path}`;
+  }
+
+  return trimmed;
+}
+
+export interface ReusableRepoCandidate {
+  id: number;
+  url: string;
+  hasToken: boolean;
+}
+
+/**
+ * Finds an already-registered project repository whose URL matches
+ * `cloneUrl` (via `normalizeRepoUrlForWizard`) AND already carries a token
+ * — i.e. one that, if reused, actually resolves the "no credential" problem
+ * rather than just avoiding a duplicate row. Returns `null` when there is
+ * no match or the match has no token (the wizard must still collect one in
+ * that case — reuse alone does not supply a missing credential).
+ */
+export function findReusableRepositoryWithToken(cloneUrl: string, repos: ReusableRepoCandidate[]): ReusableRepoCandidate | null {
+  if (!cloneUrl.trim()) return null;
+  const normalized = normalizeRepoUrlForWizard(cloneUrl);
+  return repos.find((r) => r.hasToken && normalizeRepoUrlForWizard(r.url) === normalized) ?? null;
 }
 
 /**

@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { Badge, FormInput, FormSelect, InstallSteps, baseInputStyle, SegmentedToggle, type InstallStep } from './ui';
 import FormField from './FormField';
 import DirectoryInput from './DirectoryInput';
-import { stepIndex, type WizardStepId, type CodeMode } from '../lib/projectWizardLogic';
+import { stepIndex, isAbsoluteWizardPath, type WizardStepId, type CodeMode, type ReusableRepoCandidate } from '../lib/projectWizardLogic';
 
 // Presentational step bodies for ProjectWizard.tsx, split out to keep that
 // file focused on state/orchestration (this codebase's ~300-line-per-file
@@ -126,13 +126,16 @@ export function EnvironmentStep({ t, serverList, selectedServer, setSelectedServ
 export function CodeStep({
   t, codeMode, setCodeMode, selectedServer, selectedServerType, existingPath, onExistingPathChange, discovery,
   selectedRemoteUrls, toggleRemoteSelected, cloneUrl, setCloneUrl, cloneDirectory, setCloneDirectory, cloneBranch, setCloneBranch,
+  cloneToken, setCloneToken, reusableRepo,
   showValidation,
 }: {
   t: TFunc; codeMode: CodeMode; setCodeMode: (m: CodeMode) => void; selectedServer: string; selectedServerType?: string;
   existingPath: string; onExistingPathChange: (v: string) => void; discovery: DiscoveryStatus;
   selectedRemoteUrls: Set<string>; toggleRemoteSelected: (url: string) => void;
   cloneUrl: string; setCloneUrl: (v: string) => void; cloneDirectory: string; setCloneDirectory: (v: string) => void;
-  cloneBranch: string; setCloneBranch: (v: string) => void; showValidation: boolean;
+  cloneBranch: string; setCloneBranch: (v: string) => void;
+  cloneToken: string; setCloneToken: (v: string) => void; reusableRepo: ReusableRepoCandidate | null;
+  showValidation: boolean;
 }) {
   // 'local' clones directly (right here, on the hub's own filesystem);
   // every other server type instead gets the repository via the existing
@@ -141,6 +144,11 @@ export function CodeStep({
   // actually happens, not a generic "provisioned later" note for both).
   const clonesNow = selectedServerType === 'local';
   const parsedClone = cloneUrl.trim() ? parseCloneUrlForRegistration(cloneUrl.trim()) : null;
+  // Non-local delivery goes through the hub's 代行配信 path, which refuses a
+  // repository with no credential outright — a token is required unless an
+  // already-registered repository for this URL already carries one (Issue
+  // #87 review, Important finding 3).
+  const needsToken = !clonesNow && reusableRepo === null;
   return (
     <>
       <FormField label="">
@@ -176,8 +184,13 @@ export function CodeStep({
               </div>
             )}
           </FormField>
-          <FormField label={t('wizard.code.cloneDirectoryLabel')} error={showValidation && !cloneDirectory.trim() ? t('wizard.code.cloneDirectoryRequired') : undefined}>
-            <FormInput value={cloneDirectory} onChange={(e) => setCloneDirectory(e.target.value)} />
+          <FormField
+            label={t('wizard.code.cloneDirectoryLabel')}
+            error={showValidation && cloneDirectory.trim() && !isAbsoluteWizardPath(cloneDirectory)
+              ? t('wizard.code.cloneDirectoryMustBeAbsolute')
+              : showValidation && !cloneDirectory.trim() ? t('wizard.code.cloneDirectoryRequired') : undefined}
+          >
+            <DirectoryInput value={cloneDirectory} onChange={setCloneDirectory} serverName={selectedServer} placeholder={t('wizard.code.cloneDirectoryPlaceholder')} style={baseInputStyle} />
           </FormField>
           <FormField label={t('wizard.code.cloneBranchLabel')}>
             <FormInput value={cloneBranch} onChange={(e) => setCloneBranch(e.target.value)} placeholder="main" />
@@ -185,6 +198,21 @@ export function CodeStep({
           <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
             {clonesNow ? t('wizard.code.cloneNoteLocal') : t('wizard.code.cloneNote')}
           </p>
+          {!clonesNow && reusableRepo && (
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--accent-a08)' }}>
+              <Badge tone="accent">{t('wizard.code.repoReusedBadge')}</Badge>
+              <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{t('wizard.code.repoReusedHint')}</span>
+            </div>
+          )}
+          {!clonesNow && !reusableRepo && (
+            <FormField
+              label={t('wizard.code.cloneTokenLabel')}
+              hint={t('wizard.code.cloneTokenHint')}
+              error={showValidation && needsToken && !cloneToken.trim() ? t('wizard.code.cloneTokenRequired') : undefined}
+            >
+              <FormInput type="password" autoComplete="off" value={cloneToken} onChange={(e) => setCloneToken(e.target.value)} placeholder={t('wizard.code.cloneTokenPlaceholder')} />
+            </FormField>
+          )}
         </>
       )}
 

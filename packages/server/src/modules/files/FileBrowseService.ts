@@ -754,6 +754,47 @@ export class FileBrowseService {
     return resolved || null;
   }
 
+  /**
+   * Creates `targetPath` as a directory, recursively (parent components
+   * that don't exist yet are created too — `mkdir -p` semantics), and is
+   * idempotent: an already-existing directory is a no-op success. Used by
+   * the project wizard to actually create the root it told the operator
+   * "このパスを作成します" about (indicator 1: the wizard used to accept
+   * that `exists: false` discovery result and just save the path as
+   * `working_directory` without ever creating it, so task execution's
+   * containment resolution later failed against a root that was never
+   * created).
+   *
+   * A path that already exists but is NOT a directory (a file/symlink/etc.
+   * sitting at that location) fails loudly (409) rather than silently
+   * proceeding — creating the environment on top of it would be wrong.
+   */
+  async ensureDirectory(srv: ServerConfig, targetPath: string): Promise<{ created: boolean }> {
+    if (srv.type === 'local') {
+      const fs = await import('fs');
+      if (fs.existsSync(targetPath)) {
+        if (!fs.statSync(targetPath).isDirectory()) {
+          throw new FileBrowseError('Path already exists and is not a directory', 409);
+        }
+        return { created: false };
+      }
+      fs.mkdirSync(targetPath, { recursive: true });
+      return { created: true };
+    }
+    const q = sq(targetPath);
+    const state = await this.tmux.execCommand(
+      srv,
+      `if [ -d ${q} ]; then echo dir; elif [ -e ${q} ]; then echo other; else echo none; fi`,
+    );
+    const stateResult = stripTerminalArtifacts(state.stdout).trim();
+    if (stateResult === 'other') throw new FileBrowseError('Path already exists and is not a directory', 409);
+    if (stateResult === 'dir') return { created: false };
+    await this.tmux.execCommand(srv, `mkdir -p ${q}`);
+    const verify = await this.tmux.execCommand(srv, `test -d ${q} && echo ok || echo ng`);
+    if (stripTerminalArtifacts(verify.stdout).trim() !== 'ok') throw new FileBrowseError('Create failed', 500);
+    return { created: true };
+  }
+
   async createEntry(srv: ServerConfig, targetPath: string, type: 'file' | 'directory'): Promise<void> {
     if (srv.type === 'local') {
       const fs = await import('fs');

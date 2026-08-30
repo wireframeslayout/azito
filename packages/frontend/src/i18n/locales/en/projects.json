@@ -79,10 +79,18 @@
       "cloneUrlPlaceholder": "https://github.com/owner/repo",
       "cloneUrlRequired": "Please enter a repository URL",
       "cloneDirectoryLabel": "Target directory",
+      "cloneDirectoryPlaceholder": "/path/to/target",
       "cloneDirectoryRequired": "Please enter a target directory",
+      "cloneDirectoryMustBeAbsolute": "Please enter an absolute path (starting with /).",
       "cloneBranchLabel": "Branch",
       "cloneNote": "This repository will be provisioned via distribution the first time a task runs on this server. Cloning does not happen here.",
       "cloneNoteLocal": "This repository will be cloned directly into the target directory on the hub, right now.",
+      "repoReusedBadge": "Reusing existing repository",
+      "repoReusedHint": "This project already has a credentialed repository registered for this URL — it will be reused, and no new token is needed.",
+      "cloneTokenLabel": "Access token",
+      "cloneTokenHint": "Required for delivering this repository to a non-local server — the destination server has no git credentials of its own.",
+      "cloneTokenPlaceholder": "ghp_xxxx...",
+      "cloneTokenRequired": "An access token is required to deliver this repository to a non-local server.",
       "laterNote": "Only the environment (server + root) will be created; no repository will be registered."
     },
     "confirm": {
@@ -95,6 +103,7 @@
       "stepProject": "Project",
       "stepEnvironment": "Environment",
       "stepRepository": "Repository",
+      "stepDirectory": "Directory",
       "stepClone": "Clone",
       "alreadyCreatedNotice": "Steps already completed are kept. You can retry from the step that failed.",
       "retry": "Retry"
@@ -106,7 +115,9 @@
       "projectFailed": "Failed to create the project.",
       "repositoryFailed": "Failed to register the repository.",
       "environmentFailed": "Failed to save the environment.",
+      "directoryFailed": "Failed to create the directory.",
       "cloneFailed": "Failed to clone the repository.",
+      "cloneTokenRequired": "An access token is required to deliver this repository to a non-local server.",
       "serverTypeUnresolved": "Could not determine server \"{{server}}\"'s type yet — please wait a moment and try again."
     }
   },

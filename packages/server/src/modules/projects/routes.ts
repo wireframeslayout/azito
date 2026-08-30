@@ -1,3 +1,4 @@
+import * as path from 'path';
 import type { FastifyPluginCallback } from 'fastify';
 import type { IProjectRepository, RepositoryProvider } from './Project';
 import type { IProjectServerRepository } from './ProjectServer';
@@ -186,18 +187,36 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
     '/api/projects/:id/repositories',
     async (request, reply) => {
       const id = parseInt(request.params.id, 10);
-      if (!projectRepo.findById(id))
-        return reply.status(404).send({ error: 'Project not found' });
+      const project = projectRepo.findById(id);
+      if (!project) return reply.status(404).send({ error: 'Project not found' });
       const { url, name, provider, owner, repo_name, token } = request.body as {
         url?: string; name?: string; provider?: string; owner?: string; repo_name?: string; token?: string;
       };
       if (!url) return reply.status(400).send({ error: 'URL required' });
+
+      // Reuse an already-registered repository row for the same remote
+      // (compared via normalizeRemoteUrl, the same identity check the bulk
+      // endpoint's dedup already uses) instead of appending a duplicate.
+      // The project wizard's "clone" mode used to always register a NEW
+      // repository row with no token, even when the project already had a
+      // row for the same URL carrying a working token — the wizard's own
+      // row then had no credentials, so distribution to any non-local
+      // server always failed with `no_token` (Issue #87 review, Important
+      // finding 3). This makes the endpoint idempotent for any caller, not
+      // just the wizard (ProjectSettings' manual "add repository" form uses
+      // the same endpoint and gets the same protection).
+      const normalized = normalizeRemoteUrl(url);
+      const existing = project.repositories.find((r) => normalizeRemoteUrl(r.url) === normalized);
+      if (existing) {
+        return { ok: true, id: existing.id, reused: true };
+      }
+
       const repoId = projectRepo.addRepository(
         id, url, name,
         (provider as RepositoryProvider) || 'github',
         owner, repo_name, token,
       );
-      return { ok: true, id: repoId };
+      return { ok: true, id: repoId, reused: false };
     },
   );
 
@@ -763,6 +782,16 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       }
       if (typeof body.target_directory !== 'string' || !body.target_directory.trim()) {
         return reply.status(400).send({ error: 'target_directory is required' });
+      }
+      // Defense in depth (Issue #87 review, Important finding 2): the
+      // wizard's own auto-derivation used to produce a bare basename
+      // (`widgets`), which — resolved against the hub PROCESS's cwd rather
+      // than any project root — could land in an unintended (possibly
+      // unwritable, possibly wrong-permission) directory under a daemon/
+      // release deployment. The frontend no longer does that, but this
+      // endpoint must reject a relative target regardless of caller.
+      if (!path.isAbsolute(body.target_directory.trim())) {
+        return reply.status(400).send({ error: 'target_directory must be an absolute path' });
       }
       const branch = typeof body.branch === 'string' && body.branch.trim() ? body.branch.trim() : 'main';
 

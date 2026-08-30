@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
-  getVisibleSteps, canAdvanceFromStep, stepIndex, nextStep, deriveCloneDirectoryName, deriveDefaultBranch,
+  getVisibleSteps, canAdvanceFromStep, stepIndex, nextStep, deriveDefaultBranch,
   pickAvailableServer, isDiscoveryCurrent, clonesDirectlyOnServer,
   resolveCloneDeliveryMode, repoStepSignature, envStepSignature, cloneStepSignature,
   repoIdsToCleanup, reconcileDeletedRepositoryIds, cleanupStaleRepositoryIds,
+  isAbsoluteWizardPath, normalizeRepoUrlForWizard, findReusableRepositoryWithToken, needsDirectoryCreation,
   type WizardValidationState,
 } from './projectWizardLogic';
 
@@ -60,11 +61,37 @@ describe('canAdvanceFromStep', () => {
     expect(canAdvanceFromStep('code', makeState({ codeMode: 'existing', existingPath: '/work/widgets', discoveryReady: true }))).toBe(true);
   });
 
-  it('requires both a clone URL and a target directory when codeMode is "clone"', () => {
-    expect(canAdvanceFromStep('code', makeState({ codeMode: 'clone' }))).toBe(false);
-    expect(canAdvanceFromStep('code', makeState({ codeMode: 'clone', cloneUrl: 'git@github.com:acme/widgets.git' }))).toBe(false);
+  it('requires both a clone URL and an absolute target directory when codeMode is "clone", on a local server', () => {
+    expect(canAdvanceFromStep('code', makeState({ codeMode: 'clone', cloneTargetIsLocal: true }))).toBe(false);
+    expect(canAdvanceFromStep('code', makeState({ codeMode: 'clone', cloneTargetIsLocal: true, cloneUrl: 'git@github.com:acme/widgets.git' }))).toBe(false);
     expect(canAdvanceFromStep('code', makeState({
-      codeMode: 'clone', cloneUrl: 'git@github.com:acme/widgets.git', cloneDirectory: 'widgets',
+      codeMode: 'clone', cloneTargetIsLocal: true, cloneUrl: 'git@github.com:acme/widgets.git', cloneDirectory: '/work/widgets',
+    }))).toBe(true);
+  });
+
+  it('blocks a relative clone directory even once a URL is entered (Issue #87 review, Important finding 2)', () => {
+    expect(canAdvanceFromStep('code', makeState({
+      codeMode: 'clone', cloneTargetIsLocal: true, cloneUrl: 'git@github.com:acme/widgets.git', cloneDirectory: 'widgets',
+    }))).toBe(false);
+  });
+
+  it('blocks a non-local clone target with no token and no reusable credentialed repository (Issue #87 review, Important finding 3)', () => {
+    expect(canAdvanceFromStep('code', makeState({
+      codeMode: 'clone', cloneTargetIsLocal: false, cloneUrl: 'git@github.com:acme/widgets.git', cloneDirectory: '/work/widgets',
+    }))).toBe(false);
+  });
+
+  it('allows a non-local clone target when a token was entered', () => {
+    expect(canAdvanceFromStep('code', makeState({
+      codeMode: 'clone', cloneTargetIsLocal: false, cloneUrl: 'git@github.com:acme/widgets.git', cloneDirectory: '/work/widgets',
+      cloneToken: 'ghp_dummy',
+    }))).toBe(true);
+  });
+
+  it('allows a non-local clone target with no token when an already-registered repository already carries one', () => {
+    expect(canAdvanceFromStep('code', makeState({
+      codeMode: 'clone', cloneTargetIsLocal: false, cloneUrl: 'git@github.com:acme/widgets.git', cloneDirectory: '/work/widgets',
+      cloneRepoReusableWithToken: true,
     }))).toBe(true);
   });
 
@@ -104,21 +131,88 @@ describe('stepIndex / nextStep', () => {
   });
 });
 
-describe('deriveCloneDirectoryName', () => {
-  it('derives the repo name from an scp-like SSH URL', () => {
-    expect(deriveCloneDirectoryName('git@github.com:acme/widgets.git')).toBe('widgets');
+describe('isAbsoluteWizardPath (Issue #87 review, Important finding 2)', () => {
+  it('accepts an absolute path', () => {
+    expect(isAbsoluteWizardPath('/work/widgets')).toBe(true);
   });
 
-  it('derives the repo name from an https URL without a .git suffix', () => {
-    expect(deriveCloneDirectoryName('https://github.com/acme/widgets')).toBe('widgets');
+  it('rejects a bare basename', () => {
+    expect(isAbsoluteWizardPath('widgets')).toBe(false);
   });
 
-  it('strips a trailing slash before deriving the name', () => {
-    expect(deriveCloneDirectoryName('https://github.com/acme/widgets/')).toBe('widgets');
+  it('rejects a relative path with segments', () => {
+    expect(isAbsoluteWizardPath('work/widgets')).toBe(false);
   });
 
-  it('returns an empty string for an empty URL', () => {
-    expect(deriveCloneDirectoryName('')).toBe('');
+  it('rejects an empty string', () => {
+    expect(isAbsoluteWizardPath('')).toBe(false);
+  });
+
+  it('trims surrounding whitespace before checking', () => {
+    expect(isAbsoluteWizardPath('  /work/widgets  ')).toBe(true);
+  });
+});
+
+describe('normalizeRepoUrlForWizard (frontend mirror of the server normalizeRemoteUrl)', () => {
+  it('treats an https and scp-like SSH URL for the same github.com repo as identical', () => {
+    const https = normalizeRepoUrlForWizard('https://github.com/acme/widgets.git');
+    const ssh = normalizeRepoUrlForWizard('git@github.com:acme/widgets.git');
+    expect(https).toBe(ssh);
+  });
+
+  it('treats different repos as different', () => {
+    expect(normalizeRepoUrlForWizard('https://github.com/acme/widgets.git'))
+      .not.toBe(normalizeRepoUrlForWizard('https://github.com/acme/gadgets.git'));
+  });
+
+  it('lowercases the host but preserves path case (most hosts are case-sensitive there)', () => {
+    expect(normalizeRepoUrlForWizard('https://GitHub.com/Owner/Repo')).toBe('github.com/Owner/Repo');
+  });
+
+  it('strips a trailing .git suffix and slash', () => {
+    expect(normalizeRepoUrlForWizard('https://github.com/acme/widgets.git'))
+      .toBe(normalizeRepoUrlForWizard('https://github.com/acme/widgets/'));
+  });
+});
+
+describe('needsDirectoryCreation (Issue #87 review, Important finding 1)', () => {
+  it('is true when codeMode is "existing" and discovery reported the path missing', () => {
+    expect(needsDirectoryCreation('existing', false)).toBe(true);
+  });
+
+  it('is false when the path already exists', () => {
+    expect(needsDirectoryCreation('existing', true)).toBe(false);
+  });
+
+  it('is false when discovery has not resolved yet (null)', () => {
+    expect(needsDirectoryCreation('existing', null)).toBe(false);
+  });
+
+  it('is false for "clone" or "later" modes regardless of discovery', () => {
+    expect(needsDirectoryCreation('clone', false)).toBe(false);
+    expect(needsDirectoryCreation('later', false)).toBe(false);
+  });
+});
+
+describe('findReusableRepositoryWithToken (Issue #87 review, Important finding 3)', () => {
+  it('finds a match with a token', () => {
+    const repos = [{ id: 1, url: 'https://github.com/acme/widgets.git', hasToken: true }];
+    expect(findReusableRepositoryWithToken('git@github.com:acme/widgets.git', repos)).toEqual(repos[0]);
+  });
+
+  it('returns null when the matching repository has no token — reuse alone must not supply a missing credential', () => {
+    const repos = [{ id: 1, url: 'https://github.com/acme/widgets.git', hasToken: false }];
+    expect(findReusableRepositoryWithToken('git@github.com:acme/widgets.git', repos)).toBeNull();
+  });
+
+  it('returns null when no repository matches the URL', () => {
+    const repos = [{ id: 1, url: 'https://github.com/acme/other.git', hasToken: true }];
+    expect(findReusableRepositoryWithToken('git@github.com:acme/widgets.git', repos)).toBeNull();
+  });
+
+  it('returns null for an empty clone URL', () => {
+    const repos = [{ id: 1, url: 'https://github.com/acme/widgets.git', hasToken: true }];
+    expect(findReusableRepositoryWithToken('', repos)).toBeNull();
   });
 });
 

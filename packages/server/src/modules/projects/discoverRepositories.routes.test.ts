@@ -545,6 +545,78 @@ describe('POST /api/projects/:id/repositories/bulk', () => {
   });
 });
 
+describe('POST /api/projects/:id/repositories (reuse-aware)', () => {
+  it('reuses an existing repository row for the same URL instead of creating a duplicate', async () => {
+    const opts = makeOpts({
+      projectRepo: {
+        findAll: vi.fn(() => []),
+        findById: vi.fn(() => ({
+          id: 10, name: 'P', slug: 'p', description: null, repositoryUrl: null, defaultBranch: 'main',
+          sidekickPrompt: null, icon: null, color: null, defaultUnitId: null, servers: [], windows: [],
+          createdAt: '', updatedAt: '',
+          repositories: [{ id: 42, name: null, url: 'https://github.com/acme/widgets.git', provider: 'github' as const, owner: 'acme', repoName: 'widgets', hasToken: true }],
+        })),
+        create: vi.fn(() => 10),
+        update: vi.fn(),
+        delete: vi.fn(),
+        addRepository: vi.fn(() => 999),
+        findRepositoryById: vi.fn(() => null),
+        removeRepository: vi.fn(),
+      },
+    });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    // Same repository, different (but equivalent) URL form — ssh vs https,
+    // both github.com (a known cross-protocol host) — must still match.
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/projects/10/repositories',
+      payload: { url: 'git@github.com:acme/widgets.git', provider: 'github' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, id: 42, reused: true });
+    expect(opts.projectRepo.addRepository).not.toHaveBeenCalled();
+  });
+
+  it('creates a new row when no existing repository matches the URL', async () => {
+    const opts = makeOpts({
+      projectRepo: {
+        findAll: vi.fn(() => []),
+        findById: vi.fn(() => ({
+          id: 10, name: 'P', slug: 'p', description: null, repositoryUrl: null, defaultBranch: 'main',
+          sidekickPrompt: null, icon: null, color: null, defaultUnitId: null, servers: [], windows: [],
+          createdAt: '', updatedAt: '',
+          repositories: [{ id: 42, name: null, url: 'https://github.com/acme/other-repo.git', provider: 'github' as const, owner: 'acme', repoName: 'other-repo', hasToken: true }],
+        })),
+        create: vi.fn(() => 10),
+        update: vi.fn(),
+        delete: vi.fn(),
+        addRepository: vi.fn(() => 999),
+        findRepositoryById: vi.fn(() => null),
+        removeRepository: vi.fn(),
+      },
+    });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/projects/10/repositories',
+      payload: { url: 'https://github.com/acme/widgets.git', provider: 'github', token: 'dummy-token' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, id: 999, reused: false });
+    expect(opts.projectRepo.addRepository).toHaveBeenCalledWith(
+      10, 'https://github.com/acme/widgets.git', undefined, 'github', undefined, undefined, 'dummy-token',
+    );
+  });
+});
+
 describe('POST clone-local', () => {
   function makeCloneOpts(overrides: Partial<ProjectsRouteOptions> = {}) {
     return makeOpts({
@@ -644,6 +716,23 @@ describe('POST clone-local', () => {
     });
 
     expect(res.statusCode).toBe(409);
+  });
+
+  it('rejects a relative target_directory (Issue #87 review, Important finding 2)', async () => {
+    const cloneMock = vi.fn();
+    const opts = makeCloneOpts({ localRepoCloneService: { clone: cloneMock } as unknown as ProjectsRouteOptions['localRepoCloneService'] });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'POST', url: '/api/projects/10/servers/local/clone-local',
+      payload: { repository_id: 5, target_directory: 'widgets' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/absolute/);
+    expect(cloneMock).not.toHaveBeenCalled();
   });
 
   it('returns 502 with the (already-redacted) error message on a general clone failure', async () => {

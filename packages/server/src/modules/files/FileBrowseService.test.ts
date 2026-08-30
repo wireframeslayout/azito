@@ -943,6 +943,88 @@ describe('FileBrowseService.createEntry (remote)', () => {
   });
 });
 
+describe('FileBrowseService.ensureDirectory (local)', () => {
+  let tmpDir: string;
+  const svc = new FileBrowseService({} as any);
+  const localSrv = { type: 'local', name: 'local' } as any;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-test-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('creates a nested directory that does not exist yet (mkdir -p semantics)', async () => {
+    const target = path.join(tmpDir, 'a', 'b', 'c');
+    const result = await svc.ensureDirectory(localSrv, target);
+    expect(result.created).toBe(true);
+    expect(fs.statSync(target).isDirectory()).toBe(true);
+  });
+
+  it('is a no-op when the directory already exists', async () => {
+    const target = path.join(tmpDir, 'already');
+    fs.mkdirSync(target);
+    const result = await svc.ensureDirectory(localSrv, target);
+    expect(result.created).toBe(false);
+  });
+
+  it('throws 409 when the path exists but is not a directory', async () => {
+    const target = path.join(tmpDir, 'file.txt');
+    fs.writeFileSync(target, 'hello');
+    await expect(svc.ensureDirectory(localSrv, target)).rejects.toThrow('not a directory');
+    try {
+      await svc.ensureDirectory(localSrv, target);
+    } catch (err) {
+      expect(err).toBeInstanceOf(FileBrowseError);
+      expect((err as FileBrowseError).status).toBe(409);
+    }
+  });
+});
+
+describe('FileBrowseService.ensureDirectory (remote)', () => {
+  it('creates the directory when it does not exist', async () => {
+    const commands: string[] = [];
+    const svc = new FileBrowseService({
+      execCommand: async (_srv: unknown, cmd: string) => {
+        commands.push(cmd);
+        if (cmd.startsWith('if [ -d')) return { stdout: 'none\n', stderr: '', code: 0 };
+        if (cmd.startsWith('mkdir -p')) return { stdout: '', stderr: '', code: 0 };
+        if (cmd.startsWith('test -d')) return { stdout: 'ok\n', stderr: '', code: 0 };
+        return { stdout: '', stderr: '', code: 0 };
+      },
+    } as any);
+    const srv = { type: 'agent', name: 'test', host: 'user@host' } as any;
+    const result = await svc.ensureDirectory(srv, '/workspace/new/nested');
+    expect(result.created).toBe(true);
+    expect(commands.some((c) => c.startsWith('mkdir -p'))).toBe(true);
+  });
+
+  it('is a no-op when the remote path is already a directory', async () => {
+    const svc = new FileBrowseService({
+      execCommand: async (_srv: unknown, cmd: string) => {
+        if (cmd.startsWith('if [ -d')) return { stdout: 'dir\n', stderr: '', code: 0 };
+        throw new Error(`unexpected command: ${cmd}`);
+      },
+    } as any);
+    const srv = { type: 'agent', name: 'test', host: 'user@host' } as any;
+    const result = await svc.ensureDirectory(srv, '/workspace/existing');
+    expect(result.created).toBe(false);
+  });
+
+  it('throws 409 when the remote path exists but is not a directory', async () => {
+    const svc = new FileBrowseService({
+      execCommand: async (_srv: unknown, cmd: string) => {
+        if (cmd.startsWith('if [ -d')) return { stdout: 'other\n', stderr: '', code: 0 };
+        throw new Error(`unexpected command: ${cmd}`);
+      },
+    } as any);
+    const srv = { type: 'agent', name: 'test', host: 'user@host' } as any;
+    await expect(svc.ensureDirectory(srv, '/workspace/afile')).rejects.toThrow('not a directory');
+  });
+});
+
 describe('FileBrowseService.deleteEntry (local)', () => {
   let tmpDir: string;
   const svc = new FileBrowseService({} as any);
