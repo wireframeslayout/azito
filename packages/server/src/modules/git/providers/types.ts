@@ -71,6 +71,28 @@ export interface CreatePullRequestParams {
   body?: string;
 }
 
+/**
+ * アクセス可能なリポジトリ1件分のサマリ。プロジェクト作成ウィザードの候補提示
+ * （リポジトリ選択API）専用。トークンやレスポンス全体は含めず、clone/表示に
+ * 必要な最小フィールドのみを持つ。
+ */
+export interface RemoteRepositorySummary {
+  provider: 'github' | 'gitlab';
+  owner: string;
+  repoName: string;
+  /** cloneに使えるhttps URL */
+  httpsUrl: string;
+  defaultBranch: string;
+  private: boolean;
+  updatedAt: string;
+}
+
+export interface ListAccessibleRepositoriesResult {
+  repositories: RemoteRepositorySummary[];
+  /** ページ上限に達し、まだ取得しきれていないリポジトリがある可能性がある場合true */
+  truncated: boolean;
+}
+
 export interface IGitProviderClient {
   listIssues(ref: RepoRef, opts?: ListIssuesOptions): Promise<ListIssuesResult>;
   searchIssues(ref: RepoRef, query: string): Promise<RemoteIssue[]>;
@@ -83,4 +105,10 @@ export interface IGitProviderClient {
   createPullRequest(ref: RepoRef, params: CreatePullRequestParams): Promise<RemotePullRequest>;
   /** ブランチの HEAD SHA を返す。ブランチ不在なら null、リポジトリ不在なら throw */
   getBranchHeadSha(ref: RepoRef, branch: string): Promise<string | null>;
+  /**
+   * 認証中ユーザーがアクセス可能なリポジトリを一覧する（プロジェクト未登録の
+   * 状態で呼ぶための、RepoRefに紐づかない入口）。ページ上限あり
+   * （{@link ListAccessibleRepositoriesResult.truncated} 参照）。
+   */
+  listAccessibleRepositories(token: string | null): Promise<ListAccessibleRepositoriesResult>;
 }

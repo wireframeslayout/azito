@@ -3,6 +3,7 @@ import type {
   RemoteIssue, ListIssuesOptions, ListIssuesResult,
   RemotePullRequest, ListPullRequestsOptions, ListPullRequestsResult,
   IGitProviderClient, RepoRef, CreatePullRequestParams,
+  RemoteRepositorySummary, ListAccessibleRepositoriesResult,
 } from './types';
 
 export type { RemoteIssue, ListIssuesOptions, ListIssuesResult };
@@ -14,6 +15,10 @@ interface CacheEntry<T> {
 
 const CACHE_TTL = 5 * 60 * 1000;
 const LIST_CACHE_TTL = 60 * 1000;
+/** listAccessibleRepositoriesの1ページあたりの件数。 */
+const REPOS_PER_PAGE = 50;
+/** listAccessibleRepositoriesの最大ページ数（無制限ページングを防ぐ上限）。 */
+const REPOS_MAX_PAGES = 2;
 
 export class GitHubClient implements IGitProviderClient {
   private cache = new Map<string, CacheEntry<unknown>>();
@@ -310,5 +315,39 @@ export class GitHubClient implements IGitProviderClient {
 
     this.invalidatePullsCache(baseUrl, owner, repo);
     return this.toRemotePullRequest(raw);
+  }
+
+  private toRemoteRepositorySummary(raw: any): RemoteRepositorySummary {
+    return {
+      provider: 'github',
+      owner: raw.owner?.login || '',
+      repoName: raw.name,
+      httpsUrl: raw.clone_url || raw.html_url,
+      defaultBranch: raw.default_branch || 'main',
+      private: !!raw.private,
+      updatedAt: raw.pushed_at || raw.updated_at,
+    };
+  }
+
+  async listAccessibleRepositories(token: string | null): Promise<ListAccessibleRepositoriesResult> {
+    const { baseUrl, host } = this.getEndpoint(null);
+    const resolvedToken = this.resolveToken(token, host);
+
+    const repositories: RemoteRepositorySummary[] = [];
+    let truncated = false;
+    for (let page = 1; page <= REPOS_MAX_PAGES; page++) {
+      const params = new URLSearchParams({
+        affiliation: 'owner,collaborator,organization_member',
+        sort: 'pushed',
+        per_page: String(REPOS_PER_PAGE),
+        page: String(page),
+      });
+      const raw = await this.request<any[]>(baseUrl, `/user/repos?${params.toString()}`, resolvedToken);
+      repositories.push(...raw.map((r) => this.toRemoteRepositorySummary(r)));
+      if (raw.length < REPOS_PER_PAGE) break;
+      if (page === REPOS_MAX_PAGES) truncated = true;
+    }
+
+    return { repositories, truncated };
   }
 }

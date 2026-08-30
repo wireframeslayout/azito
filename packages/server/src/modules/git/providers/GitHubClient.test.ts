@@ -76,3 +76,99 @@ describe('GitHubClient token resolution (execFileSync argv safety)', () => {
     expect(mockedExecFileSync).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('GitHubClient.listAccessibleRepositories', () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    mockedExecFileSync.mockReset();
+    fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  function makeRepo(overrides: Partial<Record<string, unknown>> = {}) {
+    return {
+      owner: { login: 'acme' },
+      name: 'widgets',
+      clone_url: 'https://github.com/acme/widgets.git',
+      default_branch: 'main',
+      private: false,
+      pushed_at: '2026-01-01T00:00:00Z',
+      ...overrides,
+    };
+  }
+
+  function jsonResponse(body: unknown) {
+    return { ok: true, json: async () => body, text: async () => '' };
+  }
+
+  it('maps fields and requests the expected affiliation/sort params (explicit token, no gh CLI fallback)', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse([makeRepo()]));
+    const client = new GitHubClient();
+
+    const result = await client.listAccessibleRepositories('explicit-token');
+
+    expect(mockedExecFileSync).not.toHaveBeenCalled();
+    expect(result.truncated).toBe(false);
+    expect(result.repositories).toEqual([
+      {
+        provider: 'github',
+        owner: 'acme',
+        repoName: 'widgets',
+        httpsUrl: 'https://github.com/acme/widgets.git',
+        defaultBranch: 'main',
+        private: false,
+        updatedAt: '2026-01-01T00:00:00Z',
+      },
+    ]);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/user/repos?');
+    expect(url).toContain('affiliation=owner%2Ccollaborator%2Corganization_member');
+    expect(url).toContain('sort=pushed');
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer explicit-token');
+  });
+
+  it('never leaks the token into the returned repository summaries', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse([makeRepo()]));
+    const client = new GitHubClient();
+
+    const result = await client.listAccessibleRepositories('super-secret-token');
+
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain('super-secret-token');
+  });
+
+  it('stops paging at the page cap and reports truncated when a full page is returned at the cap', async () => {
+    const fullPage = Array.from({ length: 50 }, (_, i) => makeRepo({ name: `repo-${i}` }));
+    fetchMock.mockResolvedValueOnce(jsonResponse(fullPage)); // page 1: full
+    fetchMock.mockResolvedValueOnce(jsonResponse(fullPage)); // page 2 (cap): full again
+    const client = new GitHubClient();
+
+    const result = await client.listAccessibleRepositories('tok');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2); // never fetches a 3rd page
+    expect(result.repositories).toHaveLength(100);
+    expect(result.truncated).toBe(true);
+  });
+
+  it('stops paging and reports not truncated once a short page is returned', async () => {
+    const fullPage = Array.from({ length: 50 }, (_, i) => makeRepo({ name: `repo-${i}` }));
+    const shortPage = [makeRepo({ name: 'last-one' })];
+    fetchMock.mockResolvedValueOnce(jsonResponse(fullPage));
+    fetchMock.mockResolvedValueOnce(jsonResponse(shortPage));
+    const client = new GitHubClient();
+
+    const result = await client.listAccessibleRepositories('tok');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.repositories).toHaveLength(51);
+    expect(result.truncated).toBe(false);
+  });
+
+  it('propagates a provider API failure as a thrown error rather than an empty success result', async () => {
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 401, text: async () => 'Bad credentials' });
+    const client = new GitHubClient();
+
+    await expect(client.listAccessibleRepositories('bad-token')).rejects.toThrow(/401/);
+  });
+});

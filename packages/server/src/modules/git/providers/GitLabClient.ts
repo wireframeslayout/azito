@@ -3,6 +3,7 @@ import type {
   RemoteIssue, ListIssuesOptions, ListIssuesResult,
   RemotePullRequest, ListPullRequestsOptions, ListPullRequestsResult,
   IGitProviderClient, RepoRef, CreatePullRequestParams,
+  RemoteRepositorySummary, ListAccessibleRepositoriesResult,
 } from './types';
 
 interface CacheEntry<T> {
@@ -12,6 +13,10 @@ interface CacheEntry<T> {
 
 const CACHE_TTL = 5 * 60 * 1000;
 const LIST_CACHE_TTL = 60 * 1000;
+/** listAccessibleRepositoriesの1ページあたりの件数。 */
+const REPOS_PER_PAGE = 50;
+/** listAccessibleRepositoriesの最大ページ数（無制限ページングを防ぐ上限）。 */
+const REPOS_MAX_PAGES = 2;
 
 export class GitLabClient implements IGitProviderClient {
   private cache = new Map<string, CacheEntry<unknown>>();
@@ -325,5 +330,44 @@ export class GitLabClient implements IGitProviderClient {
 
     this.invalidateMrCache(baseUrl, owner, repo);
     return this.toRemotePullRequest(raw, baseUrl, owner, repo);
+  }
+
+  private toRemoteRepositorySummary(raw: any): RemoteRepositorySummary {
+    const pathWithNamespace: string = raw.path_with_namespace || raw.name || '';
+    const segments = pathWithNamespace.split('/').filter((s: string) => s.length > 0);
+    const repoName = segments.pop() || raw.name || '';
+    const owner = segments.join('/');
+    return {
+      provider: 'gitlab',
+      owner,
+      repoName,
+      httpsUrl: raw.http_url_to_repo || raw.web_url,
+      defaultBranch: raw.default_branch || 'main',
+      private: raw.visibility ? raw.visibility !== 'public' : true,
+      updatedAt: raw.last_activity_at || raw.updated_at,
+    };
+  }
+
+  async listAccessibleRepositories(token: string | null): Promise<ListAccessibleRepositoriesResult> {
+    const baseUrl = this.getBaseUrl(null);
+    const host = new URL(baseUrl).host;
+    const resolvedToken = this.resolveToken(token, host);
+
+    const repositories: RemoteRepositorySummary[] = [];
+    let truncated = false;
+    for (let page = 1; page <= REPOS_MAX_PAGES; page++) {
+      const params = new URLSearchParams({
+        membership: 'true',
+        order_by: 'last_activity_at',
+        per_page: String(REPOS_PER_PAGE),
+        page: String(page),
+      });
+      const raw = await this.request<any[]>(baseUrl, `/projects?${params.toString()}`, resolvedToken);
+      repositories.push(...raw.map((r) => this.toRemoteRepositorySummary(r)));
+      if (raw.length < REPOS_PER_PAGE) break;
+      if (page === REPOS_MAX_PAGES) truncated = true;
+    }
+
+    return { repositories, truncated };
   }
 }
