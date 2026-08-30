@@ -112,12 +112,18 @@ export function resolveBranchOnCandidateSelect(
  * stays true so the loading indicator can render in an otherwise-empty
  * dropdown; the stale *candidates* are still gone (`result: null`), so
  * nothing selectable survives the edit.
+ *
+ * Review finding (round 3): `loading` must be raised here too, not only
+ * when the debounce fires. Opening the dropdown at edit time while
+ * `loading` was still false left a 300ms window in which `result` was
+ * null and every content branch was false — an empty dropdown. Raising
+ * both together means the dropdown is never open without content.
  */
 export function beginCandidateEditRequest(
   guard: { start(): number },
   hasFocus: boolean,
-): { requestId: number; result: null; open: boolean } {
-  return { requestId: guard.start(), result: null, open: hasFocus };
+): { requestId: number; result: null; open: boolean; loading: boolean } {
+  return { requestId: guard.start(), result: null, open: hasFocus, loading: true };
 }
 
 export async function fetchCandidatesGuarded(

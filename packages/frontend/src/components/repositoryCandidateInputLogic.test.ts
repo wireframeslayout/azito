@@ -143,6 +143,24 @@ describe('beginCandidateEditRequest', () => {
     expect(edit.result).toBeNull(); // old candidates are still gone — nothing stale is selectable
   });
 
+  it('raises loading at edit time, so an open dropdown is never empty during the debounce window', () => {
+    // Review finding (round 3): opening the dropdown on edit while
+    // `loading` stayed false until the 300ms debounce fired left a window
+    // in which `result` was null and no content branch rendered — an
+    // empty dropdown on first focus and after every keystroke. `open` and
+    // `loading` must be raised together.
+    const guard = createRequestGuard();
+    const edit = beginCandidateEditRequest(guard, true);
+    expect(edit.loading).toBe(true);
+    expect(edit.open && edit.loading).toBe(true); // open implies renderable content
+  });
+
+  it('does not leave loading raised behind a closed dropdown when the input is unfocused', () => {
+    const guard = createRequestGuard();
+    const edit = beginCandidateEditRequest(guard, false);
+    expect(edit.open).toBe(false);
+  });
+
   it('each edit keeps invalidating the prior one, so only the very latest edit can ever adopt a response', () => {
     const guard = createRequestGuard();
     const first = beginCandidateEditRequest(guard, true);

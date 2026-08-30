@@ -82,9 +82,10 @@ export default function RepositoryCandidateInput({ value, onChange, onSelectCand
    */
   const debouncedFetch = useCallback((query: string) => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    const { requestId, result, open } = beginCandidateEditRequest(guardRef.current, hasFocusRef.current);
+    const { requestId, result, open, loading } = beginCandidateEditRequest(guardRef.current, hasFocusRef.current);
     setResult(result);
     setOpen(open);
+    setLoading(loading);
     debounceRef.current = setTimeout(() => fetchCandidates(query, requestId), DEBOUNCE_MS);
   }, [fetchCandidates]);
 
