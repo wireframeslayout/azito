@@ -205,4 +205,87 @@ describe('RepositoryCandidateService', () => {
 
     expect(gitProviderCalls).toEqual(['github']);
   });
+
+  it('on dedupe conflict, keeps the registered candidate\'s source/hasToken but merges defaultBranch/private/updatedAt from the provider', async () => {
+    const projectRepo = makeProjectRepo([
+      makeProjectDetail({
+        repositories: [
+          // Registered candidates never carry defaultBranch/private/updatedAt (always null in the DB row).
+          { id: 10, name: null, url: 'https://github.com/acme/widgets.git', provider: 'github', owner: 'acme', repoName: 'widgets', hasToken: true },
+        ],
+      }),
+    ]);
+    const gitProvider = makeGitProvider(async (provider) => {
+      if (provider === 'github') {
+        return {
+          truncated: false,
+          repositories: [
+            {
+              provider: 'github', owner: 'acme', repoName: 'widgets',
+              httpsUrl: 'https://github.com/acme/widgets.git', defaultBranch: 'develop', private: true, updatedAt: '2026-08-01T00:00:00Z',
+            },
+          ],
+        };
+      }
+      return { truncated: false, repositories: [] };
+    });
+
+    const service = new RepositoryCandidateService(projectRepo, gitProvider);
+    const result = await service.listCandidates({});
+
+    expect(result.candidates).toHaveLength(1);
+    const widgets = result.candidates[0];
+    // Kept from the registered side.
+    expect(widgets.source).toBe('registered');
+    expect(widgets.hasToken).toBe(true);
+    // Merged in from the provider side, instead of staying null.
+    expect(widgets.defaultBranch).toBe('develop');
+    expect(widgets.private).toBe(true);
+    expect(widgets.updatedAt).toBe('2026-08-01T00:00:00Z');
+  });
+
+  it('propagates a provider-side truncation even when the result is well under the local 50-item cap', async () => {
+    const projectRepo = makeProjectRepo([makeProjectDetail()]);
+    const gitProvider = makeGitProvider(async (provider) => {
+      if (provider === 'github') {
+        return {
+          truncated: true, // provider itself hit its page cap
+          repositories: [
+            { provider: 'github', owner: 'acme', repoName: 'widgets', httpsUrl: 'https://github.com/acme/widgets.git', defaultBranch: 'main', private: false, updatedAt: 'x' },
+          ],
+        };
+      }
+      return { truncated: false, repositories: [] };
+    });
+
+    const service = new RepositoryCandidateService(projectRepo, gitProvider);
+    const result = await service.listCandidates({});
+
+    expect(result.candidates).toHaveLength(1);
+    expect(result.truncated).toBe(true);
+  });
+
+  it('still reports truncated after a q-filter shrinks the result below 50, when the provider itself was truncated', async () => {
+    const projectRepo = makeProjectRepo([makeProjectDetail()]);
+    const gitProvider = makeGitProvider(async (provider) => {
+      if (provider === 'github') {
+        return {
+          truncated: true,
+          repositories: [
+            { provider: 'github', owner: 'acme', repoName: 'widgets', httpsUrl: 'https://github.com/acme/widgets.git', defaultBranch: 'main', private: false, updatedAt: 'x' },
+            { provider: 'github', owner: 'acme', repoName: 'gadgets', httpsUrl: 'https://github.com/acme/gadgets.git', defaultBranch: 'main', private: false, updatedAt: 'x' },
+          ],
+        };
+      }
+      return { truncated: false, repositories: [] };
+    });
+
+    const service = new RepositoryCandidateService(projectRepo, gitProvider);
+    const result = await service.listCandidates({ q: 'widgets' });
+
+    // The q-filter alone drops the result to 1 item (well under the 50-item cap), so a naive
+    // `filtered.length > MAX_CANDIDATES` check would report truncated: false here.
+    expect(result.candidates).toHaveLength(1);
+    expect(result.truncated).toBe(true);
+  });
 });

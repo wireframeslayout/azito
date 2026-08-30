@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../api/client';
-import { Badge, Chip, Spinner, baseInputStyle } from './ui';
+import { Badge, Spinner, baseInputStyle } from './ui';
 import { createRequestGuard } from './repoDiscoveryDialogLogic';
 import {
-  groupRepositoryCandidates, fetchCandidatesGuarded,
+  groupRepositoryCandidates, fetchCandidatesGuarded, beginCandidateEditRequest,
   type RepositoryCandidate, type RepositoryCandidatesResult, type RepositoryCandidateGroupKey,
 } from './repositoryCandidateInputLogic';
 
@@ -46,8 +46,7 @@ export default function RepositoryCandidateInput({ value, onChange, onSelectCand
   const groups = result ? groupRepositoryCandidates(result.candidates) : [];
   const flatCandidates = groups.flatMap((g) => g.candidates);
 
-  const fetchCandidates = useCallback(async (query: string) => {
-    const requestId = guardRef.current.start();
+  const fetchCandidates = useCallback(async (query: string, requestId: number) => {
     setLoading(true);
     try {
       const data = await fetchCandidatesGuarded(
@@ -68,10 +67,24 @@ export default function RepositoryCandidateInput({ value, onChange, onSelectCand
     }
   }, []);
 
+  /**
+   * Advances the request guard synchronously (before the debounce delay),
+   * clearing/closing any stale candidates from a superseded query
+   * immediately. Fixes a bug where editing the input right after opening
+   * the dropdown left the *previous* query's candidates open and
+   * selectable until the 300ms debounce fired — pressing Enter in that
+   * window replaced the just-typed URL with a stale candidate, and a
+   * slow in-flight response for the old query could still be adopted as
+   * "latest". The request id is captured here and threaded through to the
+   * delayed fetch so `fetchCandidatesGuarded` compares against the id that
+   * was current at edit time, not at debounce-fire time.
+   */
   const debouncedFetch = useCallback((query: string) => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (hasFocusRef.current) setOpen(true); // show the "loading" state immediately, not just once results land
-    debounceRef.current = setTimeout(() => fetchCandidates(query), DEBOUNCE_MS);
+    const { requestId, result, open } = beginCandidateEditRequest(guardRef.current);
+    setResult(result);
+    setOpen(open);
+    debounceRef.current = setTimeout(() => fetchCandidates(query, requestId), DEBOUNCE_MS);
   }, [fetchCandidates]);
 
   useEffect(() => () => { if (debounceRef.current) clearTimeout(debounceRef.current); }, []);
@@ -242,9 +255,24 @@ export default function RepositoryCandidateInput({ value, onChange, onSelectCand
                     >
                       <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
                       {candidate.private && <Badge tone="orange">{t('wizard.code.repoCandidates.privateBadge')}</Badge>}
-                      {candidate.source === 'registered' && candidate.hasToken && (
-                        <Chip tone="accent">{t('wizard.code.repoCandidates.hasTokenBadge')}</Chip>
-                      )}
+                      {/*
+                        Review finding (Issue #87 review round 2, Important finding 3): a
+                        "資格情報あり" chip used to render here whenever `candidate.hasToken`
+                        was true, implying selecting this candidate carries its token over.
+                        But `hasToken` only means SOME project (searched across all projects)
+                        has a token for this URL — in 'create' mode `existingRepositories` is
+                        always empty (the project doesn't exist yet), so the match is always a
+                        DIFFERENT project, and tokens are intentionally not copied across
+                        projects (Issue #28/#29 credential separation). Selecting such a
+                        candidate still required a fresh token below, so the chip was actively
+                        misleading. The accurate, scope-correct signal already exists — see
+                        `CodeStep`'s `repoReusedBadge`/`repoReusedHint`, driven by
+                        `reusableRepo` (scoped to the CURRENT project's own
+                        `existingRepositories`) — so no replacement chip is added here.
+                        Cross-project credential reuse (copying/duplicating a token
+                        server-side into the new project) is a real future option but is out
+                        of scope for this fix.
+                      */}
                     </div>
                   );
                 })}

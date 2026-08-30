@@ -90,6 +90,27 @@ export function resolveBranchOnCandidateSelect(
  * so the caller can skip applying a stale response. Mirrors
  * `DirectoryInput`'s ordering guarantee for its own suggestion fetches.
  */
+/**
+ * Advances the request guard synchronously on every edit (not after the
+ * debounce delay) and returns the state an editing input must apply
+ * immediately: the new request's id (threaded through to the delayed
+ * fetch, see `fetchCandidatesGuarded`) plus a cleared/closed dropdown.
+ *
+ * Review finding: the previous implementation only advanced the guard
+ * inside the debounced fetch itself, so a query's stale candidate list
+ * stayed open and selectable for the whole 300ms debounce window after
+ * the operator kept typing — pressing Enter in that window replaced the
+ * just-typed URL with a stale candidate. Calling `guard.start()` here,
+ * synchronously from `handleChange`, invalidates the previous request id
+ * immediately (verified without waiting for any timer/promise) and closes
+ * the stale dropdown before the debounce timer is even set.
+ */
+export function beginCandidateEditRequest(
+  guard: { start(): number },
+): { requestId: number; result: null; open: false } {
+  return { requestId: guard.start(), result: null, open: false };
+}
+
 export async function fetchCandidatesGuarded(
   query: string,
   requestId: number,

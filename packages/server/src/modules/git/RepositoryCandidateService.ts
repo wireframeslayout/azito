@@ -44,6 +44,8 @@ const PROVIDER_CACHE_TTL_MS = 60 * 1000;
 
 interface ProviderCacheEntry {
   repositories: RemoteRepositorySummary[] | null;
+  /** プロバイダ自身がページ上限で打ち切ったか（{@link ListAccessibleRepositoriesResult.truncated}）。 */
+  truncated: boolean;
   errorMessage: string | null;
   expiresAt: number;
 }
@@ -71,10 +73,12 @@ export class RepositoryCandidateService {
     const registered = this.collectRegisteredCandidates();
     const providerErrors: ProviderFetchError[] = [];
     const providerCandidates: RepositoryCandidate[] = [];
+    let providerTruncated = false;
 
     for (const provider of providers) {
       try {
-        const { repositories } = await this.fetchProviderRepositories(provider);
+        const { repositories, truncated } = await this.fetchProviderRepositories(provider);
+        if (truncated) providerTruncated = true;
         for (const repo of repositories) {
           const safeUrl = sanitizeDiscoveredRemoteUrl(repo.httpsUrl);
           if (safeUrl === null) continue;
@@ -100,19 +104,40 @@ export class RepositoryCandidateService {
       ? merged.filter((c) => `${c.owner ?? ''}/${c.repoName ?? ''}`.toLowerCase().includes(q))
       : merged;
 
-    const truncated = filtered.length > MAX_CANDIDATES;
-    const candidates = truncated ? filtered.slice(0, MAX_CANDIDATES) : filtered;
+    const localTruncated = filtered.length > MAX_CANDIDATES;
+    const candidates = localTruncated ? filtered.slice(0, MAX_CANDIDATES) : filtered;
+    // ローカルの50件上限による切り捨てと、プロバイダ自身のページ上限による切り捨て（絞り込み後は
+    // 50件未満になり得るため、ローカル判定だけでは検出できない）のORを取る。
+    const truncated = localTruncated || providerTruncated;
 
     return { candidates, truncated, providerErrors };
   }
 
-  /** 登録済みを優先し、normalizeRemoteUrlで同一と見なせるものを1件にまとめる。 */
+  /**
+   * 登録済みを優先し、normalizeRemoteUrlで同一と見なせるものを1件にまとめる。
+   * ただし登録済み側の `defaultBranch`/`private`/`updatedAt` は常にnull（DBに保持しない項目）
+   * のため、衝突時は `source`/`hasToken` のみ登録済みを維持し、それ以外はプロバイダ側の値で
+   * 補う（プロバイダがdevelopをデフォルトブランチと報告しているのに、登録済み側の
+   * null由来でウィザードの既定がmainのまま残る、という不整合を防ぐ）。
+   */
   private dedupe(registered: RepositoryCandidate[], provider: RepositoryCandidate[]): RepositoryCandidate[] {
     const byKey = new Map<string, RepositoryCandidate>();
-    // registeredを先に入れることで、後続のprovider側は既存キーに触れない限り上書きされない。
-    for (const candidate of [...registered, ...provider]) {
+    for (const candidate of registered) {
+      byKey.set(normalizeRemoteUrl(candidate.httpsUrl), candidate);
+    }
+    for (const candidate of provider) {
       const key = normalizeRemoteUrl(candidate.httpsUrl);
-      if (!byKey.has(key)) byKey.set(key, candidate);
+      const existing = byKey.get(key);
+      if (!existing) {
+        byKey.set(key, candidate);
+        continue;
+      }
+      byKey.set(key, {
+        ...existing,
+        defaultBranch: candidate.defaultBranch,
+        private: candidate.private,
+        updatedAt: candidate.updatedAt,
+      });
     }
     return [...byKey.values()];
   }
@@ -139,7 +164,7 @@ export class RepositoryCandidateService {
     return candidates;
   }
 
-  private async fetchProviderRepositories(provider: 'github' | 'gitlab'): Promise<{ repositories: RemoteRepositorySummary[] }> {
+  private async fetchProviderRepositories(provider: 'github' | 'gitlab'): Promise<{ repositories: RemoteRepositorySummary[]; truncated: boolean }> {
     // このエントリポイントは呼び出し元から明示トークンを受け取らない（gh/glab CLIの
     // フォールバックに一任する）ため、hasToken部分は常に'no-token'固定。将来トークンを
     // 渡す経路ができた場合に備えてキー形式だけ用意しておく。
@@ -148,16 +173,16 @@ export class RepositoryCandidateService {
     const now = Date.now();
     if (cached && now < cached.expiresAt) {
       if (cached.errorMessage !== null) throw new Error(cached.errorMessage);
-      return { repositories: cached.repositories! };
+      return { repositories: cached.repositories!, truncated: cached.truncated };
     }
 
     try {
       const result = await this.gitProvider.listAccessibleRepositories(provider);
-      this.providerCache.set(cacheKey, { repositories: result.repositories, errorMessage: null, expiresAt: now + PROVIDER_CACHE_TTL_MS });
-      return { repositories: result.repositories };
+      this.providerCache.set(cacheKey, { repositories: result.repositories, truncated: result.truncated, errorMessage: null, expiresAt: now + PROVIDER_CACHE_TTL_MS });
+      return { repositories: result.repositories, truncated: result.truncated };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown provider error';
-      this.providerCache.set(cacheKey, { repositories: null, errorMessage: message, expiresAt: now + PROVIDER_CACHE_TTL_MS });
+      this.providerCache.set(cacheKey, { repositories: null, truncated: false, errorMessage: message, expiresAt: now + PROVIDER_CACHE_TTL_MS });
       throw err;
     }
   }

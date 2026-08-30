@@ -107,8 +107,7 @@
         "empty": "No candidates found. You can still enter a URL directly.",
         "truncated": "There are more results — try narrowing your search.",
         "providerError": "Could not list {{provider}} repositories: {{message}}",
-        "privateBadge": "Private",
-        "hasTokenBadge": "Has credentials"
+        "privateBadge": "Private"
       }
     },
     "confirm": {

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createRequestGuard } from './repoDiscoveryDialogLogic';
 import {
-  groupRepositoryCandidates, resolveBranchOnCandidateSelect, fetchCandidatesGuarded,
+  groupRepositoryCandidates, resolveBranchOnCandidateSelect, fetchCandidatesGuarded, beginCandidateEditRequest,
   type RepositoryCandidate, type RepositoryCandidatesResult,
 } from './repositoryCandidateInputLogic';
 
@@ -97,5 +97,41 @@ describe('fetchCandidatesGuarded', () => {
 
     const resultA = await fetchCandidatesGuarded('az', requestA, guard, async () => emptyResult());
     expect(resultA).toBeNull();
+  });
+});
+
+describe('beginCandidateEditRequest', () => {
+  it('invalidates the previous request synchronously, before its debounced fetch would ever fire', () => {
+    // Simulates: the operator types "az" (request A starts, still
+    // debouncing — no fetch in flight yet), then edits again to "azi"
+    // before the 300ms debounce for A elapses. The guard must already
+    // treat A as stale the instant B starts, not only once B's own fetch
+    // eventually resolves — otherwise the dropdown from A's *previous*
+    // completed query stays open/selectable for the whole debounce
+    // window and a stray Enter can select it.
+    const guard = createRequestGuard();
+    const requestA = guard.start(); // query "az" begins debouncing
+
+    const edit = beginCandidateEditRequest(guard); // query "azi" typed before A's debounce fires
+    expect(guard.isCurrent(requestA)).toBe(false);
+    expect(guard.isCurrent(edit.requestId)).toBe(true);
+  });
+
+  it('returns cleared/closed dropdown state so a stale candidate list cannot be shown or selected mid-debounce', () => {
+    const guard = createRequestGuard();
+    const edit = beginCandidateEditRequest(guard);
+    expect(edit.result).toBeNull();
+    expect(edit.open).toBe(false);
+  });
+
+  it('each edit keeps invalidating the prior one, so only the very latest edit can ever adopt a response', () => {
+    const guard = createRequestGuard();
+    const first = beginCandidateEditRequest(guard);
+    const second = beginCandidateEditRequest(guard);
+    const third = beginCandidateEditRequest(guard);
+
+    expect(guard.isCurrent(first.requestId)).toBe(false);
+    expect(guard.isCurrent(second.requestId)).toBe(false);
+    expect(guard.isCurrent(third.requestId)).toBe(true);
   });
 });
