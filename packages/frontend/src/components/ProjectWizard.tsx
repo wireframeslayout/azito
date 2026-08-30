@@ -9,7 +9,8 @@ import { notifyProjectsChanged } from '../lib/projectsChanged';
 import { createRequestGuard, dedupeSelectableUrls } from './repoDiscoveryDialogLogic';
 import {
   getVisibleSteps, canAdvanceFromStep, stepIndex, nextStep, deriveCloneDirectoryName, deriveDefaultBranch,
-  pickAvailableServer, isDiscoveryCurrent, clonesDirectlyOnServer,
+  pickAvailableServer, isDiscoveryCurrent, resolveCloneDeliveryMode,
+  repoStepSignature, envStepSignature, cloneStepSignature,
   type WizardStepId, type CodeMode, type WizardValidationState, type DiscoveryKey,
 } from '../lib/projectWizardLogic';
 import {
@@ -202,6 +203,70 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
       .map((r) => ({ url: r.url, provider: r.provider, owner: r.owner ?? undefined, repoName: r.repoName ?? undefined }));
   }, [codeMode, discovery, selectedRemoteUrls]);
 
+  // Whether "clone" mode clones directly on the selected server (local) or
+  // relies on the hub's existing distribution path — kept as a 3-way result
+  // ('local' | 'distributed' | 'unresolved') rather than folding "the
+  // server record hasn't loaded yet" into "distributed" (review finding:
+  // "サーバー種別が未解決のとき「リモート扱い」になる"). `serverList` starts
+  // empty until `GET /servers` resolves, so a fast wizard run can otherwise
+  // reach execute() before the selected server's type is known.
+  const cloneDeliveryMode = useMemo(
+    () => resolveCloneDeliveryMode(codeMode, selectedServer, serverList),
+    [codeMode, selectedServer, serverList],
+  );
+  const cloningLocally = cloneDeliveryMode === 'local';
+  const serverTypeUnresolvedForClone = cloneDeliveryMode === 'unresolved';
+
+  const environmentWorkingDirectory = codeMode === 'existing' ? existingPath.trim()
+    : codeMode === 'clone' ? cloneDirectory.trim()
+    : '';
+  // Only meaningful once the repository step has actually produced an id —
+  // `createdRepositoryId` invalidates back to `null` (see the repo-step
+  // signature effect below) whenever the inputs that produced it change.
+  const distributingRepositoryId = cloneDeliveryMode === 'distributed' ? createdRepositoryId : null;
+
+  // ── Completion-flag invalidation (review finding: "完了フラグが入力と
+  // 結びついていない"). Each confirm-step success flag is compared against
+  // a signature of the inputs it actually consumed; the moment that
+  // signature changes (the user went back and edited something), the flag
+  // — and any id it produced — is invalidated so the next run re-executes
+  // that step instead of skipping it as "already done" against stale
+  // inputs. A step that already succeeded AND whose inputs are unchanged is
+  // deliberately left alone, preserving "resume after a failed step"
+  // without re-running work that is still valid. ──
+  const repoSignature = repoStepSignature({ codeMode, cloneUrl, selectedRemoteUrls });
+  const repoSignatureRef = useRef(repoSignature);
+  useEffect(() => {
+    if (repoSignatureRef.current !== repoSignature) {
+      repoSignatureRef.current = repoSignature;
+      setRepoDone(false);
+      setCreatedRepositoryId(null);
+    }
+  }, [repoSignature]);
+
+  const envSignature = envStepSignature({
+    selectedServer, workingDirectory: environmentWorkingDirectory,
+    branch: codeMode === 'clone' ? cloneBranch.trim() : '', distributingRepositoryId,
+  });
+  const envSignatureRef = useRef(envSignature);
+  useEffect(() => {
+    if (envSignatureRef.current !== envSignature) {
+      envSignatureRef.current = envSignature;
+      setEnvDone(false);
+    }
+  }, [envSignature]);
+
+  const cloneSignature = cloneStepSignature({
+    selectedServer, cloneDirectory: cloneDirectory.trim(), cloneBranch: cloneBranch.trim(), repositoryId: createdRepositoryId,
+  });
+  const cloneSignatureRef = useRef(cloneSignature);
+  useEffect(() => {
+    if (cloneSignatureRef.current !== cloneSignature) {
+      cloneSignatureRef.current = cloneSignature;
+      setLocalCloneDone(false);
+    }
+  }, [cloneSignature]);
+
   const setStep = useCallback((stepName: string, status: InstallStep['status'], message: string) => {
     setSteps((prev) => {
       const idx = prev.findIndex((s) => s.step === stepName);
@@ -316,23 +381,26 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
       // always created once a server is selected, root or not (the
       // pre-existing "add environment" form this replaces worked the same
       // way — workingDirectory was always optional there too).
-      const selectedServerType = serverList.find((sv) => sv.name === selectedServer)?.type;
-      const cloningLocally = codeMode === 'clone' && clonesDirectlyOnServer(selectedServerType ?? '');
+      // Never proceed while the selected server's own record hasn't
+      // resolved yet — folding "unresolved" into "distributed" used to
+      // leave an environment that is neither cloned locally nor set up for
+      // distribution (review finding: "サーバー種別が未解決のとき「リモー
+      // ト扱い」になる"). Fail visibly instead of guessing.
+      if (codeMode === 'clone' && serverTypeUnresolvedForClone) {
+        throw new Error(t('wizard.errors.serverTypeUnresolved', { server: selectedServer }));
+      }
       const distributingClone = codeMode === 'clone' && !cloningLocally && repoId !== null;
       const wantsEnvironment = !!selectedServer && (mode === 'addEnvironment' || codeMode !== 'later');
       if (wantsEnvironment && pid !== null) {
         if (!envDone) {
           setStep('environment', 'running', t('wizard.confirm.stepEnvironment'));
           try {
-            const workingDirectory = codeMode === 'existing' ? existingPath.trim()
-              : codeMode === 'clone' ? cloneDirectory.trim()
-              : '';
             const { status, body } = await apiWithStatus<{ ok: true } | { error: string }>(
               `/projects/${pid}/servers/${selectedServer}`,
               {
                 method: 'PUT',
                 body: JSON.stringify({
-                  working_directory: workingDirectory || null,
+                  working_directory: environmentWorkingDirectory || null,
                   branch: codeMode === 'clone' ? (cloneBranch.trim() || null) : null,
                   tmux_session: null,
                   input_policy: 'manual-approval',
@@ -392,8 +460,9 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
     }
   }, [
     mode, createdProjectId, createdRepositoryId, name, slug, description, sidekickPrompt, icon, color,
-    selectedServer, serverList, existingServerList, codeMode, existingPath, cloneDirectory, cloneBranch, cloneUrl,
+    selectedServer, existingServerList, codeMode, existingPath, cloneDirectory, cloneBranch, cloneUrl,
     envDone, repoDone, localCloneDone, repositoriesToRegister, onDone, setStep, t,
+    cloningLocally, serverTypeUnresolvedForClone, environmentWorkingDirectory,
   ]);
 
   const primaryLabel = isLastStep ? t('wizard.create') : t('wizard.next');
@@ -403,7 +472,13 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
   // be unreachable, since canAdvanceFromStep('environment', ...) blocks
   // leaving that step while selectedServer is '' — but the primary button
   // must never complete the wizard on this condition either way.
-  const primaryDisabled = isLastStep ? noServersAvailable : !canAdvance;
+  // serverTypeUnresolvedForClone blocks the SAME way, proactively: the
+  // selected server's record hasn't resolved yet, so completing now would
+  // create an environment with neither a local clone nor distribution
+  // configured (review finding: "サーバー種別が未解決のとき「リモート扱
+  // い」になる"). handleRun also throws on this as defense in depth, for
+  // any other path that reaches it.
+  const primaryDisabled = isLastStep ? (noServersAvailable || serverTypeUnresolvedForClone) : !canAdvance;
 
   // 'addEnvironment' is only ever mounted inline inside ProjectSettings's
   // servers section (spec: "別画面を作らないこと" — no separate screen) —

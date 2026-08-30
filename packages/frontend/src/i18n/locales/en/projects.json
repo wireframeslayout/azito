@@ -106,7 +106,8 @@
       "projectFailed": "Failed to create the project.",
       "repositoryFailed": "Failed to register the repository.",
       "environmentFailed": "Failed to save the environment.",
-      "cloneFailed": "Failed to clone the repository."
+      "cloneFailed": "Failed to clone the repository.",
+      "serverTypeUnresolved": "Could not determine server \"{{server}}\"'s type yet — please wait a moment and try again."
     }
   },
   "general": {

@@ -1,10 +1,13 @@
-import { execFileSync } from 'child_process';
+import { execFile } from 'child_process';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { promisify } from 'util';
 import type { CanonicalRepositoryIdentity } from './resolveCanonicalRepositoryIdentity';
 import { redactGitUrlCredentials } from './redactGitUrlCredentials';
+
+const execFileAsync = promisify(execFile);
 
 /** Thrown when the requested clone target already exists and is not an empty directory — the caller must never overwrite pre-existing content. */
 export class LocalCloneTargetNotEmptyError extends Error {
@@ -30,16 +33,24 @@ export class LocalCloneTargetNotEmptyError extends Error {
  * the script is removed in a `finally` block. Any error is stripped of
  * embedded URL credentials before it is thrown (Issue #87 review, "クローン
  * が壊れた設定を作る" finding 4) — this codebase's `redactGitUrlCredentials`.
+ *
+ * `clone()` runs `git clone` asynchronously (`execFile`, promisified —
+ * never `execFileSync`): AZITO is a single-process hub, and a synchronous
+ * clone would block the Node event loop (HTTP/WS/activity-detection/timers)
+ * for up to the full 300s timeout whenever the remote is slow or
+ * unreachable (review finding, "クローンがイベントループを最大5分ブロッ
+ * クする"). The 300s timeout and error/redaction semantics are unchanged
+ * from the previous sync implementation.
  */
 export class LocalRepoCloneService {
-  clone(identity: CanonicalRepositoryIdentity, token: string | null, branch: string, targetDir: string): void {
+  async clone(identity: CanonicalRepositoryIdentity, token: string | null, branch: string, targetDir: string): Promise<void> {
     this.assertTargetEmpty(targetDir);
     fs.mkdirSync(targetDir, { recursive: true });
 
     const cloneUrl = token ? this.embedAskPassUsername(identity.httpsUrl) : identity.httpsUrl;
     const askPassPath = token ? this.writeAskPassScript(token) : null;
     try {
-      execFileSync('git', [
+      await execFileAsync('git', [
         '-c', 'core.hooksPath=/dev/null',
         'clone', '--branch', branch, '--single-branch', cloneUrl, targetDir,
       ], {

@@ -106,7 +106,8 @@
       "projectFailed": "プロジェクトの作成に失敗しました。",
       "repositoryFailed": "リポジトリの登録に失敗しました。",
       "environmentFailed": "環境の保存に失敗しました。",
-      "cloneFailed": "リポジトリのクローンに失敗しました。"
+      "cloneFailed": "リポジトリのクローンに失敗しました。",
+      "serverTypeUnresolved": "サーバー「{{server}}」の種別がまだ解決できていません。少し待ってからもう一度お試しください。"
     }
   },
   "general": {

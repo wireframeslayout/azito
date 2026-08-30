@@ -777,7 +777,7 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       }
 
       try {
-        localRepoCloneService.clone(identityResult.identity, repository.token, branch, body.target_directory.trim());
+        await localRepoCloneService.clone(identityResult.identity, repository.token, branch, body.target_directory.trim());
       } catch (err) {
         if (err instanceof LocalCloneTargetNotEmptyError) {
           return reply.status(409).send({ error: err.message });

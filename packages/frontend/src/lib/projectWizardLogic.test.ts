@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   getVisibleSteps, canAdvanceFromStep, stepIndex, nextStep, deriveCloneDirectoryName, deriveDefaultBranch,
   pickAvailableServer, isDiscoveryCurrent, clonesDirectlyOnServer,
+  resolveCloneDeliveryMode, repoStepSignature, envStepSignature, cloneStepSignature,
   type WizardValidationState,
 } from './projectWizardLogic';
 
@@ -196,5 +197,99 @@ describe('clonesDirectlyOnServer', () => {
   it('does not clone directly on any other server type', () => {
     expect(clonesDirectlyOnServer('agent')).toBe(false);
     expect(clonesDirectlyOnServer('')).toBe(false);
+  });
+});
+
+describe('resolveCloneDeliveryMode (review finding: unresolved server type must never fall through to "distributed")', () => {
+  const servers = [{ name: 'local', type: 'local' }, { name: 'remote1', type: 'ssh' }];
+
+  it('is "none" when codeMode is not "clone" (nothing to deliver)', () => {
+    expect(resolveCloneDeliveryMode('later', 'local', servers)).toBe('none');
+    expect(resolveCloneDeliveryMode('existing', 'local', servers)).toBe('none');
+  });
+
+  it('is "local" when the selected server resolves to a local-type server', () => {
+    expect(resolveCloneDeliveryMode('clone', 'local', servers)).toBe('local');
+  });
+
+  it('is "distributed" when the selected server resolves to a non-local type', () => {
+    expect(resolveCloneDeliveryMode('clone', 'remote1', servers)).toBe('distributed');
+  });
+
+  it('is "unresolved" — never "distributed" — when no server is selected yet', () => {
+    expect(resolveCloneDeliveryMode('clone', '', servers)).toBe('unresolved');
+  });
+
+  it('is "unresolved" — never "distributed" — when the selected server has no matching record yet (e.g. GET /servers still in flight)', () => {
+    // The exact failure mode from the review: `selectedServer` defaults to
+    // 'local' before `serverList` has loaded, so `serverList` is still `[]`
+    // here — the OLD `serverList.find(...)?.type ?? ''` behavior silently
+    // treated this as "not local", i.e. distributed.
+    expect(resolveCloneDeliveryMode('clone', 'local', [])).toBe('unresolved');
+    expect(resolveCloneDeliveryMode('clone', 'not-yet-loaded', servers)).toBe('unresolved');
+  });
+});
+
+describe('repoStepSignature (review finding: completion flags must invalidate when their inputs change)', () => {
+  it('is stable for the same "clone" mode inputs', () => {
+    const a = repoStepSignature({ codeMode: 'clone', cloneUrl: 'https://github.com/acme/widgets', selectedRemoteUrls: [] });
+    const b = repoStepSignature({ codeMode: 'clone', cloneUrl: 'https://github.com/acme/widgets', selectedRemoteUrls: [] });
+    expect(a).toBe(b);
+  });
+
+  it('changes when the clone URL changes', () => {
+    const a = repoStepSignature({ codeMode: 'clone', cloneUrl: 'https://github.com/acme/widgets', selectedRemoteUrls: [] });
+    const b = repoStepSignature({ codeMode: 'clone', cloneUrl: 'https://github.com/acme/other', selectedRemoteUrls: [] });
+    expect(a).not.toBe(b);
+  });
+
+  it('is order-independent for the selected remote URLs (a Set) in "existing" mode', () => {
+    const a = repoStepSignature({ codeMode: 'existing', cloneUrl: '', selectedRemoteUrls: ['b', 'a'] });
+    const b = repoStepSignature({ codeMode: 'existing', cloneUrl: '', selectedRemoteUrls: ['a', 'b'] });
+    expect(a).toBe(b);
+  });
+
+  it('changes when the selected remote URLs change in "existing" mode', () => {
+    const a = repoStepSignature({ codeMode: 'existing', cloneUrl: '', selectedRemoteUrls: ['a'] });
+    const b = repoStepSignature({ codeMode: 'existing', cloneUrl: '', selectedRemoteUrls: ['a', 'b'] });
+    expect(a).not.toBe(b);
+  });
+});
+
+describe('envStepSignature / cloneStepSignature (review finding: completion flags must invalidate when their inputs change)', () => {
+  it('envStepSignature changes when the working directory changes (e.g. cloneDirectory edited after a failed local clone)', () => {
+    const a = envStepSignature({ selectedServer: 'local', workingDirectory: '/work/widgets', branch: 'main', distributingRepositoryId: null });
+    const b = envStepSignature({ selectedServer: 'local', workingDirectory: '/work/widgets-2', branch: 'main', distributingRepositoryId: null });
+    expect(a).not.toBe(b);
+  });
+
+  it('envStepSignature changes when the selected server changes', () => {
+    const a = envStepSignature({ selectedServer: 'local', workingDirectory: '/work/widgets', branch: 'main', distributingRepositoryId: null });
+    const b = envStepSignature({ selectedServer: 'remote1', workingDirectory: '/work/widgets', branch: 'main', distributingRepositoryId: null });
+    expect(a).not.toBe(b);
+  });
+
+  it('envStepSignature changes when the distributed repository id changes (repo step re-registered a different repository)', () => {
+    const a = envStepSignature({ selectedServer: 'remote1', workingDirectory: '/work/widgets', branch: 'main', distributingRepositoryId: 1 });
+    const b = envStepSignature({ selectedServer: 'remote1', workingDirectory: '/work/widgets', branch: 'main', distributingRepositoryId: 2 });
+    expect(a).not.toBe(b);
+  });
+
+  it('cloneStepSignature changes when cloneDirectory changes (the concrete review scenario: retry after a failed local clone with an edited target)', () => {
+    const a = cloneStepSignature({ selectedServer: 'local', cloneDirectory: '/work/widgets', cloneBranch: 'main', repositoryId: 1 });
+    const b = cloneStepSignature({ selectedServer: 'local', cloneDirectory: '/work/widgets-new', cloneBranch: 'main', repositoryId: 1 });
+    expect(a).not.toBe(b);
+  });
+
+  it('cloneStepSignature changes when selectedServer changes', () => {
+    const a = cloneStepSignature({ selectedServer: 'local', cloneDirectory: '/work/widgets', cloneBranch: 'main', repositoryId: 1 });
+    const b = cloneStepSignature({ selectedServer: 'local-2', cloneDirectory: '/work/widgets', cloneBranch: 'main', repositoryId: 1 });
+    expect(a).not.toBe(b);
+  });
+
+  it('is stable when nothing relevant changed', () => {
+    const a = envStepSignature({ selectedServer: 'local', workingDirectory: '/work/widgets', branch: 'main', distributingRepositoryId: null });
+    const b = envStepSignature({ selectedServer: 'local', workingDirectory: '/work/widgets', branch: 'main', distributingRepositoryId: null });
+    expect(a).toBe(b);
   });
 });

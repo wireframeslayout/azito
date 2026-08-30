@@ -175,3 +175,91 @@ export function deriveDefaultBranch(codeMode: CodeMode, cloneBranch: string): st
 export function clonesDirectlyOnServer(serverType: string): boolean {
   return serverType === 'local';
 }
+
+/**
+ * Resolves whether the confirm/execute step can actually tell local-clone
+ * apart from distributed-clone for the selected server — and, critically,
+ * whether it is safe to decide that at all yet.
+ *
+ * `serverList` starts empty (before `GET /servers` resolves) and
+ * `selectedServer` defaults to `'local'` before that fetch lands. The old
+ * call site computed `serverList.find(...)?.type ?? ''`, which folds
+ * "not yet resolved" into the same `''` as "type genuinely unknown" — and
+ * since `clonesDirectlyOnServer('') === false`, an unresolved `local`
+ * selection silently fell through to the distribution path (`distribute_code:
+ * true` is never sent for `''`, but neither is an actual local clone run),
+ * producing an environment where the server review flagged as getting
+ * neither cloned nor distributed. This function keeps "unresolved" a
+ * distinct third outcome so the caller can block execution instead of
+ * guessing (review finding: "サーバー種別が未解決のとき「リモート扱い」に
+ * なる").
+ */
+export type CloneDeliveryMode = 'local' | 'distributed' | 'none' | 'unresolved';
+
+export function resolveCloneDeliveryMode(
+  codeMode: CodeMode,
+  selectedServer: string,
+  serverList: { name: string; type: string }[],
+): CloneDeliveryMode {
+  if (codeMode !== 'clone') return 'none';
+  if (!selectedServer.trim()) return 'unresolved';
+  const record = serverList.find((sv) => sv.name === selectedServer);
+  if (!record) return 'unresolved';
+  return clonesDirectlyOnServer(record.type) ? 'local' : 'distributed';
+}
+
+/**
+ * Signature of the inputs that drove the "repository" confirm-step
+ * success (`repoDone`/`createdRepositoryId`). Compared before/after every
+ * render (by simple string equality) so the wizard can invalidate those
+ * flags the moment the user edits something that step actually consumed —
+ * instead of leaving a stale success flag that skips re-running the step
+ * on a "go back, change something, run again" pass (review finding:
+ * "完了フラグが入力と結びついていない"). Order-independent for the
+ * discovered-remote-url selection (a Set), since selection order carries
+ * no meaning.
+ */
+export function repoStepSignature(input: { codeMode: CodeMode; cloneUrl: string; selectedRemoteUrls: Iterable<string> }): string {
+  return JSON.stringify({
+    codeMode: input.codeMode,
+    cloneUrl: input.codeMode === 'clone' ? input.cloneUrl.trim() : '',
+    remoteUrls: input.codeMode === 'existing' ? [...input.selectedRemoteUrls].sort() : [],
+  });
+}
+
+/**
+ * Signature of the inputs that drove the "environment" confirm-step
+ * success (`envDone`). Includes `distributingRepositoryId` (not just
+ * `distributingClone`) so that when the repository step above gets
+ * invalidated and re-creates a *different* repository id, the environment
+ * PUT — which embedded the OLD id in `distribution_repository_id` — is
+ * correctly treated as stale too, even though none of the environment
+ * step's own fields changed.
+ */
+export function envStepSignature(input: {
+  selectedServer: string;
+  workingDirectory: string;
+  branch: string;
+  distributingRepositoryId: number | null;
+}): string {
+  return JSON.stringify(input);
+}
+
+/**
+ * Signature of the inputs that drove the "local clone" confirm-step
+ * success (`localCloneDone`). Same rationale as `envStepSignature`: a
+ * failed local clone followed by editing `cloneDirectory` or
+ * `selectedServer` and re-running must re-issue the clone against the new
+ * target, not skip it because the OLD target already "succeeded" (the
+ * concrete review scenario: code ends up in the new directory while
+ * `project_servers.working_directory` — actually the whole point here is
+ * the clone itself — silently still targets the old one).
+ */
+export function cloneStepSignature(input: {
+  selectedServer: string;
+  cloneDirectory: string;
+  cloneBranch: string;
+  repositoryId: number | null;
+}): string {
+  return JSON.stringify(input);
+}

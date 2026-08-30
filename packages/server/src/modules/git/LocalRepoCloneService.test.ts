@@ -44,55 +44,55 @@ describe('LocalRepoCloneService', () => {
     return dir;
   }
 
-  it('clones the branch into the target directory', () => {
+  it('clones the branch into the target directory', async () => {
     const origin = makeTmpDir('azito-clone-origin-');
     createOriginRepo(origin, 'main');
     const targetRoot = makeTmpDir('azito-clone-target-');
     const targetDir = path.join(targetRoot, 'nested', 'project');
 
     const service = new LocalRepoCloneService();
-    service.clone(makeIdentity(origin), null, 'main', targetDir);
+    await service.clone(makeIdentity(origin), null, 'main', targetDir);
 
     expect(fs.existsSync(path.join(targetDir, 'file.txt'))).toBe(true);
     expect(fs.existsSync(path.join(targetDir, '.git'))).toBe(true);
   });
 
-  it('creates missing parent directories for the target', () => {
+  it('creates missing parent directories for the target', async () => {
     const origin = makeTmpDir('azito-clone-origin-');
     createOriginRepo(origin, 'main');
     const targetRoot = makeTmpDir('azito-clone-target-');
     const targetDir = path.join(targetRoot, 'a', 'b', 'c');
 
     const service = new LocalRepoCloneService();
-    expect(() => service.clone(makeIdentity(origin), null, 'main', targetDir)).not.toThrow();
+    await expect(service.clone(makeIdentity(origin), null, 'main', targetDir)).resolves.not.toThrow();
     expect(fs.existsSync(path.join(targetDir, '.git'))).toBe(true);
   });
 
-  it('fails when the target directory already exists and is not empty, without touching it', () => {
+  it('fails when the target directory already exists and is not empty, without touching it', async () => {
     const origin = makeTmpDir('azito-clone-origin-');
     createOriginRepo(origin, 'main');
     const targetDir = makeTmpDir('azito-clone-target-');
     fs.writeFileSync(path.join(targetDir, 'preexisting.txt'), 'do not touch\n');
 
     const service = new LocalRepoCloneService();
-    expect(() => service.clone(makeIdentity(origin), null, 'main', targetDir)).toThrow(LocalCloneTargetNotEmptyError);
+    await expect(service.clone(makeIdentity(origin), null, 'main', targetDir)).rejects.toThrow(LocalCloneTargetNotEmptyError);
 
     // The pre-existing content must survive untouched.
     expect(fs.readFileSync(path.join(targetDir, 'preexisting.txt'), 'utf-8')).toBe('do not touch\n');
     expect(fs.existsSync(path.join(targetDir, '.git'))).toBe(false);
   });
 
-  it('succeeds when the target directory already exists but is empty', () => {
+  it('succeeds when the target directory already exists but is empty', async () => {
     const origin = makeTmpDir('azito-clone-origin-');
     createOriginRepo(origin, 'main');
     const targetDir = makeTmpDir('azito-clone-target-');
 
     const service = new LocalRepoCloneService();
-    expect(() => service.clone(makeIdentity(origin), null, 'main', targetDir)).not.toThrow();
+    await expect(service.clone(makeIdentity(origin), null, 'main', targetDir)).resolves.not.toThrow();
     expect(fs.existsSync(path.join(targetDir, '.git'))).toBe(true);
   });
 
-  it('never leaves the askpass script (which holds the token) behind after a successful clone', () => {
+  it('never leaves the askpass script (which holds the token) behind after a successful clone', async () => {
     const origin = makeTmpDir('azito-clone-origin-');
     createOriginRepo(origin, 'main');
     const targetRoot = makeTmpDir('azito-clone-target-');
@@ -100,7 +100,7 @@ describe('LocalRepoCloneService', () => {
     const token = 'super-secret-token-value';
 
     const service = new LocalRepoCloneService();
-    service.clone(makeIdentity(origin), token, 'main', targetDir);
+    await service.clone(makeIdentity(origin), token, 'main', targetDir);
 
     // The askpass script (mode 0700, holds the token) must be cleaned up —
     // it is the only place the token is ever written to disk.
@@ -109,7 +109,7 @@ describe('LocalRepoCloneService', () => {
     expect(fs.existsSync(path.join(targetDir, '.git'))).toBe(true);
   });
 
-  it('never leaks the token into a thrown error, and cleans up the askpass script on failure too (no real remote touched)', () => {
+  it('never leaks the token into a thrown error, and cleans up the askpass script on failure too (no real remote touched)', async () => {
     const service = new LocalRepoCloneService();
     const targetRoot = makeTmpDir('azito-clone-target-');
     const targetDir = path.join(targetRoot, 'project');
@@ -121,7 +121,7 @@ describe('LocalRepoCloneService', () => {
 
     let thrown: Error | null = null;
     try {
-      service.clone(badIdentity, token, 'main', targetDir);
+      await service.clone(badIdentity, token, 'main', targetDir);
     } catch (err) {
       thrown = err as Error;
     }
@@ -130,5 +130,30 @@ describe('LocalRepoCloneService', () => {
 
     const leftover = fs.readdirSync(os.tmpdir()).filter((f) => f.startsWith('azito-clone-askpass-'));
     expect(leftover).toEqual([]);
+  });
+
+  it('returns a Promise rather than blocking synchronously (review finding: sync clone froze the whole hub for up to 300s)', () => {
+    const origin = makeTmpDir('azito-clone-origin-');
+    createOriginRepo(origin, 'main');
+    const targetRoot = makeTmpDir('azito-clone-target-');
+    const targetDir = path.join(targetRoot, 'project');
+
+    const service = new LocalRepoCloneService();
+    const result = service.clone(makeIdentity(origin), null, 'main', targetDir);
+
+    // A synchronous (execFileSync-based) implementation would have already
+    // completed the clone by the time `clone()` returns, and would return
+    // `undefined`, not a thenable. Returning a Promise is the observable
+    // signal that the git subprocess is driven asynchronously (via
+    // `execFile`/callback, not `execFileSync`), so the caller — and the
+    // Fastify event loop — is never blocked waiting for it inline.
+    expect(result).toBeInstanceOf(Promise);
+    return result;
+  });
+
+  it('does not import or call execFileSync anywhere in the source (must stay fully async — no event-loop-blocking clone)', () => {
+    const source = fs.readFileSync(path.join(__dirname, 'LocalRepoCloneService.ts'), 'utf-8');
+    expect(source).not.toMatch(/execFileSync\(/);
+    expect(source).not.toMatch(/[^.\w]execSync\(/);
   });
 });
