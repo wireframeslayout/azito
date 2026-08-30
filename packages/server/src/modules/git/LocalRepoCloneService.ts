@@ -6,6 +6,7 @@ import * as path from 'path';
 import { promisify } from 'util';
 import type { CanonicalRepositoryIdentity } from './resolveCanonicalRepositoryIdentity';
 import { redactGitUrlCredentials } from './redactGitUrlCredentials';
+import { KeyedMutex } from '../../shared/keyedMutex';
 
 const execFileAsync = promisify(execFile);
 
@@ -41,9 +42,28 @@ export class LocalCloneTargetNotEmptyError extends Error {
  * unreachable (review finding, "クローンがイベントループを最大5分ブロッ
  * クする"). The 300s timeout and error/redaction semantics are unchanged
  * from the previous sync implementation.
+ *
+ * Making `clone()` async reopened a race the synchronous implementation
+ * happened to close by accident: two concurrent requests targeting the same
+ * `targetDir` could both pass `assertTargetEmpty()` before either one's
+ * `git clone` had created anything, then run two `git` processes against
+ * the same path at once (review finding, "同一ディレクトリへのクローンが
+ * 競合する"). `mutex` serializes every call by the target directory's
+ * normalized (resolved) path — same `KeyedMutex` pattern as
+ * `FetchDistributionService`'s per-repo/per-working-dir locks — and
+ * `assertTargetEmpty()` runs INSIDE that lock (never before acquiring it),
+ * so a second caller for the same target only ever sees either "still
+ * empty" or "already populated by the first clone", never a window where
+ * both see empty.
  */
 export class LocalRepoCloneService {
+  private readonly mutex = new KeyedMutex();
+
   async clone(identity: CanonicalRepositoryIdentity, token: string | null, branch: string, targetDir: string): Promise<void> {
+    return this.mutex.withLock(this.lockKey(targetDir), () => this.cloneUnlocked(identity, token, branch, targetDir));
+  }
+
+  private async cloneUnlocked(identity: CanonicalRepositoryIdentity, token: string | null, branch: string, targetDir: string): Promise<void> {
     this.assertTargetEmpty(targetDir);
     fs.mkdirSync(targetDir, { recursive: true });
 
@@ -67,6 +87,11 @@ export class LocalRepoCloneService {
     } finally {
       if (askPassPath) { try { fs.unlinkSync(askPassPath); } catch { /* best-effort cleanup */ } }
     }
+  }
+
+  /** `path.resolve` normalizes `.`/`..`/trailing-slash variants of the same target to one key, so two requests that spell the same directory differently still serialize against each other. */
+  private lockKey(targetDir: string): string {
+    return path.resolve(targetDir);
   }
 
   private assertTargetEmpty(targetDir: string): void {

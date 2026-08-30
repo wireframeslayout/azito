@@ -10,7 +10,7 @@ import { createRequestGuard, dedupeSelectableUrls } from './repoDiscoveryDialogL
 import {
   getVisibleSteps, canAdvanceFromStep, stepIndex, nextStep, deriveCloneDirectoryName, deriveDefaultBranch,
   pickAvailableServer, isDiscoveryCurrent, resolveCloneDeliveryMode,
-  repoStepSignature, envStepSignature, cloneStepSignature,
+  repoStepSignature, envStepSignature, cloneStepSignature, invalidateRepoStepIds,
   type WizardStepId, type CodeMode, type WizardValidationState, type DiscoveryKey,
 } from '../lib/projectWizardLogic';
 import {
@@ -92,6 +92,12 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
   const [running, setRunning] = useState(false);
   const [createdProjectId, setCreatedProjectId] = useState<number | null>(mode === 'addEnvironment' ? (projectId ?? null) : null);
   const [createdRepositoryId, setCreatedRepositoryId] = useState<number | null>(null);
+  // Every repository row id created by THIS wizard run's repository step
+  // (single id for 'clone' mode, one or more for a bulk 'existing'-mode
+  // registration) — tracked purely for cleanup, so a ref rather than state
+  // (see `invalidateRepoStepIds` / the repo-signature invalidation effect
+  // below; Issue #87 review, Important finding 1).
+  const createdRepositoryIdsRef = useRef<number[]>([]);
   const [envDone, setEnvDone] = useState(false);
   const [repoDone, setRepoDone] = useState(false);
   const [localCloneDone, setLocalCloneDone] = useState(false);
@@ -237,12 +243,27 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
   const repoSignature = repoStepSignature({ codeMode, cloneUrl, selectedRemoteUrls });
   const repoSignatureRef = useRef(repoSignature);
   useEffect(() => {
-    if (repoSignatureRef.current !== repoSignature) {
-      repoSignatureRef.current = repoSignature;
-      setRepoDone(false);
-      setCreatedRepositoryId(null);
+    const signatureChanged = repoSignatureRef.current !== repoSignature;
+    if (!signatureChanged) return;
+    repoSignatureRef.current = repoSignature;
+    setRepoDone(false);
+    setCreatedRepositoryId(null);
+    // Delete whatever THIS wizard run already persisted for the repository
+    // step before letting it re-run — `/repositories`(`/bulk`) is
+    // append-only, so re-registering without cleanup left the previous
+    // run's row(s) as orphaned duplicates (Issue #87 review, Important
+    // finding 1). Only reachable once a project exists (repoDone can only
+    // have been true after a project was created), and best-effort: this is
+    // orphan cleanup, not a step the user is blocked on — a failed delete
+    // just leaves an unused row behind, same as today.
+    const { idsToDelete, nextIds } = invalidateRepoStepIds(createdRepositoryIdsRef.current, true);
+    createdRepositoryIdsRef.current = nextIds;
+    if (createdProjectId !== null) {
+      for (const rid of idsToDelete) {
+        apiWithStatus(`/projects/${createdProjectId}/repositories/${rid}`, { method: 'DELETE' }).catch(() => {});
+      }
     }
-  }, [repoSignature]);
+  }, [repoSignature, createdProjectId]);
 
   const envSignature = envStepSignature({
     selectedServer, workingDirectory: environmentWorkingDirectory,
@@ -331,13 +352,18 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
         if (codeMode === 'existing' && repositoriesToRegister.length > 0) {
           setStep('repository', 'running', t('wizard.confirm.stepRepository'));
           try {
-            const { status, body } = await apiWithStatus<{ added: number } | { error: string }>(
+            const { status, body } = await apiWithStatus<{ added: number; ids?: number[] } | { error: string }>(
               `/projects/${pid}/repositories/bulk`,
               { method: 'POST', body: JSON.stringify({ repositories: repositoriesToRegister }) },
             );
             if (status < 200 || status >= 300) {
               throw new Error(('error' in body && body.error) || t('wizard.errors.repositoryFailed'));
             }
+            // Track every row this call created (Issue #87 review, Important
+            // finding 1) so a later retry can delete exactly these rows
+            // instead of accumulating duplicates — see the repo-signature
+            // invalidation effect above.
+            createdRepositoryIdsRef.current = 'ids' in body && Array.isArray(body.ids) ? body.ids : [];
             setRepoDone(true);
             setStep('repository', 'ok', t('wizard.confirm.stepRepository'));
           } catch (err) {
@@ -363,6 +389,7 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
             }
             repoId = body.id;
             setCreatedRepositoryId(repoId);
+            createdRepositoryIdsRef.current = [repoId];
             setRepoDone(true);
             setStep('repository', 'ok', t('wizard.confirm.stepRepository'));
           } catch (err) {

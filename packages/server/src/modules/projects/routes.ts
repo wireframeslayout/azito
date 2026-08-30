@@ -834,6 +834,7 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
 
       let added = 0;
       let skipped = 0;
+      const ids: number[] = [];
       for (const repo of repositories) {
         const rawUrl = typeof repo?.url === 'string' ? repo.url.trim() : '';
         if (!rawUrl) { skipped++; continue; }
@@ -855,7 +856,7 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
         const provider = typeof repo.provider === 'string' ? repo.provider : undefined;
         const owner = typeof repo.owner === 'string' ? repo.owner : undefined;
         const repoName = typeof repo.repoName === 'string' ? repo.repoName : undefined;
-        projectRepo.addRepository(
+        const repoId = projectRepo.addRepository(
           projectId,
           url,
           name,
@@ -863,11 +864,18 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
           owner,
           repoName,
         );
+        ids.push(repoId);
         existingUrls.add(normalizeRemoteUrl(url));
         added++;
       }
 
-      return { added, skipped };
+      // `ids` (Issue #87 review, Important finding 1): the caller (the
+      // project-creation wizard) needs the ids of the rows THIS call just
+      // created so a later retry — after editing an input that invalidates
+      // the wizard's repository step — can delete exactly those rows before
+      // re-registering, instead of leaving them as orphaned duplicates
+      // (this endpoint is append-only, same as the single-repository POST).
+      return { added, skipped, ids };
     },
   );
 

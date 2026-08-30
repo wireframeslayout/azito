@@ -519,6 +519,30 @@ describe('POST /api/projects/:id/repositories/bulk', () => {
     expect(res.json().added).toBe(1);
     expect(opts.projectRepo.addRepository).toHaveBeenCalled();
   });
+
+  it('returns the created repository ids, in order, for use by a later cleanup call (Issue #87 review, Important finding 1)', async () => {
+    const opts = makeOpts();
+    let nextId = 100;
+    opts.projectRepo.addRepository = vi.fn(() => nextId++);
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/projects/10/repositories/bulk',
+      payload: {
+        repositories: [
+          { url: 'https://github.com/acme/widgets.git', provider: 'github' },
+          { url: 'https://github.com/acme/gadgets.git', provider: 'github' },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().added).toBe(2);
+    expect(res.json().ids).toEqual([100, 101]);
+  });
 });
 
 describe('POST clone-local', () => {

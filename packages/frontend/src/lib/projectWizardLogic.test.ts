@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   getVisibleSteps, canAdvanceFromStep, stepIndex, nextStep, deriveCloneDirectoryName, deriveDefaultBranch,
   pickAvailableServer, isDiscoveryCurrent, clonesDirectlyOnServer,
-  resolveCloneDeliveryMode, repoStepSignature, envStepSignature, cloneStepSignature,
+  resolveCloneDeliveryMode, repoStepSignature, envStepSignature, cloneStepSignature, invalidateRepoStepIds,
   type WizardValidationState,
 } from './projectWizardLogic';
 
@@ -291,5 +291,31 @@ describe('envStepSignature / cloneStepSignature (review finding: completion flag
     const a = envStepSignature({ selectedServer: 'local', workingDirectory: '/work/widgets', branch: 'main', distributingRepositoryId: null });
     const b = envStepSignature({ selectedServer: 'local', workingDirectory: '/work/widgets', branch: 'main', distributingRepositoryId: null });
     expect(a).toBe(b);
+  });
+});
+
+describe('invalidateRepoStepIds (review finding: retrying the repository step must not duplicate rows — /repositories is append-only)', () => {
+  it('deletes every previously-created id and clears the tracked list when the signature changed', () => {
+    const result = invalidateRepoStepIds([1, 2, 3], true);
+    expect(result.idsToDelete).toEqual([1, 2, 3]);
+    expect(result.nextIds).toEqual([]);
+  });
+
+  it('deletes nothing and keeps the tracked ids when the signature did not change (resume-after-a-later-step-failure)', () => {
+    const result = invalidateRepoStepIds([1, 2, 3], false);
+    expect(result.idsToDelete).toEqual([]);
+    expect(result.nextIds).toEqual([1, 2, 3]);
+  });
+
+  it('is a no-op when nothing had been created yet', () => {
+    const result = invalidateRepoStepIds([], true);
+    expect(result.idsToDelete).toEqual([]);
+    expect(result.nextIds).toEqual([]);
+  });
+
+  it('handles a single tracked id (the "clone" mode single-repository registration path)', () => {
+    const result = invalidateRepoStepIds([42], true);
+    expect(result.idsToDelete).toEqual([42]);
+    expect(result.nextIds).toEqual([]);
   });
 });

@@ -263,3 +263,28 @@ export function cloneStepSignature(input: {
 }): string {
   return JSON.stringify(input);
 }
+
+/**
+ * Decides which repository rows a stale-signature invalidation must delete
+ * before the repository step is allowed to re-run (Issue #87 review,
+ * Important finding 1: "やり直しでリポジトリ行が重複して増える").
+ * `/projects/:id/repositories` and its `/bulk` sibling are append-only —
+ * retrying the repository step after editing an input that changed
+ * `repoStepSignature` used to just reset `repoDone`/`createdRepositoryId`
+ * and re-POST, leaving the PREVIOUS run's already-persisted row(s) orphaned
+ * (an unused repository still attached to the project, and — since
+ * `local` execution picks the first repository row — sometimes the one a
+ * later task actually resolves against).
+ *
+ * `createdRepositoryIds` is every repository id created by THIS wizard run
+ * (single id for 'clone' mode, one or more for a bulk 'existing'-mode
+ * registration). When the signature hasn't changed, nothing is deleted and
+ * the ids are kept (so a resume-after-a-later-step-failure run doesn't
+ * re-create a still-valid repository row). When it has changed, every id
+ * from the stale run must be deleted and the tracked list cleared so the
+ * next run starts from zero rows again.
+ */
+export function invalidateRepoStepIds(createdRepositoryIds: number[], signatureChanged: boolean): { idsToDelete: number[]; nextIds: number[] } {
+  if (!signatureChanged) return { idsToDelete: [], nextIds: createdRepositoryIds };
+  return { idsToDelete: createdRepositoryIds, nextIds: [] };
+}
