@@ -156,10 +156,10 @@ describe('RepoDiscoveryService', () => {
       ].join('\n');
       // A broken candidate: `rev-parse` fails (2>/dev/null swallows
       // stderr), so its section has no leading absolute path line.
-      const brokenSection = '---AZITO_REPO_SECTION---\n';
+      const brokenSection = '---AZITO_REPO_SECTION---';
 
-      const batchStdout =
-        brokenPosition === 'first' ? brokenSection + goodSection : goodSection + brokenSection;
+      const sections = brokenPosition === 'first' ? [brokenSection, goodSection] : [goodSection, brokenSection];
+      const batchStdout = sections.join('\n');
 
       return makeTmux(async (cmd) => {
         if (cmd.startsWith('find')) {
