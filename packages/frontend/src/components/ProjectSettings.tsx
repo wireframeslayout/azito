@@ -20,6 +20,7 @@ import { notifyProjectsChanged } from '../lib/projectsChanged';
 import { isDistributeCodeLocked, isDistributionRepositorySelected, resolveDistributeCodeForSave, resolveDistributeCodeToggleOnProjectServersChange, resolveDistributionRepositoryIdOnProjectServersChange, shouldShowDistributeCodeBadge } from '../lib/distributeCodePolicy';
 import { useToast } from '../hooks/useToast';
 import { useConfirm } from '../hooks/useConfirm';
+import RepoDiscoveryDialog from './RepoDiscoveryDialog';
 
 interface Repository { id: number; url: string; name?: string; provider?: string; owner?: string; repoName?: string; }
 interface ProjectServer {
@@ -113,6 +114,8 @@ export function useProjectSettings(
   const { showToast } = useToast();
   const confirm = useConfirm();
   const { t } = useTranslation(['projects', 'common']);
+  const [discoverOpen, setDiscoverOpen] = useState(false);
+  const [discoverSuggestion, setDiscoverSuggestion] = useState<{ serverName: string; count: number } | null>(null);
 
   // Issue #87 review finding (Minor 3): `handleOpenServerForm` already
   // re-derives `psDistributeCode` whenever it's called, but the server
@@ -318,8 +321,22 @@ export function useProjectSettings(
       body.distribute_code = resolvedDistributeCode;
     }
     await api(`/projects/${projectId}/servers/${psServer}`, { method: 'PUT', body: JSON.stringify(body) });
+    const savedServer = psServer;
+    const savedWorkDir = psWorkDir.trim();
     setAddPsOpen(false); setPsWorkDir(''); setPsBranch(''); setPsTmuxSession(''); setPsInputPolicy('manual-approval'); setPsDistributeCode(false); setPsDistributionRepositoryId('');
     api<ProjectServer[]>(`/projects/${projectId}/servers`).then((res) => setProjectServers(Array.isArray(res) ? res : [])).catch(() => {});
+    if (savedWorkDir) {
+      api<{ repositories: Array<{ remotes: Array<{ alreadyRegistered: boolean }> }> }>(
+        `/projects/${projectId}/servers/${savedServer}/discover-repositories`,
+      ).then((res) => {
+        const unregistered = res.repositories.reduce(
+          (n, r) => n + r.remotes.filter((rm) => !rm.alreadyRegistered).length, 0,
+        );
+        if (unregistered > 0) {
+          setDiscoverSuggestion({ serverName: savedServer, count: unregistered });
+        }
+      }).catch((e: unknown) => console.warn('discover-repositories:', e));
+    }
   }, [projectId, psServer, psWorkDir, psBranch, psTmuxSession, psInputPolicy, psDistributeCode, psDistributionRepositoryId, servers]);
 
   // Opens the add/edit form for `serverName`, pre-filled from its existing
@@ -364,6 +381,7 @@ export function useProjectSettings(
     addRepoOpen, setAddRepoOpen, repoUrl, setRepoUrl, repoName, setRepoName,
     repoProvider, setRepoProvider, repoOwner, setRepoOwner, repoRepoName, setRepoRepoName,
     repoToken, setRepoToken, parseRepoUrl, handleAddRepo, handleRemoveRepo,
+    discoverOpen, setDiscoverOpen, discoverSuggestion, setDiscoverSuggestion,
     // Windows
     handleRemoveWindow,
     // Servers
@@ -548,14 +566,45 @@ function GeneralSection({ settings: s }: { settings: ReturnType<typeof useProjec
 function RepositoriesSection({ settings: s, addWindowModal }: { settings: ReturnType<typeof useProjectSettings>; addWindowModal: ReturnType<typeof useAddWindowModal> }) {
   const { t } = useTranslation(['projects', 'common']);
   if (!s.project) return null;
+  const hasServerWithWorkDir = s.projectServers.some((ps) => ps.workingDirectory);
   return (
     <>
       <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginBottom: 12, padding: '8px 12px', background: 'var(--bg-card)', borderRadius: 'var(--radius-sm)' }}>
         {t('settings.repositories.tip')}
       </div>
+
+      {s.discoverSuggestion && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+          marginBottom: 12, padding: '10px 14px', borderRadius: 8,
+          background: 'var(--accent-a08)', border: '1px solid var(--accent-a35)',
+          fontSize: 13,
+        }}>
+          <span style={{ color: 'var(--accent)' }}>
+            {s.discoverSuggestion.count} unregistered {s.discoverSuggestion.count === 1 ? 'repository' : 'repositories'} found
+          </span>
+          <span style={{ display: 'flex', gap: 6 }}>
+            <Button size="sm" variant="primary" onClick={() => {
+              s.setDiscoverOpen(true);
+              s.setDiscoverSuggestion(null);
+            }}>Review</Button>
+            <button
+              onClick={() => s.setDiscoverSuggestion(null)}
+              aria-label="Dismiss"
+              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, color: 'var(--text-dim)', fontSize: 14 }}
+            >&times;</button>
+          </span>
+        </div>
+      )}
+
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
         <span style={{ fontSize: 'var(--font-md)', color: 'var(--text-dim)' }}>{t('settings.repositories.count', { count: s.project.repositories.length })}</span>
-        <Button size="sm" onClick={() => s.setAddRepoOpen(!s.addRepoOpen)}>+ {t('common:actions.add')}</Button>
+        <span style={{ display: 'flex', gap: 6 }}>
+          {hasServerWithWorkDir && (
+            <Button size="sm" onClick={() => s.setDiscoverOpen(true)}>Discover</Button>
+          )}
+          <Button size="sm" onClick={() => s.setAddRepoOpen(!s.addRepoOpen)}>+ {t('common:actions.add')}</Button>
+        </span>
       </div>
       {s.addRepoOpen && (
         <div style={{ marginBottom: 16, padding: 16, background: 'var(--bg-card)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
@@ -602,6 +651,20 @@ function RepositoriesSection({ settings: s, addWindowModal }: { settings: Return
           </div>
         ))
       )}
+
+      {s.project && (() => {
+        const discoverServer = s.discoverSuggestion?.serverName
+          || s.projectServers.find((ps) => ps.workingDirectory)?.serverName;
+        return discoverServer ? (
+          <RepoDiscoveryDialog
+            open={s.discoverOpen}
+            onClose={() => s.setDiscoverOpen(false)}
+            projectId={s.project.id}
+            serverName={discoverServer}
+            onRegistered={s.refresh}
+          />
+        ) : null;
+      })()}
 
       {/* Windows sub-section */}
       <div style={{ marginTop: 32, paddingTop: 20, borderTop: '1px solid var(--border)' }}>

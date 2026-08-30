@@ -24,6 +24,8 @@ import type { SqliteProjectSecretRepository } from './SqliteProjectSecretReposit
 import { ensureSessionWithLock, type ServerIsolationLock } from '../servers/ServerIsolationLock';
 import type { KeyedMutex } from '../../shared/keyedMutex';
 import { rejectQualifiedBranchInput } from '../git/assertSafeGitArgs';
+import type { RepoDiscoveryService } from '../git/RepoDiscoveryService';
+import { normalizeRemoteUrl } from '../git/parseRemoteUrl';
 
 // ─── Types ───
 
@@ -46,12 +48,13 @@ export interface ProjectsRouteOptions {
   // row a concurrent transition has already superseded. See
   // ServerIsolationLock's doc comment in tasks/execution/WindowRotation.ts.
   serverIsolationMutex: KeyedMutex;
+  repoDiscovery: RepoDiscoveryService;
 }
 
 // ─── Plugin ───
 
 const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, opts, done) => {
-  const { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux, serverRepo, projectSecretRepo, originationService, serverIsolationMutex } = opts;
+  const { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux, serverRepo, projectSecretRepo, originationService, serverIsolationMutex, repoDiscovery } = opts;
   const serverIsolationLock: ServerIsolationLock = { serverIsolationMutex, serverRepo };
   const SECRET_NAME_PATTERN = /^[A-Z0-9_]{1,64}$/;
 
@@ -665,6 +668,89 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
     if (!deleted) return reply.status(404).send({ error: 'Secret not found' });
     return { ok: true };
   });
+
+  // ── GET /api/projects/:id/servers/:serverName/discover-repositories ──
+  fastify.get<{ Params: { id: string; serverName: string } }>(
+    '/api/projects/:id/servers/:serverName/discover-repositories',
+    async (request, reply) => {
+      const projectId = parseInt(request.params.id, 10);
+      const project = projectRepo.findById(projectId);
+      if (!project) return reply.status(404).send({ error: 'Project not found' });
+
+      const ps = projectServerRepo.find(projectId, request.params.serverName);
+      if (!ps?.workingDirectory) {
+        return reply.status(400).send({ error: 'Working directory not configured for this server environment' });
+      }
+
+      const srv = serverRepo.findByName(request.params.serverName);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+
+      const discovered = await repoDiscovery.discover(srv, ps.workingDirectory);
+
+      const existingUrls = new Set(
+        (project.repositories || []).map((r) => normalizeRemoteUrl(r.url)),
+      );
+
+      const repositories = discovered.map((repo) => ({
+        relativePath: repo.relativePath,
+        absolutePath: repo.absolutePath,
+        remotes: repo.remotes.map((remote) => ({
+          name: remote.name,
+          url: remote.url,
+          provider: remote.parsed.provider,
+          owner: remote.parsed.owner,
+          repoName: remote.parsed.repoName,
+          alreadyRegistered: existingUrls.has(normalizeRemoteUrl(remote.url)),
+        })),
+      }));
+
+      return { repositories };
+    },
+  );
+
+  // ── POST /api/projects/:id/repositories/bulk ──
+  fastify.post<{ Params: { id: string } }>(
+    '/api/projects/:id/repositories/bulk',
+    async (request, reply) => {
+      const projectId = parseInt(request.params.id, 10);
+      const project = projectRepo.findById(projectId);
+      if (!project) return reply.status(404).send({ error: 'Project not found' });
+
+      const body = request.body as Record<string, unknown>;
+      const repositories = body.repositories;
+      if (!Array.isArray(repositories)) {
+        return reply.status(400).send({ error: 'repositories array required' });
+      }
+
+      const existingUrls = new Set(
+        (project.repositories || []).map((r) => normalizeRemoteUrl(r.url)),
+      );
+
+      let added = 0;
+      let skipped = 0;
+      for (const repo of repositories) {
+        const url = typeof repo?.url === 'string' ? repo.url.trim() : '';
+        if (!url) { skipped++; continue; }
+        if (existingUrls.has(normalizeRemoteUrl(url))) { skipped++; continue; }
+        const name = typeof repo.name === 'string' ? repo.name : undefined;
+        const provider = typeof repo.provider === 'string' ? repo.provider : undefined;
+        const owner = typeof repo.owner === 'string' ? repo.owner : undefined;
+        const repoName = typeof repo.repoName === 'string' ? repo.repoName : undefined;
+        projectRepo.addRepository(
+          projectId,
+          url,
+          name,
+          (provider as RepositoryProvider) || 'other',
+          owner,
+          repoName,
+        );
+        existingUrls.add(normalizeRemoteUrl(url));
+        added++;
+      }
+
+      return { added, skipped };
+    },
+  );
 
   done();
 };
