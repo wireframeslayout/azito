@@ -82,6 +82,7 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
     } as unknown as ProjectsRouteOptions['projectSecretRepo'],
     serverIsolationMutex: new KeyedMutex(),
     repoDiscovery: { discover: vi.fn(async () => []) } as unknown as ProjectsRouteOptions['repoDiscovery'],
+    localRepoCloneService: { clone: vi.fn() } as unknown as ProjectsRouteOptions['localRepoCloneService'],
     ...overrides,
   };
 }

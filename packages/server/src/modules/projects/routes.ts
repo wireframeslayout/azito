@@ -28,6 +28,8 @@ import { toDiscoveryResponse, type RepoDiscoveryService } from '../git/RepoDisco
 import { normalizeRemoteUrl } from '../git/parseRemoteUrl';
 import { urlHasEmbeddedCredentials } from '../git/urlHasEmbeddedCredentials';
 import { sanitizeDiscoveredRemoteUrl } from '../git/sanitizeDiscoveredRemoteUrl';
+import { resolveCanonicalRepositoryIdentity } from '../git/resolveCanonicalRepositoryIdentity';
+import { LocalCloneTargetNotEmptyError, type LocalRepoCloneService } from '../git/LocalRepoCloneService';
 
 // ─── Types ───
 
@@ -51,12 +53,14 @@ export interface ProjectsRouteOptions {
   // ServerIsolationLock's doc comment in tasks/execution/WindowRotation.ts.
   serverIsolationMutex: KeyedMutex;
   repoDiscovery: RepoDiscoveryService;
+  /** Issue #87 "クローンが壊れた設定を作る" fix: clones a registered repository directly into a `local`-type server's working directory (hub own filesystem) — the only server type distribution doesn't cover. */
+  localRepoCloneService: LocalRepoCloneService;
 }
 
 // ─── Plugin ───
 
 const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, opts, done) => {
-  const { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux, serverRepo, projectSecretRepo, originationService, serverIsolationMutex, repoDiscovery } = opts;
+  const { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux, serverRepo, projectSecretRepo, originationService, serverIsolationMutex, repoDiscovery, localRepoCloneService } = opts;
   const serverIsolationLock: ServerIsolationLock = { serverIsolationMutex, serverRepo };
   const SECRET_NAME_PATTERN = /^[A-Z0-9_]{1,64}$/;
 
@@ -730,6 +734,61 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       const repositories = toDiscoveryResponse(discovered, existingUrls);
 
       return { repositories };
+    },
+  );
+
+  // ── POST /api/projects/:id/servers/:serverName/clone-local ──
+  // Issue #87 "クローンが壊れた設定を作る" fix: `local` is the hub itself and
+  // is structurally excluded from hub-代行配信 (ExecuteTaskUseCase's
+  // distribution gate), so a `local` environment's "clone" wizard step has
+  // no other way to actually get code onto disk. Every other server type
+  // instead relies on `distribute_code`/`distribution_repository_id` set on
+  // the PUT .../servers/:serverName call — see that handler's own comments.
+  fastify.post<{ Params: { id: string; serverName: string } }>(
+    '/api/projects/:id/servers/:serverName/clone-local',
+    async (request, reply) => {
+      const projectId = parseInt(request.params.id, 10);
+      const project = projectRepo.findById(projectId);
+      if (!project) return reply.status(404).send({ error: 'Project not found' });
+
+      const targetServer = serverRepo.findByName(request.params.serverName);
+      if (!targetServer) return reply.status(404).send({ error: 'Server not found' });
+      if (targetServer.type !== 'local') {
+        return reply.status(400).send({ error: 'clone-local is only supported for a local-type server; other server types are provisioned via distribution instead' });
+      }
+
+      const body = (request.body ?? {}) as { repository_id?: number; target_directory?: string; branch?: string };
+      if (typeof body.repository_id !== 'number') {
+        return reply.status(400).send({ error: 'repository_id must be a number' });
+      }
+      if (typeof body.target_directory !== 'string' || !body.target_directory.trim()) {
+        return reply.status(400).send({ error: 'target_directory is required' });
+      }
+      const branch = typeof body.branch === 'string' && body.branch.trim() ? body.branch.trim() : 'main';
+
+      const repository = projectRepo.findRepositoryById(body.repository_id);
+      if (!repository || !project.repositories.some((r) => r.id === repository.id)) {
+        return reply.status(400).send({ error: 'repository_id must reference a repository belonging to this project' });
+      }
+
+      const identityResult = resolveCanonicalRepositoryIdentity(repository);
+      if (!identityResult.ok) {
+        return reply.status(400).send({ error: `Could not resolve a canonical repository identity: ${identityResult.reason}` });
+      }
+
+      try {
+        localRepoCloneService.clone(identityResult.identity, repository.token, branch, body.target_directory.trim());
+      } catch (err) {
+        if (err instanceof LocalCloneTargetNotEmptyError) {
+          return reply.status(409).send({ error: err.message });
+        }
+        // LocalRepoCloneService already redacts any embedded credential
+        // before the error reaches here — safe to surface as-is.
+        fastify.log.warn({ err, projectId, serverName: request.params.serverName }, 'local repository clone failed');
+        return reply.status(502).send({ error: err instanceof Error ? err.message : 'Local clone failed' });
+      }
+
+      return { ok: true };
     },
   );
 

@@ -5,6 +5,7 @@ import type { ProjectsRouteOptions } from './routes';
 import { TaskOriginationService } from '../tasks/origination/TaskOriginationService';
 import type { AuditLogService } from '../../shared/audit/AuditLogService';
 import { KeyedMutex } from '../../shared/keyedMutex';
+import { LocalCloneTargetNotEmptyError } from '../git/LocalRepoCloneService';
 
 // Issue #19 third-party review:
 // - Important finding 1: a discovered remote's raw URL (which may embed
@@ -90,6 +91,7 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
     } as unknown as ProjectsRouteOptions['projectSecretRepo'],
     serverIsolationMutex: new KeyedMutex(),
     repoDiscovery: { discover: vi.fn(async () => []) } as unknown as ProjectsRouteOptions['repoDiscovery'],
+    localRepoCloneService: { clone: vi.fn() } as unknown as ProjectsRouteOptions['localRepoCloneService'],
     ...overrides,
   };
 }
@@ -516,5 +518,123 @@ describe('POST /api/projects/:id/repositories/bulk', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().added).toBe(1);
     expect(opts.projectRepo.addRepository).toHaveBeenCalled();
+  });
+});
+
+describe('POST clone-local', () => {
+  function makeCloneOpts(overrides: Partial<ProjectsRouteOptions> = {}) {
+    return makeOpts({
+      projectRepo: {
+        findAll: vi.fn(() => []),
+        findById: vi.fn(() => ({
+          id: 10, name: 'P', slug: 'p', description: null, repositoryUrl: null, defaultBranch: 'main',
+          sidekickPrompt: null, icon: null, color: null, defaultUnitId: null, servers: [], windows: [],
+          createdAt: '', updatedAt: '',
+          repositories: [{ id: 5, name: null, url: 'https://github.com/acme/widgets.git', provider: 'github' as const, owner: 'acme', repoName: 'widgets', hasToken: true }],
+        })),
+        create: vi.fn(() => 10),
+        update: vi.fn(),
+        delete: vi.fn(),
+        addRepository: vi.fn(() => 1),
+        findRepositoryById: vi.fn((id: number) => id === 5 ? {
+          id: 5, name: null, url: 'https://github.com/acme/widgets.git', provider: 'github' as const, owner: 'acme', repoName: 'widgets', token: 'dummy-token',
+        } : null),
+        removeRepository: vi.fn(),
+      },
+      ...overrides,
+    });
+  }
+
+  it('rejects a non-local server', async () => {
+    const opts = makeCloneOpts({
+      serverRepo: {
+        findAll: vi.fn(() => []),
+        findByName: vi.fn(() => ({
+          name: 'remote1', type: 'agent' as const, host: 'x', agentPort: null, agentToken: null, agentVersion: null,
+          sshHost: 'x', muxRuntime: 'system' as const, sshHostFingerprint: null,
+          isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '',
+        })),
+        create: vi.fn(), update: vi.fn(), updateAgentVersion: vi.fn(), updateFingerprint: vi.fn(),
+        clearFingerprint: vi.fn(), updateIsolationIntent: vi.fn(), delete: vi.fn(),
+      },
+    });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'POST', url: '/api/projects/10/servers/remote1/clone-local',
+      payload: { repository_id: 5, target_directory: '/work/widgets' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(opts.localRepoCloneService.clone).not.toHaveBeenCalled();
+  });
+
+  it('rejects a repository_id that does not belong to the project', async () => {
+    const opts = makeCloneOpts();
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'POST', url: '/api/projects/10/servers/local/clone-local',
+      payload: { repository_id: 999, target_directory: '/work/widgets' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(opts.localRepoCloneService.clone).not.toHaveBeenCalled();
+  });
+
+  it('clones the resolved identity with the repository token into the target directory on success', async () => {
+    const cloneMock = vi.fn();
+    const opts = makeCloneOpts({ localRepoCloneService: { clone: cloneMock } as unknown as ProjectsRouteOptions['localRepoCloneService'] });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'POST', url: '/api/projects/10/servers/local/clone-local',
+      payload: { repository_id: 5, target_directory: '/work/widgets', branch: 'develop' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(cloneMock).toHaveBeenCalledTimes(1);
+    const [identity, token, branch, targetDir] = cloneMock.mock.calls[0];
+    expect(identity).toMatchObject({ provider: 'github', owner: 'acme', repo: 'widgets' });
+    expect(token).toBe('dummy-token');
+    expect(branch).toBe('develop');
+    expect(targetDir).toBe('/work/widgets');
+  });
+
+  it('returns 409 when the target directory is not empty', async () => {
+    const cloneMock = vi.fn(() => { throw new LocalCloneTargetNotEmptyError('/work/widgets'); });
+    const opts = makeCloneOpts({ localRepoCloneService: { clone: cloneMock } as unknown as ProjectsRouteOptions['localRepoCloneService'] });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'POST', url: '/api/projects/10/servers/local/clone-local',
+      payload: { repository_id: 5, target_directory: '/work/widgets' },
+    });
+
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('returns 502 with the (already-redacted) error message on a general clone failure', async () => {
+    const cloneMock = vi.fn(() => { throw new Error('git clone failed: fatal: could not resolve host'); });
+    const opts = makeCloneOpts({ localRepoCloneService: { clone: cloneMock } as unknown as ProjectsRouteOptions['localRepoCloneService'] });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'POST', url: '/api/projects/10/servers/local/clone-local',
+      payload: { repository_id: 5, target_directory: '/work/widgets' },
+    });
+
+    expect(res.statusCode).toBe(502);
+    expect(res.json().error).toContain('could not resolve host');
   });
 });

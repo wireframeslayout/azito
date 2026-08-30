@@ -24,6 +24,23 @@ export interface WizardValidationState {
   existingPath: string;
   cloneUrl: string;
   cloneDirectory: string;
+  /**
+   * Server names already configured for this project ('addEnvironment' mode
+   * only). A selection matching one of these must never be allowed to
+   * advance — the environment PUT would silently overwrite that
+   * environment's working directory/branch/tmux session/input policy
+   * (Issue #87 review, Important finding 2).
+   */
+  existingServerNames?: string[];
+  /**
+   * Whether repository discovery has FINISHED SUCCESSFULLY for the
+   * currently-selected server + path (codeMode 'existing' only) — never
+   * true while a scan is in flight, errored, or was run against a stale
+   * server/path the user has since changed (Issue #87 review, Important
+   * finding 3). The wizard must not advance to confirm/execute on a
+   * previous path's discovery result.
+   */
+  discoveryReady?: boolean;
 }
 
 /**
@@ -54,9 +71,9 @@ export function canAdvanceFromStep(stepId: WizardStepId, state: WizardValidation
     case 'project':
       return state.projectName.trim().length > 0 && state.projectSlug.trim().length > 0;
     case 'environment':
-      return state.selectedServer.trim().length > 0;
+      return state.selectedServer.trim().length > 0 && !(state.existingServerNames ?? []).includes(state.selectedServer);
     case 'code':
-      if (state.codeMode === 'existing') return state.existingPath.trim().length > 0;
+      if (state.codeMode === 'existing') return state.existingPath.trim().length > 0 && state.discoveryReady === true;
       if (state.codeMode === 'clone') return state.cloneUrl.trim().length > 0 && state.cloneDirectory.trim().length > 0;
       return true; // 'later': nothing required
     case 'confirm':
@@ -81,6 +98,46 @@ export function nextStep(visibleSteps: WizardStepId[], currentStep: WizardStepId
   return visibleSteps[target];
 }
 
+/**
+ * Picks the server the environment step should default to, given the
+ * servers already configured for this project ('addEnvironment' mode).
+ * Never returns a name in `existingServerNames` — selecting one would let
+ * the environment PUT silently overwrite that environment's settings
+ * (Issue #87 review, Important finding 2). Returns '' when every server is
+ * already configured (the caller must then block completion and show a
+ * message — there is nothing left to choose).
+ *
+ * `currentSelection` is kept as-is when it is still a valid (available)
+ * choice, so this can be called on every server-list/existing-names change
+ * without fighting a manual selection the user already made.
+ */
+export function pickAvailableServer(
+  serverNames: string[],
+  existingServerNames: string[],
+  currentSelection: string,
+): string {
+  const available = serverNames.filter((name) => !existingServerNames.includes(name));
+  if (available.includes(currentSelection)) return currentSelection;
+  if (available.includes('local')) return 'local';
+  return available[0] ?? '';
+}
+
+export interface DiscoveryKey {
+  server: string;
+  path: string;
+}
+
+/**
+ * Whether a resolved discovery result (keyed by the server + path it was
+ * fetched for) still matches the CURRENT server + path — used to gate
+ * advancing past the "code" step so a stale result (from before the user
+ * edited the path/server) can never be registered as if it were current
+ * (Issue #87 review, Important finding 3).
+ */
+export function isDiscoveryCurrent(key: DiscoveryKey | null, currentServer: string, currentPath: string): boolean {
+  return key !== null && key.server === currentServer && key.path === currentPath.trim();
+}
+
 /** Derives a default clone-target directory name from a repository URL, e.g. `git@github.com:acme/widgets.git` -> `widgets`. Editable afterward by the user; returns '' when no name can be derived. */
 export function deriveCloneDirectoryName(cloneUrl: string): string {
   const trimmed = cloneUrl.trim().replace(/\/+$/, '');
@@ -101,4 +158,20 @@ export function deriveCloneDirectoryName(cloneUrl: string): string {
 export function deriveDefaultBranch(codeMode: CodeMode, cloneBranch: string): string {
   if (codeMode === 'clone') return cloneBranch.trim() || 'main';
   return 'main';
+}
+
+/**
+ * Whether the wizard clones directly on the given server type, versus
+ * relying on the hub's existing 代行配信 (distribution) path.
+ *
+ * `local` IS the hub itself and is structurally excluded from distribution
+ * (ExecuteTaskUseCase's distribution gate never targets it) — it is the
+ * only server type where "clone" can mean an actual `git clone` run right
+ * now. Every other server type gets its code from distribution instead,
+ * which only runs once a task actually executes there — never here (Issue
+ * #87 review, Important finding 4: the previous "clone" mode registered a
+ * repository row but configured neither distribution nor an actual clone).
+ */
+export function clonesDirectlyOnServer(serverType: string): boolean {
+  return serverType === 'local';
 }

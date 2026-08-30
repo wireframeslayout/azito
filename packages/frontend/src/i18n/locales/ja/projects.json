@@ -56,7 +56,9 @@
       "isolatedBadge": "隔離",
       "isolatedHint": "このサーバーは資格情報を持たず、承認なしで外部由来タスクを実行できます。",
       "autoSelected": "選択肢が1つのため自動選択されました。",
-      "alreadyAdded": "追加済み"
+      "alreadyAdded": "追加済み",
+      "noServersAvailable": "このプロジェクトにはすべてのサーバーが既に追加済みです。追加できる環境はありません。",
+      "alreadyAddedError": "「{{server}}」はこのプロジェクトに既に追加済みのため、再度追加できません。"
     },
     "code": {
       "modeExisting": "既存のディレクトリを使う",
@@ -79,7 +81,8 @@
       "cloneDirectoryLabel": "配置先ディレクトリ",
       "cloneDirectoryRequired": "配置先ディレクトリを入力してください",
       "cloneBranchLabel": "ブランチ",
-      "cloneNote": "作成後に配信でこのリポジトリを用意します。ここではクローンを実行しません。",
+      "cloneNote": "このサーバーで最初にタスクを実行するときに、配信でこのリポジトリを用意します。ここではクローンを実行しません。",
+      "cloneNoteLocal": "このリポジトリを、いまここでハブ上の配置先ディレクトリへ直接クローンします。",
       "laterNote": "環境（サーバー・ルート）のみ作成し、リポジトリは登録しません。"
     },
     "confirm": {
@@ -92,11 +95,18 @@
       "stepProject": "プロジェクト",
       "stepEnvironment": "環境",
       "stepRepository": "リポジトリ",
+      "stepClone": "クローン",
       "alreadyCreatedNotice": "すでに作成済みの手順は保持されます。失敗した手順から再実行できます。",
       "retry": "再試行"
     },
     "addEnvironment": {
       "title": "環境を追加"
+    },
+    "errors": {
+      "projectFailed": "プロジェクトの作成に失敗しました。",
+      "repositoryFailed": "リポジトリの登録に失敗しました。",
+      "environmentFailed": "環境の保存に失敗しました。",
+      "cloneFailed": "リポジトリのクローンに失敗しました。"
     }
   },
   "general": {

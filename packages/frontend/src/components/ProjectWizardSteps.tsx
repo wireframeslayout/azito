@@ -76,11 +76,28 @@ export function StepIndicator({ visibleSteps, currentStep, isMobile, t }: { visi
   );
 }
 
-export function EnvironmentStep({ t, serverList, selectedServer, setSelectedServer, existingServerNames, showValidation }: {
+export function EnvironmentStep({ t, serverList, selectedServer, setSelectedServer, existingServerNames, showValidation, noServersAvailable }: {
   t: TFunc; serverList: ServerListItem[]; selectedServer: string; setSelectedServer: (v: string) => void;
-  existingServerNames?: string[]; showValidation: boolean;
+  existingServerNames?: string[]; showValidation: boolean; noServersAvailable?: boolean;
 }) {
   const selected = serverList.find((sv) => sv.name === selectedServer);
+  // No server left to add (every one is already configured for this
+  // project) — the operator cannot complete this step at all, so say so
+  // instead of showing a select with nothing valid in it (Issue #87
+  // review, Important finding 2).
+  if (noServersAvailable) {
+    return (
+      <>
+        <p style={{ fontSize: 'var(--font-md)', color: 'var(--text-dim)', marginTop: 0 }}>{t('wizard.environment.description')}</p>
+        <div role="alert" style={{
+          padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--danger-a15)',
+          border: '1px solid var(--danger-a35)', color: 'var(--danger)', fontSize: 'var(--font-md)',
+        }}>
+          {t('wizard.environment.noServersAvailable')}
+        </div>
+      </>
+    );
+  }
   return (
     <>
       <p style={{ fontSize: 'var(--font-md)', color: 'var(--text-dim)', marginTop: 0 }}>{t('wizard.environment.description')}</p>
@@ -107,16 +124,22 @@ export function EnvironmentStep({ t, serverList, selectedServer, setSelectedServ
 }
 
 export function CodeStep({
-  t, codeMode, setCodeMode, selectedServer, existingPath, onExistingPathChange, discovery,
+  t, codeMode, setCodeMode, selectedServer, selectedServerType, existingPath, onExistingPathChange, discovery,
   selectedRemoteUrls, toggleRemoteSelected, cloneUrl, setCloneUrl, cloneDirectory, setCloneDirectory, cloneBranch, setCloneBranch,
   showValidation,
 }: {
-  t: TFunc; codeMode: CodeMode; setCodeMode: (m: CodeMode) => void; selectedServer: string;
+  t: TFunc; codeMode: CodeMode; setCodeMode: (m: CodeMode) => void; selectedServer: string; selectedServerType?: string;
   existingPath: string; onExistingPathChange: (v: string) => void; discovery: DiscoveryStatus;
   selectedRemoteUrls: Set<string>; toggleRemoteSelected: (url: string) => void;
   cloneUrl: string; setCloneUrl: (v: string) => void; cloneDirectory: string; setCloneDirectory: (v: string) => void;
   cloneBranch: string; setCloneBranch: (v: string) => void; showValidation: boolean;
 }) {
+  // 'local' clones directly (right here, on the hub's own filesystem);
+  // every other server type instead gets the repository via the existing
+  // hub-代行配信 path, which only runs once a task actually executes there
+  // (Issue #87 review, Important finding 4 — the UI must say which one
+  // actually happens, not a generic "provisioned later" note for both).
+  const clonesNow = selectedServerType === 'local';
   const parsedClone = cloneUrl.trim() ? parseCloneUrlForRegistration(cloneUrl.trim()) : null;
   return (
     <>
@@ -159,7 +182,9 @@ export function CodeStep({
           <FormField label={t('wizard.code.cloneBranchLabel')}>
             <FormInput value={cloneBranch} onChange={(e) => setCloneBranch(e.target.value)} placeholder="main" />
           </FormField>
-          <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{t('wizard.code.cloneNote')}</p>
+          <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
+            {clonesNow ? t('wizard.code.cloneNoteLocal') : t('wizard.code.cloneNote')}
+          </p>
         </>
       )}
 
