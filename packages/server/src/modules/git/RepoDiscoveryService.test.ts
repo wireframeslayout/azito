@@ -3,7 +3,8 @@ import { execSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { RepoDiscoveryService } from './RepoDiscoveryService';
+import { RepoDiscoveryService, toDiscoveryResponse } from './RepoDiscoveryService';
+import { normalizeRemoteUrl } from './parseRemoteUrl';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { ServerConfig } from '../servers/Server';
 
@@ -271,6 +272,113 @@ describe('RepoDiscoveryService', () => {
       expect(foundPaths).toContain(join(fixtureRoot, '.worktrees', 'task-1', '.git'));
       expect(foundPaths.some((p) => p.includes('node_modules'))).toBe(false);
       expect(foundPaths.some((p) => p.includes('/.git/modules/'))).toBe(false);
+    });
+  });
+
+  describe('checkPathStatus', () => {
+    it('reports exists:false without an error for a path that does not exist', async () => {
+      const tmux = makeTmux(async () => ({ stdout: '', stderr: '', code: 0 }));
+      const service = new RepoDiscoveryService(tmux);
+
+      const status = await service.checkPathStatus(makeServer(), '/does/not/exist');
+
+      expect(status).toEqual({ exists: false, isGitRepository: false });
+    });
+
+    it('reports exists:true, isGitRepository:false for an existing non-git directory', async () => {
+      const tmux = makeTmux(async () => ({ stdout: 'EXISTS\n', stderr: '', code: 0 }));
+      const service = new RepoDiscoveryService(tmux);
+
+      const status = await service.checkPathStatus(makeServer(), '/work/plain-dir');
+
+      expect(status).toEqual({ exists: true, isGitRepository: false });
+    });
+
+    it('reports exists:true, isGitRepository:true when the path itself has a .git entry', async () => {
+      const tmux = makeTmux(async () => ({ stdout: 'EXISTS\nISGIT\n', stderr: '', code: 0 }));
+      const service = new RepoDiscoveryService(tmux);
+
+      const status = await service.checkPathStatus(makeServer(), '/work/repo');
+
+      expect(status).toEqual({ exists: true, isGitRepository: true });
+    });
+
+    it('throws (does not silently report exists:false) on a transport-level failure', async () => {
+      const tmux = makeTmux(async () => ({ stdout: '', stderr: 'boom', code: 1 }));
+      const service = new RepoDiscoveryService(tmux);
+
+      await expect(service.checkPathStatus(makeServer(), '/work')).rejects.toThrow(/Path status check failed/);
+    });
+  });
+
+  describe('toDiscoveryResponse', () => {
+    it('strips embedded credentials and never includes a raw remote URL', () => {
+      const result = toDiscoveryResponse(
+        [
+          {
+            relativePath: '.',
+            absolutePath: '/work/repo',
+            remotes: [
+              {
+                name: 'origin',
+                url: 'https://ghost:dummy-token@github.com/acme/widgets.git',
+                parsed: { provider: 'github', owner: 'acme', repoName: 'widgets', host: 'github.com' },
+              },
+            ],
+          },
+        ],
+        new Set(),
+      );
+
+      expect(result[0].remotes[0].url).toBe('https://github.com/acme/widgets.git');
+      expect(result[0].remotes[0].url).not.toContain('dummy-token');
+    });
+
+    it('drops a remote sanitizeDiscoveredRemoteUrl cannot clean, rather than a placeholder string', () => {
+      const result = toDiscoveryResponse(
+        [
+          {
+            relativePath: '.',
+            absolutePath: '/work/repo',
+            remotes: [
+              {
+                name: 'origin',
+                // Structurally malformed scheme:// value sanitizeDiscoveredRemoteUrl cannot parse.
+                url: 'https://[bad',
+                parsed: { provider: 'other', owner: null, repoName: null, host: null },
+              },
+            ],
+          },
+        ],
+        new Set(),
+      );
+
+      expect(result[0].remotes).toEqual([]);
+    });
+
+    it('marks alreadyRegistered only when the normalized URL is present in existingUrls', () => {
+      const repos = [
+        {
+          relativePath: '.',
+          absolutePath: '/work/repo',
+          remotes: [
+            {
+              name: 'origin',
+              url: 'git@github.com:acme/widgets.git',
+              parsed: { provider: 'github' as const, owner: 'acme', repoName: 'widgets', host: 'github.com' },
+            },
+          ],
+        },
+      ];
+
+      const matched = toDiscoveryResponse(repos, new Set([normalizeRemoteUrl('git@github.com:acme/widgets.git')]));
+      expect(matched[0].remotes[0].alreadyRegistered).toBe(true);
+
+      // The project-independent create-project wizard endpoint always calls
+      // this with an empty set (no project exists yet to register against),
+      // and must never report true regardless of the discovered URL.
+      const unmatched = toDiscoveryResponse(repos, new Set());
+      expect(unmatched[0].remotes[0].alreadyRegistered).toBe(false);
     });
   });
 });

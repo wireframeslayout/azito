@@ -431,7 +431,12 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // serializes against this exact mutex as well. `wiring.serverIsolationMutex`
   // is that one shared instance; reused below, never re-constructed.
   const { serverIsolationMutex } = wiring;
-  await app.register(serversRoutes, { serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled });
+  // Constructed here (before serversRoutes registration) rather than down
+  // near projectsRoutes below, so both the project-independent scan route
+  // (servers/routes.ts) and the project-scoped one (projects/routes.ts)
+  // share this exact instance.
+  const repoDiscovery = new RepoDiscoveryService(tmuxClient);
+  await app.register(serversRoutes, { serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, repoDiscovery });
   await app.register(sessionsRoutes, {
     serverRepo, tmux: tmuxClient, windowRepo, notificationBus, resourceGuard, serverIsolationMutex,
     destroyPrimaryTaskWindow: (taskId, windowName, serverName, target, reason, kill, onDestroyed) => {
@@ -486,7 +491,6 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   const fileSearchService = new FileSearchService(transportFactory);
   await app.register(fileBrowseRoutes, { serverRepo, tmux: tmuxClient, projectServerRepo, transportFactory, searchService: fileSearchService });
   await app.register(gitRoutes, { serverRepo, transportFactory, taskRepo, projectServerRepo, worktreeServiceFactory });
-  const repoDiscovery = new RepoDiscoveryService(tmuxClient);
   await app.register(projectsRoutes, { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux: tmuxClient, serverRepo, projectSecretRepo, originationService, serverIsolationMutex, repoDiscovery });
   await app.register(unitsRoutes, { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, projectServerRepo, serverRepo, sidekickLoader: sidekickPackageLoader, unitTypeLoader });
   await app.register(operationsRoutes, { executeTaskUseCase, agentActivityMonitor, supervisorRegistry, windowRepo });

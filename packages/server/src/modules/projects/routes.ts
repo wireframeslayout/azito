@@ -24,7 +24,7 @@ import type { SqliteProjectSecretRepository } from './SqliteProjectSecretReposit
 import { ensureSessionWithLock, type ServerIsolationLock } from '../servers/ServerIsolationLock';
 import type { KeyedMutex } from '../../shared/keyedMutex';
 import { rejectQualifiedBranchInput } from '../git/assertSafeGitArgs';
-import type { RepoDiscoveryService } from '../git/RepoDiscoveryService';
+import { toDiscoveryResponse, type RepoDiscoveryService } from '../git/RepoDiscoveryService';
 import { normalizeRemoteUrl } from '../git/parseRemoteUrl';
 import { urlHasEmbeddedCredentials } from '../git/urlHasEmbeddedCredentials';
 import { sanitizeDiscoveredRemoteUrl } from '../git/sanitizeDiscoveredRemoteUrl';
@@ -724,24 +724,10 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       // cannot clean (structurally malformed) comes back as `null` and is
       // dropped from the response entirely rather than shown as a
       // placeholder string (Issue #19 3rd review round, Nit finding 2).
-      const repositories = discovered.map((repo) => ({
-        relativePath: repo.relativePath,
-        absolutePath: repo.absolutePath,
-        remotes: repo.remotes
-          .map((remote) => {
-            const safeUrl = sanitizeDiscoveredRemoteUrl(remote.url);
-            if (safeUrl === null) return null;
-            return {
-              name: remote.name,
-              url: safeUrl,
-              provider: remote.parsed.provider,
-              owner: remote.parsed.owner,
-              repoName: remote.parsed.repoName,
-              alreadyRegistered: existingUrls.has(normalizeRemoteUrl(safeUrl)),
-            };
-          })
-          .filter((r): r is NonNullable<typeof r> => r !== null),
-      }));
+      // `toDiscoveryResponse` is shared with the project-independent
+      // `GET /api/servers/:name/discover-repositories` endpoint so this
+      // shaping logic (and its credential handling) exists in one place.
+      const repositories = toDiscoveryResponse(discovered, existingUrls);
 
       return { repositories };
     },

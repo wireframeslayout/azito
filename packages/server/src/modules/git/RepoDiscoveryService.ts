@@ -1,7 +1,8 @@
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { ServerConfig } from '../servers/Server';
-import { parseRemoteUrl, type ParsedRemote } from './parseRemoteUrl';
+import { parseRemoteUrl, normalizeRemoteUrl, type ParsedRemote, type RepositoryProvider } from './parseRemoteUrl';
 import { shellQuote } from '../../shared/shellQuote';
+import { sanitizeDiscoveredRemoteUrl } from './sanitizeDiscoveredRemoteUrl';
 
 export interface DiscoveredRemote {
   name: string;
@@ -15,10 +16,91 @@ export interface DiscoveredRepo {
   remotes: DiscoveredRemote[];
 }
 
+export interface DiscoveredRepoRemoteResponse {
+  name: string;
+  url: string;
+  provider: RepositoryProvider;
+  owner: string | null;
+  repoName: string | null;
+  alreadyRegistered: boolean;
+}
+
+export interface DiscoveredRepoResponse {
+  relativePath: string;
+  absolutePath: string;
+  remotes: DiscoveredRepoRemoteResponse[];
+}
+
+/**
+ * Shared response shaping between the project-scoped discovery endpoint
+ * (`GET /api/projects/:id/servers/:serverName/discover-repositories`) and
+ * the project-independent one (`GET /api/servers/:name/discover-repositories`,
+ * usable before a project exists). Both must apply the same credential
+ * stripping (`sanitizeDiscoveredRemoteUrl`) and drop remotes it cannot
+ * clean rather than showing a placeholder — this function is the single
+ * place that logic lives, so neither route can drift from the other.
+ *
+ * `existingUrls` is a set of already-registered remote URLs (normalized via
+ * `normalizeRemoteUrl`) used to compute `alreadyRegistered`. The
+ * project-independent caller has no project to check against, so it passes
+ * an empty set — every remote comes back `alreadyRegistered: false` there,
+ * which is simply true (there is nothing yet to be "already registered"
+ * with), not a stand-in for unknown/unchecked state.
+ */
+export function toDiscoveryResponse(repos: DiscoveredRepo[], existingUrls: Set<string>): DiscoveredRepoResponse[] {
+  return repos.map((repo) => ({
+    relativePath: repo.relativePath,
+    absolutePath: repo.absolutePath,
+    remotes: repo.remotes
+      .map((remote) => {
+        const safeUrl = sanitizeDiscoveredRemoteUrl(remote.url);
+        if (safeUrl === null) return null;
+        return {
+          name: remote.name,
+          url: safeUrl,
+          provider: remote.parsed.provider,
+          owner: remote.parsed.owner,
+          repoName: remote.parsed.repoName,
+          alreadyRegistered: existingUrls.has(normalizeRemoteUrl(safeUrl)),
+        };
+      })
+      .filter((r): r is NonNullable<typeof r> => r !== null),
+  }));
+}
+
+export interface PathStatus {
+  exists: boolean;
+  isGitRepository: boolean;
+}
+
 const SECTION_MARKER = '---AZITO_REPO_SECTION---';
 
 export class RepoDiscoveryService {
   constructor(private tmux: TmuxClient) {}
+
+  /**
+   * Reports whether `path` exists on `server`, and if so whether `path`
+   * itself (not a descendant) is a git repository root — used by the
+   * project-independent discovery endpoint so the create-project wizard
+   * can distinguish "this path will be created" (does not exist yet, not
+   * an error) from "this path is already a git repo" without running a
+   * full recursive scan first. A `.git` entry can be a directory (normal
+   * clone) or a file (worktree/submodule pointer), matching the same
+   * candidate shape `discover()` accepts.
+   */
+  async checkPathStatus(server: ServerConfig, path: string): Promise<PathStatus> {
+    const safePath = shellQuote(path);
+    const cmd = `if [ -e ${safePath} ]; then echo EXISTS; if [ -e ${safePath}/.git ]; then echo ISGIT; fi; fi`;
+    const result = await this.tmux.execCommand(server, cmd);
+    if (result.code !== 0) {
+      throw new Error(`Path status check failed for '${path}' (exit code ${result.code})`);
+    }
+    const lines = result.stdout.split('\n').map((l) => l.trim());
+    return {
+      exists: lines.includes('EXISTS'),
+      isGitRepository: lines.includes('ISGIT'),
+    };
+  }
 
   /**
    * Scans `workingDirectory` for git repositories and their remotes.

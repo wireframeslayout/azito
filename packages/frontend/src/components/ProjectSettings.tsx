@@ -21,6 +21,7 @@ import { isDistributeCodeLocked, isDistributionRepositorySelected, resolveDistri
 import { useToast } from '../hooks/useToast';
 import { useConfirm } from '../hooks/useConfirm';
 import RepoDiscoveryDialog from './RepoDiscoveryDialog';
+import ProjectWizard from './ProjectWizard';
 
 interface Repository { id: number; url: string; name?: string; provider?: string; owner?: string; repoName?: string; }
 interface ProjectServer {
@@ -65,6 +66,12 @@ export function useProjectSettings(
   const [saving, setSaving] = useState(false);
 
   const [projectServers, setProjectServers] = useState<ProjectServer[]>([]);
+  // Shared by every call site that needs to refetch the project_servers
+  // list after a mutation (save/remove/wizard-add) — previously duplicated
+  // inline at each of those call sites.
+  const refreshProjectServers = useCallback(() => {
+    api<ProjectServer[]>(`/projects/${projectId}/servers`).then((res) => setProjectServers(Array.isArray(res) ? res : [])).catch(() => {});
+  }, [projectId]);
   const [addPsOpen, setAddPsOpen] = useState(false);
   const [psServer, setPsServer] = useState('');
   const [psWorkDir, setPsWorkDir] = useState('');
@@ -297,9 +304,9 @@ export function useProjectSettings(
     // the open form's own selection immediately if it pointed at the
     // repository just removed — the id is derived purely from server state,
     // not user-typed, so clearing it here can't discard unsaved input.
-    api<ProjectServer[]>(`/projects/${projectId}/servers`).then((res) => setProjectServers(Array.isArray(res) ? res : [])).catch(() => {});
+    refreshProjectServers();
     setPsDistributionRepositoryId((prev) => (prev === String(rid) ? '' : prev));
-  }, [projectId, refresh]);
+  }, [refresh, refreshProjectServers]);
 
   const handleRemoveWindow = useCallback(async (wid: number) => {
     const win = project?.windows.find((w) => w.id === wid);
@@ -334,7 +341,7 @@ export function useProjectSettings(
     const savedServer = psServer;
     const savedWorkDir = psWorkDir.trim();
     setAddPsOpen(false); setPsWorkDir(''); setPsBranch(''); setPsTmuxSession(''); setPsInputPolicy('manual-approval'); setPsDistributeCode(false); setPsDistributionRepositoryId('');
-    api<ProjectServer[]>(`/projects/${projectId}/servers`).then((res) => setProjectServers(Array.isArray(res) ? res : [])).catch(() => {});
+    refreshProjectServers();
     if (savedWorkDir) {
       api<{ repositories: Array<{ remotes: Array<{ alreadyRegistered: boolean }> }> }>(
         `/projects/${projectId}/servers/${savedServer}/discover-repositories`,
@@ -377,8 +384,8 @@ export function useProjectSettings(
 
   const handleRemoveServer = useCallback(async (serverName: string) => {
     await api(`/projects/${projectId}/servers/${serverName}`, { method: 'DELETE' });
-    api<ProjectServer[]>(`/projects/${projectId}/servers`).then((res) => setProjectServers(Array.isArray(res) ? res : [])).catch(() => {});
-  }, [projectId]);
+    refreshProjectServers();
+  }, [projectId, refreshProjectServers]);
 
   return {
     project, servers, refresh, section, setSection, saving,
@@ -396,7 +403,7 @@ export function useProjectSettings(
     // Windows
     handleRemoveWindow,
     // Servers
-    projectServers, addPsOpen, setAddPsOpen, psServer, setPsServer,
+    projectServers, refreshProjectServers, addPsOpen, setAddPsOpen, psServer, setPsServer,
     psWorkDir, setPsWorkDir, psBranch, setPsBranch, psTmuxSession, setPsTmuxSession,
     psInputPolicy, setPsInputPolicy, psDistributeCode, setPsDistributeCode: handleSetPsDistributeCode,
     psDistributionRepositoryId, setPsDistributionRepositoryId: handleSetPsDistributionRepositoryId,
@@ -709,6 +716,14 @@ function RepositoriesSection({ settings: s, addWindowModal }: { settings: Return
 function ServersSection({ settings: s }: { settings: ReturnType<typeof useProjectSettings> }) {
   const { t } = useTranslation(['projects', 'common']);
   const repositories = s.project?.repositories ?? [];
+  // Adding a NEW environment goes through the shared wizard (steps
+  // "environment"/"code"/"confirm" — ProjectWizard.tsx, mode
+  // 'addEnvironment'), embedded right here rather than as a separate
+  // screen. EDITING an already-configured environment stays on the
+  // original inline form below (`s.addPsOpen`, opened only from the
+  // per-row "Edit" button) — wizard-izing item edits is explicitly out of
+  // scope for this task.
+  const [addWizardOpen, setAddWizardOpen] = useState(false);
   // Issue #87 explicit-target follow-up: distribution actually runs for the
   // form's currently-selected server whenever the toggle is effectively on
   // (locked-on for an isolated server, or the user's own choice otherwise —
@@ -732,11 +747,23 @@ function ServersSection({ settings: s }: { settings: ReturnType<typeof useProjec
         <Button
           size="sm"
           onClick={() => {
-            if (s.addPsOpen) { s.setAddPsOpen(false); return; }
-            s.handleOpenServerForm(s.servers?.length ? s.servers[0].name : '');
+            if (s.addPsOpen) s.setAddPsOpen(false);
+            setAddWizardOpen((open) => !open);
           }}
         >+ {t('common:actions.add')}</Button>
       </div>
+      {addWizardOpen && s.project && (
+        <ProjectWizard
+          mode="addEnvironment"
+          projectId={s.project.id}
+          existingServerNames={s.projectServers.map((ps) => ps.serverName)}
+          onDone={() => {
+            setAddWizardOpen(false);
+            s.refreshProjectServers();
+          }}
+          onCancel={() => setAddWizardOpen(false)}
+        />
+      )}
       {s.addPsOpen && (
         <div style={{ marginBottom: 16, padding: 16, background: 'var(--bg-card)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
           <FormField label={t('settings.servers.server')}>

@@ -36,6 +36,69 @@
     "nameRequired": "Name is required",
     "slugRequired": "Slug is required"
   },
+  "wizard": {
+    "steps": {
+      "project": "Project",
+      "environment": "Environment",
+      "code": "Code",
+      "confirm": "Confirm"
+    },
+    "stepOf": "{{current}} / {{total}}",
+    "back": "Back",
+    "next": "Next",
+    "create": "Create",
+    "creating": "Creating...",
+    "cancel": "Cancel",
+    "environment": {
+      "description": "Choose where this project will work.",
+      "serverLabel": "Server",
+      "serverRequired": "Please select a server",
+      "isolatedBadge": "Isolated",
+      "isolatedHint": "This server holds no credentials and can run externally-sourced tasks without approval.",
+      "autoSelected": "Auto-selected — there was only one option.",
+      "alreadyAdded": "Already added"
+    },
+    "code": {
+      "modeExisting": "Use an existing directory",
+      "modeClone": "Clone a repository",
+      "modeLater": "Decide later",
+      "pathLabel": "Path",
+      "pathPlaceholder": "/path/to/project",
+      "pathRequired": "Please enter a path",
+      "checking": "Checking...",
+      "pathCheckFailed": "Failed to check the path",
+      "pathWillBeCreated": "This path does not exist yet. It will be created.",
+      "pathIsGitRepo": "Detected a git repository",
+      "pathNoRepo": "No repository will be registered",
+      "pathMultipleRepos_one": "Found {{count}} repository",
+      "pathMultipleRepos_other": "Found {{count}} repositories",
+      "selectRepos": "Select repositories to register",
+      "cloneUrlLabel": "Repository URL",
+      "cloneUrlPlaceholder": "https://github.com/owner/repo",
+      "cloneUrlRequired": "Please enter a repository URL",
+      "cloneDirectoryLabel": "Target directory",
+      "cloneDirectoryRequired": "Please enter a target directory",
+      "cloneBranchLabel": "Branch",
+      "cloneNote": "This repository will be provisioned via distribution after creation. Cloning does not happen here.",
+      "laterNote": "Only the environment (server + root) will be created; no repository will be registered."
+    },
+    "confirm": {
+      "projectLabel": "Project",
+      "environmentLabel": "Environment",
+      "codeLabel": "Code",
+      "codeExisting": "Existing directory: {{path}}",
+      "codeClone": "Clone: {{url}} → {{dir}}",
+      "codeLater": "Not decided yet",
+      "stepProject": "Project",
+      "stepEnvironment": "Environment",
+      "stepRepository": "Repository",
+      "alreadyCreatedNotice": "Steps already completed are kept. You can retry from the step that failed.",
+      "retry": "Retry"
+    },
+    "addEnvironment": {
+      "title": "Add Environment"
+    }
+  },
   "general": {
     "projectName": "Project Name",
     "projectNamePlaceholder": "project name",

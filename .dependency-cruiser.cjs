@@ -82,6 +82,8 @@ module.exports = {
         '基盤層 modules/servers は modules/tmux 以外への依存を原則禁止（tmux との関係は tmux⇄servers ' +
         'ペアとして双方向を許可）。個別の例外:\n' +
         '- servers/routes.ts: HTTP インターフェース層として git/DiffParser（差分表示）・' +
+        'git/RepoDiscoveryService（プロジェクト作成前のリポジトリ検査エンドポイント、' +
+        'GET /api/servers/:name/discover-repositories）・' +
         'projects/Project・projects/ProjectServer（プロジェクト⇔サーバー関連付け表示）・' +
         'windows/SqliteWindowRepository（ウィンドウ情報表示）を参照。\n' +
         '- servers/transport/AgentEventStream.ts: notifications/NotificationBus を参照（エージェント' +
@@ -96,6 +98,7 @@ module.exports = {
           '^packages/server/src/modules/servers',
           '^packages/server/src/modules/tmux',
           '^packages/server/src/modules/git/DiffParser\\.ts$',
+          '^packages/server/src/modules/git/RepoDiscoveryService\\.ts$',
           '^packages/server/src/modules/projects/Project\\.ts$',
           '^packages/server/src/modules/projects/ProjectServer\\.ts$',
           '^packages/server/src/modules/windows/SqliteWindowRepository\\.ts$',

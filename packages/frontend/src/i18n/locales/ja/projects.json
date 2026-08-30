@@ -36,6 +36,69 @@
     "nameRequired": "名前は必須です",
     "slugRequired": "スラッグは必須です"
   },
+  "wizard": {
+    "steps": {
+      "project": "プロジェクト",
+      "environment": "環境",
+      "code": "コード",
+      "confirm": "確認"
+    },
+    "stepOf": "{{current}} / {{total}}",
+    "back": "戻る",
+    "next": "次へ",
+    "create": "作成",
+    "creating": "作成しています...",
+    "cancel": "キャンセル",
+    "environment": {
+      "description": "このプロジェクトをどこで作業するか選択します。",
+      "serverLabel": "サーバー",
+      "serverRequired": "サーバーを選択してください",
+      "isolatedBadge": "隔離",
+      "isolatedHint": "このサーバーは資格情報を持たず、承認なしで外部由来タスクを実行できます。",
+      "autoSelected": "選択肢が1つのため自動選択されました。",
+      "alreadyAdded": "追加済み"
+    },
+    "code": {
+      "modeExisting": "既存のディレクトリを使う",
+      "modeClone": "リポジトリをクローンする",
+      "modeLater": "まだ決めない",
+      "pathLabel": "パス",
+      "pathPlaceholder": "/path/to/project",
+      "pathRequired": "パスを入力してください",
+      "checking": "確認しています...",
+      "pathCheckFailed": "パスの確認に失敗しました",
+      "pathWillBeCreated": "このパスは存在しません。作成します。",
+      "pathIsGitRepo": "gitリポジトリを検出しました",
+      "pathNoRepo": "リポジトリは登録されません",
+      "pathMultipleRepos_one": "{{count}}件のリポジトリが見つかりました",
+      "pathMultipleRepos_other": "{{count}}件のリポジトリが見つかりました",
+      "selectRepos": "登録するリポジトリを選択",
+      "cloneUrlLabel": "リポジトリURL",
+      "cloneUrlPlaceholder": "https://github.com/owner/repo",
+      "cloneUrlRequired": "リポジトリURLを入力してください",
+      "cloneDirectoryLabel": "配置先ディレクトリ",
+      "cloneDirectoryRequired": "配置先ディレクトリを入力してください",
+      "cloneBranchLabel": "ブランチ",
+      "cloneNote": "作成後に配信でこのリポジトリを用意します。ここではクローンを実行しません。",
+      "laterNote": "環境（サーバー・ルート）のみ作成し、リポジトリは登録しません。"
+    },
+    "confirm": {
+      "projectLabel": "プロジェクト",
+      "environmentLabel": "環境",
+      "codeLabel": "コード",
+      "codeExisting": "既存のディレクトリ: {{path}}",
+      "codeClone": "クローン: {{url}} → {{dir}}",
+      "codeLater": "未定（あとで設定）",
+      "stepProject": "プロジェクト",
+      "stepEnvironment": "環境",
+      "stepRepository": "リポジトリ",
+      "alreadyCreatedNotice": "すでに作成済みの手順は保持されます。失敗した手順から再実行できます。",
+      "retry": "再試行"
+    },
+    "addEnvironment": {
+      "title": "環境を追加"
+    }
+  },
   "general": {
     "projectName": "プロジェクト名",
     "projectNamePlaceholder": "プロジェクト名",

@@ -23,6 +23,7 @@ import type { KeyedMutex } from '../../shared/keyedMutex';
 import { runIsolationDoctor } from './isolationDoctor';
 import { getVerifiedHubCanary } from './hubCanary';
 import { assertServerIdentityUnchanged, ServerSnapshotMismatchError } from './ServerIsolationLock';
+import { toDiscoveryResponse, type RepoDiscoveryService } from '../git/RepoDiscoveryService';
 
 // ─── Hub identity helpers ───
 
@@ -113,6 +114,13 @@ export interface ServersRouteOptions {
   tmuxInstaller?: TmuxInstaller;
   projectRepo?: IProjectRepository;
   projectServerRepo?: IProjectServerRepository;
+  // Used by GET /api/servers/:name/discover-repositories — the
+  // project-independent repository scan the create-project wizard calls
+  // before any project/environment exists. Optional to match the other
+  // deploy/scan collaborators above (a server without it simply omits the
+  // route); required at the one call site that actually registers it
+  // (buildServer.ts).
+  repoDiscovery?: RepoDiscoveryService;
   // Issue #29 review, Critical finding 1: used by the isolation_intent
   // false->true gate to detect windows that may already hold injected
   // credentials (window_type='agent', or any task-owned window) on the
@@ -159,7 +167,7 @@ export interface ServersRouteOptions {
 // ─── Plugin ───
 
 const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts, done) => {
-  const { serverRepo, tmux, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled } = opts;
+  const { serverRepo, tmux, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, repoDiscovery } = opts;
 
   // Issue #29 review, Important finding 1: a false->true isolation_intent
   // transition must actually purge a previously-distributed operator token
@@ -1268,6 +1276,77 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       } catch {
         return { branches: [] };
       }
+    },
+  );
+
+  // ── GET /api/servers/:name/discover-repositories ──
+  // Project-independent repository scan used by the create-project wizard
+  // (Step: "既存のディレクトリを使う") to inspect a path BEFORE any
+  // project/environment row exists. `GET /api/projects/:id/servers/
+  // :serverName/discover-repositories` (projects/routes.ts) cannot serve
+  // this: it requires a `project_servers` row, which the wizard has not
+  // created yet at this point. Both routes share the actual scan
+  // (`RepoDiscoveryService.discover`) and response shaping
+  // (`toDiscoveryResponse`) — only the path resolution and the
+  // "alreadyRegistered" set differ (this route always has an empty set:
+  // there is no project yet for anything to already be registered
+  // against).
+  //
+  // Path status (`exists`/`isGitRepository`) is folded into the SAME
+  // response rather than a separate endpoint: the wizard needs both
+  // pieces of information for the same debounced keystroke, and computing
+  // them from one shared `discover()` call (a repo at `path` itself shows
+  // up as `relativePath: '.'`) avoids a second round-trip and a second
+  // place that could disagree about whether `path` is a git repo.
+  fastify.get<{ Params: { name: string }; Querystring: { path?: string } }>(
+    '/api/servers/:name/discover-repositories',
+    async (request, reply) => {
+      if (!repoDiscovery) return reply.status(501).send({ error: 'Repository discovery not available' });
+
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+
+      const path = request.query.path;
+      if (!path || !path.startsWith('/')) {
+        return reply.status(400).send({ error: 'An absolute path query parameter is required' });
+      }
+
+      let status: { exists: boolean; isGitRepository: boolean };
+      try {
+        status = await repoDiscovery.checkPathStatus(srv, path);
+      } catch (err) {
+        fastify.log.warn({ err, serverName: request.params.name }, 'repository path status check failed');
+        return reply.status(502).send({ error: 'Failed to check the working directory on the server' });
+      }
+
+      if (!status.exists) {
+        // Not existing is not an error here: the wizard's "use an existing
+        // directory" step treats a not-yet-created path as "this path will
+        // be created" rather than a failure.
+        return { exists: false, isGitRepository: false, repositories: [] };
+      }
+
+      let discovered;
+      try {
+        discovered = await repoDiscovery.discover(srv, path);
+      } catch (err) {
+        // Same distinction as the project-scoped endpoint: a scan that
+        // could not run must never be reported the same way as a scan
+        // that genuinely found nothing.
+        fastify.log.warn({ err, serverName: request.params.name }, 'repository discovery scan failed');
+        return reply.status(502).send({ error: 'Failed to scan the working directory for git repositories' });
+      }
+
+      // No project exists yet at this point in the wizard, so nothing can
+      // already be "registered" — every remote comes back
+      // `alreadyRegistered: false` (see toDiscoveryResponse's doc comment).
+      const repositories = toDiscoveryResponse(discovered, new Set());
+
+      return {
+        exists: true,
+        isGitRepository: status.isGitRepository,
+        repositories,
+      };
     },
   );
 
