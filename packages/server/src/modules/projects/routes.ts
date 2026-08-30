@@ -26,8 +26,8 @@ import type { KeyedMutex } from '../../shared/keyedMutex';
 import { rejectQualifiedBranchInput } from '../git/assertSafeGitArgs';
 import type { RepoDiscoveryService } from '../git/RepoDiscoveryService';
 import { normalizeRemoteUrl } from '../git/parseRemoteUrl';
-import { redactGitUrlCredentials } from '../git/redactGitUrlCredentials';
 import { urlHasEmbeddedCredentials } from '../git/urlHasEmbeddedCredentials';
+import { sanitizeDiscoveredRemoteUrl } from '../git/sanitizeDiscoveredRemoteUrl';
 
 // ─── Types ───
 
@@ -702,20 +702,27 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       }
 
       const existingUrls = new Set(
-        (project.repositories || []).map((r) => normalizeRemoteUrl(redactGitUrlCredentials(r.url))),
+        (project.repositories || []).map((r) => normalizeRemoteUrl(sanitizeDiscoveredRemoteUrl(r.url))),
       );
 
       // Discovered remote URLs come straight from the server's git config
       // and may embed credentials (`https://user:token@host/repo.git`) —
       // strip them before this ever reaches the browser or the (plaintext)
-      // `project_repositories.url` column (Important finding 1). Dedup
-      // against `existingUrls` uses the same redacted form so a
-      // credentialed vs. redacted URL for the same repo still matches.
+      // `project_repositories.url` column (Issue #19 review, Important
+      // finding 1). This must stay a URL `git clone` can actually use, so
+      // it goes through `sanitizeDiscoveredRemoteUrl` (strips real
+      // credentials only) rather than `redactGitUrlCredentials` (a
+      // log-only helper that also drops the non-secret SSH `user@`
+      // prefix and replaces anything it can't parse, e.g. a local-path
+      // remote, with a fixed placeholder — Issue #19 later review round,
+      // Important finding 1). Dedup against `existingUrls` uses the same
+      // sanitized form so a credentialed vs. sanitized URL for the same
+      // repo still matches.
       const repositories = discovered.map((repo) => ({
         relativePath: repo.relativePath,
         absolutePath: repo.absolutePath,
         remotes: repo.remotes.map((remote) => {
-          const safeUrl = redactGitUrlCredentials(remote.url);
+          const safeUrl = sanitizeDiscoveredRemoteUrl(remote.url);
           return {
             name: remote.name,
             url: safeUrl,
@@ -757,7 +764,7 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       }
 
       const existingUrls = new Set(
-        (project.repositories || []).map((r) => normalizeRemoteUrl(redactGitUrlCredentials(r.url))),
+        (project.repositories || []).map((r) => normalizeRemoteUrl(sanitizeDiscoveredRemoteUrl(r.url))),
       );
 
       let added = 0;

@@ -127,6 +127,90 @@ describe('GET discover-repositories', () => {
     expect(url).toBe('https://github.com/acme/widgets.git');
   });
 
+  it('keeps a scp-like SSH remote URL (including its git user) unchanged', async () => {
+    const opts = makeOpts({
+      repoDiscovery: {
+        discover: vi.fn(async () => [
+          {
+            relativePath: 'widgets',
+            absolutePath: '/work/widgets',
+            remotes: [
+              {
+                name: 'origin',
+                url: 'git@github.com:acme/widgets.git',
+                parsed: { provider: 'github' as const, owner: 'acme', repoName: 'widgets', host: 'github.com' },
+              },
+            ],
+          },
+        ]),
+      } as unknown as ProjectsRouteOptions['repoDiscovery'],
+    });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'GET', url: '/api/projects/10/servers/local/discover-repositories' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().repositories[0].remotes[0].url).toBe('git@github.com:acme/widgets.git');
+  });
+
+  it('keeps an ssh:// remote URL (including its git user) unchanged', async () => {
+    const opts = makeOpts({
+      repoDiscovery: {
+        discover: vi.fn(async () => [
+          {
+            relativePath: 'widgets',
+            absolutePath: '/work/widgets',
+            remotes: [
+              {
+                name: 'origin',
+                url: 'ssh://git@example.com:2222/acme/widgets.git',
+                parsed: { provider: 'other' as const, owner: 'acme', repoName: 'widgets', host: 'example.com' },
+              },
+            ],
+          },
+        ]),
+      } as unknown as ProjectsRouteOptions['repoDiscovery'],
+    });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'GET', url: '/api/projects/10/servers/local/discover-repositories' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().repositories[0].remotes[0].url).toBe('ssh://git@example.com:2222/acme/widgets.git');
+  });
+
+  it('keeps a local filesystem path remote unchanged (no placeholder string)', async () => {
+    const opts = makeOpts({
+      repoDiscovery: {
+        discover: vi.fn(async () => [
+          {
+            relativePath: 'widgets',
+            absolutePath: '/work/widgets',
+            remotes: [
+              {
+                name: 'origin',
+                url: '/srv/repos/widgets.git',
+                parsed: { provider: 'other' as const, owner: null, repoName: null, host: null },
+              },
+            ],
+          },
+        ]),
+      } as unknown as ProjectsRouteOptions['repoDiscovery'],
+    });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'GET', url: '/api/projects/10/servers/local/discover-repositories' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().repositories[0].remotes[0].url).toBe('/srv/repos/widgets.git');
+  });
+
   it('returns an error (not an empty success) when the scan fails', async () => {
     const opts = makeOpts({
       repoDiscovery: {

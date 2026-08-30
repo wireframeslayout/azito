@@ -34,7 +34,20 @@ export class RepoDiscoveryService {
     // `.git` can be a directory (a normal clone) or a file (a worktree, or
     // most submodules — it holds a `gitdir: <path>` pointer instead).
     // Restricting to `-type d` silently excluded both (Important finding 3).
-    const findCmd = `find ${safeDir} -maxdepth ${depth + 1} \\( -type d -o -type f \\) -name .git -not -path '*/node_modules/*' -not -path '*/.*/*' 2>/dev/null`;
+    //
+    // Excluding ALL hidden directories (`-not -path '*/.*/*'`) also
+    // silently excluded every worktree, because AZITO itself creates task
+    // worktrees under a hidden `.worktrees/` directory — e.g.
+    // `.worktrees/task-1/.git` never matched, defeating the -type f fix
+    // above for the exact case it exists to catch (Issue #19 later review
+    // round, Important finding). The exclusion is narrowed to what
+    // actually should not be scanned: `node_modules`, and the *contents*
+    // of an already-found `.git` directory (its internals, e.g.
+    // `.git/modules/**`, are not themselves repositories to report, and
+    // descending into them would just add noise/duplicates) — the `.git`
+    // entry itself is still matched by `-name .git`; only paths inside it
+    // (its internals) are excluded.
+    const findCmd = `find ${safeDir} -maxdepth ${depth + 1} \\( -type d -o -type f \\) -name .git -not -path '*/node_modules/*' -not -path '*/.git/*' 2>/dev/null`;
     const findResult = await this.tmux.execCommand(server, findCmd);
     if (findResult.code !== 0) {
       throw new Error(`Repository scan failed while searching '${workingDirectory}' (exit code ${findResult.code})`);
