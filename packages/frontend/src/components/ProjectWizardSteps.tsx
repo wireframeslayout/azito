@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { Badge, Chip, FormInput, InstallSteps, Spinner, baseInputStyle, type InstallStep } from './ui';
 import FormField from './FormField';
 import DirectoryInput from './DirectoryInput';
+import RepositoryCandidateInput from './RepositoryCandidateInput';
+import type { RepositoryCandidate } from './repositoryCandidateInputLogic';
 import { stepIndex, isAbsoluteWizardPath, type WizardStepId, type CodeMode, type ReusableRepoCandidate } from '../lib/projectWizardLogic';
 
 // Presentational step bodies for ProjectWizard.tsx, split out to keep that
@@ -217,14 +219,15 @@ export function EnvironmentStep({ t, serverList, selectedServer, setSelectedServ
 
 export function CodeStep({
   t, codeMode, setCodeMode, selectedServer, selectedServerType, existingPath, onExistingPathChange, discovery,
-  selectedRemoteUrls, toggleRemoteSelected, cloneUrl, setCloneUrl, cloneDirectory, setCloneDirectory, cloneBranch, setCloneBranch,
+  selectedRemoteUrls, toggleRemoteSelected, cloneUrl, setCloneUrl, onSelectRepoCandidate, cloneDirectory, setCloneDirectory, cloneBranch, setCloneBranch,
   cloneToken, setCloneToken, reusableRepo,
   showValidation,
 }: {
   t: TFunc; codeMode: CodeMode; setCodeMode: (m: CodeMode) => void; selectedServer: string; selectedServerType?: string;
   existingPath: string; onExistingPathChange: (v: string) => void; discovery: DiscoveryStatus;
   selectedRemoteUrls: Set<string>; toggleRemoteSelected: (url: string) => void;
-  cloneUrl: string; setCloneUrl: (v: string) => void; cloneDirectory: string; setCloneDirectory: (v: string) => void;
+  cloneUrl: string; setCloneUrl: (v: string) => void; onSelectRepoCandidate: (candidate: RepositoryCandidate) => void;
+  cloneDirectory: string; setCloneDirectory: (v: string) => void;
   cloneBranch: string; setCloneBranch: (v: string) => void;
   cloneToken: string; setCloneToken: (v: string) => void; reusableRepo: ReusableRepoCandidate | null;
   showValidation: boolean;
@@ -274,7 +277,13 @@ export function CodeStep({
       {codeMode === 'clone' && (
         <>
           <FormField label={t('wizard.code.cloneUrlLabel')} error={showValidation && !cloneUrl.trim() ? t('wizard.code.cloneUrlRequired') : undefined}>
-            <FormInput value={cloneUrl} onChange={(e) => setCloneUrl(e.target.value)} placeholder={t('wizard.code.cloneUrlPlaceholder')} />
+            <RepositoryCandidateInput
+              value={cloneUrl}
+              onChange={setCloneUrl}
+              onSelectCandidate={onSelectRepoCandidate}
+              placeholder={t('wizard.code.cloneUrlPlaceholder')}
+              ariaLabel={t('wizard.code.cloneUrlLabel')}
+            />
             {parsedClone && (
               <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
                 <Badge tone={parsedClone.provider === 'github' ? 'accent' : parsedClone.provider === 'gitlab' ? 'orange' : 'neutral'}>{parsedClone.provider}</Badge>

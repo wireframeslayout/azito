@@ -97,7 +97,19 @@
       "cloneTokenHint": "配信先サーバーはgit資格情報を持たないため、このリポジトリを配信するにはトークンが必要です。",
       "cloneTokenPlaceholder": "ghp_xxxx...",
       "cloneTokenRequired": "リポジトリをローカル以外のサーバーへ配信するには、アクセストークンが必要です。",
-      "laterNote": "環境（サーバー・ルート）のみ作成し、リポジトリは登録しません。"
+      "laterNote": "環境（サーバー・ルート）のみ作成し、リポジトリは登録しません。",
+      "repoCandidates": {
+        "groupRegistered": "登録済み",
+        "groupGithub": "GitHub",
+        "groupGitlab": "GitLab",
+        "groupOther": "その他",
+        "loading": "候補を取得しています...",
+        "empty": "候補が見つかりません。URLを直接入力できます。",
+        "truncated": "他にもあります。絞り込んでください。",
+        "providerError": "{{provider}}の一覧は取得できませんでした: {{message}}",
+        "privateBadge": "非公開",
+        "hasTokenBadge": "資格情報あり"
+      }
     },
     "confirm": {
       "projectLabel": "プロジェクト",

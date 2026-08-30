@@ -97,7 +97,19 @@
       "cloneTokenHint": "Required for delivering this repository to a non-local server — the destination server has no git credentials of its own.",
       "cloneTokenPlaceholder": "ghp_xxxx...",
       "cloneTokenRequired": "An access token is required to deliver this repository to a non-local server.",
-      "laterNote": "Only the environment (server + root) will be created; no repository will be registered."
+      "laterNote": "Only the environment (server + root) will be created; no repository will be registered.",
+      "repoCandidates": {
+        "groupRegistered": "Registered",
+        "groupGithub": "GitHub",
+        "groupGitlab": "GitLab",
+        "groupOther": "Other",
+        "loading": "Fetching candidates...",
+        "empty": "No candidates found. You can still enter a URL directly.",
+        "truncated": "There are more results — try narrowing your search.",
+        "providerError": "Could not list {{provider}} repositories: {{message}}",
+        "privateBadge": "Private",
+        "hasTokenBadge": "Has credentials"
+      }
     },
     "confirm": {
       "projectLabel": "Project",

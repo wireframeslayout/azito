@@ -18,6 +18,7 @@ import {
   StepIndicator, EnvironmentStep, CodeStep, ConfirmStep, parseCloneUrlForRegistration,
   type ServerListItem, type DiscoveredRepo, type DiscoveryStatus,
 } from './ProjectWizardSteps';
+import { resolveBranchOnCandidateSelect, type RepositoryCandidate } from './repositoryCandidateInputLogic';
 
 interface DiscoverResponse {
   exists: boolean;
@@ -92,6 +93,17 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
   const [cloneDirectory, setCloneDirectory] = useState('');
   const [cloneToken, setCloneToken] = useState('');
   const [cloneBranch, setCloneBranch] = useState('main');
+  // Whether the operator has edited the branch field by hand — once true,
+  // picking a repository candidate must never silently overwrite it (see
+  // resolveBranchOnCandidateSelect).
+  const cloneBranchTouchedRef = useRef(false);
+  const handleCloneBranchChange = useCallback((v: string) => {
+    cloneBranchTouchedRef.current = true;
+    setCloneBranch(v);
+  }, []);
+  const handleSelectRepoCandidate = useCallback((candidate: RepositoryCandidate) => {
+    setCloneBranch((current) => resolveBranchOnCandidateSelect(cloneBranchTouchedRef.current, candidate.defaultBranch, current));
+  }, []);
 
   // ── Step 4: confirm / execution ──
   const [steps, setSteps] = useState<InstallStep[]>([]);
@@ -731,10 +743,10 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
               existingPath={existingPath} onExistingPathChange={setExistingPath}
               discovery={discovery}
               selectedRemoteUrls={selectedRemoteUrls} toggleRemoteSelected={toggleRemoteSelected}
-              cloneUrl={cloneUrl} setCloneUrl={setCloneUrl}
+              cloneUrl={cloneUrl} setCloneUrl={setCloneUrl} onSelectRepoCandidate={handleSelectRepoCandidate}
               cloneDirectory={cloneDirectory}
               setCloneDirectory={setCloneDirectory}
-              cloneBranch={cloneBranch} setCloneBranch={setCloneBranch}
+              cloneBranch={cloneBranch} setCloneBranch={handleCloneBranchChange}
               cloneToken={cloneToken} setCloneToken={setCloneToken}
               reusableRepo={reusableRepo}
               showValidation={!canAdvance}
