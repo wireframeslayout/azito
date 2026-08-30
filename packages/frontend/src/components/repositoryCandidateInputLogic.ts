@@ -102,13 +102,22 @@ export function resolveBranchOnCandidateSelect(
  * the operator kept typing — pressing Enter in that window replaced the
  * just-typed URL with a stale candidate. Calling `guard.start()` here,
  * synchronously from `handleChange`, invalidates the previous request id
- * immediately (verified without waiting for any timer/promise) and closes
- * the stale dropdown before the debounce timer is even set.
+ * immediately (verified without waiting for any timer/promise) and clears
+ * the stale candidates before the debounce timer is even set.
+ *
+ * Review finding (round 2): clearing `result` must not also force the
+ * dropdown closed unconditionally — doing so made the "fetching" state
+ * (rendered from `loading`) unreachable, since the dropdown itself was
+ * gone until the response landed. When the input still has focus, `open`
+ * stays true so the loading indicator can render in an otherwise-empty
+ * dropdown; the stale *candidates* are still gone (`result: null`), so
+ * nothing selectable survives the edit.
  */
 export function beginCandidateEditRequest(
   guard: { start(): number },
-): { requestId: number; result: null; open: false } {
-  return { requestId: guard.start(), result: null, open: false };
+  hasFocus: boolean,
+): { requestId: number; result: null; open: boolean } {
+  return { requestId: guard.start(), result: null, open: hasFocus };
 }
 
 export async function fetchCandidatesGuarded(

@@ -62,6 +62,7 @@ export default function RepositoryCandidateInput({ value, onChange, onSelectCand
     } catch {
       if (!guardRef.current.isCurrent(requestId)) return;
       setResult(null);
+      setOpen(false);
     } finally {
       if (guardRef.current.isCurrent(requestId)) setLoading(false);
     }
@@ -81,7 +82,7 @@ export default function RepositoryCandidateInput({ value, onChange, onSelectCand
    */
   const debouncedFetch = useCallback((query: string) => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    const { requestId, result, open } = beginCandidateEditRequest(guardRef.current);
+    const { requestId, result, open } = beginCandidateEditRequest(guardRef.current, hasFocusRef.current);
     setResult(result);
     setOpen(open);
     debounceRef.current = setTimeout(() => fetchCandidates(query, requestId), DEBOUNCE_MS);

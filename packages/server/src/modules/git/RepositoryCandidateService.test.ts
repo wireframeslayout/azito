@@ -244,6 +244,35 @@ describe('RepositoryCandidateService', () => {
     expect(widgets.updatedAt).toBe('2026-08-01T00:00:00Z');
   });
 
+  it('keeps hasToken: true when the same repository is registered in two projects and findAll() returns the newer (tokenless) one first', async () => {
+    // Regression: projectRepo.findAll() returns projects newest-first. A prior fix that
+    // synthesizes provider metadata onto registered candidates also made the registered-vs-
+    // registered dedupe loop overwrite unconditionally, so a newer duplicate with hasToken:
+    // false could clobber an older duplicate's hasToken: true. Must not regress to "last write
+    // wins" among registered candidates themselves.
+    const projectRepo = makeProjectRepo([
+      makeProjectDetail({
+        id: 2,
+        repositories: [
+          { id: 20, name: null, url: 'https://github.com/acme/widgets.git', provider: 'github', owner: 'acme', repoName: 'widgets', hasToken: false },
+        ],
+      }),
+      makeProjectDetail({
+        id: 1,
+        repositories: [
+          { id: 10, name: null, url: 'https://github.com/acme/widgets.git', provider: 'github', owner: 'acme', repoName: 'widgets', hasToken: true },
+        ],
+      }),
+    ]);
+    const gitProvider = makeGitProvider(async () => ({ truncated: false, repositories: [] }));
+
+    const service = new RepositoryCandidateService(projectRepo, gitProvider);
+    const result = await service.listCandidates({});
+
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0].hasToken).toBe(true);
+  });
+
   it('propagates a provider-side truncation even when the result is well under the local 50-item cap', async () => {
     const projectRepo = makeProjectRepo([makeProjectDetail()]);
     const gitProvider = makeGitProvider(async (provider) => {

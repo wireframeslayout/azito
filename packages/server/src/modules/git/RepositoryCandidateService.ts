@@ -122,8 +122,21 @@ export class RepositoryCandidateService {
    */
   private dedupe(registered: RepositoryCandidate[], provider: RepositoryCandidate[]): RepositoryCandidate[] {
     const byKey = new Map<string, RepositoryCandidate>();
+    // projectRepo.findAll() は新しい順。同一URLが複数プロジェクトに登録されていると、
+    // どちらの重複が先/後に並ぶかは「新しい順」でしかなく、トークンを持つ方とは無関係
+    // （新しい方に限らずどちらにも起こり得る）。無条件上書き（旧実装）はもちろん、単純な
+    // 先勝ちも「先に見つかった重複がトークン無しなら、後続の重複が持つ hasToken: true を
+    // 拾えない」という同種の退行になり得るため、hasToken は「一致するいずれかの登録済み
+    // 重複がトークンを持つか」の意味に定め、重複間で OR を取る（プロバイダのメタデータ
+    // 合成とは無関係の退行を避ける）。
     for (const candidate of registered) {
-      byKey.set(normalizeRemoteUrl(candidate.httpsUrl), candidate);
+      const key = normalizeRemoteUrl(candidate.httpsUrl);
+      const existing = byKey.get(key);
+      if (!existing) {
+        byKey.set(key, candidate);
+      } else if (candidate.hasToken && !existing.hasToken) {
+        byKey.set(key, { ...existing, hasToken: true });
+      }
     }
     for (const candidate of provider) {
       const key = normalizeRemoteUrl(candidate.httpsUrl);

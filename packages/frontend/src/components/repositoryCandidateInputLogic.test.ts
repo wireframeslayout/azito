@@ -112,23 +112,42 @@ describe('beginCandidateEditRequest', () => {
     const guard = createRequestGuard();
     const requestA = guard.start(); // query "az" begins debouncing
 
-    const edit = beginCandidateEditRequest(guard); // query "azi" typed before A's debounce fires
+    const edit = beginCandidateEditRequest(guard, true); // query "azi" typed before A's debounce fires
     expect(guard.isCurrent(requestA)).toBe(false);
     expect(guard.isCurrent(edit.requestId)).toBe(true);
   });
 
-  it('returns cleared/closed dropdown state so a stale candidate list cannot be shown or selected mid-debounce', () => {
+  it('clears the stale candidate list so nothing from a superseded query can be selected mid-debounce', () => {
     const guard = createRequestGuard();
-    const edit = beginCandidateEditRequest(guard);
+    const edit = beginCandidateEditRequest(guard, true);
     expect(edit.result).toBeNull();
+  });
+
+  it('closes the dropdown when the input is not focused', () => {
+    const guard = createRequestGuard();
+    const edit = beginCandidateEditRequest(guard, false);
     expect(edit.open).toBe(false);
+  });
+
+  it('keeps the dropdown open while the input has focus, so the loading indicator stays reachable', () => {
+    // Review finding: clearing stale candidates on every keystroke had
+    // also been forcing `open` to false unconditionally, which meant the
+    // "fetching" state (rendered from `loading`) could never be shown —
+    // the dropdown itself was gone until the response landed. With focus
+    // still on the input, the dropdown must stay open (with no stale
+    // candidates in it) so the loading indicator is reachable while a
+    // slow provider request is in flight.
+    const guard = createRequestGuard();
+    const edit = beginCandidateEditRequest(guard, true);
+    expect(edit.open).toBe(true);
+    expect(edit.result).toBeNull(); // old candidates are still gone — nothing stale is selectable
   });
 
   it('each edit keeps invalidating the prior one, so only the very latest edit can ever adopt a response', () => {
     const guard = createRequestGuard();
-    const first = beginCandidateEditRequest(guard);
-    const second = beginCandidateEditRequest(guard);
-    const third = beginCandidateEditRequest(guard);
+    const first = beginCandidateEditRequest(guard, true);
+    const second = beginCandidateEditRequest(guard, true);
+    const third = beginCandidateEditRequest(guard, true);
 
     expect(guard.isCurrent(first.requestId)).toBe(false);
     expect(guard.isCurrent(second.requestId)).toBe(false);
