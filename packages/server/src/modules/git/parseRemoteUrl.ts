@@ -64,6 +64,17 @@ const DEFAULT_PORT_BY_SCHEME: Record<string, string> = {
  *   omitting it.
  * - A trailing `.git` suffix and trailing slash are stripped (both are
  *   syntactically equivalent forms of the same remote).
+ * - The scheme is preserved in the identity for general hosts:
+ *   `http://host/repo`, `https://host/repo` and `ssh://host/repo` are
+ *   different services on a self-hosted target and must not be treated as
+ *   the same repository (Issue #19 third-party review round 2, Important
+ *   finding 3 — the previous version dropped the scheme unconditionally,
+ *   which could cause a legitimate distinct repository to be reported as
+ *   "already registered" and excluded from bulk registration). Cross-
+ *   protocol unification (https/ssh pointing at the same repo) is applied
+ *   only for hosts that are known to be a single hosting service reachable
+ *   over multiple protocols — currently just `github.com` — never as a
+ *   general rule.
  *
  * Issue #19 third-party review, Important finding 4: the previous
  * implementation lowercased the entire URL and unconditionally dropped the
@@ -71,6 +82,12 @@ const DEFAULT_PORT_BY_SCHEME: Record<string, string> = {
  * paths on a case-sensitive host, or different services on different
  * ports).
  */
+const KNOWN_CROSS_PROTOCOL_HOSTS = new Set(['github.com']);
+
+function isKnownCrossProtocolHost(host: string): boolean {
+  return KNOWN_CROSS_PROTOCOL_HOSTS.has(host);
+}
+
 export function normalizeRemoteUrl(url: string): string {
   const trimmed = url.trim();
 
@@ -85,7 +102,8 @@ export function normalizeRemoteUrl(url: string): string {
         .replace(/^\/+/, '')
         .replace(/\.git$/, '')
         .replace(/\/+$/, '');
-      return `${host}${port}/${path}`;
+      const schemePrefix = isKnownCrossProtocolHost(host) ? '' : `${scheme}://`;
+      return `${schemePrefix}${host}${port}/${path}`;
     } catch {
       // Not a valid WHATWG URL despite the scheme prefix — fall through to
       // the scp-like/plain handling below rather than guessing.
@@ -93,11 +111,17 @@ export function normalizeRemoteUrl(url: string): string {
   }
 
   // scp-like syntax: `[user@]host:path` (e.g. `git@github.com:owner/repo.git`).
+  // This form is always ssh, so it is folded into the `ssh://` identity for
+  // general hosts (so it compares equal to an explicit `ssh://host/path`
+  // remote pointing at the same place), while known cross-protocol hosts
+  // drop the prefix entirely as above.
   const scpMatch = trimmed.match(/^(?:[a-zA-Z0-9_.-]+@)?([a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?):(.+)$/);
   if (scpMatch) {
-    const [, host, rawPath] = scpMatch;
+    const [, rawHost, rawPath] = scpMatch;
+    const host = rawHost.toLowerCase();
     const path = rawPath.replace(/\.git$/, '').replace(/\/+$/, '').replace(/^\/+/, '');
-    return `${host.toLowerCase()}/${path}`;
+    const schemePrefix = isKnownCrossProtocolHost(host) ? '' : 'ssh://';
+    return `${schemePrefix}${host}/${path}`;
   }
 
   return trimmed;

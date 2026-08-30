@@ -755,6 +755,14 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       const project = projectRepo.findById(projectId);
       if (!project) return reply.status(404).send({ error: 'Project not found' });
 
+      // A request sent with no body (or a non-object body, e.g. a bare
+      // JSON string/array/null) leaves `request.body` as `undefined` —
+      // accessing `.repositories` on it threw a TypeError and surfaced as
+      // an unhandled 500 instead of the intended validation error
+      // (Issue #19 review round 2, Minor finding 5).
+      if (typeof request.body !== 'object' || request.body === null || Array.isArray(request.body)) {
+        return reply.status(400).send({ error: 'JSON object body required' });
+      }
       const body = request.body as Record<string, unknown>;
       const repositories = body.repositories;
       if (!Array.isArray(repositories)) {

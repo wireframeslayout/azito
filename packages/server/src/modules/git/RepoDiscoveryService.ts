@@ -74,10 +74,22 @@ export class RepoDiscoveryService {
       .join(' ; ');
 
     const batchResult = await this.tmux.execCommand(server, batchCmd);
-    // A nonzero exit here reflects only the trailing `git remote -v` (the
-    // last command in the chain), which already tolerates failure per
-    // repository via its own `2>/dev/null` — a broken/unreadable repo
-    // simply resolves with no remotes rather than failing the whole scan.
+    // The trailing command in the chain (the last candidate's `git remote
+    // -v`) still runs even when e.g. `git` itself is missing on the
+    // target — a missing executable fails that final command with a
+    // nonzero exit rather than silently producing empty output, so
+    // checking `batchResult.code` here does catch a command-level failure
+    // (missing git binary, permission denied, etc.) instead of reporting
+    // it as "found 0 remotes" (Issue #19 third-party review round 2,
+    // Important finding 1). A single unreadable/broken repo *within* the
+    // batch still resolves with no remotes for that repo only, via its
+    // own per-candidate `2>/dev/null` — that per-candidate tolerance is
+    // unaffected by this check.
+    if (batchResult.code !== 0) {
+      throw new Error(
+        `Repository remote lookup failed while searching '${workingDirectory}' (exit code ${batchResult.code})`,
+      );
+    }
 
     return dedupeByAbsolutePath(parseBatchOutput(batchResult.stdout, workingDirectory));
   }

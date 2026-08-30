@@ -69,12 +69,12 @@ describe('normalizeRemoteUrl', () => {
 
   it('preserves a non-default port', () => {
     const result = normalizeRemoteUrl('ssh://git@example.com:2222/owner/repo.git');
-    expect(result).toBe('example.com:2222/owner/repo');
+    expect(result).toBe('ssh://example.com:2222/owner/repo');
   });
 
   it('drops the default port for the scheme', () => {
     expect(normalizeRemoteUrl('https://github.com:443/owner/repo.git')).toBe('github.com/owner/repo');
-    expect(normalizeRemoteUrl('ssh://git@example.com:22/owner/repo.git')).toBe('example.com/owner/repo');
+    expect(normalizeRemoteUrl('ssh://git@example.com:22/owner/repo.git')).toBe('ssh://example.com/owner/repo');
   });
 
   it('treats different ports as different identities', () => {
@@ -99,5 +99,46 @@ describe('normalizeRemoteUrl', () => {
     const https = normalizeRemoteUrl('https://github.com/owner/Repo.git');
     const scp = normalizeRemoteUrl('git@github.com:owner/Repo.git');
     expect(https).toBe(scp);
+  });
+
+  describe('scheme identity on a general (non-hosting-provider) host (Issue #19 review round 2, Important finding 3)', () => {
+    it('treats http, https and ssh as different identities on a self-hosted target', () => {
+      const http = normalizeRemoteUrl('http://selfhosted.internal/owner/repo.git');
+      const https = normalizeRemoteUrl('https://selfhosted.internal/owner/repo.git');
+      const ssh = normalizeRemoteUrl('ssh://git@selfhosted.internal/owner/repo.git');
+      expect(http).not.toBe(https);
+      expect(https).not.toBe(ssh);
+      expect(http).not.toBe(ssh);
+    });
+
+    it('folds scp-like syntax into the ssh:// identity for a general host', () => {
+      const scp = normalizeRemoteUrl('git@selfhosted.internal:owner/repo.git');
+      const sshProto = normalizeRemoteUrl('ssh://git@selfhosted.internal/owner/repo.git');
+      expect(scp).toBe(sshProto);
+      expect(scp).toBe('ssh://selfhosted.internal/owner/repo');
+    });
+
+    it('preserves a non-default port together with the scheme', () => {
+      expect(normalizeRemoteUrl('https://selfhosted.internal:8443/owner/repo.git')).toBe(
+        'https://selfhosted.internal:8443/owner/repo',
+      );
+    });
+  });
+
+  describe('provider-specific cross-protocol unification (github.com only)', () => {
+    it('still unifies https/ssh/scp for github.com', () => {
+      const https = normalizeRemoteUrl('https://github.com/owner/repo.git');
+      const sshProto = normalizeRemoteUrl('ssh://git@github.com/owner/repo.git');
+      const scp = normalizeRemoteUrl('git@github.com:owner/repo.git');
+      expect(https).toBe('github.com/owner/repo');
+      expect(https).toBe(sshProto);
+      expect(https).toBe(scp);
+    });
+
+    it('does not unify protocols for a host merely containing "gitlab" (self-hosted, not github.com)', () => {
+      const https = normalizeRemoteUrl('https://gitlab.example.com/team/project.git');
+      const ssh = normalizeRemoteUrl('ssh://git@gitlab.example.com/team/project.git');
+      expect(https).not.toBe(ssh);
+    });
   });
 });

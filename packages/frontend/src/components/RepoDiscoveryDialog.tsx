@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { apiWithStatus } from '../api/client';
 import Modal from './Modal';
 import { Badge } from './ui/Badge';
 import { Button, Spinner } from './ui';
+import { createRequestGuard, dedupeSelectableUrls } from './repoDiscoveryDialogLogic';
 
 interface DiscoveredRemote {
   name: string;
@@ -49,14 +50,21 @@ export default function RepoDiscoveryDialog({ open, onClose, projectId, serverNa
   const [repos, setRepos] = useState<DiscoveredRepo[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
+  // Guards against a slow, stale request (e.g. from a server the dialog
+  // was scanning before it was closed and reopened for a different one)
+  // landing after a newer request and overwriting its result (Issue #19
+  // third-party review round 2, Important finding 2).
+  const requestGuardRef = useRef(createRequestGuard());
 
   const discover = useCallback(async () => {
+    const requestId = requestGuardRef.current.start();
     setLoading(true);
     setError(null);
     try {
       const { status, body } = await apiWithStatus<DiscoverResponse | DiscoverErrorResponse>(
         `/projects/${projectId}/servers/${serverName}/discover-repositories`,
       );
+      if (!requestGuardRef.current.isCurrent(requestId)) return;
       if (status !== 200 || !('repositories' in body)) {
         setRepos([]);
         setError(('error' in body && body.error) || t('settings.repositories.discover.failed'));
@@ -73,10 +81,11 @@ export default function RepoDiscoveryDialog({ open, onClose, projectId, serverNa
       }
       setSelected(initial);
     } catch (err: unknown) {
+      if (!requestGuardRef.current.isCurrent(requestId)) return;
       setRepos([]);
       setError((err as Error).message || t('settings.repositories.discover.failed'));
     } finally {
-      setLoading(false);
+      if (requestGuardRef.current.isCurrent(requestId)) setLoading(false);
     }
   }, [projectId, serverName, t]);
 
@@ -94,14 +103,20 @@ export default function RepoDiscoveryDialog({ open, onClose, projectId, serverNa
   }, []);
 
   const selectableRemotes = repos.flatMap((r) => r.remotes).filter((r) => !r.alreadyRegistered);
+  // Selection is keyed by URL, but multiple clones/worktrees commonly
+  // share the same remote URL — comparing against the raw (duplicate-
+  // including) remote count meant "select all" could never read as
+  // checked, and toggling one occurrence flipped every occurrence of that
+  // URL at once (Issue #19 third-party review round 2, Minor finding 4).
+  const selectableUrls = useMemo(() => dedupeSelectableUrls(selectableRemotes), [selectableRemotes]);
 
   const toggleAll = useCallback(() => {
-    if (selected.size === selectableRemotes.length) {
+    if (selected.size === selectableUrls.length) {
       setSelected(new Set());
     } else {
-      setSelected(new Set(selectableRemotes.map((r) => r.url)));
+      setSelected(new Set(selectableUrls));
     }
-  }, [selected.size, selectableRemotes]);
+  }, [selected.size, selectableUrls]);
 
   const handleRegister = useCallback(async () => {
     const toRegister: Array<{ url: string; name?: string; provider: string; owner?: string; repoName?: string }> = [];
@@ -189,11 +204,11 @@ export default function RepoDiscoveryDialog({ open, onClose, projectId, serverNa
                 remotes: t('settings.repositories.discover.remoteCount', { count: totalRemotes }),
               })}
             </span>
-            {selectableRemotes.length > 0 && (
+            {selectableUrls.length > 0 && (
               <label style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
                 <input
                   type="checkbox"
-                  checked={selected.size === selectableRemotes.length && selectableRemotes.length > 0}
+                  checked={selected.size === selectableUrls.length && selectableUrls.length > 0}
                   onChange={toggleAll}
                   style={{ margin: 0 }}
                 />

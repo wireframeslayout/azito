@@ -472,6 +472,35 @@ describe('POST /api/projects/:id/repositories/bulk', () => {
     expect(storedUrl).toBe('user@example.com:acme/widgets.git');
   });
 
+  it('returns 400 (not 500) for a request sent with no body (Issue #19 review round 2, Minor finding 5)', async () => {
+    const opts = makeOpts();
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/projects/10/repositories/bulk' });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBeTruthy();
+    expect(opts.projectRepo.addRepository).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 (not 500) for a non-object JSON body (e.g. a bare array)', async () => {
+    const opts = makeOpts();
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/projects/10/repositories/bulk',
+      payload: [1, 2, 3],
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBeTruthy();
+  });
+
   it('accepts a batch of plain URLs', async () => {
     const opts = makeOpts();
     const app = Fastify();

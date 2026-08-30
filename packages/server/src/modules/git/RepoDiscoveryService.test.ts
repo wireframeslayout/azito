@@ -101,6 +101,21 @@ describe('RepoDiscoveryService', () => {
     await expect(service.discover(makeServer(), '/work')).rejects.toThrow(/ssh connection lost/);
   });
 
+  it('propagates a nonzero batch (remote lookup) exit code as an error instead of an empty result (Issue #19 review round 2, Important finding 1)', async () => {
+    const tmux = makeTmux(async (cmd) => {
+      if (cmd.startsWith('find')) {
+        return { stdout: '/work/repo/.git\n', stderr: '', code: 0 };
+      }
+      // Simulates e.g. `git` being unavailable on the target: the batch
+      // command's final step fails with a nonzero exit even though its
+      // stdout looks like a well-formed (empty) result.
+      return { stdout: '', stderr: 'bash: git: command not found', code: 127 };
+    });
+
+    const service = new RepoDiscoveryService(tmux);
+    await expect(service.discover(makeServer(), '/work')).rejects.toThrow(/remote lookup failed/i);
+  });
+
   it('returns an empty list when no .git entries are found', async () => {
     const tmux = makeTmux(async (cmd) => {
       if (cmd.startsWith('find')) {
