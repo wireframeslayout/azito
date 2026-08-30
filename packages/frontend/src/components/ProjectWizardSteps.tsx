@@ -49,7 +49,7 @@ export function StepIndicator({ visibleSteps, currentStep, isMobile, t }: { visi
   const idx = stepIndex(visibleSteps, currentStep);
   if (isMobile) {
     return (
-      <div style={{ padding: '8px var(--space-4)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', borderBottom: '1px solid var(--hairline)' }}>
+      <div style={{ padding: '8px var(--space-4)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', borderBottom: '1px solid var(--border)', background: 'var(--bg-card)' }}>
         <span style={{ fontFamily: NUMERIC_FONT }}>{t('wizard.stepOf', { current: idx + 1, total: visibleSteps.length })}</span>
         {' · '}
         {t(`wizard.steps.${currentStep}`)}
@@ -57,7 +57,7 @@ export function StepIndicator({ visibleSteps, currentStep, isMobile, t }: { visi
     );
   }
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px var(--space-4)', borderBottom: '1px solid var(--hairline)', overflowX: 'auto' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px var(--space-4)', borderBottom: '1px solid var(--border)', background: 'var(--bg-card)', overflowX: 'auto' }}>
       {visibleSteps.map((step, i) => {
         const state = i < idx ? 'done' : i === idx ? 'current' : 'upcoming';
         return (
@@ -76,7 +76,7 @@ export function StepIndicator({ visibleSteps, currentStep, isMobile, t }: { visi
                 {t(`wizard.steps.${step}`)}
               </span>
             </div>
-            {i < visibleSteps.length - 1 && <span style={{ flex: 1, height: 1, background: 'var(--hairline)', minWidth: 10 }} />}
+            {i < visibleSteps.length - 1 && <span style={{ flex: 1, height: 1, background: 'var(--border)', minWidth: 10 }} />}
           </Fragment>
         );
       })}
@@ -374,13 +374,13 @@ function DiscoveryResult({ t, discovery, selectedRemoteUrls, toggleRemoteSelecte
           : t('wizard.code.pathMultipleRepos', { count: discovery.repos.length })}
         sub={t('wizard.code.selectRepos')}
       />
-      <div style={{ marginTop: 6, border: '1px solid var(--hairline)', borderRadius: 'var(--radius-md)', maxHeight: 260, overflowY: 'auto' }}>
+      <div style={{ marginTop: 6, border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', background: 'var(--bg-card)', maxHeight: 260, overflowY: 'auto' }}>
         {remotes.map(({ repo, remote }, i) => (
           <label
             key={`${repo.absolutePath}:${remote.name}`}
             style={{
               display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', fontSize: 'var(--font-sm)', cursor: 'pointer',
-              boxShadow: i < remotes.length - 1 ? '0 1px 0 var(--hairline)' : 'none',
+              boxShadow: i < remotes.length - 1 ? '0 1px 0 var(--border)' : 'none',
             }}
           >
             <input type="checkbox" checked={selectedRemoteUrls.has(remote.url)} onChange={() => toggleRemoteSelected(remote.url)} style={{ margin: 0 }} />

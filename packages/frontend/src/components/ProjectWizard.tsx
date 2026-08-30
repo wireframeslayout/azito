@@ -645,7 +645,7 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
 
   return (
     <div style={embedded
-      ? { border: '1px solid var(--hairline)', borderRadius: 'var(--radius-md)', background: 'var(--bg-card)', marginBottom: 16, overflow: 'hidden' }
+      ? { border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', background: 'var(--bg-card)', marginBottom: 16, overflow: 'hidden' }
       : { height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}
     >
       {embedded ? (
@@ -662,7 +662,7 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
       ) : (
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: 'var(--space-3) var(--space-4)', borderBottom: '1px solid var(--hairline)',
+          padding: 'var(--space-3) var(--space-4)', borderBottom: '1px solid var(--border)',
           background: 'var(--bg-card)', flexShrink: 0, gap: 12,
         }}>
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -681,7 +681,7 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
           <button
             onClick={onCancel}
             style={{
-              padding: '6px 16px', background: 'var(--bg)', border: '1px solid var(--hairline)',
+              padding: '6px 16px', background: 'var(--bg)', border: '1px solid var(--border)',
               borderRadius: 'var(--radius-sm)', color: 'var(--text)', fontSize: 'var(--font-md)', cursor: 'pointer', flexShrink: 0,
             }}
           >
@@ -754,8 +754,8 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
 
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
-        padding: 'var(--space-3) var(--space-4)', borderTop: '1px solid var(--hairline)',
-        background: 'var(--bg-card)', flexShrink: 0,
+        padding: 'var(--space-3) var(--space-4)', borderTop: '1px solid var(--border)',
+        background: embedded ? 'var(--bg)' : 'var(--bg-card)', flexShrink: 0,
       }}>
         <Button
           onClick={goBack}
