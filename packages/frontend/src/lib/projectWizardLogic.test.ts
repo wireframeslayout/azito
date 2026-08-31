@@ -6,7 +6,9 @@ import {
   repoIdsToCleanup, reconcileDeletedRepositoryIds, cleanupStaleRepositoryIds,
   isAbsoluteWizardPath, normalizeRepoUrlForWizard, findReusableRepositoryWithToken, needsDirectoryCreation,
   trackCreatedRepositoryId,
-  type WizardValidationState,
+  resolveCodeStepVariant, codeModeOptionsForVariant, effectiveCodeMode, shouldPersistDistribution,
+  resolveEnvironmentAdvancedSettings, resolveDistributionSummary,
+  type WizardValidationState, type WizardServerRecord,
 } from './projectWizardLogic';
 
 function makeState(overrides: Partial<WizardValidationState> = {}): WizardValidationState {
@@ -551,5 +553,200 @@ describe('repository cleanup-before-registration ordering (Issue #87 review, Imp
 
     expect(finalTracked).toEqual([idA, idC]);
     expect(finalTracked).not.toContain(idB);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Code step per server kind (Issue #87 follow-up: an isolated server could
+// be given an environment with no distribution at all, which fails its very
+// first task run with `no_distribution_repository` and no warning anywhere).
+// ───────────────────────────────────────────────────────────────────────────
+
+const SERVERS: WizardServerRecord[] = [
+  { name: 'local', type: 'local' },
+  { name: 'remote1', type: 'ssh', isolationIntent: false },
+  { name: 'vault', type: 'agent', isolationIntent: true },
+];
+
+describe('resolveCodeStepVariant', () => {
+  it('reports the hub itself as local', () => {
+    expect(resolveCodeStepVariant('local', SERVERS)).toBe('local');
+  });
+
+  it('reports a non-isolated remote server as remote', () => {
+    expect(resolveCodeStepVariant('remote1', SERVERS)).toBe('remote');
+  });
+
+  it('reports an isolated remote server as isolated', () => {
+    expect(resolveCodeStepVariant('vault', SERVERS)).toBe('isolated');
+  });
+
+  it('treats an agent server without an isolation flag as a plain remote', () => {
+    expect(resolveCodeStepVariant('a', [{ name: 'a', type: 'agent' }])).toBe('remote');
+  });
+
+  it('stays unresolved while the server list has not loaded (never guesses)', () => {
+    expect(resolveCodeStepVariant('vault', [])).toBe('unresolved');
+    expect(resolveCodeStepVariant('', SERVERS)).toBe('unresolved');
+  });
+});
+
+describe('codeModeOptionsForVariant (what each server kind may be asked)', () => {
+  it('offers all three modes on the hub', () => {
+    expect(codeModeOptionsForVariant('local')).toEqual(['existing', 'clone', 'later']);
+  });
+
+  it('offers all three modes on a non-isolated remote server', () => {
+    expect(codeModeOptionsForVariant('remote')).toEqual(['existing', 'clone', 'later']);
+  });
+
+  it('offers NO choice on an isolated server — delivery is not optional there', () => {
+    expect(codeModeOptionsForVariant('isolated')).toEqual([]);
+  });
+});
+
+describe('effectiveCodeMode', () => {
+  it('forces an isolated server onto the distribution path whatever was selected', () => {
+    expect(effectiveCodeMode('isolated', 'existing')).toBe('clone');
+    expect(effectiveCodeMode('isolated', 'later')).toBe('clone');
+    expect(effectiveCodeMode('isolated', 'clone')).toBe('clone');
+  });
+
+  it('leaves every other server kind with the operator selection', () => {
+    for (const variant of ['local', 'remote', 'unresolved'] as const) {
+      expect(effectiveCodeMode(variant, 'existing')).toBe('existing');
+      expect(effectiveCodeMode(variant, 'later')).toBe('later');
+    }
+  });
+});
+
+describe('canAdvanceFromStep — isolated servers cannot skip the distribution repository', () => {
+  function isolatedState(overrides: Partial<WizardValidationState> = {}) {
+    return makeState({
+      selectedServer: 'vault',
+      // The wizard always passes the EFFECTIVE mode, which an isolated
+      // server forces to 'clone' — that is what makes this unskippable.
+      codeMode: effectiveCodeMode('isolated', 'later'),
+      cloneTargetIsLocal: false,
+      cloneDirectory: '/srv/work',
+      cloneToken: 'ghp_x',
+      cloneUrl: 'https://github.com/acme/widgets',
+      ...overrides,
+    });
+  }
+
+  it('blocks advancing while no source repository is entered', () => {
+    expect(canAdvanceFromStep('code', isolatedState({ cloneUrl: '' }))).toBe(false);
+    expect(canAdvanceFromStep('code', isolatedState({ cloneUrl: '   ' }))).toBe(false);
+  });
+
+  it('blocks advancing while no access token is entered and none can be reused', () => {
+    expect(canAdvanceFromStep('code', isolatedState({ cloneToken: '' }))).toBe(false);
+  });
+
+  it('blocks advancing while no delivery directory is entered', () => {
+    expect(canAdvanceFromStep('code', isolatedState({ cloneDirectory: '' }))).toBe(false);
+  });
+
+  it('advances once repository, token and delivery directory are all present', () => {
+    expect(canAdvanceFromStep('code', isolatedState())).toBe(true);
+  });
+
+  it('advances without a token when an already-credentialed repository is reused', () => {
+    expect(canAdvanceFromStep('code', isolatedState({ cloneToken: '', cloneRepoReusableWithToken: true }))).toBe(true);
+  });
+
+  it('would have let "まだ決めない" through before the forced mode (regression guard)', () => {
+    // The raw selection alone still advances — proof that the fix lives in
+    // `effectiveCodeMode`, not in an easily-bypassed extra check.
+    expect(canAdvanceFromStep('code', makeState({ selectedServer: 'vault', codeMode: 'later' }))).toBe(true);
+  });
+});
+
+describe('shouldPersistDistribution (distribute_code / distribution_repository_id)', () => {
+  it('is always true for an isolated server once the repository step produced an id', () => {
+    expect(shouldPersistDistribution('isolated', 'later', 7)).toBe(true);
+    expect(shouldPersistDistribution('isolated', 'existing', 7)).toBe(true);
+    expect(shouldPersistDistribution('isolated', 'clone', 7)).toBe(true);
+  });
+
+  it('is false for an isolated server while no repository id exists yet', () => {
+    expect(shouldPersistDistribution('isolated', 'clone', null)).toBe(false);
+  });
+
+  it('follows the operator choice on a non-isolated remote server', () => {
+    expect(shouldPersistDistribution('remote', 'clone', 7)).toBe(true);
+    expect(shouldPersistDistribution('remote', 'existing', 7)).toBe(false);
+    expect(shouldPersistDistribution('remote', 'later', 7)).toBe(false);
+  });
+
+  it('never distributes to the hub itself, and never decides while unresolved', () => {
+    expect(shouldPersistDistribution('local', 'clone', 7)).toBe(false);
+    expect(shouldPersistDistribution('unresolved', 'clone', 7)).toBe(false);
+  });
+});
+
+describe('resolveEnvironmentAdvancedSettings (confirm-step 詳細設定)', () => {
+  it('sends exactly the previously hard-coded values when the section is left untouched', () => {
+    expect(resolveEnvironmentAdvancedSettings({ tmuxSession: '', inputPolicy: 'manual-approval', isolationIntent: false }))
+      .toEqual({ tmux_session: null, input_policy: 'manual-approval' });
+  });
+
+  it('passes through an explicitly entered session name and policy', () => {
+    expect(resolveEnvironmentAdvancedSettings({ tmuxSession: ' work ', inputPolicy: 'deny', isolationIntent: false }))
+      .toEqual({ tmux_session: 'work', input_policy: 'deny' });
+  });
+
+  it('keeps "allow" only for an isolated server (PUT rejects it otherwise)', () => {
+    expect(resolveEnvironmentAdvancedSettings({ tmuxSession: '', inputPolicy: 'allow', isolationIntent: true }).input_policy).toBe('allow');
+    expect(resolveEnvironmentAdvancedSettings({ tmuxSession: '', inputPolicy: 'allow', isolationIntent: false }).input_policy).toBe('manual-approval');
+  });
+
+  it('treats a whitespace-only session name as unset', () => {
+    expect(resolveEnvironmentAdvancedSettings({ tmuxSession: '   ', inputPolicy: 'deny', isolationIntent: false }).tmux_session).toBeNull();
+  });
+});
+
+describe('envStepSignature — the advanced settings invalidate the environment step too', () => {
+  it('changes when the tmux session changes', () => {
+    const base = { selectedServer: 'vault', workingDirectory: '/srv/work', branch: 'main', distributingRepositoryId: 1 };
+    expect(envStepSignature({ ...base, tmuxSession: '' })).not.toBe(envStepSignature({ ...base, tmuxSession: 'work' }));
+  });
+
+  it('changes when the input policy changes', () => {
+    const base = { selectedServer: 'vault', workingDirectory: '/srv/work', branch: 'main', distributingRepositoryId: 1 };
+    expect(envStepSignature({ ...base, inputPolicy: 'manual-approval' as const }))
+      .not.toBe(envStepSignature({ ...base, inputPolicy: 'deny' as const }));
+  });
+
+  it('omitting the advanced settings equals passing their defaults', () => {
+    const base = { selectedServer: 'vault', workingDirectory: '/srv/work', branch: 'main', distributingRepositoryId: 1 };
+    expect(envStepSignature(base)).toBe(envStepSignature({ ...base, tmuxSession: '', inputPolicy: 'manual-approval' }));
+  });
+});
+
+describe('resolveDistributionSummary (confirm step must state delivery outright)', () => {
+  it('reports delivery and its source repository for an isolated server, whatever was selected', () => {
+    expect(resolveDistributionSummary('isolated', 'later', 'https://github.com/acme/widgets'))
+      .toEqual({ distributed: true, repositoryName: 'https://github.com/acme/widgets' });
+  });
+
+  it('reports delivery with no source yet when the repository field is still empty', () => {
+    expect(resolveDistributionSummary('isolated', 'clone', '  ')).toEqual({ distributed: true, repositoryName: null });
+  });
+
+  it('reports delivery on a non-isolated remote server only when that mode was chosen', () => {
+    expect(resolveDistributionSummary('remote', 'clone', 'https://github.com/acme/widgets').distributed).toBe(true);
+    expect(resolveDistributionSummary('remote', 'existing', 'https://github.com/acme/widgets').distributed).toBe(false);
+    expect(resolveDistributionSummary('remote', 'later', '').distributed).toBe(false);
+  });
+
+  it('never reports delivery for the hub itself, which clones directly', () => {
+    expect(resolveDistributionSummary('local', 'clone', 'https://github.com/acme/widgets'))
+      .toEqual({ distributed: false, repositoryName: null });
+  });
+
+  it('never reports delivery while the server kind is unresolved', () => {
+    expect(resolveDistributionSummary('unresolved', 'clone', 'https://github.com/acme/widgets').distributed).toBe(false);
   });
 });

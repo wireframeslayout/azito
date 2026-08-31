@@ -12,7 +12,10 @@ import {
   pickAvailableServer, isDiscoveryCurrent, resolveCloneDeliveryMode,
   repoStepSignature, envStepSignature, cloneStepSignature, repoIdsToCleanup, cleanupStaleRepositoryIds,
   findReusableRepositoryWithToken, needsDirectoryCreation, trackCreatedRepositoryId,
+  resolveCodeStepVariant, effectiveCodeMode, shouldPersistDistribution,
+  resolveEnvironmentAdvancedSettings, resolveDistributionSummary,
   type WizardStepId, type CodeMode, type WizardValidationState, type DiscoveryKey, type ReusableRepoCandidate,
+  type EnvironmentInputPolicy,
 } from '../lib/projectWizardLogic';
 import {
   StepIndicator, EnvironmentStep, CodeStep, ConfirmStep, parseCloneUrlForRegistration,
@@ -105,7 +108,26 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
     setCloneBranch((current) => resolveBranchOnCandidateSelect(cloneBranchTouchedRef.current, candidate.defaultBranch, current));
   }, []);
 
+  // What the "code" step may offer is decided by the SERVER, not the
+  // operator (Issue #87 follow-up): an isolated server holds no git
+  // credentials, so the backend distributes to it unconditionally — the
+  // step drops the choice and `effectiveMode` is forced to 'clone', the one
+  // mode whose persistence path actually registers a repository and sends
+  // `distribute_code`/`distribution_repository_id`. Every derivation below
+  // consumes `effectiveMode`, never the raw `codeMode` selection, so an
+  // isolated environment can no longer be created without distribution.
+  const codeStepVariant = useMemo(
+    () => resolveCodeStepVariant(selectedServer, serverList),
+    [selectedServer, serverList],
+  );
+  const effectiveMode = effectiveCodeMode(codeStepVariant, codeMode);
+
   // ── Step 4: confirm / execution ──
+  // Confirm-step "詳細設定" (collapsed by default). The defaults below are
+  // exactly the values this wizard used to hard-code into the environment
+  // PUT, so leaving the section closed keeps the previous behavior.
+  const [tmuxSession, setTmuxSession] = useState('');
+  const [inputPolicy, setInputPolicy] = useState<EnvironmentInputPolicy>('manual-approval');
   const [steps, setSteps] = useState<InstallStep[]>([]);
   const [running, setRunning] = useState(false);
   const [createdProjectId, setCreatedProjectId] = useState<number | null>(mode === 'addEnvironment' ? (projectId ?? null) : null);
@@ -171,6 +193,14 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
     if (next !== selectedServer) setSelectedServer(next);
   }, [serverList, existingServerList, selectedServer]);
 
+  // `allow` is only accepted for an isolated server (PUT rejects it with
+  // 400 otherwise). Switching to a non-isolated server must not leave the
+  // selection stranded on a now-disabled option — reset it, so what the
+  // confirm step shows is what actually gets sent.
+  useEffect(() => {
+    if (codeStepVariant !== 'isolated') setInputPolicy((p) => (p === 'allow' ? 'manual-approval' : p));
+  }, [codeStepVariant]);
+
   // Keep currentStep valid if visibleSteps changes shape (e.g. servers finish loading and the environment step appears/disappears).
   useEffect(() => {
     if (!visibleSteps.includes(currentStep)) setCurrentStep(visibleSteps[0]);
@@ -209,10 +239,10 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
     setDiscoveryKey(null);
     setSelectedRemoteUrls(new Set());
 
-    if (codeMode !== 'existing' || !existingPath.trim() || !selectedServer) return;
+    if (effectiveMode !== 'existing' || !existingPath.trim() || !selectedServer) return;
     const handle = setTimeout(() => { runDiscovery(existingPath, selectedServer); }, 400);
     return () => clearTimeout(handle);
-  }, [existingPath, selectedServer, codeMode, runDiscovery]);
+  }, [existingPath, selectedServer, effectiveMode, runDiscovery]);
 
   const toggleRemoteSelected = useCallback((url: string) => {
     setSelectedRemoteUrls((prev) => {
@@ -232,8 +262,8 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
   // empty until `GET /servers` resolves, so a fast wizard run can otherwise
   // reach execute() before the selected server's type is known.
   const cloneDeliveryMode = useMemo(
-    () => resolveCloneDeliveryMode(codeMode, selectedServer, serverList),
-    [codeMode, selectedServer, serverList],
+    () => resolveCloneDeliveryMode(effectiveMode, selectedServer, serverList),
+    [effectiveMode, selectedServer, serverList],
   );
   const cloningLocally = cloneDeliveryMode === 'local';
   const serverTypeUnresolvedForClone = cloneDeliveryMode === 'unresolved';
@@ -242,12 +272,12 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
   // URL (Issue #87 review, Important finding 3) — when found, the wizard
   // can proceed on a non-local target without collecting a new token.
   const reusableRepo = useMemo(
-    () => (codeMode === 'clone' ? findReusableRepositoryWithToken(cloneUrl, existingRepositories) : null),
-    [codeMode, cloneUrl, existingRepositories],
+    () => (effectiveMode === 'clone' ? findReusableRepositoryWithToken(cloneUrl, existingRepositories) : null),
+    [effectiveMode, cloneUrl, existingRepositories],
   );
 
   const validationState: WizardValidationState = {
-    projectName: name, projectSlug: slug, selectedServer, codeMode, existingPath, cloneUrl, cloneDirectory,
+    projectName: name, projectSlug: slug, selectedServer, codeMode: effectiveMode, existingPath, cloneUrl, cloneDirectory,
     existingServerNames: existingServerList, discoveryReady,
     cloneTargetIsLocal: cloningLocally, cloneToken, cloneRepoReusableWithToken: reusableRepo !== null,
   };
@@ -261,21 +291,21 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
   const isLastStep = stepIndex(visibleSteps, currentStep) === visibleSteps.length - 1;
 
   const repositoriesToRegister = useMemo(() => {
-    if (codeMode !== 'existing') return [];
+    if (effectiveMode !== 'existing') return [];
     if (discovery === 'idle' || discovery === 'checking' || discovery === 'error') return [];
     return discovery.repos
       .flatMap((r) => r.remotes)
       .filter((r) => selectedRemoteUrls.has(r.url))
       .map((r) => ({ url: r.url, provider: r.provider, owner: r.owner ?? undefined, repoName: r.repoName ?? undefined }));
-  }, [codeMode, discovery, selectedRemoteUrls]);
+  }, [effectiveMode, discovery, selectedRemoteUrls]);
 
   // "existing directory" mode where discovery reported the path missing —
   // the wizard must actually create it (Issue #87 review, Important
   // finding 1) rather than just saving it as `working_directory`.
-  const pathNeedsCreation = needsDirectoryCreation(codeMode, typeof discovery === 'object' ? discovery.exists : null);
+  const pathNeedsCreation = needsDirectoryCreation(effectiveMode, typeof discovery === 'object' ? discovery.exists : null);
 
-  const environmentWorkingDirectory = codeMode === 'existing' ? existingPath.trim()
-    : codeMode === 'clone' ? cloneDirectory.trim()
+  const environmentWorkingDirectory = effectiveMode === 'existing' ? existingPath.trim()
+    : effectiveMode === 'clone' ? cloneDirectory.trim()
     : '';
   // Only meaningful once the repository step has actually produced an id —
   // `createdRepositoryId` invalidates back to `null` (see the repo-step
@@ -291,7 +321,7 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
   // inputs. A step that already succeeded AND whose inputs are unchanged is
   // deliberately left alone, preserving "resume after a failed step"
   // without re-running work that is still valid. ──
-  const repoSignature = repoStepSignature({ codeMode, cloneUrl, cloneToken, selectedRemoteUrls });
+  const repoSignature = repoStepSignature({ codeMode: effectiveMode, cloneUrl, cloneToken, selectedRemoteUrls });
   const repoSignatureRef = useRef(repoSignature);
   useEffect(() => {
     const signatureChanged = repoSignatureRef.current !== repoSignature;
@@ -331,7 +361,8 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
 
   const envSignature = envStepSignature({
     selectedServer, workingDirectory: environmentWorkingDirectory,
-    branch: codeMode === 'clone' ? cloneBranch.trim() : '', distributingRepositoryId,
+    branch: effectiveMode === 'clone' ? cloneBranch.trim() : '', distributingRepositoryId,
+    tmuxSession, inputPolicy,
   });
   const envSignatureRef = useRef(envSignature);
   useEffect(() => {
@@ -357,7 +388,7 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
   // above: a directory already created for one server+path combination
   // must not be treated as "done" once the operator goes back and picks a
   // different server or path.
-  const directorySignature = codeMode === 'existing' ? `${selectedServer}::${existingPath.trim()}` : '';
+  const directorySignature = effectiveMode === 'existing' ? `${selectedServer}::${existingPath.trim()}` : '';
   const directorySignatureRef = useRef(directorySignature);
   useEffect(() => {
     if (directorySignatureRef.current !== directorySignature) {
@@ -394,7 +425,7 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
             method: 'POST',
             body: JSON.stringify({
               name: name.trim(), slug: slug.trim(), description: description.trim(),
-              default_branch: deriveDefaultBranch(codeMode, cloneBranch),
+              default_branch: deriveDefaultBranch(effectiveMode, cloneBranch),
               sidekick_prompt: sidekickPrompt.trim(), icon: icon.trim() || null, color: color.trim() || null,
             }),
           });
@@ -427,7 +458,7 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
       // no token and no reusable credentialed repository — but re-verify
       // here in case the operator changed the server/URL after already
       // passing that step once.
-      if (codeMode === 'clone' && !cloningLocally && !serverTypeUnresolvedForClone && reusableRepo === null && !cloneToken.trim()) {
+      if (effectiveMode === 'clone' && !cloningLocally && !serverTypeUnresolvedForClone && reusableRepo === null && !cloneToken.trim()) {
         throw new Error(t('wizard.errors.cloneTokenRequired'));
       }
 
@@ -468,7 +499,7 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
         // review, Important finding: 削除の完了を待たずに再登録するため、
         // リポジトリが失われる).
         await pendingRepoCleanupRef.current;
-        if (codeMode === 'existing' && repositoriesToRegister.length > 0) {
+        if (effectiveMode === 'existing' && repositoriesToRegister.length > 0) {
           setStep('repository', 'running', t('wizard.confirm.stepRepository'));
           try {
             const { status, body } = await apiWithStatus<{ added: number; ids?: number[] } | { error: string }>(
@@ -496,7 +527,7 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
             setStep('repository', 'error', (err as Error).message);
             throw err;
           }
-        } else if (codeMode === 'clone' && cloneUrl.trim()) {
+        } else if (effectiveMode === 'clone' && cloneUrl.trim()) {
           setStep('repository', 'running', t('wizard.confirm.stepRepository'));
           try {
             const parsed = parseCloneUrlForRegistration(cloneUrl.trim());
@@ -547,11 +578,18 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
       // leave an environment that is neither cloned locally nor set up for
       // distribution (review finding: "サーバー種別が未解決のとき「リモー
       // ト扱い」になる"). Fail visibly instead of guessing.
-      if (codeMode === 'clone' && serverTypeUnresolvedForClone) {
+      if (effectiveMode === 'clone' && serverTypeUnresolvedForClone) {
         throw new Error(t('wizard.errors.serverTypeUnresolved', { server: selectedServer }));
       }
-      const distributingClone = codeMode === 'clone' && !cloningLocally && repoId !== null;
-      const wantsEnvironment = !!selectedServer && (mode === 'addEnvironment' || codeMode !== 'later');
+      // An isolated server MUST carry distribution — `shouldPersistDistribution`
+      // derives that from the server itself (via `effectiveCodeMode`), so
+      // the flags below are no longer a side effect of the operator having
+      // happened to pick "クローン".
+      const distributingClone = shouldPersistDistribution(codeStepVariant, codeMode, repoId);
+      const advanced = resolveEnvironmentAdvancedSettings({
+        tmuxSession, inputPolicy, isolationIntent: codeStepVariant === 'isolated',
+      });
+      const wantsEnvironment = !!selectedServer && (mode === 'addEnvironment' || effectiveMode !== 'later');
       if (wantsEnvironment && pid !== null) {
         if (!envDone) {
           setStep('environment', 'running', t('wizard.confirm.stepEnvironment'));
@@ -562,9 +600,9 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
                 method: 'PUT',
                 body: JSON.stringify({
                   working_directory: environmentWorkingDirectory || null,
-                  branch: codeMode === 'clone' ? (cloneBranch.trim() || null) : null,
-                  tmux_session: null,
-                  input_policy: 'manual-approval',
+                  branch: effectiveMode === 'clone' ? (cloneBranch.trim() || null) : null,
+                  tmux_session: advanced.tmux_session,
+                  input_policy: advanced.input_policy,
                   // 'local' IS the hub — distribution is provisioned by an
                   // explicit clone-local call below instead (Issue #87
                   // review, Important finding 4).
@@ -621,10 +659,15 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
     }
   }, [
     mode, createdProjectId, createdRepositoryId, name, slug, description, sidekickPrompt, icon, color,
-    selectedServer, existingServerList, codeMode, existingPath, cloneDirectory, cloneBranch, cloneUrl, cloneToken,
+    selectedServer, existingServerList, codeMode, effectiveMode, codeStepVariant, tmuxSession, inputPolicy,
+    existingPath, cloneDirectory, cloneBranch, cloneUrl, cloneToken,
     envDone, repoDone, localCloneDone, directoryCreated, pathNeedsCreation, reusableRepo, repositoriesToRegister, onDone, setStep, t,
     cloningLocally, serverTypeUnresolvedForClone, environmentWorkingDirectory,
   ]);
+
+  // Stated outright on the confirm step — distribution used to be enabled
+  // as an unannounced side effect of the "clone" choice.
+  const distributionSummary = resolveDistributionSummary(codeStepVariant, codeMode, cloneUrl);
 
   const primaryLabel = isLastStep ? t('wizard.create') : t('wizard.next');
   const primaryAction = isLastStep ? handleRun : goNext;
@@ -645,7 +688,7 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
   // target, but the operator could reach 'confirm', go back, change the
   // server or URL, and jump forward without re-triggering that check
   // (Issue #87 review, Important finding 3).
-  const cloneTokenRequired = codeMode === 'clone' && !cloningLocally && !serverTypeUnresolvedForClone && reusableRepo === null && !cloneToken.trim();
+  const cloneTokenRequired = effectiveMode === 'clone' && !cloningLocally && !serverTypeUnresolvedForClone && reusableRepo === null && !cloneToken.trim();
   const primaryDisabled = isLastStep ? (noServersAvailable || serverTypeUnresolvedForClone || cloneTokenRequired) : !canAdvance;
 
   // 'addEnvironment' is only ever mounted inline inside ProjectSettings's
@@ -739,7 +782,7 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
             <CodeStep
               t={t} codeMode={codeMode} setCodeMode={setCodeMode}
               selectedServer={selectedServer}
-              selectedServerType={serverList.find((sv) => sv.name === selectedServer)?.type}
+              variant={codeStepVariant}
               existingPath={existingPath} onExistingPathChange={setExistingPath}
               discovery={discovery}
               selectedRemoteUrls={selectedRemoteUrls} toggleRemoteSelected={toggleRemoteSelected}
@@ -757,7 +800,11 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
             <ConfirmStep
               t={t} mode={mode}
               name={name} selectedServer={selectedServer} showEnvironmentStep={visibleSteps.includes('environment')}
-              codeMode={codeMode} existingPath={existingPath} cloneUrl={cloneUrl} cloneDirectory={cloneDirectory}
+              codeMode={effectiveMode} existingPath={existingPath} cloneUrl={cloneUrl} cloneDirectory={cloneDirectory}
+              distribution={distributionSummary}
+              tmuxSession={tmuxSession} setTmuxSession={setTmuxSession}
+              inputPolicy={inputPolicy} setInputPolicy={setInputPolicy}
+              allowPolicyAvailable={codeStepVariant === 'isolated'}
               steps={steps} running={running} alreadyCreated={createdProjectId !== null}
             />
           )}

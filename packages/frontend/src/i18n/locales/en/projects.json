@@ -94,7 +94,7 @@
       "repoReusedBadge": "Reusing existing repository",
       "repoReusedHint": "This project already has a credentialed repository registered for this URL — it will be reused, and no new token is needed.",
       "cloneTokenLabel": "Access token",
-      "cloneTokenHint": "Required for delivering this repository to a non-local server — the destination server has no git credentials of its own.",
+      "cloneTokenHint": "The token is stored on the hub only and never reaches the target server. The hub uses it to fetch the repository and deliver it as a bundle.",
       "cloneTokenPlaceholder": "ghp_xxxx...",
       "cloneTokenRequired": "An access token is required to deliver this repository to a non-local server.",
       "laterNote": "Only the environment (server + root) will be created; no repository will be registered.",
@@ -108,7 +108,17 @@
         "truncated": "There are more results — try narrowing your search.",
         "providerError": "Could not list {{provider}} repositories: {{message}}",
         "privateBadge": "Private"
-      }
+      },
+      "modeDistribute": "Deliver via the hub",
+      "modeDistributeDescription": "The hub fetches the repository and pushes it to this server as a bundle. Nothing is cloned here.",
+      "isolatedTitle": "Code is delivered to this server via the hub",
+      "isolatedBundle": "The hub fetches the repository, builds a bundle, and sends it to this server. There is no other way to place code here.",
+      "isolatedNoCredentials": "This server holds no git credentials, so it cannot fetch the repository itself.",
+      "isolatedOriginReplaced": "The delivered checkout's origin is replaced with a dummy URL — this server cannot push directly.",
+      "distributionRepoLabel": "Source repository",
+      "distributionRepoRequired": "Enter the source repository",
+      "distributionDirectoryLabel": "Delivery directory",
+      "distributionDirectoryHint": "If a repository already exists there, its origin must match the source repository. The hub aborts delivery when it does not."
     },
     "confirm": {
       "projectLabel": "Project",
@@ -123,7 +133,22 @@
       "stepDirectory": "Directory",
       "stepClone": "Clone",
       "alreadyCreatedNotice": "Steps already completed are kept. You can retry from the step that failed.",
-      "retry": "Retry"
+      "retry": "Retry",
+      "codeDistribute": "Deliver: {{url}} → {{dir}}",
+      "distributionLabel": "Delivery",
+      "distributionOn": "Delivered via the hub (source: {{repo}})",
+      "distributionOnNoRepo": "Delivered via the hub (no source repository set)",
+      "distributionOff": "Not delivered",
+      "advancedToggle": "Advanced settings",
+      "tmuxSessionLabel": "tmux session",
+      "tmuxSessionHint": "Leave empty to let AZITO use its default session name.",
+      "tmuxSessionPlaceholder": "Use the default session name",
+      "inputPolicyLabel": "Input policy",
+      "inputPolicyHint": "How externally-sourced input is handled in this environment.",
+      "inputPolicyAllowIsolatedOnly": "\"Allow without approval\" is only available for an isolated server's environment.",
+      "inputPolicyManualApproval": "Manual approval",
+      "inputPolicyDeny": "Deny",
+      "inputPolicyAllow": "Allow without approval"
     },
     "addEnvironment": {
       "title": "Add Environment"

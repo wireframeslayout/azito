@@ -378,8 +378,18 @@ export function envStepSignature(input: {
   workingDirectory: string;
   branch: string;
   distributingRepositoryId: number | null;
+  /** Confirm-step "詳細設定" values; omitted means the wizard's defaults ('' / 'manual-approval'). */
+  tmuxSession?: string;
+  inputPolicy?: EnvironmentInputPolicy;
 }): string {
-  return JSON.stringify(input);
+  return JSON.stringify({
+    selectedServer: input.selectedServer,
+    workingDirectory: input.workingDirectory,
+    branch: input.branch,
+    distributingRepositoryId: input.distributingRepositoryId,
+    tmuxSession: input.tmuxSession ?? '',
+    inputPolicy: input.inputPolicy ?? 'manual-approval',
+  });
 }
 
 /**
@@ -483,4 +493,139 @@ export async function cleanupStaleRepositoryIds(
     }
   }));
   return reconcileDeletedRepositoryIds(results);
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Code-step shape per server kind (Issue #87 follow-up: 隔離サーバーで壊れた
+// 環境が作れてしまう). What the "code" step may offer is decided by the
+// SERVER, not by the operator — the same rule the backend already enforces
+// in `DistributionHelper` (local: never distributed / remote+isolated:
+// always distributed / remote+non-isolated: opt-in).
+// ───────────────────────────────────────────────────────────────────────────
+
+/** The subset of `GET /api/servers` the wizard's code step depends on. */
+export interface WizardServerRecord {
+  name: string;
+  type: string;
+  isolationIntent?: boolean;
+}
+
+/**
+ * Which shape the "code" step takes for the selected server.
+ *
+ * - `unresolved`: `GET /servers` hasn't landed yet (or the selection names
+ *   no known server). Kept a distinct outcome for the same reason
+ *   `resolveCloneDeliveryMode` does — guessing here is what produced
+ *   environments that were neither cloned nor distributed.
+ * - `local`: the hub itself. It is structurally excluded from distribution,
+ *   so "clone" means an actual `git clone` run right now.
+ * - `remote`: a non-isolated remote server. Distribution is optional
+ *   (`distribute_code` opt-in), so the operator still picks between an
+ *   existing directory, hub-代行配信, or deciding later.
+ * - `isolated`: a remote server with `isolation_intent = 1`. It holds no git
+ *   credentials at all, so the backend distributes to it UNCONDITIONALLY —
+ *   there is nothing to choose, and offering "既存のディレクトリを使う" /
+ *   "まだ決めない" produced an environment whose first task execution fails
+ *   with `no_distribution_repository`.
+ */
+export type CodeStepVariant = 'unresolved' | 'local' | 'remote' | 'isolated';
+
+export function resolveCodeStepVariant(selectedServer: string, serverList: WizardServerRecord[]): CodeStepVariant {
+  if (!selectedServer.trim()) return 'unresolved';
+  const record = serverList.find((sv) => sv.name === selectedServer);
+  if (!record) return 'unresolved';
+  if (clonesDirectlyOnServer(record.type)) return 'local';
+  return record.isolationIntent === true ? 'isolated' : 'remote';
+}
+
+/**
+ * The code-mode choices the step may offer for `variant`. An isolated
+ * server gets NONE: delivery is fixed to hub-代行配信, so the step asks only
+ * for the repository/token/target directory/branch that delivery needs.
+ */
+export function codeModeOptionsForVariant(variant: CodeStepVariant): CodeMode[] {
+  if (variant === 'isolated') return [];
+  return ['existing', 'clone', 'later'];
+}
+
+/**
+ * The code mode the wizard actually acts on. Identical to the operator's
+ * own selection everywhere except an isolated server, where it is forced to
+ * `clone` — the mode whose persistence path registers the repository and
+ * sends `distribute_code`/`distribution_repository_id`. This is what makes
+ * "配信設定が必ず保存される" structural rather than a branch someone can
+ * forget: every downstream derivation (validation, signatures, `handleRun`)
+ * consumes this, never the raw selection.
+ */
+export function effectiveCodeMode(variant: CodeStepVariant, codeMode: CodeMode): CodeMode {
+  return variant === 'isolated' ? 'clone' : codeMode;
+}
+
+/**
+ * Whether the environment PUT must carry `distribute_code: true` +
+ * `distribution_repository_id`. `local` never distributes (the hub clones
+ * for itself); `unresolved` never decides (the caller fails visibly
+ * instead); everything else distributes exactly when the effective mode is
+ * `clone` and the repository step produced an id.
+ */
+export function shouldPersistDistribution(
+  variant: CodeStepVariant,
+  codeMode: CodeMode,
+  repositoryId: number | null,
+): boolean {
+  if (variant === 'local' || variant === 'unresolved') return false;
+  return effectiveCodeMode(variant, codeMode) === 'clone' && repositoryId !== null;
+}
+
+/** `project_servers.input_policy` values, mirroring the server-side union. */
+export type EnvironmentInputPolicy = 'manual-approval' | 'deny' | 'allow';
+
+export interface EnvironmentAdvancedSettings {
+  tmux_session: string | null;
+  input_policy: EnvironmentInputPolicy;
+}
+
+/**
+ * Resolves the confirm step's collapsed "詳細設定" into the environment
+ * PUT's `tmux_session` / `input_policy` fields. Untouched defaults ('' /
+ * 'manual-approval') resolve to exactly the values the wizard hard-coded
+ * before, so leaving the section closed changes nothing.
+ *
+ * `allow` is only meaningful for an isolated server (`PUT
+ * /api/projects/:id/servers/:name` rejects it otherwise with 400, and
+ * `ProjectSettings.tsx` only enables that option for one) — it is downgraded
+ * here rather than sent and rejected, so a stale selection left behind by
+ * switching servers can never fail the run.
+ */
+export function resolveEnvironmentAdvancedSettings(input: {
+  tmuxSession: string;
+  inputPolicy: EnvironmentInputPolicy;
+  isolationIntent: boolean;
+}): EnvironmentAdvancedSettings {
+  const policy: EnvironmentInputPolicy = input.inputPolicy === 'allow' && !input.isolationIntent
+    ? 'manual-approval'
+    : input.inputPolicy;
+  return { tmux_session: input.tmuxSession.trim() || null, input_policy: policy };
+}
+
+/**
+ * What the confirm step states about delivery. `repositoryName` is the
+ * 配信元 to name in the summary — `null` while the repository URL is still
+ * empty, so the row can say "配信元が未設定" instead of an empty string.
+ * Before this, distribution was switched on as a silent side effect of
+ * picking "クローン" and never appeared on the confirmation screen at all.
+ */
+export interface DistributionSummary {
+  distributed: boolean;
+  repositoryName: string | null;
+}
+
+export function resolveDistributionSummary(
+  variant: CodeStepVariant,
+  codeMode: CodeMode,
+  cloneUrl: string,
+): DistributionSummary {
+  const distributed = variant !== 'local' && variant !== 'unresolved' && effectiveCodeMode(variant, codeMode) === 'clone';
+  if (!distributed) return { distributed: false, repositoryName: null };
+  return { distributed: true, repositoryName: cloneUrl.trim() || null };
 }

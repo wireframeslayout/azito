@@ -1,11 +1,15 @@
 import type { CSSProperties, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Badge, Chip, FormInput, InstallSteps, Spinner, baseInputStyle, type InstallStep } from './ui';
+import { Badge, Chip, FormInput, FormSelect, InstallSteps, Notice, Spinner, baseInputStyle, type InstallStep } from './ui';
 import FormField from './FormField';
 import DirectoryInput from './DirectoryInput';
 import RepositoryCandidateInput from './RepositoryCandidateInput';
 import type { RepositoryCandidate } from './repositoryCandidateInputLogic';
-import { stepIndex, isAbsoluteWizardPath, type WizardStepId, type CodeMode, type ReusableRepoCandidate } from '../lib/projectWizardLogic';
+import {
+  stepIndex, isAbsoluteWizardPath, codeModeOptionsForVariant, effectiveCodeMode,
+  type WizardStepId, type CodeMode, type ReusableRepoCandidate, type CodeStepVariant,
+  type EnvironmentInputPolicy, type DistributionSummary,
+} from '../lib/projectWizardLogic';
 
 // Presentational step bodies for ProjectWizard.tsx, split out to keep that
 // file focused on state/orchestration (this codebase's ~300-line-per-file
@@ -218,12 +222,12 @@ export function EnvironmentStep({ t, serverList, selectedServer, setSelectedServ
 }
 
 export function CodeStep({
-  t, codeMode, setCodeMode, selectedServer, selectedServerType, existingPath, onExistingPathChange, discovery,
+  t, codeMode, setCodeMode, selectedServer, variant, existingPath, onExistingPathChange, discovery,
   selectedRemoteUrls, toggleRemoteSelected, cloneUrl, setCloneUrl, onSelectRepoCandidate, cloneDirectory, setCloneDirectory, cloneBranch, setCloneBranch,
   cloneToken, setCloneToken, reusableRepo,
   showValidation,
 }: {
-  t: TFunc; codeMode: CodeMode; setCodeMode: (m: CodeMode) => void; selectedServer: string; selectedServerType?: string;
+  t: TFunc; codeMode: CodeMode; setCodeMode: (m: CodeMode) => void; selectedServer: string; variant: CodeStepVariant;
   existingPath: string; onExistingPathChange: (v: string) => void; discovery: DiscoveryStatus;
   selectedRemoteUrls: Set<string>; toggleRemoteSelected: (url: string) => void;
   cloneUrl: string; setCloneUrl: (v: string) => void; onSelectRepoCandidate: (candidate: RepositoryCandidate) => void;
@@ -232,57 +236,88 @@ export function CodeStep({
   cloneToken: string; setCloneToken: (v: string) => void; reusableRepo: ReusableRepoCandidate | null;
   showValidation: boolean;
 }) {
-  // 'local' clones directly (right here, on the hub's own filesystem);
-  // every other server type instead gets the repository via the existing
-  // hub-代行配信 path, which only runs once a task actually executes there
-  // (Issue #87 review, Important finding 4 — the UI must say which one
-  // actually happens, not a generic "provisioned later" note for both).
-  const clonesNow = selectedServerType === 'local';
+  // `local` IS the hub: it clones right here, right now, on the hub's own
+  // filesystem. Every other server type gets its code through the hub's
+  // 代行配信 path instead, which only runs once a task actually executes
+  // there — and for an isolated server that path is not optional at all
+  // (`DistributionHelper`), so the step drops the choice entirely and asks
+  // only for what delivery needs.
+  const clonesNow = variant === 'local';
+  const isolated = variant === 'isolated';
+  const mode = effectiveCodeMode(variant, codeMode);
+  const modeOptions = codeModeOptionsForVariant(variant);
   const parsedClone = cloneUrl.trim() ? parseCloneUrlForRegistration(cloneUrl.trim()) : null;
-  // Non-local delivery goes through the hub's 代行配信 path, which refuses a
-  // repository with no credential outright — a token is required unless an
-  // already-registered repository for this URL already carries one (Issue
-  // #87 review, Important finding 3).
+  // Delivery through the hub refuses a repository with no credential
+  // outright — a token is required unless an already-registered repository
+  // for this URL already carries one (Issue #87 review, Important finding 3).
   const needsToken = !clonesNow && reusableRepo === null;
-  const codeModeOptions: { value: CodeMode; label: string; description: string }[] = [
-    { value: 'existing', label: t('wizard.code.modeExisting'), description: t('wizard.code.modeExistingDescription') },
-    { value: 'clone', label: t('wizard.code.modeClone'), description: t('wizard.code.modeCloneDescription') },
-    { value: 'later', label: t('wizard.code.modeLater'), description: t('wizard.code.modeLaterDescription') },
-  ];
+  const optionText: Record<CodeMode, { label: string; description: string }> = {
+    existing: { label: t('wizard.code.modeExisting'), description: t('wizard.code.modeExistingDescription') },
+    // Only `local` performs a real clone; for any other server the same
+    // option actually means "配信する", and saying "クローン" there is what
+    // let the confirm screen stay silent about distribution.
+    clone: clonesNow
+      ? { label: t('wizard.code.modeClone'), description: t('wizard.code.modeCloneDescription') }
+      : { label: t('wizard.code.modeDistribute'), description: t('wizard.code.modeDistributeDescription') },
+    later: { label: t('wizard.code.modeLater'), description: t('wizard.code.modeLaterDescription') },
+  };
   return (
     <>
-      <FormField label="">
-        <div role="radiogroup" aria-label={t('wizard.steps.code')}>
-          {codeModeOptions.map((opt) => (
-            <OptionCard
-              key={opt.value}
-              id={`wizard-code-mode-${opt.value}`}
-              name="wizard-code-mode"
-              checked={codeMode === opt.value}
-              onChange={() => setCodeMode(opt.value)}
-              title={<span>{opt.label}</span>}
-              description={opt.description}
-            />
-          ))}
-        </div>
-      </FormField>
+      {isolated && (
+        <Notice
+          tone="info"
+          sub={(
+            <>
+              <div>{t('wizard.code.isolatedNoCredentials')}</div>
+              <div>{t('wizard.code.isolatedOriginReplaced')}</div>
+            </>
+          )}
+          style={{ marginBottom: 14 }}
+        >
+          <strong style={{ fontWeight: 600 }}>{t('wizard.code.isolatedTitle')}</strong>
+          <div style={{ color: 'var(--text-dim)', marginTop: 2 }}>{t('wizard.code.isolatedBundle')}</div>
+        </Notice>
+      )}
 
-      {codeMode === 'existing' && (
+      {modeOptions.length > 0 && (
+        <FormField label="">
+          <div role="radiogroup" aria-label={t('wizard.steps.code')}>
+            {modeOptions.map((value) => (
+              <OptionCard
+                key={value}
+                id={`wizard-code-mode-${value}`}
+                name="wizard-code-mode"
+                checked={mode === value}
+                onChange={() => setCodeMode(value)}
+                title={<span>{optionText[value].label}</span>}
+                description={optionText[value].description}
+              />
+            ))}
+          </div>
+        </FormField>
+      )}
+
+      {mode === 'existing' && (
         <FormField label={t('wizard.code.pathLabel')} error={showValidation ? t('wizard.code.pathRequired') : undefined}>
           <DirectoryInput value={existingPath} onChange={onExistingPathChange} serverName={selectedServer} placeholder={t('wizard.code.pathPlaceholder')} style={baseInputStyle} />
           <DiscoveryResult t={t} discovery={discovery} selectedRemoteUrls={selectedRemoteUrls} toggleRemoteSelected={toggleRemoteSelected} />
         </FormField>
       )}
 
-      {codeMode === 'clone' && (
+      {mode === 'clone' && (
         <>
-          <FormField label={t('wizard.code.cloneUrlLabel')} error={showValidation && !cloneUrl.trim() ? t('wizard.code.cloneUrlRequired') : undefined}>
+          <FormField
+            label={clonesNow ? t('wizard.code.cloneUrlLabel') : t('wizard.code.distributionRepoLabel')}
+            error={showValidation && !cloneUrl.trim()
+              ? (clonesNow ? t('wizard.code.cloneUrlRequired') : t('wizard.code.distributionRepoRequired'))
+              : undefined}
+          >
             <RepositoryCandidateInput
               value={cloneUrl}
               onChange={setCloneUrl}
               onSelectCandidate={onSelectRepoCandidate}
               placeholder={t('wizard.code.cloneUrlPlaceholder')}
-              ariaLabel={t('wizard.code.cloneUrlLabel')}
+              ariaLabel={clonesNow ? t('wizard.code.cloneUrlLabel') : t('wizard.code.distributionRepoLabel')}
             />
             {parsedClone && (
               <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -293,22 +328,8 @@ export function CodeStep({
               </div>
             )}
           </FormField>
-          <FormField
-            label={t('wizard.code.cloneDirectoryLabel')}
-            error={showValidation && cloneDirectory.trim() && !isAbsoluteWizardPath(cloneDirectory)
-              ? t('wizard.code.cloneDirectoryMustBeAbsolute')
-              : showValidation && !cloneDirectory.trim() ? t('wizard.code.cloneDirectoryRequired') : undefined}
-          >
-            <DirectoryInput value={cloneDirectory} onChange={setCloneDirectory} serverName={selectedServer} placeholder={t('wizard.code.cloneDirectoryPlaceholder')} style={baseInputStyle} />
-          </FormField>
-          <FormField label={t('wizard.code.cloneBranchLabel')}>
-            <FormInput value={cloneBranch} onChange={(e) => setCloneBranch(e.target.value)} placeholder="main" />
-          </FormField>
-          <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
-            {clonesNow ? t('wizard.code.cloneNoteLocal') : t('wizard.code.cloneNote')}
-          </p>
           {!clonesNow && reusableRepo && (
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--accent-a08)' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--accent-a08)', marginBottom: 14 }}>
               <Badge tone="accent">{t('wizard.code.repoReusedBadge')}</Badge>
               <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{t('wizard.code.repoReusedHint')}</span>
             </div>
@@ -322,10 +343,27 @@ export function CodeStep({
               <FormInput type="password" autoComplete="off" value={cloneToken} onChange={(e) => setCloneToken(e.target.value)} placeholder={t('wizard.code.cloneTokenPlaceholder')} />
             </FormField>
           )}
+          <FormField
+            label={clonesNow ? t('wizard.code.cloneDirectoryLabel') : t('wizard.code.distributionDirectoryLabel')}
+            hint={clonesNow ? undefined : t('wizard.code.distributionDirectoryHint')}
+            error={showValidation && cloneDirectory.trim() && !isAbsoluteWizardPath(cloneDirectory)
+              ? t('wizard.code.cloneDirectoryMustBeAbsolute')
+              : showValidation && !cloneDirectory.trim() ? t('wizard.code.cloneDirectoryRequired') : undefined}
+          >
+            <DirectoryInput value={cloneDirectory} onChange={setCloneDirectory} serverName={selectedServer} placeholder={t('wizard.code.cloneDirectoryPlaceholder')} style={baseInputStyle} />
+          </FormField>
+          <FormField label={t('wizard.code.cloneBranchLabel')}>
+            <FormInput value={cloneBranch} onChange={(e) => setCloneBranch(e.target.value)} placeholder="main" />
+          </FormField>
+          {!isolated && (
+            <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
+              {clonesNow ? t('wizard.code.cloneNoteLocal') : t('wizard.code.cloneNote')}
+            </p>
+          )}
         </>
       )}
 
-      {codeMode === 'later' && (
+      {mode === 'later' && (
         <p style={{ fontSize: 'var(--font-md)', color: 'var(--text-dim)' }}>{t('wizard.code.laterNote')}</p>
       )}
     </>
@@ -405,10 +443,17 @@ function DiscoveryResult({ t, discovery, selectedRemoteUrls, toggleRemoteSelecte
 }
 
 export function ConfirmStep({
-  t, mode, name, selectedServer, showEnvironmentStep, codeMode, existingPath, cloneUrl, cloneDirectory, steps, running, alreadyCreated,
+  t, mode, name, selectedServer, showEnvironmentStep, codeMode, existingPath, cloneUrl, cloneDirectory,
+  distribution, tmuxSession, setTmuxSession, inputPolicy, setInputPolicy, allowPolicyAvailable,
+  steps, running, alreadyCreated,
 }: {
   t: TFunc; mode: 'create' | 'addEnvironment'; name: string; selectedServer: string; showEnvironmentStep: boolean;
   codeMode: CodeMode; existingPath: string; cloneUrl: string; cloneDirectory: string;
+  distribution: DistributionSummary;
+  tmuxSession: string; setTmuxSession: (v: string) => void;
+  inputPolicy: EnvironmentInputPolicy; setInputPolicy: (v: EnvironmentInputPolicy) => void;
+  /** `allow` is only accepted for an isolated server (PUT rejects it otherwise) — mirrors ProjectSettings's own gate. */
+  allowPolicyAvailable: boolean;
   steps: InstallStep[]; running: boolean; alreadyCreated: boolean;
 }) {
   return (
@@ -419,10 +464,54 @@ export function ConfirmStep({
         label={t('wizard.confirm.codeLabel')}
         value={
           codeMode === 'existing' ? t('wizard.confirm.codeExisting', { path: existingPath })
-            : codeMode === 'clone' ? t('wizard.confirm.codeClone', { url: cloneUrl, dir: cloneDirectory })
+            : codeMode === 'clone'
+              ? (distribution.distributed
+                ? t('wizard.confirm.codeDistribute', { url: cloneUrl, dir: cloneDirectory })
+                : t('wizard.confirm.codeClone', { url: cloneUrl, dir: cloneDirectory }))
               : t('wizard.confirm.codeLater')
         }
       />
+      {/* Distribution used to be switched on as a silent side effect of
+          picking "クローン" on a non-local server and never appeared here —
+          state it outright, naming the 配信元 repository. */}
+      <SummaryRow
+        label={t('wizard.confirm.distributionLabel')}
+        value={distribution.distributed
+          ? (distribution.repositoryName
+            ? t('wizard.confirm.distributionOn', { repo: distribution.repositoryName })
+            : t('wizard.confirm.distributionOnNoRepo'))
+          : t('wizard.confirm.distributionOff')}
+      />
+
+      <details style={{ marginTop: 4, marginBottom: 14 }}>
+        <summary style={{ cursor: 'pointer', userSelect: 'none', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', padding: '6px 0' }}>
+          {t('wizard.confirm.advancedToggle')}
+        </summary>
+        <div style={{ marginTop: 10, padding: 'var(--space-3)', borderRadius: 'var(--radius-md)', background: 'var(--bg-card)', boxShadow: 'inset 0 1px 0 var(--edge-hi)' }}>
+          <FormField label={t('wizard.confirm.tmuxSessionLabel')} hint={t('wizard.confirm.tmuxSessionHint')}>
+            <FormInput value={tmuxSession} onChange={(e) => setTmuxSession(e.target.value)} placeholder={t('wizard.confirm.tmuxSessionPlaceholder')} />
+          </FormField>
+          <FormField
+            label={t('wizard.confirm.inputPolicyLabel')}
+            hint={allowPolicyAvailable ? t('wizard.confirm.inputPolicyHint') : t('wizard.confirm.inputPolicyAllowIsolatedOnly')}
+          >
+            <FormSelect
+              value={inputPolicy}
+              onChange={(e) => {
+                const v = e.target.value;
+                setInputPolicy(v === 'deny' || v === 'allow' ? v : 'manual-approval');
+              }}
+            >
+              <option value="manual-approval">{t('wizard.confirm.inputPolicyManualApproval')}</option>
+              <option value="deny">{t('wizard.confirm.inputPolicyDeny')}</option>
+              {/* Client-side hint only; the real enforcement is server-side
+                  (PUT rejects 'allow' for a non-isolated server with 400). */}
+              <option value="allow" disabled={!allowPolicyAvailable}>{t('wizard.confirm.inputPolicyAllow')}</option>
+            </FormSelect>
+          </FormField>
+        </div>
+      </details>
+
       {alreadyCreated && (steps.some((s) => s.status === 'error')) && (
         <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginBottom: 8 }}>{t('wizard.confirm.alreadyCreatedNotice')}</div>
       )}

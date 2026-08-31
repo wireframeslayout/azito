@@ -94,7 +94,7 @@
       "repoReusedBadge": "既存リポジトリを再利用",
       "repoReusedHint": "このプロジェクトには、このURLに対応する資格情報付きのリポジトリが既に登録されています。それを再利用するため、新しいトークンの入力は不要です。",
       "cloneTokenLabel": "アクセストークン",
-      "cloneTokenHint": "配信先サーバーはgit資格情報を持たないため、このリポジトリを配信するにはトークンが必要です。",
+      "cloneTokenHint": "トークンはハブにのみ保存され、配信先サーバーには渡りません。ハブがこのトークンでリポジトリを取得し、bundle にして配信します。",
       "cloneTokenPlaceholder": "ghp_xxxx...",
       "cloneTokenRequired": "リポジトリをローカル以外のサーバーへ配信するには、アクセストークンが必要です。",
       "laterNote": "環境（サーバー・ルート）のみ作成し、リポジトリは登録しません。",
@@ -108,7 +108,17 @@
         "truncated": "他にもあります。絞り込んでください。",
         "providerError": "{{provider}}の一覧は取得できませんでした: {{message}}",
         "privateBadge": "非公開"
-      }
+      },
+      "modeDistribute": "ハブ経由で配信する",
+      "modeDistributeDescription": "ハブがリポジトリを取得し、bundle にしてこのサーバーへ送り込みます。ここではクローンを実行しません。",
+      "isolatedTitle": "このサーバーへはハブ経由で配信します",
+      "isolatedBundle": "ハブがリポジトリを取得して bundle を作り、このサーバーへ送り込みます。配置方法は選べません。",
+      "isolatedNoCredentials": "このサーバーは git の資格情報を持たないため、自分でリポジトリを取得できません。",
+      "isolatedOriginReplaced": "配信先の origin はダミー URL に置き換わります。このサーバーから直接 push はできません。",
+      "distributionRepoLabel": "配信元リポジトリ",
+      "distributionRepoRequired": "配信元リポジトリを入力してください",
+      "distributionDirectoryLabel": "配信先ディレクトリ",
+      "distributionDirectoryHint": "配信先にすでにリポジトリがある場合、その origin が配信元リポジトリと一致している必要があります。一致しない場合、ハブは配信を中止します。"
     },
     "confirm": {
       "projectLabel": "プロジェクト",
@@ -123,7 +133,22 @@
       "stepDirectory": "ディレクトリ",
       "stepClone": "クローン",
       "alreadyCreatedNotice": "すでに作成済みの手順は保持されます。失敗した手順から再実行できます。",
-      "retry": "再試行"
+      "retry": "再試行",
+      "codeDistribute": "配信: {{url}} → {{dir}}",
+      "distributionLabel": "配信",
+      "distributionOn": "ハブ経由で配信します（配信元: {{repo}}）",
+      "distributionOnNoRepo": "ハブ経由で配信します（配信元リポジトリが未設定です）",
+      "distributionOff": "配信しません",
+      "advancedToggle": "詳細設定",
+      "tmuxSessionLabel": "tmux セッション",
+      "tmuxSessionHint": "空欄のままにすると、AZITO が既定のセッション名を使います。",
+      "tmuxSessionPlaceholder": "既定のセッション名を使う",
+      "inputPolicyLabel": "入力ポリシー",
+      "inputPolicyHint": "外部由来の入力をこの環境でどう扱うかを決めます。",
+      "inputPolicyAllowIsolatedOnly": "「承認なしで許可」は隔離サーバーの環境でのみ選択できます。",
+      "inputPolicyManualApproval": "手動承認",
+      "inputPolicyDeny": "拒否",
+      "inputPolicyAllow": "承認なしで許可"
     },
     "addEnvironment": {
       "title": "環境を追加"
