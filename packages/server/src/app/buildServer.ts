@@ -431,7 +431,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // this function) need the SAME instance too, so task-window (re)creation
   // serializes against this exact mutex as well. `wiring.serverIsolationMutex`
   // is that one shared instance; reused below, never re-constructed.
-  const { serverIsolationMutex } = wiring;
+  const { serverIsolationMutex, distributionStateRepo, fetchDistributionService } = wiring;
   // Constructed here (before serversRoutes registration) rather than down
   // near projectsRoutes below, so both the project-independent scan route
   // (servers/routes.ts) and the project-scoped one (projects/routes.ts)
@@ -493,7 +493,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   const fileSearchService = new FileSearchService(transportFactory);
   await app.register(fileBrowseRoutes, { serverRepo, tmux: tmuxClient, projectServerRepo, transportFactory, searchService: fileSearchService });
   await app.register(gitRoutes, { serverRepo, transportFactory, taskRepo, projectServerRepo, worktreeServiceFactory, projectRepo, gitProvider });
-  await app.register(projectsRoutes, { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux: tmuxClient, serverRepo, projectSecretRepo, originationService, serverIsolationMutex, repoDiscovery, localRepoCloneService });
+  await app.register(projectsRoutes, { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux: tmuxClient, serverRepo, projectSecretRepo, originationService, serverIsolationMutex, repoDiscovery, localRepoCloneService, distributionStateRepo, fetchDistributionService });
   await app.register(unitsRoutes, { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, projectServerRepo, serverRepo, sidekickLoader: sidekickPackageLoader, unitTypeLoader });
   await app.register(operationsRoutes, { executeTaskUseCase, agentActivityMonitor, supervisorRegistry, windowRepo });
   await app.register(auditLogRoutes, { auditLogService });

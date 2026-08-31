@@ -18,6 +18,12 @@ export interface DistributionStateRecord {
   distributedAt: string;
 }
 
+/** A {@link DistributionStateRecord} together with the `(server_name, repository_id)` pair it is keyed by — see {@link IDistributionStateRepository.findManyByRepositoryIds}. */
+export interface DistributionStateEntry extends DistributionStateRecord {
+  serverName: string;
+  repositoryId: number;
+}
+
 export interface IDistributionStateRepository {
   upsert(serverName: string, repositoryId: number, sha: string, bundleType: 'full' | 'incremental'): void;
   deleteByServer(serverName: string): void;
@@ -30,6 +36,16 @@ export interface IDistributionStateRepository {
   // exact `(serverName, repositoryId)` pair (never distributed, or the
   // server/repository named by the recorded id has changed).
   find(serverName: string, repositoryId: number): DistributionStateRecord | null;
+  /**
+   * Every row whose `repository_id` is in `repositoryIds`, in ONE query
+   * (Issue #87 配信状態の可視化). GET /api/projects/:id/servers renders the
+   * last-distribution record for every project server row at once and must
+   * not issue one `find()` per server. Returns `[]` for an empty id list
+   * without touching the database. Callers match rows on BOTH `serverName`
+   * and `repositoryId` — the table's unique key is the pair, and one
+   * repository is routinely distributed to several servers.
+   */
+  findManyByRepositoryIds(repositoryIds: number[]): DistributionStateEntry[];
 }
 
 // ── Fetch distribution (Phase 1) ──

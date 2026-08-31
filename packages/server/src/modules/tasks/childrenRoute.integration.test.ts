@@ -103,7 +103,7 @@ function buildApp(scopedAuthEnabled: boolean, db: SqliteDatabase, createCalls: R
 
   const opts: TasksRouteOptions = {
     taskRepo,
-    projectRepo: { findAll: vi.fn(() => []), findById: vi.fn(() => ({ id: 10, name: 'P', slug: 'p' })), create: vi.fn(), update: vi.fn(), delete: vi.fn(), addRepository: vi.fn(), findRepositoryById: vi.fn(() => null), removeRepository: vi.fn() } as unknown as TasksRouteOptions['projectRepo'],
+    projectRepo: { findAll: vi.fn(() => []), findById: vi.fn(() => ({ id: 10, name: 'P', slug: 'p' })), create: vi.fn(), update: vi.fn(), delete: vi.fn(), addRepository: vi.fn(), findRepositoryById: vi.fn(() => null), removeRepository: vi.fn(), findRepositoryCredentialsByIds: vi.fn(() => []) } as unknown as TasksRouteOptions['projectRepo'],
     projectServerRepo: { findByProject: vi.fn(() => []), findByServer: vi.fn(() => []), find: vi.fn(() => null), upsert: vi.fn(), remove: vi.fn() },
     logRepo: { findByTask: vi.fn(() => []), findByUnit: vi.fn(() => []), append: vi.fn() },
     executeTaskUseCase: { stopByTaskId: vi.fn(() => false), execute: vi.fn(), followUp: vi.fn(), events: { on: vi.fn(), off: vi.fn(), emit: vi.fn() } } as unknown as TasksRouteOptions['executeTaskUseCase'],

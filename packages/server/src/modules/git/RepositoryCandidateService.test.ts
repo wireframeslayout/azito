@@ -35,6 +35,7 @@ function makeProjectRepo(findAllResult: ProjectDetail[]): IProjectRepository {
     updateRepositoryToken: vi.fn(),
     findRepositoryById: vi.fn(() => null),
     removeRepository: vi.fn(),
+    findRepositoryCredentialsByIds: vi.fn(() => []),
   };
 }
 

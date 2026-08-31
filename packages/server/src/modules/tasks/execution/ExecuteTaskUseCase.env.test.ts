@@ -297,6 +297,7 @@ function buildUseCase(opts: {
     findRepositoryById: vi.fn(() => opts.repository ? { ...opts.repository, name: null } : null),
     updateRepositoryToken: vi.fn(),
     removeRepository: vi.fn(),
+    findRepositoryCredentialsByIds: vi.fn(() => []),
   };
 
   const projectServerRepo: IProjectServerRepository = {
@@ -1434,6 +1435,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITOç›
       findRepositoryById: vi.fn(() => null),
       updateRepositoryToken: vi.fn(),
       removeRepository: vi.fn(),
+      findRepositoryCredentialsByIds: vi.fn(() => []),
     };
     const projectServerRepo: IProjectServerRepository = {
       findByProject: vi.fn(() => [{ projectId: 1, serverName: 'local-server', workingDirectory: '/work', branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null }]),
@@ -2378,6 +2380,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       findRepositoryById: vi.fn(() => null),
       updateRepositoryToken: vi.fn(),
       removeRepository: vi.fn(),
+      findRepositoryCredentialsByIds: vi.fn(() => []),
     };
     const projectServerRepo: IProjectServerRepository = {
       findByProject: vi.fn(() => []),

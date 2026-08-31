@@ -3,7 +3,7 @@ import type { ProjectDetail, ProjectRepository } from '../../projects/Project';
 import type { ProjectServer } from '../../projects/ProjectServer';
 import type { IProjectRepository } from '../../projects/Project';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
-import { resolveCanonicalRepositoryIdentity } from '../../git/resolveCanonicalRepositoryIdentity';
+import { resolveCanonicalRepositoryIdentity, type CanonicalRepositoryIdentity } from '../../git/resolveCanonicalRepositoryIdentity';
 import { normalizeBranchRef } from '../../git/assertSafeGitArgs';
 import type { FetchDistributionService } from '../../git/hub-transfer/FetchDistributionService';
 import type { IDistributionStateRepository } from '../../git/hub-transfer/types';
@@ -36,6 +36,7 @@ export type DistributionFailureStage =
   | 'distribution_repository_not_found'
   | 'no_token'
   | 'identity_unresolvable'
+  | 'credential_unreadable'
   | 'distribute_failed'
   | 'stale_local_branch';
 
@@ -318,6 +319,178 @@ export function shouldClearRecordedDistributionRepository(
   return distributionStateRepo.find(serverName, recordedRepositoryId) == null;
 }
 
+/**
+ * The subset of {@link DistributionFailureStage} values a purely local,
+ * remote-free prerequisite check can produce (Issue #87 配信状態の可視化).
+ * `distribute_failed`/`stale_local_branch` are deliberately excluded: both
+ * are outcomes of the distribution attempt itself, never of its
+ * preconditions.
+ */
+export type DistributionPrerequisiteStage =
+  | 'service_not_wired'
+  | 'no_working_dir'
+  | 'no_distribution_repository'
+  | 'distribution_repository_not_found'
+  | 'no_token'
+  | 'credential_unreadable'
+  | 'identity_unresolvable';
+
+/**
+ * What a caller's credential lookup found for the distribution target
+ * repository (Issue #87 配信状態の可視化). The lookup — not this module —
+ * decides HOW the credential is fetched, because the two callers need
+ * different fetch behavior: `performDistribution` reads the one repository
+ * it is about to use and lets a decryption failure propagate exactly as
+ * before, while the read-only listing bulk-loads every referenced repository
+ * and reports a decryption failure as `unreadable` instead of failing the
+ * whole response.
+ */
+export type DistributionRepositoryLookup =
+  | { status: 'ok'; repo: Pick<ProjectRepository, 'url' | 'provider' | 'owner' | 'repoName'>; token: string }
+  | { status: 'no_token' }
+  | { status: 'unreadable' };
+
+export interface CheckDistributionPrerequisitesParams {
+  server: Pick<ServerConfig, 'type' | 'isolationIntent'>;
+  projectServer: Pick<ProjectServer, 'distributeCode' | 'distributionRepositoryId'> | null;
+  project: Pick<ProjectDetail, 'repositories'> | null;
+  workingDir: string | null;
+  /** Resolves the distribution target repository's credential — called at most once, only after the target id is known. */
+  lookupRepository: (repositoryId: number) => DistributionRepositoryLookup;
+  fetchDistributionService: FetchDistributionService | null;
+}
+
+export type DistributionPrerequisiteResult =
+  | { required: false }
+  | {
+      required: true;
+      ok: true;
+      /** The `project_repositories` id distribution would pull from. */
+      repositoryId: number;
+      /** Non-null by construction: a null/empty working directory fails as `no_working_dir`. */
+      workingDir: string;
+      /** Resolved, non-empty token for {@link repositoryId} — never surfaced outside this process. */
+      token: string;
+      identity: CanonicalRepositoryIdentity;
+      /** Non-null by construction: a null service fails as `service_not_wired`. */
+      fetchDistributionService: FetchDistributionService;
+    }
+  | { required: true; ok: false; stage: DistributionPrerequisiteStage; message: string };
+
+/**
+ * The prerequisite half of {@link performDistribution} — every check that
+ * runs BEFORE `transportFactory.getTransport(server)`, i.e. every check that
+ * touches nothing but the hub's own database rows (Issue #87 配信状態の可視化).
+ *
+ * Extracted so the same verdict can be rendered in a list (GET
+ * /api/projects/:id/servers) without executing a task first: before this
+ * existed, a project server whose `distribution_repository_id` was never set
+ * (e.g. the "use an existing directory" branch of the project wizard) looked
+ * perfectly healthy until the first task failed on `no_distribution_repository`.
+ *
+ * Makes NO remote connection, spawns no process, and invokes
+ * `lookupRepository` at most once. `performDistribution` calls this and nothing
+ * else for its own prerequisite phase, so the two can never drift — the
+ * stage values, their order, and their messages are this function's alone.
+ *
+ * The `message` is INTERNAL (it can embed the identity-resolution reason and
+ * is written for hub logs/execution logs). API surfaces must expose `stage`
+ * only and localize from that — never forward `message` to a client.
+ */
+export function checkDistributionPrerequisites(
+  params: CheckDistributionPrerequisitesParams,
+): DistributionPrerequisiteResult {
+  const { server, projectServer, project, workingDir, lookupRepository, fetchDistributionService } = params;
+
+  if (!isDistributionRequired(server, projectServer)) {
+    return { required: false };
+  }
+
+  if (!fetchDistributionService) {
+    return {
+      required: true,
+      ok: false,
+      stage: 'service_not_wired',
+      message: 'Fetch distribution is required (server isolation intent or project distribute_code) but FetchDistributionService is not wired',
+    };
+  }
+
+  if (!workingDir) {
+    return {
+      required: true,
+      ok: false,
+      stage: 'no_working_dir',
+      message: 'Fetch distribution is required (server isolation intent or project distribute_code) but no working directory is configured for this task/server',
+    };
+  }
+
+  // Issue #87 explicit-target follow-up: the target repository is resolved
+  // from `projectServer.distributionRepositoryId`, never inferred from
+  // `project.repositories[0]`/"exactly one repository configured" — see
+  // `ProjectServer.distributionRepositoryId`'s doc comment and this
+  // module's own doc comment. Required even when the project has exactly
+  // one repository (deliberately not defaulted to it): an operator
+  // approving distribution for a project server is approving "code from
+  // THIS repository, on THIS server", and inferring a single-repository
+  // project's implicit repository would let a later-added second repository
+  // silently make a previously-unambiguous choice ambiguous again with no
+  // signal at the project-server row itself — the explicit column is the
+  // one place that choice is recorded and can be reviewed/changed
+  // independently of how many repositories the project happens to have.
+  const distributionRepositoryId = projectServer?.distributionRepositoryId ?? null;
+  if (distributionRepositoryId === null) {
+    return {
+      required: true,
+      ok: false,
+      stage: 'no_distribution_repository',
+      message: 'Fetch distribution is required but no distribution target repository is configured for this project server. Select one in Settings → Servers for this project/server pairing.',
+    };
+  }
+
+  const repoEntry = project?.repositories?.find((r) => r.id === distributionRepositoryId);
+  if (!repoEntry) {
+    return {
+      required: true,
+      ok: false,
+      stage: 'distribution_repository_not_found',
+      message: 'Fetch distribution is required but the configured distribution target repository no longer exists on this project',
+    };
+  }
+
+  const lookup = lookupRepository(repoEntry.id);
+  if (lookup.status === 'unreadable') {
+    return {
+      required: true,
+      ok: false,
+      stage: 'credential_unreadable',
+      message: 'Fetch distribution is required but the repository\'s stored credential could not be decrypted (master key mismatch or corrupted ciphertext)',
+    };
+  }
+  if (lookup.status === 'no_token') {
+    return { required: true, ok: false, stage: 'no_token', message: 'Fetch distribution is required but the repository has no token configured' };
+  }
+
+  const identity = resolveCanonicalRepositoryIdentity(lookup.repo);
+  if (!identity.ok) {
+    return {
+      required: true,
+      ok: false,
+      stage: 'identity_unresolvable',
+      message: `Fetch distribution is required but the repository URL could not be normalized to a canonical identity: ${identity.reason}`,
+    };
+  }
+
+  return {
+    required: true,
+    ok: true,
+    repositoryId: repoEntry.id,
+    workingDir,
+    token: lookup.token,
+    identity: identity.identity,
+    fetchDistributionService,
+  };
+}
+
 export interface PerformDistributionParams {
   server: ServerConfig;
   projectServer: Pick<ProjectServer, 'distributeCode' | 'distributionRepositoryId'> | null;
@@ -376,76 +549,31 @@ export interface PerformDistributionParams {
 export async function performDistribution(params: PerformDistributionParams): Promise<DistributionOutcome> {
   const { server, projectServer, project, workingDir, baseBranch, taskBranch, transportFactory, projectRepo, fetchDistributionService, onBeforeDistribute } = params;
 
-  if (!isDistributionRequired(server, projectServer)) {
-    return { required: false };
+  // Every check that runs before the transport is obtained lives in
+  // `checkDistributionPrerequisites` — the SAME function GET
+  // /api/projects/:id/servers renders, so the list view and an actual run can
+  // never disagree about why a project server is not distributable.
+  const prerequisites = checkDistributionPrerequisites({
+    server,
+    projectServer,
+    project,
+    workingDir,
+    // Unchanged execution-path behavior: `findRepositoryById` decrypts
+    // eagerly and a `SecretBox.open()` failure propagates out of
+    // `performDistribution` exactly as it did before this extraction — a run
+    // that cannot read its own credential must not proceed. `unreadable` is
+    // therefore never produced here; it exists for the read-only listing
+    // path, which must degrade one row instead of the whole response.
+    lookupRepository: (repositoryId) => {
+      const repo = projectRepo.findRepositoryById(repositoryId);
+      return repo?.token ? { status: 'ok', repo, token: repo.token } : { status: 'no_token' };
+    },
+    fetchDistributionService,
+  });
+  if (!prerequisites.required) return { required: false };
+  if (!prerequisites.ok) {
+    return { required: true, ok: false, stage: prerequisites.stage, message: prerequisites.message };
   }
-
-  if (!fetchDistributionService) {
-    return {
-      required: true,
-      ok: false,
-      stage: 'service_not_wired',
-      message: 'Fetch distribution is required (server isolation intent or project distribute_code) but FetchDistributionService is not wired',
-    };
-  }
-
-  if (!workingDir) {
-    return {
-      required: true,
-      ok: false,
-      stage: 'no_working_dir',
-      message: 'Fetch distribution is required (server isolation intent or project distribute_code) but no working directory is configured for this task/server',
-    };
-  }
-
-  // Issue #87 explicit-target follow-up: the target repository is resolved
-  // from `projectServer.distributionRepositoryId`, never inferred from
-  // `project.repositories[0]`/"exactly one repository configured" — see
-  // `ProjectServer.distributionRepositoryId`'s doc comment and this
-  // function's own module doc comment. Required even when the project has
-  // exactly one repository (deliberately not defaulted to it): an operator
-  // approving distribution for a project server is approving "code from
-  // THIS repository, on THIS server", and inferring a single-repository
-  // project's implicit repository would let a later-added second repository
-  // silently make a previously-unambiguous choice ambiguous again with no
-  // signal at the project-server row itself — the explicit column is the
-  // one place that choice is recorded and can be reviewed/changed
-  // independently of how many repositories the project happens to have.
-  const distributionRepositoryId = projectServer?.distributionRepositoryId ?? null;
-  if (distributionRepositoryId === null) {
-    return {
-      required: true,
-      ok: false,
-      stage: 'no_distribution_repository',
-      message: 'Fetch distribution is required but no distribution target repository is configured for this project server. Select one in Settings → Servers for this project/server pairing.',
-    };
-  }
-
-  const repoEntry = project?.repositories?.find((r) => r.id === distributionRepositoryId);
-  if (!repoEntry) {
-    return {
-      required: true,
-      ok: false,
-      stage: 'distribution_repository_not_found',
-      message: 'Fetch distribution is required but the configured distribution target repository no longer exists on this project',
-    };
-  }
-
-  const repo = projectRepo.findRepositoryById(repoEntry.id);
-  if (!repo?.token) {
-    return { required: true, ok: false, stage: 'no_token', message: 'Fetch distribution is required but the repository has no token configured' };
-  }
-
-  const identity = resolveCanonicalRepositoryIdentity(repo);
-  if (!identity.ok) {
-    return {
-      required: true,
-      ok: false,
-      stage: 'identity_unresolvable',
-      message: `Fetch distribution is required but the repository URL could not be normalized to a canonical identity: ${identity.reason}`,
-    };
-  }
-
   const transport = transportFactory.getTransport(server);
 
   // Every prerequisite check THIS function runs has now passed — but
@@ -457,15 +585,15 @@ export async function performDistribution(params: PerformDistributionParams): Pr
   // once, immediately before the one step INSIDE it that actually mutates
   // `workingDir` (`ensureWorkingDir()`). See `onBeforeDistribute`'s doc
   // comment on `PerformDistributionParams` above for the full rationale.
-  const distResult = await fetchDistributionService.distribute({
+  const distResult = await prerequisites.fetchDistributionService.distribute({
     server,
     transport,
-    repoIdentity: identity.identity,
-    token: repo.token,
+    repoIdentity: prerequisites.identity,
+    token: prerequisites.token,
     branch: baseBranch,
-    workingDir,
-    repositoryId: repoEntry.id,
-    onBeforeWorkingDirChange: onBeforeDistribute ? () => onBeforeDistribute(repoEntry.id) : undefined,
+    workingDir: prerequisites.workingDir,
+    repositoryId: prerequisites.repositoryId,
+    onBeforeWorkingDirChange: onBeforeDistribute ? () => onBeforeDistribute(prerequisites.repositoryId) : undefined,
   });
 
   if (distResult.status === 'failed') {
@@ -490,7 +618,7 @@ export async function performDistribution(params: PerformDistributionParams): Pr
       required: true,
       ok: false,
       stage: 'stale_local_branch',
-      message: `Fetch distribution succeeded but the local branch "${taskBranch}" in ${workingDir} could not be updated to the distributed content — it is likely checked out in another worktree on the server. Remove or update that worktree, or specify a different branch name for this task, and retry.`,
+      message: `Fetch distribution succeeded but the local branch "${taskBranch}" in ${prerequisites.workingDir} could not be updated to the distributed content — it is likely checked out in another worktree on the server. Remove or update that worktree, or specify a different branch name for this task, and retry.`,
     };
   }
 
@@ -501,6 +629,6 @@ export async function performDistribution(params: PerformDistributionParams): Pr
     sha: distResult.sha,
     bundleType: distResult.bundleType,
     localBranchSynced: distResult.localBranchSynced,
-    repositoryId: repoEntry.id,
+    repositoryId: prerequisites.repositoryId,
   };
 }

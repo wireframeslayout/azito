@@ -179,6 +179,7 @@ function makeRepos(overrides: {
     findRepositoryById: vi.fn(() => null),
     updateRepositoryToken: vi.fn(),
     removeRepository: vi.fn(),
+    findRepositoryCredentialsByIds: vi.fn(() => []),
     ...overrides.project,
   };
 

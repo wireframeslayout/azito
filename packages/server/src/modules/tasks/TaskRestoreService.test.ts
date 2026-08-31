@@ -105,6 +105,7 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
       findRepositoryById: vi.fn(() => null),
       updateRepositoryToken: vi.fn(),
       removeRepository: vi.fn(),
+      findRepositoryCredentialsByIds: vi.fn(() => []),
     },
     projectServerRepo: {
       findByProject: vi.fn(() => [{ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: 1 }]),
@@ -1069,6 +1070,7 @@ describe('TaskRestoreService', () => {
             serverName === 'test-server' && repositoryId === 5
               ? { lastDistributedSha: 'a'.repeat(40), bundleType: 'full' as const, distributedAt: '2026-01-01T00:00:00Z' }
               : null),
+          findManyByRepositoryIds: vi.fn(() => []),
         };
         deps = makeDeps({ ...deps, fetchDistributionService, distributionStateRepo });
         service = new TaskRestoreService(deps);
@@ -1087,6 +1089,7 @@ describe('TaskRestoreService', () => {
           upsert: vi.fn(),
           deleteByServer: vi.fn(),
           find: vi.fn(() => null),
+          findManyByRepositoryIds: vi.fn(() => []),
         };
         deps = makeDeps({ ...deps, fetchDistributionService, distributionStateRepo });
         service = new TaskRestoreService(deps);

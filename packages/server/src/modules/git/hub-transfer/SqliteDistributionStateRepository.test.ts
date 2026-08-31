@@ -82,4 +82,27 @@ describe('SqliteDistributionStateRepository', () => {
     expect(readState('server-a', 2)).toBeNull();
     expect(readState('server-b', 1)).not.toBeNull();
   });
+
+  describe('findManyByRepositoryIds (Issue #87 配信状態の可視化)', () => {
+    it('returns every row for the given repositories, keyed by server AND repository', () => {
+      repo.upsert('server-a', 1, 'a'.repeat(40), 'full');
+      repo.upsert('server-b', 1, 'b'.repeat(40), 'incremental');
+      repo.upsert('server-a', 2, 'c'.repeat(40), 'full');
+      const rows = repo.findManyByRepositoryIds([1, 2]);
+      expect(rows).toHaveLength(3);
+      expect(rows).toContainEqual(expect.objectContaining({ serverName: 'server-b', repositoryId: 1, lastDistributedSha: 'b'.repeat(40), bundleType: 'incremental' }));
+      expect(rows.every((r) => typeof r.distributedAt === 'string' && r.distributedAt.length > 0)).toBe(true);
+    });
+
+    it('filters to the requested repository ids only', () => {
+      repo.upsert('server-a', 1, 'a'.repeat(40), 'full');
+      repo.upsert('server-a', 2, 'c'.repeat(40), 'full');
+      expect(repo.findManyByRepositoryIds([2]).map((r) => r.repositoryId)).toEqual([2]);
+    });
+
+    it('returns [] for an empty id list without querying', () => {
+      repo.upsert('server-a', 1, 'a'.repeat(40), 'full');
+      expect(repo.findManyByRepositoryIds([])).toEqual([]);
+    });
+  });
 });

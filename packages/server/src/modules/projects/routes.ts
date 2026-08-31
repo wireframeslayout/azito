@@ -1,7 +1,7 @@
 import * as path from 'path';
 import type { FastifyPluginCallback } from 'fastify';
 import type { IProjectRepository, RepositoryProvider } from './Project';
-import type { IProjectServerRepository } from './ProjectServer';
+import type { IProjectServerRepository, ProjectServer } from './ProjectServer';
 import { resolveInputPolicy } from './ProjectServer';
 import type { ITaskRepository } from '../tasks/Task';
 import type { TaskOriginationService } from '../tasks/origination/TaskOriginationService';
@@ -31,6 +31,15 @@ import { urlHasEmbeddedCredentials } from '../git/urlHasEmbeddedCredentials';
 import { sanitizeDiscoveredRemoteUrl } from '../git/sanitizeDiscoveredRemoteUrl';
 import { resolveCanonicalRepositoryIdentity } from '../git/resolveCanonicalRepositoryIdentity';
 import { LocalCloneTargetNotEmptyError, type LocalRepoCloneService } from '../git/LocalRepoCloneService';
+// Issue #87 配信状態の可視化: the SAME prerequisite check an actual run
+// performs (`performDistribution` delegates to it), reused read-only here so
+// GET /api/projects/:id/servers can surface a misconfigured distribution
+// target BEFORE a task is executed against it. Touches nothing but hub-local
+// rows — no transport, no remote connection (see its own doc comment).
+import { checkDistributionPrerequisites, type DistributionPrerequisiteStage, type DistributionRepositoryLookup } from '../tasks/execution/DistributionHelper';
+import type { FetchDistributionService } from '../git/hub-transfer/FetchDistributionService';
+import type { IDistributionStateRepository } from '../git/hub-transfer/types';
+import type { ProjectRepositoryCredential } from './Project';
 
 // ─── Types ───
 
@@ -56,12 +65,35 @@ export interface ProjectsRouteOptions {
   repoDiscovery: RepoDiscoveryService;
   /** Issue #87 "クローンが壊れた設定を作る" fix: clones a registered repository directly into a `local`-type server's working directory (hub own filesystem) — the only server type distribution doesn't cover. */
   localRepoCloneService: LocalRepoCloneService;
+  /** Read-only here (Issue #87 配信状態の可視化): the last-distribution record rendered by GET /api/projects/:id/servers. */
+  distributionStateRepo: IDistributionStateRepository;
+  /** Presence-checked only (Issue #87 配信状態の可視化) — the `service_not_wired` prerequisite stage. Never invoked from this module: distribution itself stays in the tasks module. */
+  fetchDistributionService: FetchDistributionService | null;
+}
+
+/** Distribution facts GET /api/projects/:id/servers adds to each project-server row (Issue #87 配信状態の可視化). */
+export interface ProjectServerDistributionInfo {
+  /** `isDistributionRequired`'s verdict, or `null` when the referenced `servers` row is gone and it cannot be computed. */
+  distributionRequired: boolean | null;
+  distributionPrerequisite: {
+    /**
+     * `not_required` — distribution does not apply to this pairing;
+     * `ok` — every hub-local precondition passes;
+     * `failed` — a precondition failed, see `stage`;
+     * `unknown` — the referenced `servers` row does not exist, so nothing can be decided.
+     */
+    status: 'not_required' | 'ok' | 'failed' | 'unknown';
+    /** Machine-readable failure identifier for `status: 'failed'`, `null` otherwise. Clients localize from this — the internal message is deliberately NOT exposed (it can embed repository URLs / resolution details). */
+    stage: DistributionPrerequisiteStage | null;
+  };
+  /** The `distribution_state` row for (this server, its configured distribution repository). `null` = never distributed. */
+  lastDistribution: { distributedAt: string; bundleType: 'full' | 'incremental'; lastDistributedSha: string } | null;
 }
 
 // ─── Plugin ───
 
 const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, opts, done) => {
-  const { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux, serverRepo, projectSecretRepo, originationService, serverIsolationMutex, repoDiscovery, localRepoCloneService } = opts;
+  const { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux, serverRepo, projectSecretRepo, originationService, serverIsolationMutex, repoDiscovery, localRepoCloneService, distributionStateRepo, fetchDistributionService } = opts;
   const serverIsolationLock: ServerIsolationLock = { serverIsolationMutex, serverRepo };
   const SECRET_NAME_PATTERN = /^[A-Z0-9_]{1,64}$/;
 
@@ -266,9 +298,78 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
     '/api/projects/:id/servers',
     async (request, reply) => {
       const id = parseInt(request.params.id, 10);
-      if (!projectRepo.findById(id))
+      const project = projectRepo.findById(id);
+      if (!project)
         return reply.status(404).send({ error: 'Project not found' });
-      return projectServerRepo.findByProject(id);
+      const rows = projectServerRepo.findByProject(id);
+
+      // Three bulk reads for the whole list, never one per row (Issue #87
+      // 配信状態の可視化): all `servers` in one query, all `distribution_state`
+      // rows for the referenced repositories in one query, and all referenced
+      // repositories (with their credential-decryption outcome) in one more —
+      // regardless of how many distinct repositories the servers point at.
+      const serversByName = new Map(serverRepo.findAll().map((s) => [s.name, s]));
+      const repositoryIds = [...new Set(rows.map((r) => r.distributionRepositoryId).filter((v): v is number => v != null))];
+      const stateKey = (serverName: string, repositoryId: number) => `${serverName}\u0000${repositoryId}`;
+      const stateByKey = new Map(
+        distributionStateRepo.findManyByRepositoryIds(repositoryIds).map((e) => [stateKey(e.serverName, e.repositoryId), e]),
+      );
+      // Bulk-loaded ONCE for every referenced repository, and deliberately
+      // via `findRepositoryCredentialsByIds` rather than `findRepositoryById`:
+      // the latter throws when a stored credential can no longer be decrypted,
+      // which on a listing would turn one broken repository into a 500 for the
+      // whole project. Here that becomes this row's `credential_unreadable`
+      // stage and every other row still renders.
+      const credentialsById = new Map<number, ProjectRepositoryCredential>(
+        projectRepo.findRepositoryCredentialsByIds(repositoryIds).map((c) => [c.id, c]),
+      );
+      const lookupRepository = (rid: number): DistributionRepositoryLookup => {
+        const credential = credentialsById.get(rid);
+        if (!credential) return { status: 'no_token' };
+        if (credential.credentialStatus === 'unreadable') return { status: 'unreadable' };
+        if (!credential.token) return { status: 'no_token' };
+        return { status: 'ok', repo: credential, token: credential.token };
+      };
+
+      return rows.map((row): ProjectServer & ProjectServerDistributionInfo => {
+        const state = row.distributionRepositoryId != null
+          ? stateByKey.get(stateKey(row.serverName, row.distributionRepositoryId)) ?? null
+          : null;
+        const lastDistribution = state
+          ? { distributedAt: state.distributedAt, bundleType: state.bundleType, lastDistributedSha: state.lastDistributedSha }
+          : null;
+
+        const server = serversByName.get(row.serverName);
+        if (!server) {
+          // The `servers` row this pairing names is gone — reported as
+          // `unknown` rather than defaulted to "no distribution needed",
+          // which would render a broken pairing as healthy.
+          return { ...row, distributionRequired: null, distributionPrerequisite: { status: 'unknown', stage: null }, lastDistribution };
+        }
+
+        const prerequisites = checkDistributionPrerequisites({
+          server,
+          projectServer: row,
+          project,
+          workingDir: row.workingDirectory,
+          lookupRepository,
+          fetchDistributionService,
+        });
+        // `prerequisites.message` is internal (it can embed the repository
+        // URL / identity-resolution reason) and is deliberately dropped here
+        // — only the machine-readable `stage` crosses the API boundary.
+        const distributionPrerequisite: ProjectServerDistributionInfo['distributionPrerequisite'] =
+          !prerequisites.required
+            ? { status: 'not_required', stage: null }
+            : prerequisites.ok
+              ? { status: 'ok', stage: null }
+              : { status: 'failed', stage: prerequisites.stage };
+
+        // `prerequisites.required` IS `isDistributionRequired(server, row)` —
+        // read off the same result rather than recomputing it, so the flag
+        // and the verdict can never disagree.
+        return { ...row, distributionRequired: prerequisites.required, distributionPrerequisite, lastDistribution };
+      });
     },
   );
 

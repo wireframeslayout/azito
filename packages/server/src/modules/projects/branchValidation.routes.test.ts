@@ -50,6 +50,7 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
       findRepositoryById: vi.fn(() => ({ id: 1, name: 'widgets', url: 'https://github.com/acme/widgets', provider: 'github' as const, owner: 'acme', repoName: 'widgets', token: null })),
       updateRepositoryToken: vi.fn(),
       removeRepository: vi.fn(),
+      findRepositoryCredentialsByIds: vi.fn(() => []),
     },
     projectServerRepo: {
       findByProject: vi.fn(() => []),
@@ -84,6 +85,13 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
     serverIsolationMutex: new KeyedMutex(),
     repoDiscovery: { discover: vi.fn(async () => []) } as unknown as ProjectsRouteOptions['repoDiscovery'],
     localRepoCloneService: { clone: vi.fn() } as unknown as ProjectsRouteOptions['localRepoCloneService'],
+    distributionStateRepo: {
+      upsert: vi.fn(),
+      deleteByServer: vi.fn(),
+      find: vi.fn(() => null),
+      findManyByRepositoryIds: vi.fn(() => []),
+    },
+    fetchDistributionService: null,
     ...overrides,
   };
 }
@@ -185,6 +193,7 @@ describe('PUT /api/projects/:id — default_branch input validation (Issue #87 t
         findRepositoryById: vi.fn(() => ({ id: 1, name: 'widgets', url: 'https://github.com/acme/widgets', provider: 'github' as const, owner: 'acme', repoName: 'widgets', token: null })),
         updateRepositoryToken: vi.fn(),
         removeRepository: vi.fn(),
+        findRepositoryCredentialsByIds: vi.fn(() => []),
       },
     });
     const app = Fastify();

@@ -93,6 +93,7 @@ function makeOpts(existingTask: Task | null): TasksRouteOptions {
       findRepositoryById: vi.fn(() => null),
       updateRepositoryToken: vi.fn(),
       removeRepository: vi.fn(),
+      findRepositoryCredentialsByIds: vi.fn(() => []),
     },
     projectServerRepo: {
       findByProject: vi.fn(() => [{ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null }]),

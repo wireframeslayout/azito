@@ -55,6 +55,7 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
       findRepositoryById: vi.fn(() => null),
       updateRepositoryToken: vi.fn(),
       removeRepository: vi.fn(),
+      findRepositoryCredentialsByIds: vi.fn(() => []),
     },
     projectServerRepo: {
       findByProject: vi.fn(() => []),
@@ -93,6 +94,13 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
     serverIsolationMutex: new KeyedMutex(),
     repoDiscovery: { discover: vi.fn(async () => []) } as unknown as ProjectsRouteOptions['repoDiscovery'],
     localRepoCloneService: { clone: vi.fn() } as unknown as ProjectsRouteOptions['localRepoCloneService'],
+    distributionStateRepo: {
+      upsert: vi.fn(),
+      deleteByServer: vi.fn(),
+      find: vi.fn(() => null),
+      findManyByRepositoryIds: vi.fn(() => []),
+    },
+    fetchDistributionService: null,
     ...overrides,
   };
 }
@@ -564,6 +572,7 @@ describe('POST /api/projects/:id/repositories (reuse-aware)', () => {
         findRepositoryById: vi.fn(() => null),
         updateRepositoryToken: vi.fn(),
         removeRepository: vi.fn(),
+        findRepositoryCredentialsByIds: vi.fn(() => []),
       },
     });
     const app = Fastify();
@@ -600,6 +609,7 @@ describe('POST /api/projects/:id/repositories (reuse-aware)', () => {
         findRepositoryById: vi.fn(() => null),
         updateRepositoryToken: vi.fn(),
         removeRepository: vi.fn(),
+        findRepositoryCredentialsByIds: vi.fn(() => []),
       },
     });
     const app = Fastify();
@@ -642,6 +652,7 @@ describe('POST /api/projects/:id/repositories (reuse-aware)', () => {
         findRepositoryById: vi.fn(() => null),
         updateRepositoryToken: vi.fn(),
         removeRepository: vi.fn(),
+        findRepositoryCredentialsByIds: vi.fn(() => []),
       },
     });
     const app = Fastify();
@@ -681,6 +692,7 @@ describe('POST /api/projects/:id/repositories (reuse-aware)', () => {
         findRepositoryById: vi.fn(() => null),
         updateRepositoryToken: vi.fn(),
         removeRepository: vi.fn(),
+        findRepositoryCredentialsByIds: vi.fn(() => []),
       },
     });
     const app = Fastify();
@@ -721,6 +733,7 @@ describe('POST /api/projects/:id/repositories (reuse-aware)', () => {
         findRepositoryById: vi.fn(() => null),
         updateRepositoryToken: vi.fn(),
         removeRepository: vi.fn(),
+        findRepositoryCredentialsByIds: vi.fn(() => []),
       },
     });
     const app = Fastify();
@@ -760,6 +773,7 @@ describe('POST /api/projects/:id/repositories (reuse-aware)', () => {
         findRepositoryById: vi.fn(() => null),
         updateRepositoryToken: vi.fn((_id: number, token: string) => { currentToken = token; }),
         removeRepository: vi.fn(),
+        findRepositoryCredentialsByIds: vi.fn(() => []),
       },
     });
     const app = Fastify();
@@ -816,6 +830,7 @@ describe('POST /api/projects/:id/repositories (reuse-aware)', () => {
         findRepositoryById: vi.fn(() => null),
         updateRepositoryToken: vi.fn(),
         removeRepository: vi.fn(),
+        findRepositoryCredentialsByIds: vi.fn(() => []),
       },
     });
     const app = Fastify();
@@ -853,6 +868,7 @@ describe('POST /api/projects/:id/repositories (reuse-aware)', () => {
         findRepositoryById: vi.fn(() => null),
         updateRepositoryToken: vi.fn(),
         removeRepository: vi.fn(),
+        findRepositoryCredentialsByIds: vi.fn(() => []),
       },
     });
     const app = Fastify();
@@ -889,6 +905,7 @@ describe('POST /api/projects/:id/repositories (reuse-aware)', () => {
         findRepositoryById: vi.fn(() => null),
         updateRepositoryToken: vi.fn(),
         removeRepository: vi.fn(),
+        findRepositoryCredentialsByIds: vi.fn(() => []),
       },
     });
     const app = Fastify();
@@ -929,6 +946,7 @@ describe('POST clone-local', () => {
         } : null),
         updateRepositoryToken: vi.fn(),
         removeRepository: vi.fn(),
+        findRepositoryCredentialsByIds: vi.fn(() => []),
       },
       ...overrides,
     });

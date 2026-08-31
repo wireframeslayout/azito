@@ -198,6 +198,10 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
   agentActivityMonitor: AgentActivityMonitor;
   interactionMonitor: InteractionMonitor;
   resourceGuard: ResourceGuard;
+  /** Shared with FetchDistributionService (its writer) — also read by projectsRoutes to render each project server's last-distribution record (Issue #87 配信状態の可視化). */
+  distributionStateRepo: SqliteDistributionStateRepository;
+  /** Also handed to projectsRoutes, which only checks its presence (the `service_not_wired` prerequisite stage). */
+  fetchDistributionService: FetchDistributionService;
   /** Issue #28 Phase A: resolved once here (the composition root boundary) via shared/auth/scopedAuthFlag.ts, then threaded through — see that file's doc comment for why buildServer.ts reads this instead of process.env directly. */
   scopedAuthEnabled: boolean;
 }
@@ -566,6 +570,8 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
     interactionMonitor,
     resourceGuard,
     scopedAuthEnabled,
+    distributionStateRepo,
+    fetchDistributionService,
     ...systemUpdateModule,
   };
 }

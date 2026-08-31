@@ -1,7 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
-import { resolveExecutionRepositoryEntry, isDistributionRequired, isDistributionRequiredButRepositoryUnresolved, shouldClearRecordedDistributionRepository } from './DistributionHelper';
+import { resolveExecutionRepositoryEntry, isDistributionRequired, isDistributionRequiredButRepositoryUnresolved, shouldClearRecordedDistributionRepository, checkDistributionPrerequisites, performDistribution } from './DistributionHelper';
+import type { CheckDistributionPrerequisitesParams, DistributionRepositoryLookup, PerformDistributionParams } from './DistributionHelper';
+import type { FetchDistributionService } from '../../git/hub-transfer/FetchDistributionService';
 import type { ServerConfig } from '../../servers/Server';
-import type { ProjectDetail, ProjectRepository } from '../../projects/Project';
+import type { ProjectDetail, ProjectRepository, ProjectRepositoryWithToken } from '../../projects/Project';
 import type { ProjectServer } from '../../projects/ProjectServer';
 import type { IDistributionStateRepository } from '../../git/hub-transfer/types';
 
@@ -178,6 +180,7 @@ describe('shouldClearRecordedDistributionRepository (Issue #87 review, forge/87-
       upsert: vi.fn(),
       deleteByServer: vi.fn(),
       find: vi.fn(() => null),
+      findManyByRepositoryIds: vi.fn(() => []),
       ...overrides,
     };
   }
@@ -208,5 +211,221 @@ describe('shouldClearRecordedDistributionRepository (Issue #87 review, forge/87-
     const repo = mockDistributionStateRepo({ find });
     shouldClearRecordedDistributionRepository(repo, 'server-a', 7);
     expect(find).toHaveBeenCalledWith('server-a', 7);
+  });
+});
+
+// ── checkDistributionPrerequisites (Issue #87 配信状態の可視化) ──
+//
+// The remote-free half of `performDistribution`, extracted so GET
+// /api/projects/:id/servers can render the same verdict without executing a
+// task. Every stage below is reachable BEFORE any transport is obtained.
+
+describe('checkDistributionPrerequisites', () => {
+  const tokenedRepo: ProjectRepositoryWithToken = { id: repoB.id, name: 'B', url: repoB.url, provider: 'github', owner: 'acme', repoName: 'repo-b', token: 'ghp_x' };
+
+  function makeLookup(result?: DistributionRepositoryLookup) {
+    return vi.fn((_rid: number): DistributionRepositoryLookup => result ?? { status: 'ok', repo: tokenedRepo, token: 'ghp_x' });
+  }
+
+  const service = {} as FetchDistributionService;
+
+  function check(overrides: Partial<CheckDistributionPrerequisitesParams> = {}) {
+    return checkDistributionPrerequisites({
+      server: makeAgentServer({ isolationIntent: true }),
+      projectServer: makeProjectServer({ distributionRepositoryId: repoB.id }),
+      project: makeProject([repoA, repoB]),
+      workingDir: '/work/dir',
+      lookupRepository: makeLookup(),
+      fetchDistributionService: service,
+      ...overrides,
+    });
+  }
+
+  it('returns { required: false } for a local server (never a distribution target)', () => {
+    expect(check({ server: { type: 'local', isolationIntent: false } })).toEqual({ required: false });
+  });
+
+  it('returns { required: false } for an agent server with neither isolationIntent nor distributeCode', () => {
+    expect(check({ server: makeAgentServer(), projectServer: makeProjectServer({ distributionRepositoryId: repoB.id }) })).toEqual({ required: false });
+  });
+
+  it('fails with service_not_wired when FetchDistributionService is absent', () => {
+    const result = check({ fetchDistributionService: null });
+    expect(result).toMatchObject({ required: true, ok: false, stage: 'service_not_wired' });
+  });
+
+  it('fails with no_working_dir when no working directory is configured', () => {
+    expect(check({ workingDir: null })).toMatchObject({ required: true, ok: false, stage: 'no_working_dir' });
+  });
+
+  it('fails with no_distribution_repository when distributionRepositoryId is unset (the project-wizard "use an existing directory" gap)', () => {
+    const result = check({ projectServer: makeProjectServer({ distributeCode: true, distributionRepositoryId: null }) });
+    expect(result).toMatchObject({ required: true, ok: false, stage: 'no_distribution_repository' });
+  });
+
+  it('fails with distribution_repository_not_found when the configured id no longer exists on the project', () => {
+    const result = check({ projectServer: makeProjectServer({ distributionRepositoryId: 999 }) });
+    expect(result).toMatchObject({ required: true, ok: false, stage: 'distribution_repository_not_found' });
+  });
+
+  it('fails with no_token when the lookup reports no credential (row gone, or token absent)', () => {
+    const result = check({ lookupRepository: makeLookup({ status: 'no_token' }) });
+    expect(result).toMatchObject({ required: true, ok: false, stage: 'no_token' });
+  });
+
+  it('fails with credential_unreadable when the lookup reports an undecryptable credential', () => {
+    const result = check({ lookupRepository: makeLookup({ status: 'unreadable' }) });
+    expect(result).toMatchObject({ required: true, ok: false, stage: 'credential_unreadable' });
+  });
+
+  it('never embeds the credential itself in the credential_unreadable message', () => {
+    const result = check({ lookupRepository: makeLookup({ status: 'unreadable' }) });
+    if (result.required === false || result.ok) throw new Error('expected a prerequisite failure');
+    expect(result.message).not.toContain('ghp_');
+  });
+
+  it('fails with identity_unresolvable when the repository URL cannot be normalized', () => {
+    const result = check({ lookupRepository: makeLookup({ status: 'ok', repo: { ...tokenedRepo, url: 'not a url' }, token: 'ghp_x' }) });
+    expect(result).toMatchObject({ required: true, ok: false, stage: 'identity_unresolvable' });
+  });
+
+  it('never leaks the repository URL through the identity_unresolvable stage value itself (only the internal message carries detail)', () => {
+    const result = check({ lookupRepository: makeLookup({ status: 'ok', repo: { ...tokenedRepo, url: 'not a url' }, token: 'ghp_x' }) });
+    if (result.required === false || result.ok) throw new Error('expected a prerequisite failure');
+    expect(result.stage).toBe('identity_unresolvable');
+    expect(result.message).toContain('url_not_normalizable');
+  });
+
+  it('returns ok with the resolved repositoryId, workingDir, token, identity and service when every prerequisite passes', () => {
+    const result = check();
+    if (result.required === false || !result.ok) throw new Error('expected prerequisites to pass');
+    expect(result.repositoryId).toBe(repoB.id);
+    expect(result.workingDir).toBe('/work/dir');
+    expect(result.token).toBe('ghp_x');
+    expect(result.identity.httpsUrl).toBe('https://github.com/acme/repo-b.git');
+    expect(result.fetchDistributionService).toBe(service);
+  });
+
+  it('passes for a distributeCode server without isolationIntent too', () => {
+    const result = check({ server: makeAgentServer(), projectServer: makeProjectServer({ distributeCode: true, distributionRepositoryId: repoB.id }) });
+    expect(result).toMatchObject({ required: true, ok: true, repositoryId: repoB.id });
+  });
+
+  it('does not look the repository up at all when distribution is not required (no wasted query/decryption for the common case)', () => {
+    const lookupRepository = makeLookup();
+    check({ server: { type: 'local', isolationIntent: false }, lookupRepository });
+    expect(lookupRepository).not.toHaveBeenCalled();
+  });
+
+  it('looks the repository up exactly once, by the resolved target id', () => {
+    const lookupRepository = makeLookup();
+    check({ lookupRepository });
+    expect(lookupRepository).toHaveBeenCalledTimes(1);
+    expect(lookupRepository).toHaveBeenCalledWith(repoB.id);
+  });
+});
+
+// `performDistribution` now delegates its entire prerequisite phase to
+// `checkDistributionPrerequisites`. These assert the observable contract is
+// byte-identical to the pre-extraction behavior: same stage, same message,
+// and — critically — the transport is never obtained and `distribute()` is
+// never called for any prerequisite failure.
+describe('performDistribution (prerequisite phase unchanged after extraction)', () => {
+  function makeHarness(overrides: Partial<PerformDistributionParams> = {}) {
+    const distribute = vi.fn(async (_params: { onBeforeWorkingDirChange?: () => void }) => ({ status: 'distributed' as const, sha: 'b'.repeat(40), bundleType: 'full' as const, localBranchSynced: true }));
+    const getTransport = vi.fn(() => ({} as never));
+    const params: PerformDistributionParams = {
+      server: { type: 'agent', isolationIntent: true } as ServerConfig,
+      projectServer: makeProjectServer({ distributionRepositoryId: repoB.id }),
+      project: makeProject([repoA, repoB]),
+      workingDir: '/work/dir',
+      baseBranch: 'main',
+      taskBranch: null,
+      transportFactory: { getTransport } as unknown as PerformDistributionParams['transportFactory'],
+      projectRepo: { findRepositoryById: vi.fn(() => ({ id: repoB.id, name: 'B', url: repoB.url, provider: 'github' as const, owner: 'acme', repoName: 'repo-b', token: 'ghp_x' })) } as unknown as PerformDistributionParams['projectRepo'],
+      fetchDistributionService: { distribute } as unknown as FetchDistributionService,
+      ...overrides,
+    };
+    return { params, distribute, getTransport };
+  }
+
+  it('returns { required: false } without obtaining a transport when distribution is not required', async () => {
+    const { params, getTransport, distribute } = makeHarness({ server: { type: 'local', isolationIntent: false } as ServerConfig });
+    await expect(performDistribution(params)).resolves.toEqual({ required: false });
+    expect(getTransport).not.toHaveBeenCalled();
+    expect(distribute).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['service_not_wired', { fetchDistributionService: null }, 'Fetch distribution is required (server isolation intent or project distribute_code) but FetchDistributionService is not wired'],
+    ['no_working_dir', { workingDir: null }, 'Fetch distribution is required (server isolation intent or project distribute_code) but no working directory is configured for this task/server'],
+    ['no_distribution_repository', { projectServer: makeProjectServer({ distributionRepositoryId: null, distributeCode: true }) }, 'Fetch distribution is required but no distribution target repository is configured for this project server. Select one in Settings → Servers for this project/server pairing.'],
+    ['distribution_repository_not_found', { projectServer: makeProjectServer({ distributionRepositoryId: 999 }) }, 'Fetch distribution is required but the configured distribution target repository no longer exists on this project'],
+  ] as const)('fails with %s (verbatim message) and never obtains a transport', async (stage, overrides, message) => {
+    const { params, getTransport, distribute } = makeHarness(overrides as Partial<PerformDistributionParams>);
+    await expect(performDistribution(params)).resolves.toEqual({ required: true, ok: false, stage, message });
+    expect(getTransport).not.toHaveBeenCalled();
+    expect(distribute).not.toHaveBeenCalled();
+  });
+
+  it('fails with no_token (verbatim message) and never obtains a transport', async () => {
+    const { params, getTransport, distribute } = makeHarness({
+      projectRepo: { findRepositoryById: vi.fn(() => ({ id: repoB.id, name: 'B', url: repoB.url, provider: 'github' as const, owner: 'acme', repoName: 'repo-b', token: null })) } as unknown as PerformDistributionParams['projectRepo'],
+    });
+    await expect(performDistribution(params)).resolves.toEqual({
+      required: true, ok: false, stage: 'no_token',
+      message: 'Fetch distribution is required but the repository has no token configured',
+    });
+    expect(getTransport).not.toHaveBeenCalled();
+    expect(distribute).not.toHaveBeenCalled();
+  });
+
+  it('fails with identity_unresolvable (verbatim message, including the reason) and never obtains a transport', async () => {
+    const { params, getTransport } = makeHarness({
+      projectRepo: { findRepositoryById: vi.fn(() => ({ id: repoB.id, name: 'B', url: 'not a url', provider: 'github' as const, owner: 'acme', repoName: 'repo-b', token: 'ghp_x' })) } as unknown as PerformDistributionParams['projectRepo'],
+    });
+    await expect(performDistribution(params)).resolves.toEqual({
+      required: true, ok: false, stage: 'identity_unresolvable',
+      message: 'Fetch distribution is required but the repository URL could not be normalized to a canonical identity: url_not_normalizable',
+    });
+    expect(getTransport).not.toHaveBeenCalled();
+  });
+
+  it('distributes with the resolved identity/token/workingDir and reports the repositoryId when prerequisites pass', async () => {
+    const { params, distribute, getTransport } = makeHarness();
+    const onBeforeDistribute = vi.fn();
+    const result = await performDistribution({ ...params, onBeforeDistribute });
+    expect(getTransport).toHaveBeenCalledTimes(1);
+    expect(distribute).toHaveBeenCalledWith(expect.objectContaining({
+      token: 'ghp_x',
+      branch: 'main',
+      workingDir: '/work/dir',
+      repositoryId: repoB.id,
+      repoIdentity: expect.objectContaining({ httpsUrl: 'https://github.com/acme/repo-b.git' }),
+    }));
+    expect(result).toEqual({ required: true, ok: true, distStatus: 'distributed', sha: 'b'.repeat(40), bundleType: 'full', localBranchSynced: true, repositoryId: repoB.id });
+    // Fired by distribute() itself, never by performDistribution — the mock
+    // above never invokes onBeforeWorkingDirChange.
+    expect(onBeforeDistribute).not.toHaveBeenCalled();
+    distribute.mock.calls[0][0].onBeforeWorkingDirChange?.();
+    expect(onBeforeDistribute).toHaveBeenCalledWith(repoB.id);
+  });
+
+  it('reports distribute_failed with the service error verbatim', async () => {
+    const { params } = makeHarness({
+      fetchDistributionService: { distribute: vi.fn(async () => ({ status: 'failed' as const, error: 'boom' })) } as unknown as FetchDistributionService,
+    });
+    await expect(performDistribution(params)).resolves.toEqual({ required: true, ok: false, stage: 'distribute_failed', message: 'Fetch distribution failed: boom' });
+  });
+
+  it('reports stale_local_branch (naming the resolved working directory) when the task branch is the distributed branch and the local ref could not be advanced', async () => {
+    const { params } = makeHarness({
+      taskBranch: 'main',
+      fetchDistributionService: { distribute: vi.fn(async () => ({ status: 'distributed' as const, sha: 'c'.repeat(40), bundleType: 'full' as const, localBranchSynced: false })) } as unknown as FetchDistributionService,
+    });
+    const result = await performDistribution(params);
+    if (result.required === false || result.ok) throw new Error('expected stale_local_branch');
+    expect(result.stage).toBe('stale_local_branch');
+    expect(result.message).toContain('the local branch "main" in /work/dir could not be updated');
   });
 });

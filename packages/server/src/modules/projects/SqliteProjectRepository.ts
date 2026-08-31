@@ -4,6 +4,7 @@ import type {
   Project,
   ProjectDetail,
   ProjectRepositoryWithToken as ProjectRepoWithToken,
+  ProjectRepositoryCredential,
   IProjectRepository,
   RepositoryProvider,
 } from './Project';
@@ -122,6 +123,36 @@ export class SqliteProjectRepository implements IProjectRepository {
       repoName: row.repo_name,
       token: open(row.token),
     };
+  }
+
+  findRepositoryCredentialsByIds(ids: number[]): ProjectRepositoryCredential[] {
+    if (ids.length === 0) return [];
+    const placeholders = ids.map(() => '?').join(', ');
+    const rows = this.db.prepare(
+      `SELECT * FROM project_repositories WHERE id IN (${placeholders})`,
+    ).all(...ids) as RepoRow[];
+    return rows.map((row) => {
+      const base = {
+        id: row.id,
+        name: row.name,
+        url: row.url,
+        provider: (row.provider || 'github') as RepositoryProvider,
+        owner: row.owner,
+        repoName: row.repo_name,
+      };
+      if (row.token == null) return { ...base, credentialStatus: 'absent' as const, token: null };
+      try {
+        const token = open(row.token);
+        // An empty decrypted value is "no credential stored", not a broken
+        // one — same verdict `!repo?.token` produces on the execution path.
+        return token ? { ...base, credentialStatus: 'ok' as const, token } : { ...base, credentialStatus: 'absent' as const, token: null };
+      } catch {
+        // Deliberately swallowed HERE and only here: the failure is turned
+        // into a reported state (`unreadable`) rather than hidden — the
+        // execution path's own `findRepositoryById` still throws unchanged.
+        return { ...base, credentialStatus: 'unreadable' as const, token: null };
+      }
+    });
   }
 
   private toDetail(row: ProjectRow): ProjectDetail {
