@@ -134,6 +134,14 @@ export default function RepositoryCandidateInput({ value, onChange, onSelectCand
         selectCandidate(flatCandidates[highlightIdx]);
       }
     } else if (e.key === 'Escape') {
+      // Consume the event so an enclosing Modal does not ALSO close on the
+      // same keypress. `Modal` (Modal.tsx) closes on Escape unless the event
+      // is already `defaultPrevented`; this input now sits inside the
+      // repository and environment modals, where dismissing the candidate
+      // dropdown would otherwise discard the whole form. The `!open` guard
+      // at the top of this handler means an already-closed dropdown never
+      // reaches here, so Escape still closes the modal as expected.
+      e.preventDefault();
       setOpen(false);
     }
   }, [open, flatCandidates, highlightIdx, selectCandidate]);

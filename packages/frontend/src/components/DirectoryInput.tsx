@@ -86,6 +86,12 @@ export default function DirectoryInput({ value, onChange, serverName, placeholde
         selectItem(suggestions[highlightIdx]);
       }
     } else if (e.key === 'Escape') {
+      // See RepositoryCandidateInput's identical branch: an open dropdown
+      // consumes Escape so an enclosing Modal does not close the whole form
+      // on the same keypress. The `!open || suggestions.length === 0` guard
+      // at the top matches this component's own render condition, so Escape
+      // is consumed exactly when a dropdown is actually visible.
+      e.preventDefault();
       setOpen(false);
     }
   }, [open, suggestions, highlightIdx, selectItem]);

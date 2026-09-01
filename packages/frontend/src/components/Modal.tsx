@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import { shouldCloseOnKey } from './modalEscape';
 import { Button } from './ui';
 
 interface ModalProps {
@@ -18,7 +19,7 @@ export default function Modal({ title, open, onClose, actions, children, maxWidt
   useEffect(() => {
     if (!open) return;
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); onClose(); }
+      if (shouldCloseOnKey(e)) { e.preventDefault(); onClose(); }
     };
     document.addEventListener('keydown', handleKey);
     return () => document.removeEventListener('keydown', handleKey);
