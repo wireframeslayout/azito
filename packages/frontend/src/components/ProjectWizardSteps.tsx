@@ -10,6 +10,7 @@ import {
   type WizardStepId, type CodeMode, type ReusableRepoCandidate, type CodeStepVariant,
   type EnvironmentInputPolicy, type DistributionSummary,
 } from '../lib/projectWizardLogic';
+import { resolveRepositoryRegistration } from '../lib/repositoryForm';
 
 // Presentational step bodies for ProjectWizard.tsx, split out to keep that
 // file focused on state/orchestration (this codebase's ~300-line-per-file
@@ -41,15 +42,6 @@ export type DiscoveryStatus = 'idle' | 'checking' | 'error' | { repos: Discovere
 export type TFunc = ReturnType<typeof useTranslation>['t'];
 
 const NUMERIC_FONT = "'JetBrainsMono Nerd Font', 'JetBrains Mono', monospace";
-
-/** Local mirror of the frontend's `parseRepoUrl` (lib/gitProvider.ts) shaped for the repository-registration payload — that helper only recognizes github/gitlab and returns a stricter shape; this always returns a provider (falling back to 'other') so an unrecognized clone URL can still be registered. */
-export function parseCloneUrlForRegistration(url: string): { provider: 'github' | 'gitlab' | 'other'; owner: string | null; repoName: string | null } {
-  const ghMatch = url.match(/github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?$/);
-  if (ghMatch) return { provider: 'github', owner: ghMatch[1], repoName: ghMatch[2] };
-  const glMatch = url.match(/gitlab[^/]*[/:]([\w.-]+(?:\/[\w.-]+)*)\/([\w.-]+?)(?:\.git)?$/);
-  if (glMatch) return { provider: 'gitlab', owner: glMatch[1], repoName: glMatch[2] };
-  return { provider: 'other', owner: null, repoName: null };
-}
 
 export function StepIndicator({ visibleSteps, currentStep, isMobile, t }: { visibleSteps: WizardStepId[]; currentStep: WizardStepId; isMobile: boolean; t: TFunc }) {
   const idx = stepIndex(visibleSteps, currentStep);
@@ -246,7 +238,7 @@ export function CodeStep({
   const isolated = variant === 'isolated';
   const mode = effectiveCodeMode(variant, codeMode);
   const modeOptions = codeModeOptionsForVariant(variant);
-  const parsedClone = cloneUrl.trim() ? parseCloneUrlForRegistration(cloneUrl.trim()) : null;
+  const parsedClone = cloneUrl.trim() ? resolveRepositoryRegistration(cloneUrl.trim()) : null;
   // Delivery through the hub refuses a repository with no credential
   // outright — a token is required unless an already-registered repository
   // for this URL already carries one (Issue #87 review, Important finding 3).

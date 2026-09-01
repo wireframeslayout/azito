@@ -213,8 +213,8 @@ export function isAbsoluteWizardPath(p: string): boolean {
 /**
  * Frontend mirror of the server's `normalizeRemoteUrl`
  * (`packages/server/src/modules/git/parseRemoteUrl.ts`) — kept in sync by
- * hand, same convention this file already follows for `parseRepoUrl`/
- * `parseCloneUrlForRegistration` (see that function's doc comment). Used
+ * hand, same convention this file already follows for `parseRepoUrl`
+ * (`lib/gitProvider.ts`). Used
  * ONLY to decide whether the clone wizard step can skip asking for a
  * token (an already-registered, already-credentialed repository covers the
  * same remote) — the actual dedup-and-reuse decision is still made

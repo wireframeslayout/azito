@@ -11,9 +11,8 @@ import FormField from './FormField';
 import ProjectGeneralFields from './ProjectGeneralFields';
 import AddWindowModal from './workspace/AddWindowModal';
 import ResourceWarningDialog from './ResourceWarningDialog';
-import { Chip, EmptyState, FormInput, FormSelect, ListRow, ListRowGroup, LoadingState, PanelHeader, baseInputStyle, Button } from './ui';
+import { Chip, EmptyState, FormSelect, ListRow, ListRowGroup, LoadingState, PanelHeader, baseInputStyle, Button } from './ui';
 import type { Window, Unit, Server } from '../pages/workspace/types';
-import { parseRepoUrl as parseGitRepoUrl } from '../lib/gitProvider';
 import { notifyProjectsChanged } from '../lib/projectsChanged';
 import { isDistributeCodeLocked, isDistributionRepositorySelected, resolveDistributeCodeForSave, resolveDistributeCodeToggleOnProjectServersChange, resolveDistributionRepositoryIdOnProjectServersChange } from '../lib/distributeCodePolicy';
 import { buildEnvironmentRowChips, needsDistributionSetup, type DistributionPrerequisite, type EnvironmentChip, type LastDistribution } from '../lib/environmentRow';
@@ -22,8 +21,14 @@ import { useToast } from '../hooks/useToast';
 import { useConfirm } from '../hooks/useConfirm';
 import RepoDiscoveryDialog from './RepoDiscoveryDialog';
 import { AddEnvironmentModal, EditEnvironmentModal } from './settings/EnvironmentModals';
+import { AddRepositoryModal } from './settings/RepositoryModals';
+import { buildRepositoryRowView, collectDistributionRepositoryIds } from '../lib/repositoryForm';
 
-interface Repository { id: number; url: string; name?: string; provider?: string; owner?: string; repoName?: string; }
+interface Repository {
+  id: number; url: string; name?: string; provider?: string; owner?: string; repoName?: string;
+  /** トークンが登録済みか（GET /api/projects/:id が返す。秘密そのものは返らない）。 */
+  hasToken?: boolean;
+}
 interface ProjectServer {
   projectId: number; serverName: string; workingDirectory?: string; branch?: string; tmuxSession: string;
   /** Issue #29 Step 3a: 'allow' is now selectable, but only ever effective for a verified-isolated server — the server degrades it to 'manual-approval' at run time otherwise (see routes.ts's PUT validation and ProjectServer.resolveEffectiveInputPolicy). */
@@ -115,13 +120,6 @@ export function useProjectSettings(
   // `resolveDistributionRepositoryIdOnProjectServersChange`'s doc comment.
   const psDistributionRepositoryIdTouchedRef = useRef(false);
 
-  const [addRepoOpen, setAddRepoOpen] = useState(false);
-  const [repoUrl, setRepoUrl] = useState('');
-  const [repoName, setRepoName] = useState('');
-  const [repoProvider, setRepoProvider] = useState('github');
-  const [repoOwner, setRepoOwner] = useState('');
-  const [repoRepoName, setRepoRepoName] = useState('');
-  const [repoToken, setRepoToken] = useState('');
   const [icon, setIcon] = useState('');
   const [color, setColor] = useState('');
   const { showToast } = useToast();
@@ -277,25 +275,6 @@ export function useProjectSettings(
     navigate('/', { replace: true });
   }, [projectId, navigate, confirm, t]);
 
-  const parseRepoUrl = useCallback((url: string) => {
-    const parsed = parseGitRepoUrl(url);
-    if (!parsed) return;
-    setRepoOwner(parsed.owner); setRepoRepoName(parsed.repo); setRepoProvider(parsed.provider);
-  }, []);
-
-  const handleAddRepo = useCallback(async () => {
-    if (!repoUrl.trim()) return showToast(t('common:validation.urlRequired'));
-    await api(`/projects/${projectId}/repositories`, {
-      method: 'POST', body: JSON.stringify({
-        url: repoUrl.trim(), name: repoName.trim() || undefined, provider: repoProvider,
-        owner: repoOwner.trim() || undefined, repo_name: repoRepoName.trim() || undefined,
-        token: repoToken.trim() || undefined,
-      }),
-    });
-    setRepoUrl(''); setRepoName(''); setRepoProvider('github'); setRepoOwner(''); setRepoRepoName(''); setRepoToken('');
-    setAddRepoOpen(false); refresh();
-  }, [projectId, repoUrl, repoName, repoProvider, repoOwner, repoRepoName, repoToken, refresh, showToast, t]);
-
   const handleRemoveRepo = useCallback(async (rid: number) => {
     // design-lint rule 1 forbids window.confirm — useConfirm() is the
     // project-wide replacement (see RepoSidebar.tsx's own remove handler).
@@ -418,9 +397,7 @@ export function useProjectSettings(
     icon, setIcon, color, setColor, handleSave,
     defaultUnitId, setDefaultUnitId, units,
     // Repositories
-    addRepoOpen, setAddRepoOpen, repoUrl, setRepoUrl, repoName, setRepoName,
-    repoProvider, setRepoProvider, repoOwner, setRepoOwner, repoRepoName, setRepoRepoName,
-    repoToken, setRepoToken, parseRepoUrl, handleAddRepo, handleRemoveRepo,
+    handleRemoveRepo,
     discoverOpen, setDiscoverOpen, discoverSuggestion, setDiscoverSuggestion,
     discoverServerName, setDiscoverServerName,
     // Windows
@@ -606,10 +583,34 @@ function GeneralSection({ settings: s }: { settings: ReturnType<typeof useProjec
   );
 }
 
+/** リポジトリ一覧の行1つ。表示ロジックは lib/repositoryForm.ts の純粋関数側にある。 */
+function RepositoryRow({ repo, usedAsDistributionSource, onRemove }: {
+  repo: Repository;
+  usedAsDistributionSource: boolean;
+  onRemove: () => void;
+}) {
+  const { t } = useTranslation(['git', 'common']);
+  const view = buildRepositoryRowView(repo, { usedAsDistributionSource });
+  return (
+    <ListRow
+      icon={<Icon name="repos" size={14} />}
+      title={view.title}
+      description={view.description}
+      chips={view.chips.map((chip) => <Chip key={chip.id} tone={chip.tone}>{t(chip.labelKey)}</Chip>)}
+      rightActions={<Button size="sm" onClick={onRemove}>{t('common:actions.remove')}</Button>}
+    />
+  );
+}
+
 function RepositoriesSection({ settings: s }: { settings: ReturnType<typeof useProjectSettings> }) {
   const { t } = useTranslation(['projects', 'common']);
+  // 追加フォームは共通モーダル（AddRepositoryModal）。一覧は常に一覧のまま残す。
+  const [addOpen, setAddOpen] = useState(false);
   if (!s.project) return null;
   const hasServerWithWorkDir = s.projectServers.some((ps) => ps.workingDirectory);
+  // 配信元として使われているリポジトリ。判定材料はこのセクションに既に来ている
+  // projectServers だけで足り、追加の API 呼び出しはしない。
+  const distributionRepoIds = collectDistributionRepositoryIds(s.projectServers);
   return (
     <>
       <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginBottom: 12, padding: '8px 12px', background: 'var(--bg-card)', borderRadius: 'var(--radius-sm)' }}>
@@ -655,54 +656,30 @@ function RepositoriesSection({ settings: s }: { settings: ReturnType<typeof useP
               s.setDiscoverOpen(true);
             }}>{t('settings.repositories.discoverButton')}</Button>
           )}
-          <Button size="sm" onClick={() => s.setAddRepoOpen(!s.addRepoOpen)}>+ {t('common:actions.add')}</Button>
+          <Button size="sm" onClick={() => setAddOpen(true)}>+ {t('common:actions.add')}</Button>
         </span>
       </div>
-      {s.addRepoOpen && (
-        <div style={{ marginBottom: 16, padding: 16, background: 'var(--bg-card)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
-          <FormField label={t('settings.repositories.provider')}>
-            <FormSelect value={s.repoProvider} onChange={(e) => s.setRepoProvider(e.target.value)}>
-              <option value="github">{t('settings.repositories.github')}</option>
-              <option value="gitlab">{t('settings.repositories.gitlab')}</option>
-              <option value="other">{t('settings.repositories.other')}</option>
-            </FormSelect>
-          </FormField>
-          <FormField label={t('settings.repositories.repositoryUrl')}>
-            <FormInput value={s.repoUrl} onChange={(e) => { s.setRepoUrl(e.target.value); s.parseRepoUrl(e.target.value); }} placeholder={t('settings.repositories.repositoryUrlPlaceholder')} />
-          </FormField>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <FormField label={t('settings.repositories.owner')}>
-              <FormInput value={s.repoOwner} onChange={(e) => s.setRepoOwner(e.target.value)} placeholder={t('settings.repositories.ownerPlaceholder')} />
-            </FormField>
-            <FormField label={t('settings.repositories.repoName')}>
-              <FormInput value={s.repoRepoName} onChange={(e) => s.setRepoRepoName(e.target.value)} placeholder={t('settings.repositories.repoNamePlaceholder')} />
-            </FormField>
-          </div>
-          <FormField label={t('settings.repositories.displayName')}>
-            <FormInput value={s.repoName} onChange={(e) => s.setRepoName(e.target.value)} placeholder={t('settings.repositories.displayNamePlaceholder')} />
-          </FormField>
-          <FormField label={t('settings.repositories.token')} hint={t('settings.repositories.tokenHint')}>
-            <FormInput value={s.repoToken} onChange={(e) => s.setRepoToken(e.target.value)} placeholder={t('settings.repositories.tokenPlaceholder')} type="password" autoComplete="off" />
-          </FormField>
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-            <Button size="sm" onClick={() => { s.setAddRepoOpen(false); s.setRepoUrl(''); s.setRepoName(''); s.setRepoProvider('github'); s.setRepoOwner(''); s.setRepoRepoName(''); s.setRepoToken(''); }}>{t('common:actions.cancel')}</Button>
-            <Button variant="primary" size="sm" onClick={s.handleAddRepo}>{t('settings.repositories.addRepository')}</Button>
-          </div>
-        </div>
-      )}
-      {s.project.repositories.length === 0 && !s.addRepoOpen ? (
-        <div style={{ color: 'var(--text-dim)', fontSize: 'var(--font-md)' }}>{t('settings.repositories.noRepositories')}</div>
+      {s.project.repositories.length === 0 ? (
+        <EmptyState title={t('settings.repositories.noRepositories')} />
       ) : (
-        s.project.repositories.map((r) => (
-          <div key={r.id} style={{ padding: '10px 0', fontSize: 'var(--font-md)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border)', gap: 8 }}>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-              <span style={{ fontSize: 'var(--font-2xs)', fontWeight: 600, textTransform: 'uppercase', padding: '1px 5px', borderRadius: 'var(--radius-sm)', background: 'var(--bg-card)', flexShrink: 0 }}>{r.provider || 'github'}</span>
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name ? `${r.name} — ${r.owner}/${r.repoName || ''}` : r.url}</span>
-            </span>
-            <Button size="sm" style={{ flexShrink: 0 }} onClick={() => s.handleRemoveRepo(r.id)}>{t('common:actions.remove')}</Button>
-          </div>
-        ))
+        <ListRowGroup>
+          {s.project.repositories.map((r) => (
+            <RepositoryRow
+              key={r.id}
+              repo={r}
+              usedAsDistributionSource={distributionRepoIds.has(r.id)}
+              onRemove={() => s.handleRemoveRepo(r.id)}
+            />
+          ))}
+        </ListRowGroup>
       )}
+
+      <AddRepositoryModal
+        open={addOpen}
+        projectId={s.project.id}
+        onAdded={() => { setAddOpen(false); s.refresh(); }}
+        onClose={() => setAddOpen(false)}
+      />
 
       {s.project && s.discoverServerName ? (
         <RepoDiscoveryDialog

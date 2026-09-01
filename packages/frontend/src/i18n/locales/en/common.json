@@ -86,8 +86,7 @@
     "nameRequired": "Name is required",
     "titleRequired": "Title is required",
     "slugRequired": "Slug is required",
-    "descriptionRequired": "Description is required",
-    "urlRequired": "URL required"
+    "descriptionRequired": "Description is required"
   },
   "confirm": {
     "cannotBeUndone": "This cannot be undone."

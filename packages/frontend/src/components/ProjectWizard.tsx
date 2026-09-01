@@ -5,6 +5,7 @@ import { useApi } from '../hooks/useApi';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { Button, type InstallStep } from './ui';
 import ProjectGeneralFields, { generateSlug } from './ProjectGeneralFields';
+import { resolveRepositoryRegistration } from '../lib/repositoryForm';
 import { notifyProjectsChanged } from '../lib/projectsChanged';
 import { createRequestGuard, dedupeSelectableUrls } from './repoDiscoveryDialogLogic';
 import {
@@ -18,7 +19,7 @@ import {
   type EnvironmentInputPolicy,
 } from '../lib/projectWizardLogic';
 import {
-  StepIndicator, EnvironmentStep, CodeStep, ConfirmStep, parseCloneUrlForRegistration,
+  StepIndicator, EnvironmentStep, CodeStep, ConfirmStep,
   type ServerListItem, type DiscoveredRepo, type DiscoveryStatus,
 } from './ProjectWizardSteps';
 import { resolveBranchOnCandidateSelect, type RepositoryCandidate } from './repositoryCandidateInputLogic';
@@ -530,7 +531,7 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
         } else if (effectiveMode === 'clone' && cloneUrl.trim()) {
           setStep('repository', 'running', t('wizard.confirm.stepRepository'));
           try {
-            const parsed = parseCloneUrlForRegistration(cloneUrl.trim());
+            const parsed = resolveRepositoryRegistration(cloneUrl.trim());
             const { status, body } = await apiWithStatus<{ id: number; reused: boolean } | { error: string }>(
               `/projects/${pid}/repositories`,
               {
