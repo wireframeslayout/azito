@@ -10,9 +10,14 @@ import { parseRepoUrl, repoDisplayName } from './gitProvider';
 /** 登録ペイロードの provider。URL から判定できない場合も登録できるよう 'other' を持つ。 */
 export type RepositoryFormProvider = 'github' | 'gitlab' | 'other';
 
-/** リポジトリ登録フォームの入力値。provider は URL から導出するのでここには持たない。 */
+/**
+ * リポジトリ登録フォームの入力値。provider は URL から自動判定できる場合は
+ * 訊かず、判定できない場合（自己ホスト型など）だけ `provider` を手動で選ばせる。
+ */
 export interface RepositoryFormValues {
   url: string;
+  /** 自動判定できない URL のときだけ使う手動選択。未選択は ''。 */
+  provider: RepositoryFormProvider | '';
   /** 表示名（任意）。 */
   displayName: string;
   owner: string;
@@ -22,7 +27,7 @@ export interface RepositoryFormValues {
 }
 
 export const EMPTY_REPOSITORY_FORM: RepositoryFormValues = {
-  url: '', displayName: '', owner: '', repoName: '', token: '',
+  url: '', provider: '', displayName: '', owner: '', repoName: '', token: '',
 };
 
 /**
@@ -36,9 +41,17 @@ export function resolveRepositoryRegistration(url: string): { provider: Reposito
   return { provider: parsed.provider, owner: parsed.owner, repoName: parsed.repo };
 }
 
-/** 入力中の URL から自動判定されるプロバイダ（画面には Badge で表示のみする）。 */
-export function resolveRepositoryProvider(url: string): RepositoryFormProvider {
-  return resolveRepositoryRegistration(url).provider;
+/**
+ * 入力中の URL から自動判定したプロバイダ。判定できなければ null を返す
+ * （'other' へ丸めない）。null のときはフォームが手動選択欄を出す。
+ *
+ * `parseRepoUrl` はリテラルの `github.com` と、ホスト名に 'gitlab' を含む
+ * ホストしか判定できないため、GitHub Enterprise Server（github.mycorp.com）や
+ * ホスト名に 'gitlab' を含まない自己ホスト GitLab（git.mycorp.com）はここで
+ * null になり、手動選択に委ねられる。
+ */
+export function detectRepositoryProvider(url: string): RepositoryFormProvider | null {
+  return parseRepoUrl(url)?.provider ?? null;
 }
 
 /**
@@ -72,22 +85,34 @@ export interface RepositoryCreatePayload {
   token?: string;
 }
 
+/** 登録をブロックする入力エラー。i18n はフォーム側で解決する。 */
+export type RepositoryFormError = 'url_required' | 'provider_required';
+
+export type RepositoryCreateResult =
+  | { ok: true; payload: RepositoryCreatePayload }
+  | { ok: false; error: RepositoryFormError };
+
 /**
- * 登録ペイロードを組み立てる。URL が空なら null（呼び出し側でバリデーション
- * エラーを出す）。owner / repoName は入力欄の値だけを見る（URL から自動補完
- * された値も入力欄に入っているため）。provider だけは手動選択を廃止したので
- * URL からの自動判定を使う。
+ * 登録ペイロードを組み立てる。owner / repoName は入力欄の値だけを見る
+ * （URL から自動補完された値も入力欄に入っているため）。provider は
+ * URL から判定できればそれを使い、判定できない場合は手動選択が必須
+ * （未選択のまま 'other' に落として登録しない）。
  */
-export function buildRepositoryCreatePayload(values: RepositoryFormValues): RepositoryCreatePayload | null {
+export function buildRepositoryCreatePayload(values: RepositoryFormValues): RepositoryCreateResult {
   const url = values.url.trim();
-  if (!url) return null;
+  if (!url) return { ok: false, error: 'url_required' };
+  const provider = detectRepositoryProvider(url) ?? values.provider;
+  if (!provider) return { ok: false, error: 'provider_required' };
   return {
-    url,
-    name: values.displayName.trim() || undefined,
-    provider: resolveRepositoryProvider(url),
-    owner: values.owner.trim() || undefined,
-    repo_name: values.repoName.trim() || undefined,
-    token: values.token.trim() || undefined,
+    ok: true,
+    payload: {
+      url,
+      name: values.displayName.trim() || undefined,
+      provider,
+      owner: values.owner.trim() || undefined,
+      repo_name: values.repoName.trim() || undefined,
+      token: values.token.trim() || undefined,
+    },
   };
 }
 
@@ -121,7 +146,7 @@ export interface RepositoryRowInput {
 
 function normalizeProvider(provider: string | undefined, url: string): RepositoryFormProvider {
   if (provider === 'github' || provider === 'gitlab' || provider === 'other') return provider;
-  return resolveRepositoryProvider(url);
+  return detectRepositoryProvider(url) ?? 'other';
 }
 
 /**

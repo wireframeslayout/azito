@@ -1,10 +1,10 @@
 import { useTranslation } from 'react-i18next';
 import FormField from '../FormField';
 import RepositoryCandidateInput from '../RepositoryCandidateInput';
-import { Badge, FormInput } from '../ui';
+import { Badge, FormInput, FormSelect } from '../ui';
 import {
-  applyRepositoryCandidate, applyRepositoryUrlChange, resolveRepositoryProvider,
-  type RepositoryFormValues,
+  applyRepositoryCandidate, applyRepositoryUrlChange, detectRepositoryProvider,
+  type RepositoryFormProvider, type RepositoryFormValues,
 } from '../../lib/repositoryForm';
 
 export interface RepositoryFormFieldsProps {
@@ -12,6 +12,8 @@ export interface RepositoryFormFieldsProps {
   onChange: (next: RepositoryFormValues) => void;
   /** URL 欄のバリデーションエラー（未入力）。 */
   urlError?: string;
+  /** プロバイダ欄のバリデーションエラー（自動判定できず未選択）。 */
+  providerError?: string;
   /** 入力を止める（送信中）。 */
   disabled?: boolean;
 }
@@ -25,10 +27,14 @@ export interface RepositoryFormFieldsProps {
  * 送信はモーダル側）。プロバイダは手動選択をやめ、URL からの自動判定を
  * Badge で表示するだけにしている。
  */
-export default function RepositoryFormFields({ values, onChange, urlError, disabled }: RepositoryFormFieldsProps) {
+export default function RepositoryFormFields({ values, onChange, urlError, providerError, disabled }: RepositoryFormFieldsProps) {
   const { t } = useTranslation(['git', 'common']);
-  const provider = values.url.trim() ? resolveRepositoryProvider(values.url.trim()) : null;
-  const providerTone = provider === 'github' ? 'accent' : provider === 'gitlab' ? 'orange' : 'neutral';
+  const url = values.url.trim();
+  // 自動判定できた URL ではプロバイダを訊かない。判定できない URL
+  // （GitHub Enterprise Server や、ホスト名に 'gitlab' を含まない自己ホスト
+  // GitLab など）だけ手動選択欄を出す。
+  const detected = url ? detectRepositoryProvider(url) : null;
+  const detectedTone = detected === 'github' ? 'accent' : 'orange';
 
   return (
     <>
@@ -40,13 +46,28 @@ export default function RepositoryFormFields({ values, onChange, urlError, disab
           placeholder={t('repo.repositoryUrlPlaceholder')}
           ariaLabel={t('repo.repositoryUrl')}
         />
-        {provider && (
+        {detected && (
           <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <Badge tone={providerTone}>{t(`repo.${provider}`)}</Badge>
+            <Badge tone={detectedTone}>{t(`repo.${detected}`)}</Badge>
             <span style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>{t('repo.providerDetected')}</span>
           </div>
         )}
       </FormField>
+
+      {url && !detected && (
+        <FormField label={t('repo.provider')} hint={t('repo.providerSelfHostedHint')} required error={providerError}>
+          <FormSelect
+            value={values.provider}
+            onChange={(e) => onChange({ ...values, provider: e.target.value as RepositoryFormProvider | '' })}
+            disabled={disabled}
+          >
+            <option value="">{t('repo.providerPlaceholder')}</option>
+            <option value="github">{t('repo.github')}</option>
+            <option value="gitlab">{t('repo.gitlab')}</option>
+            <option value="other">{t('repo.other')}</option>
+          </FormSelect>
+        </FormField>
+      )}
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
         <div style={{ flex: '1 1 160px', minWidth: 0 }}>

@@ -5,7 +5,7 @@ import Modal from '../Modal';
 import { Button } from '../ui';
 import { useToast } from '../../hooks/useToast';
 import RepositoryFormFields from './RepositoryFormFields';
-import { buildRepositoryCreatePayload, EMPTY_REPOSITORY_FORM, type RepositoryFormValues } from '../../lib/repositoryForm';
+import { buildRepositoryCreatePayload, EMPTY_REPOSITORY_FORM, type RepositoryFormError, type RepositoryFormValues } from '../../lib/repositoryForm';
 
 interface AddRepositoryModalProps {
   open: boolean;
@@ -29,30 +29,31 @@ export function AddRepositoryModal({ open, projectId, onAdded, onClose }: AddRep
   const { showToast } = useToast();
   const [values, setValues] = useState<RepositoryFormValues>(EMPTY_REPOSITORY_FORM);
   const [saving, setSaving] = useState(false);
-  const [urlError, setUrlError] = useState<string | undefined>(undefined);
+  const [error, setError] = useState<RepositoryFormError | null>(null);
 
   const handleClose = useCallback(() => {
     setValues(EMPTY_REPOSITORY_FORM);
-    setUrlError(undefined);
+    setError(null);
     onClose();
   }, [onClose]);
 
+  // 入力を直せばその場でエラー表示を消す（送信し直すまで赤いままにしない）。
   const handleChange = useCallback((next: RepositoryFormValues) => {
     setValues(next);
-    if (next.url.trim()) setUrlError(undefined);
+    setError(null);
   }, []);
 
   const handleSubmit = useCallback(async () => {
-    const payload = buildRepositoryCreatePayload(values);
-    if (!payload) {
-      setUrlError(t('repo.urlRequired'));
+    const result = buildRepositoryCreatePayload(values);
+    if (!result.ok) {
+      setError(result.error);
       return;
     }
     setSaving(true);
     try {
-      await api(`/projects/${projectId}/repositories`, { method: 'POST', body: JSON.stringify(payload) });
+      await api(`/projects/${projectId}/repositories`, { method: 'POST', body: JSON.stringify(result.payload) });
       setValues(EMPTY_REPOSITORY_FORM);
-      setUrlError(undefined);
+      setError(null);
       onAdded();
     } catch (err) {
       showToast((err as Error).message || t('repo.addFailed'));
@@ -78,7 +79,13 @@ export function AddRepositoryModal({ open, projectId, onAdded, onClose }: AddRep
         </Button>
       )}
     >
-      <RepositoryFormFields values={values} onChange={handleChange} urlError={urlError} disabled={saving} />
+      <RepositoryFormFields
+        values={values}
+        onChange={handleChange}
+        urlError={error === 'url_required' ? t('repo.urlRequired') : undefined}
+        providerError={error === 'provider_required' ? t('repo.providerRequired') : undefined}
+        disabled={saving}
+      />
     </Modal>
   );
 }
