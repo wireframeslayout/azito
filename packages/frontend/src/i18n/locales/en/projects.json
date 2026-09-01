@@ -194,6 +194,7 @@
       "general": "General",
       "repositories": "Repositories",
       "serverEnvironments": "Server Environments",
+      "windows": "Windows",
       "secrets": "Secrets",
       "dangerZone": "Danger Zone"
     },
@@ -244,11 +245,15 @@
         "register_other": "Register {{count}} repositories",
         "registering": "Registering...",
         "registerFailed": "Failed to register repositories"
-      }
+      },
+      "removeConfirmTitle": "Remove this repository?",
+      "removeConfirmMessage": "This unregisters the repository from this project. The remote repository itself is not deleted."
     },
     "windows": {
       "title": "Windows",
-      "noWindows": "No windows"
+      "noWindows": "No windows",
+      "count": "{{count}} windows",
+      "noWindowsHint": "Register a tmux window with this project to open it as a workspace tab."
     },
     "servers": {
       "count": "{{count}} server environments",
@@ -258,7 +263,6 @@
       "distributeCode": "Distribute code to this server",
       "distributeCodeHint": "The hub distributes this project's code to this server on the hub's own credentials, so a dev environment is ready even without git credentials on the server. Defaults off.",
       "distributeCodeIsolatedHint": "Isolated servers hold no git credentials of their own, so code distribution is always on and cannot be turned off.",
-      "distributeCodeBadge": "Distributed",
       "distributionRepository": "Distribution repository",
       "distributionRepositoryHint": "Which repository the hub distributes onto this server. Required while distribution is on — never inferred, even when the project has only one repository.",
       "distributionRepositoryPlaceholder": "— Select a repository —",
@@ -269,13 +273,39 @@
       "tmuxSessionHint": "Defaults to 'azito' when left empty.",
       "tmuxSessionPlaceholder": "azito",
       "noServers": "No server environments configured",
-      "session": "session: {{name}}",
       "inputPolicy": "Untrusted Input Policy",
       "inputPolicyHint": "Controls whether tasks imported from an external source (e.g. a GitHub/GitLab issue) may run on this server. Defaults to requiring manual approval.",
       "inputPolicyManualApproval": "Require manual approval",
       "inputPolicyDeny": "Deny execution",
       "inputPolicyAllow": "Run automatically without approval",
-      "inputPolicyAllowHint": "Runs automatically without approval — only effective on a verified isolated server. Automatically falls back to manual approval when verification is missing, expired, or scoped auth is disabled."
+      "inputPolicyAllowHint": "Runs automatically without approval — only effective on a verified isolated server. Automatically falls back to manual approval when verification is missing, expired, or scoped auth is disabled.",
+      "editTitle": "Environment: {{name}}",
+      "noWorkingDirectory": "No working directory set",
+      "noServersHint": "Link a server and a working directory to this project so tasks have somewhere to run.",
+      "isolatedChip": "Isolated",
+      "branchChip": "branch {{name}}",
+      "distributeCodeLabel": "Code distribution",
+      "distributionRepositoryOriginHint": "While distribution is on, the working directory's origin remote is replaced with a dummy URL, so you cannot push manually from that directory.",
+      "removeConfirmTitle": "Remove the environment for {{name}}?",
+      "removeConfirmMessage": "This only removes the link between this project and the server (working directory, branch and distribution settings). No files on the server are deleted.",
+      "distribution": {
+        "distributed": "Distributed {{time}} · {{bundle}}",
+        "bundleFull": "full",
+        "bundleIncremental": "incremental",
+        "notDistributed": "Not distributed yet",
+        "unknown": "Distribution state cannot be determined",
+        "failedGeneric": "Distribution cannot run — tasks cannot execute",
+        "configure": "Configure",
+        "failed": {
+          "serviceNotWired": "Distribution is unavailable — tasks cannot execute",
+          "noWorkingDir": "No working directory set — tasks cannot execute",
+          "noDistributionRepository": "No distribution repository set — tasks cannot execute",
+          "distributionRepositoryNotFound": "Distribution repository not found — tasks cannot execute",
+          "noToken": "No token registered for the distribution repository — tasks cannot execute",
+          "credentialUnreadable": "The distribution repository's credential cannot be read — tasks cannot execute",
+          "identityUnresolvable": "The distribution repository's owner/name cannot be resolved — tasks cannot execute"
+        }
+      }
     },
     "secrets": {
       "note": "Values registered here are injected as environment variables (AZITO_SECRET_<NAME>) into task execution panes. Only register credentials that are safe to share with agents. Values cannot be retrieved after saving.",

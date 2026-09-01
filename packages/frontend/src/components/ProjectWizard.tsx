@@ -691,30 +691,18 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
   const cloneTokenRequired = effectiveMode === 'clone' && !cloningLocally && !serverTypeUnresolvedForClone && reusableRepo === null && !cloneToken.trim();
   const primaryDisabled = isLastStep ? (noServersAvailable || serverTypeUnresolvedForClone || cloneTokenRequired) : !canAdvance;
 
-  // 'addEnvironment' is only ever mounted inline inside ProjectSettings's
-  // servers section (spec: "別画面を作らないこと" — no separate screen) —
-  // a bordered card matching the settings panel's existing add-form
-  // affordance, not the full-height sticky-header/footer chrome the
-  // create-project route uses.
-  const embedded = mode === 'addEnvironment';
+  // 'addEnvironment' is hosted inside a Modal (components/settings/
+  // EnvironmentModals.tsx's AddEnvironmentModal), opened from the project
+  // settings' server-environment list. The modal already supplies the
+  // surface, the title and the Cancel affordance, so this mode renders
+  // neither a card of its own nor the full-height sticky-header/footer
+  // chrome the create-project route uses — only the steps and the
+  // Back/Next row.
+  const inModal = mode === 'addEnvironment';
 
   return (
-    <div style={embedded
-      ? { border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', background: 'var(--bg-card)', marginBottom: 16, overflow: 'hidden' }
-      : { height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}
-    >
-      {embedded ? (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px 0' }}>
-          <h3 style={{ fontSize: 'var(--font-md)', fontWeight: 600, margin: 0 }}>{t('wizard.addEnvironment.title')}</h3>
-          <button
-            onClick={onCancel}
-            aria-label={t('wizard.cancel')}
-            style={{ background: 'none', border: 'none', padding: 4, color: 'var(--text-dim)', cursor: 'pointer', fontSize: 'var(--font-md)' }}
-          >
-            ✕
-          </button>
-        </div>
-      ) : (
+    <div style={inModal ? undefined : { height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}>
+      {!inModal && (
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           padding: 'var(--space-3) var(--space-4)', borderBottom: '1px solid var(--border)',
@@ -749,15 +737,15 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
 
       {runError && (
         <div role="alert" style={{
-          padding: '8px 12px', margin: embedded ? '12px 16px 0' : 'var(--space-4) var(--space-4) 0', borderRadius: 'var(--radius-sm)',
+          padding: '8px 12px', margin: inModal ? 'var(--space-3) 0 0' : 'var(--space-4) var(--space-4) 0', borderRadius: 'var(--radius-sm)',
           background: 'var(--danger-a15)', border: '1px solid var(--danger-a35)', color: 'var(--danger)', fontSize: 'var(--font-md)',
         }}>
           {runError}
         </div>
       )}
 
-      <div style={embedded ? undefined : { flex: 1, overflowY: 'auto' }}>
-        <div style={embedded ? { padding: 16 } : { maxWidth: 720, margin: '0 auto', padding: 'var(--space-6) var(--space-4)' }}>
+      <div style={inModal ? undefined : { flex: 1, overflowY: 'auto' }}>
+        <div style={inModal ? { padding: 'var(--space-4) 0' } : { maxWidth: 720, margin: '0 auto', padding: 'var(--space-6) var(--space-4)' }}>
           {currentStep === 'project' && (
             <ProjectGeneralFields
               name={name} setName={(v) => { setName(v); if (!slugManuallyEdited) setSlug(generateSlug(v)); }}
@@ -813,8 +801,9 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
 
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
-        padding: 'var(--space-3) var(--space-4)', borderTop: '1px solid var(--border)',
-        background: embedded ? 'var(--bg)' : 'var(--bg-card)', flexShrink: 0,
+        padding: inModal ? 0 : 'var(--space-3) var(--space-4)',
+        borderTop: inModal ? undefined : '1px solid var(--border)',
+        background: inModal ? undefined : 'var(--bg-card)', flexShrink: 0,
       }}>
         <Button
           onClick={goBack}

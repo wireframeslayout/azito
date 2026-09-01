@@ -194,6 +194,7 @@
       "general": "一般",
       "repositories": "リポジトリ",
       "serverEnvironments": "サーバー環境",
+      "windows": "ウィンドウ",
       "secrets": "シークレット",
       "dangerZone": "危険な操作"
     },
@@ -244,11 +245,15 @@
         "register_other": "{{count}}件のリポジトリを登録",
         "registering": "登録しています...",
         "registerFailed": "リポジトリの登録に失敗しました"
-      }
+      },
+      "removeConfirmTitle": "リポジトリを削除しますか？",
+      "removeConfirmMessage": "このプロジェクトからリポジトリの登録を解除します。リモートのリポジトリ自体は削除されません。"
     },
     "windows": {
       "title": "ウィンドウ",
-      "noWindows": "ウィンドウなし"
+      "noWindows": "ウィンドウなし",
+      "count": "{{count}} 件のウィンドウ",
+      "noWindowsHint": "tmux のウィンドウをこのプロジェクトに登録すると、ワークスペースのタブから開けます。"
     },
     "servers": {
       "count": "{{count}} 件のサーバー環境",
@@ -258,7 +263,6 @@
       "distributeCode": "コードをこのサーバーへ配信する",
       "distributeCodeHint": "hub がこのプロジェクトのコードをこのサーバーへ代行配信します。サーバー側に git 資格情報が無くても開発環境がすぐに用意できます。既定はオフです。",
       "distributeCodeIsolatedHint": "隔離サーバーは git 資格情報を持たないため、コード配信は常に有効です。オフにすることはできません。",
-      "distributeCodeBadge": "配信対象",
       "distributionRepository": "配信対象リポジトリ",
       "distributionRepositoryHint": "hub がこのサーバーへ配信するリポジトリを選択します。配信が有効な間は必須です。プロジェクトのリポジトリが1つだけの場合でも自動選択はされません。",
       "distributionRepositoryPlaceholder": "— リポジトリを選択 —",
@@ -269,13 +273,39 @@
       "tmuxSessionHint": "空の場合は 'azito' がデフォルト。",
       "tmuxSessionPlaceholder": "azito",
       "noServers": "サーバー環境が設定されていません",
-      "session": "セッション: {{name}}",
       "inputPolicy": "未信頼入力のポリシー",
       "inputPolicyHint": "外部（GitHub/GitLab のイシューなど）から取り込まれたタスクをこのサーバーで実行してよいかを制御します。既定では手動承認が必要です。",
       "inputPolicyManualApproval": "手動承認を必須にする",
       "inputPolicyDeny": "実行を拒否する",
       "inputPolicyAllow": "承認なしで自動実行する",
-      "inputPolicyAllowHint": "承認なしで自動実行します（検証済み隔離サーバーのみ実効。未検証・期限切れ・スコープ認証無効の場合は手動承認に自動的に降格します）。"
+      "inputPolicyAllowHint": "承認なしで自動実行します（検証済み隔離サーバーのみ実効。未検証・期限切れ・スコープ認証無効の場合は手動承認に自動的に降格します）。",
+      "editTitle": "{{name}} の環境設定",
+      "noWorkingDirectory": "作業ディレクトリ未設定",
+      "noServersHint": "タスクを実行するサーバーと作業ディレクトリをこのプロジェクトに紐づけます。",
+      "isolatedChip": "隔離",
+      "branchChip": "ブランチ {{name}}",
+      "distributeCodeLabel": "コード配信",
+      "distributionRepositoryOriginHint": "配信中は作業ディレクトリの origin がダミー URL に置き換わるため、そのディレクトリから手動で push することはできません。",
+      "removeConfirmTitle": "{{name}} の環境設定を削除しますか？",
+      "removeConfirmMessage": "このプロジェクトとサーバーの紐づけ（作業ディレクトリ・ブランチ・配信設定）のみを削除します。サーバー上のファイルは削除されません。",
+      "distribution": {
+        "distributed": "配信済 {{time}} · {{bundle}}",
+        "bundleFull": "全体",
+        "bundleIncremental": "差分",
+        "notDistributed": "未配信",
+        "unknown": "配信状態を判定できません",
+        "failedGeneric": "配信できません — タスクを実行できません",
+        "configure": "設定する",
+        "failed": {
+          "serviceNotWired": "配信機能が利用できません — タスクを実行できません",
+          "noWorkingDir": "作業ディレクトリ未設定 — タスクを実行できません",
+          "noDistributionRepository": "配信元リポジトリ未設定 — タスクを実行できません",
+          "distributionRepositoryNotFound": "配信元リポジトリが見つかりません — タスクを実行できません",
+          "noToken": "配信元リポジトリのトークン未登録 — タスクを実行できません",
+          "credentialUnreadable": "配信元リポジトリの資格情報を読み取れません — タスクを実行できません",
+          "identityUnresolvable": "配信元リポジトリの所有者・名称を解決できません — タスクを実行できません"
+        }
+      }
     },
     "secrets": {
       "note": "ここに登録した値はタスク実行ペインに環境変数（AZITO_SECRET_<NAME>）として注入されます。エージェントと共有しても安全な認証情報のみ登録してください。保存後に値を取得することはできません。",
