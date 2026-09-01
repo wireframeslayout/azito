@@ -327,11 +327,21 @@ export function shouldClearRecordedDistributionRepository(
  * are outcomes of the distribution attempt itself, never of its
  * preconditions.
  */
-export type DistributionPrerequisiteStage =
+/**
+ * The stages decidable from the hub's OWN configuration rows alone — no
+ * repository credential read, no decryption, no CLI process (Issue #87
+ * review follow-up). Deliberately separated from the credential stages
+ * below: a caller must be able to reach a verdict for these WITHOUT paying
+ * for (or failing on) a credential it has not yet established it needs.
+ */
+export type DistributionPreconditionStage =
   | 'service_not_wired'
   | 'no_working_dir'
   | 'no_distribution_repository'
-  | 'distribution_repository_not_found'
+  | 'distribution_repository_not_found';
+
+export type DistributionPrerequisiteStage =
+  | DistributionPreconditionStage
   | 'no_token'
   | 'credential_unreadable'
   | 'identity_unresolvable';
@@ -368,11 +378,35 @@ export type DistributionRepositoryLookup =
  */
 export type DistributionCredentialSource = 'repository' | 'cli';
 
-export interface CheckDistributionPrerequisitesParams {
+export interface CheckDistributionPreconditionsParams {
   server: Pick<ServerConfig, 'type' | 'isolationIntent'>;
   projectServer: Pick<ProjectServer, 'distributeCode' | 'distributionRepositoryId'> | null;
   project: Pick<ProjectDetail, 'repositories'> | null;
   workingDir: string | null;
+  fetchDistributionService: FetchDistributionService | null;
+}
+
+/**
+ * What {@link checkDistributionPreconditions} established WITHOUT having
+ * touched any credential: distribution applies to this pairing, the service
+ * is wired, a working directory is configured, and the target repository is
+ * named by the project server AND still present on the project.
+ */
+export type DistributionPreconditionResult =
+  | { required: false }
+  | {
+      required: true;
+      ok: true;
+      /** The `project_repositories` id distribution would pull from — present on THIS project. */
+      repositoryId: number;
+      /** Non-null by construction: a null/empty working directory fails as `no_working_dir`. */
+      workingDir: string;
+      /** Non-null by construction: a null service fails as `service_not_wired`. */
+      fetchDistributionService: FetchDistributionService;
+    }
+  | { required: true; ok: false; stage: DistributionPreconditionStage; message: string };
+
+export interface CheckDistributionPrerequisitesParams extends CheckDistributionPreconditionsParams {
   /** Resolves the distribution target repository's credential — called at most once, only after the target id is known. */
   lookupRepository: (repositoryId: number) => DistributionRepositoryLookup;
   /**
@@ -389,7 +423,6 @@ export interface CheckDistributionPrerequisitesParams {
    * credentials at all.
    */
   cliToken: CliTokenLookup;
-  fetchDistributionService: FetchDistributionService | null;
 }
 
 export type DistributionPrerequisiteResult =
@@ -420,29 +453,30 @@ export type DistributionPrerequisiteResult =
   | { required: true; ok: false; stage: DistributionPrerequisiteStage; message: string };
 
 /**
- * The prerequisite half of {@link performDistribution} — every check that
- * runs BEFORE `transportFactory.getTransport(server)`, i.e. every check that
- * touches nothing but the hub's own database rows (Issue #87 配信状態の可視化).
+ * Phase 1 of the prerequisite check (Issue #87 review follow-up): every
+ * verdict reachable from the hub's own configuration rows ALONE — no
+ * repository credential is read or decrypted, no `gh`/`glab` process is
+ * spawned, nothing remote is contacted.
  *
- * Extracted so the same verdict can be rendered in a list (GET
- * /api/projects/:id/servers) without executing a task first: before this
- * existed, a project server whose `distribution_repository_id` was never set
- * (e.g. the "use an existing directory" branch of the project wizard) looked
- * perfectly healthy until the first task failed on `no_distribution_repository`.
+ * Split out from {@link checkDistributionPrerequisites} so a caller can
+ * decide whether a credential is needed at all BEFORE paying for one. That
+ * ordering is not an optimization but a correctness requirement:
+ * `service_not_wired` and `no_working_dir` must keep being reported
+ * immediately and unconditionally, even for a repository whose stored
+ * credential can no longer be decrypted (the execution path's
+ * `findRepositoryById` throws on that, by design) and even when resolving
+ * the hub's CLI token would take the CLI's full timeout.
  *
- * Makes NO remote connection, spawns no process, and invokes
- * `lookupRepository` at most once. `performDistribution` calls this and nothing
- * else for its own prerequisite phase, so the two can never drift — the
- * stage values, their order, and their messages are this function's alone.
+ * Pure and synchronous — see {@link checkDistributionPrerequisites}, which
+ * calls THIS function for its own first phase so the two can never drift.
  *
- * The `message` is INTERNAL (it can embed the identity-resolution reason and
- * is written for hub logs/execution logs). API surfaces must expose `stage`
- * only and localize from that — never forward `message` to a client.
+ * The `message` is INTERNAL (hub logs / execution logs). API surfaces must
+ * expose `stage` only and localize from that.
  */
-export function checkDistributionPrerequisites(
-  params: CheckDistributionPrerequisitesParams,
-): DistributionPrerequisiteResult {
-  const { server, projectServer, project, workingDir, lookupRepository, cliToken, fetchDistributionService } = params;
+export function checkDistributionPreconditions(
+  params: CheckDistributionPreconditionsParams,
+): DistributionPreconditionResult {
+  const { server, projectServer, project, workingDir, fetchDistributionService } = params;
 
   if (!isDistributionRequired(server, projectServer)) {
     return { required: false };
@@ -489,6 +523,8 @@ export function checkDistributionPrerequisites(
     };
   }
 
+  // Also the project-membership check: an id naming a repository that is not
+  // on THIS project never reaches the credential phase.
   const repoEntry = project?.repositories?.find((r) => r.id === distributionRepositoryId);
   if (!repoEntry) {
     return {
@@ -499,7 +535,48 @@ export function checkDistributionPrerequisites(
     };
   }
 
-  const lookup = lookupRepository(repoEntry.id);
+  return { required: true, ok: true, repositoryId: repoEntry.id, workingDir, fetchDistributionService };
+}
+
+/**
+ * The full prerequisite half of {@link performDistribution} — every check
+ * that runs BEFORE `transportFactory.getTransport(server)`, i.e. every check
+ * that touches nothing but the hub's own database rows (Issue #87
+ * 配信状態の可視化).
+ *
+ * Extracted so the same verdict can be rendered in a list (GET
+ * /api/projects/:id/servers) without executing a task first: before this
+ * existed, a project server whose `distribution_repository_id` was never set
+ * (e.g. the "use an existing directory" branch of the project wizard) looked
+ * perfectly healthy until the first task failed on `no_distribution_repository`.
+ *
+ * Phase 1 is {@link checkDistributionPreconditions} (delegated to, never
+ * re-implemented); phase 2 — reached only once phase 1 passes — is the
+ * credential itself: the repository's PAT, else the hub's CLI token
+ * (`docs/ja/github-integration.md`'s two-stage resolution).
+ *
+ * Makes NO remote connection, spawns no process, and invokes
+ * `lookupRepository` at most once — and only after phase 1 has passed, so a
+ * pairing that is not distributable for a configuration reason never reads
+ * (or fails to decrypt) a credential at all. `performDistribution` calls
+ * this and nothing else for its own prerequisite phase, so the two can never
+ * drift — the stage values, their order, and their messages are these two
+ * functions' alone.
+ *
+ * The `message` is INTERNAL (it can embed the identity-resolution reason and
+ * is written for hub logs/execution logs). API surfaces must expose `stage`
+ * only and localize from that — never forward `message` to a client.
+ */
+export function checkDistributionPrerequisites(
+  params: CheckDistributionPrerequisitesParams,
+): DistributionPrerequisiteResult {
+  const { lookupRepository, cliToken } = params;
+
+  const preconditions = checkDistributionPreconditions(params);
+  if (!preconditions.required) return { required: false };
+  if (!preconditions.ok) return preconditions;
+
+  const lookup = lookupRepository(preconditions.repositoryId);
   if (lookup.status === 'unreadable') {
     return {
       required: true,
@@ -548,12 +625,12 @@ export function checkDistributionPrerequisites(
   return {
     required: true,
     ok: true,
-    repositoryId: repoEntry.id,
-    workingDir,
+    repositoryId: preconditions.repositoryId,
+    workingDir: preconditions.workingDir,
     token,
     credentialSource,
     identity: identity.identity,
-    fetchDistributionService,
+    fetchDistributionService: preconditions.fetchDistributionService,
   };
 }
 
@@ -605,33 +682,31 @@ export interface PerformDistributionParams {
 }
 
 /**
- * The async half of `performDistribution`'s prerequisite phase: resolves the
- * hub's `gh`/`glab` credential for the ONE repository this run would
- * distribute, so the synchronous `checkDistributionPrerequisites` can consult
- * it without spawning anything.
+ * Resolves the hub's `gh`/`glab` credential for the ONE repository named by
+ * an ALREADY-PASSED {@link checkDistributionPreconditions} result, so the
+ * synchronous {@link checkDistributionPrerequisites} can consult it without
+ * spawning anything itself.
  *
- * Deliberately silent about every reason it might not find a target — it
- * never reports a failure of its own. `checkDistributionPrerequisites` runs
- * the same resolution immediately afterwards and owns every stage value and
- * message; duplicating the diagnosis here would be the one way the two could
- * drift apart.
+ * Takes the resolved `repositoryId` rather than re-deriving it (Issue #87
+ * review follow-up): running any of this before the preconditions have
+ * passed would read/decrypt a credential — and possibly wait out the CLI's
+ * timeout — for a pairing that is going to fail on `service_not_wired` or
+ * `no_working_dir` anyway, turning an immediate configuration verdict into a
+ * delayed one, or (for an undecryptable credential on the execution path,
+ * where `findRepositoryById` throws by design) into an exception.
+ *
+ * Deliberately silent about every reason it might not resolve a token — it
+ * never reports a failure of its own. `checkDistributionPrerequisites` owns
+ * every stage value and message; duplicating the diagnosis here would be the
+ * one way the two could drift apart.
  *
  * The CLI is asked ONLY when the repository has no PAT of its own, so a
  * PAT-configured project never spawns a process here.
  */
-async function resolveCliTokenForTarget(params: {
-  server: Pick<ServerConfig, 'type' | 'isolationIntent'>;
-  projectServer: Pick<ProjectServer, 'distributeCode' | 'distributionRepositoryId'> | null;
-  project: Pick<ProjectDetail, 'repositories'> | null;
-  findRepo: (repositoryId: number) => ProjectRepositoryWithToken | null;
-}): Promise<CliTokenLookup> {
-  const { server, projectServer, project, findRepo } = params;
-  if (!isDistributionRequired(server, projectServer)) return NO_CLI_TOKEN;
-
-  const repositoryId = projectServer?.distributionRepositoryId ?? null;
-  if (repositoryId === null) return NO_CLI_TOKEN;
-  if (!project?.repositories?.some((r) => r.id === repositoryId)) return NO_CLI_TOKEN;
-
+async function resolveCliTokenForRepository(
+  repositoryId: number,
+  findRepo: (repositoryId: number) => ProjectRepositoryWithToken | null,
+): Promise<CliTokenLookup> {
   const repo = findRepo(repositoryId);
   if (!repo || repo.token) return NO_CLI_TOKEN;
 
@@ -662,23 +737,32 @@ export async function performDistribution(params: PerformDistributionParams): Pr
     return cachedRepo;
   };
 
-  // `checkDistributionPrerequisites` is synchronous by contract, so the
-  // hub's own `gh`/`glab` credential — needed only when the repository has
-  // no PAT of its own — is resolved here, asynchronously, before the check
-  // runs. Best effort by design: when this cannot even identify a target
-  // (distribution not required, no/unknown target repository, unnormalizable
-  // URL) it resolves nothing and the check below reports the real reason.
-  const cliToken = await resolveCliTokenForTarget({ server, projectServer, project, findRepo });
+  // Phase 1 — every verdict reachable without a credential. Runs FIRST so
+  // `service_not_wired`/`no_working_dir`/`no_distribution_repository`/
+  // `distribution_repository_not_found` keep being reported immediately,
+  // without reading (or failing to decrypt) a credential and without waiting
+  // on the CLI (Issue #87 review follow-up).
+  const preconditionParams = { server, projectServer, project, workingDir, fetchDistributionService };
+  const preconditions = checkDistributionPreconditions(preconditionParams);
+  if (!preconditions.required) return { required: false };
+  if (!preconditions.ok) {
+    return { required: true, ok: false, stage: preconditions.stage, message: preconditions.message };
+  }
+
+  // Phase 2's async input: `checkDistributionPrerequisites` is synchronous by
+  // contract, so the hub's own `gh`/`glab` credential — needed only when the
+  // repository has no PAT of its own — is resolved here, for the repository
+  // phase 1 just established as the target.
+  const cliToken = await resolveCliTokenForRepository(preconditions.repositoryId, findRepo);
 
   // Every check that runs before the transport is obtained lives in
   // `checkDistributionPrerequisites` — the SAME function GET
   // /api/projects/:id/servers renders, so the list view and an actual run can
-  // never disagree about why a project server is not distributable.
+  // never disagree about why a project server is not distributable. It
+  // re-runs phase 1 itself (pure, cheap, and the single source of those
+  // verdicts) rather than accepting the result above.
   const prerequisites = checkDistributionPrerequisites({
-    server,
-    projectServer,
-    project,
-    workingDir,
+    ...preconditionParams,
     // Unchanged execution-path behavior: `findRepositoryById` decrypts
     // eagerly and a `SecretBox.open()` failure propagates out of
     // `performDistribution` exactly as it did before this extraction — a run
@@ -691,7 +775,6 @@ export async function performDistribution(params: PerformDistributionParams): Pr
       return repo.token ? { status: 'ok', repo, token: repo.token } : { status: 'no_token', repo };
     },
     cliToken,
-    fetchDistributionService,
   });
   if (!prerequisites.required) return { required: false };
   if (!prerequisites.ok) {

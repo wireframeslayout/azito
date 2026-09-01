@@ -36,7 +36,7 @@ import { LocalCloneTargetNotEmptyError, type LocalRepoCloneService } from '../gi
 // GET /api/projects/:id/servers can surface a misconfigured distribution
 // target BEFORE a task is executed against it. Touches nothing but hub-local
 // rows — no transport, no remote connection (see its own doc comment).
-import { checkDistributionPrerequisites, type DistributionCredentialSource, type DistributionPrerequisiteStage, type DistributionRepositoryLookup } from '../tasks/execution/DistributionHelper';
+import { checkDistributionPreconditions, checkDistributionPrerequisites, type DistributionCredentialSource, type DistributionPrerequisiteStage, type DistributionRepositoryLookup } from '../tasks/execution/DistributionHelper';
 import { resolveCliTokens, type CliTokenTarget } from '../git/providers/cliToken';
 import type { FetchDistributionService } from '../git/hub-transfer/FetchDistributionService';
 import type { IDistributionStateRepository } from '../git/hub-transfer/types';
@@ -358,21 +358,40 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       // (`docs/ja/github-integration.md`): repositories with no PAT of their
       // own can still be distributed on the hub's `gh`/`glab` login.
       //
-      // Resolved ASYNCHRONOUSLY here, once per distinct host, and handed to
-      // the synchronous per-row check below — never from inside it.
-      // `checkDistributionPrerequisites` is rendered for every row of this
-      // frequently-polled, read-only listing; a synchronous `gh` invocation
-      // there would block the whole hub for the CLI's timeout per uncached
-      // host. Repositories that DO have a PAT are skipped entirely, so a
-      // fully PAT-configured project spawns no process at all.
-      const cliTargets: CliTokenTarget[] = [];
-      for (const rid of repositoryIds) {
-        const credential = credentialsById.get(rid);
+      // Resolved ASYNCHRONOUSLY here, once per distinct provider+host, and
+      // handed to the synchronous per-row check below — never from inside
+      // it. `checkDistributionPrerequisites` is rendered for every row of
+      // this frequently-polled, read-only listing; a synchronous `gh`
+      // invocation there would block the whole hub for the CLI's timeout per
+      // uncached host.
+      //
+      // The target set is narrowed by the credential-free phase of the very
+      // same check (`checkDistributionPreconditions`), so a CLI process is
+      // spawned ONLY for a pairing that would actually distribute on that
+      // credential (Issue #87 review follow-up): rows whose server row is
+      // gone, whose distribution is not required at all, that have no
+      // working directory or no/foreign target repository, and repositories
+      // that already carry a PAT, all contribute no target.
+      const cliTargets = new Map<string, CliTokenTarget>();
+      for (const row of rows) {
+        const server = serversByName.get(row.serverName);
+        if (!server) continue;
+        const preconditions = checkDistributionPreconditions({
+          server,
+          projectServer: row,
+          project,
+          workingDir: row.workingDirectory,
+          fetchDistributionService,
+        });
+        if (!preconditions.required || !preconditions.ok) continue;
+        const credential = credentialsById.get(preconditions.repositoryId);
         if (!credential || credential.credentialStatus === 'unreadable' || credential.token) continue;
         const identity = resolveCanonicalRepositoryIdentity(credential);
-        if (identity.ok) cliTargets.push({ provider: identity.identity.provider, host: identity.identity.host });
+        if (!identity.ok) continue;
+        const target = { provider: identity.identity.provider, host: identity.identity.host };
+        cliTargets.set(`${target.provider}\u0000${target.host}`, target);
       }
-      const cliToken = await resolveCliTokens(cliTargets);
+      const cliToken = await resolveCliTokens(cliTargets.values());
 
       return rows.map((row): ProjectServer & ProjectServerDistributionInfo => {
         const state = row.distributionRepositoryId != null

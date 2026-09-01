@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { resolveExecutionRepositoryEntry, isDistributionRequired, isDistributionRequiredButRepositoryUnresolved, shouldClearRecordedDistributionRepository, checkDistributionPrerequisites, performDistribution } from './DistributionHelper';
-import type { CheckDistributionPrerequisitesParams, DistributionRepositoryLookup, PerformDistributionParams } from './DistributionHelper';
+import { resolveExecutionRepositoryEntry, isDistributionRequired, isDistributionRequiredButRepositoryUnresolved, shouldClearRecordedDistributionRepository, checkDistributionPreconditions, checkDistributionPrerequisites, performDistribution } from './DistributionHelper';
+import type { CheckDistributionPreconditionsParams, CheckDistributionPrerequisitesParams, DistributionRepositoryLookup, PerformDistributionParams } from './DistributionHelper';
 import type { FetchDistributionService } from '../../git/hub-transfer/FetchDistributionService';
 import type { ServerConfig } from '../../servers/Server';
 import type { ProjectDetail, ProjectRepository, ProjectRepositoryWithToken } from '../../projects/Project';
@@ -406,6 +406,72 @@ describe('checkDistributionPrerequisites', () => {
     check({ lookupRepository: makeLookup({ status: 'no_token', repo: tokenedRepo }), cliToken: cliTokenFor('gho_cli') });
     expect(mockedGetCliToken).not.toHaveBeenCalled();
   });
+
+  // ── Credential-free stages come FIRST (Issue #87 review follow-up) ──
+  //
+  // A repository whose stored credential cannot be read must not change the
+  // verdict — or its immediacy — for a pairing that is already
+  // undistributable for a configuration reason. On the execution path
+  // `lookupRepository` THROWS in that situation (findRepositoryById
+  // propagates a SecretBox failure by design), so reaching it too early
+  // turns a plain stage into an exception.
+  it.each([
+    ['service_not_wired', { fetchDistributionService: null }],
+    ['no_working_dir', { workingDir: null }],
+    ['no_distribution_repository', { projectServer: makeProjectServer({ distributeCode: true, distributionRepositoryId: null }) }],
+    ['distribution_repository_not_found', { projectServer: makeProjectServer({ distributionRepositoryId: 999 }) }],
+  ] as const)('reports %s without reading the credential at all, even when reading it would throw', (stage, overrides) => {
+    const lookupRepository = vi.fn((): DistributionRepositoryLookup => { throw new Error('the credential could not be decrypted'); });
+    const cliToken = vi.fn(() => 'gho_cli');
+    const result = check({ ...(overrides as Partial<CheckDistributionPrerequisitesParams>), lookupRepository, cliToken });
+    expect(result).toMatchObject({ required: true, ok: false, stage });
+    expect(lookupRepository).not.toHaveBeenCalled();
+    expect(cliToken).not.toHaveBeenCalled();
+  });
+});
+
+// ── checkDistributionPreconditions (Issue #87 review follow-up) ──
+//
+// Phase 1: everything decidable from the hub's own configuration rows, with
+// no credential read and no CLI process. `checkDistributionPrerequisites`
+// delegates its own first phase to this function, so the two can never
+// disagree about these stages.
+
+describe('checkDistributionPreconditions', () => {
+  function precheck(overrides: Partial<CheckDistributionPreconditionsParams> = {}) {
+    return checkDistributionPreconditions({
+      server: makeAgentServer({ isolationIntent: true }),
+      projectServer: makeProjectServer({ distributionRepositoryId: repoB.id }),
+      project: makeProject([repoA, repoB]),
+      workingDir: '/work/dir',
+      fetchDistributionService: {} as FetchDistributionService,
+      ...overrides,
+    });
+  }
+
+  it('returns { required: false } for a local server', () => {
+    expect(precheck({ server: { type: 'local', isolationIntent: false } })).toEqual({ required: false });
+  });
+
+  it.each([
+    ['service_not_wired', { fetchDistributionService: null }],
+    ['no_working_dir', { workingDir: null }],
+    ['no_distribution_repository', { projectServer: makeProjectServer({ distributeCode: true, distributionRepositoryId: null }) }],
+    ['distribution_repository_not_found', { projectServer: makeProjectServer({ distributionRepositoryId: 999 }) }],
+  ] as const)('fails with %s', (stage, overrides) => {
+    expect(precheck(overrides as Partial<CheckDistributionPreconditionsParams>)).toMatchObject({ required: true, ok: false, stage });
+  });
+
+  it('resolves the target repository id, working directory and service when every precondition passes', () => {
+    const service = {} as FetchDistributionService;
+    const result = precheck({ fetchDistributionService: service });
+    expect(result).toEqual({ required: true, ok: true, repositoryId: repoB.id, workingDir: '/work/dir', fetchDistributionService: service });
+  });
+
+  it('rejects a target repository that belongs to another project (membership is checked here, before any credential)', () => {
+    const result = precheck({ project: makeProject([repoA]) });
+    expect(result).toMatchObject({ required: true, ok: false, stage: 'distribution_repository_not_found' });
+  });
 });
 
 // `performDistribution` now delegates its entire prerequisite phase to
@@ -511,6 +577,26 @@ describe('performDistribution (prerequisite phase unchanged after extraction)', 
     await performDistribution(params);
     expect(mockedGetCliToken).not.toHaveBeenCalled();
     expect(findRepositoryById).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['service_not_wired', { fetchDistributionService: null }],
+    ['no_working_dir', { workingDir: null }],
+    ['no_distribution_repository', { projectServer: makeProjectServer({ distributionRepositoryId: null, distributeCode: true }) }],
+    ['distribution_repository_not_found', { projectServer: makeProjectServer({ distributionRepositoryId: 999 }) }],
+  ] as const)('reports %s without reading the repository row or asking the CLI, even when the stored credential cannot be decrypted', async (stage, overrides) => {
+    // The real execution-path repository read: a SecretBox failure throws.
+    const findRepositoryById = vi.fn(() => { throw new Error('the credential could not be decrypted'); });
+    mockedGetCliToken.mockResolvedValue('gho_cli');
+    const { params, getTransport, distribute } = makeHarness({
+      ...(overrides as Partial<PerformDistributionParams>),
+      projectRepo: { findRepositoryById } as unknown as PerformDistributionParams['projectRepo'],
+    });
+    await expect(performDistribution(params)).resolves.toMatchObject({ required: true, ok: false, stage });
+    expect(findRepositoryById).not.toHaveBeenCalled();
+    expect(mockedGetCliToken).not.toHaveBeenCalled();
+    expect(getTransport).not.toHaveBeenCalled();
+    expect(distribute).not.toHaveBeenCalled();
   });
 
   it('never asks the CLI when distribution is not required at all', async () => {

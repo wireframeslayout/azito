@@ -266,6 +266,64 @@ describe('GET /api/projects/:id/servers — distribution status (Issue #87 配�
     expect([...(mockedResolveCliTokens.mock.calls[0][0] as CliTokenTarget[])]).toEqual([]);
   });
 
+  // Issue #87 review follow-up: this listing is read-only and frequently
+  // polled, so a row that cannot distribute for a CONFIGURATION reason must
+  // never contribute a `gh`/`glab` process to wait on.
+  it('asks for no CLI targets when distribution is not required for any row', async () => {
+    const base = makeOpts();
+    const opts = makeOpts({
+      serverRepo: { ...base.serverRepo, findMetaByNames: vi.fn(() => [toMeta(makeServer({ type: 'local', isolationIntent: false }))]) },
+      projectRepo: { ...base.projectRepo, findRepositoryCredentialsByIds: vi.fn(() => [makeCredential({ credentialStatus: 'absent', token: null })]) },
+    });
+    const [row] = (await getServers(opts)).json();
+    expect(row.distributionPrerequisite).toEqual({ status: 'not_required', stage: null, credentialSource: null });
+    expect([...(mockedResolveCliTokens.mock.calls[0][0] as CliTokenTarget[])]).toEqual([]);
+  });
+
+  it.each([
+    ['no_distribution_repository', { distributionRepositoryId: null }],
+    ['distribution_repository_not_found', { distributionRepositoryId: 42 }],
+    ['no_working_dir', { workingDirectory: null }],
+  ] as const)('asks for no CLI targets for a %s row', async (stage, rowOverrides) => {
+    const base = makeOpts();
+    const opts = makeOpts({
+      projectServerRepo: { ...base.projectServerRepo, findByProject: vi.fn(() => [makeProjectServer(rowOverrides)]) },
+      projectRepo: { ...base.projectRepo, findRepositoryCredentialsByIds: vi.fn((ids: number[]) => ids.map((id) => makeCredential({ id, credentialStatus: 'absent', token: null }))) },
+    });
+    const [row] = (await getServers(opts)).json();
+    expect(row.distributionPrerequisite).toEqual({ status: 'failed', stage, credentialSource: null });
+    expect([...(mockedResolveCliTokens.mock.calls[0][0] as CliTokenTarget[])]).toEqual([]);
+  });
+
+  it('asks for no CLI targets for a row whose servers row no longer exists', async () => {
+    const base = makeOpts();
+    const opts = makeOpts({
+      serverRepo: { ...base.serverRepo, findMetaByNames: vi.fn(() => []) },
+      projectRepo: { ...base.projectRepo, findRepositoryCredentialsByIds: vi.fn(() => [makeCredential({ credentialStatus: 'absent', token: null })]) },
+    });
+    const [row] = (await getServers(opts)).json();
+    expect(row.distributionPrerequisite).toEqual({ status: 'unknown', stage: null, credentialSource: null });
+    expect([...(mockedResolveCliTokens.mock.calls[0][0] as CliTokenTarget[])]).toEqual([]);
+  });
+
+  it('de-duplicates CLI targets across rows pointing at the same host', async () => {
+    const base = makeOpts();
+    const servers = [makeServer({ name: 'iso-0' }), makeServer({ name: 'iso-1' })];
+    const opts = makeOpts({
+      projectServerRepo: {
+        ...base.projectServerRepo,
+        findByProject: vi.fn(() => [
+          makeProjectServer({ serverName: 'iso-0', distributionRepositoryId: 1 }),
+          makeProjectServer({ serverName: 'iso-1', distributionRepositoryId: 2 }),
+        ]),
+      },
+      serverRepo: { ...base.serverRepo, findMetaByNames: vi.fn((names: string[]) => servers.filter((sv) => names.includes(sv.name)).map(toMeta)) },
+      projectRepo: { ...base.projectRepo, findRepositoryCredentialsByIds: vi.fn((ids: number[]) => ids.map((id) => makeCredential({ id, credentialStatus: 'absent', token: null }))) },
+    });
+    await getServers(opts);
+    expect([...(mockedResolveCliTokens.mock.calls[0][0] as CliTokenTarget[])]).toEqual([{ provider: 'github', host: 'github.com' }]);
+  });
+
   // Guards the reason the lookup is resolved up front and handed in: the
   // per-row check is synchronous, and a synchronous `gh` invocation on this
   // frequently-polled read-only listing would block the event loop for the
