@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   buildEnvironmentRowChips,
   needsDistributionSetup,
+  resolveCredentialSourceChip,
   resolveDistributionChip,
   type DistributionPrerequisiteStage,
   type LastDistribution,
@@ -15,11 +16,11 @@ const LAST: LastDistribution = {
 
 describe('resolveDistributionChip', () => {
   it('shows no chip when distribution does not apply to this pairing', () => {
-    expect(resolveDistributionChip({ status: 'not_required', stage: null }, null)).toBeNull();
+    expect(resolveDistributionChip({ status: 'not_required', stage: null, credentialSource: null }, null)).toBeNull();
   });
 
   it('shows a neutral "cannot be determined" chip for unknown', () => {
-    expect(resolveDistributionChip({ status: 'unknown', stage: null }, null)).toEqual({
+    expect(resolveDistributionChip({ status: 'unknown', stage: null, credentialSource: null }, null)).toEqual({
       id: 'distribution',
       tone: 'default',
       labelKey: 'settings.servers.distribution.unknown',
@@ -27,7 +28,7 @@ describe('resolveDistributionChip', () => {
   });
 
   it('shows a warning "not distributed yet" chip when prerequisites pass but nothing was distributed', () => {
-    expect(resolveDistributionChip({ status: 'ok', stage: null }, null)).toEqual({
+    expect(resolveDistributionChip({ status: 'ok', stage: null, credentialSource: null }, null)).toEqual({
       id: 'distribution',
       tone: 'orange',
       labelKey: 'settings.servers.distribution.notDistributed',
@@ -35,7 +36,7 @@ describe('resolveDistributionChip', () => {
   });
 
   it('shows a success chip carrying the timestamp and bundle type once distributed', () => {
-    expect(resolveDistributionChip({ status: 'ok', stage: null }, LAST)).toEqual({
+    expect(resolveDistributionChip({ status: 'ok', stage: null, credentialSource: null }, LAST)).toEqual({
       id: 'distribution',
       tone: 'green',
       labelKey: 'settings.servers.distribution.distributed',
@@ -45,7 +46,7 @@ describe('resolveDistributionChip', () => {
   });
 
   it('distinguishes a full bundle from an incremental one', () => {
-    const chip = resolveDistributionChip({ status: 'ok', stage: null }, { ...LAST, bundleType: 'full' });
+    const chip = resolveDistributionChip({ status: 'ok', stage: null, credentialSource: null }, { ...LAST, bundleType: 'full' });
     expect(chip?.bundleKey).toBe('settings.servers.distribution.bundleFull');
   });
 
@@ -61,7 +62,7 @@ describe('resolveDistributionChip', () => {
 
   for (const [stage, labelKey] of stages) {
     it(`maps the failed stage ${stage} to its own danger-toned label`, () => {
-      expect(resolveDistributionChip({ status: 'failed', stage }, null)).toEqual({
+      expect(resolveDistributionChip({ status: 'failed', stage, credentialSource: null }, null)).toEqual({
         id: 'distribution',
         tone: 'red',
         labelKey,
@@ -76,7 +77,7 @@ describe('resolveDistributionChip', () => {
   });
 
   it('falls back to a generic danger label when a failure carries no stage', () => {
-    expect(resolveDistributionChip({ status: 'failed', stage: null }, null)).toEqual({
+    expect(resolveDistributionChip({ status: 'failed', stage: null, credentialSource: null }, null)).toEqual({
       id: 'distribution',
       tone: 'red',
       labelKey: 'settings.servers.distribution.failedGeneric',
@@ -84,7 +85,7 @@ describe('resolveDistributionChip', () => {
   });
 
   it('keeps the failure visible even when an older successful distribution exists', () => {
-    const chip = resolveDistributionChip({ status: 'failed', stage: 'no_token' }, LAST);
+    const chip = resolveDistributionChip({ status: 'failed', stage: 'no_token', credentialSource: null }, LAST);
     expect(chip?.tone).toBe('red');
   });
 
@@ -95,11 +96,44 @@ describe('resolveDistributionChip', () => {
 
 describe('needsDistributionSetup', () => {
   it('is true only for a failed prerequisite', () => {
-    expect(needsDistributionSetup({ status: 'failed', stage: 'no_distribution_repository' })).toBe(true);
-    expect(needsDistributionSetup({ status: 'ok', stage: null })).toBe(false);
-    expect(needsDistributionSetup({ status: 'not_required', stage: null })).toBe(false);
-    expect(needsDistributionSetup({ status: 'unknown', stage: null })).toBe(false);
+    expect(needsDistributionSetup({ status: 'failed', stage: 'no_distribution_repository', credentialSource: null })).toBe(true);
+    expect(needsDistributionSetup({ status: 'ok', stage: null, credentialSource: null })).toBe(false);
+    expect(needsDistributionSetup({ status: 'not_required', stage: null, credentialSource: null })).toBe(false);
+    expect(needsDistributionSetup({ status: 'unknown', stage: null, credentialSource: null })).toBe(false);
     expect(needsDistributionSetup(undefined)).toBe(false);
+  });
+});
+
+describe('resolveCredentialSourceChip', () => {
+  it('names the hub CLI login as the credential when that is what delivery would use', () => {
+    expect(resolveCredentialSourceChip({ status: 'ok', stage: null, credentialSource: 'cli' })).toEqual({
+      id: 'credentialSource',
+      tone: 'default',
+      labelKey: 'settings.servers.distribution.credentialSourceCli',
+      detailKey: 'settings.servers.distribution.credentialSourceCliDetail',
+    });
+  });
+
+  it('stays silent for a repository-stored token — that is the default shape, not news', () => {
+    expect(resolveCredentialSourceChip({ status: 'ok', stage: null, credentialSource: 'repository' })).toBeNull();
+  });
+
+  it('stays silent when no source is reported', () => {
+    expect(resolveCredentialSourceChip({ status: 'ok', stage: null, credentialSource: null })).toBeNull();
+    expect(resolveCredentialSourceChip(undefined)).toBeNull();
+  });
+
+  it('never claims a credential source for a status other than ok', () => {
+    for (const status of ['failed', 'not_required', 'unknown'] as const) {
+      // 契約上 credentialSource は ok のときだけ非 null だが、型上は表現できてしまう。
+      expect(resolveCredentialSourceChip({ status, stage: null, credentialSource: 'cli' })).toBeNull();
+    }
+  });
+
+  it('carries a word, never colour alone', () => {
+    const chip = resolveCredentialSourceChip({ status: 'ok', stage: null, credentialSource: 'cli' });
+    expect(chip?.tone).toBe('default');
+    expect(chip?.labelKey).toBeTruthy();
   });
 });
 
@@ -109,7 +143,7 @@ describe('buildEnvironmentRowChips', () => {
       branch: 'feat/x',
       inputPolicy: 'allow',
       isolated: true,
-      distributionPrerequisite: { status: 'failed', stage: 'no_distribution_repository' },
+      distributionPrerequisite: { status: 'failed', stage: 'no_distribution_repository', credentialSource: null },
       lastDistribution: null,
     });
     expect(chips.map((c) => c.id)).toEqual(['distribution', 'isolated', 'branch', 'inputPolicy']);
@@ -118,7 +152,7 @@ describe('buildEnvironmentRowChips', () => {
   it('omits the distribution and isolated chips when neither applies', () => {
     const chips = buildEnvironmentRowChips({
       isolated: false,
-      distributionPrerequisite: { status: 'not_required', stage: null },
+      distributionPrerequisite: { status: 'not_required', stage: null, credentialSource: null },
       lastDistribution: null,
     });
     expect(chips.map((c) => c.id)).toEqual(['inputPolicy']);
@@ -130,7 +164,7 @@ describe('buildEnvironmentRowChips', () => {
   });
 
   it('changes the distribution chip with the presence of a last-distribution record', () => {
-    const base = { isolated: false, distributionPrerequisite: { status: 'ok' as const, stage: null } };
+    const base = { isolated: false, distributionPrerequisite: { status: 'ok' as const, stage: null, credentialSource: null } };
     const never = buildEnvironmentRowChips({ ...base, lastDistribution: null });
     const once = buildEnvironmentRowChips({ ...base, lastDistribution: LAST });
     expect(never[0].labelKey).toBe('settings.servers.distribution.notDistributed');
@@ -155,12 +189,24 @@ describe('buildEnvironmentRowChips', () => {
       branch: 'main',
       inputPolicy: 'manual-approval',
       isolated: true,
-      distributionPrerequisite: { status: 'ok', stage: null },
+      distributionPrerequisite: { status: 'ok', stage: null, credentialSource: null },
       lastDistribution: LAST,
     });
     const serialized = JSON.stringify(chips);
     expect(serialized).not.toContain('tmux');
     expect(serialized).not.toContain('session');
     expect(chips.some((c) => c.id === ('tmuxSession' as never))).toBe(false);
+  });
+
+  it('places the credential-source chip right after the distribution one, and only for the CLI login', () => {
+    const chips = (source: 'repository' | 'cli' | null) => buildEnvironmentRowChips({
+      branch: 'main',
+      isolated: false,
+      distributionPrerequisite: { status: 'ok', stage: null, credentialSource: source },
+      lastDistribution: LAST,
+    }).map((c) => c.id);
+    expect(chips('cli')).toEqual(['distribution', 'credentialSource', 'branch', 'inputPolicy']);
+    expect(chips('repository')).toEqual(['distribution', 'branch', 'inputPolicy']);
+    expect(chips(null)).toEqual(['distribution', 'branch', 'inputPolicy']);
   });
 });

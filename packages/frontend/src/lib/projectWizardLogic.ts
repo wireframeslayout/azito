@@ -41,23 +41,6 @@ export interface WizardValidationState {
    * previous path's discovery result.
    */
   discoveryReady?: boolean;
-  /**
-   * Whether the selected server clones directly on the hub (i.e. is
-   * `local`) — `clonesDirectlyOnServer(selectedServerType)`. Only
-   * meaningful for `codeMode === 'clone'`; a non-local target relies on the
-   * hub's 代行配信 path, which requires the repository to actually carry a
-   * credential (Issue #87 review, Important finding 3).
-   */
-  cloneTargetIsLocal?: boolean;
-  /** The clone-step token field's current (trimmed) value. */
-  cloneToken?: string;
-  /**
-   * Whether the clone URL already matches a repository this project has
-   * registered WITH a token — see `findReusableRepository`. When true, the
-   * wizard can proceed without the operator entering a new token (the
-   * reused row's own credential covers delivery).
-   */
-  cloneRepoReusableWithToken?: boolean;
 }
 
 /**
@@ -100,12 +83,13 @@ export function canAdvanceFromStep(stepId: WizardStepId, state: WizardValidation
         // release deployment) — see `isAbsoluteWizardPath` (Issue #87
         // review, Important finding 2).
         if (!isAbsoluteWizardPath(state.cloneDirectory)) return false;
-        // A non-local clone target relies on the hub's 代行配信 path, which
-        // refuses a repository with no credential outright — the wizard
-        // must collect a token before letting the operator finish, unless
-        // an already-registered repository for this URL already carries
-        // one (Issue #87 review, Important finding 3).
-        if (!state.cloneTargetIsLocal && !state.cloneRepoReusableWithToken && !(state.cloneToken ?? '').trim()) return false;
+        // No token check here: the hub resolves a repository's credential in
+        // two steps (docs/ja/github-integration.md) — the repository's own
+        // PAT first, then the hub's `gh` / `glab` CLI login. An operator who
+        // is already logged in on the hub has no PAT to type, so requiring
+        // one would make the wizard uncompletable for them. A run with
+        // neither credential fails visibly instead: the environment list
+        // shows that row's 配信前提 as failed.
         return true;
       }
       return true; // 'later': nothing required
@@ -214,15 +198,14 @@ export function isAbsoluteWizardPath(p: string): boolean {
  * Frontend mirror of the server's `normalizeRemoteUrl`
  * (`packages/server/src/modules/git/parseRemoteUrl.ts`) — kept in sync by
  * hand, same convention this file already follows for `parseRepoUrl`
- * (`lib/gitProvider.ts`). Used
- * ONLY to decide whether the clone wizard step can skip asking for a
- * token (an already-registered, already-credentialed repository covers the
- * same remote) — the actual dedup-and-reuse decision is still made
+ * (`lib/gitProvider.ts`). Used ONLY to tell the operator that the clone
+ * step's URL matches a repository this project has already registered WITH
+ * a token, so the token field can be replaced by a "その資格情報を再利用
+ * します" note — the actual dedup-and-reuse decision is still made
  * server-side, in `POST /api/projects/:id/repositories`, using the real
  * `normalizeRemoteUrl`. A false negative here (two equivalent URLs judged
- * different) only means the operator is asked for a token that turns out
- * to be unnecessary — never lets the wizard skip past a step it shouldn't
- * (Issue #87 review, Important finding 3).
+ * different) only means that note is not shown; nothing is blocked either
+ * way, since the token itself is optional.
  */
 export function normalizeRepoUrlForWizard(url: string): string {
   const trimmed = url.trim();
@@ -264,10 +247,9 @@ export interface ReusableRepoCandidate {
 /**
  * Finds an already-registered project repository whose URL matches
  * `cloneUrl` (via `normalizeRepoUrlForWizard`) AND already carries a token
- * — i.e. one that, if reused, actually resolves the "no credential" problem
- * rather than just avoiding a duplicate row. Returns `null` when there is
- * no match or the match has no token (the wizard must still collect one in
- * that case — reuse alone does not supply a missing credential).
+ * — i.e. one whose stored credential the new environment inherits by being
+ * pointed at the same row. Returns `null` when there is no match or the
+ * match has no token; the step then offers its own (optional) token field.
  */
 export function findReusableRepositoryWithToken(cloneUrl: string, repos: ReusableRepoCandidate[]): ReusableRepoCandidate | null {
   if (!cloneUrl.trim()) return null;

@@ -15,10 +15,21 @@ export type DistributionPrerequisiteStage =
   | 'credential_unreadable'
   | 'identity_unresolvable';
 
+/**
+ * 配信でどの資格情報を使うか（server: ProjectServerDistributionInfo）。
+ *
+ * - `repository`: プロジェクトに保存された PAT。暗号化して記録された明示的な付与。
+ * - `cli`: ハブの `gh` / `glab` のログイン。操作者の環境依存なので、ハブで
+ *   `gh auth logout` すると設定を変えていなくても配信が落ちる。
+ */
+export type DistributionCredentialSource = 'repository' | 'cli';
+
 export interface DistributionPrerequisite {
   status: 'not_required' | 'ok' | 'failed' | 'unknown';
   /** `status: 'failed'` のときのみ非 null。 */
   stage: DistributionPrerequisiteStage | null;
+  /** `status: 'ok'` のときのみ非 null。 */
+  credentialSource: DistributionCredentialSource | null;
 }
 
 export interface LastDistribution {
@@ -27,7 +38,7 @@ export interface LastDistribution {
   lastDistributedSha: string;
 }
 
-export type EnvironmentChipId = 'distribution' | 'isolated' | 'branch' | 'inputPolicy';
+export type EnvironmentChipId = 'distribution' | 'credentialSource' | 'isolated' | 'branch' | 'inputPolicy';
 
 export interface EnvironmentChip {
   /** React key / テストの識別子。 */
@@ -45,6 +56,11 @@ export interface EnvironmentChip {
   bundleKey?: string;
   /** 配信チップの `{{time}}` に埋める相対時刻の元になる ISO 風文字列。 */
   distributedAt?: string;
+  /**
+   * チップの語だけでは伝えきれない背景を補う説明文の i18n キー（title 属性）。
+   * チップ本体の語は単独で意味が通るものにし、これは補足に留める。
+   */
+  detailKey?: string;
 }
 
 const FAILED_STAGE_LABEL_KEYS: Record<DistributionPrerequisiteStage, string> = {
@@ -103,6 +119,29 @@ export function resolveDistributionChip(
   }
 }
 
+/**
+ * 配信に使う資格情報の出所チップ。ハブの CLI ログイン（`cli`）のときだけ出す。
+ *
+ * `repository`（プロジェクトに保存した PAT）は配信の既定の姿なので、チップを
+ * 増やしても雑音にしかならない。一方 `cli` は操作者の環境に依存していて、ハブで
+ * `gh auth logout` すればこの環境の設定を変えなくても配信が落ちる — 行から
+ * 読み取れないと原因を追えない差なので、こちらだけ明示する。
+ *
+ * 状態としては正常（`status: 'ok'`）なので色で警告はせず、語で伝える。
+ */
+export function resolveCredentialSourceChip(
+  prerequisite: DistributionPrerequisite | undefined,
+): EnvironmentChip | null {
+  if (prerequisite?.status !== 'ok') return null;
+  if (prerequisite.credentialSource !== 'cli') return null;
+  return {
+    id: 'credentialSource',
+    tone: 'default',
+    labelKey: 'settings.servers.distribution.credentialSourceCli',
+    detailKey: 'settings.servers.distribution.credentialSourceCliDetail',
+  };
+}
+
 /** 配信前提が失敗しているとき、行に「設定する」導線（編集モーダルを開く）を出すか。 */
 export function needsDistributionSetup(prerequisite: DistributionPrerequisite | undefined): boolean {
   return prerequisite?.status === 'failed';
@@ -126,7 +165,7 @@ const INPUT_POLICY_LABEL_KEYS = {
 /**
  * 一覧行に並べるチップを「緊急 → 文脈 → 詳細」の順で返す。
  *
- * 順序は 配信状態 → 隔離 → ブランチ → 入力ポリシー で固定。tmux セッションは
+ * 順序は 配信状態 → 資格情報の出所 → 隔離 → ブランチ → 入力ポリシー で固定。tmux セッションは
  * 行から降ろしてある（編集モーダルでのみ扱う）ため、ここでは一切扱わない。
  */
 export function buildEnvironmentRowChips(input: EnvironmentRowInput): EnvironmentChip[] {
@@ -134,6 +173,9 @@ export function buildEnvironmentRowChips(input: EnvironmentRowInput): Environmen
 
   const distribution = resolveDistributionChip(input.distributionPrerequisite, input.lastDistribution);
   if (distribution) chips.push(distribution);
+
+  const credentialSource = resolveCredentialSourceChip(input.distributionPrerequisite);
+  if (credentialSource) chips.push(credentialSource);
 
   if (input.isolated) {
     chips.push({ id: 'isolated', tone: 'purple', labelKey: 'settings.servers.isolatedChip' });

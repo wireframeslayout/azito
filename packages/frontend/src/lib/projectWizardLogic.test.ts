@@ -64,37 +64,26 @@ describe('canAdvanceFromStep', () => {
     expect(canAdvanceFromStep('code', makeState({ codeMode: 'existing', existingPath: '/work/widgets', discoveryReady: true }))).toBe(true);
   });
 
-  it('requires both a clone URL and an absolute target directory when codeMode is "clone", on a local server', () => {
-    expect(canAdvanceFromStep('code', makeState({ codeMode: 'clone', cloneTargetIsLocal: true }))).toBe(false);
-    expect(canAdvanceFromStep('code', makeState({ codeMode: 'clone', cloneTargetIsLocal: true, cloneUrl: 'git@github.com:acme/widgets.git' }))).toBe(false);
+  it('requires both a clone URL and an absolute target directory when codeMode is "clone"', () => {
+    expect(canAdvanceFromStep('code', makeState({ codeMode: 'clone' }))).toBe(false);
+    expect(canAdvanceFromStep('code', makeState({ codeMode: 'clone', cloneUrl: 'git@github.com:acme/widgets.git' }))).toBe(false);
     expect(canAdvanceFromStep('code', makeState({
-      codeMode: 'clone', cloneTargetIsLocal: true, cloneUrl: 'git@github.com:acme/widgets.git', cloneDirectory: '/work/widgets',
+      codeMode: 'clone', cloneUrl: 'git@github.com:acme/widgets.git', cloneDirectory: '/work/widgets',
     }))).toBe(true);
   });
 
   it('blocks a relative clone directory even once a URL is entered (Issue #87 review, Important finding 2)', () => {
     expect(canAdvanceFromStep('code', makeState({
-      codeMode: 'clone', cloneTargetIsLocal: true, cloneUrl: 'git@github.com:acme/widgets.git', cloneDirectory: 'widgets',
+      codeMode: 'clone', cloneUrl: 'git@github.com:acme/widgets.git', cloneDirectory: 'widgets',
     }))).toBe(false);
   });
 
-  it('blocks a non-local clone target with no token and no reusable credentialed repository (Issue #87 review, Important finding 3)', () => {
+  it('never requires an access token — the hub can authenticate with its own gh/glab login', () => {
+    // 配信経路でもリポジトリの PAT → ハブの CLI トークンの順に解決されるため、
+    // `gh auth login` 済みで PAT を持たない操作者はトークンを入力できない。
+    // ここで必須にすると、その操作者はウィザードを完了できなくなる。
     expect(canAdvanceFromStep('code', makeState({
-      codeMode: 'clone', cloneTargetIsLocal: false, cloneUrl: 'git@github.com:acme/widgets.git', cloneDirectory: '/work/widgets',
-    }))).toBe(false);
-  });
-
-  it('allows a non-local clone target when a token was entered', () => {
-    expect(canAdvanceFromStep('code', makeState({
-      codeMode: 'clone', cloneTargetIsLocal: false, cloneUrl: 'git@github.com:acme/widgets.git', cloneDirectory: '/work/widgets',
-      cloneToken: 'ghp_dummy',
-    }))).toBe(true);
-  });
-
-  it('allows a non-local clone target with no token when an already-registered repository already carries one', () => {
-    expect(canAdvanceFromStep('code', makeState({
-      codeMode: 'clone', cloneTargetIsLocal: false, cloneUrl: 'git@github.com:acme/widgets.git', cloneDirectory: '/work/widgets',
-      cloneRepoReusableWithToken: true,
+      codeMode: 'clone', cloneUrl: 'git@github.com:acme/widgets.git', cloneDirectory: '/work/widgets',
     }))).toBe(true);
   });
 
@@ -627,9 +616,7 @@ describe('canAdvanceFromStep — isolated servers cannot skip the distribution r
       // The wizard always passes the EFFECTIVE mode, which an isolated
       // server forces to 'clone' — that is what makes this unskippable.
       codeMode: effectiveCodeMode('isolated', 'later'),
-      cloneTargetIsLocal: false,
       cloneDirectory: '/srv/work',
-      cloneToken: 'ghp_x',
       cloneUrl: 'https://github.com/acme/widgets',
       ...overrides,
     });
@@ -640,20 +627,14 @@ describe('canAdvanceFromStep — isolated servers cannot skip the distribution r
     expect(canAdvanceFromStep('code', isolatedState({ cloneUrl: '   ' }))).toBe(false);
   });
 
-  it('blocks advancing while no access token is entered and none can be reused', () => {
-    expect(canAdvanceFromStep('code', isolatedState({ cloneToken: '' }))).toBe(false);
-  });
-
   it('blocks advancing while no delivery directory is entered', () => {
     expect(canAdvanceFromStep('code', isolatedState({ cloneDirectory: '' }))).toBe(false);
   });
 
-  it('advances once repository, token and delivery directory are all present', () => {
+  it('advances once the source repository and delivery directory are present, with no access token', () => {
+    // トークンは任意。ハブが `gh auth login` 済みならそれで取得できるため、
+    // 未入力を理由に隔離サーバーの環境作成を止めてはならない。
     expect(canAdvanceFromStep('code', isolatedState())).toBe(true);
-  });
-
-  it('advances without a token when an already-credentialed repository is reused', () => {
-    expect(canAdvanceFromStep('code', isolatedState({ cloneToken: '', cloneRepoReusableWithToken: true }))).toBe(true);
   });
 
   it('would have let "まだ決めない" through before the forced mode (regression guard)', () => {

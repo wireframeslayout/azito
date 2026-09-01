@@ -93,10 +93,9 @@
       "cloneNoteLocal": "このリポジトリを、いまここでハブ上の配置先ディレクトリへ直接クローンします。",
       "repoReusedBadge": "既存リポジトリを再利用",
       "repoReusedHint": "このプロジェクトには、このURLに対応する資格情報付きのリポジトリが既に登録されています。それを再利用するため、新しいトークンの入力は不要です。",
-      "cloneTokenLabel": "アクセストークン",
-      "cloneTokenHint": "トークンはハブにのみ保存され、配信先サーバーには渡りません。ハブがこのトークンでリポジトリを取得し、bundle にして配信します。",
+      "cloneTokenLabel": "アクセストークン（任意）",
+      "cloneTokenHint": "ハブで gh auth login（GitLab は glab auth login）済みなら未入力で構いません。入力した場合、トークンはハブにのみ暗号化して保存され、配信先サーバーには渡りません。トークンも CLI のログインも無い場合、配信は失敗し、環境一覧に「配信できません」と表示されます。",
       "cloneTokenPlaceholder": "ghp_xxxx...",
-      "cloneTokenRequired": "リポジトリをローカル以外のサーバーへ配信するには、アクセストークンが必要です。",
       "laterNote": "環境（サーバー・ルート）のみ作成し、リポジトリは登録しません。",
       "repoCandidates": {
         "groupRegistered": "登録済み",
@@ -114,6 +113,7 @@
       "isolatedTitle": "このサーバーへはハブ経由で配信します",
       "isolatedBundle": "ハブがリポジトリを取得して bundle を作り、このサーバーへ送り込みます。配置方法は選べません。",
       "isolatedNoCredentials": "このサーバーは git の資格情報を持たないため、自分でリポジトリを取得できません。",
+      "isolatedHubCredentials": "リポジトリの取得はハブが行い、ハブ側の資格情報（保存したアクセストークン、または gh / glab のログイン）を使います。",
       "isolatedOriginReplaced": "配信先の origin はダミー URL に置き換わります。このサーバーから直接 push はできません。",
       "distributionRepoLabel": "配信元リポジトリ",
       "distributionRepoRequired": "配信元リポジトリを入力してください",
@@ -159,7 +159,6 @@
       "environmentFailed": "環境の保存に失敗しました。",
       "directoryFailed": "ディレクトリの作成に失敗しました。",
       "cloneFailed": "リポジトリのクローンに失敗しました。",
-      "cloneTokenRequired": "リポジトリをローカル以外のサーバーへ配信するには、アクセストークンが必要です。",
       "serverTypeUnresolved": "サーバー「{{server}}」の種別がまだ解決できていません。少し待ってからもう一度お試しください。"
     }
   },
@@ -285,10 +284,12 @@
           "noWorkingDir": "作業ディレクトリ未設定 — タスクを実行できません",
           "noDistributionRepository": "配信元リポジトリ未設定 — タスクを実行できません",
           "distributionRepositoryNotFound": "配信元リポジトリが見つかりません — タスクを実行できません",
-          "noToken": "配信元リポジトリのトークン未登録 — タスクを実行できません",
+          "noToken": "配信元リポジトリの資格情報がありません（トークン未登録・ハブの CLI ログインもなし） — タスクを実行できません",
           "credentialUnreadable": "配信元リポジトリの資格情報を読み取れません — タスクを実行できません",
           "identityUnresolvable": "配信元リポジトリの所有者・名称を解決できません — タスクを実行できません"
-        }
+        },
+        "credentialSourceCli": "資格情報: ハブの CLI ログイン",
+        "credentialSourceCliDetail": "このリポジトリにはアクセストークンが登録されておらず、ハブの gh / glab のログインで配信します。ハブでログアウトすると、設定を変えていなくても配信が失敗するようになります。固定したい場合はリポジトリにアクセストークンを登録してください。"
       }
     },
     "secrets": {

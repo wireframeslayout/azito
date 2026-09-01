@@ -239,10 +239,6 @@ export function CodeStep({
   const mode = effectiveCodeMode(variant, codeMode);
   const modeOptions = codeModeOptionsForVariant(variant);
   const parsedClone = cloneUrl.trim() ? resolveRepositoryRegistration(cloneUrl.trim()) : null;
-  // Delivery through the hub refuses a repository with no credential
-  // outright — a token is required unless an already-registered repository
-  // for this URL already carries one (Issue #87 review, Important finding 3).
-  const needsToken = !clonesNow && reusableRepo === null;
   const optionText: Record<CodeMode, { label: string; description: string }> = {
     existing: { label: t('wizard.code.modeExisting'), description: t('wizard.code.modeExistingDescription') },
     // Only `local` performs a real clone; for any other server the same
@@ -261,6 +257,7 @@ export function CodeStep({
           sub={(
             <>
               <div>{t('wizard.code.isolatedNoCredentials')}</div>
+              <div>{t('wizard.code.isolatedHubCredentials')}</div>
               <div>{t('wizard.code.isolatedOriginReplaced')}</div>
             </>
           )}
@@ -330,7 +327,6 @@ export function CodeStep({
             <FormField
               label={t('wizard.code.cloneTokenLabel')}
               hint={t('wizard.code.cloneTokenHint')}
-              error={showValidation && needsToken && !cloneToken.trim() ? t('wizard.code.cloneTokenRequired') : undefined}
             >
               <FormInput type="password" autoComplete="off" value={cloneToken} onChange={(e) => setCloneToken(e.target.value)} placeholder={t('wizard.code.cloneTokenPlaceholder')} />
             </FormField>

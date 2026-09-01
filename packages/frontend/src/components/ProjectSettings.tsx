@@ -39,7 +39,11 @@ interface ProjectServer {
   distributionRepositoryId?: number | null;
   /** Issue #87 配信状態の可視化: whether distribution applies to this pairing at all. `null` = the referenced `servers` row is gone, so it cannot be computed. */
   distributionRequired?: boolean | null;
-  /** Hub-local precondition check for distribution. `failed` carries the machine-readable `stage` the UI localizes. */
+  /**
+   * Hub-local precondition check for distribution. `failed` carries the machine-readable `stage` the UI localizes;
+   * `ok` carries `credentialSource` — which credential delivery would use (the repository's own PAT, or the hub's
+   * `gh` / `glab` login).
+   */
   distributionPrerequisite?: DistributionPrerequisite;
   /** The last `distribution_state` record for this server + its configured repository. `null` = never distributed. */
   lastDistribution?: LastDistribution | null;
@@ -694,13 +698,23 @@ function RepositoriesSection({ settings: s }: { settings: ReturnType<typeof useP
   );
 }
 
-/** 一覧行のチップ1つを i18n 解決して描画する。相対時刻とバンドル種別はここで補間する。 */
+/**
+ * 一覧行のチップ1つを i18n 解決して描画する。相対時刻とバンドル種別はここで補間する。
+ * `detailKey` を持つチップは、語だけでは伝わらない背景を title で補う（語そのものは
+ * 単独で意味が通るので、title が読めなくても情報は失われない）。
+ */
 function EnvironmentChipView({ chip }: { chip: EnvironmentChip }) {
   const { t, i18n } = useTranslation(['projects', 'common']);
   const params: Record<string, string> = { ...chip.params };
   if (chip.bundleKey) params.bundle = t(chip.bundleKey);
   if (chip.distributedAt) params.time = formatRelativeTime(chip.distributedAt, i18n.language);
-  return <Chip tone={chip.tone}>{t(chip.labelKey, params)}</Chip>;
+  const label = t(chip.labelKey, params);
+  if (!chip.detailKey) return <Chip tone={chip.tone}>{label}</Chip>;
+  return (
+    <span title={t(chip.detailKey)} style={{ display: 'inline-flex' }}>
+      <Chip tone={chip.tone}>{label}</Chip>
+    </span>
+  );
 }
 
 interface EnvironmentRowProps {

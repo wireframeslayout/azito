@@ -93,10 +93,9 @@
       "cloneNoteLocal": "This repository will be cloned directly into the target directory on the hub, right now.",
       "repoReusedBadge": "Reusing existing repository",
       "repoReusedHint": "This project already has a credentialed repository registered for this URL — it will be reused, and no new token is needed.",
-      "cloneTokenLabel": "Access token",
-      "cloneTokenHint": "The token is stored on the hub only and never reaches the target server. The hub uses it to fetch the repository and deliver it as a bundle.",
+      "cloneTokenLabel": "Access token (optional)",
+      "cloneTokenHint": "Leave empty if the hub is already signed in with gh auth login (glab auth login for GitLab). A token you enter is stored encrypted on the hub only and never reaches the target server. With neither a token nor a CLI login, delivery fails and the environment list shows \"Cannot deliver\".",
       "cloneTokenPlaceholder": "ghp_xxxx...",
-      "cloneTokenRequired": "An access token is required to deliver this repository to a non-local server.",
       "laterNote": "Only the environment (server + root) will be created; no repository will be registered.",
       "repoCandidates": {
         "groupRegistered": "Registered",
@@ -114,6 +113,7 @@
       "isolatedTitle": "Code is delivered to this server via the hub",
       "isolatedBundle": "The hub fetches the repository, builds a bundle, and sends it to this server. There is no other way to place code here.",
       "isolatedNoCredentials": "This server holds no git credentials, so it cannot fetch the repository itself.",
+      "isolatedHubCredentials": "The hub is what fetches the repository, using its own credentials — the access token you store here, or the hub’s gh / glab login.",
       "isolatedOriginReplaced": "The delivered checkout's origin is replaced with a dummy URL — this server cannot push directly.",
       "distributionRepoLabel": "Source repository",
       "distributionRepoRequired": "Enter the source repository",
@@ -159,7 +159,6 @@
       "environmentFailed": "Failed to save the environment.",
       "directoryFailed": "Failed to create the directory.",
       "cloneFailed": "Failed to clone the repository.",
-      "cloneTokenRequired": "An access token is required to deliver this repository to a non-local server.",
       "serverTypeUnresolved": "Could not determine server \"{{server}}\"'s type yet — please wait a moment and try again."
     }
   },
@@ -285,10 +284,12 @@
           "noWorkingDir": "No working directory set — tasks cannot execute",
           "noDistributionRepository": "No distribution repository set — tasks cannot execute",
           "distributionRepositoryNotFound": "Distribution repository not found — tasks cannot execute",
-          "noToken": "No token registered for the distribution repository — tasks cannot execute",
+          "noToken": "No credential for the distribution repository (no token, and no hub CLI login) — tasks cannot execute",
           "credentialUnreadable": "The distribution repository's credential cannot be read — tasks cannot execute",
           "identityUnresolvable": "The distribution repository's owner/name cannot be resolved — tasks cannot execute"
-        }
+        },
+        "credentialSourceCli": "Credentials: hub CLI login",
+        "credentialSourceCliDetail": "No access token is registered for this repository, so delivery uses the hub’s gh / glab login. Signing out on the hub makes delivery fail even though nothing here changed. Register an access token on the repository to pin the credential instead."
       }
     },
     "secrets": {

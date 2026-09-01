@@ -270,8 +270,9 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
   const serverTypeUnresolvedForClone = cloneDeliveryMode === 'unresolved';
 
   // An already-registered, already-credentialed repository for this same
-  // URL (Issue #87 review, Important finding 3) — when found, the wizard
-  // can proceed on a non-local target without collecting a new token.
+  // URL — when found, the clone step says so instead of offering its own
+  // token field, since pointing the environment at that row reuses the
+  // credential already stored on it.
   const reusableRepo = useMemo(
     () => (effectiveMode === 'clone' ? findReusableRepositoryWithToken(cloneUrl, existingRepositories) : null),
     [effectiveMode, cloneUrl, existingRepositories],
@@ -280,7 +281,6 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
   const validationState: WizardValidationState = {
     projectName: name, projectSlug: slug, selectedServer, codeMode: effectiveMode, existingPath, cloneUrl, cloneDirectory,
     existingServerNames: existingServerList, discoveryReady,
-    cloneTargetIsLocal: cloningLocally, cloneToken, cloneRepoReusableWithToken: reusableRepo !== null,
   };
   const canAdvance = canAdvanceFromStep(currentStep, validationState);
   const availableServerCount = serverList.filter((sv) => !existingServerList.includes(sv.name)).length;
@@ -452,15 +452,6 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
       // server's settings even if reached some other way.
       if (mode === 'addEnvironment' && existingServerList.includes(selectedServer)) {
         throw new Error(t('wizard.environment.alreadyAddedError', { server: selectedServer }));
-      }
-
-      // Defense in depth (Issue #87 review, Important finding 3): the code
-      // step already blocks advancing while a non-local clone target has
-      // no token and no reusable credentialed repository — but re-verify
-      // here in case the operator changed the server/URL after already
-      // passing that step once.
-      if (effectiveMode === 'clone' && !cloningLocally && !serverTypeUnresolvedForClone && reusableRepo === null && !cloneToken.trim()) {
-        throw new Error(t('wizard.errors.cloneTokenRequired'));
       }
 
       // Step: directory. "既存のディレクトリを使う" with a path discovery
@@ -662,7 +653,7 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
     mode, createdProjectId, createdRepositoryId, name, slug, description, sidekickPrompt, icon, color,
     selectedServer, existingServerList, codeMode, effectiveMode, codeStepVariant, tmuxSession, inputPolicy,
     existingPath, cloneDirectory, cloneBranch, cloneUrl, cloneToken,
-    envDone, repoDone, localCloneDone, directoryCreated, pathNeedsCreation, reusableRepo, repositoriesToRegister, onDone, setStep, t,
+    envDone, repoDone, localCloneDone, directoryCreated, pathNeedsCreation, repositoriesToRegister, onDone, setStep, t,
     cloningLocally, serverTypeUnresolvedForClone, environmentWorkingDirectory,
   ]);
 
@@ -683,14 +674,11 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
   // configured (review finding: "サーバー種別が未解決のとき「リモート扱
   // い」になる"). handleRun also throws on this as defense in depth, for
   // any other path that reaches it.
-  // cloneTokenRequired mirrors the same defense-in-depth as the other two:
-  // canAdvanceFromStep('code', ...) already blocks leaving that step
-  // without a token/reusable credentialed repository for a non-local clone
-  // target, but the operator could reach 'confirm', go back, change the
-  // server or URL, and jump forward without re-triggering that check
-  // (Issue #87 review, Important finding 3).
-  const cloneTokenRequired = effectiveMode === 'clone' && !cloningLocally && !serverTypeUnresolvedForClone && reusableRepo === null && !cloneToken.trim();
-  const primaryDisabled = isLastStep ? (noServersAvailable || serverTypeUnresolvedForClone || cloneTokenRequired) : !canAdvance;
+  // The clone-step access token is deliberately NOT part of this guard: it
+  // is optional (the hub falls back to its own `gh` / `glab` CLI login when
+  // the repository carries no PAT), so a missing token must never block
+  // completion.
+  const primaryDisabled = isLastStep ? (noServersAvailable || serverTypeUnresolvedForClone) : !canAdvance;
 
   // 'addEnvironment' is hosted inside a Modal (components/settings/
   // EnvironmentModals.tsx's AddEnvironmentModal), opened from the project
