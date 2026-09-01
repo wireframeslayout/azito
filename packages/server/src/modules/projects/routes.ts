@@ -304,11 +304,22 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       const rows = projectServerRepo.findByProject(id);
 
       // Three bulk reads for the whole list, never one per row (Issue #87
-      // 配信状態の可視化): all `servers` in one query, all `distribution_state`
-      // rows for the referenced repositories in one query, and all referenced
-      // repositories (with their credential-decryption outcome) in one more —
-      // regardless of how many distinct repositories the servers point at.
-      const serversByName = new Map(serverRepo.findAll().map((s) => [s.name, s]));
+      // 配信状態の可視化): the referenced `servers` in one query, all
+      // `distribution_state` rows for the referenced repositories in one
+      // query, and all referenced repositories (with their
+      // credential-decryption outcome) in one more — regardless of how many
+      // distinct repositories the servers point at.
+      //
+      // `findMetaByNames`, not `findAll()`: the latter maps every row through
+      // `toEntity()`, which decrypts `agent_token`, so ONE server with an
+      // undecryptable credential would 500 this listing — including for
+      // projects that reference none of the affected servers. This route
+      // needs only name/type/isolationIntent, so it reads only those columns
+      // and never reaches `SecretBox.open()`. It is also scoped to the names
+      // this project actually references rather than the whole table.
+      const serversByName = new Map(
+        serverRepo.findMetaByNames([...new Set(rows.map((r) => r.serverName))]).map((s) => [s.name, s]),
+      );
       const repositoryIds = [...new Set(rows.map((r) => r.distributionRepositoryId).filter((v): v is number => v != null))];
       const stateKey = (serverName: string, repositoryId: number) => `${serverName}\u0000${repositoryId}`;
       const stateByKey = new Map(

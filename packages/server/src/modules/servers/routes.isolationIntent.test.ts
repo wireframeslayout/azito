@@ -75,6 +75,7 @@ function makeOpts(overrides: Partial<ServersRouteOptions> = {}): ServersRouteOpt
     updateFingerprint: vi.fn(),
     clearFingerprint: vi.fn(),
     updateIsolationIntent: vi.fn(),
+    findMetaByNames: vi.fn(() => []),
     updateIsolationReport: vi.fn(),
     updateIsolationCleanupReport: vi.fn(),
     updateIsolationVerification: vi.fn(),

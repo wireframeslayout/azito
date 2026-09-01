@@ -77,6 +77,7 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
       updateFingerprint: vi.fn(),
       clearFingerprint: vi.fn(),
       updateIsolationIntent: vi.fn(),
+      findMetaByNames: vi.fn(() => []),
       delete: vi.fn(),
     },
     projectSecretRepo: {
@@ -130,6 +131,7 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
         updateFingerprint: vi.fn(),
         clearFingerprint: vi.fn(),
         updateIsolationIntent: vi.fn(),
+        findMetaByNames: vi.fn(() => []),
         delete: vi.fn(),
       },
     });
@@ -166,6 +168,7 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
         updateFingerprint: vi.fn(),
         clearFingerprint: vi.fn(),
         updateIsolationIntent: vi.fn(),
+        findMetaByNames: vi.fn(() => []),
         delete: vi.fn(),
       },
     });
@@ -306,6 +309,7 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
         updateFingerprint: vi.fn(),
         clearFingerprint: vi.fn(),
         updateIsolationIntent: vi.fn(),
+        findMetaByNames: vi.fn(() => []),
         delete: vi.fn(),
       },
       tmux: {
@@ -453,6 +457,7 @@ describe('PUT /api/projects/:id/servers/:serverName — distribute_code (Issue #
         updateFingerprint: vi.fn(),
         clearFingerprint: vi.fn(),
         updateIsolationIntent: vi.fn(),
+        findMetaByNames: vi.fn(() => []),
         delete: vi.fn(),
       },
     });
@@ -485,6 +490,7 @@ describe('PUT /api/projects/:id/servers/:serverName — distribute_code (Issue #
         updateFingerprint: vi.fn(),
         clearFingerprint: vi.fn(),
         updateIsolationIntent: vi.fn(),
+        findMetaByNames: vi.fn(() => []),
         delete: vi.fn(),
       },
     });

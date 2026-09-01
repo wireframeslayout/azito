@@ -218,6 +218,7 @@ function makeRepos(overrides: {
     updateFingerprint: vi.fn(),
     clearFingerprint: vi.fn(),
     updateIsolationIntent: vi.fn(),
+    findMetaByNames: vi.fn(() => []),
     delete: vi.fn(),
     ...overrides.serverRepo,
   };

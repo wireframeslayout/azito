@@ -1,6 +1,6 @@
 import type { SqliteDatabase } from '../../shared/db/Database';
 import { seal, open } from '../../shared/crypto/SecretBox';
-import type { ServerConfig, IServerRepository, MuxRuntime } from './Server';
+import type { ServerConfig, IServerRepository, MuxRuntime, ServerMeta } from './Server';
 import { ISOLATION_CLEANUP_PENDING_REPORT } from './Server';
 
 const COLUMNS = 'name, type, host, agent_port, agent_token, agent_version, ssh_host, mux_runtime, ssh_host_fingerprint, isolation_intent, isolation_verified_at, isolation_report, isolation_cleanup_report, created_at';
@@ -79,6 +79,24 @@ export class SqliteServerRepository implements IServerRepository {
   findAll(): ServerConfig[] {
     const rows = this.listStmt.all() as Array<Record<string, unknown>>;
     return rows.map((r) => this.toEntity(r));
+  }
+
+  // Deliberately does NOT go through `toEntity()` (Issue #87 配信状態の可視化):
+  // that mapper decrypts `agent_token`, so routing a read-only listing
+  // through it would let one server's broken credential fail the whole
+  // response — including for callers that never reference that server. Only
+  // the three non-secret columns are selected, so `open()` is never reached.
+  findMetaByNames(names: string[]): ServerMeta[] {
+    if (names.length === 0) return [];
+    const placeholders = names.map(() => '?').join(', ');
+    const rows = this.db.prepare(
+      `SELECT name, type, isolation_intent FROM servers WHERE name IN (${placeholders}) AND type IN ('local', 'agent')`,
+    ).all(...names) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      name: row.name as string,
+      type: row.type as ServerConfig['type'],
+      isolationIntent: (row.isolation_intent as number) === 1,
+    }));
   }
 
   findByName(name: string): ServerConfig | null {

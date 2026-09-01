@@ -284,6 +284,7 @@ function buildUseCase(opts: {
     updateFingerprint: vi.fn(),
     clearFingerprint: vi.fn(),
     updateIsolationIntent: vi.fn(),
+    findMetaByNames: vi.fn(() => []),
     delete: vi.fn(),
   };
 
@@ -1422,6 +1423,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITOç›
       updateFingerprint: vi.fn(),
       clearFingerprint: vi.fn(),
       updateIsolationIntent: vi.fn(),
+      findMetaByNames: vi.fn(() => []),
       delete: vi.fn(),
     };
     const project = makeProject({ defaultUnitId: null });
@@ -2399,6 +2401,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       updateFingerprint: vi.fn(),
       clearFingerprint: vi.fn(),
       updateIsolationIntent: vi.fn(),
+      findMetaByNames: vi.fn(() => []),
       delete: vi.fn(),
     };
     const projectSecretRepo = { findByProjectWithValues: vi.fn(() => []), findByProject: vi.fn(() => []) };

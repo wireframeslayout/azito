@@ -78,9 +78,35 @@ export interface ServerConfig {
   createdAt: string;
 }
 
+/**
+ * The non-secret subset of a `servers` row (Issue #87 配信状態の可視化) —
+ * everything a read-only listing needs to reason about a server, and nothing
+ * that requires decrypting a credential. See
+ * {@link IServerRepository.findMetaByNames} for why that distinction matters.
+ */
+export type ServerMeta = Pick<ServerConfig, 'name' | 'type' | 'isolationIntent'>;
+
 export interface IServerRepository {
   findAll(): ServerConfig[];
   findByName(name: string): ServerConfig | null;
+  /**
+   * The {@link ServerMeta} for `names`, in ONE query, WITHOUT decrypting any
+   * `agent_token` (Issue #87 配信状態の可視化).
+   *
+   * `findAll()`/`findByName()` map rows through `toEntity()`, which calls
+   * `SecretBox.open()` on `agent_token` — correct for an execution path that
+   * is about to talk to the agent, but it makes a single undecryptable
+   * credential fatal for every reader. A listing that only needs
+   * `type`/`isolationIntent` must not be able to fail that way, and must not
+   * be able to fail because of a server it does not even reference. Reading
+   * only the non-secret columns removes both failure modes at the source
+   * rather than reporting them as yet another degraded state.
+   *
+   * Rows are filtered to the same server types `findAll()` exposes; names
+   * that do not resolve are simply absent from the result. `[]` in, `[]`
+   * out (no query issued).
+   */
+  findMetaByNames(names: string[]): ServerMeta[];
   create(name: string, type: string, host?: string, agentPort?: number, agentToken?: string, agentVersion?: string, sshHost?: string, muxRuntime?: MuxRuntime): void;
   update(name: string, type: string, host?: string, agentPort?: number, agentToken?: string, sshHost?: string, muxRuntime?: MuxRuntime): void;
   /**

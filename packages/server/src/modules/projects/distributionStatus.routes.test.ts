@@ -1,11 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
 import Fastify from 'fastify';
+import BetterSqlite3 from 'better-sqlite3';
 import projectsRoutes from './routes';
 import type { ProjectsRouteOptions } from './routes';
 import { TaskOriginationService } from '../tasks/origination/TaskOriginationService';
 import type { AuditLogService } from '../../shared/audit/AuditLogService';
 import { KeyedMutex } from '../../shared/keyedMutex';
-import type { ServerConfig } from '../servers/Server';
+import type { ServerConfig, ServerMeta } from '../servers/Server';
+import { SqliteServerRepository } from '../servers/SqliteServerRepository';
+import type { SqliteDatabase } from '../../shared/db/Database';
 import type { ProjectServer } from './ProjectServer';
 import type { FetchDistributionService } from '../git/hub-transfer/FetchDistributionService';
 import type { ProjectRepositoryCredential } from './Project';
@@ -24,6 +27,11 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null,
     createdAt: '2026-01-01T00:00:00Z', ...overrides,
   } as ServerConfig;
+}
+
+/** The non-secret projection the listing actually reads — see IServerRepository.findMetaByNames. */
+function toMeta(server: ServerConfig): ServerMeta {
+  return { name: server.name, type: server.type, isolationIntent: server.isolationIntent };
 }
 
 function makeProjectServer(overrides: Partial<ProjectServer> = {}): ProjectServer {
@@ -75,8 +83,14 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
     gitProvider: { getIssue: vi.fn() } as unknown as ProjectsRouteOptions['gitProvider'],
     tmux: { listSessions: vi.fn(async () => []), createSession: vi.fn(async () => {}) } as unknown as ProjectsRouteOptions['tmux'],
     serverRepo: {
-      findAll: vi.fn(() => [makeServer()]), findByName: vi.fn(() => null), create: vi.fn(), update: vi.fn(),
-      updateAgentVersion: vi.fn(), updateFingerprint: vi.fn(), clearFingerprint: vi.fn(), updateIsolationIntent: vi.fn(), delete: vi.fn(),
+      // Throws on purpose: this listing must never take the credential-decrypting
+      // path (`findAll()` -> `toEntity()` -> `SecretBox.open()`), which one broken
+      // `agent_token` anywhere in the table would turn into a 500.
+      findAll: vi.fn((): ServerConfig[] => { throw new Error('the listing must never read every server through toEntity()'); }),
+      findByName: vi.fn(() => null), create: vi.fn(), update: vi.fn(),
+      updateAgentVersion: vi.fn(), updateFingerprint: vi.fn(), clearFingerprint: vi.fn(), updateIsolationIntent: vi.fn(),
+      findMetaByNames: vi.fn((names: string[]) => [makeServer()].filter((s) => names.includes(s.name)).map(toMeta)),
+      delete: vi.fn(),
     },
     projectSecretRepo: { findByProject: vi.fn(() => []) } as unknown as ProjectsRouteOptions['projectSecretRepo'],
     serverIsolationMutex: new KeyedMutex(),
@@ -187,7 +201,7 @@ describe('GET /api/projects/:id/servers — distribution status (Issue #87 配�
   it('reports not_required for a local server', async () => {
     const base = makeOpts();
     const opts = makeOpts({
-      serverRepo: { ...base.serverRepo, findAll: vi.fn(() => [makeServer({ type: 'local', isolationIntent: false })]) },
+      serverRepo: { ...base.serverRepo, findMetaByNames: vi.fn(() => [toMeta(makeServer({ type: 'local', isolationIntent: false }))]) },
     });
     const [row] = (await getServers(opts)).json();
     expect(row.distributionRequired).toBe(false);
@@ -196,7 +210,7 @@ describe('GET /api/projects/:id/servers — distribution status (Issue #87 配�
 
   it('reports unknown (never a healthy-looking default) when the referenced servers row no longer exists', async () => {
     const base = makeOpts();
-    const opts = makeOpts({ serverRepo: { ...base.serverRepo, findAll: vi.fn(() => []) } });
+    const opts = makeOpts({ serverRepo: { ...base.serverRepo, findMetaByNames: vi.fn(() => []) } });
     const [row] = (await getServers(opts)).json();
     expect(row.distributionRequired).toBeNull();
     expect(row.distributionPrerequisite).toEqual({ status: 'unknown', stage: null });
@@ -218,19 +232,20 @@ describe('GET /api/projects/:id/servers — distribution status (Issue #87 配�
     // Repositories 1/2/3 cycled across 6 servers: 3 distinct ids, 6 rows.
     const rows = servers.map((s, i) => makeProjectServer({ serverName: s.name, distributionRepositoryId: (i % 3) + 1 }));
     const base = makeOpts();
-    const findAll = vi.fn(() => servers);
+    const findMetaByNames = vi.fn((names: string[]) => servers.filter((s) => names.includes(s.name)).map(toMeta));
     const findManyByRepositoryIds = vi.fn(() => []);
     const findRepositoryCredentialsByIds = vi.fn((ids: number[]) => ids.map((id) => makeCredential({ id })));
     const opts = makeOpts({
       projectServerRepo: { ...base.projectServerRepo, findByProject: vi.fn(() => rows) },
       projectRepo: { ...base.projectRepo, findRepositoryCredentialsByIds },
-      serverRepo: { ...base.serverRepo, findAll },
+      serverRepo: { ...base.serverRepo, findMetaByNames },
       distributionStateRepo: { upsert: vi.fn(), deleteByServer: vi.fn(), find: vi.fn(() => null), findManyByRepositoryIds },
     });
     const body = (await getServers(opts)).json();
     expect(body).toHaveLength(6);
     expect(body.every((r: { distributionPrerequisite: { status: string } }) => r.distributionPrerequisite.status === 'ok')).toBe(true);
-    expect(findAll).toHaveBeenCalledTimes(1);
+    expect(findMetaByNames).toHaveBeenCalledTimes(1);
+    expect(findMetaByNames).toHaveBeenCalledWith(servers.map((s) => s.name));
     expect(findManyByRepositoryIds).toHaveBeenCalledTimes(1);
     expect(findManyByRepositoryIds).toHaveBeenCalledWith([1, 2, 3]);
     // ONE bulk credential read for all three distinct repositories — not one
@@ -250,7 +265,7 @@ describe('GET /api/projects/:id/servers — distribution status (Issue #87 配�
     const base = makeOpts();
     const opts = makeOpts({
       projectServerRepo: { ...base.projectServerRepo, findByProject: vi.fn(() => rows) },
-      serverRepo: { ...base.serverRepo, findAll: vi.fn(() => servers) },
+      serverRepo: { ...base.serverRepo, findMetaByNames: vi.fn((names: string[]) => servers.filter((s) => names.includes(s.name)).map(toMeta)) },
       projectRepo: {
         ...base.projectRepo,
         findRepositoryCredentialsByIds: vi.fn(() => [
@@ -266,6 +281,58 @@ describe('GET /api/projects/:id/servers — distribution status (Issue #87 配�
     expect(body[0].distributionPrerequisite).toEqual({ status: 'failed', stage: 'credential_unreadable' });
     expect(body[1].distributionPrerequisite).toEqual({ status: 'ok', stage: null });
     expect(res.body).not.toContain('ghp_x');
+  });
+
+  // Third-party review of 2b1e59c9, Important finding: this route previously
+  // did not read `servers` at all. Reading it via `findAll()` made ANY
+  // server's undecryptable `agent_token` — including one belonging to a
+  // completely unrelated project — 500 the whole listing. Wired through the
+  // REAL SqliteServerRepository so the regression cannot come back through a
+  // mock that never decrypts anything.
+  it('returns 200 with correct verdicts even when an UNRELATED server has an undecryptable agent_token', async () => {
+    const db = new BetterSqlite3(':memory:');
+    db.exec(`
+      CREATE TABLE servers (
+        name TEXT PRIMARY KEY, type TEXT NOT NULL, host TEXT, agent_port INTEGER, agent_token TEXT,
+        agent_version TEXT, ssh_host TEXT, mux_runtime TEXT DEFAULT 'system', ssh_host_fingerprint TEXT,
+        isolation_intent INTEGER DEFAULT 0, isolation_verified_at TEXT, isolation_report TEXT,
+        isolation_cleanup_report TEXT, created_at TEXT DEFAULT (datetime('now'))
+      )
+    `);
+    const insert = db.prepare('INSERT INTO servers (name, type, agent_token, isolation_intent) VALUES (?, ?, ?, ?)');
+    insert.run('iso-1', 'agent', null, 1);
+    // Belongs to no project in this test — its broken credential must not
+    // matter at all here.
+    insert.run('someone-elses-server', 'agent', 'v1.corrupted', 1);
+    const realServerRepo = new SqliteServerRepository(db as unknown as SqliteDatabase);
+    // Sanity: the eager path really does blow up on this table.
+    expect(() => realServerRepo.findAll()).toThrow();
+
+    const res = await getServers(makeOpts({ serverRepo: realServerRepo }));
+
+    expect(res.statusCode).toBe(200);
+    const [row] = res.json();
+    expect(row.serverName).toBe('iso-1');
+    expect(row.distributionRequired).toBe(true);
+    expect(row.distributionPrerequisite).toEqual({ status: 'ok', stage: null });
+  });
+
+  it('returns 200 when the project\'s OWN server has an undecryptable agent_token (the credential is irrelevant to this verdict)', async () => {
+    const db = new BetterSqlite3(':memory:');
+    db.exec(`
+      CREATE TABLE servers (
+        name TEXT PRIMARY KEY, type TEXT NOT NULL, host TEXT, agent_port INTEGER, agent_token TEXT,
+        agent_version TEXT, ssh_host TEXT, mux_runtime TEXT DEFAULT 'system', ssh_host_fingerprint TEXT,
+        isolation_intent INTEGER DEFAULT 0, isolation_verified_at TEXT, isolation_report TEXT,
+        isolation_cleanup_report TEXT, created_at TEXT DEFAULT (datetime('now'))
+      )
+    `);
+    db.prepare('INSERT INTO servers (name, type, agent_token, isolation_intent) VALUES (?, ?, ?, ?)')
+      .run('iso-1', 'agent', 'v1.corrupted', 1);
+    const res = await getServers(makeOpts({ serverRepo: new SqliteServerRepository(db as unknown as SqliteDatabase) }));
+    expect(res.statusCode).toBe(200);
+    expect(res.json()[0].distributionPrerequisite).toEqual({ status: 'ok', stage: null });
+    expect(res.body).not.toContain('v1.corrupted');
   });
 
   it('still 404s for an unknown project', async () => {

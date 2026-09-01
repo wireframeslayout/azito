@@ -86,6 +86,7 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
       updateFingerprint: vi.fn(),
       clearFingerprint: vi.fn(),
       updateIsolationIntent: vi.fn(),
+      findMetaByNames: vi.fn(() => []),
       delete: vi.fn(),
     },
     projectSecretRepo: {
@@ -962,7 +963,7 @@ describe('POST clone-local', () => {
           isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '',
         })),
         create: vi.fn(), update: vi.fn(), updateAgentVersion: vi.fn(), updateFingerprint: vi.fn(),
-        clearFingerprint: vi.fn(), updateIsolationIntent: vi.fn(), delete: vi.fn(),
+        clearFingerprint: vi.fn(), updateIsolationIntent: vi.fn(), findMetaByNames: vi.fn(() => []), delete: vi.fn(),
       },
     });
     const app = Fastify();
