@@ -20,6 +20,7 @@ import { resolveSidekickDir } from '../../sidekicks/SidekickSyncService';
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import type { UnitTypePhase } from '../../sidekicks/UnitType';
 import type { IWorktreeService } from '../../git/IWorktreeService';
+import { resolvePushCredential } from '../../git/hub-transfer/pushCredential';
 import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import { buildSubagentDelegationBlock, buildSubagentRulesFileContent } from '../../prompt/PhasePromptRenderer';
@@ -687,8 +688,21 @@ export class PhaseLoopRunner {
           this.taskRepo.updateStatus(task.id, 'failed');
           return;
         }
-        if (probeRepo.token) {
-          this.appendLog(task.id, unit.id, 'command', { type: 'hub_push_start' });
+        // Two-stage credential resolution (Issue #87): the repository's own
+        // PAT first, then the hub operator's `gh`/`glab` token for that
+        // repository's canonical host — the same resolution fetch
+        // distribution applies (`docs/ja/github-integration.md`). Before
+        // this, an isolated server whose repository had no PAT completed the
+        // pushing phase having pushed nothing at all, even when the hub was
+        // perfectly able to push with its own CLI login.
+        //
+        // Resolved HERE, not inside `PushNotaryService`: this call site also
+        // owns the "no credential at all" verdict below, so keeping both in
+        // one place is what makes it impossible for one stage to be applied
+        // in one and skipped in the other.
+        const pushCredential = await resolvePushCredential(probeRepo);
+        if (pushCredential) {
+          this.appendLog(task.id, unit.id, 'command', { type: 'hub_push_start', credentialSource: pushCredential.source });
           const currentTaskForPush = this.taskRepo.findById(task.id);
           const probeDir = await (async () => {
             const wtPath = currentTaskForPush?.worktreePath;
@@ -708,13 +722,19 @@ export class PhaseLoopRunner {
               branch: probeBranch,
               baseBranch: currentTaskForPush?.targetBranch ?? null,
               repo: probeRepo,
+              token: pushCredential.token,
             });
             if (notaryResult.status === 'failed') {
               this.appendLog(task.id, unit.id, 'status_change', { status: 'hub_push_failed', error: notaryResult.error });
               this.taskRepo.updateStatus(task.id, 'failed');
               return;
             }
-            this.appendLog(task.id, unit.id, 'command', { type: 'hub_push_completed', sha: notaryResult.sha, status: notaryResult.status });
+            // `credentialSource` (never the token itself) is recorded on the
+            // completion too: a `cli` credential is ambient hub-operator
+            // environment that `gh auth logout` removes without any AZITO
+            // configuration changing, so a later reader of this log must be
+            // able to tell which credential a past push actually used.
+            this.appendLog(task.id, unit.id, 'command', { type: 'hub_push_completed', sha: notaryResult.sha, status: notaryResult.status, credentialSource: pushCredential.source });
             if (!currentTaskForPush?.skipPr) {
               try {
                 await this.pullRequestCreator.ensureCreated(task.id, unit.id, probeRepo, probeBranch, {
@@ -728,6 +748,10 @@ export class PhaseLoopRunner {
             this.appendLog(task.id, unit.id, 'command', { type: 'hub_push_skipped', reason: 'no_worktree_or_branch' });
           }
         } else {
+          // Neither a repository PAT nor a hub CLI token: unchanged
+          // semantics (Issue #87 — skip, log it explicitly, let the phase
+          // advance), only the set of credentials consulted before reaching
+          // this verdict has widened.
           this.appendLog(task.id, unit.id, 'command', { type: 'hub_push_skipped', reason: 'no_push_credential' });
         }
       }

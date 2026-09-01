@@ -18,14 +18,18 @@ export class PushNotaryService {
   ) {}
 
   async notarize(params: PushNotaryParams): Promise<PushNotaryResult> {
-    const { server, transport, worktreePath, branch, baseBranch, repo } = params;
+    const { server, transport, worktreePath, branch, baseBranch, repo, token } = params;
     const sshHost = server.sshHost;
     if (!sshHost) {
       return { status: 'failed', error: 'Server has no sshHost configured for SFTP transfer' };
     }
 
-    if (!repo.token) {
-      return { status: 'failed', error: 'No push credential (project_repositories.token) configured' };
+    // The caller resolves the credential (repository PAT -> hub CLI token,
+    // see `pushCredential.ts`) and decides what "no credential at all" means
+    // for the run; an empty token reaching here would be a wiring bug, so it
+    // fails loudly rather than pushing anonymously.
+    if (!token) {
+      return { status: 'failed', error: 'No push credential was resolved for hub push notarization' };
     }
 
     const identity = resolveCanonicalRepositoryIdentity(repo);
@@ -53,7 +57,7 @@ export class PushNotaryService {
         await this.sftpService.download(sshHost, remoteBundlePath, localBundlePath);
         await this.remoteBundleOps.cleanup(transport, remoteBundlePath);
 
-        const pushResult = this.cleanPusher.push(localBundlePath, identity.identity, repo.token, branch);
+        const pushResult = this.cleanPusher.push(localBundlePath, identity.identity, token, branch);
 
         const verifiedSha = await this.gitProvider.getBranchHeadSha(repo, branch);
         if (verifiedSha !== pushResult.pushedSha) {

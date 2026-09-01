@@ -106,6 +106,13 @@ export interface PushNotaryParams {
   branch: string;
   baseBranch: string | null;
   repo: ProjectRepositoryWithToken;
+  /**
+   * The credential to push with, ALREADY resolved by the caller through the
+   * two-stage resolution in `pushCredential.ts` (repository PAT, then the
+   * hub's own `gh`/`glab` token). `PushNotaryService` deliberately does not
+   * read `repo.token` itself — see `resolvePushCredential`'s doc comment.
+   */
+  token: string;
 }
 
 export interface PushNotaryResult {

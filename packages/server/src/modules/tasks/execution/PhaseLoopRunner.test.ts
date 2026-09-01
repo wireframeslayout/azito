@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { PhaseLoopRunner } from './PhaseLoopRunner';
 import { TuiWorkerRuntime } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
@@ -7,6 +7,15 @@ import { resolveTaskPromptVars } from '../../prompt/resolveTaskPromptVars';
 import { renderSidekickBody } from '../../sidekicks/renderSidekickBody';
 import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionManifest';
 import { isDistributionRequired } from './DistributionHelper';
+
+// Hub push notarization resolves its credential through the shared
+// `cliToken` module (Issue #87). Stubbed here so these tests never depend on
+// whether the machine running them happens to have an authenticated `gh`.
+const getCliTokenMock = vi.hoisted(() => vi.fn(async (): Promise<string | null> => null));
+vi.mock('../../git/providers/cliToken', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../git/providers/cliToken')>()),
+  getCliToken: getCliTokenMock,
+}));
 
 // ─── Minimal mock harness ───
 //
@@ -1113,6 +1122,101 @@ describe('PhaseLoopRunner hub push notarization fails closed when the locked rep
     expect(pullRequestCreator.ensureCreated).not.toHaveBeenCalled();
     expect(taskRepo.updateStatus).not.toHaveBeenCalledWith(1, 'failed');
     expect(appendLog).toHaveBeenCalledWith(1, 1, 'command', expect.objectContaining({ type: 'hub_push_skipped', reason: 'no_push_credential' }));
+    // `no_push_credential` now means BOTH stages came up empty — the CLI
+    // fallback was actually consulted, not skipped.
+    expect(getCliTokenMock).toHaveBeenCalledWith({ provider: 'github', host: 'github.com' });
+  });
+});
+
+// Issue #87: hub代行 push must apply the SAME two-stage credential
+// resolution as hub代行 fetch distribution (`docs/ja/github-integration.md`:
+// 1. the repository's stored PAT, 2. the hub operator's gh/glab CLI token).
+// Before this, an isolated server whose repository carried no PAT completed
+// the pushing phase having pushed nothing at all.
+describe('PhaseLoopRunner hub push notarization resolves PAT then hub CLI token (Issue #87)', () => {
+  type PushTestRepo = { id: number; name: string; url: string; provider: 'github'; owner: string; repoName: string; token: string | null; hasToken: boolean };
+  const repoNoToken: PushTestRepo = { id: 1, name: 'A', url: 'https://github.com/acme/repo-a.git', provider: 'github', owner: 'acme', repoName: 'repo-a', token: null, hasToken: false };
+  const repoWithToken: PushTestRepo = { ...repoNoToken, token: 'ghp_stored', hasToken: true };
+
+  function makePushingUnit(overrides: Record<string, unknown> = {}) {
+    return makeUnitForRun({
+      phaseConfig: {
+        planning: { enabled: false }, implementing: { enabled: false },
+        reviewing: { enabled: false }, testing: { enabled: false },
+      },
+      ...overrides,
+    });
+  }
+
+  function setupRun(repo: PushTestRepo) {
+    const notarize = vi.fn(async () => ({ status: 'notarized' as const, sha: 'abc123' }));
+    const harness = makeRunner({ pushNotaryService: { notarize } });
+    harness.projectRepo.findById = vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', defaultUnitId: null, repositories: [repo] }));
+    harness.projectRepo.findRepositoryById = vi.fn(() => repo) as any;
+    harness.projectServerRepo.find = vi.fn(() => ({
+      projectId: 10, serverName: 'isolated-1', workingDirectory: '/work', branch: null, tmuxSession: 'azito',
+      inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: repo.id,
+    })) as any;
+    harness.taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: false, worktreePath: null,
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+    } as any));
+    return { ...harness, notarize };
+  }
+
+  const isolatedServer = { name: 'isolated-1', type: 'agent', isolationIntent: true } as any;
+
+  async function runPushingPhase(runner: PhaseLoopRunner, repo: PushTestRepo) {
+    await runner.stateMachineLoop(makePushingUnit(), 'isolated-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1', repo, true);
+  }
+
+  beforeEach(() => {
+    getCliTokenMock.mockReset();
+    getCliTokenMock.mockResolvedValue(null);
+  });
+
+  it('notarizes with the hub CLI token when the repository has no PAT', async () => {
+    getCliTokenMock.mockResolvedValue('gh-cli-token');
+    const { runner, notarize, taskRepo, appendLog } = setupRun(repoNoToken);
+
+    await runPushingPhase(runner, repoNoToken);
+
+    expect(getCliTokenMock).toHaveBeenCalledWith({ provider: 'github', host: 'github.com' });
+    expect(notarize).toHaveBeenCalledWith(expect.objectContaining({ repo: repoNoToken, token: 'gh-cli-token' }));
+    expect(appendLog).not.toHaveBeenCalledWith(1, 1, 'command', expect.objectContaining({ reason: 'no_push_credential' }));
+    expect(taskRepo.updateStatus).not.toHaveBeenCalledWith(1, 'failed');
+  });
+
+  it('prefers the repository PAT and never spawns a CLI when one is stored', async () => {
+    const { runner, notarize } = setupRun(repoWithToken);
+
+    await runPushingPhase(runner, repoWithToken);
+
+    expect(getCliTokenMock).not.toHaveBeenCalled();
+    expect(notarize).toHaveBeenCalledWith(expect.objectContaining({ token: 'ghp_stored' }));
+  });
+
+  it('records WHICH credential the push used — and never the token value — in the execution log', async () => {
+    getCliTokenMock.mockResolvedValue('gh-cli-token');
+    const { runner, appendLog } = setupRun(repoNoToken);
+
+    await runPushingPhase(runner, repoNoToken);
+
+    expect(appendLog).toHaveBeenCalledWith(1, 1, 'command', expect.objectContaining({ type: 'hub_push_start', credentialSource: 'cli' }));
+    expect(appendLog).toHaveBeenCalledWith(1, 1, 'command', expect.objectContaining({ type: 'hub_push_completed', credentialSource: 'cli' }));
+    const logged = JSON.stringify(appendLog.mock.calls);
+    expect(logged).not.toContain('gh-cli-token');
+    expect(logged).not.toContain('ghp_stored');
+  });
+
+  it('logs credentialSource "repository" when the stored PAT was used', async () => {
+    const { runner, appendLog } = setupRun(repoWithToken);
+
+    await runPushingPhase(runner, repoWithToken);
+
+    expect(appendLog).toHaveBeenCalledWith(1, 1, 'command', expect.objectContaining({ type: 'hub_push_start', credentialSource: 'repository' }));
+    expect(JSON.stringify(appendLog.mock.calls)).not.toContain('ghp_stored');
   });
 });
 

@@ -58,20 +58,43 @@ describe('PushNotaryService', () => {
     const service = new PushNotaryService(mockRemoteBundleOps(), mockSftpService(), mockCleanPusher(), mockGitProvider());
     const result = await service.notarize({
       taskId: 1, unitId: 1, server: makeServer({ sshHost: null }) as any,
-      transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: 'main', repo: makeRepo(),
+      transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: 'main', repo: makeRepo(), token: 'ghp_test',
     });
     expect(result.status).toBe('failed');
     expect(result.error).toContain('sshHost');
   });
 
-  it('returns failed when token is missing', async () => {
+  // The caller (PhaseLoopRunner) resolves the credential and owns the
+  // "no credential at all" verdict; an empty token arriving here is a wiring
+  // bug and must fail loudly rather than push anonymously (Issue #87).
+  it('returns failed when the caller passes no resolved token', async () => {
     const service = new PushNotaryService(mockRemoteBundleOps(), mockSftpService(), mockCleanPusher(), mockGitProvider());
     const result = await service.notarize({
       taskId: 1, unitId: 1, server: makeServer() as any,
-      transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: 'main', repo: makeRepo({ token: null }),
+      transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: 'main', repo: makeRepo(), token: '',
     });
     expect(result.status).toBe('failed');
     expect(result.error).toContain('push credential');
+  });
+
+  // The service pushes with the credential it was HANDED, never with
+  // `repo.token` — that is what lets a repository with no PAT be pushed with
+  // the hub's own `gh`/`glab` token (Issue #87).
+  it('pushes with the caller-resolved token, not repo.token', async () => {
+    const remoteBundleOps = mockRemoteBundleOps({ getHeadSha: vi.fn(async () => sha) });
+    const gitProvider = { getBranchHeadSha: vi.fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(sha),
+    } as any;
+    const cleanPusher = mockCleanPusher(sha);
+    const service = new PushNotaryService(remoteBundleOps, mockSftpService(), cleanPusher, gitProvider);
+    const result = await service.notarize({
+      taskId: 1, unitId: 1, server: makeServer() as any,
+      transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: 'main',
+      repo: makeRepo({ token: null }), token: 'gh-cli-token',
+    });
+    expect(result.status).toBe('notarized');
+    expect(cleanPusher.push).toHaveBeenCalledWith(expect.any(String), expect.anything(), 'gh-cli-token', 'feat');
   });
 
   it('returns already_up_to_date when remote matches worker HEAD', async () => {
@@ -80,7 +103,7 @@ describe('PushNotaryService', () => {
     const service = new PushNotaryService(remoteBundleOps, mockSftpService(), mockCleanPusher(), gitProvider);
     const result = await service.notarize({
       taskId: 1, unitId: 1, server: makeServer() as any,
-      transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: 'main', repo: makeRepo(),
+      transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: 'main', repo: makeRepo(), token: 'ghp_test',
     });
     expect(result.status).toBe('already_up_to_date');
     expect(result.sha).toBe(sha);
@@ -97,7 +120,7 @@ describe('PushNotaryService', () => {
     const service = new PushNotaryService(remoteBundleOps, sftpService, cleanPusher, gitProvider);
     const result = await service.notarize({
       taskId: 1, unitId: 1, server: makeServer() as any,
-      transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: 'main', repo: makeRepo(),
+      transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: 'main', repo: makeRepo(), token: 'ghp_test',
     });
     expect(result.status).toBe('notarized');
     expect(result.sha).toBe(sha);
@@ -115,7 +138,7 @@ describe('PushNotaryService', () => {
     const service = new PushNotaryService(remoteBundleOps, mockSftpService(), mockCleanPusher(sha), gitProvider);
     const result = await service.notarize({
       taskId: 1, unitId: 1, server: makeServer() as any,
-      transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: 'main', repo: makeRepo(),
+      transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: 'main', repo: makeRepo(), token: 'ghp_test',
     });
     expect(result.status).toBe('failed');
     expect(result.error).toContain('Push verification failed');
@@ -126,7 +149,7 @@ describe('PushNotaryService', () => {
     const service = new PushNotaryService(remoteBundleOps, mockSftpService(), mockCleanPusher(), mockGitProvider());
     const result = await service.notarize({
       taskId: 1, unitId: 1, server: makeServer() as any,
-      transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: 'main', repo: makeRepo(),
+      transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: 'main', repo: makeRepo(), token: 'ghp_test',
     });
     expect(result.status).toBe('failed');
     expect(result.error).toContain('HEAD SHA');
