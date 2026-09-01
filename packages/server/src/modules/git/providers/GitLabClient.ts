@@ -1,4 +1,4 @@
-import { execFileSync } from 'child_process';
+import { getCliTokenSync } from './cliToken';
 import type {
   RemoteIssue, ListIssuesOptions, ListIssuesResult,
   RemotePullRequest, ListPullRequestsOptions, ListPullRequestsResult,
@@ -20,19 +20,14 @@ const REPOS_MAX_PAGES = 2;
 
 export class GitLabClient implements IGitProviderClient {
   private cache = new Map<string, CacheEntry<unknown>>();
-  private glabTokens = new Map<string, string | null>();
 
+  /**
+   * Per-host `glab` CLI token fallback (stage 2 of the two-stage resolution
+   * in `docs/ja/github-integration.md`). Delegates to the shared, TTL'd
+   * `cliToken` module — the same credentials hub代行 code distribution uses.
+   */
   private getGlabToken(host: string): string | null {
-    if (this.glabTokens.has(host)) return this.glabTokens.get(host)!;
-    try {
-      // host comes from a repo URL and must never reach a shell; pass it as an argv element, not interpolated text.
-      const token = execFileSync('glab', ['config', 'get', 'token', '-h', host], { encoding: 'utf-8', timeout: 5000 }).trim();
-      this.glabTokens.set(host, token || null);
-      return token || null;
-    } catch {
-      this.glabTokens.set(host, null);
-      return null;
-    }
+    return getCliTokenSync({ provider: 'gitlab', host });
   }
 
   private resolveToken(repoToken: string | null, host: string): string | null {

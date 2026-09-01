@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import Fastify from 'fastify';
 import BetterSqlite3 from 'better-sqlite3';
 import projectsRoutes from './routes';
@@ -12,6 +12,29 @@ import type { SqliteDatabase } from '../../shared/db/Database';
 import type { ProjectServer } from './ProjectServer';
 import type { FetchDistributionService } from '../git/hub-transfer/FetchDistributionService';
 import type { ProjectRepositoryCredential } from './Project';
+import { resolveCliTokens, getCliTokenSync, type CliTokenTarget } from '../git/providers/cliToken';
+
+// The hub's own `gh`/`glab` login must never be consulted for real from a
+// unit test — the verdict would then depend on whoever is logged in on the
+// machine running it. Stubbed to "no CLI credentials" by default; the
+// two-stage-resolution tests below opt in explicitly.
+vi.mock('../git/providers/cliToken', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../git/providers/cliToken')>();
+  return {
+    ...actual,
+    resolveCliTokens: vi.fn(async () => actual.NO_CLI_TOKEN),
+    // Blocking, event-loop-stalling variant: this listing must never reach it.
+    getCliTokenSync: vi.fn(() => { throw new Error('GET /api/projects/:id/servers must never resolve a CLI token synchronously'); }),
+  };
+});
+const mockedResolveCliTokens = vi.mocked(resolveCliTokens);
+const mockedGetCliTokenSync = vi.mocked(getCliTokenSync);
+
+beforeEach(() => {
+  mockedResolveCliTokens.mockReset();
+  mockedResolveCliTokens.mockResolvedValue(() => null);
+  mockedGetCliTokenSync.mockClear();
+});
 
 // Issue #87 配信状態の可視化: GET /api/projects/:id/servers must answer
 // "is this pairing distributable, and when did it last receive code?"
@@ -123,7 +146,7 @@ describe('GET /api/projects/:id/servers — distribution status (Issue #87 配�
     expect(res.statusCode).toBe(200);
     const [row] = res.json();
     expect(row.distributionRequired).toBe(true);
-    expect(row.distributionPrerequisite).toEqual({ status: 'ok', stage: null });
+    expect(row.distributionPrerequisite).toEqual({ status: 'ok', stage: null, credentialSource: 'repository' });
     expect(row.lastDistribution).toEqual({ distributedAt: '2026-08-30T10:00:00Z', bundleType: 'incremental', lastDistributedSha: 'a'.repeat(40) });
     // Pre-existing fields are untouched.
     expect(row.serverName).toBe('iso-1');
@@ -134,7 +157,7 @@ describe('GET /api/projects/:id/servers — distribution status (Issue #87 配�
   it('reports lastDistribution: null for a never-distributed environment whose prerequisites nonetheless pass', async () => {
     const res = await getServers(makeOpts());
     const [row] = res.json();
-    expect(row.distributionPrerequisite).toEqual({ status: 'ok', stage: null });
+    expect(row.distributionPrerequisite).toEqual({ status: 'ok', stage: null, credentialSource: 'repository' });
     expect(row.lastDistribution).toBeNull();
   });
 
@@ -144,7 +167,7 @@ describe('GET /api/projects/:id/servers — distribution status (Issue #87 配�
     });
     const [row] = (await getServers(opts)).json();
     expect(row.distributionRequired).toBe(true);
-    expect(row.distributionPrerequisite).toEqual({ status: 'failed', stage: 'no_distribution_repository' });
+    expect(row.distributionPrerequisite).toEqual({ status: 'failed', stage: 'no_distribution_repository', credentialSource: null });
     expect(row.lastDistribution).toBeNull();
   });
 
@@ -153,7 +176,7 @@ describe('GET /api/projects/:id/servers — distribution status (Issue #87 配�
       projectServerRepo: { ...makeOpts().projectServerRepo, findByProject: vi.fn(() => [makeProjectServer({ distributionRepositoryId: 42 })]) },
     });
     const [row] = (await getServers(opts)).json();
-    expect(row.distributionPrerequisite).toEqual({ status: 'failed', stage: 'distribution_repository_not_found' });
+    expect(row.distributionPrerequisite).toEqual({ status: 'failed', stage: 'distribution_repository_not_found', credentialSource: null });
   });
 
   it('reports no_working_dir when the pairing has no working directory configured', async () => {
@@ -161,7 +184,7 @@ describe('GET /api/projects/:id/servers — distribution status (Issue #87 配�
       projectServerRepo: { ...makeOpts().projectServerRepo, findByProject: vi.fn(() => [makeProjectServer({ workingDirectory: null })]) },
     });
     const [row] = (await getServers(opts)).json();
-    expect(row.distributionPrerequisite).toEqual({ status: 'failed', stage: 'no_working_dir' });
+    expect(row.distributionPrerequisite).toEqual({ status: 'failed', stage: 'no_working_dir', credentialSource: null });
   });
 
   it('reports no_token when the target repository has no credential', async () => {
@@ -170,14 +193,14 @@ describe('GET /api/projects/:id/servers — distribution status (Issue #87 配�
       projectRepo: { ...base.projectRepo, findRepositoryCredentialsByIds: vi.fn(() => [makeCredential({ credentialStatus: 'absent', token: null })]) },
     });
     const [row] = (await getServers(opts)).json();
-    expect(row.distributionPrerequisite).toEqual({ status: 'failed', stage: 'no_token' });
+    expect(row.distributionPrerequisite).toEqual({ status: 'failed', stage: 'no_token', credentialSource: null });
   });
 
   it('reports no_token when the target repository row is gone entirely', async () => {
     const base = makeOpts();
     const opts = makeOpts({ projectRepo: { ...base.projectRepo, findRepositoryCredentialsByIds: vi.fn(() => []) } });
     const [row] = (await getServers(opts)).json();
-    expect(row.distributionPrerequisite).toEqual({ status: 'failed', stage: 'no_token' });
+    expect(row.distributionPrerequisite).toEqual({ status: 'failed', stage: 'no_token', credentialSource: null });
   });
 
   it('reports identity_unresolvable WITHOUT leaking the repository URL or the internal message', async () => {
@@ -187,15 +210,83 @@ describe('GET /api/projects/:id/servers — distribution status (Issue #87 配�
     });
     const res = await getServers(opts);
     const [row] = res.json();
-    expect(row.distributionPrerequisite).toEqual({ status: 'failed', stage: 'identity_unresolvable' });
+    expect(row.distributionPrerequisite).toEqual({ status: 'failed', stage: 'identity_unresolvable', credentialSource: null });
     expect(row.distributionPrerequisite).not.toHaveProperty('message');
     expect(res.body).not.toContain('secret');
     expect(res.body).not.toContain('example.invalid');
   });
 
+  // ── Two-stage token resolution (docs/ja/github-integration.md, Issue #87) ──
+  //
+  // A repository with no PAT is still distributable when the hub itself is
+  // logged into that host's CLI — the same fallback GitHubClient/GitLabClient
+  // have always applied to issue/PR calls.
+
+  it('reports ok with credentialSource cli when the repository has no PAT but the hub CLI is logged in', async () => {
+    mockedResolveCliTokens.mockResolvedValue(() => 'gho_cli');
+    const base = makeOpts();
+    const opts = makeOpts({
+      projectRepo: { ...base.projectRepo, findRepositoryCredentialsByIds: vi.fn(() => [makeCredential({ credentialStatus: 'absent', token: null })]) },
+    });
+    const res = await getServers(opts);
+    const [row] = res.json();
+    expect(row.distributionPrerequisite).toEqual({ status: 'ok', stage: null, credentialSource: 'cli' });
+    // The credential VALUE never crosses the API boundary.
+    expect(res.body).not.toContain('gho_cli');
+  });
+
+  it('resolves the CLI token for the repository\'s own provider/host, once, only for repositories lacking a PAT', async () => {
+    const base = makeOpts();
+    const rows = [
+      makeProjectServer({ serverName: 'iso-0', distributionRepositoryId: 1 }),
+      makeProjectServer({ serverName: 'iso-1', distributionRepositoryId: 2 }),
+    ];
+    const servers = [makeServer({ name: 'iso-0' }), makeServer({ name: 'iso-1' })];
+    const opts = makeOpts({
+      projectServerRepo: { ...base.projectServerRepo, findByProject: vi.fn(() => rows) },
+      serverRepo: { ...base.serverRepo, findMetaByNames: vi.fn((names: string[]) => servers.filter((s) => names.includes(s.name)).map(toMeta)) },
+      projectRepo: {
+        ...base.projectRepo,
+        findRepositoryCredentialsByIds: vi.fn(() => [
+          makeCredential({ id: 1, url: 'https://ghe.example.com/acme/widgets.git', credentialStatus: 'absent', token: null }),
+          makeCredential({ id: 2 }),
+        ]),
+      },
+    });
+    await getServers(opts);
+    expect(mockedResolveCliTokens).toHaveBeenCalledTimes(1);
+    const targets = mockedResolveCliTokens.mock.calls[0][0] as CliTokenTarget[];
+    // Only the PAT-less repository's host — repository 2 has a PAT, so its
+    // host is never asked about (no wasted CLI process).
+    expect([...targets]).toEqual([{ provider: 'github', host: 'ghe.example.com' }]);
+  });
+
+  it('asks for no CLI targets at all when every referenced repository has a PAT', async () => {
+    await getServers(makeOpts());
+    expect([...(mockedResolveCliTokens.mock.calls[0][0] as CliTokenTarget[])]).toEqual([]);
+  });
+
+  // Guards the reason the lookup is resolved up front and handed in: the
+  // per-row check is synchronous, and a synchronous `gh` invocation on this
+  // frequently-polled read-only listing would block the event loop for the
+  // CLI's timeout. The route must reach the CLI ONLY through the async
+  // resolver.
+  it('never resolves CLI credentials synchronously from this route', async () => {
+    const base = makeOpts();
+    const opts = makeOpts({
+      projectRepo: { ...base.projectRepo, findRepositoryCredentialsByIds: vi.fn(() => [makeCredential({ credentialStatus: 'absent', token: null })]) },
+    });
+    // The synchronous resolver is stubbed to throw: reaching it at all would
+    // fail this request outright, not merely record a call.
+    const res = await getServers(opts);
+    expect(res.statusCode).toBe(200);
+    expect(mockedGetCliTokenSync).not.toHaveBeenCalled();
+    expect(mockedResolveCliTokens).toHaveBeenCalledTimes(1);
+  });
+
   it('reports service_not_wired when FetchDistributionService is unavailable', async () => {
     const [row] = (await getServers(makeOpts({ fetchDistributionService: null }))).json();
-    expect(row.distributionPrerequisite).toEqual({ status: 'failed', stage: 'service_not_wired' });
+    expect(row.distributionPrerequisite).toEqual({ status: 'failed', stage: 'service_not_wired', credentialSource: null });
   });
 
   it('reports not_required for a local server', async () => {
@@ -205,7 +296,7 @@ describe('GET /api/projects/:id/servers — distribution status (Issue #87 配�
     });
     const [row] = (await getServers(opts)).json();
     expect(row.distributionRequired).toBe(false);
-    expect(row.distributionPrerequisite).toEqual({ status: 'not_required', stage: null });
+    expect(row.distributionPrerequisite).toEqual({ status: 'not_required', stage: null, credentialSource: null });
   });
 
   it('reports unknown (never a healthy-looking default) when the referenced servers row no longer exists', async () => {
@@ -213,7 +304,7 @@ describe('GET /api/projects/:id/servers — distribution status (Issue #87 配�
     const opts = makeOpts({ serverRepo: { ...base.serverRepo, findMetaByNames: vi.fn(() => []) } });
     const [row] = (await getServers(opts)).json();
     expect(row.distributionRequired).toBeNull();
-    expect(row.distributionPrerequisite).toEqual({ status: 'unknown', stage: null });
+    expect(row.distributionPrerequisite).toEqual({ status: 'unknown', stage: null, credentialSource: null });
   });
 
   it('matches distribution_state on BOTH server name and repository id (a row for another server is not this server\'s record)', async () => {
@@ -278,8 +369,8 @@ describe('GET /api/projects/:id/servers — distribution status (Issue #87 配�
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body).toHaveLength(2);
-    expect(body[0].distributionPrerequisite).toEqual({ status: 'failed', stage: 'credential_unreadable' });
-    expect(body[1].distributionPrerequisite).toEqual({ status: 'ok', stage: null });
+    expect(body[0].distributionPrerequisite).toEqual({ status: 'failed', stage: 'credential_unreadable', credentialSource: null });
+    expect(body[1].distributionPrerequisite).toEqual({ status: 'ok', stage: null, credentialSource: 'repository' });
     expect(res.body).not.toContain('ghp_x');
   });
 
@@ -314,7 +405,7 @@ describe('GET /api/projects/:id/servers — distribution status (Issue #87 配�
     const [row] = res.json();
     expect(row.serverName).toBe('iso-1');
     expect(row.distributionRequired).toBe(true);
-    expect(row.distributionPrerequisite).toEqual({ status: 'ok', stage: null });
+    expect(row.distributionPrerequisite).toEqual({ status: 'ok', stage: null, credentialSource: 'repository' });
   });
 
   it('returns 200 when the project\'s OWN server has an undecryptable agent_token (the credential is irrelevant to this verdict)', async () => {
@@ -331,7 +422,7 @@ describe('GET /api/projects/:id/servers — distribution status (Issue #87 配�
       .run('iso-1', 'agent', 'v1.corrupted', 1);
     const res = await getServers(makeOpts({ serverRepo: new SqliteServerRepository(db as unknown as SqliteDatabase) }));
     expect(res.statusCode).toBe(200);
-    expect(res.json()[0].distributionPrerequisite).toEqual({ status: 'ok', stage: null });
+    expect(res.json()[0].distributionPrerequisite).toEqual({ status: 'ok', stage: null, credentialSource: 'repository' });
     expect(res.body).not.toContain('v1.corrupted');
   });
 

@@ -1,4 +1,4 @@
-import { execFileSync } from 'child_process';
+import { getCliTokenSync } from './cliToken';
 import type {
   RemoteIssue, ListIssuesOptions, ListIssuesResult,
   RemotePullRequest, ListPullRequestsOptions, ListPullRequestsResult,
@@ -22,21 +22,14 @@ const REPOS_MAX_PAGES = 2;
 
 export class GitHubClient implements IGitProviderClient {
   private cache = new Map<string, CacheEntry<unknown>>();
-  private ghTokens = new Map<string, string | null>();
 
-  /** Per-host `gh` CLI token fallback: GHE hosts need `--hostname` (mirrors GitLabClient.getGlabToken). */
+  /**
+   * Per-host `gh` CLI token fallback (stage 2 of the two-stage resolution in
+   * `docs/ja/github-integration.md`). Delegates to the shared, TTL'd
+   * `cliToken` module — the same credentials hub代行 code distribution uses.
+   */
   private getGhToken(host: string): string | null {
-    if (this.ghTokens.has(host)) return this.ghTokens.get(host)!;
-    // host comes from a repo URL and must never reach a shell; pass it as an argv element, not interpolated text.
-    const args = host === 'github.com' ? ['auth', 'token'] : ['auth', 'token', '--hostname', host];
-    try {
-      const token = execFileSync('gh', args, { encoding: 'utf-8', timeout: 5000 }).trim();
-      this.ghTokens.set(host, token || null);
-      return token || null;
-    } catch {
-      this.ghTokens.set(host, null);
-      return null;
-    }
+    return getCliTokenSync({ provider: 'github', host });
   }
 
   private resolveToken(repoToken: string | null, host: string): string | null {

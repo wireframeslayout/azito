@@ -4,6 +4,15 @@ import { mkdtempSync, mkdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { ExecuteTaskUseCase } from './ExecuteTaskUseCase';
+// The hub's own `gh`/`glab` login is the second stage of distribution's token
+// resolution (Issue #87). Stubbed to "not logged in" so these tests exercise
+// the no-credential path deterministically, instead of depending on whoever
+// is authenticated on the machine running them.
+vi.mock('../../git/providers/cliToken', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../git/providers/cliToken')>();
+  return { ...actual, getCliToken: vi.fn(async () => null) };
+});
+
 import { shellQuote } from '../../../shared/shellQuote';
 import { KeyedMutex } from '../../../shared/keyedMutex';
 import { TurnSignalHub } from '../turns/TurnSignalHub';

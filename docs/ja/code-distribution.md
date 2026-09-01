@@ -50,6 +50,25 @@ hub は認証済みの bare リポジトリキャッシュを `$AZITO_DATA_DIR/r
 側 mirror（後述）の両方が同じリポジトリに対して同じハッシュを使います。配信のたびに、hub は
 プロジェクトに設定された資格情報でこのキャッシュを対象ブランチだけ fetch し、最新化します。
 
+#### 2.1.1 どの資格情報で fetch するか（2段階解決）
+
+配信の fetch に使う資格情報は、[GitHub/GitLab 連携](./github-integration.md)が定める2段階解決に
+従います。issue/PR 操作やリポジトリ候補一覧と同じ順序・同じ資格情報です。
+
+1. **リポジトリごとのトークン（PAT）** — 設定 → プロジェクト → リポジトリに保存されたトークン。
+2. **hub の CLI トークン** — 1 が未設定の場合、hub 自身の `gh auth token`
+   （GitHub Enterprise Server は `gh auth token --hostname <host>`）/ `glab config get token -h <host>`
+   をリポジトリのホストごとに解決して使います。
+
+どちらも取得できない場合のみ、配信の前提チェックは `no_token` として失敗します（黙ってスキップ
+したり、資格情報なしで fetch を試みたりはしません）。
+
+CLI トークンは **hub を動かしている操作者の環境に属する**資格情報で、`gh auth logout` すれば
+AZITO 側の設定を何も変えないまま消えます。そのため設定 → プロジェクト → サーバー環境の一覧
+（`GET /api/projects/:id/servers`）は、前提チェックが通ったサーバーについて、どちらの資格情報で
+配信されるのかを `credentialSource`（`repository` = PAT / `cli` = hub の CLI トークン）として
+返します。トークンの値そのものは API に一切出ません。
+
 ### 2.2 サーバー側 bare mirror
 
 配信先サーバーには、リポジトリごとの配布専用 bare mirror を `~/.azito/repos/<repoHash>.git` に

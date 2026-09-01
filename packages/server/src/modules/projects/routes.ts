@@ -36,7 +36,8 @@ import { LocalCloneTargetNotEmptyError, type LocalRepoCloneService } from '../gi
 // GET /api/projects/:id/servers can surface a misconfigured distribution
 // target BEFORE a task is executed against it. Touches nothing but hub-local
 // rows — no transport, no remote connection (see its own doc comment).
-import { checkDistributionPrerequisites, type DistributionPrerequisiteStage, type DistributionRepositoryLookup } from '../tasks/execution/DistributionHelper';
+import { checkDistributionPrerequisites, type DistributionCredentialSource, type DistributionPrerequisiteStage, type DistributionRepositoryLookup } from '../tasks/execution/DistributionHelper';
+import { resolveCliTokens, type CliTokenTarget } from '../git/providers/cliToken';
 import type { FetchDistributionService } from '../git/hub-transfer/FetchDistributionService';
 import type { IDistributionStateRepository } from '../git/hub-transfer/types';
 import type { ProjectRepositoryCredential } from './Project';
@@ -85,6 +86,17 @@ export interface ProjectServerDistributionInfo {
     status: 'not_required' | 'ok' | 'failed' | 'unknown';
     /** Machine-readable failure identifier for `status: 'failed'`, `null` otherwise. Clients localize from this — the internal message is deliberately NOT exposed (it can embed repository URLs / resolution details). */
     stage: DistributionPrerequisiteStage | null;
+    /**
+     * WHICH credential distribution would use, for `status: 'ok'` only
+     * (`null` for every other status): `repository` = the repository's
+     * stored PAT, `cli` = the hub's own `gh`/`glab` login.
+     *
+     * Exposed because the two are not equally durable — a `cli` credential
+     * is the hub operator's ambient environment and disappears on `gh auth
+     * logout` without any AZITO configuration changing. The credential
+     * VALUE is never serialized.
+     */
+    credentialSource: DistributionCredentialSource | null;
   };
   /** The `distribution_state` row for (this server, its configured distribution repository). `null` = never distributed. */
   lastDistribution: { distributedAt: string; bundleType: 'full' | 'incremental'; lastDistributedSha: string } | null;
@@ -338,9 +350,29 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
         const credential = credentialsById.get(rid);
         if (!credential) return { status: 'no_token' };
         if (credential.credentialStatus === 'unreadable') return { status: 'unreadable' };
-        if (!credential.token) return { status: 'no_token' };
+        if (!credential.token) return { status: 'no_token', repo: credential };
         return { status: 'ok', repo: credential, token: credential.token };
       };
+
+      // Second stage of the documented two-stage token resolution
+      // (`docs/ja/github-integration.md`): repositories with no PAT of their
+      // own can still be distributed on the hub's `gh`/`glab` login.
+      //
+      // Resolved ASYNCHRONOUSLY here, once per distinct host, and handed to
+      // the synchronous per-row check below — never from inside it.
+      // `checkDistributionPrerequisites` is rendered for every row of this
+      // frequently-polled, read-only listing; a synchronous `gh` invocation
+      // there would block the whole hub for the CLI's timeout per uncached
+      // host. Repositories that DO have a PAT are skipped entirely, so a
+      // fully PAT-configured project spawns no process at all.
+      const cliTargets: CliTokenTarget[] = [];
+      for (const rid of repositoryIds) {
+        const credential = credentialsById.get(rid);
+        if (!credential || credential.credentialStatus === 'unreadable' || credential.token) continue;
+        const identity = resolveCanonicalRepositoryIdentity(credential);
+        if (identity.ok) cliTargets.push({ provider: identity.identity.provider, host: identity.identity.host });
+      }
+      const cliToken = await resolveCliTokens(cliTargets);
 
       return rows.map((row): ProjectServer & ProjectServerDistributionInfo => {
         const state = row.distributionRepositoryId != null
@@ -355,7 +387,7 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
           // The `servers` row this pairing names is gone — reported as
           // `unknown` rather than defaulted to "no distribution needed",
           // which would render a broken pairing as healthy.
-          return { ...row, distributionRequired: null, distributionPrerequisite: { status: 'unknown', stage: null }, lastDistribution };
+          return { ...row, distributionRequired: null, distributionPrerequisite: { status: 'unknown', stage: null, credentialSource: null }, lastDistribution };
         }
 
         const prerequisites = checkDistributionPrerequisites({
@@ -364,6 +396,7 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
           project,
           workingDir: row.workingDirectory,
           lookupRepository,
+          cliToken,
           fetchDistributionService,
         });
         // `prerequisites.message` is internal (it can embed the repository
@@ -371,10 +404,10 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
         // — only the machine-readable `stage` crosses the API boundary.
         const distributionPrerequisite: ProjectServerDistributionInfo['distributionPrerequisite'] =
           !prerequisites.required
-            ? { status: 'not_required', stage: null }
+            ? { status: 'not_required', stage: null, credentialSource: null }
             : prerequisites.ok
-              ? { status: 'ok', stage: null }
-              : { status: 'failed', stage: prerequisites.stage };
+              ? { status: 'ok', stage: null, credentialSource: prerequisites.credentialSource }
+              : { status: 'failed', stage: prerequisites.stage, credentialSource: null };
 
         // `prerequisites.required` IS `isDistributionRequired(server, row)` —
         // read off the same result rather than recomputing it, so the flag

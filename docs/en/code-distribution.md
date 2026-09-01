@@ -53,6 +53,26 @@ repository's normalized URL, and both the hub-side cache and the server-side mir
 the same hash for the same repository. On every distribution, the hub fetches just the target
 branch into this cache using the project's configured credential, bringing it up to date.
 
+#### 2.1.1 Which credential the fetch uses (two-stage resolution)
+
+The credential used for the distribution fetch follows the same two-stage resolution
+[GitHub/GitLab integration](./github-integration.md) defines — the same order, and the same
+credentials, that issue/PR calls and the repository picker already use:
+
+1. **The repository's own token (PAT)** — stored under Settings -> Project -> Repositories.
+2. **The hub's CLI token** — when (1) is unset, the hub resolves its own `gh auth token`
+   (`gh auth token --hostname <host>` for GitHub Enterprise Server) / `glab config get token -h <host>`
+   per repository host.
+
+The prerequisite check fails with `no_token` only when BOTH are absent — distribution is never
+silently skipped, and a fetch is never attempted without a credential.
+
+A CLI token belongs to **the environment of whoever operates the hub**: `gh auth logout` removes it
+without any AZITO configuration changing. So the project-server listing
+(`GET /api/projects/:id/servers`) reports which credential a distributable pairing would use, as
+`credentialSource` (`repository` = the stored PAT, `cli` = the hub's CLI token). The credential
+value itself is never exposed through the API.
+
 ### 2.2 The server-side bare mirror
 
 The target server gets a per-repository, distribution-only bare mirror at

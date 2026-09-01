@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { resolveExecutionRepositoryEntry, isDistributionRequired, isDistributionRequiredButRepositoryUnresolved, shouldClearRecordedDistributionRepository, checkDistributionPrerequisites, performDistribution } from './DistributionHelper';
 import type { CheckDistributionPrerequisitesParams, DistributionRepositoryLookup, PerformDistributionParams } from './DistributionHelper';
 import type { FetchDistributionService } from '../../git/hub-transfer/FetchDistributionService';
@@ -6,6 +6,27 @@ import type { ServerConfig } from '../../servers/Server';
 import type { ProjectDetail, ProjectRepository, ProjectRepositoryWithToken } from '../../projects/Project';
 import type { ProjectServer } from '../../projects/ProjectServer';
 import type { IDistributionStateRepository } from '../../git/hub-transfer/types';
+import { getCliToken, NO_CLI_TOKEN, type CliTokenLookup } from '../../git/providers/cliToken';
+
+// The hub's own `gh`/`glab` login must never be consulted for real from a
+// unit test (the result would depend on whoever is logged in on the machine
+// running it), so the async resolver is stubbed. Everything else in the
+// module (NO_CLI_TOKEN, the cache) stays real.
+vi.mock('../../git/providers/cliToken', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../git/providers/cliToken')>();
+  return { ...actual, getCliToken: vi.fn(async () => null) };
+});
+const mockedGetCliToken = vi.mocked(getCliToken);
+
+beforeEach(() => {
+  mockedGetCliToken.mockReset();
+  mockedGetCliToken.mockResolvedValue(null);
+});
+
+/** A CLI-token lookup that answers `token` for every host. */
+function cliTokenFor(token: string | null): CliTokenLookup {
+  return () => token;
+}
 
 // Issue #87 13th-round review, Important finding: the distribution target
 // (`projectServer.distributionRepositoryId`) and the repository push/PR/
@@ -236,6 +257,7 @@ describe('checkDistributionPrerequisites', () => {
       project: makeProject([repoA, repoB]),
       workingDir: '/work/dir',
       lookupRepository: makeLookup(),
+      cliToken: NO_CLI_TOKEN,
       fetchDistributionService: service,
       ...overrides,
     });
@@ -302,6 +324,7 @@ describe('checkDistributionPrerequisites', () => {
     expect(result.repositoryId).toBe(repoB.id);
     expect(result.workingDir).toBe('/work/dir');
     expect(result.token).toBe('ghp_x');
+    expect(result.credentialSource).toBe('repository');
     expect(result.identity.httpsUrl).toBe('https://github.com/acme/repo-b.git');
     expect(result.fetchDistributionService).toBe(service);
   });
@@ -322,6 +345,66 @@ describe('checkDistributionPrerequisites', () => {
     check({ lookupRepository });
     expect(lookupRepository).toHaveBeenCalledTimes(1);
     expect(lookupRepository).toHaveBeenCalledWith(repoB.id);
+  });
+
+  // ── Two-stage token resolution (docs/ja/github-integration.md) ──
+
+  it('passes on the hub CLI token when the repository has no PAT, reporting credentialSource cli', () => {
+    const result = check({
+      lookupRepository: makeLookup({ status: 'no_token', repo: tokenedRepo }),
+      cliToken: cliTokenFor('gho_cli'),
+    });
+    if (result.required === false || !result.ok) throw new Error('expected prerequisites to pass');
+    expect(result.token).toBe('gho_cli');
+    expect(result.credentialSource).toBe('cli');
+  });
+
+  it('asks the CLI lookup for the repository\'s own canonical provider/host, never a default', () => {
+    const cliToken = vi.fn(() => 'gho_cli');
+    check({
+      lookupRepository: makeLookup({ status: 'no_token', repo: { ...tokenedRepo, url: 'https://ghe.example.com/acme/repo-b.git' } }),
+      cliToken,
+    });
+    expect(cliToken).toHaveBeenCalledWith({ provider: 'github', host: 'ghe.example.com' });
+  });
+
+  it('prefers the repository PAT over the hub CLI token and never consults the CLI lookup at all', () => {
+    const cliToken = vi.fn(() => 'gho_cli');
+    const result = check({ cliToken });
+    if (result.required === false || !result.ok) throw new Error('expected prerequisites to pass');
+    expect(result.token).toBe('ghp_x');
+    expect(result.credentialSource).toBe('repository');
+    expect(cliToken).not.toHaveBeenCalled();
+  });
+
+  it('fails with no_token when neither a PAT nor a CLI token is available', () => {
+    const result = check({
+      lookupRepository: makeLookup({ status: 'no_token', repo: tokenedRepo }),
+      cliToken: cliTokenFor(null),
+    });
+    expect(result).toMatchObject({ required: true, ok: false, stage: 'no_token' });
+  });
+
+  it('fails with no_token (no CLI lookup possible) when the repository row itself is gone', () => {
+    const cliToken = vi.fn(() => 'gho_cli');
+    const result = check({ lookupRepository: makeLookup({ status: 'no_token' }), cliToken });
+    expect(result).toMatchObject({ required: true, ok: false, stage: 'no_token' });
+    expect(cliToken).not.toHaveBeenCalled();
+  });
+
+  it('never consults the CLI for an undecryptable credential (that is a broken PAT, not a missing one)', () => {
+    const cliToken = vi.fn(() => 'gho_cli');
+    const result = check({ lookupRepository: makeLookup({ status: 'unreadable' }), cliToken });
+    expect(result).toMatchObject({ required: true, ok: false, stage: 'credential_unreadable' });
+    expect(cliToken).not.toHaveBeenCalled();
+  });
+
+  // The function is synchronous and rendered per row by the frequently
+  // polled GET /api/projects/:id/servers, so it must never reach for a
+  // credential itself — the CLI lookup it is handed is already resolved.
+  it('resolves entirely from its arguments: no CLI process is spawned, even when no PAT exists', () => {
+    check({ lookupRepository: makeLookup({ status: 'no_token', repo: tokenedRepo }), cliToken: cliTokenFor('gho_cli') });
+    expect(mockedGetCliToken).not.toHaveBeenCalled();
   });
 });
 
@@ -409,6 +492,31 @@ describe('performDistribution (prerequisite phase unchanged after extraction)', 
     expect(onBeforeDistribute).not.toHaveBeenCalled();
     distribute.mock.calls[0][0].onBeforeWorkingDirChange?.();
     expect(onBeforeDistribute).toHaveBeenCalledWith(repoB.id);
+  });
+
+  it('distributes on the hub CLI token when the repository has no PAT of its own', async () => {
+    mockedGetCliToken.mockResolvedValue('gho_cli');
+    const { params, distribute } = makeHarness({
+      projectRepo: { findRepositoryById: vi.fn(() => ({ id: repoB.id, name: 'B', url: repoB.url, provider: 'github' as const, owner: 'acme', repoName: 'repo-b', token: null })) } as unknown as PerformDistributionParams['projectRepo'],
+    });
+    const result = await performDistribution(params);
+    expect(mockedGetCliToken).toHaveBeenCalledWith({ provider: 'github', host: 'github.com' });
+    expect(distribute).toHaveBeenCalledWith(expect.objectContaining({ token: 'gho_cli' }));
+    expect(result).toMatchObject({ required: true, ok: true });
+  });
+
+  it('never asks the CLI when the repository has a PAT, and reads/decrypts the repository row only once', async () => {
+    const findRepositoryById = vi.fn(() => ({ id: repoB.id, name: 'B', url: repoB.url, provider: 'github' as const, owner: 'acme', repoName: 'repo-b', token: 'ghp_x' }));
+    const { params } = makeHarness({ projectRepo: { findRepositoryById } as unknown as PerformDistributionParams['projectRepo'] });
+    await performDistribution(params);
+    expect(mockedGetCliToken).not.toHaveBeenCalled();
+    expect(findRepositoryById).toHaveBeenCalledTimes(1);
+  });
+
+  it('never asks the CLI when distribution is not required at all', async () => {
+    const { params } = makeHarness({ server: { type: 'local', isolationIntent: false } as ServerConfig });
+    await performDistribution(params);
+    expect(mockedGetCliToken).not.toHaveBeenCalled();
   });
 
   it('reports distribute_failed with the service error verbatim', async () => {

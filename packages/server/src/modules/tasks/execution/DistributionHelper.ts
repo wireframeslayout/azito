@@ -1,10 +1,11 @@
 import type { ServerConfig } from '../../servers/Server';
-import type { ProjectDetail, ProjectRepository } from '../../projects/Project';
+import type { ProjectDetail, ProjectRepository, ProjectRepositoryWithToken } from '../../projects/Project';
 import type { ProjectServer } from '../../projects/ProjectServer';
 import type { IProjectRepository } from '../../projects/Project';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import { resolveCanonicalRepositoryIdentity, type CanonicalRepositoryIdentity } from '../../git/resolveCanonicalRepositoryIdentity';
 import { normalizeBranchRef } from '../../git/assertSafeGitArgs';
+import { getCliToken, NO_CLI_TOKEN, type CliTokenLookup } from '../../git/providers/cliToken';
 import type { FetchDistributionService } from '../../git/hub-transfer/FetchDistributionService';
 import type { IDistributionStateRepository } from '../../git/hub-transfer/types';
 
@@ -345,10 +346,27 @@ export type DistributionPrerequisiteStage =
  * and reports a decryption failure as `unreadable` instead of failing the
  * whole response.
  */
+export type DistributionRepositoryFields = Pick<ProjectRepository, 'url' | 'provider' | 'owner' | 'repoName'>;
+
 export type DistributionRepositoryLookup =
-  | { status: 'ok'; repo: Pick<ProjectRepository, 'url' | 'provider' | 'owner' | 'repoName'>; token: string }
-  | { status: 'no_token' }
+  | { status: 'ok'; repo: DistributionRepositoryFields; token: string }
+  /**
+   * The row exists but carries no PAT. `repo` is then present and the check
+   * falls through to the hub's own `gh`/`glab` CLI credential for that
+   * repository's host (the second stage of the two-stage resolution in
+   * `docs/ja/github-integration.md`). `repo` is absent ONLY when there is no
+   * row at all to read an identity from — an id pointing at a deleted
+   * repository — in which case no CLI lookup is possible either.
+   */
+  | { status: 'no_token'; repo?: DistributionRepositoryFields }
   | { status: 'unreadable' };
+
+/**
+ * Which credential hub代行 distribution would authenticate with (Issue #87).
+ * `repository` = the `project_repositories` row's stored PAT; `cli` = the
+ * hub's own `gh`/`glab` CLI token for that repository's host.
+ */
+export type DistributionCredentialSource = 'repository' | 'cli';
 
 export interface CheckDistributionPrerequisitesParams {
   server: Pick<ServerConfig, 'type' | 'isolationIntent'>;
@@ -357,6 +375,20 @@ export interface CheckDistributionPrerequisitesParams {
   workingDir: string | null;
   /** Resolves the distribution target repository's credential — called at most once, only after the target id is known. */
   lookupRepository: (repositoryId: number) => DistributionRepositoryLookup;
+  /**
+   * ALREADY-RESOLVED view of the hub's `gh`/`glab` credentials
+   * ({@link resolveCliTokens}), consulted only when the repository itself
+   * carries no PAT.
+   *
+   * Passed in rather than resolved here because this function is
+   * synchronous and is rendered per row by GET /api/projects/:id/servers:
+   * spawning `gh` from inside it would block the event loop for the CLI's
+   * timeout on every poll. Callers resolve the (few, de-duplicated) hosts
+   * they actually need asynchronously first, then hand the result in. Pass
+   * {@link NO_CLI_TOKEN} for a caller that must not consider CLI
+   * credentials at all.
+   */
+  cliToken: CliTokenLookup;
   fetchDistributionService: FetchDistributionService | null;
 }
 
@@ -371,6 +403,16 @@ export type DistributionPrerequisiteResult =
       workingDir: string;
       /** Resolved, non-empty token for {@link repositoryId} — never surfaced outside this process. */
       token: string;
+      /**
+       * WHERE {@link token} came from: the repository's stored PAT
+       * (`repository`) or the hub operator's `gh`/`glab` login (`cli`).
+       *
+       * Surfaced through the API (never the token itself) because the two
+       * are not equivalent in durability: a `cli` credential is ambient
+       * operator environment and vanishes on `gh auth logout` with no
+       * change to any AZITO configuration.
+       */
+      credentialSource: DistributionCredentialSource;
       identity: CanonicalRepositoryIdentity;
       /** Non-null by construction: a null service fails as `service_not_wired`. */
       fetchDistributionService: FetchDistributionService;
@@ -400,7 +442,7 @@ export type DistributionPrerequisiteResult =
 export function checkDistributionPrerequisites(
   params: CheckDistributionPrerequisitesParams,
 ): DistributionPrerequisiteResult {
-  const { server, projectServer, project, workingDir, lookupRepository, fetchDistributionService } = params;
+  const { server, projectServer, project, workingDir, lookupRepository, cliToken, fetchDistributionService } = params;
 
   if (!isDistributionRequired(server, projectServer)) {
     return { required: false };
@@ -466,10 +508,16 @@ export function checkDistributionPrerequisites(
       message: 'Fetch distribution is required but the repository\'s stored credential could not be decrypted (master key mismatch or corrupted ciphertext)',
     };
   }
-  if (lookup.status === 'no_token') {
-    return { required: true, ok: false, stage: 'no_token', message: 'Fetch distribution is required but the repository has no token configured' };
-  }
+  const noToken = { required: true, ok: false, stage: 'no_token', message: 'Fetch distribution is required but the repository has no token configured' } as const;
+  // No row at all (the id names a deleted repository): no identity to
+  // resolve, so the CLI fallback has no host to ask about either.
+  if (!lookup.repo) return noToken;
 
+  // Resolved BEFORE the token decision, not after: the CLI fallback is
+  // per-host, so the canonical host must be known before it can be
+  // consulted. A repository whose URL does not normalize therefore reports
+  // `identity_unresolvable` (the reason it is undistributable) even when it
+  // also has no PAT.
   const identity = resolveCanonicalRepositoryIdentity(lookup.repo);
   if (!identity.ok) {
     return {
@@ -480,12 +528,30 @@ export function checkDistributionPrerequisites(
     };
   }
 
+  // Stage 1: the repository's own PAT. Stage 2: the hub's `gh`/`glab`
+  // credential for this host — `docs/ja/github-integration.md`'s documented
+  // two-stage resolution, which the provider API clients have always applied
+  // and distribution now applies too. `no_token` means BOTH are absent; the
+  // failure is never hidden behind a silent no-op.
+  let token: string;
+  let credentialSource: DistributionCredentialSource;
+  if (lookup.status === 'ok') {
+    token = lookup.token;
+    credentialSource = 'repository';
+  } else {
+    const cli = cliToken({ provider: identity.identity.provider, host: identity.identity.host });
+    if (!cli) return noToken;
+    token = cli;
+    credentialSource = 'cli';
+  }
+
   return {
     required: true,
     ok: true,
     repositoryId: repoEntry.id,
     workingDir,
-    token: lookup.token,
+    token,
+    credentialSource,
     identity: identity.identity,
     fetchDistributionService,
   };
@@ -539,6 +605,45 @@ export interface PerformDistributionParams {
 }
 
 /**
+ * The async half of `performDistribution`'s prerequisite phase: resolves the
+ * hub's `gh`/`glab` credential for the ONE repository this run would
+ * distribute, so the synchronous `checkDistributionPrerequisites` can consult
+ * it without spawning anything.
+ *
+ * Deliberately silent about every reason it might not find a target — it
+ * never reports a failure of its own. `checkDistributionPrerequisites` runs
+ * the same resolution immediately afterwards and owns every stage value and
+ * message; duplicating the diagnosis here would be the one way the two could
+ * drift apart.
+ *
+ * The CLI is asked ONLY when the repository has no PAT of its own, so a
+ * PAT-configured project never spawns a process here.
+ */
+async function resolveCliTokenForTarget(params: {
+  server: Pick<ServerConfig, 'type' | 'isolationIntent'>;
+  projectServer: Pick<ProjectServer, 'distributeCode' | 'distributionRepositoryId'> | null;
+  project: Pick<ProjectDetail, 'repositories'> | null;
+  findRepo: (repositoryId: number) => ProjectRepositoryWithToken | null;
+}): Promise<CliTokenLookup> {
+  const { server, projectServer, project, findRepo } = params;
+  if (!isDistributionRequired(server, projectServer)) return NO_CLI_TOKEN;
+
+  const repositoryId = projectServer?.distributionRepositoryId ?? null;
+  if (repositoryId === null) return NO_CLI_TOKEN;
+  if (!project?.repositories?.some((r) => r.id === repositoryId)) return NO_CLI_TOKEN;
+
+  const repo = findRepo(repositoryId);
+  if (!repo || repo.token) return NO_CLI_TOKEN;
+
+  const identity = resolveCanonicalRepositoryIdentity(repo);
+  if (!identity.ok) return NO_CLI_TOKEN;
+
+  const target = { provider: identity.identity.provider, host: identity.identity.host };
+  const token = await getCliToken(target);
+  return (asked) => (asked.provider === target.provider && asked.host === target.host ? token : null);
+}
+
+/**
  * Runs the full prerequisite validation (repository configured, exactly one
  * repository, token present, URL resolves to a canonical identity) and, if
  * all pass, the distribution itself — the same sequence
@@ -548,6 +653,22 @@ export interface PerformDistributionParams {
  */
 export async function performDistribution(params: PerformDistributionParams): Promise<DistributionOutcome> {
   const { server, projectServer, project, workingDir, baseBranch, taskBranch, transportFactory, projectRepo, fetchDistributionService, onBeforeDistribute } = params;
+
+  // Read (and decrypted) at most once even though both the CLI-token
+  // pre-pass below and `checkDistributionPrerequisites` itself need it.
+  let cachedRepo: ProjectRepositoryWithToken | null | undefined;
+  const findRepo = (repositoryId: number): ProjectRepositoryWithToken | null => {
+    if (cachedRepo === undefined) cachedRepo = projectRepo.findRepositoryById(repositoryId);
+    return cachedRepo;
+  };
+
+  // `checkDistributionPrerequisites` is synchronous by contract, so the
+  // hub's own `gh`/`glab` credential — needed only when the repository has
+  // no PAT of its own — is resolved here, asynchronously, before the check
+  // runs. Best effort by design: when this cannot even identify a target
+  // (distribution not required, no/unknown target repository, unnormalizable
+  // URL) it resolves nothing and the check below reports the real reason.
+  const cliToken = await resolveCliTokenForTarget({ server, projectServer, project, findRepo });
 
   // Every check that runs before the transport is obtained lives in
   // `checkDistributionPrerequisites` — the SAME function GET
@@ -565,9 +686,11 @@ export async function performDistribution(params: PerformDistributionParams): Pr
     // therefore never produced here; it exists for the read-only listing
     // path, which must degrade one row instead of the whole response.
     lookupRepository: (repositoryId) => {
-      const repo = projectRepo.findRepositoryById(repositoryId);
-      return repo?.token ? { status: 'ok', repo, token: repo.token } : { status: 'no_token' };
+      const repo = findRepo(repositoryId);
+      if (!repo) return { status: 'no_token' };
+      return repo.token ? { status: 'ok', repo, token: repo.token } : { status: 'no_token', repo };
     },
+    cliToken,
     fetchDistributionService,
   });
   if (!prerequisites.required) return { required: false };

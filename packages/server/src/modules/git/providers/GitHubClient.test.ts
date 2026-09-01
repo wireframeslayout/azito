@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { execFileSync } from 'child_process';
 import { GitHubClient } from './GitHubClient';
+import { clearCliTokenCache } from './cliToken';
 
 vi.mock('child_process', () => ({
   execFileSync: vi.fn(),
@@ -11,6 +12,9 @@ const mockedExecFileSync = vi.mocked(execFileSync);
 describe('GitHubClient token resolution (execFileSync argv safety)', () => {
   beforeEach(() => {
     mockedExecFileSync.mockReset();
+    // The CLI token cache is now process-wide (shared with hub代行 distribution),
+    // so it must be dropped between tests that stub different CLI outcomes.
+    clearCliTokenCache();
   });
 
   // Access the private getGhToken via the class's public surface indirectly is awkward here,
@@ -82,6 +86,7 @@ describe('GitHubClient.listAccessibleRepositories', () => {
 
   beforeEach(() => {
     mockedExecFileSync.mockReset();
+    clearCliTokenCache();
     fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
   });

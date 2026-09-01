@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { execFileSync } from 'child_process';
 import { GitLabClient } from './GitLabClient';
+import { clearCliTokenCache } from './cliToken';
 
 vi.mock('child_process', () => ({
   execFileSync: vi.fn(),
@@ -11,6 +12,9 @@ const mockedExecFileSync = vi.mocked(execFileSync);
 describe('GitLabClient token resolution (execFileSync argv safety)', () => {
   beforeEach(() => {
     mockedExecFileSync.mockReset();
+    // The CLI token cache is now process-wide (shared with hub代行 distribution),
+    // so it must be dropped between tests that stub different CLI outcomes.
+    clearCliTokenCache();
   });
 
   function getGlabToken(client: GitLabClient, host: string): string | null {
@@ -68,6 +72,7 @@ describe('GitLabClient.listAccessibleRepositories', () => {
 
   beforeEach(() => {
     mockedExecFileSync.mockReset();
+    clearCliTokenCache();
     fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
   });
