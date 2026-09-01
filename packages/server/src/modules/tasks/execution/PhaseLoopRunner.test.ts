@@ -1203,19 +1203,19 @@ describe('PhaseLoopRunner hub push notarization resolves PAT then hub CLI token 
 
     await runPushingPhase(runner, repoNoToken);
 
-    expect(appendLog).toHaveBeenCalledWith(1, 1, 'command', expect.objectContaining({ type: 'hub_push_start', credentialSource: 'cli' }));
-    expect(appendLog).toHaveBeenCalledWith(1, 1, 'command', expect.objectContaining({ type: 'hub_push_completed', credentialSource: 'cli' }));
+    expect(appendLog).toHaveBeenCalledWith(1, 1, 'command', expect.objectContaining({ type: 'hub_push_start', resolvedCredentialSource: 'cli' }));
+    expect(appendLog).toHaveBeenCalledWith(1, 1, 'command', expect.objectContaining({ type: 'hub_push_completed', resolvedCredentialSource: 'cli' }));
     const logged = JSON.stringify(appendLog.mock.calls);
     expect(logged).not.toContain('gh-cli-token');
     expect(logged).not.toContain('ghp_stored');
   });
 
-  it('logs credentialSource "repository" when the stored PAT was used', async () => {
+  it('logs resolvedCredentialSource "repository" when the stored PAT was used', async () => {
     const { runner, appendLog } = setupRun(repoWithToken);
 
     await runPushingPhase(runner, repoWithToken);
 
-    expect(appendLog).toHaveBeenCalledWith(1, 1, 'command', expect.objectContaining({ type: 'hub_push_start', credentialSource: 'repository' }));
+    expect(appendLog).toHaveBeenCalledWith(1, 1, 'command', expect.objectContaining({ type: 'hub_push_start', resolvedCredentialSource: 'repository' }));
     expect(JSON.stringify(appendLog.mock.calls)).not.toContain('ghp_stored');
   });
 });

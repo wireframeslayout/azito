@@ -468,16 +468,20 @@ credential helper). Issue #87 adds **hub-proxied push (push notarization)**, whi
 work without weakening that assumption: when `PhaseLoopRunner` reaches the `pushing` phase (any
 phase carrying the `pushVerify` flag), the worker still commits as normal, but the actual `git
 push` is never delegated to the worker. Instead `PushNotaryService` builds a bundle from the
-worker's worktree, pulls it to the hub over SFTP, and pushes it from the hub using the hub's own
-stored credential for that repository (`project_repositories.token`, configured in project
-settings). It then verifies the push landed via the provider API (the resulting SHA matches) and
+worker's worktree, pulls it to the hub over SFTP, and pushes it from the hub using **the hub's own git
+credential**. That credential resolves in the same two steps as
+[GitHub/GitLab integration](./github-integration.md): the repository's stored
+`project_repositories.token` (a PAT) first, then the hub's `gh` / `glab` CLI login
+(`gh auth token` / `glab config get token`). Which one was resolved is recorded in the execution
+log as `resolvedCredentialSource` (`repository` / `cli`) — never the token itself. Note that a CLI
+token depends on the operator's environment: `gh auth logout` breaks pushing without any
+configuration change. It then verifies the push landed via the provider API (the resulting SHA matches) and
 creates the PR if one is still missing. The isolated server never receives anything resembling
 `gh` auth or an SSH deploy key — the only thing that leaves it is the bundle/SHA needed to push.
 
-When hub-proxied push cannot go through (`PushNotaryService` isn't wired, or the target repository
-has no push token configured), the `pushing` phase is **skipped automatically**, exactly as
-before. The skip is recorded in the execution log as `pushing_skipped_isolated` (service not
-wired) or `hub_push_skipped` (no token, or worktree/branch unresolved); once every other phase has
+When hub-proxied push cannot go through (`PushNotaryService` isn't wired, or **neither a PAT nor a
+CLI token is available**), the `pushing` phase is **skipped automatically**, exactly as before. The skip is recorded in the execution log as `pushing_skipped_isolated` (service not
+wired) or `hub_push_skipped` (neither PAT nor CLI token, or worktree/branch unresolved); once every other phase has
 completed normally, the task transitions to `review` the same way a testing-terminated run would.
 In that case, commit, push, and PR creation must be done manually by the operator.
 

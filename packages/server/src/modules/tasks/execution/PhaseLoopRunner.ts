@@ -702,7 +702,7 @@ export class PhaseLoopRunner {
         // in one and skipped in the other.
         const pushCredential = await resolvePushCredential(probeRepo);
         if (pushCredential) {
-          this.appendLog(task.id, unit.id, 'command', { type: 'hub_push_start', credentialSource: pushCredential.source });
+          this.appendLog(task.id, unit.id, 'command', { type: 'hub_push_start', resolvedCredentialSource: pushCredential.source });
           const currentTaskForPush = this.taskRepo.findById(task.id);
           const probeDir = await (async () => {
             const wtPath = currentTaskForPush?.worktreePath;
@@ -729,12 +729,17 @@ export class PhaseLoopRunner {
               this.taskRepo.updateStatus(task.id, 'failed');
               return;
             }
-            // `credentialSource` (never the token itself) is recorded on the
+            // `resolvedCredentialSource` names which credential was RESOLVED
+            // for this notarization, not necessarily one that pushed:
+            // `notarize()` can return `already_up_to_date` without pushing at
+            // all (PushNotaryService.ts). The sibling `status` field is what
+            // says whether a push happened; this field only answers "which
+            // credential would have been / was used". Never the token itself —
             // completion too: a `cli` credential is ambient hub-operator
             // environment that `gh auth logout` removes without any AZITO
             // configuration changing, so a later reader of this log must be
             // able to tell which credential a past push actually used.
-            this.appendLog(task.id, unit.id, 'command', { type: 'hub_push_completed', sha: notaryResult.sha, status: notaryResult.status, credentialSource: pushCredential.source });
+            this.appendLog(task.id, unit.id, 'command', { type: 'hub_push_completed', sha: notaryResult.sha, status: notaryResult.status, resolvedCredentialSource: pushCredential.source });
             if (!currentTaskForPush?.skipPr) {
               try {
                 await this.pullRequestCreator.ensureCreated(task.id, unit.id, probeRepo, probeBranch, {

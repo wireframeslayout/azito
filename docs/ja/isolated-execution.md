@@ -453,14 +453,19 @@ curl -v <hub-webhook-url>             # 隔離サーバー -> hub の webhook �
 notarization）** が実装されました: `PhaseLoopRunner` は `pushing` フェーズ（`pushVerify` フラグ
 を持つフェーズ）に到達すると、通常どおりワーカーにコミットまで行わせますが、実際の `git push`
 はワーカーにやらせず、`PushNotaryService` がワーカーの worktree から bundle を作成して SFTP で
-ハブへ取得し、ハブ側で hub が保持する当該リポジトリの `project_repositories.token`（プロジェクト
-設定の資格情報）を使って push します。push 後にプロバイダ API 経由で反映を検証し（期待した SHA
+ハブへ取得し、**ハブ側の git 資格情報**を使って push します。資格情報は
+[GitHub/GitLab 連携](./github-integration.md)と同じ二段階で解決されます — まずプロジェクトに
+設定された `project_repositories.token`（PAT）、無ければハブの `gh` / `glab` CLI ログイン
+（`gh auth token` / `glab config get token`）。どちらを使ったかは実行ログの
+`resolvedCredentialSource`（`repository` / `cli`）に記録されます（トークンの値は記録しません）。
+CLI トークンは操作者の環境依存で、`gh auth logout` すると設定を変えていなくても push が成立
+しなくなる点に注意してください。push 後にプロバイダ API 経由で反映を検証し（期待した SHA
 と一致するか）、PR 未作成なら続けて作成します。隔離サーバー自身は push 用の SHA/bundle 以外の
 何も持ち出さず、gh 認証や SSH 鍵に相当するものを一度も受け取りません。
 
-hub 代行 push が成立しない場合（`PushNotaryService` が配線されていない、または対象リポジトリに
-push 用トークンが設定されていない）は、`pushing` フェーズは**自動的にスキップ**されます。実行
-ログに `pushing_skipped_isolated`（サービス未配線）または `hub_push_skipped`（トークン未設定・
+hub 代行 push が成立しない場合（`PushNotaryService` が配線されていない、または**PAT と CLI
+トークンのどちらも利用できない**）は、`pushing` フェーズは**自動的にスキップ**されます。実行
+ログに `pushing_skipped_isolated`（サービス未配線）または `hub_push_skipped`（PAT・CLI トークンとも不在、または
 worktree/branch 不明）として記録され、他の全フェーズが正常完了していれば testing 終端と同じ扱い
 でタスクは `review` へ遷移します。この場合はコミット・プッシュ・PR 作成を operator が手動で
 行ってください。
