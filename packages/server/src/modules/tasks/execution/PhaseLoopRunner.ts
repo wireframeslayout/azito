@@ -158,12 +158,20 @@ export class PhaseLoopRunner {
    * calls resolveExecutionManifest(), so a trusted task never resolves a
    * manifest (no per-phase file I/O) here.
    *
-   * Returns true when the phase may proceed. Returns false when it blocked —
-   * the caller must stop the loop (send nothing, launch nothing) without
-   * throwing, since the block itself is the intended outcome, not a failure.
+   * Returns `{ allowed: true }` when the phase may proceed, or
+   * `{ allowed: false }` when it blocked — the caller must stop the loop
+   * (send nothing, launch nothing) without throwing, since the block itself
+   * is the intended outcome, not a failure.
+   *
+   * Also returns the `serverConfig` that `resolveExecutionManifest()` resolved
+   * for this phase (#88): the caller reuses it for isolation-cutoff decisions
+   * so an untrusted task pays zero extra `serverRepo.findByName()` calls for
+   * the cutoff (the manifest already resolved one). For trusted tasks the gate
+   * short-circuits before any manifest resolution, so `serverConfig` is `null`
+   * and the caller reads the server row itself — one read per phase, not two.
    */
-  private reverifyExecutionGateForPhase(taskId: number, currentTask: Task, loopUnitId: number): boolean {
-    if (currentTask.inputTrust !== 'untrusted') return true;
+  private reverifyExecutionGateForPhase(taskId: number, currentTask: Task, loopUnitId: number): { allowed: boolean; serverConfig: ServerConfig | null } {
+    if (currentTask.inputTrust !== 'untrusted') return { allowed: true, serverConfig: null };
 
     // 'continuation': this is a per-phase re-check mid-run — the run's own
     // execute()/resumeStateMachine() entry already passed its own
@@ -209,7 +217,7 @@ export class PhaseLoopRunner {
         allowDegradedReason: effective.allowDegradedReason,
       });
     }
-    if (gate.allowed) return true;
+    if (gate.allowed) return { allowed: true, serverConfig };
 
     if (unitId !== null) {
       this.appendLog(taskId, unitId, 'command', { type: 'execution_gate_blocked', reason: gate.reason });
@@ -260,7 +268,7 @@ export class PhaseLoopRunner {
       }
       this.taskRepo.updateStatus(taskId, 'failed');
     }
-    return false;
+    return { allowed: false, serverConfig };
   }
 
   private async ensureSidekicksSynced(server: ServerConfig): Promise<void> {
@@ -382,9 +390,23 @@ export class PhaseLoopRunner {
       // never run for the one phase it guards. See
       // reverifyExecutionGateForPhase's doc comment.
       const currentTask = this.taskRepo.findById(task.id);
-      if (currentTask && !this.reverifyExecutionGateForPhase(task.id, currentTask, unit.id)) {
-        return;
+      let gateServerConfig: ServerConfig | null = null;
+      if (currentTask) {
+        const gateResult = this.reverifyExecutionGateForPhase(task.id, currentTask, unit.id);
+        if (!gateResult.allowed) {
+          return;
+        }
+        gateServerConfig = gateResult.serverConfig;
       }
+
+      // #88: re-read isolationIntent at judgment time, not run start.
+      // For untrusted tasks, reverifyExecutionGateForPhase already re-read the
+      // server row via resolveExecutionManifest — reuse that to avoid a double
+      // read. For trusted tasks (gate short-circuited), read it ourselves.
+      // When the server row itself cannot be fetched (deleted mid-run), fall
+      // back to the run-start snapshot — same safe-side behavior as before.
+      const currentServer = gateServerConfig ?? this.serverRepo.findByName(server.name);
+      const currentIsolationIntent = currentServer ? currentServer.isolationIntent : server.isolationIntent;
 
       // Isolation cutoff (Issue #29 docs review, Important finding 1):
       // isolated agent servers never hold push credentials (see
@@ -394,7 +416,7 @@ export class PhaseLoopRunner {
       // reaching this branch signals a configuration defect. An isolated
       // server has no other push path, so skipping would let the task
       // complete with nothing pushed — fail instead.
-      if (server.isolationIntent === true && phaseDef.pushVerify && !this.pushNotaryService) {
+      if (currentIsolationIntent === true && phaseDef.pushVerify && !this.pushNotaryService) {
         this.taskRepo.updateCurrentPhase(task.id, phase);
         this.appendLog(task.id, unit.id, 'status_change', {
           status: 'hub_push_failed',
@@ -506,7 +528,7 @@ export class PhaseLoopRunner {
       }
 
       let pushingProbe: (() => Promise<boolean>) | undefined;
-      if (phaseDef.pushVerify && !(server.isolationIntent && this.pushNotaryService)) {
+      if (phaseDef.pushVerify && !(currentIsolationIntent && this.pushNotaryService)) {
         const currentTaskForProbe = this.taskRepo.findById(task.id);
         const probeDir = await (async () => {
           const wtPath = currentTaskForProbe?.worktreePath;
@@ -625,7 +647,7 @@ export class PhaseLoopRunner {
       this.appendLog(task.id, unit.id, 'command', { type: 'phase_completed', phase, summary: phaseSummary ?? null });
 
       // Hub push notarization for isolated servers (Issue #87 Phase 2)
-      if (server.isolationIntent && phaseDef.pushVerify && this.pushNotaryService
+      if (currentIsolationIntent && phaseDef.pushVerify && this.pushNotaryService
           && classification.status === 'phase_complete') {
         // Issue #87 13th-round review, Important finding: the hub push
         // notary must target the SAME repository fetch distribution pulled
@@ -635,7 +657,7 @@ export class PhaseLoopRunner {
         // `projectRepo.findById()`/`resolveExecutionRepositoryEntry()`
         // re-resolution — see this method's parameter doc comment.
         if (!distributionRepoEntry) {
-          // `server.isolationIntent` gates this whole block, so
+          // `currentIsolationIntent` gates this whole block, so
           // `isDistributionRequired` is true here and
           // `resolveExecutionRepositoryEntry` NEVER falls back to
           // `project.repositories[0]` for it (see that function's doc
