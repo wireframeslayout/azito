@@ -51,6 +51,9 @@ function mockRemoteBundleOps(overrides: Record<string, any> = {}) {
     // identity-verification describe block below, which overrides this
     // explicitly per test.
     getOriginUrl: vi.fn(async () => DUMMY_ORIGIN_URL),
+    detectPartialClone: vi.fn(async () => false),
+    resolvePartialClone: vi.fn(async () => {}),
+    setGitIdentity: vi.fn(async () => {}),
     ...overrides,
   } as any;
 }
@@ -118,7 +121,7 @@ describe('FetchDistributionService', () => {
       getMirrorBranchSha: vi.fn(async () => sha),
       repoExists: vi.fn(async () => true),
     });
-    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const result = await service.distribute(makeParams());
     expect(result.status).toBe('already_current');
     expect(result.sha).toBe(sha);
@@ -144,7 +147,7 @@ describe('FetchDistributionService', () => {
     });
     const sftpService = mockSftpService();
     const distRepo = mockDistRepo();
-    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, sftpService, distRepo);
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, sftpService, distRepo, null, { name: 'Test Op', email: 'test@example.com' });
     const result = await service.distribute(makeParams());
     expect(result.status).toBe('distributed');
     expect(result.bundleType).toBe('full');
@@ -169,7 +172,7 @@ describe('FetchDistributionService', () => {
       // server, so `git branch -f` refuses.
       syncLocalBranchToTracking: vi.fn(async () => false),
     });
-    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const result = await service.distribute(makeParams());
     expect(result.status).toBe('already_current');
     expect(result.localBranchSynced).toBe(false);
@@ -182,7 +185,7 @@ describe('FetchDistributionService', () => {
       repoExists: vi.fn(async () => true),
     });
     const hubRepoCache = mockHubRepoCache();
-    const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, mockSftpService(), mockDistRepo());
+    const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const result = await service.distribute(makeParams());
     expect(result.status).toBe('distributed');
     expect(result.bundleType).toBe('incremental');
@@ -207,7 +210,7 @@ describe('FetchDistributionService', () => {
     });
     const hubRepoCache = mockHubRepoCache();
     const distRepo = mockDistRepo();
-    const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, mockSftpService(), distRepo);
+    const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, mockSftpService(), distRepo, null, { name: 'Test Op', email: 'test@example.com' });
     const result = await service.distribute(makeParams());
     expect(result.status).toBe('distributed');
     expect(result.bundleType).toBe('incremental');
@@ -226,7 +229,7 @@ describe('FetchDistributionService', () => {
     });
     const hubRepoCache = mockHubRepoCache();
     const sftpService = mockSftpService();
-    const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService, mockDistRepo());
+    const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService, mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const result = await service.distribute(makeParams());
     expect(result.status).toBe('distributed');
     expect(result.bundleType).toBe('full');
@@ -245,7 +248,7 @@ describe('FetchDistributionService', () => {
     });
     const hubRepoCache = mockHubRepoCache();
     const sftpService = mockSftpService();
-    const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService, mockDistRepo());
+    const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService, mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const result = await service.distribute(makeParams());
     expect(result.status).toBe('distributed');
     expect(result.bundleType).toBe('full');
@@ -266,7 +269,7 @@ describe('FetchDistributionService', () => {
     });
     const hubRepoCache = mockHubRepoCache();
     const sftpService = { upload: vi.fn(async () => { throw new Error('ECONNREFUSED'); }) };
-    const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService as any, mockDistRepo());
+    const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService as any, mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const result = await service.distribute(makeParams());
     expect(result.status).toBe('failed');
     expect(result.error).toContain('ECONNREFUSED');
@@ -297,7 +300,7 @@ describe('FetchDistributionService', () => {
     });
     const hubRepoCache = mockHubRepoCache();
     const sftpService = mockSftpService();
-    const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService, mockDistRepo());
+    const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService, mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const result = await service.distribute(makeParams());
     expect(result.status).toBe('failed');
     // Only the one (incremental) attempt — no fallback full bundle was
@@ -325,7 +328,7 @@ describe('FetchDistributionService', () => {
     });
     const hubRepoCache = mockHubRepoCache();
     const sftpService = mockSftpService();
-    const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService, mockDistRepo());
+    const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService, mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const result = await service.distribute(makeParams());
     expect(result.status).toBe('distributed');
     expect(result.bundleType).toBe('full');
@@ -351,7 +354,7 @@ describe('FetchDistributionService', () => {
         throw new Error('rm -f: connection lost');
       }),
     });
-    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const result = await service.distribute(makeParams());
     expect(result.status).toBe('failed');
     expect(result.error).toContain('transport/execution failure');
@@ -364,14 +367,14 @@ describe('FetchDistributionService', () => {
       repoExists: vi.fn(async () => false),
       fetchBundleIntoMirror: vi.fn(async () => { throw new Error('git fetch bundle into mirror failed: fatal: disk full'); }),
     });
-    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const result = await service.distribute(makeParams());
     expect(result.status).toBe('failed');
     expect(remoteBundleOps.fetchBundleIntoMirror).toHaveBeenCalledTimes(1);
   });
 
   it('returns failed when sshHost is missing', async () => {
-    const service = new FetchDistributionService(mockHubRepoCache(), mockRemoteBundleOps(), mockSftpService(), mockDistRepo());
+    const service = new FetchDistributionService(mockHubRepoCache(), mockRemoteBundleOps(), mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const result = await service.distribute(makeParams({ server: makeServer({ sshHost: null }) }));
     expect(result.status).toBe('failed');
     expect(result.error).toContain('sshHost');
@@ -379,7 +382,7 @@ describe('FetchDistributionService', () => {
 
   it('returns failed when hub fetch throws', async () => {
     const hubRepoCache = mockHubRepoCache({ ensureFetched: vi.fn(() => { throw new Error('auth failed'); }) });
-    const service = new FetchDistributionService(hubRepoCache, mockRemoteBundleOps(), mockSftpService(), mockDistRepo());
+    const service = new FetchDistributionService(hubRepoCache, mockRemoteBundleOps(), mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const result = await service.distribute(makeParams());
     expect(result.status).toBe('failed');
     expect(result.error).toContain('auth failed');
@@ -436,7 +439,7 @@ describe('FetchDistributionService', () => {
       };
 
       const hubRepoCache = mockHubRepoCache();
-      const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService as any, mockDistRepo());
+      const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService as any, mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
 
       const first = service.distribute(makeParams());
       // Give the first call a chance to actually start before queuing the second.
@@ -493,7 +496,7 @@ describe('FetchDistributionService', () => {
         }),
       };
 
-      const service = new FetchDistributionService(mockHubRepoCache(), mockRemoteBundleOps(), sftpService as any, mockDistRepo());
+      const service = new FetchDistributionService(mockHubRepoCache(), mockRemoteBundleOps(), sftpService as any, mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
 
       // Same repoIdentity (same mirror), different repositoryId rows.
       // (The inner repoHash-keyed lock added for Issue #87 review finding 1
@@ -537,7 +540,7 @@ describe('FetchDistributionService', () => {
         }),
       };
 
-      const service = new FetchDistributionService(mockHubRepoCache(), mockRemoteBundleOps(), sftpService as any, mockDistRepo());
+      const service = new FetchDistributionService(mockHubRepoCache(), mockRemoteBundleOps(), sftpService as any, mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
       const otherIdentity: CanonicalRepositoryIdentity = {
         ...identity,
         repo: 'other-repo',
@@ -592,7 +595,7 @@ describe('FetchDistributionService', () => {
       // resolves homeDir to a fixed value regardless of the transport passed
       // in), but distinct server names — the two rows are registered
       // separately in the DB, yet describe the same physical machine/account.
-      const service = new FetchDistributionService(mockHubRepoCache(), mockRemoteBundleOps(), sftpService as any, mockDistRepo());
+      const service = new FetchDistributionService(mockHubRepoCache(), mockRemoteBundleOps(), sftpService as any, mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
 
       const a = service.distribute(makeParams({ server: makeServer({ name: 'alias-a', sshHost: 'user@shared-host' }) }));
       await flushAsync();
@@ -630,7 +633,7 @@ describe('FetchDistributionService', () => {
         }),
       };
 
-      const service = new FetchDistributionService(mockHubRepoCache(), mockRemoteBundleOps(), sftpService as any, mockDistRepo());
+      const service = new FetchDistributionService(mockHubRepoCache(), mockRemoteBundleOps(), sftpService as any, mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
 
       const a = service.distribute(makeParams({ server: makeServer({ name: 'server-a', sshHost: 'user@host-a' }) }));
       await flushAsync();
@@ -694,7 +697,7 @@ describe('FetchDistributionService', () => {
         }),
       };
 
-      const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService as any, mockDistRepo());
+      const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService as any, mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
 
       const a = service.distribute(makeParams({ server: makeServer({ name: 'server-a', sshHost: 'user@host-a' }) }));
       await flushAsync();
@@ -781,7 +784,7 @@ describe('FetchDistributionService', () => {
         }),
       };
 
-      const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService as any, mockDistRepo());
+      const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService as any, mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
 
       const a = service.distribute(makeParams({ server: makeServer({ name: 'server-a', sshHost: 'user@host-a' }) }));
       await flushAsync();
@@ -851,7 +854,7 @@ describe('FetchDistributionService', () => {
           .mockResolvedValueOnce(undefined),
       });
       const distRepo = mockDistRepo();
-      const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, mockSftpService(), distRepo);
+      const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, mockSftpService(), distRepo, null, { name: 'Test Op', email: 'test@example.com' });
 
       const result = await service.distribute(makeParams());
 
@@ -901,7 +904,7 @@ describe('FetchDistributionService workingDir serialization (Issue #87 review, 8
       }),
     });
 
-    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const otherIdentity: CanonicalRepositoryIdentity = {
       ...identity,
       repo: 'other-repo',
@@ -949,7 +952,7 @@ describe('FetchDistributionService workingDir serialization (Issue #87 review, 8
       }),
     });
 
-    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const otherIdentity: CanonicalRepositoryIdentity = {
       ...identity,
       repo: 'other-repo',
@@ -993,7 +996,7 @@ describe('FetchDistributionService workingDir serialization (Issue #87 review, 8
       }),
     });
 
-    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const otherIdentity: CanonicalRepositoryIdentity = {
       ...identity,
       repo: 'other-repo',
@@ -1056,7 +1059,7 @@ describe('FetchDistributionService lock key host normalization (Issue #87 review
     };
 
     const service = new FetchDistributionService(
-      mockHubRepoCache(), mockRemoteBundleOps(), sftpService as any, mockDistRepo(), sshHostResolver,
+      mockHubRepoCache(), mockRemoteBundleOps(), sftpService as any, mockDistRepo(), sshHostResolver, { name: 'Test Op', email: 'test@example.com' },
     );
 
     // 'user@host' (implicit port 22) and 'user@host:22' (explicit) resolve
@@ -1098,7 +1101,7 @@ describe('FetchDistributionService lock key host normalization (Issue #87 review
     };
 
     const service = new FetchDistributionService(
-      mockHubRepoCache(), mockRemoteBundleOps(), sftpService as any, mockDistRepo(), sshHostResolver,
+      mockHubRepoCache(), mockRemoteBundleOps(), sftpService as any, mockDistRepo(), sshHostResolver, { name: 'Test Op', email: 'test@example.com' },
     );
 
     const a = service.distribute(makeParams({ server: makeServer({ name: 'server-a', sshHost: 'user@host-a' }) }));
@@ -1137,7 +1140,7 @@ describe('FetchDistributionService lock key host normalization (Issue #87 review
 
     // No 5th constructor arg — mirrors the pre-fix behavior / any caller
     // (e.g. a test) that doesn't care about alias collapsing.
-    const service = new FetchDistributionService(mockHubRepoCache(), mockRemoteBundleOps(), sftpService as any, mockDistRepo());
+    const service = new FetchDistributionService(mockHubRepoCache(), mockRemoteBundleOps(), sftpService as any, mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
 
     const a = service.distribute(makeParams({ server: makeServer({ name: 'server-a', sshHost: 'user@same-host' }) }));
     await flushAsync();
@@ -1169,7 +1172,7 @@ describe('FetchDistributionService workingDir repoHash stamp verification (Issue
       repoExists: vi.fn(async () => true),
       getStampedRepoHash: vi.fn(async () => computeRepoHash(otherIdentity)),
     });
-    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const result = await service.distribute(makeParams());
     expect(result.status).toBe('failed');
     expect((result as any).error).toMatch(/different repository/);
@@ -1184,7 +1187,7 @@ describe('FetchDistributionService workingDir repoHash stamp verification (Issue
       repoExists: vi.fn(async () => true),
       getStampedRepoHash: vi.fn(async () => null),
     });
-    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const result = await service.distribute(makeParams());
     expect(result.status).toBe('already_current');
     // Back-compat: no stamp existed, so distribution still proceeds normally...
@@ -1199,7 +1202,7 @@ describe('FetchDistributionService workingDir repoHash stamp verification (Issue
       repoExists: vi.fn(async () => true),
       getStampedRepoHash: vi.fn(async () => repoHash),
     });
-    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const result = await service.distribute(makeParams());
     expect(result.status).toBe('already_current');
     expect(remoteBundleOps.fetchWorkingDirFromMirror).toHaveBeenCalled();
@@ -1212,7 +1215,7 @@ describe('FetchDistributionService workingDir repoHash stamp verification (Issue
       getMirrorBranchSha: vi.fn(async () => null),
       repoExists: vi.fn(async () => false),
     });
-    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const result = await service.distribute(makeParams());
     expect(result.status).toBe('distributed');
     expect(remoteBundleOps.cloneWorkingDirFromMirror).toHaveBeenCalled();
@@ -1231,7 +1234,7 @@ describe('FetchDistributionService workingDir repoHash stamp verification (Issue
       getMirrorBranchSha: vi.fn(async () => null),
       repoExists: vi.fn(async () => false),
     });
-    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     await service.distribute(makeParams());
 
     expect(remoteBundleOps.setDummyOrigin).toHaveBeenCalled();
@@ -1253,7 +1256,7 @@ describe('FetchDistributionService workingDir repoHash stamp verification (Issue
       repoExists: vi.fn(async () => false),
       stampRepoHash: vi.fn(async () => { throw new Error('transient stamp failure'); }),
     });
-    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
 
     const failedResult = await service.distribute(makeParams());
     expect(failedResult.status).toBe('failed');
@@ -1268,7 +1271,7 @@ describe('FetchDistributionService workingDir repoHash stamp verification (Issue
       getStampedRepoHash: vi.fn(async () => null),
       getOriginUrl: vi.fn(async () => DUMMY_ORIGIN_URL),
     });
-    const retryService = new FetchDistributionService(mockHubRepoCache(), retryOps, mockSftpService(), mockDistRepo());
+    const retryService = new FetchDistributionService(mockHubRepoCache(), retryOps, mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const retryResult = await retryService.distribute(makeParams());
 
     expect(retryResult.status).toBe('already_current');
@@ -1287,7 +1290,7 @@ describe('FetchDistributionService unstamped-workingDir identity verification (I
       getStampedRepoHash: vi.fn(async () => null),
       getOriginUrl: vi.fn(async () => identity.httpsUrl),
     });
-    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const result = await service.distribute(makeParams());
 
     expect(result.status).toBe('already_current');
@@ -1308,7 +1311,7 @@ describe('FetchDistributionService unstamped-workingDir identity verification (I
       getStampedRepoHash: vi.fn(async () => null),
       getOriginUrl: vi.fn(async () => 'https://github.com/someone-else/other-repo.git'),
     });
-    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const result = await service.distribute(makeParams());
 
     expect(result.status).toBe('failed');
@@ -1326,7 +1329,7 @@ describe('FetchDistributionService unstamped-workingDir identity verification (I
       getStampedRepoHash: vi.fn(async () => null),
       getOriginUrl: vi.fn(async () => 'https://azito-isolated-no-direct-access.invalid/repo.git'),
     });
-    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const result = await service.distribute(makeParams());
 
     expect(result.status).toBe('already_current');
@@ -1347,7 +1350,7 @@ describe('FetchDistributionService unstamped-workingDir identity verification (I
       getStampedRepoHash: vi.fn(async () => null),
       getOriginUrl: vi.fn(async () => null),
     });
-    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const result = await service.distribute(makeParams());
 
     expect(result.status).toBe('failed');
@@ -1374,7 +1377,7 @@ describe('FetchDistributionService unstamped-workingDir identity verification (I
       getStampedRepoHash: vi.fn(async () => null),
       getOriginUrl: vi.fn(async () => originWithoutGitSuffix),
     });
-    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const result = await service.distribute(makeParams());
 
     expect(result.status).toBe('already_current');
@@ -1393,7 +1396,7 @@ describe('FetchDistributionService unstamped-workingDir identity verification (I
       getStampedRepoHash: vi.fn(async () => null),
       getOriginUrl: vi.fn(async () => originWithCreds),
     });
-    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const result = await service.distribute(makeParams());
 
     expect(result.status).toBe('failed');
@@ -1412,7 +1415,7 @@ describe('FetchDistributionService unstamped-workingDir identity verification (I
       getStampedRepoHash: vi.fn(async () => null),
       getOriginUrl: vi.fn(async () => originWithCreds),
     });
-    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const result = await service.distribute(makeParams());
 
     expect(result.status).toBe('failed');
@@ -1442,7 +1445,7 @@ describe('FetchDistributionService unstamped-workingDir identity verification (I
       getStampedRepoHash: vi.fn(async () => null),
       getOriginUrl: vi.fn(async () => originWithCreds),
     });
-    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const result = await service.distribute(makeParams({ repoIdentity: targetWithCreds }));
 
     expect(result.status).toBe('failed');
@@ -1470,7 +1473,7 @@ describe('FetchDistributionService onBeforeWorkingDirChange (Issue #87 review, f
       getMirrorBranchSha: vi.fn(async () => sha),
       repoExists: vi.fn(async () => true),
     });
-    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const calls: string[] = [];
     const onBeforeWorkingDirChange = vi.fn(() => calls.push('onBeforeWorkingDirChange'));
     remoteBundleOps.ensureDetachedHead = vi.fn(async () => { calls.push('ensureWorkingDir'); });
@@ -1488,7 +1491,7 @@ describe('FetchDistributionService onBeforeWorkingDirChange (Issue #87 review, f
       getMirrorBranchSha: vi.fn(async () => null),
       repoExists: vi.fn(async () => true),
     });
-    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const calls: string[] = [];
     const onBeforeWorkingDirChange = vi.fn(() => calls.push('onBeforeWorkingDirChange'));
     remoteBundleOps.ensureDetachedHead = vi.fn(async () => { calls.push('ensureWorkingDir'); });
@@ -1502,7 +1505,7 @@ describe('FetchDistributionService onBeforeWorkingDirChange (Issue #87 review, f
 
   it('does NOT fire when distribute() fails before ever touching workingDir (e.g. no sshHost configured)', async () => {
     const remoteBundleOps = mockRemoteBundleOps();
-    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const onBeforeWorkingDirChange = vi.fn();
 
     const result = await service.distribute(makeParams({ server: makeServer({ sshHost: null }), onBeforeWorkingDirChange }));
@@ -1515,7 +1518,7 @@ describe('FetchDistributionService onBeforeWorkingDirChange (Issue #87 review, f
     const remoteBundleOps = mockRemoteBundleOps({
       resolveHomeDir: vi.fn(async () => { throw new Error('ssh connection refused'); }),
     });
-    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo());
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const onBeforeWorkingDirChange = vi.fn();
 
     const result = await service.distribute(makeParams({ onBeforeWorkingDirChange }));
@@ -1531,7 +1534,7 @@ describe('FetchDistributionService onBeforeWorkingDirChange (Issue #87 review, f
     const remoteBundleOps = mockRemoteBundleOps({
       getMirrorBranchSha: vi.fn(async () => null),
     });
-    const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, mockSftpService(), mockDistRepo());
+    const service = new FetchDistributionService(hubRepoCache, remoteBundleOps, mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
     const onBeforeWorkingDirChange = vi.fn();
 
     const result = await service.distribute(makeParams({ onBeforeWorkingDirChange }));

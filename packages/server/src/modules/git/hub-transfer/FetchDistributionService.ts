@@ -189,6 +189,7 @@ export class FetchDistributionService {
     // tests that don't care about alias collapsing) falls back to the raw
     // string — see `resolveHostIdentityForLockKey()`.
     private sshHostResolver: { resolveHost(hostStr: string): { host: string; port: number; username: string } } | null = null,
+    private hubGitIdentity: { name: string; email: string } | null = null,
   ) {}
 
   // Falls back to the raw `sshHost` string (prefixed so it can never collide
@@ -223,6 +224,20 @@ export class FetchDistributionService {
 
   async distribute(params: FetchDistributionParams): Promise<FetchDistributionResult> {
     const { server, transport, repoIdentity } = params;
+
+    // #124 Bug 5: isolated servers MUST have a hub git identity configured.
+    // Without it, commits use the server's local default (whoami@hostname),
+    // leaking internal hostnames into public repository history.
+    if (server.isolationIntent && !this.hubGitIdentity) {
+      return {
+        status: 'failed',
+        error: 'Hub git identity (user.name / user.email) is not configured. '
+          + 'Commits on isolated servers would use the server\'s local default, '
+          + 'which may leak internal hostnames into public repository history. '
+          + 'Configure: git config --global user.name "..." && git config --global user.email "..."',
+      };
+    }
+
     const sshHost = server.sshHost;
     if (!sshHost) {
       return { status: 'failed', error: 'Server has no sshHost configured for SFTP transfer' };
@@ -297,7 +312,7 @@ export class FetchDistributionService {
         // on `FetchDistributionParams`.
         onBeforeWorkingDirChange?.();
         const localBranchSynced = await this.workingDirMutex.withLock(workingDirLockKey, () =>
-          this.ensureWorkingDir(transport, mirrorDir, workingDir, branch, repoHash, repoIdentity));
+          this.ensureWorkingDir(transport, mirrorDir, workingDir, branch, repoHash, repoIdentity, server.isolationIntent ?? undefined));
         return { status: 'already_current', sha: prep.headSha, localBranchSynced };
       }
 
@@ -311,7 +326,7 @@ export class FetchDistributionService {
       // change.
       onBeforeWorkingDirChange?.();
       const localBranchSynced = await this.workingDirMutex.withLock(workingDirLockKey, () =>
-        this.ensureWorkingDir(transport, mirrorDir, workingDir, branch, repoHash, repoIdentity));
+        this.ensureWorkingDir(transport, mirrorDir, workingDir, branch, repoHash, repoIdentity, server.isolationIntent ?? undefined));
 
       this.distributionStateRepo.upsert(server.name, repositoryId, delivered.headSha, delivered.bundleType);
 
@@ -556,7 +571,7 @@ export class FetchDistributionService {
    *     destroy an unrelated repository" — the latter is the only
    *     acceptable default here.
    */
-  private async ensureWorkingDir(transport: IServerTransport, mirrorDir: string, workingDir: string, branch: string, repoHash: string, repoIdentity: CanonicalRepositoryIdentity): Promise<boolean> {
+  private async ensureWorkingDir(transport: IServerTransport, mirrorDir: string, workingDir: string, branch: string, repoHash: string, repoIdentity: CanonicalRepositoryIdentity, isolationIntent?: boolean): Promise<boolean> {
     const exists = await this.remoteBundleOps.repoExists(transport, workingDir);
     if (exists) {
       const stampedRepoHash = await this.remoteBundleOps.getStampedRepoHash(transport, workingDir);
@@ -570,6 +585,14 @@ export class FetchDistributionService {
         // Confirms identity (or accepts back-compat ambiguity) and stamps
         // BEFORE any mutation below — see this method's doc comment.
         await this.verifyUnstampedIdentity(transport, workingDir, repoHash, repoIdentity);
+      }
+      // #124 Bug 2: detect and resolve partial clone before any operation
+      // that needs blob objects. resolvePartialClone temporarily sets origin
+      // to mirrorDir; setDummyOrigin below restores the dummy.
+      const isPartialClone = await this.remoteBundleOps.detectPartialClone(transport, workingDir);
+      if (isPartialClone) {
+        console.warn(`[FetchDistributionService] Detected partial clone at "${workingDir}", backfilling from mirror`);
+        await this.remoteBundleOps.resolvePartialClone(transport, workingDir, mirrorDir);
       }
       await this.remoteBundleOps.fetchWorkingDirFromMirror(transport, mirrorDir, workingDir, branch);
     } else {
@@ -617,6 +640,14 @@ export class FetchDistributionService {
     // origin policy is unchanged by this refactor — still a dummy URL, kept
     // separate from the mirror-path update route above.
     await this.remoteBundleOps.setDummyOrigin(transport, workingDir);
+    // #124 Bug 5: set the hub operator's git identity on isolated servers
+    // so commits carry the correct author, not the server's local default.
+    // Non-isolated servers keep their own identity (the server owner
+    // controls user.name/email). The fail-fast for missing identity is in
+    // distribute().
+    if (isolationIntent && this.hubGitIdentity) {
+      await this.remoteBundleOps.setGitIdentity(transport, workingDir, this.hubGitIdentity);
+    }
     return branchSynced;
   }
 

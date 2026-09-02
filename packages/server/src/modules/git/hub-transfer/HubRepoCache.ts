@@ -15,14 +15,14 @@ export class HubRepoCache {
   }
 
   ensureFetched(identity: CanonicalRepositoryIdentity, token: string, branch: string): string {
-    const repoDir = this.repoCacheDir(identity);
+    const repoDir = this.getRepoCacheDir(identity);
     this.ensureBareRepo(repoDir, identity.httpsUrl);
     this.fetchWithAskPass(repoDir, token, branch);
     return this.resolveRef(repoDir, branch);
   }
 
   createBundle(identity: CanonicalRepositoryIdentity, branch: string, sinceCommit?: string): { bundlePath: string; headSha: string } {
-    const repoDir = this.repoCacheDir(identity);
+    const repoDir = this.getRepoCacheDir(identity);
     const nonce = crypto.randomBytes(8).toString('hex');
     const bundlePath = path.join(os.tmpdir(), `azito-dist-${nonce}.bundle`);
 
@@ -39,7 +39,7 @@ export class HubRepoCache {
     return { bundlePath, headSha };
   }
 
-  private repoCacheDir(identity: CanonicalRepositoryIdentity): string {
+  getRepoCacheDir(identity: CanonicalRepositoryIdentity): string {
     return path.join(this.cacheRoot, computeRepoHash(identity));
   }
 

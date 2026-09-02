@@ -381,4 +381,74 @@ export class RemoteBundleOps {
       'git config (repoHash stamp) failed',
     );
   }
+
+  // ── #124 Bug 2: partial clone detection & resolution ──
+
+  async detectPartialClone(transport: IServerTransport, workingDir: string): Promise<boolean> {
+    // Check promisor separately: `git config --bool` normalizes to "true"/"false",
+    // so an explicit `promisor=false` is not a false positive.
+    const promisor = await transport.exec(
+      `git -C ${shellQuote(workingDir)} config --bool --get remote.origin.promisor 2>/dev/null || true`,
+      5_000,
+    );
+    if (promisor.stdout.trim() === 'true') return true;
+
+    // partialclonefilter and extensions.partialclone: any value means partial.
+    const r = await transport.exec(
+      `cd ${shellQuote(workingDir)} && { ` +
+      `git config --get remote.origin.partialclonefilter 2>/dev/null || true; ` +
+      `git config --get extensions.partialclone 2>/dev/null || true; ` +
+      `}`,
+      10_000,
+    );
+    const lines = r.stdout.trim().split('\n').filter(Boolean);
+    return lines.length > 0;
+  }
+
+  async resolvePartialClone(transport: IServerTransport, workingDir: string, mirrorDir: string): Promise<void> {
+    const versionResult = await transport.exec('git --version', 5_000);
+    const match = versionResult.stdout.match(/(\d+)\.(\d+)/);
+    if (match) {
+      const [major, minor] = [parseInt(match[1]), parseInt(match[2])];
+      if (major < 2 || (major === 2 && minor < 36)) {
+        throw new Error(
+          `git ${major}.${minor} does not support --refetch (requires 2.36+). ` +
+          `Upgrade git on this server, or re-clone the working directory without --filter.`,
+        );
+      }
+    }
+
+    await transport.exec(
+      `cd ${shellQuote(workingDir)} && ` +
+      `git config --unset remote.origin.promisor 2>/dev/null; ` +
+      `git config --unset remote.origin.partialclonefilter 2>/dev/null; ` +
+      `git config --unset extensions.partialclone 2>/dev/null; true`,
+      10_000,
+    );
+
+    // origin URL is temporarily set to the local mirror for backfill.
+    // ensureWorkingDir's subsequent setDummyOrigin call restores the dummy —
+    // this ordering dependency is verified by tests.
+    const outcome = await execWithSentinel(
+      transport,
+      `git -C ${shellQuote(workingDir)} remote set-url origin ${shellQuote(mirrorDir)} && ` +
+      `git -C ${shellQuote(workingDir)} fetch --refetch origin 2>&1`,
+      120_000,
+    );
+    if (!outcome.ok) {
+      throw new Error(`Failed to backfill partial clone from mirror: ${outcome.stderr ?? outcome.stdout}`);
+    }
+  }
+
+  // ── #124 Bug 5: git identity on distributed working directories ──
+
+  async setGitIdentity(transport: IServerTransport, workingDir: string, identity: { name: string; email: string }): Promise<void> {
+    await execGitOrThrow(
+      transport,
+      `git -C ${shellQuote(workingDir)} config user.name ${shellQuote(identity.name)} && ` +
+      `git -C ${shellQuote(workingDir)} config user.email ${shellQuote(identity.email)} 2>&1`,
+      10_000,
+      'git config user identity failed',
+    );
+  }
 }
