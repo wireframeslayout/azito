@@ -479,11 +479,15 @@ configuration change. It then verifies the push landed via the provider API (the
 creates the PR if one is still missing. The isolated server never receives anything resembling
 `gh` auth or an SSH deploy key — the only thing that leaves it is the bundle/SHA needed to push.
 
-When hub-proxied push cannot go through (`PushNotaryService` isn't wired, or **neither a PAT nor a
-CLI token is available**), the `pushing` phase is **skipped automatically**, exactly as before. The skip is recorded in the execution log as `pushing_skipped_isolated` (service not
-wired) or `hub_push_skipped` (neither PAT nor CLI token, or worktree/branch unresolved); once every other phase has
-completed normally, the task transitions to `review` the same way a testing-terminated run would.
-In that case, commit, push, and PR creation must be done manually by the operator.
+When the credentials required for hub-proxied push are missing, the task **fails** (`failed`
+status). Credential resolution is two-stage: (1) the repository PAT from project settings
+(`resolvedCredentialSource: 'repository'`), then (2) the hub operator's gh/glab CLI token
+(`resolvedCredentialSource: 'cli'`). If neither is available, the execution log records
+`hub_push_failed` and the task fails. The same hard failure applies when the worktree path or
+branch cannot be resolved, or when `PushNotaryService` is not wired. An isolated server has no
+push path other than hub-proxied push, so skipping the phase would let the task reach `review`
+with nothing on the remote — indistinguishable from a real success. When a push fails, check the
+repository PAT in project settings, or run `gh auth login` / `glab auth login` on the hub.
 
 This behavior is specific to isolated servers — the `distribute_code` opt-in for non-isolated
 servers ([Code Distribution](./code-distribution.md)) is about *fetching* code onto a server and

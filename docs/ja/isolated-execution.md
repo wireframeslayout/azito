@@ -463,12 +463,15 @@ CLI トークンは操作者の環境依存で、`gh auth logout` すると設�
 と一致するか）、PR 未作成なら続けて作成します。隔離サーバー自身は push 用の SHA/bundle 以外の
 何も持ち出さず、gh 認証や SSH 鍵に相当するものを一度も受け取りません。
 
-hub 代行 push が成立しない場合（`PushNotaryService` が配線されていない、または**PAT と CLI
-トークンのどちらも利用できない**）は、`pushing` フェーズは**自動的にスキップ**されます。実行
-ログに `pushing_skipped_isolated`（サービス未配線）または `hub_push_skipped`（PAT・CLI トークンとも不在、または
-worktree/branch 不明）として記録され、他の全フェーズが正常完了していれば testing 終端と同じ扱い
-でタスクは `review` へ遷移します。この場合はコミット・プッシュ・PR 作成を operator が手動で
-行ってください。
+hub 代行 push に必要な資格情報が存在しない場合、タスクは **`failed`** になります。資格情報の
+解決は二段階で行われます: (1) プロジェクト設定のリポジトリ PAT（`resolvedCredentialSource:
+'repository'`）、(2) ハブの gh/glab CLI トークン（`resolvedCredentialSource: 'cli'`）。どちら
+も利用できない場合、実行ログに `hub_push_failed` として記録されタスクは失敗します。同様に、
+worktree パスやブランチが解決できない場合、または `PushNotaryService` が配線されていない場合も
+`hub_push_failed` で失敗します。隔離サーバーにはハブ代行 push 以外の push 経路が存在しないため、
+スキップして完了扱いにすると成果物がリモートに届かないまま `review` に到達してしまいます。
+失敗時はプロジェクト設定のリポジトリ PAT を確認するか、ハブで `gh auth login` / `glab auth
+login` を実行してください。
 
 これは隔離サーバー限定の挙動です — 非隔離サーバー向けの `distribute_code` opt-in（[コード配信](
 ./code-distribution.md)参照）は、コードを**取得する**ための仕組みであり、pushing フェーズの

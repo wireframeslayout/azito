@@ -1050,9 +1050,9 @@ describe('PhaseLoopRunner uses the caller-locked distributionRepoEntry, not a fr
 // on `no_push_credential`, which only LOGS a skip and lets the phase
 // advance as `phase_complete` — silently completing the task without ever
 // pushing/notarizing anything. These tests pin the fix: a deleted target
-// repository must hard-fail the task (`hub_push_failed`), while a resolved
-// repository that simply has no token keeps the pre-existing
-// `no_push_credential` skip-not-fail behavior.
+// repository must hard-fail the task (`hub_push_failed`), and a resolved
+// repository that has no token also hard-fails on an isolated server
+// (Issue #119).
 describe('PhaseLoopRunner hub push notarization fails closed when the locked repository is deleted mid-run (Issue #87 review follow-up, Important finding 2)', () => {
   const repoA = { id: 1, name: 'A', url: 'https://github.com/acme/repo-a.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-a', token: 'token-a', hasToken: true };
 
@@ -1096,7 +1096,7 @@ describe('PhaseLoopRunner hub push notarization fails closed when the locked rep
     expect(appendLog).toHaveBeenCalledWith(1, 1, 'status_change', expect.objectContaining({ status: 'hub_push_failed' }));
   });
 
-  it('keeps the pre-existing no_push_credential skip (not a hard failure) when the locked repository resolves but has no token', async () => {
+  it('fails the task when the locked repository resolves but has no token on an isolated server', async () => {
     const notarize = vi.fn(async () => ({ status: 'pushed' as const, sha: 'abc123' }));
     const repoNoToken = { ...repoA, token: null, hasToken: false };
     const { runner, taskRepo, projectRepo, projectServerRepo, pullRequestCreator, appendLog } = makeRunner({
@@ -1120,11 +1120,43 @@ describe('PhaseLoopRunner hub push notarization fails closed when the locked rep
 
     expect(notarize).not.toHaveBeenCalled();
     expect(pullRequestCreator.ensureCreated).not.toHaveBeenCalled();
-    expect(taskRepo.updateStatus).not.toHaveBeenCalledWith(1, 'failed');
-    expect(appendLog).toHaveBeenCalledWith(1, 1, 'command', expect.objectContaining({ type: 'hub_push_skipped', reason: 'no_push_credential' }));
-    // `no_push_credential` now means BOTH stages came up empty — the CLI
-    // fallback was actually consulted, not skipped.
+    expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'failed');
+    expect(appendLog).toHaveBeenCalledWith(1, 1, 'status_change', expect.objectContaining({ status: 'hub_push_failed' }));
+    // Both stages of credential resolution were consulted before reaching
+    // the hard-fail verdict.
     expect(getCliTokenMock).toHaveBeenCalledWith({ provider: 'github', host: 'github.com' });
+    // Token values never leak into the log.
+    const logged = JSON.stringify(appendLog.mock.calls);
+    expect(logged).not.toContain('token-a');
+  });
+
+  it('fails the task when worktree path and branch cannot be resolved on an isolated server', async () => {
+    const notarize = vi.fn(async () => ({ status: 'pushed' as const, sha: 'abc123' }));
+    const { runner, taskRepo, projectRepo, projectServerRepo, appendLog } = makeRunner({
+      pushNotaryService: { notarize },
+    });
+    projectRepo.findById = vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', defaultUnitId: null, repositories: [repoA] }));
+    projectRepo.findRepositoryById = vi.fn(() => repoA) as any;
+    projectServerRepo.find = vi.fn(() => ({
+      projectId: 10, serverName: 'isolated-1', workingDirectory: null, branch: null, tmuxSession: 'azito',
+      inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: repoA.id,
+    })) as any;
+    taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: false, worktreePath: null,
+      workingDirectory: null, worktreeBranch: null, branch: null, summaryJson: null,
+    } as any));
+    const unit = makePushingUnit();
+    const isolatedServer = { name: 'isolated-1', type: 'agent', isolationIntent: true } as any;
+
+    await runner.stateMachineLoop(unit, 'isolated-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1', repoA, true);
+
+    expect(notarize).not.toHaveBeenCalled();
+    expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'failed');
+    expect(appendLog).toHaveBeenCalledWith(1, 1, 'status_change', expect.objectContaining({
+      status: 'hub_push_failed',
+      error: expect.stringContaining('worktree'),
+    }));
   });
 });
 
@@ -1184,7 +1216,7 @@ describe('PhaseLoopRunner hub push notarization resolves PAT then hub CLI token 
 
     expect(getCliTokenMock).toHaveBeenCalledWith({ provider: 'github', host: 'github.com' });
     expect(notarize).toHaveBeenCalledWith(expect.objectContaining({ repo: repoNoToken, token: 'gh-cli-token' }));
-    expect(appendLog).not.toHaveBeenCalledWith(1, 1, 'command', expect.objectContaining({ reason: 'no_push_credential' }));
+    expect(appendLog).not.toHaveBeenCalledWith(1, 1, 'status_change', expect.objectContaining({ status: 'hub_push_failed' }));
     expect(taskRepo.updateStatus).not.toHaveBeenCalledWith(1, 'failed');
   });
 
@@ -1354,11 +1386,11 @@ describe('PhaseLoopRunner pushing probe fails closed when distribution is requir
 
 // Issue #29 docs review, Important finding 1: isolated agent servers hold no
 // push credentials, so the pushing phase must never be sent to the worker on
-// one — it must be skipped and the run land on the same terminal path a
-// normal last-phase completion would (terminal status 'review'), leaving push
-// to the operator until #87 (hub-proxied push) ships.
+// one. When PushNotaryService is not wired (a configuration defect in
+// production — it is always wired in wiring.ts), the task must fail rather
+// than silently completing with nothing pushed.
 describe('PhaseLoopRunner isolation cutoff (Issue #29 docs review, finding 1)', () => {
-  it('skips the pushing phase and terminates at review when server.isolationIntent is true', async () => {
+  it('fails the task when server.isolationIntent is true and PushNotaryService is not wired', async () => {
     const isolatedServer = { ...server, isolationIntent: true };
     const { runner, taskRepo, workerWaiter, appendLog } = makeRunner();
     const unit = makeUnitForRun();
@@ -1366,14 +1398,12 @@ describe('PhaseLoopRunner isolation cutoff (Issue #29 docs review, finding 1)', 
     await runner.stateMachineLoop(unit, 'local', task, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     // 4 phases (planning/implementing/reviewing/testing) actually run the
-    // worker; pushing is skipped without ever calling waitForWorker for it.
+    // worker; pushing hits the notary-not-wired branch and fails.
     expect(workerWaiter.waitForWorker).toHaveBeenCalledTimes(4);
-    expect(appendLog).toHaveBeenCalledWith(1, 1, 'command', expect.objectContaining({
-      type: 'pushing_skipped_isolated',
-      phase: 'pushing',
+    expect(appendLog).toHaveBeenCalledWith(1, 1, 'status_change', expect.objectContaining({
+      status: 'hub_push_failed',
     }));
-    expect(taskRepo.updateStatus).not.toHaveBeenCalledWith(1, 'failed');
-    expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'review');
+    expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'failed');
   });
 
   it('runs the pushing phase normally (sends the worker prompt) when the server is not isolated', async () => {
@@ -1458,10 +1488,10 @@ describe('PhaseLoopRunner isolation cutoff (Issue #29 docs review, finding 1)', 
 
     await runner.stateMachineLoop(unit, 'local', task, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
-    // Only the first 4 phases sent prompts; pushing was neither skipped
-    // silently nor sent — it was blocked at the gate.
+    // Only the first 4 phases sent prompts; pushing was neither failed
+    // (notary-not-wired) nor sent — it was blocked at the gate.
     expect(workerInput.sendPrompt).toHaveBeenCalledTimes(4);
-    expect(appendLog).not.toHaveBeenCalledWith(1, 1, 'command', expect.objectContaining({ type: 'pushing_skipped_isolated' }));
+    expect(appendLog).not.toHaveBeenCalledWith(1, 1, 'status_change', expect.objectContaining({ status: 'hub_push_failed' }));
     expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(1, {
       pendingOperation: 'resume',
       priorStatus: 'running',
