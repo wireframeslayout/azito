@@ -1052,7 +1052,7 @@ describe('PhaseLoopRunner uses the caller-locked distributionRepoEntry, not a fr
 // pushing/notarizing anything. These tests pin the fix: a deleted target
 // repository must hard-fail the task (`hub_push_failed`), and a resolved
 // repository that has no token also hard-fails on an isolated server
-// (Issue #366).
+// (Issue #119).
 describe('PhaseLoopRunner hub push notarization fails closed when the locked repository is deleted mid-run (Issue #87 review follow-up, Important finding 2)', () => {
   const repoA = { id: 1, name: 'A', url: 'https://github.com/acme/repo-a.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-a', token: 'token-a', hasToken: true };
 
