@@ -390,28 +390,18 @@ export class PhaseLoopRunner {
       // isolated agent servers never hold push credentials (see
       // ServerIsolationLock.ts / TaskPaneEnvironmentService.ts — the same
       // isolationIntent gate that withholds secrets from the task pane).
-      // Without this, an isolated task whose Unit still has the pushing
-      // phase enabled would reach it, send the phase prompt, and have it
-      // fail/hang for lack of credentials. `phaseDef.pushVerify` is the
-      // existing generic signal a phase is a "pushing" phase (already used
-      // above to arm the pushingProbe) — reused here instead of a hardcoded
-      // phase-name check. Skipping lands the run on the same terminal path
-      // as a normal last-phase completion (falls through the while loop to
-      // the "all phases complete" block below, terminal status 'review').
-      // Push becomes the operator's responsibility until #87 (hub-proxied
-      // push) ships; this is deliberately the only cutoff logic added here —
-      // no push-credential injection, per the Issue #29 review scope. Runs
-      // only after the gate re-check above has already confirmed the
-      // approved manifest/input-policy still holds for this phase.
+      // PushNotaryService is always wired in production (wiring.ts L421);
+      // reaching this branch signals a configuration defect. An isolated
+      // server has no other push path, so skipping would let the task
+      // complete with nothing pushed — fail instead.
       if (server.isolationIntent === true && phaseDef.pushVerify && !this.pushNotaryService) {
         this.taskRepo.updateCurrentPhase(task.id, phase);
-        this.appendLog(task.id, unit.id, 'command', {
-          type: 'pushing_skipped_isolated',
-          phase,
-          reason: '隔離サーバーは push 資格情報を持たないため。operator が push してください / hub 代行 push は #87',
+        this.appendLog(task.id, unit.id, 'status_change', {
+          status: 'hub_push_failed',
+          error: 'PushNotaryService is not wired but is required for hub-proxied push on an isolated server',
         });
-        currentPhaseIndex++;
-        continue;
+        this.taskRepo.updateStatus(task.id, 'failed');
+        return;
       }
 
       this.taskRepo.updateStatus(task.id, 'running');
@@ -750,14 +740,28 @@ export class PhaseLoopRunner {
               } catch { /* best-effort */ }
             }
           } else {
-            this.appendLog(task.id, unit.id, 'command', { type: 'hub_push_skipped', reason: 'no_worktree_or_branch' });
+            this.appendLog(task.id, unit.id, 'status_change', {
+              status: 'hub_push_failed',
+              error: 'Hub-proxied push requires a worktree path and branch, but neither could be resolved for this task',
+            });
+            this.taskRepo.updateStatus(task.id, 'failed');
+            return;
           }
         } else {
-          // Neither a repository PAT nor a hub CLI token: unchanged
-          // semantics (Issue #87 — skip, log it explicitly, let the phase
-          // advance), only the set of credentials consulted before reaching
-          // this verdict has widened.
-          this.appendLog(task.id, unit.id, 'command', { type: 'hub_push_skipped', reason: 'no_push_credential' });
+          // An isolated server has no other way to push: its own git holds
+          // no credential and the distributed working directory's `origin`
+          // is a dummy URL. Skipping here (the pre-#87 semantics) let the
+          // phase advance as if the push had happened, so the task reached
+          // `review` with nothing on the remote — indistinguishable from a
+          // real success. Same verdict the unresolved-repository branch
+          // above already applies: a write-capable operation that cannot
+          // write must fail, not silently succeed.
+          this.appendLog(task.id, unit.id, 'status_change', {
+            status: 'hub_push_failed',
+            error: 'Hub-proxied push is the only push path for an isolated server, but neither a repository PAT nor a hub gh/glab CLI token is available',
+          });
+          this.taskRepo.updateStatus(task.id, 'failed');
+          return;
         }
       }
 
