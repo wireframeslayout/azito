@@ -747,7 +747,14 @@ export class PhaseLoopRunner {
                   description: currentTaskForPush?.description ?? null,
                   targetBranch: currentTaskForPush?.targetBranch ?? null,
                 });
-              } catch { /* best-effort */ }
+              } catch (prErr) {
+                // #124 Bug 3: log PR creation failures so "push succeeded but
+                // no PR was created" is distinguishable in execution logs.
+                this.appendLog(task.id, unit.id, 'command', {
+                  type: 'hub_pr_create_failed',
+                  error: prErr instanceof Error ? prErr.message : String(prErr),
+                });
+              }
             }
           } else {
             this.appendLog(task.id, unit.id, 'command', { type: 'hub_push_skipped', reason: 'no_worktree_or_branch' });

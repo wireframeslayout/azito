@@ -39,8 +39,12 @@ export class HubRepoCache {
     return { bundlePath, headSha };
   }
 
-  private repoCacheDir(identity: CanonicalRepositoryIdentity): string {
+  getRepoCacheDir(identity: CanonicalRepositoryIdentity): string {
     return path.join(this.cacheRoot, computeRepoHash(identity));
+  }
+
+  private repoCacheDir(identity: CanonicalRepositoryIdentity): string {
+    return this.getRepoCacheDir(identity);
   }
 
   private ensureBareRepo(repoDir: string, httpsUrl: string): void {

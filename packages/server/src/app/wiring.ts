@@ -4,6 +4,7 @@
 // manual `new` (no DI container). Mirrors the former inline construction in
 // main.ts; grouped into per-module factory functions for readability.
 
+import { execFileSync } from 'child_process';
 import { EventEmitter } from 'events';
 import * as path from 'path';
 import type { SqliteDatabase } from '../shared/db/Database';
@@ -347,14 +348,26 @@ function buildAgentUpdater(agentBundler: AgentBundler, infra: SharedInfra, repos
 // execute()/restore() may clear `task.distributionRepositoryId`, so
 // `buildExecuteTaskUseCase`/`buildApplicationServices` (TaskRestoreService)
 // must be able to read from it too.
+function readHubGitIdentity(): { name: string; email: string } | null {
+  try {
+    const name = execFileSync('git', ['config', '--global', 'user.name'], { encoding: 'utf-8' }).trim();
+    const email = execFileSync('git', ['config', '--global', 'user.email'], { encoding: 'utf-8' }).trim();
+    if (!name || !email) return null;
+    return { name, email };
+  } catch {
+    return null;
+  }
+}
+
 function buildFetchDistributionService(infra: SharedInfra, dataPaths: DataPaths, distributionStateRepo: SqliteDistributionStateRepository): FetchDistributionService {
   const sftpService = new SftpService(infra.sshClient);
   const hubRepoCache = new HubRepoCache(dataPaths.dir);
   const remoteBundleOps = new RemoteBundleOps();
+  const hubGitIdentity = readHubGitIdentity();
   // sshClient passed to normalize the outer lock key's host identity (Issue
   // #87 review, 6th pass, Important finding 3) — see FetchDistributionService's
   // `sshHostResolver` constructor doc comment.
-  return new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService, distributionStateRepo, infra.sshClient);
+  return new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService, distributionStateRepo, infra.sshClient, hubGitIdentity);
 }
 
 function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiToken: string, scopedAuthEnabled: boolean, fetchDistributionService: FetchDistributionService, distributionStateRepo: SqliteDistributionStateRepository): ApplicationServices {
@@ -413,12 +426,14 @@ function buildExecuteTaskUseCase(
   scopedAuthEnabled: boolean,
   fetchDistributionService: FetchDistributionService,
   distributionStateRepo: SqliteDistributionStateRepository,
+  dataPaths: DataPaths,
 ): ExecuteTaskUseCase {
 
   const sftpService = new SftpService(infra.sshClient);
   const remoteBundleOps = new RemoteBundleOps();
   const cleanPusher = new CleanPusher();
-  const pushNotaryService = new PushNotaryService(remoteBundleOps, sftpService, cleanPusher, infra.gitProvider);
+  const hubRepoCache = new HubRepoCache(dataPaths.dir);
+  const pushNotaryService = new PushNotaryService(remoteBundleOps, sftpService, cleanPusher, infra.gitProvider, hubRepoCache);
 
   return new ExecuteTaskUseCase(
     repos.taskRepo,
@@ -552,7 +567,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   const fetchDistributionService = buildFetchDistributionService(infra, dataPaths, distributionStateRepo);
   const appServices = buildApplicationServices(infra, repos, uiToken, scopedAuthEnabled, fetchDistributionService, distributionStateRepo);
   const resourceGuard = new ResourceGuard(infra.transportFactory, repos.resourceGuardSettingsRepo);
-  const executeTaskUseCase = buildExecuteTaskUseCase(infra, repos, appServices, resourceGuard, scopedAuthEnabled, fetchDistributionService, distributionStateRepo);
+  const executeTaskUseCase = buildExecuteTaskUseCase(infra, repos, appServices, resourceGuard, scopedAuthEnabled, fetchDistributionService, distributionStateRepo, dataPaths);
   const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService, appServices.windowActivityStatusService);
   const interactionMonitor = new InteractionMonitor(repos.windowRepo);
   const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos);

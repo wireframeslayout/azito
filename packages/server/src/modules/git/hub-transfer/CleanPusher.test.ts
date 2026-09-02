@@ -122,4 +122,65 @@ describe('CleanPusher', () => {
     expect(initCall).toBeDefined();
     expect(initCall![1]).toContain('core.hooksPath=/dev/null');
   });
+
+  // #124 Bug 1: incremental bundle + empty bare repo
+  it('fails on incremental bundle without seed (prerequisite missing)', () => {
+    const branch = 'main';
+    const srcDir = makeTmpDir('azito-cleanpusher-incr-src-');
+    runGit(['init', '-q', `--initial-branch=${branch}`, srcDir], srcDir);
+    runGit(['-C', srcDir, 'config', 'user.email', 'test@example.com'], srcDir);
+    runGit(['-C', srcDir, 'config', 'user.name', 'Test'], srcDir);
+    fs.writeFileSync(path.join(srcDir, 'file.txt'), 'base\n');
+    runGit(['-C', srcDir, 'add', 'file.txt'], srcDir);
+    runGit(['-C', srcDir, 'commit', '-q', '-m', 'base commit'], srcDir);
+    fs.writeFileSync(path.join(srcDir, 'file.txt'), 'incremental\n');
+    runGit(['-C', srcDir, 'add', 'file.txt'], srcDir);
+    runGit(['-C', srcDir, 'commit', '-q', '-m', 'incremental commit'], srcDir);
+
+    // Create incremental bundle: only the tip commit, with the base as prerequisite
+    const baseSha = execFileSync('git', ['-C', srcDir, 'rev-parse', 'HEAD~1'], { encoding: 'utf-8' }).trim();
+    const bundlePath = path.join(makeTmpDir('azito-cleanpusher-incr-bundle-'), 'incr.bundle');
+    runGit(['-C', srcDir, 'bundle', 'create', bundlePath, `refs/heads/${branch}`, `--not`, baseSha], srcDir);
+
+    const remoteDir = makeTmpDir('azito-cleanpusher-incr-remote-');
+    runGit(['init', '-q', '--bare', remoteDir], remoteDir);
+
+    const pusher = new CleanPusher();
+    expect(() => pusher.push(bundlePath, makeIdentity(remoteDir), 'unused-token', branch)).toThrow();
+  });
+
+  it('succeeds on incremental bundle with seedDir providing prerequisites (#124 Bug 1)', () => {
+    const branch = 'main';
+    const srcDir = makeTmpDir('azito-cleanpusher-seed-src-');
+    runGit(['init', '-q', `--initial-branch=${branch}`, srcDir], srcDir);
+    runGit(['-C', srcDir, 'config', 'user.email', 'test@example.com'], srcDir);
+    runGit(['-C', srcDir, 'config', 'user.name', 'Test'], srcDir);
+    fs.writeFileSync(path.join(srcDir, 'file.txt'), 'base\n');
+    runGit(['-C', srcDir, 'add', 'file.txt'], srcDir);
+    runGit(['-C', srcDir, 'commit', '-q', '-m', 'base commit'], srcDir);
+    const baseSha = execFileSync('git', ['-C', srcDir, 'rev-parse', 'HEAD'], { encoding: 'utf-8' }).trim();
+
+    fs.writeFileSync(path.join(srcDir, 'file.txt'), 'incremental\n');
+    runGit(['-C', srcDir, 'add', 'file.txt'], srcDir);
+    runGit(['-C', srcDir, 'commit', '-q', '-m', 'incremental commit'], srcDir);
+    const tipSha = execFileSync('git', ['-C', srcDir, 'rev-parse', 'HEAD'], { encoding: 'utf-8' }).trim();
+
+    // Incremental bundle: tip only, base as prerequisite
+    const bundlePath = path.join(makeTmpDir('azito-cleanpusher-seed-bundle-'), 'incr.bundle');
+    runGit(['-C', srcDir, 'bundle', 'create', bundlePath, `${baseSha}..refs/heads/${branch}`], srcDir);
+
+    // Seed repo has the base commit (simulating hub repo-cache)
+    const seedDir = makeTmpDir('azito-cleanpusher-seed-cache-');
+    runGit(['clone', '-q', '--bare', '--no-tags', srcDir, seedDir], seedDir);
+
+    const remoteDir = makeTmpDir('azito-cleanpusher-seed-remote-');
+    runGit(['init', '-q', '--bare', remoteDir], remoteDir);
+
+    const pusher = new CleanPusher();
+    const result = pusher.push(bundlePath, makeIdentity(remoteDir), 'unused-token', branch, seedDir);
+    expect(result.pushedSha).toBe(tipSha);
+
+    const remoteSha = execFileSync('git', ['-C', remoteDir, 'rev-parse', `refs/heads/${branch}`], { encoding: 'utf-8' }).trim();
+    expect(remoteSha).toBe(tipSha);
+  });
 });

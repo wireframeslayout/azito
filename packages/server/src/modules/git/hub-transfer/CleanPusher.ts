@@ -8,7 +8,7 @@ import type { CanonicalRepositoryIdentity } from '../resolveCanonicalRepositoryI
 import type { CleanPushResult } from './types';
 
 export class CleanPusher {
-  push(bundlePath: string, identity: CanonicalRepositoryIdentity, token: string, branch: string): CleanPushResult {
+  push(bundlePath: string, identity: CanonicalRepositoryIdentity, token: string, branch: string, seedDir?: string): CleanPushResult {
     assertSafeBranch(branch, 'branch');
 
     const nonce = crypto.randomBytes(8).toString('hex');
@@ -28,6 +28,22 @@ export class CleanPusher {
         timeout: 10_000,
         env,
       });
+
+      // #124 Bug 1: seed prerequisites from hub repo-cache so incremental
+      // bundles (created with `--not origin/<baseBranch>`) can be applied.
+      // Without this, the empty bare repo lacks the prerequisite commits the
+      // bundle references and `git fetch <bundle>` always fails.
+      if (seedDir && fs.existsSync(seedDir)) {
+        execFileSync('git', [
+          '-C', tmpDir,
+          '-c', 'core.hooksPath=/dev/null',
+          'fetch', seedDir, '+refs/heads/*:refs/heads/*',
+        ], {
+          encoding: 'utf-8',
+          timeout: 60_000,
+          env,
+        });
+      }
 
       // The bundle originates from an untrusted server-side worktree, so
       // reject malformed/oversized objects instead of trusting git's
