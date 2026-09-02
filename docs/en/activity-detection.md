@@ -91,6 +91,42 @@ variables at the head of the command string, but only when they have a value. Be
 runs after profile evaluation, they are reliably restored. Nothing is injected when launched
 outside tmux.
 
+### Combined mode (hybrid detection)
+
+Starting with Claude Code v2.1.236, pane titles under tmux are written only when the text
+actually changes (CHANGELOG: "Fixed terminal tab titles jumping in tmux"). As a result, the
+working spinner glyph (◐◑◒◓ etc.) no longer appears in the title, which stays fixed at
+`✳ <topic>`.
+
+`ActivityTracker` addresses this with two detection modes:
+
+| Mode | Entry condition | Detection method |
+|------|----------------|-----------------|
+| **title-authoritative** | A `working` or `blocked` title observed at least once | Title only (byte volume disabled). Codex / Claude ≤2.1.234 enter this mode |
+| **combined** | Otherwise (including initial state) | Byte-volume heuristic + title promotion. Claude ≥2.1.236 on tmux stays here |
+
+In combined mode:
+
+- The byte-volume heuristic determines idle/active
+- Echo filtering: the threshold must be exceeded **with fresh output in that tick** for
+  `ACTIVE_CONSECUTIVE_TICKS` (2) consecutive ticks before transitioning idle→active (a single
+  keystroke echo burst does not trigger a transition)
+- Observing a `working` / `blocked` title instantly promotes the tracker to
+  title-authoritative mode
+- Active frames emitted in combined mode carry no `status` (allowing the hub to distinguish
+  byte-derived activity)
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `ACTIVE_CONSECUTIVE_TICKS` | 2 | Consecutive above-threshold ticks needed for idle→active (only ticks with fresh output count) |
+
+### Registration snapshot frame
+
+On receiving a `registered` message, `HubClient` sends the `ActivityTracker`'s current state
+as a single activity frame (at the same point as the `ready` re-send). This ensures the hub
+receives a known baseline even when activity transitions that occurred before registration
+were dropped. This also fires on reconnect.
+
 ## 3. Tier 1 -- Claude Code hooks
 
 | Element | Behavior |

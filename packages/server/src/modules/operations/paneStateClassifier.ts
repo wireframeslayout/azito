@@ -59,6 +59,10 @@ interface ScreenRule {
  * Kept in sync with `WORKING_SPINNER_RE` in
  * `packages/tui-supervisor/src/TitleStateTracker.ts` — the two packages
  * cannot share a constant, so when the glyph set changes, update both.
+ *
+ * NOTE: Claude Code ≥2.1.236 does not animate spinner glyphs in pane titles
+ * under tmux (title is written only when its text changes). Tier 2 title
+ * classification therefore cannot detect 'working' for these versions.
  */
 const WORKING_SPINNER_TITLE_RE = /^[⠀-⣿◐◑◒◓✻✶✽✢∗] /;
 

@@ -85,6 +85,38 @@ hooks（`azito-activity` / `azito-interaction` / `azito-notify` / `azito-questio
 場合のみコマンド文字列の先頭で両変数を再エクスポートします。プロファイル評価の後に実行される
 ため確実に復元されます。tmux 外での起動時は何も注入しません。
 
+### Combined mode（ハイブリッド判定）
+
+Claude Code v2.1.236 以降、tmux 配下ではペインタイトルが「文言変化時のみ書き込み」に変更された
+（CHANGELOG: "Fixed terminal tab titles jumping in tmux"）。結果、作業中スピナーグリフ
+（◐◑◒◓ 等）がタイトルに出現しなくなり、タイトルは常に `✳ <topic>` で固定される。
+
+`ActivityTracker` はこの状況に対応するため、2つの判定モードを持つ:
+
+| モード | 進入条件 | 判定方式 |
+|--------|---------|---------|
+| **title-authoritative** | `working` または `blocked` タイトルを一度でも観測 | タイトルのみ（バイト量無効）。codex / claude ≤2.1.234 がここに入る |
+| **combined** | 上記以外（初期状態含む） | バイト量ヒューリスティック + タイトル昇格。claude ≥2.1.236 on tmux がここに入る |
+
+Combined mode では:
+
+- バイト量ヒューリスティックで idle/active を判定する
+- エコー緩和: **当該 tick に新規出力がある**閾値超過が `ACTIVE_CONSECUTIVE_TICKS`（2）tick 連続
+  した場合のみ idle→active に遷移する（単発のキーストロークエコーでは遷移しない）
+- `working` / `blocked` タイトルが観測された瞬間に title-authoritative mode に昇格する
+- Combined mode で emit される active frame には `status` を付けない（バイト由来であることを
+  ハブが区別可能）
+
+| 定数 | 値 | 説明 |
+|------|---|------|
+| `ACTIVE_CONSECUTIVE_TICKS` | 2 | idle→active 遷移に必要な連続閾値超過 tick 数（新規出力ありの tick のみカウント） |
+
+### 登録時のスナップショット frame
+
+`HubClient` は `registered` メッセージ受信時に `ActivityTracker` の現在状態をスナップショット
+として activity frame を1枚送信する（`ready` 再送と同じ位置）。これにより、登録前に発生した
+状態遷移が失われても、接続直後にハブが最新状態を認識できる。再接続時も同様に発火する。
+
 ## 3. Tier 1 -- Claude Code hooks
 
 | 要素 | 内容 |

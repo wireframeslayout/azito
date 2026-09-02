@@ -51,6 +51,7 @@ if (hubEnv) {
     },
     write: (data) => proxy.write(data),
     readiness,
+    activitySnapshot: () => tracker.getSnapshot(),
   });
   tracker.on('transition', (state: ActivityState, bytesInWindow: number, status?: AgentStatus) => {
     hub.sendActivity(state, bytesInWindow, status);

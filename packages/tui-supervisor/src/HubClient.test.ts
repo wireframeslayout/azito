@@ -275,6 +275,52 @@ describe('HubClient', () => {
     });
   });
 
+  describe('activity snapshot on registration', () => {
+    it('sends the activity snapshot as a frame when registered', async () => {
+      makeClient({
+        activitySnapshot: () => ({ state: 'active' as const, bytesInWindow: 999 }),
+      }).connect();
+      await waitFor(() => connections[0]?.messages.some((m) => m.type === 'activity'));
+      const activity = connections[0].messages.find((m) => m.type === 'activity');
+      expect(activity).toMatchObject({ type: 'activity', state: 'active', bytesInWindow: 999 });
+    });
+
+    it('sends the activity snapshot with status when provided', async () => {
+      makeClient({
+        activitySnapshot: () => ({
+          state: 'active' as const,
+          bytesInWindow: 500,
+          status: 'blocked' as const,
+        }),
+      }).connect();
+      await waitFor(() => connections[0]?.messages.some((m) => m.type === 'activity'));
+      const activity = connections[0].messages.find((m) => m.type === 'activity');
+      expect(activity).toMatchObject({ state: 'active', status: 'blocked' });
+    });
+
+    it('does not send activity snapshot when callback is not provided', async () => {
+      makeClient().connect();
+      await waitFor(() => connections[0]?.messages.some((m) => m.type === 'heartbeat'));
+      await new Promise((r) => setTimeout(r, 50));
+      expect(connections[0].messages.filter((m) => m.type === 'activity')).toHaveLength(0);
+    });
+
+    it('re-sends activity snapshot on reconnect', async () => {
+      let callCount = 0;
+      makeClient({
+        activitySnapshot: () => {
+          callCount++;
+          return { state: 'idle' as const, bytesInWindow: 0 };
+        },
+      }).connect();
+      await waitFor(() => connections[0]?.messages.some((m) => m.type === 'activity'));
+      connections[0].socket.terminate();
+      await waitFor(() => connections.length === 2);
+      await waitFor(() => connections[1].messages.some((m) => m.type === 'activity'));
+      expect(callCount).toBe(2);
+    });
+  });
+
   it('handles send_keys via the keymap', async () => {
     makeClient().connect();
     await waitFor(() => connections.length === 1 && connections[0].messages.length >= 1);
