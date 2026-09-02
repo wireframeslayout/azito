@@ -122,6 +122,8 @@ function makeProjectServer(overrides: Partial<ProjectServer> = {}): ProjectServe
     branch: null,
     tmuxSession: 'azito',
     inputPolicy: 'manual-approval',
+    distributeCode: false,
+    distributionRepositoryId: null,
     ...overrides,
   };
 }
@@ -207,8 +209,12 @@ function makeDeps(fixture: Fixture) {
   const unitRepo: Pick<IUnitRepository, 'findById'> = {
     findById: vi.fn((id: number) => fixture.units[id] ?? null),
   };
-  const projectRepo: Pick<IProjectRepository, 'findById'> = {
+  const projectRepo: Pick<IProjectRepository, 'findById' | 'findRepositoryById'> = {
     findById: vi.fn(() => fixture.project),
+    findRepositoryById: vi.fn((id: number) => {
+      const repo = fixture.project?.repositories?.find((r: any) => r.id === id);
+      return repo ? { ...repo, token: null } : null;
+    }),
   };
   const projectServerRepo: Pick<IProjectServerRepository, 'find' | 'findByProject'> = {
     find: vi.fn((_projectId: number, serverName: string) => fixture.projectServers[serverName] ?? null),
@@ -248,9 +254,9 @@ function makeDeps(fixture: Fixture) {
   };
 }
 
-function hashFor(task: Task, fixture: Fixture): string {
+function hashFor(task: Task, fixture: Fixture, operationKind: 'execute' | 'continuation' = 'continuation'): string {
   const deps = makeDeps(fixture);
-  return hashExecutionManifest(resolveExecutionManifest(task, deps).manifest);
+  return hashExecutionManifest(resolveExecutionManifest(task, deps, operationKind).manifest);
 }
 
 describe('resolveExecutionManifest / hashExecutionManifest', () => {
@@ -263,14 +269,14 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     const task = makeTask();
     const deps = makeDeps(fixture);
 
-    const { manifest, projectServer } = resolveExecutionManifest(task, deps);
+    const { manifest, projectServer } = resolveExecutionManifest(task, deps, 'continuation');
     const approvedHash = hashExecutionManifest(manifest);
     const approvedTask = { ...task, executionApprovedFingerprintHash: approvedHash };
 
     // Re-resolve exactly as a subsequent run would (fresh resolution, not
     // the cached `manifest` from above) — nothing changed in between, so
     // this must still be allowed, not fall back into pending_approval.
-    const { manifest: manifestAtRunTime } = resolveExecutionManifest(approvedTask, deps);
+    const { manifest: manifestAtRunTime } = resolveExecutionManifest(approvedTask, deps, 'continuation');
     const gate = checkExecutionGate(approvedTask, resolveInputPolicy(projectServer), hashExecutionManifest(manifestAtRunTime));
     expect(gate).toEqual({ allowed: true });
   });
@@ -509,10 +515,472 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
       };
       const task = makeTask();
 
-      const resolved = resolveExecutionManifest(task, makeDeps(isolatedWithSecrets));
+      const resolved = resolveExecutionManifest(task, makeDeps(isolatedWithSecrets), 'continuation');
       expect(resolved.manifest.secrets.namesDigest).toBe(
-        resolveExecutionManifest(task, makeDeps(unisolatedNoSecrets)).manifest.secrets.namesDigest,
+        resolveExecutionManifest(task, makeDeps(unisolatedNoSecrets), 'continuation').manifest.secrets.namesDigest,
       );
+    });
+  });
+
+  // Issue #87 13th-round review, Important finding 2: project_servers'
+  // distribute_code opt-in must be covered by the fingerprint — otherwise an
+  // operator approving a task while distribution is off could have
+  // distribution flipped on afterwards without invalidating that approval,
+  // silently changing where the task's code comes from (hub-credentialed
+  // fetch distribution instead of whatever was already on the target).
+  describe('server.distributeCode', () => {
+    it('is exposed on the resolved manifest, sourced from the project_servers row', () => {
+      const fixture: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: true }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      };
+      const task = makeTask();
+
+      const resolved = resolveExecutionManifest(task, makeDeps(fixture), 'continuation');
+      expect(resolved.manifest.server.distributeCode).toBe(true);
+    });
+
+    it('turning distribute_code on for the project server alone invalidates a prior approval, WITHOUT touching the task row', () => {
+      const fixture = (distributeCode: boolean): Fixture => ({
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      });
+      const task = makeTask();
+
+      const hashOff = hashFor(task, fixture(false));
+      const hashOn = hashFor(task, fixture(true));
+
+      expect(hashOn).not.toBe(hashOff);
+    });
+
+    it('turning distribute_code back off alone also invalidates approval (the reverse direction)', () => {
+      const fixture = (distributeCode: boolean): Fixture => ({
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      });
+      const task = makeTask();
+
+      const hashOn = hashFor(task, fixture(true));
+      const hashOff = hashFor(task, fixture(false));
+
+      expect(hashOff).not.toBe(hashOn);
+    });
+
+    // Issue #87 review follow-up (Minor finding 2): for 'continuation', once
+    // task.distributionRepositoryId is recorded, distributeCode must hash
+    // the EFFECTIVE "is distribution required" value
+    // (isDistributionRequiredForContinuation), which is `true`
+    // unconditionally once a repository is recorded — not the raw toggle.
+    // Disabling distribution after a task already distributed must NOT
+    // invalidate the approval: resumeStateMachine()/followUp()/
+    // isPushCompleted() all keep treating the recorded repository as
+    // authoritative regardless of the current toggle.
+    it("does NOT invalidate a 'continuation' approval when distribute_code is turned off after the task already recorded a distributionRepositoryId", () => {
+      const fixture = (distributeCode: boolean): Fixture => ({
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode, distributionRepositoryId: 7 }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      });
+      const task = makeTask({ distributionRepositoryId: 7 });
+
+      const hashOn = hashFor(task, fixture(true), 'continuation');
+      const hashOff = hashFor(task, fixture(false), 'continuation');
+
+      expect(hashOn).toBe(hashOff);
+    });
+
+    it("still invalidates an 'execute' approval when distribute_code changes, even for a task that recorded a PAST distributionRepositoryId ('redistribute' resolves identically — see ExecutionOperationKind's doc comment) — a fresh distribution run is genuinely governed by the current toggle", () => {
+      const fixture = (distributeCode: boolean): Fixture => ({
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode, distributionRepositoryId: 7 }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      });
+      const task = makeTask({ distributionRepositoryId: 7 });
+
+      const hashOn = hashFor(task, fixture(true), 'execute');
+      const hashOff = hashFor(task, fixture(false), 'execute');
+
+      expect(hashOn).not.toBe(hashOff);
+    });
+
+    it("still invalidates a 'continuation' approval when distribute_code changes for a task that has NEVER recorded a distributionRepositoryId (unchanged pre-existing behavior)", () => {
+      const fixture = (distributeCode: boolean): Fixture => ({
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode, distributionRepositoryId: null }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      });
+      const task = makeTask({ distributionRepositoryId: null });
+
+      const hashOn = hashFor(task, fixture(true), 'continuation');
+      const hashOff = hashFor(task, fixture(false), 'continuation');
+
+      expect(hashOn).not.toBe(hashOff);
+    });
+
+    // Issue #87 review (forge/87-mirror follow-up), Important finding 1:
+    // isolated servers (isolation_intent=1) distribute unconditionally,
+    // regardless of the project server's own distribute_code toggle — a
+    // standard, common configuration (isolation_intent=1, distribute_code=0).
+    // The FIRST 'execute' manifest for such a task used to hash the RAW
+    // distributeCode toggle (`false`) while the very next 'continuation'
+    // phase-boundary re-check (run right after distribution recorded
+    // task.distributionRepositoryId) hashed the EFFECTIVE value (`true`,
+    // via isDistributionRequiredForContinuation) — a mismatch that threw an
+    // already-approved, successfully-distributed task straight back to
+    // pending_approval. Both operationKinds must now hash the SAME EFFECTIVE
+    // value for this exact server/project-server pairing.
+    it("'execute' and the immediately-following 'continuation' agree on manifest.server.distributeCode for an isolated server with distribute_code off (Issue #87 review, forge/87-mirror follow-up, Important finding 1)", () => {
+      // Realistic configuration: the project server's own distribution
+      // target (7) is set once and does not change across this run —
+      // `performDistribution` always records `task.distributionRepositoryId`
+      // from `projectServer.distributionRepositoryId`, so after a successful
+      // distribution the two agree (see `performDistribution`'s own
+      // `distributionRepositoryId` resolution, DistributionHelper.ts).
+      const isolatedFixture: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject({ repositories: [{ id: 7, name: null, provider: 'github', url: 'https://github.com/o/r.git', owner: 'o', repoName: 'r', hasToken: false }] }),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: false, distributionRepositoryId: 7 }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021, isolationIntent: true }) },
+      };
+      // Before a run of this task has ever distributed anything —
+      // task.distributionRepositoryId is still null.
+      const taskBeforeDistribution = makeTask({ distributionRepositoryId: null });
+      const resolvedExecute = resolveExecutionManifest(taskBeforeDistribution, makeDeps(isolatedFixture), 'execute');
+
+      // Immediately after execute() ran: fetch distribution succeeded
+      // (isolationIntent alone required it) and recorded
+      // task.distributionRepositoryId — the project-server's own
+      // distribute_code is still off throughout, unchanged.
+      const taskAfterDistribution = makeTask({ distributionRepositoryId: 7 });
+      const resolvedContinuation = resolveExecutionManifest(taskAfterDistribution, makeDeps(isolatedFixture), 'continuation');
+
+      expect(resolvedExecute.manifest.server.distributeCode).toBe(true);
+      expect(resolvedContinuation.manifest.server.distributeCode).toBe(true);
+      expect(hashExecutionManifest(resolvedContinuation.manifest)).toBe(hashExecutionManifest(resolvedExecute.manifest));
+    });
+
+    it("manifest.server.distributeCode reflects the EFFECTIVE isDistributionRequired value (not the raw toggle) for 'execute'/'redistribute' on an isolated server with distribute_code off", () => {
+      const fixture: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: false }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021, isolationIntent: true }) },
+      };
+      const task = makeTask();
+
+      const resolvedExecute = resolveExecutionManifest(task, makeDeps(fixture), 'execute');
+      expect(resolvedExecute.manifest.server.distributeCode).toBe(true);
+
+      const resolvedRedistribute = resolveExecutionManifest(task, makeDeps(fixture), 'redistribute');
+      expect(resolvedRedistribute.manifest.server.distributeCode).toBe(true);
+    });
+  });
+
+  // Issue #87 explicit-target follow-up: distributionRepositoryId names
+  // WHICH repository distribute_code/isolation pulls onto the server — same
+  // trust-boundary reasoning as distributeCode itself above (an
+  // already-approved manifest's distribution SOURCE changing is exactly as
+  // material as flipping distributeCode).
+  describe('server.distributionRepositoryId', () => {
+    it('is exposed on the resolved manifest, sourced from the project_servers row', () => {
+      const fixture: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: true, distributionRepositoryId: 7 }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      };
+      const task = makeTask();
+
+      const resolved = resolveExecutionManifest(task, makeDeps(fixture), 'continuation');
+      expect(resolved.manifest.server.distributionRepositoryId).toBe(7);
+    });
+
+    it('is null when the project_servers row has no target configured', () => {
+      const fixture: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer({ distributionRepositoryId: null }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      };
+      const task = makeTask();
+
+      const resolved = resolveExecutionManifest(task, makeDeps(fixture), 'continuation');
+      expect(resolved.manifest.server.distributionRepositoryId).toBeNull();
+    });
+
+    it('changing the target repository alone invalidates a prior approval', () => {
+      const fixture = (distributionRepositoryId: number | null): Fixture => ({
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: true, distributionRepositoryId }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      });
+      const task = makeTask();
+
+      const hashRepoA = hashFor(task, fixture(7));
+      const hashRepoB = hashFor(task, fixture(8));
+
+      expect(hashRepoA).not.toBe(hashRepoB);
+    });
+
+    it('clearing the target repository (back to null) alone also invalidates approval', () => {
+      const fixture = (distributionRepositoryId: number | null): Fixture => ({
+        units: { 20: makeUnit() },
+        project: makeProject(),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: true, distributionRepositoryId }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      });
+      const task = makeTask();
+
+      const hashSet = hashFor(task, fixture(7));
+      const hashNull = hashFor(task, fixture(null));
+
+      expect(hashSet).not.toBe(hashNull);
+    });
+
+    // Issue #87 13th-round review, Important finding: the approval
+    // fingerprint's `repository` field must reflect the SAME repository
+    // push/PR/notarization will actually target — previously it always
+    // resolved `project.repositories[0]`, disagreeing with a
+    // `distributionRepositoryId` pointing at a different (later) entry.
+    it("manifest.repository reflects the distribution target repository (B), not repositories[0] (A), when distribution is active for this project/server", () => {
+      const repoA = { id: 1, name: 'A', url: 'https://github.com/acme/repo-a.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-a', hasToken: false };
+      const repoB = { id: 2, name: 'B', url: 'https://github.com/acme/repo-b.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-b', hasToken: false };
+      const fixture: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject({ repositories: [repoA, repoB] }),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: true, distributionRepositoryId: repoB.id }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      };
+      const task = makeTask();
+
+      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture), 'continuation');
+
+      expect(manifest.repository?.id).toBe(repoB.id);
+      expect(manifest.repository?.repoName).toBe('repo-b');
+    });
+
+    it('manifest.repository falls back to repositories[0] (A) when distribution is not active for this project/server (no distributeCode, no isolationIntent)', () => {
+      const repoA = { id: 1, name: 'A', url: 'https://github.com/acme/repo-a.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-a', hasToken: false };
+      const repoB = { id: 2, name: 'B', url: 'https://github.com/acme/repo-b.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-b', hasToken: false };
+      const fixture: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject({ repositories: [repoA, repoB] }),
+        // distributionRepositoryId set but distribution is NOT active for
+        // this pairing (distributeCode false, server not isolated) — same
+        // pre-existing behavior every project not using hub-代行
+        // distribution must keep.
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: false, distributionRepositoryId: repoB.id }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      };
+      const task = makeTask();
+
+      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture), 'continuation');
+
+      expect(manifest.repository?.id).toBe(repoA.id);
+    });
+  });
+
+  // Issue #87 review (forge/87-mirror follow-up), Important finding 1: the
+  // approval manifest must agree with what a resumed run actually executes
+  // against — `ExecuteTaskUseCase.resumeStateMachine()`/`followUp()`/
+  // `isPushCompleted()` all treat `task.distributionRepositoryId` (once
+  // recorded) as authoritative and never re-resolve from the project/
+  // project-server's CURRENT configuration. Before this fix,
+  // `resolveExecutionManifest` always called `resolveExecutionRepositoryEntry`
+  // (current config only), so a config change after a task's first
+  // distribution made the approval UI/fingerprint show a DIFFERENT
+  // repository than the one execution actually resumes against.
+  describe('task.distributionRepositoryId (Issue #87 review, forge/87-mirror follow-up, Important finding 1)', () => {
+    const repoA = { id: 1, name: 'A', url: 'https://github.com/acme/repo-a.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-a', hasToken: false };
+    const repoB = { id: 2, name: 'B', url: 'https://github.com/acme/repo-b.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-b', hasToken: false };
+
+    it("manifest.repository reflects the task's RECORDED repository (A), not the project-server's CURRENT distribution target (B)", () => {
+      const fixture: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject({ repositories: [repoA, repoB] }),
+        // Current config has since moved to repo B.
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: true, distributionRepositoryId: repoB.id }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      };
+      // But this task's own distribution already ran against repo A.
+      const task = makeTask({ distributionRepositoryId: repoA.id });
+
+      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture), 'continuation');
+
+      expect(manifest.repository?.id).toBe(repoA.id);
+      expect(manifest.repository?.repoName).toBe('repo-a');
+    });
+
+    // `manifest.server.distributionRepositoryId` (Issue #87 review,
+    // forge/87-mirror follow-up, Important finding 3) must apply the SAME
+    // "recorded value is authoritative" rule as `manifest.repository` above —
+    // a re-point of the project server's CURRENT config after this task's
+    // repository was already recorded must change NEITHER field, and
+    // therefore must not change the overall fingerprint either. Approval and
+    // actual execution (resumeStateMachine()/followUp()/isPushCompleted(),
+    // which all keep running against the recorded repository) must agree
+    // about what changed.
+    it("neither manifest.repository nor manifest.server.distributionRepositoryId (nor therefore the fingerprint) changes across a config re-point, once a repository is recorded", () => {
+      const fixture = (currentTarget: number): Fixture => ({
+        units: { 20: makeUnit() },
+        project: makeProject({ repositories: [repoA, repoB] }),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: true, distributionRepositoryId: currentTarget }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      });
+      const task = makeTask({ distributionRepositoryId: repoA.id });
+
+      const beforeRepoint = resolveExecutionManifest(task, makeDeps(fixture(repoA.id)), 'continuation');
+      const afterRepoint = resolveExecutionManifest(task, makeDeps(fixture(repoB.id)), 'continuation');
+
+      expect(beforeRepoint.manifest.repository?.id).toBe(repoA.id);
+      expect(afterRepoint.manifest.repository?.id).toBe(repoA.id);
+      expect(beforeRepoint.manifest.server.distributionRepositoryId).toBe(repoA.id);
+      expect(afterRepoint.manifest.server.distributionRepositoryId).toBe(repoA.id);
+
+      const hashBeforeRepoint = hashFor(task, fixture(repoA.id));
+      const hashAfterRepoint = hashFor(task, fixture(repoB.id));
+      expect(hashBeforeRepoint).toBe(hashAfterRepoint);
+    });
+
+    it('resolves manifest.repository to null (fails closed, never falls back to current config) when the recorded repository no longer exists on the project', () => {
+      const fixture: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject({ repositories: [repoB] }),
+        // Current config would resolve repo B just fine...
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: true, distributionRepositoryId: repoB.id }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      };
+      // ...but this task's recorded repository (A) was deleted from the project.
+      const task = makeTask({ distributionRepositoryId: repoA.id });
+
+      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture), 'continuation');
+
+      expect(manifest.repository).toBeNull();
+    });
+
+    it('falls back to current-config resolution (repositories[0]) when the task has never recorded a distribution repository', () => {
+      const fixture: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject({ repositories: [repoA, repoB] }),
+        // distribution not active for this pairing — current-config
+        // resolution falls back to repositories[0] (A), same as the
+        // pre-existing behavior every non-distribution project relies on.
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: false, distributionRepositoryId: null }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      };
+      const task = makeTask({ distributionRepositoryId: null });
+
+      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture), 'continuation');
+
+      expect(manifest.repository?.id).toBe(repoA.id);
+    });
+  });
+
+  describe("operationKind ('execute' vs 'continuation') — Issue #87 review, forge/87-mirror follow-up, Important finding (approval-boundary bypass)", () => {
+    const repoA = { id: 1, name: 'A', url: 'https://github.com/acme/repo-a.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-a', hasToken: false };
+    const repoB = { id: 2, name: 'B', url: 'https://github.com/acme/repo-b.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-b', hasToken: false };
+
+    // Reproduces the exact bypass scenario the fix closes: a task is
+    // approved while the project server distributes from repo A; the
+    // project server is then re-pointed at repo B; a FRESH execute() must
+    // hash B (what performDistribution is about to pull), not the
+    // previously-recorded A — otherwise the stale A-fingerprint would still
+    // match the task's `executionApprovedFingerprintHash` and the gate
+    // would let execute() through to distribute B's code unapproved.
+    it("operationKind: 'execute' resolves manifest.repository/server.distributionRepositoryId from the CURRENT project-server config (B), ignoring any recorded task.distributionRepositoryId (A) — so an approval given for A does not survive a re-point to B", () => {
+      const fixture: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject({ repositories: [repoA, repoB] }),
+        // Project server now distributes from B...
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: true, distributionRepositoryId: repoB.id }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      };
+      // ...but this task's PAST distribution (a previous execute()/restore())
+      // recorded A.
+      const task = makeTask({ distributionRepositoryId: repoA.id });
+
+      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture), 'execute');
+
+      expect(manifest.repository?.id).toBe(repoB.id);
+      expect(manifest.repository?.repoName).toBe('repo-b');
+      expect(manifest.server.distributionRepositoryId).toBe(repoB.id);
+    });
+
+    it("acceptance criterion: approve for A, re-point the project server to B, then a FRESH execute() must NOT be allowed on the stale A-fingerprint — the gate must require re-approval for B", () => {
+      const fixtureFor = (currentTarget: number): Fixture => ({
+        units: { 20: makeUnit() },
+        project: makeProject({ repositories: [repoA, repoB] }),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: true, distributionRepositoryId: currentTarget }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      });
+
+      // Approved while the project server distributed from A, and A got
+      // recorded onto the task by that run.
+      const approvedHash = hashFor(makeTask({ distributionRepositoryId: repoA.id }), fixtureFor(repoA.id), 'execute');
+      const approvedTask = makeTask({
+        distributionRepositoryId: repoA.id,
+        executionApprovedFingerprintHash: approvedHash,
+      });
+
+      // Project server re-pointed at B. A fresh execute()'s gate hashes
+      // CURRENT config ('execute') — this must differ from the stale
+      // approval, i.e. the gate must NOT allow silently through.
+      const { manifest: manifestAtFreshExecute, projectServer } = resolveExecutionManifest(approvedTask, makeDeps(fixtureFor(repoB.id)), 'execute');
+      const freshExecuteHash = hashExecutionManifest(manifestAtFreshExecute);
+
+      expect(freshExecuteHash).not.toBe(approvedHash);
+      const gate = checkExecutionGate(approvedTask, resolveInputPolicy(projectServer), freshExecuteHash);
+      expect(gate).toEqual({ allowed: false, reason: 'pending_approval' });
+    });
+
+    it("operationKind: 'continuation' still resolves the RECORDED repository (A), unaffected by the same re-point that invalidates 'execute' above — resume/follow-up/restore/respawn must not spuriously re-prompt for approval just because the project server config changed after distribution already ran", () => {
+      const fixtureFor = (currentTarget: number): Fixture => ({
+        units: { 20: makeUnit() },
+        project: makeProject({ repositories: [repoA, repoB] }),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: true, distributionRepositoryId: currentTarget }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      });
+      const task = makeTask({ distributionRepositoryId: repoA.id });
+
+      const beforeRepoint = resolveExecutionManifest(task, makeDeps(fixtureFor(repoA.id)), 'continuation');
+      const afterRepoint = resolveExecutionManifest(task, makeDeps(fixtureFor(repoB.id)), 'continuation');
+
+      expect(beforeRepoint.manifest.repository?.id).toBe(repoA.id);
+      expect(afterRepoint.manifest.repository?.id).toBe(repoA.id);
+      expect(beforeRepoint.manifest.server.distributionRepositoryId).toBe(repoA.id);
+      expect(afterRepoint.manifest.server.distributionRepositoryId).toBe(repoA.id);
+
+      const hashBeforeRepoint = hashFor(task, fixtureFor(repoA.id), 'continuation');
+      const hashAfterRepoint = hashFor(task, fixtureFor(repoB.id), 'continuation');
+      expect(hashBeforeRepoint).toBe(hashAfterRepoint);
+    });
+
+    it('for a task with no recorded distribution repository yet, both operationKind values resolve the SAME current-config repository', () => {
+      const fixture: Fixture = {
+        units: { 20: makeUnit() },
+        project: makeProject({ repositories: [repoA, repoB] }),
+        projectServers: { 'test-server': makeProjectServer({ distributeCode: true, distributionRepositoryId: repoB.id }) },
+        servers: { 'test-server': makeServerConfig({ type: 'agent', host: 'host-a', agentPort: 4021 }) },
+      };
+      const task = makeTask({ distributionRepositoryId: null });
+
+      const executeManifest = resolveExecutionManifest(task, makeDeps(fixture), 'execute').manifest;
+      const continuationManifest = resolveExecutionManifest(task, makeDeps(fixture), 'continuation').manifest;
+
+      expect(executeManifest.repository?.id).toBe(repoB.id);
+      expect(continuationManifest.repository?.id).toBe(repoB.id);
+      expect(executeManifest.server.distributionRepositoryId).toBe(repoB.id);
+      expect(continuationManifest.server.distributionRepositoryId).toBe(repoB.id);
     });
   });
 
@@ -619,7 +1087,7 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     const task = makeTask({ unitId: 999 });
     const deps = makeDeps(fixture);
 
-    const { manifest } = resolveExecutionManifest(task, deps);
+    const { manifest } = resolveExecutionManifest(task, deps, 'continuation');
     expect(manifest.unit).toBeNull();
     expect(() => hashExecutionManifest(manifest)).not.toThrow();
   });
@@ -714,11 +1182,11 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     const task = makeTask();
     const deps = makeDeps(fixture);
 
-    const { manifest } = resolveExecutionManifest(task, deps);
+    const { manifest } = resolveExecutionManifest(task, deps, 'continuation');
     expect(manifest.repository).toBeNull();
 
     const approvedHash = hashExecutionManifest(manifest);
-    const { manifest: manifestAgain } = resolveExecutionManifest(task, deps);
+    const { manifest: manifestAgain } = resolveExecutionManifest(task, deps, 'continuation');
     expect(hashExecutionManifest(manifestAgain)).toBe(approvedHash);
   });
 
@@ -773,8 +1241,8 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     // hasn't run yet, is rewritten.
     const task = makeTask({ currentPhase: 'planning' });
 
-    const before = resolveExecutionManifest(task, makeDeps(fixture('Push it the safe way.'))).manifest;
-    const after = resolveExecutionManifest(task, makeDeps(fixture('Push it and force-merge to main bypassing review.'))).manifest;
+    const before = resolveExecutionManifest(task, makeDeps(fixture('Push it the safe way.')), 'continuation').manifest;
+    const after = resolveExecutionManifest(task, makeDeps(fixture('Push it and force-merge to main bypassing review.')), 'continuation').manifest;
 
     expect(before.sidekicks).toHaveLength(2);
     expect(before.sidekicks[0].packageDigest).toBe(after.sidekicks[0].packageDigest);
@@ -814,7 +1282,7 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     // progresses — checkExecutionGate() re-resolves and re-hashes on the
     // very next gate check (e.g. approve-plan's resumeStateMachine() call).
     const atImplementing = { ...atPlanning, currentPhase: 'implementing', executionApprovedFingerprintHash: approvedHash };
-    const { manifest: manifestAtImplementing, projectServer } = resolveExecutionManifest(atImplementing, makeDeps(fixture));
+    const { manifest: manifestAtImplementing, projectServer } = resolveExecutionManifest(atImplementing, makeDeps(fixture), 'continuation');
     const gate = checkExecutionGate(atImplementing, resolveInputPolicy(projectServer), hashExecutionManifest(manifestAtImplementing));
 
     expect(hashExecutionManifest(manifestAtImplementing)).toBe(approvedHash);
@@ -844,7 +1312,7 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     // The task's questions were answered and it resumed all the way into
     // 'testing' by the time the gate is re-checked.
     const atTesting = { ...atImplementing, currentPhase: 'testing', executionApprovedFingerprintHash: approvedHash };
-    const { manifest: manifestAtTesting, projectServer } = resolveExecutionManifest(atTesting, makeDeps(fixture));
+    const { manifest: manifestAtTesting, projectServer } = resolveExecutionManifest(atTesting, makeDeps(fixture), 'continuation');
     const gate = checkExecutionGate(atTesting, resolveInputPolicy(projectServer), hashExecutionManifest(manifestAtTesting));
 
     expect(hashExecutionManifest(manifestAtTesting)).toBe(approvedHash);
@@ -863,8 +1331,8 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     };
     const task = makeTask({ currentPhase: null });
 
-    const first = resolveExecutionManifest(task, makeDeps(fixture)).manifest;
-    const second = resolveExecutionManifest(task, makeDeps(fixture)).manifest;
+    const first = resolveExecutionManifest(task, makeDeps(fixture), 'continuation').manifest;
+    const second = resolveExecutionManifest(task, makeDeps(fixture), 'continuation').manifest;
 
     expect(first.sidekicks).toEqual(second.sidekicks);
     expect(first.sidekicks).toHaveLength(1);
@@ -1127,7 +1595,7 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     };
     const task = makeTask({ inputTrust: 'trusted', currentPhase: null });
 
-    const { manifest } = resolveExecutionManifest(task, makeDeps(fixture));
+    const { manifest } = resolveExecutionManifest(task, makeDeps(fixture), 'continuation');
 
     const cheapBodyOnlyDigest = createHash('sha256').update(body).digest('hex');
     expect(manifest.sidekicks).toHaveLength(1);
@@ -1190,7 +1658,7 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
       };
       const task = makeTask({ currentPhase: null });
 
-      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture));
+      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture), 'continuation');
 
       expect(manifest.phases).toEqual([
         { phase: 'planning', planApproval: true, questions: false, testFailed: false, testFailedRollbackTo: null, selfReviewRetry: false, pushVerify: false, subagentRole: null },
@@ -1217,7 +1685,7 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
       const approvedHash = hashFor(atPlanning, fixture);
 
       const atPushing = { ...atPlanning, currentPhase: 'pushing', executionApprovedFingerprintHash: approvedHash };
-      const { manifest: manifestAtPushing, projectServer } = resolveExecutionManifest(atPushing, makeDeps(fixture));
+      const { manifest: manifestAtPushing, projectServer } = resolveExecutionManifest(atPushing, makeDeps(fixture), 'continuation');
       const gate = checkExecutionGate(atPushing, resolveInputPolicy(projectServer), hashExecutionManifest(manifestAtPushing));
 
       expect(hashExecutionManifest(manifestAtPushing)).toBe(approvedHash);
@@ -1284,9 +1752,67 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
       };
       const task = makeTask({ selfReviewMaxAttempts: 7 });
 
-      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture));
+      const { manifest } = resolveExecutionManifest(task, makeDeps(fixture), 'continuation');
 
       expect(manifest.task.selfReviewMaxAttempts).toBe(7);
     });
+  });
+});
+
+// Issue #87 third-party review, 12th round, Important finding 3: the
+// approval manifest used to hash the RAW resolved base branch
+// (resolveBaseBranch's result), while ExecuteTaskUseCase.execute()
+// canonicalizes that same value (canonicalizeBaseBranch — strips a
+// `refs/heads/` prefix and/or a remote `origin/` qualifier) before actually
+// using it. For a pre-existing task whose resolved base branch is
+// `origin/main` or `refs/heads/main`, that meant the operator approved and
+// fingerprinted `origin/main`, but the task actually ran against `main` —
+// an execution-gate contract violation. `resolveExecutionManifest` must
+// apply the exact same canonicalization, so `branches.base` in the manifest
+// always equals what execution actually uses.
+describe('resolveExecutionManifest base branch canonicalization (Issue #87 third-party review, 12th round, Important finding 3)', () => {
+  it('records the CANONICALIZED base branch, not the raw remote-qualified value, when the task base branch is "origin/main"', () => {
+    const fixture: Fixture = {
+      units: { 20: makeUnit() },
+      project: makeProject(),
+      projectServers: { 'test-server': makeProjectServer() },
+    };
+    const task = makeTask({ baseBranch: 'origin/main' });
+
+    const { manifest } = resolveExecutionManifest(task, makeDeps(fixture), 'continuation');
+
+    expect(manifest.branches.base).toBe('main');
+  });
+
+  it('records the CANONICALIZED base branch when the task base branch is a fully-qualified ref "refs/heads/main"', () => {
+    const fixture: Fixture = {
+      units: { 20: makeUnit() },
+      project: makeProject(),
+      projectServers: { 'test-server': makeProjectServer() },
+    };
+    const task = makeTask({ baseBranch: 'refs/heads/main' });
+
+    const { manifest } = resolveExecutionManifest(task, makeDeps(fixture), 'continuation');
+
+    expect(manifest.branches.base).toBe('main');
+  });
+
+  it('a task previously approved with a raw "origin/main" baseBranch still passes the execution gate at run time (both sides now canonicalize identically)', () => {
+    const fixture: Fixture = {
+      units: { 20: makeUnit() },
+      project: makeProject(),
+      projectServers: { 'test-server': makeProjectServer() },
+    };
+    const task = makeTask({ baseBranch: 'origin/main' });
+    const deps = makeDeps(fixture);
+
+    const { manifest, projectServer } = resolveExecutionManifest(task, deps, 'continuation');
+    const approvedHash = hashExecutionManifest(manifest);
+    const approvedTask = { ...task, executionApprovedFingerprintHash: approvedHash };
+
+    const { manifest: manifestAtRunTime } = resolveExecutionManifest(approvedTask, deps, 'continuation');
+    const gate = checkExecutionGate(approvedTask, resolveInputPolicy(projectServer), hashExecutionManifest(manifestAtRunTime));
+
+    expect(gate).toEqual({ allowed: true });
   });
 });

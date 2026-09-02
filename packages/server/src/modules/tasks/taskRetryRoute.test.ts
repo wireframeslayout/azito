@@ -3,6 +3,7 @@ import Fastify from 'fastify';
 import tasksRoutes from './routes';
 import type { TasksRouteOptions } from './routes';
 import type { Task } from './Task';
+import type { TaskStatus } from './TaskStatus';
 import { destroyPrimaryTaskWindow } from './execution/TaskWindowDestruction';
 import type { TaskPaneEnvironmentService } from './execution/TaskPaneEnvironmentService';
 
@@ -100,6 +101,11 @@ function makeOpts(
       task.tmuxWindow = null;
       return true;
     }),
+    updateStatusIfWindowMatches: vi.fn((id: number, expectedWindowName: string, status: TaskStatus) => {
+      if (id !== task.id || task.tmuxWindow !== expectedWindowName) return false;
+      task.status = status;
+      return true;
+    }),
   };
   return {
     taskRepo,
@@ -111,12 +117,14 @@ function makeOpts(
       delete: vi.fn(),
       addRepository: vi.fn(() => 1),
       findRepositoryById: vi.fn(() => null),
+      updateRepositoryToken: vi.fn(),
       removeRepository: vi.fn(),
+      findRepositoryCredentialsByIds: vi.fn(() => []),
     },
     projectServerRepo: {
-      findByProject: vi.fn(() => [{ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const }]),
+      findByProject: vi.fn(() => [{ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null }]),
       findByServer: vi.fn(() => []),
-      find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const })),
+      find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null })),
       upsert: vi.fn(),
       remove: vi.fn(),
     },
@@ -155,6 +163,7 @@ function makeOpts(
       updateAgentVersion: vi.fn(),
       updateFingerprint: vi.fn(),
       clearFingerprint: vi.fn(), updateIsolationIntent: vi.fn(),
+      findMetaByNames: vi.fn(() => []),
       delete: vi.fn(),
     },
     worktreeServiceFactory: {

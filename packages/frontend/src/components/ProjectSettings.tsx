@@ -1,30 +1,52 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { Icon } from './ui/Icon';
-import { DocsLink } from './ui/DocsLink';
 import { useApi } from '../hooks/useApi';
 import { useAddWindowModal } from '../hooks/useAddWindowModal';
 import { useIsMobile } from '../hooks/useIsMobile';
 import type { PersistedTab } from '../hooks/useTabPersistence';
 import FormField from './FormField';
 import ProjectGeneralFields from './ProjectGeneralFields';
-import DirectoryInput from './DirectoryInput';
 import AddWindowModal from './workspace/AddWindowModal';
 import ResourceWarningDialog from './ResourceWarningDialog';
-import { FormInput, FormSelect, LoadingState, baseInputStyle, Button } from './ui';
+import { Chip, EmptyState, FormSelect, ListRow, ListRowGroup, LoadingState, PanelHeader, baseInputStyle, Button } from './ui';
 import type { Window, Unit, Server } from '../pages/workspace/types';
-import { parseRepoUrl as parseGitRepoUrl } from '../lib/gitProvider';
 import { notifyProjectsChanged } from '../lib/projectsChanged';
+import { isDistributeCodeLocked, isDistributionRepositorySelected, resolveDistributeCodeForSave, resolveDistributeCodeToggleOnProjectServersChange, resolveDistributionRepositoryIdOnProjectServersChange } from '../lib/distributeCodePolicy';
+import { buildEnvironmentRowChips, needsDistributionSetup, type DistributionPrerequisite, type EnvironmentChip, type LastDistribution } from '../lib/environmentRow';
+import { formatRelativeTime } from '../utils/time';
 import { useToast } from '../hooks/useToast';
 import { useConfirm } from '../hooks/useConfirm';
+import RepoDiscoveryDialog from './RepoDiscoveryDialog';
+import { AddEnvironmentModal, EditEnvironmentModal } from './settings/EnvironmentModals';
+import { AddRepositoryModal } from './settings/RepositoryModals';
+import { buildRepositoryRowView, collectDistributionRepositoryIds } from '../lib/repositoryForm';
 
-interface Repository { id: number; url: string; name?: string; provider?: string; owner?: string; repoName?: string; }
+interface Repository {
+  id: number; url: string; name?: string; provider?: string; owner?: string; repoName?: string;
+  /** トークンが登録済みか（GET /api/projects/:id が返す。秘密そのものは返らない）。 */
+  hasToken?: boolean;
+}
 interface ProjectServer {
   projectId: number; serverName: string; workingDirectory?: string; branch?: string; tmuxSession: string;
   /** Issue #29 Step 3a: 'allow' is now selectable, but only ever effective for a verified-isolated server — the server degrades it to 'manual-approval' at run time otherwise (see routes.ts's PUT validation and ProjectServer.resolveEffectiveInputPolicy). */
   inputPolicy?: 'deny' | 'manual-approval' | 'allow';
+  /** Issue #87 Phase 2: whether the hub distributes this project's code to this server. Meaningless for `local`. Default off. */
+  distributeCode?: boolean;
+  /** Issue #87: which of the project's repositories distribution pulls onto this server. Required whenever distribution actually runs (distributeCode on, or an isolated server). `null`/`undefined` means unset. */
+  distributionRepositoryId?: number | null;
+  /** Issue #87 配信状態の可視化: whether distribution applies to this pairing at all. `null` = the referenced `servers` row is gone, so it cannot be computed. */
+  distributionRequired?: boolean | null;
+  /**
+   * Hub-local precondition check for distribution. `failed` carries the machine-readable `stage` the UI localizes;
+   * `ok` carries `credentialSource` — which credential delivery would use (the repository's own PAT, or the hub's
+   * `gh` / `glab` login).
+   */
+  distributionPrerequisite?: DistributionPrerequisite;
+  /** The last `distribution_state` record for this server + its configured repository. `null` = never distributed. */
+  lastDistribution?: LastDistribution | null;
 }
 interface Project {
   id: number; name: string; slug: string; description?: string;
@@ -35,7 +57,7 @@ interface Project {
 interface TmuxWindow { index: number; name: string; panes: { index: number }[]; }
 interface Session { name: string; windows: TmuxWindow[]; }
 
-export type SettingsSection = 'general' | 'repositories' | 'servers' | 'secrets' | 'danger';
+export type SettingsSection = 'general' | 'repositories' | 'servers' | 'windows' | 'secrets' | 'danger';
 
 export function useProjectSettings(
   projectId: number,
@@ -59,6 +81,12 @@ export function useProjectSettings(
   const [saving, setSaving] = useState(false);
 
   const [projectServers, setProjectServers] = useState<ProjectServer[]>([]);
+  // Shared by every call site that needs to refetch the project_servers
+  // list after a mutation (save/remove/wizard-add) — previously duplicated
+  // inline at each of those call sites.
+  const refreshProjectServers = useCallback(() => {
+    api<ProjectServer[]>(`/projects/${projectId}/servers`).then((res) => setProjectServers(Array.isArray(res) ? res : [])).catch(() => {});
+  }, [projectId]);
   const [addPsOpen, setAddPsOpen] = useState(false);
   const [psServer, setPsServer] = useState('');
   const [psWorkDir, setPsWorkDir] = useState('');
@@ -74,19 +102,138 @@ export function useProjectSettings(
   // TIME from live verification/scoped-auth state, degrading back to
   // 'manual-approval' whenever any of that isn't currently true.
   const [psInputPolicy, setPsInputPolicy] = useState<'deny' | 'manual-approval' | 'allow'>('manual-approval');
+  // Issue #87 Phase 2: opt-in hub-代行 code distribution to this server, on
+  // the hub's own git credentials — generalizes the isolated-server-only
+  // distribution path (mandatory there, since an isolated server holds no
+  // credentials of its own) to any agent/ssh server, for instant dev
+  // environment provisioning. Default off, meaningless for `local` (the hub
+  // itself) — the form hides the toggle entirely for that server (see
+  // isPsServerLocal below).
+  const [psDistributeCode, setPsDistributeCode] = useState(false);
+  // Issue #87 explicit-target follow-up: which of the project's repositories
+  // distribution pulls onto this server — required whenever distribution
+  // actually runs (see `ProjectServer.distributionRepositoryId`'s doc
+  // comment). Stored as a string ('' = unset) to match `FormSelect`'s
+  // string-only value contract; converted to `number | null` only at the
+  // request boundary (`handleSaveServer`).
+  const [psDistributionRepositoryId, setPsDistributionRepositoryId] = useState('');
+  // Issue #87 review (Minor finding): mirrors `psDistributeCodeTouchedRef` —
+  // tracks whether the user has edited the distribution-target-repository
+  // select since the form was last (re)opened for the current `psServer`, so
+  // the re-derivation effect below can stop overwriting it once touched. See
+  // `resolveDistributionRepositoryIdOnProjectServersChange`'s doc comment.
+  const psDistributionRepositoryIdTouchedRef = useRef(false);
 
-  const [addRepoOpen, setAddRepoOpen] = useState(false);
-  const [repoUrl, setRepoUrl] = useState('');
-  const [repoName, setRepoName] = useState('');
-  const [repoProvider, setRepoProvider] = useState('github');
-  const [repoOwner, setRepoOwner] = useState('');
-  const [repoRepoName, setRepoRepoName] = useState('');
-  const [repoToken, setRepoToken] = useState('');
   const [icon, setIcon] = useState('');
   const [color, setColor] = useState('');
   const { showToast } = useToast();
   const confirm = useConfirm();
   const { t } = useTranslation(['projects', 'common']);
+  const [discoverOpen, setDiscoverOpen] = useState(false);
+  const [discoverSuggestion, setDiscoverSuggestion] = useState<{ serverName: string; count: number } | null>(null);
+  // Holds the server the discovery dialog should scan — set explicitly
+  // whenever the dialog is opened (from the suggestion banner or the
+  // manual "Discover" button), independent of `discoverSuggestion` (which
+  // is cleared as soon as the dialog opens). Deriving the dialog's server
+  // from `discoverSuggestion` alone meant that clearing it on open, then
+  // falling back to "the first server with a working directory" on the
+  // next render, could scan a different server than the one the user just
+  // reviewed a suggestion for (Issue #19 third-party review, Important
+  // finding 2).
+  const [discoverServerName, setDiscoverServerName] = useState<string | null>(null);
+
+  // Issue #87 review finding (Minor 3): `handleOpenServerForm` already
+  // re-derives `psDistributeCode` whenever it's called, but the server
+  // `<select>`'s own onChange is the only call site that re-invokes it —
+  // if `psServer` ever changes any other way, the toggle's underlying
+  // state would keep whatever value it last held even after switching to
+  // (or landing on) a `local` server, where the toggle is hidden but the
+  // value is still sent on Save. Re-deriving here on every `psServer`
+  // change, independent of how it changed, and forcing `false` outright
+  // for a `local` target (`distribute_code` is structurally meaningless
+  // there — see the toggle's hidden-for-local condition below) closes that
+  // gap without relying on a single call site staying in sync.
+  //
+  // `projectServers` is a real dependency (Issue #87 third-party review,
+  // 10th round, Minor finding 3): the `[project]` effect below fetches it
+  // asynchronously, so opening this form before that fetch resolves used to
+  // read an empty `projectServers` here, initialize the toggle to `false`,
+  // and never correct it once the real rows arrived — because this effect
+  // was previously keyed only on `[psServer, servers]`, it never re-ran
+  // when `projectServers` changed out from under it. A save made in that
+  // window would then silently overwrite an existing `distribute_code:
+  // true` row with `false`. Including `projectServers` here means the
+  // effect re-derives the toggle the moment the fetch lands, matching
+  // whatever server is currently selected in the form.
+  //
+  // Issue #87 third-party review, 11th round, Minor finding 3: that same
+  // `projectServers` dependency also means ANY later refetch (e.g. this
+  // same async request landing late — dependent on network timing, not
+  // just "before the form ever opened" — or a refetch triggered by an
+  // unrelated save/remove elsewhere in this component while this form is
+  // still open) re-runs this effect and clobbers a toggle the user has
+  // since edited by hand. `psDistributeCodeTouchedRef` tracks whether the
+  // user has touched the toggle since the form was last (re)opened for the
+  // current `psServer` (reset in `handleOpenServerForm`, matching how every
+  // other field in this form is (re)initialized only there); once touched,
+  // this effect stops overwriting it until the next open. This mirrors the
+  // "user edit wins over a late server response" contract the other form
+  // fields already get for free by only ever being set from
+  // `handleOpenServerForm`.
+  const psDistributeCodeTouchedRef = useRef(false);
+  useEffect(() => {
+    const targetServer = (servers || []).find((sv) => sv.name === psServer);
+    // Issue #87 review, eighth pass, Important finding 1: an isolated
+    // server's toggle is always shown checked/disabled in the JSX below
+    // (via `isDistributeCodeLocked` at the render call site) — that's a
+    // pure display derivation, not something this state needs to carry.
+    // Forcing `psDistributeCode` itself to `true` here used to get
+    // persisted verbatim by `handleSaveServer` (see its own `locked` guard
+    // now omitting the field), which meant opting a server INTO isolation
+    // silently wrote a `distribute_code: true` row that outlived isolation
+    // being turned back off. Keep this state equal to the actual saved
+    // value regardless of lock status, so Save never has anything to send
+    // beyond what the user actually chose.
+    //
+    // `resolveDistributeCodeToggleOnProjectServersChange` (distributeCodePolicy.ts)
+    // is the single tested place encoding the "touched user edit wins over a
+    // late server response" rule described above — functional `setState` so
+    // it sees the current value without adding `psDistributeCode` itself as
+    // an effect dependency (which would re-run this on every toggle, not just
+    // on a real `projectServers`/`servers`/`psServer` change).
+    setPsDistributeCode((prev) => resolveDistributeCodeToggleOnProjectServersChange(
+      prev, psDistributeCodeTouchedRef.current, targetServer?.type, projectServers, psServer,
+    ));
+  }, [psServer, servers, projectServers]);
+
+  // Wraps the raw `setPsDistributeCode` state setter for the toggle's own
+  // `onChange` (the only manual-edit call site) so a user interaction marks
+  // the field dirty — see `psDistributeCodeTouchedRef`'s doc comment above.
+  const handleSetPsDistributeCode = useCallback((value: boolean) => {
+    psDistributeCodeTouchedRef.current = true;
+    setPsDistributeCode(value);
+  }, []);
+
+  // Issue #87 review (Minor finding): the distribution-target-repository
+  // select had the same "form opened before `projectServers` resolved" bug
+  // `psDistributeCode`'s effect above was already fixed for — re-derive it
+  // whenever `projectServers` (or `psServer`) changes, unless the user has
+  // touched the field since the form was (re)opened. See
+  // `resolveDistributionRepositoryIdOnProjectServersChange`'s doc comment.
+  useEffect(() => {
+    setPsDistributionRepositoryId((prev) => resolveDistributionRepositoryIdOnProjectServersChange(
+      prev, psDistributionRepositoryIdTouchedRef.current, projectServers, psServer,
+    ));
+  }, [psServer, projectServers]);
+
+  // Wraps the raw `setPsDistributionRepositoryId` state setter for the
+  // select's own `onChange` (the only manual-edit call site) so a user
+  // interaction marks the field dirty — see
+  // `psDistributionRepositoryIdTouchedRef`'s doc comment above.
+  const handleSetPsDistributionRepositoryId = useCallback((value: string) => {
+    psDistributionRepositoryIdTouchedRef.current = true;
+    setPsDistributionRepositoryId(value);
+  }, []);
 
   useEffect(() => {
     if (project) {
@@ -132,28 +279,31 @@ export function useProjectSettings(
     navigate('/', { replace: true });
   }, [projectId, navigate, confirm, t]);
 
-  const parseRepoUrl = useCallback((url: string) => {
-    const parsed = parseGitRepoUrl(url);
-    if (!parsed) return;
-    setRepoOwner(parsed.owner); setRepoRepoName(parsed.repo); setRepoProvider(parsed.provider);
-  }, []);
-
-  const handleAddRepo = useCallback(async () => {
-    if (!repoUrl.trim()) return showToast(t('common:validation.urlRequired'));
-    await api(`/projects/${projectId}/repositories`, {
-      method: 'POST', body: JSON.stringify({
-        url: repoUrl.trim(), name: repoName.trim() || undefined, provider: repoProvider,
-        owner: repoOwner.trim() || undefined, repo_name: repoRepoName.trim() || undefined,
-        token: repoToken.trim() || undefined,
-      }),
-    });
-    setRepoUrl(''); setRepoName(''); setRepoProvider('github'); setRepoOwner(''); setRepoRepoName(''); setRepoToken('');
-    setAddRepoOpen(false); refresh();
-  }, [projectId, repoUrl, repoName, repoProvider, repoOwner, repoRepoName, repoToken, refresh, showToast, t]);
-
   const handleRemoveRepo = useCallback(async (rid: number) => {
-    await api(`/projects/${projectId}/repositories/${rid}`, { method: 'DELETE' }); refresh();
-  }, [projectId, refresh]);
+    // design-lint rule 1 forbids window.confirm — useConfirm() is the
+    // project-wide replacement (see RepoSidebar.tsx's own remove handler).
+    const ok = await confirm({
+      title: t('settings.repositories.removeConfirmTitle'),
+      message: t('settings.repositories.removeConfirmMessage'),
+      danger: true,
+    });
+    if (!ok) return;
+    await api(`/projects/${projectId}/repositories/${rid}`, { method: 'DELETE' });
+    refresh();
+    // Issue #87 review (Minor finding): a deleted repository is removed from
+    // FK-referencing project_servers rows via `ON DELETE SET NULL` on the
+    // backend, but that alone leaves this form's own state stale — the
+    // `[project]` effect above only refetches `projectServers` when
+    // `project` itself changes, not on a standalone repository delete, and
+    // the currently-open server form's `psDistributionRepositoryId` would
+    // still hold the now-deleted id. Refetch `projectServers` so the list
+    // badge and any later form (re)open reflect the NULLed value, and clear
+    // the open form's own selection immediately if it pointed at the
+    // repository just removed — the id is derived purely from server state,
+    // not user-typed, so clearing it here can't discard unsaved input.
+    refreshProjectServers();
+    setPsDistributionRepositoryId((prev) => (prev === String(rid) ? '' : prev));
+  }, [projectId, refresh, refreshProjectServers, confirm, t]);
 
   const handleRemoveWindow = useCallback(async (wid: number) => {
     const win = project?.windows.find((w) => w.id === wid);
@@ -167,17 +317,41 @@ export function useProjectSettings(
   }, [projectId, project, tabs, closeTab, refresh]);
 
   const handleSaveServer = useCallback(async () => {
-    await api(`/projects/${projectId}/servers/${psServer}`, {
-      method: 'PUT', body: JSON.stringify({
-        working_directory: psWorkDir.trim() || null,
-        branch: psBranch.trim() || null,
-        tmux_session: psTmuxSession.trim() || null,
-        input_policy: psInputPolicy,
-      }),
-    });
-    setAddPsOpen(false); setPsWorkDir(''); setPsBranch(''); setPsTmuxSession(''); setPsInputPolicy('manual-approval');
-    api<ProjectServer[]>(`/projects/${projectId}/servers`).then((res) => setProjectServers(Array.isArray(res) ? res : [])).catch(() => {});
-  }, [projectId, psServer, psWorkDir, psBranch, psTmuxSession, psInputPolicy]);
+    const targetServer = (servers || []).find((sv) => sv.name === psServer);
+    // Issue #87 review, eighth pass, Important finding 1: for a locked
+    // (isolated) server, `resolveDistributeCodeForSave` returns `undefined`
+    // so the key is omitted below — the PUT handler's "key absent ->
+    // preserve existing value" semantics (routes.ts) then keep whatever was
+    // actually saved before, instead of persisting a forced/display value.
+    const resolvedDistributeCode = resolveDistributeCodeForSave(targetServer, psDistributeCode);
+    const body: Record<string, unknown> = {
+      working_directory: psWorkDir.trim() || null,
+      branch: psBranch.trim() || null,
+      tmux_session: psTmuxSession.trim() || null,
+      input_policy: psInputPolicy,
+      distribution_repository_id: psDistributionRepositoryId ? parseInt(psDistributionRepositoryId, 10) : null,
+    };
+    if (resolvedDistributeCode !== undefined) {
+      body.distribute_code = resolvedDistributeCode;
+    }
+    await api(`/projects/${projectId}/servers/${psServer}`, { method: 'PUT', body: JSON.stringify(body) });
+    const savedServer = psServer;
+    const savedWorkDir = psWorkDir.trim();
+    setAddPsOpen(false); setPsWorkDir(''); setPsBranch(''); setPsTmuxSession(''); setPsInputPolicy('manual-approval'); setPsDistributeCode(false); setPsDistributionRepositoryId('');
+    refreshProjectServers();
+    if (savedWorkDir) {
+      api<{ repositories: Array<{ remotes: Array<{ alreadyRegistered: boolean }> }> }>(
+        `/projects/${projectId}/servers/${savedServer}/discover-repositories`,
+      ).then((res) => {
+        const unregistered = res.repositories.reduce(
+          (n, r) => n + r.remotes.filter((rm) => !rm.alreadyRegistered).length, 0,
+        );
+        if (unregistered > 0) {
+          setDiscoverSuggestion({ serverName: savedServer, count: unregistered });
+        }
+      }).catch((e: unknown) => console.warn('discover-repositories:', e));
+    }
+  }, [projectId, psServer, psWorkDir, psBranch, psTmuxSession, psInputPolicy, psDistributeCode, psDistributionRepositoryId, servers]);
 
   // Opens the add/edit form for `serverName`, pre-filled from its existing
   // project_servers row when one exists (Issue #51 review note: this form's
@@ -192,13 +366,32 @@ export function useProjectSettings(
     setPsBranch(existing?.branch ?? '');
     setPsTmuxSession(existing?.tmuxSession ?? '');
     setPsInputPolicy(existing?.inputPolicy === 'deny' || existing?.inputPolicy === 'allow' ? existing.inputPolicy : 'manual-approval');
+    setPsDistributeCode(existing?.distributeCode ?? false);
+    setPsDistributionRepositoryId(existing?.distributionRepositoryId != null ? String(existing.distributionRepositoryId) : '');
+    // (Re)opening the form for `serverName` — the toggle's derivation effect
+    // is free to overwrite `psDistributeCode` again until the user touches
+    // it, same as every other field here being freshly initialized from
+    // `existing`. See `psDistributeCodeTouchedRef`'s doc comment above.
+    psDistributeCodeTouchedRef.current = false;
+    // Same reset as `psDistributeCodeTouchedRef` above, for the
+    // distribution-target-repository select.
+    psDistributionRepositoryIdTouchedRef.current = false;
     setAddPsOpen(true);
   }, [projectServers]);
 
   const handleRemoveServer = useCallback(async (serverName: string) => {
+    // DELETE /api/projects/:id/servers/:serverName only removes the
+    // project_servers row (projects/routes.ts) — nothing on the server's own
+    // filesystem is touched, which the confirmation message states outright.
+    const ok = await confirm({
+      title: t('settings.servers.removeConfirmTitle', { name: serverName }),
+      message: t('settings.servers.removeConfirmMessage'),
+      danger: true,
+    });
+    if (!ok) return;
     await api(`/projects/${projectId}/servers/${serverName}`, { method: 'DELETE' });
-    api<ProjectServer[]>(`/projects/${projectId}/servers`).then((res) => setProjectServers(Array.isArray(res) ? res : [])).catch(() => {});
-  }, [projectId]);
+    refreshProjectServers();
+  }, [projectId, refreshProjectServers, confirm, t]);
 
   return {
     project, servers, refresh, section, setSection, saving,
@@ -208,15 +401,17 @@ export function useProjectSettings(
     icon, setIcon, color, setColor, handleSave,
     defaultUnitId, setDefaultUnitId, units,
     // Repositories
-    addRepoOpen, setAddRepoOpen, repoUrl, setRepoUrl, repoName, setRepoName,
-    repoProvider, setRepoProvider, repoOwner, setRepoOwner, repoRepoName, setRepoRepoName,
-    repoToken, setRepoToken, parseRepoUrl, handleAddRepo, handleRemoveRepo,
+    handleRemoveRepo,
+    discoverOpen, setDiscoverOpen, discoverSuggestion, setDiscoverSuggestion,
+    discoverServerName, setDiscoverServerName,
     // Windows
     handleRemoveWindow,
     // Servers
-    projectServers, addPsOpen, setAddPsOpen, psServer, setPsServer,
+    projectServers, refreshProjectServers, addPsOpen, setAddPsOpen, psServer, setPsServer,
     psWorkDir, setPsWorkDir, psBranch, setPsBranch, psTmuxSession, setPsTmuxSession,
-    psInputPolicy, setPsInputPolicy, handleSaveServer, handleRemoveServer, handleOpenServerForm,
+    psInputPolicy, setPsInputPolicy, psDistributeCode, setPsDistributeCode: handleSetPsDistributeCode,
+    psDistributionRepositoryId, setPsDistributionRepositoryId: handleSetPsDistributionRepositoryId,
+    handleSaveServer, handleRemoveServer, handleOpenServerForm,
     // Danger
     handleDelete,
   };
@@ -226,6 +421,7 @@ const SECTIONS: { id: SettingsSection; labelKey: string; icon: React.ReactNode }
   { id: 'general', labelKey: 'settings.sections.general', icon: <Icon name="edit" size={16} /> },
   { id: 'repositories', labelKey: 'settings.sections.repositories', icon: <Icon name="repos" size={16} /> },
   { id: 'servers', labelKey: 'settings.sections.serverEnvironments', icon: <Icon name="servers" size={16} /> },
+  { id: 'windows', labelKey: 'settings.sections.windows', icon: <Icon name="windows" size={16} /> },
   { id: 'secrets', labelKey: 'settings.sections.secrets', icon: <Icon name="settings" size={16} /> },
   { id: 'danger', labelKey: 'settings.sections.dangerZone', icon: <Icon name="warning" size={16} /> },
 ];
@@ -310,8 +506,9 @@ export function SettingsContent({ settings }: { settings: ReturnType<typeof useP
       <div style={{ flex: 1, overflowY: 'auto', padding: 24 }}>
         <div style={{ maxWidth: 700 }}>
           {s.section === 'general' && <GeneralSection settings={s} />}
-          {s.section === 'repositories' && <RepositoriesSection settings={s} addWindowModal={addWindowModal} />}
+          {s.section === 'repositories' && <RepositoriesSection settings={s} />}
           {s.section === 'servers' && <ServersSection settings={s} />}
+          {s.section === 'windows' && <WindowsSection settings={s} addWindowModal={addWindowModal} />}
           {s.section === 'secrets' && s.project && <SecretsSection projectId={s.project.id} />}
           {s.section === 'danger' && <DangerSection settings={s} />}
         </div>
@@ -390,170 +587,311 @@ function GeneralSection({ settings: s }: { settings: ReturnType<typeof useProjec
   );
 }
 
-function RepositoriesSection({ settings: s, addWindowModal }: { settings: ReturnType<typeof useProjectSettings>; addWindowModal: ReturnType<typeof useAddWindowModal> }) {
+/** リポジトリ一覧の行1つ。表示ロジックは lib/repositoryForm.ts の純粋関数側にある。 */
+function RepositoryRow({ repo, usedAsDistributionSource, onRemove }: {
+  repo: Repository;
+  usedAsDistributionSource: boolean;
+  onRemove: () => void;
+}) {
+  const { t } = useTranslation(['git', 'common']);
+  const view = buildRepositoryRowView(repo, { usedAsDistributionSource });
+  return (
+    <ListRow
+      icon={<Icon name="repos" size={14} />}
+      title={view.title}
+      description={view.description}
+      chips={view.chips.map((chip) => <Chip key={chip.id} tone={chip.tone}>{t(chip.labelKey)}</Chip>)}
+      rightActions={<Button size="sm" onClick={onRemove}>{t('common:actions.remove')}</Button>}
+    />
+  );
+}
+
+function RepositoriesSection({ settings: s }: { settings: ReturnType<typeof useProjectSettings> }) {
   const { t } = useTranslation(['projects', 'common']);
+  // 追加フォームは共通モーダル（AddRepositoryModal）。一覧は常に一覧のまま残す。
+  const [addOpen, setAddOpen] = useState(false);
   if (!s.project) return null;
+  const hasServerWithWorkDir = s.projectServers.some((ps) => ps.workingDirectory);
+  // 配信元として使われているリポジトリ。判定材料はこのセクションに既に来ている
+  // projectServers だけで足り、追加の API 呼び出しはしない。
+  const distributionRepoIds = collectDistributionRepositoryIds(s.projectServers);
   return (
     <>
       <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginBottom: 12, padding: '8px 12px', background: 'var(--bg-card)', borderRadius: 'var(--radius-sm)' }}>
         {t('settings.repositories.tip')}
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-        <span style={{ fontSize: 'var(--font-md)', color: 'var(--text-dim)' }}>{t('settings.repositories.count', { count: s.project.repositories.length })}</span>
-        <Button size="sm" onClick={() => s.setAddRepoOpen(!s.addRepoOpen)}>+ {t('common:actions.add')}</Button>
-      </div>
-      {s.addRepoOpen && (
-        <div style={{ marginBottom: 16, padding: 16, background: 'var(--bg-card)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
-          <FormField label={t('settings.repositories.provider')}>
-            <FormSelect value={s.repoProvider} onChange={(e) => s.setRepoProvider(e.target.value)}>
-              <option value="github">{t('settings.repositories.github')}</option>
-              <option value="gitlab">{t('settings.repositories.gitlab')}</option>
-              <option value="other">{t('settings.repositories.other')}</option>
-            </FormSelect>
-          </FormField>
-          <FormField label={t('settings.repositories.repositoryUrl')}>
-            <FormInput value={s.repoUrl} onChange={(e) => { s.setRepoUrl(e.target.value); s.parseRepoUrl(e.target.value); }} placeholder={t('settings.repositories.repositoryUrlPlaceholder')} />
-          </FormField>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <FormField label={t('settings.repositories.owner')}>
-              <FormInput value={s.repoOwner} onChange={(e) => s.setRepoOwner(e.target.value)} placeholder={t('settings.repositories.ownerPlaceholder')} />
-            </FormField>
-            <FormField label={t('settings.repositories.repoName')}>
-              <FormInput value={s.repoRepoName} onChange={(e) => s.setRepoRepoName(e.target.value)} placeholder={t('settings.repositories.repoNamePlaceholder')} />
-            </FormField>
-          </div>
-          <FormField label={t('settings.repositories.displayName')}>
-            <FormInput value={s.repoName} onChange={(e) => s.setRepoName(e.target.value)} placeholder={t('settings.repositories.displayNamePlaceholder')} />
-          </FormField>
-          <FormField label={t('settings.repositories.token')} hint={t('settings.repositories.tokenHint')}>
-            <FormInput value={s.repoToken} onChange={(e) => s.setRepoToken(e.target.value)} placeholder={t('settings.repositories.tokenPlaceholder')} type="password" autoComplete="off" />
-          </FormField>
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-            <Button size="sm" onClick={() => { s.setAddRepoOpen(false); s.setRepoUrl(''); s.setRepoName(''); s.setRepoProvider('github'); s.setRepoOwner(''); s.setRepoRepoName(''); s.setRepoToken(''); }}>{t('common:actions.cancel')}</Button>
-            <Button variant="primary" size="sm" onClick={s.handleAddRepo}>{t('settings.repositories.addRepository')}</Button>
-          </div>
+
+      {s.discoverSuggestion && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+          marginBottom: 12, padding: '10px 14px', borderRadius: 'var(--radius-md)',
+          background: 'var(--accent-a08)', border: '1px solid var(--accent-a35)',
+          fontSize: 'var(--font-md)',
+        }}>
+          <span style={{ color: 'var(--accent)' }}>
+            {t('settings.repositories.discover.suggestionFound', { count: s.discoverSuggestion.count })}
+          </span>
+          <span style={{ display: 'flex', gap: 6 }}>
+            <Button size="sm" variant="primary" onClick={() => {
+              // Capture the suggestion's server name into its own state
+              // BEFORE clearing the suggestion — React batches these two
+              // updates into one render, so the dialog never sees a null
+              // `discoverSuggestion` without an already-set server name.
+              s.setDiscoverServerName(s.discoverSuggestion!.serverName);
+              s.setDiscoverOpen(true);
+              s.setDiscoverSuggestion(null);
+            }}>{t('settings.repositories.discover.review')}</Button>
+            <button
+              onClick={() => s.setDiscoverSuggestion(null)}
+              aria-label={t('settings.repositories.discover.dismiss')}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, color: 'var(--text-dim)', fontSize: 'var(--font-sm)' }}
+            >&times;</button>
+          </span>
         </div>
-      )}
-      {s.project.repositories.length === 0 && !s.addRepoOpen ? (
-        <div style={{ color: 'var(--text-dim)', fontSize: 'var(--font-md)' }}>{t('settings.repositories.noRepositories')}</div>
-      ) : (
-        s.project.repositories.map((r) => (
-          <div key={r.id} style={{ padding: '10px 0', fontSize: 'var(--font-md)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border)', gap: 8 }}>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-              <span style={{ fontSize: 'var(--font-2xs)', fontWeight: 600, textTransform: 'uppercase', padding: '1px 5px', borderRadius: 'var(--radius-sm)', background: 'var(--bg-card)', flexShrink: 0 }}>{r.provider || 'github'}</span>
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name ? `${r.name} — ${r.owner}/${r.repoName || ''}` : r.url}</span>
-            </span>
-            <Button size="sm" style={{ flexShrink: 0 }} onClick={() => s.handleRemoveRepo(r.id)}>{t('common:actions.remove')}</Button>
-          </div>
-        ))
       )}
 
-      {/* Windows sub-section */}
-      <div style={{ marginTop: 32, paddingTop: 20, borderTop: '1px solid var(--border)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-          <span style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 0.5 }}>{t('settings.windows.title')}</span>
-          <Button size="sm" onClick={() => addWindowModal.openAddWindow()}>+ {t('common:actions.add')}</Button>
-        </div>
-        {s.project.windows.length === 0 ? (
-          <div style={{ color: 'var(--text-dim)', fontSize: 'var(--font-md)' }}>{t('settings.windows.noWindows')}</div>
-        ) : (
-          s.project.windows.map((w) => (
-            <div key={w.id} style={{ padding: '8px 0', fontSize: 'var(--font-md)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border)' }}>
-              <span>
-                <code>{w.label || `${w.serverName} / ${w.tmuxTarget}`}</code>
-                {w.label && <span style={{ color: 'var(--text-dim)', marginLeft: 8 }}>({w.serverName}:{w.tmuxTarget})</span>}
-              </span>
-              <Button size="sm" onClick={() => s.handleRemoveWindow(w.id)}>{t('common:actions.remove')}</Button>
-            </div>
-          ))
-        )}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+        <span style={{ fontSize: 'var(--font-md)', color: 'var(--text-dim)' }}>{t('settings.repositories.count', { count: s.project.repositories.length })}</span>
+        <span style={{ display: 'flex', gap: 6 }}>
+          {hasServerWithWorkDir && (
+            <Button size="sm" onClick={() => {
+              const defaultServer = s.projectServers.find((ps) => ps.workingDirectory)?.serverName ?? null;
+              s.setDiscoverServerName(defaultServer);
+              s.setDiscoverOpen(true);
+            }}>{t('settings.repositories.discoverButton')}</Button>
+          )}
+          <Button size="sm" onClick={() => setAddOpen(true)}>+ {t('common:actions.add')}</Button>
+        </span>
       </div>
+      {s.project.repositories.length === 0 ? (
+        <EmptyState title={t('settings.repositories.noRepositories')} />
+      ) : (
+        <ListRowGroup>
+          {s.project.repositories.map((r) => (
+            <RepositoryRow
+              key={r.id}
+              repo={r}
+              usedAsDistributionSource={distributionRepoIds.has(r.id)}
+              onRemove={() => s.handleRemoveRepo(r.id)}
+            />
+          ))}
+        </ListRowGroup>
+      )}
+
+      <AddRepositoryModal
+        open={addOpen}
+        projectId={s.project.id}
+        onAdded={() => { setAddOpen(false); s.refresh(); }}
+        onClose={() => setAddOpen(false)}
+      />
+
+      {s.project && s.discoverServerName ? (
+        <RepoDiscoveryDialog
+          open={s.discoverOpen}
+          onClose={() => s.setDiscoverOpen(false)}
+          projectId={s.project.id}
+          serverName={s.discoverServerName}
+          onRegistered={s.refresh}
+        />
+      ) : null}
     </>
+  );
+}
+
+/**
+ * 一覧行のチップ1つを i18n 解決して描画する。相対時刻とバンドル種別はここで補間する。
+ * `detailKey` を持つチップは、語だけでは伝わらない背景を title で補う（語そのものは
+ * 単独で意味が通るので、title が読めなくても情報は失われない）。
+ */
+function EnvironmentChipView({ chip }: { chip: EnvironmentChip }) {
+  const { t, i18n } = useTranslation(['projects', 'common']);
+  const params: Record<string, string> = { ...chip.params };
+  if (chip.bundleKey) params.bundle = t(chip.bundleKey);
+  if (chip.distributedAt) params.time = formatRelativeTime(chip.distributedAt, i18n.language);
+  const label = t(chip.labelKey, params);
+  if (!chip.detailKey) return <Chip tone={chip.tone}>{label}</Chip>;
+  return (
+    <span title={t(chip.detailKey)} style={{ display: 'inline-flex' }}>
+      <Chip tone={chip.tone}>{label}</Chip>
+    </span>
+  );
+}
+
+interface EnvironmentRowProps {
+  projectServer: ProjectServer;
+  /** 対応する servers 行。未解決（サーバーが削除済み等）なら undefined。 */
+  server: Server | undefined;
+  onEdit: () => void;
+  onRemove: () => void;
+}
+
+/**
+ * サーバー環境1件の行。情報の優先順位は「緊急（配信状態）→ 文脈（隔離・ブランチ）
+ * → 詳細（入力ポリシー）」。tmux セッションは行から降ろし、編集モーダルでのみ扱う。
+ */
+function EnvironmentRow({ projectServer: ps, server, onEdit, onRemove }: EnvironmentRowProps) {
+  const { t } = useTranslation(['projects', 'common']);
+  const chips = buildEnvironmentRowChips({
+    branch: ps.branch,
+    inputPolicy: ps.inputPolicy,
+    isolated: !!server?.isolationIntent,
+    distributionPrerequisite: ps.distributionPrerequisite,
+    lastDistribution: ps.lastDistribution,
+  });
+  // 配信の前提が失敗している行だけ、編集モーダルへの直行導線を primary で出す
+  // （通常の「編集」ボタンと二重に並べない）。
+  const needsSetup = needsDistributionSetup(ps.distributionPrerequisite);
+  return (
+    <ListRow
+      icon={<Icon name="servers" size={14} />}
+      title={ps.serverName}
+      description={ps.workingDirectory
+        ? <span title={ps.workingDirectory} style={{ fontFamily: 'monospace' }}>{ps.workingDirectory}</span>
+        : t('settings.servers.noWorkingDirectory')}
+      chips={chips.map((chip) => <EnvironmentChipView key={chip.id} chip={chip} />)}
+      rightActions={(
+        <>
+          <Button size="sm" variant={needsSetup ? 'primary' : undefined} onClick={onEdit}>
+            {needsSetup ? t('settings.servers.distribution.configure') : t('common:actions.edit')}
+          </Button>
+          <Button size="sm" onClick={onRemove}>{t('common:actions.remove')}</Button>
+        </>
+      )}
+    />
   );
 }
 
 function ServersSection({ settings: s }: { settings: ReturnType<typeof useProjectSettings> }) {
   const { t } = useTranslation(['projects', 'common']);
+  const repositories = s.project?.repositories ?? [];
+  const servers = (s.servers || []) as Server[];
+  // 追加は共有ウィザード（ProjectWizard の 'addEnvironment' モード）、編集は
+  // 専用フォーム。どちらもモーダルで開くので、一覧は常に一覧のまま残る。
+  const [addOpen, setAddOpen] = useState(false);
+  const [savingServer, setSavingServer] = useState(false);
+
+  // Issue #87 explicit-target follow-up: distribution actually runs for the
+  // form's currently-selected server whenever the toggle is effectively on
+  // (locked-on for an isolated server, or the user's own choice otherwise) —
+  // a target repository is then required (Fail Fast, never inferred), so
+  // Save must be blocked until one is picked. Checking membership in the
+  // live `repositories` list (not just non-emptiness) also catches a
+  // selected repository that has since been deleted.
+  const formDistributeEffective = isDistributeCodeLocked(servers.find((sv) => sv.name === s.psServer)) || s.psDistributeCode;
+  const formDistributionRepoMissing = formDistributeEffective
+    && !isDistributionRepositorySelected(repositories, s.psDistributionRepositoryId);
+
+  const handleSubmit = async () => {
+    setSavingServer(true);
+    try {
+      await s.handleSaveServer();
+    } finally {
+      setSavingServer(false);
+    }
+  };
+
+  const addButton = (
+    <Button size="sm" variant="primary" onClick={() => setAddOpen(true)}>+ {t('common:actions.add')}</Button>
+  );
+
   return (
     <>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-        <span style={{ fontSize: 'var(--font-md)', color: 'var(--text-dim)' }}>{t('settings.servers.count', { count: s.projectServers.length })}</span>
-        <Button
-          size="sm"
-          onClick={() => {
-            if (s.addPsOpen) { s.setAddPsOpen(false); return; }
-            s.handleOpenServerForm(s.servers?.length ? s.servers[0].name : '');
-          }}
-        >+ {t('common:actions.add')}</Button>
-      </div>
-      {s.addPsOpen && (
-        <div style={{ marginBottom: 16, padding: 16, background: 'var(--bg-card)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
-          <FormField label={t('settings.servers.server')}>
-            <FormSelect value={s.psServer} onChange={(e) => s.handleOpenServerForm(e.target.value)}>
-              {(s.servers || []).map((sv) => <option key={sv.name} value={sv.name}>{sv.name}</option>)}
-            </FormSelect>
-          </FormField>
-          <FormField label={t('settings.servers.workingDirectory')}>
-            <DirectoryInput value={s.psWorkDir} onChange={s.setPsWorkDir} serverName={s.psServer} placeholder={t('settings.servers.workingDirectoryPlaceholder')} style={baseInputStyle} />
-          </FormField>
-          <FormField label={t('settings.servers.branch')}>
-            <FormInput value={s.psBranch} onChange={(e) => s.setPsBranch(e.target.value)} placeholder={t('settings.servers.branchPlaceholder')} />
-          </FormField>
-          <FormField label={t('settings.servers.tmuxSession')} hint={t('settings.servers.tmuxSessionHint')}>
-            <FormInput value={s.psTmuxSession} onChange={(e) => s.setPsTmuxSession(e.target.value)} placeholder={t('settings.servers.tmuxSessionPlaceholder')} />
-          </FormField>
-          <FormField label={t('settings.servers.inputPolicy')} hint={t('settings.servers.inputPolicyHint')}>
-            <FormSelect
-              value={s.psInputPolicy}
-              onChange={(e) => {
-                const v = e.target.value;
-                s.setPsInputPolicy(v === 'deny' || v === 'allow' ? v : 'manual-approval');
-              }}
-            >
-              <option value="manual-approval">{t('settings.servers.inputPolicyManualApproval')}</option>
-              <option value="deny">{t('settings.servers.inputPolicyDeny')}</option>
-              {/* Issue #29 Step 3a: client-side hint only — selectable ONLY for
-                  a row whose target server has declared isolation intent. The
-                  real enforcement is server-side: PUT rejects 'allow' for a
-                  non-isolated server (400), and the run-time gate additionally
-                  requires a current doctor verification + scoped auth before
-                  'allow' is ever actually effective. */}
-              <option value="allow" disabled={!(s.servers || []).find((sv) => sv.name === s.psServer)?.isolationIntent}>
-                {t('settings.servers.inputPolicyAllow')}
-              </option>
-            </FormSelect>
-          </FormField>
-          {s.psInputPolicy === 'allow' && (
-            <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: -8, marginBottom: 12 }}>
-              {t('settings.servers.inputPolicyAllowHint')} <DocsLink page="isolated-execution" />
-            </div>
-          )}
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-            <Button size="sm" onClick={() => s.setAddPsOpen(false)}>{t('common:actions.cancel')}</Button>
-            <Button variant="primary" size="sm" onClick={s.handleSaveServer}>{t('common:actions.save')}</Button>
-          </div>
-        </div>
-      )}
-      {s.projectServers.length === 0 && !s.addPsOpen ? (
-        <div style={{ color: 'var(--text-dim)', fontSize: 'var(--font-md)' }}>{t('settings.servers.noServers')}</div>
+      <PanelHeader
+        title={t('settings.servers.count', { count: s.projectServers.length })}
+        actions={addButton}
+        style={{ marginBottom: 16, borderRadius: 'var(--radius-md)' }}
+      />
+      {s.projectServers.length === 0 ? (
+        <EmptyState
+          title={t('settings.servers.noServers')}
+          description={t('settings.servers.noServersHint')}
+          action={addButton}
+        />
       ) : (
-        s.projectServers.map((ps) => (
-          <div key={ps.serverName} style={{ padding: '10px 0', fontSize: 'var(--font-md)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border)' }}>
-            <span>
-              <strong>{ps.serverName}</strong>
-              {ps.workingDirectory && <span style={{ color: 'var(--text-dim)', marginLeft: 8 }}>{ps.workingDirectory}</span>}
-              {ps.branch && <span style={{ color: 'var(--accent)', marginLeft: 8 }}>{ps.branch}</span>}
-              <span style={{ color: 'var(--text-dim)', marginLeft: 8 }}>{t('settings.servers.session', { name: ps.tmuxSession })}</span>
-              <span style={{ color: ps.inputPolicy === 'deny' ? 'var(--danger)' : ps.inputPolicy === 'allow' ? 'var(--accent)' : 'var(--text-dim)', marginLeft: 8 }}>
-                {ps.inputPolicy === 'deny' ? t('settings.servers.inputPolicyDeny') : ps.inputPolicy === 'allow' ? t('settings.servers.inputPolicyAllow') : t('settings.servers.inputPolicyManualApproval')}
-              </span>
-            </span>
-            <span style={{ display: 'flex', gap: 8 }}>
-              <Button size="sm" onClick={() => s.handleOpenServerForm(ps.serverName)}>{t('common:actions.edit')}</Button>
-              <Button size="sm" onClick={() => s.handleRemoveServer(ps.serverName)}>{t('common:actions.remove')}</Button>
-            </span>
-          </div>
-        ))
+        <ListRowGroup>
+          {s.projectServers.map((ps) => (
+            <EnvironmentRow
+              key={ps.serverName}
+              projectServer={ps}
+              server={servers.find((sv) => sv.name === ps.serverName)}
+              onEdit={() => s.handleOpenServerForm(ps.serverName)}
+              onRemove={() => s.handleRemoveServer(ps.serverName)}
+            />
+          ))}
+        </ListRowGroup>
+      )}
+
+      {s.project && (
+        <AddEnvironmentModal
+          open={addOpen}
+          projectId={s.project.id}
+          existingServerNames={s.projectServers.map((ps) => ps.serverName)}
+          onDone={() => {
+            setAddOpen(false);
+            s.refreshProjectServers();
+          }}
+          onClose={() => setAddOpen(false)}
+        />
+      )}
+      <EditEnvironmentModal
+        open={s.addPsOpen}
+        onClose={() => s.setAddPsOpen(false)}
+        onSubmit={handleSubmit}
+        saving={savingServer}
+        servers={servers}
+        repositories={repositories}
+        serverName={s.psServer}
+        onServerNameChange={s.handleOpenServerForm}
+        workingDirectory={s.psWorkDir}
+        onWorkingDirectoryChange={s.setPsWorkDir}
+        distributeCode={s.psDistributeCode}
+        onDistributeCodeChange={s.setPsDistributeCode}
+        distributionRepositoryId={s.psDistributionRepositoryId}
+        onDistributionRepositoryIdChange={s.setPsDistributionRepositoryId}
+        branch={s.psBranch}
+        onBranchChange={s.setPsBranch}
+        tmuxSession={s.psTmuxSession}
+        onTmuxSessionChange={s.setPsTmuxSession}
+        inputPolicy={s.psInputPolicy}
+        onInputPolicyChange={s.setPsInputPolicy}
+        distributionRepositoryMissing={formDistributionRepoMissing}
+      />
+    </>
+  );
+}
+
+function WindowsSection({ settings: s, addWindowModal }: { settings: ReturnType<typeof useProjectSettings>; addWindowModal: ReturnType<typeof useAddWindowModal> }) {
+  const { t } = useTranslation(['projects', 'common']);
+  if (!s.project) return null;
+  const windows = s.project.windows;
+  const addButton = (
+    <Button size="sm" variant="primary" onClick={() => addWindowModal.openAddWindow()}>+ {t('common:actions.add')}</Button>
+  );
+  return (
+    <>
+      <PanelHeader
+        title={t('settings.windows.count', { count: windows.length })}
+        actions={addButton}
+        style={{ marginBottom: 16, borderRadius: 'var(--radius-md)' }}
+      />
+      {windows.length === 0 ? (
+        <EmptyState
+          title={t('settings.windows.noWindows')}
+          description={t('settings.windows.noWindowsHint')}
+          action={addButton}
+        />
+      ) : (
+        <ListRowGroup>
+          {windows.map((w) => (
+            <ListRow
+              key={w.id}
+              icon={<Icon name="terminal" size={14} />}
+              title={w.label || `${w.serverName} / ${w.tmuxTarget}`}
+              description={<span style={{ fontFamily: 'monospace' }}>{w.serverName}:{w.tmuxTarget}</span>}
+              rightActions={<Button size="sm" onClick={() => s.handleRemoveWindow(w.id)}>{t('common:actions.remove')}</Button>}
+            />
+          ))}
+        </ListRowGroup>
       )}
     </>
   );

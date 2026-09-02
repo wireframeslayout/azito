@@ -71,6 +71,7 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
       countChildren: vi.fn(() => 0),
       countChildrenInGeneration: vi.fn(() => 0),
       clearTmuxWindowIfMatches: vi.fn(() => true),
+      updateStatusIfWindowMatches: vi.fn(() => true),
     },
     projectRepo: {
       findAll: vi.fn(() => []),
@@ -80,12 +81,14 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
       delete: vi.fn(),
       addRepository: vi.fn(() => 1),
       findRepositoryById: vi.fn(() => null),
+      updateRepositoryToken: vi.fn(),
       removeRepository: vi.fn(),
+      findRepositoryCredentialsByIds: vi.fn(() => []),
     },
     projectServerRepo: {
-      findByProject: vi.fn(() => [{ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const }]),
+      findByProject: vi.fn(() => [{ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null }]),
       findByServer: vi.fn(() => []),
-      find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const })),
+      find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null })),
       upsert: vi.fn(),
       remove: vi.fn(),
     },
@@ -124,6 +127,7 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
       updateAgentVersion: vi.fn(),
       updateFingerprint: vi.fn(),
       clearFingerprint: vi.fn(), updateIsolationIntent: vi.fn(),
+      findMetaByNames: vi.fn(() => []),
       delete: vi.fn(),
     },
     worktreeServiceFactory: {

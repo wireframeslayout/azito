@@ -190,6 +190,9 @@ export class TaskPaneEnvironmentService {
     for (const secret of secretEntries) {
       env[`AZITO_SECRET_${secret.name}`] = secret.value;
     }
+    if (server.isolationIntent) {
+      env.AZITO_HUB_PUSH = '1';
+    }
     applyTokenMaskingOrCompat(env, server, this.uiToken, this.scopedAuthEnabled);
     return { env, tokenId: issued.id };
   }

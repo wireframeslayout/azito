@@ -190,6 +190,29 @@ export interface Task {
   changedFiles: string | null;
   summaryJson: string | null;
   prUrl: string | null;
+  /**
+   * The `project_repositories` id fetch distribution actually pulled this
+   * task's working-directory code from (migration 067; Issue #87 review
+   * follow-up, Important finding 1) — set once, when `performDistribution`
+   * distributes successfully (ExecuteTaskUseCase.execute() /
+   * TaskRestoreService.restore()), never re-derived afterward.
+   *
+   * `ExecuteTaskUseCase.resumeStateMachine()` MUST use this value (fail
+   * closed if it is non-null but no longer resolves — the repository was
+   * deleted — rather than falling back to the project's current
+   * configuration) instead of re-resolving the distribution target from
+   * `project`/`projectServer` at resume time: the task's working directory
+   * already holds code from THE repository distribution used, which can
+   * differ from whatever `projectServer.distributionRepositoryId` points at
+   * by the time a plan-approval wait or a startup recovery gets around to
+   * resuming — an isolated server would otherwise notarize/push code from
+   * repository A against repository B. NULL for a task that never went
+   * through distribution (a `local` server, or an agent/ssh server with
+   * neither `isolationIntent` nor `distributeCode`) — including every task
+   * that predates this column, which is safe because such a task never
+   * required distribution's fail-closed handling in the first place.
+   */
+  distributionRepositoryId?: number | null;
   agentSessionId: string | null;
   sleepAfterPush: boolean | null;
   reviewSubagent?: SubagentConfig | null;
@@ -514,4 +537,70 @@ export interface ITaskRepository {
    * specific call created.
    */
   clearTmuxWindowIfMatches(id: number, expectedWindowName: string): boolean;
+
+  /**
+   * Atomically writes `status` — but ONLY if the row's generation still
+   * matches the CALLER's own generation — and reports whether it did
+   * (Issue #87 third-party review, Important 1; third pass fixes a NULL
+   * over-match bug found in the second pass — see below).
+   * `rollbackWindowAfterPostCreationFailure()` in ExecuteTaskUseCase runs
+   * OUTSIDE `runExclusiveForTask` (same gap documented on
+   * {@link clearTmuxWindowIfMatches} above), so a concurrent
+   * execute()/followUp() for the SAME task can already have created its OWN
+   * newer window generation and moved the task to `in_progress` while THIS
+   * call's post-window-creation step (fetch distribution, worktree creation)
+   * is still failing and about to roll back. An unconditional
+   * `update(id, { status: 'failed' })` at that point would stomp the newer
+   * generation's live, still-running execution back to `failed`.
+   *
+   * `tokenId` is the id of the `task_tokens` row the CALLER's own
+   * `createRotatedWindow` issued for its generation — the caller already
+   * holds it (see `rollbackWindowAfterPostCreationFailure`'s `tokenId`
+   * parameter). The write applies when:
+   * - `tmuxWindow` still equals `expectedWindowName` (the caller's own
+   *   generation is still the one on the row), OR
+   * - `tmuxWindow` is `NULL` **and no `task_tokens` row for this task has a
+   *   `window_generation` newer than the caller's own token's** (the NULL
+   *   was left by the ordinary window-destruction path clearing THIS SAME
+   *   generation's reference, not by a newer generation taking over).
+   *
+   * The write is a no-op when `tmuxWindow` names a DIFFERENT window, or when
+   * `tmuxWindow` is `NULL` but a strictly newer generation has already been
+   * issued for this task (that newer execution just hasn't written its
+   * window name yet, or already destroyed and cleared its own window too —
+   * either way it, not this stale rollback, owns the row's status now).
+   *
+   * History of the two failure modes this generation check has to balance:
+   * first pass matched `tmuxWindow = expectedWindowName` only, which left a
+   * task stuck `in_progress` forever once the ordinary window-destruction
+   * path cleared `tmuxWindow` to NULL for the SAME still-active generation
+   * (no newer generation ever came along to advance it). Second pass
+   * "fixed" that by also matching bare `tmuxWindow IS NULL` unconditionally
+   * — but that over-matches: it lets a stale rollback for an OLD generation
+   * overwrite the status of a genuinely NEWER generation whenever that newer
+   * generation's own window later gets destroyed and NULLs `tmuxWindow` too.
+   * This third pass replaces the bare NULL check with the `task_tokens`
+   * generation lookup above so NULL is only treated as "my own generation's
+   * window is gone", never as blanket permission.
+   *
+   * `extraFields` (Issue #87 third-party review, seventh pass, Important
+   * finding 2) lets a caller clear `worktreePath`/`worktreeBranch` in the
+   * SAME guarded, generation-checked UPDATE as the status write, instead of
+   * a second unconditional `update()` call afterwards. Before this fix, the
+   * rollback for a path-containment failure wrote `status: 'failed'`
+   * through this guarded method (correctly refusing to stomp a newer
+   * generation) but then unconditionally overwrote `worktreePath`/
+   * `worktreeBranch` via `update()` regardless of the guard's outcome — so a
+   * stale (old-generation) rollback could still erase the worktree fields a
+   * newer, live generation had already persisted for its own execution. When
+   * the guard doesn't match (stale caller), NEITHER the status NOR
+   * `extraFields` are written.
+   */
+  updateStatusIfWindowMatches(
+    id: number,
+    expectedWindowName: string,
+    status: TaskStatus,
+    tokenId: number,
+    extraFields?: { worktreePath: string | null; worktreeBranch: string | null },
+  ): boolean;
 }

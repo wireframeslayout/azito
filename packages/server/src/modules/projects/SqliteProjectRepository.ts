@@ -4,6 +4,7 @@ import type {
   Project,
   ProjectDetail,
   ProjectRepositoryWithToken as ProjectRepoWithToken,
+  ProjectRepositoryCredential,
   IProjectRepository,
   RepositoryProvider,
 } from './Project';
@@ -44,6 +45,7 @@ export class SqliteProjectRepository implements IProjectRepository {
   private listReposStmt;
   private getRepoStmt;
   private addRepoStmt;
+  private updateRepoTokenStmt;
   private deleteRepoStmt;
 
   constructor(private db: SqliteDatabase, private windowRepo: IWindowRepository) {
@@ -56,6 +58,7 @@ export class SqliteProjectRepository implements IProjectRepository {
     this.listReposStmt = db.prepare('SELECT * FROM project_repositories WHERE project_id = ?');
     this.getRepoStmt = db.prepare('SELECT * FROM project_repositories WHERE id = ?');
     this.addRepoStmt = db.prepare('INSERT INTO project_repositories (project_id, url, name, provider, owner, repo_name, token) VALUES (?, ?, ?, ?, ?, ?, ?)');
+    this.updateRepoTokenStmt = db.prepare('UPDATE project_repositories SET token = ? WHERE id = ?');
     this.deleteRepoStmt = db.prepare('DELETE FROM project_repositories WHERE id = ? AND project_id = ?');
   }
 
@@ -100,6 +103,10 @@ export class SqliteProjectRepository implements IProjectRepository {
     return Number(result.lastInsertRowid);
   }
 
+  updateRepositoryToken(id: number, token: string): void {
+    this.updateRepoTokenStmt.run(seal(token), id);
+  }
+
   removeRepository(id: number, projectId: number): void {
     this.deleteRepoStmt.run(id, projectId);
   }
@@ -116,6 +123,36 @@ export class SqliteProjectRepository implements IProjectRepository {
       repoName: row.repo_name,
       token: open(row.token),
     };
+  }
+
+  findRepositoryCredentialsByIds(ids: number[]): ProjectRepositoryCredential[] {
+    if (ids.length === 0) return [];
+    const placeholders = ids.map(() => '?').join(', ');
+    const rows = this.db.prepare(
+      `SELECT * FROM project_repositories WHERE id IN (${placeholders})`,
+    ).all(...ids) as RepoRow[];
+    return rows.map((row) => {
+      const base = {
+        id: row.id,
+        name: row.name,
+        url: row.url,
+        provider: (row.provider || 'github') as RepositoryProvider,
+        owner: row.owner,
+        repoName: row.repo_name,
+      };
+      if (row.token == null) return { ...base, credentialStatus: 'absent' as const, token: null };
+      try {
+        const token = open(row.token);
+        // An empty decrypted value is "no credential stored", not a broken
+        // one — same verdict `!repo?.token` produces on the execution path.
+        return token ? { ...base, credentialStatus: 'ok' as const, token } : { ...base, credentialStatus: 'absent' as const, token: null };
+      } catch {
+        // Deliberately swallowed HERE and only here: the failure is turned
+        // into a reported state (`unreadable`) rather than hidden — the
+        // execution path's own `findRepositoryById` still throws unchanged.
+        return { ...base, credentialStatus: 'unreadable' as const, token: null };
+      }
+    });
   }
 
   private toDetail(row: ProjectRow): ProjectDetail {

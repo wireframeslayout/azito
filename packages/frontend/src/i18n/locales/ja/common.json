@@ -86,8 +86,7 @@
     "nameRequired": "名前は必須です",
     "titleRequired": "タイトルは必須です",
     "slugRequired": "スラッグは必須です",
-    "descriptionRequired": "説明は必須です",
-    "urlRequired": "URLは必須です"
+    "descriptionRequired": "説明は必須です"
   },
   "confirm": {
     "cannotBeUndone": "この操作は元に戻せません。"

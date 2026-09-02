@@ -18,10 +18,12 @@ import type { KeyedMutex } from '../../../shared/keyedMutex';
 import type { IWorktreeService, WorktreeInfo } from '../../git/IWorktreeService';
 import type { WorktreeServiceFactory } from '../../git/WorktreeServiceFactory';
 import { PathResolverFactory, assertDirectoryContained } from '../../git/PathContainment';
+import { normalizeBranchRef } from '../../git/assertSafeGitArgs';
 import type { GitProviderService } from '../../git/providers/GitProviderService';
-import type { ProjectRepositoryWithToken as ProjectRepository } from '../../projects/Project';
+import type { ProjectRepositoryWithToken as ProjectRepository, ProjectRepository as ProjectRepositoryEntry } from '../../projects/Project';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import type { ServerConfig } from '../../servers/Server';
+import { resolveCanonicalRepositoryIdentity } from '../../git/resolveCanonicalRepositoryIdentity';
 import type { PaneClassifier } from '../../llm/PaneClassifier';
 import type { IContentExtractor } from '../../llm/ContentExtractor';
 import type { IWindowRepository } from '../../windows/Window';
@@ -46,7 +48,9 @@ import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingAppro
 import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionManifest';
 import { TuiWorkerRuntime } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
-import { resolveTaskServerName, resolveTmuxSession, resolveUnitId, resolveBaseBranch } from './TaskExecutionEnv';
+import { resolveTaskServerName, resolveTmuxSession, resolveUnitId, resolveBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
+import { performDistribution, resolveExecutionRepositoryEntry, resolveRecordedDistributionRepositoryEntry, isDistributionRequired, isDistributionRequiredForContinuation, isDistributionRequiredButRepositoryUnresolved, shouldClearRecordedDistributionRepository, type DistributionOutcome } from './DistributionHelper';
+import type { IDistributionStateRepository } from '../../git/hub-transfer/types';
 import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
 import type { SqliteAgentTurnRepository } from '../turns/SqliteAgentTurnRepository';
 import type { TurnSignalHub } from '../turns/TurnSignalHub';
@@ -149,6 +153,19 @@ export class ExecuteTaskUseCase {
     // wire it and silently fall back to treating scoped auth as enabled.
     private scopedAuthEnabled: boolean,
     private sleepTaskWindows: (taskId: number) => Promise<number[]>,
+    private pushNotaryService: import('../../git/hub-transfer/PushNotaryService').PushNotaryService | null = null,
+    private fetchDistributionService: import('../../git/hub-transfer/FetchDistributionService').FetchDistributionService | null = null,
+    // Issue #87 review (forge/87-mirror follow-up), Important finding 3: the
+    // SAME instance `fetchDistributionService` itself writes to on every
+    // successful distribution (see wiring.ts's `buildFetchDistributionService`)
+    // — used by `shouldClearRecordedDistributionRepository` to decide whether
+    // a not-required-this-run execute() may clear `task.distributionRepositoryId`.
+    // Nullable only because some test fixtures don't wire it; when null,
+    // there is no way to corroborate whether the current server still holds
+    // the recorded repository's content, so — per this fix's "insufficient
+    // information must fail toward keeping the record" rule — the record is
+    // left untouched rather than cleared. See the field's use below.
+    private distributionStateRepo: IDistributionStateRepository | null = null,
   ) {
     this.gitInfoCollector = new GitInfoCollector(this.tmux);
     this.pushVerifier = new PushVerifier(this.tmux, this.gitProvider);
@@ -197,6 +214,7 @@ export class ExecuteTaskUseCase {
       this.serverRepo,
       this.projectSecretRepo,
       this.scopedAuthEnabled,
+      this.pushNotaryService,
       this.sleepTaskWindows,
     );
   }
@@ -308,6 +326,18 @@ export class ExecuteTaskUseCase {
     // fingerprint of RESOLVED execution content instead of raw task columns
     // (see ExecutionManifest.ts). `project`/`projectServer` returned here are
     // reused by execute()'s working-directory logic below, same as before.
+    //
+    // operationKind: only `operation === 'execute'` is a FRESH run that has
+    // not distributed anything yet this time — `performDistribution` is
+    // about to read the CURRENT `projectServer.distributionRepositoryId`
+    // regardless of what a past run recorded, so the gate must hash that
+    // same current value ('execute'). Every other `operation` value here
+    // ('resume'/'resume_await_answer'/'resume_await_plan_review') is
+    // resuming a run whose working directory a past execute() already
+    // populated — the recorded repository is authoritative for those
+    // ('continuation'). See resolveExecutionManifest's own doc comment for
+    // the full rationale (Issue #87 review, forge/87-mirror follow-up,
+    // Important finding).
     const { manifest, project, projectServer, serverConfig } = resolveExecutionManifest(task, {
       unitRepo: this.unitRepo,
       projectRepo: this.projectRepo,
@@ -316,7 +346,7 @@ export class ExecuteTaskUseCase {
       projectSecretRepo: this.projectSecretRepo,
       unitTypeLoader: this.unitTypeLoader,
       sidekickLoader: this.sidekickLoader,
-    });
+    }, operation === 'execute' ? 'execute' : 'continuation');
     const manifestHash = hashExecutionManifest(manifest);
     // Issue #29 Step 3a: the 3-point AND gate for 'allow' is re-evaluated on
     // every entry point, not just resolved once at approval time — see
@@ -390,14 +420,31 @@ export class ExecuteTaskUseCase {
    * runs immediately before any task-token/secret env is built, not after.
    * See `ExecutionGate.reverifyExecutionGateInLock`'s own doc comment for
    * the TOCTOU this closes.
+   *
+   * Returns the `project`/`projectServer` snapshot this in-lock resolution
+   * actually gated against (Issue #87 16th-round review, Important finding
+   * 2): the caller's own `projectServer`/`project` were resolved by
+   * `enforceExecutionGate` BEFORE the resource guard, workingDir
+   * containment, and window creation — none of which hold any lock — so a
+   * `distribute_code` toggle landing in that window would leave
+   * `performDistribution` (called after this preCheck returns) deciding
+   * against a snapshot older than the one the gate itself just re-verified
+   * with. Returning it here lets the caller re-point `performDistribution`
+   * and the base-branch resolution feeding it at the SAME snapshot the gate
+   * passed, without re-querying a third time.
    */
   private reverifyGateInLock(
     currentTask: Task,
     unitId: number,
     operation: NonNullable<Task['pendingOperation']>,
     freshServer: ServerConfig,
-  ): void {
-    const { manifest, projectServer } = resolveExecutionManifest(currentTask, {
+  ): { project: ReturnType<typeof resolveExecutionManifest>['project']; projectServer: ReturnType<typeof resolveExecutionManifest>['projectServer'] } {
+    // Same 'execute' vs 'continuation' mapping as enforceExecutionGate()
+    // above — only a FRESH execute() (never distributed anything this run)
+    // may hash the CURRENT project-server repository config; every other
+    // `operation` value re-verifies a run that is already resuming/
+    // continuing past distribution.
+    const { manifest, project, projectServer } = resolveExecutionManifest(currentTask, {
       unitRepo: this.unitRepo,
       projectRepo: this.projectRepo,
       projectServerRepo: this.projectServerRepo,
@@ -405,7 +452,7 @@ export class ExecuteTaskUseCase {
       projectSecretRepo: this.projectSecretRepo,
       unitTypeLoader: this.unitTypeLoader,
       sidekickLoader: this.sidekickLoader,
-    });
+    }, operation === 'execute' ? 'execute' : 'continuation');
     const manifestHash = hashExecutionManifest(manifest);
     reverifyExecutionGateInLock(
       { taskRepo: this.taskRepo, logRepo: this.logRepo, events: this.events },
@@ -417,10 +464,92 @@ export class ExecuteTaskUseCase {
       this.scopedAuthEnabled,
       manifestHash,
     );
+    return { project, projectServer };
   }
 
   private appendLog(taskId: number, unitId: number, type: LogType, content: unknown): void {
     appendLogAndEmit(this.logRepo, this.events, taskId, unitId, type, content);
+  }
+
+  /**
+   * Shared cleanup for a failure that happens AFTER the task window was
+   * already created and the task marked `in_progress` (execute()'s
+   * post-window-creation span: fetch distribution, worktree creation,
+   * worktree path containment) — review finding (Issue #87 third-party
+   * review, Important 1): the fetch-distribution failure branch used to only
+   * `throw`, leaving the task `in_progress` with a live, still-authenticated
+   * window and an un-revoked token. This factors out exactly the rollback
+   * the pre-existing worktree-failure branches already performed (marks the
+   * task `failed`, then kills the window and revokes ITS OWN generation's
+   * token via {@link rollbackWindowReference}) so a THIRD failure branch
+   * doesn't reimplement it a third time.
+   *
+   * `extraTaskUpdate` lets a caller merge in `worktreePath`/`worktreeBranch`
+   * (e.g. `null, null` for the path-rejected branch) into the SAME
+   * generation-guarded `updateStatusIfWindowMatches` UPDATE as the status
+   * write — not a separate, unconditional `taskRepo.update()` call. Issue
+   * #87 third-party review, seventh pass, Important finding 2: a second
+   * unconditional `update()` after the guarded status write clobbered
+   * `worktreePath`/`worktreeBranch` even when the guard had just refused the
+   * status write because a NEWER generation had already persisted its own
+   * worktree for this same task — the stale rollback erased a live
+   * execution's worktree info. Routing both through one guarded statement
+   * means the guard not matching now blocks BOTH fields, not just status.
+   *
+   * Scoped to `tokenId` (the generation `createRotatedWindow` issued for
+   * THIS execute() call, inside `runExclusiveForTask`), not the whole task —
+   * a blanket revoke here could otherwise clobber a newer generation a
+   * concurrent rotation for this task already persisted. `tmuxWindow` is
+   * cleared only once the kill is CONFIRMED gone, via
+   * `clearTmuxWindowIfMatches(taskId, windowName)` (gated on this call's own
+   * `windowName`) — never an unconditional null-out, for the same reason
+   * (see the original worktree_failed/worktree_path_rejected comments this
+   * replaces for the full Issue #28 third-party review history behind these
+   * two properties). Errors from the rollback itself are swallowed (best
+   * effort) — same as the two call sites this replaces — since surfacing
+   * them here would replace the caller's own actual failure message.
+   *
+   * Issue #87 third-party review, Important finding 1: this whole span runs
+   * OUTSIDE `runExclusiveForTask` (same gap as the window-reference clear
+   * above), so a concurrent execute()/followUp() for the SAME task can
+   * already have created its OWN newer window generation and moved the task
+   * to `in_progress` while THIS call's post-window-creation step is still
+   * failing and about to roll back. An unconditional `update(taskId, {
+   * status: 'failed' })` would stomp that newer, still-live execution's
+   * status. The status write now goes through
+   * `updateStatusIfWindowMatches(taskId, windowName, 'failed')` — gated on
+   * this call's own `windowName`, exactly like `clearTmuxWindowIfMatches`
+   * above — so it becomes a no-op once the row has moved on to a different
+   * generation. `extraTaskUpdate` (worktreePath/worktreeBranch on the
+   * worktree_path_rejected branch) is passed through to the SAME guarded
+   * call (seventh pass, Important finding 2) instead of a second
+   * unconditional `taskRepo.update()` — see that method's own doc comment
+   * for the clobber this closes.
+   */
+  private async rollbackWindowAfterPostCreationFailure(
+    taskId: number,
+    server: ServerConfig,
+    tmuxSession: string,
+    windowName: string,
+    tokenId: number,
+    revokeReason: string,
+    extraTaskUpdate?: { worktreePath: string | null; worktreeBranch: string | null },
+  ): Promise<void> {
+    if (extraTaskUpdate) {
+      this.taskRepo.updateStatusIfWindowMatches(taskId, windowName, 'failed' as TaskStatus, tokenId, extraTaskUpdate);
+    } else {
+      this.taskRepo.updateStatusIfWindowMatches(taskId, windowName, 'failed' as TaskStatus, tokenId);
+    }
+    try {
+      await rollbackWindowReference(
+        this.tmux.killWindow(server, `${tmuxSession}:${windowName}`),
+        this.paneEnvService,
+        tokenId,
+        revokeReason,
+        () => this.taskRepo.clearTmuxWindowIfMatches(taskId, windowName),
+        () => {},
+      );
+    } catch {}
   }
 
   /**
@@ -652,6 +781,16 @@ export class ExecuteTaskUseCase {
     let windowName: string;
     let tokenId: number;
     let createdServer: ServerConfig;
+    // Reassigned by reverifyGateInLock's preCheck below with the
+    // project/projectServer snapshot the in-lock gate re-verification
+    // actually ran against (Issue #87 16th-round review, Important finding
+    // 2) — falls back to the pre-lock `project`/`projectServer` (from
+    // `enforceExecutionGate` above) only if the lock is somehow never
+    // acquired (e.g. `runExclusiveForTask`/`withServerLock` throwing before
+    // reaching `reverifyGateInLock`, in which case execute() never reaches
+    // the distribution call below anyway).
+    let lockedProject = project;
+    let lockedProjectServer = projectServer;
     try {
       ({ windowName, tokenId, server: createdServer } = await runExclusiveForTask(taskId, async () => {
         // Task/tmux state is re-read HERE, inside the lock (Issue #28
@@ -711,7 +850,11 @@ export class ExecuteTaskUseCase {
           // third-party review finding).
           return createRotatedWindowInLock(this.paneEnvService, freshServer, currentTask, 'execute_create_failed', (fs, env) =>
             this.tmux.createWindow(fs, tmuxSession, `task-${task.id}`, { extraEnv: env }),
-            (fs) => this.reverifyGateInLock(currentTask, unitId, 'execute', fs),
+            (fs) => {
+              const locked = this.reverifyGateInLock(currentTask, unitId, 'execute', fs);
+              lockedProject = locked.project;
+              lockedProjectServer = locked.projectServer;
+            },
           );
         });
 
@@ -740,20 +883,175 @@ export class ExecuteTaskUseCase {
     const windowTarget = `${tmuxSession}:${windowName}`;
     const target = await this.tmux.resolvePaneId(server, windowTarget);
 
+    // Canonicalized ONCE, immediately after resolution (Issue #87
+    // third-party review, 11th round, Important finding 1) — see
+    // `canonicalizeBaseBranch`'s doc comment in TaskExecutionEnv.ts. Computed
+    // unconditionally (not only when `workingDir` is set) because fetch
+    // distribution's own prerequisite checks (via performDistribution) need
+    // it regardless of whether a working directory happens to be configured.
+    // Resolved from `lockedProjectServer`/`lockedProject` (Issue #87
+    // 16th-round review, Important finding 2), not the pre-lock
+    // `projectServer`/`project` — see reverifyGateInLock's doc comment.
+    const baseBranch = canonicalizeBaseBranch(resolveBaseBranch(task, lockedProjectServer, lockedProject));
+
+    // Fetch distribution (Issue #87 Phase 1: isolated servers, unconditionally
+    // — they hold no git credentials of their own, so distribution is not
+    // optional there. Issue #87 Phase 2: generalized to any non-`local`
+    // server via the project's own `distribute_code` opt-in, for instant
+    // dev-environment provisioning without hub-side credentials on the
+    // target. `local` is always excluded — that server IS the hub, so
+    // "distributing" to it is meaningless.)
+    //
+    // Extracted into performDistribution() (Issue #87 13th-round review,
+    // Important finding 1): TaskRestoreService.restore() shares this exact
+    // prerequisite-check-and-distribute sequence, so a task restored on an
+    // isolated/distribute_code server goes through the same distribution a
+    // fresh execute() would, instead of silently recreating its worktree
+    // from whatever stale content happens to already be at `workingDir`.
+    // Rollback (window/token teardown) and task-status handling stay HERE —
+    // restore()'s own failure handling differs enough (a single outer
+    // try/catch spanning window+worktree creation) that folding it into the
+    // shared helper would either lose information this call site uses or
+    // force restore() to adopt a rollback shape it doesn't have.
+    // Issue #87 review follow-up (Important finding 1): persist the
+    // distribution TARGET before performDistribution() may mutate the
+    // remote working directory, not only after it returns successfully.
+    // Writing only on success (the old code below) left a window — a crash,
+    // or a thrown error, between a successful distribute() and that write —
+    // where `distributionRepositoryId` still held whatever a PRIOR run
+    // recorded (or null). A later resume/restore that trusts this column
+    // (resolveRecordedDistributionRepositoryEntry) could then validate/push
+    // a working tree THIS run actually populated from target B against a
+    // stale recorded target A.
+    //
+    // Issue #87 review follow-up (second round, Important finding 1): that
+    // first fix wrote this record BEFORE `performDistribution()` even ran —
+    // too early. `performDistribution()` itself starts with several
+    // prerequisite checks (`service_not_wired`/`no_working_dir`/
+    // `no_distribution_repository`/`distribution_repository_not_found`/
+    // `no_token`/`identity_unresolvable`, DistributionHelper.ts) that never
+    // touch the remote. If a re-execution targets a DIFFERENT repository
+    // than the one a prior run actually distributed, and this run then
+    // fails one of those checks, the working directory is left exactly as
+    // the prior run left it (repository A) while the record above would
+    // already have been overwritten to name the new target (repository B) —
+    // the record would point at a repository the working directory was
+    // never populated from, and a later resume/push could validate/push
+    // A's content against B. So the write is now done via
+    // `onBeforeDistribute`, a callback `performDistribution()` invokes
+    // itself, exactly once, immediately before the one call that can
+    // actually mutate the remote — i.e. only after every prerequisite check
+    // has passed. A prerequisite failure therefore leaves the previous
+    // record untouched. See `onBeforeDistribute`'s doc comment in
+    // DistributionHelper.ts. `TaskRestoreService.restore()` mirrors this
+    // same ordering.
+    const distOutcome: DistributionOutcome = await performDistribution({
+      server,
+      projectServer: lockedProjectServer,
+      project: lockedProject,
+      workingDir,
+      baseBranch,
+      taskBranch: task.branch,
+      transportFactory: this.transportFactory,
+      projectRepo: this.projectRepo,
+      fetchDistributionService: this.fetchDistributionService,
+      onBeforeDistribute: (repositoryId) => {
+        this.taskRepo.update(taskId, { distributionRepositoryId: repositoryId } as Partial<Task>);
+      },
+    });
+    if (distOutcome.required && !distOutcome.ok) {
+      this.appendLog(taskId, unitId, 'command', { type: 'fetch_distribution_failed', error: distOutcome.message });
+      const rollbackReason = distOutcome.stage === 'distribute_failed'
+        ? 'fetch_distribution_failed_rollback'
+        : distOutcome.stage === 'stale_local_branch'
+          ? 'fetch_distribution_stale_local_branch_rollback'
+          : 'fetch_distribution_prereq_failed_rollback';
+      await this.rollbackWindowAfterPostCreationFailure(taskId, server, tmuxSession, windowName, tokenId, rollbackReason);
+      // No write here — and whether one already happened depends on which
+      // stage failed. `onBeforeDistribute` (passed to `performDistribution`
+      // above) only fires once every prerequisite check has passed, right
+      // before the actual `distribute()` call:
+      // - A pure prerequisite failure (`service_not_wired`/`no_working_dir`/
+      //   `no_distribution_repository`/`distribution_repository_not_found`/
+      //   `no_token`/`identity_unresolvable`) never reached that point —
+      //   `onBeforeDistribute` did NOT fire, so whatever a PRIOR run
+      //   recorded is still there, untouched, correctly describing the
+      //   working directory's actual (unchanged-by-this-run) content.
+      // - `distribute_failed`/`stale_local_branch` fail AFTER
+      //   `onBeforeDistribute` already fired — the record already names
+      //   what THIS run attempted to distribute, which is either what's
+      //   actually on disk now or a broken worktree that must be
+      //   re-validated/failed-closed against that SAME repository.
+      throw new Error(distOutcome.message);
+    }
+    if (distOutcome.required) {
+      this.appendLog(taskId, unitId, 'command', { type: 'fetch_distributed', sha: distOutcome.sha, bundleType: distOutcome.bundleType });
+      // Already persisted via `onBeforeDistribute` inside
+      // `performDistribution()` (see above) — `distOutcome.repositoryId` is
+      // always the same id resolved there, so writing it again here would
+      // only be a redundant, idempotent duplicate of the SAME record. Not
+      // repeated, to keep this a single source of truth rather than two
+      // write sites that could drift.
+    } else {
+      // Issue #87 review follow-up, Important finding 4, superseded by Issue
+      // #87 review (forge/87-mirror follow-up), Important finding 3: this run
+      // did NOT distribute — but `required: false` only means "not required
+      // THIS run", not "the working directory holds nothing from a past
+      // distribution". Unconditionally clearing here (the previous fix) broke
+      // exactly the common case of disabling `distributeCode` on a server that
+      // had already distributed: the checkout stays on disk, the worktree
+      // created right below still comes from it, but every downstream
+      // consumer of `task.distributionRepositoryId`
+      // (`resolveRecordedDistributionRepositoryEntry`) fell back to
+      // `project.repositories[0]` — silently retargeting push/PR verification
+      // at a different repository than what's actually checked out.
+      //
+      // `shouldClearRecordedDistributionRepository` (DistributionHelper.ts)
+      // only returns `true` when it has positive evidence this run's server
+      // does NOT hold the recorded repository's distributed content (no
+      // matching `distribution_state` row) — the case Important finding 4
+      // above was actually guarding against (server switched away from
+      // isolated/distribute_code). When it cannot tell (`distributionStateRepo`
+      // not wired), the record is left untouched — "insufficient information
+      // fails toward keeping the record", not toward clearing it.
+      if (this.distributionStateRepo && shouldClearRecordedDistributionRepository(this.distributionStateRepo, server.name, task.distributionRepositoryId)) {
+        this.taskRepo.update(taskId, { distributionRepositoryId: null } as Partial<Task>);
+      }
+    }
+    // Tracks fetch distribution's outcome this call (null when distribution
+    // did not run, e.g. a `local` server, or an agent/ssh server whose
+    // project_servers row has distribute_code off) — see
+    // resolveWorktreeCreateBaseBranch's doc comment for why this decides
+    // whether worktree creation below resolves `origin/<baseBranch>` instead
+    // of the plain `baseBranch`.
+    const distStatus: 'distributed' | 'already_current' | null = distOutcome.required ? distOutcome.distStatus : null;
+
     if (workingDir) {
+      const worktreeCreateBaseBranch = resolveWorktreeCreateBaseBranch(baseBranch, distStatus);
+
       // Create worktree for isolated branch/file tracking
       let wt: WorktreeInfo;
-      const baseBranch = resolveBaseBranch(task, projectServer, project);
       try {
         const slug = await this.contentExtractor.generateSlug(task.title);
-        wt = await this.getWorktreeService(server).create(workingDir, taskId, slug, baseBranch, task.branch || undefined);
+        // `task.branch` is a PERSISTED value, not fresh API input — a task
+        // saved before `rejectQualifiedBranchInput` rejected new
+        // fully-qualified refs at the API boundary can still have
+        // `branch: 'refs/heads/main'` sitting in the database (Issue #87
+        // third-party review, 12th round, Important finding 2). Normalize
+        // it the same way `baseBranch` above is normalized, rather than
+        // passing it through raw — `assertSafeBranch` inside
+        // `WorktreeService.create()` no longer rejects a fully-qualified
+        // ref (same review round), so this is about keeping the branch this
+        // worktree actually uses/reuses in its plain, unqualified form, not
+        // about avoiding a thrown error.
+        const branchName = task.branch ? normalizeBranchRef(task.branch) : undefined;
+        wt = await this.getWorktreeService(server).create(workingDir, taskId, slug, worktreeCreateBaseBranch, branchName);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         this.appendLog(taskId, unitId, 'command', {
           type: 'worktree_failed',
           message,
         });
-        this.taskRepo.update(taskId, { status: 'failed' as TaskStatus } as Partial<Task>);
         // 'failed' is deliberately NOT in TOKEN_REVOKING_STATUSES (a failed
         // task is resumable via follow-up onto a later window), so the
         // window-generation token this createWindow() just issued would
@@ -781,16 +1079,12 @@ export class ExecuteTaskUseCase {
         // reference. Gating on `windowName` (this call's own generation)
         // makes the clear a no-op when the row has already moved on — see
         // ITaskRepository.clearTmuxWindowIfMatches's doc comment.
-        try {
-          await rollbackWindowReference(
-            this.tmux.killWindow(server, `${tmuxSession}:${windowName}`),
-            this.paneEnvService,
-            tokenId,
-            'worktree_creation_failed_rollback',
-            () => this.taskRepo.clearTmuxWindowIfMatches(taskId, windowName),
-            () => {},
-          );
-        } catch {}
+        //
+        // Both the status update and the rollback are now
+        // rollbackWindowAfterPostCreationFailure() (see its own doc comment)
+        // — shared with the worktree_path_rejected branch below and with the
+        // fetch-distribution failure branch above.
+        await this.rollbackWindowAfterPostCreationFailure(taskId, server, tmuxSession, windowName, tokenId, 'worktree_creation_failed_rollback');
         throw new Error(`Worktree creation failed: ${message}`);
       }
 
@@ -820,11 +1114,6 @@ export class ExecuteTaskUseCase {
               message: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
             });
           }
-          this.taskRepo.update(taskId, {
-            status: 'failed' as TaskStatus,
-            worktreePath: null,
-            worktreeBranch: null,
-          } as Partial<Task>);
           // Same generation-leak fix as the worktree_failed branch above —
           // see that branch's comment. `tmuxWindow` is cleared inside
           // rollbackWindowReference's onGone callback, not unconditionally
@@ -833,16 +1122,10 @@ export class ExecuteTaskUseCase {
           // Fix 3: same clearTmuxWindowIfMatches reasoning as the
           // worktree_failed branch above — this span also runs outside
           // runExclusiveForTask.
-          try {
-            await rollbackWindowReference(
-              this.tmux.killWindow(server, `${tmuxSession}:${windowName}`),
-              this.paneEnvService,
-              tokenId,
-              'worktree_path_rejected_rollback',
-              () => this.taskRepo.clearTmuxWindowIfMatches(taskId, windowName),
-              () => {},
-            );
-          } catch {}
+          await this.rollbackWindowAfterPostCreationFailure(taskId, server, tmuxSession, windowName, tokenId, 'worktree_path_rejected_rollback', {
+            worktreePath: null,
+            worktreeBranch: null,
+          });
           throw new Error(`Worktree path rejected: ${message}`);
         }
       }
@@ -1002,6 +1285,24 @@ export class ExecuteTaskUseCase {
 
     const effectiveSelfReviewMax = task.selfReviewMaxAttempts ?? unit.selfReviewMaxAttempts;
 
+    // Issue #87 review (forge/87-mirror follow-up), Important finding 1:
+    // resolve the distribution repository ONCE here, against the LOCKED
+    // `lockedProject`/`lockedProjectServer` snapshot `performDistribution()`
+    // itself distributed against (see their declaration comment above), and
+    // pass it into the state machine loop instead of letting it re-derive
+    // its own (possibly-since-changed) project/projectServer read — see
+    // `PhaseLoopRunner.stateMachineLoop`'s `distributionRepoEntry` parameter
+    // doc comment for the full rationale.
+    const distributionRepoEntry = resolveExecutionRepositoryEntry(server, lockedProjectServer, lockedProject);
+    // Issue #87 review (forge/87-mirror follow-up), Important finding 2
+    // (second round): computed against the SAME locked `lockedProjectServer`
+    // snapshot as `distributionRepoEntry` above, so PhaseLoopRunner's
+    // fail-closed pushing-probe check can never disagree with what was
+    // actually true when this run's distribution ran — see
+    // `PhaseLoopRunner.stateMachineLoop`'s `distributionRequired` parameter
+    // doc comment.
+    const distributionRequired = isDistributionRequired(server, lockedProjectServer);
+
     const runLoop = this.phaseLoopRunner.stateMachineLoop(
       { ...unit, selfReviewMaxAttempts: effectiveSelfReviewMax },
       serverName,
@@ -1010,6 +1311,8 @@ export class ExecuteTaskUseCase {
       target,
       abortController.signal,
       windowTarget,
+      distributionRepoEntry,
+      distributionRequired,
     );
 
     runLoop
@@ -1025,8 +1328,16 @@ export class ExecuteTaskUseCase {
           this.runningExecutions.delete(unitId);
         }
 
-        const repoEntry = project?.repositories?.[0];
-        const repo = repoEntry ? this.projectRepo.findRepositoryById(repoEntry.id) : undefined;
+        // Issue #87 review (forge/87-mirror follow-up), Minor finding 3:
+        // reuse the SAME `distributionRepoEntry` already resolved above
+        // against the fully-locked `lockedProject`/`lockedProjectServer`
+        // snapshot, instead of re-deriving it here by mixing
+        // `lockedProjectServer` with the pre-lock `project` — a
+        // pre-lock/post-lock mismatch could otherwise resolve the final PR
+        // reference against a different repository than the one this run
+        // actually distributed/pushed to. See `resolveExecutionRepositoryEntry`'s
+        // doc comment.
+        const repo = distributionRepoEntry ? this.projectRepo.findRepositoryById(distributionRepoEntry.id) : undefined;
 
         // Collect final git info (changed files + PR URL)
         void (async () => {
@@ -1442,7 +1753,38 @@ export class ExecuteTaskUseCase {
         const phaseNames = ut ? ut.phases.map((p) => p.name) : [];
         if (phaseNames.includes(origCurrentPhase)) {
           const effectiveSelfReviewMax = task.selfReviewMaxAttempts ?? unit.selfReviewMaxAttempts;
-          await this.phaseLoopRunner.stateMachineLoop({ ...unit, selfReviewMaxAttempts: effectiveSelfReviewMax }, serverName, { ...task, currentPhase: origCurrentPhase }, server, target, abortController.signal, windowTarget);
+          // Issue #87 review follow-up, Important finding 2: must apply the
+          // SAME "recorded distribution repository is authoritative, fail
+          // closed if it no longer resolves" rule resumeStateMachine() does
+          // — this follow-up continuation resumes the exact same
+          // already-distributed working directory a plan-approval wait or a
+          // startup recovery would resume via resumeStateMachine(), so it
+          // cannot re-resolve from `followUpProject`/`followUpProjectServer`'s
+          // CURRENT configuration either. See
+          // `resolveRecordedDistributionRepositoryEntry`'s doc comment.
+          const followUpResolution = resolveRecordedDistributionRepositoryEntry(task.distributionRepositoryId, server, followUpProjectServer, followUpProject);
+          if (!followUpResolution.ok) {
+            this.appendLog(taskId, unitId, 'status_change', {
+              status: 'error',
+              message: `This task's recorded distribution repository (id ${followUpResolution.recordedRepositoryId}) no longer exists — refusing to resume with a different repository`,
+            });
+            this.taskRepo.updateStatus(taskId, 'failed');
+            return;
+          }
+          const followUpDistributionRepoEntry = followUpResolution.entry;
+          // Issue #87 review (forge/87-mirror follow-up), Important finding
+          // 2 (third round): a recorded `task.distributionRepositoryId` is
+          // itself proof this task was distributed, regardless of what the
+          // CURRENT `followUpProjectServer` configuration now says — see
+          // `isDistributionRequiredForContinuation`'s doc comment. Computed
+          // against the SAME `followUpProjectServer` snapshot used to
+          // resolve `followUpResolution` above, so PhaseLoopRunner's
+          // fail-closed pushing-probe check agrees with what this follow-up
+          // continuation actually resolved — see
+          // `PhaseLoopRunner.stateMachineLoop`'s `distributionRequired`
+          // parameter doc comment.
+          const followUpDistributionRequired = isDistributionRequiredForContinuation(task.distributionRepositoryId, server, followUpProjectServer);
+          await this.phaseLoopRunner.stateMachineLoop({ ...unit, selfReviewMaxAttempts: effectiveSelfReviewMax }, serverName, { ...task, currentPhase: origCurrentPhase }, server, target, abortController.signal, windowTarget, followUpDistributionRepoEntry, followUpDistributionRequired);
           return;
         }
       }
@@ -1506,6 +1848,45 @@ export class ExecuteTaskUseCase {
 
     const effectiveSelfReviewMax = task.selfReviewMaxAttempts ?? unit.selfReviewMaxAttempts;
 
+    // Issue #87 review follow-up, Important finding 1: a resumed run must
+    // NEVER re-resolve the distribution target from the project/project-
+    // server's CURRENT configuration — the task's working directory already
+    // holds code from whichever repository distribution actually pulled it
+    // from at execute() time (or restore() time), and that can differ from
+    // `projectServer.distributionRepositoryId` by the time a plan-approval
+    // wait, or a startup recovery, gets around to calling resumeStateMachine
+    // (an operator can repoint the project server's distribution target at
+    // repository B while a task's worktree still holds repository A's code
+    // mid-run). See `Task.distributionRepositoryId`'s doc comment.
+    const resumeProject = this.projectRepo.findById(task.projectId);
+    const resumeProjectServer = resumeProject ? this.projectServerRepo.find(task.projectId, serverName) : null;
+    // Shared with followUp()'s state-machine continuation and
+    // isPushCompleted() (Issue #87 review follow-up, Important findings 2 &
+    // 3) — see `resolveRecordedDistributionRepositoryEntry`'s doc comment
+    // for the full "recorded value is authoritative, fail closed if it no
+    // longer resolves" rule.
+    const resumeResolution = resolveRecordedDistributionRepositoryEntry(task.distributionRepositoryId, server, resumeProjectServer, resumeProject);
+    if (!resumeResolution.ok) {
+      this.appendLog(taskId, unitId, 'status_change', {
+        status: 'error',
+        message: `This task's recorded distribution repository (id ${resumeResolution.recordedRepositoryId}) no longer exists — refusing to resume with a different repository`,
+      });
+      this.taskRepo.updateStatus(taskId, 'failed');
+      return;
+    }
+    const resumeDistributionRepoEntry: ProjectRepositoryEntry | null = resumeResolution.entry;
+    // Issue #87 review (forge/87-mirror follow-up), Important finding 2
+    // (third round): a recorded `task.distributionRepositoryId` is itself
+    // proof this task was distributed, regardless of what the CURRENT
+    // `resumeProjectServer` configuration now says — see
+    // `isDistributionRequiredForContinuation`'s doc comment. Computed
+    // against the SAME `resumeProjectServer` snapshot used to resolve
+    // `resumeResolution` above, so PhaseLoopRunner's fail-closed
+    // pushing-probe check agrees with what this resume actually resolved —
+    // see `PhaseLoopRunner.stateMachineLoop`'s `distributionRequired`
+    // parameter doc comment.
+    const resumeDistributionRequired = isDistributionRequiredForContinuation(task.distributionRepositoryId, server, resumeProjectServer);
+
     this.phaseLoopRunner.stateMachineLoop(
       { ...unit, selfReviewMaxAttempts: effectiveSelfReviewMax },
       serverName,
@@ -1514,6 +1895,8 @@ export class ExecuteTaskUseCase {
       target,
       abortController.signal,
       windowTarget,
+      resumeDistributionRepoEntry,
+      resumeDistributionRequired,
     )
       .catch((err: Error) => {
         this.appendLog(taskId, unitId, 'status_change', { status: 'error', message: err.message });
@@ -1581,8 +1964,33 @@ export class ExecuteTaskUseCase {
     if (!workingDir) return false;
     const branch = task.worktreeBranch || task.branch || '';
     if (!branch) return false;
-    const repoEntry2 = project?.repositories?.[0];
+    // Issue #87 review follow-up, Important finding 3: must use the task's
+    // RECORDED distribution repository when one exists (same rule
+    // resumeStateMachine()/followUp() apply), not re-resolve from `ps`/
+    // `project`'s current configuration — a working tree distributed from
+    // repository A must never have its push/PR verified against repository
+    // B just because the project server's config changed while the task was
+    // pushing. Fails closed (never calls PR creation/verification) when the
+    // recorded value no longer resolves. A task with no recorded value
+    // (predates this column, or never went through distribution) falls back
+    // to `resolveExecutionRepositoryEntry`'s live resolution unchanged. See
+    // `resolveRecordedDistributionRepositoryEntry`'s doc comment.
+    const repoResolution = resolveRecordedDistributionRepositoryEntry(task.distributionRepositoryId, server, ps, project);
+    if (!repoResolution.ok) return false;
+    const repoEntry2 = repoResolution.entry;
     const repo = repoEntry2 ? this.projectRepo.findRepositoryById(repoEntry2.id) : null;
+    // Issue #87 review finding (Important), shared with PhaseLoopRunner's
+    // pushing-phase probe via `isDistributionRequiredButRepositoryUnresolved`
+    // (see its doc comment for the full fail-closed rationale) — must fail
+    // fast here too, never fall through into `PushVerifier`'s
+    // no-repo-info-registered fallback. Uses `isDistributionRequiredForContinuation`
+    // (Issue #87 review, forge/87-mirror follow-up, Important finding 2,
+    // third round) so a recorded `task.distributionRepositoryId` alone still
+    // forces this closed even if the CURRENT `ps` configuration no longer
+    // calls for distribution. Computed against the SAME `ps` snapshot used
+    // to resolve `repoResolution` above so this check can never disagree
+    // with what this call actually resolved.
+    if (isDistributionRequiredButRepositoryUnresolved(isDistributionRequiredForContinuation(task.distributionRepositoryId, server, ps), repo)) return false;
     if (!task.skipPr) {
       await this.pullRequestCreator.ensureCreated(task.id, resolvedUnitId, repo, branch, {
         title: task.title,

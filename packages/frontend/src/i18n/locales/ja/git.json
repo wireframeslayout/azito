@@ -76,7 +76,6 @@
   "repo": {
     "repositories": "リポジトリ",
     "addRepository": "リポジトリを追加",
-    "provider": "プロバイダー",
     "github": "GitHub",
     "gitlab": "GitLab",
     "other": "その他",
@@ -89,13 +88,22 @@
     "displayName": "名前（任意）",
     "displayNamePlaceholder": "表示名",
     "token": "トークン（任意）",
-    "tokenHint": "空 = gh CLI認証",
+    "tokenHint": "非公開リポジトリをハブ経由で配信する場合に必要です。トークンはハブにのみ保存され、配信先のサーバーには渡りません。空の場合は gh CLI 認証を使用します。",
     "tokenPlaceholder": "ghp_...",
     "viewOnGitHub": "GitHubで表示",
     "otherSection": "その他",
     "noRepositories": "リポジトリがありません。+ をクリックして追加してください。",
     "removeConfirmTitle": "リポジトリを削除",
     "removeConfirmMessage": "このリポジトリを削除しますか？",
-    "urlRequired": "URLは必須です"
+    "urlRequired": "URLは必須です",
+    "providerDetected": "URLから自動判定しました",
+    "provider": "プロバイダー",
+    "providerPlaceholder": "選択してください",
+    "providerSelfHostedHint": "URLから自動判定できませんでした。自己ホスト型（GitHub Enterprise Server や独自ドメインのGitLab）の場合はここで指定してください。",
+    "providerRequired": "プロバイダーを選択してください",
+    "addFailed": "リポジトリの追加に失敗しました",
+    "chipTokenSet": "トークンあり",
+    "chipTokenNone": "トークンなし",
+    "chipDistributionSource": "配信元"
   }
 }

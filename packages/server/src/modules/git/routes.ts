@@ -3,11 +3,16 @@ import type { IServerRepository } from '../servers/Server';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { ITaskRepository } from '../tasks/Task';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
+import type { IProjectRepository } from '../projects/Project';
 import { GitDiffService, SAFE_PATH, SAFE_BRANCH, SAFE_HASH, type DiffScope } from './GitDiffService';
 import type { WorktreeServiceFactory } from './WorktreeServiceFactory';
+import type { GitProviderService } from './providers/GitProviderService';
+import type { ProviderFilter } from './RepositoryCandidateService';
+import { RepositoryCandidateService } from './RepositoryCandidateService';
 import { shellQuote } from '../../shared/shellQuote';
 
 const VALID_SCOPES = new Set<string>(['uncommitted', 'base', 'commit']);
+const VALID_PROVIDER_FILTERS = new Set<string>(['github', 'gitlab', 'all']);
 
 export interface GitRouteOptions {
   serverRepo: IServerRepository;
@@ -15,11 +20,15 @@ export interface GitRouteOptions {
   taskRepo?: ITaskRepository;
   projectServerRepo?: IProjectServerRepository;
   worktreeServiceFactory?: WorktreeServiceFactory;
+  projectRepo?: IProjectRepository;
+  gitProvider?: GitProviderService;
 }
 
 const gitRoutes: FastifyPluginCallback<GitRouteOptions> = (fastify, opts, done) => {
-  const { serverRepo, transportFactory } = opts;
+  const { serverRepo, transportFactory, projectRepo, gitProvider } = opts;
   const gitDiffService = new GitDiffService(transportFactory);
+  const repositoryCandidateService =
+    projectRepo && gitProvider ? new RepositoryCandidateService(projectRepo, gitProvider) : null;
 
   // ── GET /api/servers/:name/git/commits ──
   fastify.get<{ Params: { name: string }; Querystring: { path?: string; base?: string } }>(
@@ -134,6 +143,31 @@ const gitRoutes: FastifyPluginCallback<GitRouteOptions> = (fastify, opts, done) 
         return { worktrees };
       } catch (error) {
         return reply.status(500).send({ error: error instanceof Error ? error.message : 'Failed to list worktrees' });
+      }
+    },
+  );
+
+  // ── GET /api/repository-candidates ──
+  // プロジェクト非依存（プロジェクト作成ウィザードがプロジェクト作成前に呼ぶ）。
+  fastify.get<{ Querystring: { q?: string; provider?: string } }>(
+    '/api/repository-candidates',
+    async (request, reply) => {
+      if (!repositoryCandidateService) {
+        return reply.status(501).send({ error: 'Repository candidates not configured' });
+      }
+
+      const providerRaw = (request.query.provider || 'all').trim();
+      if (!VALID_PROVIDER_FILTERS.has(providerRaw)) {
+        return reply.status(400).send({ error: 'Invalid provider' });
+      }
+
+      try {
+        return await repositoryCandidateService.listCandidates({
+          q: request.query.q,
+          provider: providerRaw as ProviderFilter,
+        });
+      } catch (e) {
+        return reply.status(500).send({ error: e instanceof Error ? e.message : 'Failed to list repository candidates' });
       }
     },
   );

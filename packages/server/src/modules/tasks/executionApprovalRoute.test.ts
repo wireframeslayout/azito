@@ -81,6 +81,7 @@ function makeOpts(existingTask: Task | null): TasksRouteOptions {
       countChildren: vi.fn(() => 0),
       countChildrenInGeneration: vi.fn(() => 0),
       clearTmuxWindowIfMatches: vi.fn(() => true),
+      updateStatusIfWindowMatches: vi.fn(() => true),
     },
     projectRepo: {
       findAll: vi.fn(() => []),
@@ -90,12 +91,14 @@ function makeOpts(existingTask: Task | null): TasksRouteOptions {
       delete: vi.fn(),
       addRepository: vi.fn(() => 1),
       findRepositoryById: vi.fn(() => null),
+      updateRepositoryToken: vi.fn(),
       removeRepository: vi.fn(),
+      findRepositoryCredentialsByIds: vi.fn(() => []),
     },
     projectServerRepo: {
-      findByProject: vi.fn(() => [{ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const }]),
+      findByProject: vi.fn(() => [{ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null }]),
       findByServer: vi.fn(() => []),
-      find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const })),
+      find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null })),
       upsert: vi.fn(),
       remove: vi.fn(),
     },
@@ -135,6 +138,7 @@ function makeOpts(existingTask: Task | null): TasksRouteOptions {
       updateFingerprint: vi.fn(),
       clearFingerprint: vi.fn(),
       updateIsolationIntent: vi.fn(),
+      findMetaByNames: vi.fn(() => []),
       delete: vi.fn(),
     },
     worktreeServiceFactory: { create: vi.fn() } as unknown as TasksRouteOptions['worktreeServiceFactory'],
@@ -250,7 +254,7 @@ function currentFingerprintFor(opts: TasksRouteOptions, task: Task): string {
     projectSecretRepo: opts.projectSecretRepo,
     unitTypeLoader: opts.unitTypeLoader,
     sidekickLoader: opts.sidekickLoader,
-  });
+  }, 'execute');
   return hashExecutionManifest(manifest);
 }
 
@@ -320,7 +324,7 @@ describe('GET /api/tasks/:id/execution-approval (Issue #51)', () => {
   // pending_approval task, instead of looking like an ordinary block.
   it('surfaces allowDegradedReason when the project server is configured for "allow" but the 3-point gate degraded it', async () => {
     const opts = makeOpts(makeTask());
-    opts.projectServerRepo.find = vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'allow' as const }));
+    opts.projectServerRepo.find = vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'allow' as const, distributeCode: false, distributionRepositoryId: null }));
     // serverRepo default (from makeOpts) has isolationIntent: false -> 'not_isolated'.
     const app = Fastify();
     await app.register(tasksRoutes, opts);
@@ -336,7 +340,7 @@ describe('GET /api/tasks/:id/execution-approval (Issue #51)', () => {
 
   it('returns allowDegradedReason: null when "allow" is fully satisfied (isolated, verified, scoped auth enabled)', async () => {
     const opts = makeOpts(makeTask());
-    opts.projectServerRepo.find = vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'allow' as const }));
+    opts.projectServerRepo.find = vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'allow' as const, distributeCode: false, distributionRepositoryId: null }));
     opts.serverRepo.findByName = vi.fn(() => ({
       name: 'test-server', type: 'agent' as const, host: '', agentPort: null, agentToken: null, agentVersion: null,
       sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const,
@@ -377,6 +381,21 @@ describe('POST /api/tasks/:id/approve-execution (Issue #328 review)', () => {
    * matches what the handler recomputes at approval time.
    */
   function currentFingerprint(opts: TasksRouteOptions, task: Task, respawnWindow?: { serverName: string; workerModel: string | null; workerType: string | null; paneLayout: null }): string {
+    // Mirrors resolvePendingApprovalManifest()'s own operationKind
+    // derivation (ExecutionApprovalDecision.ts): 'execute' (and no pending
+    // operation yet) is a FRESH run; 'restore' resolves as 'redistribute'
+    // (Issue #87 review, forge/87-mirror follow-up round 2, Important
+    // finding — restore() tears down and repopulates the working directory
+    // from CURRENT config exactly like execute() does, so its approval
+    // manifest must agree); every other blocked pendingOperation resumes a
+    // run whose working directory a past execute()/restore() already
+    // populated WITHOUT repopulating it, and stays 'continuation'.
+    const operationKind =
+      task.pendingOperation === 'execute' || task.pendingOperation === null
+        ? 'execute'
+        : task.pendingOperation === 'restore'
+          ? 'redistribute'
+          : 'continuation';
     const { manifest } = resolveExecutionManifest(
       task,
       {
@@ -388,6 +407,7 @@ describe('POST /api/tasks/:id/approve-execution (Issue #328 review)', () => {
         unitTypeLoader: opts.unitTypeLoader,
         sidekickLoader: opts.sidekickLoader,
       },
+      operationKind,
       respawnWindow ? buildRespawnManifestInput(respawnWindow) : undefined,
       respawnWindow?.serverName,
     );
@@ -1016,6 +1036,41 @@ describe('GET fingerprint satisfies POST (Issue #328 fourteenth-round review —
     expect(getRes.statusCode).toBe(200);
     expect(postRes.statusCode).toBe(200);
     expect(opts.taskRestoreService.restore).toHaveBeenCalled();
+  });
+
+  // Issue #87 review (forge/87-mirror follow-up round 2), Important finding:
+  // the approval screen for a pending 'restore' must display the repository
+  // it is ACTUALLY about to distribute (the project server's CURRENT
+  // distributionRepositoryId), not the task's recorded PAST one — otherwise
+  // a human approving what they see on screen (repository A) would be
+  // approving a restore that actually distributes a different repository
+  // (B) the moment TaskRestoreService.restore()'s own performDistribution()
+  // call runs, which always reads the current config.
+  it("'restore' displays the CURRENT project-server repository, not the task's recorded (past) distributionRepositoryId", async () => {
+    const repoA = { id: 1, provider: 'github' as const, url: 'https://github.com/o/repo-a', owner: 'o', repoName: 'repo-a', name: 'o/repo-a', hasToken: false };
+    const repoB = { id: 2, provider: 'github' as const, url: 'https://github.com/o/repo-b', owner: 'o', repoName: 'repo-b', name: 'o/repo-b', hasToken: false };
+    const task = makeTask({ pendingOperation: 'restore', pendingOperationPriorStatus: 'archived', distributionRepositoryId: 1 });
+    const { opts } = makeStatefulOpts(task);
+    opts.projectRepo.findById = vi.fn(() => ({ id: 10, name: 'P', slug: 'p', description: null, repositoryUrl: null, defaultBranch: 'main', sidekickPrompt: null, icon: null, color: null, defaultUnitId: 20, servers: [], repositories: [repoA, repoB], windows: [], createdAt: '', updatedAt: '' }));
+    // Distribution required (isolated server) so `resolveExecutionRepositoryEntry`
+    // (current config) and `resolveRecordedDistributionRepositoryEntry`
+    // (task's recorded value) can actually disagree.
+    opts.serverRepo.findByName = vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '' }));
+    // The project server has since been re-pointed at repository B —
+    // task.distributionRepositoryId (above) still names A.
+    const projectServerAtB = { projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: true, distributionRepositoryId: 2 };
+    opts.projectServerRepo.find = vi.fn(() => projectServerAtB);
+    opts.projectServerRepo.findByProject = vi.fn(() => [projectServerAtB]);
+
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'GET', url: '/api/tasks/1/execution-approval' });
+    expect(res.statusCode).toBe(200);
+    // Reflects the CURRENT config (B) — what restore() is actually about
+    // to distribute — not the task's recorded past repository (A).
+    expect(res.json().execution.repository).toMatchObject({ owner: 'o', repoName: 'repo-b' });
   });
 
   it("'recover_session_legacy'", async () => {

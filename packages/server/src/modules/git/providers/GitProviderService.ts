@@ -1,7 +1,7 @@
 import type {
   IGitProviderClient, ListIssuesOptions, ListIssuesResult, RemoteIssue,
   ListPullRequestsOptions, ListPullRequestsResult, RemotePullRequest,
-  RepoRef, CreatePullRequestParams,
+  RepoRef, CreatePullRequestParams, ListAccessibleRepositoriesResult,
 } from './types';
 import type { ProjectRepositoryWithToken as ProjectRepository } from '../../projects/Project';
 import { GitHubClient } from './GitHubClient';
@@ -64,5 +64,20 @@ export class GitProviderService {
   async createPullRequest(repo: ProjectRepository, params: CreatePullRequestParams): Promise<RemotePullRequest> {
     const ref = this.toRepoRef(repo);
     return this.getClient(ref.provider).createPullRequest(ref, params);
+  }
+
+  async getBranchHeadSha(repo: ProjectRepository, branch: string): Promise<string | null> {
+    const ref = this.toRepoRef(repo);
+    return this.getClient(ref.provider).getBranchHeadSha(ref, branch);
+  }
+
+  /**
+   * リポジトリに紐づかない入口: プロジェクト作成ウィザードのようにまだ
+   * ProjectRepository が存在しない状態でも、プロバイダにアクセス可能な
+   * リポジトリ一覧を問い合わせられる（{@link toRepoRef} は登録済み
+   * リポジトリを前提とするため使えない）。
+   */
+  async listAccessibleRepositories(provider: RepoRef['provider'], token?: string | null): Promise<ListAccessibleRepositoriesResult> {
+    return this.getClient(provider).listAccessibleRepositories(token ?? null);
   }
 }

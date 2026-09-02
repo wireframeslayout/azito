@@ -1,8 +1,9 @@
-import { execFileSync } from 'child_process';
+import { getCliTokenSync } from './cliToken';
 import type {
   RemoteIssue, ListIssuesOptions, ListIssuesResult,
   RemotePullRequest, ListPullRequestsOptions, ListPullRequestsResult,
   IGitProviderClient, RepoRef, CreatePullRequestParams,
+  RemoteRepositorySummary, ListAccessibleRepositoriesResult,
 } from './types';
 
 interface CacheEntry<T> {
@@ -12,22 +13,21 @@ interface CacheEntry<T> {
 
 const CACHE_TTL = 5 * 60 * 1000;
 const LIST_CACHE_TTL = 60 * 1000;
+/** listAccessibleRepositoriesの1ページあたりの件数。 */
+const REPOS_PER_PAGE = 50;
+/** listAccessibleRepositoriesの最大ページ数（無制限ページングを防ぐ上限）。 */
+const REPOS_MAX_PAGES = 2;
 
 export class GitLabClient implements IGitProviderClient {
   private cache = new Map<string, CacheEntry<unknown>>();
-  private glabTokens = new Map<string, string | null>();
 
+  /**
+   * Per-host `glab` CLI token fallback (stage 2 of the two-stage resolution
+   * in `docs/ja/github-integration.md`). Delegates to the shared, TTL'd
+   * `cliToken` module — the same credentials hub代行 code distribution uses.
+   */
   private getGlabToken(host: string): string | null {
-    if (this.glabTokens.has(host)) return this.glabTokens.get(host)!;
-    try {
-      // host comes from a repo URL and must never reach a shell; pass it as an argv element, not interpolated text.
-      const token = execFileSync('glab', ['config', 'get', 'token', '-h', host], { encoding: 'utf-8', timeout: 5000 }).trim();
-      this.glabTokens.set(host, token || null);
-      return token || null;
-    } catch {
-      this.glabTokens.set(host, null);
-      return null;
-    }
+    return getCliTokenSync({ provider: 'gitlab', host });
   }
 
   private resolveToken(repoToken: string | null, host: string): string | null {
@@ -290,6 +290,21 @@ export class GitLabClient implements IGitProviderClient {
     return raw.default_branch;
   }
 
+  async getBranchHeadSha(ref: RepoRef, branch: string): Promise<string | null> {
+    const { owner, repoName: repo } = ref;
+    const baseUrl = this.getBaseUrl(ref.url);
+    const projectPath = encodeURIComponent(`${owner}/${repo}`);
+    const host = new URL(baseUrl).host;
+    const resolvedToken = this.resolveToken(ref.token, host);
+    try {
+      const raw = await this.request<any>(baseUrl, `/projects/${projectPath}/repository/branches/${encodeURIComponent(branch)}`, resolvedToken);
+      return raw?.commit?.id ?? null;
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('404')) return null;
+      throw err;
+    }
+  }
+
   async createPullRequest(ref: RepoRef, params: CreatePullRequestParams): Promise<RemotePullRequest> {
     const { owner, repoName: repo } = ref;
     const baseUrl = this.getBaseUrl(ref.url);
@@ -310,5 +325,44 @@ export class GitLabClient implements IGitProviderClient {
 
     this.invalidateMrCache(baseUrl, owner, repo);
     return this.toRemotePullRequest(raw, baseUrl, owner, repo);
+  }
+
+  private toRemoteRepositorySummary(raw: any): RemoteRepositorySummary {
+    const pathWithNamespace: string = raw.path_with_namespace || raw.name || '';
+    const segments = pathWithNamespace.split('/').filter((s: string) => s.length > 0);
+    const repoName = segments.pop() || raw.name || '';
+    const owner = segments.join('/');
+    return {
+      provider: 'gitlab',
+      owner,
+      repoName,
+      httpsUrl: raw.http_url_to_repo || raw.web_url,
+      defaultBranch: raw.default_branch || 'main',
+      private: raw.visibility ? raw.visibility !== 'public' : true,
+      updatedAt: raw.last_activity_at || raw.updated_at,
+    };
+  }
+
+  async listAccessibleRepositories(token: string | null): Promise<ListAccessibleRepositoriesResult> {
+    const baseUrl = this.getBaseUrl(null);
+    const host = new URL(baseUrl).host;
+    const resolvedToken = this.resolveToken(token, host);
+
+    const repositories: RemoteRepositorySummary[] = [];
+    let truncated = false;
+    for (let page = 1; page <= REPOS_MAX_PAGES; page++) {
+      const params = new URLSearchParams({
+        membership: 'true',
+        order_by: 'last_activity_at',
+        per_page: String(REPOS_PER_PAGE),
+        page: String(page),
+      });
+      const raw = await this.request<any[]>(baseUrl, `/projects?${params.toString()}`, resolvedToken);
+      repositories.push(...raw.map((r) => this.toRemoteRepositorySummary(r)));
+      if (raw.length < REPOS_PER_PAGE) break;
+      if (page === REPOS_MAX_PAGES) truncated = true;
+    }
+
+    return { repositories, truncated };
   }
 }

@@ -64,6 +64,10 @@ import * as m060 from './migrations/060_authz_foundation';
 import * as m061 from './migrations/061_isolation_profile';
 import * as m062 from './migrations/062_isolation_report_split';
 import * as m063 from './migrations/063_window_sleep';
+import * as m064 from './migrations/064_distribution_state';
+import * as m065 from './migrations/065_project_server_distribute_code';
+import * as m066 from './migrations/066_project_server_distribution_repository';
+import * as m067 from './migrations/067_task_distribution_repository';
 
 // ─── Migration runner ───
 
@@ -73,7 +77,7 @@ interface Migration {
   up: (db: import('better-sqlite3').Database) => void;
 }
 
-const migrations: Migration[] = [m001, m002, m003, m004, m005, m006, m007, m008, m009, m010, m011, m012, m013, m014, m015, m016, m017, m018, m019, m020, m021, m022, m023, m024, m025, m026, m027, m028, m029, m030, m031, m032, m033, m034, m035, m036, m037, m038, m039, m040, m041, m042, m043, m044, m045, m046, m047, m048, m049, m050, m051, m052, m053, m054, m055, m056, m057, m058, m059, m060, m061, m062, m063];
+const migrations: Migration[] = [m001, m002, m003, m004, m005, m006, m007, m008, m009, m010, m011, m012, m013, m014, m015, m016, m017, m018, m019, m020, m021, m022, m023, m024, m025, m026, m027, m028, m029, m030, m031, m032, m033, m034, m035, m036, m037, m038, m039, m040, m041, m042, m043, m044, m045, m046, m047, m048, m049, m050, m051, m052, m053, m054, m055, m056, m057, m058, m059, m060, m061, m062, m063, m064, m065, m066, m067];
 
 // Migrations that rebuild a table referenced by other tables' FOREIGN KEY constraints (via
 // RENAME + CREATE + copy + DROP) need `foreign_keys` off and `legacy_alter_table` on for the

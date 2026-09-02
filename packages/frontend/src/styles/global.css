@@ -310,6 +310,22 @@ a:hover {
   }
 }
 
+/* ---- Project wizard: confirm-step summary row (label col + wrapping value col) ---- */
+@media (max-width: 480px) {
+  .wizard-sum-row {
+    grid-template-columns: 1fr !important;
+    gap: var(--space-1) !important;
+  }
+}
+
+/* ---- Project wizard: option card keyboard-focus indicator (opaque --accent, 3:1+ contrast) ----
+   Keyboard-only (:focus-visible), separate from the selected-state ring (inline inset box-shadow
+   on the same element) so the two never compete on specificity. */
+.wizard-option-card:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -834,6 +850,7 @@ button:focus-within .diff-open-btn {
 .toggle-slider::before { content: ''; position: absolute; height: 16px; width: 16px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: .2s; }
 .toggle input:checked + .toggle-slider { background: var(--accent); }
 .toggle input:checked + .toggle-slider::before { transform: translateX(16px); }
+.toggle input:disabled + .toggle-slider { cursor: not-allowed; opacity: .55; }
 
 /* ---- Theme: workspace-scope backdrop ----
    ワークスペースエリアのクローム面（サイドバー/タブバー）専用のサーフェス変数。

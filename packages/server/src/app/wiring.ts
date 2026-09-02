@@ -8,6 +8,13 @@ import { EventEmitter } from 'events';
 import * as path from 'path';
 import type { SqliteDatabase } from '../shared/db/Database';
 import type { DataPaths } from '../shared/dataDir';
+import { SftpService } from '../modules/servers/ssh/SftpService';
+import { HubRepoCache } from '../modules/git/hub-transfer/HubRepoCache';
+import { RemoteBundleOps } from '../modules/git/hub-transfer/RemoteBundleOps';
+import { CleanPusher } from '../modules/git/hub-transfer/CleanPusher';
+import { SqliteDistributionStateRepository } from '../modules/git/hub-transfer/SqliteDistributionStateRepository';
+import { FetchDistributionService } from '../modules/git/hub-transfer/FetchDistributionService';
+import { PushNotaryService } from '../modules/git/hub-transfer/PushNotaryService';
 
 import { SshClient, type FingerprintStore } from '../modules/servers/ssh/SshClient';
 import { TransportFactory } from '../modules/servers/transport/TransportFactory';
@@ -191,6 +198,10 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
   agentActivityMonitor: AgentActivityMonitor;
   interactionMonitor: InteractionMonitor;
   resourceGuard: ResourceGuard;
+  /** Shared with FetchDistributionService (its writer) — also read by projectsRoutes to render each project server's last-distribution record (Issue #87 配信状態の可視化). */
+  distributionStateRepo: SqliteDistributionStateRepository;
+  /** Also handed to projectsRoutes, which only checks its presence (the `service_not_wired` prerequisite stage). */
+  fetchDistributionService: FetchDistributionService;
   /** Issue #28 Phase A: resolved once here (the composition root boundary) via shared/auth/scopedAuthFlag.ts, then threaded through — see that file's doc comment for why buildServer.ts reads this instead of process.env directly. */
   scopedAuthEnabled: boolean;
 }
@@ -322,7 +333,31 @@ function buildAgentUpdater(agentBundler: AgentBundler, infra: SharedInfra, repos
   return new AgentUpdater(agentBundler, infra.agentInstaller, repos.serverRepo, repos.taskRepo);
 }
 
-function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiToken: string, scopedAuthEnabled: boolean): ApplicationServices {
+// Constructed ONCE and shared between TaskRestoreService and
+// ExecuteTaskUseCase (Issue #87 13th-round review, Important finding 1) —
+// FetchDistributionService's own per-repo KeyedMutex only actually serializes
+// concurrent distributions to the same mirror when both call sites share the
+// SAME instance; two separately-constructed instances would each hold their
+// own mutex and could race the same mirror.
+// `distributionStateRepo` is constructed by the caller and passed in (Issue
+// #87 review, forge/87-mirror follow-up, Important finding 3) — it is no
+// longer FetchDistributionService's private implementation detail:
+// `shouldClearRecordedDistributionRepository` (DistributionHelper.ts) needs
+// the SAME instance/table to decide whether a not-required-this-run
+// execute()/restore() may clear `task.distributionRepositoryId`, so
+// `buildExecuteTaskUseCase`/`buildApplicationServices` (TaskRestoreService)
+// must be able to read from it too.
+function buildFetchDistributionService(infra: SharedInfra, dataPaths: DataPaths, distributionStateRepo: SqliteDistributionStateRepository): FetchDistributionService {
+  const sftpService = new SftpService(infra.sshClient);
+  const hubRepoCache = new HubRepoCache(dataPaths.dir);
+  const remoteBundleOps = new RemoteBundleOps();
+  // sshClient passed to normalize the outer lock key's host identity (Issue
+  // #87 review, 6th pass, Important finding 3) — see FetchDistributionService's
+  // `sshHostResolver` constructor doc comment.
+  return new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService, distributionStateRepo, infra.sshClient);
+}
+
+function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiToken: string, scopedAuthEnabled: boolean, fetchDistributionService: FetchDistributionService, distributionStateRepo: SqliteDistributionStateRepository): ApplicationServices {
   const sessionStrategyFactory = new SessionStrategyFactory(infra.agentRegistry, infra.transportFactory);
   const sessionCaptureService = new SessionCaptureService(repos.windowRepo, repos.taskRepo, repos.serverRepo, sessionStrategyFactory);
   // Constructed here (ahead of ExecuteTaskUseCase, built later in
@@ -352,6 +387,8 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
     paneEnvService: taskPaneEnvironmentService,
     serverIsolationMutex: infra.serverIsolationMutex,
     scopedAuthEnabled,
+    fetchDistributionService,
+    distributionStateRepo,
   });
   // windowSessionResolver / windowActivityStatusService: shared by transcriptsRoutes
   // (session resolution), windowsRoutes (GET /api/windows/activity-status, diagnostics)
@@ -374,7 +411,15 @@ function buildExecuteTaskUseCase(
   appServices: ApplicationServices,
   resourceGuard: ResourceGuard,
   scopedAuthEnabled: boolean,
+  fetchDistributionService: FetchDistributionService,
+  distributionStateRepo: SqliteDistributionStateRepository,
 ): ExecuteTaskUseCase {
+
+  const sftpService = new SftpService(infra.sshClient);
+  const remoteBundleOps = new RemoteBundleOps();
+  const cleanPusher = new CleanPusher();
+  const pushNotaryService = new PushNotaryService(remoteBundleOps, sftpService, cleanPusher, infra.gitProvider);
+
   return new ExecuteTaskUseCase(
     repos.taskRepo,
     repos.unitRepo,
@@ -404,6 +449,9 @@ function buildExecuteTaskUseCase(
     infra.serverIsolationMutex,
     scopedAuthEnabled,
     (taskId) => appServices.windowSleepService.sleepTaskWindows(taskId),
+    pushNotaryService,
+    fetchDistributionService,
+    distributionStateRepo,
   );
 }
 
@@ -493,9 +541,18 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, db, fingerprintStore, repos.auditLogService, scopedAuthEnabled);
   const pushNotification = buildPushNotificationModule(repos.pushSubRepo);
   const agentUpdater = buildAgentUpdater(agentBundler, infra, repos);
-  const appServices = buildApplicationServices(infra, repos, uiToken, scopedAuthEnabled);
+  // Constructed here, once, and passed to both `buildFetchDistributionService`
+  // (which writes to it on every successful distribution) and
+  // `buildApplicationServices`/`buildExecuteTaskUseCase` (which read from it
+  // via `shouldClearRecordedDistributionRepository` — Issue #87 review,
+  // forge/87-mirror follow-up, Important finding 3) — a single shared
+  // instance, not two separately-constructed repositories over the same
+  // table.
+  const distributionStateRepo = new SqliteDistributionStateRepository(db);
+  const fetchDistributionService = buildFetchDistributionService(infra, dataPaths, distributionStateRepo);
+  const appServices = buildApplicationServices(infra, repos, uiToken, scopedAuthEnabled, fetchDistributionService, distributionStateRepo);
   const resourceGuard = new ResourceGuard(infra.transportFactory, repos.resourceGuardSettingsRepo);
-  const executeTaskUseCase = buildExecuteTaskUseCase(infra, repos, appServices, resourceGuard, scopedAuthEnabled);
+  const executeTaskUseCase = buildExecuteTaskUseCase(infra, repos, appServices, resourceGuard, scopedAuthEnabled, fetchDistributionService, distributionStateRepo);
   const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService, appServices.windowActivityStatusService);
   const interactionMonitor = new InteractionMonitor(repos.windowRepo);
   const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos);
@@ -513,6 +570,8 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
     interactionMonitor,
     resourceGuard,
     scopedAuthEnabled,
+    distributionStateRepo,
+    fetchDistributionService,
     ...systemUpdateModule,
   };
 }

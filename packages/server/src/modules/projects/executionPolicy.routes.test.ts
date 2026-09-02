@@ -31,6 +31,7 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
     countChildren: vi.fn(() => 0),
     countChildrenInGeneration: vi.fn(() => 0),
     clearTmuxWindowIfMatches: vi.fn(() => true),
+    updateStatusIfWindowMatches: vi.fn(() => true),
   };
   // A real TaskOriginationService wrapping the mock taskRepo above — so
   // import-issue's "task ends up untrusted" assertions below still exercise
@@ -47,7 +48,9 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
       delete: vi.fn(),
       addRepository: vi.fn(() => 1),
       findRepositoryById: vi.fn(() => ({ id: 1, name: 'widgets', url: 'https://github.com/acme/widgets', provider: 'github' as const, owner: 'acme', repoName: 'widgets', token: null })),
+      updateRepositoryToken: vi.fn(),
       removeRepository: vi.fn(),
+      findRepositoryCredentialsByIds: vi.fn(() => []),
     },
     projectServerRepo: {
       findByProject: vi.fn(() => []),
@@ -74,12 +77,22 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
       updateFingerprint: vi.fn(),
       clearFingerprint: vi.fn(),
       updateIsolationIntent: vi.fn(),
+      findMetaByNames: vi.fn(() => []),
       delete: vi.fn(),
     },
     projectSecretRepo: {
       findByProject: vi.fn(() => []),
     } as unknown as ProjectsRouteOptions['projectSecretRepo'],
     serverIsolationMutex: new KeyedMutex(),
+    repoDiscovery: { discover: vi.fn(async () => []) } as unknown as ProjectsRouteOptions['repoDiscovery'],
+    localRepoCloneService: { clone: vi.fn() } as unknown as ProjectsRouteOptions['localRepoCloneService'],
+    distributionStateRepo: {
+      upsert: vi.fn(),
+      deleteByServer: vi.fn(),
+      find: vi.fn(() => null),
+      findManyByRepositoryIds: vi.fn(() => []),
+    },
+    fetchDistributionService: null,
     ...overrides,
   };
 }
@@ -118,6 +131,7 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
         updateFingerprint: vi.fn(),
         clearFingerprint: vi.fn(),
         updateIsolationIntent: vi.fn(),
+        findMetaByNames: vi.fn(() => []),
         delete: vi.fn(),
       },
     });
@@ -154,6 +168,7 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
         updateFingerprint: vi.fn(),
         clearFingerprint: vi.fn(),
         updateIsolationIntent: vi.fn(),
+        findMetaByNames: vi.fn(() => []),
         delete: vi.fn(),
       },
     });
@@ -213,7 +228,7 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
         findByProject: vi.fn(() => []),
         findByServer: vi.fn(() => []),
         find: vi.fn(() => ({
-          projectId: 10, serverName: 'test-server', workingDirectory: '/srv/repo', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const,
+          projectId: 10, serverName: 'test-server', workingDirectory: '/srv/repo', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null,
         })),
         upsert: vi.fn(),
         remove: vi.fn(),
@@ -243,7 +258,7 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
         findByProject: vi.fn(() => []),
         findByServer: vi.fn(() => []),
         find: vi.fn(() => ({
-          projectId: 10, serverName: 'test-server', workingDirectory: '/srv/repo', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const,
+          projectId: 10, serverName: 'test-server', workingDirectory: '/srv/repo', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null,
         })),
         upsert: vi.fn(),
         remove: vi.fn(),
@@ -294,6 +309,7 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
         updateFingerprint: vi.fn(),
         clearFingerprint: vi.fn(),
         updateIsolationIntent: vi.fn(),
+        findMetaByNames: vi.fn(() => []),
         delete: vi.fn(),
       },
       tmux: {
@@ -320,6 +336,296 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
       'p',
       expect.anything(),
     );
+  });
+});
+
+describe('PUT /api/projects/:id/servers/:serverName — distribute_code (Issue #87 third-party review, Minor finding)', () => {
+  it('rejects a non-boolean distribute_code (e.g. a string "false") with 400 and does not persist it', async () => {
+    const opts = makeOpts();
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10/servers/test-server',
+      payload: { distribute_code: 'false' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('distribute_code must be a boolean');
+    expect(opts.projectServerRepo.upsert).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-boolean distribute_code (an object) with 400', async () => {
+    const opts = makeOpts();
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10/servers/test-server',
+      payload: { distribute_code: {} },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('distribute_code must be a boolean');
+    expect(opts.projectServerRepo.upsert).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-boolean distribute_code (the number 1) with 400', async () => {
+    const opts = makeOpts();
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10/servers/test-server',
+      payload: { distribute_code: 1 },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('distribute_code must be a boolean');
+    expect(opts.projectServerRepo.upsert).not.toHaveBeenCalled();
+  });
+
+  it('accepts a real boolean distribute_code and persists it', async () => {
+    const opts = makeOpts();
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10/servers/test-server',
+      payload: { distribute_code: true },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.projectServerRepo.upsert).toHaveBeenCalledWith(expect.objectContaining({ distributeCode: true }));
+  });
+
+  it('preserves the existing distribute_code value when the key is omitted', async () => {
+    const opts = makeOpts({
+      projectServerRepo: {
+        findByProject: vi.fn(() => []),
+        findByServer: vi.fn(() => []),
+        find: vi.fn(() => ({
+          projectId: 10, serverName: 'test-server', workingDirectory: '/srv/repo', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: true, distributionRepositoryId: null,
+        })),
+        upsert: vi.fn(),
+        remove: vi.fn(),
+      },
+    });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10/servers/test-server',
+      payload: { input_policy: 'deny' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.projectServerRepo.upsert).toHaveBeenCalledWith(expect.objectContaining({ distributeCode: true }));
+  });
+
+  // Issue #87 review finding (Minor 3, forge/87-mirror follow-up): the
+  // frontend form hides the toggle for a `local` target server but its
+  // underlying state can still survive a stale/anomalous save (or a direct
+  // API caller bypassing the form entirely) and reach this endpoint as
+  // `distribute_code: true`. `local` IS the hub itself, so distribution is
+  // structurally meaningless there (ExecuteTaskUseCase already excludes it
+  // outright) — normalized to `false` rather than rejected with 400, so an
+  // otherwise-valid save isn't blocked by a field the caller may not even
+  // know is wrong.
+  it('normalizes distribute_code to false when the target server type is local, even if the caller sent true', async () => {
+    const opts = makeOpts({
+      serverRepo: {
+        findAll: vi.fn(() => []),
+        findByName: vi.fn(() => ({
+          name: 'test-server', type: 'local' as const, host: null, agentPort: null, agentToken: null, agentVersion: null,
+          sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const,
+          isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01',
+        })),
+        create: vi.fn(),
+        update: vi.fn(),
+        updateAgentVersion: vi.fn(),
+        updateFingerprint: vi.fn(),
+        clearFingerprint: vi.fn(),
+        updateIsolationIntent: vi.fn(),
+        findMetaByNames: vi.fn(() => []),
+        delete: vi.fn(),
+      },
+    });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10/servers/test-server',
+      payload: { distribute_code: true },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.projectServerRepo.upsert).toHaveBeenCalledWith(expect.objectContaining({ distributeCode: false }));
+  });
+
+  it('does not normalize distribute_code for a non-local (agent) target server', async () => {
+    const opts = makeOpts({
+      serverRepo: {
+        findAll: vi.fn(() => []),
+        findByName: vi.fn(() => ({
+          name: 'test-server', type: 'agent' as const, host: null, agentPort: null, agentToken: null, agentVersion: null,
+          sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const,
+          isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01',
+        })),
+        create: vi.fn(),
+        update: vi.fn(),
+        updateAgentVersion: vi.fn(),
+        updateFingerprint: vi.fn(),
+        clearFingerprint: vi.fn(),
+        updateIsolationIntent: vi.fn(),
+        findMetaByNames: vi.fn(() => []),
+        delete: vi.fn(),
+      },
+    });
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10/servers/test-server',
+      payload: { distribute_code: true },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.projectServerRepo.upsert).toHaveBeenCalledWith(expect.objectContaining({ distributeCode: true }));
+  });
+});
+
+// Issue #87 explicit-target follow-up: distribution_repository_id replaces
+// the removed "exactly one repository configured" fail-fast — the target
+// repository is now an explicit per-project-server column, validated the
+// same way distribute_code/input_policy already are (declared-type
+// rejection, "key absent preserves" semantics) plus a project-ownership
+// check specific to this field (a distribution target must belong to the
+// SAME project as the project server row, since distribution uses the
+// repository's own stored token).
+describe('PUT /api/projects/:id/servers/:serverName — distribution_repository_id (Issue #87 explicit-target follow-up)', () => {
+  function optsWithProjectRepositories(repositories: Array<{ id: number; name: string | null; url: string; provider: 'github' | 'gitlab' | 'other'; owner: string | null; repoName: string | null; hasToken: boolean }>) {
+    return makeOpts({
+      projectRepo: {
+        findAll: vi.fn(() => []),
+        findById: vi.fn(() => ({ id: 10, name: 'P', slug: 'p', description: null, repositoryUrl: null, defaultBranch: 'main', sidekickPrompt: null, icon: null, color: null, defaultUnitId: 20, repositories, windows: [], createdAt: '', updatedAt: '' })),
+        create: vi.fn(() => 10),
+        update: vi.fn(),
+        delete: vi.fn(),
+        addRepository: vi.fn(() => 1),
+        findRepositoryById: vi.fn(() => ({ id: 1, name: 'widgets', url: 'https://github.com/acme/widgets', provider: 'github' as const, owner: 'acme', repoName: 'widgets', token: null })),
+        updateRepositoryToken: vi.fn(),
+        removeRepository: vi.fn(),
+        findRepositoryCredentialsByIds: vi.fn(() => []),
+      },
+    });
+  }
+
+  it('accepts a numeric distribution_repository_id that belongs to this project', async () => {
+    const opts = optsWithProjectRepositories([{ id: 5, name: 'widgets', url: 'https://github.com/acme/widgets', provider: 'github', owner: 'acme', repoName: 'widgets', hasToken: true }]);
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10/servers/test-server',
+      payload: { distribution_repository_id: 5 },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.projectServerRepo.upsert).toHaveBeenCalledWith(expect.objectContaining({ distributionRepositoryId: 5 }));
+  });
+
+  it('accepts an explicit null, clearing any previously configured target', async () => {
+    const opts = optsWithProjectRepositories([{ id: 5, name: 'widgets', url: 'https://github.com/acme/widgets', provider: 'github', owner: 'acme', repoName: 'widgets', hasToken: true }]);
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10/servers/test-server',
+      payload: { distribution_repository_id: null },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.projectServerRepo.upsert).toHaveBeenCalledWith(expect.objectContaining({ distributionRepositoryId: null }));
+  });
+
+  it('rejects a non-numeric, non-null distribution_repository_id with 400', async () => {
+    const opts = optsWithProjectRepositories([{ id: 5, name: 'widgets', url: 'https://github.com/acme/widgets', provider: 'github', owner: 'acme', repoName: 'widgets', hasToken: true }]);
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10/servers/test-server',
+      payload: { distribution_repository_id: '5' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(opts.projectServerRepo.upsert).not.toHaveBeenCalled();
+  });
+
+  it('rejects a distribution_repository_id that belongs to a different project with 400', async () => {
+    // This project (10) has no repository with id 6 — id 6 is a stand-in
+    // for another project's repository row (distribution uses the
+    // repository's own stored token, so accepting it here would let a
+    // caller point distribution at another project's git credentials).
+    const opts = optsWithProjectRepositories([{ id: 5, name: 'widgets', url: 'https://github.com/acme/widgets', provider: 'github', owner: 'acme', repoName: 'widgets', hasToken: true }]);
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10/servers/test-server',
+      payload: { distribution_repository_id: 6 },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(opts.projectServerRepo.upsert).not.toHaveBeenCalled();
+  });
+
+  it('preserves the existing distribution_repository_id when the key is omitted', async () => {
+    const opts = optsWithProjectRepositories([{ id: 5, name: 'widgets', url: 'https://github.com/acme/widgets', provider: 'github', owner: 'acme', repoName: 'widgets', hasToken: true }]);
+    opts.projectServerRepo = {
+      findByProject: vi.fn(() => []),
+      findByServer: vi.fn(() => []),
+      find: vi.fn(() => ({
+        projectId: 10, serverName: 'test-server', workingDirectory: '/srv/repo', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: true, distributionRepositoryId: 5,
+      })),
+      upsert: vi.fn(),
+      remove: vi.fn(),
+    };
+    const app = Fastify();
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/projects/10/servers/test-server',
+      payload: { input_policy: 'deny' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.projectServerRepo.upsert).toHaveBeenCalledWith(expect.objectContaining({ distributionRepositoryId: 5 }));
   });
 });
 

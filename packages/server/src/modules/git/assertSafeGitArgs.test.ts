@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { assertSafePath, assertSafeBranch, SAFE_PATH_PATTERN, SAFE_BRANCH_PATTERN } from './assertSafeGitArgs';
+import {
+  assertSafePath,
+  assertSafeBranch,
+  SAFE_PATH_PATTERN,
+  SAFE_BRANCH_PATTERN,
+  isFullyQualifiedRef,
+  normalizeBranchRef,
+  rejectQualifiedBranchInput,
+} from './assertSafeGitArgs';
 
 describe('assertSafePath', () => {
   it('accepts normal paths', () => {
@@ -59,5 +67,60 @@ describe('assertSafeBranch', () => {
 
   it('rejects spaces', () => {
     expect(() => assertSafeBranch('my branch', 'test')).toThrow('Unsafe');
+  });
+
+  it('accepts fully-qualified refs — shell-safety only, back-compat for pre-existing persisted task.branch values (Issue #87 12th round, Important 2)', () => {
+    expect(() => assertSafeBranch('refs/heads/main', 'test')).not.toThrow();
+  });
+
+  it('still accepts branch names that merely contain "refs" as a path segment', () => {
+    expect(() => assertSafeBranch('feature/refs-cleanup', 'test')).not.toThrow();
+  });
+});
+
+describe('isFullyQualifiedRef', () => {
+  it('detects refs/ prefixed values', () => {
+    expect(isFullyQualifiedRef('refs/heads/main')).toBe(true);
+    expect(isFullyQualifiedRef('refs/tags/v1')).toBe(true);
+  });
+
+  it('does not flag plain branch names', () => {
+    expect(isFullyQualifiedRef('main')).toBe(false);
+    expect(isFullyQualifiedRef('feature/x')).toBe(false);
+  });
+});
+
+describe('normalizeBranchRef', () => {
+  it('strips a refs/heads/ prefix', () => {
+    expect(normalizeBranchRef('refs/heads/main')).toBe('main');
+    expect(normalizeBranchRef('refs/heads/feature/x')).toBe('feature/x');
+  });
+
+  it('leaves plain branch names unchanged', () => {
+    expect(normalizeBranchRef('main')).toBe('main');
+    expect(normalizeBranchRef('feature/x')).toBe('feature/x');
+  });
+
+  it('makes refs/heads/main and main compare equal (guard normalization)', () => {
+    expect(normalizeBranchRef('refs/heads/main')).toBe(normalizeBranchRef('main'));
+  });
+});
+
+describe('rejectQualifiedBranchInput (Issue #87 third-party review, 11th round, Important finding 1)', () => {
+  it('accepts plain branch names', () => {
+    expect(rejectQualifiedBranchInput('main')).toBeNull();
+    expect(rejectQualifiedBranchInput('feature/x')).toBeNull();
+  });
+
+  it('rejects fully-qualified refs', () => {
+    expect(rejectQualifiedBranchInput('refs/heads/main')).toMatch(/fully-qualified ref/);
+  });
+
+  it('rejects remote-qualified branch names', () => {
+    expect(rejectQualifiedBranchInput('origin/main')).toMatch(/remote-qualified/);
+  });
+
+  it('rejects unsafe characters', () => {
+    expect(rejectQualifiedBranchInput('main; touch x')).toMatch(/invalid branch name/);
   });
 });

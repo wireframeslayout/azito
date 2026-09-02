@@ -4,6 +4,15 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { TaskRestoreService, type TaskRestoreDeps } from './TaskRestoreService';
+// The hub's own `gh`/`glab` login is the second stage of distribution's token
+// resolution (Issue #87). Stubbed to "not logged in" so these tests exercise
+// the no-credential path deterministically, instead of depending on whoever
+// is authenticated on the machine running them.
+vi.mock('../git/providers/cliToken', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../git/providers/cliToken')>();
+  return { ...actual, getCliToken: vi.fn(async () => null) };
+});
+
 import type { Task } from './Task';
 import { KeyedMutex } from '../../shared/keyedMutex';
 
@@ -83,6 +92,7 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
       countChildren: vi.fn(() => 0),
       countChildrenInGeneration: vi.fn(() => 0),
       clearTmuxWindowIfMatches: vi.fn(() => true),
+      updateStatusIfWindowMatches: vi.fn(() => true),
     },
     serverRepo: {
       findAll: vi.fn(() => []),
@@ -92,6 +102,7 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
       updateAgentVersion: vi.fn(),
       updateFingerprint: vi.fn(),
       clearFingerprint: vi.fn(), updateIsolationIntent: vi.fn(),
+      findMetaByNames: vi.fn(() => []),
       delete: vi.fn(),
     },
     projectRepo: {
@@ -102,12 +113,14 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
       delete: vi.fn(),
       addRepository: vi.fn(() => 1),
       findRepositoryById: vi.fn(() => null),
+      updateRepositoryToken: vi.fn(),
       removeRepository: vi.fn(),
+      findRepositoryCredentialsByIds: vi.fn(() => []),
     },
     projectServerRepo: {
-      findByProject: vi.fn(() => [{ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const }]),
+      findByProject: vi.fn(() => [{ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: 1 }]),
       findByServer: vi.fn(() => []),
-      find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const })),
+      find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: 1 })),
       upsert: vi.fn(),
       remove: vi.fn(),
     },
@@ -216,6 +229,16 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
     // needing every test to special-case a mocked lock.
     serverIsolationMutex: new KeyedMutex(),
     scopedAuthEnabled: true,
+    // Distribution not required by default (server.type is 'local' and
+    // projectServerRepo's fixture has distributeCode: false) — null exercises
+    // performDistribution()'s `{ required: false }` fast path. Tests below
+    // that need distribution override this with a real mock.
+    fetchDistributionService: null,
+    // Issue #87 review (forge/87-mirror follow-up), Important finding 3:
+    // null by default (same rationale as `fetchDistributionService` above) —
+    // tests exercising `shouldClearRecordedDistributionRepository` wire a
+    // real/mocked repo via `overrides`.
+    distributionStateRepo: null,
     ...overrides,
   };
 }
@@ -308,7 +331,7 @@ describe('TaskRestoreService', () => {
       worktreeBranch: 'feat/stale-prior-run-branch',
     });
 
-    const { manifest } = resolveExecutionManifest(task, deps);
+    const { manifest } = resolveExecutionManifest(task, deps, 'continuation');
     await service.restore(task, log);
 
     const worktreeService = (deps.worktreeServiceFactory.create as ReturnType<typeof vi.fn>).mock.results[0].value;
@@ -330,25 +353,35 @@ describe('TaskRestoreService', () => {
 
     await service.restore(task, log);
 
-    const updateCall = (deps.taskRepo.update as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(updateCall[1]).not.toHaveProperty('branch');
-    expect(updateCall[1]).toMatchObject({ worktreeBranch: 'feat/test-task' });
+    // Issue #87 review follow-up, Important finding 4: restore() now ALSO
+    // writes an earlier taskRepo.update({ distributionRepositoryId: null })
+    // call (this task's server is local, so distribution never runs) —
+    // locate the success-path update by its own distinctive field instead of
+    // assuming it is the first (or any fixed-index) call.
+    const updateCalls = (deps.taskRepo.update as ReturnType<typeof vi.fn>).mock.calls;
+    const updateCall = updateCalls.find((c) => (c[1] as Record<string, unknown>).worktreeBranch !== undefined);
+    expect(updateCall).toBeDefined();
+    expect(updateCall![1]).not.toHaveProperty('branch');
+    expect(updateCall![1]).toMatchObject({ worktreeBranch: 'feat/test-task' });
   });
 
   it('restoring an approved, branch-unspecified task does not change the execution-manifest fingerprint (Issue #328 regression) — re-approval must not be required immediately after a successful restore', async () => {
     const { resolveExecutionManifest, hashExecutionManifest } = await import('./execution/ExecutionManifest.js');
     const task = makeTask({ serverName: 'test-server', branch: null, worktreeBranch: null });
 
-    const hashBefore = hashExecutionManifest(resolveExecutionManifest(task, deps).manifest);
+    const hashBefore = hashExecutionManifest(resolveExecutionManifest(task, deps, 'continuation').manifest);
 
     await service.restore(task, log);
 
-    // Simulate the DB row after restore() by applying the exact same fields
-    // taskRepo.update() was called with — task.branch must be untouched, so
-    // re-resolving the manifest off the post-restore row hashes identically.
-    const updateCall = (deps.taskRepo.update as ReturnType<typeof vi.fn>).mock.calls[0];
-    const restoredTask: Task = { ...task, ...(updateCall[1] as Partial<Task>) };
-    const hashAfter = hashExecutionManifest(resolveExecutionManifest(restoredTask, deps).manifest);
+    // Simulate the DB row after restore() by applying every taskRepo.update()
+    // call's fields, in order (restore() now issues two: the Issue #87
+    // review follow-up Important finding 4 distributionRepositoryId:null
+    // write, then the success-path status/worktreePath/worktreeBranch write)
+    // — task.branch must be untouched throughout, so re-resolving the
+    // manifest off the post-restore row hashes identically.
+    const updateCalls = (deps.taskRepo.update as ReturnType<typeof vi.fn>).mock.calls;
+    const restoredTask: Task = updateCalls.reduce((acc, c) => ({ ...acc, ...(c[1] as Partial<Task>) }), task);
+    const hashAfter = hashExecutionManifest(resolveExecutionManifest(restoredTask, deps, 'continuation').manifest);
 
     expect(hashAfter).toBe(hashBefore);
   });
@@ -418,7 +451,7 @@ describe('TaskRestoreService', () => {
       ...deps,
       projectServerRepo: {
         ...deps.projectServerRepo,
-        find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const })),
+        find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null })),
       },
     });
     service = new TaskRestoreService(deps);
@@ -545,7 +578,16 @@ describe('TaskRestoreService', () => {
         // Forces restore()'s final success-path taskRepo.update (after
         // windowRepo.add has already run) to throw, so the outer catch runs
         // with windowRowId already set — the scenario the fix targets.
-        update: vi.fn(() => { throw new Error('db write failed'); }),
+        update: vi.fn((_id: number, fields: Record<string, unknown>) => {
+          // Issue #87 review follow-up, Important finding 4: restore() now
+          // ALSO writes distributionRepositoryId:null unconditionally right
+          // after performDistribution (this task's server is local, so
+          // distribution never runs) — that earlier write must succeed so
+          // this mock can still target the LATER success-path update this
+          // test actually exercises.
+          if ('distributionRepositoryId' in fields) return;
+          throw new Error('db write failed');
+        }),
       },
       tmux: {
         ...deps.tmux,
@@ -567,7 +609,16 @@ describe('TaskRestoreService', () => {
       ...deps,
       taskRepo: {
         ...deps.taskRepo,
-        update: vi.fn(() => { throw new Error('db write failed'); }),
+        update: vi.fn((_id: number, fields: Record<string, unknown>) => {
+          // Issue #87 review follow-up, Important finding 4: restore() now
+          // ALSO writes distributionRepositoryId:null unconditionally right
+          // after performDistribution (this task's server is local, so
+          // distribution never runs) — that earlier write must succeed so
+          // this mock can still target the LATER success-path update this
+          // test actually exercises.
+          if ('distributionRepositoryId' in fields) return;
+          throw new Error('db write failed');
+        }),
       },
     });
     service = new TaskRestoreService(deps);
@@ -672,6 +723,536 @@ describe('TaskRestoreService', () => {
     expect(getTransportServer.agentVersion).toBe(resolvePaneIdServer.agentVersion);
   });
 
+  // Issue #87 13th-round review, Important finding 1: restore() must run
+  // the same fetch-distribution check execute() does before recreating a
+  // task's worktree — an isolated server or a distribute_code project
+  // server restored from an archived task must not silently rebuild its
+  // worktree from whatever stale local content happens to already be at
+  // workingDir.
+  describe('fetch distribution (Issue #87 13th-round review, Important finding 1)', () => {
+    function mockFetchDistributionService(overrides: Record<string, any> = {}) {
+      return {
+        // Issue #87 review (forge/87-mirror follow-up), Important finding 2
+        // (third round): the record-write callback (`onBeforeDistribute`,
+        // threaded through as `params.onBeforeWorkingDirChange`) now fires
+        // from INSIDE `distribute()`, immediately before the local working
+        // directory is touched — not by `performDistribution()` itself
+        // before calling `distribute()` at all. This fake must call it too,
+        // exactly like the real `FetchDistributionService.distributeUnlocked()`
+        // does right before its `ensureWorkingDir()` calls, or every test
+        // below that asserts `taskRepo.update({ distributionRepositoryId })`
+        // was written would falsely fail.
+        distribute: vi.fn(async (params: { onBeforeWorkingDirChange?: () => void }) => {
+          params.onBeforeWorkingDirChange?.();
+          return { status: 'distributed', sha: 'a'.repeat(40), bundleType: 'full', localBranchSynced: true };
+        }),
+        ...overrides,
+      } as unknown as NonNullable<TaskRestoreDeps['fetchDistributionService']>;
+    }
+
+    // agent/ssh servers route worktree-path containment through
+    // PathResolverFactory's RemotePathResolver, which shells out via
+    // `transport.exec('cd -- <path> && pwd -P')` — echo the requested path
+    // straight back (it's already a real, existing directory: `worktreeDir`)
+    // so the containment check these tests don't otherwise care about
+    // doesn't throw.
+    function agentTransportFactory(): TaskRestoreDeps['transportFactory'] {
+      return {
+        getTransport: vi.fn(() => ({
+          exec: vi.fn(async (cmd: string) => {
+            const match = /^cd -- (.+) && pwd -P$/.exec(cmd);
+            const rawPath = match ? match[1] : worktreeDir;
+            const unquoted = rawPath.startsWith("'") ? rawPath.slice(1, -1).replace(/'\\''/g, "'") : rawPath;
+            return { stdout: `${unquoted}\n`, stderr: '', code: 0 };
+          }),
+        })),
+      } as unknown as TaskRestoreDeps['transportFactory'];
+    }
+
+    function withRepository(projectRepo: TaskRestoreDeps['projectRepo']) {
+      (projectRepo.findById as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 10, name: 'Project', slug: 'project', description: null, repositoryUrl: null, defaultBranch: 'main',
+        sidekickPrompt: null, icon: null, color: null, defaultUnitId: 20,
+        repositories: [{ id: 1, name: 'repo', url: 'https://github.com/acme/repo.git', provider: 'github' as const, owner: 'acme', repoName: 'repo', hasToken: true }],
+        windows: [], createdAt: '2026-01-01', updatedAt: '2026-01-01',
+      });
+      (projectRepo.findRepositoryById as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 1, name: 'repo', url: 'https://github.com/acme/repo.git', provider: 'github' as const, owner: 'acme', repoName: 'repo', token: 'dummy-token',
+      });
+    }
+
+    it('runs fetch distribution before worktree creation on an isolated server, and fails the restore when it fails', async () => {
+      const fetchDistributionService = mockFetchDistributionService({
+        distribute: vi.fn(async () => ({ status: 'failed', error: 'dummy distribution failure' })),
+      });
+      withRepository(deps.projectRepo);
+      deps = makeDeps({
+        ...deps,
+        fetchDistributionService,
+        transportFactory: agentTransportFactory(),
+        serverRepo: {
+          ...deps.serverRepo,
+          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
+        },
+      });
+      service = new TaskRestoreService(deps);
+      const task = makeTask({ serverName: 'test-server' });
+
+      await expect(service.restore(task, log)).rejects.toThrow(/Fetch distribution failed/);
+
+      expect(fetchDistributionService.distribute).toHaveBeenCalled();
+      // Distribution failed before worktree creation was ever reached — the
+      // worktree service factory itself was never invoked.
+      expect(deps.worktreeServiceFactory.create).not.toHaveBeenCalled();
+      // The tmux window this run created is rolled back, same as this
+      // function's existing failure-handling convention for worktree
+      // creation failures.
+      expect(deps.tmux.killWindow).toHaveBeenCalled();
+    });
+
+    it('succeeds and creates the worktree once distribution succeeds on an isolated server', async () => {
+      const fetchDistributionService = mockFetchDistributionService();
+      withRepository(deps.projectRepo);
+      deps = makeDeps({
+        ...deps,
+        fetchDistributionService,
+        transportFactory: agentTransportFactory(),
+        serverRepo: {
+          ...deps.serverRepo,
+          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
+        },
+      });
+      service = new TaskRestoreService(deps);
+      const task = makeTask({ serverName: 'test-server' });
+
+      const result = await service.restore(task, log);
+
+      expect(fetchDistributionService.distribute).toHaveBeenCalled();
+      expect(result.worktreePath).toBe(worktreeDir);
+      const worktreeService = (deps.worktreeServiceFactory.create as ReturnType<typeof vi.fn>).mock.results[0]?.value;
+      expect(worktreeService?.create).toHaveBeenCalled();
+    });
+
+    // Issue #87 review follow-up, Important finding 1: restore() must
+    // persist the repository distribution actually pulled from, the same
+    // way execute() does — see Task.distributionRepositoryId's doc comment.
+    // A later resumeStateMachine() call must use this recorded value
+    // instead of re-resolving from the project/project-server's THEN-
+    // current configuration.
+    it('records the resolved repository id onto the task once distribution succeeds', async () => {
+      const fetchDistributionService = mockFetchDistributionService();
+      withRepository(deps.projectRepo);
+      deps = makeDeps({
+        ...deps,
+        fetchDistributionService,
+        transportFactory: agentTransportFactory(),
+        serverRepo: {
+          ...deps.serverRepo,
+          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
+        },
+      });
+      service = new TaskRestoreService(deps);
+      const task = makeTask({ serverName: 'test-server' });
+
+      await service.restore(task, log);
+
+      expect(deps.taskRepo.update).toHaveBeenCalledWith(task.id, expect.objectContaining({ distributionRepositoryId: 1 }));
+    });
+
+    // Issue #87 review (forge/87-mirror follow-up), Important finding 2
+    // (third round): the record-write callback is threaded through
+    // `performDistribution()` -> `fetchDistributionService.distribute()` as
+    // `onBeforeWorkingDirChange`, NOT invoked by `performDistribution()`
+    // itself before `distribute()` is even called (the previous round's
+    // fix, which this one supersedes — see DistributionHelper.ts's
+    // `onBeforeDistribute` doc comment). This asserts the wiring:
+    // `distribute()` is called WITH the callback, and invoking it (as the
+    // mock does, right before it "succeeds") is what actually produces the
+    // taskRepo write.
+    it('threads the record-write callback into distribute() as onBeforeWorkingDirChange, rather than firing it before distribute() is even called', async () => {
+      const fetchDistributionService = mockFetchDistributionService();
+      withRepository(deps.projectRepo);
+      deps = makeDeps({
+        ...deps,
+        fetchDistributionService,
+        transportFactory: agentTransportFactory(),
+        serverRepo: {
+          ...deps.serverRepo,
+          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
+        },
+      });
+      service = new TaskRestoreService(deps);
+      const task = makeTask({ serverName: 'test-server' });
+
+      await service.restore(task, log);
+
+      expect(fetchDistributionService.distribute).toHaveBeenCalledWith(
+        expect.objectContaining({ onBeforeWorkingDirChange: expect.any(Function) }),
+      );
+      expect(deps.taskRepo.update).toHaveBeenCalledWith(task.id, expect.objectContaining({ distributionRepositoryId: 1 }));
+    });
+
+    // Issue #87 review (forge/87-mirror follow-up), Important finding 2
+    // (third round), superseding the prior "still records the attempted
+    // distributionRepositoryId even when fetch distribution fails" test:
+    // `distribute()` can fail BEFORE ever reaching the working-directory
+    // mutation step (resolving sshHost's home directory, preparing the
+    // hub's repo cache, transferring the bundle onto the remote mirror —
+    // see FetchDistributionService.distribute()/distributeUnlocked()). A
+    // failure at any of those stages means `onBeforeWorkingDirChange` never
+    // fires, so the record must NOT be written — the working directory was
+    // never touched this run, so a PRIOR run's accurate record (if any)
+    // must survive untouched. This fake models exactly that: `distribute()`
+    // fails without ever calling `onBeforeWorkingDirChange`.
+    it('does NOT record a distributionRepositoryId when fetch distribution fails before ever calling onBeforeWorkingDirChange (i.e. before touching the working directory)', async () => {
+      const fetchDistributionService = mockFetchDistributionService({
+        distribute: vi.fn(async () => ({ status: 'failed', error: 'dummy distribution failure' })),
+      });
+      withRepository(deps.projectRepo);
+      deps = makeDeps({
+        ...deps,
+        fetchDistributionService,
+        transportFactory: agentTransportFactory(),
+        serverRepo: {
+          ...deps.serverRepo,
+          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
+        },
+      });
+      service = new TaskRestoreService(deps);
+      const task = makeTask({ serverName: 'test-server' });
+
+      await expect(service.restore(task, log)).rejects.toThrow(/Fetch distribution failed/);
+
+      expect(fetchDistributionService.distribute).toHaveBeenCalled();
+      expect(deps.taskRepo.update).not.toHaveBeenCalledWith(task.id, expect.objectContaining({ distributionRepositoryId: expect.anything() }));
+    });
+
+    // Issue #87 review follow-up (second round, Important finding 1): a
+    // prerequisite check failure (none of which ever touch the remote) must
+    // NOT overwrite a PRIOR run's recorded target — the working directory
+    // still holds whatever that prior run actually distributed. Mirrors
+    // ExecuteTaskUseCase.execute()'s matching test.
+    it('does NOT overwrite a previously recorded distributionRepositoryId when a prerequisite check fails (no working directory configured)', async () => {
+      const fetchDistributionService = mockFetchDistributionService();
+      withRepository(deps.projectRepo);
+      deps = makeDeps({
+        ...deps,
+        fetchDistributionService,
+        transportFactory: agentTransportFactory(),
+        serverRepo: {
+          ...deps.serverRepo,
+          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
+        },
+        projectServerRepo: {
+          ...deps.projectServerRepo,
+          find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: 1 })),
+        },
+      });
+      service = new TaskRestoreService(deps);
+      // Task previously distributed from repo 1 (a PRIOR run's recorded
+      // value) — this restore has no working directory configured anywhere,
+      // so `performDistribution` must fail on its `no_working_dir` stage
+      // before ever reaching `onBeforeDistribute`.
+      const task = makeTask({ serverName: 'test-server', workingDirectory: null, distributionRepositoryId: 1 });
+
+      await expect(service.restore(task, log)).rejects.toThrow(/Fetch distribution failed/);
+
+      expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+      expect(deps.taskRepo.update).not.toHaveBeenCalledWith(task.id, expect.objectContaining({ distributionRepositoryId: expect.anything() }));
+    });
+
+    // Same prerequisite-failure-preserves-record guarantee, this time via
+    // the `no_token` stage (repository resolved but has no token
+    // configured) — a different prerequisite check, same rule.
+    it('does NOT overwrite a previously recorded distributionRepositoryId when a prerequisite check fails (no token configured)', async () => {
+      const fetchDistributionService = mockFetchDistributionService();
+      withRepository(deps.projectRepo);
+      (deps.projectRepo.findRepositoryById as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 1, name: 'repo', url: 'https://github.com/acme/repo.git', provider: 'github' as const, owner: 'acme', repoName: 'repo', token: null,
+      });
+      deps = makeDeps({
+        ...deps,
+        fetchDistributionService,
+        transportFactory: agentTransportFactory(),
+        serverRepo: {
+          ...deps.serverRepo,
+          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
+        },
+      });
+      service = new TaskRestoreService(deps);
+      const task = makeTask({ serverName: 'test-server', distributionRepositoryId: 1 });
+
+      await expect(service.restore(task, log)).rejects.toThrow(/Fetch distribution failed/);
+
+      expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+      expect(deps.taskRepo.update).not.toHaveBeenCalledWith(task.id, expect.objectContaining({ distributionRepositoryId: expect.anything() }));
+    });
+
+    // Issue #87 14th-round review, Important finding 1: performDistribution()
+    // (and its own `no_working_dir` fail-fast) used to run inside
+    // `if (workingDir)` — so an isolated server / distribute_code task
+    // restored with NO working directory configured anywhere (task.workingDirectory
+    // AND the project server's workingDirectory both null) bypassed the
+    // check entirely and opened the task window on unverified content. It
+    // must fail the same way ExecuteTaskUseCase's unconditional call does.
+    it('fails fast (no window left open) restoring an isolated-server task with no workingDir configured anywhere', async () => {
+      const fetchDistributionService = mockFetchDistributionService();
+      withRepository(deps.projectRepo);
+      deps = makeDeps({
+        ...deps,
+        fetchDistributionService,
+        transportFactory: agentTransportFactory(),
+        serverRepo: {
+          ...deps.serverRepo,
+          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
+        },
+        projectServerRepo: {
+          ...deps.projectServerRepo,
+          find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null })),
+        },
+      });
+      service = new TaskRestoreService(deps);
+      const task = makeTask({ serverName: 'test-server', workingDirectory: null });
+
+      await expect(service.restore(task, log)).rejects.toThrow(/Fetch distribution failed/);
+
+      // performDistribution's own no_working_dir stage must have been the
+      // reason — distribute() itself was never even reached.
+      expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+      // No worktree, and the window this run created is rolled back — the
+      // task must not be left with an open window running on unverified
+      // content.
+      expect(deps.worktreeServiceFactory.create).not.toHaveBeenCalled();
+      expect(deps.tmux.killWindow).toHaveBeenCalled();
+    });
+
+    // Counterpart to the above: when a working directory IS configured
+    // (task.workingDirectory or the project server's), restore continues to
+    // distribute and succeed exactly as before this fix.
+    it('still distributes and restores successfully on an isolated server when workingDir IS configured', async () => {
+      const fetchDistributionService = mockFetchDistributionService();
+      withRepository(deps.projectRepo);
+      deps = makeDeps({
+        ...deps,
+        fetchDistributionService,
+        transportFactory: agentTransportFactory(),
+        serverRepo: {
+          ...deps.serverRepo,
+          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
+        },
+      });
+      service = new TaskRestoreService(deps);
+      const task = makeTask({ serverName: 'test-server' });
+
+      const result = await service.restore(task, log);
+
+      expect(fetchDistributionService.distribute).toHaveBeenCalled();
+      expect(result.worktreePath).toBe(worktreeDir);
+    });
+
+    it('does NOT run fetch distribution for a plain local, non-distribute_code server', async () => {
+      const fetchDistributionService = mockFetchDistributionService();
+      deps = makeDeps({ ...deps, fetchDistributionService });
+      service = new TaskRestoreService(deps);
+      const task = makeTask({ serverName: 'test-server' });
+
+      const result = await service.restore(task, log);
+
+      expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+      expect(result.worktreePath).toBe(worktreeDir);
+    });
+
+    // Issue #87 review (forge/87-mirror follow-up), Important finding 3: a
+    // restore whose OWN run does not require distribution must not
+    // unconditionally clear a PRIOR run's recorded distributionRepositoryId
+    // — the checkout that recorded id came from can still be sitting on
+    // disk (e.g. distribute_code was toggled off on the SAME server after a
+    // prior run already distributed). Only clear when there is positive
+    // evidence (a distribution_state row) that the CURRENT server does NOT
+    // hold that repository's content.
+    describe('distributionRepositoryId retention when this run does not require distribution', () => {
+      it('keeps a previously recorded distributionRepositoryId when distribution_state proves this SAME server already holds that repository (distribute_code toggled off after a prior distribution)', async () => {
+        const fetchDistributionService = mockFetchDistributionService();
+        const distributionStateRepo = {
+          upsert: vi.fn(),
+          deleteByServer: vi.fn(),
+          find: vi.fn((serverName: string, repositoryId: number) =>
+            serverName === 'test-server' && repositoryId === 5
+              ? { lastDistributedSha: 'a'.repeat(40), bundleType: 'full' as const, distributedAt: '2026-01-01T00:00:00Z' }
+              : null),
+          findManyByRepositoryIds: vi.fn(() => []),
+        };
+        deps = makeDeps({ ...deps, fetchDistributionService, distributionStateRepo });
+        service = new TaskRestoreService(deps);
+        const task = makeTask({ serverName: 'test-server', distributionRepositoryId: 5 });
+
+        await service.restore(task, log);
+
+        expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+        expect(distributionStateRepo.find).toHaveBeenCalledWith('test-server', 5);
+        expect(deps.taskRepo.update).not.toHaveBeenCalledWith(task.id, expect.objectContaining({ distributionRepositoryId: null }));
+      });
+
+      it('clears a previously recorded distributionRepositoryId when distribution_state shows this server does NOT hold that repository (e.g. the task moved to a different server)', async () => {
+        const fetchDistributionService = mockFetchDistributionService();
+        const distributionStateRepo = {
+          upsert: vi.fn(),
+          deleteByServer: vi.fn(),
+          find: vi.fn(() => null),
+          findManyByRepositoryIds: vi.fn(() => []),
+        };
+        deps = makeDeps({ ...deps, fetchDistributionService, distributionStateRepo });
+        service = new TaskRestoreService(deps);
+        const task = makeTask({ serverName: 'test-server', distributionRepositoryId: 5 });
+
+        await service.restore(task, log);
+
+        expect(distributionStateRepo.find).toHaveBeenCalledWith('test-server', 5);
+        expect(deps.taskRepo.update).toHaveBeenCalledWith(task.id, expect.objectContaining({ distributionRepositoryId: null }));
+      });
+
+      it('keeps (never clears) a previously recorded distributionRepositoryId when distributionStateRepo is not wired — insufficient information fails toward keeping the record', async () => {
+        const fetchDistributionService = mockFetchDistributionService();
+        deps = makeDeps({ ...deps, fetchDistributionService, distributionStateRepo: null });
+        service = new TaskRestoreService(deps);
+        const task = makeTask({ serverName: 'test-server', distributionRepositoryId: 5 });
+
+        await service.restore(task, log);
+
+        expect(deps.taskRepo.update).not.toHaveBeenCalledWith(task.id, expect.objectContaining({ distributionRepositoryId: null }));
+      });
+    });
+
+    // Issue #87 16th-round review, Important finding 2: the pre-lock
+    // projectServer (resolved before runExclusiveForTask/the isolation lock
+    // is even acquired) must never be what decides whether distribution
+    // runs — only the row the in-lock gate reverification just re-resolved
+    // and validated against may decide that, exactly like the gate decision
+    // itself.
+    describe('uses the in-lock (not pre-lock) projectServer snapshot to decide distribution (Issue #87 16th-round review, Important finding 2)', () => {
+      // `find` is called 3 times over one restore() run: (1) resolveTmuxSession
+      // at the very top, (2) resolveExecutionManifest's pre-lock gate check,
+      // (3) resolveExecutionManifest inside createRotatedWindow's in-lock
+      // preCheck. `distributeCodeFromCall3` flips ONLY from the 3rd call
+      // onward, so calls 1-2 always see the OTHER value — modeling a
+      // `distribute_code` toggle landing in the window between the pre-lock
+      // gate check and the in-lock reverification.
+      function projectServerRepoWithToggle(distributeCodeFromCall3: boolean): TaskRestoreDeps['projectServerRepo'] {
+        let calls = 0;
+        return {
+          ...deps.projectServerRepo,
+          find: vi.fn(() => {
+            calls += 1;
+            const distributeCode = calls >= 3 ? distributeCodeFromCall3 : !distributeCodeFromCall3;
+            return { projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode, distributionRepositoryId: 1 };
+          }),
+        };
+      }
+
+      it('distributes when the pre-lock row said false but the in-lock row says true', async () => {
+        const fetchDistributionService = mockFetchDistributionService();
+        withRepository(deps.projectRepo);
+        deps = makeDeps({
+          ...deps,
+          fetchDistributionService,
+          transportFactory: agentTransportFactory(),
+          serverRepo: {
+            ...deps.serverRepo,
+            findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
+          },
+          projectServerRepo: projectServerRepoWithToggle(true),
+        });
+        service = new TaskRestoreService(deps);
+        const task = makeTask({ serverName: 'test-server' });
+
+        const result = await service.restore(task, log);
+
+        expect(fetchDistributionService.distribute).toHaveBeenCalled();
+        expect(result.worktreePath).toBe(worktreeDir);
+      });
+
+      it('does NOT distribute when the pre-lock row said true but the in-lock row says false', async () => {
+        const fetchDistributionService = mockFetchDistributionService();
+        withRepository(deps.projectRepo);
+        deps = makeDeps({
+          ...deps,
+          fetchDistributionService,
+          transportFactory: agentTransportFactory(),
+          serverRepo: {
+            ...deps.serverRepo,
+            findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
+          },
+          projectServerRepo: projectServerRepoWithToggle(false),
+        });
+        service = new TaskRestoreService(deps);
+        const task = makeTask({ serverName: 'test-server' });
+
+        const result = await service.restore(task, log);
+
+        expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+        expect(result.worktreePath).toBe(worktreeDir);
+      });
+    });
+  });
+
+  // Issue #87 16th-round review, Important finding 1: the stale-old-branch
+  // guard inside performDistribution() must see the SAME branch worktree
+  // creation is about to (force-)restore into — `task.branch` alone
+  // under-covers a task whose `worktreeBranch` (not `task.branch`) names the
+  // branch actually being restored, letting a stale local ref slip past the
+  // guard and into `git worktree add --force`.
+  describe('stale-local-branch guard covers task.worktreeBranch, not just task.branch (Issue #87 16th-round review, Important finding 1)', () => {
+    it('fails fast — does not force-restore from a stale local ref — when task.branch is unset but task.worktreeBranch names the branch fetch distribution could not sync', async () => {
+      const fetchDistributionService = {
+        distribute: vi.fn(async () => ({ status: 'distributed' as const, sha: 'a'.repeat(40), bundleType: 'full' as const, localBranchSynced: false })),
+      } as unknown as NonNullable<TaskRestoreDeps['fetchDistributionService']>;
+      (deps.projectRepo.findById as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 10, name: 'Project', slug: 'project', description: null, repositoryUrl: null, defaultBranch: 'main',
+        sidekickPrompt: null, icon: null, color: null, defaultUnitId: 20,
+        repositories: [{ id: 1, name: 'repo', url: 'https://github.com/acme/repo.git', provider: 'github' as const, owner: 'acme', repoName: 'repo', hasToken: true }],
+        windows: [], createdAt: '2026-01-01', updatedAt: '2026-01-01',
+      });
+      (deps.projectRepo.findRepositoryById as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 1, name: 'repo', url: 'https://github.com/acme/repo.git', provider: 'github' as const, owner: 'acme', repoName: 'repo', token: 'dummy-token',
+      });
+      deps = makeDeps({
+        ...deps,
+        fetchDistributionService,
+        serverRepo: {
+          ...deps.serverRepo,
+          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
+        },
+        transportFactory: {
+          getTransport: vi.fn(() => ({
+            exec: vi.fn(async (cmd: string) => {
+              const match = /^cd -- (.+) && pwd -P$/.exec(cmd);
+              const rawPath = match ? match[1] : worktreeDir;
+              const unquoted = rawPath.startsWith("'") ? rawPath.slice(1, -1).replace(/'\\''/g, "'") : rawPath;
+              return { stdout: `${unquoted}\n`, stderr: '', code: 0 };
+            }),
+          })),
+        } as unknown as TaskRestoreDeps['transportFactory'],
+        projectServerRepo: {
+          ...deps.projectServerRepo,
+          find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: 1 })),
+        },
+      });
+      service = new TaskRestoreService(deps);
+      // task.branch unset (null) — task.worktreeBranch is the ONLY thing
+      // naming 'main', the same branch baseBranch resolves to (both from
+      // task.baseBranch here) — so performDistribution's guard compares
+      // worktreeBranch against baseBranch, not an empty task.branch.
+      const task = makeTask({ serverName: 'test-server', branch: null, worktreeBranch: 'main', baseBranch: 'main' });
+
+      await expect(service.restore(task, log)).rejects.toThrow(/could not be updated to the distributed content/);
+
+      // The guard must have fired BEFORE worktree creation — never allowed
+      // to fall through to `git worktree add --force` against the stale ref.
+      expect(deps.worktreeServiceFactory.create).not.toHaveBeenCalled();
+      expect(deps.tmux.killWindow).toHaveBeenCalled();
+    });
+  });
+
   describe('execution gate (Issue #328)', () => {
     it('blocks an untrusted, unapproved task before touching tmux — status becomes pending_approval, pendingOperation records "restore"', async () => {
       // Third-round review finding 1 (Issue #328): before pendingOperation
@@ -715,14 +1296,18 @@ describe('TaskRestoreService', () => {
       expect(received.some((e) => e.type === 'command')).toBe(true);
     });
 
-    it('allows an untrusted task whose approval hash matches the current fingerprint', async () => {
+    it('allows an untrusted task whose approval hash matches the current fingerprint (config unchanged since approval)', async () => {
       const { resolveExecutionManifest, hashExecutionManifest } = await import('./execution/ExecutionManifest.js');
       const task = makeTask({
         serverName: 'test-server',
         inputTrust: 'untrusted',
         description: 'do the thing',
       });
-      const { manifest } = resolveExecutionManifest(task, deps);
+      // 'redistribute', not 'continuation' (Issue #87 review, forge/87-mirror
+      // follow-up round 2, Important finding): this is the SAME kind
+      // restore() itself now resolves its gate manifest with — see
+      // TaskRestoreService.restore()'s own resolveExecutionManifest() call.
+      const { manifest } = resolveExecutionManifest(task, deps, 'redistribute');
       task.executionApprovedFingerprintHash = hashExecutionManifest(manifest);
 
       const result = await service.restore(task, log);
@@ -731,13 +1316,98 @@ describe('TaskRestoreService', () => {
       expect(deps.tmux.createWindow).toHaveBeenCalled();
     });
 
+    // Issue #87 review (forge/87-mirror follow-up round 2), Important
+    // finding: restore()'s gate used to resolve its manifest as
+    // 'continuation' (task.distributionRepositoryId — repository A,
+    // recorded from a past run), while performDistribution() actually pulls
+    // from the CURRENT projectServer.distributionRepositoryId (repository
+    // B once the project server is re-pointed). An approval given while the
+    // fingerprint hashed A stayed valid forever, even after the project
+    // server moved to B — the gate never re-hashed the value
+    // performDistribution() was about to act on, so a restore approved for
+    // A silently authorized distributing B. Fixed by resolving restore()'s
+    // gate manifest with 'redistribute' (current config), which agrees with
+    // performDistribution().
+    it('invalidates a restore approval given for repository A once the project server is re-pointed to repository B — performDistribution() must never run under a stale A-approval', async () => {
+      const { resolveExecutionManifest, hashExecutionManifest } = await import('./execution/ExecutionManifest.js');
+      const fetchDistributionService = {
+        distribute: vi.fn(async () => ({ status: 'distributed', sha: 'a'.repeat(40), bundleType: 'full', localBranchSynced: true })),
+      } as unknown as NonNullable<TaskRestoreDeps['fetchDistributionService']>;
+      const repoA = { id: 1, name: 'repo-a', url: 'https://github.com/acme/repo-a.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-a', hasToken: true };
+      const repoB = { id: 2, name: 'repo-b', url: 'https://github.com/acme/repo-b.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-b', hasToken: true };
+      const projectWithRepos = {
+        id: 10, name: 'Project', slug: 'project', description: null, repositoryUrl: null, defaultBranch: 'main',
+        sidekickPrompt: null, icon: null, color: null, defaultUnitId: 20,
+        repositories: [repoA, repoB], windows: [], createdAt: '2026-01-01', updatedAt: '2026-01-01',
+      };
+      // Distribution required (isolated agent server) so `repository` (not
+      // just the scalar distributionRepositoryId) also differs between A
+      // and B — the full identity a human actually reviews on the approval
+      // screen.
+      const isolatedServer = { name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' };
+      const projectServerAtA = { projectId: 10, serverName: 'test-server', workingDirectory: worktreeDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: true, distributionRepositoryId: 1 };
+      const projectServerAtB = { ...projectServerAtA, distributionRepositoryId: 2 };
+
+      deps = makeDeps({
+        ...deps,
+        fetchDistributionService,
+        transportFactory: {
+          getTransport: vi.fn(() => ({
+            exec: vi.fn(async (cmd: string) => {
+              const match = /^cd -- (.+) && pwd -P$/.exec(cmd);
+              const rawPath = match ? match[1] : worktreeDir;
+              const unquoted = rawPath.startsWith("'") ? rawPath.slice(1, -1).replace(/'\\''/g, "'") : rawPath;
+              return { stdout: `${unquoted}\n`, stderr: '', code: 0 };
+            }),
+          })),
+        } as unknown as TaskRestoreDeps['transportFactory'],
+        serverRepo: { ...deps.serverRepo, findByName: vi.fn(() => isolatedServer) },
+        projectRepo: {
+          ...deps.projectRepo,
+          findById: vi.fn(() => projectWithRepos),
+          findRepositoryById: vi.fn((id: number) => (id === 1 ? { ...repoA, token: 'token-a' } : { ...repoB, token: 'token-b' })),
+        },
+        // Approval time: project server still points at repository A.
+        projectServerRepo: { ...deps.projectServerRepo, find: vi.fn(() => projectServerAtA), findByProject: vi.fn(() => [projectServerAtA]) },
+      });
+      service = new TaskRestoreService(deps);
+
+      // A task that already distributed from repository A on a past run
+      // (recorded), and was approved for restore while the project server
+      // still named A too.
+      const task = makeTask({ serverName: 'test-server', inputTrust: 'untrusted', description: 'do the thing', distributionRepositoryId: 1 });
+      const { manifest: manifestAtA } = resolveExecutionManifest(task, deps, 'redistribute');
+      task.executionApprovedFingerprintHash = hashExecutionManifest(manifestAtA);
+
+      // The operator re-points the project server at repository B AFTER
+      // approval — task.distributionRepositoryId (the recorded PAST value)
+      // is untouched.
+      deps.projectServerRepo.find = vi.fn(() => projectServerAtB);
+      deps.projectServerRepo.findByProject = vi.fn(() => [projectServerAtB]);
+
+      await expect(service.restore(task, log)).rejects.toThrow(/requires approval/);
+
+      // The gate blocked BEFORE performDistribution() ran — fetch
+      // distribution (which would have pulled repository B under an
+      // approval only ever given for A) was never invoked, and no
+      // window/worktree was created either.
+      expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
+      expect(deps.tmux.createWindow).not.toHaveBeenCalled();
+      expect(deps.worktreeServiceFactory.create).not.toHaveBeenCalled();
+      expect(deps.taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(task.id, {
+        pendingOperation: 'restore',
+        priorStatus: 'archived',
+        manifestHash: expect.any(String),
+      });
+    });
+
     it('denies an untrusted task outright under a "deny" project server policy, without changing status', async () => {
       const task = makeTask({ serverName: 'test-server', inputTrust: 'untrusted' });
       deps = makeDeps({
         ...deps,
         projectServerRepo: {
           ...deps.projectServerRepo,
-          find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'deny' as const })),
+          find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'deny' as const, distributeCode: false, distributionRepositoryId: null })),
         },
       });
       service = new TaskRestoreService(deps);

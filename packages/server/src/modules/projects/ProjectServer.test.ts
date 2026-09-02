@@ -15,6 +15,8 @@ function makeProjectServer(overrides: Partial<ProjectServer> = {}): ProjectServe
     branch: 'main',
     tmuxSession: 'azito',
     inputPolicy: 'manual-approval',
+    distributeCode: false,
+    distributionRepositoryId: null,
     ...overrides,
   };
 }

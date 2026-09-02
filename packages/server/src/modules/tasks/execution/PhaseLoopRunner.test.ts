@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { PhaseLoopRunner } from './PhaseLoopRunner';
 import { TuiWorkerRuntime } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
@@ -6,6 +6,16 @@ import type { SidekickPackage } from '../../sidekicks/SidekickPackage';
 import { resolveTaskPromptVars } from '../../prompt/resolveTaskPromptVars';
 import { renderSidekickBody } from '../../sidekicks/renderSidekickBody';
 import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionManifest';
+import { isDistributionRequired } from './DistributionHelper';
+
+// Hub push notarization resolves its credential through the shared
+// `cliToken` module (Issue #87). Stubbed here so these tests never depend on
+// whether the machine running them happens to have an authenticated `gh`.
+const getCliTokenMock = vi.hoisted(() => vi.fn(async (): Promise<string | null> => null));
+vi.mock('../../git/providers/cliToken', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../git/providers/cliToken')>()),
+  getCliToken: getCliTokenMock,
+}));
 
 // ─── Minimal mock harness ───
 //
@@ -57,6 +67,8 @@ function makeRunner(overrides: {
   unitTypeLoader?: Record<string, unknown>;
   scopedAuthEnabled?: boolean;
   sleepTaskWindows?: (...args: unknown[]) => Promise<number[]>;
+  pushNotaryService?: Record<string, unknown> | null;
+  transportFactory?: Record<string, unknown>;
 } = {}) {
   const taskRepo = {
     findById: vi.fn(() => ({
@@ -153,7 +165,7 @@ function makeRunner(overrides: {
   const pullRequestCreator = { ensureCreated: vi.fn(async () => {}), ...overrides.pullRequestCreator };
   const getWorktreeService = vi.fn(() => ({ exists: vi.fn(async () => false) }));
   const appendLog = vi.fn();
-  const transportFactory = { getTransport: vi.fn(() => ({ exec: vi.fn() })), invalidate: vi.fn() };
+  const transportFactory = { getTransport: vi.fn(() => ({ exec: vi.fn() })), invalidate: vi.fn(), ...overrides.transportFactory };
   const sidekickSyncService = { sync: vi.fn(async () => {}), ...overrides.sidekickSyncService };
   const httpSignalCoordinator = {
     start: vi.fn(() => ({
@@ -195,6 +207,7 @@ function makeRunner(overrides: {
     serverRepo as any,
     projectSecretRepo as any,
     overrides.scopedAuthEnabled ?? true,
+    (overrides.pushNotaryService ?? null) as any,
     sleepTaskWindows,
   );
 
@@ -220,7 +233,7 @@ describe('PhaseLoopRunner phase-resolution (Issue #263 Phase 5)', () => {
     const { runner, sidekickLoader } = makeRunner();
     const unit = makeUnitForRun();
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(sidekickLoader.findDefaultForTag).toHaveBeenCalledWith('planning');
   });
@@ -232,7 +245,7 @@ describe('PhaseLoopRunner phase-resolution (Issue #263 Phase 5)', () => {
     });
     const unit = makeUnitForRun({ phaseConfig: { planning: { sidekick: 'planning-custom' } } });
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(sidekickLoader.findByName).toHaveBeenCalledWith('planning-custom');
     expect(sidekickLoader.findDefaultForTag).not.toHaveBeenCalledWith('planning');
@@ -245,7 +258,7 @@ describe('PhaseLoopRunner phase-resolution (Issue #263 Phase 5)', () => {
     const unit = makeUnitForRun({ phaseConfig: { planning: { sidekick: 'missing' } } });
 
     await expect(
-      runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1'),
+      runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false),
     ).rejects.toThrow('Sidekick "missing" configured for phase "planning" was not found');
   });
 
@@ -258,7 +271,7 @@ describe('PhaseLoopRunner phase-resolution (Issue #263 Phase 5)', () => {
       },
     });
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(sidekickLoader.findDefaultForTag).not.toHaveBeenCalled();
     expect(workerInput.sendPrompt).not.toHaveBeenCalled();
@@ -275,7 +288,7 @@ describe('PhaseLoopRunner phase-resolution (Issue #263 Phase 5)', () => {
     });
     const unit = makeUnitForRun();
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     const expected = renderSidekickBody(pkg, {
       ...resolveTaskPromptVars(taskRepo as any, projectRepo as any, unitRepo as any, projectServerRepo as any, 1),
@@ -296,7 +309,7 @@ describe('PhaseLoopRunner remote sidekick sync + dir resolution (Issue #263 Phas
     const { runner, sidekickSyncService } = makeRunner();
     const unit = makeUnitForRun();
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(sidekickSyncService.sync).not.toHaveBeenCalled();
   });
@@ -309,7 +322,7 @@ describe('PhaseLoopRunner remote sidekick sync + dir resolution (Issue #263 Phas
     });
     const unit = makeUnitForRun();
 
-    await runner.stateMachineLoop(unit, 'staging', task, remoteServer, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'staging', task, remoteServer, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(transportFactory.getTransport).toHaveBeenCalledWith(remoteServer);
     expect(sidekickSyncService.sync).toHaveBeenCalledWith('staging', expect.anything(), [pkg, otherPkg]);
@@ -324,7 +337,7 @@ describe('PhaseLoopRunner remote sidekick sync + dir resolution (Issue #263 Phas
     const unit = makeUnitForRun();
 
     await expect(
-      runner.stateMachineLoop(unit, 'staging', task, remoteServer, 'sess:1.1', new AbortController().signal, 'sess:1'),
+      runner.stateMachineLoop(unit, 'staging', task, remoteServer, 'sess:1.1', new AbortController().signal, 'sess:1', null, false),
     ).rejects.toThrow('sync failed: disk full');
     expect(workerInput.sendPrompt).not.toHaveBeenCalled();
   });
@@ -335,7 +348,7 @@ describe('PhaseLoopRunner phase:completed lifecycle log (#263)', () => {
     const { runner, appendLog } = makeRunner();
     const unit = makeUnitForRun();
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     const entries = appendLog.mock.calls.filter(
       ([, , type, content]) => type === 'command' && (content as { type?: string }).type === 'phase_completed',
@@ -351,7 +364,7 @@ describe('PhaseLoopRunner phase:completed lifecycle log (#263)', () => {
     // readPhaseOutputFile はデフォルト null。summary 付き出力を返すよう差し替える
     (runner as any).workerWaiter.readPhaseOutputFile = vi.fn(async () => `plan body\n\n${summaryLine}\n`);
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     const entry = appendLog.mock.calls.find(
       ([, , type, content]) =>
@@ -382,7 +395,7 @@ describe('PhaseLoopRunner http-signal execution mode (Issue: AZITO監視強化 P
     const { runner, workerInput, workerWaiter, httpSignalCoordinator } = makeRunner();
     const unit = makeUnitForRun({ workerExecutionMode: 'http-signal' });
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(httpSignalCoordinator.start).toHaveBeenCalledWith(expect.objectContaining({
       taskId: 1, unitId: 1, kind: 'phase', phase: 'planning', server, target: 'sess:1.1',
@@ -411,7 +424,7 @@ describe('PhaseLoopRunner http-signal execution mode (Issue: AZITO監視強化 P
     });
     const unit = makeUnitForRun({ workerExecutionMode: 'http-signal' });
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     // All 5 phases run to completion (loop exits normally) — resolveEnabledPhases default.
     expect(sidekickLoader.findDefaultForTag).toHaveBeenCalledWith('pushing');
@@ -439,7 +452,7 @@ describe('PhaseLoopRunner http-signal execution mode (Issue: AZITO監視強化 P
     });
     const unit = makeUnitForRun({ workerExecutionMode: 'http-signal' });
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(httpSignalCoordinator.rejectInferredCompletion).toHaveBeenCalledWith(1);
     expect(appendLog).toHaveBeenCalledWith(1, 1, 'command', expect.objectContaining({
@@ -466,7 +479,7 @@ describe('PhaseLoopRunner http-signal execution mode (Issue: AZITO監視強化 P
     });
     const unit = makeUnitForRun({ workerExecutionMode: 'http-signal' });
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(sidekickLoader.findDefaultForTag).toHaveBeenCalledWith('pushing');
     expect(httpSignalCoordinator.rejectInferredCompletion).not.toHaveBeenCalled();
@@ -503,7 +516,7 @@ describe('PhaseLoopRunner http-signal execution mode (Issue: AZITO監視強化 P
       },
     });
 
-    await runner.stateMachineLoop(unit, 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(httpSignalCoordinator.rejectInferredCompletion).not.toHaveBeenCalled();
     expect(taskRepo.updateStatus).not.toHaveBeenCalledWith(1, 'failed');
@@ -533,7 +546,7 @@ describe('PhaseLoopRunner http-signal execution mode (Issue: AZITO監視強化 P
       },
     });
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     // Retried reviewing at least once after the testing turn reported test_failed
     // (selfReviewMaxAttempts default 2 on the mock unit's task fixture).
@@ -559,7 +572,7 @@ describe('PhaseLoopRunner http-signal execution mode (Issue: AZITO監視強化 P
     });
     const unit = makeUnitForRun({ workerExecutionMode: 'http-signal' });
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'waiting_input');
   });
@@ -581,7 +594,7 @@ describe('PhaseLoopRunner http-signal execution mode (Issue: AZITO監視強化 P
     });
     const unit = makeUnitForRun({ workerExecutionMode: 'http-signal' });
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'failed');
   });
@@ -600,7 +613,7 @@ describe('PhaseLoopRunner http-signal execution mode (Issue: AZITO監視強化 P
     });
     const unit = makeUnitForRun({ workerExecutionMode: 'http-signal' });
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(workerWaiter.readPhaseOutputFile).not.toHaveBeenCalled();
   });
@@ -617,7 +630,7 @@ describe('PhaseLoopRunner prompt delivery verification (Issue #447)', () => {
     });
     const unit = makeUnitForRun();
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(workerInput.sendPrompt).toHaveBeenCalledTimes(6);
     const retryLog = appendLog.mock.calls.find(
@@ -630,7 +643,7 @@ describe('PhaseLoopRunner prompt delivery verification (Issue #447)', () => {
     const { runner, workerInput, appendLog } = makeRunner();
     const unit = makeUnitForRun();
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(workerInput.sendPrompt).toHaveBeenCalledTimes(5);
     const retryLog = appendLog.mock.calls.find(
@@ -669,7 +682,7 @@ describe('PhaseLoopRunner pushing-phase PR auto-creation (git provider abstracti
     } as any));
     const unit = makePushingUnit();
 
-    await runner.stateMachineLoop(unit, 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, server, 'sess:1.1', new AbortController().signal, 'sess:1', repo, false);
 
     expect(capturedProbe).toBeDefined();
     await capturedProbe!();
@@ -699,7 +712,7 @@ describe('PhaseLoopRunner pushing-phase PR auto-creation (git provider abstracti
     } as any));
     const unit = makePushingUnit();
 
-    await runner.stateMachineLoop(unit, 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, server, 'sess:1.1', new AbortController().signal, 'sess:1', repo, false);
 
     expect(capturedProbe).toBeDefined();
     await capturedProbe!();
@@ -725,7 +738,7 @@ describe('PhaseLoopRunner pushing-phase PR auto-creation (git provider abstracti
     } as any));
     const unit = makePushingUnit();
 
-    await runner.stateMachineLoop(unit, 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, server, 'sess:1.1', new AbortController().signal, 'sess:1', repo, false);
 
     expect(capturedProbe).toBeDefined();
     // The probe itself must not reject even though ensureCreated does — a
@@ -736,6 +749,606 @@ describe('PhaseLoopRunner pushing-phase PR auto-creation (git provider abstracti
     expect(pushVerifier.verifyPushCompleted).toHaveBeenCalled();
     expect(taskRepo.updateStatus).not.toHaveBeenCalledWith(1, 'failed');
     expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'review');
+  });
+});
+
+// Issue #87 13th-round review, Important finding: the repository fetch
+// distribution actually pulled onto the server must be the SAME repository
+// push verification / PR creation / hub push notarization target — a
+// project with two repositories choosing repository B as its distribution
+// target must never have B distributed while push/PR/notary keep silently
+// targeting A (`project.repositories[0]`).
+describe('PhaseLoopRunner repository selection agrees with distribution target (Issue #87 13th-round review)', () => {
+  const repoA = { id: 1, name: 'A', url: 'https://github.com/acme/repo-a.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-a', token: 'token-a', hasToken: true };
+  const repoB = { id: 2, name: 'B', url: 'https://github.com/acme/repo-b.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-b', token: 'token-b', hasToken: true };
+
+  function makePushingUnit(overrides: Record<string, unknown> = {}) {
+    return makeUnitForRun({
+      phaseConfig: {
+        planning: { enabled: false }, implementing: { enabled: false },
+        reviewing: { enabled: false }, testing: { enabled: false },
+      },
+      ...overrides,
+    });
+  }
+
+  it('pushing-phase probe (verifyPushCompleted / PR creation) receives repository B, not A, when B is the configured distribution target', async () => {
+    let capturedProbe: (() => Promise<boolean>) | undefined;
+    const { runner, taskRepo, projectRepo, projectServerRepo, workerWaiter, pushVerifier, pullRequestCreator } = makeRunner();
+    workerWaiter.waitForWorker = vi.fn(async (...args: unknown[]) => {
+      capturedProbe = args[8] as (() => Promise<boolean>) | undefined;
+      return { output: 'PHASE_COMPLETE', classification: { status: 'phase_complete' } };
+    });
+    projectRepo.findById = vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', defaultUnitId: null, repositories: [repoA, repoB] }));
+    projectRepo.findRepositoryById = vi.fn((id: number) => (id === repoB.id ? repoB : repoA)) as any;
+    projectServerRepo.find = vi.fn(() => ({
+      projectId: 10, serverName: 'agent-1', workingDirectory: '/work', branch: null, tmuxSession: 'azito',
+      inputPolicy: 'manual-approval' as const, distributeCode: true, distributionRepositoryId: repoB.id,
+    })) as any;
+    taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: false, worktreePath: null,
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+    } as any));
+    const unit = makePushingUnit();
+    const distributionServer = { name: 'agent-1', type: 'agent', isolationIntent: false } as any;
+
+    await runner.stateMachineLoop(unit, 'agent-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, distributionServer, 'sess:1.1', new AbortController().signal, 'sess:1', repoB, true);
+
+    expect(capturedProbe).toBeDefined();
+    await capturedProbe!();
+
+    expect(pullRequestCreator.ensureCreated).toHaveBeenCalledWith(1, 1, repoB, 'task/1-slug', expect.anything());
+    expect(pullRequestCreator.ensureCreated).not.toHaveBeenCalledWith(1, 1, repoA, expect.anything(), expect.anything());
+    expect(pushVerifier.verifyPushCompleted).toHaveBeenCalledWith(distributionServer, '/work', 'task/1-slug', false, repoB);
+  });
+
+  it('hub push notarization (isolated server) notarizes against repository B, not A, when B is the configured distribution target', async () => {
+    const notarize = vi.fn(async () => ({ status: 'pushed' as const, sha: 'abc123' }));
+    const { runner, taskRepo, projectRepo, projectServerRepo, pullRequestCreator } = makeRunner({
+      pushNotaryService: { notarize },
+    });
+    projectRepo.findById = vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', defaultUnitId: null, repositories: [repoA, repoB] }));
+    projectRepo.findRepositoryById = vi.fn((id: number) => (id === repoB.id ? repoB : repoA)) as any;
+    projectServerRepo.find = vi.fn(() => ({
+      projectId: 10, serverName: 'isolated-1', workingDirectory: '/work', branch: null, tmuxSession: 'azito',
+      inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: repoB.id,
+    })) as any;
+    taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: false, worktreePath: null,
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+    } as any));
+    const unit = makePushingUnit();
+    // isolationIntent alone (Issue #87 isDistributionRequired) is enough to
+    // require distribution — distributeCode above is deliberately false to
+    // also exercise that half of the OR.
+    const isolatedServer = { name: 'isolated-1', type: 'agent', isolationIntent: true } as any;
+
+    await runner.stateMachineLoop(unit, 'isolated-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1', repoB, true);
+
+    expect(notarize).toHaveBeenCalledWith(expect.objectContaining({ repo: repoB }));
+    expect(notarize).not.toHaveBeenCalledWith(expect.objectContaining({ repo: repoA }));
+    expect(pullRequestCreator.ensureCreated).toHaveBeenCalledWith(1, 1, repoB, 'task/1-slug', expect.anything());
+  });
+
+  it('falls back to repositories[0] (A) when distribution is not active for this project/server', async () => {
+    let capturedProbe: (() => Promise<boolean>) | undefined;
+    const { runner, taskRepo, projectRepo, projectServerRepo, workerWaiter, pushVerifier } = makeRunner();
+    workerWaiter.waitForWorker = vi.fn(async (...args: unknown[]) => {
+      capturedProbe = args[8] as (() => Promise<boolean>) | undefined;
+      return { output: 'PHASE_COMPLETE', classification: { status: 'phase_complete' } };
+    });
+    projectRepo.findById = vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', defaultUnitId: null, repositories: [repoA, repoB] }));
+    projectRepo.findRepositoryById = vi.fn((id: number) => (id === repoB.id ? repoB : repoA)) as any;
+    // distributionRepositoryId set, but distribution is NOT active for this
+    // server (distributeCode false, server not isolated) — must keep the
+    // pre-existing `repositories[0]` behavior every non-distribution project
+    // already relies on.
+    projectServerRepo.find = vi.fn(() => ({
+      projectId: 10, serverName: 'local', workingDirectory: '/work', branch: null, tmuxSession: 'azito',
+      inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: repoB.id,
+    })) as any;
+    taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: false, worktreePath: null,
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+    } as any));
+    const unit = makePushingUnit();
+
+    await runner.stateMachineLoop(unit, 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, server, 'sess:1.1', new AbortController().signal, 'sess:1', repoA, false);
+
+    expect(capturedProbe).toBeDefined();
+    await capturedProbe!();
+
+    expect(pushVerifier.verifyPushCompleted).toHaveBeenCalledWith(server, '/work', 'task/1-slug', false, repoA);
+  });
+
+  // Issue #87 14th-round review, Important finding: hub push notarization is
+  // a WRITE (it actually pushes the isolated server's code out via the
+  // provider API) — when the distribution target repository cannot be
+  // resolved (unset or deleted), it must fail the task hard, never silently
+  // skip notarization (which would let the phase advance to 'review' as if
+  // the push had happened when nothing was ever pushed).
+  it('hub push notarization fails the task hard (never silently skips) when the distribution target repository is unresolved', async () => {
+    const notarize = vi.fn(async () => ({ status: 'pushed' as const, sha: 'abc123' }));
+    const { runner, taskRepo, projectRepo, projectServerRepo } = makeRunner({
+      pushNotaryService: { notarize },
+    });
+    projectRepo.findById = vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', defaultUnitId: null, repositories: [repoA, repoB] }));
+    projectServerRepo.find = vi.fn(() => ({
+      projectId: 10, serverName: 'isolated-1', workingDirectory: '/work', branch: null, tmuxSession: 'azito',
+      inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null,
+    })) as any;
+    taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: false, worktreePath: null,
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+    } as any));
+    const unit = makePushingUnit();
+    const isolatedServer = { name: 'isolated-1', type: 'agent', isolationIntent: true } as any;
+
+    await runner.stateMachineLoop(unit, 'isolated-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1', null, true);
+
+    expect(notarize).not.toHaveBeenCalled();
+    expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'failed');
+    expect(taskRepo.updateStatus).not.toHaveBeenCalledWith(1, 'review');
+  });
+
+  // Issue #87 14th-round review, Minor finding: the pushing prompt's
+  // AZITO_GIT_PROVIDER var must reflect the CONFIGURED DISTRIBUTION TARGET
+  // (repository B, on GitLab) rather than always `project.repositories[0]`
+  // (repository A, on GitHub) — otherwise the worker is told to use `gh`
+  // against a project whose actual configured repository is on GitLab.
+  it('pushing prompt AZITO_GIT_PROVIDER reflects repository B (gitlab), not A (github, repositories[0]), when B is the configured distribution target', async () => {
+    const repoAGithub = { ...repoA, provider: 'github' as const };
+    const repoBGitlab = { ...repoB, provider: 'gitlab' as const };
+    const { runner, taskRepo, projectRepo, projectServerRepo, workerInput, sidekickLoader } = makeRunner({
+      sidekickLoader: { findDefaultForTag: vi.fn(() => makeSidekick({ name: 'pushing-default', body: 'Provider: {{task.gitProvider}}' })) },
+    });
+    projectRepo.findById = vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', defaultUnitId: null, repositories: [repoAGithub, repoBGitlab] }));
+    projectRepo.findRepositoryById = vi.fn((id: number) => (id === repoBGitlab.id ? repoBGitlab : repoAGithub)) as any;
+    projectServerRepo.find = vi.fn(() => ({
+      projectId: 10, serverName: 'agent-1', workingDirectory: '/work', branch: null, tmuxSession: 'azito',
+      inputPolicy: 'manual-approval' as const, distributeCode: true, distributionRepositoryId: repoBGitlab.id,
+    })) as any;
+    taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: false, worktreePath: null,
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+    } as any));
+    const unit = makePushingUnit();
+    const distributionServer = { name: 'agent-1', type: 'agent', isolationIntent: false } as any;
+
+    await runner.stateMachineLoop(unit, 'agent-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, distributionServer, 'sess:1.1', new AbortController().signal, 'sess:1', repoBGitlab, true);
+
+    expect(sidekickLoader.findDefaultForTag).toHaveBeenCalledWith('pushing');
+    const sentPrompt = workerInput.sendPrompt.mock.calls[0][2] as string;
+    expect(sentPrompt).toContain('Provider: gitlab');
+    expect(sentPrompt).not.toContain('Provider: github');
+  });
+});
+
+// Issue #87 review (forge/87-mirror follow-up), Important finding 1: the
+// repository stateMachineLoop uses for every downstream decision must be the
+// value the CALLER passed in (`distributionRepoEntry`), never a fresh
+// re-read of project/projectServer performed after distribution already
+// ran — `distributionRepositoryId` can change while a run is still in
+// flight (a run spans many phases, potentially over minutes to hours), and
+// this method must not silently retarget push/PR/notarization/prompt-
+// provider at whatever the row says NOW once that happens.
+describe('PhaseLoopRunner uses the caller-locked distributionRepoEntry, not a fresh re-read (Issue #87 review, forge/87-mirror follow-up)', () => {
+  const repoA = { id: 1, name: 'A', url: 'https://github.com/acme/repo-a.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-a', token: 'token-a', hasToken: true };
+  const repoB = { id: 2, name: 'B', url: 'https://github.com/acme/repo-b.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-b', token: 'token-b', hasToken: true };
+
+  function makePushingUnit(overrides: Record<string, unknown> = {}) {
+    return makeUnitForRun({
+      phaseConfig: {
+        planning: { enabled: false }, implementing: { enabled: false },
+        reviewing: { enabled: false }, testing: { enabled: false },
+      },
+      ...overrides,
+    });
+  }
+
+  it('pushing probe (PR creation + push verification) targets the locked repo (A), even though a fresh project/projectServer read would now resolve to repo B', async () => {
+    let capturedProbe: (() => Promise<boolean>) | undefined;
+    const { runner, taskRepo, projectRepo, projectServerRepo, workerWaiter, pushVerifier, pullRequestCreator } = makeRunner();
+    workerWaiter.waitForWorker = vi.fn(async (...args: unknown[]) => {
+      capturedProbe = args[8] as (() => Promise<boolean>) | undefined;
+      return { output: 'PHASE_COMPLETE', classification: { status: 'phase_complete' } };
+    });
+    // Simulates distributionRepositoryId having changed from A to B AFTER
+    // the caller (ExecuteTaskUseCase.execute()) locked A and resolved
+    // `distributionRepoEntry` from it — a fresh internal read (the old
+    // behavior this test guards against regressing to) would now see B.
+    projectRepo.findById = vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', defaultUnitId: null, repositories: [repoA, repoB] }));
+    projectRepo.findRepositoryById = vi.fn((id: number) => (id === repoB.id ? repoB : repoA)) as any;
+    projectServerRepo.find = vi.fn(() => ({
+      projectId: 10, serverName: 'agent-1', workingDirectory: '/work', branch: null, tmuxSession: 'azito',
+      inputPolicy: 'manual-approval' as const, distributeCode: true, distributionRepositoryId: repoB.id,
+    })) as any;
+    taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: false, worktreePath: null,
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+    } as any));
+    const unit = makePushingUnit();
+    const distributionServer = { name: 'agent-1', type: 'agent', isolationIntent: false } as any;
+
+    await runner.stateMachineLoop(unit, 'agent-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, distributionServer, 'sess:1.1', new AbortController().signal, 'sess:1', repoA, true);
+
+    expect(capturedProbe).toBeDefined();
+    await capturedProbe!();
+
+    expect(pullRequestCreator.ensureCreated).toHaveBeenCalledWith(1, 1, repoA, 'task/1-slug', expect.anything());
+    expect(pullRequestCreator.ensureCreated).not.toHaveBeenCalledWith(1, 1, repoB, expect.anything(), expect.anything());
+    expect(pushVerifier.verifyPushCompleted).toHaveBeenCalledWith(distributionServer, '/work', 'task/1-slug', false, repoA);
+  });
+
+  it('hub push notarization (isolated server) notarizes against the locked repo (A), even though a fresh project/projectServer read would now resolve to repo B', async () => {
+    const notarize = vi.fn(async () => ({ status: 'pushed' as const, sha: 'abc123' }));
+    const { runner, taskRepo, projectRepo, projectServerRepo, pullRequestCreator } = makeRunner({
+      pushNotaryService: { notarize },
+    });
+    projectRepo.findById = vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', defaultUnitId: null, repositories: [repoA, repoB] }));
+    projectRepo.findRepositoryById = vi.fn((id: number) => (id === repoB.id ? repoB : repoA)) as any;
+    projectServerRepo.find = vi.fn(() => ({
+      projectId: 10, serverName: 'isolated-1', workingDirectory: '/work', branch: null, tmuxSession: 'azito',
+      inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: repoB.id,
+    })) as any;
+    taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: false, worktreePath: null,
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+    } as any));
+    const unit = makePushingUnit();
+    const isolatedServer = { name: 'isolated-1', type: 'agent', isolationIntent: true } as any;
+
+    await runner.stateMachineLoop(unit, 'isolated-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1', repoA, true);
+
+    expect(notarize).toHaveBeenCalledWith(expect.objectContaining({ repo: repoA }));
+    expect(notarize).not.toHaveBeenCalledWith(expect.objectContaining({ repo: repoB }));
+    expect(pullRequestCreator.ensureCreated).toHaveBeenCalledWith(1, 1, repoA, 'task/1-slug', expect.anything());
+  });
+
+  it('the pushing prompt AZITO_GIT_PROVIDER reflects the locked repo (A, github), not a freshly re-read repo B (gitlab)', async () => {
+    const repoAGithub = { ...repoA, provider: 'github' as const };
+    const repoBGitlab = { ...repoB, provider: 'gitlab' as const };
+    const { runner, taskRepo, projectRepo, projectServerRepo, workerInput, sidekickLoader } = makeRunner({
+      sidekickLoader: { findDefaultForTag: vi.fn(() => makeSidekick({ name: 'pushing-default', body: 'Provider: {{task.gitProvider}}' })) },
+    });
+    projectRepo.findById = vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', defaultUnitId: null, repositories: [repoAGithub, repoBGitlab] }));
+    projectRepo.findRepositoryById = vi.fn((id: number) => (id === repoBGitlab.id ? repoBGitlab : repoAGithub)) as any;
+    projectServerRepo.find = vi.fn(() => ({
+      projectId: 10, serverName: 'agent-1', workingDirectory: '/work', branch: null, tmuxSession: 'azito',
+      inputPolicy: 'manual-approval' as const, distributeCode: true, distributionRepositoryId: repoBGitlab.id,
+    })) as any;
+    taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: false, worktreePath: null,
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+    } as any));
+    const unit = makePushingUnit();
+    const distributionServer = { name: 'agent-1', type: 'agent', isolationIntent: false } as any;
+
+    await runner.stateMachineLoop(unit, 'agent-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, distributionServer, 'sess:1.1', new AbortController().signal, 'sess:1', repoAGithub, true);
+
+    const sentPrompt = workerInput.sendPrompt.mock.calls[0][2] as string;
+    expect(sentPrompt).toContain('Provider: github');
+    expect(sentPrompt).not.toContain('Provider: gitlab');
+  });
+});
+
+// Issue #87 review (forge/87-mirror follow-up), Important finding 2: hub
+// push notarization's hard-fail check used to look only at whether
+// `distributionRepoEntry` (the caller-locked value, resolved once when this
+// run started/resumed) was null — but the ACTUAL `project_repositories` row
+// it points at can be deleted mid-run, while `distributionRepoEntry` itself
+// stays non-null for the rest of this (potentially hours-long) loop. That
+// case used to fall through to the `probeRepo?.token` check below and land
+// on `no_push_credential`, which only LOGS a skip and lets the phase
+// advance as `phase_complete` — silently completing the task without ever
+// pushing/notarizing anything. These tests pin the fix: a deleted target
+// repository must hard-fail the task (`hub_push_failed`), while a resolved
+// repository that simply has no token keeps the pre-existing
+// `no_push_credential` skip-not-fail behavior.
+describe('PhaseLoopRunner hub push notarization fails closed when the locked repository is deleted mid-run (Issue #87 review follow-up, Important finding 2)', () => {
+  const repoA = { id: 1, name: 'A', url: 'https://github.com/acme/repo-a.git', provider: 'github' as const, owner: 'acme', repoName: 'repo-a', token: 'token-a', hasToken: true };
+
+  function makePushingUnit(overrides: Record<string, unknown> = {}) {
+    return makeUnitForRun({
+      phaseConfig: {
+        planning: { enabled: false }, implementing: { enabled: false },
+        reviewing: { enabled: false }, testing: { enabled: false },
+      },
+      ...overrides,
+    });
+  }
+
+  it('fails the task as hub_push_failed instead of silently skipping notarization when the locked repository id no longer resolves', async () => {
+    const notarize = vi.fn(async () => ({ status: 'pushed' as const, sha: 'abc123' }));
+    const { runner, taskRepo, projectRepo, projectServerRepo, pullRequestCreator, appendLog } = makeRunner({
+      pushNotaryService: { notarize },
+    });
+    // Simulates the project_repositories row (repoA) being deleted AFTER
+    // this run's `distributionRepoEntry` was locked in by the caller —
+    // findRepositoryById(repoA.id) now returns null for the same id.
+    projectRepo.findById = vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', defaultUnitId: null, repositories: [] }));
+    projectRepo.findRepositoryById = vi.fn(() => null) as any;
+    projectServerRepo.find = vi.fn(() => ({
+      projectId: 10, serverName: 'isolated-1', workingDirectory: '/work', branch: null, tmuxSession: 'azito',
+      inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null,
+    })) as any;
+    taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: false, worktreePath: null,
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+    } as any));
+    const unit = makePushingUnit();
+    const isolatedServer = { name: 'isolated-1', type: 'agent', isolationIntent: true } as any;
+
+    await runner.stateMachineLoop(unit, 'isolated-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1', repoA, true);
+
+    expect(notarize).not.toHaveBeenCalled();
+    expect(pullRequestCreator.ensureCreated).not.toHaveBeenCalled();
+    expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'failed');
+    expect(appendLog).toHaveBeenCalledWith(1, 1, 'status_change', expect.objectContaining({ status: 'hub_push_failed' }));
+  });
+
+  it('keeps the pre-existing no_push_credential skip (not a hard failure) when the locked repository resolves but has no token', async () => {
+    const notarize = vi.fn(async () => ({ status: 'pushed' as const, sha: 'abc123' }));
+    const repoNoToken = { ...repoA, token: null, hasToken: false };
+    const { runner, taskRepo, projectRepo, projectServerRepo, pullRequestCreator, appendLog } = makeRunner({
+      pushNotaryService: { notarize },
+    });
+    projectRepo.findById = vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', defaultUnitId: null, repositories: [repoNoToken] }));
+    projectRepo.findRepositoryById = vi.fn(() => repoNoToken) as any;
+    projectServerRepo.find = vi.fn(() => ({
+      projectId: 10, serverName: 'isolated-1', workingDirectory: '/work', branch: null, tmuxSession: 'azito',
+      inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: repoNoToken.id,
+    })) as any;
+    taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: false, worktreePath: null,
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+    } as any));
+    const unit = makePushingUnit();
+    const isolatedServer = { name: 'isolated-1', type: 'agent', isolationIntent: true } as any;
+
+    await runner.stateMachineLoop(unit, 'isolated-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1', repoNoToken, true);
+
+    expect(notarize).not.toHaveBeenCalled();
+    expect(pullRequestCreator.ensureCreated).not.toHaveBeenCalled();
+    expect(taskRepo.updateStatus).not.toHaveBeenCalledWith(1, 'failed');
+    expect(appendLog).toHaveBeenCalledWith(1, 1, 'command', expect.objectContaining({ type: 'hub_push_skipped', reason: 'no_push_credential' }));
+    // `no_push_credential` now means BOTH stages came up empty — the CLI
+    // fallback was actually consulted, not skipped.
+    expect(getCliTokenMock).toHaveBeenCalledWith({ provider: 'github', host: 'github.com' });
+  });
+});
+
+// Issue #87: hub代行 push must apply the SAME two-stage credential
+// resolution as hub代行 fetch distribution (`docs/ja/github-integration.md`:
+// 1. the repository's stored PAT, 2. the hub operator's gh/glab CLI token).
+// Before this, an isolated server whose repository carried no PAT completed
+// the pushing phase having pushed nothing at all.
+describe('PhaseLoopRunner hub push notarization resolves PAT then hub CLI token (Issue #87)', () => {
+  type PushTestRepo = { id: number; name: string; url: string; provider: 'github'; owner: string; repoName: string; token: string | null; hasToken: boolean };
+  const repoNoToken: PushTestRepo = { id: 1, name: 'A', url: 'https://github.com/acme/repo-a.git', provider: 'github', owner: 'acme', repoName: 'repo-a', token: null, hasToken: false };
+  const repoWithToken: PushTestRepo = { ...repoNoToken, token: 'ghp_stored', hasToken: true };
+
+  function makePushingUnit(overrides: Record<string, unknown> = {}) {
+    return makeUnitForRun({
+      phaseConfig: {
+        planning: { enabled: false }, implementing: { enabled: false },
+        reviewing: { enabled: false }, testing: { enabled: false },
+      },
+      ...overrides,
+    });
+  }
+
+  function setupRun(repo: PushTestRepo) {
+    const notarize = vi.fn(async () => ({ status: 'notarized' as const, sha: 'abc123' }));
+    const harness = makeRunner({ pushNotaryService: { notarize } });
+    harness.projectRepo.findById = vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', defaultUnitId: null, repositories: [repo] }));
+    harness.projectRepo.findRepositoryById = vi.fn(() => repo) as any;
+    harness.projectServerRepo.find = vi.fn(() => ({
+      projectId: 10, serverName: 'isolated-1', workingDirectory: '/work', branch: null, tmuxSession: 'azito',
+      inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: repo.id,
+    })) as any;
+    harness.taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: false, worktreePath: null,
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+    } as any));
+    return { ...harness, notarize };
+  }
+
+  const isolatedServer = { name: 'isolated-1', type: 'agent', isolationIntent: true } as any;
+
+  async function runPushingPhase(runner: PhaseLoopRunner, repo: PushTestRepo) {
+    await runner.stateMachineLoop(makePushingUnit(), 'isolated-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1', repo, true);
+  }
+
+  beforeEach(() => {
+    getCliTokenMock.mockReset();
+    getCliTokenMock.mockResolvedValue(null);
+  });
+
+  it('notarizes with the hub CLI token when the repository has no PAT', async () => {
+    getCliTokenMock.mockResolvedValue('gh-cli-token');
+    const { runner, notarize, taskRepo, appendLog } = setupRun(repoNoToken);
+
+    await runPushingPhase(runner, repoNoToken);
+
+    expect(getCliTokenMock).toHaveBeenCalledWith({ provider: 'github', host: 'github.com' });
+    expect(notarize).toHaveBeenCalledWith(expect.objectContaining({ repo: repoNoToken, token: 'gh-cli-token' }));
+    expect(appendLog).not.toHaveBeenCalledWith(1, 1, 'command', expect.objectContaining({ reason: 'no_push_credential' }));
+    expect(taskRepo.updateStatus).not.toHaveBeenCalledWith(1, 'failed');
+  });
+
+  it('prefers the repository PAT and never spawns a CLI when one is stored', async () => {
+    const { runner, notarize } = setupRun(repoWithToken);
+
+    await runPushingPhase(runner, repoWithToken);
+
+    expect(getCliTokenMock).not.toHaveBeenCalled();
+    expect(notarize).toHaveBeenCalledWith(expect.objectContaining({ token: 'ghp_stored' }));
+  });
+
+  it('records WHICH credential the push used — and never the token value — in the execution log', async () => {
+    getCliTokenMock.mockResolvedValue('gh-cli-token');
+    const { runner, appendLog } = setupRun(repoNoToken);
+
+    await runPushingPhase(runner, repoNoToken);
+
+    expect(appendLog).toHaveBeenCalledWith(1, 1, 'command', expect.objectContaining({ type: 'hub_push_start', resolvedCredentialSource: 'cli' }));
+    expect(appendLog).toHaveBeenCalledWith(1, 1, 'command', expect.objectContaining({ type: 'hub_push_completed', resolvedCredentialSource: 'cli' }));
+    const logged = JSON.stringify(appendLog.mock.calls);
+    expect(logged).not.toContain('gh-cli-token');
+    expect(logged).not.toContain('ghp_stored');
+  });
+
+  it('logs resolvedCredentialSource "repository" when the stored PAT was used', async () => {
+    const { runner, appendLog } = setupRun(repoWithToken);
+
+    await runPushingPhase(runner, repoWithToken);
+
+    expect(appendLog).toHaveBeenCalledWith(1, 1, 'command', expect.objectContaining({ type: 'hub_push_start', resolvedCredentialSource: 'repository' }));
+    expect(JSON.stringify(appendLog.mock.calls)).not.toContain('ghp_stored');
+  });
+});
+
+// Issue #87 review (forge/87-mirror follow-up), Important finding 2: the
+// pushing-phase completion probe must fail closed the SAME way
+// ExecuteTaskUseCase.isPushCompleted() does — via the shared
+// `isDistributionRequiredButRepositoryUnresolved` (DistributionHelper.ts) —
+// when distribution is required but the distributed repository could not be
+// resolved (e.g. distributionRepositoryId unset, or its repository row was
+// deleted mid-run). Previously only isPushCompleted() had this fix; the
+// probe kept accepting a SHA-only match without ever having identified the
+// real target repository/PR.
+describe('PhaseLoopRunner pushing probe fails closed when distribution is required but the repository is unresolved (Issue #87 review, forge/87-mirror follow-up, Important finding 2)', () => {
+  function makePushingUnit(overrides: Record<string, unknown> = {}) {
+    return makeUnitForRun({
+      phaseConfig: {
+        planning: { enabled: false }, implementing: { enabled: false },
+        reviewing: { enabled: false }, testing: { enabled: false },
+      },
+      ...overrides,
+    });
+  }
+
+  it('never calls PR creation or push verification, and reports not-yet-completed, when distribution is required but distributionRepoEntry is null', async () => {
+    let capturedProbe: (() => Promise<boolean>) | undefined;
+    const { runner, taskRepo, projectServerRepo, workerWaiter, pushVerifier, pullRequestCreator, appendLog } = makeRunner();
+    workerWaiter.waitForWorker = vi.fn(async (...args: unknown[]) => {
+      capturedProbe = args[8] as (() => Promise<boolean>) | undefined;
+      return { output: 'PHASE_COMPLETE', classification: { status: 'phase_complete' } };
+    });
+    // Distribution required (distributeCode on) but distributionRepositoryId
+    // is unset/unresolved — same situation `resolveExecutionRepositoryEntry`
+    // would refuse to fall back to `repositories[0]` for.
+    projectServerRepo.find = vi.fn(() => ({
+      projectId: 10, serverName: 'agent-1', workingDirectory: '/work', branch: null, tmuxSession: 'azito',
+      inputPolicy: 'manual-approval' as const, distributeCode: true, distributionRepositoryId: null,
+    })) as any;
+    taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: false, worktreePath: null,
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+    } as any));
+    const unit = makePushingUnit();
+    const distributionServer = { name: 'agent-1', type: 'agent', isolationIntent: false } as any;
+
+    await runner.stateMachineLoop(unit, 'agent-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, distributionServer, 'sess:1.1', new AbortController().signal, 'sess:1', null, true);
+
+    expect(capturedProbe).toBeDefined();
+    await expect(capturedProbe!()).resolves.toBe(false);
+    expect(pullRequestCreator.ensureCreated).not.toHaveBeenCalled();
+    expect(pushVerifier.verifyPushCompleted).not.toHaveBeenCalled();
+    expect(appendLog).toHaveBeenCalledWith(1, 1, 'command', expect.objectContaining({ type: 'pushing_probe_blocked_unresolved_repository' }));
+  });
+
+  it('still verifies via SHA match alone (pre-existing behavior) when distribution is not required, even with no repository registered', async () => {
+    let capturedProbe: (() => Promise<boolean>) | undefined;
+    const { runner, taskRepo, workerWaiter, pushVerifier, pullRequestCreator } = makeRunner();
+    workerWaiter.waitForWorker = vi.fn(async (...args: unknown[]) => {
+      capturedProbe = args[8] as (() => Promise<boolean>) | undefined;
+      return { output: 'PHASE_COMPLETE', classification: { status: 'phase_complete' } };
+    });
+    taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: false, worktreePath: null,
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+    } as any));
+    const unit = makePushingUnit();
+
+    // `server` is local — isDistributionRequired is always false there — and
+    // no `distributionRepoEntry` was resolved (`null`), matching a project
+    // that never registered a repository at all: the pre-existing
+    // SHA-only-verification fallback must still apply.
+    await runner.stateMachineLoop(unit, 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
+
+    expect(capturedProbe).toBeDefined();
+    await capturedProbe!();
+    expect(pullRequestCreator.ensureCreated).toHaveBeenCalled();
+    expect(pushVerifier.verifyPushCompleted).toHaveBeenCalledWith(server, '/work', 'task/1-slug', false, null);
+  });
+
+  // Issue #87 review (forge/87-mirror follow-up), Important finding 2
+  // (second round): the fail-closed check must trust the CALLER-LOCKED
+  // `distributionRequired` flag, not re-derive it from a fresh
+  // `projectServerRepo.find()` read performed inside this method. Simulates
+  // exactly the exploit scenario the finding describes: a run started with
+  // distribution required (distributeCode on) and its target repository
+  // locked; mid-run, an operator toggles distributeCode off AND deletes the
+  // locked repository. A stale/fresh internal re-read of `projectServer`
+  // would now report `distributeCode: false` (proven by the sanity
+  // assertion below) — if the probe's fail-closed check used that fresh
+  // read instead of the caller-locked flag, it would wrongly conclude
+  // distribution is no longer required and let `null` reach PR creation/
+  // push verification, reviving the SHA-only-match bypass.
+  it('stays fail-closed on the caller-locked distributionRequired=true even though a fresh projectServer read would now say distribution is not required', async () => {
+    let capturedProbe: (() => Promise<boolean>) | undefined;
+    const { runner, taskRepo, projectServerRepo, workerWaiter, pushVerifier, pullRequestCreator, appendLog } = makeRunner();
+    workerWaiter.waitForWorker = vi.fn(async (...args: unknown[]) => {
+      capturedProbe = args[8] as (() => Promise<boolean>) | undefined;
+      return { output: 'PHASE_COMPLETE', classification: { status: 'phase_complete' } };
+    });
+    // The toggle has since been flipped off (distributeCode: false) and the
+    // locked repository's id was cleared from the project-server row too —
+    // this is what a FRESH internal read would see if this method still
+    // re-derived `distributionRequired` from it.
+    const freshProjectServer = {
+      projectId: 10, serverName: 'agent-1', workingDirectory: '/work', branch: null, tmuxSession: 'azito',
+      inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null,
+    };
+    projectServerRepo.find = vi.fn(() => freshProjectServer) as any;
+    taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: false, worktreePath: null,
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+    } as any));
+    const unit = makePushingUnit();
+    const distributionServer = { name: 'agent-1', type: 'agent', isolationIntent: false } as any;
+
+    // Sanity check: a fresh read against `distributionServer` would indeed
+    // compute `false` — the exact drift this test guards against.
+    expect(isDistributionRequired(distributionServer, freshProjectServer)).toBe(false);
+
+    // `distributionRequired: true` (locked at the caller when distribution
+    // actually ran) and `distributionRepoEntry: null` (the locked
+    // repository was deleted mid-run) — the caller-computed truth, not what
+    // a fresh internal read of `projectServer` would now say.
+    await runner.stateMachineLoop(unit, 'agent-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, distributionServer, 'sess:1.1', new AbortController().signal, 'sess:1', null, true);
+
+    expect(capturedProbe).toBeDefined();
+    await expect(capturedProbe!()).resolves.toBe(false);
+    expect(pullRequestCreator.ensureCreated).not.toHaveBeenCalled();
+    expect(pushVerifier.verifyPushCompleted).not.toHaveBeenCalled();
+    expect(appendLog).toHaveBeenCalledWith(1, 1, 'command', expect.objectContaining({ type: 'pushing_probe_blocked_unresolved_repository' }));
   });
 });
 
@@ -750,7 +1363,7 @@ describe('PhaseLoopRunner isolation cutoff (Issue #29 docs review, finding 1)', 
     const { runner, taskRepo, workerWaiter, appendLog } = makeRunner();
     const unit = makeUnitForRun();
 
-    await runner.stateMachineLoop(unit, 'local', task, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', task, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     // 4 phases (planning/implementing/reviewing/testing) actually run the
     // worker; pushing is skipped without ever calling waitForWorker for it.
@@ -767,7 +1380,7 @@ describe('PhaseLoopRunner isolation cutoff (Issue #29 docs review, finding 1)', 
     const { runner, workerWaiter } = makeRunner();
     const unit = makeUnitForRun();
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(workerWaiter.waitForWorker).toHaveBeenCalledTimes(5);
   });
@@ -812,7 +1425,7 @@ describe('PhaseLoopRunner isolation cutoff (Issue #29 docs review, finding 1)', 
         unitTypeLoader: unitTypeLoader as any,
         sidekickLoader: sidekickLoader as any,
       },
-    );
+      'continuation',);
     fixedTask.executionApprovedFingerprintHash = hashExecutionManifest(manifest);
 
     // Gate re-check runs once per phase (planning/implementing/reviewing/
@@ -843,7 +1456,7 @@ describe('PhaseLoopRunner isolation cutoff (Issue #29 docs review, finding 1)', 
     const isolatedServer = { ...server, isolationIntent: true };
     const unit = makeUnitForRun();
 
-    await runner.stateMachineLoop(unit, 'local', task, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', task, isolatedServer, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     // Only the first 4 phases sent prompts; pushing was neither skipped
     // silently nor sent — it was blocked at the gate.
@@ -892,7 +1505,7 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
     // Default fixture taskRepo.findById() already returns inputTrust: 'trusted'.
     const unit = makeUnitForRun();
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(workerInput.sendPrompt).toHaveBeenCalledTimes(5); // planning, implementing, reviewing, testing, pushing
     expect(taskRepo.update).not.toHaveBeenCalledWith(1, expect.objectContaining({ status: 'pending_approval' }));
@@ -921,14 +1534,14 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
     const { manifest } = resolveExecutionManifest(
       fixedTask as any,
       makeManifestDeps(null, unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader),
-    );
+      'continuation',);
     fixedTask.executionApprovedFingerprintHash = hashExecutionManifest(manifest);
 
     const taskRepo = { findById: vi.fn(() => fixedTask), update: vi.fn(), updateStatus: vi.fn(), updateCurrentPhase: vi.fn() };
     const { runner, workerInput } = makeRunner({ taskRepo, unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader });
     const unit = makeUnitForRun();
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(workerInput.sendPrompt).toHaveBeenCalledTimes(5);
     expect(taskRepo.update).not.toHaveBeenCalledWith(1, expect.objectContaining({ status: 'pending_approval' }));
@@ -961,7 +1574,7 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
     const { manifest } = resolveExecutionManifest(
       fixedTask as any,
       makeManifestDeps(null, approvedUnitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader),
-    );
+      'continuation',);
     fixedTask.executionApprovedFingerprintHash = hashExecutionManifest(manifest);
 
     // unitRepo.findById returns the ORIGINAL config for the first gate check
@@ -978,7 +1591,7 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
     const { runner, workerInput, appendLog } = makeRunner({ taskRepo, unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader });
     const unit = makeUnitForRun();
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     // Only planning's prompt went out — implementing's must never have been
     // built or sent.
@@ -1021,7 +1634,7 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
     const { manifest } = resolveExecutionManifest(
       fixedTask as any,
       makeManifestDeps(null, approvedUnitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader),
-    );
+      'continuation',);
     fixedTask.executionApprovedFingerprintHash = hashExecutionManifest(manifest);
 
     // The Unit is gone by the time the loop re-checks the gate for this
@@ -1043,7 +1656,7 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
     const { runner, workerInput, appendLog } = makeRunner({ taskRepo, unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader });
     const unit = makeUnitForRun();
 
-    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', task, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     // Blocked before any prompt was built or sent.
     expect(workerInput.sendPrompt).not.toHaveBeenCalled();
@@ -1091,7 +1704,7 @@ describe('PhaseLoopRunner auto-sleep after push completion', () => {
     } as any);
     const unit = makeUnitForRun({ sleepAfterPush: true });
 
-    await runner.stateMachineLoop(unit, 'local', { ...task, sleepAfterPush: null }, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', { ...task, sleepAfterPush: null }, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'review');
     expect(sleepFn).toHaveBeenCalledWith(1);
@@ -1110,7 +1723,7 @@ describe('PhaseLoopRunner auto-sleep after push completion', () => {
     } as any);
     const unit = makeUnitForRun({ sleepAfterPush: true });
 
-    await runner.stateMachineLoop(unit, 'local', { ...task, sleepAfterPush: false }, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', { ...task, sleepAfterPush: false }, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'review');
     expect(sleepFn).not.toHaveBeenCalled();
@@ -1121,7 +1734,7 @@ describe('PhaseLoopRunner auto-sleep after push completion', () => {
     const { runner, taskRepo } = makeRunner({ sleepTaskWindows: sleepFn });
     const unit = makeUnitForRun({ sleepAfterPush: false });
 
-    await runner.stateMachineLoop(unit, 'local', { ...task, sleepAfterPush: null }, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', { ...task, sleepAfterPush: null }, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'review');
     expect(sleepFn).not.toHaveBeenCalled();
@@ -1139,7 +1752,7 @@ describe('PhaseLoopRunner auto-sleep after push completion', () => {
     } as any);
     const unit = makeUnitForRun({ sleepAfterPush: true });
 
-    await runner.stateMachineLoop(unit, 'local', { ...task, sleepAfterPush: null }, server, 'sess:1.1', new AbortController().signal, 'sess:1');
+    await runner.stateMachineLoop(unit, 'local', { ...task, sleepAfterPush: null }, server, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
 
     expect(sleepFn).toHaveBeenCalledWith(1);
     expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'review');

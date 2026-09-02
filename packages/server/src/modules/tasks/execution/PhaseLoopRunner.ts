@@ -20,6 +20,7 @@ import { resolveSidekickDir } from '../../sidekicks/SidekickSyncService';
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import type { UnitTypePhase } from '../../sidekicks/UnitType';
 import type { IWorktreeService } from '../../git/IWorktreeService';
+import { resolvePushCredential } from '../../git/hub-transfer/pushCredential';
 import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import { buildSubagentDelegationBlock, buildSubagentRulesFileContent } from '../../prompt/PhasePromptRenderer';
@@ -33,9 +34,12 @@ import type { GitInfoCollector } from './GitInfoCollector';
 import type { GitProviderService } from '../../git/providers/GitProviderService';
 import type { HttpSignalTurnCoordinator } from './HttpSignalTurnCoordinator';
 import type { PullRequestCreator } from './PullRequestCreator';
+import type { PushNotaryService } from '../../git/hub-transfer/PushNotaryService';
 import type { AgentTurn } from '../turns/AgentTurn';
 import { checkExecutionGate } from './ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionManifest';
+import { isDistributionRequiredButRepositoryUnresolved } from './DistributionHelper';
+import type { ProjectRepository } from '../../projects/Project';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -106,14 +110,18 @@ export class PhaseLoopRunner {
     // below, so a per-phase re-verification degrades 'allow' exactly the way
     // the run's original entry-point check did.
     private scopedAuthEnabled: boolean,
+    private pushNotaryService: PushNotaryService | null,
     private sleepTaskWindows: (taskId: number) => Promise<number[]>,
   ) {}
 
-  private async findPrUrl(task: { projectId: number }, branch: string | null): Promise<string | null> {
-    if (!branch) return null;
-    const project = this.projectRepo.findById(task.projectId);
-    const repoEntry = project?.repositories?.[0];
-    if (!repoEntry) return null;
+  // Takes the already-resolved repository entry rather than re-deriving it
+  // from `task.projectId` (Issue #87 13th-round review, Important finding):
+  // the caller resolves it via `resolveExecutionRepositoryEntry` — the same
+  // repository the pushing phase's PR/push verification/notarization
+  // target — so this must never make its own separate `repositories[0]`
+  // choice that could disagree with theirs.
+  private async findPrUrl(repoEntry: ProjectRepository | null, branch: string | null): Promise<string | null> {
+    if (!branch || !repoEntry) return null;
     const repo = this.projectRepo.findRepositoryById(repoEntry.id);
     if (!repo || !repo.owner || !repo.repoName) return null;
     try {
@@ -157,6 +165,10 @@ export class PhaseLoopRunner {
   private reverifyExecutionGateForPhase(taskId: number, currentTask: Task, loopUnitId: number): boolean {
     if (currentTask.inputTrust !== 'untrusted') return true;
 
+    // 'continuation': this is a per-phase re-check mid-run — the run's own
+    // execute()/resumeStateMachine() entry already passed its own
+    // 'execute'/'continuation' gate before this loop started, so code (if
+    // any) has already been distributed for THIS run under that decision.
     const { manifest, projectServer, serverConfig } = resolveExecutionManifest(currentTask, {
       unitRepo: this.unitRepo,
       projectRepo: this.projectRepo,
@@ -165,7 +177,7 @@ export class PhaseLoopRunner {
       projectSecretRepo: this.projectSecretRepo,
       unitTypeLoader: this.unitTypeLoader,
       sidekickLoader: this.sidekickLoader,
-    });
+    }, 'continuation');
     const manifestHash = hashExecutionManifest(manifest);
     // Issue #29 Step 3a: same re-check as ExecuteTaskUseCase.enforceExecutionGate
     // — see resolveEffectiveInputPolicy's doc comment.
@@ -292,6 +304,43 @@ export class PhaseLoopRunner {
     target: string,
     signal: AbortSignal,
     supervisorTarget: string,
+    // Issue #87 review (forge/87-mirror follow-up), Important finding 1: the
+    // repository this run treats as THE distribution target, resolved by the
+    // CALLER once against whichever project/projectServer snapshot it locked
+    // when it started/resumed this run (ExecuteTaskUseCase.execute() resolves
+    // it from `lockedProject`/`lockedProjectServer`, the exact snapshot
+    // `performDistribution()` itself distributed against). This method used
+    // to re-derive it here via a fresh `projectRepo.findById()`/
+    // `projectServerRepo.find()` read — a run can span many phases over
+    // minutes to hours, so a `distributionRepositoryId` edit mid-run could
+    // make that fresh read disagree with what was actually distributed onto
+    // the server, silently retargeting prompt/PR-creation/push-verification/
+    // hub-notarization/final-PR-URL-lookup at a DIFFERENT repository than the
+    // one the code came from. Every downstream repository decision below
+    // MUST use this parameter directly, never re-resolve it from `project`/
+    // `projectServer` (still read below, but only for non-repository fields
+    // like `workingDirectory` fallbacks).
+    distributionRepoEntry: ProjectRepository | null,
+    // Issue #87 review (forge/87-mirror follow-up), Important finding 2
+    // (second round): whether distribution was required for this run,
+    // decided by the CALLER at the exact same moment (against the exact same
+    // locked project/projectServer snapshot) it resolved
+    // `distributionRepoEntry` above — never re-derived inside this method
+    // from a fresh `projectServerRepo.find()` read. This method used to
+    // recompute "is distribution required" itself via
+    // `isDistributionRequiredButRepositoryUnresolved(server, projectServer,
+    // ...)`, reading `projectServer` from its OWN `projectServerRepo.find()`
+    // call below — a `distributeCode` toggle flipped between when the caller
+    // locked `distributionRepoEntry` and whenever that fresh read happened
+    // (a run spans many phases, potentially over minutes to hours, and
+    // resumes/follow-ups each re-enter this method) could make the fresh
+    // read see `distributeCode: false` even though the run's locked
+    // repository had since been deleted — silently turning the pushing
+    // probe's fail-closed check off and letting `null` reach PR creation/
+    // push verification, reviving the SHA-only-match bypass that check
+    // exists to prevent. See `isDistributionRequiredButRepositoryUnresolved`'s
+    // doc comment (DistributionHelper.ts) for the full rationale.
+    distributionRequired: boolean,
   ): Promise<void> {
     const project = this.projectRepo.findById(task.projectId);
     const projectServer = project ? this.projectServerRepo.find(task.projectId, serverName) : null;
@@ -354,7 +403,7 @@ export class PhaseLoopRunner {
       // no push-credential injection, per the Issue #29 review scope. Runs
       // only after the gate re-check above has already confirmed the
       // approved manifest/input-policy still holds for this phase.
-      if (server.isolationIntent === true && phaseDef.pushVerify) {
+      if (server.isolationIntent === true && phaseDef.pushVerify && !this.pushNotaryService) {
         this.taskRepo.updateCurrentPhase(task.id, phase);
         this.appendLog(task.id, unit.id, 'command', {
           type: 'pushing_skipped_isolated',
@@ -372,7 +421,16 @@ export class PhaseLoopRunner {
       const sidekick = resolvePhaseSidekick(this.sidekickLoader, phase, unit.phaseConfig, phaseDef);
       const sidekickDir = resolveSidekickDir(sidekick, server);
       const promptModules = loadPromptModules();
-      const vars = resolveTaskPromptVars(this.taskRepo, this.projectRepo, this.unitRepo, this.projectServerRepo, task.id);
+      // Issue #87 review (14th round), Minor finding: pass the SAME
+      // distribution-aware repository this phase's own push/PR/notary
+      // logic uses (below) down into the prompt vars, so `AZITO_GIT_PROVIDER`
+      // names the actual provider the worker is pushing to (`gh`/`glab`)
+      // instead of always `project.repositories[0]`'s — see
+      // `resolveTaskPromptVars`'s doc comment on `resolvedGitProvider`.
+      // Uses the caller-locked `distributionRepoEntry` (Issue #87 review,
+      // forge/87-mirror follow-up, Important finding 1), not a fresh
+      // re-resolution — see this method's parameter doc comment.
+      const vars = resolveTaskPromptVars(this.taskRepo, this.projectRepo, this.unitRepo, this.projectServerRepo, task.id, distributionRepoEntry?.provider);
       const expandedPrompt = renderSidekickBody(sidekick, {
         ...vars,
         selfReview: {
@@ -458,7 +516,7 @@ export class PhaseLoopRunner {
       }
 
       let pushingProbe: (() => Promise<boolean>) | undefined;
-      if (phaseDef.pushVerify) {
+      if (phaseDef.pushVerify && !(server.isolationIntent && this.pushNotaryService)) {
         const currentTaskForProbe = this.taskRepo.findById(task.id);
         const probeDir = await (async () => {
           const wtPath = currentTaskForProbe?.worktreePath;
@@ -467,9 +525,31 @@ export class PhaseLoopRunner {
         })();
         const probeBranch = currentTaskForProbe?.worktreeBranch ?? currentTaskForProbe?.branch;
         if (probeDir && probeBranch) {
-          const probeRepoEntry = project?.repositories?.[0] ?? null;
-          const probeRepo = probeRepoEntry ? this.projectRepo.findRepositoryById(probeRepoEntry.id) : null;
+          // Issue #87 13th-round review, Important finding: must agree with
+          // whichever repository distribution actually pulled onto this
+          // server, not always `repositories[0]` — uses the caller-locked
+          // `distributionRepoEntry` (Issue #87 review, forge/87-mirror
+          // follow-up, Important finding 1), never a fresh re-resolution —
+          // see this method's parameter doc comment.
+          const probeRepo = distributionRepoEntry ? this.projectRepo.findRepositoryById(distributionRepoEntry.id) : null;
           pushingProbe = async () => {
+            // Issue #87 review (forge/87-mirror follow-up), Important
+            // finding 2: fail closed — same rule as
+            // ExecuteTaskUseCase.isPushCompleted(), shared via
+            // `isDistributionRequiredButRepositoryUnresolved` (see its doc
+            // comment) — when distribution is required but the target
+            // repository could not be resolved, never call PR creation or
+            // push verification (which would otherwise accept a SHA-only
+            // match against nothing in particular); treat the phase as
+            // not-yet-completed instead. Uses the caller-locked
+            // `distributionRequired` parameter (second-round fix), not a
+            // fresh `isDistributionRequired(server, projectServer)`
+            // re-derivation — see this method's `distributionRequired`
+            // parameter doc comment.
+            if (isDistributionRequiredButRepositoryUnresolved(distributionRequired, probeRepo)) {
+              this.appendLog(task.id, unit.id, 'command', { type: 'pushing_probe_blocked_unresolved_repository' });
+              return false;
+            }
             // Create the PR (if due) before verifying — verifyPushCompleted's own
             // PR-existence check then sees what this call just created.
             // PullRequestCreator itself never rejects (best-effort, self-contained
@@ -554,6 +634,133 @@ export class PhaseLoopRunner {
 
       this.appendLog(task.id, unit.id, 'command', { type: 'phase_completed', phase, summary: phaseSummary ?? null });
 
+      // Hub push notarization for isolated servers (Issue #87 Phase 2)
+      if (server.isolationIntent && phaseDef.pushVerify && this.pushNotaryService
+          && classification.status === 'phase_complete') {
+        // Issue #87 13th-round review, Important finding: the hub push
+        // notary must target the SAME repository fetch distribution pulled
+        // onto this isolated server. Uses the caller-locked
+        // `distributionRepoEntry` (Issue #87 review, forge/87-mirror
+        // follow-up, Important finding 1), not a fresh
+        // `projectRepo.findById()`/`resolveExecutionRepositoryEntry()`
+        // re-resolution — see this method's parameter doc comment.
+        if (!distributionRepoEntry) {
+          // `server.isolationIntent` gates this whole block, so
+          // `isDistributionRequired` is true here and
+          // `resolveExecutionRepositoryEntry` NEVER falls back to
+          // `project.repositories[0]` for it (see that function's doc
+          // comment, Issue #87 14th-round review) — a `null` here means the
+          // distributed repository is unset or was deleted, i.e. the one
+          // fact hub push notarization exists to agree with is unknown.
+          // Notarizing against `repositories[0]` would silently push this
+          // isolated server's code to the WRONG repository; silently
+          // skipping notarization (the old `no_push_credential` path this
+          // fell through to) would instead let the phase advance as if the
+          // push had happened when nothing was ever pushed. Neither is
+          // acceptable for a write-capable operation — fail the task.
+          this.appendLog(task.id, unit.id, 'status_change', {
+            status: 'hub_push_failed',
+            error: 'Fetch distribution repository could not be resolved for hub push notarization (unset or deleted distribution target repository)',
+          });
+          this.taskRepo.updateStatus(task.id, 'failed');
+          return;
+        }
+        const probeRepo = this.projectRepo.findRepositoryById(distributionRepoEntry.id);
+        if (probeRepo === null) {
+          // Issue #87 review follow-up, Important finding 2: `distributionRepoEntry`
+          // was resolved once when this run started/resumed and stays non-null
+          // for the rest of the (possibly hours-long) loop — but the actual
+          // `project_repositories` row it points at can be deleted mid-run.
+          // The OLD code folded this into the `probeRepo?.token` falsy check
+          // below and fell through to `no_push_credential`, which only LOGS
+          // a skip and lets the phase advance as `phase_complete` — silently
+          // completing the task without ever pushing/notarizing anything.
+          // A deleted target repository is not "no credential configured"
+          // (an accepted, intentionally-tolerated configuration state); it
+          // is "the repository this run must notarize against no longer
+          // exists" — the same hard-fail this method already applies above
+          // when `distributionRepoEntry` itself is null. Treat it the same
+          // way: fail the task, never silently skip.
+          this.appendLog(task.id, unit.id, 'status_change', {
+            status: 'hub_push_failed',
+            error: 'Fetch distribution repository was removed during execution and could not be resolved for hub push notarization',
+          });
+          this.taskRepo.updateStatus(task.id, 'failed');
+          return;
+        }
+        // Two-stage credential resolution (Issue #87): the repository's own
+        // PAT first, then the hub operator's `gh`/`glab` token for that
+        // repository's canonical host — the same resolution fetch
+        // distribution applies (`docs/ja/github-integration.md`). Before
+        // this, an isolated server whose repository had no PAT completed the
+        // pushing phase having pushed nothing at all, even when the hub was
+        // perfectly able to push with its own CLI login.
+        //
+        // Resolved HERE, not inside `PushNotaryService`: this call site also
+        // owns the "no credential at all" verdict below, so keeping both in
+        // one place is what makes it impossible for one stage to be applied
+        // in one and skipped in the other.
+        const pushCredential = await resolvePushCredential(probeRepo);
+        if (pushCredential) {
+          this.appendLog(task.id, unit.id, 'command', { type: 'hub_push_start', resolvedCredentialSource: pushCredential.source });
+          const currentTaskForPush = this.taskRepo.findById(task.id);
+          const probeDir = await (async () => {
+            const wtPath = currentTaskForPush?.worktreePath;
+            if (wtPath && await this.getWorktreeService(server).exists(wtPath)) return wtPath;
+            const ps = this.projectServerRepo.find(task.projectId, serverName);
+            return currentTaskForPush?.workingDirectory || ps?.workingDirectory;
+          })();
+          const probeBranch = currentTaskForPush?.worktreeBranch ?? currentTaskForPush?.branch;
+          if (probeDir && probeBranch) {
+            const transport = this.transportFactory.getTransport(server);
+            const notaryResult = await this.pushNotaryService.notarize({
+              taskId: task.id,
+              unitId: unit.id,
+              server,
+              transport,
+              worktreePath: probeDir,
+              branch: probeBranch,
+              baseBranch: currentTaskForPush?.targetBranch ?? null,
+              repo: probeRepo,
+              token: pushCredential.token,
+            });
+            if (notaryResult.status === 'failed') {
+              this.appendLog(task.id, unit.id, 'status_change', { status: 'hub_push_failed', error: notaryResult.error });
+              this.taskRepo.updateStatus(task.id, 'failed');
+              return;
+            }
+            // `resolvedCredentialSource` names which credential was RESOLVED
+            // for this notarization, not necessarily one that pushed:
+            // `notarize()` can return `already_up_to_date` without pushing at
+            // all (PushNotaryService.ts). The sibling `status` field is what
+            // says whether a push happened; this field only answers "which
+            // credential would have been / was used". Never the token itself —
+            // completion too: a `cli` credential is ambient hub-operator
+            // environment that `gh auth logout` removes without any AZITO
+            // configuration changing, so a later reader of this log must be
+            // able to tell which credential a past push actually used.
+            this.appendLog(task.id, unit.id, 'command', { type: 'hub_push_completed', sha: notaryResult.sha, status: notaryResult.status, resolvedCredentialSource: pushCredential.source });
+            if (!currentTaskForPush?.skipPr) {
+              try {
+                await this.pullRequestCreator.ensureCreated(task.id, unit.id, probeRepo, probeBranch, {
+                  title: currentTaskForPush?.title ?? task.title,
+                  description: currentTaskForPush?.description ?? null,
+                  targetBranch: currentTaskForPush?.targetBranch ?? null,
+                });
+              } catch { /* best-effort */ }
+            }
+          } else {
+            this.appendLog(task.id, unit.id, 'command', { type: 'hub_push_skipped', reason: 'no_worktree_or_branch' });
+          }
+        } else {
+          // Neither a repository PAT nor a hub CLI token: unchanged
+          // semantics (Issue #87 — skip, log it explicitly, let the phase
+          // advance), only the set of credentials consulted before reaching
+          // this verdict has widened.
+          this.appendLog(task.id, unit.id, 'command', { type: 'hub_push_skipped', reason: 'no_push_credential' });
+        }
+      }
+
       // Plan approval: extract plan markdown and optionally wait for approval
       if (phaseDef.planApproval) {
         const planMarkdown = phaseOutput !== null
@@ -612,7 +819,10 @@ export class PhaseLoopRunner {
     const gitInfo = server.type === 'local'
       ? this.gitInfoCollector.collectGitInfoSync(workingDir, baseBranchForDiff)
       : await this.gitInfoCollector.collectGitInfoRemote(server, workingDir, baseBranchForDiff);
-    const prUrl = await this.findPrUrl(task, gitInfo.branch);
+    // Uses the caller-locked `distributionRepoEntry` (Issue #87 review,
+    // forge/87-mirror follow-up, Important finding 1), not a fresh
+    // re-resolution — see this method's parameter doc comment.
+    const prUrl = await this.findPrUrl(distributionRepoEntry, gitInfo.branch);
     const updateFields: Record<string, unknown> = {};
     if (prUrl) updateFields.prUrl = prUrl;
     if (gitInfo.changedFiles) updateFields.changedFiles = gitInfo.changedFiles;

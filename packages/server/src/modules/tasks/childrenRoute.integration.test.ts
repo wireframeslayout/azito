@@ -97,18 +97,19 @@ function buildApp(scopedAuthEnabled: boolean, db: SqliteDatabase, createCalls: R
     countChildren: vi.fn(() => 0),
     countChildrenInGeneration: vi.fn(() => 0),
     clearTmuxWindowIfMatches: vi.fn(() => true),
+    updateStatusIfWindowMatches: vi.fn(() => true),
   };
   const originationService = new TaskOriginationService(taskRepo as unknown as ITaskRepository, auditLogService);
 
   const opts: TasksRouteOptions = {
     taskRepo,
-    projectRepo: { findAll: vi.fn(() => []), findById: vi.fn(() => ({ id: 10, name: 'P', slug: 'p' })), create: vi.fn(), update: vi.fn(), delete: vi.fn(), addRepository: vi.fn(), findRepositoryById: vi.fn(() => null), removeRepository: vi.fn() } as unknown as TasksRouteOptions['projectRepo'],
+    projectRepo: { findAll: vi.fn(() => []), findById: vi.fn(() => ({ id: 10, name: 'P', slug: 'p' })), create: vi.fn(), update: vi.fn(), delete: vi.fn(), addRepository: vi.fn(), findRepositoryById: vi.fn(() => null), removeRepository: vi.fn(), findRepositoryCredentialsByIds: vi.fn(() => []) } as unknown as TasksRouteOptions['projectRepo'],
     projectServerRepo: { findByProject: vi.fn(() => []), findByServer: vi.fn(() => []), find: vi.fn(() => null), upsert: vi.fn(), remove: vi.fn() },
     logRepo: { findByTask: vi.fn(() => []), findByUnit: vi.fn(() => []), append: vi.fn() },
     executeTaskUseCase: { stopByTaskId: vi.fn(() => false), execute: vi.fn(), followUp: vi.fn(), events: { on: vi.fn(), off: vi.fn(), emit: vi.fn() } } as unknown as TasksRouteOptions['executeTaskUseCase'],
     unitRepo: { findAll: vi.fn(() => []), findById: vi.fn(() => null), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
     tmux: {} as unknown as TasksRouteOptions['tmux'],
-    serverRepo: { findAll: vi.fn(() => []), findByName: vi.fn(() => null), create: vi.fn(), update: vi.fn(), updateAgentVersion: vi.fn(), updateFingerprint: vi.fn(), clearFingerprint: vi.fn(), updateIsolationIntent: vi.fn(), delete: vi.fn() },
+    serverRepo: { findAll: vi.fn(() => []), findByName: vi.fn(() => null), create: vi.fn(), update: vi.fn(), updateAgentVersion: vi.fn(), updateFingerprint: vi.fn(), clearFingerprint: vi.fn(), updateIsolationIntent: vi.fn(), findMetaByNames: vi.fn(() => []), delete: vi.fn() },
     worktreeServiceFactory: {} as unknown as TasksRouteOptions['worktreeServiceFactory'],
     transportFactory: {} as unknown as TasksRouteOptions['transportFactory'],
     windowRepo: { findByTaskIds: vi.fn(() => new Map()), add: vi.fn(), findAll: vi.fn(() => []), findById: vi.fn(), findByProject: vi.fn(() => []), findByTask: vi.fn(() => []), findAgentSessionIdsByServer: vi.fn(() => new Set<string>()), findByServer: vi.fn(() => []), findByServerAndTarget: vi.fn(), findByServerAndSession: vi.fn(() => []), update: vi.fn(), updateAgentSessionIdByWindow: vi.fn(), remove: vi.fn(), removeByServerAndTarget: vi.fn(() => 0), updatePaneLayout: vi.fn(), now: vi.fn(() => '2026-01-01 00:00:00') },

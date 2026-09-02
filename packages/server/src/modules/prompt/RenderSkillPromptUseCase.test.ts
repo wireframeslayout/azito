@@ -165,6 +165,7 @@ function makeRepos(overrides: {
     countChildren: vi.fn(() => 0),
     countChildrenInGeneration: vi.fn(() => 0),
     clearTmuxWindowIfMatches: vi.fn(() => true),
+    updateStatusIfWindowMatches: vi.fn(() => true),
     ...overrides.task,
   };
 
@@ -176,7 +177,9 @@ function makeRepos(overrides: {
     delete: vi.fn(),
     addRepository: vi.fn(() => 1),
     findRepositoryById: vi.fn(() => null),
+    updateRepositoryToken: vi.fn(),
     removeRepository: vi.fn(),
+    findRepositoryCredentialsByIds: vi.fn(() => []),
     ...overrides.project,
   };
 
@@ -192,7 +195,7 @@ function makeRepos(overrides: {
   const projectServerRepo: IProjectServerRepository = {
     findByProject: vi.fn(() => []),
     findByServer: vi.fn(() => []),
-    find: vi.fn(() => ({ projectId: 10, serverName: 'local', workingDirectory: '/work', branch: 'feat', tmuxSession: 'sess', inputPolicy: 'manual-approval' as const })),
+    find: vi.fn(() => ({ projectId: 10, serverName: 'local', workingDirectory: '/work', branch: 'feat', tmuxSession: 'sess', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null })),
     upsert: vi.fn(),
     remove: vi.fn(),
     ...overrides.projectServer,
@@ -215,6 +218,7 @@ function makeRepos(overrides: {
     updateFingerprint: vi.fn(),
     clearFingerprint: vi.fn(),
     updateIsolationIntent: vi.fn(),
+    findMetaByNames: vi.fn(() => []),
     delete: vi.fn(),
     ...overrides.serverRepo,
   };

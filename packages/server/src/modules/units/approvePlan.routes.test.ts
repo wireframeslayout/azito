@@ -126,6 +126,7 @@ function makeOpts(task: Task, unit: Unit, opts: { gateAllows: boolean }): { opts
       countChildren: vi.fn(() => 0),
       countChildrenInGeneration: vi.fn(() => 0),
       clearTmuxWindowIfMatches: vi.fn(() => true),
+      updateStatusIfWindowMatches: vi.fn(() => true),
     },
     logRepo: {
       findByTask: vi.fn(() => []),

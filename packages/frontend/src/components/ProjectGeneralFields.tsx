@@ -19,10 +19,16 @@ export interface ProjectGeneralFieldsProps {
   setIcon: (v: string) => void;
   color: string;
   setColor: (v: string) => void;
-  projectRepoUrl: string;
-  setProjectRepoUrl: (v: string) => void;
-  defaultBranch: string;
-  setDefaultBranch: (v: string) => void;
+  /**
+   * Repository URL / default-branch fields are shown only when both value and
+   * setter are supplied (ProjectSettings edits them; the create wizard's step 1
+   * no longer collects them — repository choice now happens in the wizard's
+   * "code" step, see ProjectWizard.tsx).
+   */
+  projectRepoUrl?: string;
+  setProjectRepoUrl?: (v: string) => void;
+  defaultBranch?: string;
+  setDefaultBranch?: (v: string) => void;
   sidekickPrompt: string;
   setSidekickPrompt: (v: string) => void;
 }
@@ -250,12 +256,16 @@ export default function ProjectGeneralFields({ name, setName, slug, setSlug, slu
           <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', fontFamily: 'monospace' }}>{color || t('general.colorNone')}</span>
         </div>
       </FormField>
-      <FormField label={t('general.repositoryUrl')}>
-        <FormInput value={projectRepoUrl} onChange={(e) => setProjectRepoUrl(e.target.value)} placeholder={t('general.repositoryUrlPlaceholder')} />
-      </FormField>
-      <FormField label={t('general.defaultBranch')}>
-        <FormInput value={defaultBranch} onChange={(e) => setDefaultBranch(e.target.value)} placeholder={t('general.defaultBranchPlaceholder')} />
-      </FormField>
+      {setProjectRepoUrl && (
+        <FormField label={t('general.repositoryUrl')}>
+          <FormInput value={projectRepoUrl ?? ''} onChange={(e) => setProjectRepoUrl(e.target.value)} placeholder={t('general.repositoryUrlPlaceholder')} />
+        </FormField>
+      )}
+      {setDefaultBranch && (
+        <FormField label={t('general.defaultBranch')}>
+          <FormInput value={defaultBranch ?? ''} onChange={(e) => setDefaultBranch(e.target.value)} placeholder={t('general.defaultBranchPlaceholder')} />
+        </FormField>
+      )}
       <FormField label={t('general.unitPrompt')} hint={t('general.unitPromptHint')}>
         <FormTextarea value={sidekickPrompt} onChange={(e) => setSidekickPrompt(e.target.value)} rows={5}
           placeholder={t('general.unitPromptPlaceholder')}

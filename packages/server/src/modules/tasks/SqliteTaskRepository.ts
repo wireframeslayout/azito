@@ -92,6 +92,7 @@ interface TaskRow {
   review_subagent: string | null;
   implement_subagent: string | null;
   sleep_after_push: number | null;
+  distribution_repository_id: number | null;
   created_by_kind: string;
   created_by_id: number | null;
   created_via_generation: number | null;
@@ -132,6 +133,8 @@ export class SqliteTaskRepository implements ITaskRepository {
   private countChildrenStmt;
   private countChildrenInGenerationStmt;
   private clearTmuxWindowIfMatchesStmt;
+  private updateStatusIfWindowMatchesStmt;
+  private updateStatusIfWindowMatchesWithWorktreeStmt;
   constructor(private db: SqliteDatabase, private taskTokenRepo: ITaskTokenRepository) {
     this.listStmt = db.prepare('SELECT * FROM tasks ORDER BY priority DESC, created_at DESC');
     this.listByProjectStmt = db.prepare('SELECT * FROM tasks WHERE project_id = ? ORDER BY priority DESC, created_at DESC');
@@ -139,10 +142,10 @@ export class SqliteTaskRepository implements ITaskRepository {
     this.listByStatusStmt = db.prepare('SELECT * FROM tasks WHERE status = ? ORDER BY priority DESC, created_at DESC');
     this.getStmt = db.prepare('SELECT * FROM tasks WHERE id = ?');
     this.createStmt = db.prepare(
-      'INSERT INTO tasks (project_id, unit_id, server_name, title, description, priority, tmux_window, self_review_max_attempts, require_plan_approval, source, source_ref, worktree_path, worktree_branch, base_branch, target_branch, skip_pr, working_directory, branch, plan_markdown, pending_questions, changed_files, summary_json, pr_url, agent_session_id, review_subagent, implement_subagent, sleep_after_push, input_trust, execution_approved_fingerprint_hash, pending_operation, pending_operation_window_id, pending_operation_prior_status, created_by_kind, created_by_id, created_via_generation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO tasks (project_id, unit_id, server_name, title, description, priority, tmux_window, self_review_max_attempts, require_plan_approval, source, source_ref, worktree_path, worktree_branch, base_branch, target_branch, skip_pr, working_directory, branch, plan_markdown, pending_questions, changed_files, summary_json, pr_url, agent_session_id, review_subagent, implement_subagent, sleep_after_push, input_trust, execution_approved_fingerprint_hash, pending_operation, pending_operation_window_id, pending_operation_prior_status, created_by_kind, created_by_id, created_via_generation, distribution_repository_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
     this.updateStmt = db.prepare(
-      "UPDATE tasks SET title = ?, description = ?, status = ?, unit_id = ?, server_name = ?, priority = ?, tmux_window = ?, self_review_max_attempts = ?, require_plan_approval = ?, source = ?, source_ref = ?, worktree_path = ?, worktree_branch = ?, base_branch = ?, target_branch = ?, skip_pr = ?, working_directory = ?, branch = ?, plan_markdown = ?, pending_questions = ?, changed_files = ?, summary_json = ?, pr_url = ?, agent_session_id = ?, review_subagent = ?, implement_subagent = ?, sleep_after_push = ?, input_trust = ?, execution_approved_fingerprint_hash = ?, pending_operation = ?, pending_operation_window_id = ?, pending_operation_prior_status = ?, updated_at = datetime('now') WHERE id = ?",
+      "UPDATE tasks SET title = ?, description = ?, status = ?, unit_id = ?, server_name = ?, priority = ?, tmux_window = ?, self_review_max_attempts = ?, require_plan_approval = ?, source = ?, source_ref = ?, worktree_path = ?, worktree_branch = ?, base_branch = ?, target_branch = ?, skip_pr = ?, working_directory = ?, branch = ?, plan_markdown = ?, pending_questions = ?, changed_files = ?, summary_json = ?, pr_url = ?, agent_session_id = ?, review_subagent = ?, implement_subagent = ?, sleep_after_push = ?, input_trust = ?, execution_approved_fingerprint_hash = ?, pending_operation = ?, pending_operation_window_id = ?, pending_operation_prior_status = ?, distribution_repository_id = ?, updated_at = datetime('now') WHERE id = ?",
     );
     // Guarded compare-and-clear for consumePendingApproval() (Issue #328
     // ninth-round review finding 4) — see that method's doc comment on
@@ -200,6 +203,51 @@ export class SqliteTaskRepository implements ITaskRepository {
     this.clearTmuxWindowIfMatchesStmt = db.prepare(
       "UPDATE tasks SET tmux_window = NULL, updated_at = datetime('now') WHERE id = ? AND tmux_window = ?",
     );
+    // Guarded compare-and-swap for updateStatusIfWindowMatches() — see that
+    // method's doc comment on ITaskRepository (Issue #87 third-party review,
+    // Important 1; fourth pass). `tmux_window = ? OR tmux_window IS NULL`
+    // covers the two shapes the row can be in when the caller's generation
+    // is still the latest: its own window name still on the row, or no
+    // window recorded yet (before this generation's own window was
+    // created). Both arms are ALSO gated by the same "no newer generation"
+    // NOT EXISTS check — the third review pass only applied that gate to
+    // the NULL arm, which left a gap: if a newer execution has already
+    // issued its own token (and thus its own, different, tmux_window) but
+    // has not yet actually created that window, the row still carries the
+    // OLD `tmux_window` value, so the `tmux_window = ?` arm alone would
+    // match a stale caller and let it roll the task back mid-handoff. The
+    // gate correlates against `task_tokens`, matching only when no OTHER
+    // row for this task_id has a `window_generation` strictly greater than
+    // the caller's own token's (`?` = tokenId). That is a single UPDATE
+    // with a correlated NOT EXISTS subquery (no read-then-write) so the
+    // check and the write stay atomic under WAL/SQLite's single-writer
+    // model.
+    this.updateStatusIfWindowMatchesStmt = db.prepare(`
+      UPDATE tasks SET status = ?, updated_at = datetime('now')
+      WHERE id = ?
+        AND (tmux_window = ? OR tmux_window IS NULL)
+        AND NOT EXISTS (
+          SELECT 1 FROM task_tokens nt
+          WHERE nt.task_id = tasks.id
+            AND nt.window_generation > (SELECT window_generation FROM task_tokens WHERE id = ?)
+        )
+    `);
+    // Same guard as updateStatusIfWindowMatchesStmt above, extended to also
+    // clear worktree_path/worktree_branch in the SAME statement (Issue #87
+    // third-party review, seventh pass, Important finding 2) — a stale
+    // rollback that fails the guard must not clear these fields either, and
+    // a second unconditional `update()` call after the guarded status write
+    // could not express that.
+    this.updateStatusIfWindowMatchesWithWorktreeStmt = db.prepare(`
+      UPDATE tasks SET status = ?, worktree_path = ?, worktree_branch = ?, updated_at = datetime('now')
+      WHERE id = ?
+        AND (tmux_window = ? OR tmux_window IS NULL)
+        AND NOT EXISTS (
+          SELECT 1 FROM task_tokens nt
+          WHERE nt.task_id = tasks.id
+            AND nt.window_generation > (SELECT window_generation FROM task_tokens WHERE id = ?)
+        )
+    `);
   }
 
   findAll(): Task[] {
@@ -265,6 +313,7 @@ export class SqliteTaskRepository implements ITaskRepository {
       data.createdByKind,
       data.createdById ?? null,
       data.createdViaGeneration ?? null,
+      data.distributionRepositoryId ?? null,
     );
     return Number(result.lastInsertRowid);
   }
@@ -317,6 +366,7 @@ export class SqliteTaskRepository implements ITaskRepository {
       data.pendingOperation !== undefined ? data.pendingOperation : current.pending_operation,
       data.pendingOperationWindowId !== undefined ? data.pendingOperationWindowId : current.pending_operation_window_id,
       data.pendingOperationPriorStatus !== undefined ? data.pendingOperationPriorStatus : current.pending_operation_prior_status,
+      data.distributionRepositoryId !== undefined ? data.distributionRepositoryId : current.distribution_repository_id,
       id,
     );
   }
@@ -424,6 +474,30 @@ export class SqliteTaskRepository implements ITaskRepository {
     return result.changes > 0;
   }
 
+  updateStatusIfWindowMatches(
+    id: number,
+    expectedWindowName: string,
+    status: TaskStatus,
+    tokenId: number,
+    extraFields?: { worktreePath: string | null; worktreeBranch: string | null },
+  ): boolean {
+    const run = this.db.transaction(() => {
+      const result = extraFields
+        ? this.updateStatusIfWindowMatchesWithWorktreeStmt.run(
+            status,
+            extraFields.worktreePath,
+            extraFields.worktreeBranch,
+            id,
+            expectedWindowName,
+            tokenId,
+          )
+        : this.updateStatusIfWindowMatchesStmt.run(status, id, expectedWindowName, tokenId);
+      if (result.changes > 0) this.revokeIfTokenRevokingStatus(id, status);
+      return result.changes > 0;
+    });
+    return run();
+  }
+
   private toEntity(row: TaskRow): Task {
     return {
       id: row.id,
@@ -470,6 +544,7 @@ export class SqliteTaskRepository implements ITaskRepository {
         | null,
       pendingOperationWindowId: row.pending_operation_window_id ?? null,
       pendingOperationPriorStatus: (row.pending_operation_prior_status ?? null) as TaskStatus | null,
+      distributionRepositoryId: row.distribution_repository_id ?? null,
       createdByKind: row.created_by_kind as Task['createdByKind'],
       createdById: row.created_by_id ?? null,
       createdViaGeneration: row.created_via_generation ?? null,

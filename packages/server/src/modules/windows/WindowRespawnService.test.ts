@@ -547,7 +547,7 @@ describe('WindowRespawnService.respawn — primary vs. secondary task window tok
 
 describe('WindowRespawnService.respawn — execution gate (Issue #328)', () => {
   function untrustedProjectServerRepo(inputPolicy: 'deny' | 'manual-approval'): Pick<IProjectServerRepository, 'find' | 'findByProject'> {
-    const row = { projectId: 1, serverName: 'local-server', workingDirectory: null, branch: 'main', tmuxSession: 'azito', inputPolicy };
+    const row = { projectId: 1, serverName: 'local-server', workingDirectory: null, branch: 'main', tmuxSession: 'azito', inputPolicy, distributeCode: false, distributionRepositoryId: null };
     return {
       find: vi.fn(() => row),
       findByProject: vi.fn(() => [row]),
@@ -909,7 +909,7 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
   let rootDir: string;
 
   function makeProjectServerRepo(workingDirectory: string | null): Pick<IProjectServerRepository, 'find' | 'findByProject'> {
-    const row = { projectId: 1, serverName: 'local-server', workingDirectory, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const };
+    const row = { projectId: 1, serverName: 'local-server', workingDirectory, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null };
     return { find: vi.fn(() => row), findByProject: vi.fn(() => [row]) };
   }
 
@@ -1179,7 +1179,7 @@ describe('WindowRespawnService.respawn — respawn config fingerprint (Issue #32
     // (win.serverName), not whatever resolveTaskServerName alone would
     // produce from the task — respawn() computes its live gate check the
     // same way, via the `server.name` it's actually called with below.
-    const { manifest } = resolveExecutionManifest(task, manifestDeps(unit), buildRespawnManifestInput(win), win.serverName);
+    const { manifest } = resolveExecutionManifest(task, manifestDeps(unit), 'continuation', buildRespawnManifestInput(win), win.serverName);
     const approvedHash = hashExecutionManifest(manifest);
     const approvedTask = { ...task, executionApprovedFingerprintHash: approvedHash };
 
@@ -1195,7 +1195,7 @@ describe('WindowRespawnService.respawn — respawn config fingerprint (Issue #32
     const unit = makeUnit({ id: 10 });
     const approvedWin = makeWindow({ id: 1, taskId: 6, windowType: 'agent', workerType: 'claude', workerModel: 'opus' });
 
-    const { manifest } = resolveExecutionManifest(task, manifestDeps(unit), buildRespawnManifestInput(approvedWin), approvedWin.serverName);
+    const { manifest } = resolveExecutionManifest(task, manifestDeps(unit), 'continuation', buildRespawnManifestInput(approvedWin), approvedWin.serverName);
     const approvedHash = hashExecutionManifest(manifest);
     const approvedTask = { ...task, executionApprovedFingerprintHash: approvedHash };
 
@@ -1221,7 +1221,7 @@ describe('WindowRespawnService.respawn — respawn config fingerprint (Issue #32
     const unit = makeUnit({ id: 10 });
     const approvedWin = makeWindow({ id: 1, taskId: 7, windowType: 'agent', workerType: 'claude', workerModel: 'opus', serverName: 'local-server' });
 
-    const { manifest } = resolveExecutionManifest(task, manifestDeps(unit), buildRespawnManifestInput(approvedWin), approvedWin.serverName);
+    const { manifest } = resolveExecutionManifest(task, manifestDeps(unit), 'continuation', buildRespawnManifestInput(approvedWin), approvedWin.serverName);
     const approvedHash = hashExecutionManifest(manifest);
     const approvedTask = { ...task, executionApprovedFingerprintHash: approvedHash };
 
@@ -1242,9 +1242,9 @@ describe('WindowRespawnService.respawn — policy resolved from the WINDOW serve
   // overridden by A's more permissive 'manual-approval', and an untrusted
   // respawn onto B could eventually be approved and run despite B's policy.
   function twoServerProjectServerRepo(): Pick<IProjectServerRepository, 'find' | 'findByProject'> {
-    const rows: Record<string, { projectId: number; serverName: string; workingDirectory: string | null; branch: string; tmuxSession: string; inputPolicy: 'deny' | 'manual-approval' }> = {
-      'server-a': { projectId: 1, serverName: 'server-a', workingDirectory: null, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' },
-      'server-b': { projectId: 1, serverName: 'server-b', workingDirectory: null, branch: 'main', tmuxSession: 'azito', inputPolicy: 'deny' },
+    const rows: Record<string, { projectId: number; serverName: string; workingDirectory: string | null; branch: string; tmuxSession: string; inputPolicy: 'deny' | 'manual-approval'; distributeCode: boolean; distributionRepositoryId: number | null }> = {
+      'server-a': { projectId: 1, serverName: 'server-a', workingDirectory: null, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval', distributeCode: false, distributionRepositoryId: null },
+      'server-b': { projectId: 1, serverName: 'server-b', workingDirectory: null, branch: 'main', tmuxSession: 'azito', inputPolicy: 'deny', distributeCode: false, distributionRepositoryId: null },
     };
     return {
       find: vi.fn((_projectId: number, serverName: string) => rows[serverName] ?? null),
@@ -1291,7 +1291,7 @@ describe('WindowRespawnService.respawn — policy resolved from the WINDOW serve
 
 describe('WindowRespawnService.resumeLegacySession (Issue #328 fourth-round review finding 2)', () => {
   function untrustedProjectServerRepo(inputPolicy: 'deny' | 'manual-approval'): Pick<IProjectServerRepository, 'find' | 'findByProject'> {
-    const row = { projectId: 1, serverName: 'local-server', workingDirectory: null, branch: 'main', tmuxSession: 'azito', inputPolicy };
+    const row = { projectId: 1, serverName: 'local-server', workingDirectory: null, branch: 'main', tmuxSession: 'azito', inputPolicy, distributeCode: false, distributionRepositoryId: null };
     return {
       find: vi.fn(() => row),
       findByProject: vi.fn(() => [row]),
@@ -1665,7 +1665,7 @@ describe('WindowRespawnService — in-lock execution-gate TOCTOU (Issue #29 Step
   const PASSING_REPORT = JSON.stringify({ kind: 'verification', verified: true });
 
   function allowProjectServerRepo(): Pick<IProjectServerRepository, 'find' | 'findByProject'> {
-    const row = { projectId: 1, serverName: 'local-server', workingDirectory: null, branch: 'main', tmuxSession: 'azito', inputPolicy: 'allow' as const };
+    const row = { projectId: 1, serverName: 'local-server', workingDirectory: null, branch: 'main', tmuxSession: 'azito', inputPolicy: 'allow' as const, distributeCode: false, distributionRepositoryId: null };
     return { find: vi.fn(() => row), findByProject: vi.fn(() => [row]) };
   }
 
