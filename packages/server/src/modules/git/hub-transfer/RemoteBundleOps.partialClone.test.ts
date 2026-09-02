@@ -186,4 +186,11 @@ describe('RemoteBundleOps.setGitIdentity (#124 Bug 5)', () => {
     expect(author).not.toContain('server006');
     expect(author).not.toContain('.ts.net');
   });
+
+  it('throws when git config fails (e.g. non-existent directory)', async () => {
+    const ops = new RemoteBundleOps();
+    await expect(
+      ops.setGitIdentity(localTransport(), '/tmp/azito-nonexistent-dir-identity', { name: 'Op', email: 'op@example.com' }),
+    ).rejects.toThrow();
+  });
 });

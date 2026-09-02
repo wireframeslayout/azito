@@ -26,6 +26,10 @@ export class PushNotaryService {
       return { status: 'failed', error: 'Server has no sshHost configured for SFTP transfer' };
     }
 
+    // The caller resolves the credential (repository PAT -> hub CLI token,
+    // see `pushCredential.ts`) and decides what "no credential at all" means
+    // for the run; an empty token reaching here would be a wiring bug, so it
+    // fails loudly rather than pushing anonymously.
     if (!token) {
       return { status: 'failed', error: 'No push credential was resolved for hub push notarization' };
     }
@@ -67,7 +71,7 @@ export class PushNotaryService {
       if (!verifiedSha) {
         return {
           status: 'failed',
-          error: `Push completed (SHA: ${pushResult.pushedSha}) but remote verification timed out after 3 attempts`
+          error: `Push completed (SHA: ${pushResult.pushedSha}) but remote verification timed out after 3 attempts (3s)`
             + ` — branch may exist on remote, verify with: git ls-remote --heads origin ${branch}`,
         };
       }
@@ -144,6 +148,7 @@ export class PushNotaryService {
   }
 
   // #124 Bug 4: retry SHA verification with exponential backoff.
+  // 3 attempts with waits of 1s and 2s between them (total wait: 3s).
   // NOT applied to the pre-push `already_up_to_date` check (null is normal there).
   private async verifyPushWithRetry(
     repo: PushNotaryParams['repo'],
@@ -151,11 +156,11 @@ export class PushNotaryService {
     expectedSha: string,
     maxAttempts = 3,
   ): Promise<string | null> {
-    const delays = [1000, 2000, 4000];
+    const delays = [1000, 2000];
     for (let i = 0; i < maxAttempts; i++) {
       const sha = await this.gitProvider.getBranchHeadSha(repo, branch);
       if (sha === expectedSha) return sha;
-      if (i < maxAttempts - 1) {
+      if (i < delays.length) {
         await new Promise(r => setTimeout(r, delays[i]));
       }
     }

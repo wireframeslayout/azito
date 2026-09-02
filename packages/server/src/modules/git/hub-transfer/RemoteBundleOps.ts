@@ -443,10 +443,12 @@ export class RemoteBundleOps {
   // ── #124 Bug 5: git identity on distributed working directories ──
 
   async setGitIdentity(transport: IServerTransport, workingDir: string, identity: { name: string; email: string }): Promise<void> {
-    await transport.exec(
+    await execGitOrThrow(
+      transport,
       `git -C ${shellQuote(workingDir)} config user.name ${shellQuote(identity.name)} && ` +
-      `git -C ${shellQuote(workingDir)} config user.email ${shellQuote(identity.email)}`,
+      `git -C ${shellQuote(workingDir)} config user.email ${shellQuote(identity.email)} 2>&1`,
       10_000,
+      'git config user identity failed',
     );
   }
 }
