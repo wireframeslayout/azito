@@ -31,6 +31,7 @@ export interface WindowsRouteOptions {
   windowActivityStatusService: WindowActivityStatusService;
   notificationBus?: NotificationBus;
   resourceGuard?: ResourceGuard;
+  harnessPrefix?: string;
 }
 
 const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts, done) => {
@@ -279,6 +280,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         ? wrapWithSupervisor(effectiveCommand, {
             server: srv,
             target: win.tmuxTarget,
+            harnessPrefix: opts.harnessPrefix,
             ...supervisorRegistry.issueLaunch({ serverName: srv.name, target: win.tmuxTarget, taskId: null, unitId: null }),
           })
         : effectiveCommand;

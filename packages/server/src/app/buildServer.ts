@@ -108,7 +108,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
 
   const verifyUiToken = createTokenVerifier(wiring.uiToken);
 
-  const harnessPrefix = process.env.AZITO_HARNESS_PREFIX || undefined;
+  const { harnessPrefix } = wiring;
 
   // ─── Push notifications on task status changes ───
 
@@ -509,7 +509,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       });
     },
   });
-  await app.register(windowsRoutes, { windowRepo, projectRepo, taskRepo, tmux: tmuxClient, serverRepo, respawnService: windowRespawnService, sleepService: windowSleepService, sessionStrategyFactory, sessionCaptureService, supervisorRegistry, windowActivityStatusService, notificationBus, resourceGuard });
+  await app.register(windowsRoutes, { windowRepo, projectRepo, taskRepo, tmux: tmuxClient, serverRepo, respawnService: windowRespawnService, sleepService: windowSleepService, sessionStrategyFactory, sessionCaptureService, supervisorRegistry, windowActivityStatusService, notificationBus, resourceGuard, harnessPrefix });
   await app.register(providersRoutes, { providerRepo: wiring.providerRepo });
   const renderSkillPromptUseCase = new RenderSkillPromptUseCase(
     taskRepo,

@@ -166,6 +166,7 @@ export class ExecuteTaskUseCase {
     // information must fail toward keeping the record" rule — the record is
     // left untouched rather than cleared. See the field's use below.
     private distributionStateRepo: IDistributionStateRepository | null = null,
+    private harnessPrefix?: string,
   ) {
     this.gitInfoCollector = new GitInfoCollector(this.tmux);
     this.pushVerifier = new PushVerifier(this.tmux, this.gitProvider);
@@ -189,7 +190,7 @@ export class ExecuteTaskUseCase {
       this.workerInput,
     );
     this.httpSignalCoordinator = new HttpSignalTurnCoordinator(this.turnRepo, this.turnSignalHub);
-    const tuiRuntime = new TuiWorkerRuntime(this.tmux, this.workerInput, this.workerWaiter, this.httpSignalCoordinator, this.supervisorRegistry);
+    const tuiRuntime = new TuiWorkerRuntime(this.tmux, this.workerInput, this.workerWaiter, this.httpSignalCoordinator, this.supervisorRegistry, this.harnessPrefix);
     this.runtimeRegistry = new WorkerRuntimeRegistry();
     this.runtimeRegistry.register('tui', tuiRuntime);
     this.phaseLoopRunner = new PhaseLoopRunner(
