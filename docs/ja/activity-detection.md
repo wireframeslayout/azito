@@ -85,6 +85,21 @@ hooks（`azito-activity` / `azito-interaction` / `azito-notify` / `azito-questio
 場合のみコマンド文字列の先頭で両変数を再エクスポートします。プロファイル評価の後に実行される
 ため確実に復元されます。tmux 外での起動時は何も注入しません。
 
+### supervisor の資格情報解決（AZITO_PREFIX 対応）
+
+supervisor は `resolveHubEnv()`（`packages/tui-supervisor/src/env.ts`）で `AZITO_URL` /
+`AZITO_WEBHOOK_TOKEN` を解決します。解決順序は「プロセス環境変数 → env ファイル」です。
+
+ハブが `--prefix` モードで運用されている場合（`AZITO_HARNESS_PREFIX` が設定されている場合）、
+ハブは supervisor の起動コマンドに `AZITO_PREFIX=<prefix>` を env 変数として埋め込みます
+（`SupervisorLaunch.wrapWithSupervisor()`）。supervisor は `AZITO_PREFIX` に従って
+`~/.azito/azitoctl-<prefix>.env` を読み、ハブの `AZITO_WEBHOOK_TOKEN` を取得します。
+prefix 未設定時は従来どおり `~/.azito/azitoctl.env` を読みます。
+
+これは Tier 1（hook）の「宛先プロファイルの原子的解決」（下記§3）と同じ `AZITO_PREFIX` 規約に
+従います。`harness/setup.sh --prefix <name>` が書いた env ファイルを、hook と supervisor が
+同じ規約で選択します。
+
 ## 3. Tier 1 -- Claude Code hooks
 
 | 要素 | 内容 |

@@ -45,6 +45,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
     private workerWaiter: WorkerWaiter,
     private httpSignalCoordinator: HttpSignalTurnCoordinator,
     private supervisorRegistry: Pick<SupervisorRegistry, 'issueLaunch'>,
+    private harnessPrefix?: string,
   ) {}
 
   async launch(ctx: WorkerLaunchContext): Promise<string> {
@@ -54,6 +55,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
           target: ctx.supervisorTarget,
           taskId: ctx.taskId,
           unitId: ctx.unitId,
+          harnessPrefix: this.harnessPrefix,
           // Issue #28 Phase C — issueLaunch() returns undefined only when no
           // DB-backed launch repository exists (see its doc comment); the
           // spread then omits both flags and wrapWithSupervisor falls back to

@@ -91,6 +91,22 @@ variables at the head of the command string, but only when they have a value. Be
 runs after profile evaluation, they are reliably restored. Nothing is injected when launched
 outside tmux.
 
+### Supervisor credential resolution (AZITO_PREFIX support)
+
+The supervisor resolves `AZITO_URL` / `AZITO_WEBHOOK_TOKEN` via `resolveHubEnv()`
+(`packages/tui-supervisor/src/env.ts`). Resolution order: process environment variables first,
+then the env file.
+
+When the hub runs in `--prefix` mode (`AZITO_HARNESS_PREFIX` is set), it embeds
+`AZITO_PREFIX=<prefix>` as an env variable on the supervisor's launch command
+(`SupervisorLaunch.wrapWithSupervisor()`). The supervisor reads `AZITO_PREFIX` and resolves
+`~/.azito/azitoctl-<prefix>.env` to obtain the hub's `AZITO_WEBHOOK_TOKEN`. When no prefix is
+set, it reads `~/.azito/azitoctl.env` as before.
+
+This follows the same `AZITO_PREFIX` convention as Tier 1's "Atomic destination-profile
+resolution" (§3 below). The env file written by `harness/setup.sh --prefix <name>` is selected
+by both hooks and the supervisor using the same convention.
+
 ## 3. Tier 1 -- Claude Code hooks
 
 | Element | Behavior |

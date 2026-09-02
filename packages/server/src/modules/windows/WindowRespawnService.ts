@@ -164,6 +164,7 @@ export class WindowRespawnService {
     // sessionCaptureService (required params must precede optional ones).
     private scopedAuthEnabled: boolean,
     private sessionCaptureService?: SessionCaptureService,
+    private harnessPrefix?: string,
   ) {}
 
   private get serverIsolationLock(): ServerIsolationLock {
@@ -716,6 +717,7 @@ export class WindowRespawnService {
               target: windowTarget,
               taskId: task.id,
               unitId: task.unitId ?? undefined,
+              harnessPrefix: this.harnessPrefix,
               ...this.supervisorRegistry.issueLaunch({
                 serverName: server.name,
                 target: windowTarget,
@@ -831,6 +833,7 @@ export class WindowRespawnService {
       target: supervisorTarget,
       taskId: supervision.taskId ?? undefined,
       unitId: supervision.unitId ?? undefined,
+      harnessPrefix: this.harnessPrefix,
       ...this.supervisorRegistry.issueLaunch({
         serverName: server.name,
         target: supervisorTarget,
