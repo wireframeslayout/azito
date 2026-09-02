@@ -1788,3 +1788,213 @@ describe('PhaseLoopRunner auto-sleep after push completion', () => {
     expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'review');
   });
 });
+
+// #88: isolation cutoff must read `isolationIntent` from the CURRENT server row
+// at each phase boundary, not from the run-start snapshot. A mid-run
+// `isolation_intent` flip (via PUT /api/servers/:name) must be reflected in the
+// pushing phase's cutoff decision.
+describe('PhaseLoopRunner isolation cutoff re-reads isolationIntent per phase (#88)', () => {
+  const repo = { id: 1, name: 'A', url: 'https://github.com/acme/repo.git', provider: 'github' as const, owner: 'acme', repoName: 'repo', token: 'ghp_xxx', hasToken: true };
+
+  function makePushingUnit(overrides: Record<string, unknown> = {}) {
+    return makeUnitForRun({
+      phaseConfig: {
+        planning: { enabled: false }, implementing: { enabled: false },
+        reviewing: { enabled: false }, testing: { enabled: false },
+      },
+      ...overrides,
+    });
+  }
+
+  // ─── Trusted tasks ───
+
+  it('trusted, false→true: a mid-run isolation_intent flip makes the pushing phase enter hub push notarization', async () => {
+    const notarize = vi.fn(async () => ({ status: 'pushed' as const, sha: 'abc123' }));
+    const { runner, taskRepo, projectRepo, projectServerRepo, serverRepo, workerWaiter } = makeRunner({
+      pushNotaryService: { notarize },
+    });
+    projectRepo.findById = vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', defaultUnitId: null, repositories: [repo] }));
+    projectRepo.findRepositoryById = vi.fn(() => repo) as any;
+    projectServerRepo.find = vi.fn(() => ({
+      projectId: 10, serverName: 'local', workingDirectory: '/work', branch: null, tmuxSession: 'azito',
+      inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: repo.id,
+    })) as any;
+    taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: false, worktreePath: null,
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+      inputTrust: 'trusted', executionApprovedFingerprintHash: null, pendingOperation: null,
+    } as any));
+    // Run-start snapshot: non-isolated. Mid-run: serverRepo returns isolated.
+    const snapshotServer = { name: 'local', type: 'local', isolationIntent: false } as any;
+    (serverRepo as any).findByName = vi.fn(() => ({ name: 'local', type: 'local', isolationIntent: true }));
+
+    await runner.stateMachineLoop(makePushingUnit(), 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, snapshotServer, 'sess:1.1', new AbortController().signal, 'sess:1', repo, true);
+
+    expect(notarize).toHaveBeenCalled();
+    // Trusted task: gate short-circuits, so findByName is called once per phase
+    // (the cutoff's own read). Only pushing is enabled, so exactly 1 call.
+    expect(serverRepo.findByName).toHaveBeenCalledTimes(1);
+  });
+
+  it('trusted, true→false: a mid-run isolation_intent removal lets pushing run the normal worker path', async () => {
+    const { runner, taskRepo, serverRepo, workerWaiter } = makeRunner({
+      pushNotaryService: null, // not wired — would fail with the stale snapshot
+    });
+    taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: false, worktreePath: null,
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+      inputTrust: 'trusted', executionApprovedFingerprintHash: null, pendingOperation: null,
+    } as any));
+    // Run-start snapshot: isolated + no notary → would fail at the
+    // "PushNotaryService is not wired" cutoff if the stale snapshot were used.
+    // Mid-run: serverRepo returns non-isolated → normal pushing path.
+    const snapshotServer = { name: 'local', type: 'local', isolationIntent: true } as any;
+    (serverRepo as any).findByName = vi.fn(() => ({ name: 'local', type: 'local', isolationIntent: false }));
+
+    await runner.stateMachineLoop(makePushingUnit(), 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, snapshotServer, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
+
+    // Normal pushing path: the worker receives a prompt (not hub_push_failed).
+    expect(workerWaiter.waitForWorker).toHaveBeenCalledTimes(1);
+    expect(taskRepo.updateStatus).not.toHaveBeenCalledWith(1, 'failed');
+  });
+
+  // ─── Untrusted tasks ───
+
+  function makeManifestDeps(serverRepoOverride: any, unitRepo: any, projectRepo: any, projectServerRepo: any, unitTypeLoader: any, sidekickLoader: any) {
+    return {
+      unitRepo,
+      projectRepo,
+      projectServerRepo,
+      serverRepo: serverRepoOverride ?? { findByName: () => null } as any,
+      projectSecretRepo: { findByProject: () => [] } as any,
+      unitTypeLoader,
+      sidekickLoader,
+    };
+  }
+
+  it('untrusted, false→true: re-reads isolationIntent from gateResult.serverConfig without an extra findByName call', async () => {
+    const notarize = vi.fn(async () => ({ status: 'pushed' as const, sha: 'abc123' }));
+    const fixedUnit = {
+      id: 1, unitType: 'devops', systemPrompt: null, selfReviewMaxAttempts: 2, reviewSubagent: null, implementSubagent: null,
+      phaseConfig: { planning: { enabled: false }, implementing: { enabled: false }, reviewing: { enabled: false }, testing: { enabled: false } },
+      sleepAfterPush: false,
+      workerType: null, workerModel: null, workerExtraArgs: null, workerExecutionMode: 'tmux-pipe', workerRuntime: 'tui',
+    };
+    const unitRepo = { findById: vi.fn(() => fixedUnit) };
+    const projectRepo = { findById: vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', defaultUnitId: null, repositories: [repo] })), findRepositoryById: vi.fn(() => repo) as any };
+    const projectServerRepo = { find: vi.fn(() => ({
+      projectId: 10, serverName: 'local', workingDirectory: '/work', branch: null, tmuxSession: 'azito',
+      inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: repo.id,
+    })), findByProject: vi.fn(() => []) };
+
+    // serverRepo returns isolationIntent: true (the mid-run flip).
+    // This is shared between resolveExecutionManifest (gate) and the cutoff.
+    const serverRepoMock = { findByName: vi.fn(() => ({ name: 'local', type: 'local', isolationIntent: true })) };
+
+    const unitTypeLoader = { get: vi.fn(() => DEVOPS_UNIT_TYPE), getOrThrow: vi.fn(() => DEVOPS_UNIT_TYPE) };
+    const sidekickLoader = { findByName: vi.fn(() => null), findDefaultForTag: vi.fn(() => makeSidekick()), list: vi.fn(() => []), invalidateCache: vi.fn() };
+
+    const fixedTask = {
+      id: 1, projectId: 10, unitId: 1, serverName: 'local', title: 'Test Task', description: 'desc',
+      status: 'running', currentPhase: 'pushing', planMarkdown: null, targetBranch: null, baseBranch: null,
+      skipPr: false, selfReviewCount: 0, worktreePath: null, workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+      inputTrust: 'untrusted' as const, pendingOperation: null, pendingOperationWindowId: null, pendingOperationPriorStatus: null,
+      executionApprovedFingerprintHash: null as string | null,
+    };
+    // Approve against the SAME config resolveExecutionManifest will see at run
+    // time (including the server with isolationIntent: true).
+    const { manifest } = resolveExecutionManifest(
+      fixedTask as any,
+      makeManifestDeps(serverRepoMock, unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader),
+      'continuation',
+    );
+    fixedTask.executionApprovedFingerprintHash = hashExecutionManifest(manifest);
+    // resolveExecutionManifest above called findByName once (fingerprint
+    // setup); clear so the assertion below only counts loop-time calls.
+    serverRepoMock.findByName.mockClear();
+
+    const taskRepo = {
+      findById: vi.fn(() => fixedTask), update: vi.fn(), updateStatus: vi.fn(), updateCurrentPhase: vi.fn(),
+      recordExecutionGateBlock: vi.fn(() => true),
+    };
+
+    const { runner } = makeRunner({
+      taskRepo, unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader,
+      pushNotaryService: { notarize },
+    });
+    // Inject the shared serverRepo mock so both the gate and the cutoff use it.
+    (runner as any).serverRepo = serverRepoMock;
+
+    const snapshotServer = { name: 'local', type: 'local', isolationIntent: false } as any;
+
+    await runner.stateMachineLoop(makePushingUnit(), 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, snapshotServer, 'sess:1.1', new AbortController().signal, 'sess:1', repo, true);
+
+    // Hub push notarization path entered (isolationIntent: true from the fresh row).
+    expect(notarize).toHaveBeenCalled();
+    // The key assertion: serverRepo.findByName is called exactly ONCE per phase
+    // (by the gate's resolveExecutionManifest). The cutoff reuses
+    // gateResult.serverConfig — no additional findByName call.
+    expect(serverRepoMock.findByName).toHaveBeenCalledTimes(1);
+  });
+
+  it('untrusted, true→false: re-reads isolationIntent from gateResult.serverConfig, entering the normal pushing path', async () => {
+    const fixedUnit = {
+      id: 1, unitType: 'devops', systemPrompt: null, selfReviewMaxAttempts: 2, reviewSubagent: null, implementSubagent: null,
+      phaseConfig: { planning: { enabled: false }, implementing: { enabled: false }, reviewing: { enabled: false }, testing: { enabled: false } },
+      sleepAfterPush: false,
+      workerType: null, workerModel: null, workerExtraArgs: null, workerExecutionMode: 'tmux-pipe', workerRuntime: 'tui',
+    };
+    const unitRepo = { findById: vi.fn(() => fixedUnit) };
+    const projectRepo = { findById: vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', defaultUnitId: null })), findRepositoryById: vi.fn(() => null) as any };
+    const projectServerRepo = { find: vi.fn(() => null), findByProject: vi.fn(() => []) };
+
+    // serverRepo returns isolationIntent: false (the mid-run flip).
+    const serverRepoMock = { findByName: vi.fn(() => ({ name: 'local', type: 'local', isolationIntent: false })) };
+
+    const unitTypeLoader = { get: vi.fn(() => DEVOPS_UNIT_TYPE), getOrThrow: vi.fn(() => DEVOPS_UNIT_TYPE) };
+    const sidekickLoader = { findByName: vi.fn(() => null), findDefaultForTag: vi.fn(() => makeSidekick()), list: vi.fn(() => []), invalidateCache: vi.fn() };
+
+    const fixedTask = {
+      id: 1, projectId: 10, unitId: 1, serverName: 'local', title: 'Test Task', description: null,
+      status: 'running', currentPhase: 'pushing', planMarkdown: null, targetBranch: null, baseBranch: null,
+      skipPr: false, selfReviewCount: 0, worktreePath: null, workingDirectory: '/work', worktreeBranch: null, branch: null, summaryJson: null,
+      inputTrust: 'untrusted' as const, pendingOperation: null, pendingOperationWindowId: null, pendingOperationPriorStatus: null,
+      executionApprovedFingerprintHash: null as string | null,
+    };
+    // Approve against the config resolveExecutionManifest will see
+    // (isolationIntent: false from serverRepoMock).
+    const { manifest } = resolveExecutionManifest(
+      fixedTask as any,
+      makeManifestDeps(serverRepoMock, unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader),
+      'continuation',
+    );
+    fixedTask.executionApprovedFingerprintHash = hashExecutionManifest(manifest);
+    serverRepoMock.findByName.mockClear();
+
+    const taskRepo = {
+      findById: vi.fn(() => fixedTask), update: vi.fn(), updateStatus: vi.fn(), updateCurrentPhase: vi.fn(),
+      recordExecutionGateBlock: vi.fn(() => true),
+    };
+
+    const { runner, workerWaiter } = makeRunner({
+      taskRepo, unitRepo, projectRepo, projectServerRepo, unitTypeLoader, sidekickLoader,
+      pushNotaryService: null, // not wired — would fail if stale snapshot (true) were used
+    });
+    (runner as any).serverRepo = serverRepoMock;
+
+    // Run-start snapshot: isolated + no notary → would fail at the cutoff
+    // if the stale snapshot were used.
+    const snapshotServer = { name: 'local', type: 'local', isolationIntent: true } as any;
+
+    await runner.stateMachineLoop(makePushingUnit(), 'local', { ...task, status: 'running' as const, currentPhase: 'pushing' }, snapshotServer, 'sess:1.1', new AbortController().signal, 'sess:1', null, false);
+
+    // Normal pushing path: the worker receives a prompt.
+    expect(workerWaiter.waitForWorker).toHaveBeenCalledTimes(1);
+    expect(taskRepo.updateStatus).not.toHaveBeenCalledWith(1, 'failed');
+    // Same single-read assertion: resolveExecutionManifest's own findByName,
+    // reused by the cutoff via gateResult.serverConfig.
+    expect(serverRepoMock.findByName).toHaveBeenCalledTimes(1);
+  });
+});
