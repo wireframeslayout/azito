@@ -99,6 +99,7 @@ interface SupervisorConnection {
   lastActivityFrameAt: number | null;
   lastReportedState: ActivityState | null;
   lastReportedStatus: AgentStatus | null;
+  muxPaneRef: string | null;
 }
 
 export interface SupervisorEntry {
@@ -116,6 +117,7 @@ export interface SupervisorEntry {
   lastActivityFrameAt: number | null;
   lastReportedState: ActivityState | null;
   lastReportedStatus: AgentStatus | null;
+  muxPaneRef: string | null;
 }
 
 export interface SupervisorActivityEvent {
@@ -173,8 +175,10 @@ export interface SupervisorAuthorityRevokedEvent {
   target: string;
 }
 
+import { windowKey, stripPaneSuffix } from '@azito/shared';
+
 function keyFor(serverName: string, target: string): string {
-  return `${serverName}::${target}`;
+  return windowKey(serverName, target);
 }
 
 /**
@@ -410,7 +414,7 @@ export class SupervisorRegistry extends EventEmitter {
 
     const mismatch =
       row.serverName !== info.serverName ||
-      row.target !== info.target ||
+      row.target !== stripPaneSuffix(info.target) ||
       row.taskId !== info.taskId ||
       row.unitId !== info.unitId;
     if (mismatch) {
@@ -547,6 +551,7 @@ export class SupervisorRegistry extends EventEmitter {
       lastActivityFrameAt: null,
       lastReportedState: null,
       lastReportedStatus: null,
+      muxPaneRef: info.muxPaneRef ?? null,
     };
     this.connections.set(key, conn);
     this.socketKeys.set(socket, key);
@@ -748,6 +753,7 @@ export class SupervisorRegistry extends EventEmitter {
       lastActivityFrameAt: conn.lastActivityFrameAt,
       lastReportedState: conn.lastReportedState,
       lastReportedStatus: conn.lastReportedStatus,
+      muxPaneRef: conn.muxPaneRef,
     }));
   }
 

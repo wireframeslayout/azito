@@ -4,6 +4,7 @@
   "description": "Browser-based tmux session manager for Claude Code / Codex agents",
   "private": true,
   "workspaces": [
+    "packages/shared",
     "packages/server",
     "packages/frontend",
     "packages/tui-supervisor"

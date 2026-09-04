@@ -1,6 +1,6 @@
 import type { IWindowRepository } from '../windows/Window';
 import { isAgentWindow } from '../windows/Window';
-import { stripPaneSuffix } from '../windows/paneTarget';
+import { stripPaneSuffix, windowKey } from '@azito/shared';
 import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import type { ActivityDiagnosticEntry, AgentActivityMonitor } from './AgentActivityMonitor';
 
@@ -30,12 +30,10 @@ export interface ActivityDiagnosticRow extends ActivityDiagnosticEntry {
      * apart from "Tier 0 authoritative".
      */
     bound: boolean;
+    muxPaneRef: string | null;
   };
 }
 
-function keyOf(serverName: string, target: string): string {
-  return `${serverName}::${stripPaneSuffix(target)}`;
-}
 
 /**
  * True when a Tier 0 attribution rests on evidence that predates the supervisor
@@ -76,7 +74,7 @@ export function buildActivityDiagnostics(
   supervisorRegistry: SupervisorRegistry,
   windowRepo: IWindowRepository,
 ): ActivityDiagnosticRow[] {
-  const supervisors = new Map(supervisorRegistry.snapshot().map((s) => [keyOf(s.serverName, s.target), s]));
+  const supervisors = new Map(supervisorRegistry.snapshot().map((s) => [windowKey(s.serverName, s.target), s]));
 
   // Same dedup rule as AgentActivityMonitor.collect(): several `windows` rows
   // can point at one tmux window; the task-owned one wins.
@@ -85,7 +83,7 @@ export function buildActivityDiagnostics(
   const windowTaskIds = new Map<string, number | null>();
   for (const w of windowRepo.findAll()) {
     if (!isAgentWindow(w)) continue;
-    const key = keyOf(w.serverName, w.tmuxTarget);
+    const key = windowKey(w.serverName, w.tmuxTarget);
     if (!windowIds.has(key) || (w.taskId != null && windowTaskIds.get(key) == null)) {
       windowIds.set(key, w.id);
       windowProjectIds.set(key, w.projectId);
@@ -94,7 +92,7 @@ export function buildActivityDiagnostics(
   }
 
   const rows: ActivityDiagnosticRow[] = monitor.diagnostics().map((entry) => {
-    const key = keyOf(entry.serverName, entry.target);
+    const key = windowKey(entry.serverName, entry.target);
     const supervisor = supervisors.get(key);
     supervisors.delete(key);
     return {
@@ -114,6 +112,7 @@ export function buildActivityDiagnostics(
         lastReportedState: supervisor.lastReportedState,
         lastReportedStatus: supervisor.lastReportedStatus ?? null,
         bound: supervisor.bound,
+        muxPaneRef: supervisor.muxPaneRef,
       },
     };
   });
@@ -135,6 +134,7 @@ export function buildActivityDiagnostics(
         lastReportedState: supervisor.lastReportedState,
         lastReportedStatus: supervisor.lastReportedStatus ?? null,
         bound: supervisor.bound,
+        muxPaneRef: supervisor.muxPaneRef,
       },
     });
   }

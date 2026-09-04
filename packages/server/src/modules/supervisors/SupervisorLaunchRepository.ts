@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { stripPaneSuffix } from '@azito/shared';
 import type { SqliteDatabase } from '../../shared/db/Database';
 
 /** What the hub expects a `register` message to claim, resolved at the moment it wrapped the launch command. */
@@ -254,8 +255,8 @@ export class SqliteSupervisorLaunchRepository implements ISupervisorLaunchReposi
     const launchId = crypto.randomUUID();
     const bootstrapToken = crypto.randomBytes(32).toString('hex');
     const run = this.db.transaction((exp: SupervisorLaunchExpectation, id: string, hash: string): void => {
-      this.supersedeForTargetStmt.run(exp.serverName, exp.target);
-      this.insertStmt.run(id, exp.serverName, exp.target, exp.taskId, exp.unitId, hash);
+      this.supersedeForTargetStmt.run(exp.serverName, stripPaneSuffix(exp.target));
+      this.insertStmt.run(id, exp.serverName, stripPaneSuffix(exp.target), exp.taskId, exp.unitId, hash);
     });
     run(expectation, launchId, hashToken(bootstrapToken));
     return { launchId, bootstrapToken };
@@ -272,7 +273,7 @@ export class SqliteSupervisorLaunchRepository implements ISupervisorLaunchReposi
   }
 
   findActiveByTarget(serverName: string, target: string): SupervisorLaunchRow | null {
-    const row = this.findActiveByTargetStmt.get(serverName, target) as LaunchRawRow | undefined;
+    const row = this.findActiveByTargetStmt.get(serverName, stripPaneSuffix(target)) as LaunchRawRow | undefined;
     return row ? toRow(row) : null;
   }
 

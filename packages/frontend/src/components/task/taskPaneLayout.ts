@@ -5,7 +5,7 @@
  *
  * Tab ids:
  *  - fixed views: 'view:description' | 'view:unit' | 'view:git' | 'view:summary' | 'view:commits' | 'view:diff'
- *  - windows:     'v-window:<serverName>/<tmuxTarget>' — one tab per assigned tmux window.
+ *  - windows:     'v-window:<serverName>::<tmuxTarget>' — one tab per assigned tmux window.
  *
  * Persistence: entries live in the shared `SUB_TAB_KEY` localStorage map,
  * keyed by taskId, as `{ layout: LayoutNode, focusedPaneId?: string }`.
@@ -23,7 +23,7 @@
 import type { PaneLayoutStorage } from '../../hooks/usePaneLayout';
 import { findPane, listPanes, openTab, createPane, normalizeLayout, type LayoutNode } from '../../hooks/paneLayoutTree';
 import type { Window, Session } from '../../pages/workspace/types';
-import { isSameWindowTarget, stripPaneSuffix } from '../../utils/tmuxTarget';
+import { isSameWindowTarget, windowKey } from '@azito/shared';
 
 // Legacy (pre-Issue #397) sub-tab model: one selected view + optional terminal ref.
 // Kept only to normalize old persisted entries into the new pane-tree shape below.
@@ -95,12 +95,17 @@ export function parseViewTabId(tabId: string): FixedView | null {
 // `allTabIds`/reconcile would treat those as two different tabs and prune whichever one the
 // user actually had selected.
 export function windowTabId(serverName: string, target: string): string {
-  return `v-window:${serverName}/${stripPaneSuffix(target)}`;
+  return `v-window:${windowKey(serverName, target)}`;
 }
 
 export function parseWindowTabId(tabId: string): TerminalRef | null {
   if (!tabId.startsWith('v-window:')) return null;
   const rest = tabId.slice('v-window:'.length);
+  const dcIdx = rest.indexOf('::');
+  if (dcIdx > 0) {
+    return { serverName: rest.slice(0, dcIdx), target: rest.slice(dcIdx + 2) };
+  }
+  // 旧形式後方互換: localStorage に永続化された `v-window:server/target` を復元する
   const slashIdx = rest.indexOf('/');
   if (slashIdx <= 0) return null;
   return { serverName: rest.slice(0, slashIdx), target: rest.slice(slashIdx + 1) };

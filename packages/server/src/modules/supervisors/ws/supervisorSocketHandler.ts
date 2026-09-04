@@ -34,6 +34,7 @@ function validateRegisterMessage(raw: Record<string, unknown>): RegisterMessage 
     ...(typeof raw.launchId === 'string' ? { launchId: raw.launchId } : {}),
     ...(typeof raw.bootstrapToken === 'string' ? { bootstrapToken: raw.bootstrapToken } : {}),
     ...(typeof raw.sessionToken === 'string' ? { sessionToken: raw.sessionToken } : {}),
+    ...(typeof raw.muxPaneRef === 'string' && /^%\d+$/.test(raw.muxPaneRef) ? { muxPaneRef: raw.muxPaneRef } : {}),
   };
 }
 
