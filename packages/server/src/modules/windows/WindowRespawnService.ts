@@ -420,7 +420,7 @@ export class WindowRespawnService {
       await sleep(createdViaNewSession ? 500 : 300);
 
       const baseTarget = `${sessionName}:${newName}`;
-      const dbTarget = `${baseTarget}.1`;
+      const dbTarget = baseTarget;
 
       // Pane restoration now runs INSIDE this same lock turn, before the
       // final persist below — see the design-rationale comment above this

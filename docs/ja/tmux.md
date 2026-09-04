@@ -19,9 +19,9 @@ set -g base-index 1
 set -g pane-base-index 1
 ```
 
-- **`pane-base-index 1`**: AZITO はペインを `<セッション>:<ウィンドウ>.1` 形式で参照します
-  （エージェント起動の send-keys、pipe-pane、respawn 等）。tmux デフォルトの pane index は
-  0 始まりのため、この設定が無いと `can't find pane: 1` でエージェントが起動しません。
+- **`pane-base-index 1`**: DB の `tmux_target` はウィンドウまで（`<セッション>:<ウィンドウ>`）
+  の形式で保存し、ペインは実行時に pane ID（`%N`）で解決します。`pane-base-index 1` は
+  引き続き必須です（`send-keys` / `pipe-pane` の一部パスがペイン ordinal を使用するため）。
 - **`base-index 1`**: ウィンドウ参照は名前ベースのため直接の依存はありませんが、
   pane-base-index と揃えて 1 始まりにしておきます（`azito.conf` にも両方含まれています）。
 

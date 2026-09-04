@@ -66,6 +66,15 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if (!serverName || !tmuxTarget)
         return reply.status(400).send({ error: 'server_name and tmux_target required' });
 
+      const existing = windowRepo.findByServerAndTarget(serverName, tmuxTarget);
+      if (existing) {
+        if (existing.projectId !== id) {
+          windowRepo.update(existing.id, { projectId: id });
+          notifyWindowsChanged(serverName);
+        }
+        return { ok: true, id: existing.id };
+      }
+
       const workerType = (body['worker_type'] as string) || null;
       const workingDirectory = (body['working_directory'] as string) || null;
       const winId = windowRepo.add({
@@ -114,6 +123,12 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const addedIds: number[] = [];
       for (const win of targetSession.windows) {
         const winTarget = `${session}:${win.name}`;
+        const existing = windowRepo.findByServerAndTarget(serverName, winTarget);
+        if (existing) {
+          if (existing.projectId !== id) windowRepo.update(existing.id, { projectId: id });
+          addedIds.push(existing.id);
+          continue;
+        }
         const winId = windowRepo.add({
           ownerType: 'project',
           projectId: id,
@@ -161,6 +176,11 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const tmuxTarget = body['tmux_target'] as string | undefined;
       if (!serverName || !tmuxTarget)
         return reply.status(400).send({ error: 'server_name and tmux_target required' });
+
+      const existing = windowRepo.findByServerAndTarget(serverName, tmuxTarget);
+      if (existing) {
+        return { ok: true, id: existing.id };
+      }
 
       const workerType = (body['worker_type'] as string) || null;
       const workingDirectory = (body['working_directory'] as string) || null;

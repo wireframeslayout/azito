@@ -266,7 +266,7 @@ describe('TaskRestoreService', () => {
 
     const result = await service.restore(task, log);
 
-    expect(result.tmuxTarget).toBe('azito:task-1.1');
+    expect(result.tmuxTarget).toBe('azito:task-1');
     expect(result.worktreePath).toBe(worktreeDir);
     expect(deps.tmux.createWindow).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'test-server' }),
@@ -278,7 +278,7 @@ describe('TaskRestoreService', () => {
       ownerType: 'task',
       taskId: 1,
       isPrimary: true,
-      tmuxTarget: 'azito:task-1.1',
+      tmuxTarget: 'azito:task-1',
     }));
     expect(deps.taskRepo.update).toHaveBeenCalledWith(1, expect.objectContaining({ status: 'open', tmuxWindow: 'task-1' }));
   });
@@ -1312,7 +1312,7 @@ describe('TaskRestoreService', () => {
 
       const result = await service.restore(task, log);
 
-      expect(result.tmuxTarget).toBe('azito:task-1.1');
+      expect(result.tmuxTarget).toBe('azito:task-1');
       expect(deps.tmux.createWindow).toHaveBeenCalled();
     });
 
@@ -1431,7 +1431,7 @@ describe('TaskRestoreService', () => {
 
       const result = await service.restore(task, log);
 
-      expect(result.tmuxTarget).toBe('azito:task-1.1');
+      expect(result.tmuxTarget).toBe('azito:task-1');
     });
   });
 });

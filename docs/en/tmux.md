@@ -20,9 +20,10 @@ set -g base-index 1
 set -g pane-base-index 1
 ```
 
-- **`pane-base-index 1`**: AZITO addresses panes as `<session>:<window>.1`
-  (agent launch via send-keys, pipe-pane, respawn, etc.). tmux's default pane index
-  starts at 0, so without this setting agent launches fail with `can't find pane: 1`.
+- **`pane-base-index 1`**: AZITO stores `tmux_target` at window level
+  (`<session>:<window>`) in the DB and resolves panes at runtime via pane ID (`%N`).
+  `pane-base-index 1` remains required (some `send-keys` / `pipe-pane` paths still
+  use pane ordinals).
 - **`base-index 1`**: windows are referenced by name, so there is no direct dependency,
   but keep it aligned with pane-base-index (both are included in `azito.conf`).
 

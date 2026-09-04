@@ -366,7 +366,7 @@ export class TaskRestoreService {
 
       const windowTarget = `${tmuxSession}:${windowName}`;
       const paneId = await tmux.resolvePaneId(server, windowTarget);
-      const dbTarget = `${windowTarget}.1`;
+      const dbTarget = windowTarget;
       // `lockedProjectServer` (Issue #87 16th-round review, Important finding
       // 2), not the pre-lock `projectServer` — this line runs AFTER
       // createRotatedWindow's preCheck has already re-resolved and captured
