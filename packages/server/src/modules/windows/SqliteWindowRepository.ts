@@ -55,12 +55,12 @@ export class SqliteWindowRepository implements IWindowRepository {
     `);
     this.findAllStmt = db.prepare('SELECT * FROM windows');
     this.findByIdStmt = db.prepare('SELECT * FROM windows WHERE id = ?');
-    this.findByProjectStmt = db.prepare("SELECT * FROM windows WHERE owner_type = 'project' AND project_id = ?");
+    this.findByProjectStmt = db.prepare('SELECT * FROM windows WHERE project_id = ? ORDER BY created_at ASC');
     this.findByTaskStmt = db.prepare("SELECT * FROM windows WHERE owner_type = 'task' AND task_id = ? ORDER BY is_primary DESC, created_at ASC");
     this.removeStmt = db.prepare('DELETE FROM windows WHERE id = ?');
     this.updatePaneLayoutStmt = db.prepare('UPDATE windows SET pane_layout = ? WHERE id = ?');
     this.findProjectWindowStmt = db.prepare(
-      "SELECT id FROM windows WHERE owner_type = 'project' AND project_id = ? AND server_name = ? AND tmux_target = ?"
+      'SELECT id FROM windows WHERE project_id = ? AND server_name = ? AND tmux_target = ?'
     );
     this.findByServerStmt = db.prepare('SELECT * FROM windows WHERE server_name = ?');
     this.findAgentSessionIdsByServerStmt = db.prepare(
@@ -172,11 +172,12 @@ export class SqliteWindowRepository implements IWindowRepository {
   }
 
   update(id: number, data: Partial<Pick<Window,
-    'tmuxTarget' | 'label' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType' | 'sleeping'
+    'tmuxTarget' | 'label' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType' | 'sleeping' | 'projectId'
   >>): void {
     const fields: string[] = [];
     const values: unknown[] = [];
 
+    if (data.projectId !== undefined) { fields.push('project_id = ?'); values.push(data.projectId); }
     if (data.tmuxTarget !== undefined) { fields.push('tmux_target = ?'); values.push(data.tmuxTarget); }
     if (data.label !== undefined) { fields.push('label = ?'); values.push(data.label); }
     if (data.agentSessionId !== undefined) { fields.push('agent_session_id = ?'); values.push(data.agentSessionId); }

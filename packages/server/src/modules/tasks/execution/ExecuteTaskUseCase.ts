@@ -1204,7 +1204,7 @@ export class ExecuteTaskUseCase {
       projectId: null,
       taskId,
       serverName,
-      tmuxTarget: `${windowTarget}.1`,
+      tmuxTarget: windowTarget,
       label: windowName,
       isPrimary: true,
       windowType,
@@ -1280,7 +1280,7 @@ export class ExecuteTaskUseCase {
 
     const abortController = new AbortController();
     const executions = this.runningExecutions.get(unitId) || [];
-    executions.push({ taskId, abortController, target, windowTarget: `${windowTarget}.1`, serverName });
+    executions.push({ taskId, abortController, target, windowTarget, serverName });
     this.runningExecutions.set(unitId, executions);
     this.appendLog(taskId, unitId, 'status_change', { status: 'started' });
 
@@ -1608,7 +1608,7 @@ export class ExecuteTaskUseCase {
 
     const abortController = new AbortController();
     const followUpExecutions = this.runningExecutions.get(unitId) || [];
-    followUpExecutions.push({ taskId, abortController, target, windowTarget: `${windowTarget}.1`, serverName });
+    followUpExecutions.push({ taskId, abortController, target, windowTarget, serverName });
     this.runningExecutions.set(unitId, followUpExecutions);
     this.appendLog(taskId, unitId, 'status_change', { status: 'follow_up_started', comment });
 
@@ -1844,7 +1844,7 @@ export class ExecuteTaskUseCase {
 
     const abortController = new AbortController();
     const executions = this.runningExecutions.get(unitId) || [];
-    executions.push({ taskId, abortController, target, windowTarget: `${windowTarget}.1`, serverName });
+    executions.push({ taskId, abortController, target, windowTarget, serverName });
     this.runningExecutions.set(unitId, executions);
 
     const effectiveSelfReviewMax = task.selfReviewMaxAttempts ?? unit.selfReviewMaxAttempts;
