@@ -151,6 +151,7 @@ function makeOpts(
       createSession: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'w' })),
       createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' })),
       killWindow: vi.fn(killWindowImpl ?? (async () => ({ stdout: '', stderr: '', code: 0 }))),
+      closeWindow: vi.fn(killWindowImpl ?? (async () => ({ stdout: '', stderr: '', code: 0 }))),
       sendKeys: vi.fn(async () => {}),
       checkPaneExists: vi.fn(async () => true),
       killPane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
@@ -244,9 +245,9 @@ describe('POST /api/tasks/:id/retry', () => {
 
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(res.payload)).toEqual({ ok: true });
-    expect(opts.tmux.killWindow).toHaveBeenCalledWith(
+    expect(opts.tmux.closeWindow).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'test-server' }),
-      'azito:task-1',
+      { kind: 'tmux', workspace: 'azito', window: 'task-1' },
     );
     expect(opts.executeTaskUseCase.stopByTaskId).toHaveBeenCalledWith(1);
     expect(opts.paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(1, 'retry_abandoned_window');
@@ -266,7 +267,7 @@ describe('POST /api/tasks/:id/retry', () => {
 
     expect(res.statusCode).toBe(409);
     expect(JSON.parse(res.payload).error).toMatch(/Failed to kill/);
-    expect(opts.tmux.killWindow).toHaveBeenCalled();
+    expect(opts.tmux.closeWindow).toHaveBeenCalled();
     // Fail-closed: nothing mutates on a 409 — not the execution, not the
     // token generation, not the task row. The 409 response must be true.
     expect(opts.executeTaskUseCase.stopByTaskId).not.toHaveBeenCalled();
