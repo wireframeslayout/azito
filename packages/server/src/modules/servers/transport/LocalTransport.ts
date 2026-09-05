@@ -4,11 +4,13 @@ import * as pty from 'node-pty';
 import type {
   ExecResult,
   IServerTransport,
+  IMuxTransport,
   ITerminalStream,
 } from './ServerTransport';
 import type { IPaneStream } from '../../tmux/PaneStream';
 import { PaneOutputStream } from '../../tmux/PaneOutputStream';
 import type { TmuxRuntime } from './TmuxRuntime';
+import { type MuxRef, type PaneHandle, type PaneOrdinal, tmuxTargetFromMuxRef } from '@azito/shared';
 
 function execLocal(command: string, args: string[], timeoutMs = 5000): Promise<ExecResult> {
   return new Promise((resolve, reject) => {
@@ -53,7 +55,7 @@ class LocalTerminalStream extends EventEmitter implements ITerminalStream {
   }
 }
 
-export class LocalTransport implements IServerTransport {
+export class LocalTransport implements IServerTransport, IMuxTransport {
   private sessionCounter = 0;
 
   constructor(private rt: TmuxRuntime, private publicUrl: string) {}
@@ -62,14 +64,37 @@ export class LocalTransport implements IServerTransport {
     return execLocal('/bin/sh', ['-c', command], timeoutMs);
   }
 
-  execTmux(args: string[]): Promise<ExecResult> {
+  execMux(args: string[]): Promise<ExecResult> {
     return execLocal(this.rt.bin, [...this.rt.baseArgs, ...args]);
   }
 
-  async openTerminal(target: string, cols: number, rows: number): Promise<ITerminalStream> {
-    const match = target.match(/^([^:]+):(.+?)(?:\.(\d+))?$/);
-    if (!match) throw new Error(`Invalid target: ${target}`);
-    const [, sessionName, windowTarget] = match;
+  /** @deprecated Use execMux */
+  execTmux(args: string[]): Promise<ExecResult> {
+    return this.execMux(args);
+  }
+
+  async openTerminal(ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream>;
+  /** @deprecated Use MuxRef overload */
+  async openTerminal(target: string, cols: number, rows: number): Promise<ITerminalStream>;
+  async openTerminal(refOrTarget: MuxRef | string, colsOrOrdinal: PaneOrdinal | number, rowsOrCols: number, maybeRows?: number): Promise<ITerminalStream> {
+    let sessionName: string;
+    let windowTarget: string;
+    let cols: number;
+    let rows: number;
+    if (typeof refOrTarget === 'string') {
+      const match = refOrTarget.match(/^([^:]+):(.+?)(?:\.(\d+))?$/);
+      if (!match) throw new Error(`Invalid target: ${refOrTarget}`);
+      [, sessionName, windowTarget] = match;
+      cols = colsOrOrdinal;
+      rows = rowsOrCols;
+    } else {
+      const tmuxTarget = tmuxTargetFromMuxRef(refOrTarget);
+      const colonIdx = tmuxTarget.indexOf(':');
+      sessionName = tmuxTarget.slice(0, colonIdx);
+      windowTarget = tmuxTarget.slice(colonIdx + 1);
+      cols = rowsOrCols;
+      rows = maybeRows!;
+    }
 
     await new Promise<void>((resolve, reject) => {
       execFile(this.rt.bin, [...this.rt.baseArgs, 'list-panes', '-t', `${sessionName}:${windowTarget}`], (err) => {
@@ -100,7 +125,7 @@ export class LocalTransport implements IServerTransport {
 
       execFile(this.rt.bin, [...this.rt.baseArgs, 'new-session', '-d', '-t', sessionName, '-s', linkedSessionName, '-e', `AZITO_URL=${this.publicUrl}`], (err) => {
         if (err) {
-          attach(['attach-session', '-t', target], null);
+          attach(['attach-session', '-t', `${sessionName}:${windowTarget}`], null);
           return;
         }
 
@@ -129,7 +154,10 @@ export class LocalTransport implements IServerTransport {
     return new LocalTerminalStream(ptyProcess, linkedSessionName, this.rt);
   }
 
-  createPaneStream(paneId: string): IPaneStream {
-    return new PaneOutputStream(paneId);
+  createPaneStream(handle: PaneHandle): IPaneStream;
+  /** @deprecated Use PaneHandle overload */
+  createPaneStream(paneId: string): IPaneStream;
+  createPaneStream(handleOrId: PaneHandle | string): IPaneStream {
+    return new PaneOutputStream(handleOrId as string);
   }
 }

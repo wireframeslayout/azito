@@ -1,16 +1,6 @@
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { ServerConfig } from '../servers/Server';
-
-const HOOK_EVENTS = [
-  'window-linked',
-  'window-unlinked',
-  'after-rename-window',
-  'after-kill-pane',
-  'session-window-changed',
-  'session-closed',
-  'after-select-pane',
-] as const;
-const HOOK_INDEX = 42;
+import { HOOK_EVENTS, buildHookValue, buildHookSetArgs, buildHookUnsetArgs } from './tmuxHooks';
 
 export class TmuxHookManager {
   private installedServers = new Set<string>();
@@ -24,10 +14,9 @@ export class TmuxHookManager {
   async install(server: ServerConfig): Promise<void> {
     const transport = this.transportFactory.getTransport(server);
     const base = `http://localhost:${this.webhookPort}/api/hooks/tmux`;
-    const serverParam = encodeURIComponent(server.name);
     for (const event of HOOK_EVENTS) {
-      const hookValue = `run-shell "curl -sf -o /dev/null -X POST -H 'Authorization: Bearer ${this.webhookToken}' '${base}?event=${event}&server=${serverParam}&session=#{hook_session_name}' 2>/dev/null &"`;
-      await transport.execTmux(['set-hook', '-g', `${event}[${HOOK_INDEX}]`, hookValue]);
+      const hookValue = buildHookValue(base, event, { token: this.webhookToken, serverName: server.name });
+      await transport.execTmux(buildHookSetArgs(event, hookValue));
     }
     this.installedServers.add(server.name);
   }
@@ -35,7 +24,7 @@ export class TmuxHookManager {
   async uninstall(server: ServerConfig): Promise<void> {
     const transport = this.transportFactory.getTransport(server);
     for (const event of HOOK_EVENTS) {
-      await transport.execTmux(['set-hook', '-gu', `${event}[${HOOK_INDEX}]`]);
+      await transport.execTmux(buildHookUnsetArgs(event));
     }
     this.installedServers.delete(server.name);
   }
