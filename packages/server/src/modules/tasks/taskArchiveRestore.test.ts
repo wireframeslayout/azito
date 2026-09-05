@@ -115,9 +115,13 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
       createSession: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'w' })),
       createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' })),
       killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
+      closeWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       sendKeys: vi.fn(async () => {}),
       checkPaneExists: vi.fn(async () => true),
+      windowExists: vi.fn(async () => true),
       killPane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
+      resolvePane: vi.fn(async () => '%0'),
+      listPanesByRef: vi.fn(async () => [{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }]),
     } as unknown as TasksRouteOptions['tmux'],
     serverRepo: {
       findAll: vi.fn(() => []),

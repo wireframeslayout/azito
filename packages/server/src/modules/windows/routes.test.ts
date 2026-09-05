@@ -30,13 +30,16 @@ function makeWindowActivityStatusService(): WindowActivityStatusService {
 }
 
 function makeWindow(overrides: Partial<Window> = {}): Window {
+  const tmuxTarget = overrides.tmuxTarget ?? 'proj:win1';
+  const colonIdx = tmuxTarget.indexOf(':');
   return {
     id: 1,
     ownerType: 'project',
     projectId: 1,
     taskId: null,
     serverName: 'local-server',
-    tmuxTarget: 'proj:win1',
+    tmuxTarget,
+    muxRef: { kind: 'tmux' as const, workspace: tmuxTarget.slice(0, colonIdx), window: tmuxTarget.slice(colonIdx + 1) },
     label: 'manual-agent',
     isPrimary: false,
     windowType: 'agent',
@@ -94,6 +97,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
     const tmux: Partial<TmuxClient> = {
       sendKeys: sendKeys as unknown as TmuxClient['sendKeys'],
       resolvePaneId: vi.fn().mockResolvedValue('%0') as unknown as TmuxClient['resolvePaneId'],
+      resolvePane: vi.fn().mockResolvedValue('%0') as unknown as TmuxClient['resolvePane'],
     };
 
     app = Fastify();
@@ -237,6 +241,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
       tmux: {
         sendKeys: sendKeys as unknown as TmuxClient['sendKeys'],
         resolvePaneId: vi.fn().mockResolvedValue('%0') as unknown as TmuxClient['resolvePaneId'],
+        resolvePane: vi.fn().mockResolvedValue('%0') as unknown as TmuxClient['resolvePane'],
       } as TmuxClient,
       serverRepo: {
         findByName: (name: string) => (name === server.name ? server : null),

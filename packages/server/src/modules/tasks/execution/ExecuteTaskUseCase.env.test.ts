@@ -341,10 +341,14 @@ function buildUseCase(opts: {
     createSession: vi.fn(async () => {}),
     createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'w1' })),
     resolvePaneId: vi.fn(async () => '%0'),
+    resolvePane: vi.fn(async () => '%0'),
     killPane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
     killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
+    closeWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
     sendKeys: vi.fn(async () => {}),
     checkPaneExists: vi.fn(async () => true),
+    windowExists: vi.fn(async () => true),
+    listPanesByRef: vi.fn(async () => [{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }]),
     uiTokenEnvForServer: vi.fn(() => ({})),
     execCommand: vi.fn(async (_server: unknown, _cmd: string) => ({ stdout: '', stderr: '', code: 0 })),
   };
@@ -496,7 +500,7 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
 
     const createSessionServer = (tmux.createSession as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const createWindowServer = (tmux.createWindow as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    const resolvePaneIdServer = (tmux.resolvePaneId as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const resolvePaneServer = (tmux.resolvePane as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const getTransportServer = (transportFactory.getTransport as ReturnType<typeof vi.fn>).mock.calls[0][0];
 
     // ensureSessionWithLock's lock span re-read the server for the session
@@ -507,10 +511,10 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
     // than ensureSessionWithLock's, never the same or an earlier one.
     expect(createWindowServer.agentVersion).not.toBe(createSessionServer.agentVersion);
     // Everything execute() does after createRotatedWindow returns
-    // (resolvePaneId, the worktree transport) must keep using THAT exact
+    // (resolvePane, the worktree transport) must keep using THAT exact
     // fresh row, not fall back to the `server` resolved before either lock
     // span ran.
-    expect(resolvePaneIdServer.agentVersion).toBe(createWindowServer.agentVersion);
+    expect(resolvePaneServer.agentVersion).toBe(createWindowServer.agentVersion);
     expect(getTransportServer.agentVersion).toBe(createWindowServer.agentVersion);
   });
 
@@ -538,16 +542,16 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
 
     const createSessionServer = (tmux.createSession as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const createWindowServer = (tmux.createWindow as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    const resolvePaneIdServer = (tmux.resolvePaneId as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const resolvePaneServer = (tmux.resolvePane as ReturnType<typeof vi.fn>).mock.calls[0][0];
 
     expect(createSessionServer.agentVersion).toBeDefined();
     // createRotatedWindow's lock span re-read the server again for the real
     // task window â€” createWindow must see a STRICTLY NEWER row than
     // ensureSessionWithLock's.
     expect(createWindowServer.agentVersion).not.toBe(createSessionServer.agentVersion);
-    // resolvePaneId (called right after createRotatedWindow returns) must
+    // resolvePane (called right after createRotatedWindow returns) must
     // keep using that exact fresh row.
-    expect(resolvePaneIdServer.agentVersion).toBe(createWindowServer.agentVersion);
+    expect(resolvePaneServer.agentVersion).toBe(createWindowServer.agentVersion);
   });
 
   it('clears the exit marker before runtime.resume() for a supervised follow-up on a local server', async () => {
@@ -1465,14 +1469,18 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITOç›
       createSession: vi.fn(async () => {}),
       createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' })),
       resolvePaneId: vi.fn(async () => '%0'),
+      resolvePane: vi.fn(async () => '%0'),
       killPane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
+      closeWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       sendKeys: vi.fn(async (_server: unknown, _target: string, _keys: string[]) => {}),
       startPipePane: vi.fn(async () => {}),
       stopPipePane: vi.fn(async () => {}),
       getWindowActivity: vi.fn(async () => null),
       capturePane: vi.fn(async () => ({ stdout: '' })),
       execCommand: vi.fn(async () => ({ stdout: '' })),
+      windowExists: vi.fn(async () => true),
+      listPanesByRef: vi.fn(async () => [{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }]),
     };
     const worktreeServiceFactory = { create: vi.fn(() => ({ exists: vi.fn(async () => false) })) };
     const gitProvider = { findPullRequestByBranch: vi.fn(async () => null) };
@@ -1968,7 +1976,7 @@ describe('ExecuteTaskUseCase rollback keeps the window reference tracked when th
     worktreeServiceFactory.create.mockReturnValue({
       create: vi.fn(async () => { throw new Error('worktree failed'); }),
     });
-    tmux.killWindow.mockResolvedValue({ stdout: '', stderr: 'device busy', code: 1 });
+    tmux.closeWindow.mockResolvedValue({ stdout: '', stderr: 'device busy', code: 1 });
 
     await expect(useCase.execute(50, 60)).rejects.toThrow(/Worktree creation failed/);
 
@@ -1989,7 +1997,7 @@ describe('ExecuteTaskUseCase rollback keeps the window reference tracked when th
       create: vi.fn(async () => ({ path: outsideDir, branch: 'task/61-slug' })),
       remove: vi.fn(async () => {}),
     });
-    tmux.killWindow.mockResolvedValue({ stdout: '', stderr: 'device busy', code: 1 });
+    tmux.closeWindow.mockResolvedValue({ stdout: '', stderr: 'device busy', code: 1 });
 
     await expect(useCase.execute(51, 61)).rejects.toThrow(/Worktree path rejected/);
 
@@ -2007,7 +2015,7 @@ describe('ExecuteTaskUseCase rollback keeps the window reference tracked when th
       projectServer: { workingDirectory: allowedRoot, branch: null, tmuxSession: 'azito' },
     });
     worktreeServiceFactory.create.mockReturnValue({ exists: vi.fn(async () => false) });
-    tmux.killWindow.mockResolvedValue({ stdout: '', stderr: 'device busy', code: 1 });
+    tmux.closeWindow.mockResolvedValue({ stdout: '', stderr: 'device busy', code: 1 });
 
     await expect(useCase.followUp(52, 62, 'please continue')).rejects.toThrow(/Follow-up working directory rejected/);
 
@@ -2469,10 +2477,14 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       createSession: vi.fn(async () => {}),
       createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'w1' })),
       resolvePaneId: vi.fn(async () => '%0'),
+      resolvePane: vi.fn(async () => '%0'),
       killPane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
+      closeWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       sendKeys: vi.fn(async () => {}),
       checkPaneExists: vi.fn(async () => true),
+      windowExists: vi.fn(async () => true),
+      listPanesByRef: vi.fn(async () => [{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }]),
       uiTokenEnvForServer: vi.fn(() => ({})),
       startPipePane: vi.fn(async () => {}),
       stopPipePane: vi.fn(async () => {}),
