@@ -65,6 +65,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
             target: ctx.supervisorTarget,
             taskId: ctx.taskId ?? null,
             unitId: ctx.unitId ?? null,
+            windowId: ctx.windowId ?? null,
           }),
         })
       : ctx.effectiveLaunchCommand;

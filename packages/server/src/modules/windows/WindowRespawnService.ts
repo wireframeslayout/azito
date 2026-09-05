@@ -83,6 +83,7 @@ interface SupervisionContext {
   supervise: boolean;
   taskId: number | null;
   unitId: number | null;
+  windowId?: number;
 }
 
 export class WindowRespawnService {
@@ -230,7 +231,7 @@ export class WindowRespawnService {
     const supervise = shouldSupervise(server.type, win.windowType);
     // task/unitId already resolved above for the execution gate — reused
     // here instead of re-querying the repositories a second time.
-    const supervision: SupervisionContext = { supervise, taskId: win.taskId, unitId };
+    const supervision: SupervisionContext = { supervise, taskId: win.taskId, unitId, windowId };
 
     // Window-generation point for this window: EITHER branch below actually
     // (re)creates the window that becomes the respawned pane (unlike
@@ -726,6 +727,7 @@ export class WindowRespawnService {
                 target: windowTarget,
                 taskId: task.id,
                 unitId: task.unitId ?? null,
+                windowId: null,
               }),
             })
           : resumeCommand;
@@ -842,6 +844,7 @@ export class WindowRespawnService {
         target: supervisorTarget,
         taskId: supervision.taskId ?? null,
         unitId: supervision.unitId ?? null,
+        windowId: supervision.windowId ?? null,
       }),
     });
   }

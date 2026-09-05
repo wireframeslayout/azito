@@ -87,7 +87,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     projectSecretRepo, storageSettingsRepo, pushSubRepo, agentWatchRepo, resourceGuardSettingsRepo, resourceGuard,
     tmuxClient, transportFactory, worktreeServiceFactory, gitProvider, storageClient,
     agentInstaller, agentBundler, harnessInstaller, tmuxInstaller,
-    executeTaskUseCase, agentActivityMonitor, interactionMonitor, windowRespawnService, windowSleepService, taskRestoreService, sessionStrategyFactory, sessionCaptureService, usageService,
+    executeTaskUseCase, agentActivityMonitor, interactionMonitor, paneHandleResolver, windowRespawnService, windowSleepService, taskRestoreService, sessionStrategyFactory, sessionCaptureService, usageService,
     windowSessionResolver, windowActivityStatusService,
     pushService, vapidKeys, notificationBus, sidekickPackageService, sidekickPackageLoader,
     sidekickSyncService, unitTypeLoader, chatCommandLoader, agentSignalService, supervisorRegistry, agentTurnRepo, turnSignalHub,
@@ -255,6 +255,17 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       type: 'supervisor:ready',
       payload: { serverName: event.serverName, target: event.target, ...(event.taskId != null ? { taskId: event.taskId } : {}) },
     });
+  });
+  supervisorRegistry.on('registered', (event) => {
+    if (event.muxPaneRef) {
+      paneHandleResolver.warm(event.serverName, event.muxPaneRef);
+    }
+  });
+
+  notificationBus.on((event) => {
+    if (event.type === 'sessions:updated') {
+      paneHandleResolver.invalidate(event.payload.serverName);
+    }
   });
 
   // ─── Plugins ───
@@ -438,7 +449,13 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // share this exact instance.
   const repoDiscovery = new RepoDiscoveryService(tmuxClient);
   const localRepoCloneService = new LocalRepoCloneService();
-  await app.register(serversRoutes, { serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, repoDiscovery });
+  await app.register(serversRoutes, {
+    serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, repoDiscovery,
+    onMuxRuntimeChanged: (serverName) => {
+      paneHandleResolver.clearServer(serverName);
+      supervisorRegistry.clearServerPaneRefs(serverName);
+    },
+  });
   await app.register(sessionsRoutes, {
     serverRepo, tmux: tmuxClient, windowRepo, notificationBus, resourceGuard, serverIsolationMutex,
     destroyPrimaryTaskWindow: (taskId, windowName, serverName, target, reason, kill, onDestroyed) => {
@@ -495,7 +512,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   await app.register(gitRoutes, { serverRepo, transportFactory, taskRepo, projectServerRepo, worktreeServiceFactory, projectRepo, gitProvider });
   await app.register(projectsRoutes, { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux: tmuxClient, serverRepo, projectSecretRepo, originationService, serverIsolationMutex, repoDiscovery, localRepoCloneService, distributionStateRepo, fetchDistributionService });
   await app.register(unitsRoutes, { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, projectServerRepo, serverRepo, sidekickLoader: sidekickPackageLoader, unitTypeLoader });
-  await app.register(operationsRoutes, { executeTaskUseCase, agentActivityMonitor, supervisorRegistry, windowRepo });
+  await app.register(operationsRoutes, { executeTaskUseCase, agentActivityMonitor, supervisorRegistry, windowRepo, paneHandleResolver });
   await app.register(auditLogRoutes, { auditLogService });
   await app.register(tasksRoutes, {
     taskRepo, auditLogService, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux: tmuxClient, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService: windowRespawnService, taskRestoreService, unitTypeLoader, sidekickLoader: sidekickPackageLoader, projectSecretRepo, originationService, taskTokenRepo, scopedAuthEnabled,

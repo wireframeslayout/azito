@@ -79,6 +79,7 @@ import { AgentRegistry, createDefaultRegistry } from '../modules/agents/registry
 import { ExecuteTaskUseCase } from '../modules/tasks/execution/ExecuteTaskUseCase';
 import { AgentActivityMonitor } from '../modules/operations/AgentActivityMonitor';
 import { InteractionMonitor } from '../modules/notifications/InteractionMonitor';
+import { PaneHandleResolver } from '../modules/operations/PaneHandleResolver';
 import { WindowRespawnService } from '../modules/windows/WindowRespawnService';
 import { WindowSleepService } from '../modules/windows/WindowSleepService';
 import { SessionCaptureService } from '../modules/windows/SessionCaptureService';
@@ -200,6 +201,7 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
   executeTaskUseCase: ExecuteTaskUseCase;
   agentActivityMonitor: AgentActivityMonitor;
   interactionMonitor: InteractionMonitor;
+  paneHandleResolver: PaneHandleResolver;
   resourceGuard: ResourceGuard;
   /** Shared with FetchDistributionService (its writer) — also read by projectsRoutes to render each project server's last-distribution record (Issue #87 配信状態の可視化). */
   distributionStateRepo: SqliteDistributionStateRepository;
@@ -491,6 +493,7 @@ function buildAgentActivityMonitor(
   executeTaskUseCase: ExecuteTaskUseCase,
   sessionCaptureService: SessionCaptureService,
   processProbe: WindowActivityStatusService,
+  paneHandleResolver: PaneHandleResolver,
 ): AgentActivityMonitor {
   return new AgentActivityMonitor(
     executeTaskUseCase,
@@ -510,6 +513,7 @@ function buildAgentActivityMonitor(
         void sessionCaptureService.tryScanForWindow(w.id);
       }
     },
+    paneHandleResolver,
   );
 }
 
@@ -576,8 +580,9 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   const appServices = buildApplicationServices(infra, repos, uiToken, scopedAuthEnabled, fetchDistributionService, distributionStateRepo, harnessPrefix);
   const resourceGuard = new ResourceGuard(infra.transportFactory, repos.resourceGuardSettingsRepo);
   const executeTaskUseCase = buildExecuteTaskUseCase(infra, repos, appServices, resourceGuard, scopedAuthEnabled, fetchDistributionService, distributionStateRepo, dataPaths, harnessPrefix);
-  const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService, appServices.windowActivityStatusService);
-  const interactionMonitor = new InteractionMonitor(repos.windowRepo);
+  const paneHandleResolver = new PaneHandleResolver(infra.muxDriverRegistry, repos.windowRepo, repos.serverRepo);
+  const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService, appServices.windowActivityStatusService, paneHandleResolver);
+  const interactionMonitor = new InteractionMonitor(repos.windowRepo, Date.now, paneHandleResolver);
   const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos);
 
   return {
@@ -591,6 +596,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
     executeTaskUseCase,
     agentActivityMonitor,
     interactionMonitor,
+    paneHandleResolver,
     resourceGuard,
     scopedAuthEnabled,
     harnessPrefix,

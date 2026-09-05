@@ -2,6 +2,8 @@ import type { IWindowRepository } from '../windows/Window';
 import { isAgentWindow } from '../windows/Window';
 import { windowSpecMatches } from '../tmux/TmuxClient';
 import { parseWindowTarget } from '../operations/AgentActivityMonitor';
+import { asPaneHandle } from '@azito/shared';
+import type { PaneHandleResolver } from '../operations/PaneHandleResolver';
 
 /**
  * Event-driven pending-answer signal delivered by a Claude Code Notification hook
@@ -143,6 +145,7 @@ export class InteractionMonitor {
   constructor(
     private windowRepo: IWindowRepository,
     private now: () => number = Date.now,
+    private paneHandleResolver?: PaneHandleResolver,
   ) {}
 
   /**
@@ -289,6 +292,14 @@ export class InteractionMonitor {
 
   /** Resolve the signal to every matching window ID (see recordSignal's doc comment on why more than one row can match). */
   private resolveWindowIds(signal: InteractionSignal): number[] {
+    if (signal.muxPaneRef && this.paneHandleResolver) {
+      const resolved = this.paneHandleResolver.getCached(signal.serverName, asPaneHandle(signal.muxPaneRef));
+      if (resolved) return [resolved.windowId];
+      if (resolved === undefined) {
+        this.paneHandleResolver.warm(signal.serverName, signal.muxPaneRef);
+      }
+    }
+
     const windowIds: number[] = [];
     for (const w of this.windowRepo.findAll()) {
       if (!isAgentWindow(w)) continue;

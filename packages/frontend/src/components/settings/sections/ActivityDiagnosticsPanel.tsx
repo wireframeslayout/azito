@@ -6,6 +6,7 @@ import { Notice } from '../../ui/Notice';
 import { formatRelativeTime } from '../../../utils/time';
 import {
   DIM,
+  MatchCell,
   StateCell,
   StateDot,
   TierCell,
@@ -127,6 +128,7 @@ export default function ActivityDiagnosticsPanel() {
                   <th scope="col">{t('activityDiagnostics.colState')}</th>
                   <th scope="col">{t('activityDiagnostics.colTier')}</th>
                   <th scope="col">{t('activityDiagnostics.colSupervisor')}</th>
+                  <th scope="col">{t('activityDiagnostics.colMatch', 'Match')}</th>
                   <th scope="col">{t('activityDiagnostics.colTransition')}</th>
                 </tr>
               </thead>
@@ -137,6 +139,7 @@ export default function ActivityDiagnosticsPanel() {
                     <td><StateCell state={row.state} /></td>
                     <td><TierCell row={row} /></td>
                     <td><SupervisorCell row={row} /></td>
+                    <td><MatchCell row={row} /></td>
                     <td><TransitionCell row={row} /></td>
                   </tr>
                 ))}

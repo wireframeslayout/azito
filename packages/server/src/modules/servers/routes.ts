@@ -162,12 +162,13 @@ export interface ServersRouteOptions {
   // to compile/start rather than silently accept every isolation
   // declaration as if scoped auth were already on.
   scopedAuthEnabled: boolean;
+  onMuxRuntimeChanged?: (serverName: string) => void;
 }
 
 // ─── Plugin ───
 
 const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts, done) => {
-  const { serverRepo, tmux, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, repoDiscovery } = opts;
+  const { serverRepo, tmux, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, repoDiscovery, onMuxRuntimeChanged } = opts;
 
   // Issue #29 review, Important finding 1: a false->true isolation_intent
   // transition must actually purge a previously-distributed operator token
@@ -645,6 +646,9 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
             sshHost ?? srv.sshHost ?? undefined,
             (validPutMux as MuxRuntime | undefined) ?? srv.muxRuntime,
           );
+        }
+        if (validPutMux !== undefined && validPutMux !== srv.muxRuntime) {
+          onMuxRuntimeChanged?.(request.params.name);
         }
         if (effectiveType !== 'agent') {
           // Issue #29 review, Important finding 1: an isolation-invariant

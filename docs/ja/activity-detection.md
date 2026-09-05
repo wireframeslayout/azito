@@ -166,6 +166,19 @@ env ファイルの**別ハブのトークン**を注入された URL へ送っ�
 
 対象スクリプト: `harness/hooks/azito-activity.sh`、`azito-interaction.sh`、`azito-question.sh`。
 
+### ウィンドウ同定方式（段階4: muxPaneRef 優先）
+
+Tier 0（supervisor）と Tier 1（hook）が送ってくるシグナルをハブ側の `windows` テーブル行に紐付ける際、以下の優先順位で同定します:
+
+| 優先度 | 方式 | 内容 |
+|---|---|---|
+| 1 | `muxPaneRef`（tmux `%N`） | `PaneHandleResolver` がペイン ID を `IMuxClient.refFromPaneHandle()` → `windowRepo.findByServerAndRef()` で逆引き。結果は 30 秒（正）/ 5 秒（負）キャッシュされ、`sessions:updated` で無効化される |
+| 2 | 4 要素照合（フォールバック） | session 名 + windowSpec（名前 or 番号）+ paneIndex の組み合わせで `windows.findAll()` を走査する従来方式。`muxPaneRef` が無い場合、または逆引き失敗時に使用 |
+
+supervisor の `register` 受理時に `muxPaneRef` がある場合、ハブは即座にバックグラウンドで逆引きを発火しキャッシュを温めます（`PaneHandleResolver.warm()`）。これにより、hook シグナルが届く前でも診断パネルの supervisor 行は `muxPaneRef` ベースで照合されます。
+
+診断パネル（`GET /api/debug/activity`）の各行に `supervisorMatchedBy`（supervisor との照合方法）と `hook.matchedBy`（hook シグナルの照合方法）が追加されています。
+
 ## 4. Tier 2 -- ペイン分類（タイトル/画面）
 
 5秒ポーリングでペインタイトルと画面末尾を規則分類します（`paneStateClassifier.ts`）。

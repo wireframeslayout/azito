@@ -1272,9 +1272,11 @@ export class ExecuteTaskUseCase {
       if (shouldSupervise(server.type, windowType)) {
         this.supervisorRegistry.clearExitMarker(server.name, windowTarget);
       }
+      const launchPrimaryWin = this.windowRepo.findByTask(taskId).find((w) => w.isPrimary);
       try {
         const actualCommand = await runtime.launch({
           server, target, supervisorTarget: windowTarget, taskId, unitId,
+          windowId: launchPrimaryWin?.id,
           windowType,
           workerExecutionMode: unit.workerExecutionMode,
           effectiveLaunchCommand,
@@ -1603,6 +1605,7 @@ export class ExecuteTaskUseCase {
         try {
           const actualCommand = await runtime.resume({
             server, target, supervisorTarget: windowTarget, taskId, unitId,
+            windowId: primaryWin?.id,
             windowType: followUpWindowType,
             workerExecutionMode: unit.workerExecutionMode,
             effectiveLaunchCommand: effectiveFollowUpCommand,

@@ -4,6 +4,7 @@ import type { IWindowRepository } from '../windows/Window';
 import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import type { AgentActivityMonitor } from './AgentActivityMonitor';
 import { buildActivityDiagnostics } from './activityDiagnostics';
+import type { PaneHandleResolver } from './PaneHandleResolver';
 
 // ─── Types ───
 
@@ -12,6 +13,7 @@ export interface OperationsRouteOptions {
   agentActivityMonitor: AgentActivityMonitor;
   supervisorRegistry: SupervisorRegistry;
   windowRepo: IWindowRepository;
+  paneHandleResolver?: PaneHandleResolver;
 }
 
 export interface RunningOperation {
@@ -29,7 +31,7 @@ export interface RunningOperation {
 // ExecuteTaskUseCase's in-memory runningExecutions map.
 
 const operationsRoutes: FastifyPluginCallback<OperationsRouteOptions> = (fastify, opts, done) => {
-  const { executeTaskUseCase, agentActivityMonitor, supervisorRegistry, windowRepo } = opts;
+  const { executeTaskUseCase, agentActivityMonitor, supervisorRegistry, windowRepo, paneHandleResolver } = opts;
 
   // ── GET /api/operations ── currently running executions (unitId + taskId + tmux target)
   fastify.get('/api/operations', async () => {
@@ -51,7 +53,7 @@ const operationsRoutes: FastifyPluginCallback<OperationsRouteOptions> = (fastify
   // this window's state, and is Tier 0 alive?" without reading logs. Reads
   // already-collected state only; it never ticks the monitor or probes anything.
   fastify.get('/api/debug/activity', async () =>
-    buildActivityDiagnostics(agentActivityMonitor, supervisorRegistry, windowRepo));
+    buildActivityDiagnostics(agentActivityMonitor, supervisorRegistry, windowRepo, paneHandleResolver));
 
   done();
 };
