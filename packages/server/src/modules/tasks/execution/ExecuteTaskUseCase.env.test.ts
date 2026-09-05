@@ -853,6 +853,11 @@ describe('ExecuteTaskUseCase concurrent execute() serialization (Issue #28 revie
         windows = windows.filter((w) => w.name !== seg && String(w.index) !== seg);
         return { stdout: '', stderr: '', code: 0 };
       });
+      (tmux.closeWindow as ReturnType<typeof vi.fn>).mockImplementation(async (_server: unknown, ref: { window: string }) => {
+        const seg = ref.window;
+        windows = windows.filter((w) => w.name !== seg && String(w.index) !== seg);
+        return { stdout: '', stderr: '', code: 0 };
+      });
 
       (paneEnvService.buildEnvForNewWindow as ReturnType<typeof vi.fn>).mockImplementation(() => {
         // Mirrors the real ITaskTokenRepository.issueNextGeneration contract
@@ -937,6 +942,11 @@ describe('ExecuteTaskUseCase concurrent execute() serialization (Issue #28 revie
       });
       (tmux.killWindow as ReturnType<typeof vi.fn>).mockImplementation(async (_server: unknown, target: string) => {
         const seg = (target as string).split(':')[1];
+        windows = windows.filter((w) => w.name !== seg && String(w.index) !== seg);
+        return { stdout: '', stderr: '', code: 0 };
+      });
+      (tmux.closeWindow as ReturnType<typeof vi.fn>).mockImplementation(async (_server: unknown, ref: { window: string }) => {
+        const seg = ref.window;
         windows = windows.filter((w) => w.name !== seg && String(w.index) !== seg);
         return { stdout: '', stderr: '', code: 0 };
       });
@@ -1715,7 +1725,7 @@ describe('ExecuteTaskUseCase working-directory containment (Issue #27)', () => {
     // TOKEN_REVOKING_STATUSES), so the just-created window's token
     // generation would otherwise leak — the rollback must kill the window
     // AND revoke it directly, once the kill is confirmed.
-    expect(tmux.killWindow).toHaveBeenCalled();
+    expect(tmux.closeWindow).toHaveBeenCalled();
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'worktree_path_rejected_rollback');
   });
 
@@ -2262,7 +2272,7 @@ describe('ExecuteTaskUseCase.followUp working-directory containment (Issue #27 r
     // !windowExists just created a fresh window (and rotated the task
     // token) for this follow-up — 'failed' doesn't auto-revoke, so the
     // rollback must kill the window AND revoke it directly.
-    expect(tmux.killWindow).toHaveBeenCalled();
+    expect(tmux.closeWindow).toHaveBeenCalled();
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'followup_working_directory_rejected_rollback');
   });
 
@@ -2930,7 +2940,7 @@ describe('ExecuteTaskUseCase fetch-distribution failure handling (Issue #87 thir
 
     expect(fetchDistributionService.distribute).toHaveBeenCalledTimes(1);
     expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed', 101);
-    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
+    expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), { kind: 'tmux', workspace: 'azito', window: 'w1' });
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_failed_rollback');
     expect(taskRepo.clearTmuxWindowIfMatches).toHaveBeenCalledWith(1, 'w1');
   });
@@ -2951,7 +2961,7 @@ describe('ExecuteTaskUseCase fetch-distribution failure handling (Issue #87 thir
 
     expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
     expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed', 101);
-    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
+    expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), { kind: 'tmux', workspace: 'azito', window: 'w1' });
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_prereq_failed_rollback');
   });
 
@@ -2967,7 +2977,7 @@ describe('ExecuteTaskUseCase fetch-distribution failure handling (Issue #87 thir
 
     expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
     expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed', 101);
-    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
+    expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), { kind: 'tmux', workspace: 'azito', window: 'w1' });
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_prereq_failed_rollback');
   });
 
@@ -2983,7 +2993,7 @@ describe('ExecuteTaskUseCase fetch-distribution failure handling (Issue #87 thir
 
     expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
     expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed', 101);
-    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
+    expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), { kind: 'tmux', workspace: 'azito', window: 'w1' });
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_prereq_failed_rollback');
   });
 
@@ -3001,7 +3011,7 @@ describe('ExecuteTaskUseCase fetch-distribution failure handling (Issue #87 thir
 
     expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
     expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed', 101);
-    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
+    expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), { kind: 'tmux', workspace: 'azito', window: 'w1' });
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_prereq_failed_rollback');
   });
 
@@ -3041,7 +3051,7 @@ describe('ExecuteTaskUseCase fetch-distribution stale-local-branch fail-fast (Is
 
     expect(fetchDistributionService.distribute).toHaveBeenCalledTimes(1);
     expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed', 101);
-    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
+    expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), { kind: 'tmux', workspace: 'azito', window: 'w1' });
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_stale_local_branch_rollback');
   });
 
@@ -3065,7 +3075,7 @@ describe('ExecuteTaskUseCase fetch-distribution stale-local-branch fail-fast (Is
 
     expect(fetchDistributionService.distribute).toHaveBeenCalledTimes(1);
     expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed', 101);
-    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
+    expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), { kind: 'tmux', workspace: 'azito', window: 'w1' });
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_stale_local_branch_rollback');
   });
 
@@ -3127,7 +3137,7 @@ describe('ExecuteTaskUseCase fetch-distribution required but no workingDir fail-
 
     expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
     expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed', 101);
-    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
+    expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), { kind: 'tmux', workspace: 'azito', window: 'w1' });
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_prereq_failed_rollback');
   });
 
@@ -3143,7 +3153,7 @@ describe('ExecuteTaskUseCase fetch-distribution required but no workingDir fail-
 
     expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
     expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed', 101);
-    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
+    expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), { kind: 'tmux', workspace: 'azito', window: 'w1' });
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_prereq_failed_rollback');
   });
 
@@ -3175,7 +3185,7 @@ describe('ExecuteTaskUseCase fetch-distribution required-but-unwired fail-fast (
 
     expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
     expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed', 101);
-    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
+    expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), { kind: 'tmux', workspace: 'azito', window: 'w1' });
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_prereq_failed_rollback');
   });
 
@@ -3284,7 +3294,7 @@ describe('ExecuteTaskUseCase fetch-distribution explicit-target resolution (Issu
 
     expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
     expect(taskRepo.updateStatusIfWindowMatches).toHaveBeenCalledWith(1, 'w1', 'failed', 101);
-    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:w1');
+    expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), { kind: 'tmux', workspace: 'azito', window: 'w1' });
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(101, 'fetch_distribution_prereq_failed_rollback');
   });
 
