@@ -847,8 +847,8 @@ export class WindowRespawnService {
   async capturePaneLayout(server: ServerConfig, tmuxTarget: string): Promise<PaneLayout> {
     const ref = muxRefFromTmuxTarget(tmuxTarget);
     const captured = await this.tmux.captureLayout(server, ref);
-    const panes = captured.panes.map((p, i) => ({
-      index: i,
+    const panes = captured.panes.map(p => ({
+      index: p.index,
       command: p.command,
       workingDirectory: p.path,
       title: p.title,

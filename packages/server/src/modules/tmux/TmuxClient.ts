@@ -772,10 +772,14 @@ export class TmuxClient implements IMuxClient {
     const target = tmuxTargetFromMuxRef(ref);
     const { stdout, code } = await this.runTmuxCommand(server, ['list-panes', '-t', target, '-F', '#{pane_index}\t#{pane_id}\t#{pane_title}\t#{pane_current_command}\t#{pane_active}']);
     if (code !== 0) throw new Error(`Failed to list panes for ${target}`);
-    return stdout.trim().split('\n').filter(Boolean).map((line, i) => {
-      const [_idx, id, title, command, active] = line.split('\t');
-      return { ordinal: (i + 1) as PaneOrdinal, handle: asPaneHandle(id), title: title || '', command: command || '', active: active === '1' };
+    const entries = stdout.trim().split('\n').filter(Boolean).map(line => {
+      const [idx, id, title, command, active] = line.split('\t');
+      return { index: parseInt(idx, 10), id, title: title || '', command: command || '', active: active === '1' };
     });
+    entries.sort((a, b) => a.index - b.index);
+    return entries.map((e, i) => ({
+      ordinal: (i + 1) as PaneOrdinal, handle: asPaneHandle(e.id), title: e.title, command: e.command, active: e.active,
+    }));
   }
 
   async refFromPaneHandle(server: ServerConfig, handle: PaneHandle): Promise<{ ref: MuxRef; ordinal: PaneOrdinal } | null> {
@@ -783,14 +787,23 @@ export class TmuxClient implements IMuxClient {
     let result: ExecResult;
     try { result = await this.runTmuxCommand(server, ['list-panes', '-a', '-F', format]); } catch { return null; }
     if (result.code !== 0) return null;
-    for (const line of result.stdout.trim().split('\n')) {
-      if (!line) continue;
+
+    const lines = result.stdout.trim().split('\n').filter(Boolean);
+    const parsed = lines.map(line => {
       const [paneId, _sessionName, windowName, paneIndex, resolvedSession] = line.split('\t');
-      if (paneId === (handle as string)) {
-        return { ref: { kind: 'tmux', workspace: resolvedSession, window: windowName }, ordinal: parseInt(paneIndex, 10) + 1 };
-      }
-    }
-    return null;
+      return { paneId, windowName, paneIndex: parseInt(paneIndex, 10), resolvedSession };
+    });
+
+    const target = parsed.find(p => p.paneId === (handle as string));
+    if (!target) return null;
+
+    const windowKey = `${target.resolvedSession}\t${target.windowName}`;
+    const siblings = parsed
+      .filter(p => `${p.resolvedSession}\t${p.windowName}` === windowKey)
+      .sort((a, b) => a.paneIndex - b.paneIndex);
+    const ordinal = siblings.findIndex(p => p.paneId === (handle as string)) + 1;
+
+    return { ref: { kind: 'tmux', workspace: target.resolvedSession, window: target.windowName }, ordinal };
   }
 
   async probePane(server: ServerConfig, handle: PaneHandle) { return this.checkPaneLiveness(server, handle as string); }
@@ -822,12 +835,14 @@ export class TmuxClient implements IMuxClient {
     const target = tmuxTargetFromMuxRef(ref);
     const layoutResult = await this.runTmuxCommand(server, ['display-message', '-t', target, '-p', '#{window_layout}']);
     const paneResult = await this.runTmuxCommand(server, ['list-panes', '-t', target, '-F', '#{pane_index}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_title}']);
+    const entries = paneResult.stdout.trim().split('\n').filter(Boolean).map(line => {
+      const [indexStr, command, path, title] = line.split('\t');
+      return { index: parseInt(indexStr, 10), command: command || null, path: path || null, title: title || null };
+    });
+    entries.sort((a, b) => a.index - b.index);
     return {
       layout: layoutResult.stdout.trim(),
-      panes: paneResult.stdout.trim().split('\n').filter(Boolean).map((line, i) => {
-        const [_index, command, path, title] = line.split('\t');
-        return { ordinal: (i + 1) as PaneOrdinal, command: command || null, path: path || null, title: title || null };
-      }),
+      panes: entries.map((e, i) => ({ index: e.index, ordinal: (i + 1) as PaneOrdinal, command: e.command, path: e.path, title: e.title })),
     };
   }
 

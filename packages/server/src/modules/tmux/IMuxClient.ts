@@ -48,7 +48,7 @@ export interface IMuxClient {
 
   // ─── Layout / Resource ───
 
-  captureLayout(server: ServerConfig, ref: MuxRef): Promise<{ layout: string; panes: Array<{ ordinal: PaneOrdinal; command: string | null; path: string | null; title: string | null }> }>;
+  captureLayout(server: ServerConfig, ref: MuxRef): Promise<{ layout: string; panes: Array<{ index: number; ordinal: PaneOrdinal; command: string | null; path: string | null; title: string | null }> }>;
   applyLayout(server: ServerConfig, ref: MuxRef, layout: string): Promise<ExecResult>;
   measurePanePids(server: ServerConfig): Promise<Array<{ ref: MuxRef; pid: number }>>;
 

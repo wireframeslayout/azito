@@ -66,6 +66,29 @@ describe('TmuxClient IMuxClient', () => {
       });
     });
 
+    it('computes ordinal by position among same-window panes (pane_index 1,2)', async () => {
+      const client = makeClient(async () => ({
+        stdout: '%a\tsess\twin\t1\tsess\n%b\tsess\twin\t2\tsess\n',
+        stderr: '', code: 0,
+      }));
+      expect(await client.refFromPaneHandle(server, '%a' as any)).toEqual({
+        ref: { kind: 'tmux', workspace: 'sess', window: 'win' }, ordinal: 1,
+      });
+      expect(await client.refFromPaneHandle(server, '%b' as any)).toEqual({
+        ref: { kind: 'tmux', workspace: 'sess', window: 'win' }, ordinal: 2,
+      });
+    });
+
+    it('handles gap in pane_index (0,2) → ordinal 1,2', async () => {
+      const client = makeClient(async () => ({
+        stdout: '%x\tsess\twin\t0\tsess\n%y\tsess\twin\t2\tsess\n',
+        stderr: '', code: 0,
+      }));
+      expect(await client.refFromPaneHandle(server, '%y' as any)).toEqual({
+        ref: { kind: 'tmux', workspace: 'sess', window: 'win' }, ordinal: 2,
+      });
+    });
+
     it('returns null for unknown handle', async () => {
       const client = makeClient(async () => ({
         stdout: '%0\tsess\twin\t0\tsess\n', stderr: '', code: 0,
@@ -93,8 +116,23 @@ describe('TmuxClient IMuxClient', () => {
 
       expect(result.layout).toBe('a1b2,80x24,0,0');
       expect(result.panes).toHaveLength(2);
-      expect(result.panes[0]).toEqual({ ordinal: 1, command: 'bash', path: '/home/user', title: 'pane-title' });
-      expect(result.panes[1]).toEqual({ ordinal: 2, command: 'node', path: '/app', title: 'server' });
+      expect(result.panes[0]).toEqual({ index: 0, ordinal: 1, command: 'bash', path: '/home/user', title: 'pane-title' });
+      expect(result.panes[1]).toEqual({ index: 1, ordinal: 2, command: 'node', path: '/app', title: 'server' });
+    });
+
+    it('preserves original pane_index in index field (pane-base-index 1)', async () => {
+      let call = 0;
+      const client = makeClient(async () => {
+        call++;
+        if (call === 1) return { stdout: 'layout', stderr: '', code: 0 };
+        return { stdout: '1\tbash\t/home\ttitle1\n2\tnode\t/app\ttitle2\n', stderr: '', code: 0 };
+      });
+      const ref: MuxRef = { kind: 'tmux', workspace: 'sess', window: 'win' };
+      const result = await client.captureLayout(server, ref);
+      expect(result.panes[0].index).toBe(1);
+      expect(result.panes[1].index).toBe(2);
+      expect(result.panes[0].ordinal).toBe(1);
+      expect(result.panes[1].ordinal).toBe(2);
     });
   });
 
