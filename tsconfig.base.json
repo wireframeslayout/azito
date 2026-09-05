@@ -12,8 +12,7 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "paths": {
-      "@azito-agent-base/server/*": ["./packages/server/src/*"],
-      "@azito/shared": ["./packages/shared/src/index.ts"]
+      "@azito-agent-base/server/*": ["./packages/server/src/*"]
     }
   }
 }
