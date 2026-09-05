@@ -295,7 +295,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       }
 
       const supervised = shouldSupervise(srv.type, win.windowType);
-      const paneId = await tmux.resolvePaneId(srv, stripPaneSuffix(win.tmuxTarget));
+      const paneHandle = await tmux.resolvePane(srv, win.muxRef!, 1);
       const cmd = supervised
         ? wrapWithSupervisor(effectiveCommand, {
             server: srv,
@@ -308,7 +308,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if (supervised) {
         supervisorRegistry.clearExitMarker(srv.name, win.tmuxTarget);
       }
-      await tmux.sendKeys(srv, paneId, [cmd, 'Enter']);
+      await tmux.sendKeys(srv, paneHandle as string, [cmd, 'Enter']);
       return { ok: true, supervised };
     },
   );

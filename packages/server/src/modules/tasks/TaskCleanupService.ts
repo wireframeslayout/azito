@@ -6,7 +6,8 @@ import type { WorktreeServiceFactory } from '../git/WorktreeServiceFactory';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
 import type { IProjectRepository } from '../projects/Project';
-import { resolveTaskServerName, resolveTmuxSession } from './execution/TaskExecutionEnv';
+import { resolveTaskServerName, resolveMuxWorkspace } from './execution/TaskExecutionEnv';
+import { muxRefFromTmuxTarget } from '@azito/shared';
 
 const WORKTREE_PATH_PATTERN = /^[a-zA-Z0-9_./@:~-]+\/\.worktrees\/task-\d+$/;
 
@@ -44,10 +45,10 @@ export class TaskCleanupService {
     const server = resolvedServerName ? serverRepo.findByName(resolvedServerName) : null;
 
     if (task.tmuxWindow && resolvedServerName && server) {
-      const tmuxSession = resolveTmuxSession(task.projectId, resolvedServerName, projectServerRepo);
-      const target = `${tmuxSession}:${task.tmuxWindow}`;
-      tmux.killWindow(server, target).catch((e) => {
-        log.warn(`[task-cleanup] Failed to kill tmux window ${target}: ${(e as Error).message}`);
+      const muxWorkspace = resolveMuxWorkspace(task.projectId, resolvedServerName, projectServerRepo);
+      const ref = muxRefFromTmuxTarget(`${muxWorkspace}:${task.tmuxWindow}`);
+      tmux.closeWindow(server, ref).catch((e) => {
+        log.warn(`[task-cleanup] Failed to kill tmux window ${muxWorkspace}:${task.tmuxWindow}: ${(e as Error).message}`);
       });
     }
 
