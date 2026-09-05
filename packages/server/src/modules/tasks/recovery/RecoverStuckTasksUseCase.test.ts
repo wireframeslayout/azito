@@ -215,6 +215,7 @@ function createMocks(): Mocks {
     },
     tmuxClient: {
       resolvePaneId: vi.fn().mockResolvedValue('%0'),
+      resolvePane: vi.fn().mockResolvedValue('%0'),
       capturePane: vi.fn().mockResolvedValue({ stdout: 'pane content', code: 0 }),
       sendKeys: vi.fn().mockResolvedValue(undefined),
     },

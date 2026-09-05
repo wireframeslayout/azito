@@ -14,6 +14,7 @@ import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
 import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
 import { isSameWindowTarget, stripPaneSuffix } from './paneTarget';
+import { muxRefFromTmuxTarget } from '@azito/shared';
 import type { SessionCaptureService } from './SessionCaptureService';
 import type { WindowActivityStatusService } from './WindowActivityStatusService';
 
@@ -31,6 +32,7 @@ export interface WindowsRouteOptions {
   windowActivityStatusService: WindowActivityStatusService;
   notificationBus?: NotificationBus;
   resourceGuard?: ResourceGuard;
+  harnessPrefix?: string;
 }
 
 const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts, done) => {
@@ -64,6 +66,15 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const tmuxTarget = body['tmux_target'] as string | undefined;
       if (!serverName || !tmuxTarget)
         return reply.status(400).send({ error: 'server_name and tmux_target required' });
+
+      const existing = windowRepo.findByServerAndTarget(serverName, tmuxTarget);
+      if (existing) {
+        if (existing.projectId !== id) {
+          windowRepo.update(existing.id, { projectId: id });
+          notifyWindowsChanged(serverName);
+        }
+        return { ok: true, id: existing.id };
+      }
 
       const workerType = (body['worker_type'] as string) || null;
       const workingDirectory = (body['working_directory'] as string) || null;
@@ -113,6 +124,12 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const addedIds: number[] = [];
       for (const win of targetSession.windows) {
         const winTarget = `${session}:${win.name}`;
+        const existing = windowRepo.findByServerAndTarget(serverName, winTarget);
+        if (existing) {
+          if (existing.projectId !== id) windowRepo.update(existing.id, { projectId: id });
+          addedIds.push(existing.id);
+          continue;
+        }
         const winId = windowRepo.add({
           ownerType: 'project',
           projectId: id,
@@ -160,6 +177,11 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const tmuxTarget = body['tmux_target'] as string | undefined;
       if (!serverName || !tmuxTarget)
         return reply.status(400).send({ error: 'server_name and tmux_target required' });
+
+      const existing = windowRepo.findByServerAndTarget(serverName, tmuxTarget);
+      if (existing) {
+        return { ok: true, id: existing.id };
+      }
 
       const workerType = (body['worker_type'] as string) || null;
       const workingDirectory = (body['working_directory'] as string) || null;
@@ -274,19 +296,20 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       }
 
       const supervised = shouldSupervise(srv.type, win.windowType);
-      const paneId = await tmux.resolvePaneId(srv, stripPaneSuffix(win.tmuxTarget));
+      const paneHandle = await tmux.resolvePane(srv, win.muxRef ?? muxRefFromTmuxTarget(win.tmuxTarget), 1);
       const cmd = supervised
         ? wrapWithSupervisor(effectiveCommand, {
             server: srv,
             target: win.tmuxTarget,
-            ...supervisorRegistry.issueLaunch({ serverName: srv.name, target: win.tmuxTarget, taskId: null, unitId: null }),
+            harnessPrefix: opts.harnessPrefix,
+            ...supervisorRegistry.issueLaunch({ serverName: srv.name, target: win.tmuxTarget, taskId: null, unitId: null, windowId: win.id }),
           })
         : effectiveCommand;
 
       if (supervised) {
         supervisorRegistry.clearExitMarker(srv.name, win.tmuxTarget);
       }
-      await tmux.sendKeys(srv, paneId, [cmd, 'Enter']);
+      await tmux.sendKeys(srv, paneHandle as string, [cmd, 'Enter']);
       return { ok: true, supervised };
     },
   );

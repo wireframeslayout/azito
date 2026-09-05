@@ -91,6 +91,58 @@ variables at the head of the command string, but only when they have a value. Be
 runs after profile evaluation, they are reliably restored. Nothing is injected when launched
 outside tmux.
 
+### Supervisor credential resolution (AZITO_PREFIX support)
+
+The supervisor resolves `AZITO_URL` / `AZITO_WEBHOOK_TOKEN` via `resolveHubEnv()`
+(`packages/tui-supervisor/src/env.ts`). Resolution order: process environment variables first,
+then the env file.
+
+When the hub runs in `--prefix` mode (`AZITO_HARNESS_PREFIX` is set), it embeds
+`AZITO_PREFIX=<prefix>` as an env variable on the supervisor's launch command
+(`SupervisorLaunch.wrapWithSupervisor()`). The supervisor reads `AZITO_PREFIX` and resolves
+`~/.azito/azitoctl-<prefix>.env` to obtain the hub's `AZITO_WEBHOOK_TOKEN`. When no prefix is
+set, it reads `~/.azito/azitoctl.env` as before.
+
+This follows the same `AZITO_PREFIX` convention as Tier 1's "Atomic destination-profile
+resolution" (§3 below). The env file written by `harness/setup.sh --prefix <name>` is selected
+by both hooks and the supervisor using the same convention.
+
+### Combined mode (hybrid detection)
+
+Starting with Claude Code v2.1.236, pane titles under tmux are written only when the text
+actually changes (CHANGELOG: "Fixed terminal tab titles jumping in tmux"). As a result, the
+working spinner glyph (◐◑◒◓ etc.) no longer appears in the title, which stays fixed at
+`✳ <topic>`.
+
+`ActivityTracker` addresses this with two detection modes:
+
+| Mode | Entry condition | Detection method |
+|------|----------------|-----------------|
+| **title-authoritative** | A `working` or `blocked` title observed at least once | Title only (byte volume disabled). Codex / Claude ≤2.1.234 enter this mode |
+| **combined** | Otherwise (including initial state) | Byte-volume heuristic + title promotion. Claude ≥2.1.236 on tmux stays here |
+
+In combined mode:
+
+- The byte-volume heuristic determines idle/active
+- Echo filtering: the threshold must be exceeded **with fresh output in that tick** for
+  `ACTIVE_CONSECUTIVE_TICKS` (2) consecutive ticks before transitioning idle→active (a single
+  keystroke echo burst does not trigger a transition)
+- Observing a `working` / `blocked` title instantly promotes the tracker to
+  title-authoritative mode
+- Active frames emitted in combined mode carry no `status` (allowing the hub to distinguish
+  byte-derived activity)
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `ACTIVE_CONSECUTIVE_TICKS` | 2 | Consecutive above-threshold ticks needed for idle→active (only ticks with fresh output count) |
+
+### Registration snapshot frame
+
+On receiving a `registered` message, `HubClient` sends the `ActivityTracker`'s current state
+as a single activity frame (at the same point as the `ready` re-send). This ensures the hub
+receives a known baseline even when activity transitions that occurred before registration
+were dropped. This also fires on reconnect.
+
 ## 3. Tier 1 -- Claude Code hooks
 
 | Element | Behavior |
@@ -126,6 +178,19 @@ without doing anything.
 
 Scripts involved: `harness/hooks/azito-activity.sh`, `azito-interaction.sh`,
 `azito-question.sh`.
+
+### Window identification (phase 4: muxPaneRef-first)
+
+When matching Tier 0 (supervisor) and Tier 1 (hook) signals to `windows` table rows on the hub, the following priority applies:
+
+| Priority | Method | Details |
+|---|---|---|
+| 1 | `muxPaneRef` (tmux `%N`) | `PaneHandleResolver` reverse-looks up the pane ID via `IMuxClient.refFromPaneHandle()` → `windowRepo.findByServerAndRef()`. Results are cached for 30s (positive) / 5s (negative) and invalidated on `sessions:updated` |
+| 2 | 4-element matching (fallback) | Walks `windows.findAll()` matching session name + windowSpec (name or index) + paneIndex. Used when `muxPaneRef` is absent or the reverse lookup fails |
+
+When a supervisor's `register` is accepted with a `muxPaneRef`, the hub immediately fires a background reverse-lookup to warm the cache (`PaneHandleResolver.warm()`). This ensures supervisor rows in the diagnostics panel are matched by `muxPaneRef` even before any hook signal arrives.
+
+The diagnostics panel (`GET /api/debug/activity`) includes `supervisorMatchedBy` (how the supervisor was matched) and `hook.matchedBy` (how the hook signal was matched) on each row.
 
 ## 4. Tier 2 -- pane classification (title/screen)
 

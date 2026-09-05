@@ -50,6 +50,8 @@ export interface RegisterMessage {
    */
   bootstrapToken?: string;
   sessionToken?: string;
+  /** tmux の `$TMUX_PANE` (`%N`)。後続段階でのペイン逆引きに使う（現段階では保持のみ）。 */
+  muxPaneRef?: string;
 }
 
 export interface HeartbeatMessage {

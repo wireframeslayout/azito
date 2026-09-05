@@ -1,4 +1,5 @@
 import type { EventEmitter } from 'events';
+import type { MuxRef, PaneHandle, PaneOrdinal } from '@azito/shared';
 import type { IPaneStream } from '../../tmux/PaneStream';
 
 export interface ExecResult {
@@ -17,10 +18,16 @@ export interface ITerminalStream extends EventEmitter {
 export interface IServerTransport {
   /** シェルコマンド実行（現行 TmuxClient.execCommand 相当） */
   exec(command: string, timeoutMs?: number): Promise<ExecResult>;
-  /** tmuxコマンド実行。引数は構造化して渡し、エスケープはTransport実装の責務とする */
+  /** @deprecated Use IMuxTransport.execMux */
   execTmux(args: string[]): Promise<ExecResult>;
-  /** ターミナル接続。リンクセッション作成（new-session -t → set status off → select-window → attach）込み */
+  /** @deprecated Use IMuxTransport.openTerminal */
   openTerminal(target: string, cols: number, rows: number): Promise<ITerminalStream>;
-  /** タスクログ用ペインストリーム（pipe-pane先ファイルのtail） */
+  /** @deprecated Use IMuxTransport.createPaneStream */
   createPaneStream(paneId: string): IPaneStream;
+}
+
+export interface IMuxTransport {
+  execMux(args: string[]): Promise<ExecResult>;
+  openTerminal(ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream>;
+  createPaneStream(handle: PaneHandle): IPaneStream;
 }

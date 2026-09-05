@@ -13,10 +13,8 @@ export interface FinishedEntry {
   paneName?: string;
 }
 
-/** 稼働状態・完了行を通じた唯一のキー規約（サーバー側の `${serverName}::${stripPaneSuffix(target)}` と対）。 */
-export function activityKey(serverName: string, target: string): string {
-  return `${serverName}::${target}`;
-}
+import { windowKey as activityKey } from '@azito/shared';
+export { activityKey };
 
 /**
  * 完了行の寿命。読み込み時・定期・保存時の3箇所で同じ値が適用される（以前は SPバーの表示

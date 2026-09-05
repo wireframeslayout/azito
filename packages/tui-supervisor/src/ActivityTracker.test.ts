@@ -33,11 +33,13 @@ describe('ActivityTracker', () => {
     expect(tracker.getState()).toBe('idle');
   });
 
-  it('transitions to active when the window sum reaches the threshold', () => {
-    tracker.record(150);
-    tracker.record(100);
-    vi.advanceTimersByTime(1_000);
-    expect(transitions).toEqual([{ state: 'active', bytes: 250 }]);
+  it('transitions to active when the window sum exceeds the threshold for 2 consecutive ticks', () => {
+    tracker.record(250);
+    vi.advanceTimersByTime(1_000); // tick 1: above, streak=1
+    expect(tracker.getState()).toBe('idle');
+    tracker.record(250);
+    vi.advanceTimersByTime(1_000); // tick 2: above, streak=2 → active
+    expect(transitions).toEqual([{ state: 'active', bytes: 500 }]);
     expect(tracker.getState()).toBe('active');
   });
 
@@ -54,22 +56,28 @@ describe('ActivityTracker', () => {
     tracker.record(5_000); // graced repaint — ignored
     vi.advanceTimersByTime(900); // past the 800ms grace
     tracker.record(250); // genuine output afterwards
-    vi.advanceTimersByTime(1_000);
-    expect(transitions).toEqual([{ state: 'active', bytes: 250 }]);
+    vi.advanceTimersByTime(1_000); // tick 1: above, streak=1
+    tracker.record(250);
+    vi.advanceTimersByTime(1_000); // tick 2: above, streak=2 → active
+    expect(transitions).toEqual([{ state: 'active', bytes: 500 }]);
     expect(tracker.getState()).toBe('active');
   });
 
   it('emits the transition only once (no repeat while continuously active)', () => {
     tracker.record(500);
-    vi.advanceTimersByTime(1_000);
+    vi.advanceTimersByTime(1_000); // streak=1
     tracker.record(500);
-    vi.advanceTimersByTime(2_000);
+    vi.advanceTimersByTime(1_000); // streak=2 → active
+    tracker.record(500);
+    vi.advanceTimersByTime(1_000);
     expect(transitions.filter((t) => t.state === 'active')).toHaveLength(1);
   });
 
   it('transitions to idle after idleAfterMs below the threshold', () => {
     tracker.record(500);
-    vi.advanceTimersByTime(1_000);
+    vi.advanceTimersByTime(1_000); // streak=1
+    tracker.record(500);
+    vi.advanceTimersByTime(1_000); // streak=2 → active
     expect(tracker.getState()).toBe('active');
     // Silence: idle requires idleAfterMs of ticks whose window sum is below the
     // active threshold, measured from the last above-threshold tick (the 500B
@@ -81,7 +89,9 @@ describe('ActivityTracker', () => {
 
   it('goes idle even while a sub-threshold trickle keeps dribbling out', () => {
     tracker.record(500);
-    vi.advanceTimersByTime(1_000);
+    vi.advanceTimersByTime(1_000); // streak=1
+    tracker.record(500);
+    vi.advanceTimersByTime(1_000); // streak=2 → active
     expect(tracker.getState()).toBe('active');
     // An idle TUI still emits a few bytes (cursor blink / prompt redraw). A
     // trickle that never reaches the threshold must NOT postpone idle: idle is
@@ -95,7 +105,9 @@ describe('ActivityTracker', () => {
 
   it('stays active while output keeps exceeding the threshold', () => {
     tracker.record(500);
-    vi.advanceTimersByTime(1_000);
+    vi.advanceTimersByTime(1_000); // streak=1
+    tracker.record(500);
+    vi.advanceTimersByTime(1_000); // streak=2 → active
     // Sustained real work: 300 bytes/s keeps the 3s window sum above 200.
     for (let i = 0; i < 8; i += 1) {
       tracker.record(300);
@@ -106,14 +118,16 @@ describe('ActivityTracker', () => {
 
   it('re-emits active every 15s while active', () => {
     tracker.record(500);
-    vi.advanceTimersByTime(1_000);
+    vi.advanceTimersByTime(1_000); // streak=1
+    tracker.record(500);
+    vi.advanceTimersByTime(1_000); // streak=2 → active (first emit)
     expect(transitions.filter((t) => t.state === 'active')).toHaveLength(1);
     // Keep it active with periodic large output.
     for (let i = 0; i < 30; i += 1) {
       tracker.record(300);
       vi.advanceTimersByTime(1_000);
     }
-    // 31s elapsed since first emit -> 2 re-sends (at ~16s and ~31s).
+    // 30s elapsed since first emit -> 2 re-sends (at ~17s and ~32s).
     const actives = transitions.filter((t) => t.state === 'active');
     expect(actives.length).toBe(3);
   });
@@ -135,12 +149,17 @@ describe('ActivityTracker', () => {
       expect(statusLog).toEqual([{ state: 'active', status: 'working' }]);
     });
 
-    it('stays idle on an idle title even while byte volume exceeds the active threshold (keystroke-echo false positive)', () => {
+    it('stays idle on an idle title even while byte volume exceeds the active threshold (keystroke-echo false positive, title-authoritative)', () => {
       // Core regression case: Claude Code's TUI repaints its input box on
       // every keypress — hundreds of bytes per keystroke while the agent is
-      // actually idle. Once the idle title is observed, that volume must be
-      // ignored entirely.
+      // actually idle. Once a working title has been observed (proving the
+      // agent drives its title with this protocol) and it flips to idle,
+      // the byte volume must be ignored entirely.
+      tracker.setTitleState('working'); // enter title-authoritative
+      vi.advanceTimersByTime(1_000);
       tracker.setTitleState('idle');
+      vi.advanceTimersByTime(1_000);
+      statusLog.length = 0; // clear the working→idle transitions
       for (let i = 0; i < 5; i += 1) {
         tracker.record(1_000);
         vi.advanceTimersByTime(1_000);
@@ -180,7 +199,9 @@ describe('ActivityTracker', () => {
     it('falls back to the byte heuristic while no title has ever been observed', () => {
       tracker.setTitleState('unknown');
       tracker.record(500);
-      vi.advanceTimersByTime(1_000);
+      vi.advanceTimersByTime(1_000); // streak=1
+      tracker.record(500);
+      vi.advanceTimersByTime(1_000); // streak=2 → active
       expect(tracker.getState()).toBe('active');
       expect(statusLog).toEqual([{ state: 'active', status: undefined }]);
     });
@@ -204,12 +225,21 @@ describe('ActivityTracker', () => {
         expect(statusLog).toEqual([{ state: 'active', status: undefined }]);
       });
 
-      it('hands authority to the title once a recognized marker appears', () => {
+      it('hands authority to the title once a working marker appears', () => {
         const titleTracker = new TitleStateTracker();
         feed(titleTracker, '\x1b]2;my-tui\x07', 500);
         vi.advanceTimersByTime(1_000);
-        expect(tracker.getState()).toBe('active'); // byte heuristic
+        feed(titleTracker, '\x1b]2;my-tui\x07', 500);
+        vi.advanceTimersByTime(1_000);
+        expect(tracker.getState()).toBe('active'); // byte heuristic (streak=2)
 
+        // A working spinner hands authority to the title.
+        feed(titleTracker, '\x1b]2;◐ working on it\x07');
+        vi.advanceTimersByTime(1_000);
+        expect(tracker.getState()).toBe('active');
+        expect(statusLog.at(-1)).toEqual({ state: 'active', status: 'working' });
+
+        // Now idle title immediately flips to idle (title is authoritative).
         feed(titleTracker, '\x1b]2;✳ done\x07', 500);
         vi.advanceTimersByTime(1_000);
         expect(tracker.getState()).toBe('idle'); // title authority, byte volume ignored
@@ -223,6 +253,92 @@ describe('ActivityTracker', () => {
       const actives = statusLog.filter((t) => t.state === 'active');
       expect(actives.length).toBe(3);
       expect(actives.every((t) => t.status === 'working')).toBe(true);
+    });
+  });
+
+  describe('combined mode (idle title + byte heuristic — Claude ≥2.1.236 on tmux)', () => {
+    it('transitions to active when byte threshold is exceeded for 2 consecutive ticks after idle title', () => {
+      tracker.setTitleState('idle');
+      tracker.record(500);
+      vi.advanceTimersByTime(1_000); // tick 1: above, streak=1 → no transition
+      expect(tracker.getState()).toBe('idle');
+      tracker.record(500);
+      vi.advanceTimersByTime(1_000); // tick 2: above, streak=2 → active
+      expect(tracker.getState()).toBe('active');
+      expect(transitions.at(-1)).toMatchObject({ state: 'active' });
+    });
+
+    it('does not transition on a single above-threshold tick (echo suppression)', () => {
+      tracker.setTitleState('idle');
+      tracker.record(500);
+      vi.advanceTimersByTime(1_000); // tick 1: above (500B in 3s window), streak=1
+      expect(tracker.getState()).toBe('idle');
+      // Wait for the sample to age out of the 3s window, then verify no transition
+      vi.advanceTimersByTime(4_000); // ticks at t=2,3,4: sample ages out after t=3
+      expect(tracker.getState()).toBe('idle');
+      expect(transitions).toEqual([]);
+    });
+
+    it('enters title-authoritative mode when working is observed after idle', () => {
+      tracker.setTitleState('idle');
+      tracker.record(500);
+      vi.advanceTimersByTime(1_000);
+      tracker.record(500);
+      vi.advanceTimersByTime(1_000); // streak=2 → active (byte-based)
+      expect(tracker.getState()).toBe('active');
+      // Silence: no more bytes → goes idle
+      vi.advanceTimersByTime(14_000);
+      expect(tracker.getState()).toBe('idle');
+      // Now observe working title → title-authoritative
+      tracker.setTitleState('working');
+      vi.advanceTimersByTime(1_000);
+      expect(tracker.getState()).toBe('active');
+      // No bytes, but title says working → stays active indefinitely
+      vi.advanceTimersByTime(15_000);
+      expect(tracker.getState()).toBe('active');
+    });
+
+    it('does not carry status in combined mode byte-triggered transitions', () => {
+      let lastStatus: string | undefined;
+      tracker.on('transition', (_s: string, _b: number, status?: string) => {
+        lastStatus = status;
+      });
+      tracker.setTitleState('idle');
+      tracker.record(500);
+      vi.advanceTimersByTime(1_000);
+      tracker.record(500);
+      vi.advanceTimersByTime(1_000);
+      expect(tracker.getState()).toBe('active');
+      expect(lastStatus).toBeUndefined();
+    });
+  });
+
+  describe('getSnapshot()', () => {
+    it('returns the current state and byte sum', () => {
+      tracker.record(300);
+      const snap = tracker.getSnapshot();
+      expect(snap.state).toBe('idle');
+      expect(snap.bytesInWindow).toBe(300);
+    });
+
+    it('includes status when in title-authoritative mode', () => {
+      tracker.setTitleState('working');
+      vi.advanceTimersByTime(1_000);
+      const snap = tracker.getSnapshot();
+      expect(snap.state).toBe('active');
+      expect(snap.status).toBe('working');
+    });
+
+    it('omits status in combined mode', () => {
+      tracker.setTitleState('idle');
+      tracker.record(500);
+      vi.advanceTimersByTime(1_000);
+      tracker.record(500);
+      vi.advanceTimersByTime(1_000);
+      expect(tracker.getState()).toBe('active');
+      const snap = tracker.getSnapshot();
+      expect(snap.state).toBe('active');
+      expect(snap.status).toBeUndefined();
     });
   });
 });

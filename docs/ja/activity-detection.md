@@ -85,6 +85,53 @@ hooks（`azito-activity` / `azito-interaction` / `azito-notify` / `azito-questio
 場合のみコマンド文字列の先頭で両変数を再エクスポートします。プロファイル評価の後に実行される
 ため確実に復元されます。tmux 外での起動時は何も注入しません。
 
+### supervisor の資格情報解決（AZITO_PREFIX 対応）
+
+supervisor は `resolveHubEnv()`（`packages/tui-supervisor/src/env.ts`）で `AZITO_URL` /
+`AZITO_WEBHOOK_TOKEN` を解決します。解決順序は「プロセス環境変数 → env ファイル」です。
+
+ハブが `--prefix` モードで運用されている場合（`AZITO_HARNESS_PREFIX` が設定されている場合）、
+ハブは supervisor の起動コマンドに `AZITO_PREFIX=<prefix>` を env 変数として埋め込みます
+（`SupervisorLaunch.wrapWithSupervisor()`）。supervisor は `AZITO_PREFIX` に従って
+`~/.azito/azitoctl-<prefix>.env` を読み、ハブの `AZITO_WEBHOOK_TOKEN` を取得します。
+prefix 未設定時は従来どおり `~/.azito/azitoctl.env` を読みます。
+
+これは Tier 1（hook）の「宛先プロファイルの原子的解決」（下記§3）と同じ `AZITO_PREFIX` 規約に
+従います。`harness/setup.sh --prefix <name>` が書いた env ファイルを、hook と supervisor が
+同じ規約で選択します。
+
+### Combined mode（ハイブリッド判定）
+
+Claude Code v2.1.236 以降、tmux 配下ではペインタイトルが「文言変化時のみ書き込み」に変更された
+（CHANGELOG: "Fixed terminal tab titles jumping in tmux"）。結果、作業中スピナーグリフ
+（◐◑◒◓ 等）がタイトルに出現しなくなり、タイトルは常に `✳ <topic>` で固定される。
+
+`ActivityTracker` はこの状況に対応するため、2つの判定モードを持つ:
+
+| モード | 進入条件 | 判定方式 |
+|--------|---------|---------|
+| **title-authoritative** | `working` または `blocked` タイトルを一度でも観測 | タイトルのみ（バイト量無効）。codex / claude ≤2.1.234 がここに入る |
+| **combined** | 上記以外（初期状態含む） | バイト量ヒューリスティック + タイトル昇格。claude ≥2.1.236 on tmux がここに入る |
+
+Combined mode では:
+
+- バイト量ヒューリスティックで idle/active を判定する
+- エコー緩和: **当該 tick に新規出力がある**閾値超過が `ACTIVE_CONSECUTIVE_TICKS`（2）tick 連続
+  した場合のみ idle→active に遷移する（単発のキーストロークエコーでは遷移しない）
+- `working` / `blocked` タイトルが観測された瞬間に title-authoritative mode に昇格する
+- Combined mode で emit される active frame には `status` を付けない（バイト由来であることを
+  ハブが区別可能）
+
+| 定数 | 値 | 説明 |
+|------|---|------|
+| `ACTIVE_CONSECUTIVE_TICKS` | 2 | idle→active 遷移に必要な連続閾値超過 tick 数（新規出力ありの tick のみカウント） |
+
+### 登録時のスナップショット frame
+
+`HubClient` は `registered` メッセージ受信時に `ActivityTracker` の現在状態をスナップショット
+として activity frame を1枚送信する（`ready` 再送と同じ位置）。これにより、登録前に発生した
+状態遷移が失われても、接続直後にハブが最新状態を認識できる。再接続時も同様に発火する。
+
 ## 3. Tier 1 -- Claude Code hooks
 
 | 要素 | 内容 |
@@ -118,6 +165,19 @@ env ファイルの**別ハブのトークン**を注入された URL へ送っ�
 解決後、`AZITO_WEBHOOK_TOKEN` または `AZITO_SERVER_NAME` が空なら hook は何もせず exit 0 します。
 
 対象スクリプト: `harness/hooks/azito-activity.sh`、`azito-interaction.sh`、`azito-question.sh`。
+
+### ウィンドウ同定方式（段階4: muxPaneRef 優先）
+
+Tier 0（supervisor）と Tier 1（hook）が送ってくるシグナルをハブ側の `windows` テーブル行に紐付ける際、以下の優先順位で同定します:
+
+| 優先度 | 方式 | 内容 |
+|---|---|---|
+| 1 | `muxPaneRef`（tmux `%N`） | `PaneHandleResolver` がペイン ID を `IMuxClient.refFromPaneHandle()` → `windowRepo.findByServerAndRef()` で逆引き。結果は 30 秒（正）/ 5 秒（負）キャッシュされ、`sessions:updated` で無効化される |
+| 2 | 4 要素照合（フォールバック） | session 名 + windowSpec（名前 or 番号）+ paneIndex の組み合わせで `windows.findAll()` を走査する従来方式。`muxPaneRef` が無い場合、または逆引き失敗時に使用 |
+
+supervisor の `register` 受理時に `muxPaneRef` がある場合、ハブは即座にバックグラウンドで逆引きを発火しキャッシュを温めます（`PaneHandleResolver.warm()`）。これにより、hook シグナルが届く前でも診断パネルの supervisor 行は `muxPaneRef` ベースで照合されます。
+
+診断パネル（`GET /api/debug/activity`）の各行に `supervisorMatchedBy`（supervisor との照合方法）と `hook.matchedBy`（hook シグナルの照合方法）が追加されています。
 
 ## 4. Tier 2 -- ペイン分類（タイトル/画面）
 

@@ -1,8 +1,9 @@
 import type { IWindowRepository } from '../windows/Window';
 import { isAgentWindow } from '../windows/Window';
-import { stripPaneSuffix } from '../windows/paneTarget';
+import { stripPaneSuffix, windowKey, asPaneHandle } from '@azito/shared';
 import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import type { ActivityDiagnosticEntry, AgentActivityMonitor } from './AgentActivityMonitor';
+import type { PaneHandleResolver } from './PaneHandleResolver';
 
 /**
  * One row of `GET /api/debug/activity`: the monitor's own per-key attribution
@@ -30,12 +31,11 @@ export interface ActivityDiagnosticRow extends ActivityDiagnosticEntry {
      * apart from "Tier 0 authoritative".
      */
     bound: boolean;
+    muxPaneRef: string | null;
   };
+  supervisorMatchedBy?: 'muxPaneRef' | 'windowKey' | null;
 }
 
-function keyOf(serverName: string, target: string): string {
-  return `${serverName}::${stripPaneSuffix(target)}`;
-}
 
 /**
  * True when a Tier 0 attribution rests on evidence that predates the supervisor
@@ -75,8 +75,23 @@ export function buildActivityDiagnostics(
   monitor: AgentActivityMonitor,
   supervisorRegistry: SupervisorRegistry,
   windowRepo: IWindowRepository,
+  paneHandleResolver?: PaneHandleResolver,
 ): ActivityDiagnosticRow[] {
-  const supervisors = new Map(supervisorRegistry.snapshot().map((s) => [keyOf(s.serverName, s.target), s]));
+  const supervisorList = supervisorRegistry.snapshot();
+
+  // Build a reverse index: windowId → supervisor entry (via PaneHandleResolver cache)
+  const supervisorByWindowId = new Map<number, { entry: typeof supervisorList[0]; matchedBy: 'muxPaneRef' | 'windowKey' }>();
+  if (paneHandleResolver) {
+    for (const s of supervisorList) {
+      if (!s.muxPaneRef) continue;
+      const resolved = paneHandleResolver.getCached(s.serverName, asPaneHandle(s.muxPaneRef));
+      if (resolved) {
+        supervisorByWindowId.set(resolved.windowId, { entry: s, matchedBy: 'muxPaneRef' });
+      }
+    }
+  }
+
+  const supervisors = new Map(supervisorList.map((s) => [windowKey(s.serverName, s.target), s]));
 
   // Same dedup rule as AgentActivityMonitor.collect(): several `windows` rows
   // can point at one tmux window; the task-owned one wins.
@@ -85,7 +100,7 @@ export function buildActivityDiagnostics(
   const windowTaskIds = new Map<string, number | null>();
   for (const w of windowRepo.findAll()) {
     if (!isAgentWindow(w)) continue;
-    const key = keyOf(w.serverName, w.tmuxTarget);
+    const key = windowKey(w.serverName, w.tmuxTarget);
     if (!windowIds.has(key) || (w.taskId != null && windowTaskIds.get(key) == null)) {
       windowIds.set(key, w.id);
       windowProjectIds.set(key, w.projectId);
@@ -93,18 +108,35 @@ export function buildActivityDiagnostics(
     }
   }
 
-  const rows: ActivityDiagnosticRow[] = monitor.diagnostics().map((entry) => {
-    const key = keyOf(entry.serverName, entry.target);
+  function resolveSupervisor(key: string, winId: number | undefined): {
+    supervisor: (typeof supervisorList)[0] | undefined;
+    supervisorMatchedBy: 'muxPaneRef' | 'windowKey' | null;
+  } {
+    if (winId !== undefined) {
+      const byRef = supervisorByWindowId.get(winId);
+      if (byRef) {
+        supervisors.delete(windowKey(byRef.entry.serverName, byRef.entry.target));
+        return { supervisor: byRef.entry, supervisorMatchedBy: byRef.matchedBy };
+      }
+    }
     const supervisor = supervisors.get(key);
-    supervisors.delete(key);
+    if (supervisor) {
+      supervisors.delete(key);
+      return { supervisor, supervisorMatchedBy: 'windowKey' };
+    }
+    return { supervisor: undefined, supervisorMatchedBy: null };
+  }
+
+  const rows: ActivityDiagnosticRow[] = monitor.diagnostics().map((entry) => {
+    const key = windowKey(entry.serverName, entry.target);
+    const winId = windowIds.get(key);
+    const { supervisor, supervisorMatchedBy } = resolveSupervisor(key, winId);
     return {
       ...entry,
-      // A stale Tier 0 row reports no decision at all, so any refinement of that
-      // decision (see ActivityDiagnosticEntry.refinedBy) must drop with it.
       ...(isStaleTier0(entry, supervisor)
         ? { decidedBy: 'none' as const, state: 'none' as const, refinedBy: undefined }
         : {}),
-      windowId: windowIds.get(key),
+      windowId: winId,
       projectId: windowProjectIds.get(key) ?? undefined,
       supervisor: supervisor && {
         pid: supervisor.pid,
@@ -114,7 +146,9 @@ export function buildActivityDiagnostics(
         lastReportedState: supervisor.lastReportedState,
         lastReportedStatus: supervisor.lastReportedStatus ?? null,
         bound: supervisor.bound,
+        muxPaneRef: supervisor.muxPaneRef,
       },
+      supervisorMatchedBy,
     };
   });
 
@@ -135,7 +169,9 @@ export function buildActivityDiagnostics(
         lastReportedState: supervisor.lastReportedState,
         lastReportedStatus: supervisor.lastReportedStatus ?? null,
         bound: supervisor.bound,
+        muxPaneRef: supervisor.muxPaneRef,
       },
+      supervisorMatchedBy: null,
     });
   }
 

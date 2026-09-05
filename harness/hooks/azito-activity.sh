@@ -91,8 +91,8 @@ for value in "$AZITO_SERVER_NAME" "$SESSION_NAME" "$WINDOW_NAME"; do
   fi
 done
 
-PAYLOAD=$(printf '{"serverName":"%s","sessionName":"%s","windowIndex":%s,"windowName":"%s","paneIndex":%s,"event":"%s"}' \
-  "$AZITO_SERVER_NAME" "$SESSION_NAME" "$WINDOW_INDEX" "$WINDOW_NAME" "$PANE_INDEX" "$EVENT")
+PAYLOAD=$(printf '{"serverName":"%s","sessionName":"%s","windowIndex":%s,"windowName":"%s","paneIndex":%s,"event":"%s","muxPaneRef":"%s"}' \
+  "$AZITO_SERVER_NAME" "$SESSION_NAME" "$WINDOW_INDEX" "$WINDOW_NAME" "$PANE_INDEX" "$EVENT" "${TMUX_PANE:-}")
 
 # Fire-and-forget in the background so this never blocks Claude's turn.
 # The Authorization header is fed via `--config -` (stdin) so the token never

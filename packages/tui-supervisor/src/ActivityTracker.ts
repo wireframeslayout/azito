@@ -30,26 +30,30 @@ interface Sample {
 /** While 'active', re-emit the current state at this interval (keepalive for the hub). */
 const ACTIVE_RESEND_MS = 15_000;
 
+/** Consecutive above-threshold ticks needed before idle→active (echo filter). */
+const ACTIVE_CONSECUTIVE_TICKS = 2;
+
 /**
  * Classifies the child agent's activity into 'active'/'idle' and emits
  * 'transition' (state, bytesInWindow, status?) on state changes, plus a
  * periodic 'active' re-send while activity continues.
  *
- * Two information sources, in priority order:
- * 1. Title state (setTitleState, fed from TitleStateTracker): once a title
- *    carrying a RECOGNIZED marker (working spinner / idle `✳` / blocked
- *    "Action Required") has been observed, it becomes the sole authority
- *    — working/blocked map to 'active' (with the corresponding status),
- *    idle maps to 'idle'. The byte-volume heuristic is disabled entirely in
- *    this mode, because it misreads keystroke echo as activity: Claude
- *    Code's TUI repaints its input box on every keypress, exceeding the
- *    byte threshold while the agent is actually idle.
- * 2. Byte-volume sliding window (record): the legacy heuristic, used while
- *    TitleStateTracker still reports 'unknown' — i.e. for agents that never
- *    set a pane title, and for those that only set titles this tracker cannot
- *    interpret (a static app name). Gating mode entry on a recognized marker
- *    (Issue #338) is what keeps such an agent from being reported permanently
- *    idle: an unrecognized title alone no longer disables the heuristic.
+ * Two information sources, combined in a priority ladder:
+ * 1. Title-authoritative mode (entered once a `working` or `blocked` title is
+ *    observed): the title is the sole authority — working/blocked → active
+ *    (with status), idle → idle. The byte heuristic is fully disabled. Codex
+ *    and Claude Code ≤2.1.234 (which animate their pane title with a working
+ *    spinner) enter this mode immediately.
+ * 2. Combined mode (default — including Claude Code ≥2.1.236 on tmux, which
+ *    only sets a static `✳ <topic>` title and never writes a working spinner):
+ *    the byte-volume sliding window decides idle/active, with an echo filter
+ *    requiring the threshold to be exceeded for ACTIVE_CONSECUTIVE_TICKS
+ *    consecutive ticks before transitioning to active. A `working` or `blocked`
+ *    title promotes the tracker to title-authoritative mode immediately.
+ *
+ * An idle marker (`✳ `) alone does NOT disable the byte heuristic — Claude Code
+ * ≥2.1.236 on tmux never writes a working spinner, so a tracker that treated
+ * `idle` as authoritative would report permanently idle.
  */
 export class ActivityTracker extends EventEmitter {
   private readonly windowMs: number;
@@ -67,6 +71,12 @@ export class ActivityTracker extends EventEmitter {
   private timer: NodeJS.Timeout | undefined;
   /** Latest classified title state — 'unknown' until a title is first observed. */
   private titleState: TitleAgentState = 'unknown';
+  /** True once a 'working' or 'blocked' title has been observed — byte heuristic is fully disabled. */
+  private titleAuthoritative = false;
+  /** Consecutive ticks where fresh output pushed the window sum above the active threshold. */
+  private aboveStreak = 0;
+  /** Whether any bytes were recorded since the last tick (reset by tick). */
+  private freshBytes = false;
   /** Status carried by the last 'active' emit (title mode only). */
   private emittedStatus: AgentStatus | undefined;
 
@@ -86,14 +96,15 @@ export class ActivityTracker extends EventEmitter {
 
   /**
    * Feed the latest title-derived state (from TitleStateTracker). Anything
-   * other than 'unknown' switches the tracker into title mode for good —
-   * TitleStateTracker only leaves 'unknown' after observing a recognized
-   * marker (so the child provably drives its title with this protocol), and
-   * never reverts once it has.
+   * other than 'unknown' updates the title state; `working` or `blocked`
+   * additionally locks the tracker into title-authoritative mode for good.
    */
   setTitleState(state: TitleAgentState): void {
     if (state === 'unknown') return;
     this.titleState = state;
+    if (state === 'working' || state === 'blocked') {
+      this.titleAuthoritative = true;
+    }
   }
 
   start(): void {
@@ -115,10 +126,21 @@ export class ActivityTracker extends EventEmitter {
     // nor keep an active one alive by itself.
     if (now < this.resizeGraceUntil) return;
     this.samples.push({ ts: now, bytes });
+    this.freshBytes = true;
   }
 
   getState(): ActivityState {
     return this.state;
+  }
+
+  getSnapshot(): { state: ActivityState; bytesInWindow: number; status?: AgentStatus } {
+    const cutoff = Date.now() - this.windowMs;
+    const sum = this.samples.filter((s) => s.ts >= cutoff).reduce((acc, s) => acc + s.bytes, 0);
+    return {
+      state: this.state,
+      bytesInWindow: sum,
+      ...(this.emittedStatus !== undefined ? { status: this.emittedStatus } : {}),
+    };
   }
 
   private tick(): void {
@@ -127,18 +149,31 @@ export class ActivityTracker extends EventEmitter {
     this.samples = this.samples.filter((s) => s.ts >= cutoff);
     const sum = this.samples.reduce((acc, s) => acc + s.bytes, 0);
 
-    // Title mode: a classifiable OSC title has been observed at least once —
-    // it is the sole authority from then on (see class doc).
-    if (this.titleState !== 'unknown') {
+    if (this.titleAuthoritative) {
+      this.tickTitleMode(now, sum);
+      return;
+    }
+    this.tickCombinedMode(now, sum);
+  }
+
+  /**
+   * Combined mode: byte-volume heuristic with echo filter, plus instant
+   * promotion to title-authoritative on a working/blocked title.
+   */
+  private tickCombinedMode(now: number, sum: number): void {
+    if (this.titleState === 'working' || this.titleState === 'blocked') {
+      this.titleAuthoritative = true;
       this.tickTitleMode(now, sum);
       return;
     }
 
-    const above = sum >= this.activeThresholdBytes;
+    const above = sum >= this.activeThresholdBytes && this.freshBytes;
+    this.freshBytes = false;
+    this.aboveStreak = above ? this.aboveStreak + 1 : 0;
     if (above) this.lastAboveThresholdTs = now;
 
     if (this.state === 'idle') {
-      if (above) {
+      if (this.aboveStreak >= ACTIVE_CONSECUTIVE_TICKS) {
         this.state = 'active';
         this.lastActiveEmitTs = now;
         this.emit('transition', 'active', sum);
@@ -146,12 +181,6 @@ export class ActivityTracker extends EventEmitter {
       return;
     }
 
-    // state === 'active'.
-    // Idle is measured from the last tick whose window sum was *above the
-    // threshold* — not from the last byte seen. An idle TUI still dribbles a
-    // few bytes (cursor blink, prompt redraw); keying off the last byte let
-    // that trickle postpone 'idle' indefinitely, so the spinner lingered long
-    // after the agent had actually finished.
     if (!above && now - this.lastAboveThresholdTs >= this.idleAfterMs) {
       this.state = 'idle';
       this.emit('transition', 'idle', sum);

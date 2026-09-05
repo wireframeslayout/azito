@@ -1,6 +1,7 @@
 import { isPrimaryTaskWindow, type IWindowRepository, type PaneLayout, type Window } from './Window';
 import type { ServerConfig } from '../servers/Server';
 import type { TmuxClient } from '../tmux/TmuxClient';
+import { muxRefFromTmuxTarget, type MuxRef, tmuxTargetFromMuxRef } from '@azito/shared';
 import type { ISessionStrategyFactory } from '../agents/SessionStrategy';
 import type { ITaskRepository, Task } from '../tasks/Task';
 import type { IUnitRepository } from '../units/Unit';
@@ -20,7 +21,7 @@ import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingAppro
 import { resolveExecutionManifest, hashExecutionManifest, type RespawnManifestInput } from '../tasks/execution/ExecutionManifest';
 import { appendLogAndEmit } from '../tasks/execution/AppendLog';
 import type { TaskPaneEnvironmentService } from '../tasks/execution/TaskPaneEnvironmentService';
-import { resolveTmuxSession } from '../tasks/execution/TaskExecutionEnv';
+import { resolveMuxWorkspace } from '../tasks/execution/TaskExecutionEnv';
 import {
   confirmOldWindowGone,
   createPlainWindowInLock,
@@ -82,6 +83,7 @@ interface SupervisionContext {
   supervise: boolean;
   taskId: number | null;
   unitId: number | null;
+  windowId?: number;
 }
 
 export class WindowRespawnService {
@@ -164,6 +166,7 @@ export class WindowRespawnService {
     // sessionCaptureService (required params must precede optional ones).
     private scopedAuthEnabled: boolean,
     private sessionCaptureService?: SessionCaptureService,
+    private harnessPrefix?: string,
   ) {}
 
   private get serverIsolationLock(): ServerIsolationLock {
@@ -228,7 +231,7 @@ export class WindowRespawnService {
     const supervise = shouldSupervise(server.type, win.windowType);
     // task/unitId already resolved above for the execution gate — reused
     // here instead of re-querying the repositories a second time.
-    const supervision: SupervisionContext = { supervise, taskId: win.taskId, unitId };
+    const supervision: SupervisionContext = { supervise, taskId: win.taskId, unitId, windowId };
 
     // Window-generation point for this window: EITHER branch below actually
     // (re)creates the window that becomes the respawned pane (unlike
@@ -419,7 +422,7 @@ export class WindowRespawnService {
       await sleep(createdViaNewSession ? 500 : 300);
 
       const baseTarget = `${sessionName}:${newName}`;
-      const dbTarget = `${baseTarget}.1`;
+      const dbTarget = baseTarget;
 
       // Pane restoration now runs INSIDE this same lock turn, before the
       // final persist below — see the design-rationale comment above this
@@ -447,7 +450,8 @@ export class WindowRespawnService {
         if (win.paneLayout) {
           await this.restorePaneLayout(respawnServer, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv);
         } else {
-          const paneId = await this.tmux.resolvePaneId(respawnServer, baseTarget);
+          const respawnRef = muxRefFromTmuxTarget(baseTarget);
+          const paneId = await this.tmux.resolvePane(respawnServer, respawnRef, 1) as string;
           await this.setupSinglePane(respawnServer, paneId, baseTarget, win, supervision, resolvedCwds.singleCwd);
         }
       } catch (err) {
@@ -637,7 +641,7 @@ export class WindowRespawnService {
 
     const unitId = this.enforceExecutionGate(task, server, 'recover_session_legacy', null);
 
-    const tmuxSession = resolveTmuxSession(task.projectId, server.name, this.projectServerRepo);
+    const tmuxSession = resolveMuxWorkspace(task.projectId, server.name, this.projectServerRepo);
     // Window generation point — rotates the task token via createRotatedWindow,
     // the same shared operation respawn()/execute()/followUp() use (Issue #28
     // third-party review finding 2): this used to call
@@ -698,9 +702,10 @@ export class WindowRespawnService {
       // method was called with — for resolvePaneId/sendKeys/killWindow
       // below, same as respawn()'s other two branches already do.
       server = created.server;
-      const windowTarget = `${tmuxSession}:${created.windowName}`;
+      const legacyRef: MuxRef = { kind: 'tmux', workspace: tmuxSession, window: created.windowName };
+      const windowTarget = tmuxTargetFromMuxRef(legacyRef);
       try {
-        const paneId = await this.tmux.resolvePaneId(server, windowTarget);
+        const paneId = await this.tmux.resolvePane(server, legacyRef, 1) as string;
         // --strict-mcp-config (Issue #28 design v3 §3): this is a claude worker
         // launch, same as buildClaudeLaunchCommand's, just hardcoded here instead
         // of going through it (see that function's own doc comment for why the
@@ -716,11 +721,13 @@ export class WindowRespawnService {
               target: windowTarget,
               taskId: task.id,
               unitId: task.unitId ?? undefined,
+              harnessPrefix: this.harnessPrefix,
               ...this.supervisorRegistry.issueLaunch({
                 serverName: server.name,
                 target: windowTarget,
                 taskId: task.id,
                 unitId: task.unitId ?? null,
+                windowId: null,
               }),
             })
           : resumeCommand;
@@ -831,40 +838,27 @@ export class WindowRespawnService {
       target: supervisorTarget,
       taskId: supervision.taskId ?? undefined,
       unitId: supervision.unitId ?? undefined,
+      harnessPrefix: this.harnessPrefix,
       ...this.supervisorRegistry.issueLaunch({
         serverName: server.name,
         target: supervisorTarget,
         taskId: supervision.taskId ?? null,
         unitId: supervision.unitId ?? null,
+        windowId: supervision.windowId ?? null,
       }),
     });
   }
 
   async capturePaneLayout(server: ServerConfig, tmuxTarget: string): Promise<PaneLayout> {
-    const windowTarget = tmuxTarget.includes('.') ? tmuxTarget.split('.')[0] : tmuxTarget;
-
-    const layoutResult = await this.tmux.execCommand(
-      server,
-      `tmux display-message -t '${windowTarget}' -p '#{window_layout}'`,
-    );
-    const layout = layoutResult.stdout.trim();
-
-    const paneResult = await this.tmux.execCommand(
-      server,
-      `tmux list-panes -t '${windowTarget}' -F '#{pane_index}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_title}'`,
-    );
-
-    const panes = paneResult.stdout.trim().split('\n').map((line) => {
-      const [index, command, workingDirectory, title] = line.split('\t');
-      return {
-        index: parseInt(index, 10),
-        command: command || null,
-        workingDirectory: workingDirectory || null,
-        title: title || null,
-      };
-    });
-
-    return { layout, panes };
+    const ref = muxRefFromTmuxTarget(tmuxTarget);
+    const captured = await this.tmux.captureLayout(server, ref);
+    const panes = captured.panes.map(p => ({
+      index: p.index,
+      command: p.command,
+      workingDirectory: p.path,
+      title: p.title,
+    }));
+    return { layout: captured.layout, panes };
   }
 
   private async restorePaneLayout(
@@ -884,23 +878,21 @@ export class WindowRespawnService {
     paneEnv: Record<string, string>,
   ): Promise<void> {
     const paneCount = paneLayout.panes.length;
-    const firstPaneId = await this.tmux.resolvePaneId(server, baseTarget);
+    const layoutRef = muxRefFromTmuxTarget(baseTarget);
+    const firstPaneId = await this.tmux.resolvePane(server, layoutRef, 1) as string;
     for (let i = 1; i < paneCount; i++) {
       await this.tmux.splitPane(server, firstPaneId, i % 2 === 0 ? 'v' : 'h', paneEnv);
       await sleep(200);
     }
 
     if (paneLayout.layout) {
-      await this.tmux.execCommand(
-        server,
-        `tmux select-layout -t '${baseTarget}' '${paneLayout.layout}'`,
-      );
+      await this.tmux.applyLayout(server, layoutRef, paneLayout.layout);
     }
 
     const paneIdMap = new Map<number, string>();
-    const paneEntries = await this.tmux.listPaneIds(server, baseTarget);
+    const paneEntries = await this.tmux.listPanesByRef(server, layoutRef);
     for (const entry of paneEntries) {
-      paneIdMap.set(entry.index, entry.paneId);
+      paneIdMap.set(entry.ordinal - 1, entry.handle as string);
     }
 
     for (const pane of paneLayout.panes) {

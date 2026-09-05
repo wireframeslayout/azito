@@ -1,7 +1,7 @@
 import type { Window } from '../pages/workspace/types';
 import type { BrowserGroupInfo } from '../hooks/useBrowserGroups';
 import { buildWindowTaskMap, lookupWindowTask } from './windowTask';
-import { stripPaneSuffix } from '../utils/tmuxTarget';
+import { windowKey } from '@azito/shared';
 
 export interface BrowserObject {
   serverName: string;
@@ -23,7 +23,7 @@ export interface ObjectSections {
  * 重複排除（別タスクが同じ物理ウィンドウを持つケースを潰さない）には使わないこと。
  */
 function windowPhysicalKey(w: Window): string {
-  return `${w.serverName}/${stripPaneSuffix(w.tmuxTarget)}`;
+  return windowKey(w.serverName, w.tmuxTarget);
 }
 
 /**

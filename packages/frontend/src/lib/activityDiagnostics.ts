@@ -38,7 +38,8 @@ export interface ActivityDiagnosticRow {
     /** Issue #28 Phase C: false = display-only, this connection never drove Tier 0. */
     bound: boolean;
   };
-  hook?: { lastSignalAt: number; lastEvent: 'start' | 'stop' };
+  hook?: { lastSignalAt: number; lastEvent: 'start' | 'stop'; matchedBy?: 'muxPaneRef' | 'windowSpec' };
+  supervisorMatchedBy?: 'muxPaneRef' | 'windowKey' | null;
   probe?: {
     status: 'working' | 'idle' | 'offline';
     tailState?: string;

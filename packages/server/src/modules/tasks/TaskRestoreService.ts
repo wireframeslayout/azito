@@ -15,7 +15,7 @@ import { PathResolverFactory, assertDirectoryContained } from '../git/PathContai
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { IContentExtractor } from '../llm/ContentExtractor';
 import type { IExecutionLogRepository } from './ExecutionLog';
-import { resolveTaskServerName, resolveTmuxSession, resolveBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './execution/TaskExecutionEnv';
+import { resolveTaskServerName, resolveMuxWorkspace, resolveBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './execution/TaskExecutionEnv';
 import { performDistribution, shouldClearRecordedDistributionRepository, type DistributionOutcome } from './execution/DistributionHelper';
 import type { IDistributionStateRepository } from '../git/hub-transfer/types';
 import { normalizeBranchRef } from '../git/assertSafeGitArgs';
@@ -28,6 +28,7 @@ import type { TaskPaneEnvironmentService } from './execution/TaskPaneEnvironment
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { EventEmitter } from 'events';
+import { type MuxRef, tmuxTargetFromMuxRef } from '@azito/shared';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -129,7 +130,7 @@ export class TaskRestoreService {
     // lost the moment this variable is captured by a nested closure below.
     let server: ServerConfig = serverAtStart;
 
-    const tmuxSession = resolveTmuxSession(task.projectId, serverName, projectServerRepo);
+    const tmuxSession = resolveMuxWorkspace(task.projectId, serverName, projectServerRepo);
 
     // Untrusted-input execution gate (Issue #328), same
     // resolveExecutionManifest()+checkExecutionGate() pairing as
@@ -364,9 +365,10 @@ export class TaskRestoreService {
       // transport, sendKeys, and the rollback's killWindow below).
       server = created.server;
 
-      const windowTarget = `${tmuxSession}:${windowName}`;
-      const paneId = await tmux.resolvePaneId(server, windowTarget);
-      const dbTarget = `${windowTarget}.1`;
+      const ref: MuxRef = { kind: 'tmux', workspace: tmuxSession, window: windowName };
+      const windowTarget = tmuxTargetFromMuxRef(ref);
+      const paneId = await tmux.resolvePane(server, ref, 1) as string;
+      const dbTarget = windowTarget;
       // `lockedProjectServer` (Issue #87 16th-round review, Important finding
       // 2), not the pre-lock `projectServer` — this line runs AFTER
       // createRotatedWindow's preCheck has already re-resolved and captured
@@ -677,7 +679,7 @@ export class TaskRestoreService {
           // already persisted (Issue #28 third-party review, WindowRotation.ts
           // finding).
           await rollbackWindowReference(
-            tmux.killWindow(server, `${tmuxSession}:${windowName}`),
+            tmux.closeWindow(server, { kind: 'tmux', workspace: tmuxSession, window: windowName }),
             paneEnvService,
             tokenId!,
             'restore_rollback',

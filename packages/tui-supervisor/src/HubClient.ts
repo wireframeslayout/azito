@@ -24,6 +24,8 @@ export interface HubClientOptions {
    * deliberately NOT gated — they target an already-running child.
    */
   readiness?: { waitUntilReady(): Promise<void>; isReady(): boolean };
+  /** Returns the current activity tracker snapshot for sending on registration. */
+  activitySnapshot?: () => { state: ActivityState; bytesInWindow: number; status?: AgentStatus };
   heartbeatMs?: number;
   backoffBaseMs?: number;
   backoffMaxMs?: number;
@@ -206,6 +208,12 @@ export class HubClient {
         // child is still booting.
         if (this.options.readiness?.isReady()) {
           this.sendReady();
+        }
+        {
+          const snap = this.options.activitySnapshot?.();
+          if (snap) {
+            this.sendActivity(snap.state, snap.bytesInWindow, snap.status);
+          }
         }
         break;
       case 'inject_prompt':

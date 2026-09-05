@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { stripPaneSuffix } from '@azito/shared';
 import type { SqliteDatabase } from '../../shared/db/Database';
 
 /** What the hub expects a `register` message to claim, resolved at the moment it wrapped the launch command. */
@@ -7,6 +8,7 @@ export interface SupervisorLaunchExpectation {
   target: string;
   taskId: number | null;
   unitId: number | null;
+  windowId?: number | null;
 }
 
 export type SupervisorLaunchStatus = 'pending' | 'active' | 'replaced' | 'expired';
@@ -29,6 +31,7 @@ export interface SupervisorLaunchRow extends SupervisorLaunchExpectation {
   launchId: string;
   bootstrapHash: string;
   sessionHash: string | null;
+  muxPaneRef: string | null;
   status: SupervisorLaunchStatus;
   createdAt: string;
   lastRegisteredAt: string | null;
@@ -147,7 +150,9 @@ export interface ISupervisorLaunchRepository {
    * (client crashed before reconnecting at all) simply never promotes —
    * still cleaned up by the normal supersede-on-relaunch path.
    */
-  touchRegistered(launchId: string): void;
+  touchRegistered(launchId: string, muxPaneRef?: string): void;
+
+  findActiveByWindow(windowId: number): SupervisorLaunchRow | null;
 
   markStatus(launchId: string, status: SupervisorLaunchStatus): void;
 }
@@ -181,8 +186,10 @@ interface LaunchRawRow {
   target: string;
   task_id: number | null;
   unit_id: number | null;
+  window_id: number | null;
   bootstrap_hash: string;
   session_hash: string | null;
+  mux_pane_ref: string | null;
   status: SupervisorLaunchStatus;
   created_at: string;
   last_registered_at: string | null;
@@ -196,8 +203,10 @@ function toRow(raw: LaunchRawRow): SupervisorLaunchRow {
     target: raw.target,
     taskId: raw.task_id,
     unitId: raw.unit_id,
+    windowId: raw.window_id,
     bootstrapHash: raw.bootstrap_hash,
     sessionHash: raw.session_hash,
+    muxPaneRef: raw.mux_pane_ref,
     status: raw.status,
     createdAt: raw.created_at,
     lastRegisteredAt: raw.last_registered_at,
@@ -209,15 +218,17 @@ export class SqliteSupervisorLaunchRepository implements ISupervisorLaunchReposi
   private findByLaunchIdStmt;
   private findBySessionHashStmt;
   private findActiveByTargetStmt;
+  private findActiveByWindowStmt;
   private activateStmt;
   private touchStmt;
+  private touchWithRefStmt;
   private markStatusStmt;
   private supersedeForTargetStmt;
 
   constructor(private db: SqliteDatabase) {
     this.insertStmt = db.prepare(
-      `INSERT INTO supervisor_launches (launch_id, server_name, target, task_id, unit_id, bootstrap_hash)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO supervisor_launches (launch_id, server_name, target, task_id, unit_id, window_id, bootstrap_hash)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
     );
     this.findByLaunchIdStmt = db.prepare('SELECT * FROM supervisor_launches WHERE launch_id = ?');
     this.findBySessionHashStmt = db.prepare('SELECT * FROM supervisor_launches WHERE session_hash = ?');
@@ -248,14 +259,24 @@ export class SqliteSupervisorLaunchRepository implements ISupervisorLaunchReposi
     this.supersedeForTargetStmt = db.prepare(
       "UPDATE supervisor_launches SET status = 'replaced' WHERE server_name = ? AND target = ? AND status IN ('pending', 'active')",
     );
+    this.findActiveByWindowStmt = db.prepare(
+      "SELECT * FROM supervisor_launches WHERE window_id = ? AND status IN ('pending', 'active') ORDER BY id DESC LIMIT 1",
+    );
+    this.touchWithRefStmt = db.prepare(
+      `UPDATE supervisor_launches
+       SET status = CASE WHEN status = 'pending' THEN 'active' ELSE status END,
+           mux_pane_ref = ?,
+           last_registered_at = datetime('now')
+       WHERE launch_id = ?`,
+    );
   }
 
   create(expectation: SupervisorLaunchExpectation): IssuedSupervisorLaunch {
     const launchId = crypto.randomUUID();
     const bootstrapToken = crypto.randomBytes(32).toString('hex');
     const run = this.db.transaction((exp: SupervisorLaunchExpectation, id: string, hash: string): void => {
-      this.supersedeForTargetStmt.run(exp.serverName, exp.target);
-      this.insertStmt.run(id, exp.serverName, exp.target, exp.taskId, exp.unitId, hash);
+      this.supersedeForTargetStmt.run(exp.serverName, stripPaneSuffix(exp.target));
+      this.insertStmt.run(id, exp.serverName, stripPaneSuffix(exp.target), exp.taskId, exp.unitId, exp.windowId ?? null, hash);
     });
     run(expectation, launchId, hashToken(bootstrapToken));
     return { launchId, bootstrapToken };
@@ -272,7 +293,7 @@ export class SqliteSupervisorLaunchRepository implements ISupervisorLaunchReposi
   }
 
   findActiveByTarget(serverName: string, target: string): SupervisorLaunchRow | null {
-    const row = this.findActiveByTargetStmt.get(serverName, target) as LaunchRawRow | undefined;
+    const row = this.findActiveByTargetStmt.get(serverName, stripPaneSuffix(target)) as LaunchRawRow | undefined;
     return row ? toRow(row) : null;
   }
 
@@ -301,8 +322,17 @@ export class SqliteSupervisorLaunchRepository implements ISupervisorLaunchReposi
     return sessionToken;
   }
 
-  touchRegistered(launchId: string): void {
-    this.touchStmt.run(launchId);
+  touchRegistered(launchId: string, muxPaneRef?: string): void {
+    if (muxPaneRef !== undefined) {
+      this.touchWithRefStmt.run(muxPaneRef, launchId);
+    } else {
+      this.touchStmt.run(launchId);
+    }
+  }
+
+  findActiveByWindow(windowId: number): SupervisorLaunchRow | null {
+    const row = this.findActiveByWindowStmt.get(windowId) as LaunchRawRow | undefined;
+    return row ? toRow(row) : null;
   }
 
   markStatus(launchId: string, status: SupervisorLaunchStatus): void {
