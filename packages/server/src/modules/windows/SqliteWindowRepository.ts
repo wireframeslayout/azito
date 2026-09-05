@@ -1,6 +1,7 @@
 import type { Database as SqliteDatabase } from 'better-sqlite3';
 import type { Window, PaneLayout, IWindowRepository } from './Window';
 import { isSameWindowTarget } from './paneTarget';
+import { type MuxRef, formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef } from '@azito/shared';
 
 // Re-exported so tmux/routes/sessions.ts (base layer — dependency-cruiser's
 // `base-tmux-limited-upward` rule only allow-lists this file, not Window.ts
@@ -22,6 +23,7 @@ interface WindowRow {
   task_id: number | null;
   server_name: string;
   tmux_target: string;
+  mux_ref: string | null;
   label: string | null;
   is_primary: number;
   window_type: string;
@@ -45,13 +47,14 @@ export class SqliteWindowRepository implements IWindowRepository {
   private updatePaneLayoutStmt;
   private findProjectWindowStmt;
   private findByServerStmt;
+  private findByServerAndRefStmt;
   private findAgentSessionIdsByServerStmt;
   private nowStmt;
 
   constructor(private db: SqliteDatabase) {
     this.addStmt = db.prepare(`
-      INSERT INTO windows (owner_type, project_id, task_id, server_name, tmux_target, label, is_primary, window_type, worker_type, worker_model, agent_session_id, launch_command, working_directory, pane_layout)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO windows (owner_type, project_id, task_id, server_name, tmux_target, mux_ref, label, is_primary, window_type, worker_type, worker_model, agent_session_id, launch_command, working_directory, pane_layout)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     this.findAllStmt = db.prepare('SELECT * FROM windows');
     this.findByIdStmt = db.prepare('SELECT * FROM windows WHERE id = ?');
@@ -63,6 +66,7 @@ export class SqliteWindowRepository implements IWindowRepository {
       'SELECT id FROM windows WHERE project_id = ? AND server_name = ? AND tmux_target = ?'
     );
     this.findByServerStmt = db.prepare('SELECT * FROM windows WHERE server_name = ?');
+    this.findByServerAndRefStmt = db.prepare('SELECT * FROM windows WHERE server_name = ? AND mux_ref = ?');
     this.findAgentSessionIdsByServerStmt = db.prepare(
       'SELECT DISTINCT agent_session_id FROM windows WHERE server_name = ? AND agent_session_id IS NOT NULL',
     );
@@ -89,6 +93,7 @@ export class SqliteWindowRepository implements IWindowRepository {
       window.taskId,
       window.serverName,
       window.tmuxTarget,
+      window.muxRef ? formatMuxRef(window.muxRef) : formatMuxRef(muxRefFromTmuxTarget(window.tmuxTarget)),
       window.label,
       window.isPrimary ? 1 : 0,
       window.windowType,
@@ -165,6 +170,11 @@ export class SqliteWindowRepository implements IWindowRepository {
     return this.toWindow(row);
   }
 
+  findByServerAndRef(serverName: string, ref: MuxRef): Window | undefined {
+    const row = this.findByServerAndRefStmt.get(serverName, formatMuxRef(ref)) as WindowRow | undefined;
+    return row ? this.toWindow(row) : undefined;
+  }
+
   findByServerAndSession(serverName: string, sessionName: string): Window[] {
     const rows = this.findByServerStmt.all(serverName) as WindowRow[];
     const prefix = `${sessionName}:`;
@@ -172,13 +182,20 @@ export class SqliteWindowRepository implements IWindowRepository {
   }
 
   update(id: number, data: Partial<Pick<Window,
-    'tmuxTarget' | 'label' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType' | 'sleeping' | 'projectId'
+    'tmuxTarget' | 'muxRef' | 'label' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType' | 'sleeping' | 'projectId'
   >>): void {
     const fields: string[] = [];
     const values: unknown[] = [];
 
     if (data.projectId !== undefined) { fields.push('project_id = ?'); values.push(data.projectId); }
-    if (data.tmuxTarget !== undefined) { fields.push('tmux_target = ?'); values.push(data.tmuxTarget); }
+    if (data.tmuxTarget !== undefined) {
+      fields.push('tmux_target = ?'); values.push(data.tmuxTarget);
+      if (!data.muxRef) { fields.push('mux_ref = ?'); values.push(formatMuxRef(muxRefFromTmuxTarget(data.tmuxTarget))); }
+    }
+    if (data.muxRef !== undefined) {
+      fields.push('mux_ref = ?'); values.push(formatMuxRef(data.muxRef));
+      if (!data.tmuxTarget) { fields.push('tmux_target = ?'); values.push(tmuxTargetFromMuxRef(data.muxRef)); }
+    }
     if (data.label !== undefined) { fields.push('label = ?'); values.push(data.label); }
     if (data.agentSessionId !== undefined) { fields.push('agent_session_id = ?'); values.push(data.agentSessionId); }
     if (data.launchCommand !== undefined) { fields.push('launch_command = ?'); values.push(data.launchCommand); }
@@ -235,6 +252,7 @@ export class SqliteWindowRepository implements IWindowRepository {
       taskId: row.task_id,
       serverName: row.server_name,
       tmuxTarget: row.tmux_target,
+      muxRef: row.mux_ref ? parseMuxRef(row.mux_ref) : muxRefFromTmuxTarget(row.tmux_target),
       label: row.label,
       isPrimary: row.is_primary === 1,
       windowType: row.window_type as Window['windowType'],

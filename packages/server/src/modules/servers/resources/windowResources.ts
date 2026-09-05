@@ -1,62 +1,27 @@
 import type { IServerTransport } from '../transport/ServerTransport';
+import type { IMuxClient } from '../../tmux/IMuxClient';
+import type { ServerConfig } from '../Server';
+import { tmuxTargetFromMuxRef } from '@azito/shared';
 
 export interface WindowResource {
   target: string;
   rssBytes: number;
 }
 
-/** Per-browser-tab linked sessions AZITO creates (see LocalTransport.openTerminal). */
-const LINKED_SESSION_PREFIX = '_azito_';
-
-/**
- * Picks which of two targets naming the same window to report. The source
- * session is preferred over the throwaway linked ones so the UI shows the
- * stable name; between two of the same kind the first one wins (stable order).
- */
-function preferredTarget(current: string, candidate: string): string {
-  const currentLinked = current.startsWith(LINKED_SESSION_PREFIX);
-  const candidateLinked = candidate.startsWith(LINKED_SESSION_PREFIX);
-  if (currentLinked && !candidateLinked) return candidate;
-  return current;
-}
-
-export async function measureWindowResources(transport: IServerTransport): Promise<WindowResource[]> {
-  const [panesResult, psResult] = await Promise.all([
-    transport.exec("tmux list-panes -a -F '#{session_name}:#{window_name} #{pane_pid}' 2>/dev/null", 5000),
-    // `-o <col>=` suppresses the header portably; `--no-headers` is a procps
-    // extension that BSD ps (macOS) rejects outright with a usage error.
+export async function measureWindowResources(transport: IServerTransport, muxClient: Pick<IMuxClient, 'measurePanePids'>, server: ServerConfig): Promise<WindowResource[]> {
+  const [panePidEntries, psResult] = await Promise.all([
+    muxClient.measurePanePids(server),
     transport.exec('ps -e -o pid=,ppid=,rss= 2>/dev/null', 5000),
   ]);
 
-  if (panesResult.code !== 0 || psResult.code !== 0) return [];
-
-  // A window linked into several sessions (AZITO creates one `tmux new-session -t`
-  // per browser tab) is the *same* tmux window object, so `list-panes -a` reports
-  // its panes once per session. Keying by pane pid collapses those duplicates;
-  // without it a single window is listed 2-3 times and its RSS counted as many.
-  const windowByPid = new Map<number, string>();
-  for (const line of panesResult.stdout.trim().split('\n')) {
-    if (!line) continue;
-    const spaceIdx = line.lastIndexOf(' ');
-    if (spaceIdx === -1) continue;
-    // The format has no pane suffix (`#{session_name}:#{window_name}`), so the
-    // target is used as-is — splitting on '.' would truncate window names that
-    // legitimately contain one and attribute the panes to a different window.
-    const windowTarget = line.slice(0, spaceIdx);
-    const pid = parseInt(line.slice(spaceIdx + 1), 10);
-    if (!Number.isFinite(pid)) continue;
-
-    const known = windowByPid.get(pid);
-    if (known === undefined || preferredTarget(known, windowTarget) === windowTarget) {
-      windowByPid.set(pid, windowTarget);
-    }
-  }
+  if (psResult.code !== 0) return [];
 
   const panePids = new Map<string, number[]>();
-  for (const [pid, windowTarget] of windowByPid) {
-    const existing = panePids.get(windowTarget);
-    if (existing) existing.push(pid);
-    else panePids.set(windowTarget, [pid]);
+  for (const entry of panePidEntries) {
+    const target = tmuxTargetFromMuxRef(entry.ref);
+    const existing = panePids.get(target);
+    if (existing) existing.push(entry.pid);
+    else panePids.set(target, [entry.pid]);
   }
 
   if (panePids.size === 0) return [];

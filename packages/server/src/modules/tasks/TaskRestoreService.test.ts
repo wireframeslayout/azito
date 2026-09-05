@@ -140,6 +140,7 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
       findByTaskIds: vi.fn(() => new Map()),
       findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
       findByServerAndTarget: vi.fn(() => undefined),
+      findByServerAndRef: vi.fn(() => undefined),
       findByServer: vi.fn(() => []),
       findByServerAndSession: vi.fn(() => []),
       update: vi.fn(),

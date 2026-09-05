@@ -166,6 +166,7 @@ function buildService(opts: {
     findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
     findByServer: vi.fn(() => []),
     findByServerAndTarget: vi.fn(() => undefined),
+    findByServerAndRef: vi.fn(() => undefined),
     findByServerAndSession: vi.fn(() => []),
     update: vi.fn(),
     updateAgentSessionIdByWindow: vi.fn(),
@@ -194,6 +195,8 @@ function buildService(opts: {
     resolvePaneId: vi.fn(async () => '%0'),
     listPaneIds: vi.fn(async () => [{ index: 0, paneId: '%0' }]),
     execCommand: vi.fn(async () => ({ stdout: '' })),
+    captureLayout: vi.fn(async () => ({ layout: '', panes: [{ index: 0, ordinal: 1, command: 'bash', path: '/home', title: '' }] })),
+    applyLayout: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
     uiTokenEnv: vi.fn(() => ({ AZITO_UI_TOKEN: 'ui-token-fixture' })),
     // Issue #29 review (5th pass), Critical finding 1: the non-task respawn
     // fallback now calls this server-aware wrapper instead of the
@@ -1497,6 +1500,7 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
       findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
       findByServer: vi.fn(() => []),
       findByServerAndTarget: vi.fn(() => undefined),
+      findByServerAndRef: vi.fn(() => undefined),
       findByServerAndSession: vi.fn(() => []),
       update: vi.fn((_id: number, fields: Partial<Window>) => {
         windowRow = { ...windowRow, ...fields };

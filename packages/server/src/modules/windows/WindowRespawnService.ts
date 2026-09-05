@@ -1,6 +1,7 @@
 import { isPrimaryTaskWindow, type IWindowRepository, type PaneLayout, type Window } from './Window';
 import type { ServerConfig } from '../servers/Server';
 import type { TmuxClient } from '../tmux/TmuxClient';
+import { muxRefFromTmuxTarget } from '@azito/shared';
 import type { ISessionStrategyFactory } from '../agents/SessionStrategy';
 import type { ITaskRepository, Task } from '../tasks/Task';
 import type { IUnitRepository } from '../units/Unit';
@@ -844,30 +845,15 @@ export class WindowRespawnService {
   }
 
   async capturePaneLayout(server: ServerConfig, tmuxTarget: string): Promise<PaneLayout> {
-    const windowTarget = tmuxTarget.includes('.') ? tmuxTarget.split('.')[0] : tmuxTarget;
-
-    const layoutResult = await this.tmux.execCommand(
-      server,
-      `tmux display-message -t '${windowTarget}' -p '#{window_layout}'`,
-    );
-    const layout = layoutResult.stdout.trim();
-
-    const paneResult = await this.tmux.execCommand(
-      server,
-      `tmux list-panes -t '${windowTarget}' -F '#{pane_index}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_title}'`,
-    );
-
-    const panes = paneResult.stdout.trim().split('\n').map((line) => {
-      const [index, command, workingDirectory, title] = line.split('\t');
-      return {
-        index: parseInt(index, 10),
-        command: command || null,
-        workingDirectory: workingDirectory || null,
-        title: title || null,
-      };
-    });
-
-    return { layout, panes };
+    const ref = muxRefFromTmuxTarget(tmuxTarget);
+    const captured = await this.tmux.captureLayout(server, ref);
+    const panes = captured.panes.map(p => ({
+      index: p.index,
+      command: p.command,
+      workingDirectory: p.path,
+      title: p.title,
+    }));
+    return { layout: captured.layout, panes };
   }
 
   private async restorePaneLayout(
@@ -894,10 +880,8 @@ export class WindowRespawnService {
     }
 
     if (paneLayout.layout) {
-      await this.tmux.execCommand(
-        server,
-        `tmux select-layout -t '${baseTarget}' '${paneLayout.layout}'`,
-      );
+      const layoutRef = muxRefFromTmuxTarget(baseTarget);
+      await this.tmux.applyLayout(server, layoutRef, paneLayout.layout);
     }
 
     const paneIdMap = new Map<number, string>();
