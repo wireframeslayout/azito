@@ -22,6 +22,7 @@ export interface InteractionSignal {
   };
   event: 'open' | 'cancel';
   timestamp: number;
+  muxPaneRef?: string;
   /**
    * The question itself, when the signal source could supply it (PermissionRequest hook,
    * `harness/hooks/azito-question.sh`). Optional because the other signal source — the

@@ -365,6 +365,7 @@ describe('GET /api/windows/pane-loading-state', () => {
       lastActivityFrameAt: null,
       lastReportedState: null,
       lastReportedStatus: null,
+      muxPaneRef: null,
     };
     app = await setup(win, [entry]);
     const res = await app.inject({

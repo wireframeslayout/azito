@@ -8,7 +8,7 @@ import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { NotificationBus } from '../notifications/NotificationBus';
 import type { AgentActivityStopReason } from '../notifications/NotificationEvent';
 import { classifyPaneState, CLASSIFIABLE_AGENT_TYPES, type PaneAgentState } from './paneStateClassifier';
-import { stripPaneSuffix } from '../windows/paneTarget';
+import { stripPaneSuffix, windowKey } from '@azito/shared';
 import { resolveInterval } from '../../shared/testIntervals';
 
 /** Split a stored `session:windowSpec[.pane]` target into its session and window parts. */
@@ -157,6 +157,7 @@ export interface AgentHookSignal {
   windowName: string;
   paneIndex: number;
   event: 'start' | 'stop';
+  muxPaneRef?: string;
 }
 
 interface HookState {
@@ -443,10 +444,6 @@ const OPERATION_ATTRIBUTION_TTL_MS = 90_000;
  * Purely a display memo — nothing in the judgment path reads it.
  */
 const LAST_TRANSITION_TTL_MS = 30 * 60_000;
-
-function windowKey(serverName: string, target: string): string {
-  return `${serverName}::${stripPaneSuffix(target)}`;
-}
 
 interface CollectResult {
   next: Map<string, AgentActivityEntry>;

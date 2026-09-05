@@ -4,6 +4,7 @@
   "description": "Browser-based tmux session manager for Claude Code / Codex agents",
   "private": true,
   "workspaces": [
+    "packages/shared",
     "packages/server",
     "packages/frontend",
     "packages/tui-supervisor"
@@ -13,7 +14,7 @@
     "dev:server": "PORT=3001 npm run dev --workspace=packages/server",
     "dev:web": "npm run dev --workspace=packages/frontend -- --host",
     "build": "npm run build:server && npm run build:web",
-    "build:server": "npm run build --workspace=packages/server",
+    "build:server": "npm run build --workspace=packages/shared && npm run build --workspace=packages/server",
     "build:web": "npx -w packages/frontend vite build --outDir ../../public --emptyOutDir",
     "start": "PORT=3001 node packages/server/dist/main.js",
     "build:hub": "npx -w packages/server tsx scripts/build-hub.ts",

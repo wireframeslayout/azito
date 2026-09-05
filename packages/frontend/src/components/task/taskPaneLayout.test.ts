@@ -41,7 +41,7 @@ describe('viewTabId / parseViewTabId', () => {
   });
 
   it('rejects non-view or unknown-view tab ids', () => {
-    expect(parseViewTabId('v-window:local/sess:1.0')).toBeNull();
+    expect(parseViewTabId('v-window:local::sess:1')).toBeNull();
     expect(parseViewTabId('view:not-a-real-view')).toBeNull();
   });
 });
@@ -49,22 +49,28 @@ describe('viewTabId / parseViewTabId', () => {
 describe('windowTabId / parseWindowTabId', () => {
   it('round-trips a server+target pair into its tab id, stripping any pane suffix', () => {
     const tabId = windowTabId('local', 'sess:1.0');
-    expect(tabId).toBe('v-window:local/sess:1');
+    expect(tabId).toBe('v-window:local::sess:1');
     expect(parseWindowTabId(tabId)).toEqual({ serverName: 'local', target: 'sess:1' });
   });
 
   it('encodes two targets that differ only by pane suffix to the same tab id', () => {
-    // The server stores task windows as `session:window.1` (see ExecuteTaskUseCase) while
-    // a pane click elsewhere in the same window produces `session:window.<paneIndex>` —
-    // both must resolve to the same task-panel tab, or allTabIds/reconcile would treat
-    // them as two different tabs and prune whichever one the user actually had selected.
     expect(windowTabId('local', 'sess:main.1')).toBe(windowTabId('local', 'sess:main.0'));
+  });
+
+  it('parses new format (:: separator)', () => {
+    expect(parseWindowTabId('v-window:local::main:0')).toEqual({ serverName: 'local', target: 'main:0' });
+    expect(parseWindowTabId('v-window:srv01::azito:win--abc')).toEqual({ serverName: 'srv01', target: 'azito:win--abc' });
+  });
+
+  it('parses old format (/ separator) for backward compatibility', () => {
+    expect(parseWindowTabId('v-window:local/main:0')).toEqual({ serverName: 'local', target: 'main:0' });
+    expect(parseWindowTabId('v-window:srv01/azito:win--abc')).toEqual({ serverName: 'srv01', target: 'azito:win--abc' });
   });
 
   it('rejects malformed window tab ids', () => {
     expect(parseWindowTabId('view:description')).toBeNull();
     expect(parseWindowTabId('v-window:')).toBeNull();
-    expect(parseWindowTabId('v-window:missing-slash')).toBeNull();
+    expect(parseWindowTabId('v-window:missing-separator')).toBeNull();
   });
 });
 
@@ -79,7 +85,7 @@ describe('browserTabId / parseBrowserTabId', () => {
     expect(parseBrowserTabId('view:description')).toBeNull();
     expect(parseBrowserTabId('v-browser:')).toBeNull();
     expect(parseBrowserTabId('v-browser:missing-slash')).toBeNull();
-    expect(parseBrowserTabId('v-window:local/sess:1')).toBeNull();
+    expect(parseBrowserTabId('v-window:local::sess:1')).toBeNull();
   });
 });
 
@@ -121,7 +127,7 @@ describe('listPersistedBrowserTabIds', () => {
     stubLocalStorage({
       [SUB_TAB_KEY]: JSON.stringify({
         3: {
-          layout: { type: 'pane', id: 'p1', tabIds: ['view:description', 'v-window:local/sess:1'], activeTabId: 'view:description' },
+          layout: { type: 'pane', id: 'p1', tabIds: ['view:description', 'v-window:local::sess:1'], activeTabId: 'view:description' },
           focusedPaneId: 'p1',
         },
       }),
@@ -170,8 +176,8 @@ describe('normalizePersistedTaskLayout', () => {
       root: {
         type: 'pane', id: 'p1',
         // terminal target's pane suffix (".0") is stripped by windowTabId's normalization.
-        tabIds: [...allFixedViewTabIds, 'v-window:local/sess:1'],
-        activeTabId: 'v-window:local/sess:1',
+        tabIds: [...allFixedViewTabIds, 'v-window:local::sess:1'],
+        activeTabId: 'v-window:local::sess:1',
       },
       focusedPaneId: 'p1',
     });
@@ -203,8 +209,8 @@ describe('normalizePersistedTaskLayout', () => {
     expect(result).toEqual({
       root: {
         type: 'pane', id: 'p1',
-        tabIds: ['view:description', 'v-window:local/sess:main'],
-        activeTabId: 'v-window:local/sess:main',
+        tabIds: ['view:description', 'v-window:local::sess:main'],
+        activeTabId: 'v-window:local::sess:main',
       },
       focusedPaneId: 'p1',
     });
@@ -218,8 +224,8 @@ describe('normalizePersistedTaskLayout', () => {
     };
     const result = normalizePersistedTaskLayout({ layout, focusedPaneId: 'p2' });
     const root = result?.root as { a: { tabIds: string[]; activeTabId: string } };
-    expect(root.a.tabIds).toEqual(['v-window:local/sess:main']);
-    expect(root.a.activeTabId).toBe('v-window:local/sess:main');
+    expect(root.a.tabIds).toEqual(['v-window:local::sess:main']);
+    expect(root.a.activeTabId).toBe('v-window:local::sess:main');
   });
 });
 
@@ -257,8 +263,8 @@ describe('selectTaskTerminal', () => {
     selectTaskTerminal(42, { serverName: 'local', target: 'sess:main.1' });
 
     const map = JSON.parse(store[SUB_TAB_KEY]) as Record<string, { layout: { tabIds: string[]; activeTabId: string } }>;
-    expect(map['42'].layout.tabIds).toEqual([...allFixedViewTabIds, 'v-window:local/sess:main']);
-    expect(map['42'].layout.activeTabId).toBe('v-window:local/sess:main');
+    expect(map['42'].layout.tabIds).toEqual([...allFixedViewTabIds, 'v-window:local::sess:main']);
+    expect(map['42'].layout.activeTabId).toBe('v-window:local::sess:main');
   });
 });
 
@@ -298,7 +304,7 @@ describe('resolveDisplayedTaskTerminal', () => {
     const store: Record<string, string> = {
       [SUB_TAB_KEY]: JSON.stringify({
         7: {
-          layout: { type: 'pane', id: 'p1', tabIds: ['v-window:local/sess:main'], activeTabId: 'v-window:local/sess:main' },
+          layout: { type: 'pane', id: 'p1', tabIds: ['v-window:local::sess:main'], activeTabId: 'v-window:local::sess:main' },
           focusedPaneId: 'p1',
         },
       }),

@@ -2,7 +2,7 @@ import type { IWindowRepository, Window } from './Window';
 import { isAgentWindow } from './Window';
 import type { WindowSessionResolver, WindowActivityProbeResult } from '../transcripts/WindowSessionResolver';
 import type { IServerRepository } from '../servers/Server';
-import { stripPaneSuffix } from './paneTarget';
+import { stripPaneSuffix, windowKey } from '@azito/shared';
 import { resolveInterval } from '../../shared/testIntervals';
 
 export interface WindowActivityStatusEntry {
@@ -107,38 +107,10 @@ export class WindowActivityStatusService {
   private async compute(): Promise<WindowActivityStatusEntry[]> {
     const windows = this.windowRepo.findAll().filter(w => isAgentWindow(w) && !w.sleeping);
 
-    // Dedup by server+target the same way AgentActivityMonitor does (multiple DB
-    // rows — project-owned and task-owned — can point at the same tmux window).
-    // The key MUST strip the pane suffix (`stripPaneSuffix`, mirroring
-    // AgentActivityMonitor's own `windowKey()`): a project-owned row is stored
-    // without a pane suffix (e.g. `main:0`) while its task-owned counterpart for
-    // the very same tmux window carries one (`main:0.1`, added at window-creation
-    // time — see ExecuteTaskUseCase). Keying on the raw `tmuxTarget` treats those
-    // as two different windows, so both survive the dedup and this service emits
-    // a duplicate `WindowActivityStatusEntry` for one physical window under two
-    // different `target` strings. The frontend's process-based supplement merges
-    // additively (never overrides a key `useAgentActivity` already has from the
-    // primary source), so the un-stripped duplicate's own key is invisible to
-    // that merge and can outlive the primary source's correctly-cleared entry —
-    // surfacing as a stuck "running" row even after the tmux window is long gone.
-    //
-    // Known limitation (deliberate): the strip is unconditional, so a window
-    // whose *own name* ends in `.N` — only reachable by importing an external
-    // tmux session, since AZITO-generated names are `win--xxxx`
-    // (see windowNameUtils.ts) — is keyed as if that suffix were a pane index
-    // and can collide with an unrelated window actually named without it.
-    // A conditional strip (live tmux entity lookup + ownership heuristic) was
-    // tried and removed: the downstream consumer of this `target`,
-    // `WindowSessionResolver.splitWindowTarget()`, strips unconditionally
-    // anyway, so preserving the raw form here bought no protection while
-    // costing a per-poll `list-panes -a` and three layers of branching.
-    // The real fix is to canonicalize activity identity on tmux's own
-    // `#{window_id}` across every layer (windows table, hook script,
-    // supervisor register, frontend tab ids) — tracked separately; do that
-    // rather than re-adding a conditional strip here.
+    // 1物理窓 = 1行（migration 068）と共有 windowKey() により dedup は防御的に残す。
     const byKey = new Map<string, typeof windows[number]>();
     for (const w of windows) {
-      const key = `${w.serverName}::${stripPaneSuffix(w.tmuxTarget)}`;
+      const key = windowKey(w.serverName, w.tmuxTarget);
       const existing = byKey.get(key);
       if (!existing || (w.taskId != null && existing.taskId == null)) byKey.set(key, w);
     }

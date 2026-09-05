@@ -30,6 +30,8 @@ proxy.on('resize', () => {
   tracker.notifyResize();
 });
 
+const muxPaneRef = /^%\d+$/.test(process.env.TMUX_PANE ?? '') ? process.env.TMUX_PANE : undefined;
+
 if (hubEnv) {
   const hub = new HubClient({
     url: hubEnv.url,
@@ -41,13 +43,9 @@ if (hubEnv) {
       unitId: args.unitId ?? null,
       pid: process.pid,
       childCommand: args.command,
-      // Issue #28 Phase C launch binding (design v3 §8) — both null for a
-      // manual `azs` invocation (no launch env vars/flags), in which case
-      // the hub registers this connection as unbound. Resolved via
-      // `resolveLaunchBinding()`: env vars (current hub shape) take
-      // precedence over the legacy `--launch-id`/`--bootstrap-token` flags.
       ...(launchBinding.launchId !== null ? { launchId: launchBinding.launchId } : {}),
       ...(launchBinding.bootstrapToken !== null ? { bootstrapToken: launchBinding.bootstrapToken } : {}),
+      ...(muxPaneRef ? { muxPaneRef } : {}),
     },
     write: (data) => proxy.write(data),
     readiness,
