@@ -302,7 +302,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
             server: srv,
             target: win.tmuxTarget,
             harnessPrefix: opts.harnessPrefix,
-            ...supervisorRegistry.issueLaunch({ serverName: srv.name, target: win.tmuxTarget, taskId: null, unitId: null }),
+            ...supervisorRegistry.issueLaunch({ serverName: srv.name, target: win.tmuxTarget, taskId: null, unitId: null, windowId: win.id }),
           })
         : effectiveCommand;
 

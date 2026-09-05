@@ -204,6 +204,7 @@
     "colState": "State",
     "colTier": "Decided by",
     "colSupervisor": "Supervisor",
+    "colMatch": "Match",
     "colTransition": "Last transition",
     "stateWorking": "Working",
     "stateBlocked": "Blocked",

@@ -4,6 +4,7 @@ import type { SqliteAgentWatchRepository } from './SqliteAgentWatchRepository';
 import type { PushNotificationService } from './push/PushNotificationService';
 import type { VapidKeys } from './push/VapidKeyManager';
 import { getPushMessage } from './push/pushCatalog';
+import { stripPaneSuffix } from '@azito/shared';
 
 const ALLOWED_PUSH_HOSTS = [
   /\.googleapis\.com$/,
@@ -107,7 +108,7 @@ const notificationRoutes: FastifyPluginCallback<NotificationRouteOptions> = (fas
     if (!body.endpoint || !body.serverName || !body.target) {
       return reply.status(400).send({ error: 'endpoint, serverName, target required' });
     }
-    agentWatchRepo.add(body.endpoint, body.serverName, body.target, body.label ?? null);
+    agentWatchRepo.add(body.endpoint, body.serverName, stripPaneSuffix(body.target), body.label ?? null);
     return { ok: true };
   });
 
@@ -117,7 +118,7 @@ const notificationRoutes: FastifyPluginCallback<NotificationRouteOptions> = (fas
     if (!body.endpoint || !body.serverName || !body.target) {
       return reply.status(400).send({ error: 'endpoint, serverName, target required' });
     }
-    agentWatchRepo.removeByKey(body.endpoint, body.serverName, body.target);
+    agentWatchRepo.removeByKey(body.endpoint, body.serverName, stripPaneSuffix(body.target));
     return { ok: true };
   });
 

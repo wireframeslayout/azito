@@ -10,6 +10,7 @@ export interface WorkerLaunchContext {
   supervisorTarget: string;
   taskId: number;
   unitId: number;
+  windowId?: number;
   windowType: string;
   workerExecutionMode: WorkerExecutionMode;
   effectiveLaunchCommand: string;

@@ -8,8 +8,9 @@ import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { NotificationBus } from '../notifications/NotificationBus';
 import type { AgentActivityStopReason } from '../notifications/NotificationEvent';
 import { classifyPaneState, CLASSIFIABLE_AGENT_TYPES, type PaneAgentState } from './paneStateClassifier';
-import { stripPaneSuffix, windowKey } from '@azito/shared';
+import { stripPaneSuffix, windowKey, asPaneHandle } from '@azito/shared';
 import { resolveInterval } from '../../shared/testIntervals';
+import type { PaneHandleResolver } from './PaneHandleResolver';
 
 /** Split a stored `session:windowSpec[.pane]` target into its session and window parts. */
 export function parseWindowTarget(target: string): { sessionName: string; windowSpec: string } {
@@ -367,7 +368,7 @@ export interface ActivityDiagnosticEntry {
    * deciding tier — see refineTier0IdleKeys().
    */
   refinedBy?: ActivityRefinedBy;
-  hook?: { lastSignalAt: number; lastEvent: 'start' | 'stop' };
+  hook?: { lastSignalAt: number; lastEvent: 'start' | 'stop'; matchedBy?: 'muxPaneRef' | 'windowSpec' };
   probe?: {
     status: 'working' | 'idle' | 'offline';
     tailState?: string;
@@ -576,6 +577,8 @@ export class AgentActivityMonitor {
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking = false;
 
+  private hookMatchedBy = new Map<string, 'muxPaneRef' | 'windowSpec'>();
+
   constructor(
     private executeTaskUseCase: ExecuteTaskUseCase,
     private windowRepo: IWindowRepository,
@@ -584,6 +587,7 @@ export class AgentActivityMonitor {
     private notificationBus: NotificationBus,
     private processProbe?: ProcessActivityProbe,
     private onActivityDetected?: (serverName: string, target: string) => void,
+    private paneHandleResolver?: PaneHandleResolver,
   ) {}
 
   start(): void {
@@ -628,7 +632,7 @@ export class AgentActivityMonitor {
         decidedBy: decision.decidedBy,
         evidenceAt: decision.evidenceAt,
         refinedBy: decision.refinedBy,
-        hook: hook ? { lastSignalAt: hook.at, lastEvent: hook.status === 'running' ? 'start' as const : 'stop' as const } : undefined,
+        hook: hook ? { lastSignalAt: hook.at, lastEvent: hook.status === 'running' ? 'start' as const : 'stop' as const, matchedBy: this.hookMatchedBy.get(key) } : undefined,
         probe: probe
           ? {
             status: probe.status,
@@ -656,6 +660,20 @@ export class AgentActivityMonitor {
     const status: HookState['status'] = signal.event === 'start' ? 'running' : 'idle';
     const at = Date.now();
 
+    if (signal.muxPaneRef && this.paneHandleResolver) {
+      const resolved = this.paneHandleResolver.getCached(signal.serverName, asPaneHandle(signal.muxPaneRef));
+      if (resolved) {
+        const key = windowKey(signal.serverName, resolved.tmuxTarget);
+        this.hookStates.set(key, { status, at });
+        this.hookMatchedBy.set(key, 'muxPaneRef');
+        void this.tick();
+        return;
+      }
+      if (resolved === undefined) {
+        this.paneHandleResolver.warm(signal.serverName, signal.muxPaneRef);
+      }
+    }
+
     for (const w of this.windowRepo.findAll()) {
       if (!isAgentWindow(w)) continue;
       if (w.sleeping) continue;
@@ -665,14 +683,12 @@ export class AgentActivityMonitor {
       if (sessionName !== signal.sessionName) continue;
       if (!windowSpecMatches(windowSpec, signal.windowIndex, signal.windowName)) continue;
 
-      // If the target pins a specific pane (`.N` suffix beyond the window
-      // spec itself), the signal's pane must match it too — otherwise a
-      // hook firing from an unrelated pane in the same window would
-      // falsely flip this window's tracked pane.
       const paneIndex = extractPaneIndex(windowSpec, signal.windowIndex, signal.windowName);
       if (paneIndex !== null && paneIndex !== signal.paneIndex) continue;
 
-      this.hookStates.set(windowKey(w.serverName, w.tmuxTarget), { status, at });
+      const key = windowKey(w.serverName, w.tmuxTarget);
+      this.hookStates.set(key, { status, at });
+      this.hookMatchedBy.set(key, 'windowSpec');
     }
 
     void this.tick();
@@ -932,6 +948,9 @@ export class AgentActivityMonitor {
     }
     for (const key of this.hookStates.keys()) {
       if (!candidateKeys.has(key)) this.hookStates.delete(key);
+    }
+    for (const key of this.hookMatchedBy.keys()) {
+      if (!candidateKeys.has(key)) this.hookMatchedBy.delete(key);
     }
     for (const key of this.processDisarmedKeys) {
       if (!candidateKeys.has(key) && !operationKeys.has(key)) this.processDisarmedKeys.delete(key);

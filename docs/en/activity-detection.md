@@ -179,6 +179,19 @@ without doing anything.
 Scripts involved: `harness/hooks/azito-activity.sh`, `azito-interaction.sh`,
 `azito-question.sh`.
 
+### Window identification (phase 4: muxPaneRef-first)
+
+When matching Tier 0 (supervisor) and Tier 1 (hook) signals to `windows` table rows on the hub, the following priority applies:
+
+| Priority | Method | Details |
+|---|---|---|
+| 1 | `muxPaneRef` (tmux `%N`) | `PaneHandleResolver` reverse-looks up the pane ID via `IMuxClient.refFromPaneHandle()` → `windowRepo.findByServerAndRef()`. Results are cached for 30s (positive) / 5s (negative) and invalidated on `sessions:updated` |
+| 2 | 4-element matching (fallback) | Walks `windows.findAll()` matching session name + windowSpec (name or index) + paneIndex. Used when `muxPaneRef` is absent or the reverse lookup fails |
+
+When a supervisor's `register` is accepted with a `muxPaneRef`, the hub immediately fires a background reverse-lookup to warm the cache (`PaneHandleResolver.warm()`). This ensures supervisor rows in the diagnostics panel are matched by `muxPaneRef` even before any hook signal arrives.
+
+The diagnostics panel (`GET /api/debug/activity`) includes `supervisorMatchedBy` (how the supervisor was matched) and `hook.matchedBy` (how the hook signal was matched) on each row.
+
 ## 4. Tier 2 -- pane classification (title/screen)
 
 Every 5s poll classifies the pane title and screen tail with rules (`paneStateClassifier.ts`).
