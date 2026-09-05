@@ -1,16 +1,16 @@
 import os from 'os';
-import type { IServerTransport } from './ServerTransport';
+import type { IServerTransport, IMuxTransport } from './ServerTransport';
 import type { ServerConfig } from '../Server';
 import { LocalTransport } from './LocalTransport';
 import { AgentTransport } from './AgentTransport';
 import { resolveTmuxRuntime } from './TmuxRuntime';
 
 export class TransportFactory {
-  private cache = new Map<string, IServerTransport>();
+  private cache = new Map<string, IServerTransport & IMuxTransport>();
 
   constructor(private publicUrl: string) {}
 
-  getTransport(server: Pick<ServerConfig, 'name' | 'type' | 'host' | 'agentPort' | 'agentToken' | 'muxRuntime'>): IServerTransport {
+  getTransport(server: Pick<ServerConfig, 'name' | 'type' | 'host' | 'agentPort' | 'agentToken' | 'muxRuntime'>): IServerTransport & IMuxTransport {
     const key = `${server.type}:${server.name}`;
     const existing = this.cache.get(key);
     if (existing && server.type === 'agent') {
@@ -24,7 +24,7 @@ export class TransportFactory {
       return existing;
     }
 
-    let transport: IServerTransport;
+    let transport: IServerTransport & IMuxTransport;
     if (server.type === 'local') {
       transport = new LocalTransport(resolveTmuxRuntime(server.muxRuntime, os.homedir()), this.publicUrl);
     } else if (server.type === 'agent') {

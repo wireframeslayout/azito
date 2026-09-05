@@ -36,7 +36,7 @@ describe('SqliteSupervisorLaunchRepository', () => {
     repo = new SqliteSupervisorLaunchRepository(db as any);
   });
 
-  const expectation = { serverName: 'srv-a', target: 'session:0.1', taskId: 5, unitId: 9 };
+  const expectation = { serverName: 'srv-a', target: 'session:0', taskId: 5, unitId: 9 };
 
   it('creates a pending launch with a fresh launchId and bootstrap token', () => {
     const issued = repo.create(expectation);
@@ -47,7 +47,7 @@ describe('SqliteSupervisorLaunchRepository', () => {
     expect(row).not.toBeNull();
     expect(row!.status).toBe('pending');
     expect(row!.serverName).toBe('srv-a');
-    expect(row!.target).toBe('session:0.1');
+    expect(row!.target).toBe('session:0');
     expect(row!.taskId).toBe(5);
     expect(row!.unitId).toBe(9);
     expect(row!.sessionHash).toBeNull();
@@ -180,7 +180,7 @@ describe('SqliteSupervisorLaunchRepository', () => {
 
     it('does not touch a launch for a DIFFERENT (serverName, target) key', () => {
       const other = repo.create(expectation);
-      repo.create({ ...expectation, target: 'session:0.2' });
+      repo.create({ ...expectation, target: 'session:1' });
 
       expect(repo.findByLaunchId(other.launchId)!.status).toBe('pending');
     });

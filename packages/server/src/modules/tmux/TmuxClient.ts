@@ -1,4 +1,4 @@
-import type { ExecResult } from '../servers/transport/ServerTransport';
+import type { ExecResult, ITerminalStream } from '../servers/transport/ServerTransport';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 export { ServerConfig } from '../servers/Server';
 import type { ServerConfig } from '../servers/Server';
@@ -7,6 +7,7 @@ import { ISOLATION_MASKED_ENV } from '../../shared/auth/isolationMaskedEnv';
 import type { IMuxClient } from './IMuxClient';
 import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxCapabilities, type MuxDriverKind, asPaneHandle, muxRefFromTmuxTarget, tmuxTargetFromMuxRef } from '@azito/shared';
 import type { TmuxPane, TmuxWindow, TmuxSession, TmuxPaneInfo } from './types';
+import { HOOK_EVENTS, buildHookValue, buildHookSetArgs, buildHookUnsetArgs } from './tmuxHooks';
 
 export type { TmuxPane, TmuxWindow, TmuxSession, TmuxPaneInfo };
 
@@ -136,6 +137,8 @@ export class TmuxClient implements IMuxClient {
     private uiToken: string,
     /** Loopback URL of this hub (`http://127.0.0.1:<port>`). */
     private localUrl: string,
+    /** Webhook token for hook auth. Falls back to uiToken when omitted. */
+    private webhookToken?: string,
   ) {}
 
   /**
@@ -421,6 +424,7 @@ export class TmuxClient implements IMuxClient {
     }
   }
 
+  /** @deprecated Use resolvePane */
   async resolvePaneId(server: ServerConfig, windowTarget: string): Promise<string> {
     const { stdout, code } = await this.runTmuxCommand(server, [
       'list-panes', '-t', windowTarget, '-F', '#{pane_id}',
@@ -562,6 +566,7 @@ export class TmuxClient implements IMuxClient {
     return this.runTmuxCommand(server, ['kill-session', '-t', sessionName]);
   }
 
+  /** @deprecated Use closeWindow */
   async killWindow(server: ServerConfig, target: string): Promise<ExecResult> {
     return this.runTmuxCommand(server, ['kill-window', '-t', target]);
   }
@@ -570,6 +575,7 @@ export class TmuxClient implements IMuxClient {
     return this.runTmuxCommand(server, ['kill-pane', '-t', target]);
   }
 
+  /** @deprecated Use captureScreen */
   async capturePane(
     server: ServerConfig,
     target: string,
@@ -582,6 +588,7 @@ export class TmuxClient implements IMuxClient {
     return this.runTmuxCommand(server, args);
   }
 
+  /** @deprecated Use sendKeysToHandle */
   async sendKeys(server: ServerConfig, target: string, keys: string[]): Promise<void> {
     for (let i = 0; i < keys.length; i++) {
       const key = keys[i];
@@ -867,7 +874,25 @@ export class TmuxClient implements IMuxClient {
     return Array.from(seen.values());
   }
 
-  async openTerminal(): Promise<never> { throw new Error('Not yet migrated to IMuxClient (stage 3-B)'); }
-  async installChangeHooks(): Promise<void> { throw new Error('Not yet migrated to IMuxClient (stage 3-B)'); }
-  async uninstallChangeHooks(): Promise<void> { throw new Error('Not yet migrated to IMuxClient (stage 3-B)'); }
+  async openTerminal(server: ServerConfig, ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream> {
+    return this.transportFactory.getTransport(server).openTerminal(ref, ordinal, cols, rows);
+  }
+
+  async installChangeHooks(server: ServerConfig): Promise<void> {
+    const transport = this.transportFactory.getTransport(server);
+    const port = new URL(this.localUrl).port;
+    const base = `http://localhost:${port}/api/hooks/tmux`;
+    const token = this.webhookToken ?? this.uiToken;
+    for (const event of HOOK_EVENTS) {
+      const hookValue = buildHookValue(base, event, { token, serverName: server.name });
+      await transport.execMux(buildHookSetArgs(event, hookValue));
+    }
+  }
+
+  async uninstallChangeHooks(server: ServerConfig): Promise<void> {
+    const transport = this.transportFactory.getTransport(server);
+    for (const event of HOOK_EVENTS) {
+      await transport.execMux(buildHookUnsetArgs(event));
+    }
+  }
 }

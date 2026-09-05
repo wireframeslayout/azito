@@ -17,7 +17,7 @@ import type { WindowRespawnService } from '../windows/WindowRespawnService';
 import type { TaskRestoreService } from './TaskRestoreService';
 import { TaskCleanupService } from './TaskCleanupService';
 import { SAFE_PATH_PATTERN, rejectQualifiedBranchInput } from '../git/assertSafeGitArgs';
-import { resolveTaskServerName, resolveTmuxSession, resolveUnitId } from './execution/TaskExecutionEnv';
+import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId } from './execution/TaskExecutionEnv';
 import type { KillOutcome } from '../tmux/killOutcome';
 import type { ExecResult } from '../servers/transport/ServerTransport';
 import { replyToExecutionGateError } from './execution/ExecutionGate';
@@ -33,6 +33,7 @@ import { OPERATOR_PRINCIPAL } from '../../shared/auth/Principal';
 import type { RouteAuthRequirement } from '../../shared/auth/routeAuth';
 import { TaskOriginationService, originFromPrincipal } from './origination/TaskOriginationService';
 import type { ITaskTokenRepository } from './tokens/TaskToken';
+import { type MuxRef, tmuxTargetFromMuxRef } from '@azito/shared';
 
 function parseSubagentConfigInput(raw: unknown, fieldName: string): SubagentConfig | null {
   if (raw === null || raw === undefined) return null;
@@ -341,8 +342,9 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         const resolvedServerName = resolveTaskServerName(t, projectServerRepo);
         const srv = resolvedServerName ? serverRepo.findByName(resolvedServerName) : null;
         if (resolvedServerName && srv) {
-          const tmuxSession = resolveTmuxSession(t.projectId, resolvedServerName, projectServerRepo);
-          paneAlive = await tmux.checkPaneExists(srv, `${tmuxSession}:${t.tmuxWindow}`);
+          const muxWorkspace = resolveMuxWorkspace(t.projectId, resolvedServerName, projectServerRepo);
+          const ref: MuxRef = { kind: 'tmux', workspace: muxWorkspace, window: t.tmuxWindow };
+          paneAlive = await tmux.windowExists(srv, ref);
         }
       }
 
@@ -920,10 +922,11 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
               'the pane could not be confirmed dead. Check the server is reachable, kill the window manually if needed, then retry.',
           });
         }
-        const tmuxSession = resolveTmuxSession(task.projectId, resolvedServerName, projectServerRepo);
+        const muxWorkspace = resolveMuxWorkspace(task.projectId, resolvedServerName, projectServerRepo);
         const windowName = task.tmuxWindow;
-        const target = `${tmuxSession}:${windowName}`;
-        const outcome = await destroyPrimaryTaskWindow(id, windowName, resolvedServerName, target, 'retry_abandoned_window', () => tmux.killWindow(srv, target), () => {});
+        const retryRef: MuxRef = { kind: 'tmux', workspace: muxWorkspace, window: windowName };
+        const target = tmuxTargetFromMuxRef(retryRef);
+        const outcome = await destroyPrimaryTaskWindow(id, windowName, resolvedServerName, target, 'retry_abandoned_window', () => tmux.closeWindow(srv, retryRef), () => {});
         if (!outcome.success) {
           return reply.status(409).send({
             error: `Failed to kill task ${id}'s abandoned tmux window '${target}'; ` +

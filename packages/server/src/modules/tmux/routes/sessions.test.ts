@@ -17,6 +17,7 @@ type FakeWindowRepo = SqliteWindowRepository & {
   removeByServerAndTarget: ReturnType<typeof vi.fn>;
   remove: ReturnType<typeof vi.fn>;
   findByServerAndTarget: ReturnType<typeof vi.fn>;
+  findByServerAndRef: ReturnType<typeof vi.fn>;
   findByServerAndSession: ReturnType<typeof vi.fn>;
   now: ReturnType<typeof vi.fn>;
 };
@@ -34,6 +35,7 @@ function makeWindowRepo(): FakeWindowRepo {
     // task token (Issue #28 third-party review finding); most of this
     // file's existing tests aren't about task windows at all.
     findByServerAndTarget: vi.fn(() => undefined),
+    findByServerAndRef: vi.fn(() => undefined),
     // Empty by default — the DELETE session handler looks this up before
     // killing to resolve which windows (task-owned or not) the session
     // held (Issue #28 third-party review finding 4); most existing tests
@@ -209,9 +211,9 @@ describe('DELETE /api/servers/:name/windows/:target', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true, identity: { sessionName: 'session', windowIndex: 2, windowName: 'win--abcd' } });
+    // With the MuxRef-based lookup, findByServerAndRef returns undefined so
+    // cleanup falls back to removeByServerAndTarget with the raw target.
     expect(windowRepo.removeByServerAndTarget).toHaveBeenCalledWith('srv1', 'session:2');
-    expect(windowRepo.removeByServerAndTarget).toHaveBeenCalledWith('srv1', 'session:win--abcd');
-    expect(windowRepo.removeByServerAndTarget).toHaveBeenCalledTimes(3);
   });
 
   // Issue #28 third-party review finding: destroying a task-owned window
@@ -567,6 +569,7 @@ describe('POST /api/servers/:name/sessions/:session/windows/:window/panes', () =
     const splitPane = vi.fn(async () => ({ stdout: '', stderr: '', code: 0 }));
     const tmux: Partial<TmuxClient> = {
       getWindowIdentity: vi.fn(async () => null),
+      resolveRef: vi.fn(async () => null),
       splitPane,
     };
     app = await buildApp({ tmux, windowRepo });
@@ -586,6 +589,7 @@ describe('POST /api/servers/:name/sessions/:session/windows/:window/panes', () =
     const splitPane = vi.fn(async () => ({ stdout: '', stderr: '', code: 0 }));
     const tmux: Partial<TmuxClient> = {
       getWindowIdentity: vi.fn(async () => null),
+      resolveRef: vi.fn(async () => null),
       splitPane,
     };
     const maskedEnv = { AZITO_TASK_ID: '42', AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' };
@@ -605,6 +609,7 @@ describe('POST /api/servers/:name/sessions/:session/windows/:window/panes', () =
     const uiTokenEnvForServer = vi.fn(() => ({ AZITO_UI_TOKEN: 'legacy-ui-token' }));
     const tmux: Partial<TmuxClient> = {
       getWindowIdentity: vi.fn(async () => null),
+      resolveRef: vi.fn(async () => null),
       splitPane,
       uiTokenEnvForServer,
     };
@@ -627,6 +632,7 @@ describe('POST /api/servers/:name/sessions/:session/windows/:window/panes', () =
     const splitPane = vi.fn(async () => ({ stdout: '', stderr: '', code: 0 }));
     const tmux: Partial<TmuxClient> = {
       getWindowIdentity: vi.fn(async () => null),
+      resolveRef: vi.fn(async () => null),
       splitPane,
       uiTokenEnvForServer: vi.fn((server: ServerConfig) => (server.isolationIntent ? { AZITO_UI_TOKEN: '' } : { AZITO_UI_TOKEN: 'legacy-ui-token' })),
     };
@@ -650,10 +656,11 @@ describe('POST /api/servers/:name/sessions/:session/windows/:window/panes', () =
     const srvV2: ServerConfig = { name: 'srv1', type: 'local', isolationIntent: false, host: 'host-v2' } as ServerConfig;
     const findByName = vi.fn(() => srvV2);
     const serverRepo = { findByName } as unknown as IServerRepository;
-    const getWindowIdentity = vi.fn(async () => null);
+    const resolveRef = vi.fn(async () => null);
     const splitPane = vi.fn(async () => ({ stdout: '', stderr: '', code: 0 }));
     const tmux: Partial<TmuxClient> = {
-      getWindowIdentity,
+      getWindowIdentity: vi.fn(async () => null),
+      resolveRef,
       splitPane,
       uiTokenEnvForServer: vi.fn(() => ({ AZITO_UI_TOKEN: 'legacy-ui-token' })),
     };
@@ -663,7 +670,7 @@ describe('POST /api/servers/:name/sessions/:session/windows/:window/panes', () =
 
     expect(res.statusCode).toBe(200);
     expect(findByName).toHaveBeenCalledTimes(1);
-    expect(getWindowIdentity).toHaveBeenCalledWith(srvV2, 'session:2');
+    expect(resolveRef).toHaveBeenCalledWith(srvV2, 'session:2');
     expect(splitPane).toHaveBeenCalledWith(srvV2, 'session:2', 'v', expect.anything());
   });
 });

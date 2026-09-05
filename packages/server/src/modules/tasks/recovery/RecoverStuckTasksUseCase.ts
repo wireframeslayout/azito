@@ -13,9 +13,10 @@ import type { ExecuteTaskUseCase } from '../execution/ExecuteTaskUseCase';
 import type { SqliteAgentTurnRepository } from '../turns/SqliteAgentTurnRepository';
 import type { AgentTurn } from '../turns/AgentTurn';
 import { extractPhaseSummary } from '../extractPhaseSummary';
-import { resolveTaskServerName, resolveTmuxSession, resolveUnitId } from '../execution/TaskExecutionEnv';
+import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId } from '../execution/TaskExecutionEnv';
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import type { UnitType, UnitTypePhase } from '../../sidekicks/UnitType';
+import type { MuxRef } from '@azito/shared';
 
 export interface RecoveryLogger {
   info(msg: string, ...args: unknown[]): void;
@@ -102,14 +103,15 @@ export class RecoverStuckTasksUseCase {
     if (!server) return;
     if (server.type !== 'local' && !usesHttpSignalPath(unit.workerExecutionMode)) return;
 
-    const tmuxSession = resolveTmuxSession(task.projectId, resolvedServerName, this.projectServerRepo);
+    const muxWorkspace = resolveMuxWorkspace(task.projectId, resolvedServerName, this.projectServerRepo);
     const windowName = task.tmuxWindow || `task-${task.id}`;
 
     let target: string;
     try {
-      target = await this.tmuxClient.resolvePaneId(server, `${tmuxSession}:${windowName}`);
+      const ref: MuxRef = { kind: 'tmux', workspace: muxWorkspace, window: windowName };
+      target = await this.tmuxClient.resolvePane(server, ref, 1) as string;
     } catch {
-      this.logger.warn(`Recovery skip: pane dead for task ${task.id} (${tmuxSession}:${windowName})`);
+      this.logger.warn(`Recovery skip: pane dead for task ${task.id} (${muxWorkspace}:${windowName})`);
       return;
     }
 

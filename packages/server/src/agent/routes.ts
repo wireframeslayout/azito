@@ -6,6 +6,7 @@ import * as path from 'path';
 import os from 'os';
 import { resolveTmuxRuntime } from '../modules/servers/transport/TmuxRuntime';
 import type { MuxRuntime } from '../modules/servers/Server';
+import { HOOK_EVENTS } from '../modules/tmux/tmuxHooks';
 
 const EXT_LANG: Record<string, string> = {
   '.ts': 'typescript', '.tsx': 'typescript',
@@ -74,11 +75,7 @@ function execTmuxCommand(args: string[], timeoutMs: number, mux?: MuxRuntime): P
   });
 }
 
-const VALID_HOOK_EVENTS = new Set([
-  'window-linked', 'window-unlinked', 'after-rename-window',
-  'after-kill-pane', 'session-window-changed', 'session-closed',
-  'after-select-pane',
-]);
+const VALID_HOOK_EVENTS = new Set<string>(HOOK_EVENTS);
 
 const agentRoutes: FastifyPluginCallback<AgentRoutesOptions> = (fastify, opts, done) => {
   const { agentVersion, startedAt, agentEventBus, browserSessionManager, bindAddress } = opts;
