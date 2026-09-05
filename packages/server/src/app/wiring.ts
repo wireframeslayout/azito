@@ -20,6 +20,7 @@ import { PushNotaryService } from '../modules/git/hub-transfer/PushNotaryService
 import { SshClient, type FingerprintStore } from '../modules/servers/ssh/SshClient';
 import { TransportFactory } from '../modules/servers/transport/TransportFactory';
 import { TmuxClient } from '../modules/tmux/TmuxClient';
+import { MuxDriverRegistry } from '../modules/tmux/MuxDriverRegistry';
 import { CodexExecClient } from '../modules/llm/CodexExecClient';
 import type { ILlmClient } from '../modules/llm/ILlmClient';
 import { PaneClassifier } from '../modules/llm/PaneClassifier';
@@ -102,6 +103,7 @@ export interface SharedInfra {
   tmuxInstaller: TmuxInstaller;
   transportFactory: TransportFactory;
   tmuxClient: TmuxClient;
+  muxDriverRegistry: MuxDriverRegistry;
   llmClient: ILlmClient;
   agentRegistry: AgentRegistry;
   paneClassifier: PaneClassifier;
@@ -217,6 +219,7 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
   const tmuxInstaller = new TmuxInstaller();
   const transportFactory = new TransportFactory(publicUrl);
   const tmuxClient = new TmuxClient(transportFactory, publicUrl, uiToken, localUrl);
+  const muxDriverRegistry = new MuxDriverRegistry(tmuxClient);
   const llmClient: ILlmClient = new CodexExecClient();
   const agentRegistry = createDefaultRegistry();
   const paneClassifier = new PaneClassifier(llmClient);
@@ -261,6 +264,7 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
     tmuxInstaller,
     transportFactory,
     tmuxClient,
+    muxDriverRegistry,
     llmClient,
     agentRegistry,
     paneClassifier,

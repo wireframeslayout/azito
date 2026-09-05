@@ -166,6 +166,7 @@ function buildService(opts: {
     findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
     findByServer: vi.fn(() => []),
     findByServerAndTarget: vi.fn(() => undefined),
+    findByServerAndRef: vi.fn(() => undefined),
     findByServerAndSession: vi.fn(() => []),
     update: vi.fn(),
     updateAgentSessionIdByWindow: vi.fn(),
@@ -1497,6 +1498,7 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
       findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
       findByServer: vi.fn(() => []),
       findByServerAndTarget: vi.fn(() => undefined),
+      findByServerAndRef: vi.fn(() => undefined),
       findByServerAndSession: vi.fn(() => []),
       update: vi.fn((_id: number, fields: Partial<Window>) => {
         windowRow = { ...windowRow, ...fields };

@@ -3,6 +3,7 @@ import type { IServerRepository } from '../Server';
 import type { ResourceGuard } from './ResourceGuard';
 import type { IResourceGuardSettingsRepository } from './SqliteResourceGuardSettingsRepository';
 import type { TransportFactory } from '../transport/TransportFactory';
+import type { IMuxClient } from '../../tmux/IMuxClient';
 import { measureWindowResources } from './windowResources';
 
 export interface ResourceGuardRouteOptions {
@@ -10,10 +11,11 @@ export interface ResourceGuardRouteOptions {
   resourceGuard: ResourceGuard;
   serverRepo: IServerRepository;
   transportFactory: TransportFactory;
+  tmuxClient: IMuxClient;
 }
 
 const resourceGuardRoutes: FastifyPluginCallback<ResourceGuardRouteOptions> = (fastify, opts, done) => {
-  const { settingsRepo, resourceGuard, serverRepo, transportFactory } = opts;
+  const { settingsRepo, resourceGuard, serverRepo, transportFactory, tmuxClient } = opts;
 
   // ── GET /api/settings/resource-guard ──
   fastify.get('/api/settings/resource-guard', async () => {
@@ -50,7 +52,7 @@ const resourceGuardRoutes: FastifyPluginCallback<ResourceGuardRouteOptions> = (f
     if (request.query.detail === '1') {
       try {
         const transport = transportFactory.getTransport(server);
-        windows = await measureWindowResources(transport);
+        windows = await measureWindowResources(transport, tmuxClient, server);
       } catch {
         windows = [];
       }
