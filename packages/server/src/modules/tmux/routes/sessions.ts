@@ -8,6 +8,7 @@ import type { NotificationBus } from '../../notifications/NotificationBus';
 import type { ResourceGuard } from '../../servers/resources/ResourceGuard';
 import { resolveKillOutcome, type KillOutcome } from '../killOutcome';
 import type { KeyedMutex } from '../../../shared/keyedMutex';
+import { formatMuxRef, type MuxRef } from '@azito/shared';
 
 // ─── Types ───
 
@@ -172,6 +173,19 @@ export function invalidateSessionCache(serverName: string): void {
 const lastGcRun = new Map<string, number>();
 const GC_INTERVAL = 60000;
 
+// ─── Helpers (enrichment) ───
+
+function enrichSessions(sessions: TmuxSession[], serverName: string, windowRepo?: SqliteWindowRepository) {
+  return sessions.map(session => ({
+    ...session,
+    windows: session.windows.map(win => {
+      const ref: MuxRef = { kind: 'tmux', workspace: session.name, window: win.name };
+      const dbWin = windowRepo?.findByServerAndRef(serverName, ref);
+      return { ...win, ref: formatMuxRef(ref), windowId: dbWin?.id ?? null };
+    }),
+  }));
+}
+
 // ─── Plugin ───
 
 const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, opts, done) => {
@@ -195,7 +209,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
 
       const cached = sessionCache.get(request.params.name);
       if (cached && Date.now() - cached.ts < SESSION_CACHE_TTL) {
-        return cached.data;
+        return enrichSessions(cached.data, request.params.name, opts.windowRepo);
       }
 
       try {
@@ -211,7 +225,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           }).catch(() => {});
         }
 
-        return sessions;
+        return enrichSessions(sessions, request.params.name, opts.windowRepo);
       } catch (err: unknown) {
         return reply.status(500).send({ error: (err as Error).message });
       }
@@ -326,10 +340,10 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           // Mirrors the identity-fallback lookup the kill-window route above
           // uses, since this route's `target` is likewise constructed from
           // URL params rather than resolved via tmux first.
-          const identity = await tmux.getWindowIdentity(freshSrv, target);
-          const windowRow = opts.windowRepo?.findByServerAndTarget(request.params.name, target)
-            ?? (identity ? opts.windowRepo?.findByServerAndTarget(request.params.name, `${identity.sessionName}:${identity.windowName}`) : undefined)
-            ?? (identity ? opts.windowRepo?.findByServerAndTarget(request.params.name, `${identity.sessionName}:${identity.windowIndex}`) : undefined);
+          const resolvedRef = await tmux.resolveRef(freshSrv, target);
+          const windowRow = resolvedRef
+            ? opts.windowRepo?.findByServerAndRef(request.params.name, resolvedRef)
+            : opts.windowRepo?.findByServerAndTarget(request.params.name, target);
 
           if (windowRow && windowRow.taskId !== null && isPrimaryTaskWindow(windowRow)) {
             // The task's PRIMARY worker window. Its already-running first pane
@@ -537,15 +551,18 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         // generic kill route must revoke that task's token generation the
         // same as the task-execution rollback paths, since a destroyed
         // window can never again be resumed onto).
-        const windowRow = opts.windowRepo?.findByServerAndTarget(request.params.name, target)
-          ?? (identity ? opts.windowRepo?.findByServerAndTarget(request.params.name, `${identity.sessionName}:${identity.windowName}`) : undefined)
-          ?? (identity ? opts.windowRepo?.findByServerAndTarget(request.params.name, `${identity.sessionName}:${identity.windowIndex}`) : undefined);
+        const resolvedRef = identity
+          ? { kind: 'tmux' as const, workspace: identity.sessionName, window: identity.windowName }
+          : null;
+        const windowRow = resolvedRef
+          ? opts.windowRepo?.findByServerAndRef(request.params.name, resolvedRef)
+          : opts.windowRepo?.findByServerAndTarget(request.params.name, target);
 
         const cleanupWindowRows = () => {
-          opts.windowRepo?.removeByServerAndTarget(request.params.name, target);
-          if (identity) {
-            opts.windowRepo?.removeByServerAndTarget(request.params.name, `${identity.sessionName}:${identity.windowName}`);
-            opts.windowRepo?.removeByServerAndTarget(request.params.name, `${identity.sessionName}:${identity.windowIndex}`);
+          if (windowRow) {
+            opts.windowRepo?.remove(windowRow.id);
+          } else {
+            opts.windowRepo?.removeByServerAndTarget(request.params.name, target);
           }
         };
 

@@ -6,11 +6,13 @@ import * as fs from 'fs';
 import * as path from 'path';
 import os from 'os';
 import { resolveTmuxRuntime } from '../modules/servers/transport/TmuxRuntime';
+import { LocalTransport } from '../modules/servers/transport/LocalTransport';
 import type { MuxRuntime } from '../modules/servers/Server';
 import type { WebSocket } from 'ws';
 
 import agentRoutes from './routes';
 import { handleAgentTerminal } from '../modules/tmux/ws/agentTerminalHandler';
+import { HOOK_EVENTS, buildHookValue, buildHookSetArgs, buildHookUnsetArgs } from '../modules/tmux/tmuxHooks';
 import { handleFileTail } from '../modules/files/ws/fileTailHandler';
 import { createTokenVerifier } from '../modules/servers/auth/tokenAuth';
 import { BrowserSessionManager } from '../modules/browser/BrowserSessionManager';
@@ -84,6 +86,10 @@ async function main(): Promise<void> {
     }
   });
 
+  const muxRuntime = (process.env.AZITO_MUX_RUNTIME as MuxRuntime) || 'system';
+  const hookRt = resolveTmuxRuntime(muxRuntime, os.homedir());
+  const agentTransport = new LocalTransport(hookRt, process.env.AZITO_URL ?? '');
+
   // WebSocket routes
   await app.register(async (fastify) => {
     fastify.get('/ws', { websocket: true }, (socket: WebSocket, request) => {
@@ -99,9 +105,7 @@ async function main(): Promise<void> {
           socket.close();
           return;
         }
-        const muxParam = url.searchParams.get('mux');
-        const mux = muxParam === 'system' || muxParam === 'managed' ? muxParam : undefined;
-        handleAgentTerminal(socket, target, cols, rows, mux);
+        handleAgentTerminal(socket, target, cols, rows, agentTransport);
         return;
       }
 
@@ -164,10 +168,7 @@ async function main(): Promise<void> {
 
   const PORT = parseInt(process.env.PORT || '3002', 10);
   const hookBase = `http://${bind}:${PORT}/api/hooks/tmux`;
-  const hookEvents = ['window-linked', 'window-unlinked', 'after-rename-window', 'after-kill-pane', 'session-window-changed', 'session-closed', 'after-select-pane'];
-
-  const muxRuntime = (process.env.AZITO_MUX_RUNTIME as MuxRuntime) || 'system';
-  const hookRt = resolveTmuxRuntime(muxRuntime, os.homedir());
+  const hookEvents = HOOK_EVENTS;
 
   // Cleanup tmux hooks and browser on shutdown (must register before listen — Fastify rejects addHook after ready)
   let hookInstallInterval: ReturnType<typeof setInterval> | null = null;
@@ -179,7 +180,7 @@ async function main(): Promise<void> {
     await browserSessionManager.stopAll();
     for (const event of hookEvents) {
       await new Promise<void>((resolve) => {
-        execFile(hookRt.bin, [...hookRt.baseArgs, 'set-hook', '-gu', `${event}[42]`], { timeout: 5000 }, () => resolve());
+        execFile(hookRt.bin, [...hookRt.baseArgs, ...buildHookUnsetArgs(event)], { timeout: 5000 }, () => resolve());
       });
     }
   });
@@ -213,8 +214,8 @@ async function main(): Promise<void> {
     let pending = hookEvents.length;
     let anyFailed = false;
     for (const event of hookEvents) {
-      const hookValue = `run-shell "curl -sf -o /dev/null -X POST '${hookBase}?event=${event}&session=#{hook_session_name}' 2>/dev/null &"`;
-      execFile(hookRt.bin, [...hookRt.baseArgs, 'set-hook', '-g', `${event}[42]`, hookValue], { timeout: 5000 }, (err) => {
+      const hookValue = buildHookValue(hookBase, event);
+      execFile(hookRt.bin, [...hookRt.baseArgs, ...buildHookSetArgs(event, hookValue)], { timeout: 5000 }, (err) => {
         if (err) anyFailed = true;
         pending--;
         if (pending === 0 && anyFailed !== lastInstallFailed) {

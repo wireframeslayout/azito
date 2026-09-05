@@ -424,6 +424,7 @@ export class TmuxClient implements IMuxClient {
     }
   }
 
+  /** @deprecated Use resolvePane */
   async resolvePaneId(server: ServerConfig, windowTarget: string): Promise<string> {
     const { stdout, code } = await this.runTmuxCommand(server, [
       'list-panes', '-t', windowTarget, '-F', '#{pane_id}',
@@ -565,6 +566,7 @@ export class TmuxClient implements IMuxClient {
     return this.runTmuxCommand(server, ['kill-session', '-t', sessionName]);
   }
 
+  /** @deprecated Use closeWindow */
   async killWindow(server: ServerConfig, target: string): Promise<ExecResult> {
     return this.runTmuxCommand(server, ['kill-window', '-t', target]);
   }
@@ -573,6 +575,7 @@ export class TmuxClient implements IMuxClient {
     return this.runTmuxCommand(server, ['kill-pane', '-t', target]);
   }
 
+  /** @deprecated Use captureScreen */
   async capturePane(
     server: ServerConfig,
     target: string,
@@ -585,6 +588,7 @@ export class TmuxClient implements IMuxClient {
     return this.runTmuxCommand(server, args);
   }
 
+  /** @deprecated Use sendKeysToHandle */
   async sendKeys(server: ServerConfig, target: string, keys: string[]): Promise<void> {
     for (let i = 0; i < keys.length; i++) {
       const key = keys[i];

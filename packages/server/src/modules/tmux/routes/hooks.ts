@@ -1,21 +1,14 @@
 import type { FastifyPluginCallback } from 'fastify';
 import type { NotificationBus } from '../../notifications/NotificationBus';
 import { invalidateSessionCache } from './sessions';
+import { HOOK_EVENTS } from '../tmuxHooks';
 
 export interface HooksRouteOptions {
   notificationBus: NotificationBus;
   verifyToken: (authHeader: string | undefined) => boolean;
 }
 
-const VALID_EVENTS = new Set([
-  'window-linked',
-  'window-unlinked',
-  'after-rename-window',
-  'after-kill-pane',
-  'session-window-changed',
-  'session-closed',
-  'after-select-pane',
-]);
+const VALID_EVENTS = new Set<string>(HOOK_EVENTS);
 
 const hooksRoutes: FastifyPluginCallback<HooksRouteOptions> = (fastify, opts, done) => {
   const { notificationBus, verifyToken } = opts;
