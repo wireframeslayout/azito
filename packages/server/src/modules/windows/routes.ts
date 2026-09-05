@@ -14,6 +14,7 @@ import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
 import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
 import { isSameWindowTarget, stripPaneSuffix } from './paneTarget';
+import { muxRefFromTmuxTarget } from '@azito/shared';
 import type { SessionCaptureService } from './SessionCaptureService';
 import type { WindowActivityStatusService } from './WindowActivityStatusService';
 
@@ -295,7 +296,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       }
 
       const supervised = shouldSupervise(srv.type, win.windowType);
-      const paneHandle = await tmux.resolvePane(srv, win.muxRef!, 1);
+      const paneHandle = await tmux.resolvePane(srv, win.muxRef ?? muxRefFromTmuxTarget(win.tmuxTarget), 1);
       const cmd = supervised
         ? wrapWithSupervisor(effectiveCommand, {
             server: srv,

@@ -926,7 +926,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         const windowName = task.tmuxWindow;
         const retryRef: MuxRef = { kind: 'tmux', workspace: muxWorkspace, window: windowName };
         const target = tmuxTargetFromMuxRef(retryRef);
-        const outcome = await destroyPrimaryTaskWindow(id, windowName, resolvedServerName, target, 'retry_abandoned_window', () => tmux.killWindow(srv, target), () => {});
+        const outcome = await destroyPrimaryTaskWindow(id, windowName, resolvedServerName, target, 'retry_abandoned_window', () => tmux.closeWindow(srv, retryRef), () => {});
         if (!outcome.success) {
           return reply.status(409).send({
             error: `Failed to kill task ${id}'s abandoned tmux window '${target}'; ` +
