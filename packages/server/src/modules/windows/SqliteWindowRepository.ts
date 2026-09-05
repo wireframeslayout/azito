@@ -47,6 +47,7 @@ export class SqliteWindowRepository implements IWindowRepository {
   private updatePaneLayoutStmt;
   private findProjectWindowStmt;
   private findByServerStmt;
+  private findByServerAndRefStmt;
   private findAgentSessionIdsByServerStmt;
   private nowStmt;
 
@@ -65,6 +66,7 @@ export class SqliteWindowRepository implements IWindowRepository {
       'SELECT id FROM windows WHERE project_id = ? AND server_name = ? AND tmux_target = ?'
     );
     this.findByServerStmt = db.prepare('SELECT * FROM windows WHERE server_name = ?');
+    this.findByServerAndRefStmt = db.prepare('SELECT * FROM windows WHERE server_name = ? AND mux_ref = ?');
     this.findAgentSessionIdsByServerStmt = db.prepare(
       'SELECT DISTINCT agent_session_id FROM windows WHERE server_name = ? AND agent_session_id IS NOT NULL',
     );
@@ -169,7 +171,7 @@ export class SqliteWindowRepository implements IWindowRepository {
   }
 
   findByServerAndRef(serverName: string, ref: MuxRef): Window | undefined {
-    const row = this.db.prepare('SELECT * FROM windows WHERE server_name = ? AND mux_ref = ?').get(serverName, formatMuxRef(ref)) as WindowRow | undefined;
+    const row = this.findByServerAndRefStmt.get(serverName, formatMuxRef(ref)) as WindowRow | undefined;
     return row ? this.toWindow(row) : undefined;
   }
 
