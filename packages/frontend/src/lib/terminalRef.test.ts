@@ -8,6 +8,8 @@ import {
   terminalRefFromWindow,
   terminalRefFromTarget,
   isValidTerminalRef,
+  resolveTerminalTarget,
+  terminalRefFromTabTarget,
   migrateLegacyTerminalTabs,
   terminalRefDisplayLabel,
   type TerminalRef,
@@ -203,5 +205,28 @@ describe('isValidTerminalRef', () => {
     expect(isValidTerminalRef({ kind: 'windowId', serverName: 'local', pane: 1 })).toBe(false);
     expect(isValidTerminalRef({ kind: 'ref', serverName: 'local', ref: 'w[object Object]', pane: 1 })).toBe(false);
     expect(isValidTerminalRef(null)).toBe(false);
+  });
+});
+
+describe('resolveTerminalTarget / terminalRefFromTabTarget (rc.7 follow-up)', () => {
+  const sessions = [{ name: 'azito', windows: [
+    { index: 17, name: 'win--qvp6', ref: JSON.stringify({ kind: 'tmux', workspace: 'azito', window: 'win--qvp6' }), windowId: 729, panes: [] },
+  ] }] as unknown as import('../pages/workspace/types').Session[];
+
+  it('resolves a windowId ref to the live tmux target via sessions', () => {
+    expect(resolveTerminalTarget({ kind: 'windowId', serverName: 'server007', windowId: 729, pane: 1 }, sessions)).toBe('azito:win--qvp6.1');
+  });
+  it('returns null for a windowId that is not in sessions yet', () => {
+    expect(resolveTerminalTarget({ kind: 'windowId', serverName: 'server007', windowId: 1, pane: 1 }, sessions)).toBeNull();
+    expect(resolveTerminalTarget({ kind: 'windowId', serverName: 'server007', windowId: 729, pane: 1 }, undefined)).toBeNull();
+  });
+  it('resolves a ref form without sessions', () => {
+    expect(resolveTerminalTarget({ kind: 'ref', serverName: 's', ref: JSON.stringify({ kind: 'tmux', workspace: 'azito', window: 'x' }), pane: 2 }, undefined)).toBe('azito:x.2');
+  });
+  it('recovers the windowId form from the w<id> placeholder target', () => {
+    expect(terminalRefFromTabTarget('server007', 'w729')).toEqual({ kind: 'windowId', serverName: 'server007', windowId: 729, pane: 1 });
+    expect(terminalRefFromTabTarget('server007', 'w729.2')).toEqual({ kind: 'windowId', serverName: 'server007', windowId: 729, pane: 2 });
+    expect(terminalRefFromTabTarget('server007', 'azito:win--qvp6.1')?.kind).toBe('ref');
+    expect(terminalRefFromTabTarget('server007', 'w[object Object]')).toBeNull();
   });
 });

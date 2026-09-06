@@ -18,7 +18,7 @@ import { isInsufficientResources } from '../hooks/useAddWindowModal';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useWorkspaceTargets } from '../hooks/useWorkspaceTargets';
 import type { Project, Task, Session } from '../pages/workspace/types';
-import type { TerminalRef } from '../lib/terminalRef';
+import { resolveTerminalTarget, terminalRefFromTabTarget, type TerminalRef } from '../lib/terminalRef';
 import { resolveActivePane } from '../lib/tmuxPane';
 import { paneDisplayName } from '../lib/paneDisplay';
 
@@ -84,7 +84,20 @@ interface TerminalContainerProps {
   onViewModeChange?: (mode: WindowViewMode) => void;
 }
 
-export function TerminalContainer({ serverName, target, terminalRef, projectId, taskId, project, allTasks, sessions, onSplitPane, onOpenTask, onDisconnect, onWindowChanged, onCloseTab, onRetargetTab, reconnectKey, leading, trailing, viewMode: viewModeProp, onViewModeChange }: TerminalContainerProps) {
+export function TerminalContainer({ serverName, target: rawTarget, terminalRef: terminalRefProp, projectId, taskId, project, allTasks, sessions, onSplitPane, onOpenTask, onDisconnect, onWindowChanged, onCloseTab, onRetargetTab, reconnectKey, leading, trailing, viewMode: viewModeProp, onViewModeChange }: TerminalContainerProps) {
+  // Tabs opened through connectPane carry a TerminalRef and a `w<id>` placeholder target;
+  // everything below that still keys off a tmux target (window-exists check, status dropdown,
+  // pane-loading-state fallback) needs the real `<session>:<window>.<pane>`, resolved from
+  // sessions. Legacy callers (TaskPanel) pass a tmux target and no ref — derive the ref then.
+  const terminalRef = useMemo<TerminalRef | undefined>(
+    () => terminalRefProp ?? terminalRefFromTabTarget(serverName, rawTarget) ?? undefined,
+    [terminalRefProp, serverName, rawTarget],
+  );
+  const target = useMemo(() => {
+    if (rawTarget.includes(':')) return rawTarget;
+    return (terminalRef && resolveTerminalTarget(terminalRef, sessions)) ?? rawTarget;
+  }, [rawTarget, terminalRef, sessions]);
+
   const { t } = useTranslation('common');
   const [windowMissing, setWindowMissing] = useState(false);
   const [disconnected, setDisconnected] = useState(false);

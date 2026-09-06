@@ -1,4 +1,4 @@
-import { formatMuxRef, muxRefFromTmuxTarget, parseMuxRef, stripPaneSuffix } from '@azito/shared';
+import { formatMuxRef, muxRefFromTmuxTarget, parseMuxRef, stripPaneSuffix, tmuxTargetFromMuxRef } from '@azito/shared';
 import type { Session } from '../pages/workspace/types';
 
 export type TerminalRef =
@@ -223,4 +223,37 @@ export function isValidTerminalRef(r: unknown): r is TerminalRef {
   if (x.kind === 'windowId') return typeof x.windowId === 'number' && Number.isInteger(x.windowId) && x.windowId > 0;
   if (x.kind === 'ref') return typeof x.ref === 'string' && x.ref.length > 0 && !x.ref.includes('[object ');
   return false;
+}
+
+/**
+ * The tmux target string (`<session>:<window>.<pane>`) a TerminalRef currently maps to, or
+ * null when it cannot be derived yet (windowId form whose window is not in `sessions`).
+ * Consumers that still key off a tmux target (window-exists check, WindowStatusDropdown,
+ * pane-loading-state fallback) use this instead of the `w<id>` placeholder connectPane stores.
+ */
+export function resolveTerminalTarget(r: TerminalRef, sessions: Session[] | undefined): string | null {
+  if (r.kind === 'ref') {
+    try {
+      return `${tmuxTargetFromMuxRef(parseMuxRef(r.ref))}.${r.pane}`;
+    } catch {
+      return null;
+    }
+  }
+  for (const sess of sessions ?? []) {
+    const win = sess.windows.find((w) => w.windowId === r.windowId);
+    if (win) return `${sess.name}:${win.name}.${r.pane}`;
+  }
+  return null;
+}
+
+/**
+ * Recover a TerminalRef from a persisted tab `target` when the tab carries no terminalRef:
+ * `w<id>` (what connectPane stores for windowId tabs) → windowId form, a real tmux target →
+ * ref form, anything else → null.
+ */
+export function terminalRefFromTabTarget(serverName: string, target: string): TerminalRef | null {
+  const m = /^w(\d+)(?:\.(\d+))?$/.exec(target);
+  if (m) return { kind: 'windowId', serverName, windowId: parseInt(m[1], 10), pane: m[2] ? parseInt(m[2], 10) : 1 };
+  if (target.includes(':')) return terminalRefFromTarget(serverName, target);
+  return null;
 }
