@@ -7,6 +7,7 @@ import {
   parseTerminalTabId,
   terminalRefFromLegacyTarget,
   terminalRefDisplayLabel,
+  terminalRefFromTarget,
 } from '../lib/terminalRef';
 import type { Session } from '../pages/workspace/types';
 
@@ -324,12 +325,7 @@ export function useTabPersistence(storageKey?: string) {
       const target = targetOrProjectId as string;
       projectId = typeof projectIdOrOpts === 'number' ? projectIdOrOpts : undefined;
       opts = legacyOpts;
-      const parsed = parseTerminalTabId(`terminal:${serverName}/${target}`);
-      if (parsed && parsed.kind !== 'legacy') {
-        ref = parsed;
-      } else {
-        ref = { kind: 'ref', serverName, ref: target, pane: 1 };
-      }
+      ref = terminalRefFromTarget(serverName, target);
     }
     const tabId = terminalTabId(ref);
     if (opts?.reconnect) {

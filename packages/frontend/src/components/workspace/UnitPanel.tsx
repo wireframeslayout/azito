@@ -12,14 +12,14 @@ import { timeAgo } from '../../utils/time';
 import { summarizePhaseConfig, getPhaseLabel } from '../../lib/taskPhases';
 import { useUnitTypes, findUnitType } from '../../hooks/useUnitTypes';
 import type { RunningOperation, Task, Unit } from '../../pages/workspace/types';
+import { terminalRefFromTarget, type TerminalRef } from '../../lib/terminalRef';
 
 interface UnitPanelProps {
   unitId: number;
   allUnits: Unit[];
   onOpenTask: (t: Task) => void;
-  /** Eyebrow back affordance: navigates to the Units list tab (same idiom as TaskPanel's onBack; the detail tab itself stays open). */
   onBack: () => void;
-  connectPane: (serverName: string, target: string) => void;
+  connectPane: (refOrServerName: TerminalRef | string, targetOrProjectId?: string | number, projectId?: number) => void;
 }
 
 const STATUS_FILTER_KEYS: Record<string, string> = {
@@ -143,7 +143,7 @@ function PanelHeader({ unit, isMobile, onBack, onEdit }: { unit: Unit; isMobile:
 function NowRunningSection({ running, unitTasks, connectPane }: {
   running: RunningOperation[];
   unitTasks: Task[];
-  connectPane: (serverName: string, target: string) => void;
+  connectPane: (refOrServerName: TerminalRef | string, targetOrProjectId?: string | number, projectId?: number) => void;
 }) {
   const { t } = useTranslation('units');
   return (
@@ -161,7 +161,12 @@ function NowRunningSection({ running, unitTasks, connectPane }: {
               title={task ? `#${task.id} ${task.title}` : t('taskList.taskRef', { id: op.taskId })}
               description={task ? `${STATUS_FILTER_KEYS[task.status] ? t(STATUS_FILTER_KEYS[task.status]) : task.status} · ${op.target}` : op.target}
               rightActions={
-                <Button size="sm" onClick={() => connectPane(op.serverName, op.target)}>{t('terminal')}</Button>
+                <Button size="sm" onClick={() => {
+                  const ref: TerminalRef = op.windowId != null
+                    ? { kind: 'windowId', serverName: op.serverName, windowId: op.windowId, pane: 1 }
+                    : terminalRefFromTarget(op.serverName, op.target);
+                  connectPane(ref);
+                }}>{t('terminal')}</Button>
               }
             />
           );

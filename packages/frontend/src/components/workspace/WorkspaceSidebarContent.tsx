@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { SidebarMode, Project, Session, Window, Task } from '../../pages/workspace/types';
+import type { ConnectPaneFn } from '../../lib/terminalRef';
 import type { PersistedTab } from '../../hooks/useTabPersistence';
 import type { BrowserGroupInfo } from '../../hooks/useBrowserGroups';
 import type { ContextMenuItem } from '../ContextMenu';
@@ -32,7 +33,7 @@ interface WorkspaceSidebarContentProps {
   onSelectFileServer: (server: string) => void;
   selectedRepoId: number | null;
   onSelectRepo: (id: number) => void;
-  connectPane: (serverName: string, target: string) => void;
+  connectPane: ConnectPaneFn;
   onOpenAddWindow: () => void;
   onOpenQuickAdd: (serverName: string, agentType: 'claude' | 'codex' | 'terminal') => void;
   /** クイック追加ボタンの押下可否判定に使う。起動コマンドを実際に供給する useAddWindowModal 側の取得状態（Workspace.tsx 経由） */

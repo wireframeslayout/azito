@@ -10,6 +10,7 @@ import { WindowActivityIndicator } from '../ui';
 import { buildObjectSections, type BrowserObject } from '../../lib/workspaceObjects';
 import { resolveOperationClick } from '../../lib/operationWindowClick';
 import { resolveWindowContextExtra } from '../task/taskPaneLayout';
+import { terminalRefFromTarget, type TerminalRef } from '../../lib/terminalRef';
 import type { BrowserGroupInfo } from '../../hooks/useBrowserGroups';
 import type { PersistedTab } from '../../hooks/useTabPersistence';
 import type { Project, Session, Window, Task } from '../../pages/workspace/types';
@@ -66,7 +67,7 @@ interface ObjectsSidebarProps {
   activeTabId: string | null;
   mobile: boolean;
   projectServers: { serverName: string; workingDirectory?: string }[];
-  connectPane: (serverName: string, target: string) => void;
+  connectPane: (refOrServerName: TerminalRef | string, targetOrProjectId?: string | number, projectId?: number) => void;
   showWindowContextMenu: (e: React.MouseEvent, w: Window, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void;
   /** 長押し（タッチ座標）版の showWindowContextMenu。プレーンなプロジェクトウィンドウ行の
    * 長押しで desktop と同一のコンテキストメニューを開く（Issue #338 T10）。省略時は長押しを
@@ -299,7 +300,10 @@ export default function ObjectsSidebar({
         }
       } catch { /* best-effort */ }
     }
-    connectPane(serverName, target);
+    const ref: TerminalRef = windowId != null
+      ? { kind: 'windowId' as const, serverName, windowId, pane: paneOrdinal ?? 1 }
+      : terminalRefFromTarget(serverName, target);
+    connectPane(ref);
     if (mobile) onCloseMobileSidebar();
   }, [mobile, connectPane, onCloseMobileSidebar]);
 
@@ -323,7 +327,7 @@ export default function ObjectsSidebar({
       if (mobile) onCloseMobileSidebar();
       return;
     }
-    handlePaneClick(serverName, target);
+    handlePaneClick(serverName, target, w.id);
   }, [onOpenTaskWindow, t, mobile, onCloseMobileSidebar, handlePaneClick]);
 
   const renderOperationExtra = useCallback((w: WindowItem) => {

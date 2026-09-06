@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { api } from '../api/client';
 import type { AgentActivityPayload } from '../types/notification';
-import { stripPaneSuffix } from '@azito/shared';
+import { stripPaneSuffix, isSameWindowTarget, formatMuxRef, muxRefFromTmuxTarget } from '@azito/shared';
+import { parseTerminalTabId } from '../lib/terminalRef';
 import { useNotificationChannel } from './useNotificationChannel';
 import { useWorkspaceTargets } from './useWorkspaceTargets';
 import {
@@ -52,7 +53,7 @@ interface AgentActivityContextValue {
   isRunning: (serverName: string, target: string) => boolean;
   shouldShowActivity: (serverName: string, target: string) => boolean;
   shouldShowTaskActivity: (taskId: number) => boolean;
-  isWatched: (serverName: string, target: string, taskId?: number) => boolean;
+  isWatched: (serverName: string, target: string, taskId?: number, windowId?: number) => boolean;
   windowIndicator: (serverName: string, target: string) => ActivityIndicator;
   /**
    * Raw running/blocked status, with no "currently watched window" suppression and with
@@ -67,8 +68,8 @@ interface AgentActivityContextValue {
    * `finishedEntries` を呼び出し側で生キー完全一致 find すると、ペインサフィックス付きの
    * タスクウィンドウ（`session:win.1`）が引けないため、完了表示の照合は必ずこれを使う。
    */
-  findFinished: (serverName: string, target: string) => FinishedEntry | undefined;
-  dismissFinished: (serverName: string, target: string) => void;
+  findFinished: (serverName: string, target: string, windowId?: number) => FinishedEntry | undefined;
+  dismissFinished: (serverName: string, target: string, windowId?: number) => void;
 }
 
 const AgentActivityContext = createContext<AgentActivityContextValue>({
@@ -224,11 +225,25 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
     onConnected: fetchSnapshot,
   });
 
-  const isWatched = useCallback((serverName: string, target: string, _taskId: number | undefined): boolean => {
+  const isWatched = useCallback((serverName: string, target: string, _taskId: number | undefined, windowId?: number): boolean => {
     if (!browserFocused) return false;
-    const termPrefix = `terminal:${serverName}/${target}`;
-    if (activeTabId === termPrefix || activeTabId?.startsWith(`${termPrefix}.`)) return true;
-    if (focusedTarget === activityKey(serverName, target)) return true;
+    if (activeTabId) {
+      const parsed = parseTerminalTabId(activeTabId);
+      if (parsed) {
+        if (windowId != null && parsed.kind === 'windowId' && parsed.windowId === windowId) return true;
+        if (parsed.kind === 'legacy' && isSameWindowTarget(parsed.target, target)) return true;
+        if (parsed.kind === 'ref') {
+          try {
+            const refJson = formatMuxRef(muxRefFromTmuxTarget(stripPaneSuffix(target)));
+            if (parsed.ref === refJson) return true;
+          } catch { /* target not parseable as tmux target */ }
+        }
+      }
+    }
+    if (focusedTarget) {
+      if (windowId != null && focusedTarget === `wid:${windowId}`) return true;
+      if (focusedTarget === activityKey(serverName, target)) return true;
+    }
     return false;
   }, [browserFocused, activeTabId, focusedTarget]);
   isWatchedRef.current = isWatched;
@@ -246,13 +261,11 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
     return () => clearInterval(timer);
   }, []);
 
-  // Auto-dismiss finished entries that become watched
   useEffect(() => {
-    const watchedFinished = finished.filter((e) => isWatched(e.serverName, e.target, e.taskId));
+    const watchedFinished = finished.filter((e) => isWatched(e.serverName, e.target, e.taskId, e.windowId));
     if (watchedFinished.length > 0) {
-      setFinished((cur) => cur.filter((e) =>
-        !watchedFinished.some((wf) => activityKey(wf.serverName, wf.target) === activityKey(e.serverName, e.target)),
-      ));
+      const watchedKeys = new Set(watchedFinished.map(activityKeyForEntry));
+      setFinished((cur) => cur.filter((e) => !watchedKeys.has(activityKeyForEntry(e))));
     }
   }, [finished, isWatched]);
 
@@ -260,9 +273,9 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
     saveFinishedEntries(pruneFinished(finished, Date.now()));
   }, [finished]);
 
-  const dismissFinished = useCallback((serverName: string, target: string) => {
-    const key = activityKey(serverName, target);
-    setFinished((cur) => cur.filter((e) => activityKey(e.serverName, e.target) !== key));
+  const dismissFinished = useCallback((serverName: string, target: string, windowId?: number) => {
+    const key = activityKey(serverName, target, windowId);
+    setFinished((cur) => cur.filter((e) => activityKeyForEntry(e) !== key));
   }, []);
 
   const findEntry = useCallback((serverName: string, target: string, windowId?: number): AgentActivityInfo | undefined => {

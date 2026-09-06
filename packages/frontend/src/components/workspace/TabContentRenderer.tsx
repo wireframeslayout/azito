@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { paths } from '../../paths';
 import { TerminalContainer } from '../TerminalContainer';
+import type { ConnectPaneFn } from '../../lib/terminalRef';
 import { FilePreviewPanel } from '../FileExplorer';
 import StorageFilePreview from '../StorageFilePreview';
 import UnitPanel from './UnitPanel';
@@ -47,7 +48,7 @@ interface TabContentRendererProps {
   executeTask: (taskId: number, unitId: number | null) => void;
   stopTask: (unitId: number | null, taskId: number) => void;
   refreshWorkspace: () => void;
-  connectPane: (serverName: string, target: string) => void;
+  connectPane: ConnectPaneFn;
   openTask: (taskId: number, title: string, from?: 'global' | 'workspace') => void;
   openTaskRaw: (taskId: number, title: string, projectId?: number, from?: 'global' | 'workspace') => void;
   openTaskForm: (opts: { mode: 'create' | 'edit'; taskId?: number; projectId?: number; presetTitle?: string; presetDescription?: string; presetSource?: { source: string; sourceRef: string } }) => void;

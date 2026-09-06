@@ -510,9 +510,14 @@ function WorkspaceInner() {
     }
   }, [currentProjectId, navigate]);
 
-  const connectPaneFromActiveWindow = useCallback((serverName: string, target: string, projectId?: number) => {
-    connectPane(serverName, target, projectId);
-    focusProjectById(projectId);
+  const connectPaneFromActiveWindow = useCallback((refOrServerName: TerminalRef | string, targetOrProjectId?: string | number, projectId?: number) => {
+    if (typeof refOrServerName === 'object') {
+      connectPane(refOrServerName, typeof targetOrProjectId === 'number' ? targetOrProjectId : undefined);
+      focusProjectById(typeof targetOrProjectId === 'number' ? targetOrProjectId : undefined);
+    } else {
+      connectPane(refOrServerName, targetOrProjectId as string, projectId);
+      focusProjectById(projectId);
+    }
   }, [connectPane, focusProjectById]);
 
   const openTaskFromActiveWindow = useCallback((taskId: number, title: string, projectId?: number) => {

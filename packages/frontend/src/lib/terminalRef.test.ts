@@ -6,10 +6,12 @@ import {
   windowApiPath,
   paneApiPath,
   terminalRefFromWindow,
+  terminalRefFromTarget,
   migrateLegacyTerminalTabs,
   terminalRefDisplayLabel,
   type TerminalRef,
 } from './terminalRef';
+import { parseMuxRef } from '@azito/shared';
 import type { Session } from '../pages/workspace/types';
 
 describe('terminalTabId', () => {
@@ -137,6 +139,44 @@ describe('terminalRefFromWindow', () => {
     expect(terminalRefFromWindow('local', null, 'theref', 0)).toEqual({
       kind: 'ref', serverName: 'local', ref: 'theref', pane: 0,
     });
+  });
+});
+
+describe('terminalRefFromTarget', () => {
+  it('produces a ref with parseMuxRef-valid JSON for a standard target', () => {
+    const ref = terminalRefFromTarget('local', 'azito:win--abc.2');
+    expect(ref.kind).toBe('ref');
+    expect(ref.pane).toBe(2);
+    if (ref.kind === 'ref') {
+      const parsed = parseMuxRef(ref.ref);
+      expect(parsed).toEqual({ kind: 'tmux', workspace: 'azito', window: 'win--abc' });
+    }
+  });
+
+  it('preserves pane number from target suffix', () => {
+    const ref = terminalRefFromTarget('srv', 'main:0.3');
+    expect(ref.pane).toBe(3);
+  });
+
+  it('defaults to pane 1 when no suffix', () => {
+    const ref = terminalRefFromTarget('srv', 'main:0');
+    expect(ref.pane).toBe(1);
+  });
+
+  it('produces valid ref even for target without colon', () => {
+    const ref = terminalRefFromTarget('srv', 'bare');
+    expect(ref.kind).toBe('ref');
+    if (ref.kind === 'ref') {
+      expect(() => parseMuxRef(ref.ref)).not.toThrow();
+    }
+  });
+
+  it('roundtrips through terminalTabId/parseTerminalTabId', () => {
+    const ref = terminalRefFromTarget('local', 'azito:win--abc.1');
+    const tabId = terminalTabId(ref);
+    const parsed = parseTerminalTabId(tabId);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.kind).toBe('ref');
   });
 });
 

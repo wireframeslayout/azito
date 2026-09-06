@@ -45,7 +45,7 @@ interface HomeFeedProps {
   allTasks: Task[];
   allProjects: ProjectSummary[];
   openTask: (taskId: number, title: string, projectId?: number) => void;
-  connectPane: (serverName: string, target: string, projectId?: number) => void;
+  connectPane: (refOrServerName: import('../../lib/terminalRef').TerminalRef | string, targetOrProjectId?: string | number, projectId?: number) => void;
   /** サイドバーの「ウィンドウ」セクションを開く導線（Workspace.tsx の handleOpenAddTabFromSwitcher 相当）。
    *  「稼働中」節が空のときの「+ ウィンドウを追加」アクションから呼ぶ。 */
   onAddWindow: () => void;
@@ -106,7 +106,7 @@ export default function HomeFeed({ allTasks, allProjects, openTask, connectPane,
 
   const handleActiveGroupClick = (group: ActiveGroupEntry) => {
     openActivityTarget(
-      { taskId: group.taskId, serverName: group.primaryRow.serverName, target: group.primaryRow.target, projectId: group.projectId },
+      { taskId: group.taskId, windowId: group.primaryRow.windowId, serverName: group.primaryRow.serverName, target: group.primaryRow.target, projectId: group.projectId },
       group.title,
       openTask,
       connectPane,

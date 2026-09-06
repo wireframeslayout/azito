@@ -1,9 +1,11 @@
-import { formatMuxRef, muxRefFromTmuxTarget, parseMuxRef } from '@azito/shared';
+import { formatMuxRef, muxRefFromTmuxTarget, parseMuxRef, stripPaneSuffix } from '@azito/shared';
 import type { Session } from '../pages/workspace/types';
 
 export type TerminalRef =
   | { kind: 'windowId'; serverName: string; windowId: number; pane: number }
   | { kind: 'ref'; serverName: string; ref: string; pane: number };
+
+export type ConnectPaneFn = (refOrServerName: TerminalRef | string, targetOrProjectId?: string | number, projectId?: number) => void;
 
 export interface LegacyTerminalTabId {
   kind: 'legacy';
@@ -70,6 +72,29 @@ export function terminalRefFromWindow(
     return { kind: 'windowId', serverName, windowId, pane };
   }
   return { kind: 'ref', serverName, ref, pane };
+}
+
+/**
+ * Convert a raw tmux target string (e.g. "azito:win--abc.2") to a TerminalRef
+ * without sessions data. Uses formatMuxRef(muxRefFromTmuxTarget(...)) to produce
+ * a valid JSON ref string, and extracts the pane suffix.
+ */
+export function terminalRefFromTarget(serverName: string, target: string): TerminalRef {
+  const stripped = stripPaneSuffix(target);
+  let pane = 1;
+  if (stripped !== target) {
+    const dotIdx = target.lastIndexOf('.');
+    if (dotIdx >= 0) {
+      const suffix = target.slice(dotIdx + 1);
+      if (/^\d+$/.test(suffix)) pane = parseInt(suffix, 10);
+    }
+  }
+  try {
+    const muxRef = muxRefFromTmuxTarget(stripped);
+    return { kind: 'ref', serverName, ref: formatMuxRef(muxRef), pane };
+  } catch {
+    return { kind: 'ref', serverName, ref: formatMuxRef({ kind: 'tmux', workspace: '', window: stripped }), pane };
+  }
 }
 
 export function terminalRefFromLegacyTarget(
