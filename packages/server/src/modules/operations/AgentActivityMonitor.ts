@@ -697,7 +697,7 @@ export class AgentActivityMonitor {
   }
 
   /**
-   * Record a Tier 0 supervisor signal for a `${serverName}::${stripPaneSuffix(target)}` key,
+   * Record a Tier 0 supervisor signal for a `${serverName}::${target}` key,
    * then tick immediately so the UI reflects the transition without waiting
    * for the next poll interval. Unlike recordHookSignal, this is not matched
    * against the `windows` table here — the caller (SupervisorRegistry event)
