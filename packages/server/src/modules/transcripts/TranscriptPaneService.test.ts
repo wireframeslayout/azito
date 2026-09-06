@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { asPaneHandle } from '@azito/shared';
 import { TranscriptPaneService } from './TranscriptPaneService';
 import type { TranscriptSource } from './sources/TranscriptSource';
 import type { TmuxClient, TmuxPaneInfo } from '../tmux/TmuxClient';
@@ -99,7 +100,7 @@ describe('TranscriptPaneService', () => {
     it('returns session_not_found when the session does not exist', async () => {
       const { claudeTranscriptSource, tmuxClient, serverRepo } = buildDeps({ getSessionCwd: () => null });
       const service = new TranscriptPaneService(claudeTranscriptSource, tmuxClient, serverRepo);
-      expect(await service.sendInput(SID, '%1', 'hello')).toBe('session_not_found');
+      expect(await service.sendInput(SID, asPaneHandle('%1'), 'hello')).toBe('session_not_found');
     });
 
     it('returns pane_not_found when the pane no longer exists', async () => {
@@ -108,7 +109,7 @@ describe('TranscriptPaneService', () => {
         checkPaneExists: async () => false,
       });
       const service = new TranscriptPaneService(claudeTranscriptSource, tmuxClient, serverRepo);
-      expect(await service.sendInput(SID, '%1', 'hello')).toBe('pane_not_found');
+      expect(await service.sendInput(SID, asPaneHandle('%1'), 'hello')).toBe('pane_not_found');
     });
 
     it('sends the text as literal, then Enter as a separate keypress, and returns ok', async () => {
@@ -121,7 +122,7 @@ describe('TranscriptPaneService', () => {
         sendLiteralText,
       });
       const service = new TranscriptPaneService(claudeTranscriptSource, tmuxClient, serverRepo);
-      const result = await service.sendInput(SID, '%1', 'hello world');
+      const result = await service.sendInput(SID, asPaneHandle('%1'), 'hello world');
       expect(result).toBe('ok');
       expect(sendLiteralText).toHaveBeenCalledWith(LOCAL_SERVER, '%1', 'hello world');
       expect(sendKeys).toHaveBeenCalledWith(LOCAL_SERVER, '%1', ['Enter']);
@@ -137,7 +138,7 @@ describe('TranscriptPaneService', () => {
         sendLiteralText,
       });
       const service = new TranscriptPaneService(claudeTranscriptSource, tmuxClient, serverRepo);
-      const result = await service.sendInput(SID, '%1', 'C-c');
+      const result = await service.sendInput(SID, asPaneHandle('%1'), 'C-c');
       expect(result).toBe('ok');
       // The literal text "C-c" must go through sendLiteralText (always -l), never through
       // sendKeys with "C-c" as an element — sendKeys would interpret that as an interrupt key.
@@ -152,7 +153,7 @@ describe('TranscriptPaneService', () => {
     it('returns session_not_found when the given source has no such session', async () => {
       const { claudeTranscriptSource, tmuxClient, serverRepo } = buildDeps({ getSessionCwd: () => null });
       const service = new TranscriptPaneService(claudeTranscriptSource, tmuxClient, serverRepo);
-      expect(await service.sendSignal(claudeTranscriptSource, SID, '%1', 'Escape')).toBe('session_not_found');
+      expect(await service.sendSignal(claudeTranscriptSource, SID, asPaneHandle('%1'), 'Escape')).toBe('session_not_found');
     });
 
     it('returns pane_not_found when the pane no longer exists', async () => {
@@ -161,7 +162,7 @@ describe('TranscriptPaneService', () => {
         checkPaneExists: async () => false,
       });
       const service = new TranscriptPaneService(claudeTranscriptSource, tmuxClient, serverRepo);
-      expect(await service.sendSignal(claudeTranscriptSource, SID, '%1', 'Escape')).toBe('pane_not_found');
+      expect(await service.sendSignal(claudeTranscriptSource, SID, asPaneHandle('%1'), 'Escape')).toBe('pane_not_found');
     });
 
     it('sends the given key via sendKeys (special-key path, not literal text) and returns ok', async () => {
@@ -172,7 +173,7 @@ describe('TranscriptPaneService', () => {
         sendKeys,
       });
       const service = new TranscriptPaneService(claudeTranscriptSource, tmuxClient, serverRepo);
-      const result = await service.sendSignal(claudeTranscriptSource, SID, '%1', 'C-c');
+      const result = await service.sendSignal(claudeTranscriptSource, SID, asPaneHandle('%1'), 'C-c');
       expect(result).toBe('ok');
       expect(sendKeys).toHaveBeenCalledWith(LOCAL_SERVER, '%1', ['C-c']);
     });
@@ -188,7 +189,7 @@ describe('TranscriptPaneService', () => {
       });
       const otherSource = { getSessionCwd: () => ({ cwd: null }) } as unknown as TranscriptSource;
       const service = new TranscriptPaneService(claudeTranscriptSource, tmuxClient, serverRepo);
-      expect(await service.sendSignal(otherSource, SID, '%1', 'Escape')).toBe('ok');
+      expect(await service.sendSignal(otherSource, SID, asPaneHandle('%1'), 'Escape')).toBe('ok');
     });
   });
 });

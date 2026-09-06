@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { asPaneHandle } from '@azito/shared';
 import { WindowInputService } from './WindowInputService';
 import type { IWindowRepository, Window } from '../windows/Window';
 import type { TmuxClient, TmuxPaneInfo } from '../tmux/TmuxClient';
@@ -97,21 +98,21 @@ describe('WindowInputService', () => {
     it('returns window_not_found when the window does not exist', async () => {
       const { windowRepo, tmuxClient, serverRepo } = buildDeps({ findById: () => undefined });
       const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
-      const result = await service.sendInput(42, '%1', 'hello');
+      const result = await service.sendInput(42, asPaneHandle('%1'), 'hello');
       expect(result).toBe('window_not_found');
     });
 
     it('returns window_not_found when the window\'s server no longer exists', async () => {
       const { windowRepo, tmuxClient, serverRepo } = buildDeps({ servers: [] });
       const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
-      const result = await service.sendInput(42, '%1', 'hello');
+      const result = await service.sendInput(42, asPaneHandle('%1'), 'hello');
       expect(result).toBe('window_not_found');
     });
 
     it('returns pane_not_found when the pane no longer exists', async () => {
       const { windowRepo, tmuxClient, serverRepo } = buildDeps({ listAllPanes: async () => [] });
       const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
-      const result = await service.sendInput(42, '%1', 'hello');
+      const result = await service.sendInput(42, asPaneHandle('%1'), 'hello');
       expect(result).toBe('pane_not_found');
     });
 
@@ -121,14 +122,14 @@ describe('WindowInputService', () => {
         listAllPanes: async () => [buildPane({ paneId: '%1', sessionName: 'other', windowIndex: 0 })],
       });
       const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
-      const result = await service.sendInput(42, '%1', 'hello');
+      const result = await service.sendInput(42, asPaneHandle('%1'), 'hello');
       expect(result).toBe('pane_not_found');
     });
 
     it('sends literal text followed by Enter and returns ok', async () => {
       const { windowRepo, tmuxClient, serverRepo, calls, wait } = buildDeps();
       const service = new WindowInputService(windowRepo, tmuxClient, serverRepo, wait);
-      const result = await service.sendInput(42, '%1', 'echo hello');
+      const result = await service.sendInput(42, asPaneHandle('%1'), 'echo hello');
       expect(result).toBe('ok');
       expect(calls.sendLiteralText).toEqual([[LOCAL_SERVER, '%1', 'echo hello']]);
       expect(calls.sendKeys).toEqual([[LOCAL_SERVER, '%1', ['Enter']]]);
@@ -137,7 +138,7 @@ describe('WindowInputService', () => {
     it('does not wait before Enter for workerType "claude" (no submitDelayMs)', async () => {
       const { windowRepo, tmuxClient, serverRepo, calls, wait } = buildDeps({ findById: () => buildWindow({ workerType: 'claude' }) });
       const service = new WindowInputService(windowRepo, tmuxClient, serverRepo, wait);
-      await service.sendInput(42, '%1', 'echo hello');
+      await service.sendInput(42, asPaneHandle('%1'), 'echo hello');
       expect(calls.wait).toEqual([]);
     });
 
@@ -153,7 +154,7 @@ describe('WindowInputService', () => {
       } as unknown as TmuxClient;
       const wait = async (ms: number) => { order.push(`wait:${ms}`); };
       const service = new WindowInputService(windowRepo, tmuxClient, serverRepo, wait);
-      const result = await service.sendInput(42, '%1', 'reply with OK only');
+      const result = await service.sendInput(42, asPaneHandle('%1'), 'reply with OK only');
       expect(result).toBe('ok');
       expect(order).toEqual(['sendLiteralText', 'wait:200', 'sendKeys']);
     });
@@ -170,7 +171,7 @@ describe('WindowInputService', () => {
       } as unknown as TmuxClient;
       const wait = async (ms: number) => { order.push(`wait:${ms}`); };
       const service = new WindowInputService(windowRepo, tmuxClient, serverRepo, wait);
-      const result = await service.sendInput(42, '%1', 'echo hello');
+      const result = await service.sendInput(42, asPaneHandle('%1'), 'echo hello');
       expect(result).toBe('ok');
       expect(order).toEqual(['cancelPaneMode', 'wait:100', 'sendLiteralText', 'sendKeys']);
     });
@@ -178,7 +179,7 @@ describe('WindowInputService', () => {
     it('does not cancel copy-mode when the pane is not in_mode', async () => {
       const { windowRepo, tmuxClient, serverRepo, calls } = buildDeps({ isPaneInMode: async () => false });
       const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
-      const result = await service.sendInput(42, '%1', 'echo hello');
+      const result = await service.sendInput(42, asPaneHandle('%1'), 'echo hello');
       expect(result).toBe('ok');
       expect(calls.cancelPaneMode).toEqual([]);
     });
@@ -188,14 +189,14 @@ describe('WindowInputService', () => {
     it('returns window_not_found when the window does not exist', async () => {
       const { windowRepo, tmuxClient, serverRepo } = buildDeps({ findById: () => undefined });
       const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
-      const result = await service.sendSignal(42, '%1', 'interrupt');
+      const result = await service.sendSignal(42, asPaneHandle('%1'), 'interrupt');
       expect(result).toBe('window_not_found');
     });
 
     it('returns pane_not_found when the pane no longer exists', async () => {
       const { windowRepo, tmuxClient, serverRepo } = buildDeps({ listAllPanes: async () => [] });
       const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
-      const result = await service.sendSignal(42, '%1', 'interrupt');
+      const result = await service.sendSignal(42, asPaneHandle('%1'), 'interrupt');
       expect(result).toBe('pane_not_found');
     });
 
@@ -204,14 +205,14 @@ describe('WindowInputService', () => {
         listAllPanes: async () => [buildPane({ paneId: '%1', sessionName: 'other', windowIndex: 0 })],
       });
       const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
-      const result = await service.sendSignal(42, '%1', 'interrupt');
+      const result = await service.sendSignal(42, asPaneHandle('%1'), 'interrupt');
       expect(result).toBe('pane_not_found');
     });
 
     it('resolves the interrupt key from the workerType profile (claude -> Escape)', async () => {
       const { windowRepo, tmuxClient, serverRepo, calls } = buildDeps({ findById: () => buildWindow({ workerType: 'claude' }) });
       const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
-      const result = await service.sendSignal(42, '%1', 'interrupt');
+      const result = await service.sendSignal(42, asPaneHandle('%1'), 'interrupt');
       expect(result).toBe('ok');
       expect(calls.sendKeys).toEqual([[LOCAL_SERVER, '%1', ['Escape']]]);
     });
@@ -219,7 +220,7 @@ describe('WindowInputService', () => {
     it('defaults to C-c when workerType has no transcript profile (e.g. generic)', async () => {
       const { windowRepo, tmuxClient, serverRepo, calls } = buildDeps({ findById: () => buildWindow({ workerType: 'generic' }) });
       const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
-      const result = await service.sendSignal(42, '%1', 'interrupt');
+      const result = await service.sendSignal(42, asPaneHandle('%1'), 'interrupt');
       expect(result).toBe('ok');
       expect(calls.sendKeys).toEqual([[LOCAL_SERVER, '%1', ['C-c']]]);
     });
@@ -227,7 +228,7 @@ describe('WindowInputService', () => {
     it('defaults to C-c when workerType is null (plain terminal window)', async () => {
       const { windowRepo, tmuxClient, serverRepo, calls } = buildDeps({ findById: () => buildWindow({ workerType: null }) });
       const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
-      const result = await service.sendSignal(42, '%1', 'interrupt');
+      const result = await service.sendSignal(42, asPaneHandle('%1'), 'interrupt');
       expect(result).toBe('ok');
       expect(calls.sendKeys).toEqual([[LOCAL_SERVER, '%1', ['C-c']]]);
     });
@@ -235,7 +236,7 @@ describe('WindowInputService', () => {
     it('sends the explicitly given key for action:"key"', async () => {
       const { windowRepo, tmuxClient, serverRepo, calls } = buildDeps();
       const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
-      const result = await service.sendSignal(42, '%1', 'key', 'C-c');
+      const result = await service.sendSignal(42, asPaneHandle('%1'), 'key', 'C-c');
       expect(result).toBe('ok');
       expect(calls.sendKeys).toEqual([[LOCAL_SERVER, '%1', ['C-c']]]);
     });
@@ -243,7 +244,7 @@ describe('WindowInputService', () => {
     it('cancels copy-mode before sending the signal when the pane is in_mode (Issue #69 T12)', async () => {
       const { windowRepo, tmuxClient, serverRepo, calls } = buildDeps({ isPaneInMode: async () => true });
       const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
-      const result = await service.sendSignal(42, '%1', 'interrupt');
+      const result = await service.sendSignal(42, asPaneHandle('%1'), 'interrupt');
       expect(result).toBe('ok');
       expect(calls.cancelPaneMode).toEqual([[LOCAL_SERVER, '%1']]);
     });
@@ -251,7 +252,7 @@ describe('WindowInputService', () => {
     it('does not cancel copy-mode when the pane is not in_mode', async () => {
       const { windowRepo, tmuxClient, serverRepo, calls } = buildDeps({ isPaneInMode: async () => false });
       const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
-      const result = await service.sendSignal(42, '%1', 'interrupt');
+      const result = await service.sendSignal(42, asPaneHandle('%1'), 'interrupt');
       expect(result).toBe('ok');
       expect(calls.cancelPaneMode).toEqual([]);
     });
@@ -262,13 +263,13 @@ describe('WindowInputService', () => {
         listAllPanes: async () => [buildPane({ paneId: '%1', paneIndex: 0 }), buildPane({ paneId: '%2', paneIndex: 3 })],
       });
       const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
-      expect(await service.resolvePaneIndex(42, '%2')).toBe(3);
+      expect(await service.resolvePaneIndex(42, asPaneHandle('%2'))).toBe(3);
     });
 
     it('ウィンドウが無ければ window_not_found', async () => {
       const { windowRepo, tmuxClient, serverRepo } = buildDeps({ findById: () => undefined });
       const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
-      expect(await service.resolvePaneIndex(42, '%1')).toBe('window_not_found');
+      expect(await service.resolvePaneIndex(42, asPaneHandle('%1'))).toBe('window_not_found');
     });
 
     it('別ウィンドウのペインは pane_not_found（帰属していない paneId を index へ解決しない）', async () => {
@@ -276,7 +277,7 @@ describe('WindowInputService', () => {
         listAllPanes: async () => [buildPane({ paneId: '%9', sessionName: 'other', windowIndex: 7 })],
       });
       const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
-      expect(await service.resolvePaneIndex(42, '%9')).toBe('pane_not_found');
+      expect(await service.resolvePaneIndex(42, asPaneHandle('%9'))).toBe('pane_not_found');
     });
   });
 });

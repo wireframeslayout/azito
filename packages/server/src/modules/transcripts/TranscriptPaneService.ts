@@ -1,3 +1,4 @@
+import type { PaneHandle } from '@azito/shared';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { TranscriptSource } from './sources/TranscriptSource';
@@ -71,16 +72,16 @@ export class TranscriptPaneService {
     return { cwd: meta.cwd, panes };
   }
 
-  async sendInput(sessionId: string, paneId: string, text: string): Promise<SendInputResult> {
+  async sendInput(sessionId: string, handle: PaneHandle, text: string): Promise<SendInputResult> {
     const meta = this.claudeTranscriptSource.getSessionCwd(sessionId);
     if (!meta) return 'session_not_found';
 
     const server = this.findLocalServer();
-    const exists = await this.tmuxClient.checkPaneExists(server, paneId);
+    const exists = await this.tmuxClient.checkPaneExists(server, handle);
     if (!exists) return 'pane_not_found';
 
-    await this.tmuxClient.sendLiteralText(server, paneId, text);
-    await this.tmuxClient.sendKeys(server, paneId, ['Enter']);
+    await this.tmuxClient.sendLiteralText(server, handle, text);
+    await this.tmuxClient.sendKeysToHandle(server, handle, ['Enter']);
     return 'ok';
   }
 
@@ -91,15 +92,15 @@ export class TranscriptPaneService {
    * 意図的に別経路にし、claude 以外のエージェント種別（プロファイルさえあれば codex 等）でも
    * 正しくセッション存在確認できるようにしている。
    */
-  async sendSignal(source: TranscriptSource, sessionId: string, paneId: string, key: InterruptKey): Promise<SendSignalResult> {
+  async sendSignal(source: TranscriptSource, sessionId: string, handle: PaneHandle, key: InterruptKey): Promise<SendSignalResult> {
     const meta = source.getSessionCwd(sessionId);
     if (!meta) return 'session_not_found';
 
     const server = this.findLocalServer();
-    const exists = await this.tmuxClient.checkPaneExists(server, paneId);
+    const exists = await this.tmuxClient.checkPaneExists(server, handle);
     if (!exists) return 'pane_not_found';
 
-    await this.tmuxClient.sendKeys(server, paneId, [key]);
+    await this.tmuxClient.sendKeysToHandle(server, handle, [key]);
     return 'ok';
   }
 }

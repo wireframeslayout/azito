@@ -330,7 +330,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if (supervised) {
         supervisorRegistry.clearExitMarker(srv.name, win.tmuxTarget);
       }
-      await tmux.sendKeys(srv, paneHandle as string, [cmd, 'Enter']);
+      await tmux.sendKeysToHandle(srv, paneHandle, [cmd, 'Enter']);
       return { ok: true, supervised };
     },
   );

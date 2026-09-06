@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { asPaneHandle } from '@azito/shared';
 import { WorkerInputService } from './WorkerInputService';
 import { SupervisorCommandError } from '../../supervisors/SupervisorRegistry';
 import type { ServerConfig } from '../../servers/Server';
@@ -37,7 +38,7 @@ function makeHarness(sendCommandImpl?: () => Promise<void>) {
 }
 
 const server = makeServer();
-const target = 'azito:1.1';
+const target = asPaneHandle('azito:1.1');
 
 // Issue #28 third-party review, Important finding (fix 2): task input
 // (prompt injection / key sends) must gate on isBoundConnected, not

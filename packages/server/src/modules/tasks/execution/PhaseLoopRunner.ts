@@ -1,4 +1,5 @@
 import { randomBytes } from 'crypto';
+import type { PaneHandle } from '@azito/shared';
 import type { ITaskRepository, Task } from '../Task';
 import { extractPhaseSummary } from '../extractPhaseSummary';
 import type { TaskStatus } from '../TaskStatus';
@@ -284,7 +285,7 @@ export class PhaseLoopRunner {
     phase: string,
   ): Promise<void> {
     await sleep(3000);
-    const firstPaneText = await this.workerWaiter.capturePaneText(workerContext.server, workerContext.target);
+    const firstPaneText = await this.workerWaiter.capturePaneText(workerContext.server, workerContext.handle);
     if (isPromptDelivered(firstPaneText)) return;
 
     this.appendLog(workerContext.taskId, workerContext.unitId, 'command', { type: 'prompt_retry', phase });
@@ -296,7 +297,7 @@ export class PhaseLoopRunner {
     }
 
     await sleep(3000);
-    const retryPaneText = await this.workerWaiter.capturePaneText(workerContext.server, workerContext.target);
+    const retryPaneText = await this.workerWaiter.capturePaneText(workerContext.server, workerContext.handle);
     if (!isPromptDelivered(retryPaneText)) {
       this.appendLog(workerContext.taskId, workerContext.unitId, 'command', { type: 'prompt_delivery_failed', phase });
     }
@@ -309,7 +310,7 @@ export class PhaseLoopRunner {
     serverName: string,
     task: { id: number; projectId: number; title: string; description: string | null; status: TaskStatus; currentPhase: string | null; sleepAfterPush: boolean | null },
     server: ServerConfig,
-    target: string,
+    handle: PaneHandle,
     signal: AbortSignal,
     supervisorTarget: string,
     // Issue #87 review (forge/87-mirror follow-up), Important finding 1: the
@@ -492,7 +493,7 @@ export class PhaseLoopRunner {
       const questionsMarker = `AZITO_QUESTIONS_${task.id}_${nonce}`;
       const testFailedMarker = `AZITO_TEST_FAILED_${task.id}_${nonce}`;
 
-      const phaseStream = this.workerWaiter.startPaneStream(server, target, task.id, unit.id);
+      const phaseStream = this.workerWaiter.startPaneStream(server, handle, task.id, unit.id);
       if (!phaseStream) return;
 
       const outputFilePath = `/tmp/azito-output-${task.id}-${nonce}.md`;
@@ -503,7 +504,7 @@ export class PhaseLoopRunner {
       const envelopeResult = runtime.buildEnvelope({
         phase, capability, nonce,
         taskId: task.id, unitId: unit.id, workerExecutionMode: unit.workerExecutionMode,
-        server, target, supervisorTarget: supervisorTarget, prompt, outputFilePath,
+        server, handle, supervisorTarget: supervisorTarget, prompt, outputFilePath,
         doneMarker, questionsMarker, testFailedMarker,
       });
       const phaseSignalStream = envelopeResult.signalStream;
@@ -512,7 +513,7 @@ export class PhaseLoopRunner {
 
       this.appendLog(task.id, unit.id, 'command', { type: 'phase_prompt', phase, text: markerizedPromptWithSignal, doneMarker, questionsMarker, outputFilePath });
 
-      const workerContext: WorkerContext = { server, target, supervisorTarget: supervisorTarget, taskId: task.id, unitId: unit.id };
+      const workerContext: WorkerContext = { server, handle, supervisorTarget: supervisorTarget, taskId: task.id, unitId: unit.id };
       try {
         await runtime.sendPrompt(workerContext, markerizedPromptWithSignal);
       } catch (err: unknown) {
@@ -581,7 +582,7 @@ export class PhaseLoopRunner {
         }
       }
 
-      const waitResult = await this.workerWaiter.waitForWorker(server, target, task.id, unit.id, signal, phaseStream, doneMarker, phaseSignalStream, pushingProbe, supervisorTarget);
+      const waitResult = await this.workerWaiter.waitForWorker(server, handle, task.id, unit.id, signal, phaseStream, doneMarker, phaseSignalStream, pushingProbe, supervisorTarget);
       const output = waitResult.output;
       let classification = waitResult.classification;
       let httpSignalFinalTurn: AgentTurn | null = httpSignalTurn;
@@ -798,7 +799,7 @@ export class PhaseLoopRunner {
       if (phaseDef.planApproval) {
         const planMarkdown = phaseOutput !== null
           ? cleanOutput
-          : await this.workerWaiter.extractPlanWithFallback(server, target, output);
+          : await this.workerWaiter.extractPlanWithFallback(server, handle, output);
         if (planMarkdown) {
           this.taskRepo.update(task.id, { planMarkdown } as Partial<Task>);
         }

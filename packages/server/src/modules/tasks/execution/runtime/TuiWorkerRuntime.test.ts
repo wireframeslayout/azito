@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { asPaneHandle } from '@azito/shared';
 import { TuiWorkerRuntime } from './TuiWorkerRuntime';
 
 function makeRuntime(capturePaneResponses: string[]) {
@@ -22,7 +23,7 @@ function makeRuntime(capturePaneResponses: string[]) {
 const server = { name: 'local', type: 'local' } as any;
 const baseLaunchCtx = {
   server,
-  target: 'sess:1.1',
+  handle: asPaneHandle('sess:1.1'),
   supervisorTarget: 'sess:1',
   taskId: 1,
   unitId: 1,

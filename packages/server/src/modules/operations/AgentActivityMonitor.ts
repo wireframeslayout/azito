@@ -8,7 +8,7 @@ import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { NotificationBus } from '../notifications/NotificationBus';
 import type { AgentActivityStopReason } from '../notifications/NotificationEvent';
 import { classifyPaneState, CLASSIFIABLE_AGENT_TYPES, type PaneAgentState } from './paneStateClassifier';
-import { stripPaneSuffix, windowKey, asPaneHandle } from '@azito/shared';
+import { stripPaneSuffix, windowKey, asPaneHandle, type PaneHandle } from '@azito/shared';
 import { resolveInterval } from '../../shared/testIntervals';
 import type { PaneHandleResolver } from './PaneHandleResolver';
 
@@ -1398,7 +1398,7 @@ export class AgentActivityMonitor {
     const activityAdvanced = prevHistory !== undefined && window.activity > prevHistory.lastActivity;
     if (!activityAdvanced) return 'unknown';
 
-    const screenTail = await this.captureScreenTail(server, w.tmuxTarget);
+    const screenTail = await this.captureScreenTail(server, asPaneHandle(w.tmuxTarget));
     if (screenTail === null) return 'unknown';
     return classifyPaneState({ paneTitle, agentType: w.workerType, screenTail });
   }
@@ -1563,7 +1563,7 @@ export class AgentActivityMonitor {
     paneIndex: number | null,
   ): Promise<ScreenVerdict> {
     if (!(CLASSIFIABLE_AGENT_TYPES as readonly string[]).includes(w.workerType)) return 'unknown';
-    const screenTail = await this.captureScreenTail(server, w.tmuxTarget);
+    const screenTail = await this.captureScreenTail(server, asPaneHandle(w.tmuxTarget));
     if (screenTail === null) return 'unknown';
     const paneTitle = getRelevantPaneTitle(window.panes, paneIndex);
     return classifyPaneState({ paneTitle, agentType: w.workerType, screenTail }) === 'blocked'
@@ -1639,9 +1639,9 @@ export class AgentActivityMonitor {
   }
 
   /** Tail of `capture-pane` (~30 lines) for the classifier's screen-content rules. Null on any tmux error. */
-  private async captureScreenTail(server: ServerConfig, target: string): Promise<string | null> {
+  private async captureScreenTail(server: ServerConfig, handle: PaneHandle): Promise<string | null> {
     try {
-      const { stdout, code } = await this.tmux.capturePane(server, target, -30);
+      const { stdout, code } = await this.tmux.captureScreen(server, handle, -30);
       if (code !== 0) return null;
       return stdout;
     } catch {

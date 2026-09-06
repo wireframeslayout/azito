@@ -2,7 +2,7 @@ import type { IWindowRepository, Window } from './Window';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { ISessionStrategyFactory } from '../agents/SessionStrategy';
 import type { IServerRepository } from '../servers/Server';
-import { stripPaneSuffix } from './paneTarget';
+import { muxRefFromTmuxTarget } from '@azito/shared';
 
 export class WindowSleepService {
   constructor(
@@ -31,7 +31,7 @@ export class WindowSleepService {
     const srv = this.serverRepo.findByName(win.serverName);
     if (srv) {
       try {
-        await this.tmux.killWindow(srv, stripPaneSuffix(win.tmuxTarget));
+        await this.tmux.closeWindow(srv, muxRefFromTmuxTarget(win.tmuxTarget));
       } catch {
         // kill failure is acceptable — the window may already be gone
       }

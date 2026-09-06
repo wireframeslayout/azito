@@ -1,3 +1,4 @@
+import type { MuxRef, PaneHandle } from '@azito/shared';
 import type { ServerConfig } from '../../servers/Server';
 import type { ExecResult } from '../../servers/transport/ServerTransport';
 import type { TmuxClient } from '../../tmux/TmuxClient';
@@ -44,10 +45,9 @@ export { isolationMaskForServer, withServerLock, ensureSessionWithLock, ServerSn
  * {@link createRotatedWindow} returns, not a blanket revoke-all.
  */
 
-export interface KillTarget {
-  target: string;
-  kind: 'window' | 'pane';
-}
+export type KillTarget =
+  | { kind: 'window'; ref: MuxRef }
+  | { kind: 'pane'; handle: PaneHandle };
 
 /** One in-flight chain per taskId — see {@link runExclusiveForTask}. */
 const taskRotationLocks = new Map<number, Promise<unknown>>();
@@ -165,23 +165,26 @@ export function runExclusiveForTasks<T>(taskIds: number[], fn: () => Promise<T>)
  * caller.
  */
 export async function confirmOldWindowGone(
-  tmux: Pick<TmuxClient, 'killWindow' | 'killPane'>,
+  tmux: Pick<TmuxClient, 'closeWindow' | 'closePane'>,
   server: ServerConfig,
   killTarget: KillTarget | null,
   taskId: number | null,
 ): Promise<void> {
   if (!killTarget) return;
   const exec = killTarget.kind === 'window'
-    ? tmux.killWindow(server, killTarget.target)
-    : tmux.killPane(server, killTarget.target);
+    ? tmux.closeWindow(server, killTarget.ref)
+    : tmux.closePane(server, killTarget.handle);
   // resolveKillOutcome normalizes local (throws on failure) vs agent
   // (resolves with a non-zero code) transports into one verdict — a bare
   // await/`.then(() => true, () => false)` here previously read an
   // agent-transport kill failure as success (Issue #28 third-party review).
   const outcome = await resolveKillOutcome(exec);
   if (taskId !== null && !outcome.success) {
+    const label = killTarget.kind === 'window'
+      ? `${killTarget.ref.workspace}:${killTarget.ref.window}`
+      : String(killTarget.handle);
     throw new Error(
-      `Failed to kill ${killTarget.kind} ${killTarget.target} before rotating window; the task token was not rotated so the still-live pane stays authenticated`,
+      `Failed to kill ${killTarget.kind} ${label} before rotating window; the task token was not rotated so the still-live pane stays authenticated`,
     );
   }
 }
