@@ -296,7 +296,9 @@ export function useAddWindowModal(
 
         const target = `${sessionName}:${createdWindowName}`;
         const label = awLabel.trim() || awNewWindowName.trim() || '';
-        const windowBody: Record<string, unknown> = { server_name: awServer, tmux_target: target, label };
+        let newRef: string | undefined;
+        try { newRef = formatMuxRef(muxRefFromTmuxTarget(target)); } catch { /* keep undefined */ }
+        const windowBody: Record<string, unknown> = { server_name: awServer, tmux_target: target, ...(newRef ? { ref: newRef } : {}), label };
         if (awAgent !== 'none') {
           windowBody['window_type'] = 'agent';
           windowBody['worker_type'] = awAgent === 'custom' ? 'generic' : awAgent;
@@ -315,7 +317,11 @@ export function useAddWindowModal(
 
         const paneTarget = `${target}.1`;
         if (awWorkDir.trim()) {
-          await api(`/servers/${awServer}/panes/${encodeURIComponent(paneTarget)}/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [`cd ${awWorkDir.trim()}`, 'Enter'] }) });
+          if (created.id) {
+            await api(`/windows/${created.id}/panes/1/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [`cd ${awWorkDir.trim()}`, 'Enter'] }) });
+          } else {
+            await api(`/servers/${awServer}/panes/${encodeURIComponent(paneTarget)}/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [`cd ${awWorkDir.trim()}`, 'Enter'] }) });
+          }
           await new Promise((r) => setTimeout(r, 500));
         }
         if (awAgent !== 'none') {
