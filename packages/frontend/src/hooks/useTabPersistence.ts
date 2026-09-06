@@ -6,6 +6,7 @@ import {
   terminalTabId,
   parseTerminalTabId,
   terminalRefFromLegacyTarget,
+  terminalRefDisplayLabel,
 } from '../lib/terminalRef';
 import type { Session } from '../pages/workspace/types';
 
@@ -341,7 +342,9 @@ export function useTabPersistence(storageKey?: string) {
         return;
       }
     }
-    const label = ref.kind === 'windowId' ? `w${ref.windowId}` : (ref as { ref: string }).ref;
+    const label = ref.kind === 'windowId'
+      ? `w${ref.windowId}`
+      : terminalRefDisplayLabel(ref);
     openTab({
       id: tabId,
       type: 'terminal',

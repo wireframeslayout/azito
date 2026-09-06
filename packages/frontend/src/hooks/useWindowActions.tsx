@@ -91,7 +91,10 @@ export function useWindowActions(
           const matchesDeletedTarget = (target: string) =>
             bases.some((b) => target === b || target.startsWith(`${b}.`));
           tabs
-            .filter((tab) => tab.type === 'terminal' && tab.serverName === serverName && tab.target && matchesDeletedTarget(tab.target))
+            .filter((tab) => tab.type === 'terminal' && tab.serverName === serverName && (
+              (tab.target && matchesDeletedTarget(tab.target)) ||
+              (tab.terminalRef?.kind === 'windowId' && tab.terminalRef.windowId === windowId)
+            ))
             .forEach((tab) => closeTab(tab.id));
           setConfirmDialog(null);
           refreshWorkspace();
@@ -187,10 +190,10 @@ export function useWindowActions(
       { label: t('windows.renameLabel'), icon: <Icon name="edit" size={16} />, onClick: () => handleRenameLabel(w) },
     ];
     if (extra?.online && extra.windowName !== undefined) {
-      items.push({ label: t('windows.renameWindow'), icon: <Icon name="edit" size={16} />, onClick: () => handleRenameWindow(w.serverName, w.tmuxTarget, extra.windowName!) });
+      items.push({ label: t('windows.renameWindow'), icon: <Icon name="edit" size={16} />, onClick: () => handleRenameWindow(w.serverName, w.tmuxTarget, extra.windowName!, w.id) });
     }
     if (extra?.online && extra.paneTarget) {
-      items.push({ label: t('windows.renamePane'), icon: <Icon name="edit" size={16} />, onClick: () => handleRenamePane(w.serverName, extra.paneTarget!, extra.paneTitle || '') });
+      items.push({ label: t('windows.renamePane'), icon: <Icon name="edit" size={16} />, onClick: () => handleRenamePane(w.serverName, extra.paneTarget!, extra.paneTitle || '', w.id) });
     }
     if (extra?.online) {
       items.push({ label: t('windows.capturePanes'), icon: <Icon name="camera" size={16} />, onClick: () => handleCapturePanes(w.id) });

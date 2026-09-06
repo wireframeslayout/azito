@@ -137,17 +137,32 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     setSessions(newSessions);
 
     for (const tab of tabsRef.current) {
-      if (tab.type !== 'terminal') continue;
+      if (tab.type !== 'terminal' || !tab.serverName) continue;
+      if (!successfulServers.has(tab.serverName)) continue;
+      const serverSessions = newSessions[tab.serverName];
+      if (!serverSessions) continue;
+
+      if (tab.terminalRef) {
+        const ref = tab.terminalRef;
+        if (ref.kind === 'windowId') {
+          const exists = serverSessions.some((s) => s.windows.some((w) => w.windowId === ref.windowId));
+          if (!exists) closeTabRef.current(tab.id);
+        } else {
+          const exists = serverSessions.some((s) => s.windows.some((w) => w.ref === ref.ref));
+          if (!exists) closeTabRef.current(tab.id);
+        }
+        continue;
+      }
+
       const slashIdx = tab.id.indexOf('/');
       if (slashIdx === -1) continue;
       const serverName = tab.id.slice('terminal:'.length, slashIdx);
-      if (!successfulServers.has(serverName)) continue;
       const target = tab.id.slice(slashIdx + 1);
       const colonIdx = target.indexOf(':');
       if (colonIdx === -1) continue;
       const sessionName = target.slice(0, colonIdx);
       const windowPart = target.slice(colonIdx + 1).split('.')[0];
-      const session = newSessions[serverName]?.find((s) => s.name === sessionName);
+      const session = serverSessions.find((s) => s.name === sessionName);
       if (!session) { closeTabRef.current(tab.id); continue; }
       const idx = parseInt(windowPart, 10);
       const windowExists = Number.isNaN(idx)
@@ -407,9 +422,15 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     } else {
       await api(`/servers/${serverName}/panes/${encodeURIComponent(target)}`, { method: 'DELETE' });
     }
-    closeTab(`terminal:${serverName}/${target}`);
+    const matchTarget = (tab: PersistedTab) =>
+      tab.type === 'terminal' && tab.serverName === serverName && (
+        tab.id === `terminal:${serverName}/${target}` ||
+        (windowId != null && paneOrdinal != null && tab.id === `terminal:${serverName}::w${windowId}.${paneOrdinal}`)
+      );
+    const matchingTab = tabs.find(matchTarget);
+    if (matchingTab) closeTab(matchingTab.id);
     refreshAll();
-  }, [refreshAll, closeTab, confirm, t]);
+  }, [refreshAll, tabs, closeTab, confirm, t]);
 
   return {
     sessions,

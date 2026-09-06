@@ -87,6 +87,12 @@ export function buildActivityDiagnostics(
       const resolved = paneHandleResolver.getCached(s.serverName, asPaneHandle(s.muxPaneRef));
       if (resolved) {
         supervisorByWindowId.set(resolved.windowId, { entry: s, matchedBy: 'muxPaneRef' });
+      } else if (resolved === undefined) {
+        // Cache miss (never resolved, or expired past the 30s positive TTL). The registry only
+        // warms once per `registered` event, so without this the panel would silently degrade
+        // to windowKey matching half a minute after every supervisor connect. Fire-and-forget:
+        // this call stays synchronous, the next poll sees the warmed entry.
+        paneHandleResolver.warm(s.serverName, s.muxPaneRef);
       }
     }
   }
