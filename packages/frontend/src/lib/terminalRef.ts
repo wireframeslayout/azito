@@ -208,3 +208,19 @@ export function terminalRefDisplayLabel(r: TerminalRef): string {
 export function terminalRefMatchesWindow(r: TerminalRef, windowId: number): boolean {
   return r.kind === 'windowId' && r.windowId === windowId;
 }
+
+/**
+ * A TerminalRef that can actually be addressed: a positive integer windowId or a
+ * non-empty ref string, plus a positive integer pane. Guards against callers that
+ * hand an object (or nothing) where a windows.id was expected — such a ref would
+ * otherwise become the tab id `…::w[object Object].1` and loop on /ws forever.
+ */
+export function isValidTerminalRef(r: unknown): r is TerminalRef {
+  if (!r || typeof r !== 'object') return false;
+  const x = r as Partial<TerminalRef> & { windowId?: unknown; ref?: unknown };
+  if (typeof x.serverName !== 'string' || !x.serverName) return false;
+  if (typeof x.pane !== 'number' || !Number.isInteger(x.pane) || x.pane < 1) return false;
+  if (x.kind === 'windowId') return typeof x.windowId === 'number' && Number.isInteger(x.windowId) && x.windowId > 0;
+  if (x.kind === 'ref') return typeof x.ref === 'string' && x.ref.length > 0 && !x.ref.includes('[object ');
+  return false;
+}

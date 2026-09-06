@@ -7,6 +7,7 @@ import {
   paneApiPath,
   terminalRefFromWindow,
   terminalRefFromTarget,
+  isValidTerminalRef,
   migrateLegacyTerminalTabs,
   terminalRefDisplayLabel,
   type TerminalRef,
@@ -188,5 +189,19 @@ describe('terminalRefDisplayLabel', () => {
   it('shows workspace:window for valid mux ref', () => {
     const ref = '{"kind":"tmux","workspace":"sess","window":"win"}';
     expect(terminalRefDisplayLabel({ kind: 'ref', serverName: 'x', ref, pane: 1 })).toBe('sess:win');
+  });
+});
+
+describe('isValidTerminalRef', () => {
+  it('accepts integer windowId and non-empty ref forms', () => {
+    expect(isValidTerminalRef({ kind: 'windowId', serverName: 'local', windowId: 729, pane: 1 })).toBe(true);
+    expect(isValidTerminalRef({ kind: 'ref', serverName: 'local', ref: '{"kind":"tmux","workspace":"a","window":"b"}', pane: 2 })).toBe(true);
+  });
+  it('rejects an object, string, or missing windowId and a stringified object ref', () => {
+    expect(isValidTerminalRef({ kind: 'windowId', serverName: 'local', windowId: { id: 729 }, pane: 1 })).toBe(false);
+    expect(isValidTerminalRef({ kind: 'windowId', serverName: 'local', windowId: '729', pane: 1 })).toBe(false);
+    expect(isValidTerminalRef({ kind: 'windowId', serverName: 'local', pane: 1 })).toBe(false);
+    expect(isValidTerminalRef({ kind: 'ref', serverName: 'local', ref: 'w[object Object]', pane: 1 })).toBe(false);
+    expect(isValidTerminalRef(null)).toBe(false);
   });
 });

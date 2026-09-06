@@ -104,3 +104,31 @@ describe('migrateTerminalTabs — legacy terminal tab ids (stage 5-B)', () => {
     expect(tabs[1]).toBe(file);
   });
 });
+
+// rc.6 regression: ObjectsSidebar handed a WindowItem object to connectPane as `windowId`,
+// persisting `terminal:<server>::w[object Object].1`. Such a tab reconnects to /ws forever on
+// every page, so hydration must repair (when `target` is a real tmux target) or drop it.
+describe('normalizeLegacyTabs — broken windowId tabs (rc.6 regression)', () => {
+  it('drops a tab whose id and target were both built from an object windowId', () => {
+    const broken = makeTab({
+      id: 'terminal:server007::w[object Object].1', type: 'terminal', serverName: 'server007', target: 'w[object Object]',
+      terminalRef: { kind: 'windowId', serverName: 'server007', windowId: { id: 729 } as unknown as number, pane: 1 },
+    });
+    expect(normalizeLegacyTabs([broken, makeTab()])).toEqual([makeTab()]);
+  });
+
+  it('repairs a tab from its tmux target when one was persisted', () => {
+    const broken = makeTab({
+      id: 'terminal:server007::w[object Object].1', type: 'terminal', serverName: 'server007', target: 'azito:win--qvp6.1',
+      terminalRef: { kind: 'windowId', serverName: 'server007', windowId: { id: 729 } as unknown as number, pane: 1 },
+    });
+    const [tab] = normalizeLegacyTabs([broken]);
+    expect(tab.terminalRef).toEqual({ kind: 'ref', serverName: 'server007', ref: JSON.stringify({ kind: 'tmux', workspace: 'azito', window: 'win--qvp6' }), pane: 1 });
+    expect(tab.id.startsWith('terminal:server007::ref:')).toBe(true);
+  });
+
+  it('leaves a healthy windowId tab alone', () => {
+    const ok = makeTab({ id: 'terminal:server007::w729.1', type: 'terminal', serverName: 'server007', terminalRef: { kind: 'windowId', serverName: 'server007', windowId: 729, pane: 1 } });
+    expect(normalizeLegacyTabs([ok])).toEqual([ok]);
+  });
+});

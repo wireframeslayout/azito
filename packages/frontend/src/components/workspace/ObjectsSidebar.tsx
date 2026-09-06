@@ -320,6 +320,13 @@ export default function ObjectsSidebar({
   // クリックされた行の WindowItem 自体（w）から taskId を得る。物理ターゲット（serverName+target）で
   // Map を引き直すと、同じ物理 tmux ウィンドウを別々のタスクが持つ場合に取り違える
   // （後勝ちで上書きされた1件に固定されてしまう）ため、行の実体を直接使う。
+  // WindowPaneTree hands the whole WindowItem to onPaneClick; handlePaneClick wants the
+  // numeric windows.id. Passing handlePaneClick directly put the row object into
+  // `windowId` and produced `terminal:<server>::w[object Object].1` tabs (rc.6 regression).
+  const handleTreePaneClick = useCallback((serverName: string, target: string, w: WindowItem) => {
+    handlePaneClick(serverName, target, typeof w.id === 'number' ? w.id : undefined);
+  }, [handlePaneClick]);
+
   const handleOperationPaneClick = useCallback((serverName: string, target: string, w: WindowItem) => {
     const decision = resolveOperationClick(w, serverName, target);
     if (decision.kind === 'task' && onOpenTaskWindow) {
@@ -661,7 +668,7 @@ export default function ObjectsSidebar({
                       quickAddIcons={quickAddIcons}
                       agentDefsLoading={agentDefsLoading}
                       agentDefsError={agentDefsError}
-                      onPaneClick={handlePaneClick}
+                      onPaneClick={handleTreePaneClick}
                       onContextMenu={showWindowContextMenu}
                       onLongPress={showWindowContextMenuAt}
                       onOpenQuickAdd={onOpenQuickAdd}
@@ -707,7 +714,7 @@ export default function ObjectsSidebar({
                       quickAddIcons={quickAddIcons}
                       agentDefsLoading={agentDefsLoading}
                       agentDefsError={agentDefsError}
-                      onPaneClick={handlePaneClick}
+                      onPaneClick={handleTreePaneClick}
                       onContextMenu={showWindowContextMenu}
                       onLongPress={showWindowContextMenuAt}
                       onOpenQuickAdd={onOpenQuickAdd}
@@ -753,7 +760,7 @@ export default function ObjectsSidebar({
                       quickAddIcons={quickAddIcons}
                       agentDefsLoading={agentDefsLoading}
                       agentDefsError={agentDefsError}
-                      onPaneClick={handlePaneClick}
+                      onPaneClick={handleTreePaneClick}
                       onContextMenu={showWindowContextMenu}
                       onLongPress={showWindowContextMenuAt}
                       onOpenQuickAdd={onOpenQuickAdd}
@@ -783,7 +790,7 @@ export default function ObjectsSidebar({
                       quickAddIcons={quickAddIcons}
                       agentDefsLoading={agentDefsLoading}
                       agentDefsError={agentDefsError}
-                      onPaneClick={handlePaneClick}
+                      onPaneClick={handleTreePaneClick}
                       onContextMenu={showWindowContextMenu}
                       onLongPress={showWindowContextMenuAt}
                       onOpenQuickAdd={onOpenQuickAdd}
@@ -884,7 +891,7 @@ interface ServerGroupProps {
   quickAddIcons: Record<QuickAddAgent, React.FC<{ size?: number }>>;
   agentDefsLoading?: boolean;
   agentDefsError?: string | null;
-  onPaneClick: (serverName: string, target: string) => void;
+  onPaneClick: (serverName: string, target: string, w: WindowItem) => void;
   onContextMenu: (e: React.MouseEvent, w: Window, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void;
   onLongPress?: (x: number, y: number, w: Window, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void;
   onOpenQuickAdd: (serverName: string, agentType: QuickAddAgent) => void;
